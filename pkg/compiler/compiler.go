@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/checker"
@@ -608,7 +609,16 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// --- Compile Hoisted Global Functions AFTER imports are processed ---
 	if program.HoistedDeclarations != nil {
 		debugPrintf("[Compile] Processing %d hoisted global declarations...\n", len(program.HoistedDeclarations))
-		for name, hoistedNode := range program.HoistedDeclarations {
+		// Sort hoisted function names for deterministic compilation order
+		// Go maps have non-deterministic iteration order, which can cause
+		// different register/spill slot assignments between runs
+		hoistedGlobalNames := make([]string, 0, len(program.HoistedDeclarations))
+		for name := range program.HoistedDeclarations {
+			hoistedGlobalNames = append(hoistedGlobalNames, name)
+		}
+		sort.Strings(hoistedGlobalNames)
+		for _, name := range hoistedGlobalNames {
+			hoistedNode := program.HoistedDeclarations[name]
 			funcLit, ok := hoistedNode.(*parser.FunctionLiteral)
 			if !ok {
 				// Should not happen if checker/parser worked correctly
@@ -979,8 +989,16 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		// 1) Hoist function declarations within this block (function-scoped hoisting)
 		if len(node.HoistedDeclarations) > 0 {
 			debugPrintf("// [BlockStatement] Processing %d hoisted declarations\n", len(node.HoistedDeclarations))
-			// Pre-allocate registers (or spill slots) for all hoisted function names to enable mutual recursion with stable locations
+			// Sort hoisted function names for deterministic compilation order
+			// Go maps have non-deterministic iteration order, which can cause
+			// different register/spill slot assignments between runs
+			hoistedNames := make([]string, 0, len(node.HoistedDeclarations))
 			for name := range node.HoistedDeclarations {
+				hoistedNames = append(hoistedNames, name)
+			}
+			sort.Strings(hoistedNames)
+			// Pre-allocate registers (or spill slots) for all hoisted function names to enable mutual recursion with stable locations
+			for _, name := range hoistedNames {
 				if sym, _, found := c.currentSymbolTable.Resolve(name); !found || sym.Register == nilRegister {
 					reg, ok := c.regAlloc.TryAllocForVariable()
 					if ok {
@@ -996,7 +1014,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				}
 			}
 			// Compile each hoisted function and emit its closure into the preallocated register or spill slot
-			for name, decl := range node.HoistedDeclarations {
+			for _, name := range hoistedNames {
+				decl := node.HoistedDeclarations[name]
 				if funcLit, ok := decl.(*parser.FunctionLiteral); ok {
 					funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, name)
 					if err != nil {

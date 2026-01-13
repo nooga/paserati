@@ -258,11 +258,23 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 		isInOuterCompiler := c.enclosing != nil && c.isDefinedInEnclosingCompiler(enclosingTable)
 
 		if enclosingTable == c.currentSymbolTable || !isInOuterCompiler {
-			debugPrintf("// [Closure Loop %s] Free '%s' is in current function's scope chain. Emitting isLocal=1, index=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingSymbol.Register)
 			// The free variable is within the enclosing function's scope (possibly in an outer block).
-			c.emitByte(1) // isLocal = true
-			// Capture the value from the enclosing scope's actual register
-			c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
+			if enclosingSymbol.IsSpilled {
+				// Spilled variable: capture from spill slot
+				debugPrintf("// [Closure Loop %s] Free '%s' is SPILLED (slot %d), emitting capture from spill\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingSymbol.SpillIndex)
+				if enclosingSymbol.SpillIndex <= 255 {
+					c.emitByte(2) // isLocal = 2 means spill slot (8-bit index)
+					c.emitByte(byte(enclosingSymbol.SpillIndex))
+				} else {
+					c.emitByte(3) // isLocal = 3 means spill slot (16-bit index)
+					c.emitUint16(enclosingSymbol.SpillIndex)
+				}
+			} else {
+				debugPrintf("// [Closure Loop %s] Free '%s' is in current function's scope chain. Emitting isLocal=1, index=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingSymbol.Register)
+				c.emitByte(1) // isLocal = true
+				// Capture the value from the enclosing scope's actual register
+				c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
+			}
 		} else {
 			// The free variable is in an outer function's scope (grandparent or beyond).
 			// It must be a free variable in the enclosing function as well.
