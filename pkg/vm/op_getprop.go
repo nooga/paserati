@@ -64,6 +64,8 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 	if objVal.Type() == TypeNativeFunctionWithProps {
 		nativeFnWithProps := objVal.AsNativeFunctionWithProps()
 
+		// DEBUG removed
+
 		// First check own properties
 		if prop, exists := nativeFnWithProps.Properties.GetOwn(propName); exists {
 			if debugVM {

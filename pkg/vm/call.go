@@ -400,14 +400,10 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 	case TypeNativeFunction:
 		nativeFunc := AsNativeFunction(calleeVal)
 
-		// fmt.Printf("DEBUG prepareCall: nativeFunc=%v, nativeFunc.Arity=%v, nativeFunc.Variadic=%v, argCount=%v\n",
-		// 	nativeFunc.Name, nativeFunc.Arity, nativeFunc.Variadic, argCount)
-
 		// Arity checking for native functions: be permissive like JS (missing args become undefined)
 		// Only enforce minimum when variadic and declared arity > 0
 		// Do not error for 0-arg constructors called without args
 
-		//fmt.Printf("DEBUG prepareCall: args=%v\n", args)
 		if debugCalls {
 			// fmt.Printf("[DEBUG call.go] Calling native function %s, frameCount=%d\n", nativeFunc.Name, vm.frameCount)
 		}
