@@ -6579,6 +6579,192 @@ startExecution:
 					return status, Undefined
 				}
 
+			case TypeBoundFunction:
+				// Handle bound function construction - delegate to original function
+				// Per ECMAScript spec, bound functions are constructible if their target is constructible
+				// The bound 'this' is IGNORED for construction (new creates its own 'this')
+				// But partial arguments ARE prepended to the call arguments
+				boundFunc := constructorVal.AsBoundFunction()
+
+				// Combine partial args with call-time args
+				argStartRegInCaller := constructorReg + 1
+				callArgs := make([]Value, argCount)
+				for i := 0; i < argCount; i++ {
+					if int(argStartRegInCaller)+i < len(callerRegisters) {
+						callArgs[i] = callerRegisters[argStartRegInCaller+byte(i)]
+					} else {
+						callArgs[i] = Undefined
+					}
+				}
+
+				finalArgs := make([]Value, len(boundFunc.PartialArgs)+len(callArgs))
+				copy(finalArgs, boundFunc.PartialArgs)
+				copy(finalArgs[len(boundFunc.PartialArgs):], callArgs)
+				finalArgCount := len(finalArgs)
+
+				// Unwrap the bound function to get the original constructor
+				originalConstructor := boundFunc.OriginalFunction
+
+				// Handle based on original function type
+				switch originalConstructor.Type() {
+				case TypeClosure:
+					constructorClosure := AsClosure(originalConstructor)
+					constructorFunc := constructorClosure.Fn
+
+					if constructorFunc.IsArrowFunction {
+						frame.ip = callerIP
+						vm.ThrowTypeError("Arrow functions cannot be used as constructors")
+						return InterpretRuntimeError, Undefined
+					}
+					if constructorFunc.IsGenerator {
+						frame.ip = callerIP
+						vm.ThrowTypeError("Generator functions cannot be used as constructors")
+						return InterpretRuntimeError, Undefined
+					}
+					if vm.frameCount == MaxFrames {
+						frame.ip = callerIP
+						status := vm.runtimeError("Stack overflow during constructor call.")
+						return status, Undefined
+					}
+					requiredRegs := constructorFunc.RegisterSize
+					if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+						frame.ip = callerIP
+						status := vm.runtimeError("Register stack overflow during constructor call.")
+						return status, Undefined
+					}
+
+					// For bound function construction, new.target is the original constructor
+					newTargetValue := originalConstructor
+
+					// Get the prototype from the original constructor
+					var instancePrototype Value
+					instancePrototype = constructorClosure.getPrototypeWithVM(vm)
+
+					// For derived constructors, 'this' is uninitialized until super() is called
+					var newInstance Value
+					if constructorFunc.IsDerivedConstructor {
+						newInstance = Undefined
+					} else {
+						newInstance = NewObject(instancePrototype)
+					}
+
+					frame.ip = callerIP
+
+					newFrame := &vm.frames[vm.frameCount]
+					newFrame.closure = constructorClosure
+					newFrame.ip = 0
+					newFrame.targetRegister = destReg
+					newFrame.thisValue = newInstance
+					newFrame.homeObject = instancePrototype
+					newFrame.isConstructorCall = true
+					newFrame.isDirectCall = false
+					newFrame.isSentinelFrame = false
+					newFrame.newTargetValue = newTargetValue
+					newFrame.argCount = finalArgCount
+					newFrame.args = finalArgs
+					newFrame.argumentsObject = Undefined
+					newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+					vm.nextRegSlot += requiredRegs
+
+					// Copy combined args to registers
+					for i := 0; i < len(newFrame.registers); i++ {
+						if i < finalArgCount {
+							newFrame.registers[i] = finalArgs[i]
+						} else {
+							newFrame.registers[i] = Undefined
+						}
+					}
+
+					// Handle rest parameters for variadic constructors
+					if constructorFunc.Variadic && constructorFunc.Arity < len(newFrame.registers) {
+						extraArgCount := finalArgCount - constructorFunc.Arity
+						var restArray Value
+						if extraArgCount <= 0 {
+							restArray = vm.emptyRestArray
+						} else {
+							restArray = NewArray()
+							restArrayObj := restArray.AsArray()
+							for i := 0; i < extraArgCount; i++ {
+								argIndex := constructorFunc.Arity + i
+								if argIndex < finalArgCount {
+									restArrayObj.Append(finalArgs[argIndex])
+								}
+							}
+						}
+						newFrame.registers[constructorFunc.Arity] = restArray
+					}
+
+					vm.frameCount++
+					callerRegisters[destReg] = newInstance
+
+					// Switch context to new frame
+					frame = newFrame
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+
+				case TypeNativeFunction:
+					nf := AsNativeFunction(originalConstructor)
+					if !nf.IsConstructor {
+						frame.ip = callerIP
+						vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", nf.Name))
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					frame.ip = callerIP
+					vm.inConstructorCall = true
+					result, err := nf.Fn(finalArgs)
+					vm.inConstructorCall = false
+					if err != nil {
+						var errValue Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								errValue = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								errValue = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							errValue = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(errValue)
+						continue
+					}
+					if vm.unwinding {
+						continue
+					}
+					callerRegisters[destReg] = result
+
+				case TypeBoundFunction:
+					// Nested bound function - recursively unwrap
+					// This is rare but should work by continuing to unwrap
+					frame.ip = callerIP
+					vm.runtimeError("Nested bound function construction not yet supported")
+					return InterpretRuntimeError, Undefined
+
+				default:
+					frame.ip = callerIP
+					vm.runtimeError("Cannot use '%s' as a constructor.", originalConstructor.TypeName())
+					return InterpretRuntimeError, Undefined
+				}
+
 			default:
 				frame.ip = callerIP
 				status := vm.runtimeError("Cannot use '%s' as a constructor.", constructorVal.TypeName())

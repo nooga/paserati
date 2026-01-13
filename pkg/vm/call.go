@@ -114,7 +114,8 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		calleeFunc := calleeClosure.Fn
 
 		// Class constructors cannot be called without 'new' (per ECMAScript spec)
-		if calleeFunc.IsClassConstructor {
+		// Skip this check if we're in a constructor call context (e.g., via vm.Construct)
+		if calleeFunc.IsClassConstructor && !vm.inConstructorCall {
 			constructorName := calleeFunc.Name
 			if constructorName == "" {
 				constructorName = "anonymous"

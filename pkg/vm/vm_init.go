@@ -717,8 +717,15 @@ func (vm *VM) Construct(constructor Value, args []Value) (Value, error) {
 		prototype := fn.getOrCreatePrototypeWithVM(vm)
 		newObj := NewObject(prototype)
 
+		// Set constructor call flag so prepareCall allows class constructors
+		prevInConstructorCall := vm.inConstructorCall
+		vm.inConstructorCall = true
+
 		// Call the constructor with the new object as 'this'
 		result, err := vm.executeUserFunctionSafe(constructor, newObj, args)
+
+		// Restore previous state
+		vm.inConstructorCall = prevInConstructorCall
 		if err != nil {
 			return Undefined, err
 		}
