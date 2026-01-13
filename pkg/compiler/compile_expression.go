@@ -532,6 +532,77 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		}
 
 	case *parser.IndexExpression:
+		// Check for super indexed update (++super[expr] or super[expr]++)
+		if _, isSuper := argNode.Left.(*parser.SuperExpression); isSuper {
+			// Super indexed update requires special handling
+			// Step 1: Capture super base FIRST (before key evaluation)
+			baseReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, baseReg)
+			c.chunk.WriteOpCode(vm.OpLoadSuper, line)
+			c.chunk.WriteByte(byte(baseReg))
+
+			// Step 2: Compile the index expression
+			keyReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, keyReg)
+			_, err := c.compileNode(argNode.Index, keyReg)
+			if err != nil {
+				return BadRegister, NewCompileError(argNode.Index, "error compiling index part of super index expression").CausedBy(err)
+			}
+
+			// Step 3: Read current value using OpGetSuperComputed
+			currentValueReg = c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, currentValueReg)
+			c.chunk.WriteOpCode(vm.OpGetSuperComputed, line)
+			c.chunk.WriteByte(byte(currentValueReg))
+			c.chunk.WriteByte(byte(keyReg))
+
+			// Step 4: Convert to numeric
+			numericValueReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, numericValueReg)
+			c.emitToNumeric(numericValueReg, currentValueReg, line)
+
+			// Step 5: Load constant 1
+			constOneReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, constOneReg)
+			c.emitLoadNumericOne(constOneReg, numericValueReg, line)
+
+			// Step 6: Perform increment/decrement
+			if node.Prefix {
+				// Prefix: ++super[key] or --super[key]
+				switch node.Operator {
+				case "++":
+					c.emitAdd(numericValueReg, numericValueReg, constOneReg, line)
+				case "--":
+					c.emitSubtract(numericValueReg, numericValueReg, constOneReg, line)
+				}
+				// Store back using captured super base
+				c.chunk.WriteOpCode(vm.OpSetSuperComputedWithBase, line)
+				c.chunk.WriteByte(byte(baseReg))
+				c.chunk.WriteByte(byte(keyReg))
+				c.chunk.WriteByte(byte(numericValueReg))
+				// Result is the new value
+				c.emitMove(hint, numericValueReg, line)
+			} else {
+				// Postfix: super[key]++ or super[key]--
+				// Save original value
+				c.emitMove(hint, numericValueReg, line)
+				// Increment/decrement
+				switch node.Operator {
+				case "++":
+					c.emitAdd(numericValueReg, numericValueReg, constOneReg, line)
+				case "--":
+					c.emitSubtract(numericValueReg, numericValueReg, constOneReg, line)
+				}
+				// Store back using captured super base
+				c.chunk.WriteOpCode(vm.OpSetSuperComputedWithBase, line)
+				c.chunk.WriteByte(byte(baseReg))
+				c.chunk.WriteByte(byte(keyReg))
+				c.chunk.WriteByte(byte(numericValueReg))
+				// Result is the original value (already in hint)
+			}
+			return hint, nil
+		}
+
 		lvalueKind = lvalueIndexExpr
 		// Compile array expression
 		arrayReg := c.regAlloc.Alloc()

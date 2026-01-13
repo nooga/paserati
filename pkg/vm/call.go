@@ -113,6 +113,16 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		calleeClosure := AsClosure(calleeVal)
 		calleeFunc := calleeClosure.Fn
 
+		// Class constructors cannot be called without 'new' (per ECMAScript spec)
+		if calleeFunc.IsClassConstructor {
+			constructorName := calleeFunc.Name
+			if constructorName == "" {
+				constructorName = "anonymous"
+			}
+			vm.ThrowTypeError(fmt.Sprintf("Class constructor %s cannot be invoked without 'new'", constructorName))
+			return false, nil
+		}
+
 		// Check if this is an async generator function (both flags set)
 		if calleeFunc.IsAsync && calleeFunc.IsGenerator && !isGeneratorExecution {
 			// Create an async generator object instead of calling the function

@@ -188,13 +188,16 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		}
 
 	case *parser.IndexExpression:
-		// Check for super indexed assignment (super[expr] = value)
+		// Check for super indexed assignment (super[expr] = value or super[expr] op= value)
 		if _, isSuper := lhsNode.Left.(*parser.SuperExpression); isSuper {
 			// Super indexed assignment requires special handling with OpSetSuperComputedWithBase
 			// Property lookup uses super base, but assignment is on 'this'
 			// IMPORTANT: Per ECMAScript spec, super base must be captured BEFORE evaluating the key
 			// This is because ToPropertyKey (which calls toString) happens in PutValue AFTER
 			// the super reference is created
+
+			// Check if this is a compound assignment
+			isCompound := node.Operator != "="
 
 			// Step 1: Capture super base FIRST (before key evaluation)
 			baseReg := c.regAlloc.Alloc()
@@ -210,12 +213,61 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				return BadRegister, err
 			}
 
-			// Step 3: Compile the RHS value
-			valueReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, valueReg)
-			_, err = c.compileNode(node.Value, valueReg)
+			var currentValueReg Register
+			if isCompound {
+				// Step 3: For compound assignment, read current value using OpGetSuperComputed
+				currentValueReg = c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, currentValueReg)
+				c.chunk.WriteOpCode(vm.OpGetSuperComputed, line)
+				c.chunk.WriteByte(byte(currentValueReg)) // destination
+				c.chunk.WriteByte(byte(keyReg))          // key
+			}
+
+			// Step 4: Compile the RHS value
+			rhsReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, rhsReg)
+			_, err = c.compileNode(node.Value, rhsReg)
 			if err != nil {
 				return BadRegister, err
+			}
+
+			// Step 5: Compute final value
+			valueReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, valueReg)
+
+			if isCompound {
+				// Arithmetic/bitwise compound assignment
+				switch node.Operator {
+				case "+=":
+					c.emitAdd(valueReg, currentValueReg, rhsReg, line)
+				case "-=":
+					c.emitSubtract(valueReg, currentValueReg, rhsReg, line)
+				case "*=":
+					c.emitMultiply(valueReg, currentValueReg, rhsReg, line)
+				case "/=":
+					c.emitDivide(valueReg, currentValueReg, rhsReg, line)
+				case "%=":
+					c.emitRemainder(valueReg, currentValueReg, rhsReg, line)
+				case "**=":
+					c.emitExponent(valueReg, currentValueReg, rhsReg, line)
+				case "&=":
+					c.emitBitwiseAnd(valueReg, currentValueReg, rhsReg, line)
+				case "|=":
+					c.emitBitwiseOr(valueReg, currentValueReg, rhsReg, line)
+				case "^=":
+					c.emitBitwiseXor(valueReg, currentValueReg, rhsReg, line)
+				case "<<=":
+					c.emitShiftLeft(valueReg, currentValueReg, rhsReg, line)
+				case ">>=":
+					c.emitShiftRight(valueReg, currentValueReg, rhsReg, line)
+				case ">>>=":
+					c.emitUnsignedShiftRight(valueReg, currentValueReg, rhsReg, line)
+				default:
+					return BadRegister, NewCompileError(node, fmt.Sprintf("unsupported compound operator for super: %s", node.Operator))
+				}
+			} else {
+				// Simple assignment: just use RHS value
+				c.emitMove(valueReg, rhsReg, line)
 			}
 
 			// Emit OpSetSuperComputedWithBase with the captured base
@@ -265,17 +317,19 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			// This is because of dual-object semantics: property lookup on super base,
 			// but receiver binding uses original 'this' for setters
 
-			// Compile the RHS value
-			valueReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, valueReg)
-			_, err := c.compileNode(node.Value, valueReg)
-			if err != nil {
-				return BadRegister, err
-			}
+			// Check if this is a compound assignment (not simple =)
+			isCompound := node.Operator != "="
 
-			// Check if this is computed property: super[expr] = value
+			// For computed properties: super[expr] = value or super[expr] op= value
 			if computedKey, ok := lhsNode.Property.(*parser.ComputedPropertyName); ok {
-				// Compile the property expression
+				// Step 1: Capture super base FIRST (before key evaluation)
+				// per ECMAScript spec (GetSuperBase before ToPropertyKey)
+				baseReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, baseReg)
+				c.chunk.WriteOpCode(vm.OpLoadSuper, line)
+				c.chunk.WriteByte(byte(baseReg))
+
+				// Step 2: Compile the key expression (may have side effects like changing prototype)
 				keyReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, keyReg)
 				_, err := c.compileNode(computedKey.Expr, keyReg)
@@ -283,26 +337,149 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					return BadRegister, err
 				}
 
-				// Emit OpSetSuperComputed
-				c.chunk.WriteOpCode(vm.OpSetSuperComputed, line)
-				c.chunk.WriteByte(byte(keyReg))
-				c.chunk.WriteByte(byte(valueReg))
+				var currentValueReg Register
+				if isCompound {
+					// Step 3: For compound assignment, read current value
+					// Note: We use OpGetSuperComputed which will re-get the super base,
+					// but since the key is already evaluated, this is correct for most cases
+					currentValueReg = c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, currentValueReg)
+					c.chunk.WriteOpCode(vm.OpGetSuperComputed, line)
+					c.chunk.WriteByte(byte(currentValueReg)) // destination
+					c.chunk.WriteByte(byte(keyReg))          // key
+				}
+
+				// Step 4: Compile the RHS value
+				rhsReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, rhsReg)
+				_, err = c.compileNode(node.Value, rhsReg)
+				if err != nil {
+					return BadRegister, err
+				}
+
+				// Step 5: Compute final value
+				valueReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, valueReg)
+
+				if isCompound {
+					// Arithmetic/bitwise compound assignment
+					switch node.Operator {
+					case "+=":
+						c.emitAdd(valueReg, currentValueReg, rhsReg, line)
+					case "-=":
+						c.emitSubtract(valueReg, currentValueReg, rhsReg, line)
+					case "*=":
+						c.emitMultiply(valueReg, currentValueReg, rhsReg, line)
+					case "/=":
+						c.emitDivide(valueReg, currentValueReg, rhsReg, line)
+					case "%=":
+						c.emitRemainder(valueReg, currentValueReg, rhsReg, line)
+					case "**=":
+						c.emitExponent(valueReg, currentValueReg, rhsReg, line)
+					case "&=":
+						c.emitBitwiseAnd(valueReg, currentValueReg, rhsReg, line)
+					case "|=":
+						c.emitBitwiseOr(valueReg, currentValueReg, rhsReg, line)
+					case "^=":
+						c.emitBitwiseXor(valueReg, currentValueReg, rhsReg, line)
+					case "<<=":
+						c.emitShiftLeft(valueReg, currentValueReg, rhsReg, line)
+					case ">>=":
+						c.emitShiftRight(valueReg, currentValueReg, rhsReg, line)
+					case ">>>=":
+						c.emitUnsignedShiftRight(valueReg, currentValueReg, rhsReg, line)
+					default:
+						return BadRegister, NewCompileError(node, fmt.Sprintf("unsupported compound operator for super: %s", node.Operator))
+					}
+				} else {
+					// Simple assignment: just use RHS value
+					c.emitMove(valueReg, rhsReg, line)
+				}
+
+				// Step 6: Write back using captured super base
+				c.chunk.WriteOpCode(vm.OpSetSuperComputedWithBase, line)
+				c.chunk.WriteByte(byte(baseReg))   // super base
+				c.chunk.WriteByte(byte(keyReg))   // key
+				c.chunk.WriteByte(byte(valueReg)) // value
+
+				// Result of assignment is the assigned value
+				if valueReg != hint {
+					c.emitMove(hint, valueReg, line)
+				}
+				return hint, nil
 			} else {
-				// Static property: super.prop = value
+				// Static property: super.prop = value or super.prop op= value
 				propName := c.extractPropertyName(lhsNode.Property)
 				nameConstIdx := c.chunk.AddConstant(vm.String(propName))
+
+				var currentValueReg Register
+				if isCompound {
+					// For compound assignment, read current value first
+					currentValueReg = c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, currentValueReg)
+					c.chunk.WriteOpCode(vm.OpGetSuper, line)
+					c.chunk.WriteByte(byte(currentValueReg))
+					c.chunk.WriteUint16(nameConstIdx)
+				}
+
+				// Compile the RHS value
+				rhsReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, rhsReg)
+				_, err := c.compileNode(node.Value, rhsReg)
+				if err != nil {
+					return BadRegister, err
+				}
+
+				// Compute final value
+				valueReg := c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, valueReg)
+
+				if isCompound {
+					// Arithmetic/bitwise compound assignment
+					switch node.Operator {
+					case "+=":
+						c.emitAdd(valueReg, currentValueReg, rhsReg, line)
+					case "-=":
+						c.emitSubtract(valueReg, currentValueReg, rhsReg, line)
+					case "*=":
+						c.emitMultiply(valueReg, currentValueReg, rhsReg, line)
+					case "/=":
+						c.emitDivide(valueReg, currentValueReg, rhsReg, line)
+					case "%=":
+						c.emitRemainder(valueReg, currentValueReg, rhsReg, line)
+					case "**=":
+						c.emitExponent(valueReg, currentValueReg, rhsReg, line)
+					case "&=":
+						c.emitBitwiseAnd(valueReg, currentValueReg, rhsReg, line)
+					case "|=":
+						c.emitBitwiseOr(valueReg, currentValueReg, rhsReg, line)
+					case "^=":
+						c.emitBitwiseXor(valueReg, currentValueReg, rhsReg, line)
+					case "<<=":
+						c.emitShiftLeft(valueReg, currentValueReg, rhsReg, line)
+					case ">>=":
+						c.emitShiftRight(valueReg, currentValueReg, rhsReg, line)
+					case ">>>=":
+						c.emitUnsignedShiftRight(valueReg, currentValueReg, rhsReg, line)
+					default:
+						return BadRegister, NewCompileError(node, fmt.Sprintf("unsupported compound operator for super: %s", node.Operator))
+					}
+				} else {
+					// Simple assignment: just use RHS value
+					c.emitMove(valueReg, rhsReg, line)
+				}
 
 				// Emit OpSetSuper
 				c.chunk.WriteOpCode(vm.OpSetSuper, line)
 				c.chunk.WriteUint16(nameConstIdx)
 				c.chunk.WriteByte(byte(valueReg))
-			}
 
-			// Result of assignment is the assigned value
-			if valueReg != hint {
-				c.emitMove(hint, valueReg, line)
+				// Result of assignment is the assigned value
+				if valueReg != hint {
+					c.emitMove(hint, valueReg, line)
+				}
+				return hint, nil
 			}
-			return hint, nil
 		}
 
 		lhsType = lhsIsMemberExpr

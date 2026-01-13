@@ -18,6 +18,7 @@ type FunctionObject struct {
 	IsAsync              bool         // True for async functions
 	IsArrowFunction      bool         // True for arrow functions (cannot be used as constructors)
 	IsDerivedConstructor bool         // True for derived class constructors (must call super())
+	IsClassConstructor   bool         // True for class constructors (calling without 'new' throws TypeError)
 	Properties           *PlainObject // For properties like .prototype (created lazily)
 	Prototype            Value        // [[Prototype]] - the function's prototype (usually Function.prototype)
 	HomeObject           Value        // [[HomeObject]] - object where method is defined (for super property access)

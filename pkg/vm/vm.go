@@ -4713,7 +4713,30 @@ startExecution:
 				sourceKeys = sourceObj.OwnKeys()
 				// Copy each string-keyed property
 				for _, key := range sourceKeys {
-					if value, exists := sourceObj.GetOwn(key); exists {
+					// Check if property is an accessor (getter/setter)
+					// GetOwnAccessor returns: (getter, setter, enumerable, configurable, exists)
+					if getter, _, enumerable, _, isAccessor := sourceObj.GetOwnAccessor(key); isAccessor {
+						// Property is an accessor
+						if !enumerable {
+							continue // Skip non-enumerable accessors
+						}
+						// Call getter if present
+						var value Value
+						if getter.Type() != TypeUndefined {
+							frame.ip = ip
+							res, err := vm.Call(getter, sourceVal, nil)
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+								} else {
+									vm.runtimeError("Error calling getter for property '%s': %v", key, err)
+								}
+								return InterpretRuntimeError, Undefined
+							}
+							value = res
+						} else {
+							value = Undefined
+						}
 						if destVal.Type() == TypeDictObject {
 							destDict := AsDictObject(destVal)
 							destDict.SetOwn(key, value)
@@ -4721,23 +4744,67 @@ startExecution:
 							destObj := AsPlainObject(destVal)
 							destObj.SetOwn(key, value)
 						}
+					} else {
+						// Regular data property - check enumerability
+						_, _, enumerable, _, exists := sourceObj.GetOwnDescriptor(key)
+						if exists && enumerable {
+							if value, _ := sourceObj.GetOwn(key); true {
+								if destVal.Type() == TypeDictObject {
+									destDict := AsDictObject(destVal)
+									destDict.SetOwn(key, value)
+								} else {
+									destObj := AsPlainObject(destVal)
+									destObj.SetOwn(key, value)
+								}
+							}
+						}
 					}
 				}
 				// Also copy symbol-keyed properties (per ECMAScript CopyDataProperties)
 				symbolKeys := sourceObj.OwnSymbolKeys()
 				for _, sym := range symbolKeys {
 					key := NewSymbolKey(sym)
-					if value, exists := sourceObj.GetOwnByKey(key); exists {
-						// Check if enumerable before copying
-						if _, _, enumerable, _, ok := sourceObj.GetOwnDescriptorByKey(key); ok && enumerable {
-							if destVal.Type() == TypeObject {
-								destObj := AsPlainObject(destVal)
-								w, e, c := true, true, true
-								destObj.DefineOwnPropertyByKey(key, value, &w, &e, &c)
+					// Check if property is an accessor (getter/setter)
+					// GetOwnAccessorByKey returns: (getter, setter, enumerable, configurable, exists)
+					if getter, _, enumerable, _, isAccessor := sourceObj.GetOwnAccessorByKey(key); isAccessor {
+						if !enumerable {
+							continue // Skip non-enumerable accessors
+						}
+						// Call getter if present
+						var value Value
+						if getter.Type() != TypeUndefined {
+							frame.ip = ip
+							res, err := vm.Call(getter, sourceVal, nil)
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+								} else {
+									vm.runtimeError("Error calling getter for symbol property: %v", err)
+								}
+								return InterpretRuntimeError, Undefined
 							}
-							// DictObject doesn't support symbol keys, so skip for DictObject destination
+							value = res
+						} else {
+							value = Undefined
+						}
+						if destVal.Type() == TypeObject {
+							destObj := AsPlainObject(destVal)
+							w, e, c := true, true, true
+							destObj.DefineOwnPropertyByKey(key, value, &w, &e, &c)
+						}
+					} else {
+						// Regular data property - check enumerability
+						if _, _, enumerable, _, ok := sourceObj.GetOwnDescriptorByKey(key); ok && enumerable {
+							if value, exists := sourceObj.GetOwnByKey(key); exists {
+								if destVal.Type() == TypeObject {
+									destObj := AsPlainObject(destVal)
+									w, e, c := true, true, true
+									destObj.DefineOwnPropertyByKey(key, value, &w, &e, &c)
+								}
+							}
 						}
 					}
+					// DictObject doesn't support symbol keys, so skip for DictObject destination
 				}
 			}
 		// --- END NEW ---

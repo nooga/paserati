@@ -274,17 +274,21 @@ func (c *Compiler) compileConstructor(node *parser.ClassDeclaration, superConstr
 
 	// Compile the constructor function
 	// Use the class name as the function name for proper function.name property
+	// Constructors are always strict mode per ECMAScript spec (class bodies are strict)
 	nameHint := node.Name.Value
-	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(functionLiteral, nameHint)
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralStrict(functionLiteral, nameHint)
 	if err != nil {
 		return BadRegister, err
 	}
 
-	// Mark as derived constructor if this class extends another class
-	if node.SuperClass != nil {
-		funcConst := c.chunk.Constants[funcConstIndex]
-		if funcConst.IsFunction() {
-			funcObj := vm.AsFunction(funcConst)
+	// Mark the constructor with class-specific flags
+	funcConst := c.chunk.Constants[funcConstIndex]
+	if funcConst.IsFunction() {
+		funcObj := vm.AsFunction(funcConst)
+		// All class constructors must be called with 'new', per ECMAScript spec
+		funcObj.IsClassConstructor = true
+		// Mark as derived constructor if this class extends another class
+		if node.SuperClass != nil {
 			funcObj.IsDerivedConstructor = true
 		}
 	}
@@ -940,7 +944,7 @@ func (c *Compiler) executeStaticInitializer(block *parser.BlockStatement, constr
 	}
 
 	// Compile the wrapper function
-	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(wrapperFunc, "__static_init__")
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralStrict(wrapperFunc, "__static_init__")
 	if err != nil {
 		return err
 	}
@@ -995,7 +999,7 @@ func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constr
 		}
 
 		// Compile the wrapper function
-		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(wrapperFunc, "__static_field_init__")
+		funcConstIndex, freeSymbols, err := c.compileFunctionLiteralStrict(wrapperFunc, "__static_field_init__")
 		if err != nil {
 			return err
 		}
@@ -1038,8 +1042,9 @@ func (c *Compiler) addStaticMethod(method *parser.MethodDefinition, constructorR
 	debugPrintf("// DEBUG addStaticMethod: Adding static method '%s'\n", c.extractPropertyName(method.Key))
 
 	// Compile the method function (static methods don't have `this` context)
+	// Static methods are still strict mode per ECMAScript spec (class bodies are strict)
 	nameHint := c.extractPropertyName(method.Key)
-	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(method.Value, nameHint)
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralStrict(method.Value, nameHint)
 	if err != nil {
 		return err
 	}
@@ -1081,8 +1086,9 @@ func (c *Compiler) addStaticPrivateMethod(method *parser.MethodDefinition, const
 	debugPrintf("// DEBUG addStaticPrivateMethod: Adding static private method '%s'\n", methodName)
 
 	// Compile the method function (static methods don't have `this` context)
+	// All class code is strict mode per ECMAScript spec
 	nameHint := methodName
-	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(method.Value, nameHint)
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralStrict(method.Value, nameHint)
 	if err != nil {
 		return err
 	}
@@ -1108,8 +1114,9 @@ func (c *Compiler) addStaticGetter(method *parser.MethodDefinition, constructorR
 	debugPrintf("// DEBUG addStaticGetter: Adding static getter '%s' to constructor\n", c.extractPropertyName(method.Key))
 
 	// Compile the getter function (static getters don't have `this` context)
+	// All class code is strict mode per ECMAScript spec
 	nameHint := "get " + c.extractPropertyName(method.Key)
-	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(method.Value, nameHint)
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralStrict(method.Value, nameHint)
 	if err != nil {
 		return err
 	}
@@ -1152,8 +1159,9 @@ func (c *Compiler) addStaticSetter(method *parser.MethodDefinition, constructorR
 	debugPrintf("// DEBUG addStaticSetter: Adding static setter '%s' to constructor\n", c.extractPropertyName(method.Key))
 
 	// Compile the setter function (static setters don't have `this` context)
+	// All class code is strict mode per ECMAScript spec
 	nameHint := "set " + c.extractPropertyName(method.Key)
-	funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(method.Value, nameHint)
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralStrict(method.Value, nameHint)
 	if err != nil {
 		return err
 	}
@@ -1356,6 +1364,7 @@ func (c *Compiler) extractConstructorArity(classDecl *parser.ClassDeclaration, c
 }
 
 // compileFunctionLiteralWithThisClass compiles a function literal in a specific class context with `this` type information
+// Class methods are always compiled in strict mode per ECMAScript spec
 func (c *Compiler) compileFunctionLiteralWithThisClass(node *parser.FunctionLiteral, nameHint string, className string) (uint16, []*Symbol, errors.PaseratiError) {
 	// Get the class instance type from the type checker
 	var thisType *types.ObjectType = nil
@@ -1372,12 +1381,13 @@ func (c *Compiler) compileFunctionLiteralWithThisClass(node *parser.FunctionLite
 	// If we found the class instance type, set it on ThisExpression nodes during compilation
 	if thisType != nil {
 		// Set the this type context for the function compilation
+		// compileFunctionLiteralWithThisType already uses strict mode
 		return c.compileFunctionLiteralWithThisType(node, nameHint, thisType)
 	}
 
-	// Fall back to regular compilation if no class context
-	debugPrintf("// DEBUG compileFunctionLiteralWithThisClass: No class instance type found for '%s', falling back to regular compilation\n", className)
-	return c.compileFunctionLiteral(node, nameHint)
+	// Fall back to strict compilation if no class context (class methods are always strict)
+	debugPrintf("// DEBUG compileFunctionLiteralWithThisClass: No class instance type found for '%s', falling back to strict compilation\n", className)
+	return c.compileFunctionLiteralStrict(node, nameHint)
 }
 
 // getCurrentClassInstanceType attempts to determine the current class instance type being compiled
@@ -1411,8 +1421,8 @@ func (c *Compiler) compileFunctionLiteralWithThisType(node *parser.FunctionLiter
 	// First, set the computed type on any ThisExpression nodes in the function body
 	c.setThisTypeOnNodes(node.Body, thisType)
 
-	// Now compile normally
-	return c.compileFunctionLiteral(node, nameHint)
+	// Compile with strict mode (class methods are always strict per ECMAScript spec)
+	return c.compileFunctionLiteralStrict(node, nameHint)
 }
 
 // setThisTypeOnNodes walks the AST and sets the computed type on ThisExpression nodes

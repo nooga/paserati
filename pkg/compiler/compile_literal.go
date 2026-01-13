@@ -988,10 +988,26 @@ func (c *Compiler) compileTemplateLiteral(node *parser.TemplateLiteral, hint Reg
 
 // --- Modify signature again to return (uint16, []*Symbol, errors.PaseratiError) ---
 func (c *Compiler) compileFunctionLiteral(node *parser.FunctionLiteral, nameHint string) (uint16, []*Symbol, errors.PaseratiError) {
+	return c.compileFunctionLiteralWithStrict(node, nameHint, false)
+}
+
+// compileFunctionLiteralStrict compiles a function literal that is implicitly strict mode (e.g., class methods)
+func (c *Compiler) compileFunctionLiteralStrict(node *parser.FunctionLiteral, nameHint string) (uint16, []*Symbol, errors.PaseratiError) {
+	return c.compileFunctionLiteralWithStrict(node, nameHint, true)
+}
+
+// compileFunctionLiteralWithStrict compiles a function literal with optional forced strict mode
+func (c *Compiler) compileFunctionLiteralWithStrict(node *parser.FunctionLiteral, nameHint string, forceStrict bool) (uint16, []*Symbol, errors.PaseratiError) {
 	// 1. Create a new Compiler instance for the function body, linked to the current one
 	functionCompiler := newFunctionCompiler(c) // <<< Keep this instance variable
 
-	// 1.5. Check for 'use strict' directive in function body
+	// 1.5. Set strict mode if forced (e.g., class methods are always strict per ECMAScript spec)
+	if forceStrict {
+		functionCompiler.chunk.IsStrict = true
+		debugPrintf("// [compileFunctionLiteral] Forced strict mode (class method)\n")
+	}
+
+	// 1.5b. Check for 'use strict' directive in function body
 	if hasStrictDirective(node.Body) {
 		functionCompiler.chunk.IsStrict = true
 		debugPrintf("// [compileFunctionLiteral] Detected 'use strict' directive in function body\n")
