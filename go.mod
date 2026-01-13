@@ -4,5 +4,5 @@ go 1.25.4
 
 require (
 	github.com/dlclark/regexp2 v1.11.5
-	golang.org/x/text v0.32.0
+	golang.org/x/text v0.33.0
 )

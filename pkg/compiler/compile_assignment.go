@@ -188,6 +188,49 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		}
 
 	case *parser.IndexExpression:
+		// Check for super indexed assignment (super[expr] = value)
+		if _, isSuper := lhsNode.Left.(*parser.SuperExpression); isSuper {
+			// Super indexed assignment requires special handling with OpSetSuperComputedWithBase
+			// Property lookup uses super base, but assignment is on 'this'
+			// IMPORTANT: Per ECMAScript spec, super base must be captured BEFORE evaluating the key
+			// This is because ToPropertyKey (which calls toString) happens in PutValue AFTER
+			// the super reference is created
+
+			// Step 1: Capture super base FIRST (before key evaluation)
+			baseReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, baseReg)
+			c.chunk.WriteOpCode(vm.OpLoadSuper, line)
+			c.chunk.WriteByte(byte(baseReg))
+
+			// Step 2: Compile the index expression (may call toString() which could mutate prototype)
+			keyReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, keyReg)
+			_, err := c.compileNode(lhsNode.Index, keyReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			// Step 3: Compile the RHS value
+			valueReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, valueReg)
+			_, err = c.compileNode(node.Value, valueReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			// Emit OpSetSuperComputedWithBase with the captured base
+			c.chunk.WriteOpCode(vm.OpSetSuperComputedWithBase, line)
+			c.chunk.WriteByte(byte(baseReg))
+			c.chunk.WriteByte(byte(keyReg))
+			c.chunk.WriteByte(byte(valueReg))
+
+			// Result of assignment is the assigned value
+			if valueReg != hint {
+				c.emitMove(hint, valueReg, line)
+			}
+			return hint, nil
+		}
+
 		lhsType = lhsIsIndexExpr
 		// Compile array expression
 		arrayReg := c.regAlloc.Alloc()

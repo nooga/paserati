@@ -6930,7 +6930,42 @@ startExecution:
 					// This is important: super.x = v should set x on 'this', not on the prototype
 					if thisValue.Type() == TypeObject {
 						thisObj := thisValue.AsPlainObject()
-						thisObj.SetOwn(propertyName, value)
+
+						// Check for strict mode property assignment restrictions
+						isStrict := frame.closure != nil && frame.closure.Fn != nil &&
+							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
+
+						// Check if property exists and its attributes
+						propertyExists := false
+						for _, f := range thisObj.shape.fields {
+							if f.keyKind == KeyKindString && f.name == propertyName {
+								propertyExists = true
+								if !f.writable {
+									// Property is not writable - throw TypeError in strict mode
+									if isStrict {
+										frame.ip = ip
+										vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
+										return InterpretRuntimeError, Undefined
+									}
+									// Non-strict: silently fail
+									break
+								}
+								break
+							}
+						}
+
+						// Check extensibility for new properties
+						if !propertyExists && !thisObj.IsExtensible() {
+							// Cannot add new property to non-extensible object
+							if isStrict {
+								frame.ip = ip
+								vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
+								return InterpretRuntimeError, Undefined
+							}
+							// Non-strict: silently fail (don't set the property)
+						} else {
+							thisObj.SetOwn(propertyName, value)
+						}
 					} else {
 						frame.ip = ip
 						vm.runtimeError("Cannot set property on non-object 'this'")
@@ -7145,7 +7180,42 @@ startExecution:
 					// This is important: super[x] = v should set x on 'this', not on the prototype
 					if thisValue.Type() == TypeObject {
 						thisObj := thisValue.AsPlainObject()
-						thisObj.SetOwn(propertyName, value)
+
+						// Check for strict mode property assignment restrictions
+						isStrict := frame.closure != nil && frame.closure.Fn != nil &&
+							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
+
+						// Check if property exists and its attributes
+						propertyExists := false
+						for _, f := range thisObj.shape.fields {
+							if f.keyKind == KeyKindString && f.name == propertyName {
+								propertyExists = true
+								if !f.writable {
+									// Property is not writable - throw TypeError in strict mode
+									if isStrict {
+										frame.ip = ip
+										vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
+										return InterpretRuntimeError, Undefined
+									}
+									// Non-strict: silently fail
+									break
+								}
+								break
+							}
+						}
+
+						// Check extensibility for new properties
+						if !propertyExists && !thisObj.IsExtensible() {
+							// Cannot add new property to non-extensible object
+							if isStrict {
+								frame.ip = ip
+								vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
+								return InterpretRuntimeError, Undefined
+							}
+							// Non-strict: silently fail (don't set the property)
+						} else {
+							thisObj.SetOwn(propertyName, value)
+						}
 					} else {
 						frame.ip = ip
 						vm.runtimeError("Cannot set property on non-object 'this'")
@@ -7155,6 +7225,144 @@ startExecution:
 			} else {
 				frame.ip = ip
 				vm.runtimeError("Cannot assign super property: prototype is not an object")
+				return InterpretRuntimeError, Undefined
+			}
+
+		case OpSetSuperComputedWithBase:
+			// Like OpSetSuperComputed but with an explicit super base register
+			// This is used when the super base must be captured BEFORE evaluating the key
+			// to respect ECMAScript evaluation order (GetSuperBase before ToPropertyKey)
+			baseReg := code[ip]
+			ip++
+			keyReg := code[ip]
+			ip++
+			valueReg := code[ip]
+			ip++
+
+			// Get 'this' value for receiver binding
+			thisValue := frame.thisValue
+
+			// Check that we're in a valid context for super property access
+			if frame.isConstructorCall && thisValue.Type() == TypeUndefined {
+				frame.ip = ip
+				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
+				return InterpretRuntimeError, Undefined
+			}
+
+			// Get the property key using ToPropertyKey (calls toString() for objects)
+			keyValue := registers[keyReg]
+			var propertyName string
+			switch keyValue.Type() {
+			case TypeString:
+				propertyName = AsString(keyValue)
+			case TypeFloatNumber, TypeIntegerNumber:
+				propertyName = keyValue.ToString()
+			case TypeSymbol:
+				// Symbols are valid property keys - use string representation
+				propertyName = keyValue.ToString()
+			default:
+				// For objects and other types, call ToPrimitive with "string" hint
+				if keyValue.IsObject() {
+					primitiveVal := vm.toPrimitive(keyValue, "string")
+					propertyName = primitiveVal.ToString()
+				} else {
+					propertyName = keyValue.ToString()
+				}
+			}
+
+			// Get the super base from the explicit register (captured before key evaluation)
+			protoValue := registers[baseReg]
+
+			// Set the property using the captured super base for setter lookup
+			if protoValue.Type() == TypeObject {
+				protoObj := protoValue.AsPlainObject()
+				value := registers[valueReg]
+
+				// Check if the property is an accessor (getter/setter) on the captured super base
+				if _, setter, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && setter.Type() != TypeUndefined {
+					// Call the setter with 'this' bound to the original object (not the prototype)
+					_, err := vm.Call(setter, thisValue, []Value{value})
+					if err != nil {
+						frame.ip = ip
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+							if !vm.unwinding {
+								continue
+							}
+							return InterpretRuntimeError, Undefined
+						}
+						// Wrap non-exception Go error
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(excVal)
+						if !vm.unwinding {
+							continue
+						}
+						return InterpretRuntimeError, Undefined
+					}
+				} else {
+					// Regular property (not an accessor) - set it on 'this', not the prototype
+					if thisValue.Type() == TypeObject {
+						thisObj := thisValue.AsPlainObject()
+
+						// Check for strict mode property assignment restrictions
+						isStrict := frame.closure != nil && frame.closure.Fn != nil &&
+							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
+
+						// Check if property exists and its attributes
+						propertyExists := false
+						for _, f := range thisObj.shape.fields {
+							if f.keyKind == KeyKindString && f.name == propertyName {
+								propertyExists = true
+								if !f.writable {
+									// Property is not writable - throw TypeError in strict mode
+									if isStrict {
+										frame.ip = ip
+										vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
+										return InterpretRuntimeError, Undefined
+									}
+									// Non-strict: silently fail
+									break
+								}
+								break
+							}
+						}
+
+						// Check extensibility for new properties
+						if !propertyExists && !thisObj.IsExtensible() {
+							// Cannot add new property to non-extensible object
+							if isStrict {
+								frame.ip = ip
+								vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
+								return InterpretRuntimeError, Undefined
+							}
+							// Non-strict: silently fail (don't set the property)
+						} else {
+							thisObj.SetOwn(propertyName, value)
+						}
+					} else {
+						frame.ip = ip
+						vm.runtimeError("Cannot set property on non-object 'this'")
+						return InterpretRuntimeError, Undefined
+					}
+				}
+			} else {
+				frame.ip = ip
+				vm.runtimeError("Cannot assign super property: super base is not an object")
 				return InterpretRuntimeError, Undefined
 			}
 

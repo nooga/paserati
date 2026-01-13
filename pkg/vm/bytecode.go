@@ -124,6 +124,7 @@ const (
 	OpSetSuper                       OpCode = 113 // NameIdx(16bit) ValueReg: super.propertyName = ValueReg (super property assignment with static name)
 	OpGetSuperComputed               OpCode = 114 // Rx KeyReg: Rx = super[KeyReg] (super property access with computed key)
 	OpSetSuperComputed               OpCode = 115 // KeyReg ValueReg: super[KeyReg] = ValueReg (super property assignment with computed key)
+	OpSetSuperComputedWithBase       OpCode = 137 // BaseReg KeyReg ValueReg: super[KeyReg] = ValueReg with explicit super base (for correct evaluation order)
 	OpDefineMethodComputed           OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
 	OpDefineMethodEnumerable         OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
 	OpDefineMethodComputedEnumerable OpCode = 122 // ObjReg ValueReg KeyReg: Define enumerable method on object with computed key (sets [[HomeObject]], for object literals)
@@ -410,6 +411,8 @@ func (op OpCode) String() string {
 		return "OpGetSuperComputed"
 	case OpSetSuperComputed:
 		return "OpSetSuperComputed"
+	case OpSetSuperComputedWithBase:
+		return "OpSetSuperComputedWithBase"
 	case OpDefineMethodComputed:
 		return "OpDefineMethodComputed"
 	case OpDefineMethodEnumerable:
@@ -883,6 +886,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx KeyReg
 	case OpSetSuperComputed:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // KeyReg ValueReg
+	case OpSetSuperComputedWithBase:
+		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // BaseReg KeyReg ValueReg
 	case OpDefineMethod:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "method") // ObjReg ValueReg NameIdx(16bit)
 	case OpDefineMethodComputed:
