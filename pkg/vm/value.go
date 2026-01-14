@@ -161,9 +161,10 @@ type ArrayObject struct {
 
 type ArgumentsObject struct {
 	Object
-	length int
-	args   []Value
-	callee Value // The function that created this arguments object
+	length   int
+	args     []Value
+	callee   Value // The function that created this arguments object
+	isStrict bool  // Whether the arguments object is from strict mode code
 }
 
 // GeneratorState represents the execution state of a generator
@@ -379,11 +380,12 @@ func NewArray() Value {
 	return Value{typ: TypeArray, obj: unsafe.Pointer(&ArrayObject{extensible: true})}
 }
 
-func NewArguments(args []Value, callee Value) Value {
+func NewArguments(args []Value, callee Value, isStrict bool) Value {
 	argObj := &ArgumentsObject{
-		length: len(args),
-		args:   make([]Value, len(args)),
-		callee: callee,
+		length:   len(args),
+		args:     make([]Value, len(args)),
+		callee:   callee,
+		isStrict: isStrict,
 	}
 	copy(argObj.args, args)
 	return Value{typ: TypeArguments, obj: unsafe.Pointer(argObj)}
@@ -1866,6 +1868,16 @@ func (a *ArgumentsObject) Set(index int, value Value) {
 		return // Arguments object doesn't expand like arrays
 	}
 	a.args[index] = value
+}
+
+// Callee returns the function that created this arguments object
+func (a *ArgumentsObject) Callee() Value {
+	return a.callee
+}
+
+// IsStrict returns whether this arguments object is from strict mode code
+func (a *ArgumentsObject) IsStrict() bool {
+	return a.isStrict
 }
 
 // MapObject methods

@@ -3300,9 +3300,13 @@ startExecution:
 						if calleeValue.Type() == TypeUndefined && frame.closure != nil {
 							calleeValue = NewClosure(frame.closure.Fn, frame.closure.Upvalues)
 						}
-						cl.CapturedArguments = NewArguments(frame.args, calleeValue)
+						argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
+							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
+						cl.CapturedArguments = NewArguments(frame.args, calleeValue, argsIsStrict)
 					} else {
-						cl.CapturedArguments = NewArguments([]Value{}, Undefined)
+						argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
+							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
+						cl.CapturedArguments = NewArguments([]Value{}, Undefined, argsIsStrict)
 					}
 				}
 			}
@@ -3406,9 +3410,13 @@ startExecution:
 						if calleeValue.Type() == TypeUndefined && frame.closure != nil {
 							calleeValue = NewClosure(frame.closure.Fn, frame.closure.Upvalues)
 						}
-						cl.CapturedArguments = NewArguments(frame.args, calleeValue)
+						argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
+							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
+						cl.CapturedArguments = NewArguments(frame.args, calleeValue, argsIsStrict)
 					} else {
-						cl.CapturedArguments = NewArguments([]Value{}, Undefined)
+						argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
+							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
+						cl.CapturedArguments = NewArguments([]Value{}, Undefined, argsIsStrict)
 					}
 				}
 			}
@@ -9146,7 +9154,9 @@ startExecution:
 				if frame.closure.CapturedArguments.Type() != TypeUndefined {
 					frame.registers[destReg] = frame.closure.CapturedArguments
 				} else {
-					frame.registers[destReg] = NewArguments([]Value{}, Undefined)
+					argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
+						frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
+					frame.registers[destReg] = NewArguments([]Value{}, Undefined, argsIsStrict)
 				}
 				continue
 			}
@@ -9186,7 +9196,9 @@ startExecution:
 					// Fallback: use the closure if calleeValue wasn't set
 					calleeValue = Value{typ: TypeClosure, obj: unsafe.Pointer(frame.closure)}
 				}
-				argsObj := NewArguments(args, calleeValue)
+				argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
+					frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
+				argsObj := NewArguments(args, calleeValue, argsIsStrict)
 				frame.argumentsObject = argsObj // Cache it for future accesses
 				frame.registers[destReg] = argsObj
 			}

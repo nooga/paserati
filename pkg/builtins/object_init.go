@@ -830,19 +830,29 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		return objectKeysWithVM(vmInstance, []vm.Value{proxy.Target()})
 	}
 
-	// Handle regular objects
-	if plainObj := obj.AsPlainObject(); plainObj != nil {
+	// Handle regular objects - check type before calling As* methods to avoid panic
+	switch obj.Type() {
+	case vm.TypeObject:
+		plainObj := obj.AsPlainObject()
 		for _, key := range plainObj.OwnKeys() {
 			if _, _, en, _, ok := plainObj.GetOwnDescriptor(key); ok && en {
 				keysArray.Append(vm.NewString(key))
 			}
 		}
-	} else if dictObj := obj.AsDictObject(); dictObj != nil {
+	case vm.TypeDictObject:
+		dictObj := obj.AsDictObject()
 		for _, key := range dictObj.OwnKeys() {
 			keysArray.Append(vm.NewString(key))
 		}
-	} else if arrObj := obj.AsArray(); arrObj != nil {
+	case vm.TypeArray:
+		arrObj := obj.AsArray()
 		for i := 0; i < arrObj.Length(); i++ {
+			keysArray.Append(vm.NewString(strconv.Itoa(i)))
+		}
+	case vm.TypeArguments:
+		argsObj := obj.AsArguments()
+		// Arguments object: return numeric indices as keys
+		for i := 0; i < argsObj.Length(); i++ {
 			keysArray.Append(vm.NewString(strconv.Itoa(i)))
 		}
 	}
@@ -1885,7 +1895,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		// Check custom properties first (e.g., static methods on constructor)
 		if fn.Properties != nil {
 			if v, w, e, c, ok := fn.Properties.GetOwnDescriptor(propName); ok {
-				descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 				descriptor.SetOwn("value", v)
 				descriptor.SetOwn("writable", vm.BooleanValue(w))
 				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
@@ -1896,11 +1906,21 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		// Fall through to check intrinsic properties below
 	case vm.TypeClosure:
 		closure := obj.AsClosure()
-		fn := closure.Fn
-		// Check custom properties first
-		if fn.Properties != nil {
-			if v, w, e, c, ok := fn.Properties.GetOwnDescriptor(propName); ok {
-				descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+		// Check closure's own Properties first (where OpDefineMethod stores static methods)
+		if closure.Properties != nil {
+			if v, w, e, c, ok := closure.Properties.GetOwnDescriptor(propName); ok {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				descriptor.SetOwn("value", v)
+				descriptor.SetOwn("writable", vm.BooleanValue(w))
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+		}
+		// Also check fn.Properties as fallback
+		if closure.Fn.Properties != nil {
+			if v, w, e, c, ok := closure.Fn.Properties.GetOwnDescriptor(propName); ok {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 				descriptor.SetOwn("value", v)
 				descriptor.SetOwn("writable", vm.BooleanValue(w))
 				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
@@ -1914,7 +1934,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		// Check custom properties first
 		if nfp.Properties != nil {
 			if v, w, e, c, ok := nfp.Properties.GetOwnDescriptor(propName); ok {
-				descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 				descriptor.SetOwn("value", v)
 				descriptor.SetOwn("writable", vm.BooleanValue(w))
 				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
@@ -1932,7 +1952,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		if propName == "length" {
 			value = vm.NumberValue(float64(arrObj.Length()))
 			// length is non-enumerable, non-configurable, writable per JS spec for Array.length
-			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", value)
 			descriptor.SetOwn("writable", vm.BooleanValue(true))
 			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
@@ -1940,7 +1960,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			return vm.NewValueFromPlainObject(descriptor), nil
 		} else if index, err := strconv.Atoi(propName); err == nil && index >= 0 && index < arrObj.Length() {
 			value = arrObj.Get(index)
-			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", value)
 			descriptor.SetOwn("writable", vm.BooleanValue(true))
 			descriptor.SetOwn("enumerable", vm.BooleanValue(true))
@@ -1950,7 +1970,10 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		// Fall through for non-index properties on arrays (methods, custom props)
 	}
 
-	if plainObj := obj.AsPlainObject(); plainObj != nil {
+	// Check type before calling As* methods to avoid panic
+	switch obj.Type() {
+	case vm.TypeObject:
+		plainObj := obj.AsPlainObject()
 		if g, s, e, c, ok := func() (vm.Value, vm.Value, bool, bool, bool) {
 			if keyIsSymbol {
 				return plainObj.GetOwnAccessorByKey(vm.NewSymbolKey(propSym))
@@ -1958,7 +1981,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			return plainObj.GetOwnAccessor(propName)
 		}(); ok {
 			// Accessor descriptor
-			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			if g.Type() != vm.TypeUndefined {
 				descriptor.SetOwn("get", g)
 			}
@@ -1975,7 +1998,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			}
 			return plainObj.GetOwnDescriptor(propName)
 		}(); ok {
-			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", v)
 			descriptor.SetOwn("writable", vm.BooleanValue(w))
 			descriptor.SetOwn("enumerable", vm.BooleanValue(e))
@@ -1995,7 +2018,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 				s = sv
 			}
 			if g.Type() != vm.TypeUndefined || s.Type() != vm.TypeUndefined {
-				descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 				if g.Type() != vm.TypeUndefined {
 					descriptor.SetOwn("get", g)
 				}
@@ -2008,17 +2031,63 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 				return vm.NewValueFromPlainObject(descriptor), nil
 			}
 		}
-		// not found
-	} else if dictObj := obj.AsDictObject(); dictObj != nil {
+	case vm.TypeDictObject:
+		dictObj := obj.AsDictObject()
 		if v, w, e, c, ok := dictObj.GetOwnDescriptor(propName); ok {
-			descriptor := vm.NewObject(vm.Undefined).AsPlainObject()
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", v)
 			descriptor.SetOwn("writable", vm.BooleanValue(w))
 			descriptor.SetOwn("enumerable", vm.BooleanValue(e))
 			descriptor.SetOwn("configurable", vm.BooleanValue(c))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
-		// not found
+	case vm.TypeArguments:
+		argsObj := obj.AsArguments()
+		// Handle numeric index or "length"
+		if propName == "length" {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", vm.NumberValue(float64(argsObj.Length())))
+			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		// Check for numeric index
+		if index, err := strconv.Atoi(propName); err == nil && index >= 0 && index < argsObj.Length() {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", argsObj.Get(index))
+			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(true))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		// Handle callee property
+		if propName == "callee" {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			if argsObj.IsStrict() {
+				// In strict mode: accessor descriptor with thrower get/set
+				// Create thrower functions that throw TypeError
+				throwerGet := vm.NewNativeFunction(0, false, "ThrowTypeError", func(args []vm.Value) (vm.Value, error) {
+					vmInstance.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
+					return vm.Undefined, nil
+				})
+				throwerSet := vm.NewNativeFunction(1, false, "ThrowTypeError", func(args []vm.Value) (vm.Value, error) {
+					vmInstance.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
+					return vm.Undefined, nil
+				})
+				descriptor.SetOwn("get", throwerGet)
+				descriptor.SetOwn("set", throwerSet)
+				descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+				descriptor.SetOwn("configurable", vm.BooleanValue(false))
+			} else {
+				// In non-strict mode: data descriptor with callee value
+				descriptor.SetOwn("value", argsObj.Callee())
+				descriptor.SetOwn("writable", vm.BooleanValue(true))
+				descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+				descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			}
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
 	}
 
 	return vm.Undefined, nil
