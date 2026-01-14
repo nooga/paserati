@@ -1672,7 +1672,8 @@ startExecution:
 			objType := objVal.Type()
 			if objType != TypeObject && objType != TypeDictObject && objType != TypeArray &&
 				objType != TypeFunction && objType != TypeNativeFunctionWithProps && objType != TypeProxy &&
-				objType != TypeClosure && objType != TypeNativeFunction && objType != TypeBoundFunction {
+				objType != TypeClosure && objType != TypeNativeFunction && objType != TypeBoundFunction &&
+				objType != TypeSet && objType != TypeMap {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot use 'in' operator to search for '%s' in %s", propVal.ToString(), objVal.Type().String()))
 				if vm.frameCount == 0 {
@@ -1712,6 +1713,38 @@ startExecution:
 				case TypeArray:
 					// No symbol support here yet
 					hasProperty = false
+				case TypeSet:
+					// Walk Set prototype chain for symbol properties
+					proto := vm.SetPrototype
+					if proto.IsObject() {
+						for cur := proto.AsPlainObject(); cur != nil; {
+							if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
+								hasProperty = true
+								break
+							}
+							pv := cur.GetPrototype()
+							if !pv.IsObject() {
+								break
+							}
+							cur = pv.AsPlainObject()
+						}
+					}
+				case TypeMap:
+					// Walk Map prototype chain for symbol properties
+					proto := vm.MapPrototype
+					if proto.IsObject() {
+						for cur := proto.AsPlainObject(); cur != nil; {
+							if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
+								hasProperty = true
+								break
+							}
+							pv := cur.GetPrototype()
+							if !pv.IsObject() {
+								break
+							}
+							cur = pv.AsPlainObject()
+						}
+					}
 				default:
 					hasProperty = false
 				}
@@ -1817,6 +1850,26 @@ startExecution:
 				case TypeBoundFunction:
 					// Bound functions inherit from FunctionPrototype
 					hasProperty = vm.hasFunctionPrototypeProperty(propKey)
+				case TypeSet:
+					// Set: check own property "size", then prototype chain
+					if propKey == "size" {
+						hasProperty = true
+					} else {
+						proto := vm.SetPrototype
+						if proto.IsObject() {
+							hasProperty = proto.AsPlainObject().Has(propKey)
+						}
+					}
+				case TypeMap:
+					// Map: check own property "size", then prototype chain
+					if propKey == "size" {
+						hasProperty = true
+					} else {
+						proto := vm.MapPrototype
+						if proto.IsObject() {
+							hasProperty = proto.AsPlainObject().Has(propKey)
+						}
+					}
 				default:
 					// Non-object RHS - shouldn't reach here due to check above
 					hasProperty = false

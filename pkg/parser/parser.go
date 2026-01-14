@@ -1519,23 +1519,30 @@ func (p *Parser) parseVarStatement() Statement {
 func (p *Parser) parseReturnStatement() *ReturnStatement {
 	stmt := &ReturnStatement{Token: p.curToken}
 	returnLine := p.curToken.Line
-	p.nextToken() // Consume 'return'
 
-	// ASI: If there's a line terminator after 'return', treat as 'return;'
-	// This is a restricted production in ECMAScript
-	if p.curToken.Line != returnLine {
+	// Check for ASI cases BEFORE consuming 'return':
+	// - If peek is on a different line, ASI applies
+	// - If peek is RBRACE or EOF, this is 'return}' or 'return<EOF>'
+	// In these cases, we leave curToken at 'return' so the caller's nextToken()
+	// will correctly position us at the terminator.
+	if p.peekToken.Line != returnLine {
 		// Line terminator after 'return' - ASI inserts semicolon
 		stmt.ReturnValue = nil
 		return stmt
 	}
 
+	if p.peekTokenIs(lexer.RBRACE) || p.peekTokenIs(lexer.EOF) {
+		// Handle 'return}' or 'return<EOF>' - no expression
+		stmt.ReturnValue = nil
+		return stmt
+	}
+
+	p.nextToken() // Consume 'return', move to expression or semicolon
+
 	if p.curTokenIs(lexer.SEMICOLON) {
-		// Handle 'return;' explicitly by setting nil and consuming ';'
+		// Handle 'return;' explicitly by setting nil
 		stmt.ReturnValue = nil
-		// curToken is already ';', main loop will advance
-	} else if p.curTokenIs(lexer.RBRACE) || p.curTokenIs(lexer.EOF) {
-		// Handle 'return}' or 'return<EOF>' - no expression, no semicolon to consume
-		stmt.ReturnValue = nil
+		// curToken is ';', caller's nextToken will advance past it
 	} else {
 		// Parse the expression
 		stmt.ReturnValue = p.parseExpression(LOWEST)

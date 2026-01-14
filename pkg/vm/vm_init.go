@@ -572,6 +572,48 @@ func (vm *VM) GetSymbolProperty(obj Value, symbol Value) (Value, bool) {
 		return Undefined, false
 	}
 
+	// Handle Set type
+	if obj.Type() == TypeSet {
+		if vm.SetPrototype.Type() != TypeUndefined {
+			proto := vm.SetPrototype.AsPlainObject()
+			if proto != nil {
+				// Walk prototype chain
+				for cur := proto; cur != nil; {
+					if v, ok := cur.GetOwnByKey(symKey); ok {
+						return v, true
+					}
+					protoVal := cur.GetPrototype()
+					if protoVal.Type() != TypeObject {
+						break
+					}
+					cur = protoVal.AsPlainObject()
+				}
+			}
+		}
+		return Undefined, false
+	}
+
+	// Handle Map type
+	if obj.Type() == TypeMap {
+		if vm.MapPrototype.Type() != TypeUndefined {
+			proto := vm.MapPrototype.AsPlainObject()
+			if proto != nil {
+				// Walk prototype chain
+				for cur := proto; cur != nil; {
+					if v, ok := cur.GetOwnByKey(symKey); ok {
+						return v, true
+					}
+					protoVal := cur.GetPrototype()
+					if protoVal.Type() != TypeObject {
+						break
+					}
+					cur = protoVal.AsPlainObject()
+				}
+			}
+		}
+		return Undefined, false
+	}
+
 	// Handle plain object type
 	if obj.Type() == TypeObject {
 		po := obj.AsPlainObject()

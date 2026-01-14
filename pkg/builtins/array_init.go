@@ -1849,19 +1849,34 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		arrayLike := args[0]
 
+		// Get optional mapFn and thisArg
+		var mapFn vm.Value = vm.Undefined
+		var thisArg vm.Value = vm.Undefined
+		if len(args) >= 2 && args[1].IsCallable() {
+			mapFn = args[1]
+		}
+		if len(args) >= 3 {
+			thisArg = args[2]
+		}
+
 		// If it's already an array, create a shallow copy
-		if sourceArray := arrayLike.AsArray(); sourceArray != nil {
+		if arrayLike.Type() == vm.TypeArray {
+			sourceArray := arrayLike.AsArray()
 			result := vm.NewArray()
 			for i := 0; i < sourceArray.Length(); i++ {
 				element := sourceArray.Get(i)
 				// Apply mapping function if provided
-				if len(args) >= 2 && args[1].IsCallable() {
-					mapFn := args[1]
-					mappedValue, err := vmInstance.Call(mapFn, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i))})
+				if mapFn.Type() != vm.TypeUndefined {
+					vmInstance.EnterHelperCall()
+					mapped, err := vmInstance.Call(mapFn, thisArg, []vm.Value{element, vm.NumberValue(float64(i))})
+					vmInstance.ExitHelperCall()
+					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+						return vm.NewArray(), nil
+					}
 					if err != nil {
 						return vm.NewArray(), err
 					}
-					result.AsArray().Append(mappedValue)
+					result.AsArray().Append(mapped)
 				} else {
 					result.AsArray().Append(element)
 				}
@@ -1869,8 +1884,106 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return result, nil
 		}
 
-		// For non-arrays, try to treat as array-like (simplified implementation)
-		// In a full implementation, this would handle iterables, strings, etc.
+		// Check if the source is iterable (has Symbol.iterator)
+		iteratorMethod := vm.Undefined
+		hasIterator := false
+		if arrayLike.Type() == vm.TypeSet || arrayLike.Type() == vm.TypeMap {
+			if method, ok := vmInstance.GetSymbolProperty(arrayLike, SymbolIterator); ok && method.IsCallable() {
+				iteratorMethod = method
+				hasIterator = true
+			}
+		} else if arrayLike.IsObject() {
+			if method, ok := vmInstance.GetSymbolProperty(arrayLike, SymbolIterator); ok && method.IsCallable() {
+				iteratorMethod = method
+				hasIterator = true
+			}
+		}
+
+		if hasIterator {
+			// Use iterator protocol
+			result := vm.NewArray()
+			vmInstance.EnterHelperCall()
+			iterator, err := vmInstance.Call(iteratorMethod, arrayLike, []vm.Value{})
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.NewArray(), nil
+			}
+			if err != nil {
+				return vm.NewArray(), err
+			}
+
+			nextMethod, err := vmInstance.GetProperty(iterator, "next")
+			if err != nil || !nextMethod.IsCallable() {
+				return vm.NewArray(), vmInstance.NewTypeError("iterator.next is not a function")
+			}
+
+			index := 0
+			for {
+				vmInstance.EnterHelperCall()
+				iterResult, err := vmInstance.Call(nextMethod, iterator, []vm.Value{})
+				vmInstance.ExitHelperCall()
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.NewArray(), nil
+				}
+				if err != nil {
+					return vm.NewArray(), err
+				}
+
+				done, _ := vmInstance.GetProperty(iterResult, "done")
+				if done.IsTruthy() {
+					break
+				}
+
+				value, _ := vmInstance.GetProperty(iterResult, "value")
+				// Apply mapping function if provided
+				if mapFn.Type() != vm.TypeUndefined {
+					vmInstance.EnterHelperCall()
+					mapped, mapErr := vmInstance.Call(mapFn, thisArg, []vm.Value{value, vm.NumberValue(float64(index))})
+					vmInstance.ExitHelperCall()
+					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+						return vm.NewArray(), nil
+					}
+					if mapErr != nil {
+						return vm.NewArray(), mapErr
+					}
+					result.AsArray().Append(mapped)
+				} else {
+					result.AsArray().Append(value)
+				}
+				index++
+			}
+			return result, nil
+		}
+
+		// For array-like objects (has length property)
+		if arrayLike.IsObject() {
+			lengthVal, err := vmInstance.GetProperty(arrayLike, "length")
+			if err == nil && lengthVal.IsNumber() {
+				length := int(lengthVal.ToFloat())
+				result := vm.NewArray()
+				for i := 0; i < length; i++ {
+					element, _ := vmInstance.GetProperty(arrayLike, fmt.Sprintf("%d", i))
+					// Apply mapping function if provided
+					if mapFn.Type() != vm.TypeUndefined {
+						vmInstance.EnterHelperCall()
+						mapped, mapErr := vmInstance.Call(mapFn, thisArg, []vm.Value{element, vm.NumberValue(float64(i))})
+						vmInstance.ExitHelperCall()
+						if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+							return vm.NewArray(), nil
+						}
+						if mapErr != nil {
+							return vm.NewArray(), mapErr
+						}
+						result.AsArray().Append(mapped)
+					} else {
+						result.AsArray().Append(element)
+					}
+				}
+				return result, nil
+			}
+		}
+
+		// Fallback: return empty array
 		return vm.NewArray(), nil
 	}))
 
