@@ -908,6 +908,12 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return nfp.Properties.GetPrototype(), nil
 		}
 		return vm.Null, nil
+	case vm.TypeSet:
+		// For Sets, return Set.prototype
+		return vmInstance.SetPrototype, nil
+	case vm.TypeMap:
+		// For Maps, return Map.prototype
+		return vmInstance.MapPrototype, nil
 	case vm.TypeGenerator:
 		// For generators, return their custom prototype or GeneratorPrototype
 		genObj := obj.AsGenerator()

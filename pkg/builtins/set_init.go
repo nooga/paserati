@@ -402,6 +402,10 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		setProto.DefineOwnProperty("constructor", v, &w, &e, &c)
 	}
 
+	// Add Symbol.toStringTag to Set.prototype (writable: false, enumerable: false, configurable: true)
+	wFalse, eFalse, cTrue := false, false, true
+	setProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolToStringTag), vm.NewString("Set"), &wFalse, &eFalse, &cTrue)
+
 	// Set Set.prototype in VM (must be before adding prototype property to constructor)
 	vmInstance.SetPrototype = vm.NewValueFromPlainObject(setProto)
 

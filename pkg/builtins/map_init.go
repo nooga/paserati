@@ -408,6 +408,10 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		mapProto.DefineOwnProperty("constructor", v, &w, &e, &c)
 	}
 
+	// Add Symbol.toStringTag to Map.prototype (writable: false, enumerable: false, configurable: true)
+	wFalse, eFalse, cTrue := false, false, true
+	mapProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolToStringTag), vm.NewString("Map"), &wFalse, &eFalse, &cTrue)
+
 	// Set Map.prototype in VM (must be before adding prototype property to constructor)
 	vmInstance.MapPrototype = vm.NewValueFromPlainObject(mapProto)
 
