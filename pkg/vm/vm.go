@@ -5996,6 +5996,19 @@ startExecution:
 				continue
 			}
 
+			// If exception was caught within this frame (handleCatchBlock set frame.ip to handler PC),
+			// we need to jump to the handler. This happens when calling undefined as a method.
+			// After line 5906, frame.ip is either callerIP (no exception) or handler.HandlerPC (exception caught).
+			// We only check this for non-callable callees to avoid false positives from recursive calls
+			// that legitimately modify frame.ip.
+			if !wasUnwinding && !vm.unwinding && frame.ip != callerIP && !calleeVal.IsCallable() {
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] OpCallMethod: Exception caught in same frame, jumping to handler at frame.ip=%d\n", frame.ip)
+				}
+				ip = frame.ip
+				continue
+			}
+
 			// Minimal targeted debug: observe results of [Symbol.iterator] and next()
 			if false && !shouldSwitch {
 				switch calleeVal.Type() {
