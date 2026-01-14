@@ -8,18 +8,20 @@ import (
 )
 
 // isConstructor checks if a value can be used as a constructor (called with 'new')
+// Per ECMAScript: only regular functions and classes are constructors.
+// Arrow functions, generators, async functions, and async generators are NOT constructors.
 func isConstructor(v vm.Value) bool {
 	switch v.Type() {
 	case vm.TypeFunction:
 		fn := vm.AsFunction(v)
-		// Arrow functions and async (non-generator) functions are not constructors
-		if fn.IsArrowFunction || (fn.IsAsync && !fn.IsGenerator) {
+		// Arrow functions, generators, and async functions are not constructors
+		if fn.IsArrowFunction || fn.IsGenerator || fn.IsAsync {
 			return false
 		}
 		return true
 	case vm.TypeClosure:
 		cl := vm.AsClosure(v)
-		if cl.Fn.IsArrowFunction || (cl.Fn.IsAsync && !cl.Fn.IsGenerator) {
+		if cl.Fn.IsArrowFunction || cl.Fn.IsGenerator || cl.Fn.IsAsync {
 			return false
 		}
 		return true

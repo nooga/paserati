@@ -107,7 +107,11 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 		realm := vm.NewObject(vm.Null).AsPlainObject()
 		realmGlobal := vm.NewObject(vm.Null).AsPlainObject()
 
-		wrapCtor := func(name string) vm.Value {
+		// Create a realm-local error constructor that creates instances with
+		// the realm's own prototype, not the main realm's prototype.
+		// This is critical for cross-realm instanceof/constructor checks.
+		makeRealmErrorCtor := func(name string) vm.Value {
+			// Get the original prototype to inherit from (for proper prototype chain)
 			orig, _ := ctx.VM.GetGlobal(name)
 			var origProto vm.Value = vm.Undefined
 			if nfp := orig.AsNativeFunctionWithProps(); nfp != nil {
@@ -118,15 +122,25 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 			if origProto == vm.Undefined {
 				origProto = ctx.VM.ErrorPrototype
 			}
+
+			// Create a local prototype that inherits from the original
 			localProto := vm.NewObject(origProto).AsPlainObject()
 			localProto.SetOwn("name", vm.NewString(name))
 
-			ctor := vm.NewNativeFunctionWithProps(-1, true, name, func(a []vm.Value) (vm.Value, error) {
-				res, err := ctx.VM.Call(orig, vm.Undefined, a)
-				if err != nil {
-					return vm.Undefined, err
+			// The constructor must create instances with localProto, NOT call the original
+			// Use NewConstructorWithProps to ensure IsConstructor is true
+			var ctor vm.Value
+			ctor = vm.NewConstructorWithProps(-1, true, name, func(a []vm.Value) (vm.Value, error) {
+				msg := ""
+				if len(a) > 0 && a[0].Type() != vm.TypeUndefined {
+					msg = a[0].ToString()
 				}
-				return res, nil
+				// Create instance with the realm's local prototype
+				inst := vm.NewObject(vm.NewValueFromPlainObject(localProto)).AsPlainObject()
+				inst.SetOwn("name", vm.NewString(name))
+				inst.SetOwn("message", vm.NewString(msg))
+				inst.SetOwn("stack", vm.NewString(ctx.VM.CaptureStackTrace()))
+				return vm.NewValueFromPlainObject(inst), nil
 			})
 			if withProps := ctor.AsNativeFunctionWithProps(); withProps != nil {
 				withProps.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(localProto))
@@ -135,13 +149,13 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 			return ctor
 		}
 
-		realmGlobal.SetOwn("Error", wrapCtor("Error"))
-		realmGlobal.SetOwn("TypeError", wrapCtor("TypeError"))
-		realmGlobal.SetOwn("ReferenceError", wrapCtor("ReferenceError"))
-		realmGlobal.SetOwn("SyntaxError", wrapCtor("SyntaxError"))
-		realmGlobal.SetOwn("EvalError", wrapCtor("EvalError"))
-		realmGlobal.SetOwn("RangeError", wrapCtor("RangeError"))
-		realmGlobal.SetOwn("URIError", wrapCtor("URIError"))
+		realmGlobal.SetOwn("Error", makeRealmErrorCtor("Error"))
+		realmGlobal.SetOwn("TypeError", makeRealmErrorCtor("TypeError"))
+		realmGlobal.SetOwn("ReferenceError", makeRealmErrorCtor("ReferenceError"))
+		realmGlobal.SetOwn("SyntaxError", makeRealmErrorCtor("SyntaxError"))
+		realmGlobal.SetOwn("EvalError", makeRealmErrorCtor("EvalError"))
+		realmGlobal.SetOwn("RangeError", makeRealmErrorCtor("RangeError"))
+		realmGlobal.SetOwn("URIError", makeRealmErrorCtor("URIError"))
 
 		realm.SetOwn("global", vm.NewValueFromPlainObject(realmGlobal))
 		realm.SetOwn("evalScript", vm.NewNativeFunctionWithProps(1, false, "evalScript", func(args []vm.Value) (vm.Value, error) {
@@ -269,40 +283,9 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 		return err
 	}
 
-	// Provide minimal native Error subclasses missing from engine
-	makeErrorSubclass := func(name string) vm.Value {
-		proto := vm.NewObject(ctx.VM.ErrorPrototype).AsPlainObject()
-		proto.SetOwn("name", vm.NewString(name))
-		ctor := vm.NewNativeFunctionWithProps(1, true, name, func(args []vm.Value) (vm.Value, error) {
-			msg := ""
-			if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
-				msg = args[0].ToString()
-			}
-			inst := vm.NewObject(vm.NewValueFromPlainObject(proto)).AsPlainObject()
-			inst.SetOwn("name", vm.NewString(name))
-			inst.SetOwn("message", vm.NewString(msg))
-			inst.SetOwn("stack", vm.NewString(ctx.VM.CaptureStackTrace()))
-			return vm.NewValueFromPlainObject(inst), nil
-		})
-		if withProps := ctor.AsNativeFunctionWithProps(); withProps != nil {
-			withProps.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(proto))
-			proto.SetOwn("constructor", ctor)
-		}
-		return ctor
-	}
-
-	if err := ctx.DefineGlobal("EvalError", makeErrorSubclass("EvalError")); err != nil {
-		return err
-	}
-	if err := ctx.DefineGlobal("RangeError", makeErrorSubclass("RangeError")); err != nil {
-		return err
-	}
-	if err := ctx.DefineGlobal("URIError", makeErrorSubclass("URIError")); err != nil {
-		return err
-	}
-	if err := ctx.DefineGlobal("ReferenceError", makeErrorSubclass("ReferenceError")); err != nil {
-		return err
-	}
+	// NOTE: EvalError, RangeError, URIError, and ReferenceError are now provided
+	// by the standard builtins (error_init.go, reference_error_init.go).
+	// No need to redefine them here.
 
 	return nil
 }
