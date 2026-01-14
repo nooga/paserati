@@ -264,6 +264,11 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) { return vm.NewTypedArray(vm.TypedArrayInt8, args, 0, 0), nil }))
 
 	proto.SetOwnNonEnumerable("constructor", ctor)
+
+	// Set the constructor's [[Prototype]] to TypedArray (for proper inheritance chain)
+	// This makes Object.getPrototypeOf(Int8Array) === TypedArray
+	ctor.AsNativeFunctionWithProps().Properties.SetPrototype(vmx.TypedArrayConstructor)
+
 	vmx.Int8ArrayPrototype = vm.NewValueFromPlainObject(proto)
 	return ctx.DefineGlobal("Int8Array", ctor)
 }

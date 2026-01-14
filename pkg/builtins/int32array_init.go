@@ -331,6 +331,10 @@ func (i *Int32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set constructor property on prototype
 	int32ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 
+	// Set the constructor's [[Prototype]] to TypedArray (for proper inheritance chain)
+	// This makes Object.getPrototypeOf(Int32Array) === TypedArray
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetPrototype(vmInstance.TypedArrayConstructor)
+
 	// Set Int32Array prototype in VM
 	vmInstance.Int32ArrayPrototype = vm.NewValueFromPlainObject(int32ArrayProto)
 

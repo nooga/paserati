@@ -207,6 +207,11 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewTypedArray(vm.TypedArrayInt16, 0, 0, 0), nil
 	})
 	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+
+	// Set the constructor's [[Prototype]] to TypedArray (for proper inheritance chain)
+	// This makes Object.getPrototypeOf(Int16Array) === TypedArray
+	ctor.AsNativeFunctionWithProps().Properties.SetPrototype(vmx.TypedArrayConstructor)
+
 	vmx.Int16ArrayPrototype = vm.NewValueFromPlainObject(proto)
 	return ctx.DefineGlobal("Int16Array", ctor)
 }

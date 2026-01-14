@@ -331,6 +331,10 @@ func (u *Float64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set constructor property on prototype
 	float64ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 
+	// Set the constructor's [[Prototype]] to TypedArray (for proper inheritance chain)
+	// This makes Object.getPrototypeOf(Float64Array) === TypedArray
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetPrototype(vmInstance.TypedArrayConstructor)
+
 	// Set Float64Array prototype in VM
 	vmInstance.Float64ArrayPrototype = vm.NewValueFromPlainObject(float64ArrayProto)
 

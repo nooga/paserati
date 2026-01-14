@@ -351,6 +351,10 @@ func (i *BigInt64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set constructor property on prototype
 	bigInt64ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 
+	// Set the constructor's [[Prototype]] to TypedArray (for proper inheritance chain)
+	// This makes Object.getPrototypeOf(BigInt64Array) === TypedArray
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetPrototype(vmInstance.TypedArrayConstructor)
+
 	// Set BigInt64Array prototype in VM
 	vmInstance.BigInt64ArrayPrototype = vm.NewValueFromPlainObject(bigInt64ArrayProto)
 

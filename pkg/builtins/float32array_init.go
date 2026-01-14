@@ -343,6 +343,10 @@ func (f *Float32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Register [Symbol.iterator] using native symbol key
 	float32ArrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterFn, nil, nil, nil)
 
+	// Set the constructor's [[Prototype]] to TypedArray (for proper inheritance chain)
+	// This makes Object.getPrototypeOf(Float32Array) === TypedArray
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetPrototype(vmInstance.TypedArrayConstructor)
+
 	// Set Float32Array prototype in VM
 	vmInstance.Float32ArrayPrototype = vm.NewValueFromPlainObject(float32ArrayProto)
 

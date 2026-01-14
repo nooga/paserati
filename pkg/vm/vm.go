@@ -234,6 +234,7 @@ type VM struct {
 	lastThrowFuncName         string // function name where exception was thrown
 
 	// TypedArray prototypes
+	TypedArrayConstructor   Value // Abstract %TypedArray% constructor - all typed arrays inherit from this
 	TypedArrayPrototype     Value // Abstract %TypedArray%.prototype - all typed arrays inherit from this
 	Uint8ArrayPrototype     Value
 	Int8ArrayPrototype      Value
@@ -3290,6 +3291,19 @@ startExecution:
 					if frame.closure != nil && frame.closure.Fn != nil {
 						cl.CapturedSuperConstructor = frame.closure.Fn.Prototype
 					}
+					// Capture arguments from enclosing non-arrow function
+					// NOTE: Do NOT set frame.argumentsObject here - that would pollute the frame
+					if frame.argumentsObject.Type() != TypeUndefined {
+						cl.CapturedArguments = frame.argumentsObject
+					} else if frame.args != nil {
+						calleeValue := frame.calleeValue
+						if calleeValue.Type() == TypeUndefined && frame.closure != nil {
+							calleeValue = NewClosure(frame.closure.Fn, frame.closure.Upvalues)
+						}
+						cl.CapturedArguments = NewArguments(frame.args, calleeValue)
+					} else {
+						cl.CapturedArguments = NewArguments([]Value{}, Undefined)
+					}
 				}
 			}
 
@@ -3382,6 +3396,19 @@ startExecution:
 					// Capture super constructor from enclosing non-arrow function
 					if frame.closure != nil && frame.closure.Fn != nil {
 						cl.CapturedSuperConstructor = frame.closure.Fn.Prototype
+					}
+					// Capture arguments from enclosing non-arrow function
+					// NOTE: Do NOT set frame.argumentsObject here - that would pollute the frame
+					if frame.argumentsObject.Type() != TypeUndefined {
+						cl.CapturedArguments = frame.argumentsObject
+					} else if frame.args != nil {
+						calleeValue := frame.calleeValue
+						if calleeValue.Type() == TypeUndefined && frame.closure != nil {
+							calleeValue = NewClosure(frame.closure.Fn, frame.closure.Upvalues)
+						}
+						cl.CapturedArguments = NewArguments(frame.args, calleeValue)
+					} else {
+						cl.CapturedArguments = NewArguments([]Value{}, Undefined)
 					}
 				}
 			}
@@ -9052,6 +9079,16 @@ startExecution:
 			if frame.closure == nil || frame.closure.Fn == nil {
 				status := vm.runtimeError("Cannot access arguments outside of function")
 				return status, Undefined
+			}
+
+			// For arrow functions, use the captured arguments from the enclosing non-arrow function
+			if frame.closure.Fn.IsArrowFunction {
+				if frame.closure.CapturedArguments.Type() != TypeUndefined {
+					frame.registers[destReg] = frame.closure.CapturedArguments
+				} else {
+					frame.registers[destReg] = NewArguments([]Value{}, Undefined)
+				}
+				continue
 			}
 
 			// Use the actual argument count that was passed to this function

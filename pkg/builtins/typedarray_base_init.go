@@ -97,6 +97,9 @@ func (i *TypedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set constructor property on prototype
 	typedArrayProto.SetOwnNonEnumerable("constructor", typedArrayCtor)
 
+	// Store the constructor in VM for inheritance by specific TypedArray constructors
+	vmInstance.TypedArrayConstructor = typedArrayCtor
+
 	// Register TypedArray constructor as global
 	return ctx.DefineGlobal("TypedArray", typedArrayCtor)
 }

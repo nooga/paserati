@@ -331,6 +331,10 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set constructor property on prototype
 	uint16ArrayProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 
+	// Set the constructor's [[Prototype]] to TypedArray (for proper inheritance chain)
+	// This makes Object.getPrototypeOf(Uint16Array) === TypedArray
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetPrototype(vmInstance.TypedArrayConstructor)
+
 	// Set Uint16Array prototype in VM
 	vmInstance.Uint16ArrayPrototype = vm.NewValueFromPlainObject(uint16ArrayProto)
 

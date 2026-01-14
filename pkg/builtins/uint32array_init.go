@@ -207,6 +207,11 @@ func (u *Uint32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewTypedArray(vm.TypedArrayUint32, 0, 0, 0), nil
 	})
 	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+
+	// Set the constructor's [[Prototype]] to TypedArray (for proper inheritance chain)
+	// This makes Object.getPrototypeOf(Uint32Array) === TypedArray
+	ctor.AsNativeFunctionWithProps().Properties.SetPrototype(vmx.TypedArrayConstructor)
+
 	vmx.Uint32ArrayPrototype = vm.NewValueFromPlainObject(proto)
 	return ctx.DefineGlobal("Uint32Array", ctor)
 }
