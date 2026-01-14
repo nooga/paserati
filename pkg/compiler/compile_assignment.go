@@ -302,13 +302,17 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		}
 		indexInfo.indexReg = indexReg
 
-		// Load the current value at the index
-		currentValueReg = c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, currentValueReg)
-		c.emitOpCode(vm.OpGetIndex, line)
-		c.emitByte(byte(currentValueReg))
-		c.emitByte(byte(indexInfo.arrayReg))
-		c.emitByte(byte(indexInfo.indexReg))
+		// Only load the current value for compound/logical assignment (not simple =)
+		// For simple assignment, we don't need the current value and must not call
+		// OpGetIndex before evaluating the RHS (per ECMAScript evaluation order)
+		if node.Operator != "=" {
+			currentValueReg = c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, currentValueReg)
+			c.emitOpCode(vm.OpGetIndex, line)
+			c.emitByte(byte(currentValueReg))
+			c.emitByte(byte(indexInfo.arrayReg))
+			c.emitByte(byte(indexInfo.indexReg))
+		}
 
 	case *parser.MemberExpression:
 		// Check for super property assignment (super.prop = value or super[expr] = value)

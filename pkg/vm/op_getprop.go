@@ -3,7 +3,10 @@ package vm
 import "fmt"
 
 func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string, dest *Value) (bool, InterpretResult, Value) {
-	// If frame is nil (called from outside VM loop), use current frame
+	// Track if frame was originally nil - if so, we should NOT update frame.ip
+	// because we're being called from a helper function (like toPrimitive) not the VM loop
+	frameWasNil := frame == nil
+	// If frame is nil (called from outside VM loop), use current frame for cache lookup only
 	if frame == nil && vm.frameCount > 0 {
 		frame = &vm.frames[vm.frameCount-1]
 	}
@@ -97,7 +100,8 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 	// 4. Functions, Closures, Native Functions, Native Functions with Props, Async Native Functions, and Bound Functions (unified handling)
 	if objVal.Type() == TypeFunction || objVal.Type() == TypeClosure || objVal.Type() == TypeBoundFunction || objVal.Type() == TypeNativeFunction || objVal.Type() == TypeNativeFunctionWithProps || objVal.Type() == TypeAsyncNativeFunction {
 		// Set frame.ip before calling handleCallableProperty in case it throws (for exception handler lookup)
-		if frame != nil {
+		// Only update if frame was NOT nil (i.e., we're in the VM loop, not a helper function)
+		if frame != nil && !frameWasNil {
 			frame.ip = ip - 4
 		}
 		// Track helper call depth so exception handlers can set handlerFound
@@ -165,7 +169,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				eo.SetOwn("message", NewString(fmt.Sprintf("Cannot read property '%s' of %s", propName, objVal.TypeName())))
 				excVal = NewValueFromPlainObject(eo)
 			}
-			if frame != nil {
+			if frame != nil && !frameWasNil {
 				frame.ip = ip - 4
 			}
 			vm.throwException(excVal)
@@ -213,7 +217,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				eo.SetOwn("message", NewString(fmt.Sprintf("Cannot access property '%s' on non-object type '%s'", propName, objVal.TypeName())))
 				excVal = NewValueFromPlainObject(eo)
 			}
-			if frame != nil {
+			if frame != nil && !frameWasNil {
 				frame.ip = ip - 4
 			}
 			vm.throwException(excVal)
@@ -263,7 +267,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 						res, err := vm.Call(g, *objVal, nil)
 						if err != nil {
 							if ee, ok := err.(ExceptionError); ok {
-								if frame != nil {
+								if frame != nil && !frameWasNil {
 									frame.ip = ip - 4
 								}
 								vm.throwException(ee.GetExceptionValue())
@@ -289,7 +293,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 								eo.SetOwn("message", NewString(err.Error()))
 								excVal = NewValueFromPlainObject(eo)
 							}
-							if frame != nil {
+							if frame != nil && !frameWasNil {
 								frame.ip = ip - 4
 							}
 							vm.throwException(excVal)
@@ -328,7 +332,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 							res, err := vm.Call(g, *objVal, nil)
 							if err != nil {
 								if ee, ok := err.(ExceptionError); ok {
-									if frame != nil {
+									if frame != nil && !frameWasNil {
 										frame.ip = ip - 4
 									}
 									vm.throwException(ee.GetExceptionValue())
@@ -353,7 +357,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 									eo.SetOwn("message", NewString(err.Error()))
 									excVal = NewValueFromPlainObject(eo)
 								}
-								if frame != nil {
+								if frame != nil && !frameWasNil {
 									frame.ip = ip - 4
 								}
 								vm.throwException(excVal)
@@ -394,7 +398,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 					res, err := vm.Call(g, *objVal, nil)
 					if err != nil {
 						if ee, ok := err.(ExceptionError); ok {
-							if frame != nil {
+							if frame != nil && !frameWasNil {
 								frame.ip = ip - 4
 							}
 							vm.throwException(ee.GetExceptionValue())
@@ -419,7 +423,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 							eo.SetOwn("message", NewString(err.Error()))
 							excVal = NewValueFromPlainObject(eo)
 						}
-						if frame != nil {
+						if frame != nil && !frameWasNil {
 							frame.ip = ip - 4
 						}
 						vm.throwException(excVal)
@@ -747,7 +751,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				eo.SetOwn("message", NewString("Cannot perform property access on a revoked Proxy"))
 				excVal = NewValueFromPlainObject(eo)
 			}
-			if frame != nil {
+			if frame != nil && !frameWasNil {
 				frame.ip = ip - 4
 			}
 			vm.throwException(excVal)
@@ -774,7 +778,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 					eo.SetOwn("message", NewString("'get' on proxy: trap is not a function"))
 					excVal = NewValueFromPlainObject(eo)
 				}
-				if frame != nil {
+				if frame != nil && !frameWasNil {
 					frame.ip = ip - 4
 				}
 				vm.throwException(excVal)
@@ -789,7 +793,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			result, err := vm.Call(getTrap, proxy.handler, trapArgs)
 			if err != nil {
 				if ee, ok := err.(ExceptionError); ok {
-					if frame != nil {
+					if frame != nil && !frameWasNil {
 						frame.ip = ip - 4
 					}
 					vm.throwException(ee.GetExceptionValue())
@@ -815,7 +819,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 					eo.SetOwn("message", NewString(err.Error()))
 					excVal = NewValueFromPlainObject(eo)
 				}
-				if frame != nil {
+				if frame != nil && !frameWasNil {
 					frame.ip = ip - 4
 				}
 				vm.throwException(excVal)
@@ -845,7 +849,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 							res, err := vm.Call(g, target, nil)
 							if err != nil {
 								if ee, ok := err.(ExceptionError); ok {
-									if frame != nil {
+									if frame != nil && !frameWasNil {
 										frame.ip = ip - 4
 									}
 									vm.throwException(ee.GetExceptionValue())
@@ -870,7 +874,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 									eo.SetOwn("message", NewString(err.Error()))
 									excVal = NewValueFromPlainObject(eo)
 								}
-								if frame != nil {
+								if frame != nil && !frameWasNil {
 									frame.ip = ip - 4
 								}
 								vm.throwException(excVal)
@@ -910,7 +914,10 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 
 // opGetPropSymbol handles property get where the key is a symbol Value.
 func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Value, dest *Value) (bool, InterpretResult, Value) {
-	// If frame is nil (called from outside VM loop), use current frame
+	// Track if frame was originally nil - if so, we should NOT update frame.ip
+	// because we're being called from a helper function (like toPrimitive) not the VM loop
+	frameWasNil := frame == nil
+	// If frame is nil (called from outside VM loop), use current frame for cache lookup only
 	if frame == nil && vm.frameCount > 0 {
 		frame = &vm.frames[vm.frameCount-1]
 	}
@@ -1295,7 +1302,7 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 				res, err := vm.Call(g, base, nil)
 				if err != nil {
 					if ee, ok := err.(ExceptionError); ok {
-						if frame != nil {
+						if frame != nil && !frameWasNil {
 							frame.ip = ip - 4
 						}
 						vm.throwException(ee.GetExceptionValue())
@@ -1321,7 +1328,7 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 						eo.SetOwn("message", NewString(err.Error()))
 						excVal = NewValueFromPlainObject(eo)
 					}
-					if frame != nil {
+					if frame != nil && !frameWasNil {
 						frame.ip = ip - 4
 					}
 					vm.throwException(excVal)
@@ -1353,7 +1360,7 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 						res, err := vm.Call(g, base, nil)
 						if err != nil {
 							if ee, ok := err.(ExceptionError); ok {
-								if frame != nil {
+								if frame != nil && !frameWasNil {
 									frame.ip = ip - 4
 								}
 								vm.throwException(ee.GetExceptionValue())
@@ -1378,7 +1385,7 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 								eo.SetOwn("message", NewString(err.Error()))
 								excVal = NewValueFromPlainObject(eo)
 							}
-							if frame != nil {
+							if frame != nil && !frameWasNil {
 								frame.ip = ip - 4
 							}
 							vm.throwException(excVal)

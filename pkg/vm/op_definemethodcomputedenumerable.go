@@ -33,7 +33,18 @@ func (vm *VM) handleOpDefineMethodComputedEnumerable(code []byte, ip *int, regis
 	if keyVal.Type() == TypeSymbol {
 		propKey = NewSymbolKey(keyVal)
 	} else {
-		propKey = NewStringKey(keyVal.ToString())
+		// For objects/callables, use toPrimitive to get proper toString() call
+		var keyStr string
+		if keyVal.IsObject() || keyVal.IsCallable() {
+			primitiveVal := vm.toPrimitive(keyVal, "string")
+			if vm.unwinding {
+				return InterpretRuntimeError, Undefined
+			}
+			keyStr = primitiveVal.ToString()
+		} else {
+			keyStr = keyVal.ToString()
+		}
+		propKey = NewStringKey(keyStr)
 	}
 
 	// Define as enumerable method (object literal methods are enumerable per ECMAScript spec)

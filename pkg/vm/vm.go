@@ -3954,7 +3954,21 @@ startExecution:
 					continue
 				default:
 					// For arbitrary base objects, support computed property by routing through opGetProp/Boxing rules
-					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, indexVal.ToString(), &registers[destReg]); !ok {
+					// Functions/closures are objects and need toPrimitive for proper toString() call
+					var propKey string
+					if indexVal.IsObject() || indexVal.IsCallable() {
+						primitiveVal := vm.toPrimitive(indexVal, "string")
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
+						}
+						propKey = primitiveVal.ToString()
+						// Store the converted key back so subsequent OpSetIndex won't call toString again
+						// This is required for ECMAScript compliance: ToPropertyKey called exactly once
+						registers[indexReg] = String(propKey)
+					} else {
+						propKey = indexVal.ToString()
+					}
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, propKey, &registers[destReg]); !ok {
 						if status != InterpretOK {
 							return status, value
 						}
@@ -4132,7 +4146,20 @@ startExecution:
 					continue
 				default:
 					// JavaScript allows any value as property key - convert to string
-					key := indexVal.ToString()
+					// For objects/callables, use toPrimitive for proper toString() call
+					var key string
+					if indexVal.IsObject() || indexVal.IsCallable() {
+						primitiveVal := vm.toPrimitive(indexVal, "string")
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
+						}
+						key = primitiveVal.ToString()
+						// Store the converted key back so subsequent OpSetIndex won't call toString again
+						// This is required for ECMAScript compliance: ToPropertyKey called exactly once
+						registers[indexReg] = String(key)
+					} else {
+						key = indexVal.ToString()
+					}
 					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
 						if status != InterpretOK {
 							return status, value
@@ -4283,9 +4310,24 @@ startExecution:
 
 			default:
 				// Check if we're trying to index null or undefined - throw TypeError per ECMAScript spec
+				// IMPORTANT: Per ECMAScript, throw TypeError BEFORE calling ToPropertyKey on the index
+				// This means we must NOT call indexVal.ToString() for objects, as that would invoke toString()
 				if baseVal.Type() == TypeNull || baseVal.Type() == TypeUndefined {
 					frame.ip = ip
-					err := vm.NewTypeError(fmt.Sprintf("Cannot read properties of %s (reading '%s')", baseVal.TypeName(), indexVal.ToString()))
+					// Get property name without calling toPrimitive/toString on objects
+					var propName string
+					switch indexVal.Type() {
+					case TypeString:
+						propName = AsString(indexVal)
+					case TypeIntegerNumber, TypeFloatNumber:
+						propName = indexVal.ToString() // Safe - numbers don't have custom toString
+					case TypeSymbol:
+						propName = indexVal.Inspect()
+					default:
+						// For objects/callables, don't call toString - just show the type
+						propName = indexVal.TypeName()
+					}
+					err := vm.NewTypeError(fmt.Sprintf("Cannot read properties of %s (reading '%s')", baseVal.TypeName(), propName))
 					if excErr, ok := err.(exceptionError); ok {
 						vm.throwException(excErr.GetExceptionValue())
 					}
@@ -4345,9 +4387,32 @@ startExecution:
 			case TypeArray:
 				arr := AsArray(baseVal)
 
-				// Handle non-number indices by converting to property key
-				if !IsNumber(indexVal) {
-					// Convert to string property key (e.g., arr[true] -> arr["true"])
+				var idx int
+				var isValidArrayIndex bool
+
+				// Handle index based on type
+				if IsNumber(indexVal) {
+					// For numbers, check if it's a valid array index (non-negative integer)
+					numVal := AsNumber(indexVal)
+					idx = int(numVal)
+					// ECMAScript: array index must be a non-negative integer where ToString(ToUint32(P)) == P
+					isValidArrayIndex = float64(idx) == numVal && idx >= 0
+				} else if indexVal.Type() == TypeString {
+					// String indices that represent valid array indices should be treated as array indices
+					// e.g., arr["0"] should be equivalent to arr[0]
+					key := AsString(indexVal)
+					// Try to parse as array index - must be non-negative integer with no leading zeros (except "0")
+					if parsed, err := strconv.Atoi(key); err == nil && parsed >= 0 {
+						// Verify it's a canonical array index (no leading zeros, within uint32 range)
+						if strconv.Itoa(parsed) == key && parsed <= 0xFFFFFFFE {
+							idx = parsed
+							isValidArrayIndex = true
+						}
+					}
+				}
+
+				// If not a valid array index, treat as property key
+				if !isValidArrayIndex {
 					key := indexVal.ToString()
 					if ok, status, res := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
 						if status != InterpretOK {
@@ -4358,29 +4423,11 @@ startExecution:
 					continue
 				}
 
-				// For numbers, check if it's a valid array index (non-negative integer)
-				numVal := AsNumber(indexVal)
-				idx := int(numVal)
+				// idx is now set from either number or string path
+				// and we've verified it's a valid array index (non-negative integer)
 
-				// If the number is not an integer or is negative, treat it as a property key
-				// ECMAScript: array index must be a non-negative integer where ToString(ToUint32(P)) == P
-				if float64(idx) != numVal || idx < 0 {
-					key := indexVal.ToString()
-					if ok, status, res := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
-						if status != InterpretOK {
-							return status, res
-						}
-						goto reloadFrame
-					}
-					continue
-				}
-
-				// Handle Array Expansion (keep existing logic)
-				if idx < 0 {
-					frame.ip = ip
-					status := vm.runtimeError("Array index cannot be negative, got %d", idx)
-					return status, Undefined
-				} else if idx < len(arr.elements) {
+				// Handle Array Expansion
+				if idx < len(arr.elements) {
 					arr.elements[idx] = valueVal
 				} else if idx == len(arr.elements) {
 					arr.elements = append(arr.elements, valueVal)
@@ -4444,7 +4491,7 @@ startExecution:
 					continue
 				default:
 					// ToPropertyKey: convert to string, calling toString() method for objects
-					if indexVal.IsObject() {
+					if indexVal.IsObject() || indexVal.IsCallable() {
 						primitiveVal := vm.toPrimitive(indexVal, "string")
 						// Check if an exception was thrown during toPrimitive
 						if len(vm.errors) > 0 {
@@ -9977,7 +10024,7 @@ startExecution:
 				continue
 			default:
 				// For objects and other types, call ToPrimitive with "string" hint
-				if srcVal.IsObject() {
+				if srcVal.IsObject() || srcVal.IsCallable() {
 					primitiveVal := vm.toPrimitive(srcVal, "string")
 					keyStr = primitiveVal.ToString()
 				} else {

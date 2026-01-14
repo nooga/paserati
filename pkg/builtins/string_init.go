@@ -2079,8 +2079,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.NewString(arg.ToString()), nil
 			}
 
-			// For objects, use ToPrimitive with hint "string"
-			if arg.IsObject() {
+			// For objects and functions, use ToPrimitive with hint "string"
+			// Functions in ECMAScript are objects and may have custom toString properties
+			if arg.IsObject() || arg.IsFunction() || arg.IsClosure() || arg.IsNativeFunction() {
 				// Track that we're in a helper call so exception handlers can be found
 				vmInstance.EnterHelperCall()
 				primVal := vmInstance.ToPrimitive(arg, "string")
