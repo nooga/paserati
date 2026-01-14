@@ -605,6 +605,11 @@ type ScopeDescriptor struct {
 	// between the eval and the variable environment. Used to reject var declarations
 	// that would conflict with these lexical bindings (per 19.2.1.3 step 5.d).
 	LexicalBindings []string
+
+	// HasSuperBinding indicates if the caller context has a [[HomeObject]] binding,
+	// meaning super property access is valid. This is true when eval is called from
+	// within a method (class method or object method with concise syntax).
+	HasSuperBinding bool
 }
 
 // Chunk represents a sequence of bytecode instructions and associated data.

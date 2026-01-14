@@ -278,9 +278,10 @@ type Compiler struct {
 	inTailPosition bool // True when compiling tail-positioned expression
 
 	// --- Function Context Tracking ---
-	isAsync         bool // True when compiling async function
-	isGenerator     bool // True when compiling generator function
-	isArrowFunction bool // True when compiling arrow function (no own arguments binding)
+	isAsync              bool // True when compiling async function
+	isGenerator          bool // True when compiling generator function
+	isArrowFunction      bool // True when compiling arrow function (no own arguments binding)
+	isMethodCompilation  bool // True when compiling a method that will have [[HomeObject]] (class/object method)
 
 	// --- Direct Eval Tracking ---
 	hasDirectEval         bool // True when function contains direct eval call (needs scope descriptor)
@@ -517,6 +518,12 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// Use the assigned checker. If none was assigned (e.g., non-REPL), create one.
 	if c.typeChecker == nil {
 		c.typeChecker = checker.NewChecker()
+	}
+
+	// For direct eval compilation with super binding, tell the checker that super is allowed
+	if c.callerScopeDesc != nil && c.callerScopeDesc.HasSuperBinding {
+		c.typeChecker.SetAllowSuperInEval(true)
+		defer c.typeChecker.SetAllowSuperInEval(false) // Reset after type checking
 	}
 
 	// Check if this program has already been type-checked by comparing the AST
@@ -2040,6 +2047,7 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 			LocalNames:              []string{},
 			HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
 			InDefaultParameterScope: c.hasEvalInDefaultParam,
+			HasSuperBinding:         c.isMethodCompilation, // Methods have [[HomeObject]] for super
 		}
 	}
 
@@ -2054,6 +2062,7 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 		LocalNames:              localNames,
 		HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
 		InDefaultParameterScope: c.hasEvalInDefaultParam,
+		HasSuperBinding:         c.isMethodCompilation, // Methods have [[HomeObject]] for super
 	}
 }
 
@@ -3500,6 +3509,51 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 	constructorReg, err := c.compileConstructor(node, BadRegister)
 	if err != nil {
 		return BadRegister, err
+	}
+
+	// 1b. Set up [[Prototype]] chain for derived class expressions
+	// Per ECMAScript spec, the constructor function's [[Prototype]] must point to the parent class.
+	if node.SuperClass != nil {
+		if _, isNull := node.SuperClass.(*parser.NullLiteral); !isNull {
+			// Get the superclass name
+			var superClassName string
+			if ident, ok := node.SuperClass.(*parser.Identifier); ok {
+				superClassName = ident.Value
+			} else if genericTypeRef, ok := node.SuperClass.(*parser.GenericTypeRef); ok {
+				superClassName = genericTypeRef.Name.Value
+			} else {
+				superClassName = node.SuperClass.String()
+			}
+
+			// Look up the parent class constructor using symbol table
+			var superConstructorReg Register
+			var needToFreeSuperReg bool
+			symbol, _, exists := c.currentSymbolTable.Resolve(superClassName)
+			if exists {
+				if symbol.IsGlobal {
+					superConstructorReg = c.regAlloc.Alloc()
+					needToFreeSuperReg = true
+					c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
+				} else {
+					superConstructorReg = symbol.Register
+					needToFreeSuperReg = false
+				}
+			} else {
+				// Not in symbol table - might be a built-in class
+				globalIdx := c.GetOrAssignGlobalIndex(superClassName)
+				superConstructorReg = c.regAlloc.Alloc()
+				needToFreeSuperReg = true
+				c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
+			}
+
+			c.emitOpCode(vm.OpSetClosureProto, node.Token.Line)
+			c.emitByte(byte(constructorReg))
+			c.emitByte(byte(superConstructorReg))
+			if needToFreeSuperReg {
+				c.regAlloc.Free(superConstructorReg)
+			}
+			debugPrintf("// DEBUG compileClassExpression: Set constructor's [[Prototype]] to parent class\n")
+		}
 	}
 
 	// 2. Set up prototype object with methods

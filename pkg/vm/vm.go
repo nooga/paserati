@@ -45,8 +45,9 @@ type EvalDriver interface {
 	// scopeDesc contains the name→register mapping for the caller's local variables
 	// callerRegs is the caller's register array (allows read/write access to locals)
 	// callerThis is the 'this' value from the caller's execution context
+	// callerHomeObject is the [[HomeObject]] for super property access
 	// Returns (result, errors) - errors is empty on success
-	DirectEvalCode(code string, inheritStrict bool, scopeDesc *ScopeDescriptor, callerRegs []Value, callerThis Value) (Value, []error)
+	DirectEvalCode(code string, inheritStrict bool, scopeDesc *ScopeDescriptor, callerRegs []Value, callerThis Value, callerHomeObject Value) (Value, []error)
 }
 
 // logGeneratorStateTransition logs generator state changes for debugging
@@ -278,8 +279,9 @@ type VM struct {
 
 	// Caller's 'this' value for direct eval (Phase 3)
 	// Set during InterpretWithCallerScope, Undefined otherwise
-	evalCallerThis    Value
-	hasEvalCallerThis bool // True when evalCallerThis is valid (allows passing Undefined as 'this')
+	evalCallerThis       Value
+	hasEvalCallerThis    bool // True when evalCallerThis is valid (allows passing Undefined as 'this')
+	evalCallerHomeObject Value // Caller's [[HomeObject]] for super property access in eval
 
 	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
@@ -670,7 +672,12 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 			frame.thisValue = globalThisVal
 		}
 	}
-	frame.homeObject = Undefined
+	// Check if we have a caller's homeObject from direct eval (for super property access)
+	if vm.evalCallerHomeObject.Type() != TypeUndefined {
+		frame.homeObject = vm.evalCallerHomeObject
+	} else {
+		frame.homeObject = Undefined
+	}
 	frame.isConstructorCall = false
 	frame.newTargetValue = Undefined
 	// IMPORTANT: Set isDirectCall=true for NESTED Interpret() calls (eval) so they return immediately
@@ -730,17 +737,21 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	}
 }
 
-// InterpretWithCallerScope executes a chunk with access to the caller's local variables and 'this'.
-// This is used for direct eval to allow reading/writing caller's registers and inheriting 'this'.
+// InterpretWithCallerScope executes a chunk with access to the caller's local variables, 'this', and homeObject.
+// This is used for direct eval to allow reading/writing caller's registers and inheriting 'this' and homeObject.
 // callerRegs is the slice of caller's registers that can be accessed by OpGetCallerLocal/OpSetCallerLocal.
 // callerThis is the 'this' value from the caller's execution context.
-func (vm *VM) InterpretWithCallerScope(chunk *Chunk, callerRegs []Value, callerThis Value) (Value, []errors.PaseratiError) {
+// callerHomeObject is the [[HomeObject]] for super property access.
+func (vm *VM) InterpretWithCallerScope(chunk *Chunk, callerRegs []Value, callerThis Value, callerHomeObject Value) (Value, []errors.PaseratiError) {
 	// Store the caller registers for access by eval code
 	vm.evalCallerRegs = callerRegs
 
 	// Store the caller's 'this' value so it's inherited by the eval code
 	vm.evalCallerThis = callerThis
 	vm.hasEvalCallerThis = true
+
+	// Store the caller's homeObject for super property access in eval
+	vm.evalCallerHomeObject = callerHomeObject
 
 	// Execute the chunk normally
 	result, errs := vm.Interpret(chunk)
@@ -749,6 +760,7 @@ func (vm *VM) InterpretWithCallerScope(chunk *Chunk, callerRegs []Value, callerT
 	vm.evalCallerRegs = nil
 	vm.evalCallerThis = Undefined
 	vm.hasEvalCallerThis = false
+	vm.evalCallerHomeObject = Undefined
 
 	return result, errs
 }
@@ -3218,8 +3230,13 @@ startExecution:
 			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
 				cl.Fn.Prototype = vm.FunctionPrototype
 				// For arrow functions, capture the current 'this' value (lexical this binding)
+				// and the super constructor for super() calls
 				if cl.Fn.IsArrowFunction {
 					cl.CapturedThis = frame.thisValue
+					// Capture super constructor from enclosing non-arrow function
+					if frame.closure != nil && frame.closure.Fn != nil {
+						cl.CapturedSuperConstructor = frame.closure.Fn.Prototype
+					}
 				}
 			}
 
@@ -3305,8 +3322,14 @@ startExecution:
 			// Set the function's [[Prototype]] to Function.prototype
 			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
 				cl.Fn.Prototype = vm.FunctionPrototype
+				// For arrow functions, capture the current 'this' value (lexical this binding)
+				// and the super constructor for super() calls
 				if cl.Fn.IsArrowFunction {
 					cl.CapturedThis = frame.thisValue
+					// Capture super constructor from enclosing non-arrow function
+					if frame.closure != nil && frame.closure.Fn != nil {
+						cl.CapturedSuperConstructor = frame.closure.Fn.Prototype
+					}
 				}
 			}
 
@@ -6813,12 +6836,76 @@ startExecution:
 			// This is used by super() to update the this binding
 			// In derived constructors, super() can only be called once
 			// Throw ReferenceError if 'this' is already initialized
-			if frame.thisValue.Type() != TypeUndefined {
-				frame.ip = ip
-				vm.ThrowReferenceError("super() already called")
-				return InterpretRuntimeError, Undefined
+
+			// For arrow functions, check the captured this instead of frame.thisValue
+			// since arrow functions use lexical this binding
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+				// Arrow function: check if captured this is already initialized
+				// If CapturedThis is not undefined, super() was already called in the enclosing constructor
+				if frame.closure.CapturedThis.Type() != TypeUndefined {
+					frame.ip = ip
+					vm.ThrowReferenceError("super() already called")
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					return InterpretRuntimeError, Undefined
+				}
+				// For arrow functions, we also need to check enclosing constructor frames
+				// Walk up the frame stack to find the enclosing constructor
+				for i := int(vm.frameCount) - 2; i >= 0; i-- {
+					enclosingFrame := &vm.frames[i]
+					if enclosingFrame.isConstructorCall {
+						if enclosingFrame.thisValue.Type() != TypeUndefined {
+							frame.ip = ip
+							vm.ThrowReferenceError("super() already called")
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							return InterpretRuntimeError, Undefined
+						}
+						// Update the enclosing constructor's thisValue
+						enclosingFrame.thisValue = registers[srcReg]
+						break
+					}
+				}
+				// Also update the current frame's thisValue for consistency
+				frame.thisValue = registers[srcReg]
+			} else {
+				// Non-arrow function: check current frame's thisValue
+				if frame.thisValue.Type() != TypeUndefined {
+					frame.ip = ip
+					vm.ThrowReferenceError("super() already called")
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					return InterpretRuntimeError, Undefined
+				}
+				frame.thisValue = registers[srcReg]
 			}
-			frame.thisValue = registers[srcReg]
 
 		case OpLoadNewTarget:
 			destReg := code[ip]
@@ -7778,14 +7865,18 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
-			// The super constructor is the [[Prototype]] of the constructor function itself
-			// We need to get it from the function's prototype chain, not the homeObject
-			// For class constructors, FunctionObject.Prototype is set to the parent class constructor
-			// This is what ECMAScript's GetSuperConstructor() returns
-			if currentClosure.Fn != nil {
-				registers[destReg] = currentClosure.Fn.Prototype
+			// For arrow functions, use the captured super constructor
+			// since arrow functions capture super() lexically at creation time
+			if currentClosure.Fn != nil && currentClosure.Fn.IsArrowFunction {
+				registers[destReg] = currentClosure.CapturedSuperConstructor
 			} else {
-				registers[destReg] = vm.FunctionPrototype
+				// For non-arrow functions, use the function's [[Prototype]]
+				// This is what ECMAScript's GetSuperConstructor() returns
+				if currentClosure.Fn != nil {
+					registers[destReg] = currentClosure.Fn.Prototype
+				} else {
+					registers[destReg] = vm.FunctionPrototype
+				}
 			}
 
 		case OpLoadImportMeta:
@@ -9856,8 +9947,8 @@ startExecution:
 				}
 
 				// Use DirectEvalCode for direct eval with scope access
-				// Pass the caller's 'this' value so it's inherited by the eval code
-				result, evalErrs = vm.evalDriver.DirectEvalCode(codeStr, callerIsStrict, function.Chunk.ScopeDesc, registers, callerThis)
+				// Pass the caller's 'this' value and homeObject so they're inherited by the eval code
+				result, evalErrs = vm.evalDriver.DirectEvalCode(codeStr, callerIsStrict, function.Chunk.ScopeDesc, registers, callerThis, frame.homeObject)
 			} else {
 				// Use regular EvalCode (no local scope access)
 				result, evalErrs = vm.evalDriver.EvalCode(codeStr, callerIsStrict)

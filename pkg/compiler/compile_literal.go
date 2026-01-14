@@ -996,10 +996,27 @@ func (c *Compiler) compileFunctionLiteralStrict(node *parser.FunctionLiteral, na
 	return c.compileFunctionLiteralWithStrict(node, nameHint, true)
 }
 
+// compileFunctionLiteralAsMethod compiles a function literal as a method (with [[HomeObject]])
+// This is used for class methods and object methods with concise syntax.
+// Methods are always strict mode and have a [[HomeObject]] for super property access.
+func (c *Compiler) compileFunctionLiteralAsMethod(node *parser.FunctionLiteral, nameHint string) (uint16, []*Symbol, errors.PaseratiError) {
+	return c.compileFunctionLiteralWithOptions(node, nameHint, true, true)
+}
+
 // compileFunctionLiteralWithStrict compiles a function literal with optional forced strict mode
 func (c *Compiler) compileFunctionLiteralWithStrict(node *parser.FunctionLiteral, nameHint string, forceStrict bool) (uint16, []*Symbol, errors.PaseratiError) {
+	return c.compileFunctionLiteralWithOptions(node, nameHint, forceStrict, false)
+}
+
+// compileFunctionLiteralWithOptions compiles a function literal with configurable options
+// forceStrict: if true, function is compiled in strict mode (e.g., class methods)
+// isMethod: if true, function will have [[HomeObject]] for super property access
+func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLiteral, nameHint string, forceStrict bool, isMethod bool) (uint16, []*Symbol, errors.PaseratiError) {
 	// 1. Create a new Compiler instance for the function body, linked to the current one
 	functionCompiler := newFunctionCompiler(c) // <<< Keep this instance variable
+
+	// 1.4. Set method compilation flag if this is a method (has [[HomeObject]])
+	functionCompiler.isMethodCompilation = isMethod
 
 	// 1.5. Set strict mode if forced (e.g., class methods are always strict per ECMAScript spec)
 	if forceStrict {

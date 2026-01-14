@@ -1421,8 +1421,9 @@ func (c *Compiler) compileFunctionLiteralWithThisType(node *parser.FunctionLiter
 	// First, set the computed type on any ThisExpression nodes in the function body
 	c.setThisTypeOnNodes(node.Body, thisType)
 
-	// Compile with strict mode (class methods are always strict per ECMAScript spec)
-	return c.compileFunctionLiteralStrict(node, nameHint)
+	// Compile as a method with strict mode (class methods are always strict per ECMAScript spec)
+	// This marks the function as having a [[HomeObject]] for super property access
+	return c.compileFunctionLiteralAsMethod(node, nameHint)
 }
 
 // setThisTypeOnNodes walks the AST and sets the computed type on ThisExpression nodes

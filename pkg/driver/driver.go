@@ -343,8 +343,11 @@ func (p *Paserati) EvalCode(code string, inheritStrict bool) (vm.Value, []error)
 // Per ECMAScript spec, indirect eval does NOT inherit strict mode from caller.
 func (p *Paserati) IndirectEvalCode(code string) (vm.Value, []error) {
 	// Parse the source code
+	// Per ECMAScript spec, indirect eval is always outside method context,
+	// so super property access is always a SyntaxError.
 	lx := lexer.NewLexer(code)
 	ps := parser.NewParser(lx)
+	ps.SetDisallowSuper(true)
 	prog, parseErrs := ps.ParseProgram()
 	if len(parseErrs) > 0 {
 		errs := make([]error, len(parseErrs))
@@ -397,8 +400,8 @@ func (p *Paserati) IndirectEvalCode(code string) (vm.Value, []error) {
 }
 
 // DirectEvalCode implements vm.EvalDriver interface for direct eval with caller scope access
-// This compiles and executes eval code with access to the caller's local variables and 'this'.
-func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm.ScopeDescriptor, callerRegs []vm.Value, callerThis vm.Value) (vm.Value, []error) {
+// This compiles and executes eval code with access to the caller's local variables, 'this', and homeObject.
+func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm.ScopeDescriptor, callerRegs []vm.Value, callerThis vm.Value, callerHomeObject vm.Value) (vm.Value, []error) {
 	// Parse the source code
 	lx := lexer.NewLexer(code)
 	ps := parser.NewParser(lx)
@@ -431,8 +434,8 @@ func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm
 		p.SyncGlobalNamesFromCompiler()
 	}
 
-	// Execute the chunk with caller scope access and inherited 'this'
-	result, runtimeErrs := p.vmInstance.InterpretWithCallerScope(chunk, callerRegs, callerThis)
+	// Execute the chunk with caller scope access, inherited 'this', and homeObject for super property access
+	result, runtimeErrs := p.vmInstance.InterpretWithCallerScope(chunk, callerRegs, callerThis, callerHomeObject)
 	if len(runtimeErrs) > 0 {
 		errs := make([]error, len(runtimeErrs))
 		for i, e := range runtimeErrs {
@@ -1384,3 +1387,4 @@ func installBuiltinModules(p *Paserati) {
 	// p.DeclareModule("paserati/fs", fsModule)
 	// p.DeclareModule("paserati/crypto", cryptoModule)
 }
+

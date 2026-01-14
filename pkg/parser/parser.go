@@ -41,6 +41,9 @@ type Parser struct {
 	// Context tracking
 	inGenerator     int // Counter for nested generator contexts (0 = not in generator)
 	inAsyncFunction int // Counter for nested async function contexts (0 = not in async function)
+
+	// Eval context flags
+	disallowSuper bool // When true, super expressions throw SyntaxError (for indirect eval)
 }
 
 // Parsing functions types for Pratt parser
@@ -369,6 +372,12 @@ func NewParser(l *lexer.Lexer) *Parser {
 // Errors returns the list of parsing errors.
 func (p *Parser) Errors() []errors.PaseratiError {
 	return p.errors
+}
+
+// SetDisallowSuper sets whether super expressions should be disallowed.
+// When true, parsing super will emit a SyntaxError (used for indirect eval).
+func (p *Parser) SetDisallowSuper(disallow bool) {
+	p.disallowSuper = disallow
 }
 
 // nextToken advances the current and peek tokens.
@@ -1961,6 +1970,10 @@ func (p *Parser) parseThisExpression() Expression {
 }
 
 func (p *Parser) parseSuperExpression() Expression {
+	if p.disallowSuper {
+		p.addError(p.curToken, "SyntaxError: 'super' keyword unexpected here")
+		return nil
+	}
 	return &SuperExpression{Token: p.curToken}
 }
 

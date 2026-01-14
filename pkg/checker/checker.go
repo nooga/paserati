@@ -263,6 +263,10 @@ type Checker struct {
 	// Track if we're currently inside an object method (for super support)
 	inObjectMethod bool
 
+	// --- NEW: Eval super context ---
+	// Track if super is allowed in the current eval context (eval called from method)
+	allowSuperInEval bool
+
 	// --- NEW: Recursive type alias tracking ---
 	// Track type aliases being resolved to prevent infinite recursion
 	resolvingTypeAliases map[string]bool
@@ -296,6 +300,12 @@ func NewCheckerWithInitializers(initializers []builtins.BuiltinInitializer) *Che
 // GetEnvironment returns the current type environment
 func (c *Checker) GetEnvironment() *Environment {
 	return c.env
+}
+
+// SetAllowSuperInEval sets whether super expressions are allowed in eval contexts
+// This is used when compiling direct eval code that was called from a method context
+func (c *Checker) SetAllowSuperInEval(allow bool) {
+	c.allowSuperInEval = allow
 }
 
 // --- Access Control Helper Methods ---
