@@ -1678,7 +1678,7 @@ startExecution:
 			if objType != TypeObject && objType != TypeDictObject && objType != TypeArray &&
 				objType != TypeFunction && objType != TypeNativeFunctionWithProps && objType != TypeProxy &&
 				objType != TypeClosure && objType != TypeNativeFunction && objType != TypeBoundFunction &&
-				objType != TypeSet && objType != TypeMap {
+				objType != TypeSet && objType != TypeMap && objType != TypeArguments {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot use 'in' operator to search for '%s' in %s", propVal.ToString(), objVal.Type().String()))
 				if vm.frameCount == 0 {
@@ -1716,8 +1716,21 @@ startExecution:
 					// DictObject currently ignores symbols
 					hasProperty = false
 				case TypeArray:
-					// No symbol support here yet
-					hasProperty = false
+					// Walk Array prototype chain for symbol properties
+					proto := vm.ArrayPrototype
+					if proto.IsObject() {
+						for cur := proto.AsPlainObject(); cur != nil; {
+							if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
+								hasProperty = true
+								break
+							}
+							pv := cur.GetPrototype()
+							if !pv.IsObject() {
+								break
+							}
+							cur = pv.AsPlainObject()
+						}
+					}
 				case TypeSet:
 					// Walk Set prototype chain for symbol properties
 					proto := vm.SetPrototype
@@ -1739,6 +1752,36 @@ startExecution:
 					proto := vm.MapPrototype
 					if proto.IsObject() {
 						for cur := proto.AsPlainObject(); cur != nil; {
+							if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
+								hasProperty = true
+								break
+							}
+							pv := cur.GetPrototype()
+							if !pv.IsObject() {
+								break
+							}
+							cur = pv.AsPlainObject()
+						}
+					}
+				case TypeArguments:
+					// Arguments objects have Symbol.iterator from Array.prototype
+					// First check Array.prototype (for Symbol.iterator)
+					if vm.ArrayPrototype.IsObject() {
+						for cur := vm.ArrayPrototype.AsPlainObject(); cur != nil; {
+							if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
+								hasProperty = true
+								break
+							}
+							pv := cur.GetPrototype()
+							if !pv.IsObject() {
+								break
+							}
+							cur = pv.AsPlainObject()
+						}
+					}
+					// If not found, also check Object.prototype
+					if !hasProperty && vm.ObjectPrototype.IsObject() {
+						for cur := vm.ObjectPrototype.AsPlainObject(); cur != nil; {
 							if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
 								hasProperty = true
 								break
@@ -1874,6 +1917,18 @@ startExecution:
 						if proto.IsObject() {
 							hasProperty = proto.AsPlainObject().Has(propKey)
 						}
+					}
+				case TypeArguments:
+					// Arguments object: check indices, length, callee, and Object.prototype
+					argObj := objVal.AsArguments()
+					if propKey == "length" {
+						hasProperty = true
+					} else if propKey == "callee" && !argObj.IsStrict() {
+						hasProperty = true
+					} else if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
+						hasProperty = index < argObj.Length()
+					} else if vm.ObjectPrototype.IsObject() {
+						hasProperty = vm.ObjectPrototype.AsPlainObject().Has(propKey)
 					}
 				default:
 					// Non-object RHS - shouldn't reach here due to check above

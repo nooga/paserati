@@ -153,6 +153,11 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 					superConstructorReg = c.regAlloc.Alloc()
 					needToFreeSuperReg = true
 					c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
+				} else if symbol.IsSpilled {
+					// Spilled variable - load from spill slot
+					superConstructorReg = c.regAlloc.Alloc()
+					needToFreeSuperReg = true
+					c.emitLoadSpill(superConstructorReg, symbol.SpillIndex, node.Token.Line)
 				} else {
 					superConstructorReg = symbol.Register
 					needToFreeSuperReg = false

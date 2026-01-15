@@ -92,23 +92,27 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Handle symbol and string keys
 		if keyVal.Type() == vm.TypeSymbol {
 			key := vm.NewSymbolKey(keyVal)
-			if plainObj := thisValue.AsPlainObject(); plainObj != nil {
-				return vm.BooleanValue(plainObj.HasOwnByKey(key)), nil
-			}
-			if dictObj := thisValue.AsDictObject(); dictObj != nil {
+			// IMPORTANT: Check type BEFORE calling As*() methods since they panic on type mismatch
+			switch thisValue.Type() {
+			case vm.TypeObject:
+				return vm.BooleanValue(thisValue.AsPlainObject().HasOwnByKey(key)), nil
+			case vm.TypeDictObject:
 				// DictObject has only string keys; symbols are not supported
 				return vm.BooleanValue(false), nil
-			}
-			if arrObj := thisValue.AsArray(); arrObj != nil {
+			case vm.TypeArray:
 				// Arrays: symbol own keys generally none here
 				return vm.BooleanValue(false), nil
+			default:
+				return vm.BooleanValue(false), nil
 			}
-			return vm.BooleanValue(false), nil
 		}
 		propName := keyVal.ToString()
 
 		// Check if this object has the property as own property
-		if plainObj := thisValue.AsPlainObject(); plainObj != nil {
+		// IMPORTANT: Check type BEFORE calling As*() methods since they panic on type mismatch
+		switch thisValue.Type() {
+		case vm.TypeObject:
+			plainObj := thisValue.AsPlainObject()
 			// Special case for globalThis: check heap for top-level declarations
 			if plainObj == vmInstance.GlobalObject {
 				if idx, exists := vmInstance.GetHeap().GetNameToIndex()[propName]; exists {
@@ -120,12 +124,12 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			_, hasOwn := plainObj.GetOwn(propName)
 			return vm.BooleanValue(hasOwn), nil
-		}
-		if dictObj := thisValue.AsDictObject(); dictObj != nil {
+		case vm.TypeDictObject:
+			dictObj := thisValue.AsDictObject()
 			_, hasOwn := dictObj.GetOwn(propName)
 			return vm.BooleanValue(hasOwn), nil
-		}
-		if arrObj := thisValue.AsArray(); arrObj != nil {
+		case vm.TypeArray:
+			arrObj := thisValue.AsArray()
 			// For arrays, check if it's a valid index or 'length'
 			if propName == "length" {
 				return vm.BooleanValue(true), nil
@@ -134,8 +138,12 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if index, err := strconv.Atoi(propName); err == nil {
 				return vm.BooleanValue(index >= 0 && index < arrObj.Length()), nil
 			}
+			// Check custom named properties (e.g., pos, end for TypeScript node arrays)
+			_, hasOwn := arrObj.GetOwn(propName)
+			return vm.BooleanValue(hasOwn), nil
+		default:
+			return vm.BooleanValue(false), nil
 		}
-		return vm.BooleanValue(false), nil
 	}))
 	// Ensure attributes per spec: writable true, enumerable false, configurable true
 	if v, ok := objectProto.GetOwn("hasOwnProperty"); ok {

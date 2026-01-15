@@ -487,3 +487,15 @@ func (c *Compiler) compileThrowStatement(node *parser.ThrowStatement, hint Regis
 
 	return BadRegister, nil
 }
+
+// compileDebuggerStatement compiles a debugger statement (no-op at runtime)
+func (c *Compiler) compileDebuggerStatement(hint Register) (Register, errors.PaseratiError) {
+	// debugger is a no-op at runtime - we just load undefined into the hint register
+	if hint == BadRegister {
+		hint = c.regAlloc.Alloc()
+		defer c.regAlloc.Free(hint)
+	}
+	c.emitOpCode(vm.OpLoadUndefined, 0)
+	c.emitByte(byte(hint))
+	return hint, nil
+}

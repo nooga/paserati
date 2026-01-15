@@ -220,10 +220,11 @@ const (
 	// DELETE keyword
 	DELETE TokenType = "DELETE"
 	// Exception handling keywords
-	TRY     TokenType = "TRY"
-	CATCH   TokenType = "CATCH"
-	THROW   TokenType = "THROW"
-	FINALLY TokenType = "FINALLY"
+	TRY      TokenType = "TRY"
+	CATCH    TokenType = "CATCH"
+	THROW    TokenType = "THROW"
+	FINALLY  TokenType = "FINALLY"
+	DEBUGGER TokenType = "DEBUGGER"
 	// Class keyword
 	CLASS TokenType = "CLASS"
 	// Enum keyword
@@ -296,6 +297,7 @@ var keywords = map[string]TokenType{
 	"catch":      CATCH,      // Added for catch blocks
 	"throw":      THROW,      // Added for throw statements
 	"finally":    FINALLY,    // Added for finally blocks
+	"debugger":   DEBUGGER,   // Added for debugger statement
 	"class":      CLASS,      // Added for class declarations/expressions
 	"enum":       ENUM,       // Added for enum declarations
 	"static":     STATIC,     // Added for static members

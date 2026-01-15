@@ -1174,6 +1174,15 @@ func (ths *ThrowStatement) String() string {
 	return out.String()
 }
 
+// DebuggerStatement represents a debugger statement (no-op in runtime).
+type DebuggerStatement struct {
+	Token lexer.Token // The 'debugger' token
+}
+
+func (ds *DebuggerStatement) statementNode()       {}
+func (ds *DebuggerStatement) TokenLiteral() string { return ds.Token.Literal }
+func (ds *DebuggerStatement) String() string       { return "debugger;" }
+
 // --- TODO: Add more expression types later (Infix, Prefix, Call, If, etc.) ---
 
 // PrefixExpression represents a prefix operator expression.
@@ -1438,7 +1447,11 @@ func (ne *NewExpression) String() string {
 	var out bytes.Buffer
 
 	out.WriteString("new ")
-	out.WriteString(ne.Constructor.String())
+	if ne.Constructor != nil {
+		out.WriteString(ne.Constructor.String())
+	} else {
+		out.WriteString("<nil>")
+	}
 
 	// Add type arguments if present
 	if len(ne.TypeArguments) > 0 {

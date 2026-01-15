@@ -112,6 +112,24 @@ func collectPatternNames(target parser.Expression, seen map[string]bool, names *
 	}
 }
 
+// extractDestructuringVarNames extracts all variable names from an ObjectDestructuringDeclaration
+// This is a wrapper that creates a new seen map for use in block predefine pass
+func extractDestructuringVarNames(decl *parser.ObjectDestructuringDeclaration) []string {
+	var names []string
+	seen := make(map[string]bool)
+	collectDestructuringNames(decl.Properties, decl.RestProperty, seen, &names)
+	return names
+}
+
+// extractArrayDestructuringVarNames extracts all variable names from an ArrayDestructuringDeclaration
+// This is a wrapper that creates a new seen map for use in block predefine pass
+func extractArrayDestructuringVarNames(decl *parser.ArrayDestructuringDeclaration) []string {
+	var names []string
+	seen := make(map[string]bool)
+	collectArrayDestructuringNames(decl.Elements, seen, &names)
+	return names
+}
+
 // collectVarDeclarations recursively collects all var declaration names from statements.
 // This is used for var hoisting - var declarations are hoisted to the top of their
 // function/script scope and initialized to undefined.
@@ -1010,6 +1028,43 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 							}
 						}
 					}
+				case *parser.ObjectDestructuringDeclaration:
+					// Pre-define all variables from object destructuring pattern
+					// This is needed so closures can capture them before the destructuring is executed
+					varNames := extractDestructuringVarNames(s)
+					for _, name := range varNames {
+						if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; !alreadyInCurrentScope {
+							reg, ok := c.regAlloc.TryAllocForVariable()
+							if ok {
+								c.currentSymbolTable.Define(name, reg)
+								c.regAlloc.Pin(reg)
+								debugPrintf("// [BlockPredefine] Pre-defined destructured let/const '%s' in register R%d (symbolTable=%p)\n", name, reg, c.currentSymbolTable)
+							} else {
+								// Variable register threshold reached, use spilling
+								spillIdx := c.AllocSpillSlot()
+								c.currentSymbolTable.DefineSpilled(name, spillIdx)
+								debugPrintf("// [BlockPredefine] Pre-defined destructured let/const '%s' in SPILL SLOT %d (symbolTable=%p)\n", name, spillIdx, c.currentSymbolTable)
+							}
+						}
+					}
+				case *parser.ArrayDestructuringDeclaration:
+					// Pre-define all variables from array destructuring pattern
+					varNames := extractArrayDestructuringVarNames(s)
+					for _, name := range varNames {
+						if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; !alreadyInCurrentScope {
+							reg, ok := c.regAlloc.TryAllocForVariable()
+							if ok {
+								c.currentSymbolTable.Define(name, reg)
+								c.regAlloc.Pin(reg)
+								debugPrintf("// [BlockPredefine] Pre-defined array destructured let/const '%s' in register R%d (symbolTable=%p)\n", name, reg, c.currentSymbolTable)
+							} else {
+								// Variable register threshold reached, use spilling
+								spillIdx := c.AllocSpillSlot()
+								c.currentSymbolTable.DefineSpilled(name, spillIdx)
+								debugPrintf("// [BlockPredefine] Pre-defined array destructured let/const '%s' in SPILL SLOT %d (symbolTable=%p)\n", name, spillIdx, c.currentSymbolTable)
+							}
+						}
+					}
 				case *parser.VarStatement:
 					// Pre-define var declarations in the function scope (not enclosed block scope)
 					// var is function-scoped, so if we're in an enclosed block scope, we need to
@@ -1339,6 +1394,10 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	case *parser.ThrowStatement:
 		return c.compileThrowStatement(node, hint)
+
+	case *parser.DebuggerStatement:
+		// debugger statement is a no-op at runtime
+		return c.compileDebuggerStatement(hint)
 
 	case *parser.WithStatement:
 		return c.compileWithStatement(node, hint)
@@ -3630,6 +3689,11 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 					superConstructorReg = c.regAlloc.Alloc()
 					needToFreeSuperReg = true
 					c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
+				} else if symbol.IsSpilled {
+					// Spilled variable - load from spill slot
+					superConstructorReg = c.regAlloc.Alloc()
+					needToFreeSuperReg = true
+					c.emitLoadSpill(superConstructorReg, symbol.SpillIndex, node.Token.Line)
 				} else {
 					superConstructorReg = symbol.Register
 					needToFreeSuperReg = false

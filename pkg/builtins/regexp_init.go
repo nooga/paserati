@@ -173,21 +173,25 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		str := args[0].ToString()
 
-		var matches []string
+		var loc []int
+		var searchStr string
+		var baseIndex int
 		if regex.IsGlobal() {
 			// Global regex: use lastIndex for stateful matching
-			remainder := str[regex.GetLastIndex():]
-			if loc := regex.FindStringSubmatchIndex(remainder); loc != nil {
-				matches = regex.FindStringSubmatch(remainder)
+			baseIndex = regex.GetLastIndex()
+			searchStr = str[baseIndex:]
+			loc = regex.FindStringSubmatchIndex(searchStr)
+			if loc != nil {
 				// Update lastIndex
-				regex.SetLastIndex(regex.GetLastIndex() + loc[1])
+				regex.SetLastIndex(baseIndex + loc[1])
 			}
 		} else {
 			// Non-global: find first match
-			matches = regex.FindStringSubmatch(str)
+			searchStr = str
+			loc = regex.FindStringSubmatchIndex(str)
 		}
 
-		if matches == nil {
+		if loc == nil {
 			if regex.IsGlobal() {
 				regex.SetLastIndex(0) // Reset lastIndex on failure
 			}
@@ -195,10 +199,19 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Create result array with matches
+		// Use FindStringSubmatchIndex to detect non-participating groups
+		// (they have indices of -1, -1)
 		result := vm.NewArray()
 		arr := result.AsArray()
-		for _, match := range matches {
-			arr.Append(vm.NewString(match))
+		// loc contains pairs of indices [start0, end0, start1, end1, ...]
+		for i := 0; i < len(loc); i += 2 {
+			start, end := loc[i], loc[i+1]
+			if start == -1 {
+				// Non-participating group: use undefined (JavaScript semantics)
+				arr.Append(vm.Undefined)
+			} else {
+				arr.Append(vm.NewString(searchStr[start:end]))
+			}
 		}
 		return result, nil
 	}))

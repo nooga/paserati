@@ -543,6 +543,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseTryStatement()
 	case lexer.THROW:
 		return p.parseThrowStatement()
+	case lexer.DEBUGGER:
+		return p.parseDebuggerStatement()
 	case lexer.IMPORT:
 		// Check if this is import.meta, import(), or import declaration
 		if p.peekTokenIs(lexer.DOT) {
@@ -7509,7 +7511,7 @@ func (p *Parser) parsePropertyName() *Identifier {
 		lexer.STATIC, lexer.READONLY, lexer.PUBLIC, lexer.PRIVATE, lexer.PROTECTED, lexer.ABSTRACT,
 		lexer.OVERRIDE, lexer.IMPORT, lexer.EXPORT, lexer.YIELD, lexer.AWAIT, lexer.VAR, lexer.TYPE, lexer.KEYOF,
 		lexer.INFER, lexer.IS, lexer.OF, lexer.INTERFACE, lexer.EXTENDS, lexer.IMPLEMENTS, lexer.SUPER, lexer.WITH,
-		lexer.ASYNC:
+		lexer.ASYNC, lexer.DEBUGGER:
 		// Allow keywords as property names
 		return &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	default:
@@ -9095,6 +9097,18 @@ func (p *Parser) parseThrowStatement() *ThrowStatement {
 	if stmt.Value == nil {
 		return nil
 	}
+
+	// Optional semicolon
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+
+	return stmt
+}
+
+// parseDebuggerStatement parses a debugger statement (no-op)
+func (p *Parser) parseDebuggerStatement() *DebuggerStatement {
+	stmt := &DebuggerStatement{Token: p.curToken} // 'debugger' token
 
 	// Optional semicolon
 	if p.peekTokenIs(lexer.SEMICOLON) {

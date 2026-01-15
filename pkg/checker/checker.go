@@ -3095,6 +3095,9 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.ThrowStatement:
 		c.checkThrowStatement(node)
 
+	case *parser.DebuggerStatement:
+		// No-op for type checking
+
 	// --- Module System: Import/Export Statements ---
 	case *parser.ImportDeclaration:
 		c.checkImportDeclaration(node)

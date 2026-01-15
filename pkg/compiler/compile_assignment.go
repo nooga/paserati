@@ -52,6 +52,8 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		globalIdx     uint16 // Direct global index instead of name constant index
 		isCallerLocal bool   // Track if this is a caller's local (for direct eval)
 		callerRegIdx  int    // Caller's register index (for direct eval)
+		isSpilled     bool   // Track if this is a spilled variable
+		spillIndex    uint16 // Spill slot index (for spilled variables)
 	}
 	var indexInfo struct { // Info needed to store back to index expr
 		arrayReg Register
@@ -165,10 +167,27 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					}
 				} else if definingTable == c.currentSymbolTable {
 					// Local variable in current scope
-					identInfo.targetReg = symbolRef.Register
-					identInfo.isUpvalue = false
-					identInfo.isGlobal = false
-					currentValueReg = identInfo.targetReg // Current value is already in targetReg
+					if symbolRef.IsSpilled {
+						// Spilled variable - use spill slot
+						identInfo.isSpilled = true
+						identInfo.spillIndex = symbolRef.SpillIndex
+						identInfo.isUpvalue = false
+						identInfo.isGlobal = false
+						// For compound assignments, we need to load the current value
+						if node.Operator != "=" {
+							currentValueReg = c.regAlloc.Alloc()
+							tempRegs = append(tempRegs, currentValueReg)
+							c.emitLoadSpill(currentValueReg, identInfo.spillIndex, line)
+						} else {
+							currentValueReg = nilRegister // Not needed for simple assignment
+						}
+					} else {
+						// Regular register-allocated variable
+						identInfo.targetReg = symbolRef.Register
+						identInfo.isUpvalue = false
+						identInfo.isGlobal = false
+						currentValueReg = identInfo.targetReg // Current value is already in targetReg
+					}
 				} else if c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
 					// Variable defined in outer function: treat as upvalue
 					identInfo.isUpvalue = true
@@ -178,11 +197,28 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					tempRegs = append(tempRegs, currentValueReg)
 					c.emitLoadFree(currentValueReg, identInfo.upvalueIndex, line)
 				} else {
-					// Variable in outer block scope of same function (or at top level): access directly via register
-					identInfo.targetReg = symbolRef.Register
-					identInfo.isUpvalue = false
-					identInfo.isGlobal = false
-					currentValueReg = identInfo.targetReg // Current value is already in targetReg
+					// Variable in outer block scope of same function (or at top level)
+					if symbolRef.IsSpilled {
+						// Spilled variable - use spill slot
+						identInfo.isSpilled = true
+						identInfo.spillIndex = symbolRef.SpillIndex
+						identInfo.isUpvalue = false
+						identInfo.isGlobal = false
+						// For compound assignments, we need to load the current value
+						if node.Operator != "=" {
+							currentValueReg = c.regAlloc.Alloc()
+							tempRegs = append(tempRegs, currentValueReg)
+							c.emitLoadSpill(currentValueReg, identInfo.spillIndex, line)
+						} else {
+							currentValueReg = nilRegister // Not needed for simple assignment
+						}
+					} else {
+						// Regular register-allocated variable: access directly via register
+						identInfo.targetReg = symbolRef.Register
+						identInfo.isUpvalue = false
+						identInfo.isGlobal = false
+						currentValueReg = identInfo.targetReg // Current value is already in targetReg
+					}
 				}
 			}
 		}
@@ -614,6 +650,8 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				c.emitByte(byte(hint))
 			} else if identInfo.isUpvalue {
 				c.emitSetUpvalue(identInfo.upvalueIndex, hint, line)
+			} else if identInfo.isSpilled {
+				c.emitStoreSpill(identInfo.spillIndex, hint, line)
 			} else {
 				if hint != identInfo.targetReg {
 					c.emitMove(identInfo.targetReg, hint, line)
@@ -833,6 +871,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				c.emitByte(byte(hint))
 			} else if identInfo.isUpvalue {
 				c.emitSetUpvalue(identInfo.upvalueIndex, hint, line)
+			} else if identInfo.isSpilled {
+				// Spilled variable assignment
+				debugPrintf("// DEBUG Assign Store Ident: Emitting StoreSpill[%d] <- R%d\n", identInfo.spillIndex, hint)
+				c.emitStoreSpill(identInfo.spillIndex, hint, line)
 			} else {
 				if hint != identInfo.targetReg {
 					debugPrintf("// DEBUG Assign Store Ident: Emitting Move R%d <- R%d\n", identInfo.targetReg, hint)
