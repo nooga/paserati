@@ -2365,10 +2365,22 @@ func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool
 		c.emitSetGlobal(globalIdx, valueReg, line)
 		c.currentSymbolTable.DefineGlobal(name, globalIdx)
 	} else {
-		// Function scope: use local symbol table
-		c.currentSymbolTable.Define(name, valueReg)
-		// Pin the register since local variables can be captured by upvalues
-		c.regAlloc.Pin(valueReg)
+		// Function scope: check if variable is already defined (e.g., from var hoisting)
+		if sym, _, found := c.currentSymbolTable.Resolve(name); found && sym.Register != nilRegister {
+			// Variable already exists (hoisted var), move value to existing register
+			if valueReg != sym.Register {
+				c.emitMove(sym.Register, valueReg, line)
+			}
+			// Don't redefine - keep existing symbol table entry
+		} else if found && sym.IsSpilled {
+			// Variable is spilled, store to spill slot
+			c.emitStoreSpill(sym.SpillIndex, valueReg, line)
+		} else {
+			// New variable, define it
+			c.currentSymbolTable.Define(name, valueReg)
+			// Pin the register since local variables can be captured by upvalues
+			c.regAlloc.Pin(valueReg)
+		}
 	}
 
 	return nil

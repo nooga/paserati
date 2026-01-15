@@ -56,6 +56,62 @@ func getExportSpecName(expr parser.Expression) string {
 	return ""
 }
 
+// collectDestructuringNames extracts variable names from object destructuring properties
+func collectDestructuringNames(props []*parser.DestructuringProperty, rest *parser.DestructuringElement, seen map[string]bool, names *[]string) {
+	for _, prop := range props {
+		if prop == nil || prop.Target == nil {
+			continue
+		}
+		collectPatternNames(prop.Target, seen, names)
+	}
+	if rest != nil && rest.Target != nil {
+		collectPatternNames(rest.Target, seen, names)
+	}
+}
+
+// collectArrayDestructuringNames extracts variable names from array destructuring elements
+func collectArrayDestructuringNames(elements []*parser.DestructuringElement, seen map[string]bool, names *[]string) {
+	for _, elem := range elements {
+		if elem == nil || elem.Target == nil {
+			continue
+		}
+		collectPatternNames(elem.Target, seen, names)
+	}
+}
+
+// collectPatternNames recursively extracts variable names from a destructuring pattern target
+func collectPatternNames(target parser.Expression, seen map[string]bool, names *[]string) {
+	if target == nil {
+		return
+	}
+	switch t := target.(type) {
+	case *parser.Identifier:
+		if !seen[t.Value] {
+			*names = append(*names, t.Value)
+			seen[t.Value] = true
+		}
+	case *parser.ObjectLiteral:
+		// Nested object pattern: { a: { b, c } }
+		for _, prop := range t.Properties {
+			if prop == nil {
+				continue
+			}
+			if prop.Value != nil {
+				// Key: Value pattern - the target is in Value
+				collectPatternNames(prop.Value, seen, names)
+			} else if prop.Key != nil {
+				// Shorthand pattern { a } - Key is both the source and target
+				collectPatternNames(prop.Key, seen, names)
+			}
+		}
+	case *parser.ArrayLiteral:
+		// Nested array pattern: [a, [b, c]]
+		for _, elem := range t.Elements {
+			collectPatternNames(elem, seen, names)
+		}
+	}
+}
+
 // collectVarDeclarations recursively collects all var declaration names from statements.
 // This is used for var hoisting - var declarations are hoisted to the top of their
 // function/script scope and initialized to undefined.
@@ -75,6 +131,16 @@ func collectVarDeclarations(stmts []parser.Statement) []string {
 					names = append(names, decl.Name.Value)
 					seen[decl.Name.Value] = true
 				}
+			}
+		case *parser.ObjectDestructuringDeclaration:
+			// Only hoist if it's a 'var' declaration (Token.Literal == "var")
+			if s.Token.Literal == "var" {
+				collectDestructuringNames(s.Properties, s.RestProperty, seen, &names)
+			}
+		case *parser.ArrayDestructuringDeclaration:
+			// Only hoist if it's a 'var' declaration (Token.Literal == "var")
+			if s.Token.Literal == "var" {
+				collectArrayDestructuringNames(s.Elements, seen, &names)
 			}
 		case *parser.BlockStatement:
 			if s != nil && s.Statements != nil {
@@ -991,6 +1057,36 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		// We keep spillTempReg for emitting spilled hoisted functions
 		for i := 1; i < len(tempPool); i++ {
 			c.regAlloc.Free(tempPool[i])
+		}
+
+		// 0.5) Hoist var declarations within this function body FIRST
+		// var declarations are hoisted to the top of the function scope and initialized to undefined
+		// This must happen BEFORE function hoisting so that functions can capture hoisted vars
+		varNames := collectVarDeclarations(node.Statements)
+		for _, name := range varNames {
+			// Skip if already defined (e.g., by a parameter)
+			if _, _, found := c.currentSymbolTable.Resolve(name); found {
+				continue
+			}
+			// Allocate register and define the variable, initialize to undefined
+			reg, ok := c.regAlloc.TryAllocForVariable()
+			if ok {
+				c.currentSymbolTable.Define(name, reg)
+				// Initialize the register to undefined (hoisted vars start as undefined)
+				c.emitLoadUndefined(reg, node.Token.Line)
+				// Don't pin - let smart pinning handle it when/if captured
+				debugPrintf("// [VarHoist] Hoisted var '%s' in R%d (initialized to undefined)\n", name, reg)
+			} else {
+				// Variable threshold reached, use spilling
+				spillIdx := c.AllocSpillSlot()
+				c.currentSymbolTable.DefineSpilled(name, spillIdx)
+				// Initialize spill slot to undefined
+				tempReg := c.regAlloc.Alloc()
+				c.emitLoadUndefined(tempReg, node.Token.Line)
+				c.emitStoreSpill(spillIdx, tempReg, node.Token.Line)
+				c.regAlloc.Free(tempReg)
+				debugPrintf("// [VarHoist] Hoisted var '%s' in SPILL SLOT %d (initialized to undefined)\n", name, spillIdx)
+			}
 		}
 
 		// 1) Hoist function declarations within this block (function-scoped hoisting)

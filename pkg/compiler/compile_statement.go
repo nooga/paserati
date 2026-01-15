@@ -998,8 +998,18 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 			}
 		}
 	} else {
-		// Get current loop context (top of stack)
-		targetContext = c.loopContextStack[len(c.loopContextStack)-1]
+		// Find the nearest enclosing loop context that supports continue
+		// (switch statements push contexts with ContinueTargetPos = -1)
+		for i := len(c.loopContextStack) - 1; i >= 0; i-- {
+			ctx := c.loopContextStack[i]
+			if ctx.ContinueTargetPos != -1 {
+				targetContext = ctx
+				break
+			}
+		}
+		if targetContext == nil {
+			return BadRegister, NewCompileError(node, "continue statement not within a loop")
+		}
 	}
 
 	// Per ECMAScript spec, continue has an empty completion value.

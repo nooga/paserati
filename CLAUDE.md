@@ -61,6 +61,27 @@ go test ./tests -v
 
 **Important**: The `TestScripts` suite in `tests/scripts_test.go` is our smoke test and should always pass. When something doesn't work, either fix it immediately or mark it as FIXME - never sweep issues under the rug.
 
+**Smoke Test Expectation Format**: Tests in `tests/scripts/` use special comments to define expected outcomes:
+
+```typescript
+// expect: value                    // Compare against LAST STATEMENT value
+// expect_runtime_error: message    // Expected runtime error
+// expect_compile_error: message    // Expected compile error
+```
+
+**Critical**: The `// expect: value` comment compares against the **value of the last statement** in the script, NOT against printed output. For example:
+
+```typescript
+// expect: 42
+let x = 40;
+let y = x + 2;
+y;  // <-- This expression's value (42) is compared against "expect"
+```
+
+The test runner evaluates the script and compares the result of the final expression to the expected value. `console.log()` output is ignored for test comparison purposes.
+
+**Temporary Test Files**: Use the `scratch/` directory (gitignored) for temporary test files, debug scripts, and experimental code. This keeps the repository clean while you debug issues.
+
 ### Test262 Compliance Testing
 
 Paserati uses the official ECMAScript Test262 suite to verify language compliance. The `paserati-test262` binary runs these tests with our runtime.
@@ -259,6 +280,52 @@ Break it down:
 ./paserati-test262 -path ./test262 -subpath "language/expressions" -filter 2>&1 | grep "instanceof"
 ```
 
+### Finding High-Impact Fixes with paserati-analyze
+
+The `paserati-analyze` tool clusters Test262 failures by error pattern, making it easy to find fixes that pass many tests at once.
+
+```bash
+# Build the analyzer
+go build -o paserati-analyze ./cmd/paserati-analyze/
+
+# Analyze failures in a specific subsuite
+./paserati-test262 -subpath language/expressions/object -json | ./paserati-analyze
+
+# Analyze a broader area
+./paserati-test262 -subpath language/expressions -json | ./paserati-analyze
+```
+
+**Output Interpretation**:
+
+```
+[42] undefined is not an object
+  - test262/test/language/expressions/object/foo.js
+  - test262/test/language/expressions/object/bar.js
+  ... and 40 more
+```
+
+The `[42]` means 42 tests fail with this normalized error pattern. These are **high-yield targets** - fixing the root cause could pass many tests at once.
+
+**Strategy**:
+1. Pick a subsuite with moderate pass rate (70-90%) - these often have easy wins
+2. Run the analyzer to find the largest error clusters
+3. Fix the root cause of the largest cluster first
+4. Avoid scattered errors - if each test fails differently, foundational work may be needed
+
+### Debugging Test262 Failures
+
+**Critical**: Test262 tests JavaScript semantics, not TypeScript types. Always use `--no-typecheck` when debugging:
+
+```bash
+# Create a minimal reproduction in scratch/
+./paserati --no-typecheck scratch/repro.js
+
+# Or run Test262 test directly
+./paserati --no-typecheck test262/test/language/expressions/some-test.js
+```
+
+Fixes to the type checker usually do NOT help with Test262 compliance. Focus on the Compiler and VM when fixing Test262 failures.
+
 ### Baseline-Driven Development Workflow
 
 Paserati uses an automated baseline system to track Test262 compliance progress. A post-commit hook automatically generates `baseline.txt` after each commit, capturing a snapshot of all test results.
@@ -413,10 +480,12 @@ The codebase follows a traditional compiler pipeline:
 **Script-Based Testing**: The primary testing mechanism uses TypeScript files in `tests/scripts/` with special comment annotations:
 
 ```typescript
-// expect: value                    // Expected output value
-// expect_runtime_error: message    // Expected runtime error
-// expect_compile_error: message    // Expected compile error
+// expect: value                    // Compare against last statement's VALUE (not printed output)
+// expect_runtime_error: message    // Expected runtime error substring
+// expect_compile_error: message    // Expected compile error substring
 ```
+
+**Important**: The `// expect:` comment compares against the **value of the last statement**, not console output. The final expression in the script is evaluated and its result is compared to the expected value.
 
 Test files are automatically discovered and executed by `tests/scripts_test.go`.
 
@@ -461,6 +530,8 @@ See `docs/bucketlist.md` for comprehensive implementation status.
 
 **Recently Completed (Latest ECMAScript Compliance Work)**:
 
+- ✅ Destructuring variable hoisting for closures (var destructuring now properly captured)
+- ✅ `continue` inside switch inside loop (proper jump target handling)
 - ✅ Type coercion for arithmetic operators (boolean, null, undefined to number)
 - ✅ ToPrimitive implementation with valueOf()/toString() calling
 - ✅ instanceof operator for all built-in types (Object, Array, RegExp, etc.)
