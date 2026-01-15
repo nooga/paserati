@@ -234,15 +234,19 @@ type AsyncGeneratorObject GeneratorObject
 
 type MapObject struct {
 	Object
-	size    int
-	entries map[string]Value // key -> value
-	keys    map[string]Value // key -> original key (for key iteration)
+	size       int
+	entries    map[string]Value // key -> value
+	keys       map[string]Value // key -> original key (for key iteration)
+	Properties *PlainObject     // User-defined properties on the Map object
+	prototype  Value            // Map prototype
 }
 
 type SetObject struct {
 	Object
-	size   int
-	values map[string]Value // key -> original value (for value iteration)
+	size       int
+	values     map[string]Value // key -> original value (for value iteration)
+	Properties *PlainObject     // User-defined properties on the Set object
+	prototype  Value            // Set prototype
 }
 
 // WeakMapEntry holds a weak reference to the key and a strong reference to the value

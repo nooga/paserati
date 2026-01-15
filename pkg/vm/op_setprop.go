@@ -574,7 +574,40 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			regex.Properties.SetOwn(propName, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
+	case TypeMap:
+		// Map objects can have user-defined properties
+		mapObj := objVal.AsMap()
+		if mapObj != nil {
+			if mapObj.Properties == nil {
+				mapObj.Properties = NewObject(Undefined).AsPlainObject()
+			}
+			mapObj.Properties.SetOwn(propName, *valueToSet)
+		}
+		return true, InterpretOK, *valueToSet
+	case TypeSet:
+		// Set objects can have user-defined properties
+		setObj := objVal.AsSet()
+		if setObj != nil {
+			if setObj.Properties == nil {
+				setObj.Properties = NewObject(Undefined).AsPlainObject()
+			}
+			setObj.Properties.SetOwn(propName, *valueToSet)
+		}
+		return true, InterpretOK, *valueToSet
 	default:
+		// Check if value is a PlainObject (TypeObject)
+		if objVal.Type() != TypeObject {
+			// Cannot set properties on non-PlainObject types in strict mode
+			if vm.IsInStrictMode() {
+				err := vm.NewTypeError(fmt.Sprintf("Cannot create property '%s' on %s '%v'", propName, objVal.TypeName(), objVal))
+				if excErr, ok := err.(ExceptionError); ok {
+					vm.throwException(excErr.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
+				}
+			}
+			// In non-strict mode, silently fail
+			return true, InterpretOK, *valueToSet
+		}
 		po := AsPlainObject(*objVal)
 		// Check if property exists
 		propertyExists := false

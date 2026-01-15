@@ -1201,17 +1201,18 @@ func (c *Compiler) addStaticSetter(method *parser.MethodDefinition, constructorR
 
 // createInheritedPrototype creates a prototype that inherits from the parent class
 func (c *Compiler) createInheritedPrototype(superClassName string, prototypeReg Register) errors.PaseratiError {
-	debugPrintf("// DEBUG createInheritedPrototype: Creating inherited prototype from '%s'\n", superClassName)
-
 	// Look up the parent class constructor
 	var parentConstructorReg Register
 	var needToFree bool
 
 	// Try to resolve the parent class
-	debugPrintf("// DEBUG createInheritedPrototype: Attempting to resolve parent class '%s'\n", superClassName)
 	if symbol, definingTable, exists := c.currentSymbolTable.Resolve(superClassName); exists {
-		debugPrintf("// DEBUG createInheritedPrototype: Successfully resolved '%s' (IsGlobal=%v)\n", superClassName, symbol.IsGlobal)
-		if symbol.IsGlobal {
+		// Check if symbol should be loaded from spill slot
+		if symbol.IsSpilled {
+			parentConstructorReg = c.regAlloc.Alloc()
+			needToFree = true
+			c.emitLoadSpill(parentConstructorReg, symbol.SpillIndex, 0)
+		} else if symbol.IsGlobal {
 			// Global scope - load from global
 			parentConstructorReg = c.regAlloc.Alloc()
 			needToFree = true
@@ -1232,7 +1233,6 @@ func (c *Compiler) createInheritedPrototype(superClassName string, prototypeReg 
 			}
 		}
 	} else {
-		debugPrintf("// DEBUG createInheritedPrototype: Failed to resolve parent class '%s'\n", superClassName)
 		return NewCompileError(nil, fmt.Sprintf("parent class '%s' not found", superClassName))
 	}
 

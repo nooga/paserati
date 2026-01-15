@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -769,10 +770,13 @@ func (vm *VM) InterpretWithCallerScope(chunk *Chunk, callerRegs []Value, callerT
 // run is the main execution loop.
 // It now returns the InterpretResult status AND the final script Value.
 func (vm *VM) run() (InterpretResult, Value) {
-	// Panic recovery - silently recover to avoid cluttering test output
+	// Panic recovery - log panics when debugging
 	defer func() {
 		if r := recover(); r != nil {
-			// Silently recover - the error will be reported through normal channels
+			if debugVM {
+				fmt.Printf("[PANIC] Recovered panic in VM.run(): %v\n", r)
+				debug.PrintStack()
+			}
 		}
 	}()
 
@@ -2510,8 +2514,9 @@ startExecution:
 
 			// Check if we're in an unwinding state before the call
 			wasUnwinding := vm.unwinding
-			// Save the frame IP before the call to detect if an exception handler changed it
+			// Save the frame IP and frame count before the call to detect if an exception handler changed it
 			frameIPBeforeCall := frame.ip
+			frameCountBeforeCall := vm.frameCount
 
 			calleeVal := callerRegisters[funcReg]
 			// Targeted debug for deepEqual recursion investigation
@@ -2555,8 +2560,8 @@ startExecution:
 
 			// Check if our frame was popped by a direct-call boundary during exception unwinding
 			if !wasUnwinding && vm.unwinding && vm.frameCount <= currentFrameIndex {
-				if debugExceptions {
-					fmt.Printf("[DEBUG vm.go] OpCall: Current frame was popped (frameCount=%d, was %d), exception hit direct-call boundary\n",
+				if debugCalls || debugExceptions {
+					fmt.Printf("[DEBUG vm.go] OpCall: Frame popped by direct-call boundary (frameCount=%d, was %d)\n",
 						vm.frameCount, currentFrameIndex+1)
 				}
 				// Our frame was popped - we need to exit this VM loop immediately
@@ -2572,7 +2577,10 @@ startExecution:
 			}
 
 			// Check if exception handler changed the IP (even if unwinding was cleared by handleCatchBlock)
-			if !wasUnwinding && frame.ip != frameIPBeforeCall {
+			// IMPORTANT: Only check this when we're still in the same frame (frameCount unchanged or decreased).
+			// If prepareCall pushed a new frame (shouldSwitch=true), the frame pointer now points to a different
+			// frame and frame.ip comparison with frameIPBeforeCall is meaningless.
+			if !wasUnwinding && vm.frameCount == frameCountBeforeCall && frame.ip != frameIPBeforeCall {
 				if debugExceptions {
 					fmt.Printf("[DEBUG vm.go] OpCall: Exception handler found, frame.ip changed from %d to %d, unwinding=%v\n",
 						frameIPBeforeCall, frame.ip, vm.unwinding)
@@ -2592,11 +2600,14 @@ startExecution:
 
 			// If exception was thrown but not handled, unwinding will still be true
 			if !wasUnwinding && vm.unwinding {
-				if debugExceptions {
+				if debugCalls || debugExceptions {
 					fmt.Printf("[DEBUG vm.go] OpCall: Exception thrown but not handled, unwinding=%v, frameCount=%d, crossedNative=%v\n", vm.unwinding, vm.frameCount, vm.unwindingCrossedNative)
 				}
 				// If we hit an isDirectCall boundary, return to let native code handle it
 				if vm.unwindingCrossedNative {
+					if debugCalls {
+						fmt.Printf("[DEBUG vm.go] OpCall: Returning InterpretRuntimeError due to crossedNative\n")
+					}
 					return InterpretRuntimeError, vm.currentException
 				}
 				// Exception was thrown but not handled - reload frame state
@@ -2670,6 +2681,9 @@ startExecution:
 			}
 
 			// Pending exception handling is now done in prepareCall directly
+			if debugCalls {
+				fmt.Printf("[DEBUG vm.go] OpCall: About to check shouldSwitch=%v, err=%v\n", shouldSwitch, err)
+			}
 
 			if shouldSwitch {
 				if debugCalls {
@@ -2819,9 +2833,8 @@ startExecution:
 			frame.ip = ip // Save final IP of this frame
 
 			// Trace returns with frame stack snapshot
-			if debugVM {
-				fmt.Printf("[DBG Return] from %s: %s (%s)\n", funcName(function), result.Inspect(), result.TypeName())
-				dumpFrameStack(vm, "on-return")
+			if debugVM || debugCalls {
+				fmt.Printf("[DEBUG OpReturn] from %s, frameCount=%d, result=%s\n", funcName(function), vm.frameCount, result.TypeName())
 			}
 
 			// If returning from the top-level script frame (and it's truly top-level), terminate immediately
@@ -3015,7 +3028,9 @@ startExecution:
 		case OpReturnUndefined:
 			frame.ip = ip // Save final IP
 
-			// Trace any function return of undefined (kept minimal)
+			if debugCalls {
+				fmt.Printf("[DEBUG OpReturnUndefined] from %s, frameCount=%d\n", funcName(function), vm.frameCount)
+			}
 
 			// If returning from the top-level script frame (and it's truly top-level), terminate immediately
 			// Don't do this for nested script frames (e.g., from eval()) which should continue normally
@@ -3094,9 +3109,6 @@ startExecution:
 			}
 
 			if vm.frameCount == 0 {
-				if debugVM {
-					fmt.Printf("[DBG] Returning from top-level\n")
-				}
 				// Returned undefined from top-level (or generator result if generator)
 				if vm.unwinding {
 					vm.handleUncaughtException()
@@ -5880,7 +5892,19 @@ startExecution:
 			// OpCallMethod is 1 (opcode) + 4 (operands) bytes long
 			callSiteIP := ip - 5 // IP where OpCallMethod instruction started
 			if debugCalls {
-				fmt.Printf("[DEBUG vm.go] OpCallMethod: callSiteIP=%d, callerIP=%d, frame.ip=%d\n", callSiteIP, callerIP, frame.ip)
+				calleeName := "<unknown>"
+				calleeVal := callerRegisters[funcReg]
+				switch calleeVal.Type() {
+				case TypeFunction:
+					calleeName = calleeVal.AsFunction().Name
+				case TypeClosure:
+					calleeName = calleeVal.AsClosure().Fn.Name
+				case TypeNativeFunction:
+					calleeName = AsNativeFunction(calleeVal).Name
+				case TypeNativeFunctionWithProps:
+					calleeName = calleeVal.AsNativeFunctionWithProps().Name
+				}
+				fmt.Printf("[DEBUG vm.go] OpCallMethod: callSiteIP=%d, callerIP=%d, frame.ip=%d, frameCount=%d, callee=%s\n", callSiteIP, callerIP, frame.ip, vm.frameCount, calleeName)
 			}
 
 			// Set frame IP to call site for exception handling

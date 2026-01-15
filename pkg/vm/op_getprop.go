@@ -516,8 +516,17 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		return true, InterpretOK, *dest
 	}
 
-	// 9. Map objects - consult Map.prototype chain for properties like forEach, get, set, etc.
+	// 9. Map objects - check user-defined properties first, then prototype chain
 	if objVal.Type() == TypeMap {
+		mapObj := objVal.AsMap()
+		// First check user-defined properties on this Map instance
+		if mapObj.Properties != nil {
+			if v, ok := mapObj.Properties.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+		}
+		// Then consult Map.prototype chain for built-in methods
 		proto := vm.MapPrototype
 		if proto.IsObject() {
 			po := proto.AsPlainObject()
@@ -544,8 +553,17 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		return true, InterpretOK, *dest
 	}
 
-	// 10. Set objects - consult Set.prototype chain for properties like forEach, add, has, etc.
+	// 10. Set objects - check user-defined properties first, then prototype chain
 	if objVal.Type() == TypeSet {
+		setObj := objVal.AsSet()
+		// First check user-defined properties on this Set instance
+		if setObj.Properties != nil {
+			if v, ok := setObj.Properties.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+		}
+		// Then consult Set.prototype chain for built-in methods
 		proto := vm.SetPrototype
 		if proto.IsObject() {
 			po := proto.AsPlainObject()

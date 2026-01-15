@@ -64,7 +64,8 @@ func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Add console methods
 	consoleObj.SetOwnNonEnumerable("log", vm.NewNativeFunction(0, true, "log", func(args []vm.Value) (vm.Value, error) {
-		fmt.Println(formatArgs(args))
+		output := formatArgs(args)
+		fmt.Println(output)
 		return vm.Undefined, nil
 	}))
 
