@@ -15,6 +15,8 @@ type Symbol struct {
 	SpillIndex uint16 // Index in the function's spillSlots array (only valid if IsSpilled)
 	// NFE binding support: named function expression bindings are immutable
 	IsImmutable bool // True if this is an NFE binding (assignments are silently ignored in non-strict)
+	// TDZ support: let/const variables are in TDZ until initialized
+	IsTDZ bool // True if this is a let/const variable that hasn't been initialized yet
 }
 
 // WithObjectInfo tracks information about a with object in the compiler
@@ -79,6 +81,31 @@ func (st *SymbolTable) DefineImmutable(name string, reg Register) Symbol {
 	symbol := Symbol{Name: name, Register: reg, IsGlobal: false, IsImmutable: true}
 	st.store[name] = symbol
 	return symbol
+}
+
+// DefineTDZ adds a new let/const symbol that's in the Temporal Dead Zone.
+// The symbol cannot be accessed until InitializeTDZ is called.
+func (st *SymbolTable) DefineTDZ(name string, reg Register) Symbol {
+	symbol := Symbol{Name: name, Register: reg, IsGlobal: false, IsTDZ: true}
+	st.store[name] = symbol
+	return symbol
+}
+
+// DefineTDZSpilled adds a new spilled let/const symbol that's in the Temporal Dead Zone.
+// Used when register allocation fails and the variable is stored in a spill slot.
+func (st *SymbolTable) DefineTDZSpilled(name string, spillIndex uint16) Symbol {
+	symbol := Symbol{Name: name, IsGlobal: false, IsSpilled: true, SpillIndex: spillIndex, IsTDZ: true}
+	st.store[name] = symbol
+	return symbol
+}
+
+// InitializeTDZ marks a TDZ symbol as initialized, allowing it to be accessed.
+// This should be called when the let/const declaration is actually executed.
+func (st *SymbolTable) InitializeTDZ(name string) {
+	if symbol, ok := st.store[name]; ok {
+		symbol.IsTDZ = false
+		st.store[name] = symbol
+	}
 }
 
 // Resolve looks up a symbol name starting from the current scope and traversing

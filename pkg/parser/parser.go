@@ -536,7 +536,12 @@ func (p *Parser) parseStatement() Statement {
 		stmt := p.parseFunctionDeclarationStatement()
 		return stmt
 	case lexer.ASYNC:
-		return p.parseAsyncFunctionDeclarationStatement()
+		// Check if this is 'async function' (declaration) or async arrow expression
+		if p.peekTokenIs(lexer.FUNCTION) {
+			return p.parseAsyncFunctionDeclarationStatement()
+		}
+		// Otherwise, treat as expression (async arrow function or 'async' as identifier)
+		return p.parseExpressionStatement()
 	case lexer.CLASS:
 		return p.parseClassDeclarationStatement()
 	case lexer.ENUM:
@@ -3138,17 +3143,11 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 			newParams = append(newParams, newParam)
 
 			// Create destructuring declaration statement
+			// Use the pattern's token (LBRACKET/LBRACE) instead of a synthetic LET token
+			// This prevents TDZ from being applied to these parameter bindings
 			if arrayPattern, ok := param.Pattern.(*ArrayParameterPattern); ok && arrayPattern != nil {
-				// Create a 'let' token for the declaration
-				letToken := lexer.Token{
-					Type:     lexer.LET,
-					Literal:  "let",
-					Line:     arrayPattern.Token.Line,
-					Column:   arrayPattern.Token.Column,
-					StartPos: arrayPattern.Token.StartPos,
-				}
 				declaration := &ArrayDestructuringDeclaration{
-					Token:          letToken,
+					Token:          arrayPattern.Token,
 					IsConst:        false, // Use let for function parameters
 					Elements:       arrayPattern.Elements,
 					TypeAnnotation: param.TypeAnnotation,
@@ -3165,16 +3164,8 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 				}
 				newStatements = append(newStatements, declaration)
 			} else if objectPattern, ok := param.Pattern.(*ObjectParameterPattern); ok && objectPattern != nil {
-				// Create a 'let' token for the declaration
-				letToken := lexer.Token{
-					Type:     lexer.LET,
-					Literal:  "let",
-					Line:     objectPattern.Token.Line,
-					Column:   objectPattern.Token.Column,
-					StartPos: objectPattern.Token.StartPos,
-				}
 				declaration := &ObjectDestructuringDeclaration{
-					Token:          letToken,
+					Token:          objectPattern.Token,
 					IsConst:        false, // Use let for function parameters
 					Properties:     objectPattern.Properties,
 					RestProperty:   objectPattern.RestProperty,
@@ -3281,17 +3272,11 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 			newParams = append(newParams, newParam)
 
 			// Create destructuring declaration statement
+			// Use the pattern's token (LBRACKET/LBRACE) instead of a synthetic LET token
+			// This prevents TDZ from being applied to these parameter bindings
 			if arrayPattern, ok := param.Pattern.(*ArrayParameterPattern); ok && arrayPattern != nil {
-				// Create a 'let' token for the declaration
-				letToken := lexer.Token{
-					Type:     lexer.LET,
-					Literal:  "let",
-					Line:     arrayPattern.Token.Line,
-					Column:   arrayPattern.Token.Column,
-					StartPos: arrayPattern.Token.StartPos,
-				}
 				declaration := &ArrayDestructuringDeclaration{
-					Token:          letToken,
+					Token:          arrayPattern.Token,
 					IsConst:        false, // Use let for function parameters
 					Elements:       arrayPattern.Elements,
 					TypeAnnotation: param.TypeAnnotation,
@@ -3308,16 +3293,8 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 				}
 				newStatements = append(newStatements, declaration)
 			} else if objectPattern, ok := param.Pattern.(*ObjectParameterPattern); ok && objectPattern != nil {
-				// Create a 'let' token for the declaration
-				letToken := lexer.Token{
-					Type:     lexer.LET,
-					Literal:  "let",
-					Line:     objectPattern.Token.Line,
-					Column:   objectPattern.Token.Column,
-					StartPos: objectPattern.Token.StartPos,
-				}
 				declaration := &ObjectDestructuringDeclaration{
-					Token:          letToken,
+					Token:          objectPattern.Token,
 					IsConst:        false, // Use let for function parameters
 					Properties:     objectPattern.Properties,
 					RestProperty:   objectPattern.RestProperty,
@@ -3488,19 +3465,10 @@ func (p *Parser) peekIsIdentifierLike() bool {
 // peekTokenIs2 checks if the token after peekToken matches the given type
 // This requires looking ahead 2 tokens from current position
 func (p *Parser) peekTokenIs2(t lexer.TokenType) bool {
-	// Save current state
-	curToken := p.curToken
-	peekToken := p.peekToken
-
-	// Advance once to look at token after peek
-	p.nextToken()
-	result := p.peekTokenIs(t)
-
-	// Restore state
-	p.curToken = curToken
-	p.peekToken = peekToken
-
-	return result
+	// Use lookAhead to properly look at token after peekToken without corrupting lexer state
+	// pos=1 returns the token after peekToken
+	token := p.lookAhead(1)
+	return token.Type == t
 }
 
 // lookAhead returns the token at position 'pos' ahead of peekToken
@@ -3516,10 +3484,11 @@ func (p *Parser) lookAhead(pos int) lexer.Token {
 	savedCur := p.curToken
 	savedPeek := p.peekToken
 
-	// Advance pos+1 times to get to the desired position
-	// (pos=1 means one token after peekToken)
+	// Advance pos times to get to the desired position
+	// The lexer is positioned to return the token after peekToken,
+	// so pos=1 needs 1 call, pos=2 needs 2 calls, etc.
 	var token lexer.Token
-	for i := 0; i <= pos; i++ {
+	for i := 0; i < pos; i++ {
 		token = p.l.NextToken()
 	}
 
@@ -3774,7 +3743,8 @@ func (p *Parser) parseAsyncExpression() Expression {
 	}
 
 	// Check if this is an async arrow function with single parameter: async x => x
-	if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.ARROW) {
+	// The parameter can be an identifier or a contextual keyword used as identifier (e.g., 'of')
+	if (p.curTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.curToken.Type) || p.curTokenIs(lexer.OF)) && p.peekTokenIs(lexer.ARROW) {
 		ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 		p.nextToken() // Move to '=>'
 		param := &Parameter{
@@ -5388,7 +5358,23 @@ func (p *Parser) parseForStatement() Statement {
 
 	// For declaration keywords or identifiers, we need to check if it's for-of/for-in
 	// Peek ahead to see the first token after '(' (and optional 'await')
-	if p.peekTokenIs(lexer.LET) || p.peekTokenIs(lexer.CONST) || p.peekTokenIs(lexer.VAR) {
+	//
+	// IMPORTANT: Per ECMAScript spec, 'let' is only treated as a declaration keyword
+	// if followed by '[' (destructuring) or an identifier. Otherwise, 'let' can be
+	// an identifier in non-strict mode. The spec says: lookahead ∉ { let [ }
+	// So "for (let; ...)" should treat 'let' as an identifier expression.
+	if p.peekTokenIs(lexer.LET) {
+		// Use lookAhead to see what follows 'let' (token at position 1 = after peekToken)
+		nextAfterLet := p.lookAhead(1).Type
+		if nextAfterLet == lexer.LBRACKET || nextAfterLet == lexer.LBRACE ||
+			nextAfterLet == lexer.IDENT || p.isKeywordThatCanBeIdentifier(nextAfterLet) {
+			// This is a let declaration: let [x], let {x}, let x
+			p.nextToken() // Advance to 'let'
+			return p.parseForStatementOrForOf(forToken, isAsync)
+		}
+		// Otherwise, 'let' is an identifier - fall through to regular expression handling
+	}
+	if p.peekTokenIs(lexer.CONST) || p.peekTokenIs(lexer.VAR) {
 		// Advance to the keyword
 		p.nextToken()
 		return p.parseForStatementOrForOf(forToken, isAsync)
@@ -5403,18 +5389,36 @@ func (p *Parser) parseForStatement() Statement {
 		return p.parseForStatementOrForOf(forToken, isAsync)
 	}
 
-	// For identifiers, check if it's followed by OF/IN or could be a member expression
-	if p.peekTokenIs(lexer.IDENT) {
+	// For identifiers (including contextual keywords like 'let', 'async' used as identifiers),
+	// check if it's followed by OF/IN or could be a member expression
+	if p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.LET) || p.peekTokenIs(lexer.ASYNC) ||
+		p.isKeywordThatCanBeIdentifier(p.peekToken.Type) {
 		// Save position, advance to check what follows
-		p.nextToken() // Now at IDENT
+		p.nextToken() // Now at IDENT or contextual keyword
 
 		// Check for member expression patterns: obj.x, obj[x], this.x
-		if p.peekTokenIs(lexer.DOT) || p.peekTokenIs(lexer.LBRACKET) {
+		// BUT NOT for 'await [' which is an await expression, not member access
+		if (p.peekTokenIs(lexer.DOT) || p.peekTokenIs(lexer.LBRACKET)) && !p.curTokenIs(lexer.AWAIT) {
 			// This is a member expression - could be for-of/for-in assignment
 			return p.parseForStatementOrForOf(forToken, isAsync)
 		}
 
-		if p.peekTokenIs(lexer.OF) || p.peekTokenIs(lexer.IN) {
+		// Check for for-of/for-in, but NOT if this is 'async of =>' (arrow function)
+		// 'async of =>' means: async arrow function with parameter 'of'
+		if p.peekTokenIs(lexer.OF) {
+			// Look ahead: if 'of' is followed by '=>', this is an arrow function, not for-of
+			if p.peekTokenIs2(lexer.ARROW) {
+				// This is 'async of =>' - parse as regular for loop with arrow function initializer
+				if isAsync {
+					p.addError(p.curToken, "for-await can only be used with for-of loops, not regular for loops")
+					return nil
+				}
+				return p.parseRegularForStatement(forToken)
+			}
+			return p.parseForStatementOrForOf(forToken, isAsync)
+		}
+
+		if p.peekTokenIs(lexer.IN) {
 			return p.parseForStatementOrForOf(forToken, isAsync)
 		}
 		// Not for-of/for-in, go back and parse as regular for
@@ -8076,17 +8080,19 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) St
 			varName = p.curToken.Literal
 		}
 	} else if p.curTokenIs(lexer.LBRACKET) {
-		// Array destructuring assignment: for ([x] of items)
-		// Parse as ArrayLiteral (which acts as assignment pattern)
-		arrayPattern := p.parseArrayLiteral()
-		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: arrayPattern}
+		// Could be array destructuring: for ([x] of items)
+		// Or array literal with suffix: for ([let][0]; ; )
+		// Parse as full expression to handle both cases
+		expr := p.parseExpression(LOWEST)
+		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: expr}
 		varStmt = exprStmt
 		varName = "" // Destructuring doesn't have a single name
 	} else if p.curTokenIs(lexer.LBRACE) {
-		// Object destructuring assignment: for ({a} of items)
-		// Parse as ObjectLiteral (which acts as assignment pattern)
-		objPattern := p.parseObjectLiteral()
-		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: objPattern}
+		// Could be object destructuring: for ({a} of items)
+		// Or object literal with suffix: for ({}.x; ; )
+		// Parse as full expression to handle both cases
+		expr := p.parseExpression(LOWEST)
+		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: expr}
 		varStmt = exprStmt
 		varName = "" // Destructuring doesn't have a single name
 	} else {
@@ -8174,7 +8180,12 @@ func (p *Parser) parseRegularForStatement(forToken lexer.Token) *ForStatement {
 
 	// Now parse initializer if curToken is not SEMICOLON
 	if !p.curTokenIs(lexer.SEMICOLON) {
-		if p.curTokenIs(lexer.LET) {
+		// IMPORTANT: 'let' is only a declaration keyword if followed by '[', '{', or an identifier
+		// Otherwise, 'let' can be used as an identifier in non-strict mode
+		isLetDeclaration := p.curTokenIs(lexer.LET) &&
+			(p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) ||
+				p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type))
+		if isLetDeclaration {
 			letStmt := &LetStatement{Token: p.curToken}
 			if !p.expectPeek(lexer.IDENT) {
 				return nil

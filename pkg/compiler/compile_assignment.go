@@ -2443,6 +2443,9 @@ func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool
 		}
 	}
 
+	// Mark TDZ as initialized now that the destructuring variable has been assigned
+	c.currentSymbolTable.InitializeTDZ(name)
+
 	return nil
 }
 

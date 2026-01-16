@@ -210,6 +210,8 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 				}
 			}
 		}
+		// Mark TDZ as initialized now that the let declaration has been processed
+		c.currentSymbolTable.InitializeTDZ(node.Name.Value)
 	} // end for declarator
 
 	return BadRegister, nil
@@ -608,6 +610,8 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 				}
 			}
 		}
+		// Mark TDZ as initialized now that the const declaration has been processed
+		c.currentSymbolTable.InitializeTDZ(node.Name.Value)
 	} // end for declarator
 	return BadRegister, nil
 }
@@ -1465,6 +1469,50 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 		loopCtx.CompletionReg = completionReg
 	}
 
+	// === Create lexical scope for switch CaseBlock ===
+	// Per ECMAScript spec, the switch CaseBlock creates a single lexical environment
+	// that all case clauses share. IMPORTANT: This scope must be created BEFORE
+	// evaluating case selectors, so that let/const declarations are hoisted and
+	// visible in case selector expressions.
+	prevSymbolTable := c.currentSymbolTable
+	c.currentSymbolTable = NewEnclosedSymbolTable(prevSymbolTable)
+
+	// Pre-define all let/const declarations found in case bodies (hoisting)
+	for _, caseClause := range node.Cases {
+		if caseClause.Body != nil {
+			for _, stmt := range caseClause.Body.Statements {
+				switch s := stmt.(type) {
+				case *parser.LetStatement:
+					if s.Name != nil {
+						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+							reg, ok := c.regAlloc.TryAllocForVariable()
+							if ok {
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+							} else {
+								spillIdx := c.AllocSpillSlot()
+								c.currentSymbolTable.DefineSpilled(s.Name.Value, spillIdx)
+							}
+						}
+					}
+				case *parser.ConstStatement:
+					if s.Name != nil {
+						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+							reg, ok := c.regAlloc.TryAllocForVariable()
+							if ok {
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+							} else {
+								spillIdx := c.AllocSpillSlot()
+								c.currentSymbolTable.DefineSpilled(s.Name.Value, spillIdx)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// === PHASE 1: Emit all case comparisons ===
 	// Each comparison jumps to the corresponding body if matched.
 	// If no match, falls through to the next comparison.
@@ -1520,48 +1568,6 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 
 	// Free switchExprReg - no longer needed after all comparisons
 	c.regAlloc.Free(switchExprReg)
-
-	// === Create lexical scope for switch body ===
-	// Per ECMAScript spec, the switch CaseBlock creates a single lexical environment
-	// that all case clauses share. let/const declarations are visible to all cases.
-	prevSymbolTable := c.currentSymbolTable
-	c.currentSymbolTable = NewEnclosedSymbolTable(prevSymbolTable)
-
-	// Pre-define all let/const declarations found in case bodies
-	for _, caseClause := range node.Cases {
-		if caseClause.Body != nil {
-			for _, stmt := range caseClause.Body.Statements {
-				switch s := stmt.(type) {
-				case *parser.LetStatement:
-					if s.Name != nil {
-						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-							reg, ok := c.regAlloc.TryAllocForVariable()
-							if ok {
-								c.currentSymbolTable.Define(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-							} else {
-								spillIdx := c.AllocSpillSlot()
-								c.currentSymbolTable.DefineSpilled(s.Name.Value, spillIdx)
-							}
-						}
-					}
-				case *parser.ConstStatement:
-					if s.Name != nil {
-						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-							reg, ok := c.regAlloc.TryAllocForVariable()
-							if ok {
-								c.currentSymbolTable.Define(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-							} else {
-								spillIdx := c.AllocSpillSlot()
-								c.currentSymbolTable.DefineSpilled(s.Name.Value, spillIdx)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
 
 	// === PHASE 2: Emit all case bodies in order ===
 	// Bodies are emitted in order for natural fall-through.

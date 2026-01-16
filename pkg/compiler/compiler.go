@@ -1022,13 +1022,13 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
 							reg, ok := c.regAlloc.TryAllocForVariable()
 							if ok {
-								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.currentSymbolTable.DefineTDZ(s.Name.Value, reg)
 								c.regAlloc.Pin(reg)
 								debugPrintf("// [BlockPredefine] Pre-defined let '%s' in register R%d (symbolTable=%p)\n", s.Name.Value, reg, c.currentSymbolTable)
 							} else {
 								// Variable register threshold reached, use spilling
 								spillIdx := c.AllocSpillSlot()
-								c.currentSymbolTable.DefineSpilled(s.Name.Value, spillIdx)
+								c.currentSymbolTable.DefineTDZSpilled(s.Name.Value, spillIdx)
 								debugPrintf("// [BlockPredefine] Pre-defined let '%s' in SPILL SLOT %d (symbolTable=%p)\n", s.Name.Value, spillIdx, c.currentSymbolTable)
 							}
 						}
@@ -1040,13 +1040,13 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
 							reg, ok := c.regAlloc.TryAllocForVariable()
 							if ok {
-								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.currentSymbolTable.DefineTDZ(s.Name.Value, reg)
 								c.regAlloc.Pin(reg)
 								debugPrintf("// [BlockPredefine] Pre-defined const '%s' in register R%d (symbolTable=%p)\n", s.Name.Value, reg, c.currentSymbolTable)
 							} else {
 								// Variable register threshold reached, use spilling
 								spillIdx := c.AllocSpillSlot()
-								c.currentSymbolTable.DefineSpilled(s.Name.Value, spillIdx)
+								c.currentSymbolTable.DefineTDZSpilled(s.Name.Value, spillIdx)
 								debugPrintf("// [BlockPredefine] Pre-defined const '%s' in SPILL SLOT %d (symbolTable=%p)\n", s.Name.Value, spillIdx, c.currentSymbolTable)
 							}
 						}
@@ -1054,37 +1054,57 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				case *parser.ObjectDestructuringDeclaration:
 					// Pre-define all variables from object destructuring pattern
 					// This is needed so closures can capture them before the destructuring is executed
+					// Use TDZ for let/const, regular Define for var
+					useTDZ := s.Token.Type == lexer.LET || s.Token.Type == lexer.CONST
 					varNames := extractDestructuringVarNames(s)
 					for _, name := range varNames {
 						if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; !alreadyInCurrentScope {
 							reg, ok := c.regAlloc.TryAllocForVariable()
 							if ok {
-								c.currentSymbolTable.Define(name, reg)
+								if useTDZ {
+									c.currentSymbolTable.DefineTDZ(name, reg)
+								} else {
+									c.currentSymbolTable.Define(name, reg)
+								}
 								c.regAlloc.Pin(reg)
-								debugPrintf("// [BlockPredefine] Pre-defined destructured let/const '%s' in register R%d (symbolTable=%p)\n", name, reg, c.currentSymbolTable)
+								debugPrintf("// [BlockPredefine] Pre-defined destructured '%s' in register R%d (TDZ=%v) (symbolTable=%p)\n", name, reg, useTDZ, c.currentSymbolTable)
 							} else {
 								// Variable register threshold reached, use spilling
 								spillIdx := c.AllocSpillSlot()
-								c.currentSymbolTable.DefineSpilled(name, spillIdx)
-								debugPrintf("// [BlockPredefine] Pre-defined destructured let/const '%s' in SPILL SLOT %d (symbolTable=%p)\n", name, spillIdx, c.currentSymbolTable)
+								if useTDZ {
+									c.currentSymbolTable.DefineTDZSpilled(name, spillIdx)
+								} else {
+									c.currentSymbolTable.DefineSpilled(name, spillIdx)
+								}
+								debugPrintf("// [BlockPredefine] Pre-defined destructured '%s' in SPILL SLOT %d (TDZ=%v) (symbolTable=%p)\n", name, spillIdx, useTDZ, c.currentSymbolTable)
 							}
 						}
 					}
 				case *parser.ArrayDestructuringDeclaration:
 					// Pre-define all variables from array destructuring pattern
+					// Use TDZ for let/const, regular Define for var
+					useTDZ := s.Token.Type == lexer.LET || s.Token.Type == lexer.CONST
 					varNames := extractArrayDestructuringVarNames(s)
 					for _, name := range varNames {
 						if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; !alreadyInCurrentScope {
 							reg, ok := c.regAlloc.TryAllocForVariable()
 							if ok {
-								c.currentSymbolTable.Define(name, reg)
+								if useTDZ {
+									c.currentSymbolTable.DefineTDZ(name, reg)
+								} else {
+									c.currentSymbolTable.Define(name, reg)
+								}
 								c.regAlloc.Pin(reg)
-								debugPrintf("// [BlockPredefine] Pre-defined array destructured let/const '%s' in register R%d (symbolTable=%p)\n", name, reg, c.currentSymbolTable)
+								debugPrintf("// [BlockPredefine] Pre-defined array destructured '%s' in register R%d (TDZ=%v) (symbolTable=%p)\n", name, reg, useTDZ, c.currentSymbolTable)
 							} else {
 								// Variable register threshold reached, use spilling
 								spillIdx := c.AllocSpillSlot()
-								c.currentSymbolTable.DefineSpilled(name, spillIdx)
-								debugPrintf("// [BlockPredefine] Pre-defined array destructured let/const '%s' in SPILL SLOT %d (symbolTable=%p)\n", name, spillIdx, c.currentSymbolTable)
+								if useTDZ {
+									c.currentSymbolTable.DefineTDZSpilled(name, spillIdx)
+								} else {
+									c.currentSymbolTable.DefineSpilled(name, spillIdx)
+								}
+								debugPrintf("// [BlockPredefine] Pre-defined array destructured '%s' in SPILL SLOT %d (TDZ=%v) (symbolTable=%p)\n", name, spillIdx, useTDZ, c.currentSymbolTable)
 							}
 						}
 					}
@@ -1584,6 +1604,16 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		}
 		debugPrintf("// DEBUG Identifier '%s': Looking up in %s scope\n", node.Value, scopeName) // <<< ADDED
 		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(node.Value)
+
+		// Note: TDZ (Temporal Dead Zone) checking is a runtime property that requires tracking
+		// variable initialization state at runtime. Compile-time TDZ checking doesn't work correctly
+		// because at compile time we don't know the order of code execution.
+		// Proper TDZ implementation would require:
+		// 1. A runtime "uninitialized" marker value for let/const variables
+		// 2. Runtime checks before variable access
+		// 3. Marking variables as initialized when their declaration is executed
+		// For now, TDZ checking is disabled to avoid false positives with upvalues.
+
 		if !found {
 			debugPrintf("// DEBUG Identifier '%s': NOT FOUND in symbol table, checking with objects\n", node.Value) // <<< ADDED
 
