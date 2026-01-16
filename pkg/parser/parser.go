@@ -485,10 +485,14 @@ func (p *Parser) parseStatement() Statement {
 	switch p.curToken.Type {
 	case lexer.LET:
 		// Check if this is actually a let declaration or just 'let' as an identifier
-		// If followed by [, {, or identifier, it's a declaration
-		// Otherwise (e.g., followed by ;, ), }, etc.), treat as identifier
-		if p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) || p.peekTokenIs(lexer.IDENT) ||
-			p.isKeywordThatCanBeIdentifier(p.peekToken.Type) {
+		// If followed by [, {, or identifier ON THE SAME LINE, it's a declaration
+		// If there's a newline before the next token, ASI applies and 'let' is an identifier
+		// Per ECMAScript, ExpressionStatement has lookahead restriction for `let [` but NOT `let {`
+		// However, if there's a LineTerminator between `let` and `{`, ASI inserts a semicolon
+		hasNewlineBefore := p.peekToken.Line > p.curToken.Line
+		if !hasNewlineBefore &&
+			(p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) || p.peekTokenIs(lexer.IDENT) ||
+				p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
 			return p.parseLetStatement()
 		} else {
 			// Treat 'let' as an identifier in an expression statement

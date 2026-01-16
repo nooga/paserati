@@ -2263,25 +2263,34 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 		return BadRegister, err
 	}
 
+	// Per ECMAScript spec, if statement completion value should be undefined when:
+	// - condition is false and there's no else clause
+	// - a branch is taken but doesn't produce a value (empty body)
+	// Pre-initialize hint to undefined BEFORE the jump so both branches see it.
+	// This ensures that when condition is false (no else), we return undefined, not the previous value.
+	if hint != BadRegister {
+		c.emitLoadUndefined(hint, node.Token.Line)
+	}
+
 	// 2. Emit placeholder jump for false condition
 	debugPrintf("[IfExpr] Before OpJumpIfFalse emit: codeLen=%d", len(c.chunk.Code))
 	jumpIfFalsePos = c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
 	debugPrintf("[IfExpr] Emitted OpJumpIfFalse at pos=%d; codeLen now=%d", jumpIfFalsePos, len(c.chunk.Code))
 
 	// 3. Compile the consequence block
-	// Per ECMAScript spec, if statement applies UpdateEmpty(stmtCompletion, undefined).
-	// Set the outer completion register to undefined before the branch, so if the branch
-	// contains break/continue (empty completion), undefined will be the result.
-	// If the branch produces a value, it will overwrite this undefined.
-	if hint != BadRegister {
-		c.emitLoadUndefined(hint, node.Token.Line)
-	}
-	// Allocate temporary register for consequence compilation
+	// Allocate temporary register for consequence compilation and initialize to undefined.
+	// This is important for break/continue inside the block - they copy hint to the loop's
+	// completion register, so hint must have a defined value (undefined if no prior statement).
 	consequenceReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, consequenceReg)
-	_, err = c.compileNode(node.Consequence, consequenceReg)
+	c.emitLoadUndefined(consequenceReg, node.Token.Line)
+	consResult, err := c.compileNode(node.Consequence, consequenceReg)
 	if err != nil {
 		return BadRegister, err
+	}
+	// If consequence produced a value, copy it to hint
+	if hint != BadRegister && consResult != BadRegister {
+		c.emitMove(hint, consequenceReg, node.Token.Line)
 	}
 	// Dump disassembly after consequence compilation, before any patching
 	debugPrintf("[IfExpr] Disassembly after consequence, pre-patch (codeLen=%d):\n%s", len(c.chunk.Code), c.chunk.DisassembleChunk("<if-consequence>"))
@@ -2304,17 +2313,18 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 		debugPrintf("[IfExpr] Disassembly after patchJumpIfFalse (else path entry):\n%s", c.chunk.DisassembleChunk("<if-else-entry>"))
 
 		// 6a. Compile the alternative block
-		// Per ECMAScript spec, if statement applies UpdateEmpty(stmtCompletion, undefined).
-		// Set the outer completion register to undefined before the branch.
-		if hint != BadRegister {
-			c.emitLoadUndefined(hint, node.Token.Line)
-		}
-		// Allocate temporary register for alternative compilation
+		// Allocate temporary register for alternative compilation and initialize to undefined.
+		// This is important for break/continue inside the block.
 		alternativeReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, alternativeReg)
-		_, err = c.compileNode(node.Alternative, alternativeReg)
+		c.emitLoadUndefined(alternativeReg, node.Token.Line)
+		altResult, err := c.compileNode(node.Alternative, alternativeReg)
 		if err != nil {
 			return BadRegister, err
+		}
+		// If alternative produced a value, copy it to hint
+		if hint != BadRegister && altResult != BadRegister {
+			c.emitMove(hint, alternativeReg, node.Token.Line)
 		}
 
 		// 7a. Backpatch the OpJump to jump *here* (end of else block)
@@ -2332,11 +2342,12 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 		patchedIfFalse = true
 		debugPrintf("[IfExpr] Patched (no-else) OpJumpIfFalse at pos=%d; codeLen=%d; bytes=%v", jumpIfFalsePos, len(c.chunk.Code), c.chunk.Code[max(0, jumpIfFalsePos-4):min(len(c.chunk.Code), jumpIfFalsePos+6)])
 		debugPrintf("[IfExpr] Disassembly after patchJumpIfFalse (no-else end):\n%s", c.chunk.DisassembleChunk("<if-no-else-exit>"))
-		// TODO: What value should an if without else produce? Undefined?
-		// If so, might need to emit OpLoadUndefined here.
 	}
 
-	// TODO: Free conditionReg if no longer needed?
+	// Return hint if we have a completion value register
+	if hint != BadRegister {
+		return hint, nil
+	}
 	return BadRegister, nil
 }
 
