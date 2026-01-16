@@ -3524,7 +3524,8 @@ func (p *Parser) isKeywordThatCanBeIdentifier(tokenType lexer.TokenType) bool {
 		lexer.TRY, lexer.SWITCH, lexer.CASE, lexer.DEFAULT, lexer.BREAK, lexer.CONTINUE, lexer.CLASS,
 		lexer.STATIC, lexer.READONLY, lexer.PUBLIC, lexer.PRIVATE, lexer.PROTECTED, lexer.ABSTRACT,
 		lexer.OVERRIDE, lexer.IMPORT, lexer.EXPORT, lexer.YIELD, lexer.AWAIT, lexer.VAR, lexer.TYPE, lexer.KEYOF,
-		lexer.INFER, lexer.IS, lexer.OF, lexer.INTERFACE, lexer.EXTENDS, lexer.IMPLEMENTS, lexer.SUPER, lexer.WITH:
+		lexer.INFER, lexer.IS, lexer.OF, lexer.INTERFACE, lexer.EXTENDS, lexer.IMPLEMENTS, lexer.SUPER, lexer.WITH,
+		lexer.ASYNC: // async can be used as identifier name
 		return true
 	default:
 		return false
