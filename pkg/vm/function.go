@@ -24,6 +24,10 @@ type FunctionObject struct {
 	HomeObject           Value        // [[HomeObject]] - object where method is defined (for super property access)
 	NameBindingRegister  int          // For named function expressions: register to initialize with closure (-1 if not used)
 
+	// Deleted intrinsic property tracking - these are configurable:true so can be deleted
+	DeletedName   bool // True if the 'name' property has been deleted
+	DeletedLength bool // True if the 'length' property has been deleted
+
 	// cachedClosure is used to avoid per-call allocations when invoking TypeFunction values.
 	// Most runtime calls should operate on TypeClosure, but some compilation paths may leave
 	// no-capture functions as TypeFunction. In that case we can reuse this closure wrapper.
@@ -135,12 +139,14 @@ func NewFunction(arity, length, upvalueCount, registerSize int, variadic bool, n
 	return Value{typ: TypeFunction, obj: unsafe.Pointer(fnObj)}
 }
 
-// getOrCreatePrototype lazily creates and returns the function's prototype property
-func (fn *FunctionObject) getOrCreatePrototype() Value {
-	return fn.getOrCreatePrototypeWithVM(nil)
+// GetOrCreatePrototype lazily creates and returns the function's prototype property
+func (fn *FunctionObject) GetOrCreatePrototype() Value {
+	return fn.GetOrCreatePrototypeWithVM(nil)
 }
 
-func (fn *FunctionObject) getOrCreatePrototypeWithVM(vm *VM) Value {
+// GetOrCreatePrototypeWithVM lazily creates and returns the function's prototype property,
+// using the VM's prototypes for proper inheritance chain setup.
+func (fn *FunctionObject) GetOrCreatePrototypeWithVM(vm *VM) Value {
 	// NUCLEAR DEBUG
 
 	// Ensure Properties object exists
@@ -204,12 +210,12 @@ func NewClosure(fn *FunctionObject, upvalues []*Upvalue) Value {
 	return Value{typ: TypeClosure, obj: unsafe.Pointer(closureObj)}
 }
 
-// getPrototypeWithVM returns the prototype to use for instances created with this closure.
+// GetPrototypeWithVM returns the prototype to use for instances created with this closure.
 // It first checks the closure's own Properties for a "prototype" property (set via assignment),
 // then falls back to the underlying FunctionObject's prototype.
 // IMPORTANT: When using the function's prototype, we update the constructor property to point
 // to this closure, ensuring `new MyFunc().constructor === MyFunc` works correctly.
-func (c *ClosureObject) getPrototypeWithVM(vm *VM) Value {
+func (c *ClosureObject) GetPrototypeWithVM(vm *VM) Value {
 	// First check closure's own properties (set via `Inner.prototype = proto`)
 	if c.Properties != nil {
 		if proto, exists := c.Properties.GetOwn("prototype"); exists {
@@ -217,7 +223,7 @@ func (c *ClosureObject) getPrototypeWithVM(vm *VM) Value {
 		}
 	}
 	// Fall back to the underlying function's prototype
-	proto := c.Fn.getOrCreatePrototypeWithVM(vm)
+	proto := c.Fn.GetOrCreatePrototypeWithVM(vm)
 
 	// Fix the constructor property ONCE to point to this closure instead of the underlying function
 	// This ensures `new MyFunc().constructor === MyFunc` works correctly

@@ -205,6 +205,16 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
 			return false, InterpretRuntimeError, Undefined
 		}
+		// Function intrinsic properties "name" and "length" are non-writable per ECMAScript spec
+		// Writes silently fail in non-strict mode, throw TypeError in strict mode
+		if propName == "name" || propName == "length" {
+			if fn.Chunk != nil && fn.Chunk.IsStrict {
+				vm.ThrowTypeError("Cannot assign to read only property '" + propName + "' of function")
+				return false, InterpretRuntimeError, Undefined
+			}
+			// In non-strict mode, silently fail (return the value but don't modify)
+			return true, InterpretOK, *valueToSet
+		}
 		if propName == "prototype" {
 			// For class constructors, prototype must be: writable=false, enumerable=false, configurable=false
 			w, e, c := false, false, false
@@ -254,6 +264,16 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		if (propName == "caller" || propName == "arguments") && closure.Fn.Chunk != nil && closure.Fn.Chunk.IsStrict {
 			vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
 			return false, InterpretRuntimeError, Undefined
+		}
+		// Function intrinsic properties "name" and "length" are non-writable per ECMAScript spec
+		// Writes silently fail in non-strict mode, throw TypeError in strict mode
+		if propName == "name" || propName == "length" {
+			if closure.Fn.Chunk != nil && closure.Fn.Chunk.IsStrict {
+				vm.ThrowTypeError("Cannot assign to read only property '" + propName + "' of function")
+				return false, InterpretRuntimeError, Undefined
+			}
+			// In non-strict mode, silently fail (return the value but don't modify)
+			return true, InterpretOK, *valueToSet
 		}
 		if propName == "prototype" {
 			// For class constructors, prototype must be: writable=false, enumerable=false, configurable=false

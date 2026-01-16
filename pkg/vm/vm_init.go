@@ -756,7 +756,7 @@ func (vm *VM) Construct(constructor Value, args []Value) (Value, error) {
 		}
 
 		// Create new object with constructor's prototype
-		prototype := fn.getOrCreatePrototypeWithVM(vm)
+		prototype := fn.GetOrCreatePrototypeWithVM(vm)
 		newObj := NewObject(prototype)
 
 		// Set constructor call flag so prepareCall allows class constructors
@@ -847,10 +847,10 @@ func (vm *VM) ConstructWithNewTarget(constructor Value, args []Value, newTarget 
 
 		var prototype Value
 		if newTargetFn != nil {
-			prototype = newTargetFn.getOrCreatePrototypeWithVM(vm)
+			prototype = newTargetFn.GetOrCreatePrototypeWithVM(vm)
 		} else {
 			// Fallback to constructor's prototype
-			prototype = fn.getOrCreatePrototypeWithVM(vm)
+			prototype = fn.GetOrCreatePrototypeWithVM(vm)
 		}
 
 		// For derived constructors, 'this' is uninitialized until super() is called

@@ -2017,11 +2017,11 @@ startExecution:
 			var constructorPrototype Value = Undefined
 			if constructorVal.Type() == TypeFunction {
 				fn := AsFunction(constructorVal)
-				constructorPrototype = fn.getOrCreatePrototypeWithVM(vm)
+				constructorPrototype = fn.GetOrCreatePrototypeWithVM(vm)
 			} else if constructorVal.Type() == TypeClosure {
-				// For closures, use getPrototypeWithVM which checks closure.Properties first
+				// For closures, use GetPrototypeWithVM which checks closure.Properties first
 				closureObj := AsClosure(constructorVal)
-				constructorPrototype = closureObj.getPrototypeWithVM(vm)
+				constructorPrototype = closureObj.GetPrototypeWithVM(vm)
 			} else if constructorVal.Type() == TypeNativeFunctionWithProps {
 				// Native functions (like Object, Array, etc.) have .prototype property
 				nativeFn := constructorVal.AsNativeFunctionWithProps()
@@ -4601,6 +4601,13 @@ startExecution:
 				} else if baseVal.Type() == TypeClosure {
 					// For closures, set property on the closure's own Properties object
 					closure := baseVal.AsClosure()
+					// Function intrinsic properties "name" and "length" are non-writable per ECMAScript spec
+					// Writes silently fail in non-strict mode
+					if key == "name" || key == "length" {
+						// TODO: In strict mode, this should throw TypeError
+						// For now, silently fail (continue without modifying)
+						continue
+					}
 					if closure.Properties == nil {
 						closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
 					}
@@ -6353,14 +6360,14 @@ startExecution:
 				var instancePrototype Value
 				if newTargetValue.Type() == TypeClosure {
 					newTargetClosure := AsClosure(newTargetValue)
-					// Use closure's getPrototypeWithVM which checks closure.Properties first
-					instancePrototype = newTargetClosure.getPrototypeWithVM(vm)
+					// Use closure's GetPrototypeWithVM which checks closure.Properties first
+					instancePrototype = newTargetClosure.GetPrototypeWithVM(vm)
 				} else if newTargetValue.Type() == TypeFunction {
 					newTargetFunc := AsFunction(newTargetValue)
-					instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
+					instancePrototype = newTargetFunc.GetOrCreatePrototypeWithVM(vm)
 				} else {
 					// Fallback: use the constructor's prototype
-					instancePrototype = constructorFunc.getOrCreatePrototypeWithVM(vm)
+					instancePrototype = constructorFunc.GetOrCreatePrototypeWithVM(vm)
 				}
 
 				// For derived constructors, 'this' is uninitialized until super() is called
@@ -6524,14 +6531,14 @@ startExecution:
 				var instancePrototype Value
 				if newTargetValue.Type() == TypeClosure {
 					newTargetClosure := AsClosure(newTargetValue)
-					// Use closure's getPrototypeWithVM which checks closure.Properties first
-					instancePrototype = newTargetClosure.getPrototypeWithVM(vm)
+					// Use closure's GetPrototypeWithVM which checks closure.Properties first
+					instancePrototype = newTargetClosure.GetPrototypeWithVM(vm)
 				} else if newTargetValue.Type() == TypeFunction {
 					newTargetFunc := AsFunction(newTargetValue)
-					instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
+					instancePrototype = newTargetFunc.GetOrCreatePrototypeWithVM(vm)
 				} else {
 					// Fallback: use the constructor's prototype
-					instancePrototype = constructorFunc.getOrCreatePrototypeWithVM(vm)
+					instancePrototype = constructorFunc.GetOrCreatePrototypeWithVM(vm)
 				}
 
 				// For derived constructors, 'this' is uninitialized until super() is called
@@ -6908,7 +6915,7 @@ startExecution:
 
 					// Get the prototype from the original constructor
 					var instancePrototype Value
-					instancePrototype = constructorClosure.getPrototypeWithVM(vm)
+					instancePrototype = constructorClosure.GetPrototypeWithVM(vm)
 
 					// For derived constructors, 'this' is uninitialized until super() is called
 					var newInstance Value
@@ -9853,7 +9860,14 @@ startExecution:
 			} else if obj.Type() == TypeFunction {
 				// Delete from function's properties
 				fn := obj.AsFunction()
-				if fn.Properties != nil {
+				// Handle deleting intrinsic properties (name, length) - they are configurable:true
+				if propName == "name" {
+					fn.DeletedName = true
+					success = true
+				} else if propName == "length" {
+					fn.DeletedLength = true
+					success = true
+				} else if fn.Properties != nil {
 					// In strict mode, check for non-configurable
 					if function.Chunk.IsStrict {
 						exists, nonConfig := fn.Properties.IsOwnPropertyNonConfigurable(propName)
@@ -9888,8 +9902,14 @@ startExecution:
 			} else if obj.Type() == TypeClosure {
 				// Delete from closure's properties (check closureObj.Properties first, then Fn.Properties)
 				closureObj := obj.AsClosure()
-				// Check if property exists in closureObj.Properties
-				if closureObj.Properties != nil && closureObj.Properties.HasOwn(propName) {
+				// Handle deleting intrinsic properties (name, length) - they are configurable:true
+				if propName == "name" {
+					closureObj.Fn.DeletedName = true
+					success = true
+				} else if propName == "length" {
+					closureObj.Fn.DeletedLength = true
+					success = true
+				} else if closureObj.Properties != nil && closureObj.Properties.HasOwn(propName) {
 					// In strict mode, check for non-configurable
 					if function.Chunk.IsStrict {
 						exists, nonConfig := closureObj.Properties.IsOwnPropertyNonConfigurable(propName)
@@ -10060,7 +10080,14 @@ startExecution:
 				// Delete from closure's properties
 				closureObj := obj.AsClosure()
 				propName := key.ToString()
-				if closureObj.Properties != nil && closureObj.Properties.HasOwn(propName) {
+				// Handle deleting intrinsic properties (name, length) - they are configurable:true
+				if propName == "name" {
+					closureObj.Fn.DeletedName = true
+					success = true
+				} else if propName == "length" {
+					closureObj.Fn.DeletedLength = true
+					success = true
+				} else if closureObj.Properties != nil && closureObj.Properties.HasOwn(propName) {
 					success = closureObj.Properties.DeleteOwn(propName)
 				} else if closureObj.Fn.Properties != nil && closureObj.Fn.Properties.HasOwn(propName) {
 					success = closureObj.Fn.Properties.DeleteOwn(propName)
@@ -10072,7 +10099,14 @@ startExecution:
 				// Delete from function's properties
 				fn := obj.AsFunction()
 				propName := key.ToString()
-				if fn.Properties != nil && fn.Properties.HasOwn(propName) {
+				// Handle deleting intrinsic properties (name, length) - they are configurable:true
+				if propName == "name" {
+					fn.DeletedName = true
+					success = true
+				} else if propName == "length" {
+					fn.DeletedLength = true
+					success = true
+				} else if fn.Properties != nil && fn.Properties.HasOwn(propName) {
 					success = fn.Properties.DeleteOwn(propName)
 				} else {
 					success = true

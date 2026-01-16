@@ -101,14 +101,14 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		var instancePrototype Value
 		if newTargetValue.Type() == TypeClosure {
 			newTargetClosure := AsClosure(newTargetValue)
-			// Use closure's getPrototypeWithVM which checks closure.Properties first
-			instancePrototype = newTargetClosure.getPrototypeWithVM(vm)
+			// Use closure's GetPrototypeWithVM which checks closure.Properties first
+			instancePrototype = newTargetClosure.GetPrototypeWithVM(vm)
 		} else if newTargetValue.Type() == TypeFunction {
 			newTargetFunc := AsFunction(newTargetValue)
-			instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
+			instancePrototype = newTargetFunc.GetOrCreatePrototypeWithVM(vm)
 		} else {
 			// Fallback: use the constructor's prototype
-			instancePrototype = constructorFunc.getOrCreatePrototypeWithVM(vm)
+			instancePrototype = constructorFunc.GetOrCreatePrototypeWithVM(vm)
 		}
 
 		// Create instance (or leave undefined for derived constructors)
@@ -203,14 +203,14 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		var instancePrototype Value
 		if newTargetValue.Type() == TypeClosure {
 			newTargetClosure := AsClosure(newTargetValue)
-			// Use closure's getPrototypeWithVM which checks closure.Properties first
-			instancePrototype = newTargetClosure.getPrototypeWithVM(vm)
+			// Use closure's GetPrototypeWithVM which checks closure.Properties first
+			instancePrototype = newTargetClosure.GetPrototypeWithVM(vm)
 		} else if newTargetValue.Type() == TypeFunction {
 			newTargetFunc := AsFunction(newTargetValue)
-			instancePrototype = newTargetFunc.getOrCreatePrototypeWithVM(vm)
+			instancePrototype = newTargetFunc.GetOrCreatePrototypeWithVM(vm)
 		} else {
 			// Fallback: use the constructor's prototype
-			instancePrototype = constructorFunc.getOrCreatePrototypeWithVM(vm)
+			instancePrototype = constructorFunc.GetOrCreatePrototypeWithVM(vm)
 		}
 
 		// Create instance (or leave undefined for derived constructors)

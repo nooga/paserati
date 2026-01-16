@@ -141,6 +141,105 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Check custom named properties (e.g., pos, end for TypeScript node arrays)
 			_, hasOwn := arrObj.GetOwn(propName)
 			return vm.BooleanValue(hasOwn), nil
+		case vm.TypeFunction:
+			fn := thisValue.AsFunction()
+			// Functions have intrinsic own properties: name, length
+			// Check if they've been deleted (configurable:true means they can be deleted)
+			if propName == "name" && !fn.DeletedName {
+				return vm.BooleanValue(true), nil
+			}
+			if propName == "length" && !fn.DeletedLength {
+				return vm.BooleanValue(true), nil
+			}
+			// prototype is only an own property for non-arrow functions that are NOT methods
+			// Arrow functions and methods don't have prototype
+			// We check if it exists in Properties (created lazily or explicitly)
+			// or if the function is a class constructor (always has prototype)
+			if propName == "prototype" && !fn.IsArrowFunction {
+				// Class constructors always have prototype
+				if fn.IsClassConstructor {
+					return vm.BooleanValue(true), nil
+				}
+				// For other functions, only report prototype if it's been accessed/created
+				if fn.Properties != nil {
+					if _, hasOwn := fn.Properties.GetOwn("prototype"); hasOwn {
+						return vm.BooleanValue(true), nil
+					}
+				}
+			}
+			// Check custom properties
+			if fn.Properties != nil {
+				_, hasOwn := fn.Properties.GetOwn(propName)
+				return vm.BooleanValue(hasOwn), nil
+			}
+			return vm.BooleanValue(false), nil
+		case vm.TypeClosure:
+			closure := thisValue.AsClosure()
+			// Closures have intrinsic own properties: name, length
+			// Check if they've been deleted (configurable:true means they can be deleted)
+			if propName == "name" && !closure.Fn.DeletedName {
+				return vm.BooleanValue(true), nil
+			}
+			if propName == "length" && !closure.Fn.DeletedLength {
+				return vm.BooleanValue(true), nil
+			}
+			// prototype is only an own property for non-arrow functions that are NOT methods
+			// Arrow functions and methods don't have prototype
+			// We check if it exists in Properties (created lazily or explicitly)
+			// or if the function is a class constructor (always has prototype)
+			if propName == "prototype" && !closure.Fn.IsArrowFunction {
+				// Class constructors always have prototype
+				if closure.Fn.IsClassConstructor {
+					return vm.BooleanValue(true), nil
+				}
+				// For closures, check both closure.Properties and Fn.Properties
+				if closure.Properties != nil {
+					if _, hasOwn := closure.Properties.GetOwn("prototype"); hasOwn {
+						return vm.BooleanValue(true), nil
+					}
+				}
+				if closure.Fn.Properties != nil {
+					if _, hasOwn := closure.Fn.Properties.GetOwn("prototype"); hasOwn {
+						return vm.BooleanValue(true), nil
+					}
+				}
+			}
+			// Check closure's own properties first
+			if closure.Properties != nil {
+				if _, hasOwn := closure.Properties.GetOwn(propName); hasOwn {
+					return vm.BooleanValue(true), nil
+				}
+			}
+			// Then check underlying function's properties
+			if closure.Fn.Properties != nil {
+				_, hasOwn := closure.Fn.Properties.GetOwn(propName)
+				return vm.BooleanValue(hasOwn), nil
+			}
+			return vm.BooleanValue(false), nil
+		case vm.TypeNativeFunction:
+			// Native functions have intrinsic own properties: name, length
+			if propName == "name" || propName == "length" {
+				return vm.BooleanValue(true), nil
+			}
+			return vm.BooleanValue(false), nil
+		case vm.TypeNativeFunctionWithProps:
+			nfp := thisValue.AsNativeFunctionWithProps()
+			// Have intrinsic own properties: name, length
+			if propName == "name" || propName == "length" {
+				return vm.BooleanValue(true), nil
+			}
+			// Check custom properties
+			if nfp.Properties != nil {
+				_, hasOwn := nfp.Properties.GetOwn(propName)
+				return vm.BooleanValue(hasOwn), nil
+			}
+			return vm.BooleanValue(false), nil
+		case vm.TypeBoundFunction:
+			// Bound functions have intrinsic own properties: name, length
+			if propName == "name" || propName == "length" {
+				return vm.BooleanValue(true), nil
+			}
+			return vm.BooleanValue(false), nil
 		default:
 			return vm.BooleanValue(false), nil
 		}
@@ -2100,6 +2199,141 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 				descriptor.SetOwn("enumerable", vm.BooleanValue(false))
 				descriptor.SetOwn("configurable", vm.BooleanValue(true))
 			}
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+	}
+
+	// Handle function intrinsic properties: name, length, prototype
+	// Per ECMAScript spec, these are own data properties with specific attributes:
+	// - name: {writable: false, enumerable: false, configurable: true}
+	// - length: {writable: false, enumerable: false, configurable: true}
+	// - prototype: {writable: true, enumerable: false, configurable: false} (for non-arrow functions)
+	switch obj.Type() {
+	case vm.TypeFunction:
+		fn := obj.AsFunction()
+		// Check for deleted intrinsic properties - if deleted, skip (return undefined)
+		if propName == "name" && !fn.DeletedName {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", vm.NewString(fn.Name))
+			descriptor.SetOwn("writable", vm.BooleanValue(false))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		if propName == "length" && !fn.DeletedLength {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", vm.NumberValue(float64(fn.Length)))
+			descriptor.SetOwn("writable", vm.BooleanValue(false))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		if propName == "prototype" && !fn.IsArrowFunction {
+			proto := fn.GetOrCreatePrototypeWithVM(vmInstance)
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", proto)
+			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(false))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+	case vm.TypeClosure:
+		closure := obj.AsClosure()
+		fn := closure.Fn
+		// Check for deleted intrinsic properties - if deleted, skip (return undefined)
+		if propName == "name" && !fn.DeletedName {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", vm.NewString(fn.Name))
+			descriptor.SetOwn("writable", vm.BooleanValue(false))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		if propName == "length" && !fn.DeletedLength {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", vm.NumberValue(float64(fn.Length)))
+			descriptor.SetOwn("writable", vm.BooleanValue(false))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		if propName == "prototype" && !fn.IsArrowFunction {
+			proto := closure.GetPrototypeWithVM(vmInstance)
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", proto)
+			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(false))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+	case vm.TypeNativeFunction:
+		nf := obj.AsNativeFunction()
+		if propName == "name" {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", vm.NewString(nf.Name))
+			descriptor.SetOwn("writable", vm.BooleanValue(false))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		if propName == "length" {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", vm.NumberValue(float64(nf.Arity)))
+			descriptor.SetOwn("writable", vm.BooleanValue(false))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+	case vm.TypeNativeFunctionWithProps:
+		nfp := obj.AsNativeFunctionWithProps()
+		if propName == "name" {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", vm.NewString(nfp.Name))
+			descriptor.SetOwn("writable", vm.BooleanValue(false))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		if propName == "length" {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", vm.NumberValue(float64(nfp.Arity)))
+			descriptor.SetOwn("writable", vm.BooleanValue(false))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+	case vm.TypeBoundFunction:
+		bf := obj.AsBoundFunction()
+		if propName == "name" {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", vm.NewString(bf.Name))
+			descriptor.SetOwn("writable", vm.BooleanValue(false))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		if propName == "length" {
+			// Bound functions have reduced length by the number of bound arguments
+			var originalLength int
+			switch bf.OriginalFunction.Type() {
+			case vm.TypeFunction:
+				originalLength = bf.OriginalFunction.AsFunction().Length
+			case vm.TypeClosure:
+				originalLength = bf.OriginalFunction.AsClosure().Fn.Length
+			case vm.TypeNativeFunction:
+				originalLength = bf.OriginalFunction.AsNativeFunction().Arity
+			case vm.TypeNativeFunctionWithProps:
+				originalLength = bf.OriginalFunction.AsNativeFunctionWithProps().Arity
+			}
+			boundLength := originalLength - len(bf.PartialArgs)
+			if boundLength < 0 {
+				boundLength = 0
+			}
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", vm.NumberValue(float64(boundLength)))
+			descriptor.SetOwn("writable", vm.BooleanValue(false))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
 	}

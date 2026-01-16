@@ -66,12 +66,12 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 	// Special handling for "prototype" property (not available on bound functions)
 	if fn != nil && propName == "prototype" {
 		if closure != nil {
-			// For closures, use getPrototypeWithVM which checks closure.Properties first
-			result := closure.getPrototypeWithVM(vm)
+			// For closures, use GetPrototypeWithVM which checks closure.Properties first
+			result := closure.GetPrototypeWithVM(vm)
 			return result, true
 		}
-		// For TypeFunction (not closure), use fn.getOrCreatePrototypeWithVM
-		result := fn.getOrCreatePrototypeWithVM(vm)
+		// For TypeFunction (not closure), use fn.GetOrCreatePrototypeWithVM
+		result := fn.GetOrCreatePrototypeWithVM(vm)
 		return result, true
 	}
 
@@ -136,12 +136,23 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 	}
 
 	// Expose intrinsic function properties like .name
+	// Check DeletedName flag for bytecode functions/closures
 	if propName == "name" {
 		switch objVal.Type() {
 		case TypeFunction:
-			return NewString(objVal.AsFunction().Name), true
+			fn := objVal.AsFunction()
+			if fn.DeletedName {
+				// Fall through to prototype lookup below
+				break
+			}
+			return NewString(fn.Name), true
 		case TypeClosure:
-			return NewString(objVal.AsClosure().Fn.Name), true
+			fn := objVal.AsClosure().Fn
+			if fn.DeletedName {
+				// Fall through to prototype lookup below
+				break
+			}
+			return NewString(fn.Name), true
 		case TypeNativeFunction:
 			return NewString(objVal.AsNativeFunction().Name), true
 		case TypeAsyncNativeFunction:
@@ -155,12 +166,23 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 
 	// Expose intrinsic function properties like .length
 	// Per ECMAScript spec, length is the number of parameters before the first default parameter
+	// Check DeletedLength flag for bytecode functions/closures
 	if propName == "length" {
 		switch objVal.Type() {
 		case TypeFunction:
-			return NumberValue(float64(objVal.AsFunction().Length)), true
+			fn := objVal.AsFunction()
+			if fn.DeletedLength {
+				// Fall through to prototype lookup below
+				break
+			}
+			return NumberValue(float64(fn.Length)), true
 		case TypeClosure:
-			return NumberValue(float64(objVal.AsClosure().Fn.Length)), true
+			fn := objVal.AsClosure().Fn
+			if fn.DeletedLength {
+				// Fall through to prototype lookup below
+				break
+			}
+			return NumberValue(float64(fn.Length)), true
 		case TypeNativeFunction:
 			// For native functions, length is the arity (number of formal parameters)
 			// Variadic flag means it accepts additional args, but doesn't affect length
