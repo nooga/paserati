@@ -131,18 +131,23 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	c.emitGetProp(valueReg, resultReg, valueConstIdx, node.Token.Line)
 
 	// 13. Assign value to loop variable
+	// Track per-iteration binding registers for let/const loop variables (not var - var is function-scoped)
+	var perIterationRegs []Register
 	if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
 		symbol := c.currentSymbolTable.Define(letStmt.Name.Value, c.regAlloc.Alloc())
 		c.regAlloc.Pin(symbol.Register)
+		perIterationRegs = append(perIterationRegs, symbol.Register)
 		c.emitMove(symbol.Register, valueReg, node.Token.Line)
 	} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
 		// Use DefineConst (not TDZ) - variable is immediately initialized in for-of
 		symbol := c.currentSymbolTable.DefineConst(constStmt.Name.Value, c.regAlloc.Alloc())
 		c.regAlloc.Pin(symbol.Register)
+		perIterationRegs = append(perIterationRegs, symbol.Register)
 		c.emitMove(symbol.Register, valueReg, node.Token.Line)
 	} else if varStmt, ok := node.Variable.(*parser.VarStatement); ok {
 		symbol := c.currentSymbolTable.Define(varStmt.Name.Value, c.regAlloc.Alloc())
 		c.regAlloc.Pin(symbol.Register)
+		// Note: var is function-scoped, so no per-iteration binding needed
 		c.emitMove(symbol.Register, valueReg, node.Token.Line)
 	} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
 		// Array destructuring: for(const [x, y] of arr)
@@ -287,6 +292,13 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	// 15. Patch continue jumps to land here (before next iteration)
 	for _, continuePos := range loopContext.ContinuePlaceholderPosList {
 		c.patchJump(continuePos)
+	}
+
+	// 15a. Per-iteration bindings: close upvalues for let/const loop variables
+	// ECMAScript spec: each iteration gets fresh bindings. This ensures closures
+	// capture the value at this iteration, not the final value.
+	for _, reg := range perIterationRegs {
+		c.emitCloseUpvalue(reg, node.Token.Line)
 	}
 
 	// 16. Jump back to loop start

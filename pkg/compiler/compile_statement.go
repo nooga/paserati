@@ -1801,16 +1801,20 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 	c.emitByte(byte(keyIndexReg))   // index
 
 	// 6. Assign current key to loop variable
+	// Track per-iteration binding registers for let/const loop variables
+	var perIterationRegs []Register
 	if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
 		// Define the loop variable in symbol table
 		symbol := c.currentSymbolTable.Define(letStmt.Name.Value, c.regAlloc.Alloc())
-		// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
+		c.regAlloc.Pin(symbol.Register) // Pin so closures can capture
+		perIterationRegs = append(perIterationRegs, symbol.Register)
 		// Store key value in the variable's register
 		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)
 	} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
 		// Use DefineConst (not TDZ) - variable is immediately initialized in for-in
 		symbol := c.currentSymbolTable.DefineConst(constStmt.Name.Value, c.regAlloc.Alloc())
-		// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
+		c.regAlloc.Pin(symbol.Register) // Pin so closures can capture
+		perIterationRegs = append(perIterationRegs, symbol.Register)
 		// Store key value in the variable's register
 		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)
 	} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
@@ -1975,6 +1979,13 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 	// 8. Patch continue jumps to land here (before increment)
 	for _, continuePos := range loopContext.ContinuePlaceholderPosList {
 		c.patchJump(continuePos)
+	}
+
+	// 8a. Per-iteration bindings: close upvalues for let/const loop variables
+	// ECMAScript spec: each iteration gets fresh bindings. This ensures closures
+	// capture the value at this iteration, not the final value.
+	for _, reg := range perIterationRegs {
+		c.emitCloseUpvalue(reg, node.Token.Line)
 	}
 
 	// 9. Increment key index
