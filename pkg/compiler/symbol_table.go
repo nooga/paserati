@@ -13,6 +13,8 @@ type Symbol struct {
 	// Spill support: when register pressure is too high, variables can be spilled to memory
 	IsSpilled  bool   // True if this variable has been spilled to spillSlots
 	SpillIndex uint16 // Index in the function's spillSlots array (only valid if IsSpilled)
+	// NFE binding support: named function expression bindings are immutable
+	IsImmutable bool // True if this is an NFE binding (assignments are silently ignored in non-strict)
 }
 
 // WithObjectInfo tracks information about a with object in the compiler
@@ -67,6 +69,14 @@ func (st *SymbolTable) DefineGlobal(name string, globalIndex uint16) Symbol {
 // Used when register allocation fails and the variable is stored in a spill slot.
 func (st *SymbolTable) DefineSpilled(name string, spillIndex uint16) Symbol {
 	symbol := Symbol{Name: name, IsGlobal: false, IsSpilled: true, SpillIndex: spillIndex}
+	st.store[name] = symbol
+	return symbol
+}
+
+// DefineImmutable adds a new immutable symbol to the *current* scope's table.
+// Used for Named Function Expression (NFE) bindings where assignments should be silently ignored.
+func (st *SymbolTable) DefineImmutable(name string, reg Register) Symbol {
+	symbol := Symbol{Name: name, Register: reg, IsGlobal: false, IsImmutable: true}
 	st.store[name] = symbol
 	return symbol
 }

@@ -289,7 +289,7 @@ type FinallyContext struct {
 	LoopStackDepthAtCreation int
 }
 
-const debugCompiler = false // Set to true to trace compiler output
+const debugCompiler = true // Set to true to trace compiler output
 const debugCompilerStats = false
 const debugCompiledCode = false // Enable disassembly output
 const debugPrint = false        // Enable debug output
@@ -913,11 +913,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.FunctionLiteral:
 		debugPrintf("// DEBUG Node-FunctionLiteral: Compiling function literal used as expression '%s'.\n", node.Name) // <<< DEBUG
 
-		// For function expressions, the nameHint should always be empty.
-		// The function's internal name (for recursive calls from within) is handled by the
-		// NFE (Named Function Expression) binding mechanism in compileFunctionLiteralWithOptions.
-		// nameHint is only used for function declarations where the name is bound in outer scope.
+		// Determine hint: empty for anonymous, Name.Value if named (though named exprs are rare)
 		nameHint := ""
+		if node.Name != nil {
+			nameHint = node.Name.Value
+		}
 		// <<< MODIFY Call Site >>>
 		funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(node, nameHint)
 		if err != nil {

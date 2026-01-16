@@ -1335,6 +1335,48 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 	// Free switchExprReg - no longer needed after all comparisons
 	c.regAlloc.Free(switchExprReg)
 
+	// === Create lexical scope for switch body ===
+	// Per ECMAScript spec, the switch CaseBlock creates a single lexical environment
+	// that all case clauses share. let/const declarations are visible to all cases.
+	prevSymbolTable := c.currentSymbolTable
+	c.currentSymbolTable = NewEnclosedSymbolTable(prevSymbolTable)
+
+	// Pre-define all let/const declarations found in case bodies
+	for _, caseClause := range node.Cases {
+		if caseClause.Body != nil {
+			for _, stmt := range caseClause.Body.Statements {
+				switch s := stmt.(type) {
+				case *parser.LetStatement:
+					if s.Name != nil {
+						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+							reg, ok := c.regAlloc.TryAllocForVariable()
+							if ok {
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+							} else {
+								spillIdx := c.AllocSpillSlot()
+								c.currentSymbolTable.DefineSpilled(s.Name.Value, spillIdx)
+							}
+						}
+					}
+				case *parser.ConstStatement:
+					if s.Name != nil {
+						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
+							reg, ok := c.regAlloc.TryAllocForVariable()
+							if ok {
+								c.currentSymbolTable.Define(s.Name.Value, reg)
+								c.regAlloc.Pin(reg)
+							} else {
+								spillIdx := c.AllocSpillSlot()
+								c.currentSymbolTable.DefineSpilled(s.Name.Value, spillIdx)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// === PHASE 2: Emit all case bodies in order ===
 	// Bodies are emitted in order for natural fall-through.
 	// Break statements emit jumps to the end.
@@ -1386,6 +1428,9 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 			c.patchJump(breakJumpPos)
 		}
 	}
+
+	// Restore the previous scope
+	c.currentSymbolTable = prevSymbolTable
 
 	c.popLoopContext()
 

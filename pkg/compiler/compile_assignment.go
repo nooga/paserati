@@ -110,7 +110,20 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		} else {
 			// Regular identifier - resolve the identifier
 			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(lhsNode.Value)
-			if !found {
+
+			// Check for immutable binding (NFE name binding)
+			// In non-strict mode, assignment is silently ignored
+			// In strict mode, it should throw a TypeError (but we currently just ignore)
+			if found && symbolRef.IsImmutable {
+				// For immutable bindings, skip the store
+				// RHS is still evaluated for side effects
+				needsStore = false
+				// Still set up identInfo so the code flow continues properly
+				identInfo.targetReg = symbolRef.Register
+				identInfo.isUpvalue = false
+				identInfo.isGlobal = false
+				currentValueReg = identInfo.targetReg
+			} else if !found {
 				// Check caller scope first (for direct eval with scope access)
 				if c.callerScopeDesc != nil {
 					if callerRegIdx := c.resolveCallerLocal(lhsNode.Value); callerRegIdx >= 0 {
@@ -845,7 +858,12 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			if rhsValueReg != hint {
 				c.emitMove(hint, rhsValueReg, line)
 			}
-			needsStore = true
+			// Only set needsStore = true if not already set to false (e.g., for immutable bindings)
+			if needsStore {
+				needsStore = true // Keep as true (no-op, just for clarity)
+			}
+			// Note: if needsStore was set to false earlier (e.g., for NFE bindings),
+			// we preserve that and skip the actual store
 
 		default:
 			return BadRegister, NewCompileError(node, fmt.Sprintf("unsupported assignment operator '%s'", node.Operator))

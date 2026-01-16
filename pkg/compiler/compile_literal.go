@@ -1341,7 +1341,8 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	if needsInnerNameBinding {
 		// Allocate a register for the function name binding
 		nameBindingReg := functionCompiler.regAlloc.Alloc()
-		functionCompiler.currentSymbolTable.Define(funcNameForInnerBinding, nameBindingReg)
+		// Use DefineImmutable so assignments to the NFE name are silently ignored in non-strict mode
+		functionCompiler.currentSymbolTable.DefineImmutable(funcNameForInnerBinding, nameBindingReg)
 		functionCompiler.regAlloc.Pin(nameBindingReg) // Pin since it can be captured
 
 		// No bytecode needs to be emitted here - the VM will initialize this register
