@@ -1024,11 +1024,18 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 							if ok {
 								c.currentSymbolTable.DefineTDZ(s.Name.Value, reg)
 								c.regAlloc.Pin(reg)
+								// Emit TDZ marker (Uninitialized value) into the register
+								c.emitLoadUninitialized(reg, s.Token.Line)
 								debugPrintf("// [BlockPredefine] Pre-defined let '%s' in register R%d (symbolTable=%p)\n", s.Name.Value, reg, c.currentSymbolTable)
 							} else {
 								// Variable register threshold reached, use spilling
 								spillIdx := c.AllocSpillSlot()
 								c.currentSymbolTable.DefineTDZSpilled(s.Name.Value, spillIdx)
+								// Emit TDZ marker to temp register, then store to spill slot
+								tempReg := c.regAlloc.Alloc()
+								c.emitLoadUninitialized(tempReg, s.Token.Line)
+								c.emitStoreSpill(spillIdx, tempReg, s.Token.Line)
+								c.regAlloc.Free(tempReg)
 								debugPrintf("// [BlockPredefine] Pre-defined let '%s' in SPILL SLOT %d (symbolTable=%p)\n", s.Name.Value, spillIdx, c.currentSymbolTable)
 							}
 						}
@@ -1042,11 +1049,18 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 							if ok {
 								c.currentSymbolTable.DefineTDZ(s.Name.Value, reg)
 								c.regAlloc.Pin(reg)
+								// Emit TDZ marker (Uninitialized value) into the register
+								c.emitLoadUninitialized(reg, s.Token.Line)
 								debugPrintf("// [BlockPredefine] Pre-defined const '%s' in register R%d (symbolTable=%p)\n", s.Name.Value, reg, c.currentSymbolTable)
 							} else {
 								// Variable register threshold reached, use spilling
 								spillIdx := c.AllocSpillSlot()
 								c.currentSymbolTable.DefineTDZSpilled(s.Name.Value, spillIdx)
+								// Emit TDZ marker to temp register, then store to spill slot
+								tempReg := c.regAlloc.Alloc()
+								c.emitLoadUninitialized(tempReg, s.Token.Line)
+								c.emitStoreSpill(spillIdx, tempReg, s.Token.Line)
+								c.regAlloc.Free(tempReg)
 								debugPrintf("// [BlockPredefine] Pre-defined const '%s' in SPILL SLOT %d (symbolTable=%p)\n", s.Name.Value, spillIdx, c.currentSymbolTable)
 							}
 						}
@@ -1063,6 +1077,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 							if ok {
 								if useTDZ {
 									c.currentSymbolTable.DefineTDZ(name, reg)
+									// Emit TDZ marker (Uninitialized value) into the register
+									c.emitLoadUninitialized(reg, s.Token.Line)
 								} else {
 									c.currentSymbolTable.Define(name, reg)
 								}
@@ -1073,6 +1089,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 								spillIdx := c.AllocSpillSlot()
 								if useTDZ {
 									c.currentSymbolTable.DefineTDZSpilled(name, spillIdx)
+									// Emit TDZ marker to temp register, then store to spill slot
+									tempReg := c.regAlloc.Alloc()
+									c.emitLoadUninitialized(tempReg, s.Token.Line)
+									c.emitStoreSpill(spillIdx, tempReg, s.Token.Line)
+									c.regAlloc.Free(tempReg)
 								} else {
 									c.currentSymbolTable.DefineSpilled(name, spillIdx)
 								}
@@ -1091,6 +1112,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 							if ok {
 								if useTDZ {
 									c.currentSymbolTable.DefineTDZ(name, reg)
+									// Emit TDZ marker (Uninitialized value) into the register
+									c.emitLoadUninitialized(reg, s.Token.Line)
 								} else {
 									c.currentSymbolTable.Define(name, reg)
 								}
@@ -1101,6 +1124,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 								spillIdx := c.AllocSpillSlot()
 								if useTDZ {
 									c.currentSymbolTable.DefineTDZSpilled(name, spillIdx)
+									// Emit TDZ marker to temp register, then store to spill slot
+									tempReg := c.regAlloc.Alloc()
+									c.emitLoadUninitialized(tempReg, s.Token.Line)
+									c.emitStoreSpill(spillIdx, tempReg, s.Token.Line)
+									c.regAlloc.Free(tempReg)
 								} else {
 									c.currentSymbolTable.DefineSpilled(name, spillIdx)
 								}

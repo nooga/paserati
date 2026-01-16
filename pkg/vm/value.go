@@ -78,7 +78,8 @@ const (
 	TypeArrayBuffer
 	TypeTypedArray
 	TypeProxy
-	TypeHole // Internal marker for array holes (sparse arrays)
+	TypeHole          // Internal marker for array holes (sparse arrays)
+	TypeUninitialized // TDZ marker for let/const before initialization
 )
 
 // String returns a human-readable string representation of the ValueType
@@ -345,11 +346,12 @@ func (vm *VM) NewRangeError(message string) error {
 }
 
 var (
-	Undefined = Value{typ: TypeUndefined}
-	Null      = Value{typ: TypeNull}
-	Hole      = Value{typ: TypeHole} // Internal marker for array holes (sparse arrays)
-	True      = Value{typ: TypeBoolean, payload: 1}
-	False     = Value{typ: TypeBoolean, payload: 0}
+	Undefined     = Value{typ: TypeUndefined}
+	Null          = Value{typ: TypeNull}
+	Hole          = Value{typ: TypeHole}          // Internal marker for array holes (sparse arrays)
+	Uninitialized = Value{typ: TypeUninitialized} // TDZ marker for let/const before initialization
+	True          = Value{typ: TypeBoolean, payload: 1}
+	False         = Value{typ: TypeBoolean, payload: 0}
 	NaN       = Value{typ: TypeFloatNumber, payload: math.Float64bits(math.NaN())}
 )
 

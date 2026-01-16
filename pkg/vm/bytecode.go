@@ -126,6 +126,7 @@ const (
 	OpSetSuperComputed               OpCode = 115 // KeyReg ValueReg: super[KeyReg] = ValueReg (super property assignment with computed key)
 	OpSetSuperComputedWithBase       OpCode = 137 // BaseReg KeyReg ValueReg: super[KeyReg] = ValueReg with explicit super base (for correct evaluation order)
 	OpGetSuperConstructor            OpCode = 138 // Rx: Get the [[Prototype]] of the current function (for super() calls)
+	OpLoadUninitialized              OpCode = 139 // Rx: Load TDZ uninitialized marker into register Rx (for let/const before initialization)
 	OpDefineMethodComputed           OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
 	OpDefineMethodEnumerable         OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
 	OpDefineMethodComputedEnumerable OpCode = 122 // ObjReg ValueReg KeyReg: Define enumerable method on object with computed key (sets [[HomeObject]], for object literals)
@@ -416,6 +417,8 @@ func (op OpCode) String() string {
 		return "OpSetSuperComputedWithBase"
 	case OpGetSuperConstructor:
 		return "OpGetSuperConstructor"
+	case OpLoadUninitialized:
+		return "OpLoadUninitialized"
 	case OpDefineMethodComputed:
 		return "OpDefineMethodComputed"
 	case OpDefineMethodEnumerable:
@@ -774,7 +777,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	switch instruction {
 	case OpLoadConst:
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
-	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject:
+	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject, OpLoadUninitialized:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
 	case OpNegate, OpNot, OpTypeof, OpToNumber, OpToNumeric, OpLoadNumericOne, OpBitwiseNot, OpGetLength, OpIsNull, OpIsUndefined, OpIsNullish:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry

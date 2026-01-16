@@ -742,6 +742,13 @@ func (c *Compiler) emitSetWithProperty(nameIdx int, valueReg Register, line int)
 	c.emitByte(byte(valueReg))
 }
 
+// emitLoadUninitialized emits OpLoadUninitialized to mark a register as TDZ (Temporal Dead Zone)
+// This is used for let/const variables that haven't been initialized yet.
+func (c *Compiler) emitLoadUninitialized(dest Register, line int) {
+	c.emitOpCode(vm.OpLoadUninitialized, line)
+	c.emitByte(byte(dest))
+}
+
 // emitTDZError emits code to throw a ReferenceError for accessing a variable
 // before it is initialized (Temporal Dead Zone violation in default parameters)
 func (c *Compiler) emitTDZError(hint Register, varName string, line int) {

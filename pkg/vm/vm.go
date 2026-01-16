@@ -956,6 +956,11 @@ startExecution:
 			ip++
 			registers[reg] = BooleanValue(false) // Use local BooleanValue()
 
+		case OpLoadUninitialized:
+			reg := code[ip]
+			ip++
+			registers[reg] = Uninitialized // TDZ marker for let/const
+
 		case OpMove:
 			regDest := code[ip]
 			regSrc := code[ip+1]
@@ -3509,13 +3514,32 @@ startExecution:
 				return status, Undefined
 			}
 			upvalue := closure.Upvalues[upvalueIndex]
+			var val Value
 			if upvalue.Location != nil {
 				// Variable is still open (on the stack)
-				registers[destReg] = *upvalue.Location // Dereference pointer to get value
+				val = *upvalue.Location // Dereference pointer to get value
 			} else {
 				// Variable is closed
-				registers[destReg] = upvalue.Closed
+				val = upvalue.Closed
 			}
+			// TDZ check: throw ReferenceError if accessing uninitialized let/const
+			if val.typ == TypeUninitialized {
+				frame.ip = ip
+				vm.ThrowReferenceError("Cannot access variable before initialization")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				return InterpretRuntimeError, Undefined
+			}
+			registers[destReg] = val
 
 		case OpSetUpvalue:
 			upvalueIndex := int(code[ip])
@@ -3529,6 +3553,29 @@ startExecution:
 				return status, Undefined
 			}
 			upvalue := closure.Upvalues[upvalueIndex]
+			// TDZ check: writing to uninitialized variable is also an error
+			var currentVal Value
+			if upvalue.Location != nil {
+				currentVal = *upvalue.Location
+			} else {
+				currentVal = upvalue.Closed
+			}
+			if currentVal.typ == TypeUninitialized {
+				frame.ip = ip
+				vm.ThrowReferenceError("Cannot access variable before initialization")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				return InterpretRuntimeError, Undefined
+			}
 			if upvalue.Location != nil {
 				// Variable is still open (on the stack), update the stack slot
 				*upvalue.Location = valueToStore // Update value via pointer
@@ -3548,13 +3595,32 @@ startExecution:
 				return status, Undefined
 			}
 			upvalue := closure.Upvalues[upvalueIndex]
+			var val Value
 			if upvalue.Location != nil {
 				// Variable is still open (on the stack)
-				registers[destReg] = *upvalue.Location // Dereference pointer to get value
+				val = *upvalue.Location // Dereference pointer to get value
 			} else {
 				// Variable is closed
-				registers[destReg] = upvalue.Closed
+				val = upvalue.Closed
 			}
+			// TDZ check: throw ReferenceError if accessing uninitialized let/const
+			if val.typ == TypeUninitialized {
+				frame.ip = ip
+				vm.ThrowReferenceError("Cannot access variable before initialization")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				return InterpretRuntimeError, Undefined
+			}
+			registers[destReg] = val
 
 		case OpSetUpvalue16:
 			upvalueIndex := int(uint16(code[ip])<<8 | uint16(code[ip+1]))
@@ -3568,6 +3634,29 @@ startExecution:
 				return status, Undefined
 			}
 			upvalue := closure.Upvalues[upvalueIndex]
+			// TDZ check: writing to uninitialized variable is also an error
+			var currentVal Value
+			if upvalue.Location != nil {
+				currentVal = *upvalue.Location
+			} else {
+				currentVal = upvalue.Closed
+			}
+			if currentVal.typ == TypeUninitialized {
+				frame.ip = ip
+				vm.ThrowReferenceError("Cannot access variable before initialization")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				return InterpretRuntimeError, Undefined
+			}
 			if upvalue.Location != nil {
 				// Variable is still open (on the stack), update the stack slot
 				*upvalue.Location = valueToStore // Update value via pointer
