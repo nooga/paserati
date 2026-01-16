@@ -577,10 +577,19 @@ func (l *Lexer) SplitGreaterEqualToken(geToken Token) Token {
 // readChar gives us the next character and advances our position in the input string.
 // It also updates the line and column count.
 func (l *Lexer) readChar() {
-	// Before advancing, check if the current character was a newline
+	// Before advancing, check if the current character was a line terminator
+	// ECMAScript line terminators: U+000A (LF), U+000D (CR), U+2028 (LS), U+2029 (PS)
+	// Note: \r\n together counts as a single line terminator
 	if l.ch == '\n' {
 		l.line++
 		l.column = 0 // Reset column, it will be incremented below
+	} else if l.ch == '\r' {
+		// Carriage return is a line terminator, but \r\n together is a single
+		// line terminator. Only increment if next char is NOT \n.
+		if l.peekChar() != '\n' {
+			l.line++
+			l.column = 0
+		}
 	}
 
 	if l.readPosition >= len(l.input) {
@@ -635,9 +644,16 @@ func (l *Lexer) skipWhitespace() {
 			remaining := []byte(l.input[l.position:])
 			r, size := utf8.DecodeRune(remaining)
 			if r != utf8.RuneError && isUnicodeWhitespace(r) {
+				// Check if this is a Unicode line terminator (U+2028 LS or U+2029 PS)
+				isLineTerminator := (r == 0x2028 || r == 0x2029)
 				// Skip the multi-byte Unicode whitespace character
 				for i := 0; i < size; i++ {
 					l.readChar()
+				}
+				// Increment line if this was a Unicode line terminator
+				if isLineTerminator {
+					l.line++
+					l.column = 1 // Reset column (readChar already incremented it)
 				}
 				continue
 			} else if r != utf8.RuneError && isInvalidInTokenStream(r) {

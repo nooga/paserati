@@ -1504,12 +1504,16 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	}
 
 	// 7. Create the bytecode.Function object
-	// ... (determine funcName as before) ...
+	// Determine funcName per ECMAScript spec:
+	// - Named functions keep their own name (e.g., function x() {} has name "x")
+	// - Anonymous functions inherit name from binding context (e.g., var f = function() {} has name "f")
 	var funcName string
-	if nameHint != "" {
-		funcName = nameHint
-	} else if node.Name != nil {
+	if node.Name != nil {
+		// Named function - always use the function's own name
 		funcName = node.Name.Value
+	} else if nameHint != "" {
+		// Anonymous function - use the binding context name (name inference)
+		funcName = nameHint
 	} else {
 		funcName = "<anonymous>"
 	}

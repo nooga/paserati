@@ -84,6 +84,24 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// 4. Update the symbol table entry for the variable with the closure register
 			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 
+		} else if classExpr, ok := node.Value.(*parser.ClassExpression); ok {
+			// --- Handle let C = class {} or let C = class D {} ---
+			// For anonymous class expressions, infer name from variable binding
+			// For named class expressions, keep the class's own name
+			if classExpr.Name == nil {
+				// Anonymous class - set name from variable binding
+				classExpr.Name = &parser.Identifier{
+					Token: classExpr.Token,
+					Value: node.Name.Value,
+				}
+			}
+			// Now compile normally - the class will use its name (either own name or inferred)
+			valueReg = c.regAlloc.Alloc()
+			_, err = c.compileNode(classExpr, valueReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
 		} else if node.Value != nil {
 			// Compile other value types normally
 			// Use existing predefined register if present
@@ -331,6 +349,24 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 			}
 
+		} else if classExpr, ok := declarator.Value.(*parser.ClassExpression); ok {
+			// --- Handle var C = class {} or var C = class D {} ---
+			// For anonymous class expressions, infer name from variable binding
+			// For named class expressions, keep the class's own name
+			if classExpr.Name == nil {
+				// Anonymous class - set name from variable binding
+				classExpr.Name = &parser.Identifier{
+					Token: classExpr.Token,
+					Value: node.Name.Value,
+				}
+			}
+			// Now compile normally - the class will use its name (either own name or inferred)
+			valueReg = c.regAlloc.Alloc()
+			_, err = c.compileNode(classExpr, valueReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
 		} else if node.Value != nil {
 			// Compile other value types normally
 			// DON'T defer free - we'll free explicitly below if needed (when it's a temp, not a variable register)
@@ -497,6 +533,24 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 
 			// 4. Update the symbol table entry for the const with the closure register
 			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
+
+		} else if classExpr, ok := node.Value.(*parser.ClassExpression); ok {
+			// --- Handle const C = class {} or const C = class D {} ---
+			// For anonymous class expressions, infer name from variable binding
+			// For named class expressions, keep the class's own name
+			if classExpr.Name == nil {
+				// Anonymous class - set name from variable binding
+				classExpr.Name = &parser.Identifier{
+					Token: classExpr.Token,
+					Value: node.Name.Value,
+				}
+			}
+			// Now compile normally - the class will use its name (either own name or inferred)
+			valueReg = c.regAlloc.Alloc()
+			_, err = c.compileNode(classExpr, valueReg)
+			if err != nil {
+				return BadRegister, err
+			}
 
 		} else {
 			// Compile other value types normally
