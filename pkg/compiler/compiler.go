@@ -1047,7 +1047,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
 							reg, ok := c.regAlloc.TryAllocForVariable()
 							if ok {
-								c.currentSymbolTable.DefineTDZ(s.Name.Value, reg)
+								c.currentSymbolTable.DefineConstTDZ(s.Name.Value, reg)
 								c.regAlloc.Pin(reg)
 								// Emit TDZ marker (Uninitialized value) into the register
 								c.emitLoadUninitialized(reg, s.Token.Line)
@@ -1055,7 +1055,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 							} else {
 								// Variable register threshold reached, use spilling
 								spillIdx := c.AllocSpillSlot()
-								c.currentSymbolTable.DefineTDZSpilled(s.Name.Value, spillIdx)
+								c.currentSymbolTable.DefineConstTDZSpilled(s.Name.Value, spillIdx)
 								// Emit TDZ marker to temp register, then store to spill slot
 								tempReg := c.regAlloc.Alloc()
 								c.emitLoadUninitialized(tempReg, s.Token.Line)
@@ -1070,13 +1070,18 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 					// This is needed so closures can capture them before the destructuring is executed
 					// Use TDZ for let/const, regular Define for var
 					useTDZ := s.Token.Type == lexer.LET || s.Token.Type == lexer.CONST
+					isConst := s.Token.Type == lexer.CONST
 					varNames := extractDestructuringVarNames(s)
 					for _, name := range varNames {
 						if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; !alreadyInCurrentScope {
 							reg, ok := c.regAlloc.TryAllocForVariable()
 							if ok {
 								if useTDZ {
-									c.currentSymbolTable.DefineTDZ(name, reg)
+									if isConst {
+										c.currentSymbolTable.DefineConstTDZ(name, reg)
+									} else {
+										c.currentSymbolTable.DefineTDZ(name, reg)
+									}
 									// Emit TDZ marker (Uninitialized value) into the register
 									c.emitLoadUninitialized(reg, s.Token.Line)
 								} else {
@@ -1088,7 +1093,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 								// Variable register threshold reached, use spilling
 								spillIdx := c.AllocSpillSlot()
 								if useTDZ {
-									c.currentSymbolTable.DefineTDZSpilled(name, spillIdx)
+									if isConst {
+										c.currentSymbolTable.DefineConstTDZSpilled(name, spillIdx)
+									} else {
+										c.currentSymbolTable.DefineTDZSpilled(name, spillIdx)
+									}
 									// Emit TDZ marker to temp register, then store to spill slot
 									tempReg := c.regAlloc.Alloc()
 									c.emitLoadUninitialized(tempReg, s.Token.Line)
@@ -1105,13 +1114,18 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 					// Pre-define all variables from array destructuring pattern
 					// Use TDZ for let/const, regular Define for var
 					useTDZ := s.Token.Type == lexer.LET || s.Token.Type == lexer.CONST
+					isConst := s.Token.Type == lexer.CONST
 					varNames := extractArrayDestructuringVarNames(s)
 					for _, name := range varNames {
 						if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; !alreadyInCurrentScope {
 							reg, ok := c.regAlloc.TryAllocForVariable()
 							if ok {
 								if useTDZ {
-									c.currentSymbolTable.DefineTDZ(name, reg)
+									if isConst {
+										c.currentSymbolTable.DefineConstTDZ(name, reg)
+									} else {
+										c.currentSymbolTable.DefineTDZ(name, reg)
+									}
 									// Emit TDZ marker (Uninitialized value) into the register
 									c.emitLoadUninitialized(reg, s.Token.Line)
 								} else {
@@ -1123,7 +1137,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 								// Variable register threshold reached, use spilling
 								spillIdx := c.AllocSpillSlot()
 								if useTDZ {
-									c.currentSymbolTable.DefineTDZSpilled(name, spillIdx)
+									if isConst {
+										c.currentSymbolTable.DefineConstTDZSpilled(name, spillIdx)
+									} else {
+										c.currentSymbolTable.DefineTDZSpilled(name, spillIdx)
+									}
 									// Emit TDZ marker to temp register, then store to spill slot
 									tempReg := c.regAlloc.Alloc()
 									c.emitLoadUninitialized(tempReg, s.Token.Line)

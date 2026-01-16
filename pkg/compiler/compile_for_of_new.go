@@ -136,7 +136,8 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		c.regAlloc.Pin(symbol.Register)
 		c.emitMove(symbol.Register, valueReg, node.Token.Line)
 	} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
-		symbol := c.currentSymbolTable.Define(constStmt.Name.Value, c.regAlloc.Alloc())
+		// Use DefineConst (not TDZ) - variable is immediately initialized in for-of
+		symbol := c.currentSymbolTable.DefineConst(constStmt.Name.Value, c.regAlloc.Alloc())
 		c.regAlloc.Pin(symbol.Register)
 		c.emitMove(symbol.Register, valueReg, node.Token.Line)
 	} else if varStmt, ok := node.Variable.(*parser.VarStatement); ok {

@@ -940,21 +940,23 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 			// Handle const declarations in for loop
 			// Pre-allocate registers and pin them so closures can capture these variables
 			// Track registers for per-iteration bindings
+			// NOTE: Use DefineConstTDZ to mark as const so assignment throws TypeError
 			if len(cs.Declarations) > 0 {
 				for _, d := range cs.Declarations {
 					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
 					if isGlobalScope {
 						globalIdx := c.GetOrAssignGlobalIndex(d.Name.Value)
 						c.currentSymbolTable.DefineGlobal(d.Name.Value, globalIdx)
+						// TODO: Need DefineGlobalConst to mark global const
 					} else {
 						reg, ok := c.regAlloc.TryAllocForVariable()
 						if ok {
-							c.currentSymbolTable.Define(d.Name.Value, reg)
+							c.currentSymbolTable.DefineConstTDZ(d.Name.Value, reg)
 							c.regAlloc.Pin(reg)
 							perIterationRegs = append(perIterationRegs, reg)
 						} else {
 							spillIdx := c.AllocSpillSlot()
-							c.currentSymbolTable.DefineSpilled(d.Name.Value, spillIdx)
+							c.currentSymbolTable.DefineConstTDZSpilled(d.Name.Value, spillIdx)
 						}
 					}
 				}
@@ -964,15 +966,16 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 				if isGlobalScope {
 					globalIdx := c.GetOrAssignGlobalIndex(name)
 					c.currentSymbolTable.DefineGlobal(name, globalIdx)
+					// TODO: Need DefineGlobalConst to mark global const
 				} else {
 					reg, ok := c.regAlloc.TryAllocForVariable()
 					if ok {
-						c.currentSymbolTable.Define(name, reg)
+						c.currentSymbolTable.DefineConstTDZ(name, reg)
 						c.regAlloc.Pin(reg)
 						perIterationRegs = append(perIterationRegs, reg)
 					} else {
 						spillIdx := c.AllocSpillSlot()
-						c.currentSymbolTable.DefineSpilled(name, spillIdx)
+						c.currentSymbolTable.DefineConstTDZSpilled(name, spillIdx)
 					}
 				}
 			}
@@ -1788,8 +1791,8 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		// Store key value in the variable's register
 		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)
 	} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
-		// Define the loop variable in symbol table
-		symbol := c.currentSymbolTable.Define(constStmt.Name.Value, c.regAlloc.Alloc())
+		// Use DefineConst (not TDZ) - variable is immediately initialized in for-in
+		symbol := c.currentSymbolTable.DefineConst(constStmt.Name.Value, c.regAlloc.Alloc())
 		// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 		// Store key value in the variable's register
 		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)

@@ -111,6 +111,16 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			// Regular identifier - resolve the identifier
 			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(lhsNode.Value)
 
+			// Check for const assignment - emit TypeError at runtime
+			if found && symbolRef.IsConst {
+				c.emitConstAssignmentError(lhsNode.Value, line)
+				// Still need to evaluate RHS for side effects, but return after
+				if _, err := c.compileNode(node.Value, hint); err != nil {
+					return BadRegister, err
+				}
+				return hint, nil
+			}
+
 			// Check for immutable binding (NFE name binding)
 			// In non-strict mode, assignment is silently ignored
 			// In strict mode, it should throw a TypeError (but we currently just ignore)
@@ -1144,6 +1154,12 @@ func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, v
 		// (Test262 runs without type checking, so we need to support this for compliance)
 		globalIdx := c.GetOrAssignGlobalIndex(identTarget.Value)
 		c.emitSetGlobal(globalIdx, valueReg, line)
+		return nil
+	}
+
+	// Check for const assignment - emit TypeError at runtime
+	if symbol.IsConst {
+		c.emitConstAssignmentError(identTarget.Value, line)
 		return nil
 	}
 

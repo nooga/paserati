@@ -468,6 +468,10 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 			currentValueReg = c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, currentValueReg)
 			c.emitGetGlobal(currentValueReg, globalIdx, line)
+		} else if symbolRef.IsConst {
+			// Cannot update a const variable - emit TypeError
+			c.emitConstAssignmentError(argNode.Value, line)
+			return hint, nil
 		} else if symbolRef.IsGlobal {
 			// Global variable: Load current value with OpGetGlobal
 			identInfo.isGlobal = true

@@ -794,4 +794,33 @@ func (c *Compiler) emitTDZError(hint Register, varName string, line int) {
 	c.regAlloc.Free(resultReg)
 }
 
+// emitConstAssignmentError emits code to throw a TypeError for assigning to a const variable.
+// ECMAScript spec: Assignment to const is a TypeError.
+func (c *Compiler) emitConstAssignmentError(varName string, line int) {
+	// Allocate registers for function and result
+	funcReg := c.regAlloc.Alloc()
+	resultReg := c.regAlloc.Alloc()
+
+	// Load TypeError constructor
+	typeErrorGlobalIdx := c.GetOrAssignGlobalIndex("TypeError")
+	c.emitGetGlobal(funcReg, typeErrorGlobalIdx, line)
+
+	// Load error message - OpCall expects args at funcReg+1, so load directly there
+	msg := fmt.Sprintf("Assignment to constant variable '%s'", varName)
+	msgConstIdx := c.chunk.AddConstant(vm.String(msg))
+	argReg := funcReg + 1
+	c.emitLoadConstant(argReg, msgConstIdx, line)
+
+	// Call TypeError constructor
+	c.emitCall(resultReg, funcReg, 1, line)
+
+	// Throw the error
+	c.emitOpCode(vm.OpThrow, line)
+	c.emitByte(byte(resultReg))
+
+	// Free temporary registers
+	c.regAlloc.Free(funcReg)
+	c.regAlloc.Free(resultReg)
+}
+
 // --- END NEW ---

@@ -17,6 +17,8 @@ type Symbol struct {
 	IsImmutable bool // True if this is an NFE binding (assignments are silently ignored in non-strict)
 	// TDZ support: let/const variables are in TDZ until initialized
 	IsTDZ bool // True if this is a let/const variable that hasn't been initialized yet
+	// Const support: const variables cannot be reassigned (throws TypeError)
+	IsConst bool // True if this is a const variable
 }
 
 // WithObjectInfo tracks information about a with object in the compiler
@@ -83,7 +85,7 @@ func (st *SymbolTable) DefineImmutable(name string, reg Register) Symbol {
 	return symbol
 }
 
-// DefineTDZ adds a new let/const symbol that's in the Temporal Dead Zone.
+// DefineTDZ adds a new let symbol that's in the Temporal Dead Zone.
 // The symbol cannot be accessed until InitializeTDZ is called.
 func (st *SymbolTable) DefineTDZ(name string, reg Register) Symbol {
 	symbol := Symbol{Name: name, Register: reg, IsGlobal: false, IsTDZ: true}
@@ -91,10 +93,34 @@ func (st *SymbolTable) DefineTDZ(name string, reg Register) Symbol {
 	return symbol
 }
 
-// DefineTDZSpilled adds a new spilled let/const symbol that's in the Temporal Dead Zone.
+// DefineConst adds a new const symbol (not in TDZ).
+// Use this for cases where the variable is immediately initialized (e.g., for-of/for-in loops).
+func (st *SymbolTable) DefineConst(name string, reg Register) Symbol {
+	symbol := Symbol{Name: name, Register: reg, IsGlobal: false, IsConst: true}
+	st.store[name] = symbol
+	return symbol
+}
+
+// DefineConstTDZ adds a new const symbol that's in the Temporal Dead Zone.
+// The symbol cannot be accessed until InitializeTDZ is called, and cannot be reassigned.
+func (st *SymbolTable) DefineConstTDZ(name string, reg Register) Symbol {
+	symbol := Symbol{Name: name, Register: reg, IsGlobal: false, IsTDZ: true, IsConst: true}
+	st.store[name] = symbol
+	return symbol
+}
+
+// DefineTDZSpilled adds a new spilled let symbol that's in the Temporal Dead Zone.
 // Used when register allocation fails and the variable is stored in a spill slot.
 func (st *SymbolTable) DefineTDZSpilled(name string, spillIndex uint16) Symbol {
 	symbol := Symbol{Name: name, IsGlobal: false, IsSpilled: true, SpillIndex: spillIndex, IsTDZ: true}
+	st.store[name] = symbol
+	return symbol
+}
+
+// DefineConstTDZSpilled adds a new spilled const symbol that's in the Temporal Dead Zone.
+// Used when register allocation fails and the variable is stored in a spill slot.
+func (st *SymbolTable) DefineConstTDZSpilled(name string, spillIndex uint16) Symbol {
+	symbol := Symbol{Name: name, IsGlobal: false, IsSpilled: true, SpillIndex: spillIndex, IsTDZ: true, IsConst: true}
 	st.store[name] = symbol
 	return symbol
 }
