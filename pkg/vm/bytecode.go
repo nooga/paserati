@@ -130,6 +130,7 @@ const (
 	OpGetSuperConstructor            OpCode = 138 // Rx: Get the [[Prototype]] of the current function (for super() calls)
 	OpLoadUninitialized              OpCode = 139 // Rx: Load TDZ uninitialized marker into register Rx (for let/const before initialization)
 	OpCheckUninitialized             OpCode = 141 // Rx: Check if register Rx is uninitialized (TDZ), throw ReferenceError if so. Self-rewrites to OpNop on success.
+	OpCloseUpvalue                   OpCode = 142 // Rx: Close any open upvalue pointing to register Rx (for per-iteration bindings in for loops)
 	OpDefineMethodComputed           OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
 	OpDefineMethodEnumerable         OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
 	OpDefineMethodComputedEnumerable OpCode = 122 // ObjReg ValueReg KeyReg: Define enumerable method on object with computed key (sets [[HomeObject]], for object literals)
@@ -426,6 +427,8 @@ func (op OpCode) String() string {
 		return "OpLoadUninitialized"
 	case OpCheckUninitialized:
 		return "OpCheckUninitialized"
+	case OpCloseUpvalue:
+		return "OpCloseUpvalue"
 	case OpDefineMethodComputed:
 		return "OpDefineMethodComputed"
 	case OpDefineMethodEnumerable:
@@ -787,7 +790,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return offset + 1 // OpNop has no operands
 	case OpLoadConst:
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
-	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject, OpLoadUninitialized, OpCheckUninitialized:
+	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject, OpLoadUninitialized, OpCheckUninitialized, OpCloseUpvalue:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
 	case OpNegate, OpNot, OpTypeof, OpToNumber, OpToNumeric, OpLoadNumericOne, OpBitwiseNot, OpGetLength, OpIsNull, OpIsUndefined, OpIsNullish:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry

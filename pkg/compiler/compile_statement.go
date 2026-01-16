@@ -852,6 +852,10 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 		_, isConst := node.Initializer.(*parser.ConstStatement)
 		hasLexicalDecl = isLet || isConst
 	}
+	// Track per-iteration binding registers for let/const in for loop init.
+	// ECMAScript spec: each iteration gets fresh bindings, so closures capture
+	// different values per iteration. We close upvalues at end of each iteration.
+	var perIterationRegs []Register
 	if hasLexicalDecl {
 		prevSymbolTable = c.currentSymbolTable
 		c.currentSymbolTable = NewEnclosedSymbolTable(c.currentSymbolTable)
@@ -893,6 +897,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 		} else if ls, ok := node.Initializer.(*parser.LetStatement); ok {
 			// Handle let declarations in for loop
 			// Pre-allocate registers and pin them so closures can capture these variables
+			// Track registers for per-iteration bindings
 			if len(ls.Declarations) > 0 {
 				for _, d := range ls.Declarations {
 					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
@@ -904,10 +909,12 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 						if ok {
 							c.currentSymbolTable.Define(d.Name.Value, reg)
 							c.regAlloc.Pin(reg) // Pin so closures can capture
+							perIterationRegs = append(perIterationRegs, reg)
 						} else {
 							// Spill if no registers available
 							spillIdx := c.AllocSpillSlot()
 							c.currentSymbolTable.DefineSpilled(d.Name.Value, spillIdx)
+							// Note: spilled vars don't need OpCloseUpvalue - they're not captured as upvalues
 						}
 					}
 				}
@@ -922,6 +929,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 					if ok {
 						c.currentSymbolTable.Define(name, reg)
 						c.regAlloc.Pin(reg)
+						perIterationRegs = append(perIterationRegs, reg)
 					} else {
 						spillIdx := c.AllocSpillSlot()
 						c.currentSymbolTable.DefineSpilled(name, spillIdx)
@@ -931,6 +939,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 		} else if cs, ok := node.Initializer.(*parser.ConstStatement); ok {
 			// Handle const declarations in for loop
 			// Pre-allocate registers and pin them so closures can capture these variables
+			// Track registers for per-iteration bindings
 			if len(cs.Declarations) > 0 {
 				for _, d := range cs.Declarations {
 					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
@@ -942,6 +951,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 						if ok {
 							c.currentSymbolTable.Define(d.Name.Value, reg)
 							c.regAlloc.Pin(reg)
+							perIterationRegs = append(perIterationRegs, reg)
 						} else {
 							spillIdx := c.AllocSpillSlot()
 							c.currentSymbolTable.DefineSpilled(d.Name.Value, spillIdx)
@@ -959,6 +969,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 					if ok {
 						c.currentSymbolTable.Define(name, reg)
 						c.regAlloc.Pin(reg)
+						perIterationRegs = append(perIterationRegs, reg)
 					} else {
 						spillIdx := c.AllocSpillSlot()
 						c.currentSymbolTable.DefineSpilled(name, spillIdx)
@@ -1019,6 +1030,14 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 	// Patch continue jumps to land here, *before* the update expression
 	for _, continuePos := range loopContext.ContinuePlaceholderPosList { // Use context on stack
 		c.patchJump(continuePos) // Patch placeholder to jump to current position
+	}
+
+	// *** Per-iteration bindings: close upvalues for let/const loop variables ***
+	// ECMAScript spec: each iteration gets fresh bindings. This is achieved by
+	// closing any upvalues pointing to these registers, so closures capture
+	// the value at this iteration. The register keeps its value for the update.
+	for _, reg := range perIterationRegs {
+		c.emitCloseUpvalue(reg, node.Token.Line)
 	}
 
 	// *** Compile Update Expression (Optional) ***

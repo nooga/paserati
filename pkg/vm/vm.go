@@ -990,6 +990,27 @@ startExecution:
 			// Self-rewrite to OpNop: opcode is at ip-2 (we advanced ip past opcode and operand)
 			code[ip-2] = byte(OpNop)
 
+		case OpCloseUpvalue:
+			// Close any open upvalue pointing to the specified register.
+			// Used for per-iteration bindings in for loops - closures created in
+			// different iterations should capture different values.
+			reg := code[ip]
+			ip++
+			targetPtr := &registers[reg]
+			// Find and close any upvalue pointing to this register
+			newOpenUpvalues := vm.openUpvalues[:0]
+			for _, upvalue := range vm.openUpvalues {
+				if upvalue.Location == targetPtr {
+					// Close this upvalue
+					upvalue.Closed = *upvalue.Location
+					upvalue.Location = nil
+				} else if upvalue.Location != nil {
+					// Keep other upvalues open
+					newOpenUpvalues = append(newOpenUpvalues, upvalue)
+				}
+			}
+			vm.openUpvalues = newOpenUpvalues
+
 		case OpMove:
 			regDest := code[ip]
 			regSrc := code[ip+1]

@@ -757,6 +757,14 @@ func (c *Compiler) emitCheckUninitialized(reg Register, line int) {
 	c.emitByte(byte(reg))
 }
 
+// emitCloseUpvalue emits OpCloseUpvalue to close any open upvalue pointing to reg.
+// Used for per-iteration bindings in for loops - ensures closures created in
+// different iterations capture different values.
+func (c *Compiler) emitCloseUpvalue(reg Register, line int) {
+	c.emitOpCode(vm.OpCloseUpvalue, line)
+	c.emitByte(byte(reg))
+}
+
 // emitTDZError emits code to throw a ReferenceError for accessing a variable
 // before it is initialized (Temporal Dead Zone violation in default parameters)
 func (c *Compiler) emitTDZError(hint Register, varName string, line int) {
