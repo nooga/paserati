@@ -1758,6 +1758,10 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				// Variable is defined in an outer block scope of the same function (or at top level)
 				// Access it directly via its register, no closure needed
 				srcReg := symbolRef.Register
+				// TDZ check for let/const variables in outer block scope
+				if symbolRef.IsTDZ {
+					c.emitCheckUninitialized(srcReg, node.Token.Line)
+				}
 				if srcReg != hint {
 					debugPrintf("// DEBUG Identifier '%s': About to emit Move R%d (dest), R%d (src)\n", node.Value, hint, srcReg)
 					c.emitMove(hint, srcReg, node.Token.Line)
@@ -1788,6 +1792,10 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 					panic(fmt.Sprintf("compiler internal error: resolved local variable '%s' to nilRegister R%d unexpectedly at line %d", node.Value, srcReg, node.Token.Line))
 				}
 			} else {
+				// TDZ check for let/const local variables
+				if symbolRef.IsTDZ {
+					c.emitCheckUninitialized(srcReg, node.Token.Line)
+				}
 				debugPrintf("// DEBUG Identifier '%s': About to emit Move R%d (dest), R%d (src)\n", node.Value, hint, srcReg)
 				c.emitMove(hint, srcReg, node.Token.Line)
 			}

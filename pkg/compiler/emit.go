@@ -749,6 +749,14 @@ func (c *Compiler) emitLoadUninitialized(dest Register, line int) {
 	c.emitByte(byte(dest))
 }
 
+// emitCheckUninitialized emits OpCheckUninitialized to check if a register contains
+// the TDZ marker (uninitialized let/const). Throws ReferenceError if uninitialized.
+// The opcode self-rewrites to OpNop on successful check for performance.
+func (c *Compiler) emitCheckUninitialized(reg Register, line int) {
+	c.emitOpCode(vm.OpCheckUninitialized, line)
+	c.emitByte(byte(reg))
+}
+
 // emitTDZError emits code to throw a ReferenceError for accessing a variable
 // before it is initialized (Temporal Dead Zone violation in default parameters)
 func (c *Compiler) emitTDZError(hint Register, varName string, line int) {

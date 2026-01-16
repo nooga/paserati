@@ -15,38 +15,40 @@ const (
 	// Format: OpCode <DestReg> <Operand1> <Operand2> ...
 	// Operands can be registers or immediate values (like constant indices)
 
-	OpLoadConst     OpCode = 0 // Rx ConstIdx: Load constant Constants[ConstIdx] into register Rx.
-	OpLoadNull      OpCode = 1 // Rx: Load null value into register Rx.
-	OpLoadUndefined OpCode = 2 // Rx: Load undefined value into register Rx.
-	OpLoadTrue      OpCode = 3 // Rx: Load boolean true into register Rx.
-	OpLoadFalse     OpCode = 4 // Rx: Load boolean false into register Rx.
-	OpMove          OpCode = 5 // Rx Ry: Move value from register Ry into register Rx.
+	// OpNop MUST be 0 - used for self-modifying TDZ checks (rewrite to 0 = no-op)
+	OpNop           OpCode = 0 // No operation - skip to next instruction
+	OpLoadConst     OpCode = 1 // Rx ConstIdx: Load constant Constants[ConstIdx] into register Rx.
+	OpLoadNull      OpCode = 2 // Rx: Load null value into register Rx.
+	OpLoadUndefined OpCode = 3 // Rx: Load undefined value into register Rx.
+	OpLoadTrue      OpCode = 4 // Rx: Load boolean true into register Rx.
+	OpLoadFalse     OpCode = 5 // Rx: Load boolean false into register Rx.
+	OpMove          OpCode = 6 // Rx Ry: Move value from register Ry into register Rx.
 
 	// Arithmetic (Dest, Left, Right)
-	OpAdd      OpCode = 6 // Rx Ry Rz: Rx = Ry + Rz
-	OpSubtract OpCode = 7 // Rx Ry Rz: Rx = Ry - Rz
-	OpMultiply OpCode = 8 // Rx Ry Rz: Rx = Ry * Rz
-	OpDivide   OpCode = 9 // Rx Ry Rz: Rx = Ry / Rz
+	OpAdd      OpCode = 7  // Rx Ry Rz: Rx = Ry + Rz
+	OpSubtract OpCode = 8  // Rx Ry Rz: Rx = Ry - Rz
+	OpMultiply OpCode = 9  // Rx Ry Rz: Rx = Ry * Rz
+	OpDivide   OpCode = 10 // Rx Ry Rz: Rx = Ry / Rz
 
 	// --- NEW: String Operations ---
 	OpStringConcat OpCode = 49 // Rx Ry Rz: Rx = Ry + Rz (optimized string concatenation)
 
 	// Unary
-	OpNegate         OpCode = 10  // Rx Ry: Rx = -Ry
-	OpNot            OpCode = 11  // Rx Ry: Rx = !Ry (logical not)
+	OpNegate         OpCode = 11 // Rx Ry: Rx = -Ry
+	OpNot            OpCode = 12 // Rx Ry: Rx = !Ry (logical not)
 	OpTypeof         OpCode = 48  // Rx Ry: Rx = typeof Ry (returns string)
 	OpToNumber       OpCode = 50  // Rx Ry: Rx = Number(Ry) (unary plus conversion)
 	OpToNumeric      OpCode = 123 // Rx Ry: Rx = ToNumeric(Ry) (preserves BigInt, converts others to Number)
 	OpLoadNumericOne OpCode = 124 // Rx Ry: If Ry is BigInt, Rx = 1n; else Rx = 1 (for ++/-- operators)
 
 	// Comparison (Result Dest, Left, Right) -> Result is boolean
-	OpEqual          OpCode = 12 // Rx Ry Rz: Rx = (Ry == Rz)
-	OpNotEqual       OpCode = 13 // Rx Ry Rz: Rx = (Ry != Rz)
-	OpStrictEqual    OpCode = 14 // Rx Ry Rz: Rx = (Ry === Rz)
-	OpStrictNotEqual OpCode = 15 // Rx Ry Rz: Rx = (Ry !== Rz)
-	OpGreater        OpCode = 16 // Rx Ry Rz: Rx = (Ry > Rz)
-	OpLess           OpCode = 17 // Rx Ry Rz: Rx = (Ry < Rz)
-	OpLessEqual      OpCode = 18 // Rx Ry Rz: Rx = (Ry <= Rz)
+	OpEqual          OpCode = 13 // Rx Ry Rz: Rx = (Ry == Rz)
+	OpNotEqual       OpCode = 14 // Rx Ry Rz: Rx = (Ry != Rz)
+	OpStrictEqual    OpCode = 15 // Rx Ry Rz: Rx = (Ry === Rz)
+	OpStrictNotEqual OpCode = 16 // Rx Ry Rz: Rx = (Ry !== Rz)
+	OpGreater        OpCode = 17 // Rx Ry Rz: Rx = (Ry > Rz)
+	OpLess           OpCode = 18 // Rx Ry Rz: Rx = (Ry < Rz)
+	OpLessEqual      OpCode = 19 // Rx Ry Rz: Rx = (Ry <= Rz)
 	OpGreaterEqual   OpCode = 89 // Rx Ry Rz: Rx = (Ry >= Rz)
 	OpDefineMethod   OpCode = 90 // ObjReg ValueReg NameIdx(16bit): Define non-enumerable method on object
 	OpIn             OpCode = 59 // Rx Ry Rz: Rx = (Ry in Rz) - property existence check
@@ -57,29 +59,29 @@ const (
 	OpExponent  OpCode = 32 // Rx Ry Rz: Rx = Ry ** Rz (Assuming next available number)
 
 	// Function/Call related
-	OpCall           OpCode = 19  // Rx FuncReg ArgCount: Call function in FuncReg with ArgCount args, result in Rx
-	OpReturn         OpCode = 20  // Rx: Return value from register Rx.
+	OpCall           OpCode = 20  // Rx FuncReg ArgCount: Call function in FuncReg with ArgCount args, result in Rx
+	OpReturn         OpCode = 21  // Rx: Return value from register Rx.
 	OpNew            OpCode = 45  // Rx ConstructorReg ArgCount Flags: Create new instance, Flags bit0=inherit new.target
 	OpSpreadNew      OpCode = 83  // Rx ConstructorReg SpreadArgReg Flags: Create new instance, Flags bit0=inherit new.target
 	OpTailCall       OpCode = 109 // Rx FuncReg ArgCount: Tail call (frame reuse)
 	OpTailCallMethod OpCode = 110 // Rx FuncReg ThisReg ArgCount: Tail call method (frame reuse with this)
 
 	// Closure related
-	OpClosure         OpCode = 21 // Rx FuncConstIdx UpvalueCount [IsLocal1 Index1 IsLocal2 Index2 ...]: Create closure for function Const[FuncConstIdx] with UpvalueCount upvalues, store in Rx.
-	OpLoadFree        OpCode = 22 // Rx UpvalueIndex: Load free variable (upvalue) at index UpvalueIndex into register Rx.
-	OpSetUpvalue      OpCode = 23 // UpvalueIndex Ry: Store value from register Ry into upvalue at index UpvalueIndex.
-	OpReturnUndefined OpCode = 24 // No operands: Return undefined value from current function.
+	OpClosure         OpCode = 22 // Rx FuncConstIdx UpvalueCount [IsLocal1 Index1 IsLocal2 Index2 ...]: Create closure for function Const[FuncConstIdx] with UpvalueCount upvalues, store in Rx.
+	OpLoadFree        OpCode = 23 // Rx UpvalueIndex: Load free variable (upvalue) at index UpvalueIndex into register Rx.
+	OpSetUpvalue      OpCode = 24 // UpvalueIndex Ry: Store value from register Ry into upvalue at index UpvalueIndex.
+	OpReturnUndefined OpCode = 25 // No operands: Return undefined value from current function.
 
 	// Control Flow
-	OpJumpIfFalse OpCode = 25 // Rx Offset(16bit): Jump by Offset if Rx is falsey.
-	OpJump        OpCode = 26 // Offset(16bit): Unconditionally jump by Offset.
+	OpJumpIfFalse OpCode = 26 // Rx Offset(16bit): Jump by Offset if Rx is falsey.
+	OpJump        OpCode = 27 // Offset(16bit): Unconditionally jump by Offset.
 
 	// Array Operations (NEW)
-	OpMakeArray OpCode = 27 // DestReg StartReg Count: Create array in DestReg from Count values starting at StartReg.
-	OpGetIndex  OpCode = 28 // DestReg ArrayReg IndexReg: DestReg = ArrayReg[IndexReg]
-	OpSetIndex  OpCode = 29 // ArrayReg IndexReg ValueReg: ArrayReg[IndexReg] = ValueReg
+	OpMakeArray OpCode = 28 // DestReg StartReg Count: Create array in DestReg from Count values starting at StartReg.
+	OpGetIndex  OpCode = 29 // DestReg ArrayReg IndexReg: DestReg = ArrayReg[IndexReg]
+	OpSetIndex  OpCode = 30 // ArrayReg IndexReg ValueReg: ArrayReg[IndexReg] = ValueReg
 
-	OpGetLength OpCode = 30 // <<< NEW: DestReg SrcReg: DestReg = length(SrcReg)
+	OpGetLength OpCode = 140 // DestReg SrcReg: DestReg = length(SrcReg)
 
 	// Add comparison operators as needed
 	// OpLessEqual // Rx Ry Rz: Rx = (Ry <= Rz)
@@ -127,6 +129,7 @@ const (
 	OpSetSuperComputedWithBase       OpCode = 137 // BaseReg KeyReg ValueReg: super[KeyReg] = ValueReg with explicit super base (for correct evaluation order)
 	OpGetSuperConstructor            OpCode = 138 // Rx: Get the [[Prototype]] of the current function (for super() calls)
 	OpLoadUninitialized              OpCode = 139 // Rx: Load TDZ uninitialized marker into register Rx (for let/const before initialization)
+	OpCheckUninitialized             OpCode = 141 // Rx: Check if register Rx is uninitialized (TDZ), throw ReferenceError if so. Self-rewrites to OpNop on success.
 	OpDefineMethodComputed           OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
 	OpDefineMethodEnumerable         OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
 	OpDefineMethodComputedEnumerable OpCode = 122 // ObjReg ValueReg KeyReg: Define enumerable method on object with computed key (sets [[HomeObject]], for object literals)
@@ -261,6 +264,8 @@ const (
 // String returns a human-readable name for the OpCode.
 func (op OpCode) String() string {
 	switch op {
+	case OpNop:
+		return "OpNop"
 	case OpLoadConst:
 		return "OpLoadConst"
 	case OpLoadNull:
@@ -419,6 +424,8 @@ func (op OpCode) String() string {
 		return "OpGetSuperConstructor"
 	case OpLoadUninitialized:
 		return "OpLoadUninitialized"
+	case OpCheckUninitialized:
+		return "OpCheckUninitialized"
 	case OpDefineMethodComputed:
 		return "OpDefineMethodComputed"
 	case OpDefineMethodEnumerable:
@@ -775,9 +782,12 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 
 	instruction := OpCode(c.Code[offset])
 	switch instruction {
+	case OpNop:
+		builder.WriteString(fmt.Sprintf("%04d    OpNop\n", offset))
+		return offset + 1 // OpNop has no operands
 	case OpLoadConst:
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
-	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject, OpLoadUninitialized:
+	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject, OpLoadUninitialized, OpCheckUninitialized:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
 	case OpNegate, OpNot, OpTypeof, OpToNumber, OpToNumeric, OpLoadNumericOne, OpBitwiseNot, OpGetLength, OpIsNull, OpIsUndefined, OpIsNullish:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry

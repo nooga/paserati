@@ -900,6 +900,11 @@ startExecution:
 		ip++ // Advance IP past the opcode itself
 
 		switch opcode {
+		case OpNop:
+			// No operation - continue to next instruction
+			// OpNop has no operands, IP already advanced past opcode
+			continue
+
 		case OpLoadConst:
 			reg := code[ip]
 			constIdxHi := code[ip+1]
@@ -960,6 +965,30 @@ startExecution:
 			reg := code[ip]
 			ip++
 			registers[reg] = Uninitialized // TDZ marker for let/const
+
+		case OpCheckUninitialized:
+			// TDZ check: throws ReferenceError if register contains uninitialized value
+			// Self-rewrites to OpNop on success for performance (check only runs once)
+			reg := code[ip]
+			ip++
+			if registers[reg].typ == TypeUninitialized {
+				frame.ip = ip
+				vm.ThrowReferenceError("Cannot access variable before initialization")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				return InterpretRuntimeError, Undefined
+			}
+			// Self-rewrite to OpNop: opcode is at ip-2 (we advanced ip past opcode and operand)
+			code[ip-2] = byte(OpNop)
 
 		case OpMove:
 			regDest := code[ip]
