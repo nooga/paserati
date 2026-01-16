@@ -537,7 +537,9 @@ func (p *Parser) parseStatement() Statement {
 		return stmt
 	case lexer.ASYNC:
 		// Check if this is 'async function' (declaration) or async arrow expression
-		if p.peekTokenIs(lexer.FUNCTION) {
+		// Per ECMAScript spec: async [no LineTerminator here] function
+		// If there's a newline between async and function, 'async' is an identifier reference
+		if p.peekTokenIs(lexer.FUNCTION) && p.peekToken.Line == p.curToken.Line {
 			return p.parseAsyncFunctionDeclarationStatement()
 		}
 		// Otherwise, treat as expression (async arrow function or 'async' as identifier)
@@ -3729,6 +3731,15 @@ func (p *Parser) parseAsyncExpression() Expression {
 		p.peekTokenIs(lexer.AS) || p.peekTokenIs(lexer.INSTANCEOF) ||
 		p.peekTokenIs(lexer.IN) {
 		// 'async' is being used as a regular identifier
+		return &Identifier{Token: asyncToken, Value: "async"}
+	}
+
+	// ECMAScript spec: async [no LineTerminator here] function/ArrowParameters
+	// If there's a newline between async and the next token that could start
+	// async function syntax, treat 'async' as a standalone identifier
+	hasNewlineAfterAsync := p.peekToken.Line > asyncToken.Line
+	if hasNewlineAfterAsync {
+		// 'async' followed by newline is just an identifier reference
 		return &Identifier{Token: asyncToken, Value: "async"}
 	}
 

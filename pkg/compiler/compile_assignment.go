@@ -2435,7 +2435,10 @@ func (c *Compiler) defineDestructuredVariable(name string, isConst bool, valueTy
 
 // defineDestructuredVariableWithValue defines a new variable from destructuring with a specific value
 func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool, valueReg Register, line int) errors.PaseratiError {
-	if c.enclosing == nil {
+	// Check if we're truly at global scope: no enclosing function AND no enclosed symbol table
+	// For loops with let/const create an enclosed symbol table, so those variables should be local
+	isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
+	if isGlobalScope {
 		// Top-level: use global variable
 		globalIdx := c.GetOrAssignGlobalIndex(name)
 		c.emitSetGlobal(globalIdx, valueReg, line)

@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/vm"
 )
@@ -850,7 +851,14 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 	if node.Initializer != nil {
 		_, isLet := node.Initializer.(*parser.LetStatement)
 		_, isConst := node.Initializer.(*parser.ConstStatement)
-		hasLexicalDecl = isLet || isConst
+		// For destructuring declarations, check if it's let/const (not var)
+		if arrDestr, ok := node.Initializer.(*parser.ArrayDestructuringDeclaration); ok {
+			hasLexicalDecl = arrDestr.Token.Type == lexer.LET || arrDestr.Token.Type == lexer.CONST
+		} else if objDestr, ok := node.Initializer.(*parser.ObjectDestructuringDeclaration); ok {
+			hasLexicalDecl = objDestr.Token.Type == lexer.LET || objDestr.Token.Type == lexer.CONST
+		} else {
+			hasLexicalDecl = isLet || isConst
+		}
 	}
 	// Track per-iteration binding registers for let/const in for loop init.
 	// ECMAScript spec: each iteration gets fresh bindings, so closures capture
@@ -985,6 +993,15 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 		if _, err := c.compileNode(node.Initializer, initReg); err != nil {
 			return BadRegister, err
 		}
+	}
+
+	// *** Per-iteration bindings: close upvalues AFTER init but BEFORE first iteration ***
+	// ECMAScript spec 13.7.4.8 ForBodyEvaluation:
+	//   Step 2: "Perform ? CreatePerIterationEnvironment(perIterationBindings)"
+	// This must happen BEFORE the first test, so closures created in init capture
+	// the initial values, separate from closures created in test/body/update.
+	for _, reg := range perIterationRegs {
+		c.emitCloseUpvalue(reg, node.Token.Line)
 	}
 
 	// Per ECMAScript spec, initialize completion value V = undefined
