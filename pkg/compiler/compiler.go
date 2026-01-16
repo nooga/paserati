@@ -476,6 +476,18 @@ func (c *Compiler) isDefinedInEnclosingCompiler(definingTable *SymbolTable) bool
 	return c.enclosing.isDefinedInEnclosingCompiler(definingTable)
 }
 
+// isInCurrentScopeChain checks if a symbol table is part of this compiler's scope chain.
+// This determines if a variable can be accessed directly via register (vs needing upvalue capture).
+// Used for closure emission to correctly identify variables that are local to the current function.
+func (c *Compiler) isInCurrentScopeChain(table *SymbolTable) bool {
+	for t := c.currentSymbolTable; t != nil; t = t.Outer {
+		if t == table {
+			return true
+		}
+	}
+	return false
+}
+
 // EnableModuleMode enables module-aware compilation with binding resolution
 // Parallels the checker's EnableModuleMode method
 func (c *Compiler) EnableModuleMode(modulePath string, loader modules.ModuleLoader) {
@@ -2477,12 +2489,13 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 			panic(fmt.Sprintf("compiler internal error: free variable '%s' not found in enclosing scope during closure emission", freeSym.Name))
 		}
 
-		// Check if the variable is in the same function (not an outer function)
-		isInEnclosing := c.enclosing != nil && c.isDefinedInEnclosingCompiler(enclosingTable)
-		debugPrintf("// [emitClosure] Checking '%s': enclosingTable=%p, currentTable=%p, c.compilingFuncName=%s, c.enclosing=%v, isInEnclosing=%v, IsSpilled=%v\n",
-			freeSym.Name, enclosingTable, c.currentSymbolTable, c.compilingFuncName, c.enclosing != nil, isInEnclosing, enclosingSymbol.IsSpilled)
+		// Check if the variable is in the current compiler's scope chain (local capture)
+		// vs in an enclosing compiler's scope chain (upvalue capture)
+		isInCurrentScope := c.isInCurrentScopeChain(enclosingTable)
+		debugPrintf("// [emitClosure] Checking '%s': enclosingTable=%p, currentTable=%p, c.compilingFuncName=%s, c.enclosing=%v, isInCurrentScope=%v, IsSpilled=%v\n",
+			freeSym.Name, enclosingTable, c.currentSymbolTable, c.compilingFuncName, c.enclosing != nil, isInCurrentScope, enclosingSymbol.IsSpilled)
 
-		if enclosingTable == c.currentSymbolTable || (c.enclosing != nil && !isInEnclosing) {
+		if isInCurrentScope {
 			// Variable is local in the current function
 			if enclosingSymbol.IsSpilled {
 				// Spilled variable: capture directly from spill slot
@@ -2585,10 +2598,11 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 			panic(fmt.Sprintf("compiler internal error: free variable '%s' not found in enclosing scope during closure emission", freeSym.Name))
 		}
 
-		// Check if the variable is in the same function (not an outer function)
-		isInEnclosing := c.enclosing != nil && c.isDefinedInEnclosingCompiler(enclosingTable)
+		// Check if the variable is in the current compiler's scope chain (local capture)
+		// vs in an enclosing compiler's scope chain (upvalue capture)
+		isInCurrentScope := c.isInCurrentScopeChain(enclosingTable)
 
-		if enclosingTable == c.currentSymbolTable || (c.enclosing != nil && !isInEnclosing) {
+		if isInCurrentScope {
 			// Variable is local in the current function
 			if enclosingSymbol.IsSpilled {
 				// Spilled variable: capture directly from spill slot

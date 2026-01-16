@@ -696,6 +696,28 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 		}
 	}()
 
+	// Per ECMAScript spec, for loops with let/const declarations create a new lexical scope
+	// that encompasses the entire loop (initializer, condition, update, and body).
+	// This scope is separate from the outer scope, so variables declared with let/const
+	// in the initializer shadow outer variables but don't modify them.
+	var prevSymbolTable *SymbolTable
+	hasLexicalDecl := false
+	if node.Initializer != nil {
+		_, isLet := node.Initializer.(*parser.LetStatement)
+		_, isConst := node.Initializer.(*parser.ConstStatement)
+		hasLexicalDecl = isLet || isConst
+	}
+	if hasLexicalDecl {
+		prevSymbolTable = c.currentSymbolTable
+		c.currentSymbolTable = NewEnclosedSymbolTable(c.currentSymbolTable)
+	}
+	// Ensure we restore the scope when done
+	defer func() {
+		if prevSymbolTable != nil {
+			c.currentSymbolTable = prevSymbolTable
+		}
+	}()
+
 	// 1. Initializer
 	if node.Initializer != nil {
 		// If initializer is a var/let/const declaration, predefine its bindings so Resolve() works in condition/update.
@@ -725,6 +747,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 			}
 		} else if ls, ok := node.Initializer.(*parser.LetStatement); ok {
 			// Handle let declarations in for loop
+			// Pre-allocate registers and pin them so closures can capture these variables
 			if len(ls.Declarations) > 0 {
 				for _, d := range ls.Declarations {
 					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
@@ -732,7 +755,15 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 						globalIdx := c.GetOrAssignGlobalIndex(d.Name.Value)
 						c.currentSymbolTable.DefineGlobal(d.Name.Value, globalIdx)
 					} else {
-						c.currentSymbolTable.Define(d.Name.Value, nilRegister)
+						reg, ok := c.regAlloc.TryAllocForVariable()
+						if ok {
+							c.currentSymbolTable.Define(d.Name.Value, reg)
+							c.regAlloc.Pin(reg) // Pin so closures can capture
+						} else {
+							// Spill if no registers available
+							spillIdx := c.AllocSpillSlot()
+							c.currentSymbolTable.DefineSpilled(d.Name.Value, spillIdx)
+						}
 					}
 				}
 			} else if ls.Name != nil {
@@ -742,11 +773,19 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 					globalIdx := c.GetOrAssignGlobalIndex(name)
 					c.currentSymbolTable.DefineGlobal(name, globalIdx)
 				} else {
-					c.currentSymbolTable.Define(name, nilRegister)
+					reg, ok := c.regAlloc.TryAllocForVariable()
+					if ok {
+						c.currentSymbolTable.Define(name, reg)
+						c.regAlloc.Pin(reg)
+					} else {
+						spillIdx := c.AllocSpillSlot()
+						c.currentSymbolTable.DefineSpilled(name, spillIdx)
+					}
 				}
 			}
 		} else if cs, ok := node.Initializer.(*parser.ConstStatement); ok {
 			// Handle const declarations in for loop
+			// Pre-allocate registers and pin them so closures can capture these variables
 			if len(cs.Declarations) > 0 {
 				for _, d := range cs.Declarations {
 					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
@@ -754,7 +793,14 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 						globalIdx := c.GetOrAssignGlobalIndex(d.Name.Value)
 						c.currentSymbolTable.DefineGlobal(d.Name.Value, globalIdx)
 					} else {
-						c.currentSymbolTable.Define(d.Name.Value, nilRegister)
+						reg, ok := c.regAlloc.TryAllocForVariable()
+						if ok {
+							c.currentSymbolTable.Define(d.Name.Value, reg)
+							c.regAlloc.Pin(reg)
+						} else {
+							spillIdx := c.AllocSpillSlot()
+							c.currentSymbolTable.DefineSpilled(d.Name.Value, spillIdx)
+						}
 					}
 				}
 			} else if cs.Name != nil {
@@ -764,7 +810,14 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 					globalIdx := c.GetOrAssignGlobalIndex(name)
 					c.currentSymbolTable.DefineGlobal(name, globalIdx)
 				} else {
-					c.currentSymbolTable.Define(name, nilRegister)
+					reg, ok := c.regAlloc.TryAllocForVariable()
+					if ok {
+						c.currentSymbolTable.Define(name, reg)
+						c.regAlloc.Pin(reg)
+					} else {
+						spillIdx := c.AllocSpillSlot()
+						c.currentSymbolTable.DefineSpilled(name, spillIdx)
+					}
 				}
 			}
 		}

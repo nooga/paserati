@@ -250,14 +250,12 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			panic(fmt.Sprintf("compiler internal error: free variable %s not found in enclosing scope during closure creation", freeSym.Name))
 		}
 
-		// Check if the variable is from an ENCLOSING compiler's scope (a grandparent relative to the arrow).
-		// The Outer chain of symbol tables crosses compiler boundaries, so we can't just walk
-		// c.currentSymbolTable.Outer to determine if it's "within" the current function.
-		// Instead, use isDefinedInEnclosingCompiler to check if enclosingTable belongs to
-		// any of c's enclosing compilers (grandparent and beyond).
-		isInOuterCompiler := c.enclosing != nil && c.isDefinedInEnclosingCompiler(enclosingTable)
+		// Check if the variable is in the current compiler's scope chain (local capture)
+		// vs in an enclosing compiler's scope chain (upvalue capture).
+		// Use isInCurrentScopeChain to walk the entire Outer chain of the current compiler.
+		isInCurrentScope := c.isInCurrentScopeChain(enclosingTable)
 
-		if enclosingTable == c.currentSymbolTable || !isInOuterCompiler {
+		if isInCurrentScope {
 			// The free variable is within the enclosing function's scope (possibly in an outer block).
 			if enclosingSymbol.IsSpilled {
 				// Spilled variable: capture from spill slot
