@@ -3293,7 +3293,7 @@ startExecution:
 				ip++
 
 				var index int
-				if captureType == 3 { // CaptureFromSpill16 uses 16-bit index
+				if captureType == 3 || captureType == 4 { // CaptureFromSpill16 and CaptureFromUpvalue16 use 16-bit index
 					index = int(code[ip])<<8 | int(code[ip+1])
 					ip += 2
 				} else {
@@ -3331,6 +3331,14 @@ startExecution:
 					}
 					location := &frame.spillSlots[index]
 					upvalues[i] = vm.captureUpvalue(location)
+				case 4: // CaptureFromUpvalue16 (16-bit index)
+					// Capture upvalue from the *enclosing* function with 16-bit index
+					if closure == nil || index >= len(closure.Upvalues) {
+						frame.ip = ip
+						status := vm.runtimeError("Invalid upvalue index %d for capture.", index)
+						return status, Undefined
+					}
+					upvalues[i] = closure.Upvalues[index]
 				default: // 0 = CaptureFromUpvalue
 					// Capture upvalue from the *enclosing* function (i.e., the current closure).
 					if closure == nil || index >= len(closure.Upvalues) {
@@ -3412,7 +3420,7 @@ startExecution:
 				ip++
 
 				var index int
-				if captureType == 3 { // CaptureFromSpill16 uses 16-bit index
+				if captureType == 3 || captureType == 4 { // CaptureFromSpill16 and CaptureFromUpvalue16 use 16-bit index
 					index = int(code[ip])<<8 | int(code[ip+1])
 					ip += 2
 				} else {

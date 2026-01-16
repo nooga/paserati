@@ -1273,6 +1273,11 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 	}
 	c.emitLoadUndefined(completionReg, 0)
 
+	// Set the completion register on the loop context so break statements use the correct register
+	if loopCtx := c.currentLoopContext(); loopCtx != nil {
+		loopCtx.CompletionReg = completionReg
+	}
+
 	// === PHASE 1: Emit all case comparisons ===
 	// Each comparison jumps to the corresponding body if matched.
 	// If no match, falls through to the next comparison.

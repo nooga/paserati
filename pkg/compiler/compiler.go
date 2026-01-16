@@ -25,7 +25,7 @@ type UpvalueCaptureType byte
 
 const (
 	// CaptureFromUpvalue captures from the enclosing closure's upvalues array.
-	// The index is the upvalue index in the parent closure.
+	// The index is the upvalue index in the parent closure (8-bit, 0-255).
 	CaptureFromUpvalue UpvalueCaptureType = 0
 
 	// CaptureFromRegister captures from a register in the current call frame.
@@ -39,6 +39,10 @@ const (
 	// CaptureFromSpill16 captures from a spill slot with a 16-bit index (256-65535).
 	// Used when spill slot index exceeds 255. Requires 2 bytes for the index.
 	CaptureFromSpill16 UpvalueCaptureType = 3
+
+	// CaptureFromUpvalue16 captures from the enclosing closure's upvalues array with a 16-bit index (256-65535).
+	// Used when upvalue index exceeds 255. Requires 2 bytes for the index.
+	CaptureFromUpvalue16 UpvalueCaptureType = 4
 )
 
 // getExportSpecName extracts the name string from an export specifier's Local or Exported field
@@ -451,16 +455,23 @@ func (c *Compiler) GetHeapAlloc() *HeapAlloc {
 // This is important for deeply nested closures (e.g., IIFE -> function -> arrow).
 func (c *Compiler) isDefinedInEnclosingCompiler(definingTable *SymbolTable) bool {
 	if c.enclosing == nil {
+		debugPrintf("// [isDefinedInEnclosingCompiler] c.enclosing is nil, returning false\n")
 		return false
 	}
 
+	debugPrintf("// [isDefinedInEnclosingCompiler] Checking definingTable=%p against c.enclosing.currentSymbolTable=%p (compilingFuncName=%s)\n",
+		definingTable, c.enclosing.currentSymbolTable, c.enclosing.compilingFuncName)
+
 	// Walk the immediate enclosing compiler's symbol table chain
 	for table := c.enclosing.currentSymbolTable; table != nil; table = table.Outer {
+		debugPrintf("// [isDefinedInEnclosingCompiler]   Walking table=%p\n", table)
 		if table == definingTable {
+			debugPrintf("// [isDefinedInEnclosingCompiler]   MATCH FOUND! Returning true\n")
 			return true
 		}
 	}
 
+	debugPrintf("// [isDefinedInEnclosingCompiler]   No match in immediate enclosing, recursing...\n")
 	// Recursively check grandparent and beyond
 	return c.enclosing.isDefinedInEnclosingCompiler(definingTable)
 }
@@ -2468,8 +2479,8 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 
 		// Check if the variable is in the same function (not an outer function)
 		isInEnclosing := c.enclosing != nil && c.isDefinedInEnclosingCompiler(enclosingTable)
-		debugPrintf("// [emitClosure] Checking '%s': enclosingTable=%p, currentTable=%p, c.enclosing=%v, isInEnclosing=%v, IsSpilled=%v\n",
-			freeSym.Name, enclosingTable, c.currentSymbolTable, c.enclosing != nil, isInEnclosing, enclosingSymbol.IsSpilled)
+		debugPrintf("// [emitClosure] Checking '%s': enclosingTable=%p, currentTable=%p, c.compilingFuncName=%s, c.enclosing=%v, isInEnclosing=%v, IsSpilled=%v\n",
+			freeSym.Name, enclosingTable, c.currentSymbolTable, c.compilingFuncName, c.enclosing != nil, isInEnclosing, enclosingSymbol.IsSpilled)
 
 		if enclosingTable == c.currentSymbolTable || (c.enclosing != nil && !isInEnclosing) {
 			// Variable is local in the current function
@@ -2491,7 +2502,11 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 			// Variable is from an outer function's scope
 			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)
 			debugPrintf("// [emitClosure] Free '%s' is from Outer function, upvalue index=%d\n", freeSym.Name, enclosingFreeIndex)
-			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromUpvalue, index: uint16(enclosingFreeIndex)}
+			if enclosingFreeIndex > 255 {
+				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromUpvalue16, index: enclosingFreeIndex}
+			} else {
+				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromUpvalue, index: enclosingFreeIndex}
+			}
 		}
 	}
 
@@ -2516,8 +2531,8 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 	for i, desc := range upvalueDescriptors {
 		debugPrintf("// [emitClosure] Emitting upvalue %d: captureType=%d, index=%d\n", i, desc.captureType, desc.index)
 		c.emitByte(byte(desc.captureType))
-		if desc.captureType == CaptureFromSpill16 {
-			// 16-bit spill index: emit high byte then low byte
+		if desc.captureType == CaptureFromSpill16 || desc.captureType == CaptureFromUpvalue16 {
+			// 16-bit index: emit high byte then low byte
 			c.emitByte(byte(desc.index >> 8))
 			c.emitByte(byte(desc.index & 0xFF))
 		} else {
@@ -2593,7 +2608,11 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 			dummyNode := &parser.Identifier{Token: lexer.Token{}, Value: freeSym.Name}
 			enclosingFreeIndex := c.addFreeSymbol(dummyNode, &enclosingSymbol)
 			debugPrintf("// [emitClosureGeneric] Free '%s' is from Outer function, upvalue index=%d\n", freeSym.Name, enclosingFreeIndex)
-			upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromUpvalue, index: uint16(enclosingFreeIndex)}
+			if enclosingFreeIndex > 255 {
+				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromUpvalue16, index: enclosingFreeIndex}
+			} else {
+				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromUpvalue, index: enclosingFreeIndex}
+			}
 		}
 	}
 
@@ -2618,8 +2637,8 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 	for i, desc := range upvalueDescriptors {
 		debugPrintf("// [emitClosureGeneric] Emitting upvalue %d: captureType=%d, index=%d\n", i, desc.captureType, desc.index)
 		c.emitByte(byte(desc.captureType))
-		if desc.captureType == CaptureFromSpill16 {
-			// 16-bit spill index: emit high byte then low byte
+		if desc.captureType == CaptureFromSpill16 || desc.captureType == CaptureFromUpvalue16 {
+			// 16-bit index: emit high byte then low byte
 			c.emitByte(byte(desc.index >> 8))
 			c.emitByte(byte(desc.index & 0xFF))
 		} else {
