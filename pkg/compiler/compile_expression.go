@@ -2269,6 +2269,13 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 	debugPrintf("[IfExpr] Emitted OpJumpIfFalse at pos=%d; codeLen now=%d", jumpIfFalsePos, len(c.chunk.Code))
 
 	// 3. Compile the consequence block
+	// Per ECMAScript spec, if statement applies UpdateEmpty(stmtCompletion, undefined).
+	// Set the outer completion register to undefined before the branch, so if the branch
+	// contains break/continue (empty completion), undefined will be the result.
+	// If the branch produces a value, it will overwrite this undefined.
+	if hint != BadRegister {
+		c.emitLoadUndefined(hint, node.Token.Line)
+	}
 	// Allocate temporary register for consequence compilation
 	consequenceReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, consequenceReg)
@@ -2297,6 +2304,11 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 		debugPrintf("[IfExpr] Disassembly after patchJumpIfFalse (else path entry):\n%s", c.chunk.DisassembleChunk("<if-else-entry>"))
 
 		// 6a. Compile the alternative block
+		// Per ECMAScript spec, if statement applies UpdateEmpty(stmtCompletion, undefined).
+		// Set the outer completion register to undefined before the branch.
+		if hint != BadRegister {
+			c.emitLoadUndefined(hint, node.Token.Line)
+		}
 		// Allocate temporary register for alternative compilation
 		alternativeReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, alternativeReg)

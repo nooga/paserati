@@ -899,18 +899,19 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement, hint Regis
 	}
 
 	// Per ECMAScript spec, break has an empty completion value.
-	// UpdateEmpty on break with undefined produces break with undefined as value.
-	// Set the loop's completion register before breaking.
+	// UpdateEmpty(break, V) keeps V if break's value is empty.
+	// The completion register already contains V from prior statements,
+	// so we should NOT overwrite it - just leave the accumulated value.
 	if targetContext.CompletionReg != BadRegister {
 		if c.inFinallyBlock && hint != BadRegister && hint != targetContext.CompletionReg {
 			// Inside finally: copy the finally's completion value to the loop's completion register
 			// This propagates the finally's completion value (which started as undefined and
 			// accumulates statement values via UpdateEmpty) to the outer loop
 			c.emitMove(targetContext.CompletionReg, hint, node.Token.Line)
-		} else if !c.inFinallyBlock {
-			// Outside finally: set to undefined (empty completion becomes undefined via UpdateEmpty)
-			c.emitLoadUndefined(targetContext.CompletionReg, node.Token.Line)
 		}
+		// Outside finally: do NOT set to undefined - preserve the accumulated completion value
+		// The completion register was initialized to undefined at loop/switch start,
+		// and each statement updates it via UpdateEmpty semantics
 	}
 
 	// Check if we're inside a try-finally block AND the break targets a loop outside it
@@ -1013,19 +1014,19 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 	}
 
 	// Per ECMAScript spec, continue has an empty completion value.
-	// When wrapped by try-catch, UpdateEmpty on continue produces continue with undefined value.
-	// This undefined value then becomes the loop's V per step 5.f of ForBodyEvaluation.
-	// Set the loop's completion register before continuing.
+	// UpdateEmpty(continue, V) keeps V if continue's value is empty.
+	// The completion register already contains V from prior statements,
+	// so we should NOT overwrite it - just leave the accumulated value.
 	if targetContext.CompletionReg != BadRegister {
 		if c.inFinallyBlock && hint != BadRegister && hint != targetContext.CompletionReg {
 			// Inside finally: copy the finally's completion value to the loop's completion register
 			// This propagates the finally's completion value (which started as undefined and
 			// accumulates statement values via UpdateEmpty) to the outer loop
 			c.emitMove(targetContext.CompletionReg, hint, node.Token.Line)
-		} else if !c.inFinallyBlock {
-			// Outside finally: set to undefined (empty completion becomes undefined via UpdateEmpty)
-			c.emitLoadUndefined(targetContext.CompletionReg, node.Token.Line)
 		}
+		// Outside finally: do NOT set to undefined - preserve the accumulated completion value
+		// The completion register was initialized to undefined at loop/switch start,
+		// and each statement updates it via UpdateEmpty semantics
 	}
 
 	// Check if we're inside a try-finally block
