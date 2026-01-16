@@ -57,6 +57,33 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// The variable's value (the closure) is now set.
 			// We don't need to assign to valueReg anymore for this path.
 
+		} else if arrowFunc, ok := node.Value.(*parser.ArrowFunctionLiteral); ok {
+			isValueFunc = true
+			// --- Handle let f = () => {} ---
+			// 1. Define the *variable name (f)* temporarily for potential recursion
+			c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+
+			// 2. Compile the arrow function with variable name as the name hint
+			//    Per ECMAScript spec, anonymous arrow functions infer name from variable
+			funcConstIndex, freeSymbols, err := c.compileArrowFunctionWithName(arrowFunc, node.Name.Value)
+			if err != nil {
+				return BadRegister, nil
+			}
+			// 3. Create the closure object
+			closureReg := c.regAlloc.Alloc()
+			// Create a minimal FunctionLiteral for emitClosure
+			var body *parser.BlockStatement
+			if blockBody, ok := arrowFunc.Body.(*parser.BlockStatement); ok {
+				body = blockBody
+			} else {
+				body = &parser.BlockStatement{}
+			}
+			minimalFuncLit := &parser.FunctionLiteral{Body: body}
+			c.emitClosure(closureReg, funcConstIndex, minimalFuncLit, freeSymbols)
+
+			// 4. Update the symbol table entry for the variable with the closure register
+			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
+
 		} else if node.Value != nil {
 			// Compile other value types normally
 			// Use existing predefined register if present
@@ -270,6 +297,40 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			// The variable's value (the closure) is now set.
 			// We don't need to assign to valueReg anymore for this path.
 
+		} else if arrowFunc, ok := declarator.Value.(*parser.ArrowFunctionLiteral); ok {
+			isValueFunc = true
+			// --- Handle var f = () => {} ---
+
+			// Check if variable was already pre-defined during block var hoisting
+			var closureReg Register
+			preDefinedReg := nilRegister
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal {
+				preDefinedReg = sym.Register
+				closureReg = preDefinedReg
+			} else {
+				c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+				closureReg = c.regAlloc.Alloc()
+			}
+
+			// Compile the arrow function with variable name as the name hint
+			funcConstIndex, freeSymbols, err := c.compileArrowFunctionWithName(arrowFunc, node.Name.Value)
+			if err != nil {
+				return BadRegister, nil
+			}
+			// Create a minimal FunctionLiteral for emitClosure
+			var body *parser.BlockStatement
+			if blockBody, ok := arrowFunc.Body.(*parser.BlockStatement); ok {
+				body = blockBody
+			} else {
+				body = &parser.BlockStatement{}
+			}
+			minimalFuncLit := &parser.FunctionLiteral{Body: body}
+			c.emitClosure(closureReg, funcConstIndex, minimalFuncLit, freeSymbols)
+
+			if preDefinedReg == nilRegister {
+				c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
+			}
+
 		} else if node.Value != nil {
 			// Compile other value types normally
 			// DON'T defer free - we'll free explicitly below if needed (when it's a temp, not a variable register)
@@ -410,6 +471,32 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 
 			// The constant's value (the closure) is now set.
 			// We don't need to assign to valueReg anymore for this path.
+
+		} else if arrowFunc, ok := node.Value.(*parser.ArrowFunctionLiteral); ok {
+			isValueFunc = true
+			// --- Handle const f = () => {} ---
+			// 1. Define the *const name (f)* temporarily for recursion
+			c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+
+			// 2. Compile the arrow function with const name as the name hint
+			funcConstIndex, freeSymbols, err := c.compileArrowFunctionWithName(arrowFunc, node.Name.Value)
+			if err != nil {
+				return BadRegister, nil
+			}
+			// 3. Create the closure object
+			closureReg := c.regAlloc.Alloc()
+			// Create a minimal FunctionLiteral for emitClosure
+			var body *parser.BlockStatement
+			if blockBody, ok := arrowFunc.Body.(*parser.BlockStatement); ok {
+				body = blockBody
+			} else {
+				body = &parser.BlockStatement{}
+			}
+			minimalFuncLit := &parser.FunctionLiteral{Body: body}
+			c.emitClosure(closureReg, funcConstIndex, minimalFuncLit, freeSymbols)
+
+			// 4. Update the symbol table entry for the const with the closure register
+			c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 
 		} else {
 			// Compile other value types normally

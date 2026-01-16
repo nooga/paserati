@@ -359,21 +359,39 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 		// Rest parameter collection is handled at runtime during function call
 	}
 
-	// Compile body
-	bodyReg := funcCompiler.regAlloc.Alloc()
-	// Mark if compiling function body BlockStatement
-	if _, isBlock := node.Body.(*parser.BlockStatement); isBlock {
+	// Compile body - handle block vs expression bodies differently
+	var returnReg Register
+	implicitReturnNeeded := true
+	switch bodyNode := node.Body.(type) {
+	case *parser.BlockStatement:
+		bodyResultReg := funcCompiler.regAlloc.Alloc()
 		funcCompiler.isCompilingFunctionBody = true
+		_, err := funcCompiler.compileNode(bodyNode, bodyResultReg)
+		funcCompiler.isCompilingFunctionBody = false
+		funcCompiler.regAlloc.Free(bodyResultReg)
+		if err != nil {
+			funcCompiler.addError(node.Body, "error compiling arrow function body")
+		}
+		implicitReturnNeeded = false // Block handles its own returns or falls through
+	case parser.Expression:
+		returnReg = funcCompiler.regAlloc.Alloc()
+		_, err := funcCompiler.compileNode(bodyNode, returnReg)
+		if err != nil {
+			funcCompiler.addError(node.Body, "error compiling arrow function body")
+			returnReg = 0
+		}
+		implicitReturnNeeded = true // Expression body needs implicit return
+	default:
+		funcCompiler.addError(node.Body, fmt.Sprintf("invalid body type %T for arrow function", node.Body))
+		implicitReturnNeeded = false
 	}
-	_, bodyErr := funcCompiler.compileNode(node.Body, bodyReg)
-	funcCompiler.isCompilingFunctionBody = false
-	if bodyErr != nil {
-		funcCompiler.addError(node.Body, "error compiling arrow function body")
+	if implicitReturnNeeded {
+		funcCompiler.emitReturn(returnReg, node.Token.Line)
+		funcCompiler.regAlloc.Free(returnReg)
 	}
 
-	// Emit return
-	funcCompiler.emitOpCode(vm.OpReturn, node.Token.Line)
-	funcCompiler.emitByte(byte(bodyReg))
+	// Add final implicit return for paths that don't hit explicit returns
+	funcCompiler.emitFinalReturn(node.Token.Line)
 
 	// Create function value with custom name
 	// Arity: total parameters excluding 'this' (for VM register allocation)

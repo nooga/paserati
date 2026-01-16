@@ -560,6 +560,16 @@ See `docs/bucketlist.md` for comprehensive implementation status.
 - instanceof tests: ~44.2% pass rate
 - Addition tests: ~60.4% pass rate
 
+**Known Flaky Tests**:
+
+The following Test262 tests show non-deterministic behavior (sometimes pass, sometimes fail) when run in batch mode. They typically pass when run individually. These can be ignored in diff summaries:
+
+- `language/statements/for-of/map.js`
+- `language/statements/for-of/map-contract-expand.js`
+- `language/statements/for-of/set-contract-expand.js`
+
+The flakiness appears related to iteration order or timing in batch test runs.
+
 ## Development Notes
 
 ### Build and Debug
