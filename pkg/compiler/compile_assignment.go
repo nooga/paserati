@@ -262,7 +262,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			baseReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, baseReg)
 			c.chunk.WriteOpCode(vm.OpLoadSuper, line)
-			c.chunk.WriteByte(byte(baseReg))
+			c.chunk.EmitByte(byte(baseReg))
 
 			// Step 2: Compile the index expression (may call toString() which could mutate prototype)
 			keyReg := c.regAlloc.Alloc()
@@ -278,8 +278,8 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				currentValueReg = c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, currentValueReg)
 				c.chunk.WriteOpCode(vm.OpGetSuperComputed, line)
-				c.chunk.WriteByte(byte(currentValueReg)) // destination
-				c.chunk.WriteByte(byte(keyReg))          // key
+				c.chunk.EmitByte(byte(currentValueReg)) // destination
+				c.chunk.EmitByte(byte(keyReg))          // key
 			}
 
 			// Step 4: Compile the RHS value
@@ -331,9 +331,9 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 			// Emit OpSetSuperComputedWithBase with the captured base
 			c.chunk.WriteOpCode(vm.OpSetSuperComputedWithBase, line)
-			c.chunk.WriteByte(byte(baseReg))
-			c.chunk.WriteByte(byte(keyReg))
-			c.chunk.WriteByte(byte(valueReg))
+			c.chunk.EmitByte(byte(baseReg))
+			c.chunk.EmitByte(byte(keyReg))
+			c.chunk.EmitByte(byte(valueReg))
 
 			// Result of assignment is the assigned value
 			if valueReg != hint {
@@ -390,7 +390,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				baseReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, baseReg)
 				c.chunk.WriteOpCode(vm.OpLoadSuper, line)
-				c.chunk.WriteByte(byte(baseReg))
+				c.chunk.EmitByte(byte(baseReg))
 
 				// Step 2: Compile the key expression (may have side effects like changing prototype)
 				keyReg := c.regAlloc.Alloc()
@@ -408,8 +408,8 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					currentValueReg = c.regAlloc.Alloc()
 					tempRegs = append(tempRegs, currentValueReg)
 					c.chunk.WriteOpCode(vm.OpGetSuperComputed, line)
-					c.chunk.WriteByte(byte(currentValueReg)) // destination
-					c.chunk.WriteByte(byte(keyReg))          // key
+					c.chunk.EmitByte(byte(currentValueReg)) // destination
+					c.chunk.EmitByte(byte(keyReg))          // key
 				}
 
 				// Step 4: Compile the RHS value
@@ -461,9 +461,9 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 				// Step 6: Write back using captured super base
 				c.chunk.WriteOpCode(vm.OpSetSuperComputedWithBase, line)
-				c.chunk.WriteByte(byte(baseReg))   // super base
-				c.chunk.WriteByte(byte(keyReg))   // key
-				c.chunk.WriteByte(byte(valueReg)) // value
+				c.chunk.EmitByte(byte(baseReg))   // super base
+				c.chunk.EmitByte(byte(keyReg))   // key
+				c.chunk.EmitByte(byte(valueReg)) // value
 
 				// Result of assignment is the assigned value
 				if valueReg != hint {
@@ -481,7 +481,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					currentValueReg = c.regAlloc.Alloc()
 					tempRegs = append(tempRegs, currentValueReg)
 					c.chunk.WriteOpCode(vm.OpGetSuper, line)
-					c.chunk.WriteByte(byte(currentValueReg))
+					c.chunk.EmitByte(byte(currentValueReg))
 					c.chunk.WriteUint16(nameConstIdx)
 				}
 
@@ -535,7 +535,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				// Emit OpSetSuper
 				c.chunk.WriteOpCode(vm.OpSetSuper, line)
 				c.chunk.WriteUint16(nameConstIdx)
-				c.chunk.WriteByte(byte(valueReg))
+				c.chunk.EmitByte(byte(valueReg))
 
 				// Result of assignment is the assigned value
 				if valueReg != hint {
@@ -2295,7 +2295,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 				// Use OpGetIndex for numeric properties (array elements)
 				// Convert string to number for proper array indexing
 				var indexNum float64
-				fmt.Sscanf(keyIdent.Value, "%f", &indexNum)
+				_, _ = fmt.Sscanf(keyIdent.Value, "%f", &indexNum)
 				indexConstIdx := c.chunk.AddConstant(vm.Number(indexNum))
 				indexReg := c.regAlloc.Alloc()
 				c.emitLoadConstant(indexReg, indexConstIdx, line)

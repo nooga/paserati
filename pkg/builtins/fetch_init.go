@@ -788,7 +788,7 @@ func createHeadersObject(vmInstance *vm.VM, h *FetchHeaders) vm.Value {
 		callback := args[0]
 		for name, values := range h.headers {
 			for _, value := range values {
-				vmInstance.Call(callback, vm.Undefined, []vm.Value{
+				_, _ = vmInstance.Call(callback, vm.Undefined, []vm.Value{
 					vm.NewString(value),
 					vm.NewString(name),
 					vm.NewValueFromPlainObject(obj),

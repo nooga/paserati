@@ -127,7 +127,7 @@ func (p *ProcessInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 	// process.nextTick - stub (executes immediately since we don't have event loop)
 	processObj.SetOwn("nextTick", vm.NewNativeFunction(1, false, "nextTick", func(args []vm.Value) (vm.Value, error) {
 		if len(args) > 0 && args[0].IsCallable() {
-			vmInstance.Call(args[0], vm.Undefined, args[1:])
+			_, _ = vmInstance.Call(args[0], vm.Undefined, args[1:])
 		}
 		return vm.Undefined, nil
 	}))

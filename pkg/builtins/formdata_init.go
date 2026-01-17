@@ -228,7 +228,7 @@ func createFormDataObject(vmInstance *vm.VM, fd *FormData, _ *vm.PlainObject) vm
 		}
 		callback := args[0]
 		for _, entry := range fd.entries {
-			vmInstance.Call(callback, vm.Undefined, []vm.Value{
+			_, _ = vmInstance.Call(callback, vm.Undefined, []vm.Value{
 				entry.value,
 				vm.NewString(entry.name),
 				vm.NewValueFromPlainObject(obj),

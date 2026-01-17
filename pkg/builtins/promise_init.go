@@ -119,7 +119,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// finally wraps both fulfill and reject handlers
 		wrapper := vm.NewNativeFunction(1, false, "finallyWrapper", func(wrapperArgs []vm.Value) (vm.Value, error) {
 			if onFinally.IsCallable() {
-				vmInstance.Call(onFinally, vm.Undefined, []vm.Value{})
+				_, _ = vmInstance.Call(onFinally, vm.Undefined, []vm.Value{})
 			}
 			// Pass through the original value
 			if len(wrapperArgs) > 0 {
@@ -235,7 +235,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Use the species constructor to create the result promise
 			executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
 				resolve := execArgs[0]
-				vmInstance.Call(resolve, vm.Undefined, []vm.Value{arr})
+				_, _ = vmInstance.Call(resolve, vm.Undefined, []vm.Value{arr})
 				return vm.Undefined, nil
 			})
 
@@ -280,7 +280,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 					if remaining == 0 {
 						// All promises resolved - create result array
 						resultArray := vmInstance.NewArrayFromSlice(results)
-						vmInstance.Call(resolve, vm.Undefined, []vm.Value{resultArray})
+						_, _ = vmInstance.Call(resolve, vm.Undefined, []vm.Value{resultArray})
 					}
 
 					return vm.Undefined, nil
@@ -294,12 +294,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 					}
 
 					// Reject the entire Promise.all
-					vmInstance.Call(reject, vm.Undefined, []vm.Value{reason})
+					_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{reason})
 					return vm.Undefined, nil
 				})
 
 				// Attach handlers
-				vmInstance.PromiseThen(promise, onFulfilled, onRejected)
+				_, _ = vmInstance.PromiseThen(promise, onFulfilled, onRejected)
 			}
 
 			return vm.Undefined, nil
@@ -365,7 +365,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 					}
 
 					// Resolve with the first settled value
-					vmInstance.Call(resolve, vm.Undefined, []vm.Value{value})
+					_, _ = vmInstance.Call(resolve, vm.Undefined, []vm.Value{value})
 					return vm.Undefined, nil
 				})
 
@@ -377,12 +377,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 					}
 
 					// Reject with the first rejection reason
-					vmInstance.Call(reject, vm.Undefined, []vm.Value{reason})
+					_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{reason})
 					return vm.Undefined, nil
 				})
 
 				// Attach handlers
-				vmInstance.PromiseThen(promise, onFulfilled, onRejected)
+				_, _ = vmInstance.PromiseThen(promise, onFulfilled, onRejected)
 			}
 
 			return vm.Undefined, nil
@@ -455,7 +455,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 					}
 
 					// Resolve with the first fulfilled value
-					vmInstance.Call(resolve, vm.Undefined, []vm.Value{value})
+					_, _ = vmInstance.Call(resolve, vm.Undefined, []vm.Value{value})
 					return vm.Undefined, nil
 				})
 
@@ -475,14 +475,14 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 						// TODO: Create proper AggregateError with errors array
 						// For now, just create a simple error message
 						errorMsg := vm.NewString("AggregateError: All promises were rejected")
-						vmInstance.Call(reject, vm.Undefined, []vm.Value{errorMsg})
+						_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errorMsg})
 					}
 
 					return vm.Undefined, nil
 				})
 
 				// Attach handlers
-				vmInstance.PromiseThen(promise, onFulfilled, onRejected)
+				_, _ = vmInstance.PromiseThen(promise, onFulfilled, onRejected)
 			}
 
 			return vm.Undefined, nil
@@ -562,7 +562,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 					if remaining == 0 {
 						// All promises settled - create result array
 						resultArray := vmInstance.NewArrayFromSlice(results)
-						vmInstance.Call(resolve, vm.Undefined, []vm.Value{resultArray})
+						_, _ = vmInstance.Call(resolve, vm.Undefined, []vm.Value{resultArray})
 					}
 
 					return vm.Undefined, nil
@@ -586,14 +586,14 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 					if remaining == 0 {
 						// All promises settled - create result array
 						resultArray := vmInstance.NewArrayFromSlice(results)
-						vmInstance.Call(resolve, vm.Undefined, []vm.Value{resultArray})
+						_, _ = vmInstance.Call(resolve, vm.Undefined, []vm.Value{resultArray})
 					}
 
 					return vm.Undefined, nil
 				})
 
 				// Attach handlers
-				vmInstance.PromiseThen(promise, onFulfilled, onRejected)
+				_, _ = vmInstance.PromiseThen(promise, onFulfilled, onRejected)
 			}
 
 			return vm.Undefined, nil

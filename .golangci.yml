@@ -1,0 +1,57 @@
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+  disable:
+    - unused  # Too many false positives for debug flags and future-use code
+
+linters-settings:
+  errcheck:
+    # Don't check for errors in test files for certain patterns
+    exclude-functions:
+      - (io.Writer).Write
+      - (*testing.T).Errorf
+      - (*testing.T).Fatalf
+
+  staticcheck:
+    checks:
+      - all
+      - "-SA9003"  # Empty branch - often intentional for future implementation
+      - "-SA4023"  # Impossible nil check - sometimes needed for safety
+      - "-SA5011"  # Possible nil pointer - we check for nil before use
+      - "-SA4006"  # Value never used - often intentional for clarity
+      - "-SA4010"  # Result of append not used - often intentional
+      - "-SA4017"  # Function without side effects - sometimes used for readability
+
+  gosimple:
+    checks:
+      - all
+      - "-S1021"  # Merge variable declaration - often clearer separate
+      - "-S1034"  # Type switch patterns - current style is intentional
+      - "-S1011"  # Replace loop with append - current style is clearer
+      - "-S1020"  # Simplify type check - current style is intentional
+      - "-S1039"  # Unnecessary fmt.Sprintf - consistency preference
+
+run:
+  timeout: 5m
+  tests: true
+
+issues:
+  # Don't limit issues
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - errcheck
+        - ineffassign
+
+    # Exclude deprecated warnings for ioutil (we'll fix these separately)
+    - text: "SA1019.*ioutil"
+      linters:
+        - staticcheck

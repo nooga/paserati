@@ -65,9 +65,9 @@ func (i *IteratorInitializer) InitTypes(ctx *TypeContext) error {
 	}
 
 	// Register the types in global environment
-	ctx.DefineGlobal("IteratorResult", iteratorResultGeneric)
-	ctx.DefineGlobal("Iterator", iteratorGeneric)
-	ctx.DefineGlobal("Iterable", iterableGeneric)
+	_ = ctx.DefineGlobal("IteratorResult", iteratorResultGeneric)
+	_ = ctx.DefineGlobal("Iterator", iteratorGeneric)
+	_ = ctx.DefineGlobal("Iterable", iterableGeneric)
 
 	return nil
 }

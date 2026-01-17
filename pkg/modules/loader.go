@@ -395,7 +395,7 @@ func (ml *moduleLoader) loadModuleParallelImpl(specifier string, fromPath string
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
-		ml.workerPool.Shutdown(shutdownCtx)
+		_ = ml.workerPool.Shutdown(shutdownCtx)
 	}()
 
 	// Queue the entry point for parsing

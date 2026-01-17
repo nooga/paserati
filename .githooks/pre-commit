@@ -1,0 +1,41 @@
+#!/bin/bash
+# Pre-commit hook to run linting before commits
+# Runs go vet and golangci-lint (if available) on staged Go files
+
+# Get list of staged .go files
+STAGED_GO_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$')
+
+if [ -z "$STAGED_GO_FILES" ]; then
+    exit 0
+fi
+
+echo "Running pre-commit checks on Go files..."
+
+# Run go vet
+echo "→ go vet..."
+if ! go vet ./...; then
+    echo "✗ go vet failed. Please fix the issues before committing."
+    exit 1
+fi
+echo "✓ go vet passed"
+
+# Run golangci-lint if available
+if command -v golangci-lint &> /dev/null; then
+    echo "→ golangci-lint..."
+    if ! golangci-lint run --timeout=2m; then
+        echo "✗ golangci-lint failed. Please fix the issues before committing."
+        exit 1
+    fi
+    echo "✓ golangci-lint passed"
+else
+    echo "→ golangci-lint not installed, skipping (install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)"
+fi
+
+# Run tests (optional - can be slow, comment out if needed)
+# echo "→ Running tests..."
+# if ! go test ./tests -run TestScripts -count=1; then
+#     echo "✗ Tests failed. Please fix before committing."
+#     exit 1
+# fi
+
+echo "✓ All pre-commit checks passed"

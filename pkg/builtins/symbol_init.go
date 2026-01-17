@@ -67,7 +67,7 @@ func (s *SymbolInitializer) InitTypes(ctx *TypeContext) error {
 		) // Symbol(description)
 
 	// Register Symbol constructor
-	ctx.DefineGlobal("Symbol", symbolCtorType)
+	_ = ctx.DefineGlobal("Symbol", symbolCtorType)
 
 	// Register Symbol primitive type prototype
 	symbolProtoType := types.NewObjectType().

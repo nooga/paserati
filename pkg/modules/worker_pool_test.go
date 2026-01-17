@@ -97,7 +97,7 @@ func TestWorkerPoolMultipleJobs(t *testing.T) {
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer shutdownCancel()
-		pool.Shutdown(shutdownCtx)
+		_ = pool.Shutdown(shutdownCtx)
 	}()
 
 	// Submit multiple jobs
@@ -180,7 +180,7 @@ func TestWorkerPoolStats(t *testing.T) {
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer shutdownCancel()
-		pool.Shutdown(shutdownCtx)
+		_ = pool.Shutdown(shutdownCtx)
 	}()
 
 	// Check initial stats

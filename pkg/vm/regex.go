@@ -121,7 +121,7 @@ func NewRegExpDeferred(pattern, flags string) Value {
 	// Try Go's standard regexp (RE2) first - it's faster
 	goPattern, err := translateJSFlagsToGo(pattern, flags)
 	if err == nil {
-		compiledRegex, err = regexp.Compile(goPattern)
+		compiledRegex, _ = regexp.Compile(goPattern)
 	}
 
 	// If RE2 failed, try regexp2 (full ECMAScript support)

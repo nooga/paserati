@@ -140,7 +140,7 @@ func BenchmarkWorkerPoolThroughput(b *testing.B) {
 	}
 	defer func() {
 		shutdownCtx := testContext(b)
-		pool.Shutdown(shutdownCtx)
+		_ = pool.Shutdown(shutdownCtx)
 	}()
 
 	b.ResetTimer()

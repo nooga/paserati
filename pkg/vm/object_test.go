@@ -129,7 +129,7 @@ func TestInlineCache(t *testing.T) {
 	vm.propCache[cacheKey] = cache
 
 	// First lookup should miss and populate cache
-	offset, hit := cache.lookupInCache(obj1.shape, "x")
+	_, hit := cache.lookupInCache(obj1.shape, "x")
 	if hit {
 		t.Errorf("Expected cache miss on first lookup, got hit")
 	}
@@ -138,7 +138,7 @@ func TestInlineCache(t *testing.T) {
 	cache.updateCache(obj1.shape, "x", 0, false, true) // "x" should be at offset 0
 
 	// Second lookup should hit
-	offset, hit = cache.lookupInCache(obj1.shape, "x")
+	offset, hit := cache.lookupInCache(obj1.shape, "x")
 	if !hit {
 		t.Errorf("Expected cache hit on second lookup, got miss")
 	}
@@ -147,7 +147,7 @@ func TestInlineCache(t *testing.T) {
 	}
 
 	// Lookup with same shape and propName should also hit
-	offset, hit = cache.lookupInCache(obj2.shape, "x")
+	_, hit = cache.lookupInCache(obj2.shape, "x")
 	if !hit {
 		t.Errorf("Expected cache hit for object with same shape, got miss")
 	}
@@ -159,7 +159,7 @@ func TestInlineCache(t *testing.T) {
 	obj3.SetOwn("z", IntegerValue(300)) // Different shape!
 
 	// Should miss because shape is different
-	offset, hit = cache.lookupInCache(obj3.shape, "x")
+	_, hit = cache.lookupInCache(obj3.shape, "x")
 	if hit {
 		t.Errorf("Expected cache miss for different shape, got hit")
 	}
@@ -175,12 +175,12 @@ func TestInlineCache(t *testing.T) {
 	}
 
 	// Both shapes should now hit
-	offset, hit = cache.lookupInCache(obj1.shape, "x")
+	_, hit = cache.lookupInCache(obj1.shape, "x")
 	if !hit {
 		t.Errorf("Expected cache hit for first shape in polymorphic cache, got miss")
 	}
 
-	offset, hit = cache.lookupInCache(obj3.shape, "x")
+	_, hit = cache.lookupInCache(obj3.shape, "x")
 	if !hit {
 		t.Errorf("Expected cache hit for second shape in polymorphic cache, got miss")
 	}
@@ -212,7 +212,7 @@ func TestInlineCacheStats(t *testing.T) {
 	obj := NewObject(DefaultObjectPrototype).AsPlainObject()
 	obj.SetOwn("test", IntegerValue(42)) // Creates different shape
 
-	offset, hit = cache.lookupInCache(obj.shape, "test")
+	_, hit = cache.lookupInCache(obj.shape, "test")
 	if hit {
 		t.Errorf("Expected cache miss for different shape, got hit")
 	}

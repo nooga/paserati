@@ -375,7 +375,7 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 					return
 				}
 				// Non-configurable, non-writable properties cannot have writable changed to true
-				if f.writable == false && writable != nil && *writable == true {
+				if !f.writable && writable != nil && *writable {
 					return
 				}
 			}
@@ -511,7 +511,7 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 					return
 				}
 			}
-			if f.writable == false && writable != nil && *writable == true {
+			if !f.writable && writable != nil && *writable {
 				return
 			}
 			if f.writable {

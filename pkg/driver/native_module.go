@@ -284,7 +284,7 @@ func (m *ModuleBuilder) bindStructMethods(vmObj *vm.PlainObject, goInstance refl
 
 	// Then, bind methods
 	// Get the pointer type for method lookup
-	ptrType := reflect.PtrTo(structType)
+	ptrType := reflect.PointerTo(structType)
 
 	// Iterate through all methods of the pointer type
 	for i := 0; i < ptrType.NumMethod(); i++ {

@@ -1396,7 +1396,7 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.LetStatement:
 		// Process all variable declarations in the statement
-		if node.Declarations == nil || len(node.Declarations) == 0 {
+		if len(node.Declarations) == 0 {
 			// Fallback to legacy fields if Declarations is not set
 			if node.Name != nil {
 				panic(fmt.Sprintf("PANIC: LetStatement has Name but no Declarations: %s", node.Name.Value))
@@ -2186,7 +2186,7 @@ func (c *Checker) visit(node parser.Node) {
 			// --- NEW: Handle Bitwise NOT (~) ---
 			case "~":
 				if widenedRightType == types.Any {
-					resultType = types.Any // Bitwise NOT on 'any' results in 'any'? Or number? Let's stick with number like other bitwise ops.
+					// Bitwise NOT on 'any' results in number (like other bitwise ops)
 					resultType = types.Number
 				} else if widenedRightType == types.Number {
 					resultType = types.Number // Result of ~number is number
@@ -3142,7 +3142,6 @@ func (c *Checker) visit(node parser.Node) {
 	default:
 		// Optional: Add error for unhandled node types
 		c.addError(nil, fmt.Sprintf("Checker: Unhandled AST node type %T", node))
-		break
 	}
 }
 

@@ -21,7 +21,7 @@ func TestGlobalFetch(t *testing.T) {
 		// Return a simple JSON response
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message": "Hello from test server", "path": "` + r.URL.Path + `"}`))
+		_, _ = w.Write([]byte(`{"message": "Hello from test server", "path": "` + r.URL.Path + `"}`))
 	}))
 	defer server.Close()
 
@@ -120,7 +120,7 @@ func TestGlobalFetchPOST(t *testing.T) {
 
 		// Read body
 		body := make([]byte, r.ContentLength)
-		r.Body.Read(body)
+		_, _ = r.Body.Read(body)
 
 		// Echo back request info
 		w.Header().Set("Content-Type", "application/json")
@@ -185,7 +185,7 @@ func TestGlobalFetchAutoStringify(t *testing.T) {
 
 		// Read body
 		body := make([]byte, r.ContentLength)
-		r.Body.Read(body)
+		_, _ = r.Body.Read(body)
 
 		// Echo back request info
 		w.Header().Set("Content-Type", "application/json")
@@ -252,7 +252,7 @@ func TestGlobalFetchBlob(t *testing.T) {
 		// Return some binary data
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte{1, 2, 3, 4, 5, 255}) // Binary data including high byte value
+		_, _ = w.Write([]byte{1, 2, 3, 4, 5, 255}) // Binary data including high byte value
 	}))
 	defer server.Close()
 

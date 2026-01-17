@@ -251,7 +251,7 @@ func NewTypedArray(kind TypedArrayKind, lengthOrBuffer interface{}, byteOffset, 
 		arrayLength = len(arg)
 		bytesNeeded := arrayLength * kind.BytesPerElement()
 		buffer = &ArrayBufferObject{data: make([]byte, bytesNeeded)}
-		arrayByteOffset = 0
+		_ = arrayByteOffset // Used in other cases
 		
 		// Initialize with values
 		ta := &TypedArrayObject{

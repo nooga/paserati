@@ -86,7 +86,7 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 				// Add type field
 				typeReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, typeReg)
-				c.emitTypeDescriptor(propType, typeReg, line)
+				_, _ = c.emitTypeDescriptor(propType, typeReg, line)
 				c.emitSetPropertyFromReg(propDescReg, "type", typeReg, line)
 
 				if typ.OptionalProperties[name] {
@@ -116,13 +116,13 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 				// Add key type
 				keyTypeReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, keyTypeReg)
-				c.emitTypeDescriptor(indexSig.KeyType, keyTypeReg, line)
+				_, _ = c.emitTypeDescriptor(indexSig.KeyType, keyTypeReg, line)
 				c.emitSetPropertyFromReg(sigReg, "keyType", keyTypeReg, line)
 
 				// Add value type
 				valueTypeReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, valueTypeReg)
-				c.emitTypeDescriptor(indexSig.ValueType, valueTypeReg, line)
+				_, _ = c.emitTypeDescriptor(indexSig.ValueType, valueTypeReg, line)
 				c.emitSetPropertyFromReg(sigReg, "valueType", valueTypeReg, line)
 
 				c.emitArrayPush(indexSigsReg, sigReg, line)
@@ -156,7 +156,7 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 			for _, baseType := range typ.BaseTypes {
 				baseReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, baseReg)
-				c.emitTypeDescriptor(baseType, baseReg, line)
+				_, _ = c.emitTypeDescriptor(baseType, baseReg, line)
 				c.emitArrayPush(baseTypesReg, baseReg, line)
 			}
 
@@ -167,7 +167,7 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 		c.emitSetProperty(hint, "kind", vm.NewString("array"), line)
 		elemReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, elemReg)
-		c.emitTypeDescriptor(typ.ElementType, elemReg, line)
+		_, _ = c.emitTypeDescriptor(typ.ElementType, elemReg, line)
 		c.emitSetPropertyFromReg(hint, "elementType", elemReg, line)
 
 	case *types.TupleType:
@@ -179,7 +179,7 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 		for _, elemType := range typ.ElementTypes {
 			elemReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, elemReg)
-			c.emitTypeDescriptor(elemType, elemReg, line)
+			_, _ = c.emitTypeDescriptor(elemType, elemReg, line)
 			c.emitArrayPush(elemTypesReg, elemReg, line)
 		}
 		c.emitSetPropertyFromReg(hint, "elementTypes", elemTypesReg, line)
@@ -193,7 +193,7 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 		for _, memberType := range typ.Types {
 			memberReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, memberReg)
-			c.emitTypeDescriptor(memberType, memberReg, line)
+			_, _ = c.emitTypeDescriptor(memberType, memberReg, line)
 			c.emitArrayPush(typesReg, memberReg, line)
 		}
 		c.emitSetPropertyFromReg(hint, "types", typesReg, line)
@@ -207,7 +207,7 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 		for _, memberType := range typ.Types {
 			memberReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, memberReg)
-			c.emitTypeDescriptor(memberType, memberReg, line)
+			_, _ = c.emitTypeDescriptor(memberType, memberReg, line)
 			c.emitArrayPush(typesReg, memberReg, line)
 		}
 		c.emitSetPropertyFromReg(hint, "types", typesReg, line)
@@ -230,13 +230,13 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 			if param.Constraint != nil {
 				constraintReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, constraintReg)
-				c.emitTypeDescriptor(param.Constraint, constraintReg, line)
+				_, _ = c.emitTypeDescriptor(param.Constraint, constraintReg, line)
 				c.emitSetPropertyFromReg(paramReg, "constraint", constraintReg, line)
 			}
 			if param.Default != nil {
 				defaultReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, defaultReg)
-				c.emitTypeDescriptor(param.Default, defaultReg, line)
+				_, _ = c.emitTypeDescriptor(param.Default, defaultReg, line)
 				c.emitSetPropertyFromReg(paramReg, "default", defaultReg, line)
 			}
 
@@ -247,7 +247,7 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 		// Add body
 		bodyReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, bodyReg)
-		c.emitTypeDescriptor(typ.Body, bodyReg, line)
+		_, _ = c.emitTypeDescriptor(typ.Body, bodyReg, line)
 		c.emitSetPropertyFromReg(hint, "body", bodyReg, line)
 
 	case *types.InstantiatedType:
@@ -264,7 +264,7 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 		for _, arg := range typ.TypeArguments {
 			argReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, argReg)
-			c.emitTypeDescriptor(arg, argReg, line)
+			_, _ = c.emitTypeDescriptor(arg, argReg, line)
 			c.emitArrayPush(argsReg, argReg, line)
 		}
 		c.emitSetPropertyFromReg(hint, "typeArguments", argsReg, line)
@@ -272,7 +272,7 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 		// Add resolved type
 		resolvedReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, resolvedReg)
-		c.emitTypeDescriptor(typ.Substitute(), resolvedReg, line)
+		_, _ = c.emitTypeDescriptor(typ.Substitute(), resolvedReg, line)
 		c.emitSetPropertyFromReg(hint, "resolved", resolvedReg, line)
 
 	case *types.TypeParameterType:
@@ -282,7 +282,7 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 			if typ.Parameter.Constraint != nil {
 				constraintReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, constraintReg)
-				c.emitTypeDescriptor(typ.Parameter.Constraint, constraintReg, line)
+				_, _ = c.emitTypeDescriptor(typ.Parameter.Constraint, constraintReg, line)
 				c.emitSetPropertyFromReg(hint, "constraint", constraintReg, line)
 			}
 		}
@@ -293,12 +293,12 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 
 		instanceReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, instanceReg)
-		c.emitTypeDescriptor(typ.InstanceType, instanceReg, line)
+		_, _ = c.emitTypeDescriptor(typ.InstanceType, instanceReg, line)
 		c.emitSetPropertyFromReg(hint, "instanceType", instanceReg, line)
 
 		staticReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, staticReg)
-		c.emitTypeDescriptor(typ.StaticType, staticReg, line)
+		_, _ = c.emitTypeDescriptor(typ.StaticType, staticReg, line)
 		c.emitSetPropertyFromReg(hint, "staticType", staticReg, line)
 
 	default:
@@ -326,7 +326,7 @@ func (c *Compiler) emitSignatureDescriptor(sig *types.Signature, hint Register, 
 
 		typeReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, typeReg)
-		c.emitTypeDescriptor(paramType, typeReg, line)
+		_, _ = c.emitTypeDescriptor(paramType, typeReg, line)
 		c.emitSetPropertyFromReg(paramReg, "type", typeReg, line)
 
 		if i < len(sig.OptionalParams) && sig.OptionalParams[i] {
@@ -341,7 +341,7 @@ func (c *Compiler) emitSignatureDescriptor(sig *types.Signature, hint Register, 
 	if sig.ReturnType != nil {
 		returnReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, returnReg)
-		c.emitTypeDescriptor(sig.ReturnType, returnReg, line)
+		_, _ = c.emitTypeDescriptor(sig.ReturnType, returnReg, line)
 		c.emitSetPropertyFromReg(hint, "returnType", returnReg, line)
 	}
 
@@ -349,7 +349,7 @@ func (c *Compiler) emitSignatureDescriptor(sig *types.Signature, hint Register, 
 	if sig.RestParameterType != nil {
 		restReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, restReg)
-		c.emitTypeDescriptor(sig.RestParameterType, restReg, line)
+		_, _ = c.emitTypeDescriptor(sig.RestParameterType, restReg, line)
 		c.emitSetPropertyFromReg(hint, "restParameter", restReg, line)
 	}
 

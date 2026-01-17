@@ -370,8 +370,8 @@ func (c *Compiler) compileIndexExpression(node *parser.IndexExpression, hint Reg
 
 		// Use OpGetSuperComputed to get the property (handles getters correctly)
 		c.chunk.WriteOpCode(vm.OpGetSuperComputed, line)
-		c.chunk.WriteByte(byte(hint))
-		c.chunk.WriteByte(byte(indexReg))
+		c.chunk.EmitByte(byte(hint))
+		c.chunk.EmitByte(byte(indexReg))
 
 		return hint, nil
 	}
@@ -543,7 +543,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 			baseReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, baseReg)
 			c.chunk.WriteOpCode(vm.OpLoadSuper, line)
-			c.chunk.WriteByte(byte(baseReg))
+			c.chunk.EmitByte(byte(baseReg))
 
 			// Step 2: Compile the index expression
 			keyReg := c.regAlloc.Alloc()
@@ -557,8 +557,8 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 			currentValueReg = c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, currentValueReg)
 			c.chunk.WriteOpCode(vm.OpGetSuperComputed, line)
-			c.chunk.WriteByte(byte(currentValueReg))
-			c.chunk.WriteByte(byte(keyReg))
+			c.chunk.EmitByte(byte(currentValueReg))
+			c.chunk.EmitByte(byte(keyReg))
 
 			// Step 4: Convert to numeric
 			numericValueReg := c.regAlloc.Alloc()
@@ -581,9 +581,9 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 				}
 				// Store back using captured super base
 				c.chunk.WriteOpCode(vm.OpSetSuperComputedWithBase, line)
-				c.chunk.WriteByte(byte(baseReg))
-				c.chunk.WriteByte(byte(keyReg))
-				c.chunk.WriteByte(byte(numericValueReg))
+				c.chunk.EmitByte(byte(baseReg))
+				c.chunk.EmitByte(byte(keyReg))
+				c.chunk.EmitByte(byte(numericValueReg))
 				// Result is the new value
 				c.emitMove(hint, numericValueReg, line)
 			} else {
@@ -599,9 +599,9 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 				}
 				// Store back using captured super base
 				c.chunk.WriteOpCode(vm.OpSetSuperComputedWithBase, line)
-				c.chunk.WriteByte(byte(baseReg))
-				c.chunk.WriteByte(byte(keyReg))
-				c.chunk.WriteByte(byte(numericValueReg))
+				c.chunk.EmitByte(byte(baseReg))
+				c.chunk.EmitByte(byte(keyReg))
+				c.chunk.EmitByte(byte(numericValueReg))
 				// Result is the original value (already in hint)
 			}
 			return hint, nil
@@ -1566,14 +1566,14 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 					return BadRegister, err
 				}
 				c.chunk.WriteOpCode(vm.OpGetSuperComputed, memberExpr.Token.Line)
-				c.chunk.WriteByte(byte(funcReg))
-				c.chunk.WriteByte(byte(propertyReg))
+				c.chunk.EmitByte(byte(funcReg))
+				c.chunk.EmitByte(byte(propertyReg))
 			} else {
 				// Static property: super.method()
 				propertyName := c.extractPropertyName(memberExpr.Property)
 				nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
 				c.chunk.WriteOpCode(vm.OpGetSuper, memberExpr.Token.Line)
-				c.chunk.WriteByte(byte(funcReg))
+				c.chunk.EmitByte(byte(funcReg))
 				c.chunk.WriteUint16(nameConstIdx)
 			}
 
@@ -1630,8 +1630,8 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 
 			// Use OpGetSuperComputed to get the method
 			c.chunk.WriteOpCode(vm.OpGetSuperComputed, indexExpr.Token.Line)
-			c.chunk.WriteByte(byte(funcReg))
-			c.chunk.WriteByte(byte(propertyReg))
+			c.chunk.EmitByte(byte(funcReg))
+			c.chunk.EmitByte(byte(propertyReg))
 
 			// Compile arguments
 			_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)
@@ -2791,8 +2791,8 @@ func (c *Compiler) compileSuperMemberExpression(node *parser.MemberExpression, h
 
 		// Use OpGetSuperComputed for super[expr]
 		c.chunk.WriteOpCode(vm.OpGetSuperComputed, node.Token.Line)
-		c.chunk.WriteByte(byte(hint))        // Destination register
-		c.chunk.WriteByte(byte(propertyReg)) // Key register
+		c.chunk.EmitByte(byte(hint))        // Destination register
+		c.chunk.EmitByte(byte(propertyReg)) // Key register
 
 		return hint, nil
 	}
@@ -2802,7 +2802,7 @@ func (c *Compiler) compileSuperMemberExpression(node *parser.MemberExpression, h
 	nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
 
 	c.chunk.WriteOpCode(vm.OpGetSuper, node.Token.Line)
-	c.chunk.WriteByte(byte(hint))     // Destination register
+	c.chunk.EmitByte(byte(hint))     // Destination register
 	c.chunk.WriteUint16(nameConstIdx) // Property name constant index
 
 	return hint, nil
@@ -3225,8 +3225,8 @@ func (c *Compiler) compileDirectEval(node *parser.CallExpression, hint Register,
 
 	// Emit OpDirectEval: result in hint, code string in codeReg
 	c.chunk.WriteOpCode(vm.OpDirectEval, line)
-	c.chunk.WriteByte(byte(hint))
-	c.chunk.WriteByte(byte(codeReg))
+	c.chunk.EmitByte(byte(hint))
+	c.chunk.EmitByte(byte(codeReg))
 
 	return hint, nil
 }

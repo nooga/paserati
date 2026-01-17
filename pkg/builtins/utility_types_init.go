@@ -84,7 +84,7 @@ func (u *UtilityTypesInitializer) registerPartialType(ctx *TypeContext) {
 	partialGeneric := types.NewGenericType("Partial", []*types.TypeParameter{tParam}, mappedType)
 
 	// Register it in the environment
-	ctx.DefineTypeAlias("Partial", partialGeneric)
+	_ = ctx.DefineTypeAlias("Partial", partialGeneric)
 }
 
 // registerRequiredType registers Required<T> = { [P in keyof T]: T[P] }
@@ -116,7 +116,7 @@ func (u *UtilityTypesInitializer) registerRequiredType(ctx *TypeContext) {
 	requiredGeneric := types.NewGenericType("Required", []*types.TypeParameter{tParam}, mappedType)
 
 	// Register it in the environment
-	ctx.DefineTypeAlias("Required", requiredGeneric)
+	_ = ctx.DefineTypeAlias("Required", requiredGeneric)
 }
 
 // registerReadonlyType registers Readonly<T> = { readonly [P in keyof T]: T[P] }
@@ -148,7 +148,7 @@ func (u *UtilityTypesInitializer) registerReadonlyType(ctx *TypeContext) {
 	readonlyGeneric := types.NewGenericType("Readonly", []*types.TypeParameter{tParam}, mappedType)
 
 	// Register it in the environment
-	ctx.DefineTypeAlias("Readonly", readonlyGeneric)
+	_ = ctx.DefineTypeAlias("Readonly", readonlyGeneric)
 }
 
 // registerPickType registers Pick<T, K> = { [P in K]: T[P] }
@@ -176,7 +176,7 @@ func (u *UtilityTypesInitializer) registerPickType(ctx *TypeContext) {
 	pickGeneric := types.NewGenericType("Pick", []*types.TypeParameter{tParam, kParam}, mappedType)
 
 	// Register it in the environment
-	ctx.DefineTypeAlias("Pick", pickGeneric)
+	_ = ctx.DefineTypeAlias("Pick", pickGeneric)
 }
 
 // registerRecordType registers Record<K, T> = { [P in K]: T }
@@ -198,7 +198,7 @@ func (u *UtilityTypesInitializer) registerRecordType(ctx *TypeContext) {
 	recordGeneric := types.NewGenericType("Record", []*types.TypeParameter{kParam, tParam}, mappedType)
 
 	// Register it in the environment
-	ctx.DefineTypeAlias("Record", recordGeneric)
+	_ = ctx.DefineTypeAlias("Record", recordGeneric)
 }
 
 // registerReturnType registers ReturnType<T> = T extends (...args: any[]) => infer R ? R : never
@@ -223,7 +223,7 @@ func (u *UtilityTypesInitializer) registerReturnType(ctx *TypeContext) {
 	returnTypeGeneric := types.NewGenericType("ReturnType", []*types.TypeParameter{tParam}, conditionalType)
 
 	// Register it in the environment
-	ctx.DefineTypeAlias("ReturnType", returnTypeGeneric)
+	_ = ctx.DefineTypeAlias("ReturnType", returnTypeGeneric)
 }
 
 // registerOmitType registers Omit<T, K> = { [P in Exclude<keyof T, K>]: T[P] }
@@ -264,7 +264,7 @@ func (u *UtilityTypesInitializer) registerOmitType(ctx *TypeContext) {
 	omitGeneric := types.NewGenericType("Omit", []*types.TypeParameter{tParam, kParam}, mappedType)
 
 	// Register it in the environment
-	ctx.DefineTypeAlias("Omit", omitGeneric)
+	_ = ctx.DefineTypeAlias("Omit", omitGeneric)
 }
 
 // registerParametersType registers Parameters<T> = T extends (...args: infer P) => any ? P : never
@@ -305,7 +305,7 @@ func (u *UtilityTypesInitializer) registerParametersType(ctx *TypeContext) {
 	parametersGeneric := types.NewGenericType("Parameters", []*types.TypeParameter{tParam}, conditionalType)
 
 	// Register it in the environment
-	ctx.DefineTypeAlias("Parameters", parametersGeneric)
+	_ = ctx.DefineTypeAlias("Parameters", parametersGeneric)
 }
 
 // registerConstructorParametersType registers ConstructorParameters<T> = T extends new (...args: infer P) => any ? P : never
@@ -346,7 +346,7 @@ func (u *UtilityTypesInitializer) registerConstructorParametersType(ctx *TypeCon
 	constructorParametersGeneric := types.NewGenericType("ConstructorParameters", []*types.TypeParameter{tParam}, conditionalType)
 
 	// Register it in the environment
-	ctx.DefineTypeAlias("ConstructorParameters", constructorParametersGeneric)
+	_ = ctx.DefineTypeAlias("ConstructorParameters", constructorParametersGeneric)
 }
 
 // registerInstanceType registers InstanceType<T> = T extends new (...args: any[]) => infer R ? R : any
@@ -390,5 +390,5 @@ func (u *UtilityTypesInitializer) registerInstanceType(ctx *TypeContext) {
 	instanceTypeGeneric := types.NewGenericType("InstanceType", []*types.TypeParameter{tParam}, conditionalType)
 
 	// Register it in the environment
-	ctx.DefineTypeAlias("InstanceType", instanceTypeGeneric)
+	_ = ctx.DefineTypeAlias("InstanceType", instanceTypeGeneric)
 }

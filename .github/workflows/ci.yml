@@ -42,5 +42,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # Build from source to match the Go version in go.mod
+          install-mode: goinstall
+          version: v1.64.8
           args: --timeout=5m

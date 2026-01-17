@@ -1565,7 +1565,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		// For now, keep the OpLoadSuper emission for edge cases
 		// TODO: Investigate if this code path is ever actually reached
 		c.chunk.WriteOpCode(vm.OpLoadSuper, node.Token.Line)
-		c.chunk.WriteByte(byte(hint))
+		c.chunk.EmitByte(byte(hint))
 		return hint, nil
 
 	case *parser.NewTargetExpression:

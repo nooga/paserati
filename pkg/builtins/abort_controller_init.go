@@ -64,7 +64,7 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// AbortSignal.abort(reason?) - creates an already-aborted signal
 	signalConstructor.SetOwnNonEnumerable("abort", vm.NewNativeFunction(1, false, "abort", func(args []vm.Value) (vm.Value, error) {
-		reason := vm.Undefined
+		var reason vm.Value
 		if len(args) > 0 {
 			reason = args[0]
 		} else {
@@ -241,7 +241,7 @@ func createAbortControllerObject(vmInstance *vm.VM, controller *AbortController,
 
 	// abort(reason?) method
 	obj.SetOwnNonEnumerable("abort", vm.NewNativeFunction(1, false, "abort", func(args []vm.Value) (vm.Value, error) {
-		reason := vm.Undefined
+		var reason vm.Value
 		if len(args) > 0 {
 			reason = args[0]
 		} else {

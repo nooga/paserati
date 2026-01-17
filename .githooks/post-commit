@@ -1,0 +1,37 @@
+#!/bin/bash
+# Post-commit hook to generate Test262 baseline after each commit
+# This creates a snapshot of test results that can be compared against future changes
+# Only runs if Go files were modified in the commit
+
+# Check if any .go files were modified in this commit
+GO_FILES_CHANGED=$(git diff-tree --no-commit-id --name-only -r HEAD | grep '\.go$')
+
+if [ -z "$GO_FILES_CHANGED" ]; then
+    echo "No Go files modified in this commit, skipping baseline generation"
+    exit 0
+fi
+
+echo "Go files modified, generating Test262 baseline..."
+
+# Build the binaries to ensure they're up to date
+echo "Building paserati..."
+go build -o paserati ./cmd/paserati/main.go || {
+    echo "Failed to build paserati, skipping baseline generation"
+    exit 0
+}
+
+echo "Building paserati-test262..."
+go build -o paserati-test262 ./cmd/paserati-test262 || {
+    echo "Failed to build paserati-test262, skipping baseline generation"
+    exit 0
+}
+
+# Run the language suite and dump baseline
+echo "Running Test262 language suite (this may take a minute)..."
+./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -dump baseline.txt 2>&1 | tail -1
+
+if [ -f "baseline.txt" ]; then
+    echo "✓ Baseline saved to baseline.txt"
+else
+    echo "✗ Failed to generate baseline.txt"
+fi

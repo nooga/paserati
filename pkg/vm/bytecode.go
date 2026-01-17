@@ -671,9 +671,10 @@ func (c *Chunk) WriteOpCode(op OpCode, line int) {
 	c.currentLine = line // Track for subsequent operand bytes
 }
 
-// WriteByte adds a raw byte (operand) to the chunk.
+// EmitByte adds a raw byte (operand) to the chunk.
 // Uses the line number from the most recent WriteOpCode call.
-func (c *Chunk) WriteByte(b byte) {
+// Note: Named EmitByte instead of WriteByte to avoid conflict with io.ByteWriter interface.
+func (c *Chunk) EmitByte(b byte) {
 	c.Code = append(c.Code, b)
 	c.Lines = append(c.Lines, c.currentLine) // Keep Lines parallel to Code
 }

@@ -399,10 +399,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		case *parser.ComputedPropertyName:
 			// Handle computed properties: [expression]
 			c.visit(key.Expr)
-			keyType := key.Expr.GetComputedType()
-			if keyType == nil {
-				keyType = types.Any
-			}
+			// Note: keyType is computed but primarily used for validation
+			// The actual key name is determined at runtime for computed properties
 
 			// Try to get a compile-time constant key if possible
 			if literal, ok := key.Expr.(*parser.StringLiteral); ok {
@@ -1555,7 +1553,6 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				default:
 					// This member doesn't support indexing
 					allMembersSupported = false
-					break
 				}
 			}
 
@@ -1818,7 +1815,7 @@ func (c *Checker) checkOptionalIndexExpression(node *parser.OptionalIndexExpress
 
 	// 4. Determine result type (similar to IndexExpression but with optional chaining)
 	widenedObjectType := types.GetWidenedType(objectType)
-	var baseResultType types.Type = types.Any
+	var baseResultType types.Type
 
 	if widenedObjectType == types.Any {
 		baseResultType = types.Any
@@ -1872,7 +1869,7 @@ func (c *Checker) checkOptionalCallExpression(node *parser.OptionalCallExpressio
 
 	// 3. Determine result type
 	widenedFunctionType := types.GetWidenedType(functionType)
-	var baseResultType types.Type = types.Any
+	var baseResultType types.Type
 
 	if widenedFunctionType == types.Any {
 		baseResultType = types.Any

@@ -13,7 +13,7 @@ func (c *Compiler) emitOpCode(op vm.OpCode, line int) {
 }
 
 func (c *Compiler) emitByte(b byte) {
-	c.chunk.WriteByte(b)
+	c.chunk.EmitByte(b)
 }
 
 func (c *Compiler) emitUint16(val uint16) {

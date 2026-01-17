@@ -2048,15 +2048,10 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(-1), nil
 	}))
 
-	// Create String constructor
-	stringCtor := vm.NewNativeFunction(-1, true, "String", func(args []vm.Value) (vm.Value, error) {
-		if len(args) == 0 {
-			return vm.NewString(""), nil
-		}
-		return vm.NewString(args[0].ToString()), nil
-	})
+	// Declare stringCtor - will be assigned after ctorWithProps is created
+	var stringCtor vm.Value
 
-	// Make it a proper constructor with static methods
+	// Create String constructor with static methods
 	ctorWithProps := vm.NewConstructorWithProps(1, true, "String", func(args []vm.Value) (vm.Value, error) {
 		// Determine the primitive string value
 		var primitiveValue string

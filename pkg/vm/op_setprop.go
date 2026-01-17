@@ -161,7 +161,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				}
 				// Update existing global in heap AND the PlainObject
 				// Both need to be in sync so reads via bracket notation work
-				vm.heap.Set(globalIdx, *valueToSet)
+				_ = vm.heap.Set(globalIdx, *valueToSet)
 				po.SetOwn(propName, *valueToSet)
 				return true, InterpretOK, *valueToSet
 			}
@@ -525,7 +525,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			if !arr.IsExtensible() {
 				// In strict mode, throw TypeError; in non-strict, silently fail
 				if vm.IsInStrictMode() {
-					err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property 'length'"))
+					err := vm.NewTypeError("Cannot assign to read only property 'length'")
 					if excErr, ok := err.(ExceptionError); ok {
 						vm.throwException(excErr.GetExceptionValue())
 						return false, InterpretRuntimeError, Undefined

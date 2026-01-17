@@ -4798,7 +4798,7 @@ startExecution:
 									vm.throwException(vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", key)).(ExceptionError).GetExceptionValue())
 									return InterpretRuntimeError, Undefined
 								}
-								vm.heap.Set(globalIdx, valueVal)
+								_ = vm.heap.Set(globalIdx, valueVal)
 							}
 						}
 						// No setter, set as data property
@@ -4848,7 +4848,7 @@ startExecution:
 			ip += 2
 
 			srcVal := registers[srcReg]
-			var length float64 = -1 // Initialize to -1 to indicate error if type is wrong
+			var length float64 // Will be set in switch cases
 
 			switch srcVal.Type() {
 			case TypeArray:
@@ -12826,7 +12826,7 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 // setGlobalInTable sets a global variable in the unified global table
 func (vm *VM) setGlobalInTable(globalIdx uint16, value Value) {
 	// Use heap to store the value
-	vm.heap.Set(int(globalIdx), value)
+	_ = vm.heap.Set(int(globalIdx), value)
 }
 
 // getGlobalFromTable gets a global variable from the unified global table

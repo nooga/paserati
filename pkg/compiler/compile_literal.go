@@ -144,7 +144,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 
 	// 5. Compile the function body
 	var returnReg Register
-	implicitReturnNeeded := true
+	var implicitReturnNeeded bool
 	switch bodyNode := node.Body.(type) {
 	case *parser.BlockStatement:
 		bodyResultReg := funcCompiler.regAlloc.Alloc()
@@ -361,7 +361,7 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 
 	// Compile body - handle block vs expression bodies differently
 	var returnReg Register
-	implicitReturnNeeded := true
+	var implicitReturnNeeded bool
 	switch bodyNode := node.Body.(type) {
 	case *parser.BlockStatement:
 		bodyResultReg := funcCompiler.regAlloc.Alloc()
@@ -492,7 +492,7 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 		firstTargetReg, ok := c.regAlloc.TryAllocContiguous(elementCount)
 		if !ok {
 			// Fall back to chunking if we can't get a contiguous block
-			useChunking = true
+			// (control flows to the chunking path below)
 		} else {
 			// Compile elements directly into contiguous positions
 			for i, elem := range node.Elements {
@@ -1441,7 +1441,7 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 
 				// Compile this desugared parameter declaration
 				stmtReg := functionCompiler.regAlloc.Alloc()
-				functionCompiler.compileNode(stmt, stmtReg)
+				_, _ = functionCompiler.compileNode(stmt, stmtReg)
 				functionCompiler.regAlloc.Free(stmtReg)
 				desugarCount++
 
@@ -1455,13 +1455,13 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 			// Compile remaining statements (the actual body)
 			for i := desugarCount; i < len(blockBody.Statements); i++ {
 				stmtReg := functionCompiler.regAlloc.Alloc()
-				functionCompiler.compileNode(blockBody.Statements[i], stmtReg)
+				_, _ = functionCompiler.compileNode(blockBody.Statements[i], stmtReg)
 				functionCompiler.regAlloc.Free(stmtReg)
 			}
 		} else {
 			// Non-block body (arrow function expression) - just emit OpInitYield first
 			functionCompiler.emitOpCode(vm.OpInitYield, node.Body.Token.Line)
-			functionCompiler.compileNode(node.Body, bodyReg)
+			_, _ = functionCompiler.compileNode(node.Body, bodyReg)
 		}
 
 		functionCompiler.isCompilingFunctionBody = false
@@ -1470,7 +1470,7 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 		// Non-generator: compile body normally
 		bodyReg := functionCompiler.regAlloc.Alloc()
 		functionCompiler.isCompilingFunctionBody = true
-		functionCompiler.compileNode(node.Body, bodyReg)
+		_, _ = functionCompiler.compileNode(node.Body, bodyReg)
 		functionCompiler.isCompilingFunctionBody = false
 		functionCompiler.regAlloc.Free(bodyReg)
 	}

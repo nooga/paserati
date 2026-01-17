@@ -106,7 +106,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		} else if node.Value != nil {
 			// Compile other value types normally
 			// Use existing predefined register if present
-			targetReg := valueReg
+			var targetReg Register
 			useSpilling := false
 			var spillIdx uint16
 			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
@@ -562,7 +562,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 		} else {
 			// Compile other value types normally
 			// Use existing predefined register if present
-			targetReg := valueReg
+			var targetReg Register
 			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
 				targetReg = sym.Register
 			} else {

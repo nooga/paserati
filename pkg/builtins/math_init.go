@@ -698,7 +698,7 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Close the iterator if it has a return method
 				if returnMethod, err := vmInstance.GetProperty(iterator, "return"); err == nil && returnMethod.IsCallable() {
 					vmInstance.EnterHelperCall()
-					vmInstance.Call(returnMethod, iterator, nil)
+					_, _ = vmInstance.Call(returnMethod, iterator, nil)
 					vmInstance.ExitHelperCall()
 				}
 				return vm.Undefined, vmInstance.NewTypeError("Math.sumPrecise can only sum numbers")

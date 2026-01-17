@@ -68,8 +68,8 @@ func TestHeap_AutoResize(t *testing.T) {
 
 func TestHeap_GetOutOfBounds(t *testing.T) {
 	heap := NewHeap(5)
-	heap.Set(2, NewString("test"))
-	
+	_ = heap.Set(2, NewString("test"))
+
 	// Test negative index
 	_, exists := heap.Get(-1)
 	if exists {
@@ -124,7 +124,7 @@ func TestHeap_Resize(t *testing.T) {
 	heap := NewHeap(2)
 	
 	// Set a value first
-	heap.Set(1, NewString("test"))
+	_ = heap.Set(1, NewString("test"))
 	
 	// Resize to larger
 	heap.Resize(10)

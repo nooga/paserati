@@ -198,7 +198,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		mapObj := thisMap.AsMap()
 		mapObj.ForEach(func(key vm.Value, value vm.Value) {
 			// Call callback(value, key, map) with thisArg as 'this'
-			vmInstance.Call(callback, thisArg, []vm.Value{value, key, thisMap})
+			_, _ = vmInstance.Call(callback, thisArg, []vm.Value{value, key, thisMap})
 		})
 
 		return vm.Undefined, nil

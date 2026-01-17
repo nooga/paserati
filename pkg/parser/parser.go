@@ -2935,7 +2935,7 @@ func (p *Parser) parseParameterDestructuringProperty() *DestructuringProperty {
 		// Numeric property key (e.g., {0: v, 1: w})
 		// Convert to NumberLiteral for the key
 		numVal := 0.0
-		fmt.Sscanf(p.curToken.Literal, "%f", &numVal)
+		_, _ = fmt.Sscanf(p.curToken.Literal, "%f", &numVal)
 		prop.Key = &NumberLiteral{Token: p.curToken, Value: numVal}
 	} else {
 		p.addError(p.curToken, "object parameter property key must be an identifier, number, or computed property")
@@ -8379,7 +8379,7 @@ func (p *Parser) parseRegularForStatementWithVar(forToken lexer.Token, varStmt S
 
 	// Sync Declarations with legacy fields for all statement types
 	if vs, ok := varStmt.(*VarStatement); ok {
-		if vs.Declarations != nil && len(vs.Declarations) > 0 {
+		if len(vs.Declarations) > 0 {
 			vs.Declarations[0].Value = vs.Value
 			vs.Declarations[0].TypeAnnotation = vs.TypeAnnotation
 		}
@@ -8406,7 +8406,7 @@ func (p *Parser) parseRegularForStatementWithVar(forToken lexer.Token, varStmt S
 			vs.Declarations = append(vs.Declarations, declarator)
 		}
 	} else if letStmt, ok := varStmt.(*LetStatement); ok {
-		if letStmt.Declarations != nil && len(letStmt.Declarations) > 0 {
+		if len(letStmt.Declarations) > 0 {
 			letStmt.Declarations[0].Value = letStmt.Value
 			letStmt.Declarations[0].TypeAnnotation = letStmt.TypeAnnotation
 		}
@@ -8433,7 +8433,7 @@ func (p *Parser) parseRegularForStatementWithVar(forToken lexer.Token, varStmt S
 			letStmt.Declarations = append(letStmt.Declarations, declarator)
 		}
 	} else if constStmt, ok := varStmt.(*ConstStatement); ok {
-		if constStmt.Declarations != nil && len(constStmt.Declarations) > 0 {
+		if len(constStmt.Declarations) > 0 {
 			constStmt.Declarations[0].Value = constStmt.Value
 			constStmt.Declarations[0].TypeAnnotation = constStmt.TypeAnnotation
 		}
@@ -9550,7 +9550,7 @@ func (p *Parser) isMappedTypePattern() bool {
 		// Expect identifier
 		if token.Type == lexer.IDENT {
 			token = p.l.NextToken() // Check for 'in'
-			tokenCount++
+			_ = tokenCount          // Used above for safety limit
 
 			// Check for 'in' - this distinguishes mapped types from index signatures
 			if token.Type == lexer.IN {

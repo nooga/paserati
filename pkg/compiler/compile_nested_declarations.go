@@ -281,7 +281,7 @@ func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parse
 			if isNumeric && len(keyIdent.Value) > 0 {
 				// Use OpGetIndex for numeric properties (array elements)
 				var indexNum float64
-				fmt.Sscanf(keyIdent.Value, "%f", &indexNum)
+				_, _ = fmt.Sscanf(keyIdent.Value, "%f", &indexNum)
 				indexConstIdx := c.chunk.AddConstant(vm.Number(indexNum))
 				indexReg := c.regAlloc.Alloc()
 				c.emitLoadConstant(indexReg, indexConstIdx, line)

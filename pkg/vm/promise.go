@@ -255,10 +255,10 @@ func (vm *VM) PromiseThen(thisPromise Value, onFulfilled, onRejected Value) (Val
 			reaction := PromiseReaction{
 				Handler: handler,
 				Resolve: func(v Value) {
-					vm.Call(resolve, Undefined, []Value{v})
+					_, _ = vm.Call(resolve, Undefined, []Value{v})
 				},
 				Reject: func(r Value) {
-					vm.Call(reject, Undefined, []Value{r})
+					_, _ = vm.Call(reject, Undefined, []Value{r})
 				},
 			}
 			promise.FulfillReactions = append(promise.FulfillReactions, reaction)
@@ -279,10 +279,10 @@ func (vm *VM) PromiseThen(thisPromise Value, onFulfilled, onRejected Value) (Val
 			reaction := PromiseReaction{
 				Handler: handler,
 				Resolve: func(v Value) {
-					vm.Call(resolve, Undefined, []Value{v})
+					_, _ = vm.Call(resolve, Undefined, []Value{v})
 				},
 				Reject: func(r Value) {
-					vm.Call(reject, Undefined, []Value{r})
+					_, _ = vm.Call(reject, Undefined, []Value{r})
 				},
 			}
 			promise.RejectReactions = append(promise.RejectReactions, reaction)
