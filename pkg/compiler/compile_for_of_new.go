@@ -297,6 +297,11 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 			if err := c.compileAssignmentToMember(target, valueReg, node.Token.Line); err != nil {
 				return BadRegister, err
 			}
+		case *parser.IndexExpression:
+			// Index expression: for (arr[idx] of items) or for ([let][1] of items)
+			if err := c.compileAssignmentToIndex(target, valueReg, node.Token.Line); err != nil {
+				return BadRegister, err
+			}
 		}
 	}
 

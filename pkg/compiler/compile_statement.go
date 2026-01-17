@@ -396,6 +396,10 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			} else if sym, funcTable := c.findVarInFunctionScope(node.Name.Value); funcTable != nil && sym.IsSpilled {
 				// Variable was pre-defined as spilled IN THE CURRENT FUNCTION, already initialized to undefined
 				debugPrintf("// [VarStmt] '%s' was pre-defined as SPILLED (slot %d), skipping\n", node.Name.Value, sym.SpillIndex)
+			} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsGlobal {
+				// ECMAScript: var re-declaration without initializer is a no-op if variable already exists
+				// Global variable already exists, skip undefined initialization
+				debugPrintf("// [VarStmt] '%s' already exists as global, skipping undefined init\n", node.Name.Value)
 			} else {
 				// DON'T defer free - we'll track if this becomes a variable register below
 				undefReg := c.regAlloc.Alloc()
@@ -2061,6 +2065,11 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		case *parser.MemberExpression:
 			// Member expression: for (obj.x in items) or for (obj[key] in items)
 			if err := c.compileAssignmentToMember(target, currentKeyReg, node.Token.Line); err != nil {
+				return BadRegister, err
+			}
+		case *parser.IndexExpression:
+			// Index expression: for (arr[idx] in items) or for ([let][1] in items)
+			if err := c.compileAssignmentToIndex(target, currentKeyReg, node.Token.Line); err != nil {
 				return BadRegister, err
 			}
 		}

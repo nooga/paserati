@@ -2514,3 +2514,32 @@ func (c *Compiler) compileAssignmentToMember(memberExpr *parser.MemberExpression
 
 	return nil
 }
+
+// compileAssignmentToIndex compiles assignment to an index expression: obj[key] = valueReg
+func (c *Compiler) compileAssignmentToIndex(indexExpr *parser.IndexExpression, valueReg Register, line int) errors.PaseratiError {
+	// Compile the object/array expression
+	objectReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(objectReg)
+
+	_, err := c.compileNode(indexExpr.Left, objectReg)
+	if err != nil {
+		return err
+	}
+
+	// Compile the index expression
+	keyReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(keyReg)
+
+	_, err = c.compileNode(indexExpr.Index, keyReg)
+	if err != nil {
+		return err
+	}
+
+	// Emit OpSetIndex: objectReg[keyReg] = valueReg
+	c.emitOpCode(vm.OpSetIndex, line)
+	c.emitByte(byte(objectReg))
+	c.emitByte(byte(keyReg))
+	c.emitByte(byte(valueReg))
+
+	return nil
+}

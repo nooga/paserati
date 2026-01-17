@@ -7917,11 +7917,21 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) St
 	var varName string
 
 	if p.curTokenIs(lexer.LET) {
-		letToken := p.curToken
-		p.nextToken() // Move past LET
+		// In non-strict mode, 'let' is an identifier when followed by 'in' or 'of'
+		// Per ECMAScript spec: lookahead ∉ { let [ }
+		// So "for (let in obj)" treats 'let' as an identifier, not a declaration
+		if p.peekTokenIs(lexer.IN) || p.peekTokenIs(lexer.OF) {
+			// 'let' is an identifier, not a declaration
+			ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			exprStmt := &ExpressionStatement{Token: p.curToken, Expression: ident}
+			varStmt = exprStmt
+			varName = "let"
+		} else {
+			letToken := p.curToken
+			p.nextToken() // Move past LET
 
-		// Check for destructuring patterns
-		if p.curTokenIs(lexer.LBRACKET) {
+			// Check for destructuring patterns
+			if p.curTokenIs(lexer.LBRACKET) {
 			// Array destructuring: for(let [a, b] ...)
 			// Parse pattern without requiring initializer initially
 			varStmt = p.parseArrayDestructuringDeclaration(letToken, false, false)
@@ -7974,6 +7984,7 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) St
 		} else {
 			p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'let', got %s", p.curToken.Type))
 			return nil
+		}
 		}
 	} else if p.curTokenIs(lexer.CONST) {
 		constToken := p.curToken
@@ -8064,8 +8075,8 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) St
 					objDecl.Value = p.parseExpression(LOWEST)
 				}
 			}
-		} else if p.curTokenIs(lexer.IDENT) || p.isContextualKeywordAsIdent() {
-			// Regular identifier (including contextual keywords like 'type')
+		} else if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.LET) || p.isContextualKeywordAsIdent() {
+			// Regular identifier (including contextual keywords like 'type', and 'let' in non-strict mode)
 			varDeclaration := &VarStatement{Token: varToken}
 			declarator := &VarDeclarator{}
 			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -8077,8 +8088,8 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) St
 			p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'var', got %s", p.curToken.Type))
 			return nil
 		}
-	} else if p.curTokenIs(lexer.IDENT) || p.isContextualKeywordAsIdent() {
-		// Could be bare identifier or member expression
+	} else if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.LET) || p.isContextualKeywordAsIdent() {
+		// Could be bare identifier or member expression (including 'let' as identifier in non-strict mode)
 		// Check if followed by . or [ to determine if it's a member expression
 		if p.peekTokenIs(lexer.DOT) || p.peekTokenIs(lexer.LBRACKET) {
 			// Member expression: parse it fully, but stop before 'in'/'of' operators
