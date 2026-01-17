@@ -1696,6 +1696,29 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		}
 	}()
 
+	// Check if this is a lexical binding (let/const) that needs its own scope
+	// This ensures loop variables shadow outer variables with the same name
+	var hasLexicalDecl bool
+	var prevSymbolTable *SymbolTable
+	switch v := node.Variable.(type) {
+	case *parser.LetStatement, *parser.ConstStatement:
+		hasLexicalDecl = true
+	case *parser.ArrayDestructuringDeclaration:
+		hasLexicalDecl = v.Token.Type == lexer.LET || v.Token.Type == lexer.CONST
+	case *parser.ObjectDestructuringDeclaration:
+		hasLexicalDecl = v.Token.Type == lexer.LET || v.Token.Type == lexer.CONST
+	}
+	if hasLexicalDecl {
+		prevSymbolTable = c.currentSymbolTable
+		c.currentSymbolTable = NewEnclosedSymbolTable(c.currentSymbolTable)
+	}
+	// Ensure we restore the scope when done
+	defer func() {
+		if prevSymbolTable != nil {
+			c.currentSymbolTable = prevSymbolTable
+		}
+	}()
+
 	// Predefine var header bindings (top-level as global, function scope as local) so body Resolve works
 	if vs, ok := node.Variable.(*parser.VarStatement); ok {
 		if len(vs.Declarations) > 0 {
@@ -1722,16 +1745,40 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		} else {
 			// fmt.Printf("// [ForInPredefine] VarStatement without Name/Declarations\n")
 		}
-	} else {
-		switch node.Variable.(type) {
+	} else if hasLexicalDecl {
+		// Define TDZ bindings for let/const variables BEFORE compiling object expression
+		// This ensures closures captured in the object expression see the TDZ state
+		switch v := node.Variable.(type) {
 		case *parser.LetStatement:
-			// fmt.Printf("// [ForInHeader] let\n")
+			c.currentSymbolTable.DefineTDZ(v.Name.Value, c.regAlloc.Alloc())
 		case *parser.ConstStatement:
-			// fmt.Printf("// [ForInHeader] const\n")
-		case *parser.ExpressionStatement:
-			// fmt.Printf("// [ForInHeader] bare identifier\n")
-		default:
-			// fmt.Printf("// [ForInHeader] other type %T\n", node.Variable)
+			c.currentSymbolTable.DefineConstTDZ(v.Name.Value, c.regAlloc.Alloc())
+		case *parser.ArrayDestructuringDeclaration:
+			for _, elem := range v.Elements {
+				if elem.Target == nil {
+					continue
+				}
+				if ident, ok := elem.Target.(*parser.Identifier); ok {
+					if v.IsConst {
+						c.currentSymbolTable.DefineConstTDZ(ident.Value, c.regAlloc.Alloc())
+					} else {
+						c.currentSymbolTable.DefineTDZ(ident.Value, c.regAlloc.Alloc())
+					}
+				}
+			}
+		case *parser.ObjectDestructuringDeclaration:
+			for _, prop := range v.Properties {
+				if prop.Target == nil {
+					continue
+				}
+				if ident, ok := prop.Target.(*parser.Identifier); ok {
+					if v.IsConst {
+						c.currentSymbolTable.DefineConstTDZ(ident.Value, c.regAlloc.Alloc())
+					} else {
+						c.currentSymbolTable.DefineTDZ(ident.Value, c.regAlloc.Alloc())
+					}
+				}
+			}
 		}
 	}
 
@@ -1804,21 +1851,31 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 	// Track per-iteration binding registers for let/const loop variables
 	var perIterationRegs []Register
 	if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
-		// Define the loop variable in symbol table
-		symbol := c.currentSymbolTable.Define(letStmt.Name.Value, c.regAlloc.Alloc())
+		// Resolve the TDZ binding defined earlier and initialize it
+		symbol, _, found := c.currentSymbolTable.Resolve(letStmt.Name.Value)
+		if !found {
+			return BadRegister, NewCompileError(letStmt, "internal error: let binding not found")
+		}
+		c.currentSymbolTable.InitializeTDZ(letStmt.Name.Value)
 		c.regAlloc.Pin(symbol.Register) // Pin so closures can capture
 		perIterationRegs = append(perIterationRegs, symbol.Register)
 		// Store key value in the variable's register
 		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)
 	} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
-		// Use DefineConst (not TDZ) - variable is immediately initialized in for-in
-		symbol := c.currentSymbolTable.DefineConst(constStmt.Name.Value, c.regAlloc.Alloc())
+		// Resolve the TDZ binding defined earlier and initialize it
+		symbol, _, found := c.currentSymbolTable.Resolve(constStmt.Name.Value)
+		if !found {
+			return BadRegister, NewCompileError(constStmt, "internal error: const binding not found")
+		}
+		c.currentSymbolTable.InitializeTDZ(constStmt.Name.Value)
 		c.regAlloc.Pin(symbol.Register) // Pin so closures can capture
 		perIterationRegs = append(perIterationRegs, symbol.Register)
 		// Store key value in the variable's register
 		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)
 	} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
 		// Array destructuring in for-in loop
+		isLexicalBinding := arrayDestr.Token.Type == lexer.LET || arrayDestr.Token.Type == lexer.CONST
+
 		for i, element := range arrayDestr.Elements {
 			if element.Target == nil {
 				continue
@@ -1836,13 +1893,37 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 			c.emitByte(byte(indexReg))
 
 			if ident, ok := element.Target.(*parser.Identifier); ok {
-				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
-				// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
-				c.emitMove(symbol.Register, extractedReg, node.Token.Line)
+				var symbol Symbol
+				if isLexicalBinding {
+					// Resolve the TDZ binding defined earlier
+					var found bool
+					symbol, _, found = c.currentSymbolTable.Resolve(ident.Value)
+					if !found {
+						return BadRegister, NewCompileError(ident, "internal error: destructuring binding not found")
+					}
+					c.currentSymbolTable.InitializeTDZ(ident.Value)
+					c.regAlloc.Pin(symbol.Register)
+					perIterationRegs = append(perIterationRegs, symbol.Register)
+				} else {
+					// var binding - define normally
+					symbol = c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
+				}
+
+				// Handle default value if present
+				if element.Default != nil {
+					err := c.compileConditionalAssignment(element.Target, extractedReg, element.Default, node.Token.Line)
+					if err != nil {
+						return BadRegister, err
+					}
+				} else {
+					c.emitMove(symbol.Register, extractedReg, node.Token.Line)
+				}
 			}
 		}
 	} else if objDestr, ok := node.Variable.(*parser.ObjectDestructuringDeclaration); ok {
 		// Object destructuring in for-in loop
+		isLexicalBinding := objDestr.Token.Type == lexer.LET || objDestr.Token.Type == lexer.CONST
+
 		for _, prop := range objDestr.Properties {
 			if prop.Target == nil {
 				continue
@@ -1869,9 +1950,31 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 			}
 
 			if ident, ok := prop.Target.(*parser.Identifier); ok {
-				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
-				// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
-				c.emitMove(symbol.Register, extractedReg, node.Token.Line)
+				var symbol Symbol
+				if isLexicalBinding {
+					// Resolve the TDZ binding defined earlier
+					var found bool
+					symbol, _, found = c.currentSymbolTable.Resolve(ident.Value)
+					if !found {
+						return BadRegister, NewCompileError(ident, "internal error: destructuring binding not found")
+					}
+					c.currentSymbolTable.InitializeTDZ(ident.Value)
+					c.regAlloc.Pin(symbol.Register)
+					perIterationRegs = append(perIterationRegs, symbol.Register)
+				} else {
+					// var binding - define normally
+					symbol = c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
+				}
+
+				// Handle default value if present
+				if prop.Default != nil {
+					err := c.compileConditionalAssignment(prop.Target, extractedReg, prop.Default, node.Token.Line)
+					if err != nil {
+						return BadRegister, err
+					}
+				} else {
+					c.emitMove(symbol.Register, extractedReg, node.Token.Line)
+				}
 			}
 		}
 	} else if varStmt, ok := node.Variable.(*parser.VarStatement); ok {

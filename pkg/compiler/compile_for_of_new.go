@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/vm"
 )
@@ -13,6 +14,29 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	defer func() {
 		for _, reg := range tempRegs {
 			c.regAlloc.Free(reg)
+		}
+	}()
+
+	// Check if this is a lexical binding (let/const) that needs its own scope
+	// This ensures loop variables shadow outer variables with the same name
+	var hasLexicalDecl bool
+	var prevSymbolTable *SymbolTable
+	switch v := node.Variable.(type) {
+	case *parser.LetStatement, *parser.ConstStatement:
+		hasLexicalDecl = true
+	case *parser.ArrayDestructuringDeclaration:
+		hasLexicalDecl = v.Token.Type == lexer.LET || v.Token.Type == lexer.CONST
+	case *parser.ObjectDestructuringDeclaration:
+		hasLexicalDecl = v.Token.Type == lexer.LET || v.Token.Type == lexer.CONST
+	}
+	if hasLexicalDecl {
+		prevSymbolTable = c.currentSymbolTable
+		c.currentSymbolTable = NewEnclosedSymbolTable(c.currentSymbolTable)
+	}
+	// Ensure we restore the scope when done
+	defer func() {
+		if prevSymbolTable != nil {
+			c.currentSymbolTable = prevSymbolTable
 		}
 	}()
 

@@ -4878,7 +4878,9 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isCon
 				if p.peekTokenIs(lexer.ASSIGN) {
 					p.nextToken() // Consume '='
 					p.nextToken() // Move to default value expression
-					defaultExpr := p.parseExpression(ASSIGNMENT)
+					// Use COMMA precedence to allow assignment expressions in defaults
+					// e.g., [x, _ = probeDecl = function() {...}]
+					defaultExpr := p.parseExpression(COMMA)
 					if defaultExpr == nil {
 						return nil
 					}
