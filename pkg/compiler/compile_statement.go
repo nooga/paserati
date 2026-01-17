@@ -1860,6 +1860,19 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 	c.emitByte(byte(keysReg))       // keys array
 	c.emitByte(byte(keyIndexReg))   // index
 
+	// 5a. Per ECMAScript spec: check if the property still exists on the object
+	// Properties may be deleted during enumeration, and deleted properties should be skipped
+	existsReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, existsReg)
+	c.emitOpCode(vm.OpIn, node.Token.Line)
+	c.emitByte(byte(existsReg))     // destination (boolean result)
+	c.emitByte(byte(currentKeyReg)) // property key
+	c.emitByte(byte(objectReg))     // object to check
+
+	// If property doesn't exist, skip to next iteration (continue to increment)
+	skipDeletedJumpPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, existsReg, node.Token.Line)
+	loopContext.ContinuePlaceholderPosList = append(loopContext.ContinuePlaceholderPosList, skipDeletedJumpPos)
+
 	// 6. Assign current key to loop variable
 	// Track per-iteration binding registers for let/const loop variables
 	// IMPORTANT: We create a NEW binding here to shadow the TDZ binding, matching for-of behavior

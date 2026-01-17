@@ -8724,14 +8724,22 @@ startExecution:
 			switch objValue.Type() {
 			case TypeObject:
 				// Enumerate own and inherited enumerable string-named properties (for-in semantics)
+				// Per ECMAScript spec: non-enumerable own properties shadow enumerable prototype properties
 				seen := make(map[string]bool)
 				cur := objValue.AsPlainObject()
 				for cur != nil {
+					// Add enumerable properties that haven't been shadowed by earlier objects
 					for _, k := range cur.OwnKeys() {
+						// OwnKeys only returns enumerable properties
 						if !seen[k] {
-							seen[k] = true
 							keys = append(keys, k)
 						}
+					}
+					// Mark ALL own property names as seen for shadowing (including non-enumerable)
+					// This must happen AFTER we check for enumerable keys so that
+					// enumerable properties on the same object are still added
+					for _, k := range cur.OwnPropertyNames() {
+						seen[k] = true
 					}
 					pv := cur.GetPrototype()
 					if !pv.IsObject() {

@@ -1789,25 +1789,9 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		return vm.Undefined, nil
 	}
 
-	// Explicitly default missing attributes to false for data descriptors
-	if !(hasGetter || hasSetter) {
-		if writablePtr == nil {
-			b := false
-			writablePtr = &b
-		}
-	}
-	if enumerablePtr == nil {
-		b := false
-		enumerablePtr = &b
-	}
-	if configurablePtr == nil {
-		b := false
-		configurablePtr = &b
-	}
-
 	// Define the property with attributes (on plain objects only for now)
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
-		// Enforce non-configurable rules when updating existing property
+		// Check if property already exists and get existing attributes
 		var exists bool
 		var w0, e0, c0 bool
 		var isAccessor0 bool
@@ -1828,6 +1812,39 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 				_, w0, e0, c0, exists = plainObj.GetOwnDescriptor(propName)
 			}
 		}
+
+		// Per ECMAScript spec:
+		// - When creating a new property, missing attributes default to false
+		// - When updating an existing property, missing attributes are preserved
+		if exists {
+			// Preserve existing attributes for missing descriptor fields
+			if !(hasGetter || hasSetter) && writablePtr == nil {
+				writablePtr = &w0
+			}
+			if enumerablePtr == nil {
+				enumerablePtr = &e0
+			}
+			if configurablePtr == nil {
+				configurablePtr = &c0
+			}
+		} else {
+			// New property: default missing attributes to false
+			if !(hasGetter || hasSetter) {
+				if writablePtr == nil {
+					b := false
+					writablePtr = &b
+				}
+			}
+			if enumerablePtr == nil {
+				b := false
+				enumerablePtr = &b
+			}
+			if configurablePtr == nil {
+				b := false
+				configurablePtr = &b
+			}
+		}
+
 		if exists && !c0 {
 			// Non-configurable: cannot change configurable or enumerable
 			if configurablePtr != nil && *configurablePtr != c0 {
