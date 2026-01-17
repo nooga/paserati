@@ -5394,12 +5394,12 @@ func (p *Parser) parseForStatement() Statement {
 		return p.parseForStatementOrForOf(forToken, isAsync)
 	}
 
-	// For destructuring patterns, check if followed by OF/IN
-	if p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) {
-		// Advance to the pattern
-		p.nextToken() // Now at [ or {
-		// Destructuring patterns in for loops are always for-of/for-in (assignment patterns)
-		// Parse as expression to handle cases like: for ([x] of items) or for ({a} in obj)
+	// For destructuring patterns or parenthesized expressions, check if followed by OF/IN
+	if p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) || p.peekTokenIs(lexer.LPAREN) {
+		// Advance to the pattern or paren
+		p.nextToken() // Now at [, {, or (
+		// Destructuring patterns and parenthesized expressions in for loops could be for-of/for-in
+		// Parse as expression to handle cases like: for ([x] of items) or for ((x) in obj)
 		return p.parseForStatementOrForOf(forToken, isAsync)
 	}
 
@@ -8081,8 +8081,9 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) St
 		// Could be bare identifier or member expression
 		// Check if followed by . or [ to determine if it's a member expression
 		if p.peekTokenIs(lexer.DOT) || p.peekTokenIs(lexer.LBRACKET) {
-			// Member expression: parse it fully
-			expr := p.parseExpression(LOWEST)
+			// Member expression: parse it fully, but stop before 'in'/'of' operators
+			// Use LESSGREATER precedence so we don't consume 'in' as an infix operator
+			expr := p.parseExpression(LESSGREATER)
 			exprStmt := &ExpressionStatement{Token: p.curToken, Expression: expr}
 			varStmt = exprStmt
 			varName = "" // Member expression doesn't have a simple name
@@ -8096,19 +8097,26 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) St
 	} else if p.curTokenIs(lexer.LBRACKET) {
 		// Could be array destructuring: for ([x] of items)
 		// Or array literal with suffix: for ([let][0]; ; )
-		// Parse as full expression to handle both cases
-		expr := p.parseExpression(LOWEST)
+		// Parse as full expression, but stop before 'in'/'of' operators
+		expr := p.parseExpression(LESSGREATER)
 		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: expr}
 		varStmt = exprStmt
 		varName = "" // Destructuring doesn't have a single name
 	} else if p.curTokenIs(lexer.LBRACE) {
 		// Could be object destructuring: for ({a} of items)
 		// Or object literal with suffix: for ({}.x; ; )
-		// Parse as full expression to handle both cases
-		expr := p.parseExpression(LOWEST)
+		// Parse as full expression, but stop before 'in'/'of' operators
+		expr := p.parseExpression(LESSGREATER)
 		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: expr}
 		varStmt = exprStmt
 		varName = "" // Destructuring doesn't have a single name
+	} else if p.curTokenIs(lexer.LPAREN) {
+		// Parenthesized expression: for ((x) in obj) or for ((x) of items)
+		// Parse as full expression, but stop before 'in'/'of' operators
+		expr := p.parseExpression(LESSGREATER)
+		exprStmt := &ExpressionStatement{Token: p.curToken, Expression: expr}
+		varStmt = exprStmt
+		varName = "" // Parenthesized expression doesn't have a simple name
 	} else {
 		return nil
 	}
