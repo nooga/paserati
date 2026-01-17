@@ -2489,6 +2489,34 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	w, e, c := true, false, true // writable, not enumerable, configurable
 	arrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterFn, &w, &e, &c)
 
+	// Array.prototype.values() - returns iterator yielding values (same as [Symbol.iterator])
+	valuesFn := vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeArray {
+			return createArrayIterator(vmInstance, thisVal.AsArray()), nil
+		}
+		// Handle array-like objects
+		if thisVal.IsObject() {
+			return createArrayLikeIterator(vmInstance, thisVal), nil
+		}
+		return vm.Undefined, nil
+	})
+	arrayProto.SetOwnNonEnumerable("values", valuesFn)
+
+	// Array.prototype.keys() - returns iterator yielding indices
+	keysFn := vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		return createArrayKeysIterator(vmInstance, thisVal), nil
+	})
+	arrayProto.SetOwnNonEnumerable("keys", keysFn)
+
+	// Array.prototype.entries() - returns iterator yielding [index, value] pairs
+	entriesFn := vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		return createArrayEntriesIterator(vmInstance, thisVal), nil
+	})
+	arrayProto.SetOwnNonEnumerable("entries", entriesFn)
+
 	// Add Symbol.asyncIterator implementation for arrays (for await...of support)
 	// This wraps the sync iterator in an async iterator (returns promises)
 	asyncIterFn := vm.NewNativeFunction(0, false, "[Symbol.asyncIterator]", func(args []vm.Value) (vm.Value, error) {
@@ -2524,6 +2552,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
 	// Create iterator object inheriting from Object.prototype
 	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
 	// Iterator state: current index
 	currentIndex := 0
@@ -2548,13 +2577,21 @@ func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
 		return vm.NewValueFromPlainObject(result), nil
 	}))
 
-	return vm.NewValueFromPlainObject(iterator)
+	// Add [Symbol.iterator] that returns the iterator itself (required for for-of)
+	iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
+		return iteratorVal, nil
+	})
+	w, e, c := true, false, true
+	iterator.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterSelfFn, &w, &e, &c)
+
+	return iteratorVal
 }
 
 // createArgumentsIterator creates an iterator object for Arguments objects
 func createArgumentsIterator(vmInstance *vm.VM, args *vm.ArgumentsObject) vm.Value {
 	// Create iterator object inheriting from Object.prototype
 	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
 	// Iterator state: current index
 	currentIndex := 0
@@ -2579,13 +2616,21 @@ func createArgumentsIterator(vmInstance *vm.VM, args *vm.ArgumentsObject) vm.Val
 		return vm.NewValueFromPlainObject(result), nil
 	}))
 
-	return vm.NewValueFromPlainObject(iterator)
+	// Add [Symbol.iterator] that returns the iterator itself
+	iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(fnArgs []vm.Value) (vm.Value, error) {
+		return iteratorVal, nil
+	})
+	w, e, c := true, false, true
+	iterator.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterSelfFn, &w, &e, &c)
+
+	return iteratorVal
 }
 
 // createArrayLikeIterator creates an iterator for generic array-like objects (with length and indices)
 func createArrayLikeIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 	// Create iterator object inheriting from Object.prototype
 	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
 	// Iterator state: current index
 	currentIndex := 0
@@ -2624,7 +2669,114 @@ func createArrayLikeIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 		return vm.NewValueFromPlainObject(result), nil
 	}))
 
-	return vm.NewValueFromPlainObject(iterator)
+	// Add [Symbol.iterator] that returns the iterator itself
+	iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(fnArgs []vm.Value) (vm.Value, error) {
+		return iteratorVal, nil
+	})
+	w, e, c := true, false, true
+	iterator.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterSelfFn, &w, &e, &c)
+
+	return iteratorVal
+}
+
+// createArrayKeysIterator creates an iterator that yields array indices
+func createArrayKeysIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
+	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	iteratorVal := vm.NewValueFromPlainObject(iterator)
+	currentIndex := 0
+
+	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+		// Get length from the array or array-like object
+		var length int
+		if arrayLike.Type() == vm.TypeArray {
+			length = arrayLike.AsArray().Length()
+		} else if obj := arrayLike.AsPlainObject(); obj != nil {
+			if lenVal, ok := obj.GetOwn("length"); ok && lenVal.IsNumber() {
+				length = int(lenVal.ToFloat())
+			}
+		}
+
+		if currentIndex >= length {
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
+		} else {
+			result.SetOwnNonEnumerable("value", vm.Number(float64(currentIndex)))
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+			currentIndex++
+		}
+
+		return vm.NewValueFromPlainObject(result), nil
+	}))
+
+	// Add [Symbol.iterator] that returns the iterator itself
+	iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(fnArgs []vm.Value) (vm.Value, error) {
+		return iteratorVal, nil
+	})
+	w, e, c := true, false, true
+	iterator.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterSelfFn, &w, &e, &c)
+
+	return iteratorVal
+}
+
+// createArrayEntriesIterator creates an iterator that yields [index, value] pairs
+func createArrayEntriesIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
+	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	iteratorVal := vm.NewValueFromPlainObject(iterator)
+	currentIndex := 0
+
+	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+		// Get length and value from the array or array-like object
+		var length int
+		var getValue func(int) vm.Value
+
+		if arrayLike.Type() == vm.TypeArray {
+			arr := arrayLike.AsArray()
+			length = arr.Length()
+			getValue = func(i int) vm.Value { return arr.Get(i) }
+		} else if obj := arrayLike.AsPlainObject(); obj != nil {
+			if lenVal, ok := obj.GetOwn("length"); ok && lenVal.IsNumber() {
+				length = int(lenVal.ToFloat())
+			}
+			getValue = func(i int) vm.Value {
+				if v, ok := obj.GetOwn(fmt.Sprintf("%d", i)); ok {
+					return v
+				}
+				return vm.Undefined
+			}
+		} else {
+			length = 0
+			getValue = func(i int) vm.Value { return vm.Undefined }
+		}
+
+		if currentIndex >= length {
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
+		} else {
+			// Create [index, value] pair array
+			pair := vm.NewArray()
+			pairArr := pair.AsArray()
+			pairArr.Append(vm.Number(float64(currentIndex)))
+			pairArr.Append(getValue(currentIndex))
+			result.SetOwnNonEnumerable("value", pair)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+			currentIndex++
+		}
+
+		return vm.NewValueFromPlainObject(result), nil
+	}))
+
+	// Add [Symbol.iterator] that returns the iterator itself
+	iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(fnArgs []vm.Value) (vm.Value, error) {
+		return iteratorVal, nil
+	})
+	w, e, c := true, false, true
+	iterator.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterSelfFn, &w, &e, &c)
+
+	return iteratorVal
 }
 
 // createAsyncArrayIterator creates an async iterator object for array iteration
