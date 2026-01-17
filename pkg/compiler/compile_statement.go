@@ -1752,22 +1752,29 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 	} else if hasLexicalDecl {
 		// Define TDZ bindings for let/const variables BEFORE compiling object expression
 		// This ensures closures captured in the object expression see the TDZ state
+		// We must also emit OpLoadUninitialized to mark the register as TDZ
 		switch v := node.Variable.(type) {
 		case *parser.LetStatement:
-			c.currentSymbolTable.DefineTDZ(v.Name.Value, c.regAlloc.Alloc())
+			reg := c.regAlloc.Alloc()
+			c.currentSymbolTable.DefineTDZ(v.Name.Value, reg)
+			c.emitLoadUninitialized(reg, node.Token.Line)
 		case *parser.ConstStatement:
-			c.currentSymbolTable.DefineConstTDZ(v.Name.Value, c.regAlloc.Alloc())
+			reg := c.regAlloc.Alloc()
+			c.currentSymbolTable.DefineConstTDZ(v.Name.Value, reg)
+			c.emitLoadUninitialized(reg, node.Token.Line)
 		case *parser.ArrayDestructuringDeclaration:
 			for _, elem := range v.Elements {
 				if elem.Target == nil {
 					continue
 				}
 				if ident, ok := elem.Target.(*parser.Identifier); ok {
+					reg := c.regAlloc.Alloc()
 					if v.IsConst {
-						c.currentSymbolTable.DefineConstTDZ(ident.Value, c.regAlloc.Alloc())
+						c.currentSymbolTable.DefineConstTDZ(ident.Value, reg)
 					} else {
-						c.currentSymbolTable.DefineTDZ(ident.Value, c.regAlloc.Alloc())
+						c.currentSymbolTable.DefineTDZ(ident.Value, reg)
 					}
+					c.emitLoadUninitialized(reg, node.Token.Line)
 				}
 			}
 		case *parser.ObjectDestructuringDeclaration:
@@ -1776,11 +1783,13 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 					continue
 				}
 				if ident, ok := prop.Target.(*parser.Identifier); ok {
+					reg := c.regAlloc.Alloc()
 					if v.IsConst {
-						c.currentSymbolTable.DefineConstTDZ(ident.Value, c.regAlloc.Alloc())
+						c.currentSymbolTable.DefineConstTDZ(ident.Value, reg)
 					} else {
-						c.currentSymbolTable.DefineTDZ(ident.Value, c.regAlloc.Alloc())
+						c.currentSymbolTable.DefineTDZ(ident.Value, reg)
 					}
+					c.emitLoadUninitialized(reg, node.Token.Line)
 				}
 			}
 		}
@@ -1853,25 +1862,19 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 
 	// 6. Assign current key to loop variable
 	// Track per-iteration binding registers for let/const loop variables
+	// IMPORTANT: We create a NEW binding here to shadow the TDZ binding, matching for-of behavior
+	// This ensures closures captured during object expression evaluation still see the TDZ binding
 	var perIterationRegs []Register
 	if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
-		// Resolve the TDZ binding defined earlier and initialize it
-		symbol, _, found := c.currentSymbolTable.Resolve(letStmt.Name.Value)
-		if !found {
-			return BadRegister, NewCompileError(letStmt, "internal error: let binding not found")
-		}
-		c.currentSymbolTable.InitializeTDZ(letStmt.Name.Value)
+		// Create a NEW binding (shadows the TDZ binding) - matches for-of behavior
+		symbol := c.currentSymbolTable.Define(letStmt.Name.Value, c.regAlloc.Alloc())
 		c.regAlloc.Pin(symbol.Register) // Pin so closures can capture
 		perIterationRegs = append(perIterationRegs, symbol.Register)
 		// Store key value in the variable's register
 		c.emitMove(symbol.Register, currentKeyReg, node.Token.Line)
 	} else if constStmt, ok := node.Variable.(*parser.ConstStatement); ok {
-		// Resolve the TDZ binding defined earlier and initialize it
-		symbol, _, found := c.currentSymbolTable.Resolve(constStmt.Name.Value)
-		if !found {
-			return BadRegister, NewCompileError(constStmt, "internal error: const binding not found")
-		}
-		c.currentSymbolTable.InitializeTDZ(constStmt.Name.Value)
+		// Create a NEW const binding (shadows the TDZ binding) - matches for-of behavior
+		symbol := c.currentSymbolTable.DefineConst(constStmt.Name.Value, c.regAlloc.Alloc())
 		c.regAlloc.Pin(symbol.Register) // Pin so closures can capture
 		perIterationRegs = append(perIterationRegs, symbol.Register)
 		// Store key value in the variable's register
@@ -1899,13 +1902,13 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 			if ident, ok := element.Target.(*parser.Identifier); ok {
 				var symbol Symbol
 				if isLexicalBinding {
-					// Resolve the TDZ binding defined earlier
-					var found bool
-					symbol, _, found = c.currentSymbolTable.Resolve(ident.Value)
-					if !found {
-						return BadRegister, NewCompileError(ident, "internal error: destructuring binding not found")
+					// Create a NEW binding (shadows the TDZ binding) - matches for-of behavior
+					// This ensures closures captured during object expression evaluation still see the TDZ binding
+					if arrayDestr.IsConst {
+						symbol = c.currentSymbolTable.DefineConst(ident.Value, c.regAlloc.Alloc())
+					} else {
+						symbol = c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
 					}
-					c.currentSymbolTable.InitializeTDZ(ident.Value)
 					c.regAlloc.Pin(symbol.Register)
 					perIterationRegs = append(perIterationRegs, symbol.Register)
 				} else {
@@ -1956,13 +1959,13 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 			if ident, ok := prop.Target.(*parser.Identifier); ok {
 				var symbol Symbol
 				if isLexicalBinding {
-					// Resolve the TDZ binding defined earlier
-					var found bool
-					symbol, _, found = c.currentSymbolTable.Resolve(ident.Value)
-					if !found {
-						return BadRegister, NewCompileError(ident, "internal error: destructuring binding not found")
+					// Create a NEW binding (shadows the TDZ binding) - matches for-of behavior
+					// This ensures closures captured during object expression evaluation still see the TDZ binding
+					if objDestr.IsConst {
+						symbol = c.currentSymbolTable.DefineConst(ident.Value, c.regAlloc.Alloc())
+					} else {
+						symbol = c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
 					}
-					c.currentSymbolTable.InitializeTDZ(ident.Value)
 					c.regAlloc.Pin(symbol.Register)
 					perIterationRegs = append(perIterationRegs, symbol.Register)
 				} else {

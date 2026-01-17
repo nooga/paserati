@@ -32,6 +32,50 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	if hasLexicalDecl {
 		prevSymbolTable = c.currentSymbolTable
 		c.currentSymbolTable = NewEnclosedSymbolTable(c.currentSymbolTable)
+
+		// Define TDZ bindings for let/const variables BEFORE compiling iterable expression
+		// This ensures closures captured in the iterable expression see the TDZ state
+		// We must also emit OpLoadUninitialized to mark the register as TDZ
+		switch v := node.Variable.(type) {
+		case *parser.LetStatement:
+			reg := c.regAlloc.Alloc()
+			c.currentSymbolTable.DefineTDZ(v.Name.Value, reg)
+			c.emitLoadUninitialized(reg, node.Token.Line)
+		case *parser.ConstStatement:
+			reg := c.regAlloc.Alloc()
+			c.currentSymbolTable.DefineConstTDZ(v.Name.Value, reg)
+			c.emitLoadUninitialized(reg, node.Token.Line)
+		case *parser.ArrayDestructuringDeclaration:
+			for _, elem := range v.Elements {
+				if elem.Target == nil {
+					continue
+				}
+				if ident, ok := elem.Target.(*parser.Identifier); ok {
+					reg := c.regAlloc.Alloc()
+					if v.IsConst {
+						c.currentSymbolTable.DefineConstTDZ(ident.Value, reg)
+					} else {
+						c.currentSymbolTable.DefineTDZ(ident.Value, reg)
+					}
+					c.emitLoadUninitialized(reg, node.Token.Line)
+				}
+			}
+		case *parser.ObjectDestructuringDeclaration:
+			for _, prop := range v.Properties {
+				if prop.Target == nil {
+					continue
+				}
+				if ident, ok := prop.Target.(*parser.Identifier); ok {
+					reg := c.regAlloc.Alloc()
+					if v.IsConst {
+						c.currentSymbolTable.DefineConstTDZ(ident.Value, reg)
+					} else {
+						c.currentSymbolTable.DefineTDZ(ident.Value, reg)
+					}
+					c.emitLoadUninitialized(reg, node.Token.Line)
+				}
+			}
+		}
 	}
 	// Ensure we restore the scope when done
 	defer func() {
