@@ -1288,6 +1288,19 @@ func (c *Compiler) compileNestedObjectDestructuring(objectLit *parser.ObjectLite
 
 	// Convert object properties to destructuring properties
 	for _, pair := range objectLit.Properties {
+		// Check for spread element first - this is a rest property like {...rest}
+		if spread, ok := pair.Key.(*parser.SpreadElement); ok {
+			// SpreadElement's Argument is the target identifier (e.g., 'rest' in '...rest')
+			if ident, ok := spread.Argument.(*parser.Identifier); ok {
+				destructureAssign.RestProperty = &parser.DestructuringElement{
+					Target: ident,
+					IsRest: true,
+				}
+			}
+			// Rest must be last, so we can continue and it will be processed at the end
+			continue
+		}
+
 		// Extract the key - can be identifier, string literal, number literal, or computed
 		var keyExpr parser.Expression
 		var keyName string
@@ -1529,7 +1542,13 @@ func (c *Compiler) compileObjectDestructuringWithValueReg(node *parser.ObjectDes
 		c.regAlloc.Free(extractedReg)
 	}
 
-	// TODO: Handle rest property if present (for future enhancement)
+	// Handle rest property if present
+	if node.RestProperty != nil {
+		err := c.compileObjectRestProperty(valueReg, node.Properties, node.RestProperty, line)
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }

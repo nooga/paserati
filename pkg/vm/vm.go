@@ -4141,18 +4141,62 @@ startExecution:
 				}
 
 			case TypeArguments:
-				if !IsNumber(indexVal) {
-					frame.ip = ip
-					status := vm.runtimeError("Arguments index must be a number, got '%v'", indexVal.Type())
-					return status, Undefined
-				}
 				args := AsArguments(baseVal)
-				idx := int(AsNumber(indexVal))
-				if idx < 0 || idx >= args.Length() {
-					registers[destReg] = Undefined // Out of bounds -> undefined
-				} else {
-					resultVal := args.Get(idx)
-					registers[destReg] = resultVal
+				switch indexVal.Type() {
+				case TypeFloatNumber, TypeIntegerNumber:
+					idx := int(AsNumber(indexVal))
+					if idx < 0 || idx >= args.Length() {
+						registers[destReg] = Undefined // Out of bounds -> undefined
+					} else {
+						resultVal := args.Get(idx)
+						registers[destReg] = resultVal
+					}
+				case TypeString:
+					key := AsString(indexVal)
+					switch key {
+					case "length":
+						registers[destReg] = Number(float64(args.Length()))
+					case "callee":
+						if args.IsStrict() {
+							frame.ip = ip
+							status := vm.runtimeError("'callee' is not accessible in strict mode")
+							return status, Undefined
+						}
+						registers[destReg] = args.Callee()
+					default:
+						// Try parsing as array index
+						if idx, ok := tryParseArrayIndex(key); ok && idx < args.Length() {
+							registers[destReg] = args.Get(idx)
+						} else {
+							// Delegate to Array.prototype for other string properties
+							if vm.ArrayPrototype.Type() == TypeObject {
+								proto := vm.ArrayPrototype.AsPlainObject()
+								if prop, found := proto.GetOwn(key); found {
+									registers[destReg] = prop
+								} else {
+									registers[destReg] = Undefined
+								}
+							} else {
+								registers[destReg] = Undefined
+							}
+						}
+					}
+				case TypeSymbol:
+					// Delegate symbol property access to Array.prototype (for Symbol.iterator etc.)
+					if vm.ArrayPrototype.Type() == TypeObject {
+						proto := vm.ArrayPrototype.AsPlainObject()
+						if prop, found := proto.GetOwnByKey(NewSymbolKey(indexVal)); found {
+							registers[destReg] = prop
+						} else {
+							registers[destReg] = Undefined
+						}
+					} else {
+						registers[destReg] = Undefined
+					}
+				default:
+					frame.ip = ip
+					status := vm.runtimeError("Arguments index must be a number, string, or symbol, got '%v'", indexVal.Type())
+					return status, Undefined
 				}
 
 			case TypeObject, TypeDictObject, TypeRegExp: // <<< NEW - added TypeRegExp
@@ -4526,6 +4570,184 @@ startExecution:
 							registers[destReg] = Undefined
 						}
 					default:
+						registers[destReg] = Undefined
+					}
+				}
+
+			// Handle primitive types (boolean, number) - box and lookup on prototype
+			case TypeBoolean:
+				// Box boolean and lookup property on Boolean.prototype -> Object.prototype chain
+				switch indexVal.Type() {
+				case TypeSymbol:
+					// Look up symbol on Boolean.prototype (usually not found, returns undefined)
+					if vm.BooleanPrototype.Type() == TypeObject {
+						proto := vm.BooleanPrototype.AsPlainObject()
+						if prop, found := proto.GetOwnByKey(NewSymbolKey(indexVal)); found {
+							registers[destReg] = prop
+						} else {
+							// Try Object.prototype
+							if vm.ObjectPrototype.Type() == TypeObject {
+								objProto := vm.ObjectPrototype.AsPlainObject()
+								if prop, found := objProto.GetOwnByKey(NewSymbolKey(indexVal)); found {
+									registers[destReg] = prop
+								} else {
+									registers[destReg] = Undefined
+								}
+							} else {
+								registers[destReg] = Undefined
+							}
+						}
+					} else {
+						registers[destReg] = Undefined
+					}
+				case TypeString:
+					key := AsString(indexVal)
+					if vm.BooleanPrototype.Type() == TypeObject {
+						proto := vm.BooleanPrototype.AsPlainObject()
+						if prop, found := proto.GetOwn(key); found {
+							registers[destReg] = prop
+						} else if vm.ObjectPrototype.Type() == TypeObject {
+							objProto := vm.ObjectPrototype.AsPlainObject()
+							if prop, found := objProto.GetOwn(key); found {
+								registers[destReg] = prop
+							} else {
+								registers[destReg] = Undefined
+							}
+						} else {
+							registers[destReg] = Undefined
+						}
+					} else {
+						registers[destReg] = Undefined
+					}
+				default:
+					// Convert index to string and lookup
+					key := indexVal.ToString()
+					if vm.BooleanPrototype.Type() == TypeObject {
+						proto := vm.BooleanPrototype.AsPlainObject()
+						if prop, found := proto.GetOwn(key); found {
+							registers[destReg] = prop
+						} else {
+							registers[destReg] = Undefined
+						}
+					} else {
+						registers[destReg] = Undefined
+					}
+				}
+
+			case TypeIntegerNumber, TypeFloatNumber:
+				// Box number and lookup property on Number.prototype -> Object.prototype chain
+				switch indexVal.Type() {
+				case TypeSymbol:
+					// Look up symbol on Number.prototype (usually not found, returns undefined)
+					if vm.NumberPrototype.Type() == TypeObject {
+						proto := vm.NumberPrototype.AsPlainObject()
+						if prop, found := proto.GetOwnByKey(NewSymbolKey(indexVal)); found {
+							registers[destReg] = prop
+						} else {
+							// Try Object.prototype
+							if vm.ObjectPrototype.Type() == TypeObject {
+								objProto := vm.ObjectPrototype.AsPlainObject()
+								if prop, found := objProto.GetOwnByKey(NewSymbolKey(indexVal)); found {
+									registers[destReg] = prop
+								} else {
+									registers[destReg] = Undefined
+								}
+							} else {
+								registers[destReg] = Undefined
+							}
+						}
+					} else {
+						registers[destReg] = Undefined
+					}
+				case TypeString:
+					key := AsString(indexVal)
+					if vm.NumberPrototype.Type() == TypeObject {
+						proto := vm.NumberPrototype.AsPlainObject()
+						if prop, found := proto.GetOwn(key); found {
+							registers[destReg] = prop
+						} else if vm.ObjectPrototype.Type() == TypeObject {
+							objProto := vm.ObjectPrototype.AsPlainObject()
+							if prop, found := objProto.GetOwn(key); found {
+								registers[destReg] = prop
+							} else {
+								registers[destReg] = Undefined
+							}
+						} else {
+							registers[destReg] = Undefined
+						}
+					} else {
+						registers[destReg] = Undefined
+					}
+				default:
+					// Convert index to string and lookup
+					key := indexVal.ToString()
+					if vm.NumberPrototype.Type() == TypeObject {
+						proto := vm.NumberPrototype.AsPlainObject()
+						if prop, found := proto.GetOwn(key); found {
+							registers[destReg] = prop
+						} else {
+							registers[destReg] = Undefined
+						}
+					} else {
+						registers[destReg] = Undefined
+					}
+				}
+
+			case TypeSymbol:
+				// Box symbol and lookup property on Symbol.prototype -> Object.prototype chain
+				switch indexVal.Type() {
+				case TypeSymbol:
+					// Look up symbol on Symbol.prototype (usually not found, returns undefined)
+					if vm.SymbolPrototype.Type() == TypeObject {
+						proto := vm.SymbolPrototype.AsPlainObject()
+						if prop, found := proto.GetOwnByKey(NewSymbolKey(indexVal)); found {
+							registers[destReg] = prop
+						} else {
+							// Try Object.prototype
+							if vm.ObjectPrototype.Type() == TypeObject {
+								objProto := vm.ObjectPrototype.AsPlainObject()
+								if prop, found := objProto.GetOwnByKey(NewSymbolKey(indexVal)); found {
+									registers[destReg] = prop
+								} else {
+									registers[destReg] = Undefined
+								}
+							} else {
+								registers[destReg] = Undefined
+							}
+						}
+					} else {
+						registers[destReg] = Undefined
+					}
+				case TypeString:
+					key := AsString(indexVal)
+					if vm.SymbolPrototype.Type() == TypeObject {
+						proto := vm.SymbolPrototype.AsPlainObject()
+						if prop, found := proto.GetOwn(key); found {
+							registers[destReg] = prop
+						} else if vm.ObjectPrototype.Type() == TypeObject {
+							objProto := vm.ObjectPrototype.AsPlainObject()
+							if prop, found := objProto.GetOwn(key); found {
+								registers[destReg] = prop
+							} else {
+								registers[destReg] = Undefined
+							}
+						} else {
+							registers[destReg] = Undefined
+						}
+					} else {
+						registers[destReg] = Undefined
+					}
+				default:
+					// Convert index to string and lookup
+					key := indexVal.ToString()
+					if vm.SymbolPrototype.Type() == TypeObject {
+						proto := vm.SymbolPrototype.AsPlainObject()
+						if prop, found := proto.GetOwn(key); found {
+							registers[destReg] = prop
+						} else {
+							registers[destReg] = Undefined
+						}
+					} else {
 						registers[destReg] = Undefined
 					}
 				}

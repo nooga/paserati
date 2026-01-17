@@ -2456,17 +2456,34 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return promise, nil
 	}))
 
-	// Add Symbol.iterator implementation for arrays
+	// Add Symbol.iterator implementation for arrays and array-like objects (Arguments)
 	// Use the global SymbolIterator (Symbol initializes before Array now)
 	// Register [Symbol.iterator] using native symbol key
 	iterFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil {
-			return vm.Undefined, nil
+		thisVal := vmInstance.GetThis()
+
+		// First check for array type (AsArray() panics on wrong type, so check type first)
+		if thisVal.Type() == vm.TypeArray {
+			return createArrayIterator(vmInstance, thisVal.AsArray()), nil
 		}
 
-		// Create an array iterator object
-		return createArrayIterator(vmInstance, thisArray), nil
+		// Handle Arguments objects (array-like)
+		if thisVal.Type() == vm.TypeArguments {
+			argsObj := thisVal.AsArguments()
+			return createArgumentsIterator(vmInstance, argsObj), nil
+		}
+
+		// Handle generic array-like objects with length property
+		if thisVal.IsObject() {
+			obj := thisVal.AsPlainObject()
+			if obj != nil {
+				if lenVal, ok := obj.GetOwn("length"); ok && lenVal.IsNumber() {
+					return createArrayLikeIterator(vmInstance, thisVal), nil
+				}
+			}
+		}
+
+		return vm.Undefined, nil
 	})
 	// Native symbol key - make it writable and configurable like standard JavaScript
 	w, e, c := true, false, true // writable, not enumerable, configurable
@@ -2523,6 +2540,82 @@ func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
 		} else {
 			// Return current element and advance
 			val := array.Get(currentIndex)
+			result.SetOwnNonEnumerable("value", val)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+			currentIndex++
+		}
+
+		return vm.NewValueFromPlainObject(result), nil
+	}))
+
+	return vm.NewValueFromPlainObject(iterator)
+}
+
+// createArgumentsIterator creates an iterator object for Arguments objects
+func createArgumentsIterator(vmInstance *vm.VM, args *vm.ArgumentsObject) vm.Value {
+	// Create iterator object inheriting from Object.prototype
+	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+	// Iterator state: current index
+	currentIndex := 0
+
+	// Add next() method to iterator
+	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(innerArgs []vm.Value) (vm.Value, error) {
+		// Create iterator result object {value, done}
+		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+		if currentIndex >= args.Length() {
+			// Iterator is exhausted
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
+		} else {
+			// Return current element and advance
+			val := args.Get(currentIndex)
+			result.SetOwnNonEnumerable("value", val)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+			currentIndex++
+		}
+
+		return vm.NewValueFromPlainObject(result), nil
+	}))
+
+	return vm.NewValueFromPlainObject(iterator)
+}
+
+// createArrayLikeIterator creates an iterator for generic array-like objects (with length and indices)
+func createArrayLikeIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
+	// Create iterator object inheriting from Object.prototype
+	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+	// Iterator state: current index
+	currentIndex := 0
+
+	// Add next() method to iterator
+	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(innerArgs []vm.Value) (vm.Value, error) {
+		// Create iterator result object {value, done}
+		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+		// Get length from the array-like object
+		var length int
+		if obj := arrayLike.AsPlainObject(); obj != nil {
+			if lenVal, ok := obj.GetOwn("length"); ok && lenVal.IsNumber() {
+				length = int(lenVal.ToFloat())
+			}
+		}
+
+		if currentIndex >= length {
+			// Iterator is exhausted
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
+		} else {
+			// Get value at current index
+			var val vm.Value = vm.Undefined
+			if obj := arrayLike.AsPlainObject(); obj != nil {
+				indexStr := fmt.Sprintf("%d", currentIndex)
+				if v, ok := obj.GetOwn(indexStr); ok {
+					val = v
+				}
+			}
 			result.SetOwnNonEnumerable("value", val)
 			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
 			currentIndex++
