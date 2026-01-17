@@ -656,6 +656,15 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	c.regAlloc = NewRegisterAllocator()
 	c.currentSymbolTable = NewSymbolTable()
 
+	// Reset per-compilation state to avoid leaking state between eval calls
+	c.loopContextStack = nil
+	c.finallyContextStack = nil
+	c.errors = nil
+	c.inFinallyBlock = false
+	c.tryFinallyDepth = 0
+	c.tryDepth = 0
+	c.constantCache = nil
+
 	// --- Determine strict mode ---
 	// TypeScript mode (type checking enabled): default to strict mode
 	// JavaScript mode (type checking disabled): respect "use strict" directive or inherited strict mode

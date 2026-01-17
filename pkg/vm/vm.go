@@ -659,6 +659,15 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	frame.ip = 0
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+scriptRegSize]
 	frame.allocatedRegSize = scriptRegSize // Track actual allocation for proper cleanup
+
+	// For nested Interpret calls (eval), initialize registers to Undefined to avoid
+	// stale values from previous executions affecting the result
+	if vm.frameCount > 0 {
+		for i := range frame.registers {
+			frame.registers[i] = Undefined
+		}
+	}
+
 	frame.targetRegister = 0               // Result of script isn't stored in caller's reg
 	// Check if we have a caller's 'this' value from direct eval
 	if vm.hasEvalCallerThis {
