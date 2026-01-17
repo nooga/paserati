@@ -200,6 +200,10 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 
 	// 13. Assign value to loop variable
 	// Track per-iteration binding registers for let/const loop variables (not var - var is function-scoped)
+	// Mark the start of the "try" region for exception-triggered iterator cleanup
+	// This covers both variable assignment (which may throw for destructuring) and the loop body
+	iteratorCleanupTryStart := len(c.chunk.Code)
+
 	var perIterationRegs []Register
 	if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
 		symbol := c.currentSymbolTable.Define(letStmt.Name.Value, c.regAlloc.Alloc())
@@ -362,6 +366,9 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		c.emitMove(hint, bodyResultReg, node.Token.Line)
 	}
 
+	// Mark the end of the "try" region for exception-triggered iterator cleanup
+	iteratorCleanupTryEnd := len(c.chunk.Code)
+
 	// 15. Patch continue jumps to land here (before next iteration)
 	for _, continuePos := range loopContext.ContinuePlaceholderPosList {
 		c.patchJump(continuePos)
@@ -383,10 +390,33 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	// 17. Patch exit jump - this is where loop exits normally when done=true
 	c.patchJump(exitJump)
 
-	// 18. Call iterator.return() after normal loop completion
-	// Note: We don't call it here because when done=true, the iterator is exhausted
-	// and per spec, we only call return() on abrupt completion (break, throw, etc)
-	// which is handled by IteratorCleanup in the loop context
+	// 18. Add exception handler for iterator cleanup when exception propagates out
+	// Per ECMAScript spec, when an exception propagates out of a for-of loop,
+	// iterator.return() must be called with error suppression.
+	// Jump over the handler code in normal flow
+	skipHandlerJump := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+
+	// Exception handler code: call iterator.return() with error suppression, then re-throw
+	iteratorCleanupHandlerPC := len(c.chunk.Code)
+	c.emitIteratorCleanupAbrupt(iteratorObjReg, node.Token.Line)
+	c.emitHandlePendingAction(node.Token.Line)
+
+	// Patch the skip jump to land after the handler
+	c.patchJump(skipHandlerJump)
+
+	// Add the exception handler to the exception table
+	// This is an iterator cleanup handler - only triggered by exceptions, not returns
+	iteratorCleanupHandler := vm.ExceptionHandler{
+		TryStart:          iteratorCleanupTryStart,
+		TryEnd:            iteratorCleanupTryEnd,
+		HandlerPC:         iteratorCleanupHandlerPC,
+		CatchReg:          -1,
+		IsCatch:           false,
+		IsFinally:         false,             // NOT a regular finally - shouldn't intercept returns
+		IsIteratorCleanup: true,              // Special handler for iterator cleanup on exception
+		FinallyReg:        -1,
+	}
+	c.chunk.ExceptionTable = append(c.chunk.ExceptionTable, iteratorCleanupHandler)
 
 	// 19. Clean up loop context and patch break jumps
 	poppedContext := c.loopContextStack[len(c.loopContextStack)-1]

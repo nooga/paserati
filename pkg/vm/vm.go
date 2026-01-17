@@ -1011,6 +1011,30 @@ startExecution:
 			}
 			vm.openUpvalues = newOpenUpvalues
 
+		case OpIteratorCleanupAbrupt:
+			// Call iterator.return() with error suppression for exception cleanup.
+			// Per ECMAScript spec IteratorClose with throw completion:
+			// - Try to get iterator.return method
+			// - If it exists and is callable, call it
+			// - Suppress any errors from getting or calling return
+			// - The original exception (stored as pendingValue) will be re-thrown after this
+			iteratorReg := code[ip]
+			ip++
+			iterator := registers[iteratorReg]
+			if iterator.IsObject() {
+				// Try to get the "return" method using GetProperty (prototype chain lookup)
+				// This is necessary because generator's return method is on GeneratorPrototype
+				returnMethod, _ := vm.GetProperty(iterator, "return")
+				// If return method exists and is callable, call it
+				if returnMethod.IsCallable() {
+					// Call iterator.return() - suppress any errors
+					// Use Call() to handle both native functions (like generator.return)
+					// and user-defined functions
+					_, _ = vm.Call(returnMethod, iterator, nil)
+					// Errors are suppressed per ECMAScript spec - we don't care about the result
+				}
+			}
+
 		case OpMove:
 			regDest := code[ip]
 			regSrc := code[ip+1]

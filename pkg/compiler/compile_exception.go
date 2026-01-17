@@ -472,13 +472,12 @@ func (c *Compiler) compileThrowStatement(node *parser.ThrowStatement, hint Regis
 		return BadRegister, err
 	}
 
-	// Clean up any active iterators before throwing from within a loop
-	for i := len(c.loopContextStack) - 1; i >= 0; i-- {
-		ctx := c.loopContextStack[i]
-		if ctx.IteratorCleanup != nil && ctx.IteratorCleanup.UsesIteratorProtocol {
-			c.emitIteratorCleanup(ctx.IteratorCleanup.IteratorReg, node.Token.Line)
-		}
-	}
+	// NOTE: We do NOT call iterator cleanup here because we don't know at compile time
+	// whether this exception will be caught within the same loop body (e.g., in a try-catch).
+	// Per ECMAScript spec, iterator.return() should only be called when an exception
+	// propagates OUT of the for-of loop, not when it's caught within the loop body.
+	// Iterator cleanup for uncaught exceptions should be handled at the VM level during
+	// stack unwinding, or when the iterator is explicitly closed by break/return.
 
 	// Emit OpThrow instruction using the value register directly
 	// Note: Previously this moved to R0, but that corrupts function parameters in R0

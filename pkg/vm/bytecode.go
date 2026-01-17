@@ -131,6 +131,7 @@ const (
 	OpLoadUninitialized              OpCode = 139 // Rx: Load TDZ uninitialized marker into register Rx (for let/const before initialization)
 	OpCheckUninitialized             OpCode = 141 // Rx: Check if register Rx is uninitialized (TDZ), throw ReferenceError if so. Self-rewrites to OpNop on success.
 	OpCloseUpvalue                   OpCode = 142 // Rx: Close any open upvalue pointing to register Rx (for per-iteration bindings in for loops)
+	OpIteratorCleanupAbrupt          OpCode = 143 // IteratorReg: Call iterator.return() with error suppression (for exception cleanup per ECMAScript IteratorClose with throw completion)
 	OpDefineMethodComputed           OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
 	OpDefineMethodEnumerable         OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
 	OpDefineMethodComputedEnumerable OpCode = 122 // ObjReg ValueReg KeyReg: Define enumerable method on object with computed key (sets [[HomeObject]], for object literals)
@@ -429,6 +430,8 @@ func (op OpCode) String() string {
 		return "OpCheckUninitialized"
 	case OpCloseUpvalue:
 		return "OpCloseUpvalue"
+	case OpIteratorCleanupAbrupt:
+		return "OpIteratorCleanupAbrupt"
 	case OpDefineMethodComputed:
 		return "OpDefineMethodComputed"
 	case OpDefineMethodEnumerable:
@@ -587,13 +590,14 @@ func (op OpCode) String() string {
 
 // ExceptionHandler represents an entry in the exception table
 type ExceptionHandler struct {
-	TryStart   int  // PC where try block starts (inclusive)
-	TryEnd     int  // PC where try block ends (exclusive)
-	HandlerPC  int  // Where to jump when exception caught
-	CatchReg   int  // Register to store exception (-1 if finally only)
-	IsCatch    bool // true for catch, false for finally
-	IsFinally  bool // true for finally blocks (Phase 3)
-	FinallyReg int  // Register to store pending action/value (-1 if not needed)
+	TryStart          int  // PC where try block starts (inclusive)
+	TryEnd            int  // PC where try block ends (exclusive)
+	HandlerPC         int  // Where to jump when exception caught
+	CatchReg          int  // Register to store exception (-1 if finally only)
+	IsCatch           bool // true for catch, false for finally
+	IsFinally         bool // true for finally blocks (Phase 3)
+	IsIteratorCleanup bool // true for for-of iterator cleanup (only triggered by exceptions, not returns)
+	FinallyReg        int  // Register to store pending action/value (-1 if not needed)
 }
 
 // ScopeDescriptor stores name-to-register mappings for functions that contain direct eval.
@@ -791,7 +795,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return offset + 1 // OpNop has no operands
 	case OpLoadConst:
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
-	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject, OpLoadUninitialized, OpCheckUninitialized, OpCloseUpvalue:
+	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject, OpLoadUninitialized, OpCheckUninitialized, OpCloseUpvalue, OpIteratorCleanupAbrupt:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
 	case OpNegate, OpNot, OpTypeof, OpToNumber, OpToNumeric, OpLoadNumericOne, OpBitwiseNot, OpGetLength, OpIsNull, OpIsUndefined, OpIsNullish:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry

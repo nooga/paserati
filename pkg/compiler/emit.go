@@ -765,6 +765,14 @@ func (c *Compiler) emitCloseUpvalue(reg Register, line int) {
 	c.emitByte(byte(reg))
 }
 
+// emitIteratorCleanupAbrupt emits OpIteratorCleanupAbrupt for exception-triggered iterator cleanup.
+// Per ECMAScript spec, when an exception propagates out of a for-of loop, iterator.return()
+// must be called with error suppression - any errors from getting/calling return are ignored.
+func (c *Compiler) emitIteratorCleanupAbrupt(iteratorReg Register, line int) {
+	c.emitOpCode(vm.OpIteratorCleanupAbrupt, line)
+	c.emitByte(byte(iteratorReg))
+}
+
 // emitTDZError emits code to throw a ReferenceError for accessing a variable
 // before it is initialized (Temporal Dead Zone violation in default parameters)
 func (c *Compiler) emitTDZError(hint Register, varName string, line int) {

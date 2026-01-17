@@ -170,6 +170,16 @@ func (vm *VM) unwindException() bool {
 					// fmt.Printf("[DEBUG] unwindException: Finally handled the situation\n")
 					return true // Finally handled the situation
 				}
+			} else if handler.IsIteratorCleanup {
+				// Iterator cleanup handler - like finally but ONLY for exceptions
+				// This is used by for-of loops to call iterator.return() when exception propagates out
+				vm.handleFinallyBlock(handler)
+				// Continue unwinding after iterator cleanup - the exception is re-thrown via OpHandlePendingAction
+				if vm.unwinding {
+					continue
+				} else {
+					return true
+				}
 			}
 		}
 
