@@ -18,7 +18,7 @@ Right now it prioritizes **correctness** over raw speed, but the architecture is
 
 ### Wins
 
-- **Test262 language suite: 92.0%** (see details below)
+- **Test262 language suite: 93.1%** (see details below)
 - **Native TS execution**: no `tsc`, no TS→JS transpilation
 - **TCO**: tail call optimization (elite feature)
 - **Shapes + ICs**: fast-ish property access without a JIT
@@ -84,7 +84,7 @@ go test ./tests/...
 From a recent run:
 
 ```
-language (TOTAL)             23410    21533     1852        0       25    92.0%    1m41.734s
+language (TOTAL)             23410    21795     1587        0       28    93.1%     2m7.648s
 ```
 
 Weak spots:
@@ -95,7 +95,6 @@ Weak spots:
 - `language/eval-code/indirect`: 62.3% (61)
 - `language/expressions/yield`: 74.6% (63)
 - `language/expressions/super`: 75.5% (94)
-- `language/statements/for-in`: 78.3% (115)
 - `language/types/reference`: 79.3% (29)
 - `language/expressions/call`: 79.3% (92)
 - `language/eval-code/direct`: 79.7% (286)
@@ -119,7 +118,6 @@ Last time I checked it could run a pure TS library [date-fns](https://github.com
 
 Known gaps:
 
-- WeakMap/WeakSet (tbd)
 - Decorators (planned)
 - `eval` correctness (still bugged; shows up in `eval-code/*` subsuites)
 - `with` statement semantics (incomplete)
