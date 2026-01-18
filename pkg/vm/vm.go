@@ -9086,11 +9086,17 @@ startExecution:
 			sourceValue := registers[sourceReg]
 			excludeValue := registers[excludeReg]
 
-			// Ensure source is an object
-			if !sourceValue.IsObject() {
+			// Only null and undefined throw TypeError per ECMAScript spec
+			// Other primitives (string, number, boolean, bigint, symbol) are auto-boxed
+			if sourceValue.Type() == TypeNull || sourceValue.Type() == TypeUndefined {
 				frame.ip = ip
-				status := vm.runtimeError("Cannot copy non-object value of type %d", int(sourceValue.Type()))
-				return status, Undefined
+				vm.ThrowTypeError(fmt.Sprintf("Cannot destructure %s as it is not an object", sourceValue.Type().String()))
+				// Check if a handler was found - if so, continue execution at handler
+				if !vm.unwinding {
+					ip = frame.ip // Handler PC was set by handleCatchBlock
+					continue
+				}
+				return InterpretRuntimeError, Undefined
 			}
 
 			// Ensure exclude list is an array
@@ -9120,7 +9126,7 @@ startExecution:
 				resultPlainObj := NewObject(vm.ObjectPrototype)
 				resultPlainObjPtr := resultPlainObj.AsPlainObject()
 
-				// Copy properties not in exclude list (only enumerable properties)
+				// Copy string-keyed properties (including integer indices) not in exclude list
 				for _, key := range sourceObj.OwnKeys() {
 					if _, shouldExclude := excludeNames[key]; !shouldExclude {
 						// Check if property is accessor (getter/setter)
@@ -9155,6 +9161,44 @@ startExecution:
 						}
 					}
 				}
+
+				// Copy symbol-keyed properties (ECMAScript requires symbols after strings)
+				for _, symVal := range sourceObj.OwnSymbolKeys() {
+					symKey := NewSymbolKey(symVal)
+					// Check if property is accessor (getter/setter)
+					if getter, _, enumerable, _, isAccessor := sourceObj.GetOwnAccessorByKey(symKey); isAccessor {
+						// Property is an accessor
+						if !enumerable {
+							continue // Skip non-enumerable accessors
+						}
+						// Call getter if present
+						if getter.Type() != TypeUndefined {
+							res, err := vm.Call(getter, sourceValue, nil)
+							if err != nil {
+								// Propagate error
+								frame.ip = ip
+								status := vm.runtimeError("Error calling getter for symbol property: %v", err)
+								return status, Undefined
+							}
+							// Store the getter's return value as data property
+							enumTrue := true
+							resultPlainObjPtr.DefineOwnPropertyByKey(symKey, res, nil, &enumTrue, nil)
+						} else {
+							// No getter: store undefined
+							enumTrue := true
+							resultPlainObjPtr.DefineOwnPropertyByKey(symKey, Undefined, nil, &enumTrue, nil)
+						}
+					} else {
+						// Regular data property
+						_, _, enumerable, _, exists := sourceObj.GetOwnDescriptorByKey(symKey)
+						if exists && enumerable {
+							if value, _ := sourceObj.GetOwnByKey(symKey); true {
+								enumTrue := true
+								resultPlainObjPtr.DefineOwnPropertyByKey(symKey, value, nil, &enumTrue, nil)
+							}
+						}
+					}
+				}
 				resultObj = resultPlainObj
 
 			case TypeDictObject:
@@ -9176,8 +9220,22 @@ startExecution:
 				}
 				resultObj = resultPlainObj
 
+			case TypeString:
+				// Strings have enumerable indexed properties (0, 1, 2, ...)
+				str := sourceValue.AsString()
+				resultPlainObj := NewObject(vm.ObjectPrototype)
+				resultPlainObjPtr := resultPlainObj.AsPlainObject()
+				for i, r := range str {
+					key := fmt.Sprintf("%d", i)
+					if _, shouldExclude := excludeNames[key]; !shouldExclude {
+						resultPlainObjPtr.SetOwn(key, NewString(string(r)))
+					}
+				}
+				resultObj = resultPlainObj
+
 			default:
-				// For other object-like types, create empty object
+				// For other primitives (number, boolean, bigint, symbol), create empty object
+				// as they have no own enumerable properties
 				resultObj = NewObject(vm.ObjectPrototype)
 			}
 

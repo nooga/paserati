@@ -2359,10 +2359,10 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	checkReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(checkReg)
 
-	// Check if tempReg is null
+	// Check if tempReg is null (use strict equality so undefined !== null)
 	nullConstIdx := c.chunk.AddConstant(vm.Null)
 	c.emitLoadConstant(checkReg, nullConstIdx, line)
-	c.emitOpCode(vm.OpEqual, line)
+	c.emitOpCode(vm.OpStrictEqual, line)
 	c.emitByte(byte(checkReg)) // result register
 	c.emitByte(byte(tempReg))  // left operand
 	c.emitByte(byte(checkReg)) // right operand (null)
@@ -2390,10 +2390,10 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	// Patch jump for not-null case
 	c.patchJump(notNullJump)
 
-	// Check if tempReg is undefined
+	// Check if tempReg is undefined (use strict equality so null !== undefined)
 	undefConstIdx := c.chunk.AddConstant(vm.Undefined)
 	c.emitLoadConstant(checkReg, undefConstIdx, line)
-	c.emitOpCode(vm.OpEqual, line)
+	c.emitOpCode(vm.OpStrictEqual, line)
 	c.emitByte(byte(checkReg)) // result register
 	c.emitByte(byte(tempReg))  // left operand
 	c.emitByte(byte(checkReg)) // right operand (undefined)

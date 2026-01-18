@@ -54,3 +54,4 @@ paserati-v8bench/
 bench/out/
 quickjs-bench/
 benchmarks/
+stvm*.js
