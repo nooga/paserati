@@ -610,10 +610,10 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			// For indirect eval, let/const should be local even at top level
 			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
 			if isGlobalScope {
-				// True global scope: use global variable
+				// True global scope: use global variable (const)
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
-				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+				c.currentSymbolTable.DefineGlobalConst(node.Name.Value, globalIdx)
 			} else {
 				// Local scope (function or enclosed block): use local symbol table
 				if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
@@ -629,14 +629,14 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			// For indirect eval, let/const should be local even at top level
 			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
 			if isGlobalScope {
-				// Top-level function: also set as global
+				// Top-level function: also set as global (const)
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 				// Get the closure register from the symbol table
 				symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
 				if found && symbolRef.Register != nilRegister {
 					c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
-					// Update the symbol to be global
-					c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+					// Update the symbol to be global const
+					c.currentSymbolTable.DefineGlobalConst(node.Name.Value, globalIdx)
 					// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 				}
 			}
@@ -984,8 +984,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
 					if isGlobalScope {
 						globalIdx := c.GetOrAssignGlobalIndex(d.Name.Value)
-						c.currentSymbolTable.DefineGlobal(d.Name.Value, globalIdx)
-						// TODO: Need DefineGlobalConst to mark global const
+						c.currentSymbolTable.DefineGlobalConst(d.Name.Value, globalIdx)
 					} else {
 						reg, ok := c.regAlloc.TryAllocForVariable()
 						if ok {
@@ -1003,8 +1002,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 				isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
 				if isGlobalScope {
 					globalIdx := c.GetOrAssignGlobalIndex(name)
-					c.currentSymbolTable.DefineGlobal(name, globalIdx)
-					// TODO: Need DefineGlobalConst to mark global const
+					c.currentSymbolTable.DefineGlobalConst(name, globalIdx)
 				} else {
 					reg, ok := c.regAlloc.TryAllocForVariable()
 					if ok {

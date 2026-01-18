@@ -69,6 +69,14 @@ func (st *SymbolTable) DefineGlobal(name string, globalIndex uint16) Symbol {
 	return symbol
 }
 
+// DefineGlobalConst adds a new const global symbol to the *current* scope's table.
+// Used for top-level const declarations in module mode.
+func (st *SymbolTable) DefineGlobalConst(name string, globalIndex uint16) Symbol {
+	symbol := Symbol{Name: name, IsGlobal: true, GlobalIndex: globalIndex, IsConst: true}
+	st.store[name] = symbol
+	return symbol
+}
+
 // DefineSpilled adds a new spilled symbol to the *current* scope's table.
 // Used when register allocation fails and the variable is stored in a spill slot.
 func (st *SymbolTable) DefineSpilled(name string, spillIndex uint16) Symbol {
