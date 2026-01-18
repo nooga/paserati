@@ -14,9 +14,8 @@ import (
 func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register) (Register, errors.PaseratiError) {
 	tryStart := len(c.chunk.Code)
 
-	// Track try depth (used to disable tail calls inside try blocks)
-	c.tryDepth++
-	defer func() { c.tryDepth-- }()
+	// Note: tryDepth is only incremented during the try body, NOT catch/finally
+	// This allows tail call optimization in catch and finally blocks per ECMAScript spec
 
 	// Track finally depth for return statement handling
 	// Also push a FinallyContext so break/continue/return know where to jump
@@ -71,10 +70,15 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 			}
 		}
 
+		// Increment tryDepth only for the try body - not for catch/finally
+		// This allows TCO in catch/finally blocks per ECMAScript spec
+		c.tryDepth++
+
 		// Compile statements
 		for _, stmt := range node.Body.Statements {
 			stmtReg, err := c.compileNode(stmt, hint)
 			if err != nil {
+				c.tryDepth--
 				c.currentSymbolTable = previousSymbolTable
 				return BadRegister, err
 			}
@@ -85,6 +89,9 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 				c.emitMove(hint, stmtReg, node.Token.Line)
 			}
 		}
+
+		// Decrement tryDepth after try body - catch/finally can now use TCO
+		c.tryDepth--
 
 		// Restore previous scope
 		c.currentSymbolTable = previousSymbolTable
@@ -117,6 +124,11 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 				// Define catch parameter in the catch scope
 				switch param := node.CatchClause.Parameter.(type) {
 				case *parser.Identifier:
+					// In strict mode, 'eval' and 'arguments' cannot be used as catch parameter names
+					if c.chunk.IsStrict && (param.Value == "eval" || param.Value == "arguments") {
+						c.currentSymbolTable = previousSymbolTable
+						return BadRegister, NewCompileError(node, fmt.Sprintf("Unexpected %s in strict mode", param.Value))
+					}
 					c.currentSymbolTable.Define(param.Value, catchReg)
 				case *parser.ArrayParameterPattern:
 					// Convert ArrayParameterPattern to ArrayDestructuringDeclaration
@@ -335,6 +347,11 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 				// Define catch parameter in the catch scope
 				switch param := node.CatchClause.Parameter.(type) {
 				case *parser.Identifier:
+					// In strict mode, 'eval' and 'arguments' cannot be used as catch parameter names
+					if c.chunk.IsStrict && (param.Value == "eval" || param.Value == "arguments") {
+						c.currentSymbolTable = previousSymbolTable
+						return BadRegister, NewCompileError(node, fmt.Sprintf("Unexpected %s in strict mode", param.Value))
+					}
 					c.currentSymbolTable.Define(param.Value, catchReg)
 				case *parser.ArrayParameterPattern:
 					// Convert ArrayParameterPattern to ArrayDestructuringDeclaration
