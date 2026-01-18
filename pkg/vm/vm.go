@@ -8913,6 +8913,11 @@ startExecution:
 			spreadArgs, err := vm.extractSpreadArguments(spreadArrayVal)
 			if err != nil {
 				frame.ip = callerIP
+				// Check if this is a JavaScript exception - if so, re-throw it
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+					return InterpretRuntimeError, Undefined
+				}
 				status := vm.runtimeError("Spread call error: %s", err.Error())
 				return status, Undefined
 			}
@@ -8964,6 +8969,11 @@ startExecution:
 			spreadArgs, err := vm.extractSpreadArguments(spreadArrayVal)
 			if err != nil {
 				frame.ip = callerIP
+				// Check if this is a JavaScript exception - if so, re-throw it
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+					return InterpretRuntimeError, Undefined
+				}
 				status := vm.runtimeError("Spread method call error: %s", err.Error())
 				return status, Undefined
 			}

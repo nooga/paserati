@@ -3650,9 +3650,20 @@ func (p *Parser) parseYieldExpression() Expression {
 		}
 
 		// yield can have an optional value
+		// Per ECMAScript: yield [no LineTerminator here] AssignmentExpression
+		// If there's a newline after yield, ASI inserts a semicolon (yield has no value)
+		yieldLine := yieldToken.Line
+		if expression.Delegate {
+			// For yield*, check line after the asterisk
+			yieldLine = p.curToken.Line
+		}
+
 		// Check if there's an expression following yield (or yield*)
-		// Don't try to parse if next token is closing punctuation or comma
-		if !p.peekTokenIs(lexer.SEMICOLON) && !p.peekTokenIs(lexer.RBRACE) &&
+		// Don't try to parse if:
+		// 1. There's a newline after yield (ASI applies)
+		// 2. Next token is closing punctuation, comma, or statement terminator
+		if p.peekToken.Line == yieldLine &&
+			!p.peekTokenIs(lexer.SEMICOLON) && !p.peekTokenIs(lexer.RBRACE) &&
 			!p.peekTokenIs(lexer.RBRACKET) && !p.peekTokenIs(lexer.RPAREN) &&
 			!p.peekTokenIs(lexer.COMMA) && !p.peekTokenIs(lexer.EOF) &&
 			!p.peekTokenIs(lexer.COLON) { // for switch cases and object properties
