@@ -1032,6 +1032,20 @@ func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constr
 		propertyNameIdx := c.chunk.AddConstant(vm.String(fieldName))
 		c.emitSetPrivateField(constructorReg, valueReg, propertyNameIdx, property.Token.Line)
 		debugPrintf("// DEBUG addStaticProperty: Static private field '%s' added to constructor\n", propertyName)
+	} else if computedKey, isComputed := property.Key.(*parser.ComputedPropertyName); isComputed {
+		// Computed property key - evaluate at runtime and use OpSetIndex
+		keyReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(keyReg)
+		_, err := c.compileNode(computedKey.Expr, keyReg)
+		if err != nil {
+			return err
+		}
+		// Emit OpSetIndex: constructorReg[keyReg] = valueReg
+		c.emitOpCode(vm.OpSetIndex, property.Token.Line)
+		c.emitByte(byte(constructorReg)) // Object register
+		c.emitByte(byte(keyReg))         // Key register (computed at runtime)
+		c.emitByte(byte(valueReg))       // Value register
+		debugPrintf("// DEBUG addStaticProperty: Static computed property added to constructor\n")
 	} else {
 		// Regular static property - use OpSetProp
 		propertyNameIdx := c.chunk.AddConstant(vm.String(propertyName))
