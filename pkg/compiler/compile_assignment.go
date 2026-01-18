@@ -2589,18 +2589,22 @@ func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool
 		c.emitSetGlobal(globalIdx, valueReg, line)
 		c.currentSymbolTable.DefineGlobal(name, globalIdx)
 	} else {
-		// Function scope: check if variable is already defined (e.g., from var hoisting)
-		if sym, _, found := c.currentSymbolTable.Resolve(name); found && sym.Register != nilRegister {
-			// Variable already exists (hoisted var), move value to existing register
-			if valueReg != sym.Register {
-				c.emitMove(sym.Register, valueReg, line)
+		// IMPORTANT: Check ONLY the CURRENT scope for existing bindings.
+		// This is critical for proper shadowing (e.g., catch parameters should shadow outer vars).
+		// Variables from outer scopes should NOT be reused - let/const creates a new binding.
+		if sym, exists := c.currentSymbolTable.store[name]; exists {
+			// Variable already exists in current scope (e.g., from hoisting or pre-definition)
+			if sym.Register != nilRegister {
+				if valueReg != sym.Register {
+					c.emitMove(sym.Register, valueReg, line)
+				}
+			} else if sym.IsSpilled {
+				c.emitStoreSpill(sym.SpillIndex, valueReg, line)
 			}
 			// Don't redefine - keep existing symbol table entry
-		} else if found && sym.IsSpilled {
-			// Variable is spilled, store to spill slot
-			c.emitStoreSpill(sym.SpillIndex, valueReg, line)
 		} else {
-			// New variable, define it
+			// Variable doesn't exist in current scope - define it.
+			// This creates a new binding that shadows any outer scope variables.
 			c.currentSymbolTable.Define(name, valueReg)
 			// Pin the register since local variables can be captured by upvalues
 			c.regAlloc.Pin(valueReg)

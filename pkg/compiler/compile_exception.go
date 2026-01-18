@@ -126,7 +126,9 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 						Elements: param.Elements,
 						Value:    nil, // value already in catchReg
 					}
-					if err := c.compileArrayDestructuringDeclarationWithValueReg(decl, catchReg, node.Token.Line); err != nil {
+					// Use iterator protocol for array destructuring in catch parameters
+					// This is required for ECMAScript compliance - calling Symbol.iterator on the value
+					if err := c.compileArrayDestructuringIteratorPath(decl, catchReg, node.Token.Line); err != nil {
 						c.currentSymbolTable = previousSymbolTable
 						return BadRegister, err
 					}
@@ -342,7 +344,9 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 						Elements: param.Elements,
 						Value:    nil, // value already in catchReg
 					}
-					if err := c.compileArrayDestructuringDeclarationWithValueReg(decl, catchReg, node.Token.Line); err != nil {
+					// Use iterator protocol for array destructuring in catch parameters
+					// This is required for ECMAScript compliance - calling Symbol.iterator on the value
+					if err := c.compileArrayDestructuringIteratorPath(decl, catchReg, node.Token.Line); err != nil {
 						c.currentSymbolTable = previousSymbolTable
 						return BadRegister, err
 					}

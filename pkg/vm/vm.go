@@ -9062,9 +9062,24 @@ startExecution:
 				frame.ip = ip
 				elements, err := vm.extractSpreadArguments(arrayValue)
 				if err != nil {
-					// Handle error - likely not iterable
-					status := vm.runtimeError("Cannot slice non-iterable value of type %s", arrayValue.TypeName())
-					return status, Undefined
+					// Propagate the original error (could be from iterator protocol)
+					// Check if it's an exceptionError that should be re-thrown
+					if excErr, ok := err.(exceptionError); ok {
+						// Re-throw the exception through proper exception handling
+						vm.throwException(excErr.GetExceptionValue())
+						if !vm.unwinding {
+							ip = frame.ip
+							continue
+						}
+						return InterpretRuntimeError, Undefined
+					}
+					// For other errors (e.g., not iterable), create a TypeError
+					vm.ThrowTypeError(fmt.Sprintf("Cannot convert %s to iterable", arrayValue.TypeName()))
+					if !vm.unwinding {
+						ip = frame.ip
+						continue
+					}
+					return InterpretRuntimeError, Undefined
 				}
 				sourceElements = elements
 				arrayLength = len(sourceElements)

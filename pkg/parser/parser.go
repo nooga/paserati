@@ -2943,6 +2943,7 @@ func (p *Parser) parseParameterDestructuringProperty() *DestructuringProperty {
 	}
 
 	// For regular identifiers and numbers, check for explicit target (key: target)
+	// Note: Computed properties already set their target in the block above
 	_, isIdent := prop.Key.(*Identifier)
 	_, isNumber := prop.Key.(*NumberLiteral)
 	if (isIdent || isNumber) && p.peekTokenIs(lexer.COLON) {
@@ -2968,8 +2969,9 @@ func (p *Parser) parseParameterDestructuringProperty() *DestructuringProperty {
 			p.addError(p.curToken, "object parameter property target must be an identifier or nested pattern")
 			return nil
 		}
-	} else {
-		// Shorthand: use key as target
+	} else if prop.Target == nil {
+		// Shorthand: use key as target (only for identifiers/numbers without explicit target)
+		// Skip if target was already set (e.g., by computed property handling above)
 		prop.Target = prop.Key
 	}
 

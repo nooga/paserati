@@ -1263,24 +1263,29 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 			c.emitDeleteIndex(hint, objReg, keyReg, node.Token.Line)
 
 		case *parser.Identifier:
-			// delete identifier: Try to delete from global scope
-			// If it's a global variable, emit OpDeleteGlobal
-			// If it's not found, return true (per ECMAScript spec)
+			// delete identifier: Check binding type per ECMAScript spec
+			// - Local bindings (let/const/var/catch param): return false (not configurable)
+			// - Global variables: emit OpDeleteGlobal (checks configurable attribute)
+			// - Unresolved identifiers: return true
 			varName := operand.Value
 
-			// Check if this is a global variable
-			if c.heapAlloc != nil {
+			// First check if this is a local variable (resolved in symbol table)
+			if _, _, found := c.currentSymbolTable.Resolve(varName); found {
+				// It's a local variable binding - these are never configurable
+				// Per ECMAScript spec, delete on non-configurable bindings returns false
+				c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(false)), node.Token.Line)
+			} else if c.heapAlloc != nil {
 				if heapIdx, isGlobal := c.heapAlloc.GetIndex(varName); isGlobal {
 					// It's a global variable - emit OpDeleteGlobal
 					c.emitOpCode(vm.OpDeleteGlobal, node.Token.Line)
 					c.emitByte(byte(hint))
 					c.emitUint16(uint16(heapIdx))
 				} else {
-					// Local variable or not found - return true (spec behavior)
+					// Not found anywhere - return true (spec behavior for unresolved references)
 					c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(true)), node.Token.Line)
 				}
 			} else {
-				// No heap allocator - return true (spec behavior)
+				// No heap allocator and not local - return true (spec behavior)
 				c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(true)), node.Token.Line)
 			}
 
