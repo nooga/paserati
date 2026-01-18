@@ -1265,15 +1265,46 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 		case *parser.Identifier:
 			// delete identifier: Check binding type per ECMAScript spec
 			// - Local bindings (let/const/var/catch param): return false (not configurable)
+			// - Eval-created bindings stored in heap: emit OpDeleteGlobal
 			// - Global variables: emit OpDeleteGlobal (checks configurable attribute)
 			// - Unresolved identifiers: return true
 			varName := operand.Value
 
-			// First check if this is a local variable (resolved in symbol table)
-			if _, _, found := c.currentSymbolTable.Resolve(varName); found {
-				// It's a local variable binding - these are never configurable
-				// Per ECMAScript spec, delete on non-configurable bindings returns false
-				c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(false)), node.Token.Line)
+			// Check if we're in eval mode (compiling direct eval code)
+			inEvalMode := c.callerScopeDesc != nil
+
+			// Check if this is a local variable (resolved in symbol table)
+			if sym, _, found := c.currentSymbolTable.Resolve(varName); found {
+				if inEvalMode {
+					// In eval mode, check if variable is from caller scope or created by eval
+					// Variables from caller scope are not deletable, but eval-created are
+					isFromCaller := false
+					if c.callerScopeDesc != nil {
+						for _, v := range c.callerScopeDesc.LocalNames {
+							if v == varName {
+								isFromCaller = true
+								break
+							}
+						}
+					}
+					if isFromCaller {
+						// From caller scope - not deletable
+						c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(false)), node.Token.Line)
+					} else if sym.IsGlobal {
+						// Eval-created binding stored in heap - actually delete it
+						c.emitOpCode(vm.OpDeleteGlobal, node.Token.Line)
+						c.emitByte(byte(hint))
+						c.emitUint16(sym.GlobalIndex)
+					} else {
+						// Eval-created but stored in register - just return true
+						// (Can't actually delete a register at runtime)
+						c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(true)), node.Token.Line)
+					}
+				} else {
+					// Not in eval mode - local bindings are never configurable
+					// Per ECMAScript spec, delete on non-configurable bindings returns false
+					c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(false)), node.Token.Line)
+				}
 			} else if c.heapAlloc != nil {
 				if heapIdx, isGlobal := c.heapAlloc.GetIndex(varName); isGlobal {
 					// It's a global variable - emit OpDeleteGlobal

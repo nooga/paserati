@@ -2279,6 +2279,34 @@ func (c *Compiler) SetIndirectEval(indirect bool) {
 	c.isIndirectEval = indirect
 }
 
+// IsEvalCreatedBinding checks if a variable name would be a NEW binding created by eval.
+// Returns true if we're in direct eval mode AND the name is not from the caller's scope.
+// Eval-created bindings should use heap storage to support deletion per ECMAScript spec.
+func (c *Compiler) IsEvalCreatedBinding(name string) bool {
+	if c.callerScopeDesc == nil {
+		// Not in eval mode
+		return false
+	}
+	// Check if the name is in the caller's scope (not deletable)
+	for _, localName := range c.callerScopeDesc.LocalNames {
+		if localName == name {
+			return false // From caller scope, not eval-created
+		}
+	}
+	// New binding created by eval - should be deletable
+	return true
+}
+
+// ShouldUseHeapForEvalBinding checks if an eval-created binding should use heap storage.
+// This enables deletion of eval-created var/function bindings per ECMAScript spec.
+func (c *Compiler) ShouldUseHeapForEvalBinding(name string) bool {
+	// Only applies to non-strict direct eval
+	if c.callerScopeDesc == nil || c.chunk.IsStrict {
+		return false
+	}
+	return c.IsEvalCreatedBinding(name)
+}
+
 // findVarInFunctionScope looks for a var in the current function's scope chain.
 // Unlike Resolve(), this stops at function boundaries (doesn't cross into enclosing compilers).
 // This is used to check if a var was pre-defined during block hoisting in the SAME function.

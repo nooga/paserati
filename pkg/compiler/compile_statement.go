@@ -155,8 +155,10 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		if valueReg == nilRegister && !isValueFunc {
 			// Check if we're in global scope first
 			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
-			if isGlobalScope {
-				// Global scope: allocate temp, load undefined, set global
+			// Check if this is an eval-created binding that needs heap storage for deletion
+			useHeapForEval := c.ShouldUseHeapForEvalBinding(node.Name.Value)
+			if isGlobalScope || useHeapForEval {
+				// Global scope or eval-created binding: use heap storage
 				undefReg := c.regAlloc.Alloc()
 				c.emitLoadUndefined(undefReg, node.Name.Token.Line)
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
@@ -190,8 +192,10 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// Check if we're in global scope: no enclosing compiler AND no outer symbol table
 			// For indirect eval, let/const should be local even at top level
 			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
-			if isGlobalScope {
-				// True global scope: use global variable
+			// Check if this is an eval-created binding that needs heap storage for deletion
+			useHeapForEval := c.ShouldUseHeapForEvalBinding(node.Name.Value)
+			if isGlobalScope || useHeapForEval {
+				// Global scope or eval-created binding: use heap storage
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
@@ -207,11 +211,13 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 				}
 			}
 		} else {
-			// Function value - check if it should be global
+			// Function value - check if it should be global or eval-created
 			// For indirect eval, let/const should be local even at top level
 			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
-			if isGlobalScope {
-				// Top-level function: also set as global
+			// Check if this is an eval-created binding that needs heap storage for deletion
+			useHeapForEval := c.ShouldUseHeapForEvalBinding(node.Name.Value)
+			if isGlobalScope || useHeapForEval {
+				// Top-level function or eval-created binding: use heap storage
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 				// Get the closure register from the symbol table
 				symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)

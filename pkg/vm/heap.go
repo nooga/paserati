@@ -21,9 +21,14 @@ type Heap struct {
 
 // NewHeap creates a new heap with the specified initial capacity
 func NewHeap(initialCapacity int) *Heap {
+	// Initialize configurable slice to all true (user variables are deletable by default)
+	configurable := make([]bool, initialCapacity)
+	for i := range configurable {
+		configurable[i] = true
+	}
 	return &Heap{
 		values:       make([]Value, initialCapacity),
-		configurable: make([]bool, initialCapacity),
+		configurable: configurable,
 		initialized:  make([]bool, initialCapacity),
 		size:         0,
 	}
