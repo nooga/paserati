@@ -733,11 +733,36 @@ func (vm *VM) resolvePropertyMeta(objVal Value, propName string, cache *PropInli
 			}
 		}
 		pv := current.GetPrototype()
-		if !pv.IsObject() {
+		if pv.IsObject() {
+			current = pv.AsPlainObject()
+			depth++
+		} else if pv.Type() == TypeClosure {
+			// Functions can be prototypes - check their properties
+			closure := pv.AsClosure()
+			if closure.Properties != nil {
+				if _, exists := closure.Properties.GetOwn(propName); exists {
+					// Found on function prototype - return nil holder to signal non-cacheable
+					// The caller will use PlainObject.Get which handles function prototypes
+					return nil, -1, false, false
+				}
+			}
+			if closure.Fn.Properties != nil {
+				if _, exists := closure.Fn.Properties.GetOwn(propName); exists {
+					return nil, -1, false, false
+				}
+			}
+			break
+		} else if pv.Type() == TypeFunction {
+			fn := pv.AsFunction()
+			if fn.Properties != nil {
+				if _, exists := fn.Properties.GetOwn(propName); exists {
+					return nil, -1, false, false
+				}
+			}
+			break
+		} else {
 			break
 		}
-		current = pv.AsPlainObject()
-		depth++
 	}
 
 	if EnableDetailedCacheStats {

@@ -801,6 +801,41 @@ func (o *PlainObject) Get(name string) (Value, bool) {
 			} else {
 				break
 			}
+		} else if current.Type() == TypeClosure {
+			// Functions can be prototypes in JavaScript
+			closure := current.AsClosure()
+			// Check closure's own properties
+			if closure.Properties != nil {
+				if value, exists := closure.Properties.GetOwn(name); exists {
+					return value, true
+				}
+			}
+			// Check underlying function's properties
+			if closure.Fn.Properties != nil {
+				if value, exists := closure.Fn.Properties.GetOwn(name); exists {
+					return value, true
+				}
+			}
+			// Continue to Function.prototype (closures inherit from Function.prototype)
+			break
+		} else if current.Type() == TypeFunction {
+			// FunctionObject can also be a prototype
+			fn := current.AsFunction()
+			if fn.Properties != nil {
+				if value, exists := fn.Properties.GetOwn(name); exists {
+					return value, true
+				}
+			}
+			break
+		} else if current.Type() == TypeNativeFunction || current.Type() == TypeNativeFunctionWithProps {
+			// Native functions can have properties too
+			if current.Type() == TypeNativeFunctionWithProps {
+				nfp := current.AsNativeFunctionWithProps()
+				if value, exists := nfp.Properties.GetOwn(name); exists {
+					return value, true
+				}
+			}
+			break
 		} else {
 			break
 		}
@@ -1150,8 +1185,10 @@ func ClearShapeCache() {
 
 func NewObject(proto Value) Value {
 	// Create a new PlainObject and set its prototype to the shared DefaultObjectPrototype
+	// In ECMAScript, the prototype can be any object, including functions (which are objects)
 	prototype := DefaultObjectPrototype
-	if proto.IsObject() {
+	if proto.IsObject() || proto.IsCallable() {
+		// Functions are valid prototypes in JavaScript since they are objects
 		prototype = proto
 	}
 	plainObj := &PlainObject{prototype: prototype, shape: RootShape, extensible: true}
@@ -1160,7 +1197,8 @@ func NewObject(proto Value) Value {
 
 func NewDictObject(proto Value) Value {
 	prototype := DefaultObjectPrototype
-	if proto.IsObject() {
+	if proto.IsObject() || proto.IsCallable() {
+		// Functions are valid prototypes in JavaScript since they are objects
 		prototype = proto
 	}
 	dictObj := &DictObject{prototype: prototype, properties: make(map[string]Value), extensible: true}

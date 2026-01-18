@@ -458,6 +458,13 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			return true, InterpretOK, *dest
 		}
 
+		// resolvePropertyMeta didn't find property - try PlainObject.Get which handles
+		// function prototypes (functions can be used as prototypes in JavaScript)
+		if fv, ok := po.Get(propName); ok {
+			*dest = fv
+			return true, InterpretOK, *dest
+		}
+
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	}
