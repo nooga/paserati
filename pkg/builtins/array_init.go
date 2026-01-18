@@ -364,10 +364,30 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		for i := 0; i < length; i++ {
 			elements[i] = thisArray.Get(i)
 		}
-		// Simple bubble sort with string comparison
+
+		// Get comparator function if provided
+		var compareFn vm.Value
+		if len(args) > 0 && args[0].IsCallable() {
+			compareFn = args[0]
+		}
+
+		// Simple bubble sort (not efficient but correct)
 		for i := 0; i < length-1; i++ {
 			for j := 0; j < length-i-1; j++ {
-				if elements[j].ToString() > elements[j+1].ToString() {
+				var shouldSwap bool
+				if compareFn.IsCallable() {
+					// Use the comparator function
+					result, err := vmInstance.Call(compareFn, vm.Undefined, []vm.Value{elements[j], elements[j+1]})
+					if err != nil {
+						return vm.Undefined, err
+					}
+					// Per ECMAScript: compareFn(a, b) > 0 means a should come after b
+					shouldSwap = result.ToFloat() > 0
+				} else {
+					// Default: string comparison per ECMAScript spec
+					shouldSwap = elements[j].ToString() > elements[j+1].ToString()
+				}
+				if shouldSwap {
 					elements[j], elements[j+1] = elements[j+1], elements[j]
 				}
 			}

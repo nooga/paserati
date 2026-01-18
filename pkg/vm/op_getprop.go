@@ -519,6 +519,33 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			*dest = v
 			return true, InterpretOK, *dest
 		}
+		// Walk the prototype chain: Array.prototype -> Object.prototype
+		// This enables inherited methods like hasOwnProperty, valueOf, etc.
+		proto := vm.ArrayPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			// Walk up to Object.prototype
+			current := po.GetPrototype()
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if p := current.AsPlainObject(); p != nil {
+						if v, ok := p.GetOwn(propName); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = p.GetPrototype()
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	}
