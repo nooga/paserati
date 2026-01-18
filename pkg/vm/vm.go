@@ -490,11 +490,11 @@ func (vm *VM) SyncHeapToGlobalObject() {
 			continue
 		}
 
-		// Create new property with eval-specific attributes:
-		// writable: true, enumerable: true, configurable: true
+		// Use the heap's configurable flag to set property attributes
+		// var declarations are non-configurable (DontDelete), eval-created bindings are configurable
 		w := true
 		e := true
-		c := true
+		c := vm.heap.IsConfigurable(idx)
 		vm.GlobalObject.DefineOwnProperty(name, val, &w, &e, &c)
 	}
 }
@@ -715,6 +715,16 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 
 	vm.nextRegSlot += scriptRegSize
 	vm.frameCount++
+
+	// Mark var declaration globals as non-configurable (DontDelete) per ECMAScript spec
+	// This must be done before execution so that delete operations respect the configurability
+	for _, idx := range chunk.VarGlobalIndices {
+		if err := vm.heap.SetConfigurable(int(idx), false); err != nil {
+			// If the index doesn't exist yet, resize the heap and set it
+			vm.heap.Resize(int(idx) + 1)
+			_ = vm.heap.SetConfigurable(int(idx), false) // After resize, this should succeed
+		}
+	}
 
 	// Run the VM
 	// fmt.Printf("// [VM] Interpret: About to call vm.run() for chunk '%s' (stack depth: %d)\n", mainFuncObj.Name, len(vm.executionContextStack))
@@ -10304,6 +10314,45 @@ startExecution:
 				}
 			} else if obj.IsObject() {
 				if po := obj.AsPlainObject(); po != nil {
+					// For GlobalObject, also check the heap's configurable flag
+					// Global var declarations and function declarations are stored in heap
+					// and marked as non-configurable (DontDelete) per ECMAScript spec
+					if po == vm.GlobalObject {
+						if idx, exists := vm.heap.GetNameToIndex()[propName]; exists {
+							if !vm.heap.IsConfigurable(idx) {
+								// Property is non-configurable in heap - cannot delete
+								// In strict mode, throw TypeError
+								if function.Chunk.IsStrict {
+									frame.ip = ip
+									vm.ThrowTypeError("Cannot delete property '" + propName + "' of #<Object>")
+									if !vm.unwinding {
+										frame = &vm.frames[vm.frameCount-1]
+										closure = frame.closure
+										function = closure.Fn
+										code = function.Chunk.Code
+										constants = function.Chunk.Constants
+										registers = frame.registers
+										ip = frame.ip
+										continue
+									}
+									if vm.unwindingCrossedNative || vm.frameCount == 0 {
+										return InterpretRuntimeError, vm.currentException
+									}
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
+								// In non-strict mode, return false
+								registers[destReg] = BooleanValue(false)
+								continue
+							}
+						}
+					}
 					// In strict mode, throw TypeError for non-configurable properties
 					if function.Chunk.IsStrict {
 						exists, nonConfig := po.IsOwnPropertyNonConfigurable(propName)
@@ -10528,6 +10577,44 @@ startExecution:
 						success = po.DeleteOwnByKey(NewSymbolKey(key))
 					} else {
 						propName := key.ToString()
+						// For GlobalObject, check the heap's configurable flag first
+						// Global var declarations are non-configurable (DontDelete) per ECMAScript
+						if po == vm.GlobalObject {
+							if idx, exists := vm.heap.GetNameToIndex()[propName]; exists {
+								if !vm.heap.IsConfigurable(idx) {
+									// Property is non-configurable in heap - cannot delete
+									// In strict mode, throw TypeError
+									if function.Chunk.IsStrict {
+										frame.ip = ip
+										vm.ThrowTypeError("Cannot delete property '" + propName + "' of #<Object>")
+										if !vm.unwinding {
+											frame = &vm.frames[vm.frameCount-1]
+											closure = frame.closure
+											function = closure.Fn
+											code = function.Chunk.Code
+											constants = function.Chunk.Constants
+											registers = frame.registers
+											ip = frame.ip
+											continue
+										}
+										if vm.unwindingCrossedNative || vm.frameCount == 0 {
+											return InterpretRuntimeError, vm.currentException
+										}
+										frame = &vm.frames[vm.frameCount-1]
+										closure = frame.closure
+										function = closure.Fn
+										code = function.Chunk.Code
+										constants = function.Chunk.Constants
+										registers = frame.registers
+										ip = frame.ip
+										continue
+									}
+									// In non-strict mode, return false
+									registers[destReg] = BooleanValue(false)
+									continue
+								}
+							}
+						}
 						success = po.DeleteOwn(propName)
 						// GlobalThis special case: keep heap in sync
 						if success && po == vm.GlobalObject {

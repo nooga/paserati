@@ -643,6 +643,9 @@ type Chunk struct {
 	// Inline caches for property access sites within this chunk, indexed by bytecode offset
 	// (the IP where the opcode starts). This avoids a global map lookup per property access.
 	propInlineCaches []*PropInlineCache
+	// VarGlobalIndices tracks global indices that are var declarations (non-configurable per ECMAScript)
+	// These indices should have their heap slots marked as non-configurable (DontDelete)
+	VarGlobalIndices []uint16
 }
 
 // GetLine returns the source line number corresponding to a given bytecode offset.
@@ -660,11 +663,23 @@ func (c *Chunk) GetLine(offset int) int {
 // NewChunk creates a new, empty Chunk.
 func NewChunk() *Chunk {
 	return &Chunk{
-		Code:           make([]byte, 0),
-		Constants:      make([]Value, 0),
-		Lines:          make([]int, 0),
-		ExceptionTable: make([]ExceptionHandler, 0),
+		Code:             make([]byte, 0),
+		Constants:        make([]Value, 0),
+		Lines:            make([]int, 0),
+		ExceptionTable:   make([]ExceptionHandler, 0),
+		VarGlobalIndices: make([]uint16, 0),
 	}
+}
+
+// AddVarGlobalIndex registers a global index as a var declaration (non-configurable)
+func (c *Chunk) AddVarGlobalIndex(idx uint16) {
+	// Avoid duplicates
+	for _, existing := range c.VarGlobalIndices {
+		if existing == idx {
+			return
+		}
+	}
+	c.VarGlobalIndices = append(c.VarGlobalIndices, idx)
 }
 
 // WriteOpCode adds an opcode to the chunk.

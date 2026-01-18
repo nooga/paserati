@@ -782,7 +782,13 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			// 5. Emit OpSetGlobal to store the function in the VM's globals array
 			c.emitSetGlobal(globalIdx, closureReg, funcLit.Token.Line)
 
-			// 6. Free the temporary register now that the closure is stored in globals
+			// 6. Mark as non-configurable (DontDelete) only for true top-level function declarations,
+			// not for eval-created bindings which should be configurable
+			if !c.isIndirectEval && c.callerScopeDesc == nil {
+				c.MarkVarGlobal(globalIdx)
+			}
+
+			// 7. Free the temporary register now that the closure is stored in globals
 			c.regAlloc.Free(closureReg)
 
 			debugPrintf("[Compile Hoisting] Defined global func '%s' with %d upvalues in R%d, stored at global index %d\n", name, len(freeSymbols), closureReg, globalIdx)
@@ -811,6 +817,11 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			c.emitLoadUndefined(tempReg, 0)
 			c.emitSetGlobal(globalIdx, tempReg, 0)
 			c.regAlloc.Free(tempReg)
+			// Mark as non-configurable (DontDelete) only for true top-level var declarations,
+			// not for eval-created bindings which should be configurable
+			if !c.isIndirectEval && c.callerScopeDesc == nil {
+				c.MarkVarGlobal(globalIdx)
+			}
 			debugPrintf("[Compile VarHoist] Hoisted var '%s' at global index %d\n", name, globalIdx)
 		}
 	}
@@ -1396,6 +1407,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				globalIdx := c.GetOrAssignGlobalIndex(funcLit.Name.Value)
 				c.emitSetGlobal(globalIdx, bindingReg, funcLit.Token.Line)
 				c.currentSymbolTable.DefineGlobal(funcLit.Name.Value, globalIdx)
+				// Mark as non-configurable (DontDelete) only for true top-level function declarations,
+				// not for eval-created bindings which should be configurable
+				if !c.isIndirectEval && c.callerScopeDesc == nil {
+					c.MarkVarGlobal(globalIdx)
+				}
 			}
 
 			// Function declarations don't produce a value for the script result
@@ -2964,6 +2980,17 @@ func (c *Compiler) GetOrAssignGlobalIndex(name string) uint16 {
 	}
 
 	return uint16(idx)
+}
+
+// MarkVarGlobal registers a global index as a var declaration (non-configurable per ECMAScript)
+// This should be called for top-level var declarations, not for let/const or eval-created bindings.
+func (c *Compiler) MarkVarGlobal(idx uint16) {
+	// Only top-level compiler should manage the chunk's var global list
+	topCompiler := c
+	for topCompiler.enclosing != nil {
+		topCompiler = topCompiler.enclosing
+	}
+	topCompiler.chunk.AddVarGlobalIndex(idx)
 }
 
 // GetGlobalNames returns a slice of all global variable names that have been assigned indices

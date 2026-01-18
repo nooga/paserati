@@ -430,6 +430,11 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 					globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 					c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 					c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+					// Mark as non-configurable (DontDelete) only for true top-level var,
+					// not for eval-created bindings which should be configurable
+					if !c.isIndirectEval && c.callerScopeDesc == nil {
+						c.MarkVarGlobal(globalIdx)
+					}
 					// valueReg was temp for the global, free it
 					c.regAlloc.Free(valueReg)
 				} else {
@@ -461,6 +466,11 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+				// Mark as non-configurable (DontDelete) only for true top-level var,
+				// not for eval-created bindings which should be configurable
+				if !c.isIndirectEval && c.callerScopeDesc == nil {
+					c.MarkVarGlobal(globalIdx)
+				}
 				// valueReg was temp for the global, free it
 				c.regAlloc.Free(valueReg)
 			} else {
@@ -480,6 +490,11 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
 				// Update the symbol to be global
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+				// Mark as non-configurable (DontDelete) only for true top-level var,
+				// not for eval-created bindings which should be configurable
+				if !c.isIndirectEval && c.callerScopeDesc == nil {
+					c.MarkVarGlobal(globalIdx)
+				}
 				// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 			}
 		}
