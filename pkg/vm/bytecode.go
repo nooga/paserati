@@ -261,6 +261,9 @@ const (
 	// 16-bit upvalue index for functions with more than 255 captured variables
 	OpLoadFree16   OpCode = 135 // Rx UpvalueIdxHi UpvalueIdxLo: Load free variable (upvalue) at 16-bit index into register Rx
 	OpSetUpvalue16 OpCode = 136 // UpvalueIdxHi UpvalueIdxLo Ry: Store value from register Ry into upvalue at 16-bit index
+
+	// --- Class Validation ---
+	OpValidateSuperclass OpCode = 144 // Rx: Validate that Rx is a valid superclass (callable constructor or null), throws TypeError if not
 )
 
 // String returns a human-readable name for the OpCode.
@@ -432,6 +435,8 @@ func (op OpCode) String() string {
 		return "OpCloseUpvalue"
 	case OpIteratorCleanupAbrupt:
 		return "OpIteratorCleanupAbrupt"
+	case OpValidateSuperclass:
+		return "OpValidateSuperclass"
 	case OpDefineMethodComputed:
 		return "OpDefineMethodComputed"
 	case OpDefineMethodEnumerable:
@@ -810,7 +815,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return offset + 1 // OpNop has no operands
 	case OpLoadConst:
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
-	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject, OpLoadUninitialized, OpCheckUninitialized, OpCloseUpvalue, OpIteratorCleanupAbrupt:
+	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject, OpLoadUninitialized, OpCheckUninitialized, OpCloseUpvalue, OpIteratorCleanupAbrupt, OpValidateSuperclass:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
 	case OpNegate, OpNot, OpTypeof, OpToNumber, OpToNumeric, OpLoadNumericOne, OpBitwiseNot, OpGetLength, OpIsNull, OpIsUndefined, OpIsNullish:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry

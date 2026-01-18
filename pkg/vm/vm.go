@@ -4077,6 +4077,95 @@ startExecution:
 				closureObj.Fn.Prototype = protoVal
 			}
 
+		case OpValidateSuperclass:
+			// OpValidateSuperclass: Rx
+			// Validates that the value in Rx is a valid superclass:
+			// - Must be callable (a function/constructor), OR
+			// - Must be null
+			// Per ECMAScript 15.7.14 ClassDefinitionEvaluation step 5
+			superclassReg := code[ip]
+			ip++
+
+			superclassVal := registers[superclassReg]
+
+			// null is valid (class extends null)
+			if superclassVal.Type() == TypeNull {
+				// Valid - do nothing
+			} else if !superclassVal.IsCallable() {
+				// Not callable and not null - throw TypeError
+				frame.ip = ip
+				vm.ThrowTypeError(fmt.Sprintf("Class extends value %s is not a constructor or null", superclassVal.TypeName()))
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			} else {
+				// It's callable - check if it has a valid .prototype property
+				// Per ECMAScript: prototype must be an Object or null
+				var protoVal Value = Undefined
+				switch superclassVal.Type() {
+				case TypeFunction:
+					fn := AsFunction(superclassVal)
+					protoVal = fn.GetOrCreatePrototypeWithVM(vm)
+				case TypeClosure:
+					closureObj := AsClosure(superclassVal)
+					protoVal = closureObj.GetPrototypeWithVM(vm)
+				case TypeNativeFunctionWithProps:
+					nativeFn := superclassVal.AsNativeFunctionWithProps()
+					if proto, exists := nativeFn.Properties.GetOwn("prototype"); exists {
+						protoVal = proto
+					}
+				case TypeNativeFunction:
+					// Try to get prototype via opGetProp
+					if ok, _, _ := vm.opGetProp(nil, 0, &superclassVal, "prototype", &protoVal); !ok {
+						protoVal = Undefined
+					}
+				}
+
+				// prototype must be Object or null, not undefined or primitive
+				if protoVal.Type() == TypeUndefined {
+					// No prototype property - that's an error for extends
+					frame.ip = ip
+					vm.ThrowTypeError("Class extends value does not have valid prototype property")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+
+				// Per ECMAScript, prototype must be Object or null
+				// Note: Functions ARE objects, so they are valid prototypes
+				if protoVal.Type() != TypeNull && !protoVal.IsObject() && !protoVal.IsCallable() {
+					frame.ip = ip
+					vm.ThrowTypeError("Class extends value has non-object prototype property")
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+			}
+
 		case OpArrayCopy:
 			destReg := code[ip]
 			offHi := code[ip+1]

@@ -1828,6 +1828,70 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		return hint, nil
 	}
 
+	// Check if this is an optional chaining method call (obj?.method(args...))
+	if optChain, isOptChain := node.Function.(*parser.OptionalChainingExpression); isOptChain {
+		// Optional method call: obj?.method(args...)
+		// Need to check if object is nullish, and if not, call method with proper this binding
+		oldTailPos := c.inTailPosition
+		c.inTailPosition = false
+
+		// 1. Compile the object part (this value)
+		thisReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, thisReg)
+		_, err := c.compileNode(optChain.Object, thisReg)
+		if err != nil {
+			c.inTailPosition = oldTailPos
+			return BadRegister, err
+		}
+
+		// 2. Check if the object is null or undefined
+		isNullishReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, isNullishReg)
+		c.emitIsNullish(isNullishReg, thisReg, node.Token.Line)
+
+		// If object is NOT nullish, jump to normal method call
+		jumpToCallPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, node.Token.Line)
+
+		// Object IS nullish - return undefined
+		c.emitLoadUndefined(hint, node.Token.Line)
+		endJumpPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+
+		// Object is not null/undefined - do method call
+		c.patchJump(jumpToCallPos)
+
+		// 3. Allocate contiguous block for function + all arguments
+		totalArgCount := c.determineTotalArgCount(node)
+		blockSize := 1 + totalArgCount
+		funcReg := c.regAlloc.AllocContiguous(blockSize)
+		for i := 0; i < blockSize; i++ {
+			tempRegs = append(tempRegs, funcReg+Register(i))
+		}
+
+		// 4. Get the method property
+		propertyName := c.extractPropertyName(optChain.Property)
+		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+		c.emitGetProp(funcReg, thisReg, nameConstIdx, node.Token.Line)
+
+		// 5. Compile arguments directly into their target positions
+		_, actualArgCount, err := c.compileArgumentsWithOptionalHandling(node, funcReg+1)
+		c.inTailPosition = oldTailPos
+		if err != nil {
+			return BadRegister, err
+		}
+
+		// 6. Emit method call with proper this binding
+		if enableTCO && c.inTailPosition && c.tryDepth == 0 {
+			c.emitTailCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+		} else {
+			c.emitCallMethod(hint, funcReg, thisReg, byte(actualArgCount), node.Token.Line)
+		}
+
+		// 7. Patch the end jump
+		c.patchJump(endJumpPos)
+
+		return hint, nil
+	}
+
 	// --- Regular function call ---
 	// 1. Allocate contiguous block for function + all arguments (including optional parameters)
 	totalArgCount := c.determineTotalArgCount(node)

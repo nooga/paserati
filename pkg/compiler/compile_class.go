@@ -135,41 +135,60 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 			superConstructorReg = BadRegister
 			needToFreeSuperReg = false
 		} else {
-			// Get the superclass name
+			// Check if it's an Identifier or GenericTypeRef - we can resolve by name
 			var superClassName string
+			var isNamedRef bool
 			if ident, ok := node.SuperClass.(*parser.Identifier); ok {
 				superClassName = ident.Value
+				isNamedRef = true
 			} else if genericTypeRef, ok := node.SuperClass.(*parser.GenericTypeRef); ok {
 				superClassName = genericTypeRef.Name.Value
-			} else {
-				superClassName = node.SuperClass.String()
+				isNamedRef = true
 			}
 
-			// Look up the parent class constructor
-			symbol, _, exists := c.currentSymbolTable.Resolve(superClassName)
-			if exists {
-				// Found in symbol table
-				if symbol.IsGlobal {
-					superConstructorReg = c.regAlloc.Alloc()
-					needToFreeSuperReg = true
-					c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
-				} else if symbol.IsSpilled {
-					// Spilled variable - load from spill slot
-					superConstructorReg = c.regAlloc.Alloc()
-					needToFreeSuperReg = true
-					c.emitLoadSpill(superConstructorReg, symbol.SpillIndex, node.Token.Line)
+			if isNamedRef {
+				// Look up the parent class constructor by name
+				symbol, _, exists := c.currentSymbolTable.Resolve(superClassName)
+				if exists {
+					// Found in symbol table
+					if symbol.IsGlobal {
+						superConstructorReg = c.regAlloc.Alloc()
+						needToFreeSuperReg = true
+						c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
+					} else if symbol.IsSpilled {
+						// Spilled variable - load from spill slot
+						superConstructorReg = c.regAlloc.Alloc()
+						needToFreeSuperReg = true
+						c.emitLoadSpill(superConstructorReg, symbol.SpillIndex, node.Token.Line)
+					} else {
+						superConstructorReg = symbol.Register
+						needToFreeSuperReg = false
+					}
 				} else {
-					superConstructorReg = symbol.Register
-					needToFreeSuperReg = false
+					// Not in symbol table - might be a built-in class (Object, Array, etc.)
+					// Emit code to look up the global variable at runtime
+					globalIdx := c.GetOrAssignGlobalIndex(superClassName)
+					superConstructorReg = c.regAlloc.Alloc()
+					needToFreeSuperReg = true
+					c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
 				}
 			} else {
-				// Not in symbol table - might be a built-in class (Object, Array, etc.)
-				// Emit code to look up the global variable at runtime
-				globalIdx := c.GetOrAssignGlobalIndex(superClassName)
+				// For arbitrary expressions (like literals, member expressions, etc.),
+				// compile the expression to get the value at runtime
 				superConstructorReg = c.regAlloc.Alloc()
 				needToFreeSuperReg = true
-				c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
+				_, err := c.compileNode(node.SuperClass, superConstructorReg)
+				if err != nil {
+					c.regAlloc.Free(superConstructorReg)
+					return BadRegister, err
+				}
 			}
+
+			// Emit runtime validation that the superclass is a valid constructor
+			// Per ECMAScript: must be callable with [[Construct]], or null
+			// The VM will throw TypeError if invalid
+			c.emitOpCode(vm.OpValidateSuperclass, node.Token.Line)
+			c.emitByte(byte(superConstructorReg))
 		}
 	}
 
