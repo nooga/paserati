@@ -31,10 +31,14 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
 			isValueFunc = true
 			// --- Handle let f = function g() {} or let f = function() {} ---
-			// 1. Define the *variable name (f)* temporarily for potential recursion
-			//    within the function body (e.g., recursive anonymous function).
-			// debug disabled
-			c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+			// 1. Check if variable is already predefined (TDZ), otherwise define temporarily for potential recursion
+			var closureReg Register
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+				closureReg = sym.Register
+			} else {
+				c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+				closureReg = c.regAlloc.Alloc()
+			}
 
 			// 2. Compile the function literal body.
 			//    Pass the variable name (f) as the hint for the function object's name
@@ -44,8 +48,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 				// Error already added to c.errors by compileFunctionLiteral
 				return BadRegister, nil // Return nil error here, main error is tracked
 			}
-			// 3. Create the closure object
-			closureReg := c.regAlloc.Alloc()
+			// 3. Closure register is already set above
 			// debug disabled
 			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
@@ -61,8 +64,14 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		} else if arrowFunc, ok := node.Value.(*parser.ArrowFunctionLiteral); ok {
 			isValueFunc = true
 			// --- Handle let f = () => {} ---
-			// 1. Define the *variable name (f)* temporarily for potential recursion
-			c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+			// 1. Check if variable is already predefined (TDZ), otherwise define temporarily for potential recursion
+			var closureReg Register
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+				closureReg = sym.Register
+			} else {
+				c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+				closureReg = c.regAlloc.Alloc()
+			}
 
 			// 2. Compile the arrow function with variable name as the name hint
 			//    Per ECMAScript spec, anonymous arrow functions infer name from variable
@@ -70,8 +79,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			if err != nil {
 				return BadRegister, nil
 			}
-			// 3. Create the closure object
-			closureReg := c.regAlloc.Alloc()
+			// 3. Closure register is already set above
 			// Create a minimal FunctionLiteral for emitClosure
 			var body *parser.BlockStatement
 			if blockBody, ok := arrowFunc.Body.(*parser.BlockStatement); ok {
@@ -96,8 +104,12 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 					Value: node.Name.Value,
 				}
 			}
-			// Now compile normally - the class will use its name (either own name or inferred)
-			valueReg = c.regAlloc.Alloc()
+			// Now compile normally - reuse predefined TDZ register if present
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+				valueReg = sym.Register
+			} else {
+				valueReg = c.regAlloc.Alloc()
+			}
 			_, err = c.compileNode(classExpr, valueReg)
 			if err != nil {
 				return BadRegister, err
@@ -494,8 +506,14 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 		if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
 			isValueFunc = true
 			// --- Handle const f = function g() {} or const f = function() {} ---
-			// 1. Define the *const name (f)* temporarily for recursion.
-			c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+			// 1. Check if variable is already predefined (TDZ), otherwise define temporarily for recursion
+			var closureReg Register
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+				closureReg = sym.Register
+			} else {
+				c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+				closureReg = c.regAlloc.Alloc()
+			}
 
 			// 2. Compile the function literal body, passing const name as hint.
 			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
@@ -503,8 +521,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 				// Error already added to c.errors by compileFunctionLiteral
 				return BadRegister, nil // Return nil error here, main error is tracked
 			}
-			// 3. Create the closure object
-			closureReg := c.regAlloc.Alloc()
+			// 3. Closure register is already set above
 			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
 			// 4. Update the temporary definition for the *const name (f)* with the closure register.
@@ -518,16 +535,21 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 		} else if arrowFunc, ok := node.Value.(*parser.ArrowFunctionLiteral); ok {
 			isValueFunc = true
 			// --- Handle const f = () => {} ---
-			// 1. Define the *const name (f)* temporarily for recursion
-			c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+			// 1. Check if variable is already predefined (TDZ), otherwise define temporarily for recursion
+			var closureReg Register
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+				closureReg = sym.Register
+			} else {
+				c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+				closureReg = c.regAlloc.Alloc()
+			}
 
 			// 2. Compile the arrow function with const name as the name hint
 			funcConstIndex, freeSymbols, err := c.compileArrowFunctionWithName(arrowFunc, node.Name.Value)
 			if err != nil {
 				return BadRegister, nil
 			}
-			// 3. Create the closure object
-			closureReg := c.regAlloc.Alloc()
+			// 3. Closure register is already set above
 			// Create a minimal FunctionLiteral for emitClosure
 			var body *parser.BlockStatement
 			if blockBody, ok := arrowFunc.Body.(*parser.BlockStatement); ok {
@@ -552,8 +574,12 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 					Value: node.Name.Value,
 				}
 			}
-			// Now compile normally - the class will use its name (either own name or inferred)
-			valueReg = c.regAlloc.Alloc()
+			// Now compile normally - reuse predefined TDZ register if present
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+				valueReg = sym.Register
+			} else {
+				valueReg = c.regAlloc.Alloc()
+			}
 			_, err = c.compileNode(classExpr, valueReg)
 			if err != nil {
 				return BadRegister, err

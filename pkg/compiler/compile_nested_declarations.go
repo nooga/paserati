@@ -197,25 +197,82 @@ func (c *Compiler) compileArrayDestructuringDeclarationWithValueReg(node *parser
 		if ident, ok := element.Target.(*parser.Identifier); ok {
 			// Simple identifier target
 			if element.Default != nil {
-				// First, define the variable to reserve the name and get the target register
-				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Any, line)
+				// For const variables, we must compute the value first, then define.
+				// If we define first as const, then try to assign, it will fail.
+				resultReg := c.regAlloc.Alloc()
+
+				// Check if extracted value is undefined
+				jumpToDefault := c.emitPlaceholderJump(vm.OpJumpIfUndefined, extractedReg, line)
+
+				// Not undefined - use the extracted value
+				c.emitMove(resultReg, extractedReg, line)
+				jumpPastDefault := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+				// Undefined - compile default expression with function name inference
+				c.patchJump(jumpToDefault)
+				nameHint := ident.Value
+				var compileErr errors.PaseratiError
+
+				// Handle function name inference per ECMAScript spec
+				if funcLit, ok := element.Default.(*parser.FunctionLiteral); ok && funcLit.Name == nil {
+					// Anonymous function literal - use target name
+					funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, nameHint)
+					if err != nil {
+						c.regAlloc.Free(resultReg)
+						c.regAlloc.Free(extractedReg)
+						return err
+					}
+					c.emitClosure(resultReg, funcConstIndex, funcLit, freeSymbols)
+				} else if classExpr, ok := element.Default.(*parser.ClassExpression); ok && classExpr.Name == nil {
+					// Anonymous class expression - give it the target name temporarily
+					classExpr.Name = &parser.Identifier{
+						Token: classExpr.Token,
+						Value: nameHint,
+					}
+					_, compileErr = c.compileNode(classExpr, resultReg)
+					classExpr.Name = nil
+					if compileErr != nil {
+						c.regAlloc.Free(resultReg)
+						c.regAlloc.Free(extractedReg)
+						return compileErr
+					}
+				} else if arrowFunc, ok := element.Default.(*parser.ArrowFunctionLiteral); ok {
+					// Arrow function - compile with name hint
+					funcConstIndex, freeSymbols, err := c.compileArrowFunctionWithName(arrowFunc, nameHint)
+					if err != nil {
+						c.regAlloc.Free(resultReg)
+						c.regAlloc.Free(extractedReg)
+						return err
+					}
+					var body *parser.BlockStatement
+					if blockBody, ok := arrowFunc.Body.(*parser.BlockStatement); ok {
+						body = blockBody
+					} else {
+						body = &parser.BlockStatement{}
+					}
+					minimalFuncLit := &parser.FunctionLiteral{Body: body}
+					c.emitClosure(resultReg, funcConstIndex, minimalFuncLit, freeSymbols)
+				} else {
+					// Not a function, compile normally
+					_, compileErr = c.compileNode(element.Default, resultReg)
+					if compileErr != nil {
+						c.regAlloc.Free(resultReg)
+						c.regAlloc.Free(extractedReg)
+						return compileErr
+					}
+				}
+
+				c.patchJump(jumpPastDefault)
+
+				// Now define the variable with the computed value
+				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, resultReg, line)
 				if err != nil {
+					c.regAlloc.Free(resultReg)
 					c.regAlloc.Free(extractedReg)
 					return err
 				}
 
-				// Get the target identifier for conditional assignment
-				targetIdent := &parser.Identifier{
-					Token: ident.Token,
-					Value: ident.Value,
-				}
-
-				// Use conditional assignment: target = extractedReg !== undefined ? extractedReg : defaultExpr
-				err = c.compileConditionalAssignment(targetIdent, extractedReg, element.Default, line)
-				if err != nil {
-					c.regAlloc.Free(extractedReg)
-					return err
-				}
+				c.regAlloc.Free(resultReg)
 			} else {
 				// Define variable with extracted value
 				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, extractedReg, line)
