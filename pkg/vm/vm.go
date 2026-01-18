@@ -3090,8 +3090,11 @@ startExecution:
 				// Handle constructor return semantics for sentinel frame returns
 				var finalResult Value
 				if isConstructor {
-					if result.IsObject() {
-						finalResult = result // Return the explicit object
+					// Constructor return semantics: if the returned value is an object
+					// (including functions, which are callable objects), return it.
+					// Otherwise return the instance (this).
+					if result.IsObject() || result.IsCallable() {
+						finalResult = result // Return the explicit object/function
 					} else {
 						finalResult = constructorThisValue // Return the instance
 					}
@@ -3123,8 +3126,11 @@ startExecution:
 				// Handle constructor return semantics for direct call
 				var finalResult Value
 				if isConstructor {
-					if result.IsObject() {
-						finalResult = result // Return the explicit object
+					// Constructor return semantics: if the returned value is an object
+					// (including functions, which are callable objects), return it.
+					// Otherwise return the instance (this).
+					if result.IsObject() || result.IsCallable() {
+						finalResult = result // Return the explicit object/function
 					} else {
 						finalResult = constructorThisValue // Return the instance
 					}
@@ -3145,10 +3151,11 @@ startExecution:
 			// Handle constructor return semantics
 			var finalResult Value
 			if isConstructor {
-				// Constructor call: only return the explicit value if it's an object,
-				// otherwise return the instance (this)
-				if result.IsObject() {
-					finalResult = result // Return the explicit object
+				// Constructor return semantics: if the returned value is an object
+				// (including functions, which are callable objects), return it.
+				// Otherwise return the instance (this).
+				if result.IsObject() || result.IsCallable() {
+					finalResult = result // Return the explicit object/function
 				} else {
 					finalResult = constructorThisValue // Return the instance
 				}
@@ -6774,6 +6781,12 @@ startExecution:
 					instancePrototype = constructorFunc.GetOrCreatePrototypeWithVM(vm)
 				}
 
+				// ECMAScript spec 13.2.2: If prototype is not an object, use Object.prototype
+				// This handles cases like: function F(){}; F.prototype = 1; new F();
+				if !instancePrototype.IsObject() && !instancePrototype.IsCallable() {
+					instancePrototype = vm.ObjectPrototype
+				}
+
 				// For derived constructors, 'this' is uninitialized until super() is called
 				// For base constructors, create the instance immediately
 				var newInstance Value
@@ -6943,6 +6956,12 @@ startExecution:
 				} else {
 					// Fallback: use the constructor's prototype
 					instancePrototype = constructorFunc.GetOrCreatePrototypeWithVM(vm)
+				}
+
+				// ECMAScript spec 13.2.2: If prototype is not an object, use Object.prototype
+				// This handles cases like: function F(){}; F.prototype = 1; new F();
+				if !instancePrototype.IsObject() && !instancePrototype.IsCallable() {
+					instancePrototype = vm.ObjectPrototype
 				}
 
 				// For derived constructors, 'this' is uninitialized until super() is called
@@ -9422,10 +9441,11 @@ startExecution:
 			// Handle constructor return semantics
 			var finalResult Value
 			if isConstructor {
-				// Constructor call: only return the explicit value if it's an object,
-				// otherwise return the instance (this)
-				if result.IsObject() {
-					finalResult = result // Return the explicit object
+				// Constructor return semantics: if the returned value is an object
+				// (including functions, which are callable objects), return it.
+				// Otherwise return the instance (this).
+				if result.IsObject() || result.IsCallable() {
+					finalResult = result // Return the explicit object/function
 				} else {
 					finalResult = constructorThisValue // Return the instance
 				}

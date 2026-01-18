@@ -1137,6 +1137,13 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 	// This must be checked BEFORE compiling the operand, as unresolvable identifiers would fail
 	if node.Operator == "delete" {
 		if ident, ok := node.Right.(*parser.Identifier); ok {
+			// Special case: 'arguments' is a non-configurable binding in function scope
+			// Per ECMAScript spec, delete arguments should return false
+			if ident.Value == "arguments" {
+				c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(false)), node.Token.Line)
+				return hint, nil
+			}
+
 			// Check if this identifier is resolvable
 			_, _, found := c.currentSymbolTable.Resolve(ident.Value)
 			if !found {
@@ -1305,6 +1312,10 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 					// Per ECMAScript spec, delete on non-configurable bindings returns false
 					c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(false)), node.Token.Line)
 				}
+			} else if varName == "arguments" {
+				// Special case: 'arguments' is a special non-configurable binding in function scope
+				// Per ECMAScript spec, delete arguments returns false
+				c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(false)), node.Token.Line)
 			} else if c.heapAlloc != nil {
 				if heapIdx, isGlobal := c.heapAlloc.GetIndex(varName); isGlobal {
 					// It's a global variable - emit OpDeleteGlobal
