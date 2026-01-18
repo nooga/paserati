@@ -391,6 +391,12 @@ type Compiler struct {
 
 	// --- Register Spilling Support ---
 	nextSpillSlot uint16 // Next available spill slot index (0-65534)
+
+	// --- Scope Boundary Tracking ---
+	// scopeBoundary marks the first symbol table that belongs to an enclosing compiler.
+	// When walking the Outer chain, we stop at this table to avoid crossing compiler boundaries.
+	// For top-level compilers, this is nil.
+	scopeBoundary *SymbolTable
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -477,10 +483,12 @@ func (c *Compiler) isDefinedInEnclosingCompiler(definingTable *SymbolTable) bool
 }
 
 // isInCurrentScopeChain checks if a symbol table is part of this compiler's scope chain.
-// This determines if a variable can be accessed directly via register (vs needing upvalue capture).
-// Used for closure emission to correctly identify variables that are local to the current function.
+// This walks the Outer chain from currentSymbolTable but STOPS at scopeBoundary
+// (which marks where the parent compiler's scope begins).
+// Used for closure emission to correctly identify variables that are local to the current function
+// vs variables from outer functions that need upvalue capture.
 func (c *Compiler) isInCurrentScopeChain(table *SymbolTable) bool {
-	for t := c.currentSymbolTable; t != nil; t = t.Outer {
+	for t := c.currentSymbolTable; t != nil && t != c.scopeBoundary; t = t.Outer {
 		if t == table {
 			return true
 		}
@@ -592,6 +600,7 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		parameterNames:           make(map[string]bool),                     // Track parameter names for var hoisting
 		currentDefaultParamIndex: -1,                                        // Not in default param scope initially
 		parameterList:            nil,                                       // Will be set when compiling function parameters
+		scopeBoundary:            enclosingCompiler.currentSymbolTable,      // Mark where parent's scope starts
 	}
 }
 

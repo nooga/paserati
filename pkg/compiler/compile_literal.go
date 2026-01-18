@@ -252,7 +252,8 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 
 		// Check if the variable is in the current compiler's scope chain (local capture)
 		// vs in an enclosing compiler's scope chain (upvalue capture).
-		// Use isInCurrentScopeChain to walk the entire Outer chain of the current compiler.
+		// isInCurrentScopeChain walks the Outer chain but stops at scopeBoundary
+		// to avoid crossing into parent compiler scopes.
 		isInCurrentScope := c.isInCurrentScopeChain(enclosingTable)
 
 		if isInCurrentScope {
