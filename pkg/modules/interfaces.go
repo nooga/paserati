@@ -70,6 +70,9 @@ type ModuleLoader interface {
 
 	// GetDependencyStats returns dependency analysis statistics
 	GetDependencyStats() DependencyStats
+
+	// SetIgnoreTypeErrors sets whether type errors should be ignored during module loading
+	SetIgnoreTypeErrors(ignore bool)
 }
 
 // ModuleRegistry manages the cache of loaded modules

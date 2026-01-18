@@ -184,7 +184,7 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		moduleChecker.EnableModuleMode(record.ResolvedPath, ml)
 
 		checkErrors := moduleChecker.Check(record.AST)
-		if len(checkErrors) > 0 {
+		if len(checkErrors) > 0 && !ml.config.IgnoreTypeErrors {
 			record.Error = fmt.Errorf("type checking failed: %s", checkErrors[0].Error())
 			record.State = ModuleError
 			debugPrintf("// [ModuleLoader] loadModuleSequential EARLY RETURN (type check error): %s\n", specifier)
@@ -625,6 +625,14 @@ func (ml *moduleLoader) SetVMInstance(vm *vm.VM) {
 	ml.vmInstance = vm
 }
 
+// SetIgnoreTypeErrors sets whether type errors should be ignored during module loading
+func (ml *moduleLoader) SetIgnoreTypeErrors(ignore bool) {
+	ml.mutex.Lock()
+	defer ml.mutex.Unlock()
+
+	ml.config.IgnoreTypeErrors = ignore
+}
+
 // AddResolver adds a module resolver to the chain
 func (ml *moduleLoader) AddResolver(resolver ModuleResolver) {
 	ml.mutex.Lock()
@@ -720,7 +728,7 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 
 		// Perform type checking on this module
 		errors := moduleChecker.Check(record.AST)
-		if len(errors) > 0 {
+		if len(errors) > 0 && !ml.config.IgnoreTypeErrors {
 			// Store the first error (can be enhanced to store all errors)
 			record.Error = fmt.Errorf("type checking failed: %s", errors[0].Error())
 			record.State = ModuleError

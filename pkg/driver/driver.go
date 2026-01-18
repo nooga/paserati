@@ -61,6 +61,10 @@ type Paserati struct {
 // SetIgnoreTypeErrors sets whether type checking errors should be ignored
 func (p *Paserati) SetIgnoreTypeErrors(ignore bool) {
 	p.ignoreTypeErrors = ignore
+	// Also propagate to module loader so imported modules respect this setting
+	if p.moduleLoader != nil {
+		p.moduleLoader.SetIgnoreTypeErrors(ignore)
+	}
 }
 
 // EnableModuleMode enables module mode for the checker and compiler

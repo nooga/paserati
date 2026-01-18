@@ -206,6 +206,9 @@ type LoaderConfig struct {
 	// Performance settings
 	PrewarmLexers bool // Pre-allocate lexer instances
 	ReuseAST      bool // Reuse AST node pools
+
+	// Type checking settings
+	IgnoreTypeErrors bool // When true, type errors don't stop module loading
 }
 
 // DefaultLoaderConfig returns sensible default configuration
