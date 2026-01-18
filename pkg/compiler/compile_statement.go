@@ -104,8 +104,8 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 					Value: node.Name.Value,
 				}
 			}
-			// Now compile normally - reuse predefined TDZ register if present
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+			// Now compile normally - reuse predefined TDZ register if present (but not for globals)
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal && !sym.IsSpilled {
 				valueReg = sym.Register
 			} else {
 				valueReg = c.regAlloc.Alloc()
@@ -121,7 +121,10 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			var targetReg Register
 			useSpilling := false
 			var spillIdx uint16
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+			// Check for existing local register. Exclude globals (they use heap, not registers)
+			// and spilled vars (they use spill slots). Also check Register != nilRegister to
+			// ensure it's actually a valid register allocation.
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal && !sym.IsSpilled {
 				targetReg = sym.Register
 			} else {
 				// Try to allocate for the new variable (using lower threshold)
@@ -162,7 +165,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 				undefReg := c.regAlloc.Alloc()
 				c.emitLoadUndefined(undefReg, node.Name.Token.Line)
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-				c.emitSetGlobal(globalIdx, undefReg, node.Name.Token.Line)
+				c.emitSetGlobalInit(globalIdx, undefReg, node.Name.Token.Line) // TDZ init
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 				c.regAlloc.Free(undefReg)
 			} else {
@@ -197,7 +200,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			if isGlobalScope || useHeapForEval {
 				// Global scope or eval-created binding: use heap storage
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
+				c.emitSetGlobalInit(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 			} else {
 				// Local scope (function or enclosed block): use local symbol table
@@ -222,7 +225,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 				// Get the closure register from the symbol table
 				symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
 				if found && symbolRef.Register != nilRegister {
-					c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
+					c.emitSetGlobalInit(globalIdx, symbolRef.Register, node.Name.Token.Line)
 					// Update the symbol to be global
 					c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 					// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
@@ -595,8 +598,8 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 					Value: node.Name.Value,
 				}
 			}
-			// Now compile normally - reuse predefined TDZ register if present
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+			// Now compile normally - reuse predefined TDZ register if present (but not for globals)
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal && !sym.IsSpilled {
 				valueReg = sym.Register
 			} else {
 				valueReg = c.regAlloc.Alloc()
@@ -608,9 +611,9 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 
 		} else {
 			// Compile other value types normally
-			// Use existing predefined register if present
+			// Use existing predefined register if present (but not for globals/spilled vars)
 			var targetReg Register
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal && !sym.IsSpilled {
 				targetReg = sym.Register
 			} else {
 				// Allocate for the new variable - DON'T defer free since this may become the variable's permanent register
@@ -633,7 +636,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			if isGlobalScope {
 				// True global scope: use global variable (const)
 				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
+				c.emitSetGlobalInit(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobalConst(node.Name.Value, globalIdx)
 			} else {
 				// Local scope (function or enclosed block): use local symbol table
@@ -655,7 +658,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 				// Get the closure register from the symbol table
 				symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
 				if found && symbolRef.Register != nilRegister {
-					c.emitSetGlobal(globalIdx, symbolRef.Register, node.Name.Token.Line)
+					c.emitSetGlobalInit(globalIdx, symbolRef.Register, node.Name.Token.Line)
 					// Update the symbol to be global const
 					c.currentSymbolTable.DefineGlobalConst(node.Name.Value, globalIdx)
 					// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure

@@ -650,6 +650,14 @@ func (c *Compiler) emitSetGlobal(globalIdx uint16, src Register, line int) {
 	c.emitByte(byte(src))
 }
 
+// emitSetGlobalInit emits OpSetGlobalInit instruction - same as emitSetGlobal but bypasses TDZ check.
+// Used when compiling let/const declarations to initialize the variable out of TDZ.
+func (c *Compiler) emitSetGlobalInit(globalIdx uint16, src Register, line int) {
+	c.emitOpCode(vm.OpSetGlobalInit, line)
+	c.emitUint16(globalIdx)
+	c.emitByte(byte(src))
+}
+
 // emitToNumber implements unary plus by converting the operand to a number
 func (c *Compiler) emitToNumber(dest, src Register, line int) {
 	c.emitOpCode(vm.OpToNumber, line)

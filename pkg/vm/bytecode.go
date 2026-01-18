@@ -158,8 +158,9 @@ const (
 	// --- END NEW ---
 
 	// --- NEW: Global Variable Operations ---
-	OpGetGlobal OpCode = 46 // Rx GlobalIdx(16bit): Rx = Globals[GlobalIdx] (direct indexed access)
-	OpSetGlobal OpCode = 47 // GlobalIdx(16bit) Ry: Globals[GlobalIdx] = Ry (direct indexed access)
+	OpGetGlobal     OpCode = 46 // Rx GlobalIdx(16bit): Rx = Globals[GlobalIdx] (direct indexed access)
+	OpSetGlobal     OpCode = 47 // GlobalIdx(16bit) Ry: Globals[GlobalIdx] = Ry (direct indexed access)
+	OpSetGlobalInit OpCode = 145 // GlobalIdx(16bit) Ry: Globals[GlobalIdx] = Ry (init at declaration, bypasses TDZ check)
 	// --- END NEW ---
 
 	// --- NEW: Efficient Nullish Checks ---
@@ -464,6 +465,8 @@ func (op OpCode) String() string {
 		return "OpGetGlobal"
 	case OpSetGlobal:
 		return "OpSetGlobal"
+	case OpSetGlobalInit:
+		return "OpSetGlobalInit"
 	// --- END NEW ---
 
 	// --- NEW: Nullish Check Op Cases ---
@@ -969,6 +972,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpGetGlobal:
 		return c.registerGlobalInstruction(builder, instruction.String(), offset) // Rx, GlobalIdx(16bit)
 	case OpSetGlobal:
+		return c.globalRegisterInstruction(builder, instruction.String(), offset) // GlobalIdx(16bit), Ry
+	case OpSetGlobalInit:
 		return c.globalRegisterInstruction(builder, instruction.String(), offset) // GlobalIdx(16bit), Ry
 	// --- END NEW ---
 

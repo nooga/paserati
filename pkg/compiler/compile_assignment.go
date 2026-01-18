@@ -2586,7 +2586,7 @@ func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool
 	if isGlobalScope {
 		// Top-level: use global variable
 		globalIdx := c.GetOrAssignGlobalIndex(name)
-		c.emitSetGlobal(globalIdx, valueReg, line)
+		c.emitSetGlobalInit(globalIdx, valueReg, line)
 		c.currentSymbolTable.DefineGlobal(name, globalIdx)
 	} else {
 		// IMPORTANT: Check ONLY the CURRENT scope for existing bindings.

@@ -249,6 +249,45 @@ func collectVarDeclarations(stmts []parser.Statement) []string {
 	return names
 }
 
+// collectLetConstDeclarations collects top-level let and const declaration names from statements.
+// Unlike var, let/const are block-scoped, so we only collect from the immediate statement list.
+// This is used for TDZ (Temporal Dead Zone) - let/const must be initialized with the
+// Uninitialized marker at script start, and only get their actual value when the declaration
+// line is executed. Accessing them before declaration triggers a ReferenceError.
+func collectLetConstDeclarations(stmts []parser.Statement) []string {
+	var names []string
+	seen := make(map[string]bool)
+
+	for _, stmt := range stmts {
+		if stmt == nil {
+			continue
+		}
+		switch s := stmt.(type) {
+		case *parser.LetStatement:
+			if s.Name != nil && !seen[s.Name.Value] {
+				names = append(names, s.Name.Value)
+				seen[s.Name.Value] = true
+			}
+		case *parser.ConstStatement:
+			if s.Name != nil && !seen[s.Name.Value] {
+				names = append(names, s.Name.Value)
+				seen[s.Name.Value] = true
+			}
+		case *parser.ObjectDestructuringDeclaration:
+			// let/const destructuring
+			if s.Token.Literal == "let" || s.Token.Literal == "const" {
+				collectDestructuringNames(s.Properties, s.RestProperty, seen, &names)
+			}
+		case *parser.ArrayDestructuringDeclaration:
+			// let/const destructuring
+			if s.Token.Literal == "let" || s.Token.Literal == "const" {
+				collectArrayDestructuringNames(s.Elements, seen, &names)
+			}
+		}
+	}
+	return names
+}
+
 // --- New: Loop Context for Break/Continue ---
 type LoopContext struct {
 	// Optional label for this loop/statement
@@ -826,6 +865,32 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 		}
 	}
 	// --- END var hoisting ---
+
+	// --- Hoist let/const declarations with TDZ (Temporal Dead Zone) marker ---
+	// Let/const declarations are initialized with the Uninitialized marker at script start.
+	// This ensures that accessing them before their declaration line throws a ReferenceError.
+	// Skip TDZ hoisting for eval code - eval has different scoping rules.
+	if c.enclosing == nil && !c.isIndirectEval && c.callerScopeDesc == nil {
+		letConstNames := collectLetConstDeclarations(program.Statements)
+		debugPrintf("[Compile] TDZ hoisting %d top-level let/const declarations\n", len(letConstNames))
+		for _, name := range letConstNames {
+			// Skip if already defined (e.g., by a hoisted function with the same name - error in strict mode but allowed in sloppy)
+			if _, _, found := c.currentSymbolTable.Resolve(name); found {
+				debugPrintf("[Compile TDZHoist] Skipping '%s' - already defined\n", name)
+				continue
+			}
+			// Define as global with Uninitialized value (TDZ)
+			globalIdx := c.GetOrAssignGlobalIndex(name)
+			c.currentSymbolTable.DefineGlobal(name, globalIdx)
+			// Emit code to initialize to Uninitialized (TDZ marker)
+			tempReg := c.regAlloc.Alloc()
+			c.emitLoadUninitialized(tempReg, 0)
+			c.emitSetGlobal(globalIdx, tempReg, 0)
+			c.regAlloc.Free(tempReg)
+			debugPrintf("[Compile TDZHoist] TDZ hoisted let/const '%s' at global index %d\n", name, globalIdx)
+		}
+	}
+	// --- END let/const TDZ hoisting ---
 
 	resultReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(resultReg)

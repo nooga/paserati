@@ -8827,6 +8827,20 @@ startExecution:
 				}
 			}
 
+			// TDZ check: throw ReferenceError if accessing an uninitialized let/const variable
+			if value.typ == TypeUninitialized {
+				frame.ip = ip
+				varName := vm.heap.GetNameByIndex(int(globalIdx))
+				if varName == "" {
+					varName = fmt.Sprintf("<index %d>", globalIdx)
+				}
+				vm.ThrowReferenceError(fmt.Sprintf("Cannot access '%s' before initialization", varName))
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+				goto reloadFrame
+			}
+
 			// Store the retrieved value in the destination register
 			registers[destReg] = value
 
@@ -8842,6 +8856,20 @@ startExecution:
 			srcReg := code[ip+2]
 			globalIdx := uint16(globalIdxHi)<<8 | uint16(globalIdxLo)
 			ip += 3
+
+			// TDZ check: throw ReferenceError if trying to set an uninitialized let/const variable
+			if currentVal, exists := vm.heap.Get(int(globalIdx)); exists && currentVal.typ == TypeUninitialized {
+				frame.ip = ip
+				varName := vm.heap.GetNameByIndex(int(globalIdx))
+				if varName == "" {
+					varName = fmt.Sprintf("<index %d>", globalIdx)
+				}
+				vm.ThrowReferenceError(fmt.Sprintf("Cannot access '%s' before initialization", varName))
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+				goto reloadFrame
+			}
 
 			// Use module-scoped global table
 			value := registers[srcReg]
@@ -8874,6 +8902,20 @@ startExecution:
 			if vm.currentModulePath != "" {
 				// fmt.Printf("// [VM] OpSetGlobal: Module context: '%s'\n", vm.currentModulePath)
 			}
+
+		// OpSetGlobalInit: Same as OpSetGlobal but bypasses TDZ check.
+		// Used when compiling let/const declarations to initialize the variable
+		// out of the TDZ (Temporal Dead Zone).
+		case OpSetGlobalInit:
+			globalIdxHi := code[ip]
+			globalIdxLo := code[ip+1]
+			srcReg := code[ip+2]
+			globalIdx := uint16(globalIdxHi)<<8 | uint16(globalIdxLo)
+			ip += 3
+
+			// NO TDZ check - this is the declaration initializing the variable
+			value := registers[srcReg]
+			vm.setGlobalInTable(globalIdx, value)
 
 		// --- Register Spilling Support ---
 		// These opcodes handle register overflow by storing/loading values from
