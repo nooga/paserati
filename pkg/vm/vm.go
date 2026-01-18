@@ -9036,13 +9036,6 @@ startExecution:
 			arrayValue := registers[arrayReg]
 			startValue := registers[startReg]
 
-			// Ensure we have an array
-			if arrayValue.Type() != TypeArray {
-				frame.ip = ip
-				status := vm.runtimeError("Cannot slice non-array value of type %d", int(arrayValue.Type()))
-				return status, Undefined
-			}
-
 			// Ensure start index is a number
 			if !startValue.IsNumber() {
 				frame.ip = ip
@@ -9050,9 +9043,32 @@ startExecution:
 				return status, Undefined
 			}
 
-			sourceArray := arrayValue.AsArray()
 			startIndex := int(startValue.ToFloat())
-			arrayLength := sourceArray.Length()
+			var sourceElements []Value
+			var arrayLength int
+
+			// Handle different source types
+			if arrayValue.Type() == TypeArray {
+				// Fast path for arrays
+				sourceArray := arrayValue.AsArray()
+				arrayLength = sourceArray.Length()
+				sourceElements = make([]Value, arrayLength)
+				for i := 0; i < arrayLength; i++ {
+					sourceElements[i] = sourceArray.Get(i)
+				}
+			} else {
+				// For any other iterable (generators, etc.), use extractSpreadArguments
+				// This implements ECMAScript's IteratorBindingInitialization semantics
+				frame.ip = ip
+				elements, err := vm.extractSpreadArguments(arrayValue)
+				if err != nil {
+					// Handle error - likely not iterable
+					status := vm.runtimeError("Cannot slice non-iterable value of type %s", arrayValue.TypeName())
+					return status, Undefined
+				}
+				sourceElements = elements
+				arrayLength = len(sourceElements)
+			}
 
 			// Handle negative indices (slice(-1) means slice from end)
 			if startIndex < 0 {
@@ -9070,7 +9086,7 @@ startExecution:
 			// Create new array with sliced elements
 			slicedElements := make([]Value, 0, arrayLength-startIndex)
 			for i := startIndex; i < arrayLength; i++ {
-				slicedElements = append(slicedElements, sourceArray.Get(i))
+				slicedElements = append(slicedElements, sourceElements[i])
 			}
 
 			// Create new array with sliced elements
@@ -11254,6 +11270,43 @@ func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 		args := make([]Value, 0, len(str))
 		for _, char := range str {
 			args = append(args, NewString(string(char)))
+		}
+		return args, nil
+
+	case TypeGenerator:
+		// Generators are iterators - iterate by calling next() directly
+		// Generator[Symbol.iterator]() returns the generator itself
+		var args []Value
+		for {
+			// Get 'next' method from the generator
+			nextMethod, err := vm.GetProperty(iterableVal, "next")
+			if err != nil {
+				return nil, err
+			}
+			if !nextMethod.IsCallable() {
+				return nil, vm.NewTypeError("generator.next is not a function")
+			}
+			// Call next()
+			result, err := vm.Call(nextMethod, iterableVal, []Value{})
+			if err != nil {
+				return nil, err
+			}
+			// Result is {value, done}
+			if result.Type() != TypeObject && result.Type() != TypeDictObject {
+				return nil, vm.NewTypeError("Generator next() must return an object")
+			}
+			doneVal, err := vm.GetProperty(result, "done")
+			if err != nil {
+				return nil, err
+			}
+			if doneVal.IsTruthy() {
+				break
+			}
+			val, err := vm.GetProperty(result, "value")
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, val)
 		}
 		return args, nil
 
