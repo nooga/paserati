@@ -28,6 +28,11 @@ type FunctionObject struct {
 	DeletedName   bool // True if the 'name' property has been deleted
 	DeletedLength bool // True if the 'length' property has been deleted
 
+	// HasLocalCaptures indicates if any nested closure captures locals from this function.
+	// When false, closeUpvalues can be skipped entirely on return (major performance win).
+	// Set at compile time when emitting OpClosure with CaptureFromRegister or CaptureFromSpill.
+	HasLocalCaptures bool
+
 	// cachedClosure is used to avoid per-call allocations when invoking TypeFunction values.
 	// Most runtime calls should operate on TypeClosure, but some compilation paths may leave
 	// no-capture functions as TypeFunction. In that case we can reuse this closure wrapper.
@@ -121,7 +126,7 @@ type VMCaller interface {
 	CallBytecode(fn Value, thisValue Value, args []Value) Value
 }
 
-func NewFunction(arity, length, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk, isGenerator bool, isAsync bool, isArrowFunction bool) Value {
+func NewFunction(arity, length, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk, isGenerator bool, isAsync bool, isArrowFunction bool, hasLocalCaptures bool) Value {
 	fnObj := &FunctionObject{
 		Arity:               arity,
 		Length:              length,
@@ -133,6 +138,7 @@ func NewFunction(arity, length, upvalueCount, registerSize int, variadic bool, n
 		IsGenerator:         isGenerator,
 		IsAsync:             isAsync,
 		IsArrowFunction:     isArrowFunction,
+		HasLocalCaptures:    hasLocalCaptures,
 		NameBindingRegister: -1,  // Default: no name binding
 		Properties:          nil, // Start with nil - create lazily
 	}

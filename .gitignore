@@ -27,6 +27,7 @@ pkg/.DS_Store
 paserati-minimal
 
 *.baseline
+*.pprof
 gojac
 qjs
 .DS_Store

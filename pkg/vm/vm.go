@@ -1031,26 +1031,52 @@ startExecution:
 			vm.openUpvalues = newOpenUpvalues
 
 		case OpIteratorCleanupAbrupt:
-			// Call iterator.return() with error suppression for exception cleanup.
-			// Per ECMAScript spec IteratorClose with throw completion:
+			// Call iterator.return() for exception/return cleanup.
+			// Per ECMAScript spec 7.4.6 IteratorClose:
 			// - Try to get iterator.return method
 			// - If it exists and is callable, call it
-			// - Suppress any errors from getting or calling return
-			// - The original exception (stored as pendingValue) will be re-thrown after this
+			// - Step 7: If completion.[[type]] is throw, suppress inner errors
+			// - Step 8: If innerResult.[[type]] is throw, return Completion(innerResult)
+			// - Step 9: If Type(innerResult.[[value]]) is not Object, throw TypeError
 			iteratorReg := code[ip]
 			ip++
 			iterator := registers[iteratorReg]
 			if iterator.IsObject() {
 				// Try to get the "return" method using GetProperty (prototype chain lookup)
 				// This is necessary because generator's return method is on GeneratorPrototype
-				returnMethod, _ := vm.GetProperty(iterator, "return")
+				returnMethod, getErr := vm.GetProperty(iterator, "return")
 				// If return method exists and is callable, call it
-				if returnMethod.IsCallable() {
-					// Call iterator.return() - suppress any errors
-					// Use Call() to handle both native functions (like generator.return)
-					// and user-defined functions
-					_, _ = vm.Call(returnMethod, iterator, nil)
-					// Errors are suppressed per ECMAScript spec - we don't care about the result
+				if getErr == nil && returnMethod.IsCallable() {
+					innerResult, callErr := vm.Call(returnMethod, iterator, nil)
+
+					// Check pending action to determine how to handle errors
+					if vm.pendingAction == ActionThrow {
+						// Step 7: completion is throw, suppress inner errors
+						if callErr != nil {
+							vm.currentException = Null
+							vm.unwinding = false
+						}
+					} else if vm.pendingAction == ActionReturn {
+						// Return completion - check step 8 and 9
+						if callErr != nil {
+							// Step 8: return() threw - extract exception and propagate
+							vm.pendingAction = ActionThrow
+							if excErr, ok := callErr.(exceptionError); ok {
+								vm.pendingValue = excErr.exception
+							} else {
+								vm.pendingValue = vm.currentException
+							}
+							vm.currentException = Null
+							vm.unwinding = false
+						} else if !innerResult.IsObject() {
+							// Step 9: return value is not an Object, throw TypeError
+							vm.pendingAction = ActionThrow
+							typeErr := vm.NewTypeError("Iterator result is not an object")
+							if excErr, ok := typeErr.(ExceptionError); ok {
+								vm.pendingValue = excErr.GetExceptionValue()
+							}
+						}
+					}
 				}
 			}
 
@@ -2352,8 +2378,10 @@ startExecution:
 							function.Name, calleeFunc.Name)
 					}
 
-					// 4. Close upvalues for current frame BEFORE overwriting
-					vm.closeUpvalues(registers)
+					// 4. Close upvalues for current frame BEFORE overwriting (only if needed)
+					if frame.closure != nil && frame.closure.Fn.HasLocalCaptures {
+						vm.closeUpvalues(registers)
+					}
 
 					// 5. Expand register window if needed (but never shrink)
 					oldRegSize := frame.allocatedRegSize
@@ -2555,8 +2583,10 @@ startExecution:
 				if totalNeeded <= availableInStack {
 					// We can perform TCO!
 
-					// 5. Close upvalues for current frame BEFORE overwriting
-					vm.closeUpvalues(registers)
+					// 5. Close upvalues for current frame BEFORE overwriting (only if needed)
+					if frame.closure != nil && frame.closure.Fn.HasLocalCaptures {
+						vm.closeUpvalues(registers)
+					}
 
 					// 6. Expand register window if needed (but never shrink)
 					oldRegSize := frame.allocatedRegSize
@@ -3097,8 +3127,10 @@ startExecution:
 			}
 
 			// No finally handler, proceed with normal return
-			// Close upvalues for the returning frame
-			vm.closeUpvalues(frame.registers)
+			// Close upvalues for the returning frame (only if this function has captured locals)
+			if frame.closure != nil && frame.closure.Fn.HasLocalCaptures {
+				vm.closeUpvalues(frame.registers)
+			}
 
 			// Check if this is a generator function returning (not yielding)
 			if frame.generatorObj != nil {
@@ -3301,13 +3333,15 @@ startExecution:
 			}
 
 			// No finally handler, proceed with normal return
-			// Close upvalues for the returning frame
-			if debugVM {
-				fmt.Printf("[DBG] About to closeUpvalues for frame with %d registers, openUpvalues=%d\n", len(frame.registers), len(vm.openUpvalues))
-			}
-			vm.closeUpvalues(frame.registers)
-			if debugVM {
-				fmt.Printf("[DBG] closeUpvalues completed\n")
+			// Close upvalues for the returning frame (only if this function has captured locals)
+			if frame.closure != nil && frame.closure.Fn.HasLocalCaptures {
+				if debugVM {
+					fmt.Printf("[DBG] About to closeUpvalues for frame with %d registers, openUpvalues=%d\n", len(frame.registers), len(vm.openUpvalues))
+				}
+				vm.closeUpvalues(frame.registers)
+				if debugVM {
+					fmt.Printf("[DBG] closeUpvalues completed\n")
+				}
 			}
 
 			// Pop the current frame
@@ -9570,39 +9604,36 @@ startExecution:
 				vm.pendingValue = Undefined
 			}
 
-			// Check if we have more finally handlers that could override this return
+			// Check if we have more finally or iterator cleanup handlers that need to run
 			handlers := vm.findAllExceptionHandlers(frame.ip)
-			hasFinallyHandler := false
+			var nextHandler *ExceptionHandler
 			for _, handler := range handlers {
-				if handler.IsFinally {
-					hasFinallyHandler = true
+				if handler.IsFinally || handler.IsIteratorCleanup {
+					nextHandler = handler
 					break
 				}
 			}
 
-			if hasFinallyHandler {
-				// There are more finally blocks - trigger them to execute
+			if nextHandler != nil {
+				// There are more handlers to execute - chain to them
 				vm.pendingAction = ActionReturn
 				vm.pendingValue = result
 
-				// Find the first finally handler and jump to it
-				for _, handler := range handlers {
-					if handler.IsFinally {
-						frame.ip = handler.HandlerPC
-						ip = handler.HandlerPC // Sync local IP variable
-						vm.finallyDepth++
-						continue startExecution // Jump to the outer finally block
-					}
-				}
+				frame.ip = nextHandler.HandlerPC
+				ip = nextHandler.HandlerPC // Sync local IP variable
+				vm.finallyDepth++
+				continue startExecution // Jump to the next handler
 			} else {
-				// No more finally handlers - this return takes effect immediately
+				// No more handlers - this return takes effect immediately
 				vm.pendingAction = ActionNone
 				vm.pendingValue = Undefined
 				vm.finallyDepth = 0
 			}
 
-			// Close upvalues for the returning frame
-			vm.closeUpvalues(frame.registers)
+			// Close upvalues for the returning frame (only if this function has captured locals)
+			if frame.closure != nil && frame.closure.Fn.HasLocalCaptures {
+				vm.closeUpvalues(frame.registers)
+			}
 
 			// Pop the current frame (same logic as OpReturn)
 			returningFrameRegSize := function.RegisterSize
@@ -9745,13 +9776,35 @@ startExecution:
 			// Check legacy pending action (for return/throw)
 			switch vm.pendingAction {
 			case ActionReturn:
-				// Execute the pending return
+				// Check if we have more finally or iterator cleanup handlers that need to run
+				// BEFORE completing the return
+				handlers := vm.findAllExceptionHandlers(frame.ip)
+				var nextHandler *ExceptionHandler
+				for _, handler := range handlers {
+					if handler.IsFinally || handler.IsIteratorCleanup {
+						nextHandler = handler
+						break
+					}
+				}
+
+				if nextHandler != nil {
+					// There are more handlers to execute - chain to them
+					// Keep pendingAction as ActionReturn so the chain continues
+					frame.ip = nextHandler.HandlerPC
+					ip = nextHandler.HandlerPC // Sync local IP variable
+					vm.finallyDepth++
+					continue startExecution // Jump to the next handler
+				}
+
+				// No more handlers - execute the pending return
 				result := vm.pendingValue
 				vm.pendingAction = ActionNone
 				vm.pendingValue = Undefined
 
-				// Close upvalues for the returning frame
-				vm.closeUpvalues(frame.registers)
+				// Close upvalues for the returning frame (only if this function has captured locals)
+				if frame.closure != nil && frame.closure.Fn.HasLocalCaptures {
+					vm.closeUpvalues(frame.registers)
+				}
 
 				// Check if this is a generator function returning
 				if frame.generatorObj != nil {

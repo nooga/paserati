@@ -215,7 +215,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	}
 	arrowName := "<arrow>"
 	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot)                                                                                              // Set spill slots needed
-	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, arrowName, functionChunk, false, node.IsAsync, true) // isArrowFunction = true
+	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, arrowName, functionChunk, false, node.IsAsync, true, funcCompiler.hasLocalCaptures) // isArrowFunction = true
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// 8. Emit OpClosure in the *enclosing* compiler (c) - result goes to hint register
@@ -258,6 +258,8 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 
 		if isInCurrentScope {
 			// The free variable is within the enclosing function's scope (possibly in an outer block).
+			// Mark that this function has locals captured by a nested closure
+			c.hasLocalCaptures = true
 			if enclosingSymbol.IsSpilled {
 				// Spilled variable: capture from spill slot
 				debugPrintf("// [Closure Loop %s] Free '%s' is SPILLED (slot %d), emitting capture from spill\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingSymbol.SpillIndex)
@@ -417,7 +419,7 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	regSize := funcCompiler.regAlloc.MaxRegs()
 	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot) // Set spill slots needed
 
-	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, nameHint, functionChunk, false, node.IsAsync, true)
+	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, nameHint, functionChunk, false, node.IsAsync, true, funcCompiler.hasLocalCaptures)
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	return constIdx, freeSymbols, nil
@@ -1548,7 +1550,7 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 			seenDefault = true
 		}
 	}
-	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, node.IsGenerator, node.IsAsync, false) // isArrowFunction = false for regular functions
+	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, node.IsGenerator, node.IsAsync, false, functionCompiler.hasLocalCaptures) // isArrowFunction = false for regular functions
 
 	// Set the name binding register if this is a named function expression
 	if needsInnerNameBinding {

@@ -388,6 +388,9 @@ type Compiler struct {
 	// --- Strict Mode Inheritance ---
 	inheritedStrictMode bool // Inherited strict mode from eval context
 
+	// --- Upvalue Optimization ---
+	hasLocalCaptures bool // True if any nested closure captures locals from this function
+
 	// --- Phase 5: Module Bindings ---
 	moduleBindings *ModuleBindings      // Module-aware binding resolver
 	moduleLoader   modules.ModuleLoader // Reference to module loader
@@ -2175,7 +2178,7 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 			seenDefault = true
 		}
 	}
-	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, false, false, false) // isGenerator=false, isAsync=false, isArrowFunction=false
+	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, false, false, false, functionCompiler.hasLocalCaptures) // isGenerator=false, isAsync=false, isArrowFunction=false
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	return constIdx, freeSymbols, nil
@@ -2707,7 +2710,8 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 			freeSym.Name, enclosingTable, c.currentSymbolTable, c.compilingFuncName, c.enclosing != nil, isInCurrentScope, enclosingSymbol.IsSpilled)
 
 		if isInCurrentScope {
-			// Variable is local in the current function
+			// Variable is local in the current function - mark that our locals are captured
+			c.hasLocalCaptures = true
 			if enclosingSymbol.IsSpilled {
 				// Spilled variable: capture directly from spill slot
 				// The VM will create a closed upvalue with the spilled value
@@ -2814,7 +2818,8 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 		isInCurrentScope := c.isInCurrentScopeChain(enclosingTable)
 
 		if isInCurrentScope {
-			// Variable is local in the current function
+			// Variable is local in the current function - mark that our locals are captured
+			c.hasLocalCaptures = true
 			if enclosingSymbol.IsSpilled {
 				// Spilled variable: capture directly from spill slot
 				debugPrintf("// [emitClosureGeneric] Free '%s' is SPILLED (slot %d), will capture from spill slot\n", freeSym.Name, enclosingSymbol.SpillIndex)

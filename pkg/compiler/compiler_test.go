@@ -314,7 +314,7 @@ func _TestCompileFunctions(t *testing.T) {
 	// 0: Function object for 'double'
 	// 1: Number 10 (for the argument)
 	expectedMainConstants := []vm.Value{
-		vm.NewFunction(1, 1, 0, 4, false, "double", vm.NewChunk(), false, false, false), // Placeholder for Function check (arity=1, length=1)
+		vm.NewFunction(1, 1, 0, 4, false, "double", vm.NewChunk(), false, false, false, false), // Placeholder for Function check (arity=1, length=1)
 		vm.Number(10), // Function argument
 	}
 

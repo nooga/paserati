@@ -479,6 +479,10 @@ func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.Arra
 	defer c.regAlloc.Free(doneReg)
 	c.emitLoadFalse(doneReg, line)
 
+	// Mark the start of the "try" region for exception-triggered iterator cleanup
+	// This covers the element iteration where default expressions may throw or yield
+	iteratorCleanupTryStart := len(c.chunk.Code)
+
 	// Process each element in the array pattern
 	for i, element := range arrayLit.Elements {
 		if element == nil {
@@ -493,8 +497,10 @@ func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.Arra
 				return NewCompileError(arrayLit, "rest element must be last in destructuring pattern")
 			}
 			// Collect remaining values into array
+			// IMPORTANT: Pass doneReg so it gets updated before each next() call.
+			// This ensures if next() throws during rest iteration, done=true and we don't call return().
 			restArrayReg := c.regAlloc.Alloc()
-			err := c.compileIteratorToArray(iteratorObjReg, restArrayReg, line)
+			err := c.compileIteratorToArrayWithDone(iteratorObjReg, restArrayReg, doneReg, line)
 			if err != nil {
 				c.regAlloc.Free(restArrayReg)
 				return err
@@ -540,8 +546,42 @@ func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.Arra
 		}
 	}
 
-	// Call iterator cleanup (this will validate return() result is an object)
+	// Call iterator cleanup (this will validate return() result is an object) - normal path
 	c.emitIteratorCleanupWithDone(iteratorObjReg, doneReg, line)
+
+	// Mark end of try region for iterator cleanup AFTER normal cleanup code
+	// This ensures the try region covers the resume point after a yield, since
+	// generators save the PC of the next instruction (not the yield itself)
+	iteratorCleanupTryEnd := len(c.chunk.Code)
+
+	// Add exception handler for iterator cleanup when exception propagates out
+	// Per ECMAScript spec, when an exception/return propagates out during destructuring,
+	// iterator.return() must be called with error suppression.
+	// Jump over the handler code in normal flow
+	skipHandlerJump := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+	// Exception handler code: call iterator.return() if not done, with error suppression, then re-throw
+	// Using IfNotDone variant ensures we don't call return() when next() throws (done is already true)
+	iteratorCleanupHandlerPC := len(c.chunk.Code)
+	c.emitIteratorCleanupAbruptIfNotDone(iteratorObjReg, doneReg, line)
+	c.emitHandlePendingAction(line)
+
+	// Patch the skip jump to land after the handler
+	c.patchJump(skipHandlerJump)
+
+	// Add the exception handler to the exception table
+	// This is an iterator cleanup handler - only triggered by exceptions/returns, not normal flow
+	iteratorCleanupHandler := vm.ExceptionHandler{
+		TryStart:          iteratorCleanupTryStart,
+		TryEnd:            iteratorCleanupTryEnd,
+		HandlerPC:         iteratorCleanupHandlerPC,
+		CatchReg:          -1,
+		IsCatch:           false,
+		IsFinally:         false,             // NOT a regular finally - shouldn't intercept normal returns
+		IsIteratorCleanup: true,              // Special handler for iterator cleanup on exception
+		FinallyReg:        -1,
+	}
+	c.chunk.ExceptionTable = append(c.chunk.ExceptionTable, iteratorCleanupHandler)
 
 	return nil
 }
@@ -588,6 +628,10 @@ func (c *Compiler) compileForOfArrayDestructuring(arrayDestr *parser.ArrayDestru
 	defer c.regAlloc.Free(doneReg)
 	c.emitLoadFalse(doneReg, line)
 
+	// Mark the start of the "try" region for exception-triggered iterator cleanup
+	// This covers the element iteration where default expressions may throw or yield
+	iteratorCleanupTryStart := len(c.chunk.Code)
+
 	// For each element, call iterator.next()
 	for _, element := range arrayDestr.Elements {
 		if element.Target == nil {
@@ -598,8 +642,10 @@ func (c *Compiler) compileForOfArrayDestructuring(arrayDestr *parser.ArrayDestru
 
 		if element.IsRest {
 			// Rest element: collect all remaining iterator values into an array
+			// IMPORTANT: Pass doneReg so it gets updated before each next() call.
+			// This ensures if next() throws during rest iteration, done=true and we don't call return().
 			restArrayReg := c.regAlloc.Alloc()
-			err := c.compileIteratorToArray(iteratorObjReg, restArrayReg, line)
+			err := c.compileIteratorToArrayWithDone(iteratorObjReg, restArrayReg, doneReg, line)
 			if err != nil {
 				c.regAlloc.Free(restArrayReg)
 				return err
@@ -665,8 +711,42 @@ func (c *Compiler) compileForOfArrayDestructuring(arrayDestr *parser.ArrayDestru
 		}
 	}
 
-	// Close the iterator if not done
+	// Close the iterator if not done (normal path)
 	c.emitIteratorCleanupWithDone(iteratorObjReg, doneReg, line)
+
+	// Mark end of try region for iterator cleanup AFTER normal cleanup code
+	// This ensures the try region covers the resume point after a yield, since
+	// generators save the PC of the next instruction (not the yield itself)
+	iteratorCleanupTryEnd := len(c.chunk.Code)
+
+	// Add exception handler for iterator cleanup when exception propagates out
+	// Per ECMAScript spec, when an exception/return propagates out during destructuring,
+	// iterator.return() must be called with error suppression.
+	// Jump over the handler code in normal flow
+	skipHandlerJump := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+	// Exception handler code: call iterator.return() if not done, with error suppression, then re-throw
+	// Using IfNotDone variant ensures we don't call return() when next() throws (done is already true)
+	iteratorCleanupHandlerPC := len(c.chunk.Code)
+	c.emitIteratorCleanupAbruptIfNotDone(iteratorObjReg, doneReg, line)
+	c.emitHandlePendingAction(line)
+
+	// Patch the skip jump to land after the handler
+	c.patchJump(skipHandlerJump)
+
+	// Add the exception handler to the exception table
+	// This is an iterator cleanup handler - only triggered by exceptions/returns, not normal flow
+	iteratorCleanupHandler := vm.ExceptionHandler{
+		TryStart:          iteratorCleanupTryStart,
+		TryEnd:            iteratorCleanupTryEnd,
+		HandlerPC:         iteratorCleanupHandlerPC,
+		CatchReg:          -1,
+		IsCatch:           false,
+		IsFinally:         false,             // NOT a regular finally - shouldn't intercept normal returns
+		IsIteratorCleanup: true,              // Special handler for iterator cleanup on exception
+		FinallyReg:        -1,
+	}
+	c.chunk.ExceptionTable = append(c.chunk.ExceptionTable, iteratorCleanupHandler)
 
 	return nil
 }
