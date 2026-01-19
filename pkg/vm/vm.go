@@ -158,6 +158,8 @@ type VM struct {
 
 	// List of upvalues pointing to variables still on the registerStack
 	openUpvalues []*Upvalue
+	// Map for O(1) lookup of existing upvalues by location pointer
+	openUpvalueMap map[*Value]*Upvalue
 
 	// Enhanced inline cache for property access (maps instruction pointer to cache)
 	propCache      map[int]*PropInlineCache
@@ -376,6 +378,7 @@ func NewVM() *VM {
 	vm := &VM{
 		// frameCount and nextRegSlot initialized to 0
 		openUpvalues:    make([]*Upvalue, 0, 16),         // Pre-allocate slightly
+		openUpvalueMap:  make(map[*Value]*Upvalue, 16),   // Map for O(1) lookup
 		propCache:       make(map[int]*PropInlineCache),  // Initialize inline cache
 		cacheStats:      ICacheStats{},                   // Initialize cache statistics
 		heap:            NewHeap(64),                     // Initialize unified global heap
@@ -568,7 +571,11 @@ func (vm *VM) Reset() {
 	vm.frameCount = 0
 	vm.nextRegSlot = 0
 	vm.openUpvalues = vm.openUpvalues[:0] // Clear slice while keeping capacity
-	vm.errors = vm.errors[:0]             // Clear errors slice
+	// Clear the map while keeping the allocation
+	for k := range vm.openUpvalueMap {
+		delete(vm.openUpvalueMap, k)
+	}
+	vm.errors = vm.errors[:0] // Clear errors slice
 	vm.callDepth = 0                      // Reset call depth counter
 	// Clear inline cache (with lock to prevent concurrent access)
 	vm.propCacheMutex.Lock()
@@ -1016,19 +1023,21 @@ startExecution:
 			reg := code[ip]
 			ip++
 			targetPtr := &registers[reg]
-			// Find and close any upvalue pointing to this register
-			newOpenUpvalues := vm.openUpvalues[:0]
-			for _, upvalue := range vm.openUpvalues {
-				if upvalue.Location == targetPtr {
-					// Close this upvalue
-					upvalue.Closed = *upvalue.Location
-					upvalue.Location = nil
-				} else if upvalue.Location != nil {
-					// Keep other upvalues open
-					newOpenUpvalues = append(newOpenUpvalues, upvalue)
+			// Use map for O(1) lookup instead of linear search
+			if upvalue, exists := vm.openUpvalueMap[targetPtr]; exists {
+				// Close this upvalue
+				upvalue.Closed = *upvalue.Location
+				upvalue.Location = nil
+				delete(vm.openUpvalueMap, targetPtr)
+				// Remove from slice by filtering
+				newOpenUpvalues := vm.openUpvalues[:0]
+				for _, uv := range vm.openUpvalues {
+					if uv.Location != nil {
+						newOpenUpvalues = append(newOpenUpvalues, uv)
+					}
 				}
+				vm.openUpvalues = newOpenUpvalues
 			}
-			vm.openUpvalues = newOpenUpvalues
 
 		case OpIteratorCleanupAbrupt:
 			// Call iterator.return() for exception/return cleanup.
@@ -11332,29 +11341,17 @@ reloadFrame:
 }
 
 // captureUpvalue creates a new Upvalue object for a local variable at the given stack location.
-// It checks if an upvalue for this location already exists in the openUpvalues list.
+// It checks if an upvalue for this location already exists using a map for O(1) lookup.
 func (vm *VM) captureUpvalue(location *Value) *Upvalue {
-	// Search from the end because upvalues for locals higher in the stack
-	// are likely to be found sooner (LIFO behavior of stack frames).
-	for i := len(vm.openUpvalues) - 1; i >= 0; i-- {
-		upvalue := vm.openUpvalues[i]
-		// Compare pointers directly to see if it's the same stack slot
-		if upvalue.Location == location {
-			return upvalue // Found existing open upvalue
-		}
-		// Optimization: If the current upvalue's location is below the target location
-		// on the stack, we won't find the target location later in the list (assuming
-		// openUpvalues is sorted or locals are captured in order).
-		// Requires careful management or unsafe.Pointer comparison.
-		// Let's skip this optimization for now for clarity.
-		// if uintptr(unsafe.Pointer(upvalue.Location)) < uintptr(unsafe.Pointer(location)) {
-		//     break
-		// }
+	// O(1) lookup using map
+	if upvalue, exists := vm.openUpvalueMap[location]; exists {
+		return upvalue
 	}
 
 	// If not found, create a new one
 	newUpvalue := &Upvalue{Location: location} // Closed field is zero-value (Undefined)
 	vm.openUpvalues = append(vm.openUpvalues, newUpvalue)
+	vm.openUpvalueMap[location] = newUpvalue // Add to map for future lookups
 	return newUpvalue
 }
 
@@ -11403,9 +11400,11 @@ func (vm *VM) closeUpvalues(frameRegisters []Value) {
 			if debugVM {
 				fmt.Printf("[DBG closeUpvalues]   Closing upvalue (in frame range)\n")
 			}
+			location := upvalue.Location     // Save location for map removal
 			closedValue := *upvalue.Location // Copy the value from the stack
 			upvalue.Closed = closedValue     // Store the value
 			upvalue.Location = nil           // Mark as closed
+			delete(vm.openUpvalueMap, location) // Remove from map
 			// Do NOT add it back to newOpenUpvalues
 		} else {
 			// This upvalue points elsewhere (e.g., higher up the stack), keep it open.
