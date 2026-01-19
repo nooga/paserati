@@ -9416,11 +9416,18 @@ startExecution:
 			excludeArray := excludeValue.AsArray()
 
 			// Create set of property names to exclude
+			// Object property keys are always strings (or symbols), so convert all values to string
 			excludeNames := make(map[string]struct{})
 			for i := 0; i < excludeArray.Length(); i++ {
 				nameValue := excludeArray.Get(i)
-				if nameValue.Type() == TypeString {
-					excludeNames[nameValue.AsString()] = struct{}{}
+				// Convert to string since object property keys are strings
+				// (Symbols are handled separately and not converted)
+				if nameValue.Type() == TypeSymbol {
+					// For symbols, use the symbol's internal key string
+					excludeNames[nameValue.AsSymbol()] = struct{}{}
+				} else {
+					// Convert numbers, strings, booleans, etc. to their string representation
+					excludeNames[nameValue.ToString()] = struct{}{}
 				}
 			}
 

@@ -1707,8 +1707,12 @@ func (c *Compiler) compileArrayDestructuringWithValueReg(node *parser.ArrayDestr
 
 // compileObjectDestructuringWithValueReg compiles object destructuring using an existing value register
 func (c *Compiler) compileObjectDestructuringWithValueReg(node *parser.ObjectDestructuringAssignment, valueReg Register, line int) errors.PaseratiError {
+	// Per ECMAScript spec: RequireObjectCoercible check
+	// Throw TypeError if value is null or undefined (even for empty patterns like {})
+	c.emitDestructuringNullCheck(valueReg, line)
+
 	// Reuse existing object destructuring logic but skip RHS compilation
-	// 2. For each property, compile: target = valueReg.propertyName
+	// For each property, compile: target = valueReg.propertyName
 	for _, prop := range node.Properties {
 		if prop.Target == nil {
 			continue // Skip malformed properties
