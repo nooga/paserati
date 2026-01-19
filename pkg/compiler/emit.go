@@ -781,6 +781,15 @@ func (c *Compiler) emitIteratorCleanupAbrupt(iteratorReg Register, line int) {
 	c.emitByte(byte(iteratorReg))
 }
 
+// emitIteratorCleanupAbruptIfNotDone emits OpIteratorCleanupAbruptIfNotDone for exception cleanup
+// that checks the done flag first. Per ECMAScript spec, when iterator.next() throws, we don't
+// call iterator.return() because the iterator is considered already "done" due to the throw.
+func (c *Compiler) emitIteratorCleanupAbruptIfNotDone(iteratorReg Register, doneReg Register, line int) {
+	c.emitOpCode(vm.OpIteratorCleanupAbruptIfNotDone, line)
+	c.emitByte(byte(iteratorReg))
+	c.emitByte(byte(doneReg))
+}
+
 // emitTDZError emits code to throw a ReferenceError for accessing a variable
 // before it is initialized (Temporal Dead Zone violation in default parameters)
 func (c *Compiler) emitTDZError(hint Register, varName string, line int) {

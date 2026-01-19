@@ -1022,7 +1022,11 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 	defer c.regAlloc.Free(doneReg)
 	c.emitLoadFalse(doneReg, line)
 
-	// 5. For each element, call iterator.next() and assign
+	// 5. Mark start of iterator cleanup region - any exception or generator.return()
+	// during element processing should close the iterator
+	iteratorCleanupTryStart := len(c.chunk.Code)
+
+	// 6. For each element, call iterator.next() and assign
 	for _, element := range node.Elements {
 		if element.Target == nil {
 			// Elision: consume iterator value but don't bind
@@ -1032,19 +1036,124 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 
 		if element.IsRest {
 			// Rest element: collect all remaining iterator values into an array
+			// Per ECMAScript spec: evaluate lref FIRST, then collect values, then assign
+			// This is important for cases like [...obj[yield]] = iter where yield
+			// must happen before consuming the iterator
+
+			var baseReg, propReg Register = BadRegister, BadRegister
+			var identSymbol Symbol
+			var identFound bool
+			var isSimpleTarget bool
+
+			// Check target type - only evaluate lref for non-pattern targets
+			switch targetNode := element.Target.(type) {
+			case *parser.Identifier:
+				// Simple identifier - resolve now but don't assign yet
+				identSymbol, _, identFound = c.currentSymbolTable.Resolve(targetNode.Value)
+				isSimpleTarget = true
+
+			case *parser.MemberExpression:
+				// obj.prop - evaluate obj now
+				baseReg = c.regAlloc.Alloc()
+				_, err := c.compileNode(targetNode.Object, baseReg)
+				if err != nil {
+					c.regAlloc.Free(baseReg)
+					return BadRegister, err
+				}
+				isSimpleTarget = true
+
+			case *parser.IndexExpression:
+				// obj[key] - evaluate both obj and key now
+				baseReg = c.regAlloc.Alloc()
+				_, err := c.compileNode(targetNode.Left, baseReg)
+				if err != nil {
+					c.regAlloc.Free(baseReg)
+					return BadRegister, err
+				}
+				propReg = c.regAlloc.Alloc()
+				_, err = c.compileNode(targetNode.Index, propReg)
+				if err != nil {
+					c.regAlloc.Free(baseReg)
+					c.regAlloc.Free(propReg)
+					return BadRegister, err
+				}
+				isSimpleTarget = true
+
+			default:
+				// Nested pattern (ArrayLiteral, ObjectLiteral) - handle normally
+				isSimpleTarget = false
+			}
+
+			// Now collect values from iterator
+			// Pass doneReg so it gets updated if next() throws (for proper exception handling)
 			restArrayReg := c.regAlloc.Alloc()
-			err := c.compileIteratorToArray(iteratorObjReg, restArrayReg, line)
+			err := c.compileIteratorToArrayWithDone(iteratorObjReg, restArrayReg, doneReg, line)
 			if err != nil {
 				c.regAlloc.Free(restArrayReg)
+				if baseReg != BadRegister {
+					c.regAlloc.Free(baseReg)
+				}
+				if propReg != BadRegister {
+					c.regAlloc.Free(propReg)
+				}
 				return BadRegister, err
 			}
 
-			// Assign rest array to target
-			if element.Default != nil {
-				err = c.compileConditionalAssignment(element.Target, restArrayReg, element.Default, line)
+			// Now assign to the pre-evaluated target
+			if isSimpleTarget {
+				switch targetNode := element.Target.(type) {
+				case *parser.Identifier:
+					if identFound {
+						// Check for const assignment
+						if identSymbol.IsConst {
+							c.emitConstAssignmentError(targetNode.Value, line)
+						} else if identSymbol.IsGlobal {
+							c.emitSetGlobal(identSymbol.GlobalIndex, restArrayReg, line)
+						} else if identSymbol.IsSpilled {
+							c.emitStoreSpill(identSymbol.SpillIndex, restArrayReg, line)
+						} else {
+							if restArrayReg != identSymbol.Register {
+								c.emitMove(identSymbol.Register, restArrayReg, line)
+							}
+						}
+					} else if c.chunk.IsStrict {
+						c.emitStrictUnresolvableReferenceError(targetNode.Value, line)
+					} else {
+						// Implicit global in non-strict
+						globalIdx := c.GetOrAssignGlobalIndex(targetNode.Value)
+						c.emitSetGlobal(globalIdx, restArrayReg, line)
+					}
+
+				case *parser.MemberExpression:
+					// Use pre-evaluated base with property name
+					propName, ok := targetNode.Property.(*parser.Identifier)
+					if !ok {
+						c.regAlloc.Free(baseReg)
+						c.regAlloc.Free(restArrayReg)
+						return BadRegister, NewCompileError(targetNode, "member expression property must be an identifier")
+					}
+					propConstIdx := c.chunk.AddConstant(vm.String(propName.Value))
+					c.emitSetProp(baseReg, restArrayReg, propConstIdx, line)
+					c.regAlloc.Free(baseReg)
+
+				case *parser.IndexExpression:
+					// Use pre-evaluated base and property
+					c.emitOpCode(vm.OpSetIndex, line)
+					c.emitByte(byte(baseReg))
+					c.emitByte(byte(propReg))
+					c.emitByte(byte(restArrayReg))
+					c.regAlloc.Free(baseReg)
+					c.regAlloc.Free(propReg)
+				}
 			} else {
-				err = c.compileSimpleAssignment(element.Target, restArrayReg, line)
+				// Nested pattern - handle normally
+				if element.Default != nil {
+					err = c.compileConditionalAssignment(element.Target, restArrayReg, element.Default, line)
+				} else {
+					err = c.compileSimpleAssignment(element.Target, restArrayReg, line)
+				}
 			}
+
 			c.regAlloc.Free(restArrayReg)
 			if err != nil {
 				return BadRegister, err
@@ -1071,8 +1180,42 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 		}
 	}
 
-	// 6. Call IteratorClose (iterator.return if it exists AND iterator is not done)
+	// 7. Call IteratorClose (iterator.return if it exists AND iterator is not done)
 	c.emitIteratorCleanupWithDone(iteratorObjReg, doneReg, line)
+
+	// 8. Mark end of iterator cleanup region - AFTER the normal cleanup
+	// This ensures that if a yield happens mid-destructuring, the resume PC is still covered
+	iteratorCleanupTryEnd := len(c.chunk.Code)
+
+	// 9. Add exception handler for iterator cleanup when exception/generator.return() propagates out
+	// Per ECMAScript spec, when an abrupt completion occurs during destructuring,
+	// iterator.return() must be called with error suppression.
+	// However, if the exception came from iterator.next() itself, we should NOT
+	// call return() (per spec, the iterator is considered "done" when next() throws).
+	// Jump over the handler code in normal flow
+	skipHandlerJump := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+	// Exception handler code: check done flag, call iterator.return() if not done, then re-throw
+	iteratorCleanupHandlerPC := len(c.chunk.Code)
+	c.emitIteratorCleanupAbruptIfNotDone(iteratorObjReg, doneReg, line)
+	c.emitHandlePendingAction(line)
+
+	// Patch the skip jump to land after the handler
+	c.patchJump(skipHandlerJump)
+
+	// Add the exception handler to the exception table
+	// This is an iterator cleanup handler - triggered by exceptions AND generator.return()
+	iteratorCleanupHandler := vm.ExceptionHandler{
+		TryStart:          iteratorCleanupTryStart,
+		TryEnd:            iteratorCleanupTryEnd,
+		HandlerPC:         iteratorCleanupHandlerPC,
+		CatchReg:          -1,
+		IsCatch:           false,
+		IsFinally:         false,
+		IsIteratorCleanup: true,
+		FinallyReg:        -1,
+	}
+	c.chunk.ExceptionTable = append(c.chunk.ExceptionTable, iteratorCleanupHandler)
 
 	return hint, nil
 }

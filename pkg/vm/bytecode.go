@@ -132,6 +132,7 @@ const (
 	OpCheckUninitialized             OpCode = 141 // Rx: Check if register Rx is uninitialized (TDZ), throw ReferenceError if so. Self-rewrites to OpNop on success.
 	OpCloseUpvalue                   OpCode = 142 // Rx: Close any open upvalue pointing to register Rx (for per-iteration bindings in for loops)
 	OpIteratorCleanupAbrupt          OpCode = 143 // IteratorReg: Call iterator.return() with error suppression (for exception cleanup per ECMAScript IteratorClose with throw completion)
+	OpIteratorCleanupAbruptIfNotDone OpCode = 155 // IteratorReg DoneReg: Only call iterator.return() if done is false (per spec: don't close if iteration itself threw)
 	OpDefineMethodComputed           OpCode = 116 // ObjReg ValueReg KeyReg: Define non-enumerable method on object with computed key (sets [[HomeObject]])
 	OpDefineMethodEnumerable         OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
 	OpDefineMethodComputedEnumerable OpCode = 122 // ObjReg ValueReg KeyReg: Define enumerable method on object with computed key (sets [[HomeObject]], for object literals)
@@ -436,6 +437,8 @@ func (op OpCode) String() string {
 		return "OpCloseUpvalue"
 	case OpIteratorCleanupAbrupt:
 		return "OpIteratorCleanupAbrupt"
+	case OpIteratorCleanupAbruptIfNotDone:
+		return "OpIteratorCleanupAbruptIfNotDone"
 	case OpValidateSuperclass:
 		return "OpValidateSuperclass"
 	case OpDefineMethodComputed:
@@ -820,7 +823,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
 	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject, OpLoadUninitialized, OpCheckUninitialized, OpCloseUpvalue, OpIteratorCleanupAbrupt, OpValidateSuperclass:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
-	case OpNegate, OpNot, OpTypeof, OpToNumber, OpToNumeric, OpLoadNumericOne, OpBitwiseNot, OpGetLength, OpIsNull, OpIsUndefined, OpIsNullish:
+	case OpNegate, OpNot, OpTypeof, OpToNumber, OpToNumeric, OpLoadNumericOne, OpBitwiseNot, OpGetLength, OpIsNull, OpIsUndefined, OpIsNullish, OpIteratorCleanupAbruptIfNotDone:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
 	case OpMove:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry

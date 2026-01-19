@@ -1054,6 +1054,26 @@ startExecution:
 				}
 			}
 
+		case OpIteratorCleanupAbruptIfNotDone:
+			// Call iterator.return() with error suppression, but ONLY if done is false.
+			// Per ECMAScript spec: when iterator.next() throws, we set done=true BEFORE
+			// propagating the exception, so we shouldn't call return() in that case.
+			// This opcode is used in destructuring exception handlers.
+			iteratorReg := code[ip]
+			doneReg := code[ip+1]
+			ip += 2
+			done := registers[doneReg]
+			// Only call return() if done is falsy (not yet exhausted/errored)
+			if !done.IsTruthy() {
+				iterator := registers[iteratorReg]
+				if iterator.IsObject() {
+					returnMethod, _ := vm.GetProperty(iterator, "return")
+					if returnMethod.IsCallable() {
+						_, _ = vm.Call(returnMethod, iterator, nil)
+					}
+				}
+			}
+
 		case OpMove:
 			regDest := code[ip]
 			regSrc := code[ip+1]
@@ -13173,29 +13193,42 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	// Update generator state
 	genObj.State = GeneratorExecuting
 
-	// Check if the generator's current position is covered by finally handlers
+	// Check if the generator's current position is covered by finally or iterator cleanup handlers
 	handlers := vm.findAllExceptionHandlers(genObj.Frame.pc)
 	hasFinallyHandler := false
+	hasIteratorCleanup := false
 	var finallyHandler *ExceptionHandler
+	var iteratorCleanupHandler *ExceptionHandler
 	for _, handler := range handlers {
 		if handler.IsFinally {
 			hasFinallyHandler = true
 			finallyHandler = handler
-			break
+		} else if handler.IsIteratorCleanup && !hasIteratorCleanup {
+			// Track the first (innermost) iterator cleanup handler
+			hasIteratorCleanup = true
+			iteratorCleanupHandler = handler
 		}
 	}
 
+	// Determine which handler to run first (innermost - finally before iterator cleanup)
+	var handlerToRun *ExceptionHandler
 	if hasFinallyHandler {
-		// Set pending return action and jump to finally handler
+		handlerToRun = finallyHandler
+	} else if hasIteratorCleanup {
+		handlerToRun = iteratorCleanupHandler
+	}
+
+	if handlerToRun != nil {
+		// Set pending return action and jump to handler (finally or iterator cleanup)
 		vm.pendingAction = ActionReturn
 		vm.pendingValue = returnValue
 		// Increment finally depth so the pending action isn't cleared prematurely
 		vm.finallyDepth++
 
-		// Update the frame's IP to jump to the finally block
-		frame.ip = finallyHandler.HandlerPC
+		// Update the frame's IP to jump to the handler
+		frame.ip = handlerToRun.HandlerPC
 
-		// Execute the VM run loop - it will execute finally blocks and complete the generator
+		// Execute the VM run loop - it will execute handlers and complete the generator
 		status, result := vm.run()
 
 		if status == InterpretRuntimeError {
