@@ -223,6 +223,8 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		c.emitMove(symbol.Register, valueReg, node.Token.Line)
 	} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
 		// Array destructuring: for(const [x, y] of arr)
+		// Check for null/undefined before destructuring (ECMAScript requirement)
+		c.emitDestructuringNullCheck(valueReg, node.Token.Line)
 		// Use iterator protocol to destructure the value
 		isConst := arrayDestr.IsConst
 		err := c.compileForOfArrayDestructuring(arrayDestr, valueReg, isConst, node.Token.Line)
@@ -231,6 +233,8 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		}
 	} else if objDestr, ok := node.Variable.(*parser.ObjectDestructuringDeclaration); ok {
 		// Object destructuring: for(const {x, y} of arr)
+		// Check for null/undefined before destructuring (ECMAScript requirement)
+		c.emitDestructuringNullCheck(valueReg, node.Token.Line)
 		for _, prop := range objDestr.Properties {
 			if prop.Target == nil {
 				continue
@@ -311,16 +315,22 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		case *parser.Identifier:
 			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(target.Value)
 			if !found {
-				// Define a function/global-scoped binding (var semantics)
-				scope := c.currentSymbolTable
-				for scope.Outer != nil {
-					scope = scope.Outer
+				// Variable not found in any scope
+				// In strict mode, this is a ReferenceError per ECMAScript spec
+				if c.chunk.IsStrict {
+					c.emitStrictUnresolvableReferenceError(target.Value, node.Token.Line)
+				} else {
+					// In non-strict mode, define a function/global-scoped binding (var semantics)
+					scope := c.currentSymbolTable
+					for scope.Outer != nil {
+						scope = scope.Outer
+					}
+					reg := c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, reg)
+					sym := scope.Define(target.Value, reg)
+					c.regAlloc.Pin(sym.Register)
+					c.emitMove(sym.Register, valueReg, node.Token.Line)
 				}
-				reg := c.regAlloc.Alloc()
-				tempRegs = append(tempRegs, reg)
-				sym := scope.Define(target.Value, reg)
-				c.regAlloc.Pin(sym.Register)
-				c.emitMove(sym.Register, valueReg, node.Token.Line)
 			} else {
 				if symbolRef.IsGlobal {
 					c.emitSetGlobal(symbolRef.GlobalIndex, valueReg, node.Token.Line)
