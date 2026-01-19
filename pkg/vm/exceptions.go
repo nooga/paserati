@@ -147,8 +147,8 @@ func (vm *VM) unwindException() bool {
 		if debugExceptions {
 			fmt.Printf("[DEBUG unwindException] Looking for handlers at IP %d, found %d handlers\n", frame.ip, len(handlers))
 			for i, h := range handlers {
-				fmt.Printf("[DEBUG unwindException]   Handler %d: TryStart=%d, TryEnd=%d, HandlerPC=%d, IsCatch=%v, IsFinally=%v\n",
-					i, h.TryStart, h.TryEnd, h.HandlerPC, h.IsCatch, h.IsFinally)
+				fmt.Printf("[DEBUG unwindException]   Handler %d: TryStart=%d, TryEnd=%d, HandlerPC=%d, IsCatch=%v, IsFinally=%v, IsIterCleanup=%v\n",
+					i, h.TryStart, h.TryEnd, h.HandlerPC, h.IsCatch, h.IsFinally, h.IsIteratorCleanup)
 			}
 		}
 
@@ -184,20 +184,22 @@ func (vm *VM) unwindException() bool {
 		}
 
 		// No handler found in this frame
-		// Check if this is a direct call frame (native function boundary)
+		// Check if this is a native boundary (direct call frame or sentinel frame)
 		// Direct call frames are created by CallFunctionDirectly or executeUserFunctionSafe
-		if frame.isDirectCall {
+		// Sentinel frames are used for generator.return() and other native-to-bytecode boundaries
+		if frame.isDirectCall || frame.isSentinelFrame {
 			// Only stop on FIRST PASS (haven't crossed native yet)
 			if !vm.unwindingCrossedNative {
 				if debugExceptions {
-					fmt.Printf("[DEBUG unwindException] Hit direct call boundary at frame %d on FIRST PASS; marking crossed and stopping\n", vm.frameCount-1)
+					fmt.Printf("[DEBUG unwindException] Hit native boundary at frame %d (isDirectCall=%v, isSentinel=%v) on FIRST PASS; marking crossed and stopping\n",
+						vm.frameCount-1, frame.isDirectCall, frame.isSentinelFrame)
 				}
 				// Mark that we're crossing into native code
 				vm.unwindingCrossedNative = true
 				return true // Stop here, let native code handle it
 			} else {
 				if debugExceptions {
-					fmt.Printf("[DEBUG unwindException] Hit direct call boundary at frame %d on RE-THROW PASS; continuing unwinding\n", vm.frameCount-1)
+					fmt.Printf("[DEBUG unwindException] Hit native boundary at frame %d on RE-THROW PASS; continuing unwinding\n", vm.frameCount-1)
 				}
 				// On RE-THROW (already crossed native), don't stop - continue unwinding
 			}

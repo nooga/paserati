@@ -1055,10 +1055,14 @@ startExecution:
 			}
 
 		case OpIteratorCleanupAbruptIfNotDone:
-			// Call iterator.return() with error suppression, but ONLY if done is false.
-			// Per ECMAScript spec: when iterator.next() throws, we set done=true BEFORE
-			// propagating the exception, so we shouldn't call return() in that case.
-			// This opcode is used in destructuring exception handlers.
+			// Call iterator.return() but ONLY if done is false.
+			// Per ECMAScript spec 7.4.6 IteratorClose:
+			// - Step 7: If completion.[[type]] is throw, return Completion(completion) - suppress inner error
+			// - Step 8: If innerResult.[[type]] is throw, return Completion(innerResult) - propagate inner throw
+			// - Step 9: If Type(innerResult.[[value]]) is not Object, throw a TypeError
+			//
+			// For throw completions: suppress all inner errors (step 7)
+			// For return completions (generator.return()): check return value is Object (step 9)
 			iteratorReg := code[ip]
 			doneReg := code[ip+1]
 			ip += 2
@@ -1067,9 +1071,48 @@ startExecution:
 			if !done.IsTruthy() {
 				iterator := registers[iteratorReg]
 				if iterator.IsObject() {
-					returnMethod, _ := vm.GetProperty(iterator, "return")
-					if returnMethod.IsCallable() {
-						_, _ = vm.Call(returnMethod, iterator, nil)
+					returnMethod, getErr := vm.GetProperty(iterator, "return")
+					if getErr == nil && returnMethod.IsCallable() {
+						innerResult, callErr := vm.Call(returnMethod, iterator, nil)
+
+						// Check pending action to determine how to handle errors
+						if vm.pendingAction == ActionThrow {
+							// Step 7: completion is throw, suppress inner errors
+							// (just ignore callErr and result)
+							// Clear any exception that was set by the return() call
+							if callErr != nil {
+								vm.currentException = Null
+								vm.unwinding = false
+							}
+						} else {
+							// Steps 8-9: completion is return/normal
+							// Step 8: If return() threw, propagate that error
+							if callErr != nil {
+								// Return threw an error - extract from exceptionError
+								// (vm.currentException was cleared by executeUserFunctionSafe)
+								vm.pendingAction = ActionThrow
+								if excErr, ok := callErr.(exceptionError); ok {
+									vm.pendingValue = excErr.exception
+									// Clear unwinding flags since we've captured the exception
+									// and will re-throw it properly via OpHandlePending
+									vm.unwinding = false
+									vm.unwindingCrossedNative = false
+								} else {
+									// Fallback to currentException (shouldn't happen but just in case)
+									vm.pendingValue = vm.currentException
+								}
+							} else {
+								// Step 9: Check if result is Object
+								if !innerResult.IsObject() && !innerResult.IsCallable() {
+									// TypeError: Iterator result is not an object
+									// Create error without calling throwException (which would start unwinding)
+									// Instead, set up pending throw for OpHandlePending to process
+									typeErr := vm.createTypeError(fmt.Sprintf("Iterator result %s is not an object", innerResult.TypeName()))
+									vm.pendingAction = ActionThrow
+									vm.pendingValue = typeErr
+								}
+							}
+						}
 					}
 				}
 			}
@@ -9804,12 +9847,23 @@ startExecution:
 
 			case ActionThrow:
 				// Execute the pending throw
-				vm.currentException = vm.pendingValue
+				savedValue := vm.pendingValue
 				vm.pendingAction = ActionNone
 				vm.pendingValue = Undefined
-				vm.unwinding = true
-				// fmt.Printf("[DEBUG] OpHandlePending: Re-throwing pending exception %s\n", vm.currentException.ToString())
-				// Let the exception handling logic take over
+				vm.throwException(savedValue)
+				// If handler was found (unwinding=false), refresh local state from frame
+				// because throwException -> unwindException may have changed frame.ip
+				if !vm.unwinding {
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+				}
+				// Let exception unwinding take over
+				continue
 			}
 			// If no pending action, just continue
 		// --- END Phase 4a ---
@@ -13231,9 +13285,27 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 		// Execute the VM run loop - it will execute handlers and complete the generator
 		status, result := vm.run()
 
+		if debugExceptions {
+			fmt.Printf("[DEBUG generator.return] vm.run() returned status=%v, result=%v, currentException=%v\n",
+				status, result.ToString(), vm.currentException.ToString())
+		}
 		if status == InterpretRuntimeError {
+			// vm.run() returns the exception as the result value
+			if result != Null && result != Undefined {
+				if debugExceptions {
+					fmt.Printf("[DEBUG generator.return] Returning result as exception: %s\n", result.ToString())
+				}
+				return Undefined, exceptionError{exception: result}
+			}
+			// Fallback to currentException if result wasn't set
 			if vm.currentException != Null {
+				if debugExceptions {
+					fmt.Printf("[DEBUG generator.return] Returning currentException: %s\n", vm.currentException.ToString())
+				}
 				return Undefined, exceptionError{exception: vm.currentException}
+			}
+			if debugExceptions {
+				fmt.Printf("[DEBUG generator.return] No exception found, using fallback\n")
 			}
 			return Undefined, exceptionError{exception: NewString("runtime error during generator return handling")}
 		}
@@ -14155,6 +14227,34 @@ func (vm *VM) findExportValueInHeap(exportName string) Value {
 
 	// fmt.Printf("// [VM DEBUG] findExportValueInHeap: Could not find '%s' in heap\n", exportName)
 	return Undefined
+}
+
+// createTypeError creates a TypeError instance without throwing it
+// Used when we need to set up a pending throw instead of immediate unwinding
+func (vm *VM) createTypeError(message string) Value {
+	// Get the TypeError constructor from globals
+	typeErrorCtor, exists := vm.GetGlobal("TypeError")
+	if !exists || typeErrorCtor.Type() == TypeUndefined {
+		// Fallback: create a basic error object
+		errObj := NewObject(vm.TypeErrorPrototype).AsPlainObject()
+		errObj.SetOwn("name", NewString("TypeError"))
+		errObj.SetOwn("message", NewString(message))
+		errObj.SetOwn("stack", NewString(vm.CaptureStackTrace()))
+		return NewValueFromPlainObject(errObj)
+	}
+
+	// Call the TypeError constructor to create a proper instance
+	errorInstance, err := vm.Call(typeErrorCtor, Undefined, []Value{NewString(message)})
+	if err != nil {
+		// Fallback if constructor call fails
+		errObj := NewObject(vm.TypeErrorPrototype).AsPlainObject()
+		errObj.SetOwn("name", NewString("TypeError"))
+		errObj.SetOwn("message", NewString(message))
+		errObj.SetOwn("stack", NewString(vm.CaptureStackTrace()))
+		return NewValueFromPlainObject(errObj)
+	}
+
+	return errorInstance
 }
 
 // ThrowTypeError creates and throws a proper TypeError instance

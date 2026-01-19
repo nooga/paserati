@@ -1164,15 +1164,86 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 			break
 		}
 
-		// Regular element: get next value from iterator
+		// Regular element: per ECMAScript spec, evaluate lref FIRST, then call next()
+		// This matters for cases like [ {}[thrower()] ] = iterable where thrower() should
+		// execute BEFORE next() is called
+		var elemBaseReg, elemPropReg Register = BadRegister, BadRegister
+		var elemIsIndexExpr bool
+
+		// Check target type - only pre-evaluate lref for IndexExpression
+		// (MemberExpression is always non-computed so no need for special handling there,
+		// and Identifier just resolves a name with no side effects)
+		switch targetNode := element.Target.(type) {
+		case *parser.IndexExpression:
+			// obj[key] - evaluate both obj and key now BEFORE calling next()
+			elemBaseReg = c.regAlloc.Alloc()
+			_, err := c.compileNode(targetNode.Left, elemBaseReg)
+			if err != nil {
+				c.regAlloc.Free(elemBaseReg)
+				return BadRegister, err
+			}
+			elemPropReg = c.regAlloc.Alloc()
+			_, err = c.compileNode(targetNode.Index, elemPropReg)
+			if err != nil {
+				c.regAlloc.Free(elemBaseReg)
+				c.regAlloc.Free(elemPropReg)
+				return BadRegister, err
+			}
+			elemIsIndexExpr = true
+		}
+
+		// NOW get next value from iterator
 		valueReg := c.regAlloc.Alloc()
 		c.compileIteratorNext(iteratorObjReg, valueReg, doneReg, line, false)
 
-		// Handle assignment with potential default value
-		if element.Default != nil {
-			err = c.compileConditionalAssignment(element.Target, valueReg, element.Default, line)
+		// Handle assignment
+		if elemIsIndexExpr {
+			// IndexExpression with pre-evaluated lref
+			// Handle default value first if present
+			if element.Default != nil {
+				// Conditional: if value is undefined, use default
+				jumpToDefault := c.emitPlaceholderJump(vm.OpJumpIfUndefined, valueReg, line)
+
+				// Value is not undefined - assign to pre-evaluated target
+				c.emitOpCode(vm.OpSetIndex, line)
+				c.emitByte(byte(elemBaseReg))
+				c.emitByte(byte(elemPropReg))
+				c.emitByte(byte(valueReg))
+				jumpPastDefault := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+				// Value is undefined - evaluate and assign default
+				c.patchJump(jumpToDefault)
+				defaultReg := c.regAlloc.Alloc()
+				_, err = c.compileNode(element.Default, defaultReg)
+				if err != nil {
+					c.regAlloc.Free(defaultReg)
+					c.regAlloc.Free(elemBaseReg)
+					c.regAlloc.Free(elemPropReg)
+					c.regAlloc.Free(valueReg)
+					return BadRegister, err
+				}
+				c.emitOpCode(vm.OpSetIndex, line)
+				c.emitByte(byte(elemBaseReg))
+				c.emitByte(byte(elemPropReg))
+				c.emitByte(byte(defaultReg))
+				c.regAlloc.Free(defaultReg)
+				c.patchJump(jumpPastDefault)
+			} else {
+				// No default - just assign
+				c.emitOpCode(vm.OpSetIndex, line)
+				c.emitByte(byte(elemBaseReg))
+				c.emitByte(byte(elemPropReg))
+				c.emitByte(byte(valueReg))
+			}
+			c.regAlloc.Free(elemBaseReg)
+			c.regAlloc.Free(elemPropReg)
 		} else {
-			err = c.compileSimpleAssignment(element.Target, valueReg, line)
+			// Use existing assignment logic for Identifier, MemberExpression, and patterns
+			if element.Default != nil {
+				err = c.compileConditionalAssignment(element.Target, valueReg, element.Default, line)
+			} else {
+				err = c.compileSimpleAssignment(element.Target, valueReg, line)
+			}
 		}
 		c.regAlloc.Free(valueReg)
 		if err != nil {
