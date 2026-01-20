@@ -643,9 +643,22 @@ func (o *PlainObject) HasOwn(name string) bool {
 }
 
 func (o *PlainObject) HasOwnByKey(key PropertyKey) bool {
+	// Check regular property slots in shape
 	for _, f := range o.shape.fields {
 		if (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
 			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj) {
+			return true
+		}
+	}
+	// Also check accessor properties (getters/setters are stored separately)
+	keyHash := key.hash()
+	if o.getters != nil {
+		if _, hasGetter := o.getters[keyHash]; hasGetter {
+			return true
+		}
+	}
+	if o.setters != nil {
+		if _, hasSetter := o.setters[keyHash]; hasSetter {
 			return true
 		}
 	}
