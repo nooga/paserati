@@ -7751,6 +7751,7 @@ func (p *Parser) isLikelyFunctionSignature() bool {
 }
 
 // parseOptionalChainingExpression handles optional chaining expressions (obj?.prop, obj?.[expr], func?.())
+// It also captures any continuation chain (e.g., obj?.a.b.c) to enable proper short-circuiting.
 func (p *Parser) parseOptionalChainingExpression(left Expression) Expression {
 	// Current token should be OPTIONAL_CHAINING (?.)
 	optToken := p.curToken // The '?.' token
@@ -7761,11 +7762,21 @@ func (p *Parser) parseOptionalChainingExpression(left Expression) Expression {
 	switch p.curToken.Type {
 	case lexer.LBRACKET:
 		// Optional computed access: obj?.[expr]
-		return p.parseOptionalIndexExpression(left, optToken)
+		exp := p.parseOptionalIndexExpression(left, optToken)
+		if exp != nil {
+			// Check for continuation chain
+			exp.(*OptionalIndexExpression).Continuation = p.parseOptionalChainContinuation()
+		}
+		return exp
 
 	case lexer.LPAREN:
 		// Optional call: func?.()
-		return p.parseOptionalCallExpression(left, optToken)
+		exp := p.parseOptionalCallExpression(left, optToken)
+		if exp != nil {
+			// Check for continuation chain
+			exp.(*OptionalCallExpression).Continuation = p.parseOptionalChainContinuation()
+		}
+		return exp
 
 	default:
 		// Optional property access: obj?.prop (current behavior)
@@ -7784,7 +7795,77 @@ func (p *Parser) parseOptionalChainingExpression(left Expression) Expression {
 		}
 
 		exp.Property = propIdent
+		// Check for continuation chain (e.g., obj?.a.b.c)
+		exp.Continuation = p.parseOptionalChainContinuation()
 		return exp
+	}
+}
+
+// parseOptionalChainContinuation parses any continuation after an optional chain element.
+// For example, in `a?.b.c.d`, after parsing `?.b`, this parses `.c.d`.
+// The continuation is represented as nested MemberExpression/IndexExpression/CallExpression
+// where the innermost Object is nil (a marker that gets filled in at compile time).
+func (p *Parser) parseOptionalChainContinuation() Expression {
+	// Check if there's a continuation (., [, or ()
+	if p.peekToken.Type != lexer.DOT && p.peekToken.Type != lexer.LBRACKET && p.peekToken.Type != lexer.LPAREN && p.peekToken.Type != lexer.OPTIONAL_CHAINING {
+		return nil
+	}
+
+	// Build the continuation chain starting with a nil placeholder
+	var result Expression = nil
+
+	for {
+		switch p.peekToken.Type {
+		case lexer.DOT:
+			// Member access: .prop
+			p.nextToken() // consume '.'
+			p.nextToken() // move to property name
+			propIdent := p.parsePropertyName()
+			if propIdent == nil {
+				return result
+			}
+			result = &MemberExpression{
+				Token:    p.curToken,
+				Object:   result, // nil for first element, previous for subsequent
+				Property: propIdent,
+			}
+
+		case lexer.LBRACKET:
+			// Index access: [expr]
+			p.nextToken() // consume '['
+			p.nextToken() // move to index expression
+			index := p.parseExpression(LOWEST)
+			if index == nil {
+				return result
+			}
+			if !p.expectPeek(lexer.RBRACKET) {
+				return result
+			}
+			result = &IndexExpression{
+				Token: p.curToken,
+				Left:  result, // nil for first element, previous for subsequent
+				Index: index,
+			}
+
+		case lexer.LPAREN:
+			// Call: (args)
+			p.nextToken() // move to '('
+			args := p.parseExpressionList(lexer.RPAREN)
+			result = &CallExpression{
+				Token:     p.curToken,
+				Function:  result, // nil for first element, previous for subsequent
+				Arguments: args,
+			}
+
+		case lexer.OPTIONAL_CHAINING:
+			// Another optional chain: ?.
+			// This starts a NEW optional chain within the continuation
+			// For now, just return what we have and let the main parser handle it
+			return result
+
+		default:
+			return result
+		}
 	}
 }
 

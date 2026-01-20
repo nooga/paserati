@@ -1772,11 +1772,13 @@ func (me *MemberExpression) String() string {
 }
 
 // OptionalChainingExpression represents optional chaining property access (e.g., object?.property).
+// For long chains like obj?.a.b.c, the entire chain after ?. is captured to enable proper short-circuiting.
 type OptionalChainingExpression struct {
-	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The '?.' token
-	Object         Expression  // The expression on the left (e.g., identifier, call result)
-	Property       Expression  // The property access (identifier or computed expression)
+	BaseExpression               // Embed base for ComputedType
+	Token          lexer.Token   // The '?.' token
+	Object         Expression    // The expression on the left (e.g., identifier, call result)
+	Property       Expression    // The property access (identifier or computed expression)
+	Continuation   Expression    // Optional: continuation of the chain (.b.c, [x], (), etc.) that should short-circuit together
 }
 
 func (oce *OptionalChainingExpression) expressionNode()      {}
@@ -1787,6 +1789,9 @@ func (oce *OptionalChainingExpression) String() string {
 	out.WriteString(oce.Object.String())
 	out.WriteString("?.")
 	out.WriteString(oce.Property.String())
+	if oce.Continuation != nil {
+		out.WriteString(oce.Continuation.String())
+	}
 	out.WriteString(")")
 	if oce.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", oce.ComputedType.String()))
@@ -1796,10 +1801,11 @@ func (oce *OptionalChainingExpression) String() string {
 
 // OptionalIndexExpression represents optional computed property access (e.g., object?.[expression]).
 type OptionalIndexExpression struct {
-	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The '?.' token
-	Object         Expression  // The expression on the left (e.g., identifier, call result)
-	Index          Expression  // The index expression (e.g., string, number, variable)
+	BaseExpression               // Embed base for ComputedType
+	Token          lexer.Token   // The '?.' token
+	Object         Expression    // The expression on the left (e.g., identifier, call result)
+	Index          Expression    // The index expression (e.g., string, number, variable)
+	Continuation   Expression    // Optional: continuation of the chain that should short-circuit together
 }
 
 func (oie *OptionalIndexExpression) expressionNode()      {}
@@ -1810,7 +1816,11 @@ func (oie *OptionalIndexExpression) String() string {
 	out.WriteString(oie.Object.String())
 	out.WriteString("?.[")
 	out.WriteString(oie.Index.String())
-	out.WriteString("])")
+	out.WriteString("]")
+	if oie.Continuation != nil {
+		out.WriteString(oie.Continuation.String())
+	}
+	out.WriteString(")")
 	if oie.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", oie.ComputedType.String()))
 	}
@@ -1819,10 +1829,11 @@ func (oie *OptionalIndexExpression) String() string {
 
 // OptionalCallExpression represents optional function call (e.g., func?.()).
 type OptionalCallExpression struct {
-	BaseExpression              // Embed base for ComputedType
-	Token          lexer.Token  // The '?.' token
-	Function       Expression   // The function expression on the left
-	Arguments      []Expression // The function arguments
+	BaseExpression               // Embed base for ComputedType
+	Token          lexer.Token   // The '?.' token
+	Function       Expression    // The function expression on the left
+	Arguments      []Expression  // The function arguments
+	Continuation   Expression    // Optional: continuation of the chain that should short-circuit together
 }
 
 func (oce *OptionalCallExpression) expressionNode()      {}
@@ -1837,6 +1848,9 @@ func (oce *OptionalCallExpression) String() string {
 	}
 	out.WriteString(strings.Join(args, ", "))
 	out.WriteString(")")
+	if oce.Continuation != nil {
+		out.WriteString(oce.Continuation.String())
+	}
 	if oce.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", oce.ComputedType.String()))
 	}
