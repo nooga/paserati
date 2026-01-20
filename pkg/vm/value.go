@@ -238,6 +238,7 @@ type MapObject struct {
 	size       int
 	entries    map[string]Value // key -> value
 	keys       map[string]Value // key -> original key (for key iteration)
+	order      []string         // insertion order of keys (for deterministic iteration)
 	Properties *PlainObject     // User-defined properties on the Map object
 	prototype  Value            // Map prototype
 }
@@ -246,6 +247,7 @@ type SetObject struct {
 	Object
 	size       int
 	values     map[string]Value // key -> original value (for value iteration)
+	order      []string         // insertion order of values (for deterministic iteration)
 	Properties *PlainObject     // User-defined properties on the Set object
 	prototype  Value            // Set prototype
 }
@@ -1936,6 +1938,7 @@ func (m *MapObject) Set(key, value Value) {
 	// fmt.Printf("[DBG Map.set] m=%p key=%s (%s) -> %s\n", m, keyStr, key.TypeName(), value.Inspect())
 	if _, exists := m.entries[keyStr]; !exists {
 		m.size++
+		m.order = append(m.order, keyStr) // Track insertion order
 	}
 	m.entries[keyStr] = value
 	m.keys[keyStr] = key
@@ -1961,6 +1964,13 @@ func (m *MapObject) Delete(key Value) bool {
 	if _, exists := m.entries[keyStr]; exists {
 		delete(m.entries, keyStr)
 		delete(m.keys, keyStr)
+		// Remove from order slice
+		for i, k := range m.order {
+			if k == keyStr {
+				m.order = append(m.order[:i], m.order[i+1:]...)
+				break
+			}
+		}
 		m.size--
 		return true
 	}
@@ -1970,6 +1980,7 @@ func (m *MapObject) Delete(key Value) bool {
 func (m *MapObject) Clear() {
 	m.entries = make(map[string]Value)
 	m.keys = make(map[string]Value)
+	m.order = nil // Reset insertion order
 	m.size = 0
 }
 
@@ -1977,9 +1988,10 @@ func (m *MapObject) Size() int {
 	return m.size
 }
 
-// ForEach calls fn for each entry in the map. Order is currently unspecified.
+// ForEach calls fn for each entry in the map in insertion order.
 func (m *MapObject) ForEach(fn func(key Value, value Value)) {
-	for keyStr, value := range m.entries {
+	for _, keyStr := range m.order {
+		value := m.entries[keyStr]
 		if originalKey, ok := m.keys[keyStr]; ok {
 			fn(originalKey, value)
 		} else {
@@ -1994,6 +2006,7 @@ func (s *SetObject) Add(value Value) {
 	keyStr := hashKey(value)
 	if _, exists := s.values[keyStr]; !exists {
 		s.size++
+		s.order = append(s.order, keyStr) // Track insertion order
 	}
 	s.values[keyStr] = value
 }
@@ -2008,6 +2021,13 @@ func (s *SetObject) Delete(value Value) bool {
 	keyStr := hashKey(value)
 	if _, exists := s.values[keyStr]; exists {
 		delete(s.values, keyStr)
+		// Remove from order slice
+		for i, k := range s.order {
+			if k == keyStr {
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
+		}
 		s.size--
 		return true
 	}
@@ -2016,6 +2036,7 @@ func (s *SetObject) Delete(value Value) bool {
 
 func (s *SetObject) Clear() {
 	s.values = make(map[string]Value)
+	s.order = nil // Reset insertion order
 	s.size = 0
 }
 
@@ -2023,10 +2044,10 @@ func (s *SetObject) Size() int {
 	return s.size
 }
 
-// ForEach calls fn for each value in the set. Order is currently unspecified.
+// ForEach calls fn for each value in the set in insertion order.
 func (s *SetObject) ForEach(fn func(value Value)) {
-	for _, value := range s.values {
-		fn(value)
+	for _, keyStr := range s.order {
+		fn(s.values[keyStr])
 	}
 }
 

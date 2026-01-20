@@ -3375,6 +3375,70 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 	// Check if the function is a member expression (e.g., obj.method?.())
 	// In this case, we need to preserve `this` binding
 	if memberExpr, isMember := node.Function.(*parser.MemberExpression); isMember {
+		// Check if this is a super method optional call (super.method?.())
+		if _, isSuperMethod := memberExpr.Object.(*parser.SuperExpression); isSuperMethod {
+			// Super method optional call: super.method?.()
+			// 1. Load 'this' (for the this binding when calling the super method)
+			thisReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, thisReg)
+			c.emitLoadThis(thisReg, memberExpr.Token.Line)
+
+			// 2. Get the method from super using OpGetSuper
+			methodReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, methodReg)
+			propertyName := c.extractPropertyName(memberExpr.Property)
+			nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+			c.chunk.WriteOpCode(vm.OpGetSuper, memberExpr.Token.Line)
+			c.chunk.EmitByte(byte(methodReg))
+			c.chunk.WriteUint16(nameConstIdx)
+
+			// 3. Check if the method is null or undefined
+			isNullishReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, isNullishReg)
+			c.emitIsNullish(isNullishReg, methodReg, node.Token.Line)
+
+			// If method is NOT nullish, jump to method call
+			jumpToCallPos := c.emitPlaceholderJump(vm.OpJumpIfFalse, isNullishReg, node.Token.Line)
+
+			// Method IS nullish - return undefined
+			c.emitLoadUndefined(hint, node.Token.Line)
+			endJumpPos := c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+
+			// Method is not null/undefined - do method call with this binding
+			c.patchJump(jumpToCallPos)
+
+			// 4. Allocate contiguous block for function + arguments
+			totalArgCount := len(node.Arguments)
+			blockSize := 1 + totalArgCount
+			funcCallReg := c.regAlloc.AllocContiguous(blockSize)
+			for i := 0; i < blockSize; i++ {
+				tempRegs = append(tempRegs, funcCallReg+Register(i))
+			}
+
+			// 5. Move method to call block
+			c.emitMove(funcCallReg, methodReg, node.Token.Line)
+
+			// 6. Compile arguments
+			for i, arg := range node.Arguments {
+				argReg := funcCallReg + Register(1+i)
+				_, err := c.compileNode(arg, argReg)
+				if err != nil {
+					c.inTailPosition = oldTailPos
+					return BadRegister, NewCompileError(arg, "error compiling argument in super optional call expression").CausedBy(err)
+				}
+			}
+			c.inTailPosition = oldTailPos
+
+			// 7. Emit method call with proper this binding
+			c.emitCallMethod(hint, funcCallReg, thisReg, byte(totalArgCount), node.Token.Line)
+
+			// 8. Patch end jump
+			c.patchJump(endJumpPos)
+
+			return hint, nil
+		}
+
+		// Regular member expression method optional call: obj.method?.()
 		// 1. Compile the object (this value)
 		thisReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, thisReg)
