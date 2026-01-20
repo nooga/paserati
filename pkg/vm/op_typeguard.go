@@ -55,14 +55,12 @@ func (vm *VM) opTypeGuardIteratorReturn(srcReg int, registers []Value) bool {
 	// Check if value is an object type
 	// According to ECMAScript, "Object" means any object (including arrays, functions, etc.)
 	// but NOT primitives (null, undefined, number, string, boolean, symbol, bigint)
-	switch value.Type() {
-	case TypeObject, TypeDictObject, TypeArray, TypeTypedArray, TypeFunction, TypeRegExp,
-		TypeGenerator, TypeAsyncGenerator, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps:
-		// These are all object types - valid
+	// Use IsObject() || IsCallable() to cover all object types including Proxy, Map, Set, etc.
+	if value.IsObject() || value.IsCallable() {
 		return true
-	default:
-		// Primitives and null/undefined are NOT objects
-		vm.ThrowTypeError(fmt.Sprintf("Iterator result %s is not an object", value.TypeName()))
-		return false
 	}
+
+	// Primitives and null/undefined are NOT objects
+	vm.ThrowTypeError(fmt.Sprintf("Iterator result %s is not an object", value.TypeName()))
+	return false
 }

@@ -615,7 +615,14 @@ func (v Value) TypeName() string {
 		return "symbol"
 	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction, TypeBoundFunction:
 		return "function"
-	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeTypedArray, TypeProxy,
+	case TypeProxy:
+		// Proxy typeof depends on whether the target is callable
+		proxy := v.AsProxy()
+		if proxy.target.IsCallable() {
+			return "function"
+		}
+		return "object"
+	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeTypedArray,
 		TypeGenerator, TypeAsyncGenerator, TypePromise, TypeMap, TypeSet, TypeArrayBuffer,
 		TypeWeakMap, TypeWeakSet:
 		return "object"

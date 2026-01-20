@@ -51,8 +51,9 @@ func (p *ProxyInitializer) InitRuntime(ctx *RuntimeContext) error {
 		handler := args[1]
 
 		// Validate target and handler
-		if !target.IsObject() && target.Type() != vm.TypeArray && target.Type() != vm.TypeFunction {
-			return vm.Undefined, vmInstance.NewTypeError("Proxy target must be an object, array, or function")
+		// Target can be any object type (including arrays, maps, sets, etc.) or any callable type
+		if !target.IsObject() && !target.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Proxy target must be an object or function")
 		}
 
 		if !handler.IsObject() {
@@ -75,8 +76,9 @@ func (p *ProxyInitializer) InitRuntime(ctx *RuntimeContext) error {
 		handler := args[1]
 
 		// Validate target and handler
-		if !target.IsObject() && target.Type() != vm.TypeArray && target.Type() != vm.TypeFunction {
-			return vm.Undefined, vmInstance.NewTypeError("Proxy target must be an object, array, or function")
+		// Target can be any object type (including arrays, maps, sets, etc.) or any callable type
+		if !target.IsObject() && !target.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Proxy target must be an object or function")
 		}
 
 		if !handler.IsObject() {

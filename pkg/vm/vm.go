@@ -1077,7 +1077,7 @@ startExecution:
 							}
 							vm.currentException = Null
 							vm.unwinding = false
-						} else if !innerResult.IsObject() {
+						} else if !innerResult.IsObject() && !innerResult.IsCallable() {
 							// Step 9: return value is not an Object, throw TypeError
 							vm.pendingAction = ActionThrow
 							typeErr := vm.NewTypeError("Iterator result is not an object")
@@ -11533,6 +11533,13 @@ func getTypeofString(val Value) string {
 		return "symbol"
 	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction, TypeBoundFunction:
 		return "function"
+	case TypeProxy:
+		// Proxy typeof depends on whether the target is callable
+		proxy := val.AsProxy()
+		if proxy.target.IsCallable() {
+			return "function"
+		}
+		return "object"
 	case TypeObject, TypeDictObject:
 		return "object"
 	case TypeArray:
@@ -11824,7 +11831,7 @@ func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 				return nil, err
 			}
 
-			if result.Type() != TypeObject && result.Type() != TypeDictObject {
+			if !result.IsObject() && !result.IsCallable() {
 				return nil, vm.NewTypeError("Iterator result is not an object")
 			}
 
