@@ -1934,45 +1934,14 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		debugPrintf("// [Generator Detection] Function type string: %s\n", functionType.String())
 	}
 
-	// Check if the function type indicates it's a generator by examining return type
-	if functionType != nil {
-		if objType, ok := functionType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 {
-			// Check if this function's return type is a Generator<...> or generator-like ObjectType
-			sig := objType.CallSignatures[0]
-			if sig.ReturnType != nil {
-				debugPrintf("// [Generator Detection] Return type: %T (%s)\n", sig.ReturnType, sig.ReturnType.String())
-			} else {
-				debugPrintf("// [Generator Detection] Return type is nil\n")
-			}
-
-			// Only check return type if it's not nil
-			if sig.ReturnType != nil {
-				// First check for InstantiatedType (ideal case)
-				if instantiated, ok := sig.ReturnType.(*types.InstantiatedType); ok {
-					debugPrintf("// [Generator Detection] InstantiatedType generic: %s\n", instantiated.Generic.Name)
-					if instantiated.Generic != nil && instantiated.Generic.Name == "Generator" {
-						isGeneratorCall = true
-						debugPrintf("// [Generator Detection] GENERATOR DETECTED (InstantiatedType)!\n")
-					}
-				}
-
-				// Also check for ObjectType with generator methods (fallback case)
-				if returnObjType, ok := sig.ReturnType.(*types.ObjectType); ok {
-					// Check if it has the characteristic generator methods
-					hasNext := returnObjType.Properties["next"] != nil
-					hasReturn := returnObjType.Properties["return"] != nil
-					hasThrow := returnObjType.Properties["throw"] != nil
-
-					if hasNext && hasReturn && hasThrow {
-						isGeneratorCall = true
-						debugPrintf("// [Generator Detection] GENERATOR DETECTED (ObjectType with generator methods)!\n")
-					}
-				}
-			}
-		} else {
-			debugPrintf("// [Generator Detection] Not an object type or not callable\n")
-		}
-	}
+	// NOTE: We do NOT detect generator functions based on return type here.
+	// A function that returns a Generator is NOT the same as a generator function.
+	// Generator function detection is handled by:
+	// 1. Direct calls to function* literals (handled in compileNode for FunctionLiteral)
+	// 2. The VM's prepareCall which checks FunctionObject.IsGenerator
+	// Detecting based on return type would incorrectly mark regular functions that
+	// return generators (e.g., factory functions) as generator functions.
+	_ = functionType // Suppress unused variable warning
 
 	// 5. Emit appropriate opcode based on function type
 	if isGeneratorCall {

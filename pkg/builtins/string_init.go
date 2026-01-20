@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
@@ -2338,11 +2339,12 @@ func createStringIterator(vmInstance *vm.VM, str string) vm.Value {
 			result.SetOwnNonEnumerable("value", vm.Undefined)
 			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 		} else {
-			// Return current character and advance
-			char := string(str[currentIndex])
-			result.SetOwnNonEnumerable("value", vm.NewString(char))
+			// Return current code point as a string and advance
+			// ECMAScript string iteration yields code points, not UTF-16 code units
+			r, size := utf8.DecodeRuneInString(str[currentIndex:])
+			result.SetOwnNonEnumerable("value", vm.NewString(string(r)))
 			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			currentIndex++
+			currentIndex += size
 		}
 
 		return vm.NewValueFromPlainObject(result), nil
