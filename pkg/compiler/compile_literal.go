@@ -1034,7 +1034,10 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	// 1. Create a new Compiler instance for the function body, linked to the current one
 	functionCompiler := newFunctionCompiler(c) // <<< Keep this instance variable
 
-	// 1.4. Set method compilation flag if this is a method (has [[HomeObject]])
+	// 1.4. Mark this as a function body (has implicit 'arguments' binding, unlike module-level or arrow functions)
+	functionCompiler.isFunctionBody = true
+
+	// 1.5. Set method compilation flag if this is a method (has [[HomeObject]])
 	functionCompiler.isMethodCompilation = isMethod
 
 	// 1.5. Set strict mode if forced (e.g., class methods are always strict per ECMAScript spec)

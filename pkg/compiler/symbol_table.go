@@ -165,6 +165,35 @@ func (st *SymbolTable) Resolve(name string) (Symbol, *SymbolTable, bool) {
 	return Symbol{}, nil, false
 }
 
+// ResolveUpTo looks up a symbol name starting from the current scope and traversing
+// up through outer scopes, but stopping before reaching the boundary scope.
+// This is useful for checking if a variable is defined within the current function's scope
+// without looking into enclosing function scopes.
+// It returns the found symbol, the table it was found in, and a boolean indicating success.
+func (st *SymbolTable) ResolveUpTo(name string, boundary *SymbolTable) (Symbol, *SymbolTable, bool) {
+	// Stop if we've reached the boundary (don't search this scope or beyond)
+	if st == boundary {
+		return Symbol{}, nil, false
+	}
+
+	symbol, ok := st.store[name]
+	if ok {
+		return symbol, st, true // Found in the current scope
+	}
+
+	// If not found in current scope and there's an outer scope, search there
+	if st.Outer != nil {
+		// Recursively call ResolveUpTo on the outer scope
+		symbol, definingTable, ok := st.Outer.ResolveUpTo(name, boundary)
+		if ok {
+			return symbol, definingTable, true // Found in an outer scope (within boundary)
+		}
+	}
+
+	// Not found in this scope or any outer scope (within boundary)
+	return Symbol{}, nil, false
+}
+
 // UpdateRegister modifies the register associated with an existing symbol in the current scope.
 // Panics if the symbol is not found in the current scope.
 func (st *SymbolTable) UpdateRegister(name string, newRegister Register) {

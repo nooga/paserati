@@ -411,6 +411,7 @@ type Compiler struct {
 	isAsync              bool // True when compiling async function
 	isGenerator          bool // True when compiling generator function
 	isArrowFunction      bool // True when compiling arrow function (no own arguments binding)
+	isFunctionBody       bool // True when compiling a function body (has implicit 'arguments' binding, not module-level)
 	isMethodCompilation  bool // True when compiling a method that will have [[HomeObject]] (class/object method)
 
 	// --- Direct Eval Tracking ---
@@ -1273,16 +1274,27 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 								if ok {
 									funcTable.Define(declarator.Name.Value, reg)
 									// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
-									// Initialize to undefined (var hoisting semantics: declaration is hoisted, not initialization)
-									c.emitLoadUndefined(reg, s.Token.Line)
+									// Special case: in non-strict mode, `var arguments` is initialized to the Arguments object
+									if declarator.Name.Value == "arguments" && c.isFunctionBody && !c.isArrowFunction && !c.chunk.IsStrict {
+										c.emitGetArguments(reg, s.Token.Line)
+									} else {
+										// Initialize to undefined (var hoisting semantics: declaration is hoisted, not initialization)
+										c.emitLoadUndefined(reg, s.Token.Line)
+									}
 									debugPrintf("// [BlockPredefine] Pre-defined var '%s' in register R%d in function scope (funcTable=%p, currentTable=%p)\n", declarator.Name.Value, reg, funcTable, c.currentSymbolTable)
 								} else {
 									// Variable register threshold reached, use spilling
 									spillIdx := c.AllocSpillSlot()
 									funcTable.DefineSpilled(declarator.Name.Value, spillIdx)
-									// Initialize to undefined using the pre-reserved spillTempReg
+									// Initialize spill slot
 									spillTempUsed = true
-									c.emitLoadUndefined(spillTempReg, s.Token.Line)
+									// Special case: in non-strict mode, `var arguments` is initialized to the Arguments object
+									if declarator.Name.Value == "arguments" && c.isFunctionBody && !c.isArrowFunction && !c.chunk.IsStrict {
+										c.emitGetArguments(spillTempReg, s.Token.Line)
+									} else {
+										// Initialize to undefined using the pre-reserved spillTempReg
+										c.emitLoadUndefined(spillTempReg, s.Token.Line)
+									}
 									c.emitStoreSpill(spillIdx, spillTempReg, s.Token.Line)
 									debugPrintf("// [BlockPredefine] Pre-defined var '%s' in SPILL SLOT %d in function scope (funcTable=%p, currentTable=%p)\n", declarator.Name.Value, spillIdx, funcTable, c.currentSymbolTable)
 								}
@@ -1313,20 +1325,33 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			reg, ok := c.regAlloc.TryAllocForVariable()
 			if ok {
 				c.currentSymbolTable.Define(name, reg)
-				// Initialize the register to undefined (hoisted vars start as undefined)
-				c.emitLoadUndefined(reg, node.Token.Line)
+				// Special case: in non-strict mode, `var arguments` is initialized to the Arguments object
+				// Per ECMAScript spec, the arguments binding is initialized to the arguments object
+				if name == "arguments" && c.isFunctionBody && !c.isArrowFunction && !c.chunk.IsStrict {
+					c.emitGetArguments(reg, node.Token.Line)
+					debugPrintf("// [VarHoist] Hoisted var 'arguments' in R%d (initialized to Arguments object)\n", reg)
+				} else {
+					// Initialize the register to undefined (hoisted vars start as undefined)
+					c.emitLoadUndefined(reg, node.Token.Line)
+					debugPrintf("// [VarHoist] Hoisted var '%s' in R%d (initialized to undefined)\n", name, reg)
+				}
 				// Don't pin - let smart pinning handle it when/if captured
-				debugPrintf("// [VarHoist] Hoisted var '%s' in R%d (initialized to undefined)\n", name, reg)
 			} else {
 				// Variable threshold reached, use spilling
 				spillIdx := c.AllocSpillSlot()
 				c.currentSymbolTable.DefineSpilled(name, spillIdx)
-				// Initialize spill slot to undefined
+				// Special case: in non-strict mode, `var arguments` is initialized to the Arguments object
 				tempReg := c.regAlloc.Alloc()
-				c.emitLoadUndefined(tempReg, node.Token.Line)
+				if name == "arguments" && c.isFunctionBody && !c.isArrowFunction && !c.chunk.IsStrict {
+					c.emitGetArguments(tempReg, node.Token.Line)
+					debugPrintf("// [VarHoist] Hoisted var 'arguments' in SPILL SLOT %d (initialized to Arguments object)\n", spillIdx)
+				} else {
+					// Initialize spill slot to undefined
+					c.emitLoadUndefined(tempReg, node.Token.Line)
+					debugPrintf("// [VarHoist] Hoisted var '%s' in SPILL SLOT %d (initialized to undefined)\n", name, spillIdx)
+				}
 				c.emitStoreSpill(spillIdx, tempReg, node.Token.Line)
 				c.regAlloc.Free(tempReg)
-				debugPrintf("// [VarHoist] Hoisted var '%s' in SPILL SLOT %d (initialized to undefined)\n", name, spillIdx)
 			}
 		}
 
@@ -1720,15 +1745,36 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	case *parser.Identifier:
 		// Special handling for 'arguments' identifier - only available in non-arrow functions
+		// BUT only if there's no user-defined variable named 'arguments' that shadows it
 		if node.Value == "arguments" {
-			// Check if we're inside a function (not global scope)
-			hasOuter := c.currentSymbolTable.Outer != nil
-			if hasOuter {
-				// Emit OpGetArguments to create arguments object on demand
-				c.emitGetArguments(hint, node.Token.Line)
-				return hint, nil
+			if c.isFunctionBody && !c.isArrowFunction {
+				// We're in a regular function - check for shadowing WITHIN this function's scope only
+				// (outer function's `var arguments` does NOT shadow this function's implicit binding)
+				_, _, foundUserVar := c.currentSymbolTable.ResolveUpTo("arguments", c.scopeBoundary)
+				if !foundUserVar {
+					// No shadowing within this function - use its implicit arguments binding
+					c.emitGetArguments(hint, node.Token.Line)
+					return hint, nil
+				}
+				// User has defined 'arguments' in this function - fall through to normal variable lookup
+			} else if c.isArrowFunction {
+				// Arrow functions don't have own arguments, but capture from enclosing non-arrow function
+				// First check if there's a user-defined 'arguments' variable anywhere
+				_, _, foundUserVar := c.currentSymbolTable.Resolve("arguments")
+				if !foundUserVar {
+					// No user variable - walk up enclosing compilers to find a regular function
+					for enc := c.enclosing; enc != nil; enc = enc.enclosing {
+						if enc.isFunctionBody && !enc.isArrowFunction {
+							// Found an enclosing regular function - use OpGetArguments
+							// (this works because arguments is lazily created and shared)
+							c.emitGetArguments(hint, node.Token.Line)
+							return hint, nil
+						}
+					}
+				}
+				// User defined 'arguments' or no enclosing regular function - fall through to normal lookup
 			}
-			// If in global scope, treat as regular identifier (will likely be undefined)
+			// If at module scope, treat as regular identifier
 		}
 
 		// Check for TDZ violation in default parameter expressions
@@ -2041,6 +2087,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint string) (uint16, []*Symbol, errors.PaseratiError) {
 	// 1. Create a new Compiler instance for the method body
 	functionCompiler := newFunctionCompiler(c)
+
+	// 1.1 Mark this as a function body (has implicit 'arguments' binding)
+	functionCompiler.isFunctionBody = true
 
 	// 2. Determine and set the function name being compiled
 	var determinedFuncName string
