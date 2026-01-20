@@ -12056,6 +12056,28 @@ func (vm *VM) cmpResult(cmp int, opcode OpCode) bool {
 	return false
 }
 
+// stringNeedsUTF16Comparison returns true if a string contains characters that
+// might have different byte representations (astral characters or WTF-8 surrogates).
+// This is used as a fast check to avoid expensive UTF-16 conversion for most strings.
+func stringNeedsUTF16Comparison(s string) bool {
+	// Fast path: scan for any byte >= 0xED (where surrogates and astral chars start in UTF-8)
+	// This is much faster than checking each byte individually
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0xED {
+			// Only these high bytes can indicate surrogates or astral characters:
+			// 0xED: WTF-8 surrogate encoding (ED [A0-BF] XX)
+			// 0xF0-0xF7: 4-byte UTF-8 sequences (astral characters >= U+10000)
+			if s[i] >= 0xF0 {
+				return true // 4-byte sequence (astral character)
+			}
+			if s[i] == 0xED && i+1 < len(s) && s[i+1] >= 0xA0 {
+				return true // WTF-8 surrogate
+			}
+		}
+	}
+	return false
+}
+
 // compareStringsUTF16 compares two strings using UTF-16 code unit ordering
 // Returns -1 if a < b, 0 if a == b, 1 if a > b
 func compareStringsUTF16(a, b string) int {
@@ -12160,6 +12182,7 @@ func StringToUTF16(s string) []uint16 {
 }
 
 // UTF16ToString converts a slice of UTF-16 code units back to a Go string
+// This preserves lone surrogates using WTF-8 encoding (same as lexer)
 func UTF16ToString(units []uint16) string {
 	var result []byte
 	for i := 0; i < len(units); i++ {
@@ -12175,8 +12198,18 @@ func UTF16ToString(units []uint16) string {
 				continue
 			}
 		}
-		// Single code unit (BMP character or lone surrogate)
-		result = append(result, string(rune(c))...)
+		// Single code unit - check if it's a surrogate that needs WTF-8 encoding
+		if c >= 0xD800 && c <= 0xDFFF {
+			// Lone surrogate - encode using WTF-8 (3 bytes: ED XX XX)
+			// This matches how the lexer stores escape sequences like \uD801
+			b1 := byte(0xE0 | ((c >> 12) & 0x0F))
+			b2 := byte(0x80 | ((c >> 6) & 0x3F))
+			b3 := byte(0x80 | (c & 0x3F))
+			result = append(result, b1, b2, b3)
+		} else {
+			// Regular BMP character - use standard UTF-8 encoding
+			result = append(result, string(rune(c))...)
+		}
 	}
 	return string(result)
 }

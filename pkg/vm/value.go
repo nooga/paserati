@@ -1426,8 +1426,26 @@ func (v Value) Is(other Value) bool {
 	case TypeBigInt:
 		return v.AsBigInt().Cmp(other.AsBigInt()) == 0
 	case TypeString:
-		// String comparison by value
-		return v.AsString() == other.AsString()
+		// String comparison by UTF-16 code units (not raw bytes)
+		// This is needed because the same JS string can have different Go representations:
+		// - Literal astral chars (e.g., "𐐨") are stored as UTF-8 (4 bytes)
+		// - Escape sequences (e.g., "\ud801\udc28") are stored as WTF-8 (6 bytes)
+		a, b := v.AsString(), other.AsString()
+		// Fast path: if byte strings are equal, they're the same JS string
+		if a == b {
+			return true
+		}
+		// Medium path: if lengths are equal, bytes are different, strings are different
+		// (same UTF-16 content can only have different byte lengths when mixing UTF-8/WTF-8)
+		if len(a) == len(b) {
+			return false
+		}
+		// Check if either string could have surrogates/astral chars that affect comparison
+		if !stringNeedsUTF16Comparison(a) && !stringNeedsUTF16Comparison(b) {
+			return false
+		}
+		// Slow path: compare by UTF-16 code units for mixed representations
+		return compareStringsUTF16(a, b) == 0
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
@@ -1477,7 +1495,26 @@ func (v Value) StrictlyEquals(other Value) bool {
 	case TypeBigInt:
 		return v.AsBigInt().Cmp(other.AsBigInt()) == 0
 	case TypeString:
-		return v.AsString() == other.AsString()
+		// String comparison by UTF-16 code units (not raw bytes)
+		// This is needed because the same JS string can have different Go representations:
+		// - Literal astral chars (e.g., "𐐨") are stored as UTF-8 (4 bytes)
+		// - Escape sequences (e.g., "\ud801\udc28") are stored as WTF-8 (6 bytes)
+		a, b := v.AsString(), other.AsString()
+		// Fast path: if byte strings are equal, they're the same JS string
+		if a == b {
+			return true
+		}
+		// Medium path: if lengths are equal, bytes are different, strings are different
+		// (same UTF-16 content can only have different byte lengths when mixing UTF-8/WTF-8)
+		if len(a) == len(b) {
+			return false
+		}
+		// Check if either string could have surrogates/astral chars that affect comparison
+		if !stringNeedsUTF16Comparison(a) && !stringNeedsUTF16Comparison(b) {
+			return false
+		}
+		// Slow path: compare by UTF-16 code units for mixed representations
+		return compareStringsUTF16(a, b) == 0
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
