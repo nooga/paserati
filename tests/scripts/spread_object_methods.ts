@@ -5,4 +5,4 @@ let obj = {
 };
 let extended = {...obj, newProp: "test"};
 extended;
-// expect: {value: 42, getValue: [Function: <anonymous>], newProp: "test"}
+// expect: {value: 42, getValue: [Function (anonymous)], newProp: "test"}

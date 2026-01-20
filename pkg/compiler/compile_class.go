@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
@@ -299,7 +300,11 @@ func (c *Compiler) compileConstructor(node *parser.ClassDeclaration, superConstr
 	// Compile the constructor function
 	// Use the class name as the function name for proper function.name property
 	// Constructors are always strict mode per ECMAScript spec (class bodies are strict)
+	// For anonymous class expressions (names starting with __AnonymousClass_), use empty string
 	nameHint := node.Name.Value
+	if strings.HasPrefix(nameHint, "__AnonymousClass_") {
+		nameHint = "" // Anonymous classes have empty name (per ECMAScript spec)
+	}
 	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralStrict(functionLiteral, nameHint)
 	if err != nil {
 		return BadRegister, err

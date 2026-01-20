@@ -29,7 +29,7 @@ func isFutureReservedWord(name string) bool {
 func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral, hint Register) (Register, errors.PaseratiError) {
 	// 1. Create a compiler for the function scope
 	funcCompiler := newFunctionCompiler(c)
-	funcCompiler.compilingFuncName = "<arrow>" // Set name for arrow functions
+	funcCompiler.compilingFuncName = "" // Arrow functions have empty name by default (per ECMAScript spec)
 	funcCompiler.isArrowFunction = true        // Arrow functions don't have own 'arguments' binding
 
 	// 1.5. Check for 'use strict' directive in arrow function body (if it's a block statement)
@@ -213,8 +213,8 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			seenDefault = true
 		}
 	}
-	arrowName := "<arrow>"
-	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot)                                                                                              // Set spill slots needed
+	arrowName := "" // Arrow functions have empty name by default (per ECMAScript spec)
+	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot)                                                                                           // Set spill slots needed
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, arrowName, functionChunk, false, node.IsAsync, true, funcCompiler.hasLocalCaptures) // isArrowFunction = true
 	constIdx := c.chunk.AddConstant(funcValue)
 
@@ -1071,7 +1071,7 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	} else if node.Name != nil {
 		determinedFuncName = node.Name.Value
 	} else {
-		determinedFuncName = "<anonymous>"
+		determinedFuncName = "" // Anonymous functions have empty name (per ECMAScript spec)
 	}
 	functionCompiler.compilingFuncName = determinedFuncName
 	functionCompiler.regAlloc.functionName = determinedFuncName
@@ -1521,7 +1521,7 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 		// Anonymous function - use the binding context name (name inference)
 		funcName = nameHint
 	} else {
-		funcName = "<anonymous>"
+		funcName = "" // Anonymous functions have empty name (per ECMAScript spec)
 	}
 
 	// DEBUG: Print RegisterSize for all functions

@@ -3577,6 +3577,14 @@ startExecution:
 					if frame.closure != nil && frame.closure.Fn != nil {
 						cl.CapturedSuperConstructor = frame.closure.Fn.Prototype
 					}
+					// Capture new.target from enclosing scope (for lexical new.target binding)
+					// If enclosing frame is itself an arrow function, use its captured new.target
+					// Otherwise use the frame's new.target value if it's a constructor call
+					if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+						cl.CapturedNewTarget = frame.closure.CapturedNewTarget
+					} else if frame.isConstructorCall {
+						cl.CapturedNewTarget = frame.newTargetValue
+					}
 					// Capture arguments from enclosing non-arrow function
 					// NOTE: Do NOT set frame.argumentsObject here - that would pollute the frame
 					if frame.argumentsObject.Type() != TypeUndefined {
@@ -3686,6 +3694,14 @@ startExecution:
 					// Capture super constructor from enclosing non-arrow function
 					if frame.closure != nil && frame.closure.Fn != nil {
 						cl.CapturedSuperConstructor = frame.closure.Fn.Prototype
+					}
+					// Capture new.target from enclosing scope (for lexical new.target binding)
+					// If enclosing frame is itself an arrow function, use its captured new.target
+					// Otherwise use the frame's new.target value if it's a constructor call
+					if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+						cl.CapturedNewTarget = frame.closure.CapturedNewTarget
+					} else if frame.isConstructorCall {
+						cl.CapturedNewTarget = frame.newTargetValue
 					}
 					// Capture arguments from enclosing non-arrow function
 					// NOTE: Do NOT set frame.argumentsObject here - that would pollute the frame
@@ -7772,10 +7788,16 @@ startExecution:
 			ip++
 
 			// Load 'new.target' value from current call frame context
-			// If not in a constructor call, return undefined
-			if frame.isConstructorCall {
+			// For arrow functions, use the lexically captured new.target
+			// For regular functions, use the frame's new.target if in constructor call
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+				// Arrow function: use captured new.target
+				registers[destReg] = frame.closure.CapturedNewTarget
+			} else if frame.isConstructorCall {
+				// Regular function in constructor call: use frame's new.target
 				registers[destReg] = frame.newTargetValue
 			} else {
+				// Regular function not in constructor call: undefined
 				registers[destReg] = Undefined
 			}
 
@@ -9444,7 +9466,8 @@ startExecution:
 				for _, key := range sourceObj.OwnKeys() {
 					if _, shouldExclude := excludeNames[key]; !shouldExclude {
 						// Check if property is accessor (getter/setter)
-						if getter, _, _, enumerable, isAccessor := sourceObj.GetOwnAccessor(key); isAccessor {
+						// GetOwnAccessor returns: (get, set, enumerable, configurable, exists)
+						if getter, _, enumerable, _, isAccessor := sourceObj.GetOwnAccessor(key); isAccessor {
 							// Property is an accessor
 							if !enumerable {
 								continue // Skip non-enumerable accessors
