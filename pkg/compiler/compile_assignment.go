@@ -11,23 +11,57 @@ import (
 
 const debugAssignment = false // Enable debug output for assignment compilation
 
+// WithPropertyInfo contains information about how to handle a with property access
+type WithPropertyInfo struct {
+	UseWithProperty bool     // True if this should use with-property resolution
+	HasLocalFallback bool    // True if there's a local variable to fall back to
+	LocalReg        Register // The local register to fall back to (if HasLocalFallback)
+}
+
 // shouldUseWithProperty checks if an identifier should be treated as a with property
-// This is an unobtrusive predicate that can be used throughout the compiler
+// Returns info about whether to use with-property resolution and any local fallback
 func (c *Compiler) shouldUseWithProperty(ident *parser.Identifier) (Register, bool) {
-	// If we're inside a with block (tracked at compile-time), ALL free variables should use OpGetWithProperty
-	// This allows runtime resolution from the with-object stack
+	info := c.getWithPropertyInfo(ident)
+	return info.LocalReg, info.UseWithProperty
+}
+
+// getWithPropertyInfo returns detailed information about how to handle an identifier
+// in a with block context - whether it needs with-property resolution and if there's
+// a local variable fallback
+func (c *Compiler) getWithPropertyInfo(ident *parser.Identifier) WithPropertyInfo {
+	// If we're not inside a with block, don't use with property resolution
 	if c.withBlockDepth == 0 {
-		return BadRegister, false
+		return WithPropertyInfo{UseWithProperty: false}
 	}
 
-	// Check if this identifier is a local variable (defined in current scope)
-	// If it's local, don't use with property resolution
-	if _, _, found := c.currentSymbolTable.Resolve(ident.Value); found {
-		return BadRegister, false // It's a local, use normal resolution
+	// Check if this identifier is a local variable in the CURRENT function scope
+	symbolRef, definingTable, found := c.currentSymbolTable.Resolve(ident.Value)
+
+	if found && !symbolRef.IsGlobal && !symbolRef.IsSpilled {
+		// Check if this is an upvalue (defined in an outer function)
+		// If so, we should NOT use the local fallback path
+		if c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+			// It's an upvalue - use OpGetWithProperty/OpSetWithProperty (falls back to upvalue resolution)
+			return WithPropertyInfo{
+				UseWithProperty:  true,
+				HasLocalFallback: false,
+			}
+		}
+
+		// It's a local variable in the current function - use OpGetWithOrLocal/OpSetWithOrLocal
+		// to check with-object first, then fall back to the local
+		return WithPropertyInfo{
+			UseWithProperty:  true,
+			HasLocalFallback: true,
+			LocalReg:         symbolRef.Register,
+		}
 	}
 
-	// It's a free variable and we're in a with block - use OpGetWithProperty
-	return BadRegister, true
+	// No local variable in current function - use OpGetWithProperty/OpSetWithProperty (falls back to globals/upvalues)
+	return WithPropertyInfo{
+		UseWithProperty:  true,
+		HasLocalFallback: false,
+	}
 }
 
 // compileAssignmentExpression compiles identifier = value OR indexExpr = value OR memberExpr = value
@@ -45,15 +79,19 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	)
 	var lhsType lhsInfoType
 	var identInfo struct { // Info needed to store back to identifier
-		targetReg     Register
-		isUpvalue     bool
-		upvalueIndex  uint16 // 16-bit to support large closures (up to 65535 upvalues)
-		isGlobal      bool   // Track if this is a global variable
-		globalIdx     uint16 // Direct global index instead of name constant index
-		isCallerLocal bool   // Track if this is a caller's local (for direct eval)
-		callerRegIdx  int    // Caller's register index (for direct eval)
-		isSpilled     bool   // Track if this is a spilled variable
-		spillIndex    uint16 // Spill slot index (for spilled variables)
+		targetReg        Register
+		isUpvalue        bool
+		upvalueIndex     uint16 // 16-bit to support large closures (up to 65535 upvalues)
+		isGlobal         bool   // Track if this is a global variable
+		globalIdx        uint16 // Direct global index instead of name constant index
+		isCallerLocal    bool   // Track if this is a caller's local (for direct eval)
+		callerRegIdx     int    // Caller's register index (for direct eval)
+		isSpilled        bool   // Track if this is a spilled variable
+		spillIndex       uint16 // Spill slot index (for spilled variables)
+		isWithOrLocal    bool   // Track if this is a with-property with local fallback
+		withNameConstIdx uint16 // Name constant index for with-property
+		withLocalReg     Register // Local register to fall back to
+		withBindingReg   Register // Register holding captured binding (for simple assignments)
 	}
 	var indexInfo struct { // Info needed to store back to index expr
 		arrayReg Register
@@ -92,20 +130,51 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		}
 
 		// First check if this is a with property (highest priority)
-		if _, isWithProperty := c.shouldUseWithProperty(lhsNode); isWithProperty {
-			// This is a with property assignment - treat as member assignment
-			lhsType = lhsIsMemberExpr
-			memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(lhsNode.Value))
-			memberInfo.isComputed = false
-			memberInfo.isWithProperty = true
+		withInfo := c.getWithPropertyInfo(lhsNode)
+		if withInfo.UseWithProperty {
+			if withInfo.HasLocalFallback {
+				// With-property with local fallback - need to capture binding BEFORE RHS evaluation
+				// per ECMAScript reference binding semantics
+				lhsType = lhsIsIdentifier
+				identInfo.isWithOrLocal = true
+				identInfo.withNameConstIdx = c.chunk.AddConstant(vm.String(lhsNode.Value))
+				identInfo.withLocalReg = withInfo.LocalReg
 
-			// For compound assignments, we need the current property value
-			if node.Operator != "=" {
-				currentValueReg = c.regAlloc.Alloc()
-				tempRegs = append(tempRegs, currentValueReg)
-				c.emitGetWithProperty(currentValueReg, int(memberInfo.nameConstIdx), line)
+				// Capture the binding BEFORE evaluating RHS (required by ECMAScript spec)
+				// This determines whether to use with-object or local at assignment start
+				identInfo.withBindingReg = c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, identInfo.withBindingReg)
+				c.emitResolveWithBinding(identInfo.withBindingReg, int(identInfo.withNameConstIdx), withInfo.LocalReg, line)
+
+				// For compound assignments, we also need the current property value
+				if node.Operator != "=" {
+					currentValueReg = c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, currentValueReg)
+					c.emitGetWithOrLocal(currentValueReg, int(identInfo.withNameConstIdx), withInfo.LocalReg, line)
+				} else {
+					currentValueReg = nilRegister // Not needed for simple assignment
+				}
 			} else {
-				currentValueReg = nilRegister // Not needed for simple assignment
+				// With-property without local fallback - still need binding capture for strict mode
+				// Use same approach but with localReg=255 to indicate no local fallback
+				lhsType = lhsIsIdentifier
+				identInfo.isWithOrLocal = true
+				identInfo.withNameConstIdx = c.chunk.AddConstant(vm.String(lhsNode.Value))
+				identInfo.withLocalReg = 255 // Sentinel: no local, fall back to global
+
+				// Capture the binding BEFORE evaluating RHS
+				identInfo.withBindingReg = c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, identInfo.withBindingReg)
+				c.emitResolveWithBinding(identInfo.withBindingReg, int(identInfo.withNameConstIdx), 255, line)
+
+				// For compound assignments, we need the current property value
+				if node.Operator != "=" {
+					currentValueReg = c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, currentValueReg)
+					c.emitGetWithProperty(currentValueReg, int(identInfo.withNameConstIdx), line)
+				} else {
+					currentValueReg = nilRegister // Not needed for simple assignment
+				}
 			}
 		} else {
 			// Regular identifier - resolve the identifier
@@ -665,7 +734,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		// Store hint to LHS (inline the store logic for RHS path)
 		switch lhsType {
 		case lhsIsIdentifier:
-			if identInfo.isGlobal {
+			if identInfo.isWithOrLocal {
+				// Use pre-captured binding to ensure correct semantics
+				c.emitSetWithByBinding(int(identInfo.withNameConstIdx), hint, identInfo.withLocalReg, identInfo.withBindingReg, line)
+			} else if identInfo.isGlobal {
 				c.emitSetGlobal(identInfo.globalIdx, hint, line)
 			} else if identInfo.isCallerLocal {
 				c.emitOpCode(vm.OpSetCallerLocal, line)
@@ -933,7 +1005,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	if needsStore {
 		switch lhsType {
 		case lhsIsIdentifier:
-			if identInfo.isGlobal {
+			if identInfo.isWithOrLocal {
+				// With-property with local fallback - use pre-captured binding for correct semantics
+				debugPrintf("// DEBUG Assign Store Ident: Emitting SetWithByBinding NameIdx=%d, Value=R%d, Local=R%d, Binding=R%d\n", identInfo.withNameConstIdx, hint, identInfo.withLocalReg, identInfo.withBindingReg)
+				c.emitSetWithByBinding(int(identInfo.withNameConstIdx), hint, identInfo.withLocalReg, identInfo.withBindingReg, line)
+			} else if identInfo.isGlobal {
 				// Global variable assignment
 				c.emitSetGlobal(identInfo.globalIdx, hint, line)
 			} else if identInfo.isCallerLocal {

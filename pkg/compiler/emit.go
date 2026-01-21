@@ -750,6 +750,43 @@ func (c *Compiler) emitSetWithProperty(nameIdx int, valueReg Register, line int)
 	c.emitByte(byte(valueReg))
 }
 
+// emitGetWithOrLocal emits OpGetWithOrLocal instruction
+// This tries the with-object first, falling back to localReg if not found
+func (c *Compiler) emitGetWithOrLocal(destReg Register, nameIdx int, localReg Register, line int) {
+	c.emitOpCode(vm.OpGetWithOrLocal, line)
+	c.emitByte(byte(destReg))
+	c.emitUint16(uint16(nameIdx))
+	c.emitByte(byte(localReg))
+}
+
+// emitSetWithOrLocal emits OpSetWithOrLocal instruction
+// This sets on the with-object if property exists, otherwise sets the local register
+func (c *Compiler) emitSetWithOrLocal(nameIdx int, valueReg Register, localReg Register, line int) {
+	c.emitOpCode(vm.OpSetWithOrLocal, line)
+	c.emitUint16(uint16(nameIdx))
+	c.emitByte(byte(valueReg))
+	c.emitByte(byte(localReg))
+}
+
+// emitResolveWithBinding captures which binding to use (with-object index or 255 for local)
+// before RHS evaluation, per ECMAScript reference binding semantics
+func (c *Compiler) emitResolveWithBinding(destReg Register, nameIdx int, localReg Register, line int) {
+	c.emitOpCode(vm.OpResolveWithBinding, line)
+	c.emitByte(byte(destReg))
+	c.emitUint16(uint16(nameIdx))
+	c.emitByte(byte(localReg))
+}
+
+// emitSetWithByBinding sets a value using a pre-captured binding
+// BindingReg contains the with-object index (or 255 for local) from OpResolveWithBinding
+func (c *Compiler) emitSetWithByBinding(nameIdx int, valueReg Register, localReg Register, bindingReg Register, line int) {
+	c.emitOpCode(vm.OpSetWithByBinding, line)
+	c.emitUint16(uint16(nameIdx))
+	c.emitByte(byte(valueReg))
+	c.emitByte(byte(localReg))
+	c.emitByte(byte(bindingReg))
+}
+
 // emitLoadUninitialized emits OpLoadUninitialized to mark a register as TDZ (Temporal Dead Zone)
 // This is used for let/const variables that haven't been initialized yet.
 func (c *Compiler) emitLoadUninitialized(dest Register, line int) {

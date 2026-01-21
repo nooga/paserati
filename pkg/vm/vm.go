@@ -1189,8 +1189,7 @@ startExecution:
 					// Check if exception was caught - need to jump to handler
 					if vm.handlerFound {
 						vm.handlerFound = false
-						ip = frame.ip // Jump to catch handler
-						continue
+						goto reloadFrame
 					}
 				}
 				numVal := primVal.ToFloat()
@@ -1256,8 +1255,7 @@ startExecution:
 				// Check if exception was caught - need to jump to handler
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip // Jump to catch handler
-					continue
+					goto reloadFrame
 				}
 			}
 			// ECMAScript: ToNumber(bigint) throws a TypeError
@@ -1290,8 +1288,7 @@ startExecution:
 				// Check if exception was caught - need to jump to handler
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip // Jump to catch handler
-					continue
+					goto reloadFrame
 				}
 			}
 			// BigInt is preserved as-is, everything else converts to Number
@@ -1379,8 +1376,7 @@ startExecution:
 				}
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip
-					continue
+					goto reloadFrame
 				}
 
 				// ToPrimitive on right operand (before checking Symbol on left!)
@@ -1392,8 +1388,7 @@ startExecution:
 				}
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip
-					continue
+					goto reloadFrame
 				}
 
 				// If either is a string, do string concatenation
@@ -1496,8 +1491,7 @@ startExecution:
 				}
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip
-					continue
+					goto reloadFrame
 				}
 
 				// Check if left is Symbol - ToNumeric(Symbol) throws TypeError
@@ -1526,8 +1520,7 @@ startExecution:
 				}
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip
-					continue
+					goto reloadFrame
 				}
 
 				// Check if right is Symbol - ToNumeric(Symbol) throws TypeError
@@ -1625,8 +1618,7 @@ startExecution:
 				}
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip
-					continue
+					goto reloadFrame
 				}
 
 				// Check if left is Symbol - ToNumeric(Symbol) throws TypeError
@@ -1654,8 +1646,7 @@ startExecution:
 				}
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip
-					continue
+					goto reloadFrame
 				}
 
 				// Check if right is Symbol - ToNumeric(Symbol) throws TypeError
@@ -3060,20 +3051,294 @@ startExecution:
 			propName := nameVal.AsString()
 			value := registers[valueReg]
 
-			// For assignments, always use the INNERMOST with-object
-			// This matches ECMAScript semantics: assignments create/update properties on the innermost with-object
+			// OpSetWithProperty is used when there's no local variable with this name.
+			// We need to determine if this is:
+			// 1. A variable that exists only as a with-object property (set on with-object)
+			// 2. A global variable that might be shadowed by with-object property
+			//
+			// Strategy: If there's a global variable with this name in the heap,
+			// check if the with-object has the property first. If not, use the global.
+			// Otherwise, use the innermost with-object (binding captured at start).
 			if len(vm.withObjectStack) > 0 {
-				innermostWithObj := vm.withObjectStack[len(vm.withObjectStack)-1]
-				if ok, status, val := vm.opSetProp(ip, &innermostWithObj, propName, &value); !ok {
-					if status != InterpretOK {
-						return status, val
+				// Check if there's a global variable with this name
+				globalIdx, hasGlobal := vm.heap.nameToIndex[propName]
+
+				if hasGlobal {
+					// There's a global - check if with-object has this property
+					withHasProperty := false
+					for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
+						withObj := vm.withObjectStack[i]
+						if withObj.Type() == TypeObject {
+							obj := withObj.AsPlainObject()
+							if obj.HasOwn(propName) {
+								// Check Symbol.unscopables
+								isUnscopable := false
+								if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
+									if unscopablesVal.Type() == TypeObject {
+										unscopablesObj := unscopablesVal.AsPlainObject()
+										if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
+											isUnscopable = excludeVal.IsTruthy()
+										}
+									}
+								}
+								if !isUnscopable {
+									withHasProperty = true
+									// Set on this with-object
+									if ok, status, val := vm.opSetProp(ip, &withObj, propName, &value); !ok {
+										if status != InterpretOK {
+											return status, val
+										}
+										goto reloadFrame
+									}
+									break
+								}
+							}
+						}
 					}
-					goto reloadFrame
+					if !withHasProperty {
+						// With-object doesn't have property - use global
+						// TDZ check
+						if currentVal, ok := vm.heap.Get(globalIdx); ok && currentVal.typ == TypeUninitialized {
+							frame.ip = ip
+							vm.ThrowReferenceError(fmt.Sprintf("Cannot access '%s' before initialization", propName))
+							if vm.unwinding {
+								return InterpretRuntimeError, Undefined
+							}
+							goto reloadFrame
+						}
+						_ = vm.heap.Set(globalIdx, value)
+					}
+				} else {
+					// No global with this name - use innermost with-object
+					// (This is the pure with-property case where binding is captured at start)
+					innermostWithObj := vm.withObjectStack[len(vm.withObjectStack)-1]
+					if ok, status, val := vm.opSetProp(ip, &innermostWithObj, propName, &value); !ok {
+						if status != InterpretOK {
+							return status, val
+						}
+						goto reloadFrame
+					}
 				}
 			} else {
 				// No with-object on stack - fall back to global
 				globalVal := NewValueFromPlainObject(vm.GlobalObject)
 				if ok, status, val := vm.opSetProp(ip, &globalVal, propName, &value); !ok {
+					if status != InterpretOK {
+						return status, val
+					}
+					goto reloadFrame
+				}
+			}
+
+		case OpGetWithOrLocal:
+			// Rx NameIdx(16bit) LocalReg: Try with-object, fallback to LocalReg
+			destReg := code[ip]
+			nameHi := code[ip+1]
+			nameLo := code[ip+2]
+			localReg := code[ip+3]
+			ip += 4
+			nameIdx := int(uint16(nameHi)<<8 | uint16(nameLo))
+			nameVal := constants[nameIdx]
+			propName := nameVal.AsString()
+
+			found := false
+			for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
+				withObj := vm.withObjectStack[i]
+				if withObj.Type() == TypeObject {
+					obj := withObj.AsPlainObject()
+					if obj.HasOwn(propName) {
+						// Check Symbol.unscopables
+						isUnscopable := false
+						if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
+							if unscopablesVal.Type() == TypeObject {
+								unscopablesObj := unscopablesVal.AsPlainObject()
+								if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
+									isUnscopable = excludeVal.IsTruthy()
+								}
+							}
+						}
+						if isUnscopable {
+							continue
+						}
+						// Use GetProperty to properly handle getters
+						frame.ip = ip
+						vm.helperCallDepth++
+						propVal, err := vm.GetProperty(withObj, propName)
+						vm.helperCallDepth--
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
+						}
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
+						}
+						if err != nil {
+							frame.ip = ip
+							status := vm.runtimeError("Error getting property: %v", err)
+							return status, Undefined
+						}
+						registers[destReg] = propVal
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				// Fall back to local variable
+				registers[destReg] = registers[localReg]
+			}
+
+		case OpSetWithOrLocal:
+			// NameIdx(16bit) ValueReg LocalReg: Set on with-object if property exists, else set local
+			nameHi := code[ip]
+			nameLo := code[ip+1]
+			valueReg := code[ip+2]
+			localReg := code[ip+3]
+			ip += 4
+			nameIdx := int(uint16(nameHi)<<8 | uint16(nameLo))
+			nameVal := constants[nameIdx]
+			propName := nameVal.AsString()
+			value := registers[valueReg]
+
+			// Check if property exists on any with-object (not just innermost)
+			setOnWith := false
+			for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
+				withObj := vm.withObjectStack[i]
+				if withObj.Type() == TypeObject {
+					obj := withObj.AsPlainObject()
+					if obj.HasOwn(propName) {
+						// Check Symbol.unscopables
+						isUnscopable := false
+						if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
+							if unscopablesVal.Type() == TypeObject {
+								unscopablesObj := unscopablesVal.AsPlainObject()
+								if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
+									isUnscopable = excludeVal.IsTruthy()
+								}
+							}
+						}
+						if isUnscopable {
+							continue
+						}
+						// Set on this with-object
+						if ok, status, val := vm.opSetProp(ip, &withObj, propName, &value); !ok {
+							if status != InterpretOK {
+								return status, val
+							}
+							goto reloadFrame
+						}
+						setOnWith = true
+						break
+					}
+				}
+			}
+			if !setOnWith {
+				// Fall back to local variable
+				registers[localReg] = value
+			}
+
+		case OpResolveWithBinding:
+			// Rx NameIdx(16bit) LocalReg: Capture binding - Rx = with-object index (or 255 for local)
+			// This captures which binding to use BEFORE RHS evaluation
+			destReg := code[ip]
+			nameHi := code[ip+1]
+			nameLo := code[ip+2]
+			_ = code[ip+3] // localReg not used here, just for symmetry
+			ip += 4
+			nameIdx := int(uint16(nameHi)<<8 | uint16(nameLo))
+			nameVal := constants[nameIdx]
+			propName := nameVal.AsString()
+
+			// Find which with-object has the property (search from innermost to outermost)
+			bindingIndex := byte(255) // 255 means use local
+			for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
+				withObj := vm.withObjectStack[i]
+				if withObj.Type() == TypeObject {
+					obj := withObj.AsPlainObject()
+					if obj.HasOwn(propName) {
+						// Check Symbol.unscopables
+						isUnscopable := false
+						if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
+							if unscopablesVal.Type() == TypeObject {
+								unscopablesObj := unscopablesVal.AsPlainObject()
+								if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
+									isUnscopable = excludeVal.IsTruthy()
+								}
+							}
+						}
+						if isUnscopable {
+							continue
+						}
+						// Found the with-object that has the property
+						bindingIndex = byte(i)
+						break
+					}
+				}
+			}
+			registers[destReg] = NumberValue(float64(bindingIndex))
+
+		case OpSetWithByBinding:
+			// NameIdx(16bit) ValueReg LocalReg BindingReg: Set using pre-resolved binding
+			nameHi := code[ip]
+			nameLo := code[ip+1]
+			valueReg := code[ip+2]
+			localReg := code[ip+3]
+			bindingReg := code[ip+4]
+			ip += 5
+			nameIdx := int(uint16(nameHi)<<8 | uint16(nameLo))
+			nameVal := constants[nameIdx]
+			propName := nameVal.AsString()
+			value := registers[valueReg]
+			bindingIndex := int(registers[bindingReg].ToFloat())
+
+			if bindingIndex == 255 || bindingIndex >= len(vm.withObjectStack) {
+				// No with-object had the property at binding time
+				if localReg == 255 {
+					// No local fallback - use global assignment
+					if globalIdx, hasGlobal := vm.heap.nameToIndex[propName]; hasGlobal {
+						_ = vm.heap.Set(globalIdx, value)
+					} else {
+						// Undeclared variable in strict mode should throw ReferenceError
+						isStrict := function != nil && function.Chunk != nil && function.Chunk.IsStrict
+						if isStrict {
+							vm.runtimeError("ReferenceError: %s is not defined", propName)
+							return InterpretRuntimeError, Undefined
+						}
+						// In non-strict mode, create implicit global by adding to global object
+						if vm.GlobalObject != nil {
+							vm.GlobalObject.SetOwn(propName, value)
+						}
+					}
+				} else {
+					// Use local variable
+					registers[localReg] = value
+				}
+			} else {
+				// Set on the with-object at the captured index
+				withObj := vm.withObjectStack[bindingIndex]
+
+				// Per ECMAScript 9.1.1.2.5 SetMutableBinding:
+				// In strict mode, if the binding was captured but property was deleted during
+				// RHS evaluation, throw ReferenceError
+				isStrict := function != nil && function.Chunk != nil && function.Chunk.IsStrict
+				if isStrict {
+					// Check if property still exists on the with-object
+					stillExists := false
+					if withObj.Type() == TypeObject {
+						obj := withObj.AsPlainObject()
+						stillExists = obj.HasOwn(propName)
+						// Also check prototype chain (HasProperty, not just HasOwn)
+						if !stillExists {
+							_, stillExists = obj.Get(propName)
+						}
+					}
+					if !stillExists {
+						vm.runtimeError("ReferenceError: Cannot assign to deleted binding '%s' in strict mode", propName)
+						return InterpretRuntimeError, Undefined
+					}
+				}
+
+				if ok, status, val := vm.opSetProp(ip, &withObj, propName, &value); !ok {
 					if status != InterpretOK {
 						return status, val
 					}
@@ -5719,8 +5984,7 @@ startExecution:
 			}
 			if vm.handlerFound {
 				vm.handlerFound = false
-				ip = frame.ip // Jump to catch handler
-				continue
+				goto reloadFrame
 			}
 
 			// BigInt: ~x = -(x + 1)
@@ -5762,8 +6026,7 @@ startExecution:
 			}
 			if vm.handlerFound {
 				vm.handlerFound = false
-				ip = frame.ip
-				continue
+				goto reloadFrame
 			}
 
 			// Check if left is Symbol - ToNumeric(Symbol) throws TypeError
@@ -5792,8 +6055,7 @@ startExecution:
 			}
 			if vm.handlerFound {
 				vm.handlerFound = false
-				ip = frame.ip
-				continue
+				goto reloadFrame
 			}
 
 			// Check if right is Symbol - ToNumeric(Symbol) throws TypeError
@@ -5938,8 +6200,7 @@ startExecution:
 			}
 			if vm.handlerFound {
 				vm.handlerFound = false
-				ip = frame.ip
-				continue
+				goto reloadFrame
 			}
 
 			// Check if left is Symbol - ToNumeric(Symbol) throws TypeError
@@ -5968,8 +6229,7 @@ startExecution:
 			}
 			if vm.handlerFound {
 				vm.handlerFound = false
-				ip = frame.ip
-				continue
+				goto reloadFrame
 			}
 
 			// Check if right is Symbol - ToNumeric(Symbol) throws TypeError
@@ -6758,11 +7018,10 @@ startExecution:
 			// which throws an exception that gets caught by a try/catch block.
 			if vm.handlerFound {
 				if debugExceptions {
-					fmt.Printf("[DEBUG vm.go] OpCallMethod: Handler found during native call, jumping to frame.ip=%d\n", frame.ip)
+					fmt.Printf("[DEBUG vm.go] OpCallMethod: Handler found during native call, reloading frame\n")
 				}
 				vm.handlerFound = false
-				ip = frame.ip
-				continue
+				goto reloadFrame
 			}
 
 			// If frame was popped during the call (exception thrown and handled in outer frame),
@@ -7367,8 +7626,7 @@ startExecution:
 				// Check if an exception was thrown and a handler was found during the native call
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip
-					continue // Jump to the catch handler
+					goto reloadFrame
 				}
 
 				// Check if VM started unwinding during the native function call
@@ -7489,8 +7747,7 @@ startExecution:
 				// Check if an exception was thrown and a handler was found during the native call
 				if vm.handlerFound {
 					vm.handlerFound = false
-					ip = frame.ip
-					continue // Jump to the catch handler
+					goto reloadFrame
 				}
 
 				// Check if VM started unwinding during the native function call

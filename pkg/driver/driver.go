@@ -277,7 +277,10 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 func (p *Paserati) CompileProgram(program *parser.Program) (*vm.Chunk, []errors.PaseratiError) {
 	// Honor session setting to ignore type errors (used for Test262)
 	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
-	return p.compiler.Compile(program)
+	chunk, errs := p.compiler.Compile(program)
+	// Sync global names to VM so with statements can resolve global variable names
+	p.SyncGlobalNamesFromCompiler()
+	return chunk, errs
 }
 
 // CompileProgramWithStrictMode compiles a parsed program with the specified strict mode
@@ -289,7 +292,10 @@ func (p *Paserati) CompileProgramWithStrictMode(program *parser.Program, strict 
 	if strict {
 		p.compiler.SetStrictMode(true)
 	}
-	return p.compiler.Compile(program)
+	chunk, errs := p.compiler.Compile(program)
+	// Note: Don't sync global names here - this is used for eval which may have
+	// its own scope that shouldn't leak to the global scope (especially in strict mode)
+	return chunk, errs
 }
 
 // EvalCode implements vm.EvalDriver interface for direct eval at global scope

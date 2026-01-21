@@ -2527,7 +2527,9 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 		c.emitMove(hint, consequenceReg, node.Token.Line)
 	}
 	// Dump disassembly after consequence compilation, before any patching
-	debugPrintf("[IfExpr] Disassembly after consequence, pre-patch (codeLen=%d):\n%s", len(c.chunk.Code), c.chunk.DisassembleChunk("<if-consequence>"))
+	if debugCompiler {
+		debugPrintf("[IfExpr] Disassembly after consequence, pre-patch (codeLen=%d):\n%s", len(c.chunk.Code), c.chunk.DisassembleChunk("<if-consequence>"))
+	}
 	// TODO: How does an if-expr produce a value? Need convention.
 	// Does the last expr statement value remain in a register?
 
@@ -2544,7 +2546,9 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 		c.patchJump(jumpIfFalsePos)
 		patchedIfFalse = true
 		debugPrintf("[IfExpr] Patched OpJumpIfFalse at pos=%d; codeLen=%d; bytes=%v", jumpIfFalsePos, len(c.chunk.Code), c.chunk.Code[max(0, jumpIfFalsePos-4):min(len(c.chunk.Code), jumpIfFalsePos+6)])
-		debugPrintf("[IfExpr] Disassembly after patchJumpIfFalse (else path entry):\n%s", c.chunk.DisassembleChunk("<if-else-entry>"))
+		if debugCompiler {
+			debugPrintf("[IfExpr] Disassembly after patchJumpIfFalse (else path entry):\n%s", c.chunk.DisassembleChunk("<if-else-entry>"))
+		}
 
 		// 6a. Compile the alternative block
 		// Allocate temporary register for alternative compilation and initialize to undefined.
@@ -2566,7 +2570,9 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 		c.patchJump(jumpElsePos)
 		patchedElseJump = true
 		debugPrintf("[IfExpr] Patched OpJump over else at pos=%d; codeLen=%d; bytes=%v", jumpElsePos, len(c.chunk.Code), c.chunk.Code[max(0, jumpElsePos-4):min(len(c.chunk.Code), jumpElsePos+6)])
-		debugPrintf("[IfExpr] Disassembly after patchJump over else (end):\n%s", c.chunk.DisassembleChunk("<if-else-exit>"))
+		if debugCompiler {
+			debugPrintf("[IfExpr] Disassembly after patchJump over else (end):\n%s", c.chunk.DisassembleChunk("<if-else-exit>"))
+		}
 
 	} else {
 		// 4b. If no else, backpatch OpJumpIfFalse to jump *here* (end of if block)
@@ -2575,7 +2581,9 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 		c.patchJump(jumpIfFalsePos)
 		patchedIfFalse = true
 		debugPrintf("[IfExpr] Patched (no-else) OpJumpIfFalse at pos=%d; codeLen=%d; bytes=%v", jumpIfFalsePos, len(c.chunk.Code), c.chunk.Code[max(0, jumpIfFalsePos-4):min(len(c.chunk.Code), jumpIfFalsePos+6)])
-		debugPrintf("[IfExpr] Disassembly after patchJumpIfFalse (no-else end):\n%s", c.chunk.DisassembleChunk("<if-no-else-exit>"))
+		if debugCompiler {
+			debugPrintf("[IfExpr] Disassembly after patchJumpIfFalse (no-else end):\n%s", c.chunk.DisassembleChunk("<if-no-else-exit>"))
+		}
 	}
 
 	// Return hint if we have a completion value register

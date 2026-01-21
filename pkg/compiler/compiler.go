@@ -1854,6 +1854,12 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		isLocal := definingTable == c.currentSymbolTable
 		debugPrintf("// DEBUG Identifier '%s': Found in symbol table, isLocal=%v, definingTable==%p, currentTable==%p\n", node.Value, isLocal, definingTable, c.currentSymbolTable) // <<< ADDED
 
+		// For READS: if there's a local variable, it shadows any with-object property.
+		// Don't use with-property resolution - just use the local directly.
+		// The with-object only takes precedence for writes (handled in compile_assignment.go).
+		// Note: We skip the with-property check entirely for reads when there's a local.
+		// This is the correct ECMAScript semantics: local var declarations shadow with-object properties.
+
 		// --- NEW RECURSION CHECK --- // Revised Check
 		// Check if this is a recursive call identifier referencing the temp definition.
 		isRecursiveSelfCall := isLocal &&

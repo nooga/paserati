@@ -150,8 +150,13 @@ const (
 	// --- With Statement Support ---
 	OpPushWithObject  OpCode = 118 // ObjReg: Push object onto VM's with-object stack
 	OpPopWithObject   OpCode = 119 // No operands: Pop object from VM's with-object stack
-	OpGetWithProperty OpCode = 120 // Rx NameIdx(16bit): Try to get property from with-object stack, fallback to normal lookup
-	OpSetWithProperty OpCode = 121 // NameIdx(16bit) ValueReg: Try to set property on with-object stack, fallback to normal assignment
+	OpGetWithProperty OpCode = 120 // Rx NameIdx(16bit): Try to get property from with-object stack, fallback to global lookup
+	OpSetWithProperty OpCode = 121 // NameIdx(16bit) ValueReg: Try to set property on with-object stack, fallback to global assignment
+	OpGetWithOrLocal  OpCode = 156 // Rx NameIdx(16bit) LocalReg: Try with-object, fallback to LocalReg (for shadowed locals)
+	OpSetWithOrLocal  OpCode = 157 // NameIdx(16bit) ValueReg LocalReg: Set on with-object if exists, else set LocalReg
+	// Reference binding capture (for correct assignment semantics - binding captured BEFORE RHS evaluation)
+	OpResolveWithBinding OpCode = 158 // Rx NameIdx(16bit) LocalReg: Capture binding - Rx = with-object index (or 255 for local)
+	OpSetWithByBinding   OpCode = 159 // NameIdx(16bit) ValueReg LocalReg BindingReg: Set using pre-resolved binding
 	// --- END With Statement ---
 
 	OpSetThis       OpCode = 82 // Ry: Set 'this' value in current call context from register Ry
@@ -457,6 +462,14 @@ func (op OpCode) String() string {
 		return "OpGetWithProperty"
 	case OpSetWithProperty:
 		return "OpSetWithProperty"
+	case OpGetWithOrLocal:
+		return "OpGetWithOrLocal"
+	case OpSetWithOrLocal:
+		return "OpSetWithOrLocal"
+	case OpResolveWithBinding:
+		return "OpResolveWithBinding"
+	case OpSetWithByBinding:
+		return "OpSetWithByBinding"
 	case OpNew:
 		return "OpNew"
 	case OpSpreadNew:
@@ -963,6 +976,14 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true) // Rx NameIdx(16bit)
 	case OpSetWithProperty:
 		return c.constantRegisterInstruction(builder, instruction.String(), offset, "property") // NameIdx(16bit) ValueReg
+	case OpGetWithOrLocal:
+		return c.getWithOrLocalInstruction(builder, instruction.String(), offset) // Rx NameIdx(16bit) LocalReg
+	case OpSetWithOrLocal:
+		return c.setWithOrLocalInstruction(builder, instruction.String(), offset) // NameIdx(16bit) ValueReg LocalReg
+	case OpResolveWithBinding:
+		return c.resolveWithBindingInstruction(builder, instruction.String(), offset) // Rx NameIdx(16bit) LocalReg
+	case OpSetWithByBinding:
+		return c.setWithByBindingInstruction(builder, instruction.String(), offset) // NameIdx(16bit) ValueReg LocalReg BindingReg
 	case OpNew:
 		return c.newInstruction(builder, instruction.String(), offset)
 	case OpSpreadNew:
@@ -1701,6 +1722,91 @@ func (c *Chunk) constantRegisterInstruction(builder *strings.Builder, name strin
 
 	fmt.Fprintf(builder, "%-16s %s %d (%s), R%d\n", name, constName, constIdx, constValue, regY)
 	return offset + 4 // Opcode + ConstIdx(2 bytes) + Ry
+}
+
+// getWithOrLocalInstruction handles OpGetWithOrLocal Rx NameIdx(16bit) LocalReg
+func (c *Chunk) getWithOrLocalInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+4 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		return offset + 1
+	}
+
+	destReg := c.Code[offset+1]
+	nameIdx := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
+	localReg := c.Code[offset+4]
+
+	constValue := "invalid"
+	if int(nameIdx) < len(c.Constants) {
+		v := c.Constants[nameIdx]
+		constValue = v.Inspect()
+	}
+
+	fmt.Fprintf(builder, "%-16s R%d, NameIdx %d (%s), LocalR%d\n", name, destReg, nameIdx, constValue, localReg)
+	return offset + 5 // Opcode + Rx + NameIdx(2 bytes) + LocalReg
+}
+
+// setWithOrLocalInstruction handles OpSetWithOrLocal NameIdx(16bit) ValueReg LocalReg
+func (c *Chunk) setWithOrLocalInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+4 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		return offset + 1
+	}
+
+	nameIdx := uint16(c.Code[offset+1])<<8 | uint16(c.Code[offset+2])
+	valueReg := c.Code[offset+3]
+	localReg := c.Code[offset+4]
+
+	constValue := "invalid"
+	if int(nameIdx) < len(c.Constants) {
+		v := c.Constants[nameIdx]
+		constValue = v.Inspect()
+	}
+
+	fmt.Fprintf(builder, "%-16s NameIdx %d (%s), R%d, LocalR%d\n", name, nameIdx, constValue, valueReg, localReg)
+	return offset + 5 // Opcode + NameIdx(2 bytes) + ValueReg + LocalReg
+}
+
+// resolveWithBindingInstruction handles OpResolveWithBinding Rx NameIdx(16bit) LocalReg
+func (c *Chunk) resolveWithBindingInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+4 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		return offset + 1
+	}
+
+	destReg := c.Code[offset+1]
+	nameIdx := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
+	localReg := c.Code[offset+4]
+
+	constValue := "invalid"
+	if int(nameIdx) < len(c.Constants) {
+		v := c.Constants[nameIdx]
+		constValue = v.Inspect()
+	}
+
+	fmt.Fprintf(builder, "%-16s R%d, NameIdx %d (%s), LocalR%d\n", name, destReg, nameIdx, constValue, localReg)
+	return offset + 5 // Opcode + Rx + NameIdx(2 bytes) + LocalReg
+}
+
+// setWithByBindingInstruction handles OpSetWithByBinding NameIdx(16bit) ValueReg LocalReg BindingReg
+func (c *Chunk) setWithByBindingInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+5 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		return offset + 1
+	}
+
+	nameIdx := uint16(c.Code[offset+1])<<8 | uint16(c.Code[offset+2])
+	valueReg := c.Code[offset+3]
+	localReg := c.Code[offset+4]
+	bindingReg := c.Code[offset+5]
+
+	constValue := "invalid"
+	if int(nameIdx) < len(c.Constants) {
+		v := c.Constants[nameIdx]
+		constValue = v.Inspect()
+	}
+
+	fmt.Fprintf(builder, "%-16s NameIdx %d (%s), R%d, LocalR%d, BindingR%d\n", name, nameIdx, constValue, valueReg, localReg, bindingReg)
+	return offset + 6 // Opcode + NameIdx(2 bytes) + ValueReg + LocalReg + BindingReg
 }
 
 // callMethodInstruction handles OpCallMethod Rx, FuncReg, ThisReg, ArgCount
