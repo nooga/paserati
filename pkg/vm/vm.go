@@ -4484,9 +4484,19 @@ startExecution:
 					// Functions/closures are objects and need toPrimitive for proper toString() call
 					var propKey string
 					if indexVal.IsObject() || indexVal.IsCallable() {
+						// Save IP before calling helper functions so exception handlers can be found
+						frame.ip = ip
+						vm.helperCallDepth++
 						primitiveVal := vm.toPrimitive(indexVal, "string")
+						vm.helperCallDepth--
+						// Check if an exception was thrown during toPrimitive
 						if vm.unwinding {
 							return InterpretRuntimeError, Undefined
+						}
+						// Check if exception was caught - need to jump to handler
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame // Reload frame to pick up the catch handler's frame
 						}
 						propKey = primitiveVal.ToString()
 						// Store the converted key back so subsequent OpSetIndex won't call toString again
@@ -5197,11 +5207,19 @@ startExecution:
 				default:
 					// ToPropertyKey: convert to string, calling toString() method for objects
 					if indexVal.IsObject() || indexVal.IsCallable() {
+						// Save IP before calling helper functions so exception handlers can be found
+						frame.ip = ip
+						vm.helperCallDepth++
 						primitiveVal := vm.toPrimitive(indexVal, "string")
+						vm.helperCallDepth--
 						// Check if an exception was thrown during toPrimitive
-						if len(vm.errors) > 0 {
-							frame.ip = ip
+						if vm.unwinding {
 							return InterpretRuntimeError, Undefined
+						}
+						// Check if exception was caught - need to jump to handler
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame // Reload frame to pick up the catch handler's frame
 						}
 						key = primitiveVal.ToString()
 					} else {
