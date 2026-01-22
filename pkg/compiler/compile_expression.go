@@ -2112,9 +2112,11 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 	isGeneratorCall := false
 
 	// Debug: Print function type information
-	debugPrintf("// [Generator Detection] Function type: %T\n", functionType)
-	if functionType != nil {
-		debugPrintf("// [Generator Detection] Function type string: %s\n", functionType.String())
+	if debugCompiler {
+		debugPrintf("// [Generator Detection] Function type: %T\n", functionType)
+		if functionType != nil {
+			debugPrintf("// [Generator Detection] Function type string: %s\n", functionType.String())
+		}
 	}
 
 	// NOTE: We do NOT detect generator functions based on return type here.

@@ -175,7 +175,7 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 	// Add type checking and compilation to sequential loading
 	debugPrintf("// [ModuleLoader] Sequential loading checkerFactory: %v, compilerFactory: %v\n",
 		ml.checkerFactory != nil, ml.compilerFactory != nil)
-	if ml.checkerFactory != nil {
+	if ml.checkerFactory != nil && !ml.config.SkipTypeCheck {
 		// Type check the module
 		record.State = ModuleChecking
 		record.CheckTime = time.Now()
@@ -249,6 +249,49 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 			record.ExportIndices = exportIndices
 			debugPrintf("// [ModuleLoader] Stored %d export indices for module: %s\n", len(exportIndices), record.ResolvedPath)
 		}
+		record.State = ModuleCompiled
+	} else if ml.config.SkipTypeCheck && ml.compilerFactory != nil {
+		// Skip type checking but still compile (pure JS mode)
+		debugPrintf("// [ModuleLoader] Skipping type check, starting compilation for module: %s\n", record.ResolvedPath)
+		record.State = ModuleCompiling
+		record.CompileTime = time.Now()
+
+		moduleCompiler := ml.compilerFactory()
+		moduleCompiler.EnableModuleMode(record.ResolvedPath, ml)
+		moduleCompiler.SetSkipTypeCheck(true)
+
+		chunk, compileErrors := moduleCompiler.Compile(record.AST)
+		if len(compileErrors) > 0 {
+			debugPrintf("// [ModuleLoader] Compilation error: %s\n", compileErrors[0].Error())
+			record.Error = fmt.Errorf("compilation failed: %s", compileErrors[0].Error())
+			record.State = ModuleError
+			return record, nil
+		}
+
+		if chunk == nil {
+			record.Error = fmt.Errorf("compilation returned nil chunk")
+			record.State = ModuleError
+			return record, nil
+		}
+
+		// Type assert to vm.Chunk
+		vmChunk, ok := chunk.(*vm.Chunk)
+		if !ok {
+			record.Error = fmt.Errorf("compilation returned invalid chunk type")
+			record.State = ModuleError
+			return record, nil
+		}
+
+		record.CompiledChunk = vmChunk
+
+		// Store export indices for dynamic import support
+		exportGlobalIndices := moduleCompiler.GetExportGlobalIndices()
+		exportIndices := make(map[string]uint16, len(exportGlobalIndices))
+		for name, idx := range exportGlobalIndices {
+			exportIndices[name] = uint16(idx)
+		}
+		record.ExportIndices = exportIndices
+		debugPrintf("// [ModuleLoader] Stored %d export indices for module: %s\n", len(exportIndices), record.ResolvedPath)
 		record.State = ModuleCompiled
 	} else {
 		// No checker factory, just mark as parsed
@@ -633,6 +676,14 @@ func (ml *moduleLoader) SetIgnoreTypeErrors(ignore bool) {
 	ml.config.IgnoreTypeErrors = ignore
 }
 
+// SetSkipTypeCheck sets whether to completely skip type checking during module loading
+func (ml *moduleLoader) SetSkipTypeCheck(skip bool) {
+	ml.mutex.Lock()
+	defer ml.mutex.Unlock()
+
+	ml.config.SkipTypeCheck = skip
+}
+
 // AddResolver adds a module resolver to the chain
 func (ml *moduleLoader) AddResolver(resolver ModuleResolver) {
 	ml.mutex.Lock()
@@ -712,35 +763,41 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 			continue // Skip modules that failed to parse
 		}
 
-		// Skip if no checker factory is set
-		if ml.checkerFactory == nil {
+		// Skip if no checker factory is set and not skipping type check
+		if ml.checkerFactory == nil && !ml.config.SkipTypeCheck {
 			debugPrintf("// [ModuleLoader] No checker factory set, skipping type checking for %s\n", modulePath)
 			record.State = ModuleLoaded
 			record.CompleteTime = time.Now()
 			continue
 		}
 
-		// Create a new checker for this module
-		moduleChecker := ml.checkerFactory()
+		// Type check if not skipping
+		var moduleChecker TypeChecker
+		if !ml.config.SkipTypeCheck && ml.checkerFactory != nil {
+			// Create a new checker for this module
+			moduleChecker = ml.checkerFactory()
 
-		// Enable module mode with this loader
-		moduleChecker.EnableModuleMode(modulePath, ml)
+			// Enable module mode with this loader
+			moduleChecker.EnableModuleMode(modulePath, ml)
 
-		// Perform type checking on this module
-		errors := moduleChecker.Check(record.AST)
-		if len(errors) > 0 && !ml.config.IgnoreTypeErrors {
-			// Store the first error (can be enhanced to store all errors)
-			record.Error = fmt.Errorf("type checking failed: %s", errors[0].Error())
-			record.State = ModuleError
-			continue
-		}
-
-		// Extract exported types from the checked module
-		if moduleChecker.IsModuleMode() {
-			// Skip type extraction for native modules - they already have their exports set
-			if !record.isNative {
-				record.Exports = moduleChecker.GetModuleExports()
+			// Perform type checking on this module
+			errors := moduleChecker.Check(record.AST)
+			if len(errors) > 0 && !ml.config.IgnoreTypeErrors {
+				// Store the first error (can be enhanced to store all errors)
+				record.Error = fmt.Errorf("type checking failed: %s", errors[0].Error())
+				record.State = ModuleError
+				continue
 			}
+
+			// Extract exported types from the checked module
+			if moduleChecker.IsModuleMode() {
+				// Skip type extraction for native modules - they already have their exports set
+				if !record.isNative {
+					record.Exports = moduleChecker.GetModuleExports()
+				}
+			}
+		} else {
+			debugPrintf("// [ModuleLoader] Skipping type check for %s (SkipTypeCheck=true)\n", modulePath)
 		}
 
 		// Phase 5: Compile the module to bytecode
@@ -751,7 +808,12 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 			// Create a compiler for this module
 			moduleCompiler := ml.compilerFactory()
 			moduleCompiler.EnableModuleMode(modulePath, ml)
-			moduleCompiler.SetChecker(moduleChecker)
+			if moduleChecker != nil {
+				moduleCompiler.SetChecker(moduleChecker)
+			}
+			if ml.config.SkipTypeCheck {
+				moduleCompiler.SetSkipTypeCheck(true)
+			}
 
 			// Compile the module to bytecode
 			chunk, compileErrors := moduleCompiler.Compile(record.AST)

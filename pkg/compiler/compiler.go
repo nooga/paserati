@@ -401,6 +401,7 @@ type Compiler struct {
 
 	// --- Type Error Handling ---
 	ignoreTypeErrors bool // When true, compilation continues despite type errors
+	skipTypeCheck    bool // When true, type checker is not run at all (for pure JS mode)
 
 	// --- NEW: Class Context for super() support ---
 	compilingSuperClassName string // Name of parent class when compiling derived class constructor
@@ -474,6 +475,12 @@ func (c *Compiler) SetChecker(checker *checker.Checker) {
 // SetIgnoreTypeErrors sets whether to continue compilation despite type errors
 func (c *Compiler) SetIgnoreTypeErrors(ignore bool) {
 	c.ignoreTypeErrors = ignore
+}
+
+// SetSkipTypeCheck sets whether to completely skip type checking
+// When true, the type checker is not run at all (for pure JS mode with no type annotations)
+func (c *Compiler) SetSkipTypeCheck(skip bool) {
+	c.skipTypeCheck = skip
 }
 
 // SetHeapAlloc sets the heap allocator for coordinating global indices
@@ -681,26 +688,31 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 		c.typeChecker = checker.NewChecker()
 	}
 
-	// For direct eval compilation with super binding, tell the checker that super is allowed
-	if c.callerScopeDesc != nil && c.callerScopeDesc.HasSuperBinding {
-		c.typeChecker.SetAllowSuperInEval(true)
-		defer c.typeChecker.SetAllowSuperInEval(false) // Reset after type checking
-	}
+	// Skip type checking entirely if skipTypeCheck is set (pure JS mode)
+	if !c.skipTypeCheck {
+		// For direct eval compilation with super binding, tell the checker that super is allowed
+		if c.callerScopeDesc != nil && c.callerScopeDesc.HasSuperBinding {
+			c.typeChecker.SetAllowSuperInEval(true)
+			defer c.typeChecker.SetAllowSuperInEval(false) // Reset after type checking
+		}
 
-	// Check if this program has already been type-checked by comparing the AST
-	// In module loading flow, the checker is already used to check the program
-	if c.typeChecker.GetProgram() != program {
-		// Program hasn't been checked yet, perform type checking
-		// The checker modifies its own environment state.
-		typeErrors := c.typeChecker.Check(program)
-		if len(typeErrors) > 0 && !c.ignoreTypeErrors {
-			// Found type errors and not ignoring them. Return them immediately.
-			// Type errors are already []errors.PaseratiError from the checker.
-			return nil, typeErrors
+		// Check if this program has already been type-checked by comparing the AST
+		// In module loading flow, the checker is already used to check the program
+		if c.typeChecker.GetProgram() != program {
+			// Program hasn't been checked yet, perform type checking
+			// The checker modifies its own environment state.
+			typeErrors := c.typeChecker.Check(program)
+			if len(typeErrors) > 0 && !c.ignoreTypeErrors {
+				// Found type errors and not ignoring them. Return them immediately.
+				// Type errors are already []errors.PaseratiError from the checker.
+				return nil, typeErrors
+			}
+		} else {
+			// Program was already type-checked by this checker, skip redundant check
+			debugPrintf("// [Compiler] Skipping type check - program already checked by this checker\n")
 		}
 	} else {
-		// Program was already type-checked by this checker, skip redundant check
-		debugPrintf("// [Compiler] Skipping type check - program already checked by this checker\n")
+		debugPrintf("// [Compiler] Skipping type check entirely (skipTypeCheck=true)\n")
 	}
 	// No need to re-assign c.typeChecker here, it was already set or created.
 	// --- End Type Checking Step ---
@@ -721,8 +733,8 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 
 	// --- Determine strict mode ---
 	// TypeScript mode (type checking enabled): default to strict mode
-	// JavaScript mode (type checking disabled): respect "use strict" directive or inherited strict mode
-	if !c.ignoreTypeErrors {
+	// JavaScript mode (type checking disabled or skipped): respect "use strict" directive or inherited strict mode
+	if !c.ignoreTypeErrors && !c.skipTypeCheck {
 		// TypeScript mode - always strict
 		c.chunk.IsStrict = true
 		debugPrintf("[Compile] TypeScript mode - enabling strict mode by default\n")

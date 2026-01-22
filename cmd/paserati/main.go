@@ -139,7 +139,10 @@ func runExpression(expr string, showCacheStats bool, showBytecode bool) {
 
 func runExpressionWithTypes(expr string, showCacheStats bool, showBytecode bool, ignoreTypes bool, disasmFilter string) {
 	paserati := driver.NewPaserati()
-	paserati.SetIgnoreTypeErrors(ignoreTypes)
+	if ignoreTypes {
+		// Completely skip type checking for pure JS mode
+		paserati.SetSkipTypeCheck(true)
+	}
 	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode, DisasmFilter: disasmFilter}
 	value, errs := paserati.RunCode(expr, options)
 	ok := paserati.DisplayResult(expr, value, errs)
@@ -187,7 +190,10 @@ func runFileWithTypes(filename string, scriptArgs []string, showCacheStats bool,
 	initializers := builtins.GetStandardInitializers()
 	initializers = append(initializers, driver.NewProcessInitializer(argv))
 	paserati := driver.NewPaseratiWithInitializers(initializers)
-	paserati.SetIgnoreTypeErrors(ignoreTypes)
+	if ignoreTypes {
+		// Completely skip type checking for pure JS mode
+		paserati.SetSkipTypeCheck(true)
+	}
 
 	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode, ModuleName: filename, DisasmFilter: disasmFilter}
 	value, errs := paserati.RunCode(source, options)
@@ -243,7 +249,10 @@ func runRepl(showCacheStats bool, showBytecode bool) {
 func runReplWithTypes(showCacheStats bool, showBytecode bool, ignoreTypes bool, disasmFilter string) {
 	reader := bufio.NewReader(os.Stdin)
 	paserati := driver.NewPaserati()
-	paserati.SetIgnoreTypeErrors(ignoreTypes)
+	if ignoreTypes {
+		// Completely skip type checking for pure JS mode
+		paserati.SetSkipTypeCheck(true)
+	}
 	fmt.Println("Paserati (Ctrl+C to exit)")
 	if showCacheStats {
 		fmt.Println("Cache statistics enabled")

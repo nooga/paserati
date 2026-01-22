@@ -19,7 +19,9 @@ func (c *Compiler) compileReflectCall(node *parser.CallExpression, hint Register
 		return BadRegister, nil
 	}
 
-	debugPrintf("// [Compiler] Compiling Paserati.reflect<T>() for type: %s\n", resolvedType.String())
+	if debugCompiler {
+		debugPrintf("// [Compiler] Compiling Paserati.reflect<T>() for type: %s\n", resolvedType.String())
+	}
 
 	// Emit bytecode to create the type descriptor object
 	return c.emitTypeDescriptor(resolvedType, hint, line)

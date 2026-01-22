@@ -1598,7 +1598,33 @@ func (l *Lexer) readIdentifier() string {
 // readIdentifierWithUnicode reads an identifier that may contain unicode escape sequences
 // or Unicode characters, and returns the resolved identifier string (e.g., "\u0064o" becomes "do")
 func (l *Lexer) readIdentifierWithUnicode() (string, bool) {
+	startPos := l.position
+
+	// Fast path: try to read a pure ASCII identifier (99%+ of cases)
+	// This avoids strings.Builder allocation entirely
+	for l.ch != 0 {
+		if l.ch == '\\' || l.ch >= 128 {
+			// Need slow path - unicode escape or non-ASCII character
+			break
+		}
+		if isLetter(l.ch) || isDigit(l.ch) || l.ch == '_' || l.ch == '$' {
+			l.readChar()
+		} else {
+			// End of identifier
+			break
+		}
+	}
+
+	// Check if we completed without hitting unicode
+	if l.ch != '\\' && l.ch < 128 {
+		// Pure ASCII identifier - return slice of input (zero allocation)
+		return l.input[startPos:l.position], false
+	}
+
+	// Slow path: we hit a unicode escape or non-ASCII character
+	// Copy what we've scanned so far into a Builder
 	var result strings.Builder
+	result.WriteString(l.input[startPos:l.position])
 	hasEscape := false
 
 	for l.ch != 0 {

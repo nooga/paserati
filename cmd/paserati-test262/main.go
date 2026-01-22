@@ -884,8 +884,8 @@ func extractFlags(header string) []string {
 func createTest262Paserati() *driver.Paserati {
 	// Create a custom Paserati instance with Test262 initializers
 	paserati := driver.NewPaseratiWithInitializers(getTest262EnabledInitializers())
-	// Disable type checking errors for test262 (JavaScript test suite)
-	paserati.SetIgnoreTypeErrors(true)
+	// Completely skip type checking for test262 (JavaScript test suite, no type annotations)
+	paserati.SetSkipTypeCheck(true)
 	return paserati
 }
 
@@ -896,8 +896,8 @@ func createTest262PaseratiForTest(testFile string) *driver.Paserati {
 
 	// Create a custom Paserati instance with Test262 initializers and the test's base directory
 	paserati := driver.NewPaseratiWithInitializersAndBaseDir(getTest262EnabledInitializers(), testDir)
-	// Disable type checking errors for test262 (JavaScript test suite)
-	paserati.SetIgnoreTypeErrors(true)
+	// Completely skip type checking for test262 (JavaScript test suite, no type annotations)
+	paserati.SetSkipTypeCheck(true)
 	return paserati
 }
 

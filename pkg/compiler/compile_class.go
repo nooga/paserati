@@ -440,7 +440,9 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 			} else if genericTypeRef, ok := node.SuperClass.(*parser.GenericTypeRef); ok {
 				// For generic type references like Container<T>, extract just the base name
 				superClassName = genericTypeRef.Name.Value
+				if debugCompiler {
 				debugPrintf("// DEBUG setupClassPrototype: Extracted base class name '%s' from generic type '%s'\n", superClassName, genericTypeRef.String())
+			}
 			} else {
 				// For other complex expressions, use string representation as fallback
 				// TODO: Implement proper generic class instantiation at runtime
@@ -1416,7 +1418,9 @@ func (c *Compiler) compileFunctionLiteralWithThisClass(node *parser.FunctionLite
 		if classType, exists := c.typeChecker.GetEnvironment().ResolveType(className); exists {
 			if objType, ok := classType.(*types.ObjectType); ok && objType.IsClassInstance() {
 				thisType = objType
-				debugPrintf("// DEBUG compileFunctionLiteralWithThisClass: Found class instance type for '%s': %s\n", className, thisType.String())
+				if debugCompiler {
+					debugPrintf("// DEBUG compileFunctionLiteralWithThisClass: Found class instance type for '%s': %s\n", className, thisType.String())
+				}
 			}
 		}
 	}
@@ -1478,7 +1482,9 @@ func (c *Compiler) setThisTypeOnNodes(node parser.Node, thisType *types.ObjectTy
 	switch n := node.(type) {
 	case *parser.ThisExpression:
 		n.SetComputedType(thisType)
-		debugPrintf("// DEBUG setThisTypeOnNodes: Set type on ThisExpression: %s\n", thisType.String())
+		if debugCompiler {
+			debugPrintf("// DEBUG setThisTypeOnNodes: Set type on ThisExpression: %s\n", thisType.String())
+		}
 
 	case *parser.BlockStatement:
 		for _, stmt := range n.Statements {

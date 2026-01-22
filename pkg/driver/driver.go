@@ -56,6 +56,7 @@ type Paserati struct {
 	heapAlloc        *compiler.HeapAlloc   // Unified global heap allocator
 	nativeResolver   *NativeModuleResolver // *NativeModuleResolver - defined in native_module.go to avoid import cycles
 	ignoreTypeErrors bool                  // When true, type checking errors are ignored and compilation continues
+	skipTypeCheck    bool                  // When true, type checker is not run at all (for pure JS mode)
 }
 
 // SetIgnoreTypeErrors sets whether type checking errors should be ignored
@@ -64,6 +65,16 @@ func (p *Paserati) SetIgnoreTypeErrors(ignore bool) {
 	// Also propagate to module loader so imported modules respect this setting
 	if p.moduleLoader != nil {
 		p.moduleLoader.SetIgnoreTypeErrors(ignore)
+	}
+}
+
+// SetSkipTypeCheck sets whether to completely skip type checking
+// When true, the type checker is not run at all (for pure JS mode)
+func (p *Paserati) SetSkipTypeCheck(skip bool) {
+	p.skipTypeCheck = skip
+	// Also propagate to module loader so imported modules respect this setting
+	if p.moduleLoader != nil {
+		p.moduleLoader.SetSkipTypeCheck(skip)
 	}
 }
 
@@ -275,8 +286,9 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 // CompileProgram compiles a parsed program using the initialized Paserati session
 // This is used by the test framework to compile with proper initialization
 func (p *Paserati) CompileProgram(program *parser.Program) (*vm.Chunk, []errors.PaseratiError) {
-	// Honor session setting to ignore type errors (used for Test262)
+	// Honor session settings to ignore/skip type errors (used for Test262)
 	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+	p.compiler.SetSkipTypeCheck(p.skipTypeCheck)
 	chunk, errs := p.compiler.Compile(program)
 	// Sync global names to VM so with statements can resolve global variable names
 	p.SyncGlobalNamesFromCompiler()
@@ -286,8 +298,9 @@ func (p *Paserati) CompileProgram(program *parser.Program) (*vm.Chunk, []errors.
 // CompileProgramWithStrictMode compiles a parsed program with the specified strict mode
 // This is used by eval() to compile code in strict mode when called from strict context
 func (p *Paserati) CompileProgramWithStrictMode(program *parser.Program, strict bool) (*vm.Chunk, []errors.PaseratiError) {
-	// Honor session setting to ignore type errors (used for Test262)
+	// Honor session settings to ignore/skip type errors (used for Test262)
 	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+	p.compiler.SetSkipTypeCheck(p.skipTypeCheck)
 	// Set strict mode before compilation
 	if strict {
 		p.compiler.SetStrictMode(true)
@@ -540,8 +553,9 @@ func (p *Paserati) CompileModule(filename string) (*vm.Chunk, []errors.PaseratiE
 	p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
 
 	// Compile the module
-	// Honor session setting to ignore type errors (used for Test262)
+	// Honor session settings to ignore/skip type errors (used for Test262)
 	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+	p.compiler.SetSkipTypeCheck(p.skipTypeCheck)
 	chunk, compileErrs := p.compiler.Compile(moduleRecord.AST)
 	if len(compileErrs) > 0 {
 		return nil, compileErrs
@@ -905,8 +919,9 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 		p.compiler.EnableModuleMode(moduleRecord.ResolvedPath, p.moduleLoader)
 
 		// Compile the module
-		// Set the compiler's ignore type errors flag based on our setting
+		// Set the compiler's ignore/skip type errors flags based on our setting
 		p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+		p.compiler.SetSkipTypeCheck(p.skipTypeCheck)
 
 		var compileErrs []errors.PaseratiError
 		chunk, compileErrs = p.compiler.Compile(moduleRecord.AST)
@@ -987,8 +1002,9 @@ func (p *Paserati) runAsModule(sourceCode string, program *parser.Program, modul
 	parser.DumpAST(program, "runAsModule")
 
 	// Compile with module mode enabled
-	// Set the compiler's ignore type errors flag based on our setting
+	// Set the compiler's ignore/skip type errors flags based on our setting
 	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+	p.compiler.SetSkipTypeCheck(p.skipTypeCheck)
 
 	chunk, compileAndTypeErrs := p.compiler.Compile(program)
 	if len(compileAndTypeErrs) > 0 {
@@ -1139,6 +1155,7 @@ func (p *Paserati) RunCode(sourceCode string, options RunOptions) (vm.Value, []e
 		// Re-compile to get chunk for display (the runAsModule already executed it)
 		// This is a bit wasteful but only happens when debugging flags are on
 		p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+		p.compiler.SetSkipTypeCheck(p.skipTypeCheck)
 		chunk, _ := p.compiler.Compile(program)
 
 		if chunk != nil {

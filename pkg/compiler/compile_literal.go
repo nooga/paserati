@@ -670,7 +670,9 @@ func (c *Compiler) compileArrayLiteralWithSpread(node *parser.ArrayLiteral, hint
 }
 
 func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Register) (Register, errors.PaseratiError) {
-	debugPrintf("Compiling Object Literal (One-by-One): %s\n", node.String())
+	if debugCompiler {
+		debugPrintf("Compiling Object Literal (One-by-One): %s\n", node.String())
+	}
 	line := parser.GetTokenFromNode(node).Line
 
 	// 1. Create an empty object in hint register

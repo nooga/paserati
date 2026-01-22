@@ -209,6 +209,7 @@ type LoaderConfig struct {
 
 	// Type checking settings
 	IgnoreTypeErrors bool // When true, type errors don't stop module loading
+	SkipTypeCheck    bool // When true, type checker is not run at all (for pure JS mode)
 }
 
 // DefaultLoaderConfig returns sensible default configuration

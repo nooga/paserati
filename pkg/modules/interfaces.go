@@ -73,6 +73,9 @@ type ModuleLoader interface {
 
 	// SetIgnoreTypeErrors sets whether type errors should be ignored during module loading
 	SetIgnoreTypeErrors(ignore bool)
+
+	// SetSkipTypeCheck sets whether to completely skip type checking during module loading
+	SetSkipTypeCheck(skip bool)
 }
 
 // ModuleRegistry manages the cache of loaded modules
@@ -138,6 +141,7 @@ type TypeChecker interface {
 type Compiler interface {
 	EnableModuleMode(modulePath string, loader ModuleLoader)
 	SetChecker(checker TypeChecker)
+	SetSkipTypeCheck(skip bool)
 	Compile(node parser.Node) (interface{}, []errors.PaseratiError)
 	GetExportGlobalIndices() map[string]int
 }

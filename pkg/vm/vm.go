@@ -18,8 +18,8 @@ import (
 )
 
 const RegFileSize = 256 // Max registers per function call frame
-const MaxFrames = 1024  // Max call stack depth
-// NOTE: Total stack = RegFileSize * MaxFrames = ~6MB. For dynamic expansion in the future,
+const MaxFrames = 256   // Max call stack depth
+// NOTE: Total stack = RegFileSize * MaxFrames = ~1.5MB. For dynamic expansion in the future,
 // upvalues would need to change from raw pointers to indices. See docs/bucketlist.md.
 
 // Debug flags - set these to control debug output

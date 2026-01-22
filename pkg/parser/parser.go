@@ -783,7 +783,9 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 		return nil // Prefix parsing failed
 	}
 
-	debugPrint("parseTypeExpressionRecursive: Parsed prefix type %T ('%s')", leftExp, leftExp.String())
+	if debugParser {
+		debugPrint("parseTypeExpressionRecursive: Parsed prefix type %T ('%s')", leftExp, leftExp.String())
+	}
 
 	// --- MODIFIED: Loop using peekTypePrecedence and typeInfixParseFns ---
 	for precedence < p.peekTypePrecedence() {
@@ -1180,7 +1182,9 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 				return nil
 			}
 			tupleTypeExp.RestElement = restType
+			if debugParser {
 			debugPrint("parseTupleTypeExpression: Parsed rest element: %s", restType.String())
+		}
 
 			// After rest element, we must have either ',' followed by ']' or just ']'
 			if p.peekTokenIs(lexer.COMMA) {
@@ -1215,8 +1219,10 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 		}
 		tupleTypeExp.OptionalFlags = append(tupleTypeExp.OptionalFlags, isOptional)
 
-		debugPrint("parseTupleTypeExpression: Parsed element %d: %s (optional: %v)",
-			len(tupleTypeExp.ElementTypes)-1, elemType.String(), isOptional)
+		if debugParser {
+			debugPrint("parseTupleTypeExpression: Parsed element %d: %s (optional: %v)",
+				len(tupleTypeExp.ElementTypes)-1, elemType.String(), isOptional)
+		}
 
 		// Check for comma or closing bracket
 		if p.peekTokenIs(lexer.COMMA) {
@@ -4010,7 +4016,9 @@ func (p *Parser) parseIfExpression() Expression {
 	if expr.Condition == nil {
 		return nil // <<< NIL CHECK
 	}
-	debugPrint("parseIfExpression parsed condition: %s", expr.Condition.String())
+	if debugParser {
+		debugPrint("parseIfExpression parsed condition: %s", expr.Condition.String())
+	}
 
 	if !p.expectPeek(lexer.RPAREN) {
 		return nil
@@ -4122,7 +4130,9 @@ func (p *Parser) parseIfExpression() Expression {
 		debugPrint("parseIfExpression found no 'else' branch.")
 	}
 
-	debugPrint("parseIfExpression finished, returning: %s", expr.String())
+	if debugParser {
+		debugPrint("parseIfExpression finished, returning: %s", expr.String())
+	}
 	return expr
 }
 
@@ -4130,7 +4140,9 @@ func (p *Parser) parseIfExpression() Expression {
 
 // parseInfixExpression handles expressions like left op right
 func (p *Parser) parseInfixExpression(left Expression) Expression {
-	debugPrint("parseInfixExpression: Starting. left=%T('%s'), cur='%s' (%s)", left, left.String(), p.curToken.Literal, p.curToken.Type)
+	if debugParser {
+		debugPrint("parseInfixExpression: Starting. left=%T('%s'), cur='%s' (%s)", left, left.String(), p.curToken.Literal, p.curToken.Type)
+	}
 	expression := &InfixExpression{
 		Token:    p.curToken, // The operator token
 		Operator: p.curToken.Literal,
@@ -4152,13 +4164,17 @@ func (p *Parser) parseInfixExpression(left Expression) Expression {
 		debugPrint("parseInfixExpression: Right expression was nil, returning nil.")
 		return nil // Error occurred parsing right side
 	}
-	debugPrint("parseInfixExpression: Finished. Right=%T('%s')", expression.Right, expression.Right.String())
+	if debugParser {
+		debugPrint("parseInfixExpression: Finished. Right=%T('%s')", expression.Right, expression.Right.String())
+	}
 	return expression
 }
 
 // parseCommaExpression handles comma operator expressions like (a, b, c)
 func (p *Parser) parseCommaExpression(left Expression) Expression {
-	debugPrint("parseCommaExpression: Starting. left=%T('%s'), cur='%s' (%s)", left, left.String(), p.curToken.Literal, p.curToken.Type)
+	if debugParser {
+		debugPrint("parseCommaExpression: Starting. left=%T('%s'), cur='%s' (%s)", left, left.String(), p.curToken.Literal, p.curToken.Type)
+	}
 
 	expression := &InfixExpression{
 		Token:    p.curToken, // The comma token
@@ -4175,7 +4191,9 @@ func (p *Parser) parseCommaExpression(left Expression) Expression {
 		return nil
 	}
 
-	debugPrint("parseCommaExpression: Finished. Right=%T('%s')", expression.Right, expression.Right.String())
+	if debugParser {
+		debugPrint("parseCommaExpression: Finished. Right=%T('%s')", expression.Right, expression.Right.String())
+	}
 	return expression
 }
 
@@ -4544,7 +4562,9 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 
 // parseTernaryExpression parses condition ? consequence : alternative
 func (p *Parser) parseTernaryExpression(condition Expression) Expression {
-	debugPrint("parseTernaryExpression starting with condition: %s", condition.String())
+	if debugParser {
+		debugPrint("parseTernaryExpression starting with condition: %s", condition.String())
+	}
 	expr := &TernaryExpression{
 		Token:     p.curToken, // The '?' token
 		Condition: condition,
@@ -4558,7 +4578,9 @@ func (p *Parser) parseTernaryExpression(condition Expression) Expression {
 	if expr.Consequence == nil {
 		return nil
 	} // <<< NIL CHECK
-	debugPrint("parseTernaryExpression parsed consequence: %s", expr.Consequence.String())
+	if debugParser {
+		debugPrint("parseTernaryExpression parsed consequence: %s", expr.Consequence.String())
+	}
 
 	if !p.expectPeek(lexer.COLON) {
 		debugPrint("parseTernaryExpression failed: expected COLON")
@@ -4575,9 +4597,13 @@ func (p *Parser) parseTernaryExpression(condition Expression) Expression {
 	if expr.Alternative == nil {
 		return nil
 	} // <<< NIL CHECK
-	debugPrint("parseTernaryExpression parsed alternative: %s", expr.Alternative.String())
+	if debugParser {
+		debugPrint("parseTernaryExpression parsed alternative: %s", expr.Alternative.String())
+	}
 
-	debugPrint("parseTernaryExpression finished, returning: %s", expr.String())
+	if debugParser {
+		debugPrint("parseTernaryExpression finished, returning: %s", expr.String())
+	}
 	return expr
 }
 
@@ -4588,7 +4614,9 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 		debugPrint("parseAssignmentExpression ERROR: left expression is nil!")
 		return nil
 	}
-	debugPrint("parseAssignmentExpression left.String(): %s", left.String())
+	if debugParser {
+		debugPrint("parseAssignmentExpression left.String(): %s", left.String())
+	}
 
 	// Check for array destructuring assignment: [a, b, c] = expr
 	if arrayLit, ok := left.(*ArrayLiteral); ok && p.curToken.Type == lexer.ASSIGN {
@@ -4628,7 +4656,9 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 		debugPrint("parseAssignmentExpression ERROR: right side expression is nil!")
 		return nil
 	}
-	debugPrint("parseAssignmentExpression finished right side: %s (%T)", expr.Value.String(), expr.Value)
+	if debugParser {
+		debugPrint("parseAssignmentExpression finished right side: %s (%T)", expr.Value.String(), expr.Value)
+	}
 
 	return expr
 }
@@ -5708,7 +5738,9 @@ func (p *Parser) parseArrayLiteral() Expression {
 		}
 
 		elements = append(elements, elem)
-		debugPrint("parseArrayLiteral: appended element=%T ('%s')", elem, elem.String())
+		if debugParser {
+			debugPrint("parseArrayLiteral: appended element=%T ('%s')", elem, elem.String())
+		}
 		// Optional comma between elements
 		if p.peekTokenIs(lexer.COMMA) {
 			p.nextToken() // move to comma
