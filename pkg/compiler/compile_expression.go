@@ -1297,8 +1297,11 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 			// Check if this identifier is resolvable
 			_, _, found := c.currentSymbolTable.Resolve(ident.Value)
 			if !found {
-				// Not a local - check if it's a global
-				if c.heapAlloc != nil {
+				// If we're in a with block, the identifier might be a property on the with-object
+				// Skip the early return and let the full delete logic handle it
+				if c.withBlockDepth > 0 {
+					// Fall through to full delete handling below
+				} else if c.heapAlloc != nil {
 					if _, isGlobal := c.heapAlloc.GetIndex(ident.Value); !isGlobal {
 						// Unresolvable reference - return true (per ECMAScript spec)
 						c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(true)), node.Token.Line)
@@ -1425,7 +1428,26 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 			// - Eval-created bindings stored in heap: emit OpDeleteGlobal
 			// - Global variables: emit OpDeleteGlobal (checks configurable attribute)
 			// - Unresolved identifiers: return true
+			// - With block context: delete from with-object if property exists there
 			varName := operand.Value
+
+			// Check if we're inside a with block - property might be on the with-object
+			if c.withBlockDepth > 0 {
+				// Determine fallback behavior based on whether identifier is declared
+				// fallback=0: return true (unresolved identifier)
+				// fallback=1: return false (declared binding - cannot delete)
+				var fallback byte = 0
+				if _, _, found := c.currentSymbolTable.Resolve(varName); found {
+					// Declared binding (local OR global) - cannot delete, fallback to false
+					// Per ECMAScript, var declarations at global scope create non-configurable
+					// properties on the global object
+					fallback = 1
+				}
+				// Emit runtime check to delete from with-object if property exists
+				nameIdx := c.chunk.AddConstant(vm.NewString(varName))
+				c.emitDeleteWithProperty(hint, int(nameIdx), fallback, node.Token.Line)
+				break // Exit switch to avoid redundant code generation
+			}
 
 			// Check if we're in eval mode (compiling direct eval code)
 			inEvalMode := c.callerScopeDesc != nil

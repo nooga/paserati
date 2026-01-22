@@ -3346,6 +3346,48 @@ startExecution:
 				}
 			}
 
+		case OpDeleteWithProperty:
+			// Rx NameIdx(16bit) Fallback: Delete from with-object, Fallback=0:true, 1:false
+			destReg := code[ip]
+			nameHi := code[ip+1]
+			nameLo := code[ip+2]
+			fallback := code[ip+3]
+			ip += 4
+			nameIdx := int(uint16(nameHi)<<8 | uint16(nameLo))
+			nameVal := constants[nameIdx]
+			propName := nameVal.AsString()
+
+			// Walk with-object stack from most recent to oldest
+			deleted := false
+			for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
+				withObj := vm.withObjectStack[i]
+				if withObj.Type() == TypeObject {
+					obj := withObj.AsPlainObject()
+					// Check Symbol.unscopables
+					if unscopables, found := obj.Get("@@unscopables"); found {
+						if unscopables.Type() == TypeObject {
+							if excluded, _ := unscopables.AsPlainObject().Get(propName); excluded.IsTruthy() {
+								continue // Skip this with-object
+							}
+						}
+					}
+					// Check if property exists on this with-object
+					if obj.HasOwn(propName) {
+						// Delete from this with-object
+						result := obj.DeleteOwn(propName)
+						registers[destReg] = BooleanValue(result)
+						deleted = true
+						break
+					}
+				}
+			}
+			if !deleted {
+				// Property not found on any with-object - use fallback behavior
+				// fallback=0: return true (identifier was unresolved)
+				// fallback=1: return false (identifier was a declared binding)
+				registers[destReg] = BooleanValue(fallback == 0)
+			}
+
 		case OpReturn:
 			srcReg := code[ip]
 			ip++

@@ -157,6 +157,7 @@ const (
 	// Reference binding capture (for correct assignment semantics - binding captured BEFORE RHS evaluation)
 	OpResolveWithBinding OpCode = 158 // Rx NameIdx(16bit) LocalReg: Capture binding - Rx = with-object index (or 255 for local)
 	OpSetWithByBinding   OpCode = 159 // NameIdx(16bit) ValueReg LocalReg BindingReg: Set using pre-resolved binding
+	OpDeleteWithProperty OpCode = 160 // Rx NameIdx(16bit) Fallback: Delete from with-object, Fallback=0:true, 1:false
 	// --- END With Statement ---
 
 	OpSetThis       OpCode = 82 // Ry: Set 'this' value in current call context from register Ry
@@ -470,6 +471,8 @@ func (op OpCode) String() string {
 		return "OpResolveWithBinding"
 	case OpSetWithByBinding:
 		return "OpSetWithByBinding"
+	case OpDeleteWithProperty:
+		return "OpDeleteWithProperty"
 	case OpNew:
 		return "OpNew"
 	case OpSpreadNew:
@@ -984,6 +987,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.resolveWithBindingInstruction(builder, instruction.String(), offset) // Rx NameIdx(16bit) LocalReg
 	case OpSetWithByBinding:
 		return c.setWithByBindingInstruction(builder, instruction.String(), offset) // NameIdx(16bit) ValueReg LocalReg BindingReg
+	case OpDeleteWithProperty:
+		return c.deleteWithPropertyInstruction(builder, instruction.String(), offset) // Rx NameIdx(16bit) Fallback
 	case OpNew:
 		return c.newInstruction(builder, instruction.String(), offset)
 	case OpSpreadNew:
@@ -1291,6 +1296,31 @@ func (c *Chunk) registerConstantInstruction(builder *strings.Builder, name strin
 		builder.WriteString(fmt.Sprintf("%-16s R%d, %d ('%s')\n", name, reg, constantIndex, constantValue.ToString()))
 	}
 	return offset + 1 + 1 + operandSize
+}
+
+// deleteWithPropertyInstruction handles OpDeleteWithProperty: Rx NameIdx(16bit) Fallback
+func (c *Chunk) deleteWithPropertyInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+4 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		return offset + 1
+	}
+
+	reg := c.Code[offset+1]
+	constantIndex := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
+	fallback := c.Code[offset+4]
+
+	fallbackStr := "true"
+	if fallback == 1 {
+		fallbackStr = "false"
+	}
+
+	if int(constantIndex) >= len(c.Constants) {
+		builder.WriteString(fmt.Sprintf("%-16s R%d, %d (invalid), fallback=%s\n", name, reg, constantIndex, fallbackStr))
+	} else {
+		constantValue := c.Constants[constantIndex]
+		builder.WriteString(fmt.Sprintf("%-16s R%d, %d ('%s'), fallback=%s\n", name, reg, constantIndex, constantValue.Inspect(), fallbackStr))
+	}
+	return offset + 5 // opcode + reg + 2 byte idx + fallback
 }
 
 // constantInstruction16 handles OpCode ConstIdx(16bit) - for instructions that only take a constant index

@@ -450,9 +450,32 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 		} else if !isValueFunc {
 			// Define symbol ONLY for non-function values.
 			// Function assignments were handled above by UpdateRegister.
-			// Check if variable was already pre-defined during var hoisting (works for both top-level and function scope)
-			// Exclude global symbols since they use OpSetGlobal, not local registers
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsSpilled {
+			//
+			// IMPORTANT: Inside a with block, the var initializer assignment should check
+			// the with-object first. Per ECMAScript, `var x = value` inside with(obj)
+			// should assign to obj.x if obj has property 'x'.
+			if c.withBlockDepth > 0 {
+				varName := node.Name.Value
+				nameIdx := c.chunk.AddConstant(vm.NewString(varName))
+
+				// Determine the local register (255 = no local, falls back to global)
+				var localReg Register = 255
+				if sym, _, found := c.currentSymbolTable.Resolve(varName); found && sym.Register != nilRegister && !sym.IsGlobal {
+					localReg = sym.Register
+				} else if c.enclosing == nil {
+					// Top-level: ensure global exists (localReg stays 255 for global fallback)
+					c.GetOrAssignGlobalIndex(varName)
+					// Don't define here - OpSetWithOrLocal will handle global fallback
+				} else {
+					// Function scope: define the local
+					localReg = c.regAlloc.Alloc()
+					c.currentSymbolTable.Define(varName, localReg)
+				}
+
+				// Use OpSetWithOrLocal to assign - checks with-object first, falls back to local/global
+				c.emitSetWithOrLocal(int(nameIdx), valueReg, localReg, node.Name.Token.Line)
+				c.regAlloc.Free(valueReg)
+			} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsSpilled {
 				// Variable was pre-defined as SPILLED, store to spill slot
 				debugPrintf("// [VarStmt] Variable '%s' was pre-defined as SPILLED (slot %d), emitting store from R%d\n", node.Name.Value, sym.SpillIndex, valueReg)
 				c.emitStoreSpill(sym.SpillIndex, valueReg, node.Name.Token.Line)

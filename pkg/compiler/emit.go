@@ -787,6 +787,15 @@ func (c *Compiler) emitSetWithByBinding(nameIdx int, valueReg Register, localReg
 	c.emitByte(byte(bindingReg))
 }
 
+// emitDeleteWithProperty emits OpDeleteWithProperty to delete a property from a with-object
+// fallback: 0 = return true if not found (unresolved), 1 = return false if not found (declared binding)
+func (c *Compiler) emitDeleteWithProperty(destReg Register, nameIdx int, fallback byte, line int) {
+	c.emitOpCode(vm.OpDeleteWithProperty, line)
+	c.emitByte(byte(destReg))
+	c.emitUint16(uint16(nameIdx))
+	c.emitByte(fallback)
+}
+
 // emitLoadUninitialized emits OpLoadUninitialized to mark a register as TDZ (Temporal Dead Zone)
 // This is used for let/const variables that haven't been initialized yet.
 func (c *Compiler) emitLoadUninitialized(dest Register, line int) {
