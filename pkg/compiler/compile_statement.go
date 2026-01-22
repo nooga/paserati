@@ -451,10 +451,12 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			// Define symbol ONLY for non-function values.
 			// Function assignments were handled above by UpdateRegister.
 			//
-			// IMPORTANT: Inside a with block, the var initializer assignment should check
-			// the with-object first. Per ECMAScript, `var x = value` inside with(obj)
+			// IMPORTANT: Inside a with block in the CURRENT function, var initializer assignment
+			// should check the with-object first. Per ECMAScript, `var x = value` inside with(obj)
 			// should assign to obj.x if obj has property 'x'.
-			if c.withBlockDepth > 0 {
+			// NOTE: We use currentFuncWithDepth (not withBlockDepth) because nested functions
+			// have their own scope - their var declarations should NOT check an enclosing with-object.
+			if c.currentFuncWithDepth > 0 {
 				varName := node.Name.Value
 				nameIdx := c.chunk.AddConstant(vm.NewString(varName))
 

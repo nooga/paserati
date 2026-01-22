@@ -48,13 +48,21 @@ func (c *Compiler) getWithPropertyInfo(ident *parser.Identifier) WithPropertyInf
 			}
 		}
 
-		// It's a local variable in the current function - use OpGetWithOrLocal/OpSetWithOrLocal
-		// to check with-object first, then fall back to the local
-		return WithPropertyInfo{
-			UseWithProperty:  true,
-			HasLocalFallback: true,
-			LocalReg:         symbolRef.Register,
+		// It's a local variable in the current function.
+		// Only use with-property resolution if the with block is in the CURRENT function.
+		// Nested functions have their own scope - their locals should NOT be shadowed by
+		// an enclosing with-object from a parent function.
+		if c.currentFuncWithDepth > 0 {
+			// With block is in current function - use OpSetWithOrLocal
+			// to check with-object first, then fall back to the local
+			return WithPropertyInfo{
+				UseWithProperty:  true,
+				HasLocalFallback: true,
+				LocalReg:         symbolRef.Register,
+			}
 		}
+		// With block is only in parent function - local wins, don't use with-property
+		return WithPropertyInfo{UseWithProperty: false}
 	}
 
 	// No local variable in current function - use OpGetWithProperty/OpSetWithProperty (falls back to globals/upvalues)

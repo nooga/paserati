@@ -383,7 +383,8 @@ type Compiler struct {
 	isCompilingFunctionBody bool              // Track if we're compiling the function body BlockStatement itself
 	tryDepth                int               // Number of enclosing try blocks (any kind: try-catch, try-finally, try-catch-finally)
 	finallyContextStack     []*FinallyContext // Stack of active finally contexts
-	withBlockDepth          int               // Number of enclosing with blocks (inherited by nested functions)
+	withBlockDepth          int               // Total with blocks (inherited, for unresolved var lookup)
+	currentFuncWithDepth    int               // With blocks in current function only (NOT inherited, for local var lookup)
 
 	// --- Strict Mode Inheritance ---
 	inheritedStrictMode bool // Inherited strict mode from eval context
@@ -639,7 +640,8 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		moduleLoader:             enclosingCompiler.moduleLoader,            // Inherit module loader
 		compilingSuperClassName:  enclosingCompiler.compilingSuperClassName, // Inherit super class context
 		finallyContextStack:      make([]*FinallyContext, 0),                // Each function has its own finally context stack
-		withBlockDepth:           enclosingCompiler.withBlockDepth,          // Inherit with block depth for nested functions
+		withBlockDepth:           enclosingCompiler.withBlockDepth,          // Inherit for unresolved var lookups in closure's scope chain
+		currentFuncWithDepth:     0,                                         // NOT inherited - function's own locals shadow with-object
 		parameterNames:           make(map[string]bool),                     // Track parameter names for var hoisting
 		currentDefaultParamIndex: -1,                                        // Not in default param scope initially
 		parameterList:            nil,                                       // Will be set when compiling function parameters
@@ -1854,11 +1856,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		isLocal := definingTable == c.currentSymbolTable
 		debugPrintf("// DEBUG Identifier '%s': Found in symbol table, isLocal=%v, definingTable==%p, currentTable==%p\n", node.Value, isLocal, definingTable, c.currentSymbolTable) // <<< ADDED
 
-		// For READS: if there's a local variable, it shadows any with-object property.
-		// Don't use with-property resolution - just use the local directly.
-		// The with-object only takes precedence for writes (handled in compile_assignment.go).
-		// Note: We skip the with-property check entirely for reads when there's a local.
-		// This is the correct ECMAScript semantics: local var declarations shadow with-object properties.
+		// NOTE: In ECMAScript, with-object properties SHADOW local variables, not vice versa.
+		// The with statement creates an object environment record that is checked FIRST.
+		// When c.withBlockDepth > 0, we use OpGetWithOrLocal to check the with-object at
+		// runtime before falling back to the local variable. This is handled in the
+		// local variable handling sections below.
 
 		// --- NEW RECURSION CHECK --- // Revised Check
 		// Check if this is a recursive call identifier referencing the temp definition.
@@ -1925,6 +1927,14 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				// Variable is spilled (stored in spill slot, not a register)
 				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, SPILLED variable in outer block scope, spillIdx=%d\n", node.Value, symbolRef.SpillIndex)
 				c.emitLoadSpill(hint, symbolRef.SpillIndex, node.Token.Line)
+			} else if c.currentFuncWithDepth > 0 {
+				// Inside a with block in the CURRENT function, with-object properties shadow outer block variables.
+				// NOTE: We use currentFuncWithDepth (not withBlockDepth) because this is still within
+				// the same function - outer block vars can be shadowed by the current function's with-object.
+				debugPrintf("// DEBUG Identifier '%s': In with block (outer block scope), using OpGetWithOrLocal\n", node.Value)
+				srcReg := symbolRef.Register
+				nameIdx := c.chunk.AddConstant(vm.NewString(node.Value))
+				c.emitGetWithOrLocal(hint, int(nameIdx), srcReg, node.Token.Line)
 			} else {
 				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, but in outer block scope of SAME function, using direct register access R%d\n", node.Value, symbolRef.Register)
 				// Variable is defined in an outer block scope of the same function (or at top level)
@@ -1963,6 +1973,14 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 					// during its temporary definition phase inappropriately.
 					panic(fmt.Sprintf("compiler internal error: resolved local variable '%s' to nilRegister R%d unexpectedly at line %d", node.Value, srcReg, node.Token.Line))
 				}
+			} else if c.currentFuncWithDepth > 0 {
+				// Inside a with block in the CURRENT function, with-object properties shadow local variables.
+				// NOTE: We use currentFuncWithDepth (not withBlockDepth) because nested functions
+				// have their own scope - their locals should NOT be shadowed by an enclosing with-object.
+				// Use OpGetWithOrLocal to check with-object at runtime, falling back to local.
+				debugPrintf("// DEBUG Identifier '%s': In with block (current func), using OpGetWithOrLocal\n", node.Value)
+				nameIdx := c.chunk.AddConstant(vm.NewString(node.Value))
+				c.emitGetWithOrLocal(hint, int(nameIdx), srcReg, node.Token.Line)
 			} else {
 				// TDZ check for let/const local variables
 				if symbolRef.IsTDZ {

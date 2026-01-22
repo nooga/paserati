@@ -1436,8 +1436,19 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 				// Determine fallback behavior based on whether identifier is declared
 				// fallback=0: return true (unresolved identifier)
 				// fallback=1: return false (declared binding - cannot delete)
+				sym, _, found := c.currentSymbolTable.Resolve(varName)
+
+				// For nested functions: local variables should NOT be deleted via with-object.
+				// The function's own locals always win over the inherited with-object.
+				if found && !sym.IsGlobal && c.currentFuncWithDepth == 0 {
+					// Local variable in nested function, no with block in current function
+					// Just return false - can't delete local bindings
+					c.emitLoadConstant(hint, c.chunk.AddConstant(vm.BooleanValue(false)), node.Token.Line)
+					break
+				}
+
 				var fallback byte = 0
-				if _, _, found := c.currentSymbolTable.Resolve(varName); found {
+				if found {
 					// Declared binding (local OR global) - cannot delete, fallback to false
 					// Per ECMAScript, var declarations at global scope create non-configurable
 					// properties on the global object

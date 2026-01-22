@@ -47,8 +47,11 @@ func (c *Compiler) compileWithStatement(node *parser.WithStatement, hint Registe
 	// Emit runtime opcode to push with object onto VM stack
 	c.emitPushWithObject(objectReg, node.Token.Line)
 
-	// Increment with block depth (this will be inherited by nested functions)
+	// Increment with block depth counters
+	// - withBlockDepth: inherited by nested functions (for unresolved variable lookup)
+	// - currentFuncWithDepth: NOT inherited (for local variable shadowing in same function)
 	c.withBlockDepth++
+	c.currentFuncWithDepth++
 
 	// Compile the body with the with object in scope
 	var bodyResult Register = BadRegister
@@ -57,6 +60,7 @@ func (c *Compiler) compileWithStatement(node *parser.WithStatement, hint Registe
 		if err != nil {
 			// Clean up before returning error
 			c.withBlockDepth--
+			c.currentFuncWithDepth--
 			c.emitPopWithObject(node.Token.Line)
 			c.currentSymbolTable.PopWithObject()
 			c.regAlloc.Free(objectReg)
@@ -64,8 +68,9 @@ func (c *Compiler) compileWithStatement(node *parser.WithStatement, hint Registe
 		}
 	}
 
-	// Decrement with block depth
+	// Decrement with block depth counters
 	c.withBlockDepth--
+	c.currentFuncWithDepth--
 
 	// Emit runtime opcode to pop with object from VM stack
 	c.emitPopWithObject(node.Token.Line)
