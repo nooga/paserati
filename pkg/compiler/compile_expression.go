@@ -3287,6 +3287,11 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 		resultReg = awaitedResultReg       // Use awaited result going forward
 	}
 
+	// Validate that iterator result is an object (required by ECMAScript spec)
+	// Per §27.5.3.7 step 7: If Type(innerResult) is not Object, throw a TypeError exception.
+	c.emitOpCode(vm.OpTypeGuardIteratorReturn, node.Token.Line)
+	c.emitByte(byte(resultReg))
+
 	// Get result.done
 	doneReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, doneReg)
