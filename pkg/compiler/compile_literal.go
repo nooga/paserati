@@ -1454,7 +1454,39 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 				debugPrintf("// [Generator] Compiled desugared parameter declaration %d\n", i)
 			}
 
-			// NOW emit OpInitYield after desugared parameters
+			// Hoist var declarations from remaining statements BEFORE OpInitYield
+			// This ensures variables are defined in the symbol table for identifier resolution
+			remainingStmts := blockBody.Statements[desugarCount:]
+			varNames := collectVarDeclarations(remainingStmts)
+			for _, name := range varNames {
+				// Skip if already defined in CURRENT scope (e.g., by a parameter)
+				// Don't use Resolve() here - it traverses parent scopes and would skip
+				// local vars that shadow globals. We only want to skip actual duplicates
+				// in the current function scope (like a parameter with the same name).
+				if _, alreadyInCurrentScope := functionCompiler.currentSymbolTable.store[name]; alreadyInCurrentScope {
+					continue
+				}
+				// Allocate register and define the variable, initialize to undefined
+				reg, ok := functionCompiler.regAlloc.TryAllocForVariable()
+				if ok {
+					functionCompiler.currentSymbolTable.Define(name, reg)
+					// Initialize the register to undefined (hoisted vars start as undefined)
+					functionCompiler.emitLoadUndefined(reg, node.Token.Line)
+					debugPrintf("// [Generator VarHoist] Hoisted var '%s' in R%d (initialized to undefined)\n", name, reg)
+				} else {
+					// Variable threshold reached, use spilling
+					spillIdx := functionCompiler.AllocSpillSlot()
+					functionCompiler.currentSymbolTable.DefineSpilled(name, spillIdx)
+					// Initialize spill slot to undefined
+					tempReg := functionCompiler.regAlloc.Alloc()
+					functionCompiler.emitLoadUndefined(tempReg, node.Token.Line)
+					functionCompiler.emitStoreSpill(spillIdx, tempReg, node.Token.Line)
+					functionCompiler.regAlloc.Free(tempReg)
+					debugPrintf("// [Generator VarHoist] Hoisted var '%s' in SPILL SLOT %d (initialized to undefined)\n", name, spillIdx)
+				}
+			}
+
+			// NOW emit OpInitYield after desugared parameters and var hoisting
 			functionCompiler.emitOpCode(vm.OpInitYield, node.Body.Token.Line)
 			debugPrintf("// [Generator] Emitted OpInitYield after %d desugared parameter declarations\n", desugarCount)
 

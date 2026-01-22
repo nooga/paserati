@@ -1317,12 +1317,21 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		// 0.5) Hoist var declarations within this function body FIRST
 		// var declarations are hoisted to the top of the function scope and initialized to undefined
 		// This must happen BEFORE function hoisting so that functions can capture hoisted vars
+		//
+		// IMPORTANT: Only do this for function bodies (!needsEnclosedScope), not nested blocks.
+		// For nested blocks at module level, vars are already hoisted by module-level hoisting.
+		// For nested blocks in functions, vars are already hoisted by the function body.
 		varNames := collectVarDeclarations(node.Statements)
-		for _, name := range varNames {
-			// Skip if already defined (e.g., by a parameter)
-			if _, _, found := c.currentSymbolTable.Resolve(name); found {
-				continue
-			}
+		if !needsEnclosedScope {
+			// This is a function body - hoist vars here
+			for _, name := range varNames {
+				// Skip if already defined in CURRENT scope (e.g., by a parameter)
+				// Don't use Resolve() here - it traverses parent scopes and would skip
+				// local vars that shadow globals. We only want to skip actual duplicates
+				// in the current function scope (like a parameter with the same name).
+				if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; alreadyInCurrentScope {
+					continue
+				}
 			// Allocate register and define the variable, initialize to undefined
 			reg, ok := c.regAlloc.TryAllocForVariable()
 			if ok {
@@ -1356,6 +1365,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				c.regAlloc.Free(tempReg)
 			}
 		}
+		} // end if !needsEnclosedScope (function body var hoisting)
 
 		// 1) Hoist function declarations within this block (function-scoped hoisting)
 		if len(node.HoistedDeclarations) > 0 {
