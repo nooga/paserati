@@ -228,7 +228,9 @@ type GeneratorObject struct {
 	Args              []Value         // Arguments passed when the generator was created
 	This              Value           // The 'this' value for the generator context
 	Prototype         *PlainObject    // Custom prototype (if set via function.prototype)
-	DelegatedIterator Value           // Iterator being delegated to (for yield* forwarding of .return()/.throw())
+	DelegatedIterator     Value // Iterator being delegated to (for yield* forwarding of .return()/.throw())
+	DelegationResult      Value // Result value when delegation completed via external throw/return with done:true
+	DelegationResultReady bool  // Flag indicating DelegationResult is set (needed because result could be undefined)
 }
 
 type AsyncGeneratorObject GeneratorObject

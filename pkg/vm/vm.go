@@ -13335,12 +13335,43 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 		}
 	}
 
-	// Store the sent value in the register specified by the yield instruction
-	// This eliminates the need to hardcode R2 and makes the codegen explicit
-	// NOTE: Only do this when resuming from a yield (SuspendedYield), NOT when starting (SuspendedStart)
-	// For SuspendedStart, outputReg is 0 but we don't want to overwrite R0 (which contains the first parameter!)
-	if genObj.State == GeneratorSuspendedYield && genObj.Frame != nil && int(genObj.Frame.outputReg) < len(frame.registers) {
-		frame.registers[genObj.Frame.outputReg] = sentValue
+	// Check if we're completing a delegation (yield* with external throw/return that returned done:true)
+	// In this case, we skip the yield* loop and use DelegationResult as the yield* expression result
+	if genObj.DelegationResultReady {
+		// Get the bytecode to find the resultReg for the yield* loop
+		// The saved PC points to the OpJump instruction after OpYieldDelegated
+		// Structure: [OpYieldDelegated, resultReg, outputReg, iteratorReg, OpJump, offset_lo, offset_hi]
+		// So code[pc-3] is resultReg
+		code := funcObj.Chunk.Code
+		savedPC := genObj.Frame.pc
+		if savedPC >= 3 && code[savedPC] == byte(OpJump) {
+			resultReg := code[savedPC-3]
+
+			// Create an iterator result object with the delegation result
+			iterResult := NewObject(vm.ObjectPrototype).AsPlainObject()
+			iterResult.SetOwn("value", genObj.DelegationResult)
+			iterResult.SetOwn("done", BooleanValue(true))
+
+			// Store in the result register so the exit code can read value from it
+			if int(resultReg) < len(frame.registers) {
+				frame.registers[resultReg] = NewValueFromPlainObject(iterResult)
+			}
+
+			// Advance PC past the OpJump instruction (1 byte opcode + 2 byte offset)
+			frame.ip = savedPC + 3
+		}
+
+		// Clear the delegation result
+		genObj.DelegationResult = Undefined
+		genObj.DelegationResultReady = false
+	} else {
+		// Store the sent value in the register specified by the yield instruction
+		// This eliminates the need to hardcode R2 and makes the codegen explicit
+		// NOTE: Only do this when resuming from a yield (SuspendedYield), NOT when starting (SuspendedStart)
+		// For SuspendedStart, outputReg is 0 but we don't want to overwrite R0 (which contains the first parameter!)
+		if genObj.State == GeneratorSuspendedYield && genObj.Frame != nil && int(genObj.Frame.outputReg) < len(frame.registers) {
+			frame.registers[genObj.Frame.outputReg] = sentValue
+		}
 	}
 
 	// Update VM state

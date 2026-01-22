@@ -161,28 +161,51 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vm.Undefined, err
 				}
 
-				// Clear the delegation state
-				thisGen.DelegatedIterator = vm.Undefined
+				// ECMAScript spec step v: If Type(innerReturnResult) is not Object, throw TypeError
+				if !result.IsObject() {
+					thisGen.DelegatedIterator = vm.Undefined
+					typeErr := vmInstance.NewTypeError("Iterator result is not an object")
+					if ee, ok := typeErr.(vm.ExceptionError); ok {
+						return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+					}
+					return vm.Undefined, typeErr
+				}
 
-				// If the delegated iterator returned done:true, complete this generator
-				// Use GetProperty to properly trigger getters on the result
-				if result.IsObject() {
-					doneVal, err := vmInstance.GetProperty(result, "done")
+				// Get done value using GetProperty to properly trigger getters
+				doneVal, err := vmInstance.GetProperty(result, "done")
+				if err != nil {
+					// done getter threw - resume generator with exception so try-catch can handle it
+					thisGen.DelegatedIterator = vm.Undefined
+					if ee, ok := err.(vm.ExceptionError); ok {
+						return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+					}
+					return vm.Undefined, err
+				}
+
+				if doneVal.IsTruthy() {
+					// ECMAScript spec step vii: done is true
+					// Get the value from the inner result
+					innerValue, err := vmInstance.GetProperty(result, "value")
 					if err != nil {
-						// done getter threw - resume generator with exception so try-catch can handle it
+						thisGen.DelegatedIterator = vm.Undefined
 						if ee, ok := err.(vm.ExceptionError); ok {
 							return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
 						}
 						return vm.Undefined, err
 					}
-					if doneVal.IsTruthy() {
-						thisGen.ReturnValue = returnValue
-						thisGen.State = vm.GeneratorCompleted
-						thisGen.Done = true
-						thisGen.Frame = nil
-					}
+
+					// Clear delegation state
+					thisGen.DelegatedIterator = vm.Undefined
+
+					// Resume generator with return completion to run finally blocks
+					// The generator will complete after finally blocks execute
+					return vmInstance.ExecuteGeneratorWithReturn(thisGen, innerValue)
 				}
 
+				// ECMAScript spec step viii: done is false
+				// GeneratorYield(innerReturnResult) - yield and wait for next received value
+				// Don't clear DelegatedIterator - delegation continues
+				// The next call to return() will forward again
 				return result, nil
 			}
 
@@ -253,32 +276,57 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vm.Undefined, err
 				}
 
-				// Clear the delegation state
-				thisGen.DelegatedIterator = vm.Undefined
+				// ECMAScript spec step ii.2: If Type(innerResult) is not Object, throw TypeError
+				if !result.IsObject() {
+					thisGen.DelegatedIterator = vm.Undefined
+					typeErr := vmInstance.NewTypeError("Iterator result is not an object")
+					if ee, ok := typeErr.(vm.ExceptionError); ok {
+						return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+					}
+					return vm.Undefined, typeErr
+				}
 
-				// If the delegated iterator returned done:true, the exception was handled
-				// Use GetProperty to properly trigger getters on the result
-				if result.IsObject() {
-					doneVal, err := vmInstance.GetProperty(result, "done")
+				// Get done value using GetProperty to properly trigger getters
+				doneVal, err := vmInstance.GetProperty(result, "done")
+				if err != nil {
+					// done getter threw - inject that exception into generator
+					thisGen.DelegatedIterator = vm.Undefined
+					if ee, ok := err.(vm.ExceptionError); ok {
+						return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+					}
+					return vm.Undefined, err
+				}
+
+				if doneVal.IsTruthy() {
+					// ECMAScript spec step ii.4: done is true
+					// Get the value from the inner result (step ii.4.a: IteratorValue)
+					innerValue, err := vmInstance.GetProperty(result, "value")
 					if err != nil {
-						// done getter threw - inject that exception into generator
+						thisGen.DelegatedIterator = vm.Undefined
 						if ee, ok := err.(vm.ExceptionError); ok {
 							return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
 						}
 						return vm.Undefined, err
 					}
-					if doneVal.IsTruthy() {
-						// The delegated iterator handled the exception and completed
-						// Continue generator execution after the yield*
-						thisGen.State = vm.GeneratorSuspendedYield
-					}
+
+					// Clear delegation and set the result value
+					// The VM will use DelegationResult to skip the yield* loop and continue
+					thisGen.DelegatedIterator = vm.Undefined
+					thisGen.DelegationResult = innerValue
+					thisGen.DelegationResultReady = true
+
+					// Resume generator - it will see DelegationResultReady and continue past yield*
+					return vmInstance.ExecuteGenerator(thisGen, vm.Undefined)
 				}
 
+				// ECMAScript spec step ii.5/6: done is false, GeneratorYield(innerResult)
+				// The delegation continues - don't clear DelegatedIterator
+				// Just return the result and let the caller call next/throw/return again
 				return result, nil
 			}
 
-			// If the delegated iterator doesn't have a .throw() method, close it and throw
-			// Try to close the iterator by calling .return() if available
+			// If the delegated iterator doesn't have a .throw() method, close it and throw TypeError
+			// Per ECMAScript spec step iii: close iterator then throw TypeError
 			returnMethod, err := vmInstance.GetProperty(delegatedIter, "return")
 			if err != nil {
 				// Getting .return threw - clear delegation and inject that exception into generator
@@ -287,10 +335,11 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
 				}
 				return vm.Undefined, err
-			} else if !returnMethod.IsUndefined() && returnMethod.Type() != vm.TypeNull && returnMethod.IsCallable() {
+			}
+			if !returnMethod.IsUndefined() && returnMethod.Type() != vm.TypeNull && returnMethod.IsCallable() {
 				// Call delegatedIter.return() to close it
-				// Per spec: if return() throws, propagate that exception (not the original throw exception)
-				_, returnErr := vmInstance.Call(returnMethod, delegatedIter, []vm.Value{})
+				// Per spec: if return() throws, propagate that exception (not the TypeError)
+				innerResult, returnErr := vmInstance.Call(returnMethod, delegatedIter, []vm.Value{})
 				if returnErr != nil {
 					// return() threw - clear delegation and inject that exception into generator
 					thisGen.DelegatedIterator = vm.Undefined
@@ -299,11 +348,27 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 					}
 					return vm.Undefined, returnErr
 				}
+				// Check if return() result is an object (spec step iii.3/4)
+				if !innerResult.IsUndefined() && !innerResult.IsObject() {
+					thisGen.DelegatedIterator = vm.Undefined
+					// Inject TypeError into generator so it can be caught by try-catch
+					typeErr := vmInstance.NewTypeError("Iterator result is not an object")
+					if ee, ok := typeErr.(vm.ExceptionError); ok {
+						return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+					}
+					return vm.Undefined, typeErr
+				}
 			}
 
-			// Clear delegation and propagate the original exception to this generator
+			// ECMAScript spec step iii.6: Throw a TypeError exception
+			// (iterator doesn't have a throw method - protocol violation)
+			// Inject into generator so it can be caught by try-catch
 			thisGen.DelegatedIterator = vm.Undefined
-			// Fall through to throw the exception into this generator
+			typeErr := vmInstance.NewTypeError("Iterator does not have a throw method")
+			if ee, ok := typeErr.(vm.ExceptionError); ok {
+				return vmInstance.ExecuteGeneratorWithException(thisGen, ee.GetExceptionValue())
+			}
+			return vm.Undefined, typeErr
 		}
 
 		// If generator is completed, throw the exception (as an Error object for clearer runtime message)
