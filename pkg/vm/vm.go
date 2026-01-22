@@ -12407,18 +12407,50 @@ func (vm *VM) cmpResult(cmp int, opcode OpCode) bool {
 // might have different byte representations (astral characters or WTF-8 surrogates).
 // This is used as a fast check to avoid expensive UTF-16 conversion for most strings.
 func stringNeedsUTF16Comparison(s string) bool {
-	// Fast path: scan for any byte >= 0xED (where surrogates and astral chars start in UTF-8)
-	// This is much faster than checking each byte individually
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 0xED {
-			// Only these high bytes can indicate surrogates or astral characters:
-			// 0xED: WTF-8 surrogate encoding (ED [A0-BF] XX)
-			// 0xF0-0xF7: 4-byte UTF-8 sequences (astral characters >= U+10000)
-			if s[i] >= 0xF0 {
-				return true // 4-byte sequence (astral character)
+	n := len(s)
+	if n == 0 {
+		return false
+	}
+
+	// Process 8 bytes at a time using direct memory access
+	// We're looking for any byte >= 0xED (237)
+	// Key insight: if (byte & 0x80) == 0, byte < 128 < 0xED
+	const highBitMask = uint64(0x8080808080808080)
+
+	// Get pointer to string data
+	ptr := unsafe.Pointer(unsafe.StringData(s))
+
+	i := 0
+	// Process 8 bytes at a time using direct memory load
+	for ; i+8 <= n; i += 8 {
+		chunk := *(*uint64)(unsafe.Pointer(uintptr(ptr) + uintptr(i)))
+
+		// Quick check: if no high bits set, all bytes < 0x80, definitely < 0xED
+		if chunk&highBitMask == 0 {
+			continue
+		}
+
+		// Some byte has high bit set - check individual bytes for >= 0xED
+		for j := i; j < i+8; j++ {
+			if s[j] >= 0xED {
+				if s[j] >= 0xF0 {
+					return true
+				}
+				if s[j] == 0xED && j+1 < n && s[j+1] >= 0xA0 {
+					return true
+				}
 			}
-			if s[i] == 0xED && i+1 < len(s) && s[i+1] >= 0xA0 {
-				return true // WTF-8 surrogate
+		}
+	}
+
+	// Handle remaining bytes
+	for ; i < n; i++ {
+		if s[i] >= 0xED {
+			if s[i] >= 0xF0 {
+				return true
+			}
+			if s[i] == 0xED && i+1 < n && s[i+1] >= 0xA0 {
+				return true
 			}
 		}
 	}

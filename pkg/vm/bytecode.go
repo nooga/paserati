@@ -673,6 +673,10 @@ type Chunk struct {
 	// VarGlobalIndices tracks global indices that are var declarations (non-configurable per ECMAScript)
 	// These indices should have their heap slots marked as non-configurable (DontDelete)
 	VarGlobalIndices []uint16
+	// Constant deduplication caches for O(1) lookup (avoids O(n) linear search)
+	stringConstCache  map[string]uint16  // Cache for string constants
+	intConstCache     map[int64]uint16   // Cache for integer constants
+	floatConstCache   map[float64]uint16 // Cache for float constants
 }
 
 // GetLine returns the source line number corresponding to a given bytecode offset.
@@ -737,15 +741,62 @@ func (c *Chunk) WriteUint16(val uint16) {
 // AddConstant adds a value to the chunk's constant pool and returns its index.
 // Returns a uint16 as we might need more than 256 constants.
 // Deduplicates constants to avoid storing the same value multiple times.
+// Uses type-specific caches for O(1) lookup of common types (strings, integers, floats).
 func (c *Chunk) AddConstant(v Value) uint16 {
-	// Skip deduplication for DictObject to avoid memory corruption issues
-	// (DictObjects like enums are typically unique anyway)
-	if v.Type() != TypeDictObject {
-		// Check if constant already exists to avoid duplicates
-		for i, existing := range c.Constants {
-			if existing.Is(v) {
-				return uint16(i)
-			}
+	// Fast path: use type-specific caches for common types
+	switch v.Type() {
+	case TypeString:
+		s := v.AsString()
+		if c.stringConstCache == nil {
+			c.stringConstCache = make(map[string]uint16)
+		} else if idx, exists := c.stringConstCache[s]; exists {
+			return idx
+		}
+		// Add new constant
+		c.Constants = append(c.Constants, v)
+		idx := uint16(len(c.Constants) - 1)
+		c.stringConstCache[s] = idx
+		return idx
+
+	case TypeIntegerNumber:
+		i := int64(v.AsInteger())
+		if c.intConstCache == nil {
+			c.intConstCache = make(map[int64]uint16)
+		} else if idx, exists := c.intConstCache[i]; exists {
+			return idx
+		}
+		c.Constants = append(c.Constants, v)
+		idx := uint16(len(c.Constants) - 1)
+		c.intConstCache[i] = idx
+		return idx
+
+	case TypeFloatNumber:
+		f := v.AsFloat()
+		if c.floatConstCache == nil {
+			c.floatConstCache = make(map[float64]uint16)
+		} else if idx, exists := c.floatConstCache[f]; exists {
+			return idx
+		}
+		c.Constants = append(c.Constants, v)
+		idx := uint16(len(c.Constants) - 1)
+		c.floatConstCache[f] = idx
+		return idx
+
+	case TypeDictObject:
+		// Skip deduplication for DictObject to avoid memory corruption issues
+		// (DictObjects like enums are typically unique anyway)
+		c.Constants = append(c.Constants, v)
+		idx := len(c.Constants) - 1
+		if idx > 65535 {
+			panic("Too many constants in one chunk.")
+		}
+		return uint16(idx)
+	}
+
+	// Fallback: linear search for other types (functions, objects, etc.)
+	for i, existing := range c.Constants {
+		if existing.Is(v) {
+			return uint16(i)
 		}
 	}
 
@@ -753,7 +804,6 @@ func (c *Chunk) AddConstant(v Value) uint16 {
 	c.Constants = append(c.Constants, v)
 	idx := len(c.Constants) - 1
 	if idx > 65535 {
-		// Handle error: Too many constants
 		panic("Too many constants in one chunk.")
 	}
 	return uint16(idx)
