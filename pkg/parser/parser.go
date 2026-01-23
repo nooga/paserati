@@ -5468,6 +5468,21 @@ func (p *Parser) parseForStatement() Statement {
 		return p.parseForStatementOrForOf(forToken, isAsync)
 	}
 
+	// For 'this' expressions, check if followed by DOT for member access: for (this.x of items)
+	if p.peekTokenIs(lexer.THIS) {
+		p.nextToken() // Now at 'this'
+		if p.peekTokenIs(lexer.DOT) || p.peekTokenIs(lexer.LBRACKET) {
+			// This is this.x or this[x] - could be for-of/for-in assignment
+			return p.parseForStatementOrForOf(forToken, isAsync)
+		}
+		// 'this' alone cannot be assignment target, so parse as regular for
+		if isAsync {
+			p.addError(p.curToken, "for-await can only be used with for-of loops, not regular for loops")
+			return nil
+		}
+		return p.parseRegularForStatement(forToken)
+	}
+
 	// For identifiers (including contextual keywords like 'let', 'async' used as identifiers),
 	// check if it's followed by OF/IN or could be a member expression
 	if p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.LET) || p.peekTokenIs(lexer.ASYNC) ||
@@ -8232,6 +8247,19 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) St
 			varName = p.curToken.Literal
 		} else {
 			p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'var', got %s", p.curToken.Type))
+			return nil
+		}
+	} else if p.curTokenIs(lexer.THIS) {
+		// 'this' followed by member access: for (this.x of items) or for (this.#field of items)
+		if p.peekTokenIs(lexer.DOT) || p.peekTokenIs(lexer.LBRACKET) {
+			// Member expression: parse it fully, but stop before 'in'/'of' operators
+			expr := p.parseExpression(LESSGREATER)
+			exprStmt := &ExpressionStatement{Token: p.curToken, Expression: expr}
+			varStmt = exprStmt
+			varName = "" // Member expression doesn't have a simple name
+		} else {
+			// 'this' alone cannot be assignment target
+			p.addError(p.curToken, "'this' cannot be used as an assignment target in for-of/for-in")
 			return nil
 		}
 	} else if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.LET) || p.isContextualKeywordAsIdent() {

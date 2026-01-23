@@ -265,16 +265,21 @@ func (p *Parser) parseClassBody() *ClassBody {
 		}
 
 		// Parse constructor, method, getter, setter, generator, or computed member
-		if p.curTokenIs(lexer.GET) && !p.peekTokenIs(lexer.LPAREN) {
+		// Per ECMAScript spec: "get [no LineTerminator here] ClassElementName"
+		// If there's a newline after 'get', it's a field named "get", not a getter accessor
+		hasNewlineAfterCur := p.peekToken.Line > p.curToken.Line
+		if p.curTokenIs(lexer.GET) && !p.peekTokenIs(lexer.LPAREN) && !hasNewlineAfterCur {
 			// Parse getter method: get propertyName() {}
 			// But NOT if followed by '(' - that's a method named "get": get() {}
+			// And NOT if there's a newline (ASI) - that's a field named "get"
 			method := p.parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
 			if method != nil {
 				methods = append(methods, method)
 			}
-		} else if p.curTokenIs(lexer.SET) && !p.peekTokenIs(lexer.LPAREN) {
+		} else if p.curTokenIs(lexer.SET) && !p.peekTokenIs(lexer.LPAREN) && !hasNewlineAfterCur {
 			// Parse setter method: set propertyName(value) {}
 			// But NOT if followed by '(' - that's a method named "set": set() {}
+			// And NOT if there's a newline (ASI) - that's a field named "set"
 			method := p.parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
 			if method != nil {
 				methods = append(methods, method)
@@ -676,14 +681,16 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 		// This allows chained assignments like: x = obj['lol'] = 42
 		initializer = p.parseExpression(COMMA)
 
-		// Consume optional semicolon after initializer
+		// After parseExpression, curToken is at the last token of the expression.
+		// We need to advance to the next token for the class body parser.
+		// Handle ASI: if there's a newline before the next token and no explicit semicolon,
+		// treat it as if there was a semicolon (Automatic Semicolon Insertion).
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Move to semicolon
-		}
-
-		// Advance past the current token to prepare for the next class member
-		// parseExpression leaves us AT the last token, so we need to advance
-		if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+			p.nextToken() // Move past semicolon to next class member
+		} else {
+			// ASI case: no explicit semicolon, but we still need to advance
+			// past the last token of the expression to the next class member
 			p.nextToken()
 		}
 	} else {
@@ -749,14 +756,16 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 		// This allows chained assignments like: x = obj['lol'] = 42
 		initializer = p.parseExpression(COMMA)
 
-		// Consume optional semicolon after initializer
+		// After parseExpression, curToken is at the last token of the expression.
+		// We need to advance to the next token for the class body parser.
+		// Handle ASI: if there's a newline before the next token and no explicit semicolon,
+		// treat it as if there was a semicolon (Automatic Semicolon Insertion).
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Move to semicolon
-		}
-
-		// Advance past the current token to prepare for the next class member
-		// parseExpression leaves us AT the last token, so we need to advance
-		if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+			p.nextToken() // Move past semicolon to next class member
+		} else {
+			// ASI case: no explicit semicolon, but we still need to advance
+			// past the last token of the expression to the next class member
 			p.nextToken()
 		}
 	} else {
@@ -1188,7 +1197,8 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 	p.nextToken() // Consume '*'
 
 	// Check that we have a valid method name token
-	if !p.curTokenIs(lexer.IDENT) && !p.curTokenIs(lexer.STRING) && !p.curTokenIs(lexer.LBRACKET) && !p.curTokenIs(lexer.PRIVATE_IDENT) {
+	// Use isValidMethodName() to allow keywords like 'yield', 'await', etc. as method names
+	if !p.isValidMethodName() && !p.curTokenIs(lexer.LBRACKET) {
 		p.addError(p.curToken, "expected method name after '*' in generator method")
 		return nil
 	}
