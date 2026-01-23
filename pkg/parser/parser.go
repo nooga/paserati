@@ -1459,9 +1459,10 @@ func (p *Parser) parseVarStatement() Statement {
 		return p.parseObjectDestructuringDeclaration(varToken, false, true)
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
 		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF,
-		lexer.UNDEFINED, lexer.NULL, lexer.FROM, lexer.TYPE, lexer.AS, lexer.ASYNC:
+		lexer.UNDEFINED, lexer.NULL, lexer.FROM, lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.ABSTRACT:
 		// Regular identifier case (including contextual keywords, FutureReservedWords in non-strict mode,
 		// and global property names like undefined/null which are not reserved words)
+		// Note: 'abstract' was removed from the future reserved words list in ES5
 		stmt := &VarStatement{Token: varToken}
 		firstDeclarator := &VarDeclarator{}
 		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -3551,7 +3552,7 @@ func (p *Parser) isKeywordThatCanBeIdentifier(tokenType lexer.TokenType) bool {
 		lexer.STATIC, lexer.READONLY, lexer.PUBLIC, lexer.PRIVATE, lexer.PROTECTED, lexer.ABSTRACT,
 		lexer.OVERRIDE, lexer.IMPORT, lexer.EXPORT, lexer.YIELD, lexer.AWAIT, lexer.VAR, lexer.TYPE, lexer.KEYOF,
 		lexer.INFER, lexer.IS, lexer.OF, lexer.INTERFACE, lexer.EXTENDS, lexer.IMPLEMENTS, lexer.SUPER, lexer.WITH,
-		lexer.ASYNC: // async can be used as identifier name
+		lexer.ASYNC, lexer.DEBUGGER: // all keywords can be used as property names
 		return true
 	default:
 		return false
@@ -3713,12 +3714,27 @@ func (p *Parser) parseYieldExpression() Expression {
 	// Not in generator context - use heuristic to determine if yield is identifier or error
 	// Heuristic: if followed by punctuation/operators that suggest end of statement or usage as value,
 	// treat as identifier. Otherwise, it's likely an error (yield expression outside generator).
-	// Common identifier contexts: yield), yield,, yield;, yield}, yield], yield.prop, yield + x
+
+	// Special case: yield => expr is a shorthand arrow function with yield as parameter
+	if p.peekTokenIs(lexer.ARROW) {
+		p.nextToken() // Consume 'yield' (now at '=>')
+		ident := &Identifier{Token: yieldToken, Value: yieldToken.Literal}
+		param := &Parameter{
+			Token:          yieldToken,
+			Name:           ident,
+			TypeAnnotation: nil,
+		}
+		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil)
+	}
+
+	// Common identifier contexts: yield), yield,, yield;, yield}, yield], yield.prop, yield + x, yield()
 	if p.peekTokenIs(lexer.RPAREN) || p.peekTokenIs(lexer.COMMA) ||
 		p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.RBRACE) ||
 		p.peekTokenIs(lexer.RBRACKET) || p.peekTokenIs(lexer.EOF) ||
 		p.peekTokenIs(lexer.COLON) || // for object properties
 		p.peekTokenIs(lexer.DOT) || // for member access
+		p.peekTokenIs(lexer.LBRACKET) || // for computed member access yield[x]
+		p.peekTokenIs(lexer.LPAREN) || // for function calls yield()
 		p.peekTokenIs(lexer.ASSIGN) || // for assignments
 		p.peekTokenIs(lexer.PLUS) || p.peekTokenIs(lexer.MINUS) ||
 		p.peekTokenIs(lexer.ASTERISK) || p.peekTokenIs(lexer.SLASH) ||
@@ -3866,13 +3882,28 @@ func (p *Parser) parseAsyncExpression() Expression {
 // If await is not followed by a valid expression (e.g., `;`, `,`, `)`), we treat it as an identifier.
 // This allows `await` to be used as a variable/parameter name in non-async contexts.
 func (p *Parser) parseAwaitExpression() Expression {
+	awaitToken := p.curToken
+
+	// Special case: await => expr is a shorthand arrow function with await as parameter
+	// This is valid in script mode (non-module, non-async)
+	if p.peekTokenIs(lexer.ARROW) {
+		p.nextToken() // Consume 'await' (now at '=>')
+		ident := &Identifier{Token: awaitToken, Value: awaitToken.Literal}
+		param := &Parameter{
+			Token:          awaitToken,
+			Name:           ident,
+			TypeAnnotation: nil,
+		}
+		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil)
+	}
+
 	// Check if the next token can start an expression
 	// If not, treat 'await' as an identifier instead of an expression keyword
 	if !p.canStartExpression(p.peekToken) {
 		// 'await' used as identifier in a context where no expression follows
 		return &Identifier{
-			Token: p.curToken,
-			Value: p.curToken.Literal, // "await"
+			Token: awaitToken,
+			Value: awaitToken.Literal, // "await"
 		}
 	}
 

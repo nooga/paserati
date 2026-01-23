@@ -42,9 +42,13 @@ func (p *Parser) isValidMethodName() bool {
 func (p *Parser) parseClassDeclaration() Statement {
 	classToken := p.curToken
 
-	if !p.expectPeek(lexer.IDENT) {
+	// Class name can be an identifier or 'await'/'yield' in script mode (non-module)
+	// These are the only contextual keywords valid as class names per ECMAScript spec
+	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.AWAIT) && !p.peekTokenIs(lexer.YIELD) {
+		p.peekError(lexer.IDENT)
 		return nil
 	}
+	p.nextToken()
 
 	name := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
@@ -117,7 +121,9 @@ func (p *Parser) parseClassExpression() Expression {
 	classToken := p.curToken
 
 	var name *Identifier
-	if p.peekTokenIs(lexer.IDENT) {
+	// Class name can be an identifier or 'await'/'yield' in script mode (non-module)
+	// These are the only contextual keywords valid as class names per ECMAScript spec
+	if p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.AWAIT) || p.peekTokenIs(lexer.YIELD) {
 		p.nextToken()
 		name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
