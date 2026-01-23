@@ -310,12 +310,63 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 
 	// (Bound/async native functions currently do not support own props; extend if needed)
 
-	// Check if the base is actually an object
+	// Handle primitives: coerce to temp object and walk prototype chain for setters
+	// Per ES spec 6.2.3.2 PutValue: primitives are coerced to objects for property assignment
 	if !objVal.IsObject() {
-		//frame.ip = ip
-		// Error setting property on non-object
-		status := vm.runtimeError("Cannot set property '%s' on non-object type '%s'", propName, objVal.TypeName())
-		return false, status, Undefined
+		var proto Value
+		switch objVal.Type() {
+		case TypeIntegerNumber, TypeFloatNumber:
+			proto = vm.NumberPrototype
+		case TypeString:
+			proto = vm.StringPrototype
+		case TypeBoolean:
+			proto = vm.BooleanPrototype
+		case TypeSymbol:
+			proto = vm.SymbolPrototype
+		default:
+			// null, undefined, or other non-object types - throw error
+			status := vm.runtimeError("Cannot set property '%s' on %s", propName, objVal.TypeName())
+			return false, status, Undefined
+		}
+
+		// Walk prototype chain looking for setters or proxy traps
+		propKeyHash := keyFromString(propName).hash()
+		current := proto
+		for current.Type() != TypeNull && current.Type() != TypeUndefined {
+			if current.Type() == TypeProxy {
+				// Found a proxy in the chain - invoke its set trap
+				proxy := current.AsProxy()
+				if !proxy.Revoked {
+					if setTrap, ok := proxy.handler.AsPlainObject().GetOwn("set"); ok && setTrap.IsCallable() {
+						// Call the set trap: trap(target, property, value, receiver)
+						// receiver is the original primitive coerced to object
+						trapArgs := []Value{proxy.Target(), NewString(propName), *valueToSet, *objVal}
+						if _, err := vm.Call(setTrap, proxy.handler, trapArgs); err == nil {
+							return true, InterpretOK, *valueToSet
+						}
+					}
+				}
+			}
+			if current.IsObject() {
+				po := current.AsPlainObject()
+				// Check for setter in the setters map
+				if po.setters != nil {
+					if setter, hasSetter := po.setters[propKeyHash]; hasSetter && setter.IsCallable() {
+						// Invoke setter with the primitive as 'this'
+						if _, err := vm.Call(setter, *objVal, []Value{*valueToSet}); err == nil {
+							return true, InterpretOK, *valueToSet
+						}
+					}
+				}
+				current = po.prototype
+			} else {
+				break
+			}
+		}
+
+		// No setter found - silently succeed (property assignment to temp object)
+		// The temp object is discarded, but the assignment "succeeds"
+		return true, InterpretOK, *valueToSet
 	}
 
 	// --- INLINE CACHE CHECK FOR PROPERTY WRITES (PlainObjects only) ---

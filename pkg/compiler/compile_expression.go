@@ -3824,6 +3824,11 @@ func (c *Compiler) compileDirectEval(node *parser.CallExpression, hint Register,
 	if c.inDefaultParamScope {
 		c.hasEvalInDefaultParam = true
 	}
+	// If we're in a class field initializer, mark it specially
+	// This is needed for "Additional Early Error Rules for Eval Inside Initializer"
+	if c.isClassFieldInitializer {
+		c.hasEvalInFieldInitializer = true
+	}
 
 	// Direct eval takes exactly one argument (the code string)
 	// If no arguments, it returns undefined

@@ -995,6 +995,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 						reg, ok := c.regAlloc.TryAllocForVariable()
 						if ok {
 							c.currentSymbolTable.Define(d.Name.Value, reg)
+							c.trackLocalName(d.Name.Value, reg)
 							c.regAlloc.Pin(reg) // Pin so closures can capture
 							perIterationRegs = append(perIterationRegs, reg)
 						} else {
@@ -1015,6 +1016,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 					reg, ok := c.regAlloc.TryAllocForVariable()
 					if ok {
 						c.currentSymbolTable.Define(name, reg)
+						c.trackLocalName(name, reg)
 						c.regAlloc.Pin(reg)
 						perIterationRegs = append(perIterationRegs, reg)
 					} else {
@@ -1038,6 +1040,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 						reg, ok := c.regAlloc.TryAllocForVariable()
 						if ok {
 							c.currentSymbolTable.DefineConstTDZ(d.Name.Value, reg)
+							c.trackLocalName(d.Name.Value, reg)
 							c.regAlloc.Pin(reg)
 							perIterationRegs = append(perIterationRegs, reg)
 						} else {
@@ -1056,6 +1059,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 					reg, ok := c.regAlloc.TryAllocForVariable()
 					if ok {
 						c.currentSymbolTable.DefineConstTDZ(name, reg)
+						c.trackLocalName(name, reg)
 						c.regAlloc.Pin(reg)
 						perIterationRegs = append(perIterationRegs, reg)
 					} else {
@@ -1830,10 +1834,12 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		case *parser.LetStatement:
 			reg := c.regAlloc.Alloc()
 			c.currentSymbolTable.DefineTDZ(v.Name.Value, reg)
+			c.trackLocalName(v.Name.Value, reg)
 			c.emitLoadUninitialized(reg, node.Token.Line)
 		case *parser.ConstStatement:
 			reg := c.regAlloc.Alloc()
 			c.currentSymbolTable.DefineConstTDZ(v.Name.Value, reg)
+			c.trackLocalName(v.Name.Value, reg)
 			c.emitLoadUninitialized(reg, node.Token.Line)
 		case *parser.ArrayDestructuringDeclaration:
 			for _, elem := range v.Elements {
@@ -1847,6 +1853,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 					} else {
 						c.currentSymbolTable.DefineTDZ(ident.Value, reg)
 					}
+					c.trackLocalName(ident.Value, reg)
 					c.emitLoadUninitialized(reg, node.Token.Line)
 				}
 			}
@@ -1862,6 +1869,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 					} else {
 						c.currentSymbolTable.DefineTDZ(ident.Value, reg)
 					}
+					c.trackLocalName(ident.Value, reg)
 					c.emitLoadUninitialized(reg, node.Token.Line)
 				}
 			}

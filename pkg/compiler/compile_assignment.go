@@ -76,6 +76,16 @@ func (c *Compiler) getWithPropertyInfo(ident *parser.Identifier) WithPropertyInf
 func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
+	// For class field initializers, set the flag so eval inside can detect this context
+	// and forbid 'arguments' access per ES spec
+	prevIsClassFieldInitializer := c.isClassFieldInitializer
+	if node.IsFieldInitializer {
+		c.isClassFieldInitializer = true
+	}
+	defer func() {
+		c.isClassFieldInitializer = prevIsClassFieldInitializer
+	}()
+
 	// --- Refactored LHS Handling ---
 	var currentValueReg Register // Register holding the value BEFORE the assignment/operation
 	var needsStore bool = true   // Assume we need to store back by default
@@ -227,7 +237,20 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 							currentValueReg = nilRegister // Not needed for simple assignment
 						}
 					} else {
-						// Not in caller scope either, treat as global
+						// Not in caller scope either
+						// In strict mode, assignment to undeclared variable throws ReferenceError
+						// But first check if this is an existing global (e.g., var/let/const at global scope)
+						// Also skip for 'arguments' and 'eval' which have special handling elsewhere
+						if c.chunk.IsStrict && !c.GlobalExists(lhsNode.Value) && lhsNode.Value != "arguments" && lhsNode.Value != "eval" {
+							// Emit runtime error for strict mode undeclared variable assignment
+							c.emitStrictUndeclaredAssignmentError(lhsNode.Value, line)
+							// Still evaluate RHS for side effects
+							if _, err := c.compileNode(node.Value, hint); err != nil {
+								return BadRegister, err
+							}
+							return hint, nil
+						}
+						// Either non-strict mode or existing global: treat as global assignment
 						identInfo.isGlobal = true
 						identInfo.globalIdx = c.GetOrAssignGlobalIndex(lhsNode.Value)
 						if node.Operator != "=" {
@@ -239,7 +262,20 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 						}
 					}
 				} else {
-					// Variable not found in any scope, treat as global assignment
+					// Variable not found in any scope
+					// In strict mode, assignment to undeclared variable throws ReferenceError
+					// But first check if this is an existing global (e.g., var/let/const at global scope)
+					// Also skip for 'arguments' and 'eval' which have special error handling elsewhere
+					if c.chunk.IsStrict && !c.GlobalExists(lhsNode.Value) && lhsNode.Value != "arguments" && lhsNode.Value != "eval" {
+						// Emit runtime error for strict mode undeclared variable assignment
+						c.emitStrictUndeclaredAssignmentError(lhsNode.Value, line)
+						// Still evaluate RHS for side effects
+						if _, err := c.compileNode(node.Value, hint); err != nil {
+							return BadRegister, err
+						}
+						return hint, nil
+					}
+					// Either non-strict mode or existing global: treat as global assignment
 					identInfo.isGlobal = true
 					identInfo.globalIdx = c.GetOrAssignGlobalIndex(lhsNode.Value)
 					// For compound assignments, we need the current value
@@ -250,6 +286,20 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					} else {
 						currentValueReg = nilRegister // Not needed for simple assignment
 					}
+				}
+			} else if symbolRef.IsCallerLocal {
+				// Caller local variable (for direct eval)
+				identInfo.isCallerLocal = true
+				identInfo.callerRegIdx = symbolRef.CallerLocalIndex
+				// For compound assignments, we need the current value
+				if node.Operator != "=" {
+					currentValueReg = c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, currentValueReg)
+					c.emitOpCode(vm.OpGetCallerLocal, line)
+					c.emitByte(byte(currentValueReg))
+					c.emitByte(byte(symbolRef.CallerLocalIndex))
+				} else {
+					currentValueReg = nilRegister // Not needed for simple assignment
 				}
 			} else {
 				// Determine target register/upvalue index and load current value

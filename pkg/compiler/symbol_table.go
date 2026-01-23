@@ -19,6 +19,9 @@ type Symbol struct {
 	IsTDZ bool // True if this is a let/const variable that hasn't been initialized yet
 	// Const support: const variables cannot be reassigned (throws TypeError)
 	IsConst bool // True if this is a const variable
+	// Caller local support: for direct eval, symbols that reference caller's local variables
+	IsCallerLocal    bool // True if this is a reference to a caller's local variable
+	CallerLocalIndex int  // Index in caller's register file (only valid if IsCallerLocal is true)
 }
 
 // WithObjectInfo tracks information about a with object in the compiler
@@ -73,6 +76,14 @@ func (st *SymbolTable) DefineGlobal(name string, globalIndex uint16) Symbol {
 // Used for top-level const declarations in module mode.
 func (st *SymbolTable) DefineGlobalConst(name string, globalIndex uint16) Symbol {
 	symbol := Symbol{Name: name, IsGlobal: true, GlobalIndex: globalIndex, IsConst: true}
+	st.store[name] = symbol
+	return symbol
+}
+
+// DefineCallerLocal adds a symbol that references a local variable from the caller's scope.
+// Used for direct eval to allow nested functions to capture caller's variables as upvalues.
+func (st *SymbolTable) DefineCallerLocal(name string, callerIndex int) Symbol {
+	symbol := Symbol{Name: name, IsCallerLocal: true, CallerLocalIndex: callerIndex}
 	st.store[name] = symbol
 	return symbol
 }

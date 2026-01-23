@@ -669,6 +669,7 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 		}
 
 		// Create assignment statement: this.propertyName = initializerExpression
+		// Mark as field initializer so eval inside can detect this context and forbid 'arguments'
 		assignment := &parser.AssignmentExpression{
 			Token:    property.Token,
 			Operator: "=",
@@ -677,7 +678,8 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 				Object:   &parser.ThisExpression{Token: property.Token},
 				Property: property.Key,
 			},
-			Value: initValue,
+			Value:              initValue,
+			IsFieldInitializer: true, // Per ES spec, eval in field initializers forbids 'arguments'
 		}
 
 		// Wrap in expression statement

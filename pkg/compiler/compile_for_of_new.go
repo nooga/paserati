@@ -40,10 +40,12 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		case *parser.LetStatement:
 			reg := c.regAlloc.Alloc()
 			c.currentSymbolTable.DefineTDZ(v.Name.Value, reg)
+			c.trackLocalName(v.Name.Value, reg)
 			c.emitLoadUninitialized(reg, node.Token.Line)
 		case *parser.ConstStatement:
 			reg := c.regAlloc.Alloc()
 			c.currentSymbolTable.DefineConstTDZ(v.Name.Value, reg)
+			c.trackLocalName(v.Name.Value, reg)
 			c.emitLoadUninitialized(reg, node.Token.Line)
 		case *parser.ArrayDestructuringDeclaration:
 			for _, elem := range v.Elements {
@@ -57,6 +59,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 					} else {
 						c.currentSymbolTable.DefineTDZ(ident.Value, reg)
 					}
+					c.trackLocalName(ident.Value, reg)
 					c.emitLoadUninitialized(reg, node.Token.Line)
 				}
 			}
@@ -72,6 +75,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 					} else {
 						c.currentSymbolTable.DefineTDZ(ident.Value, reg)
 					}
+					c.trackLocalName(ident.Value, reg)
 					c.emitLoadUninitialized(reg, node.Token.Line)
 				}
 			}

@@ -654,6 +654,11 @@ type ScopeDescriptor struct {
 	// meaning super property access is valid. This is true when eval is called from
 	// within a method (class method or object method with concise syntax).
 	HasSuperBinding bool
+
+	// InClassFieldInitializer indicates if direct eval is called from a class field initializer.
+	// Per ECMAScript, accessing 'arguments' in eval inside a class field initializer is a SyntaxError
+	// ("Additional Early Error Rules for Eval Inside Initializer" - ContainsArguments rule).
+	InClassFieldInitializer bool
 }
 
 // Chunk represents a sequence of bytecode instructions and associated data.

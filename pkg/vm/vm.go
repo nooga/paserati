@@ -11469,8 +11469,26 @@ startExecution:
 				result, evalErrs = vm.evalDriver.EvalCode(codeStr, callerIsStrict)
 			}
 
+			// Check if eval threw a runtime exception that should propagate to caller
+			// This happens when vm.currentException is set from eval's OpThrow
+			if vm.currentException.Type() != TypeUndefined && vm.currentException.Type() != TypeNull {
+				// Re-throw the exception from eval so it can be caught by caller's try/catch
+				vm.throwException(vm.currentException)
+				// After exception unwinding, reload frame state
+				if vm.frameCount > 0 {
+					frame = &vm.frames[vm.frameCount-1]
+					registers = frame.registers
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					ip = frame.ip
+				}
+				continue
+			}
+
 			if len(evalErrs) > 0 {
-				// Error occurred - throw as SyntaxError exception
+				// Compile/parse error occurred - throw as SyntaxError exception
 				// Check if we're already unwinding
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined

@@ -414,12 +414,15 @@ type Compiler struct {
 	isGenerator          bool // True when compiling generator function
 	isArrowFunction      bool // True when compiling arrow function (no own arguments binding)
 	isFunctionBody       bool // True when compiling a function body (has implicit 'arguments' binding, not module-level)
-	isMethodCompilation  bool // True when compiling a method that will have [[HomeObject]] (class/object method)
+	isMethodCompilation      bool // True when compiling a method that will have [[HomeObject]] (class/object method)
+	isClassFieldInitializer  bool // True when compiling a class field initializer (eval shouldn't access 'arguments')
 
 	// --- Direct Eval Tracking ---
-	hasDirectEval         bool // True when function contains direct eval call (needs scope descriptor)
-	inDefaultParamScope   bool // True when compiling a default parameter expression
-	hasEvalInDefaultParam bool // True when direct eval was found in a default parameter expression
+	hasDirectEval            bool // True when function contains direct eval call (needs scope descriptor)
+	inDefaultParamScope      bool // True when compiling a default parameter expression
+	hasEvalInDefaultParam    bool // True when direct eval was found in a default parameter expression
+	hasEvalInFieldInitializer bool // True when direct eval was found in a class field initializer
+	allLocalNames            map[Register]string // Tracks all local variable allocations for ScopeDescriptor
 
 	// --- Parameter TDZ Tracking ---
 	currentDefaultParamIndex int      // Index of parameter whose default we're compiling (-1 if not in default scope)
@@ -463,6 +466,7 @@ func NewCompiler() *Compiler {
 		constantCache:       make(map[uint16]Register),
 		processedModules:    make(map[string]bool),
 		finallyContextStack: make([]*FinallyContext, 0),
+		allLocalNames:       make(map[Register]string),
 	}
 }
 
@@ -653,6 +657,8 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		currentDefaultParamIndex: -1,                                        // Not in default param scope initially
 		parameterList:            nil,                                       // Will be set when compiling function parameters
 		scopeBoundary:            enclosingCompiler.currentSymbolTable,      // Mark where parent's scope starts
+		allLocalNames:            make(map[Register]string),                 // Track all local names for ScopeDescriptor
+		isClassFieldInitializer:  enclosingCompiler.isClassFieldInitializer, // Inherit field initializer context for nested functions
 	}
 }
 
@@ -721,6 +727,40 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	c.chunk = vm.NewChunk()
 	c.regAlloc = NewRegisterAllocator()
 	c.currentSymbolTable = NewSymbolTable()
+	c.allLocalNames = make(map[Register]string) // Reset local name tracking
+
+	// Re-populate symbol table with caller locals for direct eval
+	// This must be done after resetting the symbol table but before compilation
+	// We also need to track which registers need to be populated from caller scope
+	var callerLocalRegs []struct {
+		reg        Register
+		callerIdx  int
+	}
+	if c.callerScopeDesc != nil {
+		for i, name := range c.callerScopeDesc.LocalNames {
+			if name != "" {
+				reg := c.regAlloc.Alloc()
+				c.currentSymbolTable.DefineCallerLocal(name, i)
+				// Update the symbol to have a register as well (for upvalue capture)
+				if sym, found := c.currentSymbolTable.store[name]; found {
+					sym.Register = reg
+					c.currentSymbolTable.store[name] = sym
+					debugPrintf("// [Compile] Re-populated caller local '%s' at index %d with register R%d\n", name, i, reg)
+					callerLocalRegs = append(callerLocalRegs, struct {
+						reg        Register
+						callerIdx  int
+					}{reg, i})
+				}
+			}
+		}
+	}
+
+	// If the caller is inside a class field initializer, propagate that context
+	// This is needed for the "Additional Early Error Rules for Eval Inside Initializer"
+	// which forbid 'arguments' in eval code and any nested functions within it
+	if c.callerScopeDesc != nil && c.callerScopeDesc.InClassFieldInitializer {
+		c.isClassFieldInitializer = true
+	}
 
 	// Reset per-compilation state to avoid leaking state between eval calls
 	c.loopContextStack = nil
@@ -770,6 +810,16 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// --- Global Symbol Table Initialization (if needed) ---
 	// c.defineBuiltinGlobals() // TODO: Define built-ins if any
 
+	// --- Emit OpGetCallerLocal for direct eval caller locals ---
+	// This must happen at the start of eval code execution so nested functions
+	// can capture the values as upvalues correctly
+	for _, callerLocal := range callerLocalRegs {
+		c.emitOpCode(vm.OpGetCallerLocal, 0)
+		c.emitByte(byte(callerLocal.reg))
+		c.emitByte(byte(callerLocal.callerIdx))
+		debugPrintf("// [Compile] Emitted OpGetCallerLocal R%d from caller index %d\n", callerLocal.reg, callerLocal.callerIdx)
+	}
+
 	// --- Process Runtime Import Declarations FIRST (before hoisted functions) ---
 	// This ensures that runtime imported names are available when compiling hoisted function bodies
 	// Type-only imports are handled by the type checker and synced via syncImportsFromTypeChecker
@@ -793,6 +843,30 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			}
 		}
 		debugPrintf("[Compile] Finished pre-processing runtime imports\n")
+	}
+
+	// --- Pre-register global declaration names BEFORE compiling hoisted functions ---
+	// This ensures that when hoisted functions try to assign to global vars,
+	// c.GlobalExists() returns true and strict mode doesn't throw ReferenceError.
+	// The actual initialization (setting to undefined) happens later.
+	// We need to pre-register var, let, and const declarations because they're all
+	// globals at module/script scope.
+	if c.enclosing == nil {
+		// Pre-register var declarations
+		varNames := collectVarDeclarations(program.Statements)
+		for _, name := range varNames {
+			c.GetOrAssignGlobalIndex(name)
+		}
+		// Pre-register let/const declarations (except for eval which has different scoping)
+		if !c.isIndirectEval && c.callerScopeDesc == nil {
+			letConstNames := collectLetConstDeclarations(program.Statements)
+			for _, name := range letConstNames {
+				c.GetOrAssignGlobalIndex(name)
+			}
+			debugPrintf("[Compile] Pre-registered %d var and %d let/const names for strict mode checks\n", len(varNames), len(letConstNames))
+		} else {
+			debugPrintf("[Compile] Pre-registered %d var names for strict mode checks\n", len(varNames))
+		}
 	}
 
 	// --- Compile Hoisted Global Functions AFTER imports are processed ---
@@ -966,6 +1040,14 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 
 	// Store the maximum registers needed for this chunk
 	c.chunk.MaxRegs = int(c.regAlloc.MaxRegs())
+
+	// Generate scope descriptor for module/script-level code if it contains direct eval
+	// This is needed so that eval code can access local variables in the caller's scope
+	if c.hasDirectEval && c.enclosing == nil {
+		c.chunk.ScopeDesc = c.generateScopeDescriptor()
+		debugPrintf("// [Compiler] Module/script has direct eval, generated scope descriptor with %d locals\n",
+			len(c.chunk.ScopeDesc.LocalNames))
+	}
 
 	// Return the chunk (even if errors occurred, it might be partially useful for debugging?)
 	// and the collected errors.
@@ -1771,6 +1853,14 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		// Special handling for 'arguments' identifier - only available in non-arrow functions
 		// BUT only if there's no user-defined variable named 'arguments' that shadows it
 		if node.Value == "arguments" {
+			// Per ECMAScript "Additional Early Error Rules for Eval Inside Initializer":
+			// Accessing 'arguments' in eval inside class field initializer is a SyntaxError
+			// This applies regardless of whether a user-defined 'arguments' variable exists
+			// Check both direct callerScopeDesc and inherited isClassFieldInitializer flag
+			if c.isClassFieldInitializer || (c.callerScopeDesc != nil && c.callerScopeDesc.InClassFieldInitializer) {
+				return BadRegister, NewCompileError(node,
+					"'arguments' is not allowed in class field initializer")
+			}
 			if c.isFunctionBody && !c.isArrowFunction {
 				// We're in a regular function - check for shadowing WITHIN this function's scope only
 				// (outer function's `var arguments` does NOT shadow this function's implicit binding)
@@ -1877,6 +1967,33 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		}
 		isLocal := definingTable == c.currentSymbolTable
 		debugPrintf("// DEBUG Identifier '%s': Found in symbol table, isLocal=%v, definingTable==%p, currentTable==%p\n", node.Value, isLocal, definingTable, c.currentSymbolTable) // <<< ADDED
+
+		// Handle caller local symbols (for direct eval with nested functions)
+		// These symbols represent variables from the caller's scope that need to be accessed via OpGetCallerLocal
+		if symbolRef.IsCallerLocal {
+			debugPrintf("// DEBUG Identifier '%s': Found CALLER LOCAL at index %d, register R%d\n", node.Value, symbolRef.CallerLocalIndex, symbolRef.Register)
+			// If we're in the eval compiler (have callerScopeDesc), emit OpGetCallerLocal
+			// Load into the symbol's register so upvalue capture works correctly
+			if c.callerScopeDesc != nil {
+				// Emit OpGetCallerLocal to load value into the symbol's register
+				c.emitOpCode(vm.OpGetCallerLocal, node.Token.Line)
+				c.emitByte(byte(symbolRef.Register))
+				c.emitByte(byte(symbolRef.CallerLocalIndex))
+				// Move to hint if different
+				if symbolRef.Register != hint {
+					c.emitMove(hint, symbolRef.Register, node.Token.Line)
+				}
+				return hint, nil
+			}
+			// If we're in a nested function within eval, we need to capture this as a free variable
+			// The upvalue mechanism will resolve it through the closure chain
+			if c.enclosing != nil {
+				debugPrintf("// DEBUG Identifier '%s': Caller local in nested function, treating as free variable\n", node.Value)
+				freeVarIndex := c.addFreeSymbol(node, &symbolRef)
+				c.emitLoadFree(hint, freeVarIndex, node.Token.Line)
+				return hint, nil
+			}
+		}
 
 		// NOTE: In ECMAScript, with-object properties SHADOW local variables, not vice versa.
 		// The with statement creates an object environment record that is checked FIRST.
@@ -2443,6 +2560,7 @@ func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint16 {
 
 // SetCallerScopeDesc sets the caller's scope descriptor for direct eval compilation.
 // This allows eval code to resolve variable names to caller's registers.
+// Note: The actual symbol table population happens in Compile() after the symbol table is reset.
 func (c *Compiler) SetCallerScopeDesc(scopeDesc *vm.ScopeDescriptor) {
 	c.callerScopeDesc = scopeDesc
 }
@@ -2534,22 +2652,32 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 			LocalNames:              []string{},
 			HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
 			InDefaultParameterScope: c.hasEvalInDefaultParam,
-			HasSuperBinding:         c.isMethodCompilation, // Methods have [[HomeObject]] for super
+			HasSuperBinding:         c.isMethodCompilation,        // Methods have [[HomeObject]] for super
+			InClassFieldInitializer: c.hasEvalInFieldInitializer,  // Class field initializers forbid 'arguments' in eval
 		}
 	}
 
 	// Create array mapping register index to variable name
 	localNames := make([]string, maxReg)
 
-	// Walk through the symbol table and map names to their registers
-	// Only include non-global symbols (locals)
-	c.collectLocalNames(c.currentSymbolTable, localNames)
+	// Use allLocalNames if available (tracks all variables including those from popped scopes)
+	// Otherwise fall back to walking the current symbol table
+	if len(c.allLocalNames) > 0 {
+		for reg, name := range c.allLocalNames {
+			if int(reg) < len(localNames) {
+				localNames[reg] = name
+			}
+		}
+	} else {
+		c.collectLocalNames(c.currentSymbolTable, localNames)
+	}
 
 	return &vm.ScopeDescriptor{
 		LocalNames:              localNames,
 		HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
 		InDefaultParameterScope: c.hasEvalInDefaultParam,
-		HasSuperBinding:         c.isMethodCompilation, // Methods have [[HomeObject]] for super
+		HasSuperBinding:         c.isMethodCompilation,        // Methods have [[HomeObject]] for super
+		InClassFieldInitializer: c.hasEvalInFieldInitializer,  // Class field initializers forbid 'arguments' in eval
 	}
 }
 
@@ -2569,6 +2697,14 @@ func (c *Compiler) collectLocalNames(st *SymbolTable, localNames []string) {
 	// Note: We don't recurse into outer scopes here because:
 	// 1. For function compilers, currentSymbolTable is the function's own scope
 	// 2. Outer scopes belong to enclosing functions (handled by upvalues, not direct access)
+}
+
+// trackLocalName records a local variable allocation in allLocalNames for ScopeDescriptor generation.
+// This must be called whenever a local (non-global) variable is defined with a register.
+func (c *Compiler) trackLocalName(name string, reg Register) {
+	if c.allLocalNames != nil && reg != nilRegister {
+		c.allLocalNames[reg] = name
+	}
 }
 
 // emitPlaceholderJump emits a jump instruction with a placeholder offset (0xFFFF).
@@ -3145,6 +3281,26 @@ func (c *Compiler) GetOrAssignGlobalIndex(name string) uint16 {
 	}
 
 	return uint16(idx)
+}
+
+// GlobalExists checks if a global variable with the given name has already been registered.
+// This is used to distinguish between existing globals and truly undeclared variables.
+func (c *Compiler) GlobalExists(name string) bool {
+	// Only top-level compiler manages global indices
+	topCompiler := c
+	for topCompiler.enclosing != nil {
+		topCompiler = topCompiler.enclosing
+	}
+
+	// Use heap allocator if available (new unified system)
+	if topCompiler.heapAlloc != nil {
+		_, exists := topCompiler.heapAlloc.GetIndex(name)
+		return exists
+	}
+
+	// Fall back to legacy system
+	_, exists := topCompiler.globalIndices[name]
+	return exists
 }
 
 // MarkVarGlobal registers a global index as a var declaration (non-configurable per ECMAScript)

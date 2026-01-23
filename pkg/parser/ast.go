@@ -608,6 +608,7 @@ type FunctionLiteral struct {
 	Name                 *Identifier      // Optional function name
 	IsGenerator          bool             // true for function* (generator functions)
 	IsAsync              bool             // true for async functions
+	IsFieldInitializer   bool             // true for class field initializer wrapper functions (eval forbids 'arguments')
 	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	Parameters           []*Parameter     // Regular parameters
 	RestParameter        *RestParameter   // Optional rest parameter (...args)
@@ -668,11 +669,12 @@ func (fl *FunctionLiteral) String() string {
 // Note: For now, only assignment to identifiers is supported.
 // <Left Expression (Identifier)> = <Value Expression>
 type AssignmentExpression struct {
-	BaseExpression             // Embed base for ComputedType (usually type of Value)
-	Token          lexer.Token // The assignment token (e.g., '=', '+=')
-	Operator       string      // The operator literal (e.g., "=", "+=")
-	Left           Expression  // The target of the assignment (must be Identifier for now)
-	Value          Expression  // The value being assigned
+	BaseExpression               // Embed base for ComputedType (usually type of Value)
+	Token            lexer.Token // The assignment token (e.g., '=', '+=')
+	Operator         string      // The operator literal (e.g., "=", "+=")
+	Left             Expression  // The target of the assignment (must be Identifier for now)
+	Value            Expression  // The value being assigned
+	IsFieldInitializer bool      // True for class field initializer assignments (eval forbids 'arguments')
 }
 
 func (ae *AssignmentExpression) expressionNode()      {}

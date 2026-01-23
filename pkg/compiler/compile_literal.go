@@ -188,6 +188,13 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	regSize := funcCompiler.regAlloc.MaxRegs()
 	functionChunk := funcCompiler.chunk
 
+	// Generate scope descriptor if this arrow function contains direct eval
+	if funcCompiler.hasDirectEval {
+		functionChunk.ScopeDesc = funcCompiler.generateScopeDescriptor()
+		debugPrintf("// [Compiler] Arrow function has direct eval, generated scope descriptor with %d locals\n",
+			len(functionChunk.ScopeDesc.LocalNames))
+	}
+
 	// <<< ADDED: Debug dump function bytecode >>>
 	if debugCompiler {
 		fmt.Printf("\n=== Function Bytecode: %s ===\n", funcCompiler.compilingFuncName)
@@ -418,6 +425,13 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	freeSymbols := funcCompiler.freeSymbols
 	regSize := funcCompiler.regAlloc.MaxRegs()
 	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot) // Set spill slots needed
+
+	// Generate scope descriptor if this arrow function contains direct eval
+	if funcCompiler.hasDirectEval {
+		functionChunk.ScopeDesc = funcCompiler.generateScopeDescriptor()
+		debugPrintf("// [Compiler] Arrow function '%s' has direct eval, generated scope descriptor with %d locals\n",
+			nameHint, len(functionChunk.ScopeDesc.LocalNames))
+	}
 
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, nameHint, functionChunk, false, node.IsAsync, true, funcCompiler.hasLocalCaptures)
 	constIdx := c.chunk.AddConstant(funcValue)
@@ -1024,6 +1038,13 @@ func (c *Compiler) compileFunctionLiteralAsMethod(node *parser.FunctionLiteral, 
 	return c.compileFunctionLiteralWithOptions(node, nameHint, true, true)
 }
 
+// compileFunctionLiteralAsFieldInitializer compiles a function literal as a class field initializer.
+// Field initializers are strict mode (class bodies are strict) and forbid 'arguments' access in eval.
+// This is used when wrapping class field initializer expressions in functions.
+func (c *Compiler) compileFunctionLiteralAsFieldInitializer(node *parser.FunctionLiteral, nameHint string) (uint16, []*Symbol, errors.PaseratiError) {
+	return c.compileFunctionLiteralWithOptions(node, nameHint, true, false, true)
+}
+
 // compileFunctionLiteralWithStrict compiles a function literal with optional forced strict mode
 func (c *Compiler) compileFunctionLiteralWithStrict(node *parser.FunctionLiteral, nameHint string, forceStrict bool) (uint16, []*Symbol, errors.PaseratiError) {
 	return c.compileFunctionLiteralWithOptions(node, nameHint, forceStrict, false)
@@ -1032,7 +1053,8 @@ func (c *Compiler) compileFunctionLiteralWithStrict(node *parser.FunctionLiteral
 // compileFunctionLiteralWithOptions compiles a function literal with configurable options
 // forceStrict: if true, function is compiled in strict mode (e.g., class methods)
 // isMethod: if true, function will have [[HomeObject]] for super property access
-func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLiteral, nameHint string, forceStrict bool, isMethod bool) (uint16, []*Symbol, errors.PaseratiError) {
+// isFieldInitializer: if true, function is a class field initializer (forbids 'arguments' in eval)
+func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLiteral, nameHint string, forceStrict bool, isMethod bool, isFieldInitializer ...bool) (uint16, []*Symbol, errors.PaseratiError) {
 	// 1. Create a new Compiler instance for the function body, linked to the current one
 	functionCompiler := newFunctionCompiler(c) // <<< Keep this instance variable
 
@@ -1041,6 +1063,15 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 
 	// 1.5. Set method compilation flag if this is a method (has [[HomeObject]])
 	functionCompiler.isMethodCompilation = isMethod
+
+	// 1.5a. Set class field initializer flag if specified via parameter or AST node
+	if len(isFieldInitializer) > 0 && isFieldInitializer[0] {
+		functionCompiler.isClassFieldInitializer = true
+	}
+	// Also check the AST node's IsFieldInitializer flag (set by injectFieldInitializers)
+	if node.IsFieldInitializer {
+		functionCompiler.isClassFieldInitializer = true
+	}
 
 	// 1.5. Set strict mode if forced (e.g., class methods are always strict per ECMAScript spec)
 	if forceStrict {
