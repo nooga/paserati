@@ -2535,6 +2535,23 @@ func isUnicodeIDStart(r rune) bool {
 		return true
 	}
 
+	// Unicode 17.0.0 ID_Start additions
+	if r == 0x088F { // Arabic Extended-B
+		return true
+	}
+	if r == 0x0C5C || r == 0x0C5D { // Telugu
+		return true
+	}
+	if r == 0x0CDC || r == 0x0CDD { // Kannada
+		return true
+	}
+	if r == 0xA7CE || r == 0xA7CF || r == 0xA7D2 || r == 0xA7D4 || r == 0xA7F1 { // Latin Extended-F
+		return true
+	}
+	if r >= 0x10940 && r <= 0x10948 { // Lydian Supplement (Unicode 17.0)
+		return true
+	}
+
 	return false
 }
 
@@ -2600,6 +2617,23 @@ func isUnicodeIDContinue(r rune) bool {
 		return true
 	}
 	if r >= 0x1E5EE && r <= 0x1E5FA { // Todhri marks
+		return true
+	}
+
+	// Unicode 17.0.0 ID_Continue ranges
+	if r >= 0x1ACF && r <= 0x1AEB { // Myanmar Extended-B (combining marks)
+		return true
+	}
+	if r >= 0x10EFA && r <= 0x10EFB { // Arabic Extended-C marks (Unicode 17.0)
+		return true
+	}
+	if r >= 0x11B60 && r <= 0x11B67 { // Ahom digits (Unicode 17.0)
+		return true
+	}
+	if r >= 0x11DE0 && r <= 0x11DE9 { // Masaram Gondi digits (Unicode 17.0)
+		return true
+	}
+	if r >= 0x1E6E0 && r <= 0x1E6F5 { // Mende Kikakui combining marks (Unicode 17.0)
 		return true
 	}
 
