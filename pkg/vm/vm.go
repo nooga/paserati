@@ -10438,6 +10438,16 @@ startExecution:
 				argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
 					frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
 				argsObj := NewArguments(args, calleeValue, argsIsStrict)
+
+				// Set Symbol.iterator as own property (same value as Array.prototype[Symbol.iterator])
+				// Per ES6 9.4.4.7 S22, arguments objects implement the Array iterator protocol
+				if vm.SymbolIterator.Type() == TypeSymbol && vm.ArrayPrototype.Type() == TypeObject {
+					arrProto := vm.ArrayPrototype.AsPlainObject()
+					if iterMethod, ok := arrProto.GetOwnByKey(NewSymbolKey(vm.SymbolIterator)); ok {
+						argsObj.AsArguments().SetSymbolProp(vm.SymbolIterator.AsSymbolObject(), iterMethod)
+					}
+				}
+
 				frame.argumentsObject = argsObj // Cache it for future accesses
 				frame.registers[destReg] = argsObj
 			}

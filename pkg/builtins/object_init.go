@@ -102,6 +102,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			case vm.TypeArray:
 				// Arrays: symbol own keys generally none here
 				return vm.BooleanValue(false), nil
+			case vm.TypeArguments:
+				// Arguments objects have own symbol properties (e.g., Symbol.iterator)
+				return vm.BooleanValue(thisValue.AsArguments().HasOwnSymbolProp(keyVal.AsSymbolObject())), nil
 			default:
 				return vm.BooleanValue(false), nil
 			}
@@ -2173,6 +2176,20 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		}
 	case vm.TypeArguments:
 		argsObj := obj.AsArguments()
+		// Handle symbol-keyed properties (e.g., Symbol.iterator)
+		if keyIsSymbol {
+			if v, ok := argsObj.GetSymbolProp(propSym.AsSymbolObject()); ok {
+				// Symbol.iterator is writable, non-enumerable, configurable per spec
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				descriptor.SetOwn("value", v)
+				descriptor.SetOwn("writable", vm.BooleanValue(true))
+				descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+				descriptor.SetOwn("configurable", vm.BooleanValue(true))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+			// Symbol property not found
+			return vm.Undefined, nil
+		}
 		// Handle numeric index or "length"
 		if propName == "length" {
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()

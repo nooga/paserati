@@ -162,10 +162,11 @@ type ArrayObject struct {
 
 type ArgumentsObject struct {
 	Object
-	length   int
-	args     []Value
-	callee   Value // The function that created this arguments object
-	isStrict bool  // Whether the arguments object is from strict mode code
+	length      int
+	args        []Value
+	callee      Value // The function that created this arguments object
+	isStrict    bool  // Whether the arguments object is from strict mode code
+	symbolProps map[*SymbolObject]Value // Symbol-keyed properties (e.g., Symbol.iterator)
 }
 
 // GeneratorState represents the execution state of a generator
@@ -668,6 +669,14 @@ func (v Value) AsSymbol() string {
 		panic("value is not a symbol")
 	}
 	return (*SymbolObject)(v.obj).value
+}
+
+// AsSymbolObject returns the underlying SymbolObject pointer for symbol values
+func (v Value) AsSymbolObject() *SymbolObject {
+	if v.typ != TypeSymbol {
+		panic("value is not a symbol")
+	}
+	return (*SymbolObject)(v.obj)
 }
 
 func (v Value) AsObject() *Object {
@@ -1932,6 +1941,32 @@ func (a *ArgumentsObject) Callee() Value {
 // IsStrict returns whether this arguments object is from strict mode code
 func (a *ArgumentsObject) IsStrict() bool {
 	return a.isStrict
+}
+
+// GetSymbolProp returns a symbol-keyed property from the arguments object
+func (a *ArgumentsObject) GetSymbolProp(sym *SymbolObject) (Value, bool) {
+	if a.symbolProps == nil {
+		return Undefined, false
+	}
+	v, ok := a.symbolProps[sym]
+	return v, ok
+}
+
+// SetSymbolProp sets a symbol-keyed property on the arguments object
+func (a *ArgumentsObject) SetSymbolProp(sym *SymbolObject, val Value) {
+	if a.symbolProps == nil {
+		a.symbolProps = make(map[*SymbolObject]Value)
+	}
+	a.symbolProps[sym] = val
+}
+
+// HasOwnSymbolProp checks if the arguments object has an own symbol property
+func (a *ArgumentsObject) HasOwnSymbolProp(sym *SymbolObject) bool {
+	if a.symbolProps == nil {
+		return false
+	}
+	_, ok := a.symbolProps[sym]
+	return ok
 }
 
 // MapObject methods

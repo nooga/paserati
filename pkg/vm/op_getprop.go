@@ -138,7 +138,18 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			*dest = Number(float64(argObj.Length()))
 			return true, InterpretOK, *dest
 		}
-		// Delegate to Object.prototype for inherited methods
+		if propName == "callee" {
+			if argObj.IsStrict() {
+				// In strict mode, accessing 'callee' throws TypeError
+				vm.throwException(NewString("TypeError: 'callee' may not be accessed in strict mode"))
+				return false, InterpretRuntimeError, Undefined
+			}
+			*dest = argObj.Callee()
+			return true, InterpretOK, *dest
+		}
+		// Delegate to Object.prototype for inherited methods (NOT Array.prototype)
+		// Arguments objects have [[Prototype]] = Object.prototype per ES spec
+		// Symbol.iterator is an OWN property, handled separately in opGetPropSymbol
 		if vm.ObjectPrototype.Type() == TypeObject {
 			objProto := vm.ObjectPrototype.AsPlainObject()
 			if method, exists := objProto.GetOwn(propName); exists {
@@ -1084,6 +1095,55 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 							*dest = v
 							if debugVM {
 								fmt.Printf("[DBG opGetPropSymbol] TypedArray proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+							}
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	case TypeArguments:
+		// Arguments objects: check own symbol properties first, then consult Array.prototype chain
+		argObj := base.AsArguments()
+		// Check own symbol property first (e.g., Symbol.iterator set during creation)
+		if v, ok := argObj.GetSymbolProp(symKey.AsSymbolObject()); ok {
+			*dest = v
+			if debugVM {
+				fmt.Printf("[DBG opGetPropSymbol] Arguments own[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+			}
+			return true, InterpretOK, *dest
+		}
+		// Fall back to Array.prototype chain for symbol properties
+		proto := vm.ArrayPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if debugVM {
+				fmt.Printf("[DBG opGetPropSymbol] Looking up Array.prototype=%p for arguments symbol %s\n", po, symKey.AsSymbol())
+			}
+			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+				*dest = v
+				if debugVM {
+					fmt.Printf("[DBG opGetPropSymbol] Array.prototype[%s] -> %s (%s) for arguments\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
+				}
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							if debugVM {
+								fmt.Printf("[DBG opGetPropSymbol] Arguments proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
 							}
 							return true, InterpretOK, *dest
 						}
