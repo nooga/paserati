@@ -1981,10 +1981,25 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 				builder.WriteByte('\v') // Vertical tab (U+000B)
 			case 'b':
 				builder.WriteByte('\b') // Backspace (U+0008)
-			case 'a':
-				builder.WriteByte('\a') // Alert/Bell (U+0007)
-			case '0':
-				builder.WriteByte('\000') // Null character (U+0000)
+			case '0', '1', '2', '3', '4', '5', '6', '7':
+				// Legacy octal escape sequence \0 through \377
+				// In non-strict mode, \0-\7 start octal sequences
+				octalValue := int(l.ch - '0')
+				// Check for more octal digits (up to 3 digits total)
+				for i := 0; i < 2; i++ {
+					next := l.peekChar()
+					if next >= '0' && next <= '7' {
+						newVal := octalValue*8 + int(next-'0')
+						if newVal > 255 {
+							break // Would overflow a byte, stop here
+						}
+						octalValue = newVal
+						l.readChar()
+					} else {
+						break
+					}
+				}
+				builder.WriteByte(byte(octalValue))
 			case '\n':
 				// Escaped newline: Already consumed by readChar before the switch.
 				// Line count was updated. Do nothing else.

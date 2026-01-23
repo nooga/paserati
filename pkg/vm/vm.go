@@ -4392,23 +4392,37 @@ startExecution:
 				hasGetter := getterVal.Type() != TypeUndefined
 				hasSetter := setterVal.Type() != TypeUndefined
 
-				// Set [[HomeObject]] on getter/setter for super property access
+				// Per ECMAScript, set function name property for getters/setters
+				// For symbols: "get [description]" or "set [description]" (or just "get "/"set " if no description)
+				symDesc := nameVal.AsSymbol()
+				var funcNameSuffix string
+				if symDesc == "" {
+					funcNameSuffix = ""
+				} else {
+					funcNameSuffix = "[" + symDesc + "]"
+				}
+
+				// Set [[HomeObject]] and function name on getter/setter for super property access
 				if hasGetter {
 					if getterVal.Type() == TypeClosure {
 						closure := getterVal.AsClosure()
 						closure.Fn.HomeObject = objVal
+						closure.Fn.Name = "get " + funcNameSuffix
 					} else if getterVal.Type() == TypeFunction {
 						funcObj := AsFunction(getterVal)
 						funcObj.HomeObject = objVal
+						funcObj.Name = "get " + funcNameSuffix
 					}
 				}
 				if hasSetter {
 					if setterVal.Type() == TypeClosure {
 						closure := setterVal.AsClosure()
 						closure.Fn.HomeObject = objVal
+						closure.Fn.Name = "set " + funcNameSuffix
 					} else if setterVal.Type() == TypeFunction {
 						funcObj := AsFunction(setterVal)
 						funcObj.HomeObject = objVal
+						funcObj.Name = "set " + funcNameSuffix
 					}
 				}
 
@@ -4454,23 +4468,29 @@ startExecution:
 			hasGetter := getterVal.Type() != TypeUndefined
 			hasSetter := setterVal.Type() != TypeUndefined
 
-			// Set [[HomeObject]] on getter/setter for super property access
+			// Per ECMAScript, set function name property for getters/setters
+			// For string keys: "get <propName>" or "set <propName>"
+			// Set [[HomeObject]] and function name on getter/setter for super property access
 			if hasGetter {
 				if getterVal.Type() == TypeClosure {
 					closure := getterVal.AsClosure()
 					closure.Fn.HomeObject = objVal
+					closure.Fn.Name = "get " + propName
 				} else if getterVal.Type() == TypeFunction {
 					funcObj := AsFunction(getterVal)
 					funcObj.HomeObject = objVal
+					funcObj.Name = "get " + propName
 				}
 			}
 			if hasSetter {
 				if setterVal.Type() == TypeClosure {
 					closure := setterVal.AsClosure()
 					closure.Fn.HomeObject = objVal
+					closure.Fn.Name = "set " + propName
 				} else if setterVal.Type() == TypeFunction {
 					funcObj := AsFunction(setterVal)
 					funcObj.HomeObject = objVal
+					funcObj.Name = "set " + propName
 				}
 			}
 

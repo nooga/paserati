@@ -778,8 +778,34 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 			c.regAlloc.Free(keyExprReg) // keyExprReg no longer needed after ToPropertyKey
 		}
 
-		// Handle MethodDefinition (getters/setters) specially
+		// Handle MethodDefinition (methods, getters/setters) specially
 		if methodDef, isMethodDef := prop.Value.(*parser.MethodDefinition); isMethodDef {
+			// Per ECMAScript, we need to set the function name BEFORE compiling
+			// Getter names are "get <propName>", setter names are "set <propName>", method names are just "<propName>"
+			// Extract property name for static keys to set function name
+			if !isComputedKey {
+				var propName string
+				switch keyNode := prop.Key.(type) {
+				case *parser.Identifier:
+					propName = keyNode.Value
+				case *parser.StringLiteral:
+					propName = keyNode.Value
+				case *parser.NumberLiteral:
+					propName = keyNode.TokenLiteral()
+				}
+				if propName != "" {
+					funcLit := methodDef.Value
+					if methodDef.Kind == "getter" {
+						funcLit.Name = &parser.Identifier{Token: funcLit.Token, Value: "get " + propName}
+					} else if methodDef.Kind == "setter" {
+						funcLit.Name = &parser.Identifier{Token: funcLit.Token, Value: "set " + propName}
+					} else {
+						// Regular method - name is just the property name
+						funcLit.Name = &parser.Identifier{Token: funcLit.Token, Value: propName}
+					}
+				}
+			}
+
 			// Compile the function value
 			valueReg := c.regAlloc.Alloc()
 			regsToFree = append(regsToFree, valueReg)
@@ -869,10 +895,50 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 			// Regular property value
 			valueReg := c.regAlloc.Alloc()
 			regsToFree = append(regsToFree, valueReg)
-			_, err := c.compileNode(prop.Value, valueReg)
-			if err != nil {
-				freePropertyRegs()
-				return BadRegister, err
+
+			// Per ECMAScript spec, if the value is an anonymous function/class,
+			// it should get the property name. This is NamedEvaluation for object properties.
+			// Only do this for static (non-computed) keys.
+			var valueCompiled bool
+			if !isComputedKey {
+				var propName string
+				switch keyNode := prop.Key.(type) {
+				case *parser.Identifier:
+					propName = keyNode.Value
+				case *parser.StringLiteral:
+					propName = keyNode.Value
+				case *parser.NumberLiteral:
+					propName = keyNode.TokenLiteral()
+				}
+				if propName != "" {
+					// Set function name for anonymous functions
+					if arrowFunc, ok := prop.Value.(*parser.ArrowFunctionLiteral); ok {
+						// Arrow function - compile with name hint
+						funcConstIndex, freeSymbols, compileErr := c.compileArrowFunctionWithName(arrowFunc, propName)
+						if compileErr != nil {
+							freePropertyRegs()
+							return BadRegister, compileErr
+						}
+						c.emitClosureGeneric(valueReg, funcConstIndex, arrowFunc.Token.Line, &parser.Identifier{Token: arrowFunc.Token, Value: propName}, freeSymbols)
+						valueCompiled = true
+					} else if funcLit, ok := prop.Value.(*parser.FunctionLiteral); ok {
+						if funcLit.Name == nil || funcLit.Name.Value == "" {
+							funcLit.Name = &parser.Identifier{Token: funcLit.Token, Value: propName}
+						}
+					} else if classExpr, ok := prop.Value.(*parser.ClassExpression); ok {
+						if classExpr.Name == nil {
+							classExpr.Name = &parser.Identifier{Token: classExpr.Token, Value: propName}
+						}
+					}
+				}
+			}
+
+			if !valueCompiled {
+				_, err := c.compileNode(prop.Value, valueReg)
+				if err != nil {
+					freePropertyRegs()
+					return BadRegister, err
+				}
 			}
 			debugPrintf("--- OL Value Compiled. valueReg: R%d\n", valueReg)
 
@@ -905,11 +971,13 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 
 			// Set the property based on whether it's computed or static
 			if isComputedKey {
-				// Check if this is a computed method (FunctionLiteral with computed key)
-				// Computed methods need [[HomeObject]] for super property access
+				// Check if this is a function/arrow with computed key
+				// These need [[HomeObject]] for super property access AND function name setting
 				_, isFuncLit := prop.Value.(*parser.FunctionLiteral)
-				if isFuncLit {
-					// Use OpDefineMethodComputedEnumerable to set [[HomeObject]] and make enumerable
+				_, isArrowFunc := prop.Value.(*parser.ArrowFunctionLiteral)
+				_, isClassExpr := prop.Value.(*parser.ClassExpression)
+				if isFuncLit || isArrowFunc || isClassExpr {
+					// Use OpDefineMethodComputedEnumerable to set [[HomeObject]], name, and make enumerable
 					c.emitDefineMethodComputedEnumerable(hint, valueReg, keyReg, line)
 				} else {
 					// Use OpSetIndex for computed keys: obj[keyReg] = valueReg
