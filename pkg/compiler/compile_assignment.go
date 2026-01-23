@@ -778,7 +778,51 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		// This block is reached if short-circuit didn't happen
 		rhsValueReg = c.regAlloc.Alloc()
 		operationTempRegs = append(operationTempRegs, rhsValueReg)
-		_, err := c.compileNode(node.Value, rhsValueReg)
+
+		// Function name inference for logical assignment to identifier:
+		// anonymous functions should inherit the variable name per ECMAScript spec
+		var err errors.PaseratiError
+		if lhsType == lhsIsIdentifier {
+			if ident, ok := node.Left.(*parser.Identifier); ok {
+				nameHint := ident.Value
+				// Check if RHS is an anonymous function that should inherit the name
+				if arrowFunc, ok := node.Value.(*parser.ArrowFunctionLiteral); ok {
+					// Arrow function - compile with name hint
+					funcConstIndex, freeSymbols, compileErr := c.compileArrowFunctionWithName(arrowFunc, nameHint)
+					if compileErr != nil {
+						return BadRegister, compileErr
+					}
+					// Emit closure into rhsValueReg
+					var body *parser.BlockStatement
+					if blockBody, ok := arrowFunc.Body.(*parser.BlockStatement); ok {
+						body = blockBody
+					} else {
+						body = &parser.BlockStatement{}
+					}
+					minimalFuncLit := &parser.FunctionLiteral{Body: body}
+					c.emitClosure(rhsValueReg, funcConstIndex, minimalFuncLit, freeSymbols)
+				} else if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
+					// Anonymous function literal - set name before compilation
+					if funcLit.Name == nil || funcLit.Name.Value == "" {
+						funcLit.Name = &parser.Identifier{Token: funcLit.Token, Value: nameHint}
+					}
+					_, err = c.compileNode(node.Value, rhsValueReg)
+				} else if classExpr, ok := node.Value.(*parser.ClassExpression); ok {
+					// Anonymous class expression - set name before compilation
+					if classExpr.Name == nil {
+						classExpr.Name = &parser.Identifier{Token: classExpr.Token, Value: nameHint}
+					}
+					_, err = c.compileNode(node.Value, rhsValueReg)
+				} else {
+					// Other RHS - compile normally
+					_, err = c.compileNode(node.Value, rhsValueReg)
+				}
+			} else {
+				_, err = c.compileNode(node.Value, rhsValueReg)
+			}
+		} else {
+			_, err = c.compileNode(node.Value, rhsValueReg)
+		}
 		if err != nil {
 			return BadRegister, err
 		}
