@@ -1715,7 +1715,20 @@ startExecution:
 
 			case OpEqual, OpNotEqual:
 				// Use Abstract Equality (==) per JS semantics with object-to-primitive conversion
+				// Save IP and use helperCallDepth for proper exception handling
+				frame.ip = ip
+				vm.helperCallDepth++
 				isEqual := vm.abstractEqual(leftVal, rightVal)
+				vm.helperCallDepth--
+				// Check if abstractEqual triggered an exception (e.g., valueOf/toString threw)
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+				// Check if exception was caught - need to jump to handler
+				if vm.handlerFound {
+					vm.handlerFound = false
+					goto reloadFrame
+				}
 				if opcode == OpEqual {
 					registers[destReg] = BooleanValue(isEqual)
 				} else {
@@ -12924,6 +12937,10 @@ func (vm *VM) abstractEqual(a, b Value) bool {
 		}
 		// Convert object to primitive with "default" hint
 		aPrim := vm.toPrimitive(a, "default")
+		// If toPrimitive threw an exception (e.g., valueOf threw), bail out
+		if vm.unwinding {
+			return false
+		}
 		return vm.abstractEqual(aPrim, b)
 	}
 	if b.IsObject() && !a.IsObject() {
@@ -12933,6 +12950,10 @@ func (vm *VM) abstractEqual(a, b Value) bool {
 		}
 		// Convert object to primitive with "default" hint
 		bPrim := vm.toPrimitive(b, "default")
+		// If toPrimitive threw an exception (e.g., valueOf threw), bail out
+		if vm.unwinding {
+			return false
+		}
 		return vm.abstractEqual(a, bPrim)
 	}
 

@@ -344,6 +344,8 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// String.prototype itself has [[PrimitiveValue]] = "" per ES spec
 	stringProto := vm.NewObject(objectProto).AsPlainObject()
 	stringProto.SetOwn("[[PrimitiveValue]]", vm.NewString(""))
+	// String.prototype.length should be 0 (length of empty string "")
+	stringProto.SetOwnNonEnumerable("length", vm.NumberValue(0))
 
 	// Add String prototype methods
 	stringProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {

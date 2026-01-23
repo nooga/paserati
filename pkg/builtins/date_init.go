@@ -62,6 +62,7 @@ func (d *DateInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("toLocaleString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toLocaleDateString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toLocaleTimeString", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("toUTCString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toJSON", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Number)).
 		WithProperty("constructor", types.Any). // Avoid circular reference, use Any for constructor property
@@ -509,6 +510,20 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			t := time.UnixMilli(int64(timestamp))
 			// Simple locale format - could be enhanced with actual locale support
 			return vm.NewString(t.Format("3:04:05 PM")), nil
+		}
+		return vm.NewString("Invalid Date"), nil
+	}))
+
+	// toUTCString - returns date in UTC timezone as RFC 7231 format
+	dateProto.SetOwnNonEnumerable("toUTCString", vm.NewNativeFunction(0, false, "toUTCString", func(args []vm.Value) (vm.Value, error) {
+		thisDate := vmInstance.GetThis()
+		if timestamp, ok := getDateTimestamp(thisDate); ok {
+			if math.IsNaN(timestamp) {
+				return vm.NewString("Invalid Date"), nil
+			}
+			t := time.UnixMilli(int64(timestamp)).UTC()
+			// Format: "Sun, 19 Jan 2025 10:30:00 GMT" (RFC 7231)
+			return vm.NewString(t.Format("Mon, 02 Jan 2006 15:04:05 GMT")), nil
 		}
 		return vm.NewString("Invalid Date"), nil
 	}))

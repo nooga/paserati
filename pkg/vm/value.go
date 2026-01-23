@@ -1773,11 +1773,12 @@ func IsFunction(v Value) bool { return v.IsFunction() }
 // AsFunction returns the FunctionObject pointer from a function template value.
 func AsFunction(v Value) *FunctionObject { return v.AsFunction() }
 
-// Helper for BigInt == String coercion - Now stricter
+// Helper for BigInt == String coercion per ECMAScript StringToBigInt
 func stringToBigInt(s string) (*big.Int, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return nil, false // Empty string is not a valid BigInt for == comparison (unlike ToNumber)
+		// Per ECMAScript spec, empty string (or whitespace-only) converts to 0n
+		return big.NewInt(0), true
 	}
 	// Use SetString with base 0 to detect 0x/0b/0o prefixes
 	i := new(big.Int)
