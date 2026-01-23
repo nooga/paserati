@@ -44,6 +44,9 @@ type Parser struct {
 
 	// Eval context flags
 	disallowSuper bool // When true, super expressions throw SyntaxError (for indirect eval)
+
+	// Arena allocator for AST nodes - reduces GC pressure
+	arena *ASTArena
 }
 
 // Parsing functions types for Pratt parser
@@ -195,6 +198,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 		l:      l,
 		source: l.GetSource(), // Cache source from lexer
 		errors: []errors.PaseratiError{},
+		arena:  NewASTArena(), // Initialize arena for AST node allocation
 	}
 
 	// Initialize Pratt parser maps for VALUE expressions
@@ -1536,7 +1540,8 @@ func (p *Parser) parseVarStatement() Statement {
 }
 
 func (p *Parser) parseReturnStatement() *ReturnStatement {
-	stmt := &ReturnStatement{Token: p.curToken}
+	stmt := p.arena.NewReturnStatement()
+	stmt.Token = p.curToken
 	returnLine := p.curToken.Line
 
 	// Check for ASI cases BEFORE consuming 'return':
@@ -1575,7 +1580,8 @@ func (p *Parser) parseReturnStatement() *ReturnStatement {
 }
 
 func (p *Parser) parseIfStatement() *IfStatement {
-	stmt := &IfStatement{Token: p.curToken} // 'if' token
+	stmt := p.arena.NewIfStatement()
+	stmt.Token = p.curToken // 'if' token
 
 	if !p.expectPeek(lexer.LPAREN) {
 		return nil
@@ -1721,7 +1727,9 @@ func (p *Parser) parseExpression(precedence int) Expression {
 // -- Prefix Parse Functions --
 
 func (p *Parser) parseIdentifier() Expression {
-	ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	ident := p.arena.NewIdentifier()
+	ident.Token = p.curToken
+	ident.Value = p.curToken.Literal
 	debugPrint("parseIdentifier (VALUE context): cur='%s', peek='%s' (%s)", p.curToken.Literal, p.peekToken.Literal, p.peekToken.Type)
 
 	// Check ONLY for shorthand arrow function `ident => body` in VALUE context
@@ -1742,7 +1750,8 @@ func (p *Parser) parseIdentifier() Expression {
 	return ident
 }
 func (p *Parser) parseNumberLiteral() Expression {
-	lit := &NumberLiteral{Token: p.curToken}
+	lit := p.arena.NewNumberLiteral()
+	lit.Token = p.curToken
 
 	rawLiteral := p.curToken.Literal
 	base := 10
@@ -1865,7 +1874,10 @@ func (p *Parser) parseBigIntLiteral() Expression {
 }
 
 func (p *Parser) parseStringLiteral() Expression {
-	return &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	lit := p.arena.NewStringLiteral()
+	lit.Token = p.curToken
+	lit.Value = p.curToken.Literal
+	return lit
 }
 
 // parseTemplateLiteral parses template literals with interpolations
@@ -1945,7 +1957,10 @@ func (p *Parser) parseTemplateLiteral() Expression {
 }
 
 func (p *Parser) parseBooleanLiteral() Expression {
-	return &BooleanLiteral{Token: p.curToken, Value: p.curTokenIs(lexer.TRUE)}
+	lit := p.arena.NewBooleanLiteral()
+	lit.Token = p.curToken
+	lit.Value = p.curTokenIs(lexer.TRUE)
+	return lit
 }
 
 func (p *Parser) parseNullLiteral() Expression {
@@ -3370,7 +3385,8 @@ func (p *Parser) parseSpreadElement() Expression {
 }
 
 func (p *Parser) parseBlockStatement() *BlockStatement {
-	block := &BlockStatement{Token: p.curToken} // The '{' token
+	block := p.arena.NewBlockStatement()
+	block.Token = p.curToken // The '{' token
 	block.Statements = []Statement{}
 	block.HoistedDeclarations = make(map[string]Expression) // Initialize map with Expression
 
@@ -3576,12 +3592,20 @@ func (p *Parser) expectPeekIdentifierOrKeyword() bool {
 // --- Error Handling ---
 
 func (p *Parser) peekError(t lexer.TokenType) {
+	// Fast path: skip formatting if we've hit the error limit
+	if len(p.errors) >= 1000 {
+		return
+	}
 	msg := fmt.Sprintf("expected next token to be %s, got %s instead",
 		t, p.peekToken.Type)
 	p.addError(p.peekToken, msg)
 }
 
 func (p *Parser) noPrefixParseFnError(t lexer.TokenType) {
+	// Fast path: skip formatting if we've hit the error limit
+	if len(p.errors) >= 1000 {
+		return
+	}
 	msg := fmt.Sprintf("no prefix parse function for %s found", t)
 	p.addError(p.curToken, msg)
 }
@@ -3605,10 +3629,9 @@ func (p *Parser) curPrecedence() int {
 
 // parsePrefixExpression handles expressions like !expr or -expr
 func (p *Parser) parsePrefixExpression() Expression {
-	expression := &PrefixExpression{
-		Token:    p.curToken,
-		Operator: p.curToken.Literal,
-	}
+	expression := p.arena.NewPrefixExpression()
+	expression.Token = p.curToken
+	expression.Operator = p.curToken.Literal
 
 	p.nextToken() // Consume the operator
 
@@ -4143,11 +4166,10 @@ func (p *Parser) parseInfixExpression(left Expression) Expression {
 	if debugParser {
 		debugPrint("parseInfixExpression: Starting. left=%T('%s'), cur='%s' (%s)", left, left.String(), p.curToken.Literal, p.curToken.Type)
 	}
-	expression := &InfixExpression{
-		Token:    p.curToken, // The operator token
-		Operator: p.curToken.Literal,
-		Left:     left,
-	}
+	expression := p.arena.NewInfixExpression()
+	expression.Token = p.curToken // The operator token
+	expression.Operator = p.curToken.Literal
+	expression.Left = left
 
 	// --- Associativity Fix ---
 	precedence := p.curPrecedence()
@@ -4200,7 +4222,9 @@ func (p *Parser) parseCommaExpression(left Expression) Expression {
 // parseCallExpression handles function calls like func(arg1, arg2)
 // NOTE: Type arguments are handled earlier in the parsing flow
 func (p *Parser) parseCallExpression(function Expression) Expression {
-	exp := &CallExpression{Token: p.curToken, Function: function}
+	exp := p.arena.NewCallExpression()
+	exp.Token = p.curToken
+	exp.Function = function
 	exp.Arguments = p.parseExpressionList(lexer.RPAREN)
 
 	// Detect direct eval calls: callee must be a plain Identifier with name "eval"
@@ -4565,10 +4589,9 @@ func (p *Parser) parseTernaryExpression(condition Expression) Expression {
 	if debugParser {
 		debugPrint("parseTernaryExpression starting with condition: %s", condition.String())
 	}
-	expr := &TernaryExpression{
-		Token:     p.curToken, // The '?' token
-		Condition: condition,
-	}
+	expr := p.arena.NewTernaryExpression()
+	expr.Token = p.curToken // The '?' token
+	expr.Condition = condition
 
 	p.nextToken() // Consume '?'
 
@@ -4631,11 +4654,10 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 	}
 
 	// Regular assignment expression
-	expr := &AssignmentExpression{
-		Token:    p.curToken,         // The assignment token (=, +=, etc.)
-		Operator: p.curToken.Literal, // Store the operator string
-		Left:     left,
-	}
+	expr := p.arena.NewAssignmentExpression()
+	expr.Token = p.curToken         // The assignment token (=, +=, etc.)
+	expr.Operator = p.curToken.Literal // Store the operator string
+	expr.Left = left
 
 	// Check if the left side is assignable using the shared utility function
 	if !p.isValidLValue(left) {
@@ -5693,7 +5715,8 @@ func (p *Parser) parseNonNullExpression(left Expression) Expression {
 
 // --- NEW: Array Literal Parsing ---
 func (p *Parser) parseArrayLiteral() Expression {
-	array := &ArrayLiteral{Token: p.curToken} // '['
+	array := p.arena.NewArrayLiteral()
+	array.Token = p.curToken // '['
 	debugPrint("parseArrayLiteral: start '['")
 	// Special-case sparse array literal of the form [,,] or with leading/trailing commas.
 	// parseExpressionList expects an element expression before commas; for sparse arrays,
@@ -5787,10 +5810,9 @@ func (p *Parser) parseIndexExpression(left Expression) Expression {
 // --- NEW: parseMemberExpression function ---
 func (p *Parser) parseMemberExpression(left Expression) Expression {
 	// Current token should be DOT
-	exp := &MemberExpression{
-		Token:  p.curToken, // The '.' token
-		Object: left,
-	}
+	exp := p.arena.NewMemberExpression()
+	exp.Token = p.curToken // The '.' token
+	exp.Object = left
 
 	// Set precedence for parsing the property identifier
 	// Member access has higher precedence than most operators
@@ -6072,11 +6094,9 @@ func (p *Parser) tryParseGenericTypeRef(name *Identifier) Expression {
 	}
 }
 func (p *Parser) parseObjectLiteral() Expression {
-	objLit := &ObjectLiteral{
-		Token: p.curToken, // The '{' token
-		// --- MODIFIED: Initialize slice ---
-		Properties: []*ObjectProperty{},
-	}
+	objLit := p.arena.NewObjectLiteral()
+	objLit.Token = p.curToken // The '{' token
+	objLit.Properties = []*ObjectProperty{}
 	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
 		p.nextToken() // Consume '{' or ',' to get to the key
 

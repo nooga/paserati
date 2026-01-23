@@ -79,11 +79,12 @@ type Field struct {
 }
 
 type Shape struct {
-	parent      *Shape
-	fields      []Field
-	transitions map[string]*Shape // keyed by PropertyKey.hash()
-	mu          sync.RWMutex      // Protects transitions map
-	version     uint32            // Bumped on any layout/flags change
+	parent            *Shape
+	fields            []Field
+	stringTransitions map[string]*Shape // Fast path: keyed by property name directly (string keys only)
+	transitions       map[string]*Shape // Slow path: keyed by PropertyKey.hash() (symbols, etc.)
+	mu                sync.RWMutex      // Protects transitions maps
+	version           uint32            // Bumped on any layout/flags change
 }
 
 type Object struct {
@@ -233,7 +234,7 @@ func (o *PlainObject) DeleteOwnByKey(key PropertyKey) bool {
 		newProps = append(newProps, o.properties[i])
 	}
 	// Create new shape without transitions for simplicity and bump version
-	o.shape = &Shape{parent: o.shape.parent, fields: newFields, transitions: make(map[string]*Shape), version: o.shape.version + 1}
+	o.shape = &Shape{parent: o.shape.parent, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: make(map[string]*Shape), version: o.shape.version + 1}
 	o.properties = newProps
 	return true
 }
@@ -254,19 +255,25 @@ func (o *PlainObject) IsOwnPropertyNonConfigurable(name string) (exists bool, no
 // If the property exists and is non-writable, this is a no-op.
 func (o *PlainObject) SetOwn(name string, v Value) {
 	cur := o.shape
-	// Compute hash once - avoid repeated string concatenation
-	hashKey := "s:" + name
 
-	// Fast path: check if we already have a transition for this property
-	// This means the property is NEW (not an update to existing)
+	// Fast path: check if we already have a transition for this string property
+	// Uses stringTransitions map directly - no string concatenation!
 	cur.mu.RLock()
-	next, hasTransition := cur.transitions[hashKey]
+	next, hasTransition := cur.stringTransitions[name]
 	cur.mu.RUnlock()
 
 	if hasTransition {
 		// Property doesn't exist yet, use the cached transition
 		o.shape = next
-		o.properties = append(o.properties, v)
+		// Optimize: if properties slice is small/nil, pre-allocate with extra capacity
+		// to avoid multiple growth allocations for typical objects (2-4 properties)
+		if cap(o.properties) < 4 {
+			newProps := make([]Value, len(o.properties), 4)
+			copy(newProps, o.properties)
+			o.properties = append(newProps, v)
+		} else {
+			o.properties = append(o.properties, v)
+		}
 		return
 	}
 
@@ -282,22 +289,38 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 	}
 
 	// new property: regular assignment semantics -> writable: true, enumerable: true, configurable: true
+	// Check under write lock first to avoid wasteful allocations
+	cur.mu.Lock()
+	// Double-check: another goroutine might have added this while we were scanning fields
+	if existing, exists := cur.stringTransitions[name]; exists {
+		cur.mu.Unlock()
+		o.shape = existing
+		if cap(o.properties) < 4 {
+			newProps := make([]Value, len(o.properties), 4)
+			copy(newProps, o.properties)
+			o.properties = append(newProps, v)
+		} else {
+			o.properties = append(o.properties, v)
+		}
+		return
+	}
+	// Actually need to create new shape - allocate only when necessary
 	off := len(cur.fields)
 	fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: true, enumerable: true, configurable: true}
 	newFields := make([]Field, len(cur.fields)+1)
 	copy(newFields, cur.fields)
 	newFields[len(cur.fields)] = fld
-	newTrans := make(map[string]*Shape)
-	next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
-	cur.mu.Lock()
-	if existing, exists := cur.transitions[hashKey]; exists {
-		next = existing
-	} else {
-		cur.transitions[hashKey] = next
-	}
+	next = &Shape{parent: cur, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: make(map[string]*Shape), version: cur.version + 1}
+	cur.stringTransitions[name] = next
 	cur.mu.Unlock()
 	o.shape = next
-	o.properties = append(o.properties, v)
+	if cap(o.properties) < 4 {
+		newProps := make([]Value, len(o.properties), 4)
+		copy(newProps, o.properties)
+		o.properties = append(newProps, v)
+	} else {
+		o.properties = append(o.properties, v)
+	}
 }
 
 // SetOwnNonEnumerable sets or defines an own property as non-enumerable (for built-in methods).
@@ -315,25 +338,29 @@ func (o *PlainObject) SetOwnNonEnumerable(name string, v Value) {
 	}
 	// new property: built-in assignment semantics -> writable: true, enumerable: false, configurable: true
 	cur := o.shape
-	// Compute hash once - avoid repeated string concatenation
-	hashKey := "s:" + name + "_nonenum" // Different hash to avoid collision with enumerable version
+	// Use transitions map with "ne:" prefix for non-enumerable (less common path)
+	hashKey := "ne:" + name
 	cur.mu.RLock()
 	next, ok := cur.transitions[hashKey]
 	cur.mu.RUnlock()
 	if !ok {
+		// Check under write lock first to avoid wasteful allocations
+		cur.mu.Lock()
+		// Double-check: another goroutine might have added this
+		if existing, exists := cur.transitions[hashKey]; exists {
+			cur.mu.Unlock()
+			o.shape = existing
+			o.properties = append(o.properties, v)
+			return
+		}
+		// Actually need to create new shape
 		off := len(cur.fields)
 		fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: true, enumerable: false, configurable: true}
 		newFields := make([]Field, len(cur.fields)+1)
 		copy(newFields, cur.fields)
 		newFields[len(cur.fields)] = fld
-		newTrans := make(map[string]*Shape)
-		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
-		cur.mu.Lock()
-		if existing, exists := cur.transitions[hashKey]; exists {
-			next = existing
-		} else {
-			cur.transitions[hashKey] = next
-		}
+		next = &Shape{parent: cur, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: make(map[string]*Shape), version: cur.version + 1}
+		cur.transitions[hashKey] = next
 		cur.mu.Unlock()
 	}
 	o.shape = next
@@ -413,7 +440,7 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 	newFields := make([]Field, len(cur.fields)+1)
 	copy(newFields, cur.fields)
 	newFields[len(cur.fields)] = fld
-	next := &Shape{parent: cur, fields: newFields, transitions: make(map[string]*Shape), version: cur.version + 1}
+	next := &Shape{parent: cur, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: make(map[string]*Shape), version: cur.version + 1}
 	o.shape = next
 	o.properties = append(o.properties, value)
 }
@@ -470,7 +497,7 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 	copy(newFields, cur.fields)
 	newFields[len(cur.fields)] = fld
 	newTrans := make(map[string]*Shape)
-	next := &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
+	next := &Shape{parent: cur, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: newTrans, version: cur.version + 1}
 	o.shape = next
 	// Ensure maps
 	if o.getters == nil {
@@ -550,7 +577,7 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 	newFields := make([]Field, len(cur.fields)+1)
 	copy(newFields, cur.fields)
 	newFields[len(cur.fields)] = fld
-	next := &Shape{parent: cur, fields: newFields, transitions: make(map[string]*Shape), version: cur.version + 1}
+	next := &Shape{parent: cur, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: make(map[string]*Shape), version: cur.version + 1}
 	o.shape = next
 	o.properties = append(o.properties, value)
 }
@@ -612,7 +639,7 @@ func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value,
 		copy(newFields, cur.fields)
 		newFields[len(cur.fields)] = fld
 		newTrans := make(map[string]*Shape)
-		next = &Shape{parent: cur, fields: newFields, transitions: newTrans, version: cur.version + 1}
+		next = &Shape{parent: cur, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: newTrans, version: cur.version + 1}
 		cur.mu.Lock()
 		if existing, exists := cur.transitions[key.hash()]; exists {
 			next = existing
@@ -1177,20 +1204,22 @@ var RootShape *Shape
 func init() {
 	// Initialize RootShape first
 	RootShape = &Shape{
-		fields:      []Field{},
-		transitions: make(map[string]*Shape),
+		fields:            []Field{},
+		stringTransitions: make(map[string]*Shape),
+		transitions:       make(map[string]*Shape),
 	}
 	// The default prototype is an object whose own prototype is Null.
 	protoObj := &PlainObject{prototype: Null, shape: RootShape}
 	DefaultObjectPrototype = Value{typ: TypeObject, obj: unsafe.Pointer(protoObj)}
 }
 
-// ClearShapeCache clears the global RootShape transition map to prevent memory bloat
+// ClearShapeCache clears the global RootShape transition maps to prevent memory bloat
 // This should be called periodically in test runners that create many short-lived VM instances
 func ClearShapeCache() {
 	if RootShape != nil {
 		RootShape.mu.Lock()
 		// Clear all transitions to allow GC to free the shape tree
+		RootShape.stringTransitions = make(map[string]*Shape)
 		RootShape.transitions = make(map[string]*Shape)
 		RootShape.mu.Unlock()
 	}
