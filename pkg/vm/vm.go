@@ -1174,7 +1174,7 @@ startExecution:
 			} else if IsNumber(srcVal) {
 				registers[destReg] = Number(-AsNumber(srcVal))
 			} else {
-				// For objects, call ToPrimitive first, then convert to number
+				// For objects, call ToPrimitive first, then negate appropriately
 				primVal := srcVal
 				if srcVal.IsObject() || srcVal.IsCallable() {
 					// Save IP before calling helper functions so exception handlers can be found
@@ -1192,8 +1192,14 @@ startExecution:
 						goto reloadFrame
 					}
 				}
-				numVal := primVal.ToFloat()
-				registers[destReg] = Number(-numVal)
+				// After ToPrimitive, check if result is BigInt
+				if primVal.IsBigInt() {
+					result := new(big.Int).Neg(primVal.AsBigInt())
+					registers[destReg] = NewBigInt(result)
+				} else {
+					numVal := primVal.ToFloat()
+					registers[destReg] = Number(-numVal)
+				}
 			}
 
 		case OpNot:
