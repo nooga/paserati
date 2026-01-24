@@ -706,10 +706,15 @@ func (c *Compiler) isExpressionInTailPosition(expr parser.Expression) bool {
 		// Tagged templates are function calls and can be in tail position
 		return true
 	case *parser.TernaryExpression:
-		// Both branches must be in tail position
-		return c.isExpressionInTailPosition(e.Consequence) && c.isExpressionInTailPosition(e.Alternative)
+		// Either branch being in tail position allows TCO for that branch
+		// (the non-call branch just returns normally)
+		return c.isExpressionInTailPosition(e.Consequence) || c.isExpressionInTailPosition(e.Alternative)
 	case *parser.InfixExpression:
-		// Only for short-circuit operators (&& || ??), and RHS must be in tail position
+		// For comma operator, only the rightmost expression is in tail position
+		if e.Operator == "," {
+			return c.isExpressionInTailPosition(e.Right)
+		}
+		// For short-circuit operators (&& || ??), RHS may be in tail position
 		if e.Operator == "&&" || e.Operator == "||" || e.Operator == "??" {
 			return c.isExpressionInTailPosition(e.Right)
 		}

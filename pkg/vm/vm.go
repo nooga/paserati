@@ -3009,8 +3009,8 @@ startExecution:
 			propName := nameVal.AsString()
 
 			found := false
-			for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
-				withObj := vm.withObjectStack[i]
+			// Helper to check a with-object for the property
+			checkWithObj := func(withObj Value) bool {
 				if withObj.Type() == TypeObject {
 					obj := withObj.AsPlainObject()
 					if obj.HasOwn(propName) {
@@ -3025,16 +3025,33 @@ startExecution:
 							}
 						}
 						if isUnscopable {
-							continue
+							return false // continue searching
 						}
 						// Use GetProperty to properly handle getters
 						propVal, err := vm.GetProperty(withObj, propName)
 						if err != nil {
 							frame.ip = ip
-							status := vm.runtimeError("Error getting property: %v", err)
-							return status, Undefined
+							vm.runtimeError("Error getting property: %v", err)
+							return false
 						}
 						registers[destReg] = propVal
+						return true // found
+					}
+				}
+				return false
+			}
+
+			// First check current with-object stack (dynamic scope)
+			for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
+				if checkWithObj(vm.withObjectStack[i]) {
+					found = true
+					break
+				}
+			}
+			// If not found, check closure's captured with-objects (lexical scope)
+			if !found && closure != nil && len(closure.WithObjects) > 0 {
+				for i := len(closure.WithObjects) - 1; i >= 0; i-- {
+					if checkWithObj(closure.WithObjects[i]) {
 						found = true
 						break
 					}
@@ -3895,6 +3912,13 @@ startExecution:
 			// Set the function's [[Prototype]] to Function.prototype
 			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
 				cl.Fn.Prototype = vm.FunctionPrototype
+				// Capture with-object stack if we're inside a with block
+				// This allows closures to resolve identifiers through the with-object
+				// even after the with block has finished executing
+				if len(vm.withObjectStack) > 0 {
+					cl.WithObjects = make([]Value, len(vm.withObjectStack))
+					copy(cl.WithObjects, vm.withObjectStack)
+				}
 				// For arrow functions, capture the current 'this' value (lexical this binding)
 				// and the super constructor for super() calls
 				if cl.Fn.IsArrowFunction {
@@ -4013,6 +4037,13 @@ startExecution:
 			// Set the function's [[Prototype]] to Function.prototype
 			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
 				cl.Fn.Prototype = vm.FunctionPrototype
+				// Capture with-object stack if we're inside a with block
+				// This allows closures to resolve identifiers through the with-object
+				// even after the with block has finished executing
+				if len(vm.withObjectStack) > 0 {
+					cl.WithObjects = make([]Value, len(vm.withObjectStack))
+					copy(cl.WithObjects, vm.withObjectStack)
+				}
 				// For arrow functions, capture the current 'this' value (lexical this binding)
 				// and the super constructor for super() calls
 				if cl.Fn.IsArrowFunction {

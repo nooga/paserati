@@ -988,6 +988,30 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			}
 		}
 
+		// For comma operator, only the right operand is in tail position
+		// Clear tail position for left operand
+		if node.Operator == "," {
+			oldTailPos := c.inTailPosition
+			c.inTailPosition = false
+			leftReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, leftReg)
+			_, err := c.compileNode(node.Left, leftReg)
+			c.inTailPosition = oldTailPos
+			if err != nil {
+				return BadRegister, err
+			}
+			// Right operand keeps tail position
+			rightReg := c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, rightReg)
+			_, err = c.compileNode(node.Right, rightReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			// Comma operator: return the right one
+			c.emitMove(hint, rightReg, line)
+			return hint, nil
+		}
+
 		leftReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, leftReg)
 		_, err := c.compileNode(node.Left, leftReg)
@@ -1054,12 +1078,6 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			c.emitUnsignedShiftRight(hint, leftReg, rightReg, line)
 		// --- END NEW ---
 
-		case ",":
-			// Comma operator: evaluate both expressions, return the right one
-			// Left expression is already compiled (for side effects)
-			// Right expression is already compiled - just return it
-			// The comma operator returns the value of the right operand
-			c.emitMove(hint, rightReg, line)
 		default:
 			return BadRegister, NewCompileError(node, fmt.Sprintf("unknown standard infix operator '%s'", node.Operator))
 		}
@@ -1745,6 +1763,11 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		isGlobalEval := true
 		if symbol, _, ok := c.currentSymbolTable.Resolve("eval"); ok && !symbol.IsGlobal {
 			// "eval" is a local variable, not the global eval
+			isGlobalEval = false
+		}
+		// Inside a with block (including inherited from enclosing with), "eval" could be shadowed by a property
+		// on the with-object. We can't know at compile time, so treat it as a regular call (resolved at runtime)
+		if c.withBlockDepth > 0 {
 			isGlobalEval = false
 		}
 		if isGlobalEval {
