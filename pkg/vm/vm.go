@@ -3337,7 +3337,11 @@ startExecution:
 						// Undeclared variable in strict mode should throw ReferenceError
 						isStrict := function != nil && function.Chunk != nil && function.Chunk.IsStrict
 						if isStrict {
-							vm.runtimeError("ReferenceError: %s is not defined", propName)
+							frame.ip = ip
+							vm.ThrowReferenceError(fmt.Sprintf("%s is not defined", propName))
+							if !vm.unwinding {
+								goto reloadFrame
+							}
 							return InterpretRuntimeError, Undefined
 						}
 						// In non-strict mode, create implicit global by adding to global object
@@ -3369,7 +3373,11 @@ startExecution:
 						}
 					}
 					if !stillExists {
-						vm.runtimeError("ReferenceError: Cannot assign to deleted binding '%s' in strict mode", propName)
+						frame.ip = ip
+						vm.ThrowReferenceError(fmt.Sprintf("Cannot assign to deleted binding '%s' in strict mode", propName))
+						if !vm.unwinding {
+							goto reloadFrame
+						}
 						return InterpretRuntimeError, Undefined
 					}
 				}

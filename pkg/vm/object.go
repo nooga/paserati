@@ -236,6 +236,17 @@ func (o *PlainObject) DeleteOwnByKey(key PropertyKey) bool {
 	// Create new shape without transitions for simplicity and bump version
 	o.shape = &Shape{parent: o.shape.parent, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: make(map[string]*Shape), version: o.shape.version + 1}
 	o.properties = newProps
+
+	// If the deleted field was an accessor, also remove the getter/setter from the maps
+	if f.isAccessor {
+		keyHash := key.hash()
+		if o.getters != nil {
+			delete(o.getters, keyHash)
+		}
+		if o.setters != nil {
+			delete(o.setters, keyHash)
+		}
+	}
 	return true
 }
 
