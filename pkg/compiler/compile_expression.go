@@ -1736,16 +1736,10 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		return c.compileSuperConstructorCall(node, hint, &tempRegs)
 	}
 
-	// Check if any argument uses spread syntax - must come BEFORE direct eval check
-	// because eval(...spread) should be handled as a normal spread call (indirect eval)
-	hasSpread := c.hasSpreadArgument(node.Arguments)
-	if hasSpread {
-		return c.compileSpreadCallExpression(node, hint, &tempRegs)
-	}
-
 	// Check if this is a direct eval call - needs special opcode for scope access
-	// Note: This only triggers for non-spread direct eval like eval("code")
-	// Also, we need to verify that "eval" refers to the global eval, not a shadowed local variable.
+	// Per ECMAScript, eval(...spread) is STILL a direct eval call - the spread only affects
+	// how arguments are evaluated, not the direct/indirect semantics.
+	// We need to verify that "eval" refers to the global eval, not a shadowed local variable.
 	if node.IsDirectEval {
 		// Check if "eval" is shadowed by a local variable
 		isGlobalEval := true
@@ -1758,6 +1752,12 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			return c.compileDirectEval(node, hint, &tempRegs)
 		}
 		// Fall through to treat as a regular call (indirect eval behavior)
+	}
+
+	// Check if any argument uses spread syntax - for non-direct-eval calls
+	hasSpread := c.hasSpreadArgument(node.Arguments)
+	if hasSpread {
+		return c.compileSpreadCallExpression(node, hint, &tempRegs)
 	}
 
 	// Check if this is a method call (function is a member expression like obj.method() or obj[key]())
@@ -3808,12 +3808,13 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 	return hint, nil
 }
 
-// compileDirectEval handles direct eval calls: eval(code)
+// compileDirectEval handles direct eval calls: eval(code) or eval(...spread)
 // Direct eval is distinguished from indirect eval by the parser (IsDirectEval flag).
+// Per ECMAScript, eval(...spread) is still a direct eval - we evaluate all arguments
+// with spread semantics, then use only the first element.
 // It generates OpDirectEval which allows the VM to:
 // 1. Inherit strict mode from the caller
 // 2. Access the caller's local scope (Phase 3)
-// For now, we still compile as a regular call but with the special opcode.
 func (c *Compiler) compileDirectEval(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
@@ -3830,7 +3831,50 @@ func (c *Compiler) compileDirectEval(node *parser.CallExpression, hint Register,
 		c.hasEvalInFieldInitializer = true
 	}
 
-	// Direct eval takes exactly one argument (the code string)
+	// Check if we have spread arguments
+	hasSpread := c.hasSpreadArgument(node.Arguments)
+
+	if hasSpread {
+		// Per ECMAScript 12.3.4.1: For direct eval with spread, we:
+		// 1. Evaluate ArgumentListEvaluation (which handles spread)
+		// 2. If argList has no elements, return undefined
+		// 3. Use the first element of argList as evalText
+
+		// Build the arguments array using the same pattern as compileMultiSpreadCall
+		argsArrayReg := c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, argsArrayReg)
+
+		// Create an array literal node to compile (handles spread elements automatically)
+		arrayLiteral := &parser.ArrayLiteral{
+			Elements: node.Arguments,
+			Token:    node.Token,
+		}
+
+		_, err := c.compileArrayLiteral(arrayLiteral, argsArrayReg)
+		if err != nil {
+			return BadRegister, err
+		}
+
+		// Get the first element (index 0) from the array
+		codeReg := c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, codeReg)
+		zeroReg := c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, zeroReg)
+		c.emitLoadNewConstant(zeroReg, vm.IntegerValue(0), line)
+		c.emitOpCode(vm.OpGetIndex, line)
+		c.emitByte(byte(codeReg))      // dest
+		c.emitByte(byte(argsArrayReg)) // array
+		c.emitByte(byte(zeroReg))      // index
+
+		// Emit OpDirectEval with the first element
+		c.chunk.WriteOpCode(vm.OpDirectEval, line)
+		c.chunk.EmitByte(byte(hint))
+		c.chunk.EmitByte(byte(codeReg))
+
+		return hint, nil
+	}
+
+	// Non-spread case: Direct eval takes exactly one argument (the code string)
 	// If no arguments, it returns undefined
 	// If more than one argument, extra arguments are ignored
 	if len(node.Arguments) == 0 {
