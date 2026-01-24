@@ -578,6 +578,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		lvalueIdentifier lvalueType = iota
 		lvalueMemberExpr
 		lvalueIndexExpr
+		lvalueWithProperty // For identifiers inside with blocks
 	)
 
 	var lvalueKind lvalueType
@@ -600,55 +601,89 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		arrayReg Register
 		indexReg Register
 	}
+	// Information for with-property lvalue (captures binding BEFORE loading value)
+	var withInfo struct {
+		nameConstIdx uint16
+		localReg     Register // 255 means no local fallback
+		bindingReg   Register // Pre-resolved binding index
+	}
 
 	// 1. Determine lvalue type and load current value
 	switch argNode := node.Argument.(type) {
 	case *parser.Identifier:
-		lvalueKind = lvalueIdentifier
-		// Resolve identifier and determine if local or upvalue
-		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(argNode.Value)
-		if !found {
-			// Variable not found in symbol table
-			// In JavaScript mode, treat as potential global variable (will throw ReferenceError at runtime if doesn't exist)
-			// In TypeScript mode, this is a compile error
-			// For now, treat as global and let runtime handle it
-			globalIdx := c.GetOrAssignGlobalIndex(argNode.Value)
-			identInfo.isGlobal = true
-			identInfo.globalIndex = globalIdx
+		// First check if we're inside a with block - use Reference semantics with binding capture
+		withPropInfo := c.getWithPropertyInfo(argNode)
+		if withPropInfo.UseWithProperty {
+			lvalueKind = lvalueWithProperty
+			withInfo.nameConstIdx = c.chunk.AddConstant(vm.String(argNode.Value))
+
+			if withPropInfo.HasLocalFallback {
+				withInfo.localReg = withPropInfo.LocalReg
+			} else {
+				withInfo.localReg = 255 // Sentinel: no local, fall back to global
+			}
+
+			// Capture the binding BEFORE loading the value (required by ECMAScript spec for Reference semantics)
+			// This determines whether to use with-object or local at the START of the update operation
+			withInfo.bindingReg = c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, withInfo.bindingReg)
+			c.emitResolveWithBinding(withInfo.bindingReg, int(withInfo.nameConstIdx), withInfo.localReg, line)
+
+			// Now load the current value using OpGetWithOrLocal or OpGetWithProperty
 			currentValueReg = c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, currentValueReg)
-			c.emitGetGlobal(currentValueReg, globalIdx, line)
-		} else if symbolRef.IsConst {
-			// Cannot update a const variable - emit TypeError
-			c.emitConstAssignmentError(argNode.Value, line)
-			return hint, nil
-		} else if symbolRef.IsGlobal {
-			// Global variable: Load current value with OpGetGlobal
-			identInfo.isGlobal = true
-			identInfo.globalIndex = symbolRef.GlobalIndex
-			currentValueReg = c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, currentValueReg)
-			c.emitGetGlobal(currentValueReg, symbolRef.GlobalIndex, line)
-		} else if definingTable == c.currentSymbolTable {
-			// Local variable in current scope
-			identInfo.targetReg = symbolRef.Register
-			identInfo.isUpvalue = false
-			identInfo.isGlobal = false
-			currentValueReg = identInfo.targetReg // Current value is already in targetReg
-		} else if c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
-			// Variable defined in outer function: treat as upvalue
-			identInfo.isUpvalue = true
-			identInfo.isGlobal = false
-			identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
-			currentValueReg = c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, currentValueReg)
-			c.emitLoadFree(currentValueReg, identInfo.upvalueIndex, line)
+			if withPropInfo.HasLocalFallback {
+				c.emitGetWithOrLocal(currentValueReg, int(withInfo.nameConstIdx), withPropInfo.LocalReg, line)
+			} else {
+				c.emitGetWithProperty(currentValueReg, int(withInfo.nameConstIdx), line)
+			}
 		} else {
-			// Variable in outer block scope of same function (or at top level): access directly via register
-			identInfo.targetReg = symbolRef.Register
-			identInfo.isUpvalue = false
-			identInfo.isGlobal = false
-			currentValueReg = identInfo.targetReg // Current value is already in targetReg
+			lvalueKind = lvalueIdentifier
+			// Resolve identifier and determine if local or upvalue
+			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(argNode.Value)
+			if !found {
+				// Variable not found in symbol table
+				// In JavaScript mode, treat as potential global variable (will throw ReferenceError at runtime if doesn't exist)
+				// In TypeScript mode, this is a compile error
+				// For now, treat as global and let runtime handle it
+				globalIdx := c.GetOrAssignGlobalIndex(argNode.Value)
+				identInfo.isGlobal = true
+				identInfo.globalIndex = globalIdx
+				currentValueReg = c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, currentValueReg)
+				c.emitGetGlobal(currentValueReg, globalIdx, line)
+			} else if symbolRef.IsConst {
+				// Cannot update a const variable - emit TypeError
+				c.emitConstAssignmentError(argNode.Value, line)
+				return hint, nil
+			} else if symbolRef.IsGlobal {
+				// Global variable: Load current value with OpGetGlobal
+				identInfo.isGlobal = true
+				identInfo.globalIndex = symbolRef.GlobalIndex
+				currentValueReg = c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, currentValueReg)
+				c.emitGetGlobal(currentValueReg, symbolRef.GlobalIndex, line)
+			} else if definingTable == c.currentSymbolTable {
+				// Local variable in current scope
+				identInfo.targetReg = symbolRef.Register
+				identInfo.isUpvalue = false
+				identInfo.isGlobal = false
+				currentValueReg = identInfo.targetReg // Current value is already in targetReg
+			} else if c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+				// Variable defined in outer function: treat as upvalue
+				identInfo.isUpvalue = true
+				identInfo.isGlobal = false
+				identInfo.upvalueIndex = c.addFreeSymbol(node, &symbolRef)
+				currentValueReg = c.regAlloc.Alloc()
+				tempRegs = append(tempRegs, currentValueReg)
+				c.emitLoadFree(currentValueReg, identInfo.upvalueIndex, line)
+			} else {
+				// Variable in outer block scope of same function (or at top level): access directly via register
+				identInfo.targetReg = symbolRef.Register
+				identInfo.isUpvalue = false
+				identInfo.isGlobal = false
+				currentValueReg = identInfo.targetReg // Current value is already in targetReg
+			}
 		}
 
 	case *parser.MemberExpression:
@@ -819,6 +854,16 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		c.emitLoadNumericOne(constOneReg, numericValueReg, line)
 	}
 
+	// Helper to store back to lvalue, handling with-property specially
+	storeBack := func(valueReg Register) {
+		if lvalueKind == lvalueWithProperty {
+			// Use pre-resolved binding for proper Reference semantics
+			c.emitSetWithByBinding(int(withInfo.nameConstIdx), valueReg, withInfo.localReg, withInfo.bindingReg, line)
+		} else {
+			c.storeToLvalue(int(lvalueKind), identInfo, memberInfo, indexInfo, valueReg, line)
+		}
+	}
+
 	// 4. Perform Pre/Post logic using hint as result register
 	if node.Prefix {
 		// Prefix (++x or --x):
@@ -830,7 +875,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 			c.emitSubtract(numericValueReg, numericValueReg, constOneReg, line)
 		}
 		// b. Store back to lvalue (now holds incremented number)
-		c.storeToLvalue(int(lvalueKind), identInfo, memberInfo, indexInfo, numericValueReg, line)
+		storeBack(numericValueReg)
 		// c. Result of expression is the *new* value - move to hint
 		c.emitMove(hint, numericValueReg, line)
 
@@ -846,7 +891,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 			c.emitSubtract(numericValueReg, numericValueReg, constOneReg, line)
 		}
 		// c. Store back to lvalue (now holds incremented number)
-		c.storeToLvalue(int(lvalueKind), identInfo, memberInfo, indexInfo, numericValueReg, line)
+		storeBack(numericValueReg)
 		// d. Result of expression is the *original* numeric value (already in hint)
 	}
 
