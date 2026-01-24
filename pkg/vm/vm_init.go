@@ -397,6 +397,28 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 	}
 }
 
+// SetProperty sets a property on an object value, properly handling setters
+// This is safe to call from native functions and will trigger property setters/throw exceptions
+func (vm *VM) SetProperty(obj Value, propName string, value Value) error {
+	switch obj.Type() {
+	case TypeObject:
+		po := obj.AsPlainObject()
+		// Check if it's an accessor (setter)
+		if _, s, _, _, ok := po.GetOwnAccessor(propName); ok && s.Type() != TypeUndefined {
+			// Call the setter with this=obj
+			_, err := vm.Call(s, obj, []Value{value})
+			return err
+		}
+		// Not an accessor, set as regular property
+		po.SetOwn(propName, value)
+		return nil
+
+	default:
+		// For non-objects, this is a no-op (or could throw in strict mode)
+		return nil
+	}
+}
+
 // GetSymbolPropertyWithGetter gets a symbol property from an object value, handling getters and prototype chain
 // This is safe to call from native functions and will trigger property getters/throw exceptions
 func (vm *VM) GetSymbolPropertyWithGetter(obj Value, symbol Value) (Value, bool, error) {

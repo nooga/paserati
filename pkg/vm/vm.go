@@ -182,6 +182,10 @@ type VM struct {
 	// This matches ECMAScript spec behavior
 	GlobalObject *PlainObject
 
+	// Track which global indices had their value read from GlobalObject
+	// This is used by OpSetGlobal to determine if a deleted property error should be thrown
+	globalsFromGlobalObject map[uint16]bool
+
 	// Singleton empty array for rest parameters optimization
 	// Used when variadic functions are called with no extra arguments
 	emptyRestArray Value
@@ -377,15 +381,16 @@ func dumpFrameStack(vm *VM, context string) {
 func NewVM() *VM {
 	vm := &VM{
 		// frameCount and nextRegSlot initialized to 0
-		openUpvalues:    make([]*Upvalue, 0, 16),         // Pre-allocate slightly
-		openUpvalueMap:  make(map[*Value]*Upvalue, 16),   // Map for O(1) lookup
-		propCache:       make(map[int]*PropInlineCache),  // Initialize inline cache
-		cacheStats:      ICacheStats{},                   // Initialize cache statistics
-		heap:            NewHeap(64),                     // Initialize unified global heap
-		emptyRestArray:  NewArray(),                      // Initialize singleton empty array for rest params
-		errors:          make([]errors.PaseratiError, 0), // Initialize error list
-		moduleContexts:  make(map[string]*ModuleContext), // Initialize module context cache
-		completionStack: make([]Completion, 0, 4),        // Initialize completion stack
+		openUpvalues:            make([]*Upvalue, 0, 16),         // Pre-allocate slightly
+		openUpvalueMap:          make(map[*Value]*Upvalue, 16),   // Map for O(1) lookup
+		propCache:               make(map[int]*PropInlineCache),  // Initialize inline cache
+		cacheStats:              ICacheStats{},                   // Initialize cache statistics
+		heap:                    NewHeap(64),                     // Initialize unified global heap
+		emptyRestArray:          NewArray(),                      // Initialize singleton empty array for rest params
+		errors:                  make([]errors.PaseratiError, 0), // Initialize error list
+		moduleContexts:          make(map[string]*ModuleContext), // Initialize module context cache
+		completionStack:         make([]Completion, 0, 4),        // Initialize completion stack
+		globalsFromGlobalObject: make(map[uint16]bool),           // Track globals read from GlobalObject
 	}
 
 	// Initialize built-in prototypes first
@@ -9318,6 +9323,32 @@ startExecution:
 
 			// Use unified global heap
 			value, exists := vm.heap.Get(int(globalIdx))
+
+			// If not in heap, also check GlobalObject (for properties set via Object.defineProperty(this, ...))
+			if !exists && vm.GlobalObject != nil {
+				varName := vm.heap.GetNameByIndex(int(globalIdx))
+				if varName != "" && vm.GlobalObject.HasOwn(varName) {
+					// Get from GlobalObject - use GetProperty to handle getters
+					frame.ip = ip
+					vm.helperCallDepth++
+					propVal, err := vm.GetProperty(NewValueFromPlainObject(vm.GlobalObject), varName)
+					vm.helperCallDepth--
+					if vm.unwinding {
+						return InterpretRuntimeError, Undefined
+					}
+					if vm.handlerFound {
+						vm.handlerFound = false
+						goto reloadFrame
+					}
+					if err == nil {
+						value = propVal
+						exists = true
+						// Track that this global was read from GlobalObject (for strict mode delete detection)
+						vm.globalsFromGlobalObject[globalIdx] = true
+					}
+				}
+			}
+
 			if !exists {
 				// Throw ReferenceError for unresolvable global with variable name
 				frame.ip = ip
@@ -9381,7 +9412,8 @@ startExecution:
 			ip += 3
 
 			// TDZ check: throw ReferenceError if trying to set an uninitialized let/const variable
-			if currentVal, exists := vm.heap.Get(int(globalIdx)); exists && currentVal.typ == TypeUninitialized {
+			currentVal, heapExists := vm.heap.Get(int(globalIdx))
+			if heapExists && currentVal.typ == TypeUninitialized {
 				frame.ip = ip
 				varName := vm.heap.GetNameByIndex(int(globalIdx))
 				if varName == "" {
@@ -9396,6 +9428,43 @@ startExecution:
 
 			// Use module-scoped global table
 			value := registers[srcReg]
+
+			// Per ECMAScript 9.1.1.1.5 SetMutableBinding:
+			// In strict mode, if the binding doesn't exist (was deleted), throw ReferenceError
+			// This handles the case where a GlobalObject property was deleted by a getter
+			// Only apply this check if we previously read this global from GlobalObject (not a declared variable)
+			isStrict := function != nil && function.Chunk != nil && function.Chunk.IsStrict
+			if isStrict && !heapExists && vm.globalsFromGlobalObject[globalIdx] {
+				varName := vm.heap.GetNameByIndex(int(globalIdx))
+				if varName != "" && vm.GlobalObject != nil {
+					// Check if property exists on GlobalObject
+					if !vm.GlobalObject.HasOwn(varName) {
+						frame.ip = ip
+						vm.ThrowReferenceError(fmt.Sprintf("Cannot assign to deleted binding '%s' in strict mode", varName))
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
+						}
+						goto reloadFrame
+					}
+					// Property exists on GlobalObject - set it there (with setter support)
+					frame.ip = ip
+					vm.helperCallDepth++
+					err := vm.SetProperty(NewValueFromPlainObject(vm.GlobalObject), varName, value)
+					vm.helperCallDepth--
+					if vm.unwinding {
+						return InterpretRuntimeError, Undefined
+					}
+					if vm.handlerFound {
+						vm.handlerFound = false
+						goto reloadFrame
+					}
+					if err != nil {
+						vm.runtimeError("Error setting property: %v", err)
+						return InterpretRuntimeError, Undefined
+					}
+					continue // Don't also set in heap
+				}
+			}
 
 			// NUCLEAR DEBUG for fnGlobalObject
 			if value.IsFunction() {

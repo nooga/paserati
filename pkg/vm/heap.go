@@ -223,6 +223,19 @@ func (h *Heap) UpdateNameToIndex(newMappings map[string]int) {
 	if h.nameToIndex == nil {
 		h.nameToIndex = make(map[string]int, len(newMappings))
 	}
+
+	// Find the maximum index and resize the heap if needed
+	// This ensures configurable/initialized slices are properly sized
+	maxIndex := -1
+	for _, idx := range newMappings {
+		if idx > maxIndex {
+			maxIndex = idx
+		}
+	}
+	if maxIndex >= 0 && maxIndex >= len(h.configurable) {
+		h.Resize(maxIndex + 1)
+	}
+
 	for name, idx := range newMappings {
 		h.nameToIndex[name] = idx
 	}
