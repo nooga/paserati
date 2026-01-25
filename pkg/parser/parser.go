@@ -1767,10 +1767,27 @@ func (p *Parser) parseNumberLiteral() Expression {
 		base = 8
 		prefixLen = 2
 	} else if len(rawLiteral) > 1 && rawLiteral[0] == '0' && rawLiteral[1] >= '0' && rawLiteral[1] <= '7' {
-		// Handle legacy octal (e.g., 0777) - Check if still desired
-		// base = 8
-		// prefixLen = 1 // Or 0 if we treat it just as decimal
-		// For now, treat as decimal if no 0o prefix.
+		// Handle legacy octal (e.g., 0777 = 511 in octal)
+		// If the number contains 8 or 9, it's decimal (e.g., 079 = 79)
+		isLegacyOctal := true
+		for i := 1; i < len(rawLiteral); i++ {
+			if rawLiteral[i] == '8' || rawLiteral[i] == '9' {
+				isLegacyOctal = false
+				break
+			}
+			// Skip underscores
+			if rawLiteral[i] == '_' {
+				continue
+			}
+			// Non-octal digit stops the check
+			if rawLiteral[i] < '0' || rawLiteral[i] > '7' {
+				break
+			}
+		}
+		if isLegacyOctal {
+			base = 8
+			prefixLen = 0 // No prefix to strip - the 0 is part of the number but strconv handles it
+		}
 	}
 
 	// Clean the literal: remove prefix and separators

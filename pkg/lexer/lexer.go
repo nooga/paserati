@@ -1797,7 +1797,8 @@ func (l *Lexer) readNumber() string {
 	base := 10
 	consumedPrefix := false
 
-	// 1. Check for base prefix (0x, 0b, 0o)
+	// 1. Check for base prefix (0x, 0b, 0o) or legacy octal (0 followed by octal digits)
+	isLegacyOctal := false
 	if l.ch == '0' {
 		peek := l.peekChar()
 		switch peek {
@@ -1816,6 +1817,12 @@ func (l *Lexer) readNumber() string {
 			l.readChar() // Consume '0'
 			l.readChar() // Consume 'o' or 'O'
 			consumedPrefix = true
+		case '0', '1', '2', '3', '4', '5', '6', '7':
+			// Legacy octal: 0 followed by octal digits (non-strict mode)
+			// We provisionally set base to 8, but if we see 8 or 9, it becomes decimal
+			base = 8
+			isLegacyOctal = true
+			// Don't consume prefix - the '0' is part of the number
 		}
 	}
 
@@ -1823,6 +1830,12 @@ func (l *Lexer) readNumber() string {
 	lastCharWasDigit := false
 	for {
 		if isDigitForBase(l.ch, base) {
+			l.readChar()
+			lastCharWasDigit = true
+		} else if isLegacyOctal && (l.ch == '8' || l.ch == '9') {
+			// Legacy octal with 8 or 9 becomes decimal (e.g., 079 = 79)
+			base = 10
+			isLegacyOctal = false
 			l.readChar()
 			lastCharWasDigit = true
 		} else if l.ch == '_' {
