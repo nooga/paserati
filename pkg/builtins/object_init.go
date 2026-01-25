@@ -482,6 +482,107 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		objectProto.DefineOwnProperty("isPrototypeOf", v, &w, &e, &c)
 	}
 
+	// __proto__ accessor property (ES6 B.2.2.1)
+	// Getter: Object.getPrototypeOf(this)
+	protoGetter := vm.NewNativeFunction(0, false, "get __proto__", func(args []vm.Value) (vm.Value, error) {
+		thisValue := vmInstance.GetThis()
+		if thisValue.Type() == vm.TypeUndefined || thisValue.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot read property '__proto__' of " + thisValue.TypeName())
+		}
+		// Get prototype from various object types
+		switch thisValue.Type() {
+		case vm.TypeObject:
+			if po := thisValue.AsPlainObject(); po != nil {
+				return po.GetPrototype(), nil
+			}
+		case vm.TypeDictObject:
+			if d := thisValue.AsDictObject(); d != nil {
+				return d.GetPrototype(), nil
+			}
+		case vm.TypeArray:
+			return vmInstance.ArrayPrototype, nil
+		case vm.TypeFunction:
+			return vmInstance.FunctionPrototype, nil
+		case vm.TypeClosure:
+			return vmInstance.FunctionPrototype, nil
+		case vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
+			return vmInstance.FunctionPrototype, nil
+		case vm.TypeRegExp:
+			return vmInstance.RegExpPrototype, nil
+		case vm.TypeMap:
+			return vmInstance.MapPrototype, nil
+		case vm.TypeSet:
+			return vmInstance.SetPrototype, nil
+		case vm.TypeProxy:
+			// For proxy, get the target's prototype through the proxy
+			proxy := thisValue.AsProxy()
+			if proxy.Revoked {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot read property '__proto__' of a revoked Proxy")
+			}
+			target := proxy.Target()
+			if po := target.AsPlainObject(); po != nil {
+				return po.GetPrototype(), nil
+			}
+			return vm.Null, nil
+		}
+		// For primitives, return their prototype
+		switch thisValue.Type() {
+		case vm.TypeString:
+			return vmInstance.StringPrototype, nil
+		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+			return vmInstance.NumberPrototype, nil
+		case vm.TypeBoolean:
+			return vmInstance.BooleanPrototype, nil
+		case vm.TypeSymbol:
+			return vmInstance.SymbolPrototype, nil
+		}
+		return vm.Null, nil
+	})
+	// Setter: Object.setPrototypeOf(this, value)
+	protoSetter := vm.NewNativeFunction(1, false, "set __proto__", func(args []vm.Value) (vm.Value, error) {
+		thisValue := vmInstance.GetThis()
+		if thisValue.Type() == vm.TypeUndefined || thisValue.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot set property '__proto__' of " + thisValue.TypeName())
+		}
+		if len(args) == 0 {
+			return vm.Undefined, nil
+		}
+		protoArg := args[0]
+		// Prototype must be object or null
+		if protoArg.Type() != vm.TypeNull && !protoArg.IsObject() {
+			// Non-object, non-null values are silently ignored per spec
+			return vm.Undefined, nil
+		}
+		// Set prototype on object types
+		switch thisValue.Type() {
+		case vm.TypeObject:
+			if po := thisValue.AsPlainObject(); po != nil {
+				if !po.SetPrototype(protoArg) {
+					// SetPrototype returns false if object is non-extensible and prototype differs
+					// In strict mode, this would throw TypeError
+					// Per spec B.2.2.1.2, we return undefined (silent failure in non-strict)
+					return vm.Undefined, nil
+				}
+			}
+		case vm.TypeDictObject:
+			if d := thisValue.AsDictObject(); d != nil {
+				if !d.SetPrototype(protoArg) {
+					return vm.Undefined, nil
+				}
+			}
+		case vm.TypeArray:
+			// Arrays have a fixed prototype (Array.prototype)
+			// Setting __proto__ on an array is silently ignored per spec
+		default:
+			// Other object types (functions, etc.) - prototype change is typically not allowed
+			// Silently ignore per spec
+		}
+		return vm.Undefined, nil
+	})
+	// Define as accessor property: enumerable=false, configurable=true
+	e, c := false, true
+	objectProto.DefineAccessorProperty("__proto__", protoGetter, true, protoSetter, true, &e, &c)
+
 	// Create Object constructor (length=1 per spec)
 	objectCtor := vm.NewNativeFunction(1, true, "Object", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {

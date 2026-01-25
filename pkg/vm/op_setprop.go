@@ -149,12 +149,17 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				for _, f := range po.shape.fields {
 					if f.keyKind == KeyKindString && f.name == propName {
 						if !f.writable {
-							// Property is non-writable - throw TypeError
-							err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
-							if excErr, ok := err.(ExceptionError); ok {
-								vm.throwException(excErr.GetExceptionValue())
-								return false, InterpretRuntimeError, Undefined
+							// Property is non-writable
+							// In strict mode, throw TypeError; in non-strict mode, silently fail
+							if vm.IsInStrictMode() {
+								err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
+								if excErr, ok := err.(ExceptionError); ok {
+									vm.throwException(excErr.GetExceptionValue())
+									return false, InterpretRuntimeError, Undefined
+								}
 							}
+							// Non-strict mode: silently succeed without modifying
+							return true, InterpretOK, *valueToSet
 						}
 						break
 					}
@@ -488,18 +493,23 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			fmt.Printf("[DEBUG opSetProp] No accessor found, using data property path\n")
 		}
 
-		// Check if property exists on object or prototype and is non-writable (strict mode - always throw)
+		// Check if property exists on object or prototype and is non-writable
 		propertyExists := false
 		for _, f := range po.shape.fields {
 			if f.keyKind == KeyKindString && f.name == propName {
 				propertyExists = true
 				if !f.writable {
-					// Property exists but is not writable - throw TypeError
-					err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
-					if excErr, ok := err.(ExceptionError); ok {
-						vm.throwException(excErr.GetExceptionValue())
-						return false, InterpretRuntimeError, Undefined
+					// Property exists but is not writable
+					// In strict mode, throw TypeError; in non-strict mode, silently fail
+					if vm.IsInStrictMode() {
+						err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
+						if excErr, ok := err.(ExceptionError); ok {
+							vm.throwException(excErr.GetExceptionValue())
+							return false, InterpretRuntimeError, Undefined
+						}
 					}
+					// Non-strict mode: silently succeed without modifying
+					return true, InterpretOK, *valueToSet
 				}
 				break
 			}
@@ -520,11 +530,16 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 						// Found property on prototype
 						if !f.isAccessor && !f.writable {
 							// Non-writable data property on prototype - cannot shadow it
-							err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
-							if excErr, ok := err.(ExceptionError); ok {
-								vm.throwException(excErr.GetExceptionValue())
-								return false, InterpretRuntimeError, Undefined
+							// In strict mode, throw TypeError; in non-strict mode, silently fail
+							if vm.IsInStrictMode() {
+								err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
+								if excErr, ok := err.(ExceptionError); ok {
+									vm.throwException(excErr.GetExceptionValue())
+									return false, InterpretRuntimeError, Undefined
+								}
 							}
+							// Non-strict mode: silently succeed without modifying
+							return true, InterpretOK, *valueToSet
 						}
 						break
 					}
