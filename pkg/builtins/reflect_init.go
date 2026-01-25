@@ -326,7 +326,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisArg := args[1]
 		argsList := args[2]
 
-		if !target.IsFunction() {
+		if !target.IsCallable() {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.apply: target is not a function")
 		}
 
