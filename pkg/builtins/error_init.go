@@ -114,6 +114,16 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Add prototype property
 		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(errorPrototype))
 
+		// Add Error.isError static method (ES2024)
+		ctorPropsObj.Properties.SetOwnNonEnumerable("isError", vm.NewNativeFunction(1, false, "isError", func(args []vm.Value) (vm.Value, error) {
+			if len(args) == 0 {
+				return vm.BooleanValue(false), nil
+			}
+			arg := args[0]
+			// Check if the value has Error.prototype in its prototype chain
+			return vm.BooleanValue(isErrorValue(vmInstance, arg)), nil
+		}))
+
 		errorConstructor = ctorWithProps
 	}
 
@@ -196,4 +206,50 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 	}
 	proto.SetOwnNonEnumerable("constructor", ctor)
 	return ctx.DefineGlobal(name, ctor)
+}
+
+// isErrorValue checks if a value is an Error instance (has Error.prototype in its chain)
+func isErrorValue(vmInstance *vm.VM, val vm.Value) bool {
+	// Must be an object-like value
+	if !val.IsObject() {
+		return false
+	}
+
+	// Get the Error.prototype to compare against
+	errorProto := vmInstance.ErrorPrototype
+
+	// Walk the prototype chain
+	current := val
+	for {
+		var proto vm.Value
+
+		// Get prototype based on object type
+		if po := current.AsPlainObject(); po != nil {
+			proto = po.GetPrototype()
+		} else if d := current.AsDictObject(); d != nil {
+			proto = d.GetPrototype()
+		} else {
+			// Not a valid object type for prototype chain walking
+			return false
+		}
+
+		// End of prototype chain
+		if proto.Type() == vm.TypeNull || proto.Type() == vm.TypeUndefined {
+			return false
+		}
+
+		// Check if this prototype is Error.prototype
+		if proto.Type() == errorProto.Type() {
+			// Compare the actual objects
+			if protoPO := proto.AsPlainObject(); protoPO != nil {
+				if errorProtoPO := errorProto.AsPlainObject(); errorProtoPO != nil {
+					if protoPO == errorProtoPO {
+						return true
+					}
+				}
+			}
+		}
+
+		current = proto
+	}
 }

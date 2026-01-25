@@ -602,6 +602,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj.Properties.SetOwnNonEnumerable("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", func(args []vm.Value) (vm.Value, error) {
 			return objectGetOwnPropertyDescriptorWithVM(vmInstance, args)
 		}))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("getOwnPropertyDescriptors", vm.NewNativeFunction(1, false, "getOwnPropertyDescriptors", func(args []vm.Value) (vm.Value, error) {
+			return objectGetOwnPropertyDescriptorsWithVM(vmInstance, args)
+		}))
 		ctorPropsObj.Properties.SetOwnNonEnumerable("isExtensible", vm.NewNativeFunction(1, false, "isExtensible", func(args []vm.Value) (vm.Value, error) {
 			return objectIsExtensibleWithVM(vmInstance, args)
 		}))
@@ -2390,6 +2393,126 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	}
 
 	return vm.Undefined, nil
+}
+
+// objectGetOwnPropertyDescriptorsWithVM implements Object.getOwnPropertyDescriptors(obj)
+// Returns an object with all own property descriptors of obj
+func objectGetOwnPropertyDescriptorsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+	if len(args) == 0 {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+	}
+
+	obj := args[0]
+
+	// Handle null/undefined
+	if obj.Type() == vm.TypeNull || obj.Type() == vm.TypeUndefined {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+	}
+
+	// Create result object
+	result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+	// Collect all own property keys (string keys first, then symbols)
+	var stringKeys []string
+	var symbolKeys []vm.Value
+
+	switch obj.Type() {
+	case vm.TypeObject:
+		if po := obj.AsPlainObject(); po != nil {
+			stringKeys = po.OwnPropertyNames()
+			symbolKeys = po.OwnSymbolKeys()
+		} else if d := obj.AsDictObject(); d != nil {
+			stringKeys = d.OwnPropertyNames()
+		}
+	case vm.TypeArray:
+		arr := obj.AsArray()
+		for i := 0; i < arr.Length(); i++ {
+			stringKeys = append(stringKeys, strconv.Itoa(i))
+		}
+		stringKeys = append(stringKeys, "length")
+	case vm.TypeFunction:
+		fn := obj.AsFunction()
+		// Function intrinsics: length, name, prototype
+		if !fn.DeletedLength {
+			stringKeys = append(stringKeys, "length")
+		}
+		if !fn.DeletedName {
+			stringKeys = append(stringKeys, "name")
+		}
+		if fn.Properties != nil {
+			if _, ok := fn.Properties.GetOwn("prototype"); ok {
+				stringKeys = append(stringKeys, "prototype")
+			}
+		}
+		// Add custom properties
+		if fn.Properties != nil {
+			for _, k := range fn.Properties.OwnPropertyNames() {
+				// Avoid duplicates
+				if k != "length" && k != "name" && k != "prototype" {
+					stringKeys = append(stringKeys, k)
+				}
+			}
+		}
+	case vm.TypeClosure:
+		closure := obj.AsClosure()
+		// Closure intrinsics: length, name
+		if !closure.Fn.DeletedLength {
+			stringKeys = append(stringKeys, "length")
+		}
+		if !closure.Fn.DeletedName {
+			stringKeys = append(stringKeys, "name")
+		}
+		// Check prototype
+		if closure.Properties != nil {
+			if _, ok := closure.Properties.GetOwn("prototype"); ok {
+				stringKeys = append(stringKeys, "prototype")
+			}
+		}
+		// Add custom properties
+		if closure.Properties != nil {
+			for _, k := range closure.Properties.OwnPropertyNames() {
+				if k != "length" && k != "name" && k != "prototype" {
+					stringKeys = append(stringKeys, k)
+				}
+			}
+		}
+	case vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps:
+		// Native functions have length and name
+		stringKeys = append(stringKeys, "length", "name")
+		if nfp := obj.AsNativeFunctionWithProps(); nfp != nil && nfp.Properties != nil {
+			for _, k := range nfp.Properties.OwnPropertyNames() {
+				if k != "length" && k != "name" {
+					stringKeys = append(stringKeys, k)
+				}
+			}
+		}
+	}
+
+	// Get descriptor for each string key
+	for _, key := range stringKeys {
+		desc, err := objectGetOwnPropertyDescriptorWithVM(vmInstance, []vm.Value{obj, vm.NewString(key)})
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if desc.Type() != vm.TypeUndefined {
+			result.SetOwn(key, desc)
+		}
+	}
+
+	// Get descriptor for each symbol key
+	for _, symVal := range symbolKeys {
+		desc, err := objectGetOwnPropertyDescriptorWithVM(vmInstance, []vm.Value{obj, symVal})
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if desc.Type() != vm.TypeUndefined {
+			// Set symbol property using DefineOwnPropertyByKey
+			w, e, c := true, true, true
+			result.DefineOwnPropertyByKey(vm.NewSymbolKey(symVal), desc, &w, &e, &c)
+		}
+	}
+
+	return vm.NewValueFromPlainObject(result), nil
 }
 
 func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
