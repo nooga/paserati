@@ -3278,38 +3278,50 @@ startExecution:
 			// Strategy: If there's a global variable with this name in the heap,
 			// check if the with-object has the property first. If not, use the global.
 			// Otherwise, use the innermost with-object (binding captured at start).
-			if len(vm.withObjectStack) > 0 {
+
+			// Check all with-object sources (current stack + closure captured)
+			withSources := [][]Value{vm.withObjectStack}
+			if closure != nil && len(closure.WithObjects) > 0 {
+				withSources = append(withSources, closure.WithObjects)
+			}
+
+			hasAnyWithObjects := len(vm.withObjectStack) > 0 || (closure != nil && len(closure.WithObjects) > 0)
+
+			if hasAnyWithObjects {
 				// Check if there's a global variable with this name
 				globalIdx, hasGlobal := vm.heap.nameToIndex[propName]
 
 				if hasGlobal {
 					// There's a global - check if with-object has this property
 					withHasProperty := false
-					for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
-						withObj := vm.withObjectStack[i]
-						if withObj.Type() == TypeObject {
-							obj := withObj.AsPlainObject()
-							if obj.HasOwn(propName) {
-								// Check Symbol.unscopables
-								isUnscopable := false
-								if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
-									if unscopablesVal.Type() == TypeObject {
-										unscopablesObj := unscopablesVal.AsPlainObject()
-										if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
-											isUnscopable = excludeVal.IsTruthy()
+				setWithPropertyLoop:
+					for _, withObjects := range withSources {
+						for i := len(withObjects) - 1; i >= 0; i-- {
+							withObj := withObjects[i]
+							if withObj.Type() == TypeObject {
+								obj := withObj.AsPlainObject()
+								if obj.HasOwn(propName) {
+									// Check Symbol.unscopables
+									isUnscopable := false
+									if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
+										if unscopablesVal.Type() == TypeObject {
+											unscopablesObj := unscopablesVal.AsPlainObject()
+											if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
+												isUnscopable = excludeVal.IsTruthy()
+											}
 										}
 									}
-								}
-								if !isUnscopable {
-									withHasProperty = true
-									// Set on this with-object
-									if ok, status, val := vm.opSetProp(ip, &withObj, propName, &value); !ok {
-										if status != InterpretOK {
-											return status, val
+									if !isUnscopable {
+										withHasProperty = true
+										// Set on this with-object
+										if ok, status, val := vm.opSetProp(ip, &withObj, propName, &value); !ok {
+											if status != InterpretOK {
+												return status, val
+											}
+											goto reloadFrame
 										}
-										goto reloadFrame
+										break setWithPropertyLoop
 									}
-									break
 								}
 							}
 						}
@@ -3330,7 +3342,13 @@ startExecution:
 				} else {
 					// No global with this name - use innermost with-object
 					// (This is the pure with-property case where binding is captured at start)
-					innermostWithObj := vm.withObjectStack[len(vm.withObjectStack)-1]
+					// Try current stack first, then closure captured
+					var innermostWithObj Value
+					if len(vm.withObjectStack) > 0 {
+						innermostWithObj = vm.withObjectStack[len(vm.withObjectStack)-1]
+					} else if closure != nil && len(closure.WithObjects) > 0 {
+						innermostWithObj = closure.WithObjects[len(closure.WithObjects)-1]
+					}
 					if ok, status, val := vm.opSetProp(ip, &innermostWithObj, propName, &value); !ok {
 						if status != InterpretOK {
 							return status, val
@@ -3360,115 +3378,124 @@ startExecution:
 			nameVal := constants[nameIdx]
 			propName := nameVal.AsString()
 
+			// Check all with-object sources (current stack + closure captured)
+			withSources := [][]Value{vm.withObjectStack}
+			if closure != nil && len(closure.WithObjects) > 0 {
+				withSources = append(withSources, closure.WithObjects)
+			}
+
 			found := false
-			for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
-				withObj := vm.withObjectStack[i]
-				hasProperty := false
+		getWithOrLocalLoop:
+			for _, withObjects := range withSources {
+				for i := len(withObjects) - 1; i >= 0; i-- {
+					withObj := withObjects[i]
+					hasProperty := false
 
-				switch withObj.Type() {
-				case TypeProxy:
-					proxy := withObj.AsProxy()
-					if proxy.Revoked {
-						frame.ip = ip
-						status := vm.runtimeError("Cannot check property on a revoked Proxy")
-						return status, Undefined
-					}
-
-					// Check if handler has a 'has' trap
-					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
-						if !hasTrap.IsCallable() {
+					switch withObj.Type() {
+					case TypeProxy:
+						proxy := withObj.AsProxy()
+						if proxy.Revoked {
 							frame.ip = ip
-							status := vm.runtimeError("'has' on proxy: trap is not a function")
+							status := vm.runtimeError("Cannot check property on a revoked Proxy")
 							return status, Undefined
 						}
 
-						// Call handler.has(target, propertyKey)
-						trapArgs := []Value{proxy.target, NewString(propName)}
-						frame.ip = ip
-						vm.helperCallDepth++
-						result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
-						vm.helperCallDepth--
-						if vm.unwinding {
-							return InterpretRuntimeError, Undefined
-						}
-						if vm.handlerFound {
-							vm.handlerFound = false
-							goto reloadFrame
-						}
-						if err != nil {
-							frame.ip = ip
-							if ee, ok := err.(ExceptionError); ok {
-								vm.throwException(ee.GetExceptionValue())
-							} else {
-								vm.runtimeError("%s", err.Error())
+						// Check if handler has a 'has' trap
+						if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
+							if !hasTrap.IsCallable() {
+								frame.ip = ip
+								status := vm.runtimeError("'has' on proxy: trap is not a function")
+								return status, Undefined
 							}
-							return InterpretRuntimeError, Undefined
+
+							// Call handler.has(target, propertyKey)
+							trapArgs := []Value{proxy.target, NewString(propName)}
+							frame.ip = ip
+							vm.helperCallDepth++
+							result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+							vm.helperCallDepth--
+							if vm.unwinding {
+								return InterpretRuntimeError, Undefined
+							}
+							if vm.handlerFound {
+								vm.handlerFound = false
+								goto reloadFrame
+							}
+							if err != nil {
+								frame.ip = ip
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+								} else {
+									vm.runtimeError("%s", err.Error())
+								}
+								return InterpretRuntimeError, Undefined
+							}
+							hasProperty = result.IsTruthy()
+						} else {
+							// No has trap, fallback to target
+							target := proxy.target
+							switch target.Type() {
+							case TypeObject:
+								hasProperty = target.AsPlainObject().Has(propName)
+							case TypeDictObject:
+								hasProperty = target.AsDictObject().Has(propName)
+							default:
+								hasProperty = false
+							}
 						}
-						hasProperty = result.IsTruthy()
-					} else {
-						// No has trap, fallback to target
-						target := proxy.target
-						switch target.Type() {
-						case TypeObject:
-							hasProperty = target.AsPlainObject().Has(propName)
-						case TypeDictObject:
-							hasProperty = target.AsDictObject().Has(propName)
-						default:
-							hasProperty = false
-						}
+
+					case TypeObject:
+						obj := withObj.AsPlainObject()
+						hasProperty = obj.Has(propName)
+
+					case TypeDictObject:
+						obj := withObj.AsDictObject()
+						hasProperty = obj.Has(propName)
+
+					default:
+						continue
 					}
 
-				case TypeObject:
-					obj := withObj.AsPlainObject()
-					hasProperty = obj.Has(propName)
+					if !hasProperty {
+						continue
+					}
 
-				case TypeDictObject:
-					obj := withObj.AsDictObject()
-					hasProperty = obj.Has(propName)
-
-				default:
-					continue
-				}
-
-				if !hasProperty {
-					continue
-				}
-
-				// Check Symbol.unscopables for TypeObject
-				if withObj.Type() == TypeObject {
-					obj := withObj.AsPlainObject()
-					if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
-						if unscopablesVal.Type() == TypeObject {
-							unscopablesObj := unscopablesVal.AsPlainObject()
-							if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
-								if excludeVal.IsTruthy() {
-									continue // unscopable, continue searching
+					// Check Symbol.unscopables for TypeObject
+					if withObj.Type() == TypeObject {
+						obj := withObj.AsPlainObject()
+						if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
+							if unscopablesVal.Type() == TypeObject {
+								unscopablesObj := unscopablesVal.AsPlainObject()
+								if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
+									if excludeVal.IsTruthy() {
+										continue // unscopable, continue searching
+									}
 								}
 							}
 						}
 					}
-				}
 
-				// Property found and not unscopable - get the value
-				frame.ip = ip
-				vm.helperCallDepth++
-				propVal, err := vm.GetProperty(withObj, propName)
-				vm.helperCallDepth--
-				if vm.unwinding {
-					return InterpretRuntimeError, Undefined
-				}
-				if vm.handlerFound {
-					vm.handlerFound = false
-					goto reloadFrame
-				}
-				if err != nil {
+					// Property found and not unscopable - get the value
 					frame.ip = ip
-					status := vm.runtimeError("Error getting property: %v", err)
-					return status, Undefined
+					vm.helperCallDepth++
+					propVal, err := vm.GetProperty(withObj, propName)
+					vm.helperCallDepth--
+					if vm.unwinding {
+						return InterpretRuntimeError, Undefined
+					}
+					if vm.handlerFound {
+						vm.handlerFound = false
+						goto reloadFrame
+					}
+					if err != nil {
+						frame.ip = ip
+						status := vm.runtimeError("Error getting property: %v", err)
+						return status, Undefined
+					}
+					registers[destReg] = propVal
+					found = true
+					break getWithOrLocalLoop
 				}
-				registers[destReg] = propVal
-				found = true
-				break
 			}
 			if !found {
 				// Fall back to local variable
@@ -3487,93 +3514,102 @@ startExecution:
 			propName := nameVal.AsString()
 			value := registers[valueReg]
 
+			// Check all with-object sources (current stack + closure captured)
+			withSources := [][]Value{vm.withObjectStack}
+			if closure != nil && len(closure.WithObjects) > 0 {
+				withSources = append(withSources, closure.WithObjects)
+			}
+
 			// Check if property exists on any with-object (not just innermost)
 			setOnWith := false
-			for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
-				withObj := vm.withObjectStack[i]
-				hasProperty := false
+		setWithOrLocalLoop:
+			for _, withObjects := range withSources {
+				for i := len(withObjects) - 1; i >= 0; i-- {
+					withObj := withObjects[i]
+					hasProperty := false
 
-				// Handle Proxy with has trap
-				if withObj.Type() == TypeProxy {
-					proxy := withObj.AsProxy()
-					if proxy.Revoked {
-						frame.ip = ip
-						status := vm.runtimeError("Cannot check property on a revoked Proxy")
-						return status, Undefined
-					}
-
-					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
-						if !hasTrap.IsCallable() {
+					// Handle Proxy with has trap
+					if withObj.Type() == TypeProxy {
+						proxy := withObj.AsProxy()
+						if proxy.Revoked {
 							frame.ip = ip
-							status := vm.runtimeError("'has' on proxy: trap is not a function")
+							status := vm.runtimeError("Cannot check property on a revoked Proxy")
 							return status, Undefined
 						}
 
-						trapArgs := []Value{proxy.target, NewString(propName)}
-						frame.ip = ip
-						vm.helperCallDepth++
-						result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
-						vm.helperCallDepth--
-						if vm.unwinding {
-							return InterpretRuntimeError, Undefined
-						}
-						if vm.handlerFound {
-							vm.handlerFound = false
-							goto reloadFrame
-						}
-						if err != nil {
-							if ee, ok := err.(ExceptionError); ok {
-								vm.throwException(ee.GetExceptionValue())
-							} else {
-								vm.runtimeError("%s", err.Error())
+						if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
+							if !hasTrap.IsCallable() {
+								frame.ip = ip
+								status := vm.runtimeError("'has' on proxy: trap is not a function")
+								return status, Undefined
 							}
-							return InterpretRuntimeError, Undefined
+
+							trapArgs := []Value{proxy.target, NewString(propName)}
+							frame.ip = ip
+							vm.helperCallDepth++
+							result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+							vm.helperCallDepth--
+							if vm.unwinding {
+								return InterpretRuntimeError, Undefined
+							}
+							if vm.handlerFound {
+								vm.handlerFound = false
+								goto reloadFrame
+							}
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+								} else {
+									vm.runtimeError("%s", err.Error())
+								}
+								return InterpretRuntimeError, Undefined
+							}
+							hasProperty = result.IsTruthy()
+						} else {
+							// No has trap, check target
+							target := proxy.target
+							if target.Type() == TypeObject {
+								hasProperty = target.AsPlainObject().Has(propName)
+							}
 						}
-						hasProperty = result.IsTruthy()
-					} else {
-						// No has trap, check target
-						target := proxy.target
-						if target.Type() == TypeObject {
-							hasProperty = target.AsPlainObject().Has(propName)
-						}
+					} else if withObj.Type() == TypeObject {
+						obj := withObj.AsPlainObject()
+						hasProperty = obj.Has(propName)
 					}
-				} else if withObj.Type() == TypeObject {
-					obj := withObj.AsPlainObject()
-					hasProperty = obj.Has(propName)
-				}
 
-				if !hasProperty {
-					continue
-				}
+					if !hasProperty {
+						continue
+					}
 
-				// Check Symbol.unscopables
-				if withObj.Type() == TypeObject {
-					obj := withObj.AsPlainObject()
-					if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
-						if unscopablesVal.Type() == TypeObject {
-							unscopablesObj := unscopablesVal.AsPlainObject()
-							if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
-								if excludeVal.IsTruthy() {
-									continue
+					// Check Symbol.unscopables
+					if withObj.Type() == TypeObject {
+						obj := withObj.AsPlainObject()
+						if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
+							if unscopablesVal.Type() == TypeObject {
+								unscopablesObj := unscopablesVal.AsPlainObject()
+								if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
+									if excludeVal.IsTruthy() {
+										continue
+									}
 								}
 							}
 						}
 					}
-				}
 
-				// Set on this with-object
-				frame.ip = ip
-				vm.helperCallDepth++
-				if ok, status, val := vm.opSetProp(ip, &withObj, propName, &value); !ok {
-					vm.helperCallDepth--
-					if status != InterpretOK {
-						return status, val
+					// Set on this with-object
+					frame.ip = ip
+					vm.helperCallDepth++
+					if ok, status, val := vm.opSetProp(ip, &withObj, propName, &value); !ok {
+						vm.helperCallDepth--
+						if status != InterpretOK {
+							return status, val
+						}
+						goto reloadFrame
 					}
-					goto reloadFrame
+					vm.helperCallDepth--
+					setOnWith = true
+					break setWithOrLocalLoop
 				}
-				vm.helperCallDepth--
-				setOnWith = true
-				break
 			}
 			if !setOnWith {
 				// Fall back to local variable or global
@@ -3593,6 +3629,8 @@ startExecution:
 		case OpResolveWithBinding:
 			// Rx NameIdx(16bit) LocalReg: Capture binding - Rx = with-object index (or 255 for local)
 			// This captures which binding to use BEFORE RHS evaluation
+			// Encoding: 0-127 = withObjectStack index, 128-254 = closure.WithObjects index (128=closure[0])
+			// 255 = no with-object found, use local/global fallback
 			destReg := code[ip]
 			nameHi := code[ip+1]
 			nameLo := code[ip+2]
@@ -3602,89 +3640,129 @@ startExecution:
 			nameVal := constants[nameIdx]
 			propName := nameVal.AsString()
 
-			// Find which with-object has the property (search from innermost to outermost)
-			bindingIndex := byte(255) // 255 means use local
-		resolveWithLoop:
-			for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
-				withObj := vm.withObjectStack[i]
-				hasProperty := false
-
+			// Helper to check property on a with-object (may call Proxy has trap)
+			checkWithObjProperty := func(withObj Value) (hasProperty bool, err bool) {
 				switch withObj.Type() {
 				case TypeObject:
 					obj := withObj.AsPlainObject()
-					hasProperty = obj.Has(propName)
+					return obj.Has(propName), false
 				case TypeDictObject:
-					hasProperty = withObj.AsDictObject().Has(propName)
+					return withObj.AsDictObject().Has(propName), false
 				case TypeProxy:
 					proxy := withObj.AsProxy()
 					if proxy.Revoked {
 						frame.ip = ip
-						status := vm.runtimeError("Cannot check property on a revoked Proxy")
-						return status, Undefined
+						vm.runtimeError("Cannot check property on a revoked Proxy")
+						return false, true
 					}
 
 					// Check if handler has a 'has' trap
 					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
 						if !hasTrap.IsCallable() {
 							frame.ip = ip
-							status := vm.runtimeError("'has' on proxy: trap is not a function")
-							return status, Undefined
+							vm.runtimeError("'has' on proxy: trap is not a function")
+							return false, true
 						}
 
 						// Call handler.has(target, propertyKey)
 						trapArgs := []Value{proxy.target, NewString(propName)}
 						frame.ip = ip
 						vm.helperCallDepth++
-						result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+						result, callErr := vm.Call(hasTrap, proxy.handler, trapArgs)
 						vm.helperCallDepth--
-						if vm.unwinding {
-							return InterpretRuntimeError, Undefined
+						if vm.unwinding || vm.handlerFound {
+							return false, true
 						}
-						if vm.handlerFound {
-							vm.handlerFound = false
-							goto reloadFrame
-						}
-						if err != nil {
-							if ee, ok := err.(ExceptionError); ok {
+						if callErr != nil {
+							if ee, ok := callErr.(ExceptionError); ok {
 								vm.throwException(ee.GetExceptionValue())
 							} else {
-								vm.runtimeError("%s", err.Error())
+								vm.runtimeError("%s", callErr.Error())
 							}
-							return InterpretRuntimeError, Undefined
+							return false, true
 						}
-						hasProperty = result.IsTruthy()
+						return result.IsTruthy(), false
 					} else {
 						// No has trap, fallback to target
 						if proxy.target.Type() == TypeObject {
-							hasProperty = proxy.target.AsPlainObject().Has(propName)
+							return proxy.target.AsPlainObject().Has(propName), false
 						}
 					}
 				}
+				return false, false
+			}
 
-				if hasProperty {
-					// Check Symbol.unscopables (only for plain objects)
-					if withObj.Type() == TypeObject {
-						obj := withObj.AsPlainObject()
-						if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
-							if unscopablesVal.Type() == TypeObject {
-								unscopablesObj := unscopablesVal.AsPlainObject()
-								if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
-									if excludeVal.IsTruthy() {
-										continue resolveWithLoop
-									}
-								}
+			// Helper to check Symbol.unscopables
+			checkUnscopables := func(withObj Value) bool {
+				if withObj.Type() == TypeObject {
+					obj := withObj.AsPlainObject()
+					if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
+						if unscopablesVal.Type() == TypeObject {
+							unscopablesObj := unscopablesVal.AsPlainObject()
+							if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
+								return excludeVal.IsTruthy()
 							}
 						}
 					}
-					// Found the with-object that has the property
+				}
+				return false
+			}
+
+			// Find which with-object has the property (search from innermost to outermost)
+			bindingIndex := byte(255) // 255 means use local/global fallback
+
+			// First, check current withObjectStack (indices 0-127)
+		resolveWithLoopStack:
+			for i := len(vm.withObjectStack) - 1; i >= 0 && i < 128; i-- {
+				withObj := vm.withObjectStack[i]
+				hasProperty, hadError := checkWithObjProperty(withObj)
+				if hadError {
+					if vm.handlerFound {
+						vm.handlerFound = false
+						goto reloadFrame
+					}
+					return InterpretRuntimeError, Undefined
+				}
+
+				if hasProperty {
+					if checkUnscopables(withObj) {
+						continue resolveWithLoopStack
+					}
 					bindingIndex = byte(i)
 					break
 				}
 			}
+
+			// If not found in stack, check closure.WithObjects (indices 128-254)
+			if bindingIndex == 255 && closure != nil && len(closure.WithObjects) > 0 {
+			resolveWithLoopClosure:
+				for i := len(closure.WithObjects) - 1; i >= 0 && i < 127; i-- {
+					withObj := closure.WithObjects[i]
+					hasProperty, hadError := checkWithObjProperty(withObj)
+					if hadError {
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
+						}
+						return InterpretRuntimeError, Undefined
+					}
+
+					if hasProperty {
+						if checkUnscopables(withObj) {
+							continue resolveWithLoopClosure
+						}
+						// Encode closure index with offset 128
+						bindingIndex = byte(128 + i)
+						break
+					}
+				}
+			}
+
 			registers[destReg] = NumberValue(float64(bindingIndex))
 
 		case OpSetWithByBinding:
 			// NameIdx(16bit) ValueReg LocalReg BindingReg: Set using pre-resolved binding
+			// Binding index encoding: 0-127 = withObjectStack, 128-254 = closure.WithObjects (128=closure[0]), 255 = fallback
 			nameHi := code[ip]
 			nameLo := code[ip+1]
 			valueReg := code[ip+2]
@@ -3697,8 +3775,29 @@ startExecution:
 			value := registers[valueReg]
 			bindingIndex := int(registers[bindingReg].ToFloat())
 
-			if bindingIndex == 255 || bindingIndex >= len(vm.withObjectStack) {
+			// Decode the binding index to find the with-object
+			var withObj Value
+			foundWithObj := false
+
+			if bindingIndex == 255 {
 				// No with-object had the property at binding time
+			} else if bindingIndex >= 128 {
+				// Closure.WithObjects (128 = closure[0], 129 = closure[1], etc.)
+				closureIndex := bindingIndex - 128
+				if closure != nil && closureIndex < len(closure.WithObjects) {
+					withObj = closure.WithObjects[closureIndex]
+					foundWithObj = true
+				}
+			} else {
+				// withObjectStack (0-127)
+				if bindingIndex < len(vm.withObjectStack) {
+					withObj = vm.withObjectStack[bindingIndex]
+					foundWithObj = true
+				}
+			}
+
+			if !foundWithObj {
+				// No with-object had the property at binding time, or it's no longer valid
 				if localReg == 255 {
 					// No local fallback - use global assignment
 					if globalIdx, hasGlobal := vm.heap.nameToIndex[propName]; hasGlobal {
@@ -3724,8 +3823,7 @@ startExecution:
 					registers[localReg] = value
 				}
 			} else {
-				// Set on the with-object at the captured index
-				withObj := vm.withObjectStack[bindingIndex]
+				// Set on the with-object
 
 				// Per ECMAScript 9.1.1.2.5 SetMutableBinding:
 				// In strict mode, if the binding was captured but property was deleted during
@@ -3771,27 +3869,36 @@ startExecution:
 			nameVal := constants[nameIdx]
 			propName := nameVal.AsString()
 
-			// Walk with-object stack from most recent to oldest
+			// Check all with-object sources (current stack + closure captured)
+			withSources := [][]Value{vm.withObjectStack}
+			if closure != nil && len(closure.WithObjects) > 0 {
+				withSources = append(withSources, closure.WithObjects)
+			}
+
+			// Walk with-object sources from most recent to oldest
 			deleted := false
-			for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
-				withObj := vm.withObjectStack[i]
-				if withObj.Type() == TypeObject {
-					obj := withObj.AsPlainObject()
-					// Check Symbol.unscopables
-					if unscopables, found := obj.Get("@@unscopables"); found {
-						if unscopables.Type() == TypeObject {
-							if excluded, _ := unscopables.AsPlainObject().Get(propName); excluded.IsTruthy() {
-								continue // Skip this with-object
+		deleteWithLoop:
+			for _, withObjects := range withSources {
+				for i := len(withObjects) - 1; i >= 0; i-- {
+					withObj := withObjects[i]
+					if withObj.Type() == TypeObject {
+						obj := withObj.AsPlainObject()
+						// Check Symbol.unscopables
+						if unscopables, found := obj.Get("@@unscopables"); found {
+							if unscopables.Type() == TypeObject {
+								if excluded, _ := unscopables.AsPlainObject().Get(propName); excluded.IsTruthy() {
+									continue // Skip this with-object
+								}
 							}
 						}
-					}
-					// Check if property exists on this with-object
-					if obj.HasOwn(propName) {
-						// Delete from this with-object
-						result := obj.DeleteOwn(propName)
-						registers[destReg] = BooleanValue(result)
-						deleted = true
-						break
+						// Check if property exists on this with-object
+						if obj.HasOwn(propName) {
+							// Delete from this with-object
+							result := obj.DeleteOwn(propName)
+							registers[destReg] = BooleanValue(result)
+							deleted = true
+							break deleteWithLoop
+						}
 					}
 				}
 			}

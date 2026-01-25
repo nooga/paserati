@@ -386,12 +386,22 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 	p := parser.NewParser(lx)
 	prog, parseErrs := p.ParseProgram()
 	if len(parseErrs) > 0 {
+		// Create a proper SyntaxError instance that can be caught
+		if ctor, ok := vmInstance.GetGlobal("SyntaxError"); ok && ctor != vm.Undefined {
+			errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(parseErrs[0].Error())})
+			return vm.Undefined, vmInstance.NewExceptionError(errObj)
+		}
 		return vm.Undefined, fmt.Errorf("SyntaxError: %v", parseErrs[0])
 	}
 
 	// Compile the program (this uses the existing compiler without modifying its state)
 	chunk, compileErrs := d.CompileProgram(prog)
 	if len(compileErrs) > 0 {
+		// Create a proper SyntaxError instance that can be caught
+		if ctor, ok := vmInstance.GetGlobal("SyntaxError"); ok && ctor != vm.Undefined {
+			errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(compileErrs[0].Error())})
+			return vm.Undefined, vmInstance.NewExceptionError(errObj)
+		}
 		return vm.Undefined, fmt.Errorf("SyntaxError: %v", compileErrs[0])
 	}
 

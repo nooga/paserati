@@ -81,6 +81,15 @@ func (c *Compiler) compileWithStatement(node *parser.WithStatement, hint Registe
 	// Now we can free the object register
 	c.regAlloc.Free(objectReg)
 
+	// Per ECMAScript 13.11.7 step 10:
+	// If C.[[type]] is normal and C.[[value]] is empty, return NormalCompletion(undefined).
+	// If body returned no value (BadRegister), explicitly produce undefined
+	if bodyResult == BadRegister {
+		resultReg := c.regAlloc.Alloc()
+		c.emitLoadUndefined(resultReg, node.Token.Line)
+		return resultReg, nil
+	}
+
 	return bodyResult, nil
 }
 

@@ -2336,7 +2336,13 @@ func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 		}
 	}
 
-	lit.Body = p.parseBlockStatement() // Includes consuming RBRACE
+	// Save strict mode state before parsing body
+	savedStrictMode := p.strictMode
+
+	lit.Body = p.parseFunctionBodyWithDirectives() // Includes consuming RBRACE and directive prologue handling
+
+	// Restore strict mode after parsing function body
+	p.strictMode = savedStrictMode
 
 	// Restore the saved generator context
 	p.inGenerator = savedGeneratorContext
@@ -3488,6 +3494,63 @@ func (p *Parser) parseBlockStatement() *BlockStatement {
 		}
 	}
 	// --- END DEBUG ---
+
+	return block
+}
+
+// parseFunctionBodyWithDirectives parses a function body block statement with
+// directive prologue handling. This detects 'use strict' at the start of the
+// function body and sets strict mode accordingly.
+func (p *Parser) parseFunctionBodyWithDirectives() *BlockStatement {
+	block := p.arena.NewBlockStatement()
+	block.Token = p.curToken // The '{' token
+	block.Statements = []Statement{}
+	block.HoistedDeclarations = make(map[string]Expression)
+
+	p.nextToken() // Consume '{'
+
+	// Track directive prologue - only string literals at the start count
+	inDirectivePrologue := true
+
+	for !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+		stmt := p.parseStatement()
+		if stmt != nil {
+			block.Statements = append(block.Statements, stmt)
+
+			// Check for directive prologue ("use strict")
+			if inDirectivePrologue {
+				if exprStmt, ok := stmt.(*ExpressionStatement); ok {
+					if strLit, ok := exprStmt.Expression.(*StringLiteral); ok {
+						if strLit.Value == "use strict" {
+							p.strictMode = true
+						}
+						// Continue checking - multiple directives are allowed
+					} else {
+						inDirectivePrologue = false
+					}
+				} else {
+					inDirectivePrologue = false
+				}
+			}
+
+			// --- Hoisting Check ---
+			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt.Expression != nil {
+				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
+					if _, exists := block.HoistedDeclarations[funcLit.Name.Value]; exists {
+						p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration in block: %s", funcLit.Name.Value))
+					} else {
+						block.HoistedDeclarations[funcLit.Name.Value] = funcLit
+					}
+				}
+			}
+		}
+		p.nextToken()
+	}
+
+	if !p.curTokenIs(lexer.RBRACE) {
+		p.peekError(lexer.RBRACE)
+		return nil
+	}
 
 	return block
 }
@@ -5470,6 +5533,12 @@ func (p *Parser) parseWhileStatement() *WhileStatement {
 
 func (p *Parser) parseWithStatement() *WithStatement {
 	// Parses 'with' '(' <expression> ')' <statement>
+	// Per ECMAScript spec, 'with' is not allowed in strict mode
+	if p.strictMode {
+		p.addError(p.curToken, "Strict mode code may not include a with statement")
+		return nil
+	}
+
 	stmt := &WithStatement{Token: p.curToken} // Current token is 'with'
 
 	if !p.expectPeek(lexer.LPAREN) {
