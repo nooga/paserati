@@ -707,9 +707,13 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(brandedKey))
 				memberInfo.isPrivateField = true
 
-				// Check if this member is declared as a setter
+				// Check if this member is declared as an accessor (getter, setter, or both)
+				// For accessor assignments, we use OpCallPrivateSetter which:
+				// - Calls the setter if it exists
+				// - Throws TypeError if setter doesn't exist (getter-only)
+				// - Throws TypeError if object doesn't have the brand
 				if kind, _, ok := c.getPrivateMemberKind(fieldName); ok {
-					if kind == PrivateMemberSetter || kind == PrivateMemberAccessor {
+					if kind == PrivateMemberSetter || kind == PrivateMemberAccessor || kind == PrivateMemberGetter {
 						memberInfo.isPrivateSetter = true
 					}
 				}
@@ -3118,8 +3122,8 @@ func (c *Compiler) compileAssignmentToMember(memberExpr *parser.MemberExpression
 			brandedKey := c.getPrivateFieldKey(fieldName)
 			nameConstIdx := c.chunk.AddConstant(vm.String(brandedKey))
 
-			// Check if this member is declared as a setter
-			if kind, _, ok := c.getPrivateMemberKind(fieldName); ok && (kind == PrivateMemberSetter || kind == PrivateMemberAccessor) {
+			// Check if this member is declared as an accessor (getter, setter, or both)
+			if kind, _, ok := c.getPrivateMemberKind(fieldName); ok && (kind == PrivateMemberSetter || kind == PrivateMemberAccessor || kind == PrivateMemberGetter) {
 				c.emitCallPrivateSetter(objectReg, valueReg, nameConstIdx, line)
 			} else {
 				c.emitSetPrivateField(objectReg, valueReg, nameConstIdx, line)
