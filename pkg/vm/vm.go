@@ -3547,7 +3547,7 @@ startExecution:
 				if localReg == 255 {
 					// LocalR255 means this is a global variable, set via heap or GlobalObject
 					if globalIdx, exists := vm.heap.nameToIndex[propName]; exists {
-						vm.heap.Set(globalIdx, value)
+						_ = vm.heap.Set(globalIdx, value)
 					} else {
 						// Set on GlobalObject directly
 						vm.GlobalObject.SetOwn(propName, value)
