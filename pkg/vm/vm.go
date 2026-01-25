@@ -3571,28 +3571,81 @@ startExecution:
 
 			// Find which with-object has the property (search from innermost to outermost)
 			bindingIndex := byte(255) // 255 means use local
+		resolveWithLoop:
 			for i := len(vm.withObjectStack) - 1; i >= 0; i-- {
 				withObj := vm.withObjectStack[i]
-				if withObj.Type() == TypeObject {
+				hasProperty := false
+
+				switch withObj.Type() {
+				case TypeObject:
 					obj := withObj.AsPlainObject()
-					if obj.HasOwn(propName) {
-						// Check Symbol.unscopables
-						isUnscopable := false
+					hasProperty = obj.Has(propName)
+				case TypeDictObject:
+					hasProperty = withObj.AsDictObject().Has(propName)
+				case TypeProxy:
+					proxy := withObj.AsProxy()
+					if proxy.Revoked {
+						frame.ip = ip
+						status := vm.runtimeError("Cannot check property on a revoked Proxy")
+						return status, Undefined
+					}
+
+					// Check if handler has a 'has' trap
+					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
+						if !hasTrap.IsCallable() {
+							frame.ip = ip
+							status := vm.runtimeError("'has' on proxy: trap is not a function")
+							return status, Undefined
+						}
+
+						// Call handler.has(target, propertyKey)
+						trapArgs := []Value{proxy.target, NewString(propName)}
+						frame.ip = ip
+						vm.helperCallDepth++
+						result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+						vm.helperCallDepth--
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
+						}
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
+						}
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+							} else {
+								vm.runtimeError("%s", err.Error())
+							}
+							return InterpretRuntimeError, Undefined
+						}
+						hasProperty = result.IsTruthy()
+					} else {
+						// No has trap, fallback to target
+						if proxy.target.Type() == TypeObject {
+							hasProperty = proxy.target.AsPlainObject().Has(propName)
+						}
+					}
+				}
+
+				if hasProperty {
+					// Check Symbol.unscopables (only for plain objects)
+					if withObj.Type() == TypeObject {
+						obj := withObj.AsPlainObject()
 						if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
 							if unscopablesVal.Type() == TypeObject {
 								unscopablesObj := unscopablesVal.AsPlainObject()
 								if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
-									isUnscopable = excludeVal.IsTruthy()
+									if excludeVal.IsTruthy() {
+										continue resolveWithLoop
+									}
 								}
 							}
 						}
-						if isUnscopable {
-							continue
-						}
-						// Found the with-object that has the property
-						bindingIndex = byte(i)
-						break
 					}
+					// Found the with-object that has the property
+					bindingIndex = byte(i)
+					break
 				}
 			}
 			registers[destReg] = NumberValue(float64(bindingIndex))

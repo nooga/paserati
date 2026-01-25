@@ -2878,6 +2878,14 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	// Patch jump for not-undefined case
 	c.patchJump(notUndefJump)
 
+	// Check if this is a var destructuring inside a with block
+	// Per ECMAScript spec, ResolveBinding must happen BEFORE GetV (property access)
+	isVarInWithBlock := c.withBlockDepth > 0 && node.Token.Literal == "var"
+
+	if debugAssignment {
+		fmt.Printf("// [Assignment] Object Destructuring: withBlockDepth=%d, token=%q, isVarInWithBlock=%v\n", c.withBlockDepth, node.Token.Literal, isVarInWithBlock)
+	}
+
 	// 2. For each property, compile: define target = temp.property
 	for _, prop := range node.Properties {
 		if prop.Key == nil || prop.Target == nil {
@@ -2888,6 +2896,61 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 
 		// Allocate register for extracted value
 		valueReg := c.regAlloc.Alloc()
+
+		// For var destructuring in with blocks with identifier targets, we need to:
+		// 1. Compile the key (if computed)
+		// 2. ResolveBinding BEFORE GetV (per spec 14.3.3.3 KeyedBindingInitialization)
+		// 3. GetV (property access)
+		// 4. Evaluate default if needed
+		// 5. Initialize using pre-resolved binding
+		var bindingReg Register = BadRegister
+		var keyReg Register = BadRegister
+		var targetIdent *parser.Identifier
+
+		// Check if target is a simple identifier (needed for with-block handling)
+		if ident, ok := prop.Target.(*parser.Identifier); ok {
+			targetIdent = ident
+		}
+
+		// For computed keys, compile the key expression first (always needed before binding resolution)
+		if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+			keyReg = c.regAlloc.Alloc()
+			_, err := c.compileNode(computed.Expr, keyReg)
+			if err != nil {
+				c.regAlloc.Free(valueReg)
+				c.regAlloc.Free(keyReg)
+				return BadRegister, err
+			}
+
+			// Per ECMAScript spec, ToPropertyKey must happen BEFORE ResolveBinding
+			// This ensures toString() is called on the key before binding resolution
+			if isVarInWithBlock && targetIdent != nil {
+				// Convert key to property key (string) - this triggers toString()
+				c.emitOpCode(vm.OpToPropertyKey, line)
+				c.emitByte(byte(keyReg)) // dest = keyReg (in place)
+				c.emitByte(byte(keyReg)) // src = keyReg
+			}
+		}
+
+		// For var in with block with identifier target: ResolveBinding BEFORE GetV
+		if isVarInWithBlock && targetIdent != nil {
+			// Get local register for the target variable
+			localReg := Register(255) // Default to 255 (global fallback)
+			if symbolRef, _, exists := c.currentSymbolTable.Resolve(targetIdent.Value); exists {
+				if !symbolRef.IsGlobal && !symbolRef.IsSpilled {
+					localReg = symbolRef.Register
+				}
+			}
+
+			// Emit ResolveWithBinding to capture which binding to use
+			bindingReg = c.regAlloc.Alloc()
+			nameIdx := c.chunk.AddConstant(vm.String(targetIdent.Value))
+			c.emitResolveWithBinding(bindingReg, int(nameIdx), localReg, line)
+
+			if debugAssignment {
+				fmt.Printf("// [Assignment] Emitting ResolveWithBinding for %s (localReg=%d, bindingReg=%d)\n", targetIdent.Value, localReg, bindingReg)
+			}
+		}
 
 		// Handle property access (identifier or computed)
 		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
@@ -2942,47 +3005,86 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 			c.emitByte(byte(valueReg)) // destination register
 			c.emitByte(byte(tempReg))  // object register
 			c.emitUint16(propNameIdx)  // property name constant index
-		} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
-			keyReg := c.regAlloc.Alloc()
-			_, err := c.compileNode(computed.Expr, keyReg)
-			if err != nil {
-				c.regAlloc.Free(valueReg)
-				c.regAlloc.Free(keyReg)
-				return BadRegister, err
-			}
+		} else if keyReg != BadRegister {
+			// Computed key was already compiled above
 			c.emitOpCode(vm.OpGetIndex, line)
 			c.emitByte(byte(valueReg))
 			c.emitByte(byte(tempReg))
 			c.emitByte(byte(keyReg))
 			c.regAlloc.Free(keyReg)
+			keyReg = BadRegister
+		}
+
+		// Clean up keyReg if it wasn't used (shouldn't happen, but be safe)
+		if keyReg != BadRegister {
+			c.regAlloc.Free(keyReg)
 		}
 
 		// Handle assignment based on target type (identifier vs nested pattern)
-		if ident, ok := prop.Target.(*parser.Identifier); ok {
+		if targetIdent != nil {
 			// Simple identifier target
-			if prop.Default != nil {
-				// First, define the variable to reserve the name and get the target register
-				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Any, line)
+			// If we pre-resolved the binding (var in with block), use SetWithByBinding
+			if bindingReg != BadRegister {
+				// For var in with block: use the pre-resolved binding
+				nameIdx := c.chunk.AddConstant(vm.String(targetIdent.Value))
+				localReg := Register(255)
+				if symbolRef, _, exists := c.currentSymbolTable.Resolve(targetIdent.Value); exists {
+					if !symbolRef.IsGlobal && !symbolRef.IsSpilled {
+						localReg = symbolRef.Register
+					}
+				}
+
+				if prop.Default != nil {
+					// Handle default value with pre-resolved binding
+					// Check if value is undefined
+					jumpToDefault := c.emitPlaceholderJump(vm.OpJumpIfUndefined, valueReg, line)
+
+					// Path 1: Value is not undefined, use pre-resolved binding
+					c.emitSetWithByBinding(int(nameIdx), valueReg, localReg, bindingReg, line)
+					jumpPastDefault := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+					// Path 2: Value is undefined, evaluate default and assign
+					c.patchJump(jumpToDefault)
+					defaultReg := c.regAlloc.Alloc()
+					_, err := c.compileNode(prop.Default, defaultReg)
+					if err != nil {
+						c.regAlloc.Free(defaultReg)
+						c.regAlloc.Free(bindingReg)
+						c.regAlloc.Free(valueReg)
+						return BadRegister, err
+					}
+					c.emitSetWithByBinding(int(nameIdx), defaultReg, localReg, bindingReg, line)
+					c.regAlloc.Free(defaultReg)
+
+					c.patchJump(jumpPastDefault)
+				} else {
+					// No default, just assign using pre-resolved binding
+					c.emitSetWithByBinding(int(nameIdx), valueReg, localReg, bindingReg, line)
+				}
+				c.regAlloc.Free(bindingReg)
+			} else if prop.Default != nil {
+				// Standard path: First, define the variable to reserve the name and get the target register
+				err := c.defineDestructuredVariable(targetIdent.Value, node.IsConst, types.Any, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return BadRegister, err
 				}
 
 				// Get the target identifier for conditional assignment
-				targetIdent := &parser.Identifier{
-					Token: ident.Token,
-					Value: ident.Value,
+				targetIdentCopy := &parser.Identifier{
+					Token: targetIdent.Token,
+					Value: targetIdent.Value,
 				}
 
 				// Use conditional assignment: target = valueReg !== undefined ? valueReg : defaultExpr
-				err = c.compileConditionalAssignment(targetIdent, valueReg, prop.Default, line)
+				err = c.compileConditionalAssignment(targetIdentCopy, valueReg, prop.Default, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return BadRegister, err
 				}
 			} else {
 				// Define variable with extracted value
-				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
+				err := c.defineDestructuredVariableWithValue(targetIdent.Value, node.IsConst, valueReg, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return BadRegister, err
