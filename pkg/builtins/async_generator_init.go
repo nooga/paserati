@@ -165,5 +165,18 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	vmInstance.AsyncGeneratorPrototype = vm.NewValueFromPlainObject(asyncGeneratorProto)
 
+	// Create AsyncGeneratorFunction.prototype (%AsyncGeneratorFunction.prototype%)
+	// This is the [[Prototype]] of all async generator functions (async function*)
+	// It inherits from Function.prototype and has a .prototype property pointing to AsyncGeneratorPrototype
+	asyncGeneratorFunctionProto := vm.NewObject(vmInstance.FunctionPrototype).AsPlainObject()
+
+	// Set the .prototype property to AsyncGeneratorPrototype
+	// Per ECMAScript: AsyncGeneratorFunction.prototype.prototype === AsyncGenerator.prototype
+	w, e, c := false, false, false // writable=false, enumerable=false, configurable=false
+	asyncGeneratorFunctionProto.DefineOwnProperty("prototype", vmInstance.AsyncGeneratorPrototype, &w, &e, &c)
+
+	// Store in VM
+	vmInstance.AsyncGeneratorFunctionPrototype = vm.NewValueFromPlainObject(asyncGeneratorFunctionProto)
+
 	return nil
 }

@@ -6635,10 +6635,24 @@ func (p *Parser) parseObjectLiteral() Expression {
 				// Transform function if it has destructuring parameters
 				funcLit = p.transformFunctionWithDestructuring(funcLit)
 
+				// Create MethodDefinition for async method
+				// This ensures [[HomeObject]] is set for super property access
+				asyncMethod := &MethodDefinition{
+					Token:       asyncToken,
+					Key:         key,
+					Value:       funcLit,
+					Kind:        "method",
+					IsStatic:    false,
+					IsPublic:    false,
+					IsPrivate:   false,
+					IsProtected: false,
+					IsOverride:  false,
+				}
+
 				// Add the async method
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{
 					Key:   key,
-					Value: funcLit,
+					Value: asyncMethod,
 				})
 			} else if p.curTokenIs(lexer.ASTERISK) {
 				// --- NEW: Check for generator methods (*foo() or *"foo"() or *[expr]()) ---

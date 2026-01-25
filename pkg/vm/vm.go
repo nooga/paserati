@@ -212,8 +212,10 @@ type VM struct {
 	SymbolPrototype         Value
 
 	// Constructors and prototypes for non-global built-in types
-	AsyncFunctionConstructor Value
-	AsyncFunctionPrototype   Value
+	AsyncFunctionConstructor       Value
+	AsyncFunctionPrototype         Value
+	GeneratorFunctionPrototype     Value // %GeneratorFunction.prototype% - prototype of generator functions
+	AsyncGeneratorFunctionPrototype Value // %AsyncGeneratorFunction.prototype% - prototype of async generator functions
 
 	// Well-known symbols (stored as singletons)
 	SymbolIterator           Value
@@ -3983,9 +3985,26 @@ startExecution:
 			// Create a new closure value using the value-level constructor
 			closureVal := NewClosure(protoFunc, upvalues)
 
-			// Set the function's [[Prototype]] to Function.prototype
+			// Set the function's [[Prototype]] to the appropriate prototype
 			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
-				cl.Fn.Prototype = vm.FunctionPrototype
+				// Generator functions have GeneratorFunction.prototype as their [[Prototype]]
+				// Async generator functions have AsyncGeneratorFunction.prototype
+				// Regular functions have Function.prototype
+				if cl.Fn.IsGenerator && cl.Fn.IsAsync {
+					if !vm.AsyncGeneratorFunctionPrototype.IsUndefined() {
+						cl.Fn.Prototype = vm.AsyncGeneratorFunctionPrototype
+					} else {
+						cl.Fn.Prototype = vm.FunctionPrototype
+					}
+				} else if cl.Fn.IsGenerator {
+					if !vm.GeneratorFunctionPrototype.IsUndefined() {
+						cl.Fn.Prototype = vm.GeneratorFunctionPrototype
+					} else {
+						cl.Fn.Prototype = vm.FunctionPrototype
+					}
+				} else {
+					cl.Fn.Prototype = vm.FunctionPrototype
+				}
 				// Capture with-object stack if we're inside a with block
 				// This allows closures to resolve identifiers through the with-object
 				// even after the with block has finished executing
@@ -4108,9 +4127,26 @@ startExecution:
 
 			closureVal := NewClosure(protoFunc, upvalues)
 
-			// Set the function's [[Prototype]] to Function.prototype
+			// Set the function's [[Prototype]] to the appropriate prototype
 			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
-				cl.Fn.Prototype = vm.FunctionPrototype
+				// Generator functions have GeneratorFunction.prototype as their [[Prototype]]
+				// Async generator functions have AsyncGeneratorFunction.prototype
+				// Regular functions have Function.prototype
+				if cl.Fn.IsGenerator && cl.Fn.IsAsync {
+					if !vm.AsyncGeneratorFunctionPrototype.IsUndefined() {
+						cl.Fn.Prototype = vm.AsyncGeneratorFunctionPrototype
+					} else {
+						cl.Fn.Prototype = vm.FunctionPrototype
+					}
+				} else if cl.Fn.IsGenerator {
+					if !vm.GeneratorFunctionPrototype.IsUndefined() {
+						cl.Fn.Prototype = vm.GeneratorFunctionPrototype
+					} else {
+						cl.Fn.Prototype = vm.FunctionPrototype
+					}
+				} else {
+					cl.Fn.Prototype = vm.FunctionPrototype
+				}
 				// Capture with-object stack if we're inside a with block
 				// This allows closures to resolve identifiers through the with-object
 				// even after the with block has finished executing
@@ -10987,19 +11023,21 @@ startExecution:
 			// Save the execution frame state
 			if genObj.Frame == nil {
 				genObj.Frame = &GeneratorFrame{
-					pc:        ip, // Resume after this yield instruction (IP already advanced)
-					registers: make([]Value, len(registers)),
-					locals:    make([]Value, 0), // TODO: implement locals if needed
-					stackBase: 0,
-					suspendPC: ip - 2,          // IP was advanced by 2 for two-register instruction
-					outputReg: outputReg,       // Store where to put sent value on resume
-					thisValue: frame.thisValue, // Preserve 'this' across suspension
+					pc:         ip, // Resume after this yield instruction (IP already advanced)
+					registers:  make([]Value, len(registers)),
+					locals:     make([]Value, 0), // TODO: implement locals if needed
+					stackBase:  0,
+					suspendPC:  ip - 2,           // IP was advanced by 2 for two-register instruction
+					outputReg:  outputReg,        // Store where to put sent value on resume
+					thisValue:  frame.thisValue,  // Preserve 'this' across suspension
+					homeObject: frame.homeObject, // Preserve [[HomeObject]] for super property access
 				}
 			} else {
 				genObj.Frame.pc = ip
 				genObj.Frame.suspendPC = ip - 2
 				genObj.Frame.outputReg = outputReg
-				genObj.Frame.thisValue = frame.thisValue // Update 'this' (should be same but be explicit)
+				genObj.Frame.thisValue = frame.thisValue   // Update 'this' (should be same but be explicit)
+				genObj.Frame.homeObject = frame.homeObject // Update [[HomeObject]]
 			}
 
 			// Copy register state to generator frame
@@ -11044,11 +11082,12 @@ startExecution:
 				// Save current execution state
 				// IP already points to the first instruction after OpInitYield (the function body start)
 				genObj.Frame = &GeneratorFrame{
-					pc:        ip, // Resume at first instruction of function body (IP already advanced past OpInitYield opcode)
-					registers: make([]Value, len(registers)),
-					thisValue: frame.thisValue,
-					suspendPC: ip,
-					outputReg: 0, // Not used for init yield
+					pc:         ip, // Resume at first instruction of function body (IP already advanced past OpInitYield opcode)
+					registers:  make([]Value, len(registers)),
+					thisValue:  frame.thisValue,
+					homeObject: frame.homeObject, // Preserve [[HomeObject]] for super property access
+					suspendPC:  ip,
+					outputReg:  0, // Not used for init yield
 				}
 				copy(genObj.Frame.registers, registers)
 
@@ -11097,19 +11136,21 @@ startExecution:
 			// Save the execution frame state
 			if genObj.Frame == nil {
 				genObj.Frame = &GeneratorFrame{
-					pc:        ip,
-					registers: make([]Value, len(registers)),
-					locals:    make([]Value, 0),
-					stackBase: 0,
-					suspendPC: ip - 3,
-					outputReg: outputReg,
-					thisValue: frame.thisValue,
+					pc:         ip,
+					registers:  make([]Value, len(registers)),
+					locals:     make([]Value, 0),
+					stackBase:  0,
+					suspendPC:  ip - 3,
+					outputReg:  outputReg,
+					thisValue:  frame.thisValue,
+					homeObject: frame.homeObject, // Preserve [[HomeObject]] for super property access
 				}
 			} else {
 				genObj.Frame.pc = ip
 				genObj.Frame.suspendPC = ip - 3
 				genObj.Frame.outputReg = outputReg
 				genObj.Frame.thisValue = frame.thisValue
+				genObj.Frame.homeObject = frame.homeObject // Update [[HomeObject]]
 			}
 
 			// Copy register state to generator frame
@@ -11182,17 +11223,19 @@ startExecution:
 			// Save the execution frame state
 			if frame.promiseObj.Frame == nil {
 				frame.promiseObj.Frame = &SuspendedFrame{
-					pc:        ip,
-					registers: make([]Value, len(registers)),
-					locals:    make([]Value, 0),
-					stackBase: 0,
-					suspendPC: ip - 2,
-					outputReg: resultReg,
+					pc:         ip,
+					registers:  make([]Value, len(registers)),
+					locals:     make([]Value, 0),
+					stackBase:  0,
+					suspendPC:  ip - 2,
+					outputReg:  resultReg,
+					homeObject: frame.homeObject, // Preserve [[HomeObject]] for super property access
 				}
 			} else {
 				frame.promiseObj.Frame.pc = ip
 				frame.promiseObj.Frame.suspendPC = ip - 2
 				frame.promiseObj.Frame.outputReg = resultReg
+				frame.promiseObj.Frame.homeObject = frame.homeObject // Update [[HomeObject]]
 			}
 			copy(frame.promiseObj.Frame.registers, registers)
 
@@ -13782,10 +13825,11 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.allocatedRegSize = regSize         // Track actual allocation for proper cleanup
-	frame.ip = genObj.Frame.pc               // Resume from saved PC
-	frame.targetRegister = destReg           // Target in sentinel frame
-	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
+	frame.allocatedRegSize = regSize           // Track actual allocation for proper cleanup
+	frame.ip = genObj.Frame.pc                 // Resume from saved PC
+	frame.targetRegister = destReg             // Target in sentinel frame
+	frame.thisValue = genObj.Frame.thisValue   // Restore the saved 'this' value
+	frame.homeObject = genObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
 	frame.isDirectCall = true         // Mark as direct call for proper return handling
 	frame.isSentinelFrame = false     // Ensure sentinel flag is clear (frame slot may have been reused)
@@ -14021,10 +14065,11 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.allocatedRegSize = regSize         // Track actual allocation for proper cleanup
-	frame.ip = genObj.Frame.pc               // Resume from saved PC
-	frame.targetRegister = destReg           // Target in sentinel frame
-	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
+	frame.allocatedRegSize = regSize           // Track actual allocation for proper cleanup
+	frame.ip = genObj.Frame.pc                 // Resume from saved PC
+	frame.targetRegister = destReg             // Target in sentinel frame
+	frame.thisValue = genObj.Frame.thisValue   // Restore the saved 'this' value
+	frame.homeObject = genObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
 	frame.isDirectCall = false        // Don't mark as direct call so exceptions can be caught
 	frame.isSentinelFrame = false     // Ensure sentinel flag is clear (frame slot may have been reused)
@@ -14178,10 +14223,11 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.allocatedRegSize = regSize         // Track actual allocation for proper cleanup
-	frame.ip = genObj.Frame.pc               // Resume from saved PC
-	frame.targetRegister = destReg           // Target in sentinel frame
-	frame.thisValue = genObj.Frame.thisValue // Restore the saved 'this' value
+	frame.allocatedRegSize = regSize           // Track actual allocation for proper cleanup
+	frame.ip = genObj.Frame.pc                 // Resume from saved PC
+	frame.targetRegister = destReg             // Target in sentinel frame
+	frame.thisValue = genObj.Frame.thisValue   // Restore the saved 'this' value
+	frame.homeObject = genObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
 	frame.isDirectCall = false        // Don't mark as direct call so exceptions can be caught
 	frame.isSentinelFrame = false     // Ensure sentinel flag is clear (frame slot may have been reused)
@@ -14354,10 +14400,11 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	// Manually set up the async function frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.allocatedRegSize = regSize       // Track actual allocation for proper cleanup
-	frame.ip = promiseObj.Frame.pc         // Resume from saved PC
-	frame.targetRegister = destReg         // Target in sentinel frame
-	frame.thisValue = promiseObj.ThisValue // Restore original this value
+	frame.allocatedRegSize = regSize             // Track actual allocation for proper cleanup
+	frame.ip = promiseObj.Frame.pc               // Resume from saved PC
+	frame.targetRegister = destReg               // Target in sentinel frame
+	frame.thisValue = promiseObj.ThisValue       // Restore original this value
+	frame.homeObject = promiseObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
 	frame.isDirectCall = true // Mark as direct call for proper return handling
 	frame.argCount = 0
@@ -14468,10 +14515,11 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	// Manually set up the async function frame for resumption
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.allocatedRegSize = regSize       // Track actual allocation for proper cleanup
-	frame.ip = promiseObj.Frame.pc         // Resume from saved PC
-	frame.targetRegister = destReg         // Target in sentinel frame
-	frame.thisValue = promiseObj.ThisValue // Restore original this value
+	frame.allocatedRegSize = regSize             // Track actual allocation for proper cleanup
+	frame.ip = promiseObj.Frame.pc               // Resume from saved PC
+	frame.targetRegister = destReg               // Target in sentinel frame
+	frame.thisValue = promiseObj.ThisValue       // Restore original this value
+	frame.homeObject = promiseObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
 	frame.isDirectCall = true // Mark as direct call for proper return handling
 	frame.argCount = 0

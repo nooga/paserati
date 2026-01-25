@@ -400,6 +400,23 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set Generator prototype in VM
 	vmInstance.GeneratorPrototype = vm.NewValueFromPlainObject(generatorProto)
 
+	// Create GeneratorFunction.prototype (%GeneratorFunction.prototype%)
+	// This is the [[Prototype]] of all generator functions (function*)
+	// It inherits from Function.prototype and has a .prototype property pointing to GeneratorPrototype
+	generatorFunctionProto := vm.NewObject(vmInstance.FunctionPrototype).AsPlainObject()
+
+	// Set the .prototype property to GeneratorPrototype
+	// Per ECMAScript: GeneratorFunction.prototype.prototype === Generator.prototype
+	w, e, c := false, false, false // writable=false, enumerable=false, configurable=false
+	generatorFunctionProto.DefineOwnProperty("prototype", vmInstance.GeneratorPrototype, &w, &e, &c)
+
+	// Set constructor property (pointing to GeneratorFunction constructor)
+	// Note: GeneratorFunction is not a global but is accessible via (function*(){}).constructor
+	// We'll set this up later if needed, for now just mark it as not enumerable
+
+	// Store in VM
+	vmInstance.GeneratorFunctionPrototype = vm.NewValueFromPlainObject(generatorFunctionProto)
+
 	// Note: In JavaScript, Generator is not directly constructible
 	// Generators are created by calling generator functions (function*)
 	// The Generator constructor exists mainly for prototype access

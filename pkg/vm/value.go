@@ -204,13 +204,14 @@ func (gs GeneratorState) String() string {
 // SuspendedFrame stores execution state when a function is suspended
 // Used by both generators (yield) and async functions (await)
 type SuspendedFrame struct {
-	pc        int     // Program counter - next instruction to execute
-	registers []Value // Register state at suspension point
-	locals    []Value // Local variable state
-	stackBase int     // Base of this frame's stack
-	suspendPC int     // PC of the suspend instruction (yield/await) for resumption
-	outputReg byte    // Register where sent/resolved value should be stored on resumption
-	thisValue Value   // The 'this' value for this frame (must be preserved across suspensions)
+	pc         int     // Program counter - next instruction to execute
+	registers  []Value // Register state at suspension point
+	locals     []Value // Local variable state
+	stackBase  int     // Base of this frame's stack
+	suspendPC  int     // PC of the suspend instruction (yield/await) for resumption
+	outputReg  byte    // Register where sent/resolved value should be stored on resumption
+	thisValue  Value   // The 'this' value for this frame (must be preserved across suspensions)
+	homeObject Value   // The [[HomeObject]] for super property access (must be preserved for object literal methods)
 }
 
 // GeneratorFrame is an alias for backwards compatibility

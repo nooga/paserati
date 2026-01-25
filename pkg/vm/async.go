@@ -96,6 +96,7 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	frame.ip = 0                     // Start from beginning
 	frame.targetRegister = destReg
 	frame.thisValue = thisValue
+	frame.homeObject = funcObj.HomeObject // Set [[HomeObject]] for super property access (object literal methods)
 	frame.isConstructorCall = false
 	frame.isDirectCall = true      // Mark as direct call for proper return handling
 	frame.promiseObj = promiseObj  // Link frame to promise object - critical for OpAwait!
