@@ -1241,6 +1241,25 @@ startExecution:
 				val, _ := vm.heap.Get(heapIdx)
 				typeofStr := getTypeofString(val)
 				registers[destReg] = String(typeofStr)
+			} else if vm.GlobalObject != nil && vm.GlobalObject.HasOwn(identifierName) {
+				// Also check GlobalObject for properties set via Object.defineProperty(this, ...)
+				frame.ip = ip
+				vm.helperCallDepth++
+				propVal, err := vm.GetProperty(NewValueFromPlainObject(vm.GlobalObject), identifierName)
+				vm.helperCallDepth--
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+				if vm.handlerFound {
+					vm.handlerFound = false
+					goto reloadFrame
+				}
+				if err == nil {
+					typeofStr := getTypeofString(propVal)
+					registers[destReg] = String(typeofStr)
+				} else {
+					registers[destReg] = String("undefined")
+				}
 			} else {
 				// Identifier not found - return "undefined" without throwing ReferenceError
 				registers[destReg] = String("undefined")
@@ -2180,7 +2199,38 @@ startExecution:
 			var hasInstanceHandler Value = Undefined
 			if constructorVal.IsObject() {
 				// Try to get @@hasInstance from the constructor
-				if ok, _, _ := vm.opGetPropSymbol(frame, ip, &constructorVal, vm.SymbolHasInstance, &hasInstanceHandler); ok {
+				// Per spec: GetMethod may throw an error (e.g., from getter)
+				frame.ip = ip
+				vm.helperCallDepth++
+				ok, status, _ := vm.opGetPropSymbol(frame, ip, &constructorVal, vm.SymbolHasInstance, &hasInstanceHandler)
+				vm.helperCallDepth--
+				if status == InterpretRuntimeError {
+					// The getter threw an error - propagate it
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				// Check if exception was caught by a handler - need to jump to the catch block
+				if vm.handlerFound {
+					vm.handlerFound = false
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				if ok {
 					if hasInstanceHandler.IsCallable() {
 						// Call the handler: instOfHandler.call(C, O)
 						result, err := vm.Call(hasInstanceHandler, constructorVal, []Value{objVal})

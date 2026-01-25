@@ -825,6 +825,8 @@ func objectDefinePropertiesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value,
 			var value vm.Value
 			var writable, enumFlag, configurable bool
 			var hasValue, hasWritable, hasEnumerable, hasConfigurable bool
+			var getter, setter vm.Value
+			var hasGetter, hasSetter bool
 
 			// Check for 'value' property
 			if v, ok := propDescObj.GetOwn("value"); ok {
@@ -850,6 +852,16 @@ func objectDefinePropertiesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value,
 				hasConfigurable = true
 			}
 
+			// Check for accessor properties (get/set)
+			if g, ok := propDescObj.GetOwn("get"); ok {
+				hasGetter = true
+				getter = g
+			}
+			if s, ok := propDescObj.GetOwn("set"); ok {
+				hasSetter = true
+				setter = s
+			}
+
 			// Apply defaults: if not specified, writable/enumerable/configurable default to false
 			if !hasValue {
 				value = vm.Undefined
@@ -859,8 +871,8 @@ func objectDefinePropertiesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value,
 			var wPtr, ePtr, cPtr *bool
 			if hasWritable {
 				wPtr = &writable
-			} else {
-				// Default to false
+			} else if !(hasGetter || hasSetter) {
+				// Default to false only for data properties
 				f := false
 				wPtr = &f
 			}
@@ -879,7 +891,12 @@ func objectDefinePropertiesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value,
 				cPtr = &f
 			}
 
-			plainObj.DefineOwnProperty(key, value, wPtr, ePtr, cPtr)
+			// Use accessor path if getter or setter is specified
+			if hasGetter || hasSetter {
+				plainObj.DefineAccessorProperty(key, getter, hasGetter, setter, hasSetter, ePtr, cPtr)
+			} else {
+				plainObj.DefineOwnProperty(key, value, wPtr, ePtr, cPtr)
+			}
 		}
 	}
 
