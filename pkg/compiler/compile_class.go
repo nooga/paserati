@@ -130,7 +130,7 @@ func (c *Compiler) declareClassPrivateNames(node *parser.ClassDeclaration) {
 		propName := c.extractPropertyName(property.Key)
 		if len(propName) > 0 && propName[0] == '#' {
 			fieldName := propName[1:] // Strip #
-			c.declarePrivateField(fieldName)
+			c.declarePrivateMember(fieldName, PrivateMemberField)
 		}
 	}
 
@@ -140,7 +140,17 @@ func (c *Compiler) declareClassPrivateNames(node *parser.ClassDeclaration) {
 			methodName := c.extractPropertyName(method.Key)
 			if len(methodName) > 0 && methodName[0] == '#' {
 				fieldName := methodName[1:] // Strip #
-				c.declarePrivateField(fieldName)
+				// Determine the kind based on method.Kind
+				var kind PrivateMemberKind
+				switch method.Kind {
+				case "getter":
+					kind = PrivateMemberGetter
+				case "setter":
+					kind = PrivateMemberSetter
+				default:
+					kind = PrivateMemberMethod
+				}
+				c.declarePrivateMember(fieldName, kind)
 			}
 		}
 	}

@@ -6850,6 +6850,112 @@ startExecution:
 				// Regular private data field - set it (this also handles initial field creation)
 				obj.SetPrivateField(fieldName, registers[valReg])
 			}
+
+		case OpCallPrivateSetter:
+			// Call a private setter - throws TypeError if the setter doesn't exist
+			// This is used when the member is declared as a setter in the source class
+			objReg := code[ip]
+			valReg := code[ip+1]
+			nameConstIdxHi := code[ip+2]
+			nameConstIdxLo := code[ip+3]
+			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
+			ip += 4
+
+			// Get field name from constants
+			if int(nameConstIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid constant index %d for private setter name.", nameConstIdx)
+				return status, Undefined
+			}
+			nameVal := constants[nameConstIdx]
+			if !IsString(nameVal) {
+				frame.ip = ip
+				status := vm.runtimeError("Internal Error: Private setter name constant %d is not a string.", nameConstIdx)
+				return status, Undefined
+			}
+			fieldName := AsString(nameVal)
+			// Extract the display name (remove brand prefix like "1:fieldName" -> "fieldName")
+			displayName := fieldName
+			if colonIdx := strings.Index(fieldName, ":"); colonIdx >= 0 {
+				displayName = fieldName[colonIdx+1:]
+			}
+
+			objVal := registers[objReg]
+
+			// Get the object to call the setter on
+			var obj *PlainObject
+			if objVal.Type() == TypeObject {
+				obj = objVal.AsPlainObject()
+			} else if objVal.Type() == TypeFunction {
+				fn := objVal.AsFunction()
+				if fn.Properties == nil {
+					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+				}
+				obj = fn.Properties
+			} else if objVal.Type() == TypeClosure {
+				cl := objVal.AsClosure()
+				if cl.Properties == nil {
+					cl.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+				}
+				obj = cl.Properties
+			} else {
+				frame.ip = ip
+				vm.ThrowTypeError(fmt.Sprintf("Cannot write private member #%s from an object whose class did not declare it", displayName))
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
+			// The setter MUST exist on this object, otherwise throw TypeError
+			if obj.IsPrivateAccessor(fieldName) {
+				_, setter, exists := obj.GetPrivateAccessor(fieldName)
+				if !exists || setter.IsUndefined() {
+					frame.ip = ip
+					vm.ThrowTypeError(fmt.Sprintf("Cannot write private member #%s from an object whose class did not declare it", displayName))
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				// Call the setter function with the object as 'this'
+				frame.ip = ip
+				args := []Value{registers[valReg]}
+				_, err := vm.Call(setter, objVal, args)
+				if err != nil {
+					return InterpretRuntimeError, Undefined
+				}
+			} else {
+				// Object doesn't have this setter - throw TypeError
+				frame.ip = ip
+				vm.ThrowTypeError(fmt.Sprintf("Cannot write private member #%s from an object whose class did not declare it", displayName))
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
 		case OpSetPrivateMethod:
 			// Store a private method (not writable - attempts to assign will throw TypeError)
 			objReg := code[ip]

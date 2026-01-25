@@ -107,11 +107,12 @@ const (
 	OpTypeofIdentifier OpCode = 88 // Rx NameIdx(16bit): Rx = typeof identifier - returns "undefined" if identifier doesn't exist (no ReferenceError)
 
 	// --- Private Field Operations (ECMAScript # fields) ---
-	OpGetPrivateField    OpCode = 91  // Rx Ry NameIdx(16bit): Rx = Ry.#field (private field access)
-	OpSetPrivateField    OpCode = 92  // Rx Ry NameIdx(16bit): Rx.#field = Ry (private field assignment)
-	OpSetPrivateMethod   OpCode = 98  // Rx Ry NameIdx(16bit): Rx.#method = Ry (private method - not writable)
-	OpHasPrivateField    OpCode = 99  // Rx Ry NameIdx(16bit): Rx = #field in Ry (check private field presence)
-	OpSetPrivateAccessor OpCode = 106 // Rx GetterReg SetterReg NameIdx(16bit): Set up private getter/setter on Rx
+	OpGetPrivateField     OpCode = 91  // Rx Ry NameIdx(16bit): Rx = Ry.#field (private field access)
+	OpSetPrivateField     OpCode = 92  // Rx Ry NameIdx(16bit): Rx.#field = Ry (private field assignment)
+	OpSetPrivateMethod    OpCode = 98  // Rx Ry NameIdx(16bit): Rx.#method = Ry (private method - not writable)
+	OpHasPrivateField     OpCode = 99  // Rx Ry NameIdx(16bit): Rx = #field in Ry (check private field presence)
+	OpSetPrivateAccessor  OpCode = 106 // Rx GetterReg SetterReg NameIdx(16bit): Set up private getter/setter on Rx
+	OpCallPrivateSetter   OpCode = 161 // Rx Ry NameIdx(16bit): Rx.#setter = Ry (calls setter, throws if not exist)
 
 	// --- Type Guards for Runtime Validation ---
 	OpTypeGuardIterable       OpCode = 93 // Rx: Throw TypeError if Rx is not iterable
@@ -413,6 +414,8 @@ func (op OpCode) String() string {
 		return "OpHasPrivateField"
 	case OpSetPrivateAccessor:
 		return "OpSetPrivateAccessor"
+	case OpCallPrivateSetter:
+		return "OpCallPrivateSetter"
 	case OpCallMethod:
 		return "OpCallMethod"
 	case OpLoadThis:
@@ -627,6 +630,26 @@ type ExceptionHandler struct {
 	FinallyReg        int  // Register to store pending action/value (-1 if not needed)
 }
 
+// PrivateMemberKindVM is the VM's representation of private member kinds.
+// This mirrors the compiler's PrivateMemberKind for use in eval compilation.
+type PrivateMemberKindVM int
+
+const (
+	PrivateMemberFieldVM    PrivateMemberKindVM = iota // Regular data field
+	PrivateMemberMethodVM                              // Private method
+	PrivateMemberGetterVM                              // Private getter
+	PrivateMemberSetterVM                              // Private setter
+	PrivateMemberAccessorVM                            // Private getter+setter
+)
+
+// PrivateBrandInfoVM stores brand info for passing to eval compilation.
+// This is the VM's representation of the compiler's PrivateBrandInfo.
+type PrivateBrandInfoVM struct {
+	BrandID        int
+	DeclaredFields map[string]bool
+	MemberKinds    map[string]PrivateMemberKindVM
+}
+
 // ScopeDescriptor stores name-to-register mappings for functions that contain direct eval.
 // This allows direct eval to resolve variable names to caller's registers at runtime.
 // Only populated for functions marked as containing direct eval - nil otherwise for efficiency.
@@ -659,6 +682,16 @@ type ScopeDescriptor struct {
 	// Per ECMAScript, accessing 'arguments' in eval inside a class field initializer is a SyntaxError
 	// ("Additional Early Error Rules for Eval Inside Initializer" - ContainsArguments rule).
 	InClassFieldInitializer bool
+
+	// PrivateBrandStack contains the private brand context from enclosing classes.
+	// This allows direct eval to access private fields from the enclosing class.
+	PrivateBrandStack []PrivateBrandInfoVM
+
+	// CurrentPrivateBrand is the brand ID of the innermost class containing the eval.
+	CurrentPrivateBrand int
+
+	// CurrentPrivateBrandInfo is the brand info for the current class.
+	CurrentPrivateBrandInfo *PrivateBrandInfoVM
 }
 
 // Chunk represents a sequence of bytecode instructions and associated data.
@@ -988,6 +1021,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpSetPrivateAccessor:
 		return c.registerRegisterRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
+	case OpCallPrivateSetter:
+		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpTypeGuardIterable:
 		return c.registerInstruction(builder, instruction.String(), offset)
 	case OpTypeGuardIteratorReturn:

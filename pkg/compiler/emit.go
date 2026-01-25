@@ -562,6 +562,15 @@ func (c *Compiler) emitSetPrivateMethod(obj, val Register, nameConstIdx uint16, 
 	c.emitUint16(nameConstIdx)
 }
 
+// emitCallPrivateSetter emits OpCallPrivateSetter ObjReg, ValueReg, NameConstIdx(Uint16)
+// For ECMAScript private setter call: obj.#setter = value (throws if setter doesn't exist)
+func (c *Compiler) emitCallPrivateSetter(obj, val Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpCallPrivateSetter, line)
+	c.emitByte(byte(obj))
+	c.emitByte(byte(val))
+	c.emitUint16(nameConstIdx)
+}
+
 // emitHasPrivateField emits OpHasPrivateField DestReg, ObjReg, NameConstIdx(Uint16)
 // For ECMAScript private field presence check: #field in obj
 func (c *Compiler) emitHasPrivateField(dest, obj Register, nameConstIdx uint16, line int) {

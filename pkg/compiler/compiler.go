@@ -775,6 +775,12 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 		c.isClassFieldInitializer = true
 	}
 
+	// Restore private brand context from caller scope for direct eval
+	// This allows eval code to access private fields from enclosing classes
+	if c.callerScopeDesc != nil {
+		c.restoreBrandContextFromVM(c.callerScopeDesc)
+	}
+
 	// Reset per-compilation state to avoid leaking state between eval calls
 	c.loopContextStack = nil
 	c.finallyContextStack = nil
@@ -2665,8 +2671,11 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 			LocalNames:              []string{},
 			HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
 			InDefaultParameterScope: c.hasEvalInDefaultParam,
-			HasSuperBinding:         c.isMethodCompilation,        // Methods have [[HomeObject]] for super
-			InClassFieldInitializer: c.hasEvalInFieldInitializer,  // Class field initializers forbid 'arguments' in eval
+			HasSuperBinding:         c.isMethodCompilation,                  // Methods have [[HomeObject]] for super
+			InClassFieldInitializer: c.hasEvalInFieldInitializer,            // Class field initializers forbid 'arguments' in eval
+			PrivateBrandStack:       c.convertBrandStackToVM(),              // Private field brand context
+			CurrentPrivateBrand:     c.currentPrivateBrand,                  // Current brand ID
+			CurrentPrivateBrandInfo: c.convertBrandInfoToVM(&c.currentPrivateBrandInfo),
 		}
 	}
 
@@ -2689,8 +2698,100 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 		LocalNames:              localNames,
 		HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
 		InDefaultParameterScope: c.hasEvalInDefaultParam,
-		HasSuperBinding:         c.isMethodCompilation,        // Methods have [[HomeObject]] for super
-		InClassFieldInitializer: c.hasEvalInFieldInitializer,  // Class field initializers forbid 'arguments' in eval
+		HasSuperBinding:         c.isMethodCompilation,                  // Methods have [[HomeObject]] for super
+		InClassFieldInitializer: c.hasEvalInFieldInitializer,            // Class field initializers forbid 'arguments' in eval
+		PrivateBrandStack:       c.convertBrandStackToVM(),              // Private field brand context
+		CurrentPrivateBrand:     c.currentPrivateBrand,                  // Current brand ID
+		CurrentPrivateBrandInfo: c.convertBrandInfoToVM(&c.currentPrivateBrandInfo),
+	}
+}
+
+// convertBrandStackToVM converts the compiler's brand stack to VM format for eval.
+func (c *Compiler) convertBrandStackToVM() []vm.PrivateBrandInfoVM {
+	if len(c.privateBrandStack) == 0 {
+		return nil
+	}
+	result := make([]vm.PrivateBrandInfoVM, len(c.privateBrandStack))
+	for i, brandInfo := range c.privateBrandStack {
+		converted := c.convertBrandInfoToVM(&brandInfo)
+		if converted != nil {
+			result[i] = *converted
+		} else {
+			// Empty brand info - just preserve the brand ID
+			result[i] = vm.PrivateBrandInfoVM{BrandID: brandInfo.BrandID}
+		}
+	}
+	return result
+}
+
+// convertBrandInfoToVM converts a single PrivateBrandInfo to VM format.
+func (c *Compiler) convertBrandInfoToVM(info *PrivateBrandInfo) *vm.PrivateBrandInfoVM {
+	if info == nil {
+		return nil
+	}
+	// Handle case where maps might be nil
+	var declaredFields map[string]bool
+	if info.DeclaredFields != nil {
+		declaredFields = make(map[string]bool, len(info.DeclaredFields))
+		for k, v := range info.DeclaredFields {
+			declaredFields[k] = v
+		}
+	}
+	var memberKinds map[string]vm.PrivateMemberKindVM
+	if info.MemberKinds != nil {
+		memberKinds = make(map[string]vm.PrivateMemberKindVM, len(info.MemberKinds))
+		for k, v := range info.MemberKinds {
+			memberKinds[k] = vm.PrivateMemberKindVM(v)
+		}
+	}
+	return &vm.PrivateBrandInfoVM{
+		BrandID:        info.BrandID,
+		DeclaredFields: declaredFields,
+		MemberKinds:    memberKinds,
+	}
+}
+
+// restoreBrandContextFromVM restores the private brand context from a VM scope descriptor.
+// This is used when compiling direct eval code to give it access to enclosing class private fields.
+func (c *Compiler) restoreBrandContextFromVM(scopeDesc *vm.ScopeDescriptor) {
+	if scopeDesc == nil {
+		return
+	}
+
+	// Restore brand stack
+	if len(scopeDesc.PrivateBrandStack) > 0 {
+		c.privateBrandStack = make([]PrivateBrandInfo, len(scopeDesc.PrivateBrandStack))
+		for i, vmInfo := range scopeDesc.PrivateBrandStack {
+			c.privateBrandStack[i] = c.convertVMBrandInfoToCompiler(&vmInfo)
+		}
+	}
+
+	// Restore current brand
+	c.currentPrivateBrand = scopeDesc.CurrentPrivateBrand
+	if scopeDesc.CurrentPrivateBrandInfo != nil {
+		c.currentPrivateBrandInfo = c.convertVMBrandInfoToCompiler(scopeDesc.CurrentPrivateBrandInfo)
+	}
+}
+
+// convertVMBrandInfoToCompiler converts a VM PrivateBrandInfoVM to compiler PrivateBrandInfo.
+func (c *Compiler) convertVMBrandInfoToCompiler(vmInfo *vm.PrivateBrandInfoVM) PrivateBrandInfo {
+	if vmInfo == nil {
+		return PrivateBrandInfo{}
+	}
+	// Copy declared fields
+	declaredFields := make(map[string]bool, len(vmInfo.DeclaredFields))
+	for k, v := range vmInfo.DeclaredFields {
+		declaredFields[k] = v
+	}
+	// Convert member kinds
+	memberKinds := make(map[string]PrivateMemberKind, len(vmInfo.MemberKinds))
+	for k, v := range vmInfo.MemberKinds {
+		memberKinds[k] = PrivateMemberKind(v)
+	}
+	return PrivateBrandInfo{
+		BrandID:        vmInfo.BrandID,
+		DeclaredFields: declaredFields,
+		MemberKinds:    memberKinds,
 	}
 }
 
@@ -2908,10 +3009,22 @@ func (c *Compiler) currentLoopContext() *LoopContext {
 // Additionally, we track which private field names each class declares, so nested classes
 // can access outer class private fields using the outer class's brand.
 
+// PrivateMemberKind indicates what kind of private member is declared
+type PrivateMemberKind int
+
+const (
+	PrivateMemberField    PrivateMemberKind = iota // Regular data field
+	PrivateMemberMethod                            // Private method
+	PrivateMemberGetter                            // Private getter
+	PrivateMemberSetter                            // Private setter
+	PrivateMemberAccessor                          // Private getter+setter
+)
+
 // PrivateBrandInfo tracks a class's brand ID and the private field names it declares
 type PrivateBrandInfo struct {
 	BrandID        int
-	DeclaredFields map[string]bool // Set of private field names (without #) this class declares
+	DeclaredFields map[string]bool              // Set of private field names (without #) this class declares
+	MemberKinds    map[string]PrivateMemberKind // Kind of each private member
 }
 
 // enterClassBrand assigns a new unique brand ID and pushes it onto the stack.
@@ -2927,6 +3040,7 @@ func (c *Compiler) enterClassBrand() int {
 	c.currentPrivateBrandInfo = PrivateBrandInfo{
 		BrandID:        brandID,
 		DeclaredFields: make(map[string]bool),
+		MemberKinds:    make(map[string]PrivateMemberKind),
 	}
 	c.currentPrivateBrand = brandID
 
@@ -2951,10 +3065,47 @@ func (c *Compiler) exitClassBrand() {
 // declarePrivateField registers a private field name as declared by the current class.
 // Call this when compiling private field/method/accessor declarations.
 func (c *Compiler) declarePrivateField(fieldName string) {
+	c.declarePrivateMember(fieldName, PrivateMemberField)
+}
+
+// declarePrivateMember registers a private member with its kind.
+func (c *Compiler) declarePrivateMember(fieldName string, kind PrivateMemberKind) {
 	if c.currentPrivateBrandInfo.DeclaredFields != nil {
 		c.currentPrivateBrandInfo.DeclaredFields[fieldName] = true
-		debugPrintf("// DEBUG declarePrivateField: Declared '%s' for brand %d\n", fieldName, c.currentPrivateBrand)
+		// For accessors, merge getter+setter into accessor kind
+		if existingKind, exists := c.currentPrivateBrandInfo.MemberKinds[fieldName]; exists {
+			if (existingKind == PrivateMemberGetter && kind == PrivateMemberSetter) ||
+				(existingKind == PrivateMemberSetter && kind == PrivateMemberGetter) {
+				c.currentPrivateBrandInfo.MemberKinds[fieldName] = PrivateMemberAccessor
+			}
+		} else {
+			c.currentPrivateBrandInfo.MemberKinds[fieldName] = kind
+		}
+		debugPrintf("// DEBUG declarePrivateMember: Declared '%s' (kind=%d) for brand %d\n", fieldName, kind, c.currentPrivateBrand)
 	}
+}
+
+// getPrivateMemberKind returns the kind of a private member declared in the current scope chain.
+// Returns (kind, brandID, found). If found is false, the member wasn't declared.
+func (c *Compiler) getPrivateMemberKind(fieldName string) (PrivateMemberKind, int, bool) {
+	// First check current class
+	if c.currentPrivateBrandInfo.MemberKinds != nil {
+		if kind, exists := c.currentPrivateBrandInfo.MemberKinds[fieldName]; exists {
+			return kind, c.currentPrivateBrand, true
+		}
+	}
+
+	// Walk the stack from most recent to oldest
+	for i := len(c.privateBrandStack) - 1; i >= 0; i-- {
+		brandInfo := c.privateBrandStack[i]
+		if brandInfo.MemberKinds != nil {
+			if kind, exists := brandInfo.MemberKinds[fieldName]; exists {
+				return kind, brandInfo.BrandID, true
+			}
+		}
+	}
+
+	return PrivateMemberField, 0, false
 }
 
 // getPrivateFieldKey returns the branded key for a private field.

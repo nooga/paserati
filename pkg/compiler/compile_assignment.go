@@ -116,12 +116,13 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		indexReg Register
 	}
 	var memberInfo struct { // Info needed for member expr
-		objectReg      Register
-		nameConstIdx   uint16   // For static properties
-		isComputed     bool     // True if this is a computed property
-		keyReg         Register // For computed properties
-		isPrivateField bool     // True if this is a private field (#field)
-		isWithProperty bool     // True if this is a with property (use OpGetWithProperty/OpSetWithProperty)
+		objectReg         Register
+		nameConstIdx      uint16   // For static properties
+		isComputed        bool     // True if this is a computed property
+		keyReg            Register // For computed properties
+		isPrivateField    bool     // True if this is a private field (#field)
+		isPrivateSetter   bool     // True if this is a private setter (set #field)
+		isWithProperty    bool     // True if this is a with property (use OpGetWithProperty/OpSetWithProperty)
 	}
 
 	// Track temporary registers for cleanup
@@ -705,6 +706,13 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				brandedKey := c.getPrivateFieldKey(fieldName)
 				memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(brandedKey))
 				memberInfo.isPrivateField = true
+
+				// Check if this member is declared as a setter
+				if kind, _, ok := c.getPrivateMemberKind(fieldName); ok {
+					if kind == PrivateMemberSetter || kind == PrivateMemberAccessor {
+						memberInfo.isPrivateSetter = true
+					}
+				}
 			} else {
 				// Regular property
 				memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(propName))
@@ -868,7 +876,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				c.emitByte(byte(memberInfo.keyReg))
 				c.emitByte(byte(hint))
 			} else if memberInfo.isPrivateField {
-				c.emitSetPrivateField(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+				if memberInfo.isPrivateSetter {
+					c.emitCallPrivateSetter(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+				} else {
+					c.emitSetPrivateField(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+				}
 			} else {
 				c.emitSetProp(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
 			}
@@ -1157,7 +1169,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			} else if memberInfo.isPrivateField {
 				// Use OpSetPrivateField for private fields: objectReg.#field = hint
 				debugPrintf("// DEBUG Assign Store Private Field: Emitting SetPrivateField R%d[%d] = R%d\n", memberInfo.objectReg, memberInfo.nameConstIdx, hint)
-				c.emitSetPrivateField(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+				if memberInfo.isPrivateSetter {
+					c.emitCallPrivateSetter(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+				} else {
+					c.emitSetPrivateField(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+				}
 			} else {
 				// Use OpSetProp for static properties: objectReg.nameConstIdx = hint
 				// OpSetProp will invoke setters if the property is an accessor
@@ -3101,7 +3117,13 @@ func (c *Compiler) compileAssignmentToMember(memberExpr *parser.MemberExpression
 			// Use branded key to distinguish private fields with same name in different classes
 			brandedKey := c.getPrivateFieldKey(fieldName)
 			nameConstIdx := c.chunk.AddConstant(vm.String(brandedKey))
-			c.emitSetPrivateField(objectReg, valueReg, nameConstIdx, line)
+
+			// Check if this member is declared as a setter
+			if kind, _, ok := c.getPrivateMemberKind(fieldName); ok && (kind == PrivateMemberSetter || kind == PrivateMemberAccessor) {
+				c.emitCallPrivateSetter(objectReg, valueReg, nameConstIdx, line)
+			} else {
+				c.emitSetPrivateField(objectReg, valueReg, nameConstIdx, line)
+			}
 		} else {
 			// Regular property
 			nameConstIdx := c.chunk.AddConstant(vm.String(propName))
