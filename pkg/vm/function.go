@@ -187,7 +187,10 @@ func (fn *FunctionObject) GetOrCreatePrototypeWithVM(vm *VM) Value {
 
 	// Create prototype lazily with the appropriate parent
 	prototypeObj := NewObject(prototypeParent)
-	fn.Properties.SetOwn("prototype", prototypeObj)
+	// Per ECMAScript spec, function.prototype is: writable=true, enumerable=false, configurable=false
+	// (This applies to both regular functions and generator functions)
+	w, e, c := true, false, false
+	fn.Properties.DefineOwnProperty("prototype", prototypeObj, &w, &e, &c)
 
 	// Set constructor property on prototype (circular reference)
 	// IMPORTANT: Generator and async generator function prototypes should NOT have a constructor property

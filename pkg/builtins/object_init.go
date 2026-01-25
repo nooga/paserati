@@ -195,6 +195,10 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if closure.Fn.IsClassConstructor {
 					return vm.BooleanValue(true), nil
 				}
+				// Generator functions (sync and async) always have prototype per spec
+				if closure.Fn.IsGenerator {
+					return vm.BooleanValue(true), nil
+				}
 				// For closures, check both closure.Properties and Fn.Properties
 				if closure.Properties != nil {
 					if _, hasOwn := closure.Properties.GetOwn("prototype"); hasOwn {
@@ -278,27 +282,65 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.BooleanValue(false), nil
 		}
 		propName := keyVal.ToString()
-		if po := thisValue.AsPlainObject(); po != nil {
+		// IMPORTANT: Check type BEFORE calling As*() methods since they panic on type mismatch
+		switch thisValue.Type() {
+		case vm.TypeObject:
+			po := thisValue.AsPlainObject()
 			if _, _, en, _, ok := po.GetOwnDescriptor(propName); ok {
 				return vm.BooleanValue(en), nil
 			}
 			return vm.BooleanValue(false), nil
-		}
-		if dict := thisValue.AsDictObject(); dict != nil {
+		case vm.TypeDictObject:
+			dict := thisValue.AsDictObject()
 			if _, _, en, _, ok := dict.GetOwnDescriptor(propName); ok {
 				return vm.BooleanValue(en), nil
 			}
 			return vm.BooleanValue(false), nil
-		}
-		if arr := thisValue.AsArray(); arr != nil {
+		case vm.TypeArray:
+			arr := thisValue.AsArray()
 			if propName == "length" {
 				return vm.BooleanValue(false), nil
 			}
 			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < arr.Length() {
 				return vm.BooleanValue(true), nil
 			}
+			return vm.BooleanValue(false), nil
+		case vm.TypeClosure:
+			// Closure own properties: name, length are configurable but not enumerable
+			// prototype is also not enumerable for generator functions
+			if propName == "name" || propName == "length" || propName == "prototype" {
+				return vm.BooleanValue(false), nil
+			}
+			// Check closure.Properties for custom properties
+			closure := thisValue.AsClosure()
+			if closure.Properties != nil {
+				if _, _, en, _, ok := closure.Properties.GetOwnDescriptor(propName); ok {
+					return vm.BooleanValue(en), nil
+				}
+			}
+			// Check Fn.Properties
+			if closure.Fn.Properties != nil {
+				if _, _, en, _, ok := closure.Fn.Properties.GetOwnDescriptor(propName); ok {
+					return vm.BooleanValue(en), nil
+				}
+			}
+			return vm.BooleanValue(false), nil
+		case vm.TypeFunction:
+			// Function own properties: name, length are configurable but not enumerable
+			// prototype is also not enumerable
+			if propName == "name" || propName == "length" || propName == "prototype" {
+				return vm.BooleanValue(false), nil
+			}
+			fn := thisValue.AsFunction()
+			if fn.Properties != nil {
+				if _, _, en, _, ok := fn.Properties.GetOwnDescriptor(propName); ok {
+					return vm.BooleanValue(en), nil
+				}
+			}
+			return vm.BooleanValue(false), nil
+		default:
+			return vm.BooleanValue(false), nil
 		}
-		return vm.BooleanValue(false), nil
 	}))
 	if v, ok := objectProto.GetOwn("propertyIsEnumerable"); ok {
 		w, e, c := true, false, true
@@ -2216,6 +2258,15 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			value = arrObj.Get(index)
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", value)
+			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(true))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		// Check custom properties on the array (e.g., "raw" for template objects, "index"/"input" for regex matches)
+		if v, ok := arrObj.GetOwn(propName); ok {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", v)
 			descriptor.SetOwn("writable", vm.BooleanValue(true))
 			descriptor.SetOwn("enumerable", vm.BooleanValue(true))
 			descriptor.SetOwn("configurable", vm.BooleanValue(true))

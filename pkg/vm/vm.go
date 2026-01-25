@@ -2362,6 +2362,20 @@ startExecution:
 					current = vm.FunctionPrototype
 				case TypeClosure:
 					current = vm.FunctionPrototype
+				case TypeGenerator:
+					genObj := objVal.AsGenerator()
+					if genObj.Prototype != nil {
+						current = NewValueFromPlainObject(genObj.Prototype)
+					} else {
+						current = vm.GeneratorPrototype
+					}
+				case TypeAsyncGenerator:
+					asyncGenObj := objVal.AsAsyncGenerator()
+					if asyncGenObj.Prototype != nil {
+						current = NewValueFromPlainObject(asyncGenObj.Prototype)
+					} else {
+						current = vm.AsyncGeneratorPrototype
+					}
 				default:
 					current = Undefined
 				}
@@ -11569,6 +11583,36 @@ startExecution:
 				} else if propName == "length" {
 					closureObj.Fn.DeletedLength = true
 					success = true
+				} else if propName == "prototype" && closureObj.Fn.IsGenerator {
+					// Generator function prototype is non-configurable - cannot delete
+					// In strict mode, throw TypeError
+					if function.Chunk.IsStrict {
+						frame.ip = ip
+						vm.ThrowTypeError("Cannot delete property 'prototype' of function")
+						if !vm.unwinding {
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+						if vm.unwindingCrossedNative || vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					// In non-strict mode, return false
+					success = false
 				} else if closureObj.Properties != nil && closureObj.Properties.HasOwn(propName) {
 					// In strict mode, check for non-configurable
 					if function.Chunk.IsStrict {

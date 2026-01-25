@@ -219,13 +219,8 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			// Set the generator's prototype AFTER prologue execution (per ECMAScript spec 14.4.10).
 			// The spec says the generator object is created after FunctionDeclarationInstantiation,
 			// which means default parameter expressions can modify .prototype before it's read.
-			// Read from closure's Properties first (shadows Fn.Properties), then fall back to Fn.Properties.
-			prototypeVal := Undefined
-			if calleeClosure.Properties != nil && calleeClosure.Properties.HasOwn("prototype") {
-				prototypeVal, _ = calleeClosure.Properties.GetOwn("prototype")
-			} else if calleeFunc.Properties != nil && calleeFunc.Properties.HasOwn("prototype") {
-				prototypeVal, _ = calleeFunc.Properties.GetOwn("prototype")
-			}
+			// Use GetPrototypeWithVM which creates the prototype lazily if it doesn't exist.
+			prototypeVal := calleeClosure.GetPrototypeWithVM(vm)
 
 			// If .prototype is an object, use it as the generator's prototype
 			// Otherwise, use the default GeneratorPrototype
