@@ -318,6 +318,10 @@ func (p *Paserati) EvalCode(code string, inheritStrict bool) (vm.Value, []error)
 	// Parse the source code
 	lx := lexer.NewLexer(code)
 	ps := parser.NewParser(lx)
+	// Set strict mode before parsing so legacy octal etc. are rejected during parse
+	if inheritStrict {
+		ps.SetStrictMode(true)
+	}
 	prog, parseErrs := ps.ParseProgram()
 	if len(parseErrs) > 0 {
 		errs := make([]error, len(parseErrs))
@@ -428,6 +432,10 @@ func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm
 	// Parse the source code
 	lx := lexer.NewLexer(code)
 	ps := parser.NewParser(lx)
+	// Set strict mode before parsing so legacy octal etc. are rejected during parse
+	if inheritStrict {
+		ps.SetStrictMode(true)
+	}
 	prog, parseErrs := ps.ParseProgram()
 	if len(parseErrs) > 0 {
 		errs := make([]error, len(parseErrs))

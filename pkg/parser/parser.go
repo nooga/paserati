@@ -46,6 +46,9 @@ type Parser struct {
 	// Eval context flags
 	disallowSuper bool // When true, super expressions throw SyntaxError (for indirect eval)
 
+	// Strict mode tracking
+	strictMode bool // True when parsing strict mode code
+
 	// Arena allocator for AST nodes - reduces GC pressure
 	arena *ASTArena
 }
@@ -385,6 +388,12 @@ func (p *Parser) SetDisallowSuper(disallow bool) {
 	p.disallowSuper = disallow
 }
 
+// SetStrictMode sets whether the parser should operate in strict mode.
+// This is used for eval() to inherit strict mode from the calling context.
+func (p *Parser) SetStrictMode(strict bool) {
+	p.strictMode = strict
+}
+
 // nextToken advances the current and peek tokens.
 func (p *Parser) nextToken() {
 	p.curToken = p.peekToken
@@ -441,10 +450,32 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	program.HoistedDeclarations = make(map[string]Expression) // Initialize map with Expression
 	program.Source = p.source                                 // Set source context for error reporting
 
+	// Track if we're still in the directive prologue (for "use strict" detection)
+	inDirectivePrologue := true
+
 	for p.curToken.Type != lexer.EOF {
 		stmt := p.parseStatement()
 		if stmt != nil {
 			program.Statements = append(program.Statements, stmt)
+
+			// --- Directive Prologue Check for "use strict" ---
+			if inDirectivePrologue {
+				if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt != nil {
+					if strLit, isStrLit := exprStmt.Expression.(*StringLiteral); isStrLit && strLit != nil {
+						if strLit.Value == "use strict" {
+							p.strictMode = true
+						}
+						// Continue in directive prologue - more directives may follow
+					} else {
+						// Non-string-literal expression ends directive prologue
+						inDirectivePrologue = false
+					}
+				} else {
+					// Non-expression statement ends directive prologue
+					inDirectivePrologue = false
+				}
+			}
+			// --- End Directive Prologue Check ---
 
 			// --- Hoisting Check ---
 			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
@@ -1785,6 +1816,11 @@ func (p *Parser) parseNumberLiteral() Expression {
 			}
 		}
 		if isLegacyOctal {
+			// Legacy octal literals are not allowed in strict mode
+			if p.strictMode {
+				p.addError(p.curToken, "Octal literals are not allowed in strict mode")
+				return nil
+			}
 			base = 8
 			prefixLen = 0 // No prefix to strip - the 0 is part of the number but strconv handles it
 		}

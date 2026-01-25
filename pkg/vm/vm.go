@@ -2078,8 +2078,19 @@ startExecution:
 					}
 				case TypeObject:
 					plainObj := objVal.AsPlainObject()
-					// Use prototype-aware Has() method instead of HasOwn()
+					// Use prototype-aware Has() method first
 					hasProperty = plainObj.Has(propKey)
+					// Special handling for global object: also check heap variables (var declarations)
+					// But ONLY if the property doesn't exist on the object itself
+					// This handles the case where var x is declared but not yet assigned
+					if !hasProperty && plainObj == vm.GlobalObject {
+						if idx, exists := vm.heap.nameToIndex[propKey]; exists {
+							// Only consider user-defined globals (not builtins) that are initialized
+							if idx >= vm.heap.builtinCount && vm.heap.initialized[idx] {
+								hasProperty = true
+							}
+						}
+					}
 				case TypeDictObject:
 					dictObj := objVal.AsDictObject()
 					// Use prototype-aware Has() method instead of HasOwn()
@@ -5580,6 +5591,50 @@ startExecution:
 
 				// idx is now set from either number or string path
 				// and we've verified it's a valid array index (non-negative integer)
+
+				// Check for setter on Array.prototype chain before direct write
+				// ECMAScript requires invoking inherited setters for array indices
+				idxKey := strconv.Itoa(idx)
+				setterKey := "s:" + idxKey // PropertyKey hash format for string keys
+				setterFound := false
+				if vm.ArrayPrototype.IsObject() {
+					for cur := vm.ArrayPrototype.AsPlainObject(); cur != nil; {
+						// Check directly in the setters map (keyed by PropertyKey.hash())
+						if cur.setters != nil {
+							if s, ok := cur.setters[setterKey]; ok {
+								// Call the setter with this=array (original object)
+								frame.ip = ip
+								_, err := vm.Call(s, baseVal, []Value{valueVal})
+								if err != nil {
+									if ee, ok := err.(ExceptionError); ok {
+										vm.throwException(ee.GetExceptionValue())
+										return InterpretRuntimeError, Undefined
+									}
+									status := vm.runtimeError("%v", err)
+									return status, Undefined
+								}
+								setterFound = true
+								break
+							}
+						}
+						// Also check getters-only accessor (has getter but no setter)
+						if cur.getters != nil {
+							if _, ok := cur.getters[setterKey]; ok {
+								// Found accessor with getter but no setter - silently fail in non-strict mode
+								setterFound = true
+								break
+							}
+						}
+						protoVal := cur.GetPrototype()
+						if !protoVal.IsObject() {
+							break
+						}
+						cur = protoVal.AsPlainObject()
+					}
+				}
+				if setterFound {
+					continue
+				}
 
 				// Handle Array Expansion
 				if idx < len(arr.elements) {
@@ -9950,6 +10005,21 @@ startExecution:
 				// Per ECMAScript spec: non-enumerable own properties shadow enumerable prototype properties
 				seen := make(map[string]bool)
 				cur := objValue.AsPlainObject()
+
+				// Special handling for the global object: include heap variables (var declarations)
+				// ECMAScript requires global var declarations to be enumerable properties on the global object
+				if cur == vm.GlobalObject {
+					for name, idx := range vm.heap.nameToIndex {
+						// Global var declarations are enumerable
+						// Builtins are typically non-enumerable, but we include user-defined globals
+						// Check if the variable is user-defined (index >= builtinCount) AND initialized
+						if idx >= vm.heap.builtinCount && vm.heap.initialized[idx] {
+							keys = append(keys, name)
+							seen[name] = true
+						}
+					}
+				}
+
 				for cur != nil {
 					// Add enumerable properties that haven't been shadowed by earlier objects
 					for _, k := range cur.OwnKeys() {
