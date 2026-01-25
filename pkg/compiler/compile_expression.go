@@ -2312,8 +2312,11 @@ func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, 
 			rawArr.Append(v)
 		}
 		rawArr.SetExtensible(false)
-		arr.SetOwn("raw", rawVal)
+		rawArr.SetFrozen(true)
+		// Per ECMAScript spec, template object's raw property: writable=false, enumerable=false, configurable=false
+		arr.DefineOwnProperty("raw", rawVal, false, false, false)
 		arr.SetExtensible(false)
+		arr.SetFrozen(true)
 		c.emitLoadNewConstant(funcBase+1, arrVal, line)
 
 		// 5. Compile substitutions into subsequent registers
@@ -2359,9 +2362,11 @@ func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, 
 	}
 	// Freeze both arrays per ECMAScript spec - template objects are frozen
 	rawArr.SetExtensible(false)
-	// Set .raw on cooked array BEFORE freezing cooked array
-	arr.SetOwn("raw", rawVal)
+	rawArr.SetFrozen(true)
+	// Per ECMAScript spec, template object's raw property: writable=false, enumerable=false, configurable=false
+	arr.DefineOwnProperty("raw", rawVal, false, false, false)
 	arr.SetExtensible(false)
+	arr.SetFrozen(true)
 	// Load the frozen cooked array (which has .raw property set)
 	c.emitLoadNewConstant(funcBase+1, arrVal, line)
 

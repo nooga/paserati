@@ -2244,13 +2244,14 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	// Check arrays first before plainObj (arrays can also be AsPlainObject but their indices are stored separately)
 	if obj.Type() == vm.TypeArray {
 		arrObj := obj.AsArray()
+		isFrozen := arrObj.IsFrozen()
 		// For arrays, check if it's a valid index or 'length'
 		if propName == "length" {
 			value = vm.NumberValue(float64(arrObj.Length()))
-			// length is non-enumerable, non-configurable, writable per JS spec for Array.length
+			// length is non-enumerable, non-configurable; writable unless frozen
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", value)
-			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			descriptor.SetOwn("writable", vm.BooleanValue(!isFrozen))
 			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
 			descriptor.SetOwn("configurable", vm.BooleanValue(false))
 			return vm.NewValueFromPlainObject(descriptor), nil
@@ -2258,18 +2259,19 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			value = arrObj.Get(index)
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", value)
-			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			// When frozen, elements are not writable and not configurable
+			descriptor.SetOwn("writable", vm.BooleanValue(!isFrozen))
 			descriptor.SetOwn("enumerable", vm.BooleanValue(true))
-			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			descriptor.SetOwn("configurable", vm.BooleanValue(!isFrozen))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
 		// Check custom properties on the array (e.g., "raw" for template objects, "index"/"input" for regex matches)
-		if v, ok := arrObj.GetOwn(propName); ok {
+		if v, desc, ok := arrObj.GetOwnPropertyDescriptor(propName); ok {
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", v)
-			descriptor.SetOwn("writable", vm.BooleanValue(true))
-			descriptor.SetOwn("enumerable", vm.BooleanValue(true))
-			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			descriptor.SetOwn("writable", vm.BooleanValue(desc.Writable))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(desc.Enumerable))
+			descriptor.SetOwn("configurable", vm.BooleanValue(desc.Configurable))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
 		// Fall through for non-index properties on arrays (methods, custom props)

@@ -154,10 +154,19 @@ type SymbolObject struct {
 
 type ArrayObject struct {
 	Object
-	length     int
-	elements   []Value
-	properties map[string]Value // Named properties (e.g., "index", "input" for match results)
-	extensible bool             // When false, no new properties can be added (for Object.freeze/seal)
+	length       int
+	elements     []Value
+	properties   map[string]Value        // Named properties (e.g., "index", "input" for match results)
+	propertyDesc map[string]PropertyDesc // Property descriptors for named properties
+	extensible   bool                    // When false, no new properties can be added (for Object.freeze/seal)
+	frozen       bool                    // When true, elements are also non-writable and non-configurable
+}
+
+// PropertyDesc stores property descriptor attributes
+type PropertyDesc struct {
+	Writable     bool
+	Enumerable   bool
+	Configurable bool
 }
 
 type ArgumentsObject struct {
@@ -1904,6 +1913,51 @@ func (a *ArrayObject) SetOwn(name string, value Value) {
 		a.properties = make(map[string]Value)
 	}
 	a.properties[name] = value
+}
+
+// DefineOwnProperty sets a named property with specified descriptor attributes
+func (a *ArrayObject) DefineOwnProperty(name string, value Value, writable, enumerable, configurable bool) {
+	if a.properties == nil {
+		a.properties = make(map[string]Value)
+	}
+	if a.propertyDesc == nil {
+		a.propertyDesc = make(map[string]PropertyDesc)
+	}
+	a.properties[name] = value
+	a.propertyDesc[name] = PropertyDesc{
+		Writable:     writable,
+		Enumerable:   enumerable,
+		Configurable: configurable,
+	}
+}
+
+// GetOwnPropertyDescriptor returns the descriptor for a named property
+func (a *ArrayObject) GetOwnPropertyDescriptor(name string) (Value, PropertyDesc, bool) {
+	if a.properties == nil {
+		return Undefined, PropertyDesc{}, false
+	}
+	v, ok := a.properties[name]
+	if !ok {
+		return Undefined, PropertyDesc{}, false
+	}
+	// Check if we have a stored descriptor
+	if a.propertyDesc != nil {
+		if desc, hasDesc := a.propertyDesc[name]; hasDesc {
+			return v, desc, true
+		}
+	}
+	// Default descriptor if no explicit one was set
+	return v, PropertyDesc{Writable: true, Enumerable: true, Configurable: true}, true
+}
+
+// IsFrozen returns whether this array is frozen
+func (a *ArrayObject) IsFrozen() bool {
+	return a.frozen
+}
+
+// SetFrozen sets whether this array is frozen (elements non-writable/non-configurable)
+func (a *ArrayObject) SetFrozen(frozen bool) {
+	a.frozen = frozen
 }
 
 // IsExtensible returns whether new properties can be added to this array
