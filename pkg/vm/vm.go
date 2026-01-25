@@ -3072,6 +3072,39 @@ startExecution:
 			objReg := code[ip]
 			ip += 1
 			objVal := registers[objReg]
+			// Per ECMAScript spec 14.11.2, with statement calls ToObject on the expression
+			// ToObject(null) and ToObject(undefined) throw TypeError
+			if objVal.Type() == TypeNull || objVal.Type() == TypeUndefined {
+				frame.ip = ip
+				err := vm.NewTypeError(fmt.Sprintf("Cannot convert %s to object", objVal.Type().String()))
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+				}
+				// Follow the OpThrow pattern: check unwinding state and continue
+				if vm.unwinding {
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					// Reload frame state and continue unwinding
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				// Exception was caught, continue execution
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
 			// Push the value to with stack if it's an object-like value
 			// This includes TypeObject, TypeProxy, TypeDictObject, etc.
 			switch objVal.Type() {
