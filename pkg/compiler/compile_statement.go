@@ -294,7 +294,8 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 		// debug disabled
 		var valueReg Register = nilRegister
 		var err errors.PaseratiError
-		isValueFunc := false // Flag to track if value is a function literal
+		isValueFunc := false       // Flag to track if value is a function literal
+		handledInWithBlock := false // Flag to track if handled by with-block special path
 
 		if funcLit, ok := declarator.Value.(*parser.FunctionLiteral); ok {
 			isValueFunc = true
@@ -392,17 +393,58 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			}
 
 		} else if node.Value != nil {
-			// Compile other value types normally
-			// DON'T defer free - we'll free explicitly below if needed (when it's a temp, not a variable register)
-			valueReg = c.regAlloc.Alloc()
-			_, err = c.compileNode(node.Value, valueReg)
-			if err != nil {
-				return BadRegister, err
+			// IMPORTANT: Per ECMAScript spec (13.3.2.4), for var declarations with initializers
+			// inside a with block, we must ResolveBinding BEFORE evaluating the initializer.
+			// This matters when the initializer modifies the binding environment (e.g., delete).
+			if c.currentFuncWithDepth > 0 {
+				varName := node.Name.Value
+				nameIdx := c.chunk.AddConstant(vm.NewString(varName))
+
+				// Determine the local register (255 = no local, falls back to global)
+				var localReg Register = 255
+				if sym, _, found := c.currentSymbolTable.Resolve(varName); found && sym.Register != nilRegister && !sym.IsGlobal {
+					localReg = sym.Register
+				} else if c.enclosing == nil {
+					// Top-level: ensure global exists (localReg stays 255 for global fallback)
+					c.GetOrAssignGlobalIndex(varName)
+				} else {
+					// Function scope: define the local
+					localReg = c.regAlloc.Alloc()
+					c.currentSymbolTable.Define(varName, localReg)
+				}
+
+				// 1. ResolveBinding FIRST - capture which binding to use
+				bindingReg := c.regAlloc.Alloc()
+				c.emitResolveWithBinding(bindingReg, int(nameIdx), localReg, node.Name.Token.Line)
+
+				// 2. Then evaluate the initializer
+				valueReg = c.regAlloc.Alloc()
+				_, err = c.compileNode(node.Value, valueReg)
+				if err != nil {
+					c.regAlloc.Free(bindingReg)
+					return BadRegister, err
+				}
+
+				// 3. Then assign using the pre-resolved binding
+				c.emitSetWithByBinding(int(nameIdx), valueReg, localReg, bindingReg, node.Name.Token.Line)
+				c.regAlloc.Free(valueReg)
+				c.regAlloc.Free(bindingReg)
+
+				// Mark as handled to skip the normal assignment path below
+				handledInWithBlock = true
+			} else {
+				// Compile other value types normally (no with block)
+				// DON'T defer free - we'll free explicitly below if needed (when it's a temp, not a variable register)
+				valueReg = c.regAlloc.Alloc()
+				_, err = c.compileNode(node.Value, valueReg)
+				if err != nil {
+					return BadRegister, err
+				}
 			}
 		} // else: node.Value is nil (implicit undefined handled below)
 
 		// Handle implicit undefined (`var x;`)
-		if valueReg == nilRegister && !isValueFunc {
+		if valueReg == nilRegister && !isValueFunc && !handledInWithBlock {
 			// ECMAScript: If the variable is already defined as a PARAMETER,
 			// `var x;` should NOT reset it to undefined - it's a no-op for the value.
 			// However, for function name bindings (e.g., `function n() { var n; }`),
@@ -447,7 +489,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 					// DON'T free valueReg - it's now the variable's permanent register
 				}
 			}
-		} else if !isValueFunc {
+		} else if !isValueFunc && !handledInWithBlock {
 			// Define symbol ONLY for non-function values.
 			// Function assignments were handled above by UpdateRegister.
 			//
@@ -509,7 +551,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				// DON'T free valueReg - it's now the variable's permanent register
 				debugPrintf("// [VarStmt] Successfully defined '%s'\n", node.Name.Value)
 			}
-		} else if c.enclosing == nil {
+		} else if c.enclosing == nil && !handledInWithBlock {
 			// Top-level function: also set as global
 			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 			// Get the closure register from the symbol table

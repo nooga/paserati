@@ -2052,9 +2052,19 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				c.emitLoadFree(hint, freeVarIndex, node.Token.Line)
 			}
 		} else if symbolRef.IsGlobal {
-			// This is a global variable, use OpGetGlobal
-			debugPrintf("// DEBUG Identifier '%s': GLOBAL variable, using OpGetGlobal\n", node.Value) // <<< ADDED
-			c.emitGetGlobal(hint, symbolRef.GlobalIndex, node.Token.Line)
+			// This is a global variable
+			// Use withBlockDepth (not currentFuncWithDepth) so closures inside with blocks
+			// also check captured with-objects for globals
+			if c.withBlockDepth > 0 {
+				// Inside a with block (or closure defined in one), use OpGetWithProperty
+				// which checks with-object stack first, then falls back to global
+				debugPrintf("// DEBUG Identifier '%s': GLOBAL variable inside with block, using OpGetWithProperty\n", node.Value)
+				propNameIdx := c.chunk.AddConstant(vm.String(node.Value))
+				c.emitGetWithProperty(hint, int(propNameIdx), node.Token.Line)
+			} else {
+				debugPrintf("// DEBUG Identifier '%s': GLOBAL variable, using OpGetGlobal\n", node.Value)
+				c.emitGetGlobal(hint, symbolRef.GlobalIndex, node.Token.Line)
+			}
 		} else if !isLocal {
 			// Check if this is an imported identifier before treating as free variable
 			isModuleMode := c.IsModuleMode()
