@@ -6592,8 +6592,18 @@ startExecution:
 				fn := objVal.AsFunction()
 				if fn.Properties == nil {
 					frame.ip = ip
-					status := vm.runtimeError("Cannot read private field '%s': field not found", fieldName)
-					return status, Undefined
+					vm.ThrowTypeError(fmt.Sprintf("Cannot read private member #%s from an object whose class did not declare it", fieldName))
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				}
 				obj = fn.Properties
 			} else if objVal.Type() == TypeClosure {
@@ -6605,13 +6615,33 @@ startExecution:
 					obj = cl.Fn.Properties
 				} else {
 					frame.ip = ip
-					status := vm.runtimeError("Cannot read private field '%s': field not found", fieldName)
-					return status, Undefined
+					vm.ThrowTypeError(fmt.Sprintf("Cannot read private member #%s from an object whose class did not declare it", fieldName))
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				}
 			} else {
 				frame.ip = ip
-				status := vm.runtimeError("Cannot read private field '%s' of %s", fieldName, objVal.TypeName())
-				return status, Undefined
+				vm.ThrowTypeError(fmt.Sprintf("Cannot read private member #%s from an object whose class did not declare it", fieldName))
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
 			}
 
 			// Check if this is a private method
@@ -6622,8 +6652,18 @@ startExecution:
 				getter, _, exists := obj.GetPrivateAccessor(fieldName)
 				if !exists || getter.IsUndefined() {
 					frame.ip = ip
-					status := vm.runtimeError("Cannot read private accessor '%s': no getter defined", fieldName)
-					return status, Undefined
+					vm.ThrowTypeError(fmt.Sprintf("Cannot read private member #%s from an object whose class did not declare it", fieldName))
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				}
 				// Call the getter function with the object as 'this'
 				frame.ip = ip
@@ -6637,8 +6677,18 @@ startExecution:
 				value, exists := obj.GetPrivateField(fieldName)
 				if !exists {
 					frame.ip = ip
-					status := vm.runtimeError("Cannot read private field '%s': field not found", fieldName)
-					return status, Undefined
+					vm.ThrowTypeError(fmt.Sprintf("Cannot read private member #%s from an object whose class did not declare it", fieldName))
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				}
 				registers[destReg] = value
 			}
@@ -6797,7 +6847,7 @@ startExecution:
 					return InterpretRuntimeError, Undefined
 				}
 			} else {
-				// Regular private data field
+				// Regular private data field - set it (this also handles initial field creation)
 				obj.SetPrivateField(fieldName, registers[valReg])
 			}
 		case OpSetPrivateMethod:

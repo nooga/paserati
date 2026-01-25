@@ -39,8 +39,9 @@ type Parser struct {
 	typeInfixParseFns  map[lexer.TokenType]infixParseFn  // Handles type operators (e.g., |, &)
 
 	// Context tracking
-	inGenerator     int // Counter for nested generator contexts (0 = not in generator)
-	inAsyncFunction int // Counter for nested async function contexts (0 = not in async function)
+	inGenerator        int // Counter for nested generator contexts (0 = not in generator)
+	inAsyncFunction    int // Counter for nested async function contexts (0 = not in async function)
+	inNonAsyncFunction int // Counter for nested non-async function contexts (for await-as-identifier)
 
 	// Eval context flags
 	disallowSuper bool // When true, super expressions throw SyntaxError (for indirect eval)
@@ -241,7 +242,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.READONLY, p.parseIdentifier) // READONLY is a contextual keyword, can be used as identifier
 	p.registerPrefix(lexer.OVERRIDE, p.parseIdentifier) // OVERRIDE is a contextual keyword, can be used as identifier
 	p.registerPrefix(lexer.ABSTRACT, p.parseIdentifier) // ABSTRACT is a contextual keyword, can be used as identifier
-	p.registerPrefix(lexer.FUNCTION, p.parseFunctionLiteral)
+	p.registerPrefix(lexer.FUNCTION, func() Expression { return p.parseFunctionLiteral(false) })
 	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)
@@ -626,7 +627,7 @@ func (p *Parser) isDestructuringAssignment() bool {
 // --- Function Declaration Statement Parsing ---
 func (p *Parser) parseFunctionDeclarationStatement() *ExpressionStatement {
 	// Parse the function as an expression (FunctionLiteral)
-	funcExpr := p.parseFunctionLiteral()
+	funcExpr := p.parseFunctionLiteral(false)
 	if funcExpr == nil {
 		// If function parsing failed, return an empty expression statement
 		// to avoid nil statement that would cause panic in hoisting logic
@@ -661,17 +662,12 @@ func (p *Parser) parseAsyncFunctionDeclarationStatement() *ExpressionStatement {
 	}
 
 	// Parse the function as an expression (FunctionLiteral with IsAsync=true)
-	funcExpr := p.parseFunctionLiteral()
+	funcExpr := p.parseFunctionLiteral(true)
 	if funcExpr == nil {
 		return &ExpressionStatement{
 			Token:      p.curToken,
 			Expression: nil,
 		}
-	}
-
-	// Mark it as async
-	if funcLit, ok := funcExpr.(*FunctionLiteral); ok {
-		funcLit.IsAsync = true
 	}
 
 	// Wrap it in an ExpressionStatement
@@ -1744,7 +1740,7 @@ func (p *Parser) parseIdentifier() Expression {
 			TypeAnnotation: nil, // No type annotation in this shorthand syntax
 		}
 		// parseArrowFunctionBodyAndFinish expects curToken to be '=>'
-		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil)
+		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil, false)
 	}
 
 	debugPrint("parseIdentifier (VALUE context): Just identifier '%s', returning.", ident.Value)
@@ -2183,8 +2179,9 @@ func (p *Parser) parseImportMetaExpression() Expression {
 	return nil
 }
 
-func (p *Parser) parseFunctionLiteral() Expression {
+func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 	lit := &FunctionLiteral{Token: p.curToken}
+	lit.IsAsync = isAsync // Set BEFORE parsing body so context tracking works
 
 	// Check for generator syntax (function*)
 	if p.peekTokenIs(lexer.ASTERISK) {
@@ -2270,18 +2267,21 @@ func (p *Parser) parseFunctionLiteral() Expression {
 
 	// Save and manage async function context when parsing body
 	// Async functions increment the context (nested async functions are allowed)
-	// Non-async functions do NOT reset the context (they inherit parent context)
-	// This allows top-level await to work while still disallowing await in non-async functions
+	// Non-async functions track separately so await can be used as identifier
 	savedAsyncContext := p.inAsyncFunction
+	savedNonAsyncContext := p.inNonAsyncFunction
 	if lit.IsAsync {
 		p.inAsyncFunction++
 		if debugParser {
 			fmt.Printf("[PARSER] Entering async function context, inAsyncFunction=%d\n", p.inAsyncFunction)
 		}
+	} else {
+		// Non-async function: track depth so await can be treated as identifier
+		p.inNonAsyncFunction++
+		if debugParser {
+			fmt.Printf("[PARSER] Entering non-async function context, inNonAsyncFunction=%d\n", p.inNonAsyncFunction)
+		}
 	}
-	// Note: We do NOT reset inAsyncFunction for non-async functions
-	// This allows top-level await to work, while await in non-async function bodies
-	// will be caught by the type checker when type checking is enabled.
 
 	lit.Body = p.parseBlockStatement() // Includes consuming RBRACE
 
@@ -2293,6 +2293,7 @@ func (p *Parser) parseFunctionLiteral() Expression {
 
 	// Restore the saved async function context
 	p.inAsyncFunction = savedAsyncContext
+	p.inNonAsyncFunction = savedNonAsyncContext
 	if debugParser {
 		fmt.Printf("[PARSER] Restored async function context to %d\n", p.inAsyncFunction)
 	}
@@ -3724,7 +3725,7 @@ func (p *Parser) parseYieldExpression() Expression {
 			Name:           ident,
 			TypeAnnotation: nil,
 		}
-		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil)
+		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil, false)
 	}
 
 	// Common identifier contexts: yield), yield,, yield;, yield}, yield], yield.prop, yield + x, yield()
@@ -3805,11 +3806,7 @@ func (p *Parser) parseAsyncExpression() Expression {
 
 	// Check if this is an async function expression
 	if p.curTokenIs(lexer.FUNCTION) {
-		funcExpr := p.parseFunctionLiteral()
-		if funcLit, ok := funcExpr.(*FunctionLiteral); ok {
-			funcLit.IsAsync = true
-		}
-		return funcExpr
+		return p.parseFunctionLiteral(true)
 	}
 
 	// Check if this is an async arrow function with single parameter: async x => x
@@ -3822,11 +3819,7 @@ func (p *Parser) parseAsyncExpression() Expression {
 			Name:           ident,
 			TypeAnnotation: nil,
 		}
-		arrowExpr := p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil)
-		if arrowLit, ok := arrowExpr.(*ArrowFunctionLiteral); ok {
-			arrowLit.IsAsync = true
-		}
-		return arrowExpr
+		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil, true)
 	}
 
 	// Check if this is an async arrow function with parenthesized parameters: async () => ...
@@ -3843,11 +3836,7 @@ func (p *Parser) parseAsyncExpression() Expression {
 		if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.ARROW) {
 			p.nextToken() // Consume ')', cur is now '=>'
 			p.errors = p.errors[:startErrors]
-			arrowExpr := p.parseArrowFunctionBodyAndFinish(nil, params, restParam, nil)
-			if arrowLit, ok := arrowExpr.(*ArrowFunctionLiteral); ok {
-				arrowLit.IsAsync = true
-			}
-			return arrowExpr
+			return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, nil, true)
 		} else if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.COLON) {
 			// async (params): ReturnType => body
 			p.nextToken() // Consume ')', cur is now ':'
@@ -3857,11 +3846,7 @@ func (p *Parser) parseAsyncExpression() Expression {
 			if !p.expectPeek(lexer.ARROW) {
 				return nil
 			}
-			arrowExpr := p.parseArrowFunctionBodyAndFinish(nil, params, restParam, returnTypeAnnotation)
-			if arrowLit, ok := arrowExpr.(*ArrowFunctionLiteral); ok {
-				arrowLit.IsAsync = true
-			}
-			return arrowExpr
+			return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, returnTypeAnnotation, true)
 		} else {
 			// Backtrack - not a valid async arrow function
 			p.l.RestoreState(startState)
@@ -3884,6 +3869,17 @@ func (p *Parser) parseAsyncExpression() Expression {
 func (p *Parser) parseAwaitExpression() Expression {
 	awaitToken := p.curToken
 
+	// In non-async function contexts (when not nested inside an async function),
+	// 'await' is a valid identifier, not a keyword.
+	// This allows `function await() {}` and `await(null)` as a function call.
+	// But at top level or inside async functions, 'await' is the await expression keyword.
+	if p.inNonAsyncFunction > 0 && p.inAsyncFunction == 0 {
+		return &Identifier{
+			Token: awaitToken,
+			Value: awaitToken.Literal, // "await"
+		}
+	}
+
 	// Special case: await => expr is a shorthand arrow function with await as parameter
 	// This is valid in script mode (non-module, non-async)
 	if p.peekTokenIs(lexer.ARROW) {
@@ -3894,7 +3890,7 @@ func (p *Parser) parseAwaitExpression() Expression {
 			Name:           ident,
 			TypeAnnotation: nil,
 		}
-		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil)
+		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil, false)
 	}
 
 	// Check if the next token can start an expression
@@ -3980,8 +3976,8 @@ func (p *Parser) parseGroupedExpression() Expression {
 			debugPrint("parseGroupedExpression: Successfully parsed arrow params: %v, found '=>' next.", params)
 			p.nextToken() // Consume ')', Now curToken is '=>'
 			debugPrint("parseGroupedExpression: Consumed ')', cur is now '=>'")
-			p.errors = p.errors[:startErrors]                                     // Clear errors from backtrack attempt
-			return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, nil) // No return type annotation
+			p.errors = p.errors[:startErrors]                                            // Clear errors from backtrack attempt
+			return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, nil, false) // No return type annotation
 
 			// Case 2: Arrow function with params AND return type annotation: (a: T, b: U): R => body
 		// We need to save state here too, because ): might NOT be a return type annotation
@@ -4008,7 +4004,7 @@ func (p *Parser) parseGroupedExpression() Expression {
 
 				// Pass the correctly parsed returnTypeAnnotation.
 				// parseArrowFunctionBodyAndFinish expects curToken to be '=>'.
-				return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, returnTypeAnnotation)
+				return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, returnTypeAnnotation, false)
 			}
 
 			// NOT an arrow function! The ): was part of something else (e.g., ternary alternate)
@@ -4332,14 +4328,25 @@ func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 
 // parseArrowFunctionBodyAndFinish completes parsing an arrow function.
 // It assumes the parameters have been parsed and the current token is '=>'.
-func (p *Parser) parseArrowFunctionBodyAndFinish(typeParams []*TypeParameter, params []*Parameter, restParam *RestParameter, returnTypeAnnotation Expression) Expression {
-	debugPrint("parseArrowFunctionBodyAndFinish: Starting, curToken='%s' (%s), params=%v, restParam=%v", p.curToken.Literal, p.curToken.Type, params, restParam)
+// The isAsync parameter indicates whether this is an async arrow function.
+func (p *Parser) parseArrowFunctionBodyAndFinish(typeParams []*TypeParameter, params []*Parameter, restParam *RestParameter, returnTypeAnnotation Expression, isAsync bool) Expression {
+	debugPrint("parseArrowFunctionBodyAndFinish: Starting, curToken='%s' (%s), params=%v, restParam=%v, isAsync=%v", p.curToken.Literal, p.curToken.Type, params, restParam, isAsync)
 	arrowFunc := &ArrowFunctionLiteral{
 		Token:                p.curToken, // The '=>' token
+		IsAsync:              isAsync,
 		TypeParameters:       typeParams, // Use the passed-in type parameters
 		Parameters:           params,     // Use the passed-in parameters
 		RestParameter:        restParam,  // Use the passed-in rest parameter
 		ReturnTypeAnnotation: returnTypeAnnotation,
+	}
+
+	// Track async/non-async function context for proper 'await' parsing
+	savedAsyncContext := p.inAsyncFunction
+	savedNonAsyncContext := p.inNonAsyncFunction
+	if isAsync {
+		p.inAsyncFunction++
+	} else {
+		p.inNonAsyncFunction++
 	}
 
 	p.nextToken() // Consume '=>' ONLY
@@ -4353,6 +4360,11 @@ func (p *Parser) parseArrowFunctionBodyAndFinish(typeParams []*TypeParameter, pa
 		// No nextToken here - curToken is already the start of the expression
 		arrowFunc.Body = p.parseExpression(COMMA)
 	}
+
+	// Restore context
+	p.inAsyncFunction = savedAsyncContext
+	p.inNonAsyncFunction = savedNonAsyncContext
+
 	debugPrint("parseArrowFunctionBodyAndFinish: Finished parsing body=%T, returning ArrowFunc", arrowFunc.Body)
 
 	// Transform arrow function if it has destructuring parameters
@@ -7752,7 +7764,7 @@ func (p *Parser) tryParseFunctionOverloadGroup() *FunctionOverloadGroup {
 	}
 
 	// Parse the implementation as a function literal
-	funcLitExpr := p.parseFunctionLiteral()
+	funcLitExpr := p.parseFunctionLiteral(false)
 	if funcLitExpr == nil {
 		// Failed to parse implementation
 		p.curToken = originalCurToken
@@ -9124,7 +9136,7 @@ func (p *Parser) parseGenericArrowFunction() Expression {
 		return nil
 	}
 
-	return p.parseArrowFunctionBodyAndFinish(typeParams, params, restParam, returnTypeAnnotation)
+	return p.parseArrowFunctionBodyAndFinish(typeParams, params, restParam, returnTypeAnnotation, false)
 }
 
 // parseGenericFunctionTypeExpression parses generic function types in type annotation context

@@ -363,7 +363,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 				// Look ahead to distinguish
 				if p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) {
 					// It's a method (either regular or generic) - parse it and handle signatures/implementations
-					result := p.parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
+					result := p.parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, false)
 					if result != nil {
 						if sig, ok := result.(*MethodSignature); ok {
 							// It's a method signature
@@ -500,7 +500,7 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 
 // parseMethod parses a regular method or signature
 // Returns either *MethodSignature or *MethodDefinition based on whether it ends with ';' or '{'
-func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride bool) interface{} {
+func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, isAsync bool) interface{} {
 	methodToken := p.curToken
 	var methodName Expression
 	if p.curToken.Type == lexer.STRING {
@@ -585,7 +585,20 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 		return nil
 	}
 
+	// Track async/non-async function context for proper 'await' parsing
+	savedAsyncContext := p.inAsyncFunction
+	savedNonAsyncContext := p.inNonAsyncFunction
+	if isAsync {
+		p.inAsyncFunction++
+	} else {
+		p.inNonAsyncFunction++
+	}
+
 	body := p.parseBlockStatement()
+
+	// Restore context
+	p.inAsyncFunction = savedAsyncContext
+	p.inNonAsyncFunction = savedNonAsyncContext
 
 	// parseBlockStatement leaves us at '}', advance past it
 	p.nextToken()
@@ -594,6 +607,7 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 	functionLiteral := &FunctionLiteral{
 		Token:                methodToken,
 		Name:                 nil, // Methods don't have names in the traditional function sense
+		IsAsync:              isAsync,
 		TypeParameters:       typeParameters,
 		Parameters:           parameters,
 		RestParameter:        restParameter,
@@ -618,16 +632,16 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 }
 
 // parseAsyncMethod parses an async method in a class
-// Reuses parseMethod logic but marks the result as async
+// Reuses parseMethod logic with isAsync=true
 func (p *Parser) parseAsyncMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride bool) *MethodDefinition {
-	result := p.parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
+	result := p.parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, true)
 	if result == nil {
 		return nil
 	}
 
 	// parseMethod can return either MethodSignature or MethodDefinition
 	if method, ok := result.(*MethodDefinition); ok {
-		// Mark the function literal as async
+		// IsAsync is already set by parseMethod, but ensure it's marked
 		if method.Value != nil {
 			method.Value.IsAsync = true
 		}
@@ -1019,7 +1033,7 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 	// Now determine if this is a method or property based on what follows
 	if p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) {
 		// It's a computed method: [expr]() {} or [expr]<T>() {}
-		return p.parseComputedMethod(bracketToken, keyExpr, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
+		return p.parseComputedMethod(bracketToken, keyExpr, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, false)
 	} else {
 		// It's a computed property: [expr]: type = value or [expr] = value
 		return p.parseComputedProperty(bracketToken, keyExpr, isStatic, isReadonly, isPublic, isPrivate, isProtected)
@@ -1027,7 +1041,7 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 }
 
 // parseComputedMethod parses a computed method in a class
-func (p *Parser) parseComputedMethod(bracketToken lexer.Token, keyExpr Expression, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride bool) interface{} {
+func (p *Parser) parseComputedMethod(bracketToken lexer.Token, keyExpr Expression, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, isAsync bool) interface{} {
 	// Try to parse type parameters: [expr]<T, U>()
 	typeParameters := p.tryParseTypeParameters()
 
@@ -1096,7 +1110,20 @@ func (p *Parser) parseComputedMethod(bracketToken lexer.Token, keyExpr Expressio
 		return nil
 	}
 
+	// Track async/non-async function context for proper 'await' parsing
+	savedAsyncContext := p.inAsyncFunction
+	savedNonAsyncContext := p.inNonAsyncFunction
+	if isAsync {
+		p.inAsyncFunction++
+	} else {
+		p.inNonAsyncFunction++
+	}
+
 	body := p.parseBlockStatement()
+
+	// Restore context
+	p.inAsyncFunction = savedAsyncContext
+	p.inNonAsyncFunction = savedNonAsyncContext
 
 	// parseBlockStatement leaves us at '}', advance past it
 	p.nextToken()
@@ -1105,6 +1132,7 @@ func (p *Parser) parseComputedMethod(bracketToken lexer.Token, keyExpr Expressio
 	functionLiteral := &FunctionLiteral{
 		Token:                bracketToken,
 		Name:                 nil, // Methods don't have names in the traditional function sense
+		IsAsync:              isAsync,
 		TypeParameters:       typeParameters,
 		Parameters:           parameters,
 		RestParameter:        restParameter,

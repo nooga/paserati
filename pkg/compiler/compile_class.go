@@ -120,6 +120,32 @@ func (c *Compiler) tryExtractConstantComputedPropertyName(expr parser.Expression
 	}
 }
 
+// declareClassPrivateNames scans a class body and declares all private field names
+// that this class defines. This must be called after enterClassBrand and before
+// compiling any methods, so that nested classes can distinguish their own private
+// fields from the outer class's private fields.
+func (c *Compiler) declareClassPrivateNames(node *parser.ClassDeclaration) {
+	// Declare private properties (fields)
+	for _, property := range node.Body.Properties {
+		propName := c.extractPropertyName(property.Key)
+		if len(propName) > 0 && propName[0] == '#' {
+			fieldName := propName[1:] // Strip #
+			c.declarePrivateField(fieldName)
+		}
+	}
+
+	// Declare private methods and accessors
+	for _, method := range node.Body.Methods {
+		if method.Kind != "constructor" {
+			methodName := c.extractPropertyName(method.Key)
+			if len(methodName) > 0 && methodName[0] == '#' {
+				fieldName := methodName[1:] // Strip #
+				c.declarePrivateField(fieldName)
+			}
+		}
+	}
+}
+
 // compileClassDeclaration compiles a class declaration into a constructor function + prototype setup
 // This follows the approach of desugaring classes to constructor functions + prototypes
 func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint Register) (Register, errors.PaseratiError) {
@@ -206,6 +232,16 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
 		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined local class '%s'\n", node.Name.Value)
 	}
+
+	// 1.5. Enter class brand context for private field tracking
+	// Each class gets a unique brand ID to distinguish its private fields from other classes
+	c.enterClassBrand()
+	defer c.exitClassBrand()
+
+	// 1.6. Declare all private fields this class has
+	// This must happen BEFORE compiling any methods so nested classes can distinguish
+	// their own private fields from the outer class's private fields
+	c.declareClassPrivateNames(node)
 
 	// 2. Create constructor function
 	constructorReg, err := c.compileConstructor(node, superConstructorReg)
@@ -1057,7 +1093,9 @@ func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constr
 	if len(propertyName) > 0 && propertyName[0] == '#' {
 		// Private static field - strip the # and use OpSetPrivateField
 		fieldName := propertyName[1:]
-		propertyNameIdx := c.chunk.AddConstant(vm.String(fieldName))
+		// Use branded key to distinguish private fields with same name in different classes
+		brandedKey := c.getPrivateFieldKey(fieldName)
+		propertyNameIdx := c.chunk.AddConstant(vm.String(brandedKey))
 		c.emitSetPrivateField(constructorReg, valueReg, propertyNameIdx, property.Token.Line)
 		debugPrintf("// DEBUG addStaticProperty: Static private field '%s' added to constructor\n", propertyName)
 	} else if computedKey, isComputed := property.Key.(*parser.ComputedPropertyName); isComputed {
@@ -1149,7 +1187,9 @@ func (c *Compiler) addStaticPrivateMethod(method *parser.MethodDefinition, const
 	// Methods are not writable - attempts to assign will throw TypeError
 	// Strip the # prefix for storage
 	fieldName := methodName[1:]
-	methodNameIdx := c.chunk.AddConstant(vm.String(fieldName))
+	// Use branded key to distinguish private fields with same name in different classes
+	brandedKey := c.getPrivateFieldKey(fieldName)
+	methodNameIdx := c.chunk.AddConstant(vm.String(brandedKey))
 	c.emitSetPrivateMethod(constructorReg, methodReg, methodNameIdx, method.Token.Line)
 
 	debugPrintf("// DEBUG addStaticPrivateMethod: Static private method '%s' stored as private method\n", methodName)

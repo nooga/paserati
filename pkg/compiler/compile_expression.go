@@ -212,7 +212,9 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 		// Private field access: obj.#field
 		// Strip the # prefix for storage (internal representation)
 		fieldName := propertyName[1:]
-		nameConstIdx := c.chunk.AddConstant(vm.String(fieldName))
+		// Use branded key to distinguish private fields with same name in different classes
+		brandedKey := c.getPrivateFieldKey(fieldName)
+		nameConstIdx := c.chunk.AddConstant(vm.String(brandedKey))
 		c.emitGetPrivateField(hint, objectReg, nameConstIdx, node.Token.Line)
 		return hint, nil
 	}
@@ -704,7 +706,9 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		if len(propName) > 0 && propName[0] == '#' {
 			// Private field - strip the # and set flag
 			fieldName := propName[1:]
-			memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(fieldName))
+			// Use branded key to distinguish private fields with same name in different classes
+			brandedKey := c.getPrivateFieldKey(fieldName)
+			memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(brandedKey))
 			memberInfo.isPrivateField = true
 		} else {
 			memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(propName))
@@ -1018,7 +1022,9 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 				if len(fieldName) > 0 && fieldName[0] == '#' {
 					fieldName = fieldName[1:]
 				}
-				nameIdx := c.chunk.AddConstant(vm.String(fieldName))
+				// Use branded key to distinguish private fields with same name in different classes
+				brandedKey := c.getPrivateFieldKey(fieldName)
+				nameIdx := c.chunk.AddConstant(vm.String(brandedKey))
 
 				// Compile the right side (object)
 				objReg := c.regAlloc.Alloc()
@@ -1996,7 +2002,9 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			if len(propertyName) > 0 && propertyName[0] == '#' {
 				// Private method call: strip # prefix for storage
 				fieldName := propertyName[1:]
-				nameConstIdx := c.chunk.AddConstant(vm.String(fieldName))
+				// Use branded key to distinguish private fields with same name in different classes
+				brandedKey := c.getPrivateFieldKey(fieldName)
+				nameConstIdx := c.chunk.AddConstant(vm.String(brandedKey))
 				c.emitGetPrivateField(funcReg, thisReg, nameConstIdx, memberExpr.Token.Line)
 			} else {
 				// Public method call
@@ -2871,11 +2879,13 @@ func (c *Compiler) compilePrivateAccessorSetup(node *parser.CallExpression, objE
 		return BadRegister, NewCompileError(node.Arguments[0], "__setPrivateAccessor__ name must be a string literal")
 	}
 
-	// Add the field name to constants
-	nameIdx := c.chunk.AddConstant(vm.String(nameArg.Value))
+	// Add the branded field name to constants
+	// Use branding to distinguish private fields across classes (e.g., Parent.#field vs Child.#field)
+	brandedKey := c.getPrivateFieldKey(nameArg.Value)
+	nameIdx := c.chunk.AddConstant(vm.String(brandedKey))
 
-	debugPrintf("// DEBUG compilePrivateAccessorSetup: emitting OpSetPrivateAccessor for field '%s' (obj=R%d, getter=R%d, setter=R%d, nameIdx=%d)\n",
-		nameArg.Value, objReg, getterReg, setterReg, nameIdx)
+	debugPrintf("// DEBUG compilePrivateAccessorSetup: emitting OpSetPrivateAccessor for field '%s' (branded='%s', obj=R%d, getter=R%d, setter=R%d, nameIdx=%d)\n",
+		nameArg.Value, brandedKey, objReg, getterReg, setterReg, nameIdx)
 
 	// Emit a special opcode for setting up private accessors
 	// We'll use OpSetPrivateAccessor: obj, getter, setter, nameIdx
@@ -2928,11 +2938,13 @@ func (c *Compiler) compilePrivateMethodSetup(node *parser.CallExpression, objExp
 		return BadRegister, NewCompileError(node.Arguments[0], "__setPrivateMethod__ name must be a string literal")
 	}
 
-	// Add the field name to constants
-	nameIdx := c.chunk.AddConstant(vm.String(nameArg.Value))
+	// Add the branded field name to constants
+	// Use branding to distinguish private methods across classes (e.g., Parent.#method vs Child.#method)
+	brandedKey := c.getPrivateFieldKey(nameArg.Value)
+	nameIdx := c.chunk.AddConstant(vm.String(brandedKey))
 
-	debugPrintf("// DEBUG compilePrivateMethodSetup: emitting OpSetPrivateMethod for method '%s' (obj=R%d, method=R%d, nameIdx=%d)\n",
-		nameArg.Value, objReg, methodReg, nameIdx)
+	debugPrintf("// DEBUG compilePrivateMethodSetup: emitting OpSetPrivateMethod for method '%s' (branded='%s', obj=R%d, method=R%d, nameIdx=%d)\n",
+		nameArg.Value, brandedKey, objReg, methodReg, nameIdx)
 
 	// Emit OpSetPrivateMethod: obj, method, nameIdx
 	c.emitSetPrivateMethod(objReg, methodReg, nameIdx, line)

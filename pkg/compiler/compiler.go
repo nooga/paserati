@@ -445,6 +445,14 @@ type Compiler struct {
 	// When walking the Outer chain, we stop at this table to avoid crossing compiler boundaries.
 	// For top-level compilers, this is nil.
 	scopeBoundary *SymbolTable
+
+	// --- Private Field Brand Tracking ---
+	// Each class gets a unique brand ID to distinguish private fields with the same name
+	// across different classes (e.g., Parent.#field vs Child.#field)
+	privateBrandCounter      int                // Global counter for brand IDs (at top-level compiler)
+	currentPrivateBrand      int                // Current class brand ID (0 if not in a class)
+	currentPrivateBrandInfo  PrivateBrandInfo   // Current class brand info including declared fields
+	privateBrandStack        []PrivateBrandInfo // Stack for nested classes (with declared field tracking)
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -658,7 +666,12 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		parameterList:            nil,                                       // Will be set when compiling function parameters
 		scopeBoundary:            enclosingCompiler.currentSymbolTable,      // Mark where parent's scope starts
 		allLocalNames:            make(map[Register]string),                 // Track all local names for ScopeDescriptor
-		isClassFieldInitializer:  enclosingCompiler.isClassFieldInitializer, // Inherit field initializer context for nested functions
+		isClassFieldInitializer: enclosingCompiler.isClassFieldInitializer, // Inherit field initializer context for nested functions
+		// Inherit private field brand context - methods need to use the class's brand ID
+		// and also need the brand stack to look up fields from enclosing classes
+		currentPrivateBrand:     enclosingCompiler.currentPrivateBrand,
+		currentPrivateBrandInfo: enclosingCompiler.currentPrivateBrandInfo,
+		privateBrandStack:       enclosingCompiler.privateBrandStack, // Inherited so nested can access outer class fields
 	}
 }
 
@@ -2889,6 +2902,94 @@ func (c *Compiler) currentLoopContext() *LoopContext {
 	return c.loopContextStack[len(c.loopContextStack)-1]
 }
 
+// --- Private Field Brand Tracking ---
+// Each class gets a unique brand ID to distinguish private fields with the same name
+// across different classes (Parent.#field vs Child.#field should be different)
+// Additionally, we track which private field names each class declares, so nested classes
+// can access outer class private fields using the outer class's brand.
+
+// PrivateBrandInfo tracks a class's brand ID and the private field names it declares
+type PrivateBrandInfo struct {
+	BrandID        int
+	DeclaredFields map[string]bool // Set of private field names (without #) this class declares
+}
+
+// enterClassBrand assigns a new unique brand ID and pushes it onto the stack.
+// Call this when entering a class body compilation.
+func (c *Compiler) enterClassBrand() int {
+	// Get brand counter from top-level compiler
+	topLevel := c.getTopLevelCompiler()
+	topLevel.privateBrandCounter++
+	brandID := topLevel.privateBrandCounter
+
+	// Push current brand info onto stack before changing
+	c.privateBrandStack = append(c.privateBrandStack, c.currentPrivateBrandInfo)
+	c.currentPrivateBrandInfo = PrivateBrandInfo{
+		BrandID:        brandID,
+		DeclaredFields: make(map[string]bool),
+	}
+	c.currentPrivateBrand = brandID
+
+	debugPrintf("// DEBUG enterClassBrand: Assigned brand ID %d\n", brandID)
+	return brandID
+}
+
+// exitClassBrand pops the current brand and restores the previous one.
+// Call this when exiting a class body compilation.
+func (c *Compiler) exitClassBrand() {
+	if len(c.privateBrandStack) > 0 {
+		c.currentPrivateBrandInfo = c.privateBrandStack[len(c.privateBrandStack)-1]
+		c.privateBrandStack = c.privateBrandStack[:len(c.privateBrandStack)-1]
+		c.currentPrivateBrand = c.currentPrivateBrandInfo.BrandID
+	} else {
+		c.currentPrivateBrandInfo = PrivateBrandInfo{}
+		c.currentPrivateBrand = 0
+	}
+	debugPrintf("// DEBUG exitClassBrand: Restored brand ID %d\n", c.currentPrivateBrand)
+}
+
+// declarePrivateField registers a private field name as declared by the current class.
+// Call this when compiling private field/method/accessor declarations.
+func (c *Compiler) declarePrivateField(fieldName string) {
+	if c.currentPrivateBrandInfo.DeclaredFields != nil {
+		c.currentPrivateBrandInfo.DeclaredFields[fieldName] = true
+		debugPrintf("// DEBUG declarePrivateField: Declared '%s' for brand %d\n", fieldName, c.currentPrivateBrand)
+	}
+}
+
+// getPrivateFieldKey returns the branded key for a private field.
+// It looks up which class in the current scope chain declares this field.
+// Format: "brandID:fieldName" (e.g., "1:field" for brand 1 and field "field")
+func (c *Compiler) getPrivateFieldKey(fieldName string) string {
+	// First check if current class declares this field
+	if c.currentPrivateBrandInfo.DeclaredFields != nil && c.currentPrivateBrandInfo.DeclaredFields[fieldName] {
+		return fmt.Sprintf("%d:%s", c.currentPrivateBrand, fieldName)
+	}
+
+	// Walk the stack from most recent to oldest to find the declaring class
+	for i := len(c.privateBrandStack) - 1; i >= 0; i-- {
+		brandInfo := c.privateBrandStack[i]
+		if brandInfo.DeclaredFields != nil && brandInfo.DeclaredFields[fieldName] {
+			return fmt.Sprintf("%d:%s", brandInfo.BrandID, fieldName)
+		}
+	}
+
+	// Not found in any class - use current brand (fallback)
+	if c.currentPrivateBrand == 0 {
+		return fieldName
+	}
+	return fmt.Sprintf("%d:%s", c.currentPrivateBrand, fieldName)
+}
+
+// getTopLevelCompiler returns the outermost compiler (for accessing global counters)
+func (c *Compiler) getTopLevelCompiler() *Compiler {
+	top := c
+	for top.enclosing != nil {
+		top = top.enclosing
+	}
+	return top
+}
+
 // --- NEW: Bytecode Position Helper ---
 
 // currentPosition returns the index of the next byte to be written to the chunk.
@@ -4168,6 +4269,14 @@ func (c *Compiler) getNextAnonymousId() int {
 // For named classes, it also stores them in the environment like class declarations
 func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Register) (Register, errors.PaseratiError) {
 	debugPrintf("// DEBUG compileClassExpression: Starting compilation for class '%s'\n", node.Name.Value)
+
+	// Enter class brand context for private field tracking
+	// Each class gets a unique brand ID to distinguish its private fields from other classes
+	c.enterClassBrand()
+	defer c.exitClassBrand()
+
+	// Declare all private fields this class has
+	c.declareClassPrivateNames(node)
 
 	// 1. Create constructor function
 	// For class expressions, we don't pre-load the super constructor like we do for declarations

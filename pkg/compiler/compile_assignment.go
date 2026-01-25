@@ -701,7 +701,9 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			if len(propName) > 0 && propName[0] == '#' {
 				// Private field - store the field name without # prefix
 				fieldName := propName[1:]
-				memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(fieldName))
+				// Use branded key to distinguish private fields with same name in different classes
+				brandedKey := c.getPrivateFieldKey(fieldName)
+				memberInfo.nameConstIdx = c.chunk.AddConstant(vm.String(brandedKey))
 				memberInfo.isPrivateField = true
 			} else {
 				// Regular property
@@ -3096,7 +3098,9 @@ func (c *Compiler) compileAssignmentToMember(memberExpr *parser.MemberExpression
 		if len(propName) > 0 && propName[0] == '#' {
 			// Private field
 			fieldName := propName[1:]
-			nameConstIdx := c.chunk.AddConstant(vm.String(fieldName))
+			// Use branded key to distinguish private fields with same name in different classes
+			brandedKey := c.getPrivateFieldKey(fieldName)
+			nameConstIdx := c.chunk.AddConstant(vm.String(brandedKey))
 			c.emitSetPrivateField(objectReg, valueReg, nameConstIdx, line)
 		} else {
 			// Regular property
