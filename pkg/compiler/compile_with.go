@@ -53,6 +53,16 @@ func (c *Compiler) compileWithStatement(node *parser.WithStatement, hint Registe
 	c.withBlockDepth++
 	c.currentFuncWithDepth++
 
+	// Per ECMAScript 13.11.7 step 9: Return Completion(UpdateEmpty(C, undefined)).
+	// This means if the with body has an empty completion value (e.g., just "break;"),
+	// the result should be undefined, NOT the previous completion value from outside.
+	// Initialize the completion register to undefined BEFORE compiling the body.
+	// If the body produces a value, it will overwrite this. If it doesn't (e.g., break),
+	// the undefined remains.
+	if hint != BadRegister {
+		c.emitLoadUndefined(hint, node.Token.Line)
+	}
+
 	// Compile the body with the with object in scope
 	var bodyResult Register = BadRegister
 	if node.Body != nil {

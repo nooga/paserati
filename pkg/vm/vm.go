@@ -3207,12 +3207,14 @@ startExecution:
 					frame.ip = ip
 					unscopable, hadError := vm.isUnscopable(withObj, propName)
 					if hadError {
-						if vm.unwinding {
-							return InterpretRuntimeError, Undefined
-						}
+						// Check handlerFound FIRST - if a handler was found, jump to it
 						if vm.handlerFound {
 							vm.handlerFound = false
 							goto reloadFrame
+						}
+						// No handler found - propagate the error
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
 						}
 					}
 					if unscopable {
@@ -3224,12 +3226,12 @@ startExecution:
 					vm.helperCallDepth++
 					propVal, err := vm.GetProperty(withObj, propName)
 					vm.helperCallDepth--
-					if vm.unwinding {
-						return InterpretRuntimeError, Undefined
-					}
 					if vm.handlerFound {
 						vm.handlerFound = false
 						goto reloadFrame
+					}
+					if vm.unwinding {
+						return InterpretRuntimeError, Undefined
 					}
 					if err != nil {
 						frame.ip = ip
@@ -3306,12 +3308,14 @@ startExecution:
 									frame.ip = ip
 									isUnscopable, hadError := vm.isUnscopable(withObj, propName)
 									if hadError {
-										if vm.unwinding {
-											return InterpretRuntimeError, Undefined
-										}
+										// Check handlerFound FIRST - if a handler was found, jump to it
 										if vm.handlerFound {
 											vm.handlerFound = false
 											goto reloadFrame
+										}
+										// No handler found - propagate the error
+										if vm.unwinding {
+											return InterpretRuntimeError, Undefined
 										}
 									}
 									if !isUnscopable {
@@ -3467,12 +3471,14 @@ startExecution:
 					frame.ip = ip
 					unscopable, hadError := vm.isUnscopable(withObj, propName)
 					if hadError {
-						if vm.unwinding {
-							return InterpretRuntimeError, Undefined
-						}
+						// Check handlerFound FIRST - if a handler was found, jump to it
 						if vm.handlerFound {
 							vm.handlerFound = false
 							goto reloadFrame
+						}
+						// No handler found - propagate the error
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
 						}
 					}
 					if unscopable {
@@ -3484,6 +3490,10 @@ startExecution:
 					vm.helperCallDepth++
 					propVal, err := vm.GetProperty(withObj, propName)
 					vm.helperCallDepth--
+					if vm.handlerFound {
+						vm.handlerFound = false
+						goto reloadFrame
+					}
 					if vm.unwinding {
 						return InterpretRuntimeError, Undefined
 					}
@@ -3589,12 +3599,14 @@ startExecution:
 					frame.ip = ip
 					unscopable, hadError := vm.isUnscopable(withObj, propName)
 					if hadError {
-						if vm.unwinding {
-							return InterpretRuntimeError, Undefined
-						}
+						// Check handlerFound FIRST - if a handler was found, jump to it
 						if vm.handlerFound {
 							vm.handlerFound = false
 							goto reloadFrame
+						}
+						// No handler found - propagate the error
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
 						}
 					}
 					if unscopable {
@@ -3869,6 +3881,85 @@ startExecution:
 					}
 					goto reloadFrame
 				}
+			}
+
+		case OpGetWithByBinding:
+			// Rx NameIdx(16bit) LocalReg BindingReg: Get using pre-resolved binding
+			// Binding index encoding: 0-127 = withObjectStack, 128-254 = closure.WithObjects (128=closure[0]), 255 = fallback
+			destReg := code[ip]
+			nameHi := code[ip+1]
+			nameLo := code[ip+2]
+			localReg := code[ip+3]
+			bindingReg := code[ip+4]
+			ip += 5
+			nameIdx := int(uint16(nameHi)<<8 | uint16(nameLo))
+			nameVal := constants[nameIdx]
+			propName := nameVal.AsString()
+			bindingIndex := int(registers[bindingReg].ToFloat())
+
+			// Decode the binding index to find the with-object
+			var withObj Value
+			foundWithObj := false
+
+			if bindingIndex == 255 {
+				// No with-object had the property at binding time
+			} else if bindingIndex >= 128 {
+				// Closure.WithObjects (128 = closure[0], 129 = closure[1], etc.)
+				closureIndex := bindingIndex - 128
+				if closure != nil && closureIndex < len(closure.WithObjects) {
+					withObj = closure.WithObjects[closureIndex]
+					foundWithObj = true
+				}
+			} else {
+				// withObjectStack (0-127)
+				if bindingIndex < len(vm.withObjectStack) {
+					withObj = vm.withObjectStack[bindingIndex]
+					foundWithObj = true
+				}
+			}
+
+			if !foundWithObj {
+				// No with-object had the property at binding time, or it's no longer valid
+				if localReg == 255 {
+					// No local fallback - use global lookup
+					if val, ok := vm.GlobalObject.GetOwn(propName); ok {
+						registers[destReg] = val
+					} else if globalIdx, exists := vm.heap.nameToIndex[propName]; exists {
+						if val, ok := vm.heap.Get(globalIdx); ok {
+							registers[destReg] = val
+						} else {
+							frame.ip = ip
+							status := vm.runtimeError("%s is not defined", propName)
+							return status, Undefined
+						}
+					} else {
+						frame.ip = ip
+						status := vm.runtimeError("%s is not defined", propName)
+						return status, Undefined
+					}
+				} else {
+					// Use local variable
+					registers[destReg] = registers[localReg]
+				}
+			} else {
+				// Get from the with-object (no unscopables check - already done at binding time)
+				frame.ip = ip
+				vm.helperCallDepth++
+				propVal, err := vm.GetProperty(withObj, propName)
+				vm.helperCallDepth--
+				if vm.handlerFound {
+					vm.handlerFound = false
+					goto reloadFrame
+				}
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+				if err != nil {
+					frame.ip = ip
+					status := vm.runtimeError("Error getting property: %v", err)
+					return status, Undefined
+				}
+				registers[destReg] = propVal
 			}
 
 		case OpDeleteWithProperty:
@@ -12752,12 +12843,19 @@ func (vm *VM) isUnscopable(withObj Value, propName string) (bool, bool) {
 	}
 
 	// Check if propName is excluded in the unscopables object
-	unscopablesObj := unscopablesVal.AsPlainObject()
-	if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
-		return excludeVal.IsTruthy(), false
+	// Per ECMAScript 8.1.1.2.1 step 7a: Let blocked be ToBoolean(? Get(unscopables, N))
+	// This must trigger getters on the unscopables object
+	excludeVal, err := vm.GetProperty(unscopablesVal, propName)
+	if err != nil {
+		// Error thrown during getter execution - propagate it
+		return false, true
+	}
+	if vm.unwinding {
+		// Exception was thrown
+		return false, true
 	}
 
-	return false, false
+	return excludeVal.IsTruthy(), false
 }
 
 // runtimeError formats a runtime error message, appends it to the VM's error list,

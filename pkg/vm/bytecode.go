@@ -158,6 +158,7 @@ const (
 	// Reference binding capture (for correct assignment semantics - binding captured BEFORE RHS evaluation)
 	OpResolveWithBinding OpCode = 158 // Rx NameIdx(16bit) LocalReg: Capture binding - Rx = with-object index (or 255 for local)
 	OpSetWithByBinding   OpCode = 159 // NameIdx(16bit) ValueReg LocalReg BindingReg: Set using pre-resolved binding
+	OpGetWithByBinding   OpCode = 162 // Rx NameIdx(16bit) LocalReg BindingReg: Get using pre-resolved binding
 	OpDeleteWithProperty OpCode = 160 // Rx NameIdx(16bit) Fallback: Delete from with-object, Fallback=0:true, 1:false
 	// --- END With Statement ---
 
@@ -474,6 +475,8 @@ func (op OpCode) String() string {
 		return "OpResolveWithBinding"
 	case OpSetWithByBinding:
 		return "OpSetWithByBinding"
+	case OpGetWithByBinding:
+		return "OpGetWithByBinding"
 	case OpDeleteWithProperty:
 		return "OpDeleteWithProperty"
 	case OpNew:
@@ -1077,6 +1080,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.resolveWithBindingInstruction(builder, instruction.String(), offset) // Rx NameIdx(16bit) LocalReg
 	case OpSetWithByBinding:
 		return c.setWithByBindingInstruction(builder, instruction.String(), offset) // NameIdx(16bit) ValueReg LocalReg BindingReg
+	case OpGetWithByBinding:
+		return c.getWithByBindingInstruction(builder, instruction.String(), offset) // Rx NameIdx(16bit) LocalReg BindingReg
 	case OpDeleteWithProperty:
 		return c.deleteWithPropertyInstruction(builder, instruction.String(), offset) // Rx NameIdx(16bit) Fallback
 	case OpNew:
@@ -1927,6 +1932,28 @@ func (c *Chunk) setWithByBindingInstruction(builder *strings.Builder, name strin
 
 	fmt.Fprintf(builder, "%-16s NameIdx %d (%s), R%d, LocalR%d, BindingR%d\n", name, nameIdx, constValue, valueReg, localReg, bindingReg)
 	return offset + 6 // Opcode + NameIdx(2 bytes) + ValueReg + LocalReg + BindingReg
+}
+
+// getWithByBindingInstruction handles OpGetWithByBinding Rx NameIdx(16bit) LocalReg BindingReg
+func (c *Chunk) getWithByBindingInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+5 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		return offset + 1
+	}
+
+	destReg := c.Code[offset+1]
+	nameIdx := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
+	localReg := c.Code[offset+4]
+	bindingReg := c.Code[offset+5]
+
+	constValue := "invalid"
+	if int(nameIdx) < len(c.Constants) {
+		v := c.Constants[nameIdx]
+		constValue = v.Inspect()
+	}
+
+	fmt.Fprintf(builder, "%-16s R%d, NameIdx %d (%s), LocalR%d, BindingR%d\n", name, destReg, nameIdx, constValue, localReg, bindingReg)
+	return offset + 6 // Opcode + DestReg + NameIdx(2 bytes) + LocalReg + BindingReg
 }
 
 // callMethodInstruction handles OpCallMethod Rx, FuncReg, ThisReg, ArgCount

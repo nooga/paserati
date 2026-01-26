@@ -631,14 +631,12 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 			tempRegs = append(tempRegs, withInfo.bindingReg)
 			c.emitResolveWithBinding(withInfo.bindingReg, int(withInfo.nameConstIdx), withInfo.localReg, line)
 
-			// Now load the current value using OpGetWithOrLocal or OpGetWithProperty
+			// Now load the current value using OpGetWithByBinding
+			// This uses the pre-resolved binding and does NOT re-check unscopables
+			// (unscopables was already checked once during OpResolveWithBinding)
 			currentValueReg = c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, currentValueReg)
-			if withPropInfo.HasLocalFallback {
-				c.emitGetWithOrLocal(currentValueReg, int(withInfo.nameConstIdx), withPropInfo.LocalReg, line)
-			} else {
-				c.emitGetWithProperty(currentValueReg, int(withInfo.nameConstIdx), line)
-			}
+			c.emitGetWithByBinding(currentValueReg, int(withInfo.nameConstIdx), withInfo.localReg, withInfo.bindingReg, line)
 		} else {
 			lvalueKind = lvalueIdentifier
 			// Resolve identifier and determine if local or upvalue

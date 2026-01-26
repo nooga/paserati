@@ -1264,15 +1264,24 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement, hint Regis
 	}
 
 	// Per ECMAScript spec, break has an empty completion value.
-	// UpdateEmpty(break, V) keeps V if break's value is empty.
 	// When break is inside nested structures (like if statements), the current
 	// completion value (in hint) may be in a different register than the loop's
 	// completion register. We need to copy it before jumping.
-	if targetContext.CompletionReg != BadRegister && hint != BadRegister && hint != targetContext.CompletionReg {
-		// Copy the current completion value to the loop's completion register
-		// This handles cases like: do { if (true) { 3; break; } } while (false)
-		// where 3 is in the if's hint register but needs to be in the loop's completion register
-		c.emitMove(targetContext.CompletionReg, hint, node.Token.Line)
+	//
+	// Special case: When break is inside a with block and has empty completion value
+	// (hint == BadRegister), the with statement's UpdateEmpty(C, undefined) must be applied.
+	// This means we set the completion register to undefined.
+	if targetContext.CompletionReg != BadRegister {
+		if c.withBlockDepth > 0 && hint == BadRegister {
+			// Inside with block, break has empty completion - UpdateEmpty sets it to undefined
+			// Per ECMAScript 13.11.7 step 9: Return Completion(UpdateEmpty(C, undefined))
+			c.emitLoadUndefined(targetContext.CompletionReg, node.Token.Line)
+		} else if hint != BadRegister && hint != targetContext.CompletionReg {
+			// Copy the current completion value to the loop's completion register
+			// This handles cases like: do { if (true) { 3; break; } } while (false)
+			// where 3 is in the if's hint register but needs to be in the loop's completion register
+			c.emitMove(targetContext.CompletionReg, hint, node.Token.Line)
+		}
 	}
 
 	// Check if we're inside a try-finally block AND the break targets a loop outside it
@@ -1375,15 +1384,24 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 	}
 
 	// Per ECMAScript spec, continue has an empty completion value.
-	// UpdateEmpty(continue, V) keeps V if continue's value is empty.
 	// When continue is inside nested structures (like if statements), the current
 	// completion value (in hint) may be in a different register than the loop's
 	// completion register. We need to copy it before jumping.
-	if targetContext.CompletionReg != BadRegister && hint != BadRegister && hint != targetContext.CompletionReg {
-		// Copy the current completion value to the loop's completion register
-		// This handles cases like: do { if (true) { 10; continue; } } while (false)
-		// where 10 is in the if's hint register but needs to be in the loop's completion register
-		c.emitMove(targetContext.CompletionReg, hint, node.Token.Line)
+	//
+	// Special case: When continue is inside a with block and has empty completion value
+	// (hint == BadRegister), the with statement's UpdateEmpty(C, undefined) must be applied.
+	// This means we set the completion register to undefined.
+	if targetContext.CompletionReg != BadRegister {
+		if c.withBlockDepth > 0 && hint == BadRegister {
+			// Inside with block, continue has empty completion - UpdateEmpty sets it to undefined
+			// Per ECMAScript 13.11.7 step 9: Return Completion(UpdateEmpty(C, undefined))
+			c.emitLoadUndefined(targetContext.CompletionReg, node.Token.Line)
+		} else if hint != BadRegister && hint != targetContext.CompletionReg {
+			// Copy the current completion value to the loop's completion register
+			// This handles cases like: do { if (true) { 10; continue; } } while (false)
+			// where 10 is in the if's hint register but needs to be in the loop's completion register
+			c.emitMove(targetContext.CompletionReg, hint, node.Token.Line)
+		}
 	}
 
 	// Check if we're inside a try-finally block

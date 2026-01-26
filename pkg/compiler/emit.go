@@ -796,6 +796,17 @@ func (c *Compiler) emitSetWithByBinding(nameIdx int, valueReg Register, localReg
 	c.emitByte(byte(bindingReg))
 }
 
+// emitGetWithByBinding gets a value using a pre-captured binding
+// BindingReg contains the with-object index (or 255 for local) from OpResolveWithBinding
+// This avoids re-checking unscopables (already done at binding time)
+func (c *Compiler) emitGetWithByBinding(destReg Register, nameIdx int, localReg Register, bindingReg Register, line int) {
+	c.emitOpCode(vm.OpGetWithByBinding, line)
+	c.emitByte(byte(destReg))
+	c.emitUint16(uint16(nameIdx))
+	c.emitByte(byte(localReg))
+	c.emitByte(byte(bindingReg))
+}
+
 // emitDeleteWithProperty emits OpDeleteWithProperty to delete a property from a with-object
 // fallback: 0 = return true if not found (unresolved), 1 = return false if not found (declared binding)
 func (c *Compiler) emitDeleteWithProperty(destReg Register, nameIdx int, fallback byte, line int) {
