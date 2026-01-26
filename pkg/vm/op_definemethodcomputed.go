@@ -1,5 +1,38 @@
 package vm
 
+// setComputedFunctionName implements the ECMAScript SetFunctionName abstract operation
+// for computed property keys. It updates the function's .name property based on the key.
+// prefix is prepended (e.g., "get " or "set " for accessors).
+// If onlyIfAnonymous is true, the name is only set when the function has no existing name
+// (for property assignments where named function expressions keep their name).
+func setComputedFunctionName(methodVal Value, propKey PropertyKey, prefix string, onlyIfAnonymous bool) {
+	var name string
+	if propKey.kind == KeyKindSymbol {
+		// Per spec: if key is a Symbol with description, name is "[description]"
+		// If description is undefined (empty in our representation), name is ""
+		desc := propKey.symbolVal.AsSymbol()
+		if desc != "" {
+			name = "[" + desc + "]"
+		}
+	} else {
+		name = propKey.name
+	}
+	if prefix != "" {
+		name = prefix + name
+	}
+	if methodVal.Type() == TypeClosure {
+		fn := methodVal.AsClosure().Fn
+		if !onlyIfAnonymous || fn.Name == "" {
+			fn.Name = name
+		}
+	} else if methodVal.Type() == TypeFunction {
+		fn := AsFunction(methodVal)
+		if !onlyIfAnonymous || fn.Name == "" {
+			fn.Name = name
+		}
+	}
+}
+
 // handleOpDefineMethodComputed handles the OpDefineMethodComputed opcode
 // This opcode defines a non-enumerable method on an object with a computed key
 // Format: OpDefineMethodComputed ObjReg ValueReg KeyReg
@@ -46,6 +79,11 @@ func (vm *VM) handleOpDefineMethodComputed(code []byte, ip *int, registers []Val
 		}
 		propKey = NewStringKey(keyStr)
 	}
+
+	// SetFunctionName: update the method's .name based on the computed key
+	// Per ECMAScript spec, if key is a symbol, name is "[description]"
+	// If key is a string, name is that string
+	setComputedFunctionName(methodVal, propKey, "", false)
 
 	// Define as non-enumerable method using DefineOwnPropertyByKey
 	writable := true

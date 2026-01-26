@@ -2190,7 +2190,31 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		fn := obj.AsFunction()
 		// Check custom properties first (e.g., static methods on constructor)
 		if fn.Properties != nil {
-			if v, w, e, c, ok := fn.Properties.GetOwnDescriptor(propName); ok {
+			// Check accessor properties first
+			if g, s, e, c, ok := func() (vm.Value, vm.Value, bool, bool, bool) {
+				if keyIsSymbol {
+					return fn.Properties.GetOwnAccessorByKey(vm.NewSymbolKey(propSym))
+				}
+				return fn.Properties.GetOwnAccessor(propName)
+			}(); ok {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				if g.Type() != vm.TypeUndefined {
+					descriptor.SetOwn("get", g)
+				}
+				if s.Type() != vm.TypeUndefined {
+					descriptor.SetOwn("set", s)
+				}
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+			// Then check data properties
+			if v, w, e, c, ok := func() (vm.Value, bool, bool, bool, bool) {
+				if keyIsSymbol {
+					return fn.Properties.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
+				}
+				return fn.Properties.GetOwnDescriptor(propName)
+			}(); ok {
 				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 				descriptor.SetOwn("value", v)
 				descriptor.SetOwn("writable", vm.BooleanValue(w))
@@ -2204,7 +2228,31 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		closure := obj.AsClosure()
 		// Check closure's own Properties first (where OpDefineMethod stores static methods)
 		if closure.Properties != nil {
-			if v, w, e, c, ok := closure.Properties.GetOwnDescriptor(propName); ok {
+			// Check accessor properties first
+			if g, s, e, c, ok := func() (vm.Value, vm.Value, bool, bool, bool) {
+				if keyIsSymbol {
+					return closure.Properties.GetOwnAccessorByKey(vm.NewSymbolKey(propSym))
+				}
+				return closure.Properties.GetOwnAccessor(propName)
+			}(); ok {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				if g.Type() != vm.TypeUndefined {
+					descriptor.SetOwn("get", g)
+				}
+				if s.Type() != vm.TypeUndefined {
+					descriptor.SetOwn("set", s)
+				}
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+			// Then check data properties
+			if v, w, e, c, ok := func() (vm.Value, bool, bool, bool, bool) {
+				if keyIsSymbol {
+					return closure.Properties.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
+				}
+				return closure.Properties.GetOwnDescriptor(propName)
+			}(); ok {
 				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 				descriptor.SetOwn("value", v)
 				descriptor.SetOwn("writable", vm.BooleanValue(w))
@@ -2215,7 +2263,31 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		}
 		// Also check fn.Properties as fallback
 		if closure.Fn.Properties != nil {
-			if v, w, e, c, ok := closure.Fn.Properties.GetOwnDescriptor(propName); ok {
+			// Check accessor properties first
+			if g, s, e, c, ok := func() (vm.Value, vm.Value, bool, bool, bool) {
+				if keyIsSymbol {
+					return closure.Fn.Properties.GetOwnAccessorByKey(vm.NewSymbolKey(propSym))
+				}
+				return closure.Fn.Properties.GetOwnAccessor(propName)
+			}(); ok {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				if g.Type() != vm.TypeUndefined {
+					descriptor.SetOwn("get", g)
+				}
+				if s.Type() != vm.TypeUndefined {
+					descriptor.SetOwn("set", s)
+				}
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+			// Then check data properties
+			if v, w, e, c, ok := func() (vm.Value, bool, bool, bool, bool) {
+				if keyIsSymbol {
+					return closure.Fn.Properties.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
+				}
+				return closure.Fn.Properties.GetOwnDescriptor(propName)
+			}(); ok {
 				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 				descriptor.SetOwn("value", v)
 				descriptor.SetOwn("writable", vm.BooleanValue(w))
@@ -2229,7 +2301,31 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		nfp := obj.AsNativeFunctionWithProps()
 		// Check custom properties first
 		if nfp.Properties != nil {
-			if v, w, e, c, ok := nfp.Properties.GetOwnDescriptor(propName); ok {
+			// Check accessor properties first
+			if g, s, e, c, ok := func() (vm.Value, vm.Value, bool, bool, bool) {
+				if keyIsSymbol {
+					return nfp.Properties.GetOwnAccessorByKey(vm.NewSymbolKey(propSym))
+				}
+				return nfp.Properties.GetOwnAccessor(propName)
+			}(); ok {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				if g.Type() != vm.TypeUndefined {
+					descriptor.SetOwn("get", g)
+				}
+				if s.Type() != vm.TypeUndefined {
+					descriptor.SetOwn("set", s)
+				}
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+			// Then check data properties
+			if v, w, e, c, ok := func() (vm.Value, bool, bool, bool, bool) {
+				if keyIsSymbol {
+					return nfp.Properties.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
+				}
+				return nfp.Properties.GetOwnDescriptor(propName)
+			}(); ok {
 				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 				descriptor.SetOwn("value", v)
 				descriptor.SetOwn("writable", vm.BooleanValue(w))

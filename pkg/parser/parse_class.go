@@ -347,6 +347,22 @@ func (p *Parser) parseClassBody() *ClassBody {
 			}
 		} else if p.isValidMethodName() {
 			if p.curToken.Literal == "constructor" {
+				// Per ECMAScript spec, class fields named "constructor" are a SyntaxError
+				// (both static and non-static fields)
+				if p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.ASSIGN) ||
+					p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION) ||
+					p.peekTokenIs(lexer.RBRACE) || p.peekTokenIs(lexer.EOF) {
+					p.addError(p.curToken, "Classes may not have a field named 'constructor'")
+					// Skip past the problematic field
+					p.nextToken()
+					for !p.curTokenIs(lexer.SEMICOLON) && !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+						p.nextToken()
+					}
+					if p.curTokenIs(lexer.SEMICOLON) {
+						p.nextToken()
+					}
+					continue
+				}
 				// Parse constructor - let it decide if it's signature or implementation
 				result := p.parseConstructor(isStatic, isPublic, isPrivate, isProtected)
 				if result != nil {
