@@ -831,11 +831,7 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 						regsToFree = append(regsToFree, getterReg)
 						c.emitLoadUndefined(getterReg, line)
 					}
-					c.emitOpCode(vm.OpDefineAccessorDynamic, line)
-					c.emitByte(byte(hint))      // Object register
-					c.emitByte(byte(getterReg)) // Getter register
-					c.emitByte(byte(setterReg)) // Setter register
-					c.emitByte(byte(keyReg))    // Name register (computed at runtime)
+					c.emitDefineAccessorDynamic(hint, getterReg, setterReg, keyReg, true, line)
 					debugPrintf("--- OL MethodDefinition: Defined dynamic %s accessor\n", methodDef.Kind)
 					freePropertyRegs()
 					continue
@@ -881,7 +877,7 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 					c.emitLoadUndefined(getterReg, line)
 				}
 				nameIdx := c.chunk.AddConstant(vm.String(propName))
-				c.emitDefineAccessor(hint, getterReg, setterReg, nameIdx, line)
+				c.emitDefineAccessor(hint, getterReg, setterReg, nameIdx, true, line)
 				debugPrintf("--- OL MethodDefinition: Defined %s accessor for '%s'\n", methodDef.Kind, propName)
 			} else {
 				// Regular method - use OpDefineMethodEnumerable to set [[HomeObject]]

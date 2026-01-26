@@ -607,22 +607,34 @@ func (c *Compiler) emitDefineMethodComputedEnumerable(obj, val, key Register, li
 	c.emitByte(byte(key))
 }
 
-// emitDefineAccessor emits OpDefineAccessor ObjReg, GetterReg, SetterReg, NameConstIdx(Uint16)
-func (c *Compiler) emitDefineAccessor(obj, getter, setter Register, nameConstIdx uint16, line int) {
+// emitDefineAccessor emits OpDefineAccessor ObjReg, GetterReg, SetterReg, NameConstIdx(Uint16), Flags
+// Flags: bit 0 = enumerable (1=enumerable, 0=non-enumerable)
+func (c *Compiler) emitDefineAccessor(obj, getter, setter Register, nameConstIdx uint16, enumerable bool, line int) {
 	c.emitOpCode(vm.OpDefineAccessor, line)
 	c.emitByte(byte(obj))
 	c.emitByte(byte(getter))
 	c.emitByte(byte(setter))
 	c.emitUint16(nameConstIdx)
+	if enumerable {
+		c.emitByte(1)
+	} else {
+		c.emitByte(0)
+	}
 }
 
-// emitDefineAccessorDynamic emits OpDefineAccessorDynamic ObjReg, GetterReg, SetterReg, NameReg
-func (c *Compiler) emitDefineAccessorDynamic(obj, getter, setter, nameReg Register, line int) {
+// emitDefineAccessorDynamic emits OpDefineAccessorDynamic ObjReg, GetterReg, SetterReg, NameReg, Flags
+// Flags: bit 0 = enumerable (1=enumerable, 0=non-enumerable)
+func (c *Compiler) emitDefineAccessorDynamic(obj, getter, setter, nameReg Register, enumerable bool, line int) {
 	c.emitOpCode(vm.OpDefineAccessorDynamic, line)
 	c.emitByte(byte(obj))
 	c.emitByte(byte(getter))
 	c.emitByte(byte(setter))
 	c.emitByte(byte(nameReg))
+	if enumerable {
+		c.emitByte(1)
+	} else {
+		c.emitByte(0)
+	}
 }
 
 // emitDeleteProp emits OpDeleteProp DestReg, ObjReg, NameConstIdx(Uint16)

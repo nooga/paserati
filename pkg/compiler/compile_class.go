@@ -162,7 +162,7 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	debugPrintf("// DEBUG compileClassDeclaration: Starting compilation for class '%s'\n", node.Name.Value)
 
 	// If there's a super class, ensure it's defined before we compile the constructor
-	var superConstructorReg Register
+	var superConstructorReg Register = BadRegister
 	var needToFreeSuperReg bool
 	if node.SuperClass != nil {
 		// Check if extending null (class extends null)
@@ -643,13 +643,13 @@ func (c *Compiler) addGetterToPrototype(method *parser.MethodDefinition, prototy
 			return err
 		}
 		// Use OpDefineAccessorDynamic for runtime-computed property name
-		c.emitDefineAccessorDynamic(prototypeReg, getterReg, setterReg, keyReg, method.Token.Line)
+		c.emitDefineAccessorDynamic(prototypeReg, getterReg, setterReg, keyReg, false, method.Token.Line)
 		debugPrintf("// DEBUG addGetterToPrototype: Getter with computed key defined on prototype\n")
 	} else {
 		// For literal property names, use constant-based OpDefineAccessor (faster)
 		propName := c.extractPropertyName(method.Key)
 		nameIdx := c.chunk.AddConstant(vm.String(propName))
-		c.emitDefineAccessor(prototypeReg, getterReg, setterReg, nameIdx, method.Token.Line)
+		c.emitDefineAccessor(prototypeReg, getterReg, setterReg, nameIdx, false, method.Token.Line)
 		debugPrintf("// DEBUG addGetterToPrototype: Getter '%s' defined on prototype\n", propName)
 	}
 
@@ -687,13 +687,13 @@ func (c *Compiler) addSetterToPrototype(method *parser.MethodDefinition, prototy
 			return err
 		}
 		// Use OpDefineAccessorDynamic for runtime-computed property name
-		c.emitDefineAccessorDynamic(prototypeReg, getterReg, setterReg, keyReg, method.Token.Line)
+		c.emitDefineAccessorDynamic(prototypeReg, getterReg, setterReg, keyReg, false, method.Token.Line)
 		debugPrintf("// DEBUG addSetterToPrototype: Setter with computed key defined on prototype\n")
 	} else {
 		// For literal property names, use constant-based OpDefineAccessor (faster)
 		propName := c.extractPropertyName(method.Key)
 		nameIdx := c.chunk.AddConstant(vm.String(propName))
-		c.emitDefineAccessor(prototypeReg, getterReg, setterReg, nameIdx, method.Token.Line)
+		c.emitDefineAccessor(prototypeReg, getterReg, setterReg, nameIdx, false, method.Token.Line)
 		debugPrintf("// DEBUG addSetterToPrototype: Setter '%s' defined on prototype\n", propName)
 	}
 
@@ -1238,13 +1238,13 @@ func (c *Compiler) addStaticGetter(method *parser.MethodDefinition, constructorR
 			return err
 		}
 		// Use OpDefineAccessorDynamic for runtime-computed property name
-		c.emitDefineAccessorDynamic(constructorReg, getterReg, setterReg, keyReg, method.Token.Line)
+		c.emitDefineAccessorDynamic(constructorReg, getterReg, setterReg, keyReg, false, method.Token.Line)
 		debugPrintf("// DEBUG addStaticGetter: Static getter with computed key defined on constructor\n")
 	} else {
 		// For literal property names, use constant-based OpDefineAccessor (faster)
 		propName := c.extractPropertyName(method.Key)
 		nameIdx := c.chunk.AddConstant(vm.String(propName))
-		c.emitDefineAccessor(constructorReg, getterReg, setterReg, nameIdx, method.Token.Line)
+		c.emitDefineAccessor(constructorReg, getterReg, setterReg, nameIdx, false, method.Token.Line)
 		debugPrintf("// DEBUG addStaticGetter: Static getter '%s' defined on constructor\n", propName)
 	}
 
@@ -1283,13 +1283,13 @@ func (c *Compiler) addStaticSetter(method *parser.MethodDefinition, constructorR
 			return err
 		}
 		// Use OpDefineAccessorDynamic for runtime-computed property name
-		c.emitDefineAccessorDynamic(constructorReg, getterReg, setterReg, keyReg, method.Token.Line)
+		c.emitDefineAccessorDynamic(constructorReg, getterReg, setterReg, keyReg, false, method.Token.Line)
 		debugPrintf("// DEBUG addStaticSetter: Static setter with computed key defined on constructor\n")
 	} else {
 		// For literal property names, use constant-based OpDefineAccessor (faster)
 		propName := c.extractPropertyName(method.Key)
 		nameIdx := c.chunk.AddConstant(vm.String(propName))
-		c.emitDefineAccessor(constructorReg, getterReg, setterReg, nameIdx, method.Token.Line)
+		c.emitDefineAccessor(constructorReg, getterReg, setterReg, nameIdx, false, method.Token.Line)
 		debugPrintf("// DEBUG addStaticSetter: Static setter '%s' defined on constructor\n", propName)
 	}
 

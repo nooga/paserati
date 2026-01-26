@@ -894,13 +894,13 @@ func (vm *VM) ConstructWithNewTarget(constructor Value, args []Value, newTarget 
 			prototype = fn.GetOrCreatePrototypeWithVM(vm)
 		}
 
-		// For derived constructors, 'this' is uninitialized until super() is called
+		// For derived constructors, 'this' is in TDZ until super() is called
 		// We don't create an object beforehand - super() will create it
 		var newObj Value
 		if fn.IsDerivedConstructor {
-			// For derived constructors, pass Undefined as this
+			// For derived constructors, pass Uninitialized as this (TDZ sentinel)
 			// super() will create the object with the correct prototype
-			newObj = Undefined
+			newObj = Uninitialized
 		} else {
 			// For base constructors, create the object now
 			newObj = NewObject(prototype)
@@ -969,10 +969,10 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 	defer func() { vm.inConstructorCall = prevInConstructorCall }()
 
 	// Use prepareCall to set up the function call
-	// For derived constructors, this should be undefined initially
+	// For derived constructors, this is in TDZ until super() is called
 	effectiveThis := thisValue
 	if isDerivedConstructor {
-		effectiveThis = Undefined
+		effectiveThis = Uninitialized
 	}
 
 	shouldSwitch, err := vm.prepareCall(fn, effectiveThis, args, destReg, callerRegisters, callerIP)
@@ -992,9 +992,9 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 		frame.isDirectCall = true
 		frame.isConstructorCall = true
 		frame.newTargetValue = newTarget
-		// For derived constructors, this should be undefined until super() is called
+		// For derived constructors, this is in TDZ until super() is called
 		if isDerivedConstructor {
-			frame.thisValue = Undefined
+			frame.thisValue = Uninitialized
 		} else {
 			frame.thisValue = thisValue
 		}

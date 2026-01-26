@@ -1166,8 +1166,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		builder.WriteString(fmt.Sprintf("%-16s R%d, Len %d\n", "OpAllocArray", destReg, lenVal))
 		return offset + 4
 	case OpDefineAccessor:
-		// ObjReg, GetterReg, SetterReg, NameIdx(16bit)
-		if offset+5 >= len(c.Code) {
+		// ObjReg, GetterReg, SetterReg, NameIdx(16bit), Flags
+		if offset+6 >= len(c.Code) {
 			builder.WriteString("OpDefineAccessor (missing operands)\n")
 			return offset + 1
 		}
@@ -1175,17 +1175,22 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		getterReg := c.Code[offset+2]
 		setterReg := c.Code[offset+3]
 		nameIdx := uint16(c.Code[offset+4])<<8 | uint16(c.Code[offset+5])
+		flags := c.Code[offset+6]
 		name := "[unknown]"
 		if int(nameIdx) < len(c.Constants) && c.Constants[nameIdx].Type() == TypeString {
 			name = c.Constants[nameIdx].ToString()
 		}
-		builder.WriteString(fmt.Sprintf("%-20s R%d R%d R%d %d (%s)\n",
-			"OpDefineAccessor", objReg, getterReg, setterReg, nameIdx, name))
-		return offset + 6
+		enumStr := "non-enumerable"
+		if flags&1 != 0 {
+			enumStr = "enumerable"
+		}
+		builder.WriteString(fmt.Sprintf("%-20s R%d R%d R%d %d (%s) [%s]\n",
+			"OpDefineAccessor", objReg, getterReg, setterReg, nameIdx, name, enumStr))
+		return offset + 7
 
 	case OpDefineAccessorDynamic:
-		// ObjReg, GetterReg, SetterReg, NameReg
-		if offset+4 >= len(c.Code) {
+		// ObjReg, GetterReg, SetterReg, NameReg, Flags
+		if offset+5 >= len(c.Code) {
 			builder.WriteString("OpDefineAccessorDynamic (missing operands)\n")
 			return offset + 1
 		}
@@ -1193,9 +1198,14 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		getterReg := c.Code[offset+2]
 		setterReg := c.Code[offset+3]
 		nameReg := c.Code[offset+4]
-		builder.WriteString(fmt.Sprintf("%-20s R%d R%d R%d R%d\n",
-			"OpDefineAccessorDynamic", objReg, getterReg, setterReg, nameReg))
-		return offset + 5
+		flags := c.Code[offset+5]
+		enumStr := "non-enumerable"
+		if flags&1 != 0 {
+			enumStr = "enumerable"
+		}
+		builder.WriteString(fmt.Sprintf("%-20s R%d R%d R%d R%d [%s]\n",
+			"OpDefineAccessorDynamic", objReg, getterReg, setterReg, nameReg, enumStr))
+		return offset + 6
 
 	case OpSetPrototype:
 		// ObjReg, ProtoReg

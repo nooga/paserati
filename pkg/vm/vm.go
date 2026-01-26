@@ -4315,6 +4315,26 @@ startExecution:
 			result := registers[srcReg]
 			frame.ip = ip // Save final IP of this frame
 
+			// TDZ check for derived constructors: returning without calling super()
+			// Per ECMAScript spec, if a derived constructor returns a non-object value
+			// and super() was never called, throw ReferenceError
+			if frame.isConstructorCall && frame.thisValue.typ == TypeUninitialized {
+				if !result.IsObject() && !result.IsCallable() {
+					vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+					if !vm.unwinding {
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					return InterpretRuntimeError, Undefined
+				}
+			}
+
 			// Trace returns with frame stack snapshot
 			if debugVM || debugCalls {
 				fmt.Printf("[DEBUG OpReturn] from %s, frameCount=%d, result=%s\n", funcName(function), vm.frameCount, result.TypeName())
@@ -4519,6 +4539,22 @@ startExecution:
 			//	vm.frameCount, ip, function.Name, vm.currentModulePath)
 		case OpReturnUndefined:
 			frame.ip = ip // Save final IP
+
+			// TDZ check for derived constructors: implicit return without calling super()
+			if frame.isConstructorCall && frame.thisValue.typ == TypeUninitialized {
+				vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+				if !vm.unwinding {
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				return InterpretRuntimeError, Undefined
+			}
 
 			if debugCalls {
 				fmt.Printf("[DEBUG OpReturnUndefined] from %s, frameCount=%d\n", funcName(function), vm.frameCount)
@@ -5220,7 +5256,8 @@ startExecution:
 			setterReg := code[ip+2]
 			nameIdxHi := code[ip+3]
 			nameIdxLo := code[ip+4]
-			ip += 5
+			accessorFlags := code[ip+5]
+			ip += 6
 
 			nameIdx := int(uint16(nameIdxHi)<<8 | uint16(nameIdxLo))
 			if nameIdx >= len(frame.closure.Fn.Chunk.Constants) {
@@ -5293,8 +5330,8 @@ startExecution:
 				}
 			}
 
-			// Default attributes: enumerable=true, configurable=true for object literal accessors
-			enumerable := true
+			// Attributes: enumerable from flags (bit 0), configurable=true always
+			enumerable := accessorFlags&1 != 0
 			configurable := true
 
 			obj.DefineAccessorProperty(propName, getterVal, hasGetter, setterVal, hasSetter, &enumerable, &configurable)
@@ -5304,7 +5341,8 @@ startExecution:
 			getterReg := code[ip+1]
 			setterReg := code[ip+2]
 			nameReg := code[ip+3]
-			ip += 4
+			dynAccessorFlags := code[ip+4]
+			ip += 5
 
 			objVal := registers[objReg]
 			getterVal := registers[getterReg]
@@ -5376,9 +5414,9 @@ startExecution:
 					}
 				}
 
-				enumerable := true
-				configurable := true
-				obj.DefineAccessorPropertyByKey(NewSymbolKey(nameVal), getterVal, hasGetter, setterVal, hasSetter, &enumerable, &configurable)
+				dynEnum := dynAccessorFlags&1 != 0
+				dynConf := true
+				obj.DefineAccessorPropertyByKey(NewSymbolKey(nameVal), getterVal, hasGetter, setterVal, hasSetter, &dynEnum, &dynConf)
 				continue
 			default:
 				// For non-primitive values, call toPrimitive which may throw TypeError
@@ -5444,9 +5482,9 @@ startExecution:
 				}
 			}
 
-			enumerable := true
-			configurable := true
-			obj.DefineAccessorProperty(propName, getterVal, hasGetter, setterVal, hasSetter, &enumerable, &configurable)
+			dynStrEnum := dynAccessorFlags&1 != 0
+			dynStrConf := true
+			obj.DefineAccessorProperty(propName, getterVal, hasGetter, setterVal, hasSetter, &dynStrEnum, &dynStrConf)
 
 		case OpSetPrototype:
 			objReg := code[ip]
@@ -8510,7 +8548,7 @@ startExecution:
 				// For base constructors, create the instance immediately
 				var newInstance Value
 				if constructorFunc.IsDerivedConstructor {
-					newInstance = Undefined // 'this' is uninitialized in derived constructors
+					newInstance = Uninitialized // 'this' is in TDZ until super() is called
 				} else {
 					// Create new instance object with new.target's prototype
 					newInstance = NewObject(instancePrototype)
@@ -8687,7 +8725,7 @@ startExecution:
 				// For base constructors, create the instance immediately
 				var newInstance Value
 				if constructorFunc.IsDerivedConstructor {
-					newInstance = Undefined // 'this' is uninitialized in derived constructors
+					newInstance = Uninitialized // 'this' is in TDZ until super() is called
 				} else {
 					// Create new instance object with new.target's prototype
 					newInstance = NewObject(instancePrototype)
@@ -9060,7 +9098,7 @@ startExecution:
 					// For derived constructors, 'this' is uninitialized until super() is called
 					var newInstance Value
 					if constructorFunc.IsDerivedConstructor {
-						newInstance = Undefined
+						newInstance = Uninitialized
 					} else {
 						newInstance = NewObject(instancePrototype)
 					}
@@ -9207,7 +9245,22 @@ startExecution:
 			ip++
 
 			// Load 'this' value from current call frame context
-			// If no 'this' context is set (regular function call), return undefined
+			// Check for TDZ: in derived constructors, 'this' is Uninitialized until super() is called
+			if frame.thisValue.typ == TypeUninitialized {
+				frame.ip = ip
+				vm.ThrowReferenceError("Must call super constructor in derived class before accessing 'this' or returning from derived constructor")
+				if !vm.unwinding {
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				return InterpretRuntimeError, Undefined
+			}
 			registers[destReg] = frame.thisValue
 
 		case OpSetThis:
@@ -9223,8 +9276,8 @@ startExecution:
 			// since arrow functions use lexical this binding
 			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
 				// Arrow function: check if captured this is already initialized
-				// If CapturedThis is not undefined, super() was already called in the enclosing constructor
-				if frame.closure.CapturedThis.Type() != TypeUndefined {
+				// If CapturedThis is not Uninitialized, super() was already called in the enclosing constructor
+				if frame.closure.CapturedThis.Type() != TypeUninitialized {
 					frame.ip = ip
 					vm.ThrowReferenceError("super() already called")
 					if !vm.unwinding {
@@ -9245,7 +9298,7 @@ startExecution:
 				for i := int(vm.frameCount) - 2; i >= 0; i-- {
 					enclosingFrame := &vm.frames[i]
 					if enclosingFrame.isConstructorCall {
-						if enclosingFrame.thisValue.Type() != TypeUndefined {
+						if enclosingFrame.thisValue.Type() != TypeUninitialized {
 							frame.ip = ip
 							vm.ThrowReferenceError("super() already called")
 							if !vm.unwinding {
@@ -9270,7 +9323,7 @@ startExecution:
 				frame.thisValue = registers[srcReg]
 			} else {
 				// Non-arrow function: check current frame's thisValue
-				if frame.thisValue.Type() != TypeUndefined {
+				if frame.thisValue.Type() != TypeUninitialized {
 					frame.ip = ip
 					vm.ThrowReferenceError("super() already called")
 					if !vm.unwinding {
@@ -9324,7 +9377,7 @@ startExecution:
 
 			// Check that we're in a valid context for super
 			// In constructors, super property access is only valid after super() call
-			if frame.isConstructorCall && frame.thisValue.Type() == TypeUndefined {
+			if frame.isConstructorCall && frame.thisValue.Type() == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
 				return InterpretRuntimeError, Undefined
@@ -9380,7 +9433,7 @@ startExecution:
 
 			// Check that we're in a valid context for super property access
 			// In constructors, super property access is only valid after super() call
-			if frame.isConstructorCall && thisValue.Type() == TypeUndefined {
+			if frame.isConstructorCall && thisValue.Type() == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
 				return InterpretRuntimeError, Undefined
@@ -9602,7 +9655,7 @@ startExecution:
 			}
 
 			// Check that we're in a valid context for super property access
-			if frame.isConstructorCall && thisValue.Type() == TypeUndefined {
+			if frame.isConstructorCall && thisValue.Type() == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
 				return InterpretRuntimeError, Undefined
@@ -9756,7 +9809,7 @@ startExecution:
 			}
 
 			// Check that we're in a valid context for super property access
-			if frame.isConstructorCall && thisValue.Type() == TypeUndefined {
+			if frame.isConstructorCall && thisValue.Type() == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
 				return InterpretRuntimeError, Undefined
@@ -9905,7 +9958,7 @@ startExecution:
 			}
 
 			// Check that we're in a valid context for super property access
-			if frame.isConstructorCall && thisValue.Type() == TypeUndefined {
+			if frame.isConstructorCall && thisValue.Type() == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
 				return InterpretRuntimeError, Undefined
@@ -10095,7 +10148,7 @@ startExecution:
 			thisValue := frame.thisValue
 
 			// Check that we're in a valid context for super property access
-			if frame.isConstructorCall && thisValue.Type() == TypeUndefined {
+			if frame.isConstructorCall && thisValue.Type() == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
 				return InterpretRuntimeError, Undefined
