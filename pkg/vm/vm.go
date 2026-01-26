@@ -3203,19 +3203,20 @@ startExecution:
 						continue
 					}
 
-					// Check Symbol.unscopables for TypeObject
-					if withObj.Type() == TypeObject {
-						obj := withObj.AsPlainObject()
-						if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
-							if unscopablesVal.Type() == TypeObject {
-								unscopablesObj := unscopablesVal.AsPlainObject()
-								if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
-									if excludeVal.IsTruthy() {
-										continue // unscopable, continue searching
-									}
-								}
-							}
+					// Check Symbol.unscopables (triggers getter per ECMAScript spec)
+					frame.ip = ip
+					unscopable, hadError := vm.isUnscopable(withObj, propName)
+					if hadError {
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
 						}
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
+						}
+					}
+					if unscopable {
+						continue // unscopable, continue searching
 					}
 
 					// Property found and not unscopable - get the value
@@ -3301,14 +3302,16 @@ startExecution:
 							if withObj.Type() == TypeObject {
 								obj := withObj.AsPlainObject()
 								if obj.HasOwn(propName) {
-									// Check Symbol.unscopables
-									isUnscopable := false
-									if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
-										if unscopablesVal.Type() == TypeObject {
-											unscopablesObj := unscopablesVal.AsPlainObject()
-											if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
-												isUnscopable = excludeVal.IsTruthy()
-											}
+									// Check Symbol.unscopables (triggers getter per ECMAScript spec)
+									frame.ip = ip
+									isUnscopable, hadError := vm.isUnscopable(withObj, propName)
+									if hadError {
+										if vm.unwinding {
+											return InterpretRuntimeError, Undefined
+										}
+										if vm.handlerFound {
+											vm.handlerFound = false
+											goto reloadFrame
 										}
 									}
 									if !isUnscopable {
@@ -3460,19 +3463,20 @@ startExecution:
 						continue
 					}
 
-					// Check Symbol.unscopables for TypeObject
-					if withObj.Type() == TypeObject {
-						obj := withObj.AsPlainObject()
-						if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
-							if unscopablesVal.Type() == TypeObject {
-								unscopablesObj := unscopablesVal.AsPlainObject()
-								if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
-									if excludeVal.IsTruthy() {
-										continue // unscopable, continue searching
-									}
-								}
-							}
+					// Check Symbol.unscopables (triggers getter per ECMAScript spec)
+					frame.ip = ip
+					unscopable, hadError := vm.isUnscopable(withObj, propName)
+					if hadError {
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
 						}
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
+						}
+					}
+					if unscopable {
+						continue // unscopable, continue searching
 					}
 
 					// Property found and not unscopable - get the value
@@ -3581,19 +3585,20 @@ startExecution:
 						continue
 					}
 
-					// Check Symbol.unscopables
-					if withObj.Type() == TypeObject {
-						obj := withObj.AsPlainObject()
-						if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
-							if unscopablesVal.Type() == TypeObject {
-								unscopablesObj := unscopablesVal.AsPlainObject()
-								if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
-									if excludeVal.IsTruthy() {
-										continue
-									}
-								}
-							}
+					// Check Symbol.unscopables (triggers getter per ECMAScript spec)
+					frame.ip = ip
+					unscopable, hadError := vm.isUnscopable(withObj, propName)
+					if hadError {
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
 						}
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
+						}
+					}
+					if unscopable {
+						continue
 					}
 
 					// Set on this with-object
@@ -3692,22 +3697,6 @@ startExecution:
 				return false, false
 			}
 
-			// Helper to check Symbol.unscopables
-			checkUnscopables := func(withObj Value) bool {
-				if withObj.Type() == TypeObject {
-					obj := withObj.AsPlainObject()
-					if unscopablesVal, hasUnscopables := obj.GetOwnByKey(NewSymbolKey(vm.SymbolUnscopables)); hasUnscopables {
-						if unscopablesVal.Type() == TypeObject {
-							unscopablesObj := unscopablesVal.AsPlainObject()
-							if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
-								return excludeVal.IsTruthy()
-							}
-						}
-					}
-				}
-				return false
-			}
-
 			// Find which with-object has the property (search from innermost to outermost)
 			bindingIndex := byte(255) // 255 means use local/global fallback
 
@@ -3725,7 +3714,19 @@ startExecution:
 				}
 
 				if hasProperty {
-					if checkUnscopables(withObj) {
+					// Check Symbol.unscopables (triggers getter per ECMAScript spec)
+					frame.ip = ip
+					unscopable, unscopErr := vm.isUnscopable(withObj, propName)
+					if unscopErr {
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
+						}
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
+						}
+					}
+					if unscopable {
 						continue resolveWithLoopStack
 					}
 					bindingIndex = byte(i)
@@ -3748,7 +3749,19 @@ startExecution:
 					}
 
 					if hasProperty {
-						if checkUnscopables(withObj) {
+						// Check Symbol.unscopables (triggers getter per ECMAScript spec)
+						frame.ip = ip
+						unscopable, unscopErr := vm.isUnscopable(withObj, propName)
+						if unscopErr {
+							if vm.unwinding {
+								return InterpretRuntimeError, Undefined
+							}
+							if vm.handlerFound {
+								vm.handlerFound = false
+								goto reloadFrame
+							}
+						}
+						if unscopable {
 							continue resolveWithLoopClosure
 						}
 						// Encode closure index with offset 128
@@ -12713,6 +12726,38 @@ func (vm *VM) hasFunctionPrototypeProperty(propKey string) bool {
 		}
 	}
 	return false
+}
+
+// isUnscopable checks if a property is excluded by Symbol.unscopables on the with-object.
+// This properly triggers the getter for @@unscopables per ECMAScript spec.
+// Returns (unscopable, hadError) - if hadError is true, check vm.unwinding
+func (vm *VM) isUnscopable(withObj Value, propName string) (bool, bool) {
+	if withObj.Type() != TypeObject {
+		return false, false
+	}
+
+	// Get @@unscopables using getter (triggers getter if present)
+	unscopablesVal, hasUnscopables, err := vm.GetSymbolPropertyWithGetter(withObj, vm.SymbolUnscopables)
+	if err != nil {
+		// Error thrown during getter execution
+		return false, true
+	}
+	if vm.unwinding {
+		// Exception was thrown
+		return false, true
+	}
+
+	if !hasUnscopables || unscopablesVal.Type() != TypeObject {
+		return false, false
+	}
+
+	// Check if propName is excluded in the unscopables object
+	unscopablesObj := unscopablesVal.AsPlainObject()
+	if excludeVal, hasExclude := unscopablesObj.GetOwn(propName); hasExclude {
+		return excludeVal.IsTruthy(), false
+	}
+
+	return false, false
 }
 
 // runtimeError formats a runtime error message, appends it to the VM's error list,
