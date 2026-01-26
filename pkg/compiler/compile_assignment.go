@@ -166,10 +166,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				c.emitResolveWithBinding(identInfo.withBindingReg, int(identInfo.withNameConstIdx), withInfo.LocalReg, line)
 
 				// For compound assignments, we also need the current property value
+				// Use OpGetWithByBinding to use the pre-resolved binding (skips HasBinding/unscopables check)
 				if node.Operator != "=" {
 					currentValueReg = c.regAlloc.Alloc()
 					tempRegs = append(tempRegs, currentValueReg)
-					c.emitGetWithOrLocal(currentValueReg, int(identInfo.withNameConstIdx), withInfo.LocalReg, line)
+					c.emitGetWithByBinding(currentValueReg, int(identInfo.withNameConstIdx), withInfo.LocalReg, identInfo.withBindingReg, line)
 				} else {
 					currentValueReg = nilRegister // Not needed for simple assignment
 				}
@@ -187,10 +188,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				c.emitResolveWithBinding(identInfo.withBindingReg, int(identInfo.withNameConstIdx), 255, line)
 
 				// For compound assignments, we need the current property value
+				// Use OpGetWithByBinding to use the pre-resolved binding (skips HasBinding/unscopables check)
 				if node.Operator != "=" {
 					currentValueReg = c.regAlloc.Alloc()
 					tempRegs = append(tempRegs, currentValueReg)
-					c.emitGetWithProperty(currentValueReg, int(identInfo.withNameConstIdx), line)
+					c.emitGetWithByBinding(currentValueReg, int(identInfo.withNameConstIdx), 255, identInfo.withBindingReg, line)
 				} else {
 					currentValueReg = nilRegister // Not needed for simple assignment
 				}

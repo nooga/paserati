@@ -3221,22 +3221,120 @@ startExecution:
 						continue // unscopable, continue searching
 					}
 
+					// Per ECMAScript 9.1.1.2.6 GetBindingValue steps 2-3:
+					// Re-check if property still exists (it may have been deleted by unscopables getter)
+					// If deleted and strict mode, throw ReferenceError
+					stillExists := false
+					switch withObj.Type() {
+					case TypeObject:
+						stillExists = withObj.AsPlainObject().Has(propName)
+					case TypeDictObject:
+						stillExists = withObj.AsDictObject().Has(propName)
+					case TypeProxy:
+						// For Proxy, use has trap
+						proxy := withObj.AsProxy()
+						if !proxy.Revoked {
+							if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.IsCallable() {
+								trapArgs := []Value{proxy.target, NewString(propName)}
+								frame.ip = ip
+								vm.helperCallDepth++
+								result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+								vm.helperCallDepth--
+								if vm.unwinding {
+									return InterpretRuntimeError, Undefined
+								}
+								if vm.handlerFound {
+									vm.handlerFound = false
+									goto reloadFrame
+								}
+								if err == nil {
+									stillExists = result.IsTruthy()
+								}
+							} else {
+								// No has trap, check target
+								switch proxy.target.Type() {
+								case TypeObject:
+									stillExists = proxy.target.AsPlainObject().Has(propName)
+								case TypeDictObject:
+									stillExists = proxy.target.AsDictObject().Has(propName)
+								}
+							}
+						}
+					}
+					if !stillExists {
+						isStrict := function != nil && function.Chunk != nil && function.Chunk.IsStrict
+						if isStrict {
+							frame.ip = ip
+							vm.ThrowReferenceError(fmt.Sprintf("%s is not defined", propName))
+							if vm.handlerFound {
+								vm.handlerFound = false
+								goto reloadFrame
+							}
+							return InterpretRuntimeError, Undefined
+						}
+						// Non-strict mode: return undefined
+						registers[destReg] = Undefined
+						found = true
+						break withObjectLoop
+					}
+
 					// Property found and not unscopable - get the value
-					frame.ip = ip
-					vm.helperCallDepth++
-					propVal, err := vm.GetProperty(withObj, propName)
-					vm.helperCallDepth--
-					if vm.handlerFound {
-						vm.handlerFound = false
-						goto reloadFrame
-					}
-					if vm.unwinding {
-						return InterpretRuntimeError, Undefined
-					}
-					if err != nil {
+					var propVal Value
+					if withObj.Type() == TypeProxy {
+						// For Proxy, use get trap
+						proxy := withObj.AsProxy()
+						if !proxy.Revoked {
+							if getTrap, ok := proxy.handler.AsPlainObject().GetOwn("get"); ok && getTrap.IsCallable() {
+								trapArgs := []Value{proxy.target, NewString(propName), withObj}
+								frame.ip = ip
+								vm.helperCallDepth++
+								result, err := vm.Call(getTrap, proxy.handler, trapArgs)
+								vm.helperCallDepth--
+								if vm.unwinding {
+									return InterpretRuntimeError, Undefined
+								}
+								if vm.handlerFound {
+									vm.handlerFound = false
+									goto reloadFrame
+								}
+								if err != nil {
+									frame.ip = ip
+									status := vm.runtimeError("Error getting property: %v", err)
+									return status, Undefined
+								}
+								propVal = result
+							} else {
+								// No get trap, get from target
+								frame.ip = ip
+								vm.helperCallDepth++
+								var err error
+								propVal, err = vm.GetProperty(proxy.target, propName)
+								vm.helperCallDepth--
+								if err != nil {
+									frame.ip = ip
+									status := vm.runtimeError("Error getting property: %v", err)
+									return status, Undefined
+								}
+							}
+						}
+					} else {
 						frame.ip = ip
-						status := vm.runtimeError("Error getting property: %v", err)
-						return status, Undefined
+						vm.helperCallDepth++
+						var err error
+						propVal, err = vm.GetProperty(withObj, propName)
+						vm.helperCallDepth--
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
+						}
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
+						}
+						if err != nil {
+							frame.ip = ip
+							status := vm.runtimeError("Error getting property: %v", err)
+							return status, Undefined
+						}
 					}
 					registers[destReg] = propVal
 					found = true
@@ -3301,24 +3399,102 @@ startExecution:
 					for _, withObjects := range withSources {
 						for i := len(withObjects) - 1; i >= 0; i-- {
 							withObj := withObjects[i]
-							if withObj.Type() == TypeObject {
-								obj := withObj.AsPlainObject()
-								if obj.HasOwn(propName) {
-									// Check Symbol.unscopables (triggers getter per ECMAScript spec)
-									frame.ip = ip
-									isUnscopable, hadError := vm.isUnscopable(withObj, propName)
-									if hadError {
-										// Check handlerFound FIRST - if a handler was found, jump to it
+							hasProperty := false
+
+							// Check if with-object has property (HasBinding step 2)
+							switch withObj.Type() {
+							case TypeObject:
+								hasProperty = withObj.AsPlainObject().Has(propName)
+							case TypeDictObject:
+								hasProperty = withObj.AsDictObject().Has(propName)
+							case TypeProxy:
+								// Use has trap for Proxy
+								proxy := withObj.AsProxy()
+								if !proxy.Revoked {
+									if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.IsCallable() {
+										trapArgs := []Value{proxy.target, NewString(propName)}
+										frame.ip = ip
+										vm.helperCallDepth++
+										result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+										vm.helperCallDepth--
+										if vm.unwinding {
+											return InterpretRuntimeError, Undefined
+										}
 										if vm.handlerFound {
 											vm.handlerFound = false
 											goto reloadFrame
 										}
-										// No handler found - propagate the error
-										if vm.unwinding {
-											return InterpretRuntimeError, Undefined
+										if err == nil {
+											hasProperty = result.IsTruthy()
+										}
+									} else {
+										// No has trap, check target
+										switch proxy.target.Type() {
+										case TypeObject:
+											hasProperty = proxy.target.AsPlainObject().Has(propName)
+										case TypeDictObject:
+											hasProperty = proxy.target.AsDictObject().Has(propName)
 										}
 									}
-									if !isUnscopable {
+								}
+							}
+
+							if hasProperty {
+								// Check Symbol.unscopables (triggers getter per ECMAScript spec)
+								frame.ip = ip
+								isUnscopable, hadError := vm.isUnscopable(withObj, propName)
+								if hadError {
+									// Check handlerFound FIRST - if a handler was found, jump to it
+									if vm.handlerFound {
+										vm.handlerFound = false
+										goto reloadFrame
+									}
+									// No handler found - propagate the error
+									if vm.unwinding {
+										return InterpretRuntimeError, Undefined
+									}
+								}
+								if !isUnscopable {
+									// Per ECMAScript 9.1.1.2.5 SetMutableBinding step 2:
+									// Let stillExists be ? HasProperty(bindingObject, N).
+									// Re-check using has trap for Proxy
+									stillExists := false
+									switch withObj.Type() {
+									case TypeObject:
+										stillExists = withObj.AsPlainObject().Has(propName)
+									case TypeDictObject:
+										stillExists = withObj.AsDictObject().Has(propName)
+									case TypeProxy:
+										proxy := withObj.AsProxy()
+										if !proxy.Revoked {
+											if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.IsCallable() {
+												trapArgs := []Value{proxy.target, NewString(propName)}
+												frame.ip = ip
+												vm.helperCallDepth++
+												result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+												vm.helperCallDepth--
+												if vm.unwinding {
+													return InterpretRuntimeError, Undefined
+												}
+												if vm.handlerFound {
+													vm.handlerFound = false
+													goto reloadFrame
+												}
+												if err == nil {
+													stillExists = result.IsTruthy()
+												}
+											} else {
+												switch proxy.target.Type() {
+												case TypeObject:
+													stillExists = proxy.target.AsPlainObject().Has(propName)
+												case TypeDictObject:
+													stillExists = proxy.target.AsDictObject().Has(propName)
+												}
+											}
+										}
+									}
+
+									if stillExists {
 										withHasProperty = true
 										// Set on this with-object
 										if ok, status, val := vm.opSetProp(ip, &withObj, propName, &value); !ok {
@@ -3483,6 +3659,36 @@ startExecution:
 					}
 					if unscopable {
 						continue // unscopable, continue searching
+					}
+
+					// Per ECMAScript 9.1.1.2.6 GetBindingValue steps 2-3:
+					// Re-check if property still exists (it may have been deleted by unscopables getter)
+					// If deleted and strict mode, throw ReferenceError
+					stillExists := false
+					switch withObj.Type() {
+					case TypeObject:
+						stillExists = withObj.AsPlainObject().Has(propName)
+					case TypeDictObject:
+						stillExists = withObj.AsDictObject().Has(propName)
+					case TypeProxy:
+						// For Proxy, assume it exists (will be handled by GetProperty)
+						stillExists = true
+					}
+					if !stillExists {
+						isStrict := function != nil && function.Chunk != nil && function.Chunk.IsStrict
+						if isStrict {
+							frame.ip = ip
+							vm.ThrowReferenceError(fmt.Sprintf("%s is not defined", propName))
+							if vm.handlerFound {
+								vm.handlerFound = false
+								goto reloadFrame
+							}
+							return InterpretRuntimeError, Undefined
+						}
+						// Non-strict mode: return undefined
+						registers[destReg] = Undefined
+						found = true
+						break getWithOrLocalLoop
 					}
 
 					// Property found and not unscopable - get the value
@@ -3851,28 +4057,63 @@ startExecution:
 				// Set on the with-object
 
 				// Per ECMAScript 9.1.1.2.5 SetMutableBinding:
+				// Step 2: Let stillExists be ? HasProperty(bindingObject, N).
+				// For Proxy objects, this must trigger the 'has' trap
+				stillExists := false
+				switch withObj.Type() {
+				case TypeObject:
+					obj := withObj.AsPlainObject()
+					stillExists = obj.HasOwn(propName)
+					// Also check prototype chain (HasProperty, not just HasOwn)
+					if !stillExists {
+						_, stillExists = obj.Get(propName)
+					}
+				case TypeDictObject:
+					stillExists = withObj.AsDictObject().Has(propName)
+				case TypeProxy:
+					// For Proxy, call the 'has' trap per SetMutableBinding step 2
+					proxy := withObj.AsProxy()
+					if !proxy.Revoked {
+						hasTrap, hasHasTrap := proxy.handler.AsPlainObject().GetOwn("has")
+						if hasHasTrap && hasTrap.IsCallable() {
+							trapArgs := []Value{proxy.target, NewString(propName)}
+							vm.helperCallDepth++
+							result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+							vm.helperCallDepth--
+							if err != nil {
+								if vm.handlerFound {
+									vm.handlerFound = false
+									goto reloadFrame
+								}
+								return InterpretRuntimeError, Undefined
+							}
+							stillExists = result.IsTruthy()
+						} else {
+							// No has trap, check on target
+							switch proxy.target.Type() {
+							case TypeObject:
+								stillExists = proxy.target.AsPlainObject().Has(propName)
+							case TypeDictObject:
+								stillExists = proxy.target.AsDictObject().Has(propName)
+							default:
+								stillExists = true
+							}
+						}
+					}
+				default:
+					stillExists = true
+				}
+
 				// In strict mode, if the binding was captured but property was deleted during
 				// RHS evaluation, throw ReferenceError
 				isStrict := function != nil && function.Chunk != nil && function.Chunk.IsStrict
-				if isStrict {
-					// Check if property still exists on the with-object
-					stillExists := false
-					if withObj.Type() == TypeObject {
-						obj := withObj.AsPlainObject()
-						stillExists = obj.HasOwn(propName)
-						// Also check prototype chain (HasProperty, not just HasOwn)
-						if !stillExists {
-							_, stillExists = obj.Get(propName)
-						}
+				if isStrict && !stillExists {
+					frame.ip = ip
+					vm.ThrowReferenceError(fmt.Sprintf("Cannot assign to deleted binding '%s' in strict mode", propName))
+					if !vm.unwinding {
+						goto reloadFrame
 					}
-					if !stillExists {
-						frame.ip = ip
-						vm.ThrowReferenceError(fmt.Sprintf("Cannot assign to deleted binding '%s' in strict mode", propName))
-						if !vm.unwinding {
-							goto reloadFrame
-						}
-						return InterpretRuntimeError, Undefined
-					}
+					return InterpretRuntimeError, Undefined
 				}
 
 				if ok, status, val := vm.opSetProp(ip, &withObj, propName, &value); !ok {
@@ -3943,23 +4184,78 @@ startExecution:
 				}
 			} else {
 				// Get from the with-object (no unscopables check - already done at binding time)
-				frame.ip = ip
-				vm.helperCallDepth++
-				propVal, err := vm.GetProperty(withObj, propName)
-				vm.helperCallDepth--
-				if vm.handlerFound {
-					vm.handlerFound = false
-					goto reloadFrame
+				// But per ECMAScript 9.1.1.2.6 GetBindingValue steps 2-3:
+				// Step 2: Let value be ? HasProperty(bindingObject, N).
+				// For Proxy, this must trigger the 'has' trap
+				stillExists := false
+				switch withObj.Type() {
+				case TypeObject:
+					stillExists = withObj.AsPlainObject().Has(propName)
+				case TypeDictObject:
+					stillExists = withObj.AsDictObject().Has(propName)
+				case TypeProxy:
+					// For Proxy, call the 'has' trap per GetBindingValue step 2
+					proxy := withObj.AsProxy()
+					if !proxy.Revoked {
+						hasTrap, hasHasTrap := proxy.handler.AsPlainObject().GetOwn("has")
+						if hasHasTrap && hasTrap.IsCallable() {
+							trapArgs := []Value{proxy.target, NewString(propName)}
+							vm.helperCallDepth++
+							result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+							vm.helperCallDepth--
+							if err != nil {
+								if vm.handlerFound {
+									vm.handlerFound = false
+									goto reloadFrame
+								}
+								return InterpretRuntimeError, Undefined
+							}
+							stillExists = result.IsTruthy()
+						} else {
+							// No has trap, check on target
+							switch proxy.target.Type() {
+							case TypeObject:
+								stillExists = proxy.target.AsPlainObject().Has(propName)
+							case TypeDictObject:
+								stillExists = proxy.target.AsDictObject().Has(propName)
+							default:
+								stillExists = true
+							}
+						}
+					}
 				}
-				if vm.unwinding {
-					return InterpretRuntimeError, Undefined
-				}
-				if err != nil {
+				if !stillExists {
+					isStrict := function != nil && function.Chunk != nil && function.Chunk.IsStrict
+					if isStrict {
+						frame.ip = ip
+						vm.ThrowReferenceError(fmt.Sprintf("%s is not defined", propName))
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
+						}
+						return InterpretRuntimeError, Undefined
+					}
+					// Non-strict mode: return undefined
+					registers[destReg] = Undefined
+				} else {
 					frame.ip = ip
-					status := vm.runtimeError("Error getting property: %v", err)
-					return status, Undefined
+					vm.helperCallDepth++
+					propVal, err := vm.GetProperty(withObj, propName)
+					vm.helperCallDepth--
+					if vm.handlerFound {
+						vm.handlerFound = false
+						goto reloadFrame
+					}
+					if vm.unwinding {
+						return InterpretRuntimeError, Undefined
+					}
+					if err != nil {
+						frame.ip = ip
+						status := vm.runtimeError("Error getting property: %v", err)
+						return status, Undefined
+					}
+					registers[destReg] = propVal
 				}
-				registers[destReg] = propVal
 			}
 
 		case OpDeleteWithProperty:
@@ -12823,19 +13119,64 @@ func (vm *VM) hasFunctionPrototypeProperty(propKey string) bool {
 // This properly triggers the getter for @@unscopables per ECMAScript spec.
 // Returns (unscopable, hadError) - if hadError is true, check vm.unwinding
 func (vm *VM) isUnscopable(withObj Value, propName string) (bool, bool) {
-	if withObj.Type() != TypeObject {
-		return false, false
-	}
+	var unscopablesVal Value
+	hasUnscopables := false
 
-	// Get @@unscopables using getter (triggers getter if present)
-	unscopablesVal, hasUnscopables, err := vm.GetSymbolPropertyWithGetter(withObj, vm.SymbolUnscopables)
-	if err != nil {
-		// Error thrown during getter execution
-		return false, true
-	}
-	if vm.unwinding {
-		// Exception was thrown
-		return false, true
+	switch withObj.Type() {
+	case TypeObject:
+		// Get @@unscopables using getter (triggers getter if present)
+		var err error
+		unscopablesVal, hasUnscopables, err = vm.GetSymbolPropertyWithGetter(withObj, vm.SymbolUnscopables)
+		if err != nil {
+			return false, true
+		}
+		if vm.unwinding {
+			return false, true
+		}
+
+	case TypeProxy:
+		// For Proxy, use the get trap to retrieve Symbol.unscopables
+		proxy := withObj.AsProxy()
+		if proxy.Revoked {
+			vm.runtimeError("Cannot get property on a revoked Proxy")
+			return false, true
+		}
+
+		// Check if handler has a 'get' trap
+		getTrap, hasGetTrap := proxy.handler.AsPlainObject().GetOwn("get")
+		if hasGetTrap && getTrap.IsCallable() {
+			// Call handler.get(target, Symbol.unscopables, receiver)
+			trapArgs := []Value{proxy.target, vm.SymbolUnscopables, withObj}
+			vm.helperCallDepth++
+			result, err := vm.Call(getTrap, proxy.handler, trapArgs)
+			vm.helperCallDepth--
+			if vm.unwinding {
+				return false, true
+			}
+			if err != nil {
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+				}
+				return false, true
+			}
+			unscopablesVal = result
+			hasUnscopables = result.Type() != TypeUndefined
+		} else {
+			// No get trap, fallback to target
+			if proxy.target.Type() == TypeObject {
+				var err error
+				unscopablesVal, hasUnscopables, err = vm.GetSymbolPropertyWithGetter(proxy.target, vm.SymbolUnscopables)
+				if err != nil {
+					return false, true
+				}
+				if vm.unwinding {
+					return false, true
+				}
+			}
+		}
+
+	default:
+		return false, false
 	}
 
 	if !hasUnscopables || unscopablesVal.Type() != TypeObject {

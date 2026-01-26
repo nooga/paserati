@@ -129,6 +129,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.set(target, propertyKey, value [, receiver])
+	// Implements ECMAScript 10.1.9.2 OrdinarySetWithOwnDescriptor
 	reflectObj.SetOwnNonEnumerable("set", vm.NewNativeFunction(3, false, "set", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 3 {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.set requires at least 3 arguments")
@@ -137,14 +138,78 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		propKey := args[1].ToString()
 		value := args[2]
 
+		// Receiver defaults to target if not provided
+		receiver := target
+		if len(args) >= 4 {
+			receiver = args[3]
+		}
+
 		if !target.IsObject() {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.set called on non-object")
 		}
 
-		// Perform simple property set
+		// For Proxy targets, we need to use the set trap differently
+		// The set trap was already called by the caller (opSetProp), so here we
+		// are implementing the actual Set algorithm that Reflect.set uses internally
+		// when called from a Proxy set trap
+
+		// Check if the property is a data property on the target
+		isDataProp := false
 		switch target.Type() {
 		case vm.TypeObject:
-			target.AsPlainObject().SetOwnNonEnumerable(propKey, value)
+			obj := target.AsPlainObject()
+			if _, _, _, _, isAccessor := obj.GetOwnAccessor(propKey); !isAccessor {
+				isDataProp = true
+			}
+		case vm.TypeDictObject:
+			isDataProp = true // DictObject doesn't support accessors
+		case vm.TypeArray:
+			isDataProp = true
+		}
+
+		// If receiver is different from target (e.g., receiver is a Proxy),
+		// we need to call receiver's [[GetOwnProperty]] and [[DefineOwnProperty]]
+		// per ECMAScript 10.1.9.2 OrdinarySetWithOwnDescriptor
+		if isDataProp && receiver.Type() == vm.TypeProxy && receiver != target {
+			proxy := receiver.AsProxy()
+			if proxy.Revoked {
+				return vm.BooleanValue(false), vmInstance.NewTypeError("Cannot perform 'set' on a revoked Proxy")
+			}
+
+			handler := proxy.Handler()
+			proxyTarget := proxy.Target()
+
+			// Step 2.c: Let existingDescriptor be ? Receiver.[[GetOwnProperty]](P).
+			// This triggers the getOwnPropertyDescriptor trap on the receiver Proxy
+			getOwnPropDescTrap, hasGetOwnPropDesc := handler.AsPlainObject().GetOwn("getOwnPropertyDescriptor")
+			if hasGetOwnPropDesc && getOwnPropDescTrap.IsCallable() {
+				trapArgs := []vm.Value{proxyTarget, vm.NewString(propKey)}
+				_, err := vmInstance.Call(getOwnPropDescTrap, handler, trapArgs)
+				if err != nil {
+					return vm.BooleanValue(false), err
+				}
+			}
+
+			// Step 2.d.iv: Return ? Receiver.[[DefineOwnProperty]](P, valueDesc).
+			// This triggers the defineProperty trap on the receiver Proxy
+			definePropertyTrap, hasDefineProperty := handler.AsPlainObject().GetOwn("defineProperty")
+			if hasDefineProperty && definePropertyTrap.IsCallable() {
+				// Create a property descriptor with just the value
+				valueDesc := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				valueDesc.SetOwn("value", value)
+				trapArgs := []vm.Value{proxyTarget, vm.NewString(propKey), vm.NewValueFromPlainObject(valueDesc)}
+				result, err := vmInstance.Call(definePropertyTrap, handler, trapArgs)
+				if err != nil {
+					return vm.BooleanValue(false), err
+				}
+				return vm.BooleanValue(result.IsTruthy()), nil
+			}
+		}
+
+		// Simple property set on target
+		switch target.Type() {
+		case vm.TypeObject:
+			target.AsPlainObject().SetOwn(propKey, value)
 			return vm.BooleanValue(true), nil
 		case vm.TypeDictObject:
 			target.AsDictObject().SetOwn(propKey, value)

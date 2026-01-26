@@ -391,6 +391,25 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		}
 		return Undefined, nil
 
+	case TypeProxy:
+		// For Proxy, call the 'get' trap
+		proxy := obj.AsProxy()
+		if proxy.Revoked {
+			return Undefined, vm.NewTypeError("Cannot perform 'get' on a revoked Proxy")
+		}
+		getTrap, hasGetTrap := proxy.handler.AsPlainObject().GetOwn("get")
+		if hasGetTrap && getTrap.IsCallable() {
+			// Call the get trap: handler.get(target, propertyKey, receiver)
+			trapArgs := []Value{proxy.target, NewString(propName), obj}
+			result, err := vm.Call(getTrap, proxy.handler, trapArgs)
+			if err != nil {
+				return Undefined, err
+			}
+			return result, nil
+		}
+		// No get trap, fall through to target
+		return vm.GetProperty(proxy.target, propName)
+
 	default:
 		// For non-objects, just return undefined
 		return Undefined, nil
