@@ -232,13 +232,16 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	// 1. Pre-define the class name so the constructor can reference it
 	// This is needed for cases like: constructor() { Counter.increment(); }
 	// We temporarily define it with nilRegister, then update it later
-	if c.enclosing == nil {
+	// For eval code (isIndirectEval=true), class declarations should be local
+	// to the eval's lexical environment, not global.
+	isGlobalClassScope := c.enclosing == nil && !c.isIndirectEval
+	if isGlobalClassScope {
 		// Top-level class declaration
 		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
 		c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined global class '%s' at index %d\n", node.Name.Value, globalIdx)
 	} else {
-		// Local class declaration
+		// Local class declaration (or eval-scoped class)
 		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
 		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined local class '%s'\n", node.Name.Value)
 	}
@@ -271,14 +274,14 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 		debugPrintf("// DEBUG compileClassDeclaration: Set constructor's [[Prototype]] to parent class\n")
 	}
 
-	if needToFreeSuperReg {
-		c.regAlloc.Free(superConstructorReg)
-	}
-
 	// 3. Set up prototype object with methods
-	err = c.setupClassPrototype(node, constructorReg)
+	err = c.setupClassPrototype(node, constructorReg, superConstructorReg)
 	if err != nil {
 		return BadRegister, err
+	}
+
+	if needToFreeSuperReg {
+		c.regAlloc.Free(superConstructorReg)
 	}
 
 	// 4. Set up static members on the constructor
@@ -288,13 +291,13 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	}
 
 	// 5. Update the class constructor register/global
-	if c.enclosing == nil {
+	if isGlobalClassScope {
 		// Top-level class declaration - set the global value
 		globalIdx := c.GetGlobalIndex(node.Name.Value)
 		c.emitSetGlobal(uint16(globalIdx), constructorReg, node.Token.Line)
 		debugPrintf("// DEBUG compileClassDeclaration: Set global class '%s' to R%d\n", node.Name.Value, constructorReg)
 	} else {
-		// Local class declaration - update the register
+		// Local class declaration (or eval-scoped class) - update the register
 		c.currentSymbolTable.UpdateRegister(node.Name.Value, constructorReg)
 		debugPrintf("// DEBUG compileClassDeclaration: Updated local class '%s' to R%d\n", node.Name.Value, constructorReg)
 	}
@@ -432,7 +435,8 @@ func (c *Compiler) createDefaultConstructor(node *parser.ClassDeclaration) *pars
 }
 
 // setupClassPrototype sets up the prototype object with class methods
-func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructorReg Register) errors.PaseratiError {
+// superConstructorReg is the register holding the evaluated superclass constructor (BadRegister if none)
+func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructorReg Register, superConstructorReg Register) errors.PaseratiError {
 	debugPrintf("// DEBUG setupClassPrototype: Setting up prototype for class '%s'\n", node.Name.Value)
 
 	// Create prototype object - if inheriting, use parent instance, otherwise empty object
@@ -481,26 +485,37 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 		} else {
 			// Get the superclass name for compilation
 			var superClassName string
+			var isNamedRef bool
 			if ident, ok := node.SuperClass.(*parser.Identifier); ok {
 				superClassName = ident.Value
+				isNamedRef = true
 			} else if genericTypeRef, ok := node.SuperClass.(*parser.GenericTypeRef); ok {
 				// For generic type references like Container<T>, extract just the base name
 				superClassName = genericTypeRef.Name.Value
+				isNamedRef = true
 				if debugCompiler {
-				debugPrintf("// DEBUG setupClassPrototype: Extracted base class name '%s' from generic type '%s'\n", superClassName, genericTypeRef.String())
-			}
-			} else {
-				// For other complex expressions, use string representation as fallback
-				// TODO: Implement proper generic class instantiation at runtime
-				superClassName = node.SuperClass.String()
+					debugPrintf("// DEBUG setupClassPrototype: Extracted base class name '%s' from generic type '%s'\n", superClassName, genericTypeRef.String())
+				}
 			}
 
-			debugPrintf("// DEBUG setupClassPrototype: Class '%s' extends '%s', calling createInheritedPrototype\n", node.Name.Value, superClassName)
-			// Create prototype as an instance of the parent class
-			err := c.createInheritedPrototype(superClassName, prototypeReg)
-			if err != nil {
-				debugPrintf("// DEBUG setupClassPrototype: Warning - could not set up inheritance from '%s': %v\n", superClassName, err)
-				// Fall back to empty object
+			if isNamedRef {
+				debugPrintf("// DEBUG setupClassPrototype: Class '%s' extends '%s', calling createInheritedPrototype\n", node.Name.Value, superClassName)
+				// Create prototype as an instance of the parent class
+				err := c.createInheritedPrototype(superClassName, prototypeReg)
+				if err != nil {
+					debugPrintf("// DEBUG setupClassPrototype: Warning - could not set up inheritance from '%s': %v\n", superClassName, err)
+					// Fall back to empty object
+					c.emitMakeEmptyObject(prototypeReg, node.Token.Line)
+				}
+			} else if superConstructorReg != BadRegister {
+				// For complex expressions (e.g., (calls++, C)), use the already-compiled
+				// superclass constructor register to create Object.create(super.prototype)
+				err := c.createInheritedPrototypeFromReg(superConstructorReg, prototypeReg, node.Token.Line)
+				if err != nil {
+					c.emitMakeEmptyObject(prototypeReg, node.Token.Line)
+				}
+			} else {
+				// No superclass register available - fall back to empty object
 				c.emitMakeEmptyObject(prototypeReg, node.Token.Line)
 			}
 		}
@@ -973,6 +988,13 @@ func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructor
 		}
 	}
 
+	// Collect static private accessors (grouped by field name for getter+setter pairing)
+	type staticPrivateAccessorInfo struct {
+		getter *parser.MethodDefinition
+		setter *parser.MethodDefinition
+	}
+	staticPrivateAccessors := make(map[string]*staticPrivateAccessorInfo)
+
 	// Add static methods (including getters/setters, but handle private methods specially)
 	for _, method := range node.Body.Methods {
 		if method.IsStatic && method.Kind != "constructor" {
@@ -981,14 +1003,34 @@ func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructor
 			isPrivate := len(methodName) > 0 && methodName[0] == '#'
 
 			if method.Kind == "getter" {
-				err := c.addStaticGetter(method, constructorReg)
-				if err != nil {
-					return err
+				if isPrivate {
+					fieldName := methodName[1:]
+					info := staticPrivateAccessors[fieldName]
+					if info == nil {
+						info = &staticPrivateAccessorInfo{}
+						staticPrivateAccessors[fieldName] = info
+					}
+					info.getter = method
+				} else {
+					err := c.addStaticGetter(method, constructorReg)
+					if err != nil {
+						return err
+					}
 				}
 			} else if method.Kind == "setter" {
-				err := c.addStaticSetter(method, constructorReg)
-				if err != nil {
-					return err
+				if isPrivate {
+					fieldName := methodName[1:]
+					info := staticPrivateAccessors[fieldName]
+					if info == nil {
+						info = &staticPrivateAccessorInfo{}
+						staticPrivateAccessors[fieldName] = info
+					}
+					info.setter = method
+				} else {
+					err := c.addStaticSetter(method, constructorReg)
+					if err != nil {
+						return err
+					}
 				}
 			} else if isPrivate {
 				// Private static method - store as private field on constructor
@@ -1002,6 +1044,14 @@ func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructor
 					return err
 				}
 			}
+		}
+	}
+
+	// Emit static private accessor setup (getters/setters paired by field name)
+	for fieldName, info := range staticPrivateAccessors {
+		err := c.addStaticPrivateAccessor(fieldName, info.getter, info.setter, constructorReg)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -1296,6 +1346,60 @@ func (c *Compiler) addStaticSetter(method *parser.MethodDefinition, constructorR
 	return nil
 }
 
+// addStaticPrivateAccessor compiles a static private getter/setter pair and stores them
+// as private accessors on the constructor function using OpSetPrivateAccessor.
+func (c *Compiler) addStaticPrivateAccessor(fieldName string, getter *parser.MethodDefinition, setter *parser.MethodDefinition, constructorReg Register) errors.PaseratiError {
+	debugPrintf("// DEBUG addStaticPrivateAccessor: Adding static private accessor '%s'\n", fieldName)
+
+	var line int
+
+	// Compile getter closure (or undefined)
+	getterReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(getterReg)
+	if getter != nil {
+		line = getter.Token.Line
+		nameHint := "get #" + fieldName
+		funcConstIndex, freeSymbols, err := c.compileFunctionLiteralStrict(getter.Value, nameHint)
+		if err != nil {
+			return err
+		}
+		c.emitClosure(getterReg, funcConstIndex, getter.Value, freeSymbols)
+	} else {
+		c.emitLoadUndefined(getterReg, 0)
+	}
+
+	// Compile setter closure (or undefined)
+	setterReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(setterReg)
+	if setter != nil {
+		if line == 0 {
+			line = setter.Token.Line
+		}
+		nameHint := "set #" + fieldName
+		funcConstIndex, freeSymbols, err := c.compileFunctionLiteralStrict(setter.Value, nameHint)
+		if err != nil {
+			return err
+		}
+		c.emitClosure(setterReg, funcConstIndex, setter.Value, freeSymbols)
+	} else {
+		c.emitLoadUndefined(setterReg, 0)
+	}
+
+	// Get branded key for private field storage
+	brandedKey := c.getPrivateFieldKey(fieldName)
+	nameIdx := c.chunk.AddConstant(vm.String(brandedKey))
+
+	// Emit OpSetPrivateAccessor on the constructor register
+	c.emitOpCode(vm.OpSetPrivateAccessor, line)
+	c.emitByte(byte(constructorReg))
+	c.emitByte(byte(getterReg))
+	c.emitByte(byte(setterReg))
+	c.emitUint16(nameIdx)
+
+	debugPrintf("// DEBUG addStaticPrivateAccessor: Static private accessor '%s' stored on constructor\n", fieldName)
+	return nil
+}
+
 // createInheritedPrototype creates a prototype that inherits from the parent class
 func (c *Compiler) createInheritedPrototype(superClassName string, prototypeReg Register) errors.PaseratiError {
 	// Look up the parent class constructor
@@ -1379,6 +1483,41 @@ func (c *Compiler) createInheritedPrototype(superClassName string, prototypeReg 
 	c.emitCall(prototypeReg, callRegs, 1, 0)
 
 	debugPrintf("// DEBUG createInheritedPrototype: Created inherited prototype from '%s' using Object.create\n", superClassName)
+	return nil
+}
+
+// createInheritedPrototypeFromReg creates a prototype via Object.create(parentConstructor.prototype)
+// using an already-compiled superclass constructor register (for complex extends expressions)
+func (c *Compiler) createInheritedPrototypeFromReg(parentConstructorReg Register, prototypeReg Register, line int) errors.PaseratiError {
+	// Get Parent.prototype
+	parentProtoReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(parentProtoReg)
+
+	prototypeNameIdx := c.chunk.AddConstant(vm.String("prototype"))
+	c.emitGetProp(parentProtoReg, parentConstructorReg, prototypeNameIdx, line)
+
+	// Call Object.create(parentPrototype)
+	objectCreateReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(objectCreateReg)
+
+	objectGlobalIdx := c.GetOrAssignGlobalIndex("Object")
+	objectReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(objectReg)
+	c.emitGetGlobal(objectReg, objectGlobalIdx, line)
+
+	createNameIdx := c.chunk.AddConstant(vm.String("create"))
+	c.emitGetProp(objectCreateReg, objectReg, createNameIdx, line)
+
+	callRegs := c.regAlloc.AllocContiguous(2)
+	defer func() {
+		c.regAlloc.Free(callRegs)
+		c.regAlloc.Free(callRegs + 1)
+	}()
+
+	c.emitMove(callRegs, objectCreateReg, line)
+	c.emitMove(callRegs+1, parentProtoReg, line)
+	c.emitCall(prototypeReg, callRegs, 1, line)
+
 	return nil
 }
 

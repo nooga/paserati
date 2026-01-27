@@ -351,9 +351,9 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		case TypeSymbol:
 			proto = vm.SymbolPrototype
 		default:
-			// null, undefined, or other non-object types - throw error
-			status := vm.runtimeError("Cannot set property '%s' on %s", propName, objVal.TypeName())
-			return false, status, Undefined
+			// null, undefined, or other non-object types - throw TypeError
+			vm.ThrowTypeError(fmt.Sprintf("Cannot set property '%s' on %s", propName, objVal.TypeName()))
+			return false, InterpretRuntimeError, Undefined
 		}
 
 		// Walk prototype chain looking for setters or proxy traps
@@ -895,6 +895,28 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 			key := NewSymbolKey(symKey)
 			regex.Properties.DefineOwnPropertyByKey(key, *valueToSet, nil, nil, nil)
 		}
+		return true, InterpretOK, *valueToSet
+	}
+
+	// Function objects: store symbol properties on their Properties object
+	if objVal.Type() == TypeFunction {
+		funcObj := objVal.AsFunction()
+		if funcObj.Properties == nil {
+			funcObj.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+		}
+		key := NewSymbolKey(symKey)
+		funcObj.Properties.DefineOwnPropertyByKey(key, *valueToSet, nil, nil, nil)
+		return true, InterpretOK, *valueToSet
+	}
+
+	// Closure objects: store symbol properties on their Properties object
+	if objVal.Type() == TypeClosure {
+		closure := objVal.AsClosure()
+		if closure.Properties == nil {
+			closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+		}
+		key := NewSymbolKey(symKey)
+		closure.Properties.DefineOwnPropertyByKey(key, *valueToSet, nil, nil, nil)
 		return true, InterpretOK, *valueToSet
 	}
 

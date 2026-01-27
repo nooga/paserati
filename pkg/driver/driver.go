@@ -331,6 +331,12 @@ func (p *Paserati) EvalCode(code string, inheritStrict bool) (vm.Value, []error)
 		return vm.Undefined, errs
 	}
 
+	// Per ECMAScript spec, eval creates a new lexical environment for let/const/class.
+	// Set indirect eval mode so let/const/class declarations stay local to the eval chunk
+	// (only var declarations should be synced to the outer scope).
+	p.compiler.SetIndirectEval(true)
+	defer p.compiler.SetIndirectEval(false)
+
 	// Compile with inherited strict mode
 	chunk, compileErrs := p.CompileProgramWithStrictMode(prog, inheritStrict)
 	if len(compileErrs) > 0 {
@@ -444,6 +450,12 @@ func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm
 		}
 		return vm.Undefined, errs
 	}
+
+	// Per ECMAScript spec, eval creates a new lexical environment for let/const/class.
+	// Set indirect eval mode so let/const/class declarations stay local to the eval chunk
+	// (only var declarations should be synced to the outer scope).
+	p.compiler.SetIndirectEval(true)
+	defer p.compiler.SetIndirectEval(false)
 
 	// Compile with inherited strict mode and caller scope info
 	chunk, compileErrs := p.CompileDirectEvalCode(prog, inheritStrict, scopeDesc)

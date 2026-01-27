@@ -1088,7 +1088,7 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	}
 
 	obj := args[0]
-	if !obj.IsObject() {
+	if !obj.IsObject() && !obj.IsCallable() {
 		return vm.NewArray(), nil
 	}
 
@@ -1160,6 +1160,24 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		// Arguments object: return numeric indices as keys
 		for i := 0; i < argsObj.Length(); i++ {
 			keysArray.Append(vm.NewString(strconv.Itoa(i)))
+		}
+	case vm.TypeFunction:
+		funcObj := obj.AsFunction()
+		if funcObj.Properties != nil {
+			for _, key := range funcObj.Properties.OwnKeys() {
+				if _, _, en, _, ok := funcObj.Properties.GetOwnDescriptor(key); ok && en {
+					keysArray.Append(vm.NewString(key))
+				}
+			}
+		}
+	case vm.TypeClosure:
+		closure := obj.AsClosure()
+		if closure.Properties != nil {
+			for _, key := range closure.Properties.OwnKeys() {
+				if _, _, en, _, ok := closure.Properties.GetOwnDescriptor(key); ok && en {
+					keysArray.Append(vm.NewString(key))
+				}
+			}
 		}
 	}
 
@@ -1385,7 +1403,7 @@ func objectValuesImpl(args []vm.Value) (vm.Value, error) {
 	}
 
 	obj := args[0]
-	if !obj.IsObject() {
+	if !obj.IsObject() && !obj.IsCallable() {
 		// TODO: Throw TypeError when error objects are implemented
 		return vm.NewArray(), nil
 	}
@@ -1393,22 +1411,45 @@ func objectValuesImpl(args []vm.Value) (vm.Value, error) {
 	values := vm.NewArray()
 	valuesArray := values.AsArray()
 
-	if plainObj := obj.AsPlainObject(); plainObj != nil {
+	switch obj.Type() {
+	case vm.TypeObject:
+		plainObj := obj.AsPlainObject()
 		for _, key := range plainObj.OwnKeys() {
 			if _, _, en, _, ok := plainObj.GetOwnDescriptor(key); ok && en {
 				value, _ := plainObj.GetOwn(key)
 				valuesArray.Append(value)
 			}
 		}
-	} else if dictObj := obj.AsDictObject(); dictObj != nil {
+	case vm.TypeDictObject:
+		dictObj := obj.AsDictObject()
 		for _, key := range dictObj.OwnKeys() {
 			value, _ := dictObj.GetOwn(key)
 			valuesArray.Append(value)
 		}
-	} else if arrObj := obj.AsArray(); arrObj != nil {
-		// For arrays, return the element values
+	case vm.TypeArray:
+		arrObj := obj.AsArray()
 		for i := 0; i < arrObj.Length(); i++ {
 			valuesArray.Append(arrObj.Get(i))
+		}
+	case vm.TypeFunction:
+		funcObj := obj.AsFunction()
+		if funcObj.Properties != nil {
+			for _, key := range funcObj.Properties.OwnKeys() {
+				if _, _, en, _, ok := funcObj.Properties.GetOwnDescriptor(key); ok && en {
+					value, _ := funcObj.Properties.GetOwn(key)
+					valuesArray.Append(value)
+				}
+			}
+		}
+	case vm.TypeClosure:
+		closure := obj.AsClosure()
+		if closure.Properties != nil {
+			for _, key := range closure.Properties.OwnKeys() {
+				if _, _, en, _, ok := closure.Properties.GetOwnDescriptor(key); ok && en {
+					value, _ := closure.Properties.GetOwn(key)
+					valuesArray.Append(value)
+				}
+			}
 		}
 	}
 
@@ -1457,7 +1498,7 @@ func objectEntriesImpl(args []vm.Value) (vm.Value, error) {
 	}
 
 	obj := args[0]
-	if !obj.IsObject() {
+	if !obj.IsObject() && !obj.IsCallable() {
 		// TODO: Throw TypeError when error objects are implemented
 		return vm.NewArray(), nil
 	}
@@ -1465,7 +1506,9 @@ func objectEntriesImpl(args []vm.Value) (vm.Value, error) {
 	entries := vm.NewArray()
 	entriesArray := entries.AsArray()
 
-	if plainObj := obj.AsPlainObject(); plainObj != nil {
+	switch obj.Type() {
+	case vm.TypeObject:
+		plainObj := obj.AsPlainObject()
 		for _, key := range plainObj.OwnKeys() {
 			if _, _, en, _, ok := plainObj.GetOwnDescriptor(key); ok && en {
 				value, _ := plainObj.GetOwn(key)
@@ -1475,7 +1518,8 @@ func objectEntriesImpl(args []vm.Value) (vm.Value, error) {
 				entriesArray.Append(entry)
 			}
 		}
-	} else if dictObj := obj.AsDictObject(); dictObj != nil {
+	case vm.TypeDictObject:
+		dictObj := obj.AsDictObject()
 		for _, key := range dictObj.OwnKeys() {
 			value, _ := dictObj.GetOwn(key)
 			entry := vm.NewArray()
@@ -1483,13 +1527,39 @@ func objectEntriesImpl(args []vm.Value) (vm.Value, error) {
 			entry.AsArray().Append(value)
 			entriesArray.Append(entry)
 		}
-	} else if arrObj := obj.AsArray(); arrObj != nil {
-		// For arrays, return [index, value] pairs
+	case vm.TypeArray:
+		arrObj := obj.AsArray()
 		for i := 0; i < arrObj.Length(); i++ {
 			entry := vm.NewArray()
 			entry.AsArray().Append(vm.NewString(strconv.Itoa(i)))
 			entry.AsArray().Append(arrObj.Get(i))
 			entriesArray.Append(entry)
+		}
+	case vm.TypeFunction:
+		funcObj := obj.AsFunction()
+		if funcObj.Properties != nil {
+			for _, key := range funcObj.Properties.OwnKeys() {
+				if _, _, en, _, ok := funcObj.Properties.GetOwnDescriptor(key); ok && en {
+					value, _ := funcObj.Properties.GetOwn(key)
+					entry := vm.NewArray()
+					entry.AsArray().Append(vm.NewString(key))
+					entry.AsArray().Append(value)
+					entriesArray.Append(entry)
+				}
+			}
+		}
+	case vm.TypeClosure:
+		closure := obj.AsClosure()
+		if closure.Properties != nil {
+			for _, key := range closure.Properties.OwnKeys() {
+				if _, _, en, _, ok := closure.Properties.GetOwnDescriptor(key); ok && en {
+					value, _ := closure.Properties.GetOwn(key)
+					entry := vm.NewArray()
+					entry.AsArray().Append(vm.NewString(key))
+					entry.AsArray().Append(value)
+					entriesArray.Append(entry)
+				}
+			}
 		}
 	}
 

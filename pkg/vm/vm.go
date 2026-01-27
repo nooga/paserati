@@ -2500,7 +2500,19 @@ startExecution:
 					frame.closure = calleeClosure
 					frame.ip = 0
 					// Keep targetRegister unchanged (return to same caller location)
-					frame.thisValue = Undefined // Regular call has undefined 'this'
+					// Arrow functions use their captured 'this' (lexical this binding)
+				if calleeFunc.IsArrowFunction {
+					frame.thisValue = calleeClosure.CapturedThis
+				} else {
+					// Per ECMAScript spec (OrdinaryCallBindThis):
+					// - In strict mode, 'this' is undefined for regular calls
+					// - In sloppy mode, undefined/null 'this' is coerced to the global object
+					if !calleeFunc.Chunk.IsStrict {
+						frame.thisValue = NewValueFromPlainObject(vm.GlobalObject)
+					} else {
+						frame.thisValue = Undefined
+					}
+				}
 					frame.isConstructorCall = false
 					frame.isDirectCall = false
 					frame.isSentinelFrame = false
@@ -2705,7 +2717,12 @@ startExecution:
 					frame.closure = calleeClosure
 					frame.ip = 0
 					// Keep targetRegister unchanged (return to same caller location)
+					// Arrow functions use their captured 'this' (lexical this binding)
+				if calleeFunc.IsArrowFunction {
+					frame.thisValue = calleeClosure.CapturedThis
+				} else {
 					frame.thisValue = thisVal // Method call: preserve 'this'
+				}
 					frame.isConstructorCall = false
 					frame.isDirectCall = false
 					frame.isSentinelFrame = false
@@ -5794,7 +5811,7 @@ startExecution:
 					return status, Undefined
 				}
 
-			case TypeObject, TypeDictObject, TypeRegExp: // <<< NEW - added TypeRegExp
+			case TypeObject, TypeDictObject, TypeRegExp, TypePromise:
 				var key string
 				switch indexVal.Type() {
 				case TypeString:
@@ -7534,8 +7551,13 @@ startExecution:
 			}
 			propName := AsString(nameVal)
 
+			frame.ip = ip // Sync frame IP for exception handling in opSetProp
 			if ok, status, value := vm.opSetProp(ip, &registers[objReg], propName, &registers[valReg]); !ok {
 				if status != InterpretOK {
+					// If throwException found a catch handler, unwinding will be cleared
+					if !vm.unwinding {
+						goto reloadFrame
+					}
 					return status, value
 				}
 				goto reloadFrame
@@ -10991,6 +11013,50 @@ startExecution:
 				keys = make([]string, arr.Length())
 				for i := 0; i < arr.Length(); i++ {
 					keys[i] = strconv.Itoa(i)
+				}
+			case TypeFunction:
+				// Enumerate own enumerable properties on the function's Properties object
+				funcObj := objValue.AsFunction()
+				if funcObj.Properties != nil {
+					seen := make(map[string]bool)
+					cur := funcObj.Properties
+					for cur != nil {
+						for _, k := range cur.OwnKeys() {
+							if !seen[k] {
+								keys = append(keys, k)
+							}
+						}
+						for _, k := range cur.OwnPropertyNames() {
+							seen[k] = true
+						}
+						pv := cur.GetPrototype()
+						if !pv.IsObject() {
+							break
+						}
+						cur = pv.AsPlainObject()
+					}
+				}
+			case TypeClosure:
+				// Enumerate own enumerable properties on the closure's Properties object
+				closure := objValue.AsClosure()
+				if closure.Properties != nil {
+					seen := make(map[string]bool)
+					cur := closure.Properties
+					for cur != nil {
+						for _, k := range cur.OwnKeys() {
+							if !seen[k] {
+								keys = append(keys, k)
+							}
+						}
+						for _, k := range cur.OwnPropertyNames() {
+							seen[k] = true
+						}
+						pv := cur.GetPrototype()
+						if !pv.IsObject() {
+							break
+						}
+						cur = pv.AsPlainObject()
+					}
 				}
 			default:
 				// For primitive types, return empty array

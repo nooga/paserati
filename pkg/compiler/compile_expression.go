@@ -2860,26 +2860,42 @@ func (c *Compiler) compilePrivateAccessorSetup(node *parser.CallExpression, objE
 		return BadRegister, err
 	}
 
-	// Compile getter function
-	getterReg := c.regAlloc.Alloc()
-	*tempRegs = append(*tempRegs, getterReg)
-	_, err = c.compileNode(node.Arguments[1], getterReg)
-	if err != nil {
-		return BadRegister, err
-	}
-
-	// Compile setter function
-	setterReg := c.regAlloc.Alloc()
-	*tempRegs = append(*tempRegs, setterReg)
-	_, err = c.compileNode(node.Arguments[2], setterReg)
-	if err != nil {
-		return BadRegister, err
-	}
-
-	// Get the field name (should be a string literal)
+	// Get the field name first (should be a string literal) so we can use it as name hint
 	nameArg, ok := node.Arguments[0].(*parser.StringLiteral)
 	if !ok {
 		return BadRegister, NewCompileError(node.Arguments[0], "__setPrivateAccessor__ name must be a string literal")
+	}
+
+	// Compile getter function with correct name hint ("get #fieldName")
+	getterReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, getterReg)
+	if funcLit, isFuncLit := node.Arguments[1].(*parser.FunctionLiteral); isFuncLit {
+		funcConstIndex, freeSymbols, compileErr := c.compileFunctionLiteralStrict(funcLit, "get #"+nameArg.Value)
+		if compileErr != nil {
+			return BadRegister, compileErr
+		}
+		c.emitClosure(getterReg, funcConstIndex, funcLit, freeSymbols)
+	} else {
+		_, err = c.compileNode(node.Arguments[1], getterReg)
+		if err != nil {
+			return BadRegister, err
+		}
+	}
+
+	// Compile setter function with correct name hint ("set #fieldName")
+	setterReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, setterReg)
+	if funcLit, isFuncLit := node.Arguments[2].(*parser.FunctionLiteral); isFuncLit {
+		funcConstIndex, freeSymbols, compileErr := c.compileFunctionLiteralStrict(funcLit, "set #"+nameArg.Value)
+		if compileErr != nil {
+			return BadRegister, compileErr
+		}
+		c.emitClosure(setterReg, funcConstIndex, funcLit, freeSymbols)
+	} else {
+		_, err = c.compileNode(node.Arguments[2], setterReg)
+		if err != nil {
+			return BadRegister, err
+		}
 	}
 
 	// Add the branded field name to constants
@@ -2927,18 +2943,27 @@ func (c *Compiler) compilePrivateMethodSetup(node *parser.CallExpression, objExp
 		return BadRegister, err
 	}
 
-	// Compile method function
-	methodReg := c.regAlloc.Alloc()
-	*tempRegs = append(*tempRegs, methodReg)
-	_, err = c.compileNode(node.Arguments[1], methodReg)
-	if err != nil {
-		return BadRegister, err
-	}
-
-	// Get the field name (should be a string literal)
+	// Get the field name first (should be a string literal) so we can use it as name hint
 	nameArg, ok := node.Arguments[0].(*parser.StringLiteral)
 	if !ok {
 		return BadRegister, NewCompileError(node.Arguments[0], "__setPrivateMethod__ name must be a string literal")
+	}
+
+	// Compile method function with correct name hint (#fieldName)
+	methodReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, methodReg)
+	if funcLit, isFuncLit := node.Arguments[1].(*parser.FunctionLiteral); isFuncLit {
+		// Compile with proper name hint so the function's .name property is "#fieldName"
+		funcConstIndex, freeSymbols, compileErr := c.compileFunctionLiteralStrict(funcLit, "#"+nameArg.Value)
+		if compileErr != nil {
+			return BadRegister, compileErr
+		}
+		c.emitClosure(methodReg, funcConstIndex, funcLit, freeSymbols)
+	} else {
+		_, err = c.compileNode(node.Arguments[1], methodReg)
+		if err != nil {
+			return BadRegister, err
+		}
 	}
 
 	// Add the branded field name to constants

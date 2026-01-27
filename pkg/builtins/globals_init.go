@@ -389,6 +389,12 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, nil
 		}
 
+		// Per ECMAScript spec (sec-performeval), if the argument is not a string,
+		// return it as-is without attempting to parse/compile.
+		if args[0].Type() != vm.TypeString {
+			return args[0], nil
+		}
+
 		codeStr := args[0].ToString()
 
 		// Preprocess Unicode escape sequences in the eval string

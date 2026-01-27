@@ -1551,6 +1551,90 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 		return true, InterpretOK, *dest
 	}
 
+	// Function objects: check own symbol properties, then Function.prototype chain
+	if base.Type() == TypeFunction {
+		funcObj := base.AsFunction()
+		key := NewSymbolKey(symKey)
+		// Check own properties first
+		if funcObj.Properties != nil {
+			if v, ok := funcObj.Properties.GetOwnByKey(key); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+		}
+		// Walk Function.prototype chain
+		proto := vm.FunctionPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(key); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(key); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// Closure objects: check own symbol properties, then Function.prototype chain
+	if base.Type() == TypeClosure {
+		closure := base.AsClosure()
+		key := NewSymbolKey(symKey)
+		// Check own properties first
+		if closure.Properties != nil {
+			if v, ok := closure.Properties.GetOwnByKey(key); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+		}
+		// Walk Function.prototype chain
+		proto := vm.FunctionPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(key); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(key); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
 	// DictObject: no symbol identity support yet
 	*dest = Undefined
 	return true, InterpretOK, *dest

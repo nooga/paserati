@@ -2625,7 +2625,15 @@ func (c *Compiler) IsEvalCreatedBinding(name string) bool {
 
 // ShouldUseHeapForEvalBinding checks if an eval-created binding should use heap storage.
 // This enables deletion of eval-created var/function bindings per ECMAScript spec.
+// NOTE: This function is only called from let/const declaration paths. Per ECMAScript,
+// let/const/class declarations in eval should always be local to the eval's lexical
+// environment, never promoted to the outer scope. When isIndirectEval is true (set for
+// all eval modes), we return false to keep let/const as local registers.
 func (c *Compiler) ShouldUseHeapForEvalBinding(name string) bool {
+	// In eval mode, let/const should always be local (not heap)
+	if c.isIndirectEval {
+		return false
+	}
 	// Only applies to non-strict direct eval
 	if c.callerScopeDesc == nil || c.chunk.IsStrict {
 		return false
@@ -4449,58 +4457,70 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 
 	// 1b. Set up [[Prototype]] chain for derived class expressions
 	// Per ECMAScript spec, the constructor function's [[Prototype]] must point to the parent class.
+	var superConstructorReg Register = BadRegister
+	var needToFreeSuperReg bool
 	if node.SuperClass != nil {
 		if _, isNull := node.SuperClass.(*parser.NullLiteral); !isNull {
-			// Get the superclass name
+			// Check if it's an Identifier or GenericTypeRef - we can resolve by name
 			var superClassName string
+			var isNamedRef bool
 			if ident, ok := node.SuperClass.(*parser.Identifier); ok {
 				superClassName = ident.Value
+				isNamedRef = true
 			} else if genericTypeRef, ok := node.SuperClass.(*parser.GenericTypeRef); ok {
 				superClassName = genericTypeRef.Name.Value
-			} else {
-				superClassName = node.SuperClass.String()
+				isNamedRef = true
 			}
 
-			// Look up the parent class constructor using symbol table
-			var superConstructorReg Register
-			var needToFreeSuperReg bool
-			symbol, _, exists := c.currentSymbolTable.Resolve(superClassName)
-			if exists {
-				if symbol.IsGlobal {
-					superConstructorReg = c.regAlloc.Alloc()
-					needToFreeSuperReg = true
-					c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
-				} else if symbol.IsSpilled {
-					// Spilled variable - load from spill slot
-					superConstructorReg = c.regAlloc.Alloc()
-					needToFreeSuperReg = true
-					c.emitLoadSpill(superConstructorReg, symbol.SpillIndex, node.Token.Line)
+			if isNamedRef {
+				// Look up the parent class constructor using symbol table
+				symbol, _, exists := c.currentSymbolTable.Resolve(superClassName)
+				if exists {
+					if symbol.IsGlobal {
+						superConstructorReg = c.regAlloc.Alloc()
+						needToFreeSuperReg = true
+						c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
+					} else if symbol.IsSpilled {
+						superConstructorReg = c.regAlloc.Alloc()
+						needToFreeSuperReg = true
+						c.emitLoadSpill(superConstructorReg, symbol.SpillIndex, node.Token.Line)
+					} else {
+						superConstructorReg = symbol.Register
+						needToFreeSuperReg = false
+					}
 				} else {
-					superConstructorReg = symbol.Register
-					needToFreeSuperReg = false
+					// Not in symbol table - might be a built-in class
+					globalIdx := c.GetOrAssignGlobalIndex(superClassName)
+					superConstructorReg = c.regAlloc.Alloc()
+					needToFreeSuperReg = true
+					c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
 				}
 			} else {
-				// Not in symbol table - might be a built-in class
-				globalIdx := c.GetOrAssignGlobalIndex(superClassName)
+				// For arbitrary expressions, compile the expression to get the value at runtime
 				superConstructorReg = c.regAlloc.Alloc()
 				needToFreeSuperReg = true
-				c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
+				_, err := c.compileNode(node.SuperClass, superConstructorReg)
+				if err != nil {
+					c.regAlloc.Free(superConstructorReg)
+					return BadRegister, err
+				}
 			}
 
 			c.emitOpCode(vm.OpSetClosureProto, node.Token.Line)
 			c.emitByte(byte(constructorReg))
 			c.emitByte(byte(superConstructorReg))
-			if needToFreeSuperReg {
-				c.regAlloc.Free(superConstructorReg)
-			}
 			debugPrintf("// DEBUG compileClassExpression: Set constructor's [[Prototype]] to parent class\n")
 		}
 	}
 
 	// 2. Set up prototype object with methods
-	err = c.setupClassPrototype(node, constructorReg)
+	err = c.setupClassPrototype(node, constructorReg, superConstructorReg)
 	if err != nil {
 		return BadRegister, err
+	}
+
+	if needToFreeSuperReg {
+		c.regAlloc.Free(superConstructorReg)
 	}
 
 	// 3. Set up static members on the constructor

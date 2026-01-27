@@ -291,11 +291,23 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		if calleeFunc.IsArrowFunction {
 			newFrame.thisValue = calleeClosure.CapturedThis
 		} else {
-			// Per ECMAScript spec:
+			// Per ECMAScript spec (OrdinaryCallBindThis):
 			// - In strict mode, 'this' is passed as-is (undefined stays undefined)
 			// - In sloppy mode, undefined/null 'this' is coerced to the global object
-			if !calleeFunc.Chunk.IsStrict && (thisValue.Type() == TypeUndefined || thisValue.Type() == TypeNull) {
-				newFrame.thisValue = NewValueFromPlainObject(vm.GlobalObject)
+			// - In sloppy mode, primitive 'this' is auto-boxed via ToObject
+			if !calleeFunc.Chunk.IsStrict {
+				switch thisValue.Type() {
+				case TypeUndefined, TypeNull:
+					newFrame.thisValue = NewValueFromPlainObject(vm.GlobalObject)
+				case TypeFloatNumber, TypeIntegerNumber:
+					newFrame.thisValue = vm.NewNumberObject(thisValue.ToFloat())
+				case TypeString:
+					newFrame.thisValue = vm.NewStringObject(thisValue.ToString())
+				case TypeBoolean:
+					newFrame.thisValue = vm.NewBooleanObject(thisValue.AsBoolean())
+				default:
+					newFrame.thisValue = thisValue
+				}
 			} else {
 				newFrame.thisValue = thisValue
 			}

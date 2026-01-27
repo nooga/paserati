@@ -212,10 +212,18 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			}
 
 			// Check for immutable binding (NFE name binding)
+			// In strict mode, assignment throws TypeError
 			// In non-strict mode, assignment is silently ignored
-			// In strict mode, it should throw a TypeError (but we currently just ignore)
 			if found && symbolRef.IsImmutable {
-				// For immutable bindings, skip the store
+				if c.chunk.IsStrict {
+					c.emitConstAssignmentError(lhsNode.Value, line)
+					// Still need to evaluate RHS for side effects
+					if _, err := c.compileNode(node.Value, hint); err != nil {
+						return BadRegister, err
+					}
+					return hint, nil
+				}
+				// For immutable bindings in non-strict mode, skip the store
 				// RHS is still evaluated for side effects
 				needsStore = false
 				// Still set up identInfo so the code flow continues properly
@@ -1624,6 +1632,14 @@ func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, v
 	// Check for const assignment - emit TypeError at runtime
 	if symbol.IsConst {
 		c.emitConstAssignmentError(identTarget.Value, line)
+		return nil
+	}
+
+	// Check for immutable binding (NFE name) - TypeError in strict, silent ignore in non-strict
+	if symbol.IsImmutable {
+		if c.chunk.IsStrict {
+			c.emitConstAssignmentError(identTarget.Value, line)
+		}
 		return nil
 	}
 
