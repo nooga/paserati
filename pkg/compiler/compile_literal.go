@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
@@ -1671,17 +1672,23 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	arity := 0
 	length := 0
 	seenDefault := false
+	hasSimpleParams := node.RestParameter == nil
 	for _, param := range node.Parameters {
 		if param.IsThis {
 			continue
 		}
 		arity++
+		if param.IsDestructuring || param.DefaultValue != nil ||
+			(param.Name != nil && strings.HasPrefix(param.Name.Value, "__destructured_param_")) {
+			hasSimpleParams = false
+		}
 		if !seenDefault && param.DefaultValue == nil {
 			length++
 		} else {
 			seenDefault = true
 		}
 	}
+	functionChunk.HasSimpleParameterList = hasSimpleParams
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, node.IsGenerator, node.IsAsync, false, functionCompiler.hasLocalCaptures) // isArrowFunction = false for regular functions
 
 	// Set the name binding register if this is a named function expression

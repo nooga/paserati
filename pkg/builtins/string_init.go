@@ -689,7 +689,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(thisStr[start:end]), nil
 	}))
 
-	stringProto.SetOwnNonEnumerable("indexOf", vm.NewNativeFunction(2, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("indexOf", vm.NewNativeFunction(1, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// RequireObjectCoercible: throw TypeError for null/undefined
 		if err := requireObjectCoercible(vmInstance, thisVal, "indexOf"); err != nil {
@@ -739,7 +739,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(float64(position + index)), nil
 	}))
 
-	stringProto.SetOwnNonEnumerable("lastIndexOf", vm.NewNativeFunction(2, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("lastIndexOf", vm.NewNativeFunction(1, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// RequireObjectCoercible: throw TypeError for null/undefined
 		if err := requireObjectCoercible(vmInstance, thisVal, "lastIndexOf"); err != nil {
@@ -967,7 +967,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// String.prototype.normalize - returns Unicode Normalization Form of the string
-	stringProto.SetOwnNonEnumerable("normalize", vm.NewNativeFunction(1, false, "normalize", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("normalize", vm.NewNativeFunction(0, false, "normalize", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// RequireObjectCoercible: throw TypeError for null/undefined
 		if err := requireObjectCoercible(vmInstance, thisVal, "normalize"); err != nil {
@@ -1166,7 +1166,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// String.prototype.padStart - pads string at the start to reach target length
-	stringProto.SetOwnNonEnumerable("padStart", vm.NewNativeFunction(2, false, "padStart", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("padStart", vm.NewNativeFunction(1, false, "padStart", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// RequireObjectCoercible: throw TypeError for null/undefined
 		if err := requireObjectCoercible(vmInstance, thisVal, "padStart"); err != nil {
@@ -1230,7 +1230,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// String.prototype.padEnd - pads string at the end to reach target length
-	stringProto.SetOwnNonEnumerable("padEnd", vm.NewNativeFunction(2, false, "padEnd", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("padEnd", vm.NewNativeFunction(1, false, "padEnd", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// RequireObjectCoercible: throw TypeError for null/undefined
 		if err := requireObjectCoercible(vmInstance, thisVal, "padEnd"); err != nil {
@@ -1293,7 +1293,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(thisStr + padding), nil
 	}))
 
-	stringProto.SetOwnNonEnumerable("concat", vm.NewNativeFunction(0, true, "concat", func(args []vm.Value) (vm.Value, error) {
+	stringProto.SetOwnNonEnumerable("concat", vm.NewNativeFunction(1, true, "concat", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// RequireObjectCoercible: throw TypeError for null/undefined
 		if err := requireObjectCoercible(vmInstance, thisVal, "concat"); err != nil {

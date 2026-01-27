@@ -122,17 +122,21 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		}
 	}
 
-	// ES5 strict mode restriction: accessing "caller" or "arguments" on strict functions throws TypeError
-	// Per 15.3.5.4, strict mode functions have [[ThrowTypeError]] accessors for these properties
-	// This check comes AFTER own property checks because classes can define their own "arguments" getters
+	// "caller" and "arguments" restricted property handling:
+	// - Strict mode functions, arrow functions, generators, async functions:
+	//   fall through to Function.prototype's throwing accessor properties (per ECMAScript spec).
+	// - Non-strict regular function declarations/expressions:
+	//   return undefined as an own-property-like shadow (sloppy mode allows access).
 	if propName == "caller" || propName == "arguments" {
-		// Check if the function is strict (for bytecode functions)
-		if fn != nil && fn.Chunk != nil && fn.Chunk.IsStrict {
-			vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
-			return Undefined, false
+		if fn != nil && !fn.IsArrowFunction && !fn.IsGenerator && !fn.IsAsync {
+			isStrict := fn.Chunk != nil && fn.Chunk.IsStrict
+			if !isStrict {
+				// Sloppy mode regular function: return undefined (we don't track caller/arguments)
+				return Undefined, true
+			}
 		}
-		// For non-strict functions, return undefined (we don't track caller/arguments)
-		return Undefined, true
+		// Strict functions, arrow functions, generators, async functions, bound/native functions:
+		// fall through to prototype chain lookup which finds the throwing accessor.
 	}
 
 	// Expose intrinsic function properties like .name
@@ -154,11 +158,19 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 			}
 			return NewString(fn.Name), true
 		case TypeNativeFunction:
-			return NewString(objVal.AsNativeFunction().Name), true
+			nf := objVal.AsNativeFunction()
+			if nf.DeletedName {
+				break
+			}
+			return NewString(nf.Name), true
 		case TypeAsyncNativeFunction:
 			return NewString(objVal.AsAsyncNativeFunction().Name), true
 		case TypeNativeFunctionWithProps:
-			return NewString(objVal.AsNativeFunctionWithProps().Name), true
+			nfp := objVal.AsNativeFunctionWithProps()
+			if nfp.DeletedName {
+				break
+			}
+			return NewString(nfp.Name), true
 		case TypeBoundFunction:
 			return NewString(objVal.AsBoundFunction().Name), true
 		}
@@ -184,13 +196,19 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 			}
 			return NumberValue(float64(fn.Length)), true
 		case TypeNativeFunction:
-			// For native functions, length is the arity (number of formal parameters)
-			// Variadic flag means it accepts additional args, but doesn't affect length
-			return NumberValue(float64(objVal.AsNativeFunction().Arity)), true
+			nf := objVal.AsNativeFunction()
+			if nf.DeletedLength {
+				break
+			}
+			return NumberValue(float64(nf.Arity)), true
 		case TypeAsyncNativeFunction:
 			return NumberValue(float64(objVal.AsAsyncNativeFunction().Arity)), true
 		case TypeNativeFunctionWithProps:
-			return NumberValue(float64(objVal.AsNativeFunctionWithProps().Arity)), true
+			nfp := objVal.AsNativeFunctionWithProps()
+			if nfp.DeletedLength {
+				break
+			}
+			return NumberValue(float64(nfp.Arity)), true
 		case TypeBoundFunction:
 			// Bound functions have reduced length by the number of bound arguments
 			bf := objVal.AsBoundFunction()
@@ -279,6 +297,38 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 	} else if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
 		// Function.prototype is a callable NativeFunctionWithProps
 		funcProtoObj := vm.FunctionPrototype.AsNativeFunctionWithProps()
+		// Check for accessor properties first (e.g., caller, arguments throwing accessors)
+		if getter, _, _, _, exists := funcProtoObj.Properties.GetOwnAccessor(propName); exists {
+			if getter.Type() != TypeUndefined {
+				res, err := vm.Call(getter, objVal, nil)
+				if err != nil {
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+					} else {
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(excVal)
+					}
+					return Undefined, false
+				}
+				return res, true
+			}
+			return Undefined, true
+		}
 		if method, exists := funcProtoObj.Properties.GetOwn(propName); exists {
 			UpdatePrototypeStats("function_proto", 1)
 			return method, true
@@ -299,6 +349,50 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 	}
 
 	return Undefined, true // Property doesn't exist, but lookup succeeded
+}
+
+// checkFunctionProtoAccessorSetter checks if Function.prototype has an accessor property
+// with a setter for the given name. If so, invokes the setter. This implements the
+// ECMAScript [[Set]] semantics where prototype accessor setters are invoked even when
+// the receiver doesn't have an own property (e.g., Function.prototype.caller setter).
+// Returns (handled, ok, status, value) where handled=true means an accessor was found.
+// ok/status/value follow opSetProp return conventions.
+func (vm *VM) checkFunctionProtoAccessorSetter(propName string, objVal *Value, valueToSet *Value) (bool, bool, InterpretResult, Value) {
+	if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
+		funcProtoObj := vm.FunctionPrototype.AsNativeFunctionWithProps()
+		if _, setter, _, _, ok := funcProtoObj.Properties.GetOwnAccessor(propName); ok && setter.Type() != TypeUndefined {
+			_, err := vm.Call(setter, *objVal, []Value{*valueToSet})
+			if err != nil {
+				if ee, ok := err.(ExceptionError); ok {
+					vm.throwException(ee.GetExceptionValue())
+				} else {
+					var excVal Value
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							excVal = res
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+					} else {
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
+					}
+					vm.throwException(excVal)
+				}
+				if !vm.unwinding {
+					return true, false, InterpretOK, Undefined
+				}
+				return true, false, InterpretRuntimeError, Undefined
+			}
+			return true, true, InterpretOK, *valueToSet
+		}
+	}
+	return false, false, InterpretOK, Undefined
 }
 
 // handlePrimitiveMethod handles prototype method lookup for primitive types
@@ -480,6 +574,10 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 			return Number(float64(arr.Length())), true
 		case TypeArguments:
 			args := AsArguments(objVal)
+			// Check if length has been overridden
+			if v, ok := args.GetNamedProp("length"); ok {
+				return v, true
+			}
 			return Number(float64(args.Length())), true
 		case TypeString:
 			str := AsString(objVal)
@@ -491,7 +589,15 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 		switch objVal.Type() {
 		case TypeArguments:
 			args := AsArguments(objVal)
-			return args.callee, true
+			if !args.IsStrict() {
+				// Check if callee has been overridden
+				if v, ok := args.GetNamedProp("callee"); ok {
+					return v, true
+				}
+				return args.callee, true
+			}
+			// In strict mode, don't handle here - let opGetProp throw TypeError
+			return Undefined, false
 		}
 	}
 

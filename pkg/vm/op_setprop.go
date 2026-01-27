@@ -1,6 +1,9 @@
 package vm
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 const debugOpSetProp = false
 
@@ -190,7 +193,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		if fn.Properties == nil {
 			fn.Properties = NewObject(Undefined).AsPlainObject()
 		}
-		// Check for accessor property with a setter first (BEFORE strict mode caller/arguments check)
+		// Check for accessor property with a setter first (BEFORE prototype lookup)
 		// User-defined static setters named "arguments" or "caller" are allowed
 		if _, setter, _, _, ok := fn.Properties.GetOwnAccessor(propName); ok && setter.Type() != TypeUndefined {
 			_, err := vm.Call(setter, *objVal, []Value{*valueToSet})
@@ -204,11 +207,12 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			}
 			return true, InterpretOK, *valueToSet
 		}
-		// ES5 strict mode restriction: writing to "caller" or "arguments" on strict functions throws TypeError
-		// This check is AFTER the accessor check so user-defined setters take precedence
-		if (propName == "caller" || propName == "arguments") && fn.Chunk != nil && fn.Chunk.IsStrict {
-			vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
-			return false, InterpretRuntimeError, Undefined
+		// Check Function.prototype for inherited accessor properties (e.g., caller, arguments)
+		// Only for strict/arrow/generator/async functions; sloppy regular functions allow setting caller/arguments
+		if fn.IsArrowFunction || fn.IsGenerator || fn.IsAsync || (fn.Chunk != nil && fn.Chunk.IsStrict) {
+			if handled, ok, status, val := vm.checkFunctionProtoAccessorSetter(propName, objVal, valueToSet); handled {
+				return ok, status, val
+			}
 		}
 		// Function intrinsic properties "name" and "length" are non-writable per ECMAScript spec
 		// Writes silently fail in non-strict mode, throw TypeError in strict mode
@@ -264,11 +268,12 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			}
 			return true, InterpretOK, *valueToSet
 		}
-		// ES5 strict mode restriction: writing to "caller" or "arguments" on strict functions throws TypeError
-		// This check is AFTER the accessor check so user-defined setters take precedence
-		if (propName == "caller" || propName == "arguments") && closure.Fn.Chunk != nil && closure.Fn.Chunk.IsStrict {
-			vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
-			return false, InterpretRuntimeError, Undefined
+		// Check Function.prototype for inherited accessor properties (e.g., caller, arguments)
+		// Only for strict/arrow/generator/async functions; sloppy regular functions allow setting caller/arguments
+		if closure.Fn.IsArrowFunction || closure.Fn.IsGenerator || closure.Fn.IsAsync || (closure.Fn.Chunk != nil && closure.Fn.Chunk.IsStrict) {
+			if handled, ok, status, val := vm.checkFunctionProtoAccessorSetter(propName, objVal, valueToSet); handled {
+				return ok, status, val
+			}
 		}
 		// Function intrinsic properties "name" and "length" are non-writable per ECMAScript spec
 		// Writes silently fail in non-strict mode, throw TypeError in strict mode
@@ -290,30 +295,47 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		return true, InterpretOK, *valueToSet
 	case TypeNativeFunctionWithProps:
 		nfp := objVal.AsNativeFunctionWithProps()
-		if nfp != nil && nfp.Properties != nil {
-			nfp.Properties.SetOwn(propName, *valueToSet)
-			return true, InterpretOK, *valueToSet
-		}
-		// If somehow missing props container, create and retry
-		if nfp != nil && nfp.Properties == nil {
-			nfp.Properties = NewObject(Undefined).AsPlainObject()
+		if nfp != nil {
+			// name and length are non-writable intrinsic properties — silently ignore writes
+			// unless they've been deleted (then user can redefine via Properties)
+			if propName == "name" && !nfp.DeletedName {
+				return true, InterpretOK, *valueToSet
+			}
+			if propName == "length" && !nfp.DeletedLength {
+				return true, InterpretOK, *valueToSet
+			}
+			if nfp.Properties == nil {
+				nfp.Properties = NewObject(Undefined).AsPlainObject()
+			}
 			nfp.Properties.SetOwn(propName, *valueToSet)
 			return true, InterpretOK, *valueToSet
 		}
 	case TypeNativeFunction:
-		// Promote plain native function to one that supports properties
 		nf := objVal.AsNativeFunction()
 		if nf != nil {
-			promoted := NewNativeFunctionWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
-			*objVal = promoted
-			if nfp := promoted.AsNativeFunctionWithProps(); nfp != nil {
-				nfp.Properties.SetOwn(propName, *valueToSet)
+			// name and length are non-writable intrinsic properties — silently ignore writes
+			if propName == "name" && !nf.DeletedName {
 				return true, InterpretOK, *valueToSet
 			}
+			if propName == "length" && !nf.DeletedLength {
+				return true, InterpretOK, *valueToSet
+			}
+			if nf.Properties == nil {
+				nf.Properties = NewObject(Undefined).AsPlainObject()
+			}
+			nf.Properties.SetOwn(propName, *valueToSet)
+			return true, InterpretOK, *valueToSet
 		}
 	}
 
-	// (Bound/async native functions currently do not support own props; extend if needed)
+	// Bound/async native functions: check Function.prototype accessor setters
+	if objVal.Type() == TypeBoundFunction || objVal.Type() == TypeAsyncNativeFunction {
+		if handled, ok, status, val := vm.checkFunctionProtoAccessorSetter(propName, objVal, valueToSet); handled {
+			return ok, status, val
+		}
+		// For other properties, silently succeed (no own property storage on these types)
+		return true, InterpretOK, *valueToSet
+	}
 
 	// Handle primitives: coerce to temp object and walk prototype chain for setters
 	// Per ES spec 6.2.3.2 PutValue: primitives are coerced to objects for property assignment
@@ -650,6 +672,42 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			}
 		}
 		d.SetOwn(propName, *valueToSet)
+	case TypeArguments:
+		argObj := objVal.AsArguments()
+		switch propName {
+		case "callee":
+			if argObj.IsStrict() {
+				// In strict mode, callee is a throwing accessor - setting throws TypeError
+				vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
+				if !vm.unwinding {
+					return true, InterpretOK, *valueToSet
+				}
+				return false, InterpretRuntimeError, Undefined
+			}
+			// Store override in named props so reads check there first
+			argObj.SetNamedProp("callee", *valueToSet)
+		case "length":
+			// Store override in named props so reads check there first
+			argObj.SetNamedProp("length", *valueToSet)
+		default:
+			// Check for numeric string index
+			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 {
+				// For mapped arguments, write directly to the register
+				if idx < argObj.numMapped && argObj.mappedRegs != nil {
+					argObj.mappedRegs[idx] = *valueToSet
+				} else {
+					// Expand args array if needed
+					for len(argObj.args) <= idx {
+						argObj.args = append(argObj.args, Undefined)
+					}
+					argObj.args[idx] = *valueToSet
+				}
+			} else {
+				// Store in overflow named properties
+				argObj.SetNamedProp(propName, *valueToSet)
+			}
+		}
+		return true, InterpretOK, *valueToSet
 	case TypeRegExp:
 		// RegExp objects can have user-defined properties
 		regex := objVal.AsRegExpObject()

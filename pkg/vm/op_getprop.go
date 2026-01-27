@@ -97,6 +97,17 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		}
 	}
 
+	// 3b. NativeFunction with lazily-created Properties (user-set properties like nf.x = 1)
+	if objVal.Type() == TypeNativeFunction {
+		nf := objVal.AsNativeFunction()
+		if nf != nil && nf.Properties != nil {
+			if prop, exists := nf.Properties.GetOwn(propName); exists {
+				*dest = prop
+				return true, InterpretOK, *dest
+			}
+		}
+	}
+
 	// 4. Functions, Closures, Native Functions, Native Functions with Props, Async Native Functions, and Bound Functions (unified handling)
 	if objVal.Type() == TypeFunction || objVal.Type() == TypeClosure || objVal.Type() == TypeBoundFunction || objVal.Type() == TypeNativeFunction || objVal.Type() == TypeNativeFunctionWithProps || objVal.Type() == TypeAsyncNativeFunction {
 		// Set frame.ip before calling handleCallableProperty in case it throws (for exception handler lookup)
@@ -140,11 +151,22 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		}
 		if propName == "callee" {
 			if argObj.IsStrict() {
-				// In strict mode, accessing 'callee' throws TypeError
-				vm.throwException(NewString("TypeError: 'callee' may not be accessed in strict mode"))
+				// In strict mode, accessing 'callee' throws TypeError (proper TypeError object)
+				if frame != nil && !frameWasNil {
+					frame.ip = ip - 4
+				}
+				vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
+				if !vm.unwinding {
+					return false, InterpretOK, Undefined
+				}
 				return false, InterpretRuntimeError, Undefined
 			}
 			*dest = argObj.Callee()
+			return true, InterpretOK, *dest
+		}
+		// Check overflow named properties
+		if val, ok := argObj.GetNamedProp(propName); ok {
+			*dest = val
 			return true, InterpretOK, *dest
 		}
 		// Delegate to Object.prototype for inherited methods (NOT Array.prototype)

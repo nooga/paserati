@@ -173,9 +173,12 @@ type ArgumentsObject struct {
 	Object
 	length      int
 	args        []Value
-	callee      Value // The function that created this arguments object
-	isStrict    bool  // Whether the arguments object is from strict mode code
+	callee      Value                   // The function that created this arguments object
+	isStrict    bool                    // Whether the arguments object is from strict mode code
 	symbolProps map[*SymbolObject]Value // Symbol-keyed properties (e.g., Symbol.iterator)
+	namedProps  map[string]Value        // Overflow storage for arbitrary named properties
+	mappedRegs  []Value                 // Shared slice into frame registers for mapped arguments (sloppy mode)
+	numMapped   int                     // Number of mapped parameters (0 = unmapped)
 }
 
 // GeneratorState represents the execution state of a generator
@@ -1976,6 +1979,10 @@ func (a *ArgumentsObject) Length() int {
 }
 
 func (a *ArgumentsObject) Get(index int) Value {
+	// For mapped arguments (sloppy mode), read directly from the register
+	if index >= 0 && index < a.numMapped && a.mappedRegs != nil {
+		return a.mappedRegs[index]
+	}
 	if index < 0 || index >= len(a.args) {
 		return Undefined
 	}
@@ -1983,6 +1990,11 @@ func (a *ArgumentsObject) Get(index int) Value {
 }
 
 func (a *ArgumentsObject) Set(index int, value Value) {
+	// For mapped arguments (sloppy mode), write directly to the register
+	if index >= 0 && index < a.numMapped && a.mappedRegs != nil {
+		a.mappedRegs[index] = value
+		return
+	}
 	if index < 0 || index >= len(a.args) {
 		return // Arguments object doesn't expand like arrays
 	}
@@ -2022,6 +2034,42 @@ func (a *ArgumentsObject) HasOwnSymbolProp(sym *SymbolObject) bool {
 		return false
 	}
 	_, ok := a.symbolProps[sym]
+	return ok
+}
+
+// SetCallee sets the callee property on the arguments object
+func (a *ArgumentsObject) SetCallee(val Value) {
+	a.callee = val
+}
+
+// SetLength sets the length property on the arguments object
+func (a *ArgumentsObject) SetLength(val int) {
+	a.length = val
+}
+
+// GetNamedProp returns a named property from the arguments object's overflow storage
+func (a *ArgumentsObject) GetNamedProp(name string) (Value, bool) {
+	if a.namedProps == nil {
+		return Undefined, false
+	}
+	v, ok := a.namedProps[name]
+	return v, ok
+}
+
+// SetNamedProp sets a named property on the arguments object's overflow storage
+func (a *ArgumentsObject) SetNamedProp(name string, val Value) {
+	if a.namedProps == nil {
+		a.namedProps = make(map[string]Value)
+	}
+	a.namedProps[name] = val
+}
+
+// HasNamedProp checks if the arguments object has a named property in overflow storage
+func (a *ArgumentsObject) HasNamedProp(name string) bool {
+	if a.namedProps == nil {
+		return false
+	}
+	_, ok := a.namedProps[name]
 	return ok
 }
 

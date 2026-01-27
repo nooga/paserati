@@ -224,18 +224,26 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			return vm.BooleanValue(false), nil
 		case vm.TypeNativeFunction:
-			// Native functions have intrinsic own properties: name, length
-			if propName == "name" || propName == "length" {
+			nf := thisValue.AsNativeFunction()
+			if propName == "name" && !nf.DeletedName {
 				return vm.BooleanValue(true), nil
+			}
+			if propName == "length" && !nf.DeletedLength {
+				return vm.BooleanValue(true), nil
+			}
+			if nf.Properties != nil {
+				_, hasOwn := nf.Properties.GetOwn(propName)
+				return vm.BooleanValue(hasOwn), nil
 			}
 			return vm.BooleanValue(false), nil
 		case vm.TypeNativeFunctionWithProps:
 			nfp := thisValue.AsNativeFunctionWithProps()
-			// Have intrinsic own properties: name, length
-			if propName == "name" || propName == "length" {
+			if propName == "name" && !nfp.DeletedName {
 				return vm.BooleanValue(true), nil
 			}
-			// Check custom properties
+			if propName == "length" && !nfp.DeletedLength {
+				return vm.BooleanValue(true), nil
+			}
 			if nfp.Properties != nil {
 				_, hasOwn := nfp.Properties.GetOwn(propName)
 				return vm.BooleanValue(hasOwn), nil
@@ -247,6 +255,21 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.BooleanValue(true), nil
 			}
 			return vm.BooleanValue(false), nil
+		case vm.TypeArguments:
+			argsObj := thisValue.AsArguments()
+			// Arguments objects have own properties: length, callee, and numeric indices
+			if propName == "length" {
+				return vm.BooleanValue(true), nil
+			}
+			if propName == "callee" {
+				return vm.BooleanValue(true), nil
+			}
+			// Check numeric indices
+			if index, err := strconv.Atoi(propName); err == nil {
+				return vm.BooleanValue(index >= 0 && index < argsObj.Length()), nil
+			}
+			// Check overflow named properties
+			return vm.BooleanValue(argsObj.HasNamedProp(propName)), nil
 		default:
 			return vm.BooleanValue(false), nil
 		}
@@ -336,6 +359,16 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if _, _, en, _, ok := fn.Properties.GetOwnDescriptor(propName); ok {
 					return vm.BooleanValue(en), nil
 				}
+			}
+			return vm.BooleanValue(false), nil
+		case vm.TypeArguments:
+			argsObj := thisValue.AsArguments()
+			// Per spec: length and callee are non-enumerable, numeric indices are enumerable
+			if propName == "length" || propName == "callee" {
+				return vm.BooleanValue(false), nil
+			}
+			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < argsObj.Length() {
+				return vm.BooleanValue(true), nil
 			}
 			return vm.BooleanValue(false), nil
 		default:
@@ -2572,7 +2605,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		}
 	case vm.TypeNativeFunction:
 		nf := obj.AsNativeFunction()
-		if propName == "name" {
+		if propName == "name" && !nf.DeletedName {
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", vm.NewString(nf.Name))
 			descriptor.SetOwn("writable", vm.BooleanValue(false))
@@ -2580,7 +2613,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			descriptor.SetOwn("configurable", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
-		if propName == "length" {
+		if propName == "length" && !nf.DeletedLength {
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", vm.NumberValue(float64(nf.Arity)))
 			descriptor.SetOwn("writable", vm.BooleanValue(false))
@@ -2590,7 +2623,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		}
 	case vm.TypeNativeFunctionWithProps:
 		nfp := obj.AsNativeFunctionWithProps()
-		if propName == "name" {
+		if propName == "name" && !nfp.DeletedName {
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", vm.NewString(nfp.Name))
 			descriptor.SetOwn("writable", vm.BooleanValue(false))
@@ -2598,7 +2631,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			descriptor.SetOwn("configurable", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
-		if propName == "length" {
+		if propName == "length" && !nfp.DeletedLength {
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", vm.NumberValue(float64(nfp.Arity)))
 			descriptor.SetOwn("writable", vm.BooleanValue(false))

@@ -79,7 +79,10 @@ type NativeFunctionObject struct {
 	Variadic      bool
 	Name          string
 	Fn            func(args []Value) (Value, error)
-	IsConstructor bool // If true, can be used with 'new'; false by default for most native functions
+	IsConstructor bool         // If true, can be used with 'new'; false by default for most native functions
+	Properties    *PlainObject // Lazily created when user code sets properties on this function
+	DeletedName   bool         // True if the 'name' property has been deleted
+	DeletedLength bool         // True if the 'length' property has been deleted
 }
 
 // BoundNativeFunctionObject represents a native function bound to a 'this' value
@@ -109,6 +112,8 @@ type NativeFunctionObjectWithProps struct {
 	Fn            func(args []Value) (Value, error)
 	Properties    *PlainObject // Can have properties like static methods
 	IsConstructor bool         // If true, can be used with 'new'; most built-in constructors set this to true
+	DeletedName   bool         // True if the 'name' property has been deleted
+	DeletedLength bool         // True if the 'length' property has been deleted
 }
 
 // AsyncNativeFunctionObject represents a native function that can call bytecode functions

@@ -6410,28 +6410,61 @@ startExecution:
 			// --- MODIFIED: Handle Array and Object ---
 			switch baseVal.Type() {
 			case TypeArguments:
-				// Arguments object supports numeric indices only (args array)
-				// For now, treat it like a simple array-like object
 				argObj := baseVal.AsArguments()
-				if !IsNumber(indexVal) {
-					frame.ip = ip
-					status := vm.runtimeError("Arguments object only supports numeric indices, got '%v'", indexVal.Type())
-					return status, Undefined
+				if IsNumber(indexVal) {
+					idx := int(AsNumber(indexVal))
+					if idx < 0 {
+						frame.ip = ip
+						status := vm.runtimeError("Arguments index cannot be negative, got %d", idx)
+						return status, Undefined
+					}
+					// For mapped arguments, write directly to the register
+					if idx < argObj.numMapped && argObj.mappedRegs != nil {
+						argObj.mappedRegs[idx] = valueVal
+					} else {
+						// Expand args array if needed (similar to array behavior)
+						for len(argObj.args) <= idx {
+							argObj.args = append(argObj.args, Undefined)
+						}
+						argObj.args[idx] = valueVal
+						// Update length to match the actual args slice length
+						argObj.length = len(argObj.args)
+					}
+				} else {
+					// String key access (e.g., arguments["callee"], arguments["length"])
+					key := indexVal.ToString()
+					switch key {
+					case "callee":
+						if argObj.IsStrict() {
+							frame.ip = ip
+							vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
+							if vm.unwinding {
+								return InterpretRuntimeError, Undefined
+							}
+							break
+						}
+						argObj.SetNamedProp("callee", valueVal)
+					case "length":
+						argObj.SetNamedProp("length", valueVal)
+					default:
+						// Check for numeric string index
+						if idx, err := strconv.Atoi(key); err == nil && idx >= 0 {
+							// For mapped arguments, write directly to the register
+							if idx < argObj.numMapped && argObj.mappedRegs != nil {
+								argObj.mappedRegs[idx] = valueVal
+							} else {
+								for len(argObj.args) <= idx {
+									argObj.args = append(argObj.args, Undefined)
+								}
+								argObj.args[idx] = valueVal
+								argObj.length = len(argObj.args)
+							}
+						} else {
+							// Store in overflow named properties
+							argObj.SetNamedProp(key, valueVal)
+						}
+					}
 				}
-				idx := int(AsNumber(indexVal))
-				if idx < 0 {
-					frame.ip = ip
-					status := vm.runtimeError("Arguments index cannot be negative, got %d", idx)
-					return status, Undefined
-				}
-				// Expand args array if needed (similar to array behavior)
-				for len(argObj.args) <= idx {
-					argObj.args = append(argObj.args, Undefined)
-				}
-				argObj.args[idx] = valueVal
-				// Update length to match the actual args slice length
-				// This is needed because OpGetIndex uses Length() to check bounds
-				argObj.length = len(argObj.args)
 
 			case TypeArray:
 				arr := AsArray(baseVal)
@@ -6564,7 +6597,7 @@ startExecution:
 					}
 				}
 
-			case TypeObject, TypeDictObject, TypeFunction, TypeClosure, TypeRegExp: // Functions, closures, and RegExps can have properties
+			case TypeObject, TypeDictObject, TypeFunction, TypeClosure, TypeRegExp, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeAsyncNativeFunction: // Functions, closures, RegExps, and native functions can have properties
 				var key string
 				switch indexVal.Type() {
 				case TypeString:
@@ -6615,6 +6648,14 @@ startExecution:
 					// For functions, set property on the function's Properties object
 					if status, res := vm.setFunctionProperty(baseVal, key, valueVal, ip); status != InterpretOK {
 						return status, res
+					}
+				} else if baseVal.Type() == TypeNativeFunction || baseVal.Type() == TypeNativeFunctionWithProps || baseVal.Type() == TypeBoundFunction || baseVal.Type() == TypeAsyncNativeFunction {
+					// For native/bound functions, delegate to opSetProp which handles promotion
+					if ok, status, res := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
+						if status != InterpretOK {
+							return status, res
+						}
+						goto reloadFrame
 					}
 				} else if baseVal.Type() == TypeClosure {
 					// For closures, set property on the closure's own Properties object
@@ -7494,7 +7535,10 @@ startExecution:
 			propName := AsString(nameVal)
 
 			if ok, status, value := vm.opSetProp(ip, &registers[objReg], propName, &registers[valReg]); !ok {
-				return status, value
+				if status != InterpretOK {
+					return status, value
+				}
+				goto reloadFrame
 			}
 
 		case OpGetPrivateField:
@@ -11760,6 +11804,23 @@ startExecution:
 					frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
 				argsObj := NewArguments(args, calleeValue, argsIsStrict)
 
+				// Set up mapped arguments for sloppy mode functions with simple parameter lists.
+				// Per ES spec 10.4.4.7: In non-strict mode, arguments[i] and the corresponding
+				// parameter variable are aliased (bidirectional binding).
+				fn := frame.closure.Fn
+				if !argsIsStrict && fn != nil && fn.Chunk != nil && fn.Chunk.HasSimpleParameterList && fn.Arity > 0 {
+					argObjPtr := argsObj.AsArguments()
+					numMapped := fn.Arity
+					if numMapped > argCount {
+						numMapped = argCount
+					}
+					if numMapped > 0 && numMapped <= len(frame.registers) {
+						// Share the register slice so reads/writes go through the live registers
+						argObjPtr.mappedRegs = frame.registers[:numMapped]
+						argObjPtr.numMapped = numMapped
+					}
+				}
+
 				// Set Symbol.iterator as own property (same value as Array.prototype[Symbol.iterator])
 				// Per ES6 9.4.4.7 S22, arguments objects implement the Array iterator protocol
 				if vm.SymbolIterator.Type() == TypeSymbol && vm.ArrayPrototype.Type() == TypeObject {
@@ -12530,7 +12591,14 @@ startExecution:
 			} else if obj.Type() == TypeNativeFunctionWithProps {
 				// Delete from native function's properties
 				nfp := obj.AsNativeFunctionWithProps()
-				if nfp.Properties != nil {
+				// Handle deleting intrinsic properties (name, length) - they are configurable:true
+				if propName == "name" {
+					nfp.DeletedName = true
+					success = true
+				} else if propName == "length" {
+					nfp.DeletedLength = true
+					success = true
+				} else if nfp.Properties != nil {
 					// In strict mode, check for non-configurable
 					if function.Chunk.IsStrict {
 						exists, nonConfig := nfp.Properties.IsOwnPropertyNonConfigurable(propName)
@@ -12561,6 +12629,22 @@ startExecution:
 						}
 					}
 					success = nfp.Properties.DeleteOwn(propName)
+				} else {
+					success = true
+				}
+			} else if obj.Type() == TypeNativeFunction {
+				// Delete from native function
+				nf := obj.AsNativeFunction()
+				if propName == "name" {
+					nf.DeletedName = true
+					success = true
+				} else if propName == "length" {
+					nf.DeletedLength = true
+					success = true
+				} else if nf.Properties != nil && nf.Properties.HasOwn(propName) {
+					success = nf.Properties.DeleteOwn(propName)
+				} else {
+					success = true
 				}
 			}
 			registers[destReg] = BooleanValue(success)
@@ -12702,11 +12786,30 @@ startExecution:
 					success = true
 				}
 			} else if obj.Type() == TypeNativeFunctionWithProps {
-				// Delete from native function with props
 				nfp := obj.AsNativeFunctionWithProps()
 				propName := key.ToString()
-				if nfp.Properties != nil && nfp.Properties.HasOwn(propName) {
+				if propName == "name" {
+					nfp.DeletedName = true
+					success = true
+				} else if propName == "length" {
+					nfp.DeletedLength = true
+					success = true
+				} else if nfp.Properties != nil && nfp.Properties.HasOwn(propName) {
 					success = nfp.Properties.DeleteOwn(propName)
+				} else {
+					success = true
+				}
+			} else if obj.Type() == TypeNativeFunction {
+				nf := obj.AsNativeFunction()
+				propName := key.ToString()
+				if propName == "name" {
+					nf.DeletedName = true
+					success = true
+				} else if propName == "length" {
+					nf.DeletedLength = true
+					success = true
+				} else if nf.Properties != nil && nf.Properties.HasOwn(propName) {
+					success = nf.Properties.DeleteOwn(propName)
 				} else {
 					success = true
 				}

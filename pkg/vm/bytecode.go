@@ -703,8 +703,9 @@ type Chunk struct {
 	Constants      []Value            // Constant pool (Now uses Value from vm package)
 	Lines          []int              // Line number for each byte in Code (parallel array)
 	ExceptionTable []ExceptionHandler // Exception handlers for try/catch blocks
-	IsStrict       bool               // Whether this chunk runs in strict mode
-	ScopeDesc      *ScopeDescriptor   // Scope info for direct eval (nil if not needed)
+	IsStrict              bool               // Whether this chunk runs in strict mode
+	HasSimpleParameterList bool              // True if all params are plain identifiers (no defaults, rest, or destructuring)
+	ScopeDesc             *ScopeDescriptor   // Scope info for direct eval (nil if not needed)
 	MaxRegs        int                // Maximum registers needed to execute this chunk
 	NumSpillSlots  int                // Number of spill slots needed (for register overflow)
 	currentLine    int                // Current line for operand bytes (internal use)

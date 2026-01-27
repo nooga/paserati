@@ -88,6 +88,29 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 	functionProtoObj.Properties.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", toStringImpl))
 
+	// Per ECMAScript spec, Function.prototype has "caller" and "arguments" as
+	// throwing accessor properties (non-enumerable, configurable).
+	// Accessing these on strict mode functions throws TypeError.
+	throwTypeErrorFn := func(args []vm.Value) (vm.Value, error) {
+		// Create a TypeError instance and return it as an ExceptionError
+		// so that it propagates correctly through vm.Call -> accessor getter path.
+		typeErrorCtor, exists := vmInstance.GetGlobal("TypeError")
+		if exists && typeErrorCtor != vm.Undefined {
+			errInstance, err := vmInstance.Call(typeErrorCtor, vm.Undefined, []vm.Value{vm.NewString("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")})
+			if err == nil {
+				return vm.Undefined, vmInstance.NewExceptionError(errInstance)
+			}
+		}
+		return vm.Undefined, fmt.Errorf("TypeError: 'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
+	}
+	callerGetter := vm.NewNativeFunction(0, false, "ThrowTypeError", throwTypeErrorFn)
+	callerSetter := vm.NewNativeFunction(1, false, "ThrowTypeError", throwTypeErrorFn)
+	argumentsGetter := vm.NewNativeFunction(0, false, "ThrowTypeError", throwTypeErrorFn)
+	argumentsSetter := vm.NewNativeFunction(1, false, "ThrowTypeError", throwTypeErrorFn)
+	e, c := false, true
+	functionProtoObj.Properties.DefineAccessorProperty("caller", callerGetter, true, callerSetter, true, &e, &c)
+	functionProtoObj.Properties.DefineAccessorProperty("arguments", argumentsGetter, true, argumentsSetter, true, &e, &c)
+
 	// Create Function constructor (length=1 per spec)
 	functionCtor := vm.NewNativeFunction(1, true, "Function", func(args []vm.Value) (vm.Value, error) {
 		return functionConstructorImpl(vmInstance, ctx.Driver, args)
