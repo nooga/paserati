@@ -18,7 +18,7 @@ Right now it prioritizes **correctness** over raw speed, but the architecture is
 
 ### Wins
 
-- **Test262 language suite: 93.1%** (see details below)
+- **Test262 language suite: 97.0%** (see details below)
 - **Native TS execution**: no `tsc`, no TS→JS transpilation
 - **TCO**: tail call optimization (elite feature)
 - **Shapes + ICs**: fast-ish property access without a JIT
@@ -84,20 +84,20 @@ go test ./tests/...
 From a recent run:
 
 ```
-language (TOTAL)             23410    21795     1587        0       28    93.1%     2m7.648s
+language (TOTAL)             23523    22812      709        0        2    97.0%      31.931s
 ```
 
 Weak spots:
 
-- `language/import/import-defer`: 14.5% (69)
+- `language/import/import-defer`: 10.4% (96)
 - `language/module-code/namespace`: 52.8% (36)
-- `language/statements/with`: 55.8% (181)
-- `language/eval-code/indirect`: 62.3% (61)
-- `language/expressions/yield`: 74.6% (63)
-- `language/expressions/super`: 75.5% (94)
-- `language/types/reference`: 79.3% (29)
-- `language/expressions/call`: 79.3% (92)
-- `language/eval-code/direct`: 79.7% (286)
+- `language/eval-code/indirect`: 70.5% (61)
+- `language/statements/using`: 72.2% (36)
+- `language/eval-code/direct`: 84.6% (286)
+- `language/statements/await-using`: 85.7% (35)
+- `language/module-code/top-level-await`: 87.6% (251)
+- `language/literals/regexp`: 94.1% (238)
+- `language/expressions/compound-assignment`: 95.2% (454)
 
 ### Current status
 
@@ -119,8 +119,8 @@ Last time I checked it could run a pure TS library [date-fns](https://github.com
 Known gaps:
 
 - Decorators (planned)
-- `eval` correctness (still bugged; shows up in `eval-code/*` subsuites)
-- `with` statement semantics (incomplete)
+- `eval` correctness
+- `import defer` (stage 3 proposal; mostly unimplemented)
 - Some ASI edge cases (I think, eh)
 - Import attributes (experimental ES feature)
 
