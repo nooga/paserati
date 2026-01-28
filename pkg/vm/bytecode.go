@@ -162,6 +162,9 @@ const (
 	OpDeleteWithProperty OpCode = 160 // Rx NameIdx(16bit) Fallback: Delete from with-object, Fallback=0:true, 1:false
 	// --- END With Statement ---
 
+	// --- RegExp Creation ---
+	OpMakeRegExp OpCode = 163 // Rx PatternIdx(16bit) FlagsIdx(16bit): Create new RegExp from pattern and flags constants
+
 	OpSetThis       OpCode = 82 // Ry: Set 'this' value in current call context from register Ry
 	OpLoadNewTarget OpCode = 81 // Rx: Load 'new.target' value from current call context into register Rx
 	// --- END NEW ---
@@ -479,6 +482,8 @@ func (op OpCode) String() string {
 		return "OpGetWithByBinding"
 	case OpDeleteWithProperty:
 		return "OpDeleteWithProperty"
+	case OpMakeRegExp:
+		return "OpMakeRegExp"
 	case OpNew:
 		return "OpNew"
 	case OpSpreadNew:
@@ -1085,6 +1090,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.getWithByBindingInstruction(builder, instruction.String(), offset) // Rx NameIdx(16bit) LocalReg BindingReg
 	case OpDeleteWithProperty:
 		return c.deleteWithPropertyInstruction(builder, instruction.String(), offset) // Rx NameIdx(16bit) Fallback
+	case OpMakeRegExp:
+		return c.registerConstantConstantInstruction(builder, instruction.String(), offset) // Rx PatternIdx(16bit) FlagsIdx(16bit)
 	case OpNew:
 		return c.newInstruction(builder, instruction.String(), offset)
 	case OpSpreadNew:

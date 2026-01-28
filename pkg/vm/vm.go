@@ -5342,6 +5342,26 @@ startExecution:
 			}
 			registers[destReg] = arrVal
 
+		case OpMakeRegExp:
+			// OpMakeRegExp: Rx PatternIdx(16bit) FlagsIdx(16bit)
+			// Create a NEW RegExp object each time (per ECMAScript spec)
+			destReg := code[ip]
+			patternIdxHi := code[ip+1]
+			patternIdxLo := code[ip+2]
+			flagsIdxHi := code[ip+3]
+			flagsIdxLo := code[ip+4]
+			ip += 5
+
+			patternIdx := int(uint16(patternIdxHi)<<8 | uint16(patternIdxLo))
+			flagsIdx := int(uint16(flagsIdxHi)<<8 | uint16(flagsIdxLo))
+
+			pattern := AsString(constants[patternIdx])
+			flags := AsString(constants[flagsIdx])
+
+			// Create a new RegExp object (not cached - per ECMAScript spec)
+			regexValue := NewRegExpDeferred(pattern, flags)
+			registers[destReg] = regexValue
+
 		case OpDefineAccessor:
 			objReg := code[ip]
 			getterReg := code[ip+1]

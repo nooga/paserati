@@ -986,4 +986,13 @@ func (c *Compiler) emitConstAssignmentError(varName string, line int) {
 	c.regAlloc.Free(resultReg)
 }
 
+// emitMakeRegExp emits OpMakeRegExp to create a new RegExp object from pattern and flags constants.
+// Per ECMAScript spec, each evaluation of a RegExp literal creates a NEW object.
+func (c *Compiler) emitMakeRegExp(dest Register, patternIdx uint16, flagsIdx uint16, line int) {
+	c.emitOpCode(vm.OpMakeRegExp, line)
+	c.emitByte(byte(dest))
+	c.emitUint16(patternIdx)
+	c.emitUint16(flagsIdx)
+}
+
 // --- END NEW ---

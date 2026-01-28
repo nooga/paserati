@@ -4,10 +4,25 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"github.com/dlclark/regexp2"
 )
+
+// cachedCompiledRegex holds the compiled regex engines that can be shared
+// across multiple RegExpObject instances. The compiled engines are immutable
+// so sharing is safe.
+type cachedCompiledRegex struct {
+	compiledRegex  *regexp.Regexp  // Go's RE2 engine (fast path)
+	compiledRegex2 *regexp2.Regexp // regexp2 fallback (full ECMAScript)
+	compileError   string          // Error if both engines failed
+}
+
+// regexCache stores compiled regex engines keyed by "pattern\x00flags".
+// This allows regex literals to create distinct objects (per ECMAScript spec)
+// while reusing the expensive compiled regex engines internally.
+var regexCache sync.Map // map[string]*cachedCompiledRegex
 
 // RegExpObject represents a JavaScript RegExp object backed by Go's regexp package
 // Uses Go's standard regexp (RE2) for simple patterns, falls back to regexp2 for
@@ -76,40 +91,9 @@ func NewRegExp(pattern, flags string) (Value, error) {
 	return RegExpValue(regexObj), nil
 }
 
-// NewRegExpDeferred creates a RegExp object, trying Go's fast RE2 engine first,
-// then falling back to regexp2 for advanced features like lookahead/backreferences.
-// Only errors if both engines fail to compile the pattern.
-func NewRegExpDeferred(pattern, flags string) Value {
-	// ECMAScript forbids line terminators (U+2028, U+2029) in regex literals
-	if strings.ContainsRune(pattern, '\u2028') || strings.ContainsRune(pattern, '\u2029') {
-		regexObj := &RegExpObject{
-			Object:       Object{},
-			source:       pattern,
-			flags:        flags,
-			compileError: "Invalid regular expression: line terminator in pattern",
-		}
-		return RegExpValue(regexObj)
-	}
-
-	// ECMAScript forbids lone surrogates (unpaired high/low surrogates) in regex patterns
-	// In UTF-8, surrogates are encoded as: ED [A0-BF] [80-BF]
-	// High surrogates (U+D800-U+DBFF): ED [A0-AF] [80-BF]
-	// Low surrogates (U+DC00-U+DFFF): ED [B0-BF] [80-BF]
-	patternBytes := []byte(pattern)
-	for i := 0; i < len(patternBytes)-2; i++ {
-		if patternBytes[i] == 0xED && patternBytes[i+1] >= 0xA0 && patternBytes[i+1] <= 0xBF {
-			regexObj := &RegExpObject{
-				Object:       Object{},
-				source:       pattern,
-				flags:        flags,
-				compileError: "Invalid regular expression: lone surrogate in pattern",
-			}
-			return RegExpValue(regexObj)
-		}
-	}
-
-	// Parse individual flags
-	global := strings.Contains(flags, "g")
+// compileRegexEngines compiles the regex pattern with both engines and returns a cached result.
+// This is called once per unique (pattern, flags) combination.
+func compileRegexEngines(pattern, flags string) *cachedCompiledRegex {
 	ignoreCase := strings.Contains(flags, "i")
 	multiline := strings.Contains(flags, "m")
 	dotAll := strings.Contains(flags, "s")
@@ -144,18 +128,87 @@ func NewRegExpDeferred(pattern, flags string) Value {
 		}
 	}
 
+	return &cachedCompiledRegex{
+		compiledRegex:  compiledRegex,
+		compiledRegex2: compiledRegex2,
+		compileError:   compileError,
+	}
+}
+
+// getOrCompileRegex returns a cached compiled regex or compiles a new one.
+// The compiled engines are shared across RegExpObject instances for performance.
+func getOrCompileRegex(pattern, flags string) *cachedCompiledRegex {
+	key := pattern + "\x00" + flags
+
+	// Fast path: check if already cached
+	if cached, ok := regexCache.Load(key); ok {
+		return cached.(*cachedCompiledRegex)
+	}
+
+	// Slow path: compile and cache
+	compiled := compileRegexEngines(pattern, flags)
+	// LoadOrStore handles the race - if another goroutine already stored, use theirs
+	actual, _ := regexCache.LoadOrStore(key, compiled)
+	return actual.(*cachedCompiledRegex)
+}
+
+// NewRegExpDeferred creates a RegExp object, trying Go's fast RE2 engine first,
+// then falling back to regexp2 for advanced features like lookahead/backreferences.
+// The compiled regex engines are cached and shared across instances for performance,
+// but each call returns a distinct RegExpObject (per ECMAScript spec requirement
+// that each evaluation of a regex literal creates a new object).
+func NewRegExpDeferred(pattern, flags string) Value {
+	// ECMAScript forbids line terminators (U+2028, U+2029) in regex literals
+	if strings.ContainsRune(pattern, '\u2028') || strings.ContainsRune(pattern, '\u2029') {
+		regexObj := &RegExpObject{
+			Object:       Object{},
+			source:       pattern,
+			flags:        flags,
+			compileError: "Invalid regular expression: line terminator in pattern",
+		}
+		return RegExpValue(regexObj)
+	}
+
+	// ECMAScript forbids lone surrogates (unpaired high/low surrogates) in regex patterns
+	// In UTF-8, surrogates are encoded as: ED [A0-BF] [80-BF]
+	// High surrogates (U+D800-U+DBFF): ED [A0-AF] [80-BF]
+	// Low surrogates (U+DC00-U+DFFF): ED [B0-BF] [80-BF]
+	patternBytes := []byte(pattern)
+	for i := 0; i < len(patternBytes)-2; i++ {
+		if patternBytes[i] == 0xED && patternBytes[i+1] >= 0xA0 && patternBytes[i+1] <= 0xBF {
+			regexObj := &RegExpObject{
+				Object:       Object{},
+				source:       pattern,
+				flags:        flags,
+				compileError: "Invalid regular expression: lone surrogate in pattern",
+			}
+			return RegExpValue(regexObj)
+		}
+	}
+
+	// Get cached compiled engines (or compile if first time)
+	cached := getOrCompileRegex(pattern, flags)
+
+	// Parse individual flags for this instance
+	global := strings.Contains(flags, "g")
+	ignoreCase := strings.Contains(flags, "i")
+	multiline := strings.Contains(flags, "m")
+	dotAll := strings.Contains(flags, "s")
+
+	// Create a NEW RegExpObject wrapper each time (per ECMAScript spec)
+	// but share the compiled engines from cache for performance
 	regexObj := &RegExpObject{
 		Object:         Object{},
-		compiledRegex:  compiledRegex,  // Fast path (may be nil)
-		compiledRegex2: compiledRegex2, // Fallback (may be nil)
+		compiledRegex:  cached.compiledRegex,  // Shared from cache
+		compiledRegex2: cached.compiledRegex2, // Shared from cache
 		source:         pattern,
 		flags:          flags,
 		global:         global,
 		ignoreCase:     ignoreCase,
 		multiline:      multiline,
 		dotAll:         dotAll,
-		lastIndex:      0,
-		compileError:   compileError, // Only set if both engines failed
+		lastIndex:      0,                   // Fresh per instance
+		compileError:   cached.compileError, // Shared from cache
 	}
 
 	return RegExpValue(regexObj)

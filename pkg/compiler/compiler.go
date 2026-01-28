@@ -1802,11 +1802,11 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		return hint, nil // ADDED: Explicit return
 
 	case *parser.RegexLiteral: // Added for regex literals
-		// Create a RegExp object from pattern and flags
-		// Use NewRegExpDeferred so compilation continues even if Go's regexp can't handle it
-		// The error will be thrown at runtime when the regex is actually used
-		regexValue := vm.NewRegExpDeferred(node.Pattern, node.Flags)
-		c.emitLoadNewConstant(hint, regexValue, node.Token.Line)
+		// Per ECMAScript spec, each evaluation of a RegExp literal creates a NEW object
+		// We emit OpMakeRegExp which creates a new RegExp at runtime from pattern and flags
+		patternIdx := c.chunk.AddConstant(vm.String(node.Pattern))
+		flagsIdx := c.chunk.AddConstant(vm.String(node.Flags))
+		c.emitMakeRegExp(hint, patternIdx, flagsIdx, node.Token.Line)
 		return hint, nil
 
 	case *parser.ThisExpression: // Added for this keyword
