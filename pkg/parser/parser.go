@@ -2271,9 +2271,28 @@ func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 		return nil
 	}
 
+	// Save and manage generator context BEFORE parsing parameters
+	// Non-generator functions reset the context (even if nested in generators)
+	// Generator functions increment the context
+	// This is needed because yield/await can appear as identifiers in parameters of non-generator/non-async functions
+	savedGeneratorContext := p.inGenerator
+	if lit.IsGenerator {
+		p.inGenerator++
+		if debugParser {
+			fmt.Printf("[PARSER] Entering generator context for parameters, inGenerator=%d\n", p.inGenerator)
+		}
+	} else {
+		// Non-generator function resets generator context (per ECMAScript spec)
+		p.inGenerator = 0
+		if debugParser && savedGeneratorContext > 0 {
+			fmt.Printf("[PARSER] Resetting generator context for non-generator function parameters (was %d)\n", savedGeneratorContext)
+		}
+	}
+
 	// --- MODIFIED: Use parseFunctionParameters ---
 	lit.Parameters, lit.RestParameter, _ = p.parseFunctionParameters(false) // No parameter properties in function literals
 	if lit.Parameters == nil && lit.RestParameter == nil {
+		p.inGenerator = savedGeneratorContext // Restore on error
 		return nil
 	} // Propagate error
 
@@ -2284,6 +2303,7 @@ func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 		// --- MODIFIED: Use parseTypeExpression ---
 		lit.ReturnTypeAnnotation = p.parseTypeExpression()
 		if lit.ReturnTypeAnnotation == nil {
+			p.inGenerator = savedGeneratorContext // Restore on error
 			return nil
 		} // Propagate parsing error
 	} else {
@@ -2302,29 +2322,16 @@ func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 			RestParameter:        lit.RestParameter,
 			ReturnTypeAnnotation: lit.ReturnTypeAnnotation,
 		}
+		p.inGenerator = savedGeneratorContext // Restore for signature
 		return sig
 	}
 
 	if !p.expectPeek(lexer.LBRACE) {
+		p.inGenerator = savedGeneratorContext // Restore on error
 		return nil
 	}
 
-	// Save and manage generator context when parsing body
-	// Non-generator functions reset the context (even if nested in generators)
-	// Generator functions increment the context
-	savedGeneratorContext := p.inGenerator
-	if lit.IsGenerator {
-		p.inGenerator++
-		if debugParser {
-			fmt.Printf("[PARSER] Entering generator context, inGenerator=%d\n", p.inGenerator)
-		}
-	} else {
-		// Non-generator function resets generator context (per ECMAScript spec)
-		p.inGenerator = 0
-		if debugParser && savedGeneratorContext > 0 {
-			fmt.Printf("[PARSER] Resetting generator context for non-generator function (was %d)\n", savedGeneratorContext)
-		}
-	}
+	// Generator context is already set above, just continue with body parsing
 
 	// Save and manage async function context when parsing body
 	// Async functions increment the context (nested async functions are allowed)

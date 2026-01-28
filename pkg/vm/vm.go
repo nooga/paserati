@@ -2465,7 +2465,10 @@ startExecution:
 			var calleeClosure *ClosureObject
 			var calleeFunc *FunctionObject
 
-			if calleeVal.Type() == TypeClosure {
+			// Don't allow TCO when current frame is a generator - generators need special return handling
+			if frame.generatorObj != nil {
+				canPerformTCO = false
+			} else if calleeVal.Type() == TypeClosure {
 				calleeClosure = calleeVal.AsClosure()
 				calleeFunc = calleeClosure.Fn
 				// Generator functions cannot use TCO
@@ -2685,7 +2688,10 @@ startExecution:
 			var calleeClosure *ClosureObject
 			var calleeFunc *FunctionObject
 
-			if calleeVal.Type() == TypeClosure {
+			// Don't allow TCO when current frame is a generator - generators need special return handling
+			if frame.generatorObj != nil {
+				canPerformTCO = false
+			} else if calleeVal.Type() == TypeClosure {
 				calleeClosure = calleeVal.AsClosure()
 				calleeFunc = calleeClosure.Fn
 				// Generator functions cannot use TCO
