@@ -161,7 +161,48 @@ func (c *Compiler) declareClassPrivateNames(node *parser.ClassDeclaration) {
 func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint Register) (Register, errors.PaseratiError) {
 	debugPrintf("// DEBUG compileClassDeclaration: Starting compilation for class '%s'\n", node.Name.Value)
 
-	// If there's a super class, ensure it's defined before we compile the constructor
+	// 1. Pre-define the class name in the OUTER scope so the constructor can reference it
+	// This is needed for cases like: constructor() { Counter.increment(); }
+	// We temporarily define it with nilRegister, then update it later
+	// For eval code (isIndirectEval=true), class declarations should be local
+	// to the eval's lexical environment, not global.
+	isGlobalClassScope := c.enclosing == nil && !c.isIndirectEval
+	if isGlobalClassScope {
+		// Top-level class declaration
+		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+		c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined global class '%s' at index %d\n", node.Name.Value, globalIdx)
+	} else {
+		// Local class declaration (or eval-scoped class)
+		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
+		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined local class '%s'\n", node.Name.Value)
+	}
+
+	// Per ECMAScript spec (sec-runtime-semantics-classdefinitionevaluation):
+	// Create an inner scope with an immutable binding of the class name.
+	// This ensures methods inside the class see the immutable binding.
+	// NOTE: We don't allocate a separate register for the inner binding - that would
+	// cause register leaks when closures capture it. Instead, the inner binding shares
+	// storage with the outer binding (global or outer register). The TDZ case
+	// (class x extends x {}) is handled specially in heritage resolution.
+	var prevSymbolTable *SymbolTable
+	if node.Name.Value != "" {
+		prevSymbolTable = c.currentSymbolTable
+		c.currentSymbolTable = NewEnclosedSymbolTable(c.currentSymbolTable)
+		// The inner binding shares storage with the outer binding but has IsStrictImmutable set.
+		// For globals, we use the same global index. For locals, we use nilRegister for now
+		// (will be updated to constructorReg later when the outer binding is updated).
+		if isGlobalClassScope {
+			globalIdx := c.GetGlobalIndex(node.Name.Value)
+			c.currentSymbolTable.DefineGlobalStrictImmutable(node.Name.Value, uint16(globalIdx))
+		} else {
+			c.currentSymbolTable.DefineStrictImmutable(node.Name.Value, nilRegister)
+		}
+		debugPrintf("// DEBUG compileClassDeclaration: Created inner immutable binding for class '%s'\n", node.Name.Value)
+	}
+
+	// Resolve super class INSIDE the inner scope so closures in heritage clause
+	// capture the inner class name binding (per spec step 6a)
 	var superConstructorReg Register = BadRegister
 	var needToFreeSuperReg bool
 	if node.SuperClass != nil {
@@ -184,30 +225,52 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 			}
 
 			if isNamedRef {
-				// Look up the parent class constructor by name
-				symbol, _, exists := c.currentSymbolTable.Resolve(superClassName)
-				if exists {
-					// Found in symbol table
-					if symbol.IsGlobal {
-						superConstructorReg = c.regAlloc.Alloc()
-						needToFreeSuperReg = true
-						c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
-					} else if symbol.IsSpilled {
-						// Spilled variable - load from spill slot
-						superConstructorReg = c.regAlloc.Alloc()
-						needToFreeSuperReg = true
-						c.emitLoadSpill(superConstructorReg, symbol.SpillIndex, node.Token.Line)
-					} else {
-						superConstructorReg = symbol.Register
-						needToFreeSuperReg = false
-					}
-				} else {
-					// Not in symbol table - might be a built-in class (Object, Array, etc.)
-					// Emit code to look up the global variable at runtime
-					globalIdx := c.GetOrAssignGlobalIndex(superClassName)
+				// Check for class x extends x {} - self-reference before class is defined
+				// This must throw ReferenceError per ECMAScript spec
+				if superClassName == node.Name.Value {
+					// Emit code to throw ReferenceError at runtime
+					c.emitTDZError(BadRegister, superClassName, node.Token.Line)
+					// We still need a register for the code flow, but it will never be used
 					superConstructorReg = c.regAlloc.Alloc()
 					needToFreeSuperReg = true
-					c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
+				} else {
+					// Look up the parent class constructor by name
+					symbol, defTable, exists := c.currentSymbolTable.Resolve(superClassName)
+					if exists {
+						if symbol.IsGlobal {
+							superConstructorReg = c.regAlloc.Alloc()
+							needToFreeSuperReg = true
+							c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
+						} else if symbol.IsSpilled {
+							// Spilled variable - load from spill slot
+							superConstructorReg = c.regAlloc.Alloc()
+							needToFreeSuperReg = true
+							c.emitLoadSpill(superConstructorReg, symbol.SpillIndex, node.Token.Line)
+						} else if !c.isInCurrentScopeChain(defTable) && c.enclosing != nil {
+							// Symbol from enclosing function's scope - compile as expression
+							// for proper upvalue access through the closure mechanism
+							superConstructorReg = c.regAlloc.Alloc()
+							needToFreeSuperReg = true
+							_, err := c.compileNode(node.SuperClass, superConstructorReg)
+							if err != nil {
+								if prevSymbolTable != nil {
+									c.currentSymbolTable = prevSymbolTable
+								}
+								c.regAlloc.Free(superConstructorReg)
+								return BadRegister, err
+							}
+						} else {
+							superConstructorReg = symbol.Register
+							needToFreeSuperReg = false
+						}
+					} else {
+						// Not in symbol table - might be a built-in class (Object, Array, etc.)
+						// Emit code to look up the global variable at runtime
+						globalIdx := c.GetOrAssignGlobalIndex(superClassName)
+						superConstructorReg = c.regAlloc.Alloc()
+						needToFreeSuperReg = true
+						c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
+					}
 				}
 			} else {
 				// For arbitrary expressions (like literals, member expressions, etc.),
@@ -216,6 +279,9 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 				needToFreeSuperReg = true
 				_, err := c.compileNode(node.SuperClass, superConstructorReg)
 				if err != nil {
+					if prevSymbolTable != nil {
+						c.currentSymbolTable = prevSymbolTable
+					}
 					c.regAlloc.Free(superConstructorReg)
 					return BadRegister, err
 				}
@@ -227,23 +293,6 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 			c.emitOpCode(vm.OpValidateSuperclass, node.Token.Line)
 			c.emitByte(byte(superConstructorReg))
 		}
-	}
-
-	// 1. Pre-define the class name so the constructor can reference it
-	// This is needed for cases like: constructor() { Counter.increment(); }
-	// We temporarily define it with nilRegister, then update it later
-	// For eval code (isIndirectEval=true), class declarations should be local
-	// to the eval's lexical environment, not global.
-	isGlobalClassScope := c.enclosing == nil && !c.isIndirectEval
-	if isGlobalClassScope {
-		// Top-level class declaration
-		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-		c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined global class '%s' at index %d\n", node.Name.Value, globalIdx)
-	} else {
-		// Local class declaration (or eval-scoped class)
-		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
-		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined local class '%s'\n", node.Name.Value)
 	}
 
 	// 1.5. Enter class brand context for private field tracking
@@ -259,11 +308,17 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	// 2. Create constructor function
 	constructorReg, err := c.compileConstructor(node, superConstructorReg)
 	if err != nil {
+		if prevSymbolTable != nil {
+			c.currentSymbolTable = prevSymbolTable
+		}
 		if needToFreeSuperReg {
 			c.regAlloc.Free(superConstructorReg)
 		}
 		return BadRegister, err
 	}
+
+	// NOTE: No need to update the inner class name binding - it shares storage with the
+	// outer binding, which is updated later (after restoring the outer scope).
 
 	// 2.5. For derived classes, set the constructor's internal [[Prototype]] to the parent class
 	// This enables static method inheritance: super.staticMethod() in static methods
@@ -277,6 +332,9 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	// 3. Set up prototype object with methods
 	err = c.setupClassPrototype(node, constructorReg, superConstructorReg)
 	if err != nil {
+		if prevSymbolTable != nil {
+			c.currentSymbolTable = prevSymbolTable
+		}
 		return BadRegister, err
 	}
 
@@ -287,19 +345,34 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	// 4. Set up static members on the constructor
 	err = c.setupStaticMembers(node, constructorReg)
 	if err != nil {
+		if prevSymbolTable != nil {
+			c.currentSymbolTable = prevSymbolTable
+		}
 		return BadRegister, err
 	}
 
 	// 5. Update the class constructor register/global
+	// For local classes, update BOTH the inner and outer bindings before restoring the outer scope
 	if isGlobalClassScope {
 		// Top-level class declaration - set the global value
 		globalIdx := c.GetGlobalIndex(node.Name.Value)
 		c.emitSetGlobal(uint16(globalIdx), constructorReg, node.Token.Line)
 		debugPrintf("// DEBUG compileClassDeclaration: Set global class '%s' to R%d\n", node.Name.Value, constructorReg)
 	} else {
-		// Local class declaration (or eval-scoped class) - update the register
+		// Local class declaration - update the inner binding's register first (while inner scope is active)
 		c.currentSymbolTable.UpdateRegister(node.Name.Value, constructorReg)
-		debugPrintf("// DEBUG compileClassDeclaration: Updated local class '%s' to R%d\n", node.Name.Value, constructorReg)
+		debugPrintf("// DEBUG compileClassDeclaration: Updated inner binding for class '%s' to R%d\n", node.Name.Value, constructorReg)
+	}
+
+	// Restore outer scope
+	if prevSymbolTable != nil {
+		c.currentSymbolTable = prevSymbolTable
+	}
+
+	// For local classes, also update the outer binding
+	if !isGlobalClassScope {
+		c.currentSymbolTable.UpdateRegister(node.Name.Value, constructorReg)
+		debugPrintf("// DEBUG compileClassDeclaration: Updated outer binding for class '%s' to R%d\n", node.Name.Value, constructorReg)
 	}
 
 	// Class declarations don't produce a value for the hint register
@@ -350,9 +423,12 @@ func (c *Compiler) compileConstructor(node *parser.ClassDeclaration, superConstr
 	// Use the class name as the function name for proper function.name property
 	// Constructors are always strict mode per ECMAScript spec (class bodies are strict)
 	// For anonymous class expressions (names starting with __AnonymousClass_), use empty string
+	// For inferred names (from assignment targets), strip the __Inferred__ prefix
 	nameHint := node.Name.Value
 	if strings.HasPrefix(nameHint, "__AnonymousClass_") {
 		nameHint = "" // Anonymous classes have empty name (per ECMAScript spec)
+	} else if strings.HasPrefix(nameHint, "__Inferred__") {
+		nameHint = strings.TrimPrefix(nameHint, "__Inferred__") // Use the actual inferred name
 	}
 	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralStrict(functionLiteral, nameHint)
 	if err != nil {

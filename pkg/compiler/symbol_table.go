@@ -15,6 +15,9 @@ type Symbol struct {
 	SpillIndex uint16 // Index in the function's spillSlots array (only valid if IsSpilled)
 	// NFE binding support: named function expression bindings are immutable
 	IsImmutable bool // True if this is an NFE binding (assignments are silently ignored in non-strict)
+	// Strict immutable: class name inner bindings always throw TypeError on assignment
+	// Per ECMAScript CreateImmutableBinding(name, true), unlike NFE bindings (false)
+	IsStrictImmutable bool // True if assignment always throws TypeError regardless of strict mode
 	// TDZ support: let/const variables are in TDZ until initialized
 	IsTDZ bool // True if this is a let/const variable that hasn't been initialized yet
 	// Const support: const variables cannot be reassigned (throws TypeError)
@@ -96,10 +99,43 @@ func (st *SymbolTable) DefineSpilled(name string, spillIndex uint16) Symbol {
 	return symbol
 }
 
+// DefineSpilledStrictImmutable adds a strict immutable spilled symbol.
+// Used for class expression name bindings to avoid register exhaustion.
+func (st *SymbolTable) DefineSpilledStrictImmutable(name string, spillIndex uint16) Symbol {
+	symbol := Symbol{Name: name, IsGlobal: false, IsSpilled: true, SpillIndex: spillIndex, IsImmutable: true, IsStrictImmutable: true}
+	st.store[name] = symbol
+	return symbol
+}
+
 // DefineImmutable adds a new immutable symbol to the *current* scope's table.
 // Used for Named Function Expression (NFE) bindings where assignments should be silently ignored.
 func (st *SymbolTable) DefineImmutable(name string, reg Register) Symbol {
 	symbol := Symbol{Name: name, Register: reg, IsGlobal: false, IsImmutable: true}
+	st.store[name] = symbol
+	return symbol
+}
+
+// DefineStrictImmutable adds a strict immutable local symbol.
+// Used for class name inner bindings where assignments always throw TypeError.
+func (st *SymbolTable) DefineStrictImmutable(name string, reg Register) Symbol {
+	symbol := Symbol{Name: name, Register: reg, IsGlobal: false, IsImmutable: true, IsStrictImmutable: true}
+	st.store[name] = symbol
+	return symbol
+}
+
+// DefineGlobalStrictImmutable adds a strict immutable global symbol.
+// Used for class name inner bindings of global classes.
+func (st *SymbolTable) DefineGlobalStrictImmutable(name string, globalIndex uint16) Symbol {
+	symbol := Symbol{Name: name, IsGlobal: true, GlobalIndex: globalIndex, IsImmutable: true, IsStrictImmutable: true}
+	st.store[name] = symbol
+	return symbol
+}
+
+// DefineImmutableTDZ adds a new immutable symbol in the Temporal Dead Zone.
+// Used for class name inner bindings: the name is in TDZ during heritage evaluation,
+// then initialized with the class constructor value. After initialization, it's immutable.
+func (st *SymbolTable) DefineImmutableTDZ(name string, reg Register) Symbol {
+	symbol := Symbol{Name: name, Register: reg, IsGlobal: false, IsImmutable: true, IsStrictImmutable: true, IsTDZ: true}
 	st.store[name] = symbol
 	return symbol
 }

@@ -1059,6 +1059,8 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 
 	// Store the maximum registers needed for this chunk
 	c.chunk.MaxRegs = int(c.regAlloc.MaxRegs())
+	// Store spill slots needed for the main script/module chunk
+	c.chunk.NumSpillSlots = int(c.nextSpillSlot)
 
 	// Generate scope descriptor for module/script-level code if it contains direct eval
 	// This is needed so that eval code can access local variables in the caller's scope
@@ -4439,24 +4441,34 @@ func (c *Compiler) getNextAnonymousId() int {
 func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Register) (Register, errors.PaseratiError) {
 	debugPrintf("// DEBUG compileClassExpression: Starting compilation for class '%s'\n", node.Name.Value)
 
-	// Enter class brand context for private field tracking
-	// Each class gets a unique brand ID to distinguish its private fields from other classes
-	c.enterClassBrand()
-	defer c.exitClassBrand()
-
-	// Declare all private fields this class has
-	c.declareClassPrivateNames(node)
-
-	// 1. Create constructor function
-	// For class expressions, we don't pre-load the super constructor like we do for declarations
-	// because the expression might be in a different scope
-	constructorReg, err := c.compileConstructor(node, BadRegister)
-	if err != nil {
-		return BadRegister, err
+	// Per ECMAScript spec (sec-runtime-semantics-classdefinitionevaluation):
+	// Named class expressions have an immutable binding of the class name
+	// visible inside the class body (constructor and methods) but NOT outside.
+	// The TDZ case (class x extends x {}) is handled explicitly below.
+	// NOTE: At global level, use global variables. Inside functions, use spill slots
+	// to avoid register exhaustion when many class expressions exist.
+	// IMPORTANT: If the class name was inferred from an assignment target (e.g., let C = class {}),
+	// we should NOT create an inner binding - only explicitly named classes get inner bindings.
+	var prevSymbolTable *SymbolTable
+	var classNameSpillSlot uint16
+	var useSpillSlot bool
+	// Check if this is a named class expression that needs an inner binding
+	// Skip anonymous classes and classes with inferred names (from assignment targets like "let C = class {}")
+	isNamedClassExpr := node.Name.Value != "" &&
+		!strings.HasPrefix(node.Name.Value, "__AnonymousClass_") &&
+		!strings.HasPrefix(node.Name.Value, "__Inferred__")
+	if isNamedClassExpr {
+		prevSymbolTable = c.currentSymbolTable
+		c.currentSymbolTable = NewEnclosedSymbolTable(c.currentSymbolTable)
+		// Use spill slot to avoid register exhaustion (works at both global and function level)
+		classNameSpillSlot = c.AllocSpillSlot()
+		useSpillSlot = true
+		c.currentSymbolTable.DefineSpilledStrictImmutable(node.Name.Value, classNameSpillSlot)
+		debugPrintf("// DEBUG compileClassExpression: Created inner binding for class '%s' in spill slot %d\n", node.Name.Value, classNameSpillSlot)
 	}
 
-	// 1b. Set up [[Prototype]] chain for derived class expressions
-	// Per ECMAScript spec, the constructor function's [[Prototype]] must point to the parent class.
+	// Resolve super class INSIDE the inner scope so closures in heritage clause
+	// capture the inner class name binding (per spec step 6a)
 	var superConstructorReg Register = BadRegister
 	var needToFreeSuperReg bool
 	if node.SuperClass != nil {
@@ -4473,27 +4485,50 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 			}
 
 			if isNamedRef {
-				// Look up the parent class constructor using symbol table
-				symbol, _, exists := c.currentSymbolTable.Resolve(superClassName)
-				if exists {
-					if symbol.IsGlobal {
-						superConstructorReg = c.regAlloc.Alloc()
-						needToFreeSuperReg = true
-						c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
-					} else if symbol.IsSpilled {
-						superConstructorReg = c.regAlloc.Alloc()
-						needToFreeSuperReg = true
-						c.emitLoadSpill(superConstructorReg, symbol.SpillIndex, node.Token.Line)
-					} else {
-						superConstructorReg = symbol.Register
-						needToFreeSuperReg = false
-					}
-				} else {
-					// Not in symbol table - might be a built-in class
-					globalIdx := c.GetOrAssignGlobalIndex(superClassName)
+				// Check for TDZ self-reference: class x extends x {}
+				// This must throw ReferenceError per ECMAScript spec
+				if superClassName == node.Name.Value {
+					// Emit code to throw ReferenceError at runtime
+					c.emitTDZError(BadRegister, superClassName, node.Token.Line)
+					// We still need a register for the code flow, but it will never be used
 					superConstructorReg = c.regAlloc.Alloc()
 					needToFreeSuperReg = true
-					c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
+				} else {
+					// Look up the parent class constructor using symbol table
+					symbol, defTable, exists := c.currentSymbolTable.Resolve(superClassName)
+					if exists {
+						if symbol.IsGlobal {
+							superConstructorReg = c.regAlloc.Alloc()
+							needToFreeSuperReg = true
+							c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
+						} else if symbol.IsSpilled {
+							superConstructorReg = c.regAlloc.Alloc()
+							needToFreeSuperReg = true
+							c.emitLoadSpill(superConstructorReg, symbol.SpillIndex, node.Token.Line)
+						} else if !c.isInCurrentScopeChain(defTable) && c.enclosing != nil {
+							// Symbol from enclosing function's scope - compile as expression
+							// for proper upvalue access through the closure mechanism
+							superConstructorReg = c.regAlloc.Alloc()
+							needToFreeSuperReg = true
+							_, err := c.compileNode(node.SuperClass, superConstructorReg)
+							if err != nil {
+								if prevSymbolTable != nil {
+									c.currentSymbolTable = prevSymbolTable
+								}
+								c.regAlloc.Free(superConstructorReg)
+								return BadRegister, err
+							}
+						} else {
+							superConstructorReg = symbol.Register
+							needToFreeSuperReg = false
+						}
+					} else {
+						// Not in symbol table - might be a built-in class
+						globalIdx := c.GetOrAssignGlobalIndex(superClassName)
+						superConstructorReg = c.regAlloc.Alloc()
+						needToFreeSuperReg = true
+						c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)
+					}
 				}
 			} else {
 				// For arbitrary expressions, compile the expression to get the value at runtime
@@ -4501,16 +4536,44 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 				needToFreeSuperReg = true
 				_, err := c.compileNode(node.SuperClass, superConstructorReg)
 				if err != nil {
+					if prevSymbolTable != nil {
+						c.currentSymbolTable = prevSymbolTable
+					}
 					c.regAlloc.Free(superConstructorReg)
 					return BadRegister, err
 				}
 			}
-
-			c.emitOpCode(vm.OpSetClosureProto, node.Token.Line)
-			c.emitByte(byte(constructorReg))
-			c.emitByte(byte(superConstructorReg))
-			debugPrintf("// DEBUG compileClassExpression: Set constructor's [[Prototype]] to parent class\n")
 		}
+	}
+
+	// Enter class brand context for private field tracking
+	// Each class gets a unique brand ID to distinguish its private fields from other classes
+	c.enterClassBrand()
+	defer c.exitClassBrand()
+
+	// Declare all private fields this class has
+	c.declareClassPrivateNames(node)
+
+	// 1. Create constructor function
+	constructorReg, err := c.compileConstructor(node, BadRegister)
+	if err != nil {
+		if prevSymbolTable != nil {
+			c.currentSymbolTable = prevSymbolTable
+		}
+		return BadRegister, err
+	}
+
+	// Store the constructor value into the class name binding (spill slot)
+	if useSpillSlot {
+		c.emitStoreSpill(classNameSpillSlot, constructorReg, node.Token.Line)
+	}
+
+	// 1b. Set up [[Prototype]] chain for derived class expressions
+	if superConstructorReg != BadRegister {
+		c.emitOpCode(vm.OpSetClosureProto, node.Token.Line)
+		c.emitByte(byte(constructorReg))
+		c.emitByte(byte(superConstructorReg))
+		debugPrintf("// DEBUG compileClassExpression: Set constructor's [[Prototype]] to parent class\n")
 	}
 
 	// 2. Set up prototype object with methods
@@ -4529,13 +4592,22 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 		return BadRegister, err
 	}
 
-	// 4. For named classes (including class declarations parsed as expressions),
-	// store them in the environment like compileClassDeclaration does
-	// For anonymous classes, skip this step
+	// 4. Restore outer scope (inner class name scope is no longer needed)
+	// This must happen before defining outer bindings (step 4b)
+	if prevSymbolTable != nil {
+		c.currentSymbolTable = prevSymbolTable
+	}
+
+	// NOTE: Using spill slots for class name bindings avoids register exhaustion.
+	// Spill slots are captured correctly by closures via CaptureFromSpill.
+
+	// 4b. For named classes used as standalone expressions (hint == BadRegister),
+	// define them in the outer environment like class declarations.
 	// IMPORTANT: If a hint register is provided, the class is being used as an expression value
 	// (e.g., default parameter value), so don't define it in the symbol table - the variable
 	// is already defined and we're just assigning the class value to it.
-	if hint == BadRegister && !strings.HasPrefix(node.Name.Value, "__AnonymousClass_") {
+	// Also skip if the name was inferred from assignment target (isNamedClassExpr is false).
+	if hint == BadRegister && isNamedClassExpr {
 		if c.enclosing == nil {
 			// Top-level class - define as global
 			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)

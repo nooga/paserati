@@ -95,13 +95,15 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 
 		} else if classExpr, ok := node.Value.(*parser.ClassExpression); ok {
 			// --- Handle let C = class {} or let C = class D {} ---
-			// For anonymous class expressions, infer name from variable binding
+			// For anonymous class expressions, infer name from variable binding for .name property
+			// but use a prefix to indicate this is inferred (so no inner binding is created)
 			// For named class expressions, keep the class's own name
 			if classExpr.Name == nil {
-				// Anonymous class - set name from variable binding
+				// Anonymous class - set name from variable binding with inferred marker
+				// The __Inferred__ prefix tells compileClassExpression not to create an inner binding
 				classExpr.Name = &parser.Identifier{
 					Token: classExpr.Token,
-					Value: node.Name.Value,
+					Value: "__Inferred__" + node.Name.Value,
 				}
 			}
 			// Now compile normally - reuse predefined TDZ register if present (but not for globals)
@@ -376,13 +378,14 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 
 		} else if classExpr, ok := declarator.Value.(*parser.ClassExpression); ok {
 			// --- Handle var C = class {} or var C = class D {} ---
-			// For anonymous class expressions, infer name from variable binding
+			// For anonymous class expressions, infer name from variable binding for .name property
+			// but use a prefix to indicate this is inferred (so no inner binding is created)
 			// For named class expressions, keep the class's own name
 			if classExpr.Name == nil {
-				// Anonymous class - set name from variable binding
+				// Anonymous class - set name from variable binding with inferred marker
 				classExpr.Name = &parser.Identifier{
 					Token: classExpr.Token,
-					Value: node.Name.Value,
+					Value: "__Inferred__" + node.Name.Value,
 				}
 			}
 			// Now compile normally - the class will use its name (either own name or inferred)
@@ -656,13 +659,14 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 
 		} else if classExpr, ok := node.Value.(*parser.ClassExpression); ok {
 			// --- Handle const C = class {} or const C = class D {} ---
-			// For anonymous class expressions, infer name from variable binding
+			// For anonymous class expressions, infer name from variable binding for .name property
+			// but use a prefix to indicate this is inferred (so no inner binding is created)
 			// For named class expressions, keep the class's own name
 			if classExpr.Name == nil {
-				// Anonymous class - set name from variable binding
+				// Anonymous class - set name from variable binding with inferred marker
 				classExpr.Name = &parser.Identifier{
 					Token: classExpr.Token,
-					Value: node.Name.Value,
+					Value: "__Inferred__" + node.Name.Value,
 				}
 			}
 			// Now compile normally - reuse predefined TDZ register if present (but not for globals)

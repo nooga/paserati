@@ -224,10 +224,10 @@ func (c *Compiler) compileArrayDestructuringDeclarationWithValueReg(node *parser
 					}
 					c.emitClosure(resultReg, funcConstIndex, funcLit, freeSymbols)
 				} else if classExpr, ok := element.Default.(*parser.ClassExpression); ok && classExpr.Name == nil {
-					// Anonymous class expression - give it the target name temporarily
+					// Anonymous class expression - give it the target name temporarily with inferred prefix
 					classExpr.Name = &parser.Identifier{
 						Token: classExpr.Token,
-						Value: nameHint,
+						Value: "__Inferred__" + nameHint,
 					}
 					_, compileErr = c.compileNode(classExpr, resultReg)
 					classExpr.Name = nil

@@ -923,8 +923,9 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 							funcLit.Name = &parser.Identifier{Token: funcLit.Token, Value: propName}
 						}
 					} else if classExpr, ok := prop.Value.(*parser.ClassExpression); ok {
+						// Inferred name from property - use prefix so no inner binding is created
 						if classExpr.Name == nil {
-							classExpr.Name = &parser.Identifier{Token: classExpr.Token, Value: propName}
+							classExpr.Name = &parser.Identifier{Token: classExpr.Token, Value: "__Inferred__" + propName}
 						}
 					}
 				}

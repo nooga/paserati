@@ -895,30 +895,31 @@ func objectCreateWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				}
 
 				// Extract descriptor properties
+				// Per ECMAScript 8.10.5 ToPropertyDescriptor, we use [[Get]] which follows prototype chain
 				var value vm.Value
 				var writable, enumFlag, configurable bool
 				var hasValue, hasWritable, hasEnumerable, hasConfigurable bool
 
-				// Check for 'value' property
-				if v, ok := propDescObj.GetOwn("value"); ok {
+				// Check for 'value' property (using Get to follow prototype chain)
+				if v, ok := propDescObj.Get("value"); ok {
 					value = v
 					hasValue = true
 				}
 
 				// Check for 'writable' property
-				if v, ok := propDescObj.GetOwn("writable"); ok {
+				if v, ok := propDescObj.Get("writable"); ok {
 					writable = v.AsBoolean()
 					hasWritable = true
 				}
 
 				// Check for 'enumerable' property
-				if v, ok := propDescObj.GetOwn("enumerable"); ok {
+				if v, ok := propDescObj.Get("enumerable"); ok {
 					enumFlag = v.AsBoolean()
 					hasEnumerable = true
 				}
 
 				// Check for 'configurable' property
-				if v, ok := propDescObj.GetOwn("configurable"); ok {
+				if v, ok := propDescObj.Get("configurable"); ok {
 					configurable = v.AsBoolean()
 					hasConfigurable = true
 				}
@@ -1001,42 +1002,43 @@ func objectDefinePropertiesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value,
 			}
 
 			// Extract descriptor properties
+			// Per ECMAScript 8.10.5 ToPropertyDescriptor, we use [[Get]] which follows prototype chain
 			var value vm.Value
 			var writable, enumFlag, configurable bool
 			var hasValue, hasWritable, hasEnumerable, hasConfigurable bool
 			var getter, setter vm.Value
 			var hasGetter, hasSetter bool
 
-			// Check for 'value' property
-			if v, ok := propDescObj.GetOwn("value"); ok {
+			// Check for 'value' property (using Get to follow prototype chain)
+			if v, ok := propDescObj.Get("value"); ok {
 				value = v
 				hasValue = true
 			}
 
 			// Check for 'writable' property
-			if v, ok := propDescObj.GetOwn("writable"); ok {
+			if v, ok := propDescObj.Get("writable"); ok {
 				writable = v.AsBoolean()
 				hasWritable = true
 			}
 
 			// Check for 'enumerable' property
-			if v, ok := propDescObj.GetOwn("enumerable"); ok {
+			if v, ok := propDescObj.Get("enumerable"); ok {
 				enumFlag = v.AsBoolean()
 				hasEnumerable = true
 			}
 
 			// Check for 'configurable' property
-			if v, ok := propDescObj.GetOwn("configurable"); ok {
+			if v, ok := propDescObj.Get("configurable"); ok {
 				configurable = v.AsBoolean()
 				hasConfigurable = true
 			}
 
 			// Check for accessor properties (get/set)
-			if g, ok := propDescObj.GetOwn("get"); ok {
+			if g, ok := propDescObj.Get("get"); ok {
 				hasGetter = true
 				getter = g
 			}
-			if s, ok := propDescObj.GetOwn("set"); ok {
+			if s, ok := propDescObj.Get("set"); ok {
 				hasSetter = true
 				setter = s
 			}
@@ -1992,6 +1994,7 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	}
 
 	// Parse descriptor object fields: value, writable, enumerable, configurable, get, set
+	// Per ECMAScript 8.10.5 ToPropertyDescriptor, we use [[Get]] which follows prototype chain
 	var value vm.Value = vm.Undefined
 	var writablePtr, enumerablePtr, configurablePtr *bool
 	var getter vm.Value = vm.Undefined
@@ -1999,50 +2002,52 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	hasGetter := false
 	hasSetter := false
 	if descObj := descriptor.AsPlainObject(); descObj != nil {
-		if val, exists := descObj.GetOwn("value"); exists {
+		// Use Get() to follow prototype chain per spec
+		if val, exists := descObj.Get("value"); exists {
 			value = val
 		}
-		if w, exists := descObj.GetOwn("writable"); exists {
+		if w, exists := descObj.Get("writable"); exists {
 			b := w.IsTruthy()
 			writablePtr = &b
 		}
-		if e, exists := descObj.GetOwn("enumerable"); exists {
+		if e, exists := descObj.Get("enumerable"); exists {
 			b := e.IsTruthy()
 			enumerablePtr = &b
 		}
-		if c, exists := descObj.GetOwn("configurable"); exists {
+		if c, exists := descObj.Get("configurable"); exists {
 			b := c.IsTruthy()
 			configurablePtr = &b
 		}
-		if g, exists := descObj.GetOwn("get"); exists {
+		if g, exists := descObj.Get("get"); exists {
 			hasGetter = true
 			getter = g
 		}
-		if s, exists := descObj.GetOwn("set"); exists {
+		if s, exists := descObj.Get("set"); exists {
 			hasSetter = true
 			setter = s
 		}
 	} else if descObj := descriptor.AsDictObject(); descObj != nil {
-		if val, exists := descObj.GetOwn("value"); exists {
+		// Use Get() to follow prototype chain per spec
+		if val, exists := descObj.Get("value"); exists {
 			value = val
 		}
-		if w, exists := descObj.GetOwn("writable"); exists {
+		if w, exists := descObj.Get("writable"); exists {
 			b := w.IsTruthy()
 			writablePtr = &b
 		}
-		if e, exists := descObj.GetOwn("enumerable"); exists {
+		if e, exists := descObj.Get("enumerable"); exists {
 			b := e.IsTruthy()
 			enumerablePtr = &b
 		}
-		if c, exists := descObj.GetOwn("configurable"); exists {
+		if c, exists := descObj.Get("configurable"); exists {
 			b := c.IsTruthy()
 			configurablePtr = &b
 		}
-		if g, exists := descObj.GetOwn("get"); exists {
+		if g, exists := descObj.Get("get"); exists {
 			hasGetter = true
 			getter = g
 		}
-		if s, exists := descObj.GetOwn("set"); exists {
+		if s, exists := descObj.Get("set"); exists {
 			hasSetter = true
 			setter = s
 		}

@@ -4332,25 +4332,10 @@ startExecution:
 			result := registers[srcReg]
 			frame.ip = ip // Save final IP of this frame
 
-			// TDZ check for derived constructors: returning without calling super()
-			// Per ECMAScript spec, if a derived constructor returns a non-object value
-			// and super() was never called, throw ReferenceError
-			if frame.isConstructorCall && frame.thisValue.typ == TypeUninitialized {
-				if !result.IsObject() && !result.IsCallable() {
-					vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
-					if !vm.unwinding {
-						frame = &vm.frames[vm.frameCount-1]
-						closure = frame.closure
-						function = closure.Fn
-						code = function.Chunk.Code
-						constants = function.Chunk.Constants
-						registers = frame.registers
-						ip = frame.ip
-						continue
-					}
-					return InterpretRuntimeError, Undefined
-				}
-			}
+			// NOTE: Derived constructor return checks (TypeError for non-object return,
+			// ReferenceError for uninitialized this) are done AFTER the frame is popped,
+			// per ECMAScript spec 10.2.2 [[Construct]] steps 11c and 13.
+			// This ensures these errors are NOT catchable within the constructor's try-catch.
 
 			// Trace returns with frame stack snapshot
 			if debugVM || debugCalls {
@@ -4424,6 +4409,7 @@ startExecution:
 			callerTargetRegister := frame.targetRegister
 			isConstructor := frame.isConstructorCall
 			constructorThisValue := frame.thisValue
+			isDerivedConstructor := frame.closure != nil && frame.closure.Fn.IsDerivedConstructor
 			isDirectCall := frame.isDirectCall // Save this BEFORE decrementing frameCount
 
 			if debugVM {
@@ -4459,15 +4445,21 @@ startExecution:
 				// Handle constructor return semantics for sentinel frame returns
 				var finalResult Value
 				if isConstructor {
-					// Constructor return semantics: if the returned value is an object
-					// (including functions, which are callable objects), return it.
-					// Otherwise return the instance (this).
 					if result.IsObject() || result.IsCallable() {
 						finalResult = result // Return the explicit object/function
+					} else if !isDerivedConstructor {
+						finalResult = constructorThisValue // Base constructor: return the instance
+					} else if result.Type() != TypeUndefined {
+						// ECMAScript 10.2.2 step 11c: derived constructor returning non-object, non-undefined
+						vm.ThrowTypeError("Derived constructors may only return object or undefined")
+						return InterpretRuntimeError, vm.currentException
+					} else if constructorThisValue.typ == TypeUninitialized {
+						// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
+						vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+						return InterpretRuntimeError, vm.currentException
 					} else {
-						finalResult = constructorThisValue // Return the instance
+						finalResult = constructorThisValue // Derived constructor with super() called, returning undefined
 					}
-					// DEBUG
 					if debugVM {
 						fmt.Printf("[DBG Sentinel] isConstructor=true, result=%s, constructorThisValue=%s, finalResult=%s\n",
 							result.TypeName(), constructorThisValue.TypeName(), finalResult.TypeName())
@@ -4495,13 +4487,20 @@ startExecution:
 				// Handle constructor return semantics for direct call
 				var finalResult Value
 				if isConstructor {
-					// Constructor return semantics: if the returned value is an object
-					// (including functions, which are callable objects), return it.
-					// Otherwise return the instance (this).
 					if result.IsObject() || result.IsCallable() {
 						finalResult = result // Return the explicit object/function
+					} else if !isDerivedConstructor {
+						finalResult = constructorThisValue // Base constructor: return the instance
+					} else if result.Type() != TypeUndefined {
+						// ECMAScript 10.2.2 step 11c: derived constructor returning non-object, non-undefined
+						vm.ThrowTypeError("Derived constructors may only return object or undefined")
+						return InterpretRuntimeError, vm.currentException
+					} else if constructorThisValue.typ == TypeUninitialized {
+						// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
+						vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+						return InterpretRuntimeError, vm.currentException
 					} else {
-						finalResult = constructorThisValue // Return the instance
+						finalResult = constructorThisValue // Derived constructor with super() called, returning undefined
 					}
 				} else {
 					finalResult = result
@@ -4520,13 +4519,40 @@ startExecution:
 			// Handle constructor return semantics
 			var finalResult Value
 			if isConstructor {
-				// Constructor return semantics: if the returned value is an object
-				// (including functions, which are callable objects), return it.
-				// Otherwise return the instance (this).
 				if result.IsObject() || result.IsCallable() {
 					finalResult = result // Return the explicit object/function
+				} else if !isDerivedConstructor {
+					finalResult = constructorThisValue // Base constructor: return the instance
+				} else if result.Type() != TypeUndefined {
+					// ECMAScript 10.2.2 step 11c: derived constructor returning non-object, non-undefined
+					vm.ThrowTypeError("Derived constructors may only return object or undefined")
+					if !vm.unwinding {
+						frame = callerFrame
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					return InterpretRuntimeError, Undefined
+				} else if constructorThisValue.typ == TypeUninitialized {
+					// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
+					vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+					if !vm.unwinding {
+						frame = callerFrame
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					return InterpretRuntimeError, Undefined
 				} else {
-					finalResult = constructorThisValue // Return the instance
+					finalResult = constructorThisValue // Derived constructor with super() called, returning undefined
 				}
 			} else {
 				// Regular function call: return the explicit value
@@ -4557,21 +4583,9 @@ startExecution:
 		case OpReturnUndefined:
 			frame.ip = ip // Save final IP
 
-			// TDZ check for derived constructors: implicit return without calling super()
-			if frame.isConstructorCall && frame.thisValue.typ == TypeUninitialized {
-				vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
-				if !vm.unwinding {
-					frame = &vm.frames[vm.frameCount-1]
-					closure = frame.closure
-					function = closure.Fn
-					code = function.Chunk.Code
-					constants = function.Chunk.Constants
-					registers = frame.registers
-					ip = frame.ip
-					continue
-				}
-				return InterpretRuntimeError, Undefined
-			}
+			// NOTE: Derived constructor checks (ReferenceError for uninitialized this) are done
+			// AFTER the frame is popped, per ECMAScript spec 10.2.2 [[Construct]] step 13.
+			// This ensures these errors are NOT catchable within the constructor's try-catch.
 
 			if debugCalls {
 				fmt.Printf("[DEBUG OpReturnUndefined] from %s, frameCount=%d\n", funcName(function), vm.frameCount)
@@ -4642,6 +4656,7 @@ startExecution:
 			callerTargetRegister := frame.targetRegister
 			isConstructor := frame.isConstructorCall
 			constructorThisValue := frame.thisValue
+			isDerivedConstructor := frame.closure != nil && frame.closure.Fn.IsDerivedConstructor
 			isDirectCall := frame.isDirectCall // Save this BEFORE decrementing frameCount
 
 			if debugVM {
@@ -4673,7 +4688,11 @@ startExecution:
 				// Handle constructor return semantics for sentinel frame returns
 				var finalResult Value
 				if isConstructor {
-					// Constructor returning undefined: return the instance (this)
+					if isDerivedConstructor && constructorThisValue.typ == TypeUninitialized {
+						// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
+						vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+						return InterpretRuntimeError, vm.currentException
+					}
 					finalResult = constructorThisValue
 				} else {
 					finalResult = result
@@ -4703,7 +4722,11 @@ startExecution:
 				// Handle constructor return semantics for direct call
 				var finalResult Value
 				if isConstructor {
-					// Constructor returning undefined: return the instance (this)
+					if isDerivedConstructor && constructorThisValue.typ == TypeUninitialized {
+						// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
+						vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+						return InterpretRuntimeError, vm.currentException
+					}
 					finalResult = constructorThisValue
 					if debugVM {
 						fmt.Printf("[DBG] Returning constructor this: %v\n", finalResult)
@@ -4728,7 +4751,21 @@ startExecution:
 			// Handle constructor return semantics
 			var finalResult Value
 			if isConstructor {
-				// Constructor returning undefined: return the instance (this)
+				if isDerivedConstructor && constructorThisValue.typ == TypeUninitialized {
+					// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
+					vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+					if !vm.unwinding {
+						frame = callerFrame
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					return InterpretRuntimeError, Undefined
+				}
 				finalResult = constructorThisValue
 			} else {
 				// Regular function returning undefined (or generator result)
@@ -11612,6 +11649,7 @@ startExecution:
 				callerTargetRegister := frame.targetRegister
 				isConstructor := frame.isConstructorCall
 				constructorThisValue := frame.thisValue
+				isDerivedConstructor := frame.closure != nil && frame.closure.Fn.IsDerivedConstructor
 
 				vm.frameCount--
 				vm.nextRegSlot -= returningFrameRegSize
@@ -11623,6 +11661,21 @@ startExecution:
 
 				// Check if we hit a sentinel frame - if so, return immediately with the result
 				if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+					if isConstructor {
+						if result.IsObject() || result.IsCallable() {
+							// Return the explicit object
+						} else if !isDerivedConstructor {
+							result = constructorThisValue
+						} else if result.Type() != TypeUndefined {
+							vm.ThrowTypeError("Derived constructors may only return object or undefined")
+							return InterpretRuntimeError, vm.currentException
+						} else if constructorThisValue.typ == TypeUninitialized {
+							vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+							return InterpretRuntimeError, vm.currentException
+						} else {
+							result = constructorThisValue
+						}
+					}
 					// Place the result in the sentinel frame's target register
 					sentinelFrame := &vm.frames[vm.frameCount-1]
 					if sentinelFrame.registers != nil && int(callerTargetRegister) < len(sentinelFrame.registers) {
@@ -11642,8 +11695,16 @@ startExecution:
 				if frame.isDirectCall {
 					var finalResult Value
 					if isConstructor {
-						if result.IsObject() {
+						if result.IsObject() || result.IsCallable() {
 							finalResult = result
+						} else if !isDerivedConstructor {
+							finalResult = constructorThisValue
+						} else if result.Type() != TypeUndefined {
+							vm.ThrowTypeError("Derived constructors may only return object or undefined")
+							return InterpretRuntimeError, vm.currentException
+						} else if constructorThisValue.typ == TypeUninitialized {
+							vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+							return InterpretRuntimeError, vm.currentException
 						} else {
 							finalResult = constructorThisValue
 						}
@@ -11659,8 +11720,38 @@ startExecution:
 				// Handle constructor return semantics
 				var finalResult Value
 				if isConstructor {
-					if result.IsObject() {
+					if result.IsObject() || result.IsCallable() {
 						finalResult = result
+					} else if !isDerivedConstructor {
+						finalResult = constructorThisValue
+					} else if result.Type() != TypeUndefined {
+						// ECMAScript 10.2.2 step 11c: derived constructor returning non-object, non-undefined
+						vm.ThrowTypeError("Derived constructors may only return object or undefined")
+						if !vm.unwinding {
+							frame = callerFrame
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue startExecution
+						}
+						return InterpretRuntimeError, Undefined
+					} else if constructorThisValue.typ == TypeUninitialized {
+						// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
+						vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+						if !vm.unwinding {
+							frame = callerFrame
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue startExecution
+						}
+						return InterpretRuntimeError, Undefined
 					} else {
 						finalResult = constructorThisValue
 					}

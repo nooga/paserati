@@ -1727,6 +1727,14 @@ func (p *Parser) parseExpression(precedence int) Expression {
 	debugPrint("parseExpression(prec=%d): after prefix, leftExp=%T, cur='%s', peek='%s'", precedence, leftExp, p.curToken.Literal, p.peekToken.Literal)
 
 	for !p.peekTokenIs(lexer.SEMICOLON) && !p.curTokenIs(lexer.SEMICOLON) && precedence < p.peekPrecedence() {
+		// ASI restricted production: [no LineTerminator here] before postfix ++/--
+		// Per ECMAScript §12.9.3, if there is a LineTerminator between the left-hand
+		// side expression and a ++ or -- token, the ++ or -- is NOT postfix.
+		// A semicolon is automatically inserted before it.
+		if (p.peekToken.Type == lexer.INC || p.peekToken.Type == lexer.DEC) && p.peekToken.Line > p.curToken.Line {
+			break
+		}
+
 		infix := p.infixParseFns[p.peekToken.Type]
 		if infix == nil {
 			debugPrint("parseExpression(prec=%d): no infix for peek='%s', returning leftExp=%T", precedence, leftExp, p.peekToken.Literal, leftExp)

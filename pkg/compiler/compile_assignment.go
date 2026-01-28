@@ -211,6 +211,17 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				return hint, nil
 			}
 
+			// Check for strict immutable binding (class name inner binding)
+			// Per ECMAScript CreateImmutableBinding(name, true): always throws TypeError
+			if found && symbolRef.IsStrictImmutable {
+				c.emitConstAssignmentError(lhsNode.Value, line)
+				// Still need to evaluate RHS for side effects, but return after
+				if _, err := c.compileNode(node.Value, hint); err != nil {
+					return BadRegister, err
+				}
+				return hint, nil
+			}
+
 			// Check for immutable binding (NFE name binding)
 			// In strict mode, assignment throws TypeError
 			// In non-strict mode, assignment is silently ignored
@@ -832,9 +843,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					}
 					_, err = c.compileNode(node.Value, rhsValueReg)
 				} else if classExpr, ok := node.Value.(*parser.ClassExpression); ok {
-					// Anonymous class expression - set name before compilation
+					// Anonymous class expression - set inferred name before compilation
+					// Use __Inferred__ prefix so compileClassExpression doesn't create inner binding
 					if classExpr.Name == nil {
-						classExpr.Name = &parser.Identifier{Token: classExpr.Token, Value: nameHint}
+						classExpr.Name = &parser.Identifier{Token: classExpr.Token, Value: "__Inferred__" + nameHint}
 					}
 					_, err = c.compileNode(node.Value, rhsValueReg)
 				} else {
@@ -949,9 +961,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					}
 					_, err = c.compileNode(node.Value, rhsValueReg)
 				} else if classExpr, ok := node.Value.(*parser.ClassExpression); ok {
-					// Anonymous class expression - set name before compilation
+					// Anonymous class expression - set inferred name before compilation
+					// Use __Inferred__ prefix so compileClassExpression doesn't create inner binding
 					if classExpr.Name == nil {
-						classExpr.Name = &parser.Identifier{Token: classExpr.Token, Value: nameHint}
+						classExpr.Name = &parser.Identifier{Token: classExpr.Token, Value: "__Inferred__" + nameHint}
 					}
 					_, err = c.compileNode(node.Value, rhsValueReg)
 				} else {
@@ -1635,7 +1648,15 @@ func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, v
 		return nil
 	}
 
-	// Check for immutable binding (NFE name) - TypeError in strict, silent ignore in non-strict
+	// Check for immutable bindings:
+	// - StrictImmutable (class name inner binding): always throws TypeError
+	//   Per ECMAScript CreateImmutableBinding(name, true)
+	// - Immutable (NFE name): TypeError in strict mode, silent ignore in non-strict
+	//   Per ECMAScript CreateImmutableBinding(name, false)
+	if symbol.IsStrictImmutable {
+		c.emitConstAssignmentError(identTarget.Value, line)
+		return nil
+	}
 	if symbol.IsImmutable {
 		if c.chunk.IsStrict {
 			c.emitConstAssignmentError(identTarget.Value, line)
@@ -2165,11 +2186,11 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 			}
 			c.emitClosure(defaultReg, funcConstIndex, funcLit, freeSymbols)
 		} else if classExpr, ok := defaultExpr.(*parser.ClassExpression); ok && classExpr.Name == nil {
-			// Anonymous class expression - give it the target name temporarily
-			// This allows function name inference per ECMAScript spec
+			// Anonymous class expression - give it the target name temporarily with inferred prefix
+			// This allows function name inference per ECMAScript spec but avoids inner binding
 			classExpr.Name = &parser.Identifier{
 				Token: classExpr.Token,
-				Value: nameHint,
+				Value: "__Inferred__" + nameHint,
 			}
 			_, err = c.compileNode(classExpr, defaultReg)
 			// Restore to anonymous (though it doesn't matter since we're done compiling)
@@ -2486,10 +2507,10 @@ func (c *Compiler) compileArrayDestructuringFastPath(node *parser.ArrayDestructu
 					}
 					c.emitClosure(resultReg, funcConstIndex, funcLit, freeSymbols)
 				} else if classExpr, ok := element.Default.(*parser.ClassExpression); ok && classExpr.Name == nil {
-					// Anonymous class expression - give it the target name temporarily
+					// Anonymous class expression - give it the target name with inferred prefix
 					classExpr.Name = &parser.Identifier{
 						Token: classExpr.Token,
-						Value: nameHint,
+						Value: "__Inferred__" + nameHint,
 					}
 					_, compileErr = c.compileNode(classExpr, resultReg)
 					classExpr.Name = nil
@@ -2699,10 +2720,10 @@ func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestr
 					}
 					c.emitClosure(resultReg, funcConstIndex, funcLit, freeSymbols)
 				} else if classExpr, ok := element.Default.(*parser.ClassExpression); ok && classExpr.Name == nil {
-					// Anonymous class expression - give it the target name temporarily
+					// Anonymous class expression - give it the target name with inferred prefix
 					classExpr.Name = &parser.Identifier{
 						Token: classExpr.Token,
-						Value: nameHint,
+						Value: "__Inferred__" + nameHint,
 					}
 					_, compileErr = c.compileNode(classExpr, resultReg)
 					classExpr.Name = nil
