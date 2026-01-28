@@ -221,43 +221,44 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	w, e, c := true, false, true
 	mapProto.DefineOwnProperty("size", sizeGetter, &w, &e, &c)
 
-	// Minimal iterator helpers for harness usage -> implement proper iterators
+	// Live iterator for Map.prototype.entries() - respects deletions during iteration
 	mapProto.SetOwnNonEnumerable("entries", vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		if thisMap.Type() != vm.TypeMap {
 			return vm.Undefined, nil
 		}
-		// Snapshot pairs
-		pairs := vm.NewArray()
-		pairsArr := pairs.AsArray()
-		thisMap.AsMap().ForEach(func(key vm.Value, val vm.Value) {
-			entry := vm.NewArray()
-			entry.AsArray().Append(key)
-			entry.AsArray().Append(val)
-			pairsArr.Append(entry)
-		})
-		// Create iterator object
+		mapObj := thisMap.AsMap()
+
+		// Create iterator object with live reference to the Map
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		it.SetOwnNonEnumerable("__data__", pairs)
-		it.SetOwnNonEnumerable("__index__", vm.IntegerValue(0))
-		// next()
+		currentIndex := 0 // Closure captures this for live iteration
+
+		// next() - iterates live over the Map, skipping deleted entries
 		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
-			self := vmInstance.GetThis().AsPlainObject()
-			dataVal, _ := self.GetOwn("__data__")
-			idxVal, _ := self.GetOwn("__index__")
-			data := dataVal.AsArray()
-			idx := int(idxVal.ToInteger())
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
-			if idx >= data.Length() {
-				result.SetOwnNonEnumerable("value", vm.Undefined)
-				result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-				return vm.NewValueFromPlainObject(result), nil
+
+			// Skip deleted entries (tombstones) and find the next valid entry
+			for currentIndex < mapObj.OrderLen() {
+				key, value, exists := mapObj.GetEntryAt(currentIndex)
+				currentIndex++
+				if exists {
+					// Found a valid entry - return it
+					entry := vm.NewArray()
+					entry.AsArray().Append(key)
+					entry.AsArray().Append(value)
+					result.SetOwnNonEnumerable("value", entry)
+					result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+					return vm.NewValueFromPlainObject(result), nil
+				}
+				// Entry was deleted, continue to next
 			}
-			result.SetOwnNonEnumerable("value", data.Get(idx))
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			self.SetOwnNonEnumerable("__index__", vm.IntegerValue(int32(idx+1)))
+
+			// No more entries
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(result), nil
 		}))
+
 		// [Symbol.iterator]() { return this }
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
 			return vm.NewValueFromPlainObject(it), nil
@@ -268,35 +269,29 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true
 		mapProto.DefineOwnProperty("entries", v, &w, &e, &c)
 	}
+	// Live iterator for Map.prototype.values() - respects deletions during iteration
 	mapProto.SetOwnNonEnumerable("values", vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		if thisMap.Type() != vm.TypeMap {
 			return vm.Undefined, nil
 		}
-		// Snapshot values
-		vals := vm.NewArray()
-		valsArr := vals.AsArray()
-		thisMap.AsMap().ForEach(func(_ vm.Value, val vm.Value) {
-			valsArr.Append(val)
-		})
+		mapObj := thisMap.AsMap()
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		it.SetOwnNonEnumerable("__data__", vals)
-		it.SetOwnNonEnumerable("__index__", vm.IntegerValue(0))
+		currentIndex := 0
 		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
-			self := vmInstance.GetThis().AsPlainObject()
-			dataVal, _ := self.GetOwn("__data__")
-			idxVal, _ := self.GetOwn("__index__")
-			data := dataVal.AsArray()
-			idx := int(idxVal.ToInteger())
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
-			if idx >= data.Length() {
-				result.SetOwnNonEnumerable("value", vm.Undefined)
-				result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-				return vm.NewValueFromPlainObject(result), nil
+			// Live iteration: skip tombstones, check at each step
+			for currentIndex < mapObj.OrderLen() {
+				_, value, exists := mapObj.GetEntryAt(currentIndex)
+				currentIndex++
+				if exists {
+					result.SetOwnNonEnumerable("value", value)
+					result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+					return vm.NewValueFromPlainObject(result), nil
+				}
 			}
-			result.SetOwnNonEnumerable("value", data.Get(idx))
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			self.SetOwnNonEnumerable("__index__", vm.IntegerValue(int32(idx+1)))
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(result), nil
 		}))
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
@@ -308,35 +303,29 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true
 		mapProto.DefineOwnProperty("values", v, &w, &e, &c)
 	}
+	// Live iterator for Map.prototype.keys() - respects deletions during iteration
 	mapProto.SetOwnNonEnumerable("keys", vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		if thisMap.Type() != vm.TypeMap {
 			return vm.Undefined, nil
 		}
-		// Snapshot keys
-		ks := vm.NewArray()
-		ksArr := ks.AsArray()
-		thisMap.AsMap().ForEach(func(key vm.Value, _ vm.Value) {
-			ksArr.Append(key)
-		})
+		mapObj := thisMap.AsMap()
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		it.SetOwnNonEnumerable("__data__", ks)
-		it.SetOwnNonEnumerable("__index__", vm.IntegerValue(0))
+		currentIndex := 0
 		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
-			self := vmInstance.GetThis().AsPlainObject()
-			dataVal, _ := self.GetOwn("__data__")
-			idxVal, _ := self.GetOwn("__index__")
-			data := dataVal.AsArray()
-			idx := int(idxVal.ToInteger())
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
-			if idx >= data.Length() {
-				result.SetOwnNonEnumerable("value", vm.Undefined)
-				result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-				return vm.NewValueFromPlainObject(result), nil
+			// Live iteration: skip tombstones, check at each step
+			for currentIndex < mapObj.OrderLen() {
+				key, _, exists := mapObj.GetEntryAt(currentIndex)
+				currentIndex++
+				if exists {
+					result.SetOwnNonEnumerable("value", key)
+					result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+					return vm.NewValueFromPlainObject(result), nil
+				}
 			}
-			result.SetOwnNonEnumerable("value", data.Get(idx))
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			self.SetOwnNonEnumerable("__index__", vm.IntegerValue(int32(idx+1)))
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(result), nil
 		}))
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {

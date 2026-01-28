@@ -255,6 +255,7 @@ type MapObject struct {
 	entries    map[string]Value // key -> value
 	keys       map[string]Value // key -> original key (for key iteration)
 	order      []string         // insertion order of keys (for deterministic iteration)
+	tombstones map[string]bool  // keys that were deleted but still in order (for live iteration)
 	Properties *PlainObject     // User-defined properties on the Map object
 	prototype  Value            // Map prototype
 }
@@ -264,6 +265,7 @@ type SetObject struct {
 	size       int
 	values     map[string]Value // key -> original value (for value iteration)
 	order      []string         // insertion order of values (for deterministic iteration)
+	tombstones map[string]bool  // values that were deleted but still in order (for live iteration)
 	Properties *PlainObject     // User-defined properties on the Set object
 	prototype  Value            // Set prototype
 }
@@ -2085,8 +2087,15 @@ func (m *MapObject) Set(key, value Value) {
 	keyStr := hashKey(key)
 	// fmt.Printf("[DBG Map.set] m=%p key=%s (%s) -> %s\n", m, keyStr, key.TypeName(), value.Inspect())
 	if _, exists := m.entries[keyStr]; !exists {
+		// Check if this key was deleted (has tombstone)
+		if m.tombstones != nil && m.tombstones[keyStr] {
+			// Revive the tombstone - don't add to order, just remove from tombstones
+			delete(m.tombstones, keyStr)
+		} else {
+			// Truly new key - add to order
+			m.order = append(m.order, keyStr)
+		}
 		m.size++
-		m.order = append(m.order, keyStr) // Track insertion order
 	}
 	m.entries[keyStr] = value
 	m.keys[keyStr] = key
@@ -2112,13 +2121,13 @@ func (m *MapObject) Delete(key Value) bool {
 	if _, exists := m.entries[keyStr]; exists {
 		delete(m.entries, keyStr)
 		delete(m.keys, keyStr)
-		// Remove from order slice
-		for i, k := range m.order {
-			if k == keyStr {
-				m.order = append(m.order[:i], m.order[i+1:]...)
-				break
-			}
+		// NOTE: We intentionally do NOT remove from m.order here.
+		// Mark this key as a tombstone so live iterators skip it,
+		// but re-insertion can revive the entry at its original position.
+		if m.tombstones == nil {
+			m.tombstones = make(map[string]bool)
 		}
+		m.tombstones[keyStr] = true
 		m.size--
 		return true
 	}
@@ -2128,7 +2137,8 @@ func (m *MapObject) Delete(key Value) bool {
 func (m *MapObject) Clear() {
 	m.entries = make(map[string]Value)
 	m.keys = make(map[string]Value)
-	m.order = nil // Reset insertion order
+	m.order = nil        // Reset insertion order
+	m.tombstones = nil   // Clear tombstones
 	m.size = 0
 }
 
@@ -2137,9 +2147,17 @@ func (m *MapObject) Size() int {
 }
 
 // ForEach calls fn for each entry in the map in insertion order.
+// Skips entries that have been deleted (tombstones in order array).
 func (m *MapObject) ForEach(fn func(key Value, value Value)) {
 	for _, keyStr := range m.order {
-		value := m.entries[keyStr]
+		// Check if this entry is a tombstone (deleted)
+		if m.tombstones != nil && m.tombstones[keyStr] {
+			continue
+		}
+		value, exists := m.entries[keyStr]
+		if !exists {
+			continue
+		}
 		if originalKey, ok := m.keys[keyStr]; ok {
 			fn(originalKey, value)
 		} else {
@@ -2149,12 +2167,49 @@ func (m *MapObject) ForEach(fn func(key Value, value Value)) {
 	}
 }
 
+// OrderLen returns the length of the order array (including tombstones).
+// Used by live iterators.
+func (m *MapObject) OrderLen() int {
+	return len(m.order)
+}
+
+// GetEntryAt returns the key-value pair at the given index in insertion order.
+// Returns (key, value, true) if the entry exists, or (Undefined, Undefined, false)
+// if the index is out of bounds or the entry was deleted.
+// Used by live iterators.
+func (m *MapObject) GetEntryAt(index int) (Value, Value, bool) {
+	if index < 0 || index >= len(m.order) {
+		return Undefined, Undefined, false
+	}
+	keyStr := m.order[index]
+	// Check if this entry is a tombstone (deleted)
+	if m.tombstones != nil && m.tombstones[keyStr] {
+		return Undefined, Undefined, false
+	}
+	value, exists := m.entries[keyStr]
+	if !exists {
+		return Undefined, Undefined, false
+	}
+	if originalKey, ok := m.keys[keyStr]; ok {
+		return originalKey, value, true
+	}
+	// Fallback: synthesize string key
+	return NewString(keyStr), value, true
+}
+
 // SetObject methods
 func (s *SetObject) Add(value Value) {
 	keyStr := hashKey(value)
 	if _, exists := s.values[keyStr]; !exists {
+		// Check if this value was deleted (has tombstone)
+		if s.tombstones != nil && s.tombstones[keyStr] {
+			// Revive the tombstone - don't add to order, just remove from tombstones
+			delete(s.tombstones, keyStr)
+		} else {
+			// Truly new value - add to order
+			s.order = append(s.order, keyStr)
+		}
 		s.size++
-		s.order = append(s.order, keyStr) // Track insertion order
 	}
 	s.values[keyStr] = value
 }
@@ -2169,13 +2224,11 @@ func (s *SetObject) Delete(value Value) bool {
 	keyStr := hashKey(value)
 	if _, exists := s.values[keyStr]; exists {
 		delete(s.values, keyStr)
-		// Remove from order slice
-		for i, k := range s.order {
-			if k == keyStr {
-				s.order = append(s.order[:i], s.order[i+1:]...)
-				break
-			}
+		// Mark as tombstone for live iteration
+		if s.tombstones == nil {
+			s.tombstones = make(map[string]bool)
 		}
+		s.tombstones[keyStr] = true
 		s.size--
 		return true
 	}
@@ -2184,7 +2237,8 @@ func (s *SetObject) Delete(value Value) bool {
 
 func (s *SetObject) Clear() {
 	s.values = make(map[string]Value)
-	s.order = nil // Reset insertion order
+	s.order = nil      // Reset insertion order
+	s.tombstones = nil // Clear tombstones
 	s.size = 0
 }
 
@@ -2193,10 +2247,42 @@ func (s *SetObject) Size() int {
 }
 
 // ForEach calls fn for each value in the set in insertion order.
+// Skips tombstones (deleted values).
 func (s *SetObject) ForEach(fn func(value Value)) {
 	for _, keyStr := range s.order {
-		fn(s.values[keyStr])
+		// Check if this entry is a tombstone (deleted)
+		if s.tombstones != nil && s.tombstones[keyStr] {
+			continue
+		}
+		if val, exists := s.values[keyStr]; exists {
+			fn(val)
+		}
 	}
+}
+
+// OrderLen returns the length of the order array (including tombstones).
+// Used by live iterators.
+func (s *SetObject) OrderLen() int {
+	return len(s.order)
+}
+
+// GetValueAt returns the value at the given index in insertion order.
+// Returns (value, true) if the entry exists, or (Undefined, false)
+// if the index is out of bounds or the entry was deleted.
+// Used by live iterators.
+func (s *SetObject) GetValueAt(index int) (Value, bool) {
+	if index < 0 || index >= len(s.order) {
+		return Undefined, false
+	}
+	keyStr := s.order[index]
+	// Check if this entry is a tombstone (deleted)
+	if s.tombstones != nil && s.tombstones[keyStr] {
+		return Undefined, false
+	}
+	if val, exists := s.values[keyStr]; exists {
+		return val, true
+	}
+	return Undefined, false
 }
 
 // WeakMapObject methods - implements ECMAScript WeakMap using Go's weak package

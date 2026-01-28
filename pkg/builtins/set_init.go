@@ -198,34 +198,29 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Minimal iterator helpers: values(), keys(), entries(), and [Symbol.iterator]
+	// These use live iteration - checking the set at each step, not a snapshot.
 	setProto.SetOwnNonEnumerable("values", vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
 			return vm.Undefined, nil
 		}
-		vals := vm.NewArray()
-		valsArr := vals.AsArray()
-		thisSet.AsSet().ForEach(func(val vm.Value) {
-			valsArr.Append(val)
-		})
+		setObj := thisSet.AsSet()
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		it.SetOwnNonEnumerable("__data__", vals)
-		it.SetOwnNonEnumerable("__index__", vm.IntegerValue(0))
+		currentIndex := 0
 		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
-			self := vmInstance.GetThis().AsPlainObject()
-			dataVal, _ := self.GetOwn("__data__")
-			idxVal, _ := self.GetOwn("__index__")
-			data := dataVal.AsArray()
-			idx := int(idxVal.ToInteger())
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
-			if idx >= data.Length() {
-				result.SetOwnNonEnumerable("value", vm.Undefined)
-				result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-				return vm.NewValueFromPlainObject(result), nil
+			// Live iteration: skip tombstones, check at each step
+			for currentIndex < setObj.OrderLen() {
+				val, exists := setObj.GetValueAt(currentIndex)
+				currentIndex++
+				if exists {
+					result.SetOwnNonEnumerable("value", val)
+					result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+					return vm.NewValueFromPlainObject(result), nil
+				}
 			}
-			result.SetOwnNonEnumerable("value", data.Get(idx))
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			self.SetOwnNonEnumerable("__index__", vm.IntegerValue(int32(idx+1)))
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(result), nil
 		}))
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
@@ -237,37 +232,29 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true
 		setProto.DefineOwnProperty("values", v, &w, &e, &c)
 	}
-	// keys() is an alias of values() for Set
+	// keys() is an alias of values() for Set - uses same live iteration
 	setProto.SetOwnNonEnumerable("keys", vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
-		// Call values() method
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
 			return vm.Undefined, nil
 		}
-		// Get the values iterator by calling the values method
-		vals := vm.NewArray()
-		valsArr := vals.AsArray()
-		thisSet.AsSet().ForEach(func(val vm.Value) {
-			valsArr.Append(val)
-		})
+		setObj := thisSet.AsSet()
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		it.SetOwnNonEnumerable("__data__", vals)
-		it.SetOwnNonEnumerable("__index__", vm.IntegerValue(0))
+		currentIndex := 0
 		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
-			self := vmInstance.GetThis().AsPlainObject()
-			dataVal, _ := self.GetOwn("__data__")
-			idxVal, _ := self.GetOwn("__index__")
-			data := dataVal.AsArray()
-			idx := int(idxVal.ToInteger())
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
-			if idx >= data.Length() {
-				result.SetOwnNonEnumerable("value", vm.Undefined)
-				result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-				return vm.NewValueFromPlainObject(result), nil
+			// Live iteration: skip tombstones, check at each step
+			for currentIndex < setObj.OrderLen() {
+				val, exists := setObj.GetValueAt(currentIndex)
+				currentIndex++
+				if exists {
+					result.SetOwnNonEnumerable("value", val)
+					result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+					return vm.NewValueFromPlainObject(result), nil
+				}
 			}
-			result.SetOwnNonEnumerable("value", data.Get(idx))
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			self.SetOwnNonEnumerable("__index__", vm.IntegerValue(int32(idx+1)))
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(result), nil
 		}))
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
@@ -279,38 +266,33 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true
 		setProto.DefineOwnProperty("keys", v, &w, &e, &c)
 	}
-	// entries() yields [value, value]
+	// entries() yields [value, value] - uses live iteration
 	setProto.SetOwnNonEnumerable("entries", vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
 			return vm.Undefined, nil
 		}
-		pairs := vm.NewArray()
-		pairsArr := pairs.AsArray()
-		thisSet.AsSet().ForEach(func(val vm.Value) {
-			pair := vm.NewArray()
-			pair.AsArray().Append(val)
-			pair.AsArray().Append(val)
-			pairsArr.Append(pair)
-		})
+		setObj := thisSet.AsSet()
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		it.SetOwnNonEnumerable("__data__", pairs)
-		it.SetOwnNonEnumerable("__index__", vm.IntegerValue(0))
+		currentIndex := 0
 		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
-			self := vmInstance.GetThis().AsPlainObject()
-			dataVal, _ := self.GetOwn("__data__")
-			idxVal, _ := self.GetOwn("__index__")
-			data := dataVal.AsArray()
-			idx := int(idxVal.ToInteger())
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
-			if idx >= data.Length() {
-				result.SetOwnNonEnumerable("value", vm.Undefined)
-				result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-				return vm.NewValueFromPlainObject(result), nil
+			// Live iteration: skip tombstones, check at each step
+			for currentIndex < setObj.OrderLen() {
+				val, exists := setObj.GetValueAt(currentIndex)
+				currentIndex++
+				if exists {
+					// Set entries() yields [value, value]
+					entry := vm.NewArray()
+					entry.AsArray().Append(val)
+					entry.AsArray().Append(val)
+					result.SetOwnNonEnumerable("value", entry)
+					result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
+					return vm.NewValueFromPlainObject(result), nil
+				}
 			}
-			result.SetOwnNonEnumerable("value", data.Get(idx))
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			self.SetOwnNonEnumerable("__index__", vm.IntegerValue(int32(idx+1)))
+			result.SetOwnNonEnumerable("value", vm.Undefined)
+			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(result), nil
 		}))
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
