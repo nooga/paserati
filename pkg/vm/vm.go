@@ -5878,11 +5878,11 @@ startExecution:
 				switch indexVal.Type() {
 				case TypeFloatNumber, TypeIntegerNumber:
 					idx := int(AsNumber(indexVal))
-					if idx < 0 || idx >= args.Length() {
-						registers[destReg] = Undefined // Out of bounds -> undefined
+					if idx < 0 {
+						registers[destReg] = Undefined // Negative index -> undefined
 					} else {
-						resultVal := args.Get(idx)
-						registers[destReg] = resultVal
+						// Use Get() which checks args array and namedProps
+						registers[destReg] = args.Get(idx)
 					}
 				case TypeString:
 					key := AsString(indexVal)
@@ -5898,7 +5898,8 @@ startExecution:
 						registers[destReg] = args.Callee()
 					default:
 						// Try parsing as array index
-						if idx, ok := tryParseArrayIndex(key); ok && idx < args.Length() {
+						if idx, ok := tryParseArrayIndex(key); ok {
+							// Use Get() which checks args array and namedProps
 							registers[destReg] = args.Get(idx)
 						} else {
 							// Delegate to Array.prototype for other string properties
@@ -6571,14 +6572,13 @@ startExecution:
 					// For mapped arguments, write directly to the register
 					if idx < argObj.numMapped && argObj.mappedRegs != nil {
 						argObj.mappedRegs[idx] = valueVal
-					} else {
-						// Expand args array if needed (similar to array behavior)
-						for len(argObj.args) <= idx {
-							argObj.args = append(argObj.args, Undefined)
-						}
+					} else if idx < len(argObj.args) {
+						// Within original bounds - update the args array
 						argObj.args[idx] = valueVal
-						// Update length to match the actual args slice length
-						argObj.length = len(argObj.args)
+					} else {
+						// Beyond original length - store as named property (DO NOT extend length)
+						// Per ECMAScript, arguments objects have fixed length based on actual arguments
+						argObj.SetNamedProp(strconv.Itoa(idx), valueVal)
 					}
 				} else {
 					// String key access (e.g., arguments["callee"], arguments["length"])
@@ -6602,12 +6602,12 @@ startExecution:
 							// For mapped arguments, write directly to the register
 							if idx < argObj.numMapped && argObj.mappedRegs != nil {
 								argObj.mappedRegs[idx] = valueVal
-							} else {
-								for len(argObj.args) <= idx {
-									argObj.args = append(argObj.args, Undefined)
-								}
+							} else if idx < len(argObj.args) {
+								// Within original bounds - update the args array
 								argObj.args[idx] = valueVal
-								argObj.length = len(argObj.args)
+							} else {
+								// Beyond original length - store as named property (DO NOT extend length)
+								argObj.SetNamedProp(key, valueVal)
 							}
 						} else {
 							// Store in overflow named properties

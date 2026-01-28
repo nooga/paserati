@@ -1983,10 +1983,17 @@ func (a *ArgumentsObject) Get(index int) Value {
 	if index >= 0 && index < a.numMapped && a.mappedRegs != nil {
 		return a.mappedRegs[index]
 	}
-	if index < 0 || index >= len(a.args) {
-		return Undefined
+	if index >= 0 && index < len(a.args) {
+		return a.args[index]
 	}
-	return a.args[index]
+	// Check namedProps for indices beyond original length
+	// (per ECMAScript, arguments objects can have arbitrary properties added)
+	if index >= 0 && a.namedProps != nil {
+		if v, ok := a.namedProps[strconv.Itoa(index)]; ok {
+			return v
+		}
+	}
+	return Undefined
 }
 
 func (a *ArgumentsObject) Set(index int, value Value) {
