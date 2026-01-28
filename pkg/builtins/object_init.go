@@ -270,6 +270,19 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			// Check overflow named properties
 			return vm.BooleanValue(argsObj.HasNamedProp(propName)), nil
+		case vm.TypeRegExp:
+			// RegExp objects have intrinsic own property: lastIndex
+			// (source, flags, global, etc. are on prototype in modern JS)
+			if propName == "lastIndex" {
+				return vm.BooleanValue(true), nil
+			}
+			// Check custom properties
+			regexObj := thisValue.AsRegExpObject()
+			if regexObj != nil && regexObj.Properties != nil {
+				_, hasOwn := regexObj.Properties.GetOwn(propName)
+				return vm.BooleanValue(hasOwn), nil
+			}
+			return vm.BooleanValue(false), nil
 		default:
 			return vm.BooleanValue(false), nil
 		}
@@ -2747,6 +2760,32 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
 			descriptor.SetOwn("configurable", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+	}
+
+	// Handle RegExp intrinsic property: lastIndex
+	// Per ECMAScript spec: {value: 0, writable: true, enumerable: false, configurable: false}
+	if obj.Type() == vm.TypeRegExp {
+		if propName == "lastIndex" {
+			regexObj := obj.AsRegExpObject()
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", vm.Number(float64(regexObj.GetLastIndex())))
+			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+			descriptor.SetOwn("configurable", vm.BooleanValue(false))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		// Check custom properties on the regex
+		regexObj := obj.AsRegExpObject()
+		if regexObj != nil && regexObj.Properties != nil {
+			if v, w, e, c, ok := regexObj.Properties.GetOwnDescriptor(propName); ok {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				descriptor.SetOwn("value", v)
+				descriptor.SetOwn("writable", vm.BooleanValue(w))
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
 		}
 	}
 
