@@ -124,6 +124,12 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create Symbol constructor with properties (like Date does)
 	ctorWithProps := vm.NewNativeFunctionWithProps(0, true, "Symbol", func(args []vm.Value) (vm.Value, error) {
+		// Check if called with new - Symbol should throw when used as constructor
+		// Per ECMAScript 19.4.1.1 step 1: "If NewTarget is not undefined, throw a TypeError"
+		if vmInstance.IsConstructorCall() {
+			return vm.Undefined, vmInstance.NewTypeError("Symbol is not a constructor")
+		}
+
 		// Get description argument
 		var description string
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
@@ -133,6 +139,10 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Create new symbol
 		return vm.NewSymbol(description), nil
 	})
+
+	// Mark Symbol as a constructor for class extends validation
+	// Per ECMAScript, Symbol has [[Construct]] but throws when invoked
+	ctorWithProps.AsNativeFunctionWithProps().IsConstructor = true
 
 	// Add prototype property - use the VM's SymbolPrototype
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vmInstance.SymbolPrototype)

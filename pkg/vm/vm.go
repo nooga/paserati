@@ -323,6 +323,10 @@ type VM struct {
 	// Track if we're in module execution to handle errors differently
 	inModuleExecution    bool
 	moduleExecutionDepth int
+
+	// Regex cache - stores compiled regex engines keyed by "pattern\x00flags"
+	// Per-VM to avoid global state and allow proper cleanup
+	regexCache map[string]*cachedCompiledRegex
 }
 
 // ExecutionContext saves the complete VM state for recursive execution
@@ -603,6 +607,8 @@ func (vm *VM) Reset() {
 	vm.finallyDepth = 0
 	// Reset cancellation flag
 	vm.cancelled = false
+	// Clear regex cache to free memory from compiled regexes
+	vm.regexCache = nil
 }
 
 // Cancel signals the VM to stop execution at the next safe point
@@ -5365,7 +5371,7 @@ startExecution:
 			flags := AsString(constants[flagsIdx])
 
 			// Create a new RegExp object (not cached - per ECMAScript spec)
-			regexValue := NewRegExpDeferred(pattern, flags)
+			regexValue := vm.NewRegExpDeferred(pattern, flags)
 			registers[destReg] = regexValue
 
 		case OpDefineAccessor:
@@ -5665,8 +5671,9 @@ startExecution:
 			// null is valid (class extends null)
 			if superclassVal.Type() == TypeNull {
 				// Valid - do nothing
-			} else if !superclassVal.IsCallable() {
-				// Not callable and not null - throw TypeError
+			} else if !vm.IsConstructor(superclassVal) {
+				// Not a constructor and not null - throw TypeError
+				// Per ECMAScript spec 15.7.14 step 5.f: "if IsConstructor(superclass) is false, throw TypeError"
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Class extends value %s is not a constructor or null", superclassVal.TypeName()))
 				if vm.frameCount == 0 {

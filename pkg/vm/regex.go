@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 	"unsafe"
 
 	"github.com/dlclark/regexp2"
@@ -18,11 +17,6 @@ type cachedCompiledRegex struct {
 	compiledRegex2 *regexp2.Regexp // regexp2 fallback (full ECMAScript)
 	compileError   string          // Error if both engines failed
 }
-
-// regexCache stores compiled regex engines keyed by "pattern\x00flags".
-// This allows regex literals to create distinct objects (per ECMAScript spec)
-// while reusing the expensive compiled regex engines internally.
-var regexCache sync.Map // map[string]*cachedCompiledRegex
 
 // RegExpObject represents a JavaScript RegExp object backed by Go's regexp package
 // Uses Go's standard regexp (RE2) for simple patterns, falls back to regexp2 for
@@ -137,19 +131,24 @@ func compileRegexEngines(pattern, flags string) *cachedCompiledRegex {
 
 // getOrCompileRegex returns a cached compiled regex or compiles a new one.
 // The compiled engines are shared across RegExpObject instances for performance.
-func getOrCompileRegex(pattern, flags string) *cachedCompiledRegex {
+// Uses the VM's per-instance cache instead of a global cache.
+func (vm *VM) getOrCompileRegex(pattern, flags string) *cachedCompiledRegex {
 	key := pattern + "\x00" + flags
 
 	// Fast path: check if already cached
-	if cached, ok := regexCache.Load(key); ok {
-		return cached.(*cachedCompiledRegex)
+	if vm.regexCache != nil {
+		if cached, ok := vm.regexCache[key]; ok {
+			return cached
+		}
 	}
 
 	// Slow path: compile and cache
 	compiled := compileRegexEngines(pattern, flags)
-	// LoadOrStore handles the race - if another goroutine already stored, use theirs
-	actual, _ := regexCache.LoadOrStore(key, compiled)
-	return actual.(*cachedCompiledRegex)
+	if vm.regexCache == nil {
+		vm.regexCache = make(map[string]*cachedCompiledRegex)
+	}
+	vm.regexCache[key] = compiled
+	return compiled
 }
 
 // NewRegExpDeferred creates a RegExp object, trying Go's fast RE2 engine first,
@@ -157,7 +156,7 @@ func getOrCompileRegex(pattern, flags string) *cachedCompiledRegex {
 // The compiled regex engines are cached and shared across instances for performance,
 // but each call returns a distinct RegExpObject (per ECMAScript spec requirement
 // that each evaluation of a regex literal creates a new object).
-func NewRegExpDeferred(pattern, flags string) Value {
+func (vm *VM) NewRegExpDeferred(pattern, flags string) Value {
 	// ECMAScript forbids line terminators (U+2028, U+2029) in regex literals
 	if strings.ContainsRune(pattern, '\u2028') || strings.ContainsRune(pattern, '\u2029') {
 		regexObj := &RegExpObject{
@@ -187,7 +186,7 @@ func NewRegExpDeferred(pattern, flags string) Value {
 	}
 
 	// Get cached compiled engines (or compile if first time)
-	cached := getOrCompileRegex(pattern, flags)
+	cached := vm.getOrCompileRegex(pattern, flags)
 
 	// Parse individual flags for this instance
 	global := strings.Contains(flags, "g")
