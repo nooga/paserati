@@ -410,6 +410,16 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		// No get trap, fall through to target
 		return vm.GetProperty(proxy.target, propName)
 
+	case TypePromise:
+		// Promise objects: check Promise.prototype chain
+		if vm.PromisePrototype.IsObject() {
+			proto := vm.PromisePrototype.AsPlainObject()
+			if v, ok := proto.Get(propName); ok {
+				return v, nil
+			}
+		}
+		return Undefined, nil
+
 	default:
 		// For non-objects, just return undefined
 		return Undefined, nil

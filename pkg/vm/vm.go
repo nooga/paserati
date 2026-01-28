@@ -1910,7 +1910,7 @@ startExecution:
 			if objType != TypeObject && objType != TypeDictObject && objType != TypeArray &&
 				objType != TypeFunction && objType != TypeNativeFunctionWithProps && objType != TypeProxy &&
 				objType != TypeClosure && objType != TypeNativeFunction && objType != TypeBoundFunction &&
-				objType != TypeSet && objType != TypeMap && objType != TypeArguments {
+				objType != TypeSet && objType != TypeMap && objType != TypeArguments && objType != TypePromise {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot use 'in' operator to search for '%s' in %s", propVal.ToString(), objVal.Type().String()))
 				if vm.frameCount == 0 {
@@ -2014,6 +2014,22 @@ startExecution:
 					// If not found, also check Object.prototype
 					if !hasProperty && vm.ObjectPrototype.IsObject() {
 						for cur := vm.ObjectPrototype.AsPlainObject(); cur != nil; {
+							if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
+								hasProperty = true
+								break
+							}
+							pv := cur.GetPrototype()
+							if !pv.IsObject() {
+								break
+							}
+							cur = pv.AsPlainObject()
+						}
+					}
+				case TypePromise:
+					// Walk Promise prototype chain for symbol properties
+					proto := vm.PromisePrototype
+					if proto.IsObject() {
+						for cur := proto.AsPlainObject(); cur != nil; {
 							if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
 								hasProperty = true
 								break
@@ -2172,6 +2188,12 @@ startExecution:
 						hasProperty = index < argObj.Length()
 					} else if vm.ObjectPrototype.IsObject() {
 						hasProperty = vm.ObjectPrototype.AsPlainObject().Has(propKey)
+					}
+				case TypePromise:
+					// Promise objects: check Promise.prototype chain
+					// Promises don't have user-accessible own properties, only internal state
+					if vm.PromisePrototype.IsObject() {
+						hasProperty = vm.PromisePrototype.AsPlainObject().Has(propKey)
 					}
 				default:
 					// Non-object RHS - shouldn't reach here due to check above
@@ -3123,9 +3145,9 @@ startExecution:
 				continue
 			}
 			// Push the value to with stack if it's an object-like value
-			// This includes TypeObject, TypeProxy, TypeDictObject, etc.
+			// This includes TypeObject, TypeProxy, TypeDictObject, TypePromise, etc.
 			switch objVal.Type() {
-			case TypeObject, TypeProxy, TypeDictObject:
+			case TypeObject, TypeProxy, TypeDictObject, TypePromise:
 				vm.withObjectStack = append(vm.withObjectStack, objVal)
 			}
 
@@ -3152,6 +3174,12 @@ startExecution:
 					return withObj.AsPlainObject().Has(propName)
 				case TypeDictObject:
 					return withObj.AsDictObject().Has(propName)
+				case TypePromise:
+					// Promise objects: check Promise.prototype
+					if vm.PromisePrototype.IsObject() {
+						return vm.PromisePrototype.AsPlainObject().Has(propName)
+					}
+					return false
 				default:
 					return false
 				}
@@ -3247,6 +3275,11 @@ startExecution:
 						stillExists = withObj.AsPlainObject().Has(propName)
 					case TypeDictObject:
 						stillExists = withObj.AsDictObject().Has(propName)
+					case TypePromise:
+						// Promise objects: check Promise.prototype
+						if vm.PromisePrototype.IsObject() {
+							stillExists = vm.PromisePrototype.AsPlainObject().Has(propName)
+						}
 					case TypeProxy:
 						// For Proxy, use has trap
 						proxy := withObj.AsProxy()
@@ -3687,6 +3720,11 @@ startExecution:
 						stillExists = withObj.AsPlainObject().Has(propName)
 					case TypeDictObject:
 						stillExists = withObj.AsDictObject().Has(propName)
+					case TypePromise:
+						// Promise objects: check Promise.prototype
+						if vm.PromisePrototype.IsObject() {
+							stillExists = vm.PromisePrototype.AsPlainObject().Has(propName)
+						}
 					case TypeProxy:
 						// For Proxy, assume it exists (will be handled by GetProperty)
 						stillExists = true
@@ -5776,8 +5814,34 @@ startExecution:
 						}
 						continue
 					default:
-						// For other types (boolean, null, undefined, etc.), convert to string
-						key = indexVal.ToString()
+						// For objects/callables, use toPrimitive for ToPropertyKey semantics
+						if indexVal.IsObject() || indexVal.IsCallable() {
+							frame.ip = ip
+							vm.helperCallDepth++
+							primitiveVal := vm.toPrimitive(indexVal, "string")
+							vm.helperCallDepth--
+							if vm.unwinding {
+								return InterpretRuntimeError, Undefined
+							}
+							if vm.handlerFound {
+								vm.handlerFound = false
+								goto reloadFrame
+							}
+							// Per ECMAScript ToPropertyKey: if ToPrimitive returns a Symbol, use it directly
+							if primitiveVal.Type() == TypeSymbol {
+								if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, primitiveVal, &registers[destReg]); !ok {
+									if status != InterpretOK {
+										return status, value
+									}
+									goto reloadFrame
+								}
+								continue
+							}
+							key = primitiveVal.ToString()
+						} else {
+							// For other types (boolean, null, undefined, etc.), convert to string
+							key = indexVal.ToString()
+						}
 					}
 
 					// Use opGetProp to access array properties (handles prototype chain)
@@ -5885,6 +5949,18 @@ startExecution:
 						if vm.handlerFound {
 							vm.handlerFound = false
 							goto reloadFrame // Reload frame to pick up the catch handler's frame
+						}
+						// Per ECMAScript ToPropertyKey: if ToPrimitive returns a Symbol, use it directly
+						if primitiveVal.Type() == TypeSymbol {
+							if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, primitiveVal, &registers[destReg]); !ok {
+								if status != InterpretOK {
+									return status, value
+								}
+								goto reloadFrame
+							}
+							// Store the Symbol back for subsequent operations
+							registers[indexReg] = primitiveVal
+							continue
 						}
 						propKey = primitiveVal.ToString()
 						// Store the converted key back so subsequent OpSetIndex won't call toString again
@@ -6549,7 +6625,38 @@ startExecution:
 
 				// If not a valid array index, treat as property key
 				if !isValidArrayIndex {
-					key := indexVal.ToString()
+					// Handle Symbol keys directly
+					if indexVal.Type() == TypeSymbol {
+						if ok, status, res := vm.opSetPropSymbol(ip, &baseVal, indexVal, &valueVal); !ok {
+							return status, res
+						}
+						continue
+					}
+					// For objects, call toPrimitive to get the property key
+					var key string
+					if indexVal.IsObject() || indexVal.IsCallable() {
+						frame.ip = ip
+						vm.helperCallDepth++
+						primitiveVal := vm.toPrimitive(indexVal, "string")
+						vm.helperCallDepth--
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
+						}
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
+						}
+						// Per ECMAScript ToPropertyKey: if ToPrimitive returns a Symbol, use it directly
+						if primitiveVal.Type() == TypeSymbol {
+							if ok, status, res := vm.opSetPropSymbol(ip, &baseVal, primitiveVal, &valueVal); !ok {
+								return status, res
+							}
+							continue
+						}
+						key = primitiveVal.ToString()
+					} else {
+						key = indexVal.ToString()
+					}
 					if ok, status, res := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
 						if status != InterpretOK {
 							return status, res
@@ -6685,6 +6792,13 @@ startExecution:
 						if vm.handlerFound {
 							vm.handlerFound = false
 							goto reloadFrame // Reload frame to pick up the catch handler's frame
+						}
+						// Per ECMAScript ToPropertyKey: if ToPrimitive returns a Symbol, use it directly
+						if primitiveVal.Type() == TypeSymbol {
+							if ok, status, res := vm.opSetPropSymbol(ip, &baseVal, primitiveVal, &valueVal); !ok {
+								return status, res
+							}
+							continue
 						}
 						key = primitiveVal.ToString()
 					} else {
@@ -13009,6 +13123,11 @@ startExecution:
 				// For objects and other types, call ToPrimitive with "string" hint
 				if srcVal.IsObject() || srcVal.IsCallable() {
 					primitiveVal := vm.toPrimitive(srcVal, "string")
+					// Per ECMAScript ToPropertyKey: if ToPrimitive returns a Symbol, use it directly
+					if primitiveVal.Type() == TypeSymbol {
+						registers[destReg] = primitiveVal
+						continue
+					}
 					keyStr = primitiveVal.ToString()
 				} else {
 					keyStr = srcVal.ToString()
