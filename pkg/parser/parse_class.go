@@ -60,10 +60,24 @@ func (p *Parser) parseClassDeclaration() Statement {
 		p.nextToken() // consume 'extends'
 		p.nextToken() // move to start of expression
 
-		// Check if this is a runtime expression (function/class literal, call, parenthesized expr)
-		// or a type expression (identifier with optional generic args)
-		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) {
-			// Runtime expression: function() {}, class {}, (expr), etc.
+		// ECMAScript spec: ClassHeritage takes a LeftHandSideExpression which includes:
+		// - Identifiers (Container)
+		// - Member expressions (a.b.Container)
+		// - Call expressions (fn(), mixin(Base))
+		// - Function/class expressions
+		// - Parenthesized expressions
+		//
+		// For TypeScript, we also need to handle generic types (Container<T>).
+		// We use parseTypeExpression for simple identifiers (with optional generics),
+		// but parseExpression for call expressions and other runtime constructs.
+		//
+		// Detect call expression: identifier followed by '('
+		isCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LPAREN)
+		// Also detect member expression that might become a call: a.b(...)
+		isMemberCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.DOT)
+
+		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) || isCallExpr || isMemberCallExpr {
+			// Runtime expression: function() {}, class {}, (expr), fn(), a.b.fn(), etc.
 			superClass = p.parseExpression(LOWEST)
 		} else {
 			// Type expression: Container, Container<T>, etc.
@@ -137,10 +151,24 @@ func (p *Parser) parseClassExpression() Expression {
 		p.nextToken() // consume 'extends'
 		p.nextToken() // move to start of expression
 
-		// Check if this is a runtime expression (function/class literal, call, parenthesized expr)
-		// or a type expression (identifier with optional generic args)
-		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) {
-			// Runtime expression: function() {}, class {}, (expr), etc.
+		// ECMAScript spec: ClassHeritage takes a LeftHandSideExpression which includes:
+		// - Identifiers (Container)
+		// - Member expressions (a.b.Container)
+		// - Call expressions (fn(), mixin(Base))
+		// - Function/class expressions
+		// - Parenthesized expressions
+		//
+		// For TypeScript, we also need to handle generic types (Container<T>).
+		// We use parseTypeExpression for simple identifiers (with optional generics),
+		// but parseExpression for call expressions and other runtime constructs.
+		//
+		// Detect call expression: identifier followed by '('
+		isCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LPAREN)
+		// Also detect member expression that might become a call: a.b(...)
+		isMemberCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.DOT)
+
+		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) || isCallExpr || isMemberCallExpr {
+			// Runtime expression: function() {}, class {}, (expr), fn(), a.b.fn(), etc.
 			superClass = p.parseExpression(LOWEST)
 		} else {
 			// Type expression: Container, Container<T>, etc.
