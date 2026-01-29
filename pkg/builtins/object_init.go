@@ -2001,7 +2001,8 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	isObjectLike := obj.IsObject() ||
 		obj.Type() == vm.TypeFunction ||
 		obj.Type() == vm.TypeClosure ||
-		obj.Type() == vm.TypeNativeFunctionWithProps
+		obj.Type() == vm.TypeNativeFunctionWithProps ||
+		obj.Type() == vm.TypeBoundFunction
 	if !isObjectLike {
 		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperty called on non-object")
 	}
@@ -2074,6 +2075,30 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		// In absence of a direct VM reference here, mimic failure by returning undefined;
 		// harness verifyProperty will report descriptor mismatch. We will revisit once we thread VM here.
 		return vm.Undefined, nil
+	}
+
+	// Handle BoundFunction first (before AsPlainObject which would panic)
+	if obj.Type() == vm.TypeBoundFunction {
+		bf := obj.AsBoundFunction()
+		if bf != nil {
+			if bf.Properties == nil {
+				bf.Properties = vm.NewObject(vm.Undefined).AsPlainObject()
+			}
+			if hasGetter || hasSetter {
+				if keyIsSymbol {
+					bf.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				} else {
+					bf.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				}
+			} else {
+				if keyIsSymbol {
+					bf.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+				} else {
+					bf.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+				}
+			}
+		}
+		return obj, nil
 	}
 
 	// Define the property with attributes (on plain objects only for now)

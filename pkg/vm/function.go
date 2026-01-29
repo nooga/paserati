@@ -96,10 +96,11 @@ type BoundNativeFunctionObject struct {
 // BoundFunctionObject represents any function bound to a 'this' value and optional partial arguments
 type BoundFunctionObject struct {
 	Object
-	OriginalFunction Value   // The function being bound (can be any callable type)
-	BoundThis        Value   // The 'this' value to use when calling
-	PartialArgs      []Value // Arguments to prepend to call arguments
-	Name             string  // For debugging/inspection
+	OriginalFunction Value        // The function being bound (can be any callable type)
+	BoundThis        Value        // The 'this' value to use when calling
+	PartialArgs      []Value      // Arguments to prepend to call arguments
+	Name             string       // For debugging/inspection
+	Properties       *PlainObject // Per ECMAScript, bound functions can have properties
 }
 
 // NativeFunctionObjectWithProps represents a native function that can also have properties

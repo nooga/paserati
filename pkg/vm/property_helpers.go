@@ -63,6 +63,49 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		}
 	}
 
+	// For bound functions, check their Properties for user-defined properties
+	if objVal.Type() == TypeBoundFunction {
+		bf := objVal.AsBoundFunction()
+		if bf.Properties != nil {
+			// Check for accessor properties first (getters/setters)
+			if getter, _, _, _, exists := bf.Properties.GetOwnAccessor(propName); exists {
+				if getter.Type() != TypeUndefined {
+					res, err := vm.Call(getter, objVal, nil)
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						} else {
+							var excVal Value
+							if errCtor, ok := vm.GetGlobal("Error"); ok {
+								if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+									excVal = res
+								} else {
+									eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+									eo.SetOwn("name", NewString("Error"))
+									eo.SetOwn("message", NewString(err.Error()))
+									excVal = NewValueFromPlainObject(eo)
+								}
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+							vm.throwException(excVal)
+						}
+						return Undefined, false
+					}
+					return res, true
+				}
+				return Undefined, true
+			}
+			// Check for regular data properties
+			if prop, exists := bf.Properties.GetOwn(propName); exists {
+				return prop, true
+			}
+		}
+	}
+
 	// Walk the closure's [[Prototype]] chain for inherited static properties (class inheritance)
 	// This handles `class C extends B { }` where C.staticMethod should find B.staticMethod
 	// Only walk user-defined class constructors (Closure/Function), stop at built-in prototypes

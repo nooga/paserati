@@ -5708,6 +5708,30 @@ startExecution:
 					if ok, _, _ := vm.opGetProp(nil, 0, &superclassVal, "prototype", &protoVal); !ok {
 						protoVal = Undefined
 					}
+				case TypeBoundFunction:
+					// Bound functions can have user-defined prototype via Object.defineProperty
+					bf := superclassVal.AsBoundFunction()
+					if bf.Properties != nil {
+						// Check for accessor property (getter)
+						if getter, _, _, _, exists := bf.Properties.GetOwnAccessor("prototype"); exists {
+							if getter.Type() != TypeUndefined {
+								res, err := vm.Call(getter, superclassVal, nil)
+								if err == nil {
+									protoVal = res
+								}
+							}
+						} else if proto, exists := bf.Properties.GetOwn("prototype"); exists {
+							protoVal = proto
+						}
+					}
+					// If no user-defined prototype, bound functions inherit from original's prototype
+					// but typically bound functions don't have their own .prototype
+					if protoVal.Type() == TypeUndefined {
+						// Try to get from Function.prototype
+						if ok, _, _ := vm.opGetProp(nil, 0, &superclassVal, "prototype", &protoVal); !ok {
+							protoVal = Undefined
+						}
+					}
 				}
 
 				// prototype must be Object or null, not undefined or primitive
