@@ -2477,17 +2477,21 @@ startExecution:
 			} else if calleeVal.Type() == TypeClosure {
 				calleeClosure = calleeVal.AsClosure()
 				calleeFunc = calleeClosure.Fn
-				// Generator functions cannot use TCO
+				// Generator and async functions cannot use TCO
+				// - Generators need special return handling (generator objects)
+				// - Async functions need Promise wrapping which is done in prepareCall
 				// Native functions are TypeNativeFunction, not TypeClosure, so they're already excluded
-				if !calleeFunc.IsGenerator {
+				if !calleeFunc.IsGenerator && !calleeFunc.IsAsync {
 					canPerformTCO = true
 				}
 			} else if calleeVal.Type() == TypeFunction {
 				// Convert bare function to closure (like prepareCall does)
 				funcToCall := AsFunction(calleeVal)
-				// Generator functions cannot use TCO
+				// Generator and async functions cannot use TCO
+				// - Generators need special return handling (generator objects)
+				// - Async functions need Promise wrapping which is done in prepareCall
 				// Native functions are TypeNativeFunction, not TypeFunction, so they're already excluded
-				if !funcToCall.IsGenerator {
+				if !funcToCall.IsGenerator && !funcToCall.IsAsync {
 					calleeClosure = &ClosureObject{
 						Fn:       funcToCall,
 						Upvalues: []*Upvalue{},
@@ -2700,17 +2704,21 @@ startExecution:
 			} else if calleeVal.Type() == TypeClosure {
 				calleeClosure = calleeVal.AsClosure()
 				calleeFunc = calleeClosure.Fn
-				// Generator functions cannot use TCO
+				// Generator and async functions cannot use TCO
+				// - Generators need special return handling (generator objects)
+				// - Async functions need Promise wrapping which is done in prepareCall
 				// Native functions are TypeNativeFunction, not TypeClosure, so they're already excluded
-				if !calleeFunc.IsGenerator {
+				if !calleeFunc.IsGenerator && !calleeFunc.IsAsync {
 					canPerformTCO = true
 				}
 			} else if calleeVal.Type() == TypeFunction {
 				// Convert bare function to closure (like prepareCall does)
 				funcToCall := AsFunction(calleeVal)
-				// Generator functions cannot use TCO
+				// Generator and async functions cannot use TCO
+				// - Generators need special return handling (generator objects)
+				// - Async functions need Promise wrapping which is done in prepareCall
 				// Native functions are TypeNativeFunction, not TypeFunction, so they're already excluded
-				if !funcToCall.IsGenerator {
+				if !funcToCall.IsGenerator && !funcToCall.IsAsync {
 					calleeClosure = &ClosureObject{
 						Fn:       funcToCall,
 						Upvalues: []*Upvalue{},
@@ -2720,7 +2728,7 @@ startExecution:
 				}
 			}
 
-			// 3. Check if we can perform TCO (not generator, not native)
+			// 3. Check if we can perform TCO (not generator, not native, not async)
 			var totalNeeded, availableInStack int
 			if canPerformTCO {
 				// 4. Check if new function can fit in register stack

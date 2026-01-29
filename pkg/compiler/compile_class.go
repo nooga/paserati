@@ -123,19 +123,16 @@ func (c *Compiler) tryExtractConstantComputedPropertyName(expr parser.Expression
 // preEvaluateComputedFieldKeys evaluates computed property keys at class definition time
 // Per ECMAScript, the key expression in `[expr] = value` must be evaluated when the class
 // is defined, not when instances are created. This function:
-// 1. Iterates through instance (non-static) fields with computed keys
+// 1. Iterates through ALL fields (both static and instance) with computed keys in declaration order
 // 2. Allocates a register and compiles the key expression into it
-// 3. Defines a synthetic variable name that can be captured by the constructor closure
+// 3. Defines a synthetic variable name that can be captured by closures
 // 4. Returns a mapping from property index to synthetic variable name
+// Note: Per ECMAScript spec step 28, computed keys are evaluated in declaration order
+// for all fields, regardless of whether they are static or instance fields.
 func (c *Compiler) preEvaluateComputedFieldKeys(node *parser.ClassDeclaration) errors.PaseratiError {
 	c.computedFieldKeyVars = make(map[int]string)
 
 	for i, property := range node.Body.Properties {
-		// Skip static fields - they're handled separately in setupStaticMembers
-		if property.IsStatic {
-			continue
-		}
-
 		// Check if this is a computed property key
 		computedKey, isComputed := property.Key.(*parser.ComputedPropertyName)
 		if !isComputed {
@@ -143,6 +140,7 @@ func (c *Compiler) preEvaluateComputedFieldKeys(node *parser.ClassDeclaration) e
 		}
 
 		// Create a synthetic variable name for this computed key
+		// Both static and instance fields use the same naming scheme
 		varName := fmt.Sprintf("__cfk_%d__", i)
 
 		// Allocate a register for this key
@@ -161,13 +159,14 @@ func (c *Compiler) preEvaluateComputedFieldKeys(node *parser.ClassDeclaration) e
 		c.emitByte(byte(keyReg))
 
 		// Define the synthetic variable in the symbol table
-		// This will be captured as an upvalue by the constructor closure
+		// For instance fields: captured as an upvalue by the constructor closure
+		// For static fields: used directly in setupStaticMembers
 		c.currentSymbolTable.Define(varName, keyReg)
 
 		// Track the mapping
 		c.computedFieldKeyVars[i] = varName
 
-		debugPrintf("// DEBUG preEvaluateComputedFieldKeys: Pre-evaluated key for property %d -> %s (R%d)\n", i, varName, keyReg)
+		debugPrintf("// DEBUG preEvaluateComputedFieldKeys: Pre-evaluated key for property %d (static=%v) -> %s (R%d)\n", i, property.IsStatic, varName, keyReg)
 	}
 
 	return nil
@@ -1133,9 +1132,10 @@ func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructor
 	debugPrintf("// DEBUG setupStaticMembers: Setting up static members for class '%s'\n", node.Name.Value)
 
 	// Add static properties
-	for _, property := range node.Body.Properties {
+	// Note: We pass the property index so we can use pre-computed keys from computedFieldKeyVars
+	for i, property := range node.Body.Properties {
 		if property.IsStatic {
-			err := c.addStaticProperty(property, constructorReg)
+			err := c.addStaticProperty(property, constructorReg, i)
 			if err != nil {
 				return err
 			}
@@ -1262,9 +1262,9 @@ func (c *Compiler) executeStaticInitializer(block *parser.BlockStatement, constr
 }
 
 // addStaticProperty compiles a static property and adds it to the constructor
-func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constructorReg Register) errors.PaseratiError {
+func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constructorReg Register, propertyIndex int) errors.PaseratiError {
 	propertyName := c.extractPropertyName(property.Key)
-	debugPrintf("// DEBUG addStaticProperty: Adding static property '%s'\n", propertyName)
+	debugPrintf("// DEBUG addStaticProperty: Adding static property '%s' (index %d)\n", propertyName, propertyIndex)
 
 	// Allocate a register for the property value
 	valueReg := c.regAlloc.Alloc()
@@ -1321,20 +1321,31 @@ func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constr
 		propertyNameIdx := c.chunk.AddConstant(vm.String(brandedKey))
 		c.emitSetPrivateField(constructorReg, valueReg, propertyNameIdx, property.Token.Line)
 		debugPrintf("// DEBUG addStaticProperty: Static private field '%s' added to constructor\n", propertyName)
-	} else if computedKey, isComputed := property.Key.(*parser.ComputedPropertyName); isComputed {
-		// Computed property key - evaluate at runtime and use OpSetIndex
-		keyReg := c.regAlloc.Alloc()
-		defer c.regAlloc.Free(keyReg)
-		_, err := c.compileNode(computedKey.Expr, keyReg)
-		if err != nil {
-			return err
+	} else if _, isComputed := property.Key.(*parser.ComputedPropertyName); isComputed {
+		// Computed property key - use the pre-computed key from preEvaluateComputedFieldKeys
+		// The key was already evaluated in declaration order at class definition time
+		varName, hasPreComputed := c.computedFieldKeyVars[propertyIndex]
+		if !hasPreComputed {
+			pos := errors.Position{Line: property.Token.Line, Column: property.Token.Column}
+			return errors.NewCompileError(pos, "Internal error: missing pre-computed key for static field")
 		}
+
+		// Look up the pre-computed key variable
+		symbol, _, exists := c.currentSymbolTable.Resolve(varName)
+		if !exists {
+			pos := errors.Position{Line: property.Token.Line, Column: property.Token.Column}
+			return errors.NewCompileError(pos, "Internal error: pre-computed key variable not found")
+		}
+
+		// Use the pre-computed key register
+		keyReg := symbol.Register
+
 		// Emit OpSetIndex: constructorReg[keyReg] = valueReg
 		c.emitOpCode(vm.OpSetIndex, property.Token.Line)
 		c.emitByte(byte(constructorReg)) // Object register
-		c.emitByte(byte(keyReg))         // Key register (computed at runtime)
+		c.emitByte(byte(keyReg))         // Key register (pre-computed)
 		c.emitByte(byte(valueReg))       // Value register
-		debugPrintf("// DEBUG addStaticProperty: Static computed property added to constructor\n")
+		debugPrintf("// DEBUG addStaticProperty: Static computed property (key from %s) added to constructor\n", varName)
 	} else {
 		// Regular static property - use OpSetProp
 		propertyNameIdx := c.chunk.AddConstant(vm.String(propertyName))
