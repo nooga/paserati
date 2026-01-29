@@ -9920,7 +9920,19 @@ startExecution:
 			} else if homeObject.Type() == TypeArray {
 				protoValue = vm.ArrayPrototype
 			} else if homeObject.Type() == TypeFunction {
-				protoValue = vm.FunctionPrototype
+				fn := homeObject.AsFunction()
+				if fn.Prototype.Type() != TypeNull && fn.Prototype.Type() != TypeUndefined {
+					protoValue = fn.Prototype
+				} else {
+					protoValue = vm.FunctionPrototype
+				}
+			} else if homeObject.Type() == TypeClosure {
+				cl := homeObject.AsClosure()
+				if cl.Fn.Prototype.Type() != TypeNull && cl.Fn.Prototype.Type() != TypeUndefined {
+					protoValue = cl.Fn.Prototype
+				} else {
+					protoValue = vm.FunctionPrototype
+				}
 			} else {
 				frame.ip = ip
 				vm.runtimeError("Cannot assign super property: home object has no prototype")
@@ -10075,7 +10087,19 @@ startExecution:
 			} else if homeObject.Type() == TypeArray {
 				protoValue = vm.ArrayPrototype
 			} else if homeObject.Type() == TypeFunction {
-				protoValue = vm.FunctionPrototype
+				fn := homeObject.AsFunction()
+				if fn.Prototype.Type() != TypeNull && fn.Prototype.Type() != TypeUndefined {
+					protoValue = fn.Prototype
+				} else {
+					protoValue = vm.FunctionPrototype
+				}
+			} else if homeObject.Type() == TypeClosure {
+				cl := homeObject.AsClosure()
+				if cl.Fn.Prototype.Type() != TypeNull && cl.Fn.Prototype.Type() != TypeUndefined {
+					protoValue = cl.Fn.Prototype
+				} else {
+					protoValue = vm.FunctionPrototype
+				}
 			} else {
 				frame.ip = ip
 				vm.runtimeError("Cannot access super property: home object has no prototype")
@@ -10186,8 +10210,15 @@ startExecution:
 						registers[destReg] = Undefined
 					}
 				}
+			} else if protoValue.Type() == TypeClosure || protoValue.Type() == TypeFunction || protoValue.Type() == TypeNativeFunctionWithProps {
+				// Prototype is a callable (parent class) - look up static property using handleCallableProperty
+				if result, handled := vm.handleCallableProperty(protoValue, propertyName); handled {
+					registers[destReg] = result
+				} else {
+					registers[destReg] = Undefined
+				}
 			} else {
-				// Prototype is not an object, return undefined
+				// Prototype is not an object or callable, return undefined
 				registers[destReg] = Undefined
 			}
 		case OpSetSuperComputed:
@@ -10224,7 +10255,19 @@ startExecution:
 			} else if homeObject.Type() == TypeArray {
 				protoValue = vm.ArrayPrototype
 			} else if homeObject.Type() == TypeFunction {
-				protoValue = vm.FunctionPrototype
+				fn := homeObject.AsFunction()
+				if fn.Prototype.Type() != TypeNull && fn.Prototype.Type() != TypeUndefined {
+					protoValue = fn.Prototype
+				} else {
+					protoValue = vm.FunctionPrototype
+				}
+			} else if homeObject.Type() == TypeClosure {
+				cl := homeObject.AsClosure()
+				if cl.Fn.Prototype.Type() != TypeNull && cl.Fn.Prototype.Type() != TypeUndefined {
+					protoValue = cl.Fn.Prototype
+				} else {
+					protoValue = vm.FunctionPrototype
+				}
 			} else {
 				frame.ip = ip
 				vm.runtimeError("Cannot assign super property: home object has no prototype")

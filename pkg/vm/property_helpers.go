@@ -63,6 +63,37 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		}
 	}
 
+	// Walk the closure's [[Prototype]] chain for inherited static properties (class inheritance)
+	// This handles `class C extends B { }` where C.staticMethod should find B.staticMethod
+	// Only walk user-defined class constructors (Closure/Function), stop at built-in prototypes
+	if closure != nil && closure.Fn.Prototype.Type() != TypeNull && closure.Fn.Prototype.Type() != TypeUndefined {
+		proto := closure.Fn.Prototype
+		for proto.Type() != TypeNull && proto.Type() != TypeUndefined {
+			switch proto.Type() {
+			case TypeClosure:
+				cl := proto.AsClosure()
+				if cl.Properties != nil {
+					if prop, exists := cl.Properties.GetOwn(propName); exists {
+						return prop, true
+					}
+				}
+				proto = cl.Fn.Prototype
+			case TypeFunction:
+				fn := proto.AsFunction()
+				if fn.Properties != nil {
+					if prop, exists := fn.Properties.GetOwn(propName); exists {
+						return prop, true
+					}
+				}
+				proto = fn.Prototype
+			default:
+				// Stop at built-in prototypes (NativeFunctionWithProps like Function.prototype)
+				// These are handled by the FunctionPrototype lookup below
+				proto = Null
+			}
+		}
+	}
+
 	// Special handling for "prototype" property (not available on bound functions)
 	if fn != nil && propName == "prototype" {
 		if closure != nil {
