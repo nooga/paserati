@@ -4546,6 +4546,14 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 		}
 	}
 
+	// Emit runtime validation that the superclass is a valid constructor
+	// Per ECMAScript: must be callable with [[Construct]], or null
+	// The VM will throw TypeError if invalid (e.g., arrow functions)
+	if superConstructorReg != BadRegister {
+		c.emitOpCode(vm.OpValidateSuperclass, node.Token.Line)
+		c.emitByte(byte(superConstructorReg))
+	}
+
 	// Enter class brand context for private field tracking
 	// Each class gets a unique brand ID to distinguish its private fields from other classes
 	c.enterClassBrand()

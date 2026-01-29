@@ -797,7 +797,13 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 	var fieldInitializers []parser.Statement
 
 	// Extract field initializers from class properties
+	// Only include instance (non-static) fields - static fields are initialized separately
 	for _, property := range node.Body.Properties {
+		// Skip static fields - they're handled by setupStaticMembers, not the constructor
+		if property.IsStatic {
+			continue
+		}
+
 		// Per ECMAScript: class fields without initializers are initialized to undefined
 		initValue := property.Value
 		if initValue == nil {

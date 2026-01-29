@@ -349,9 +349,20 @@ func (c *Compiler) compileOptionalChainingExpression(node *parser.OptionalChaini
 		}
 	}
 
-	// 5. Add property name string to constant pool and emit OpGetProp
-	nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
-	c.emitGetProp(propResultReg, objectReg, nameConstIdx, node.Token.Line)
+	// 5. Check for private field access (ECMAScript # fields)
+	if len(propertyName) > 0 && propertyName[0] == '#' {
+		// Private field access: obj?.#field
+		// Strip the # prefix for storage (internal representation)
+		fieldName := propertyName[1:]
+		// Use branded key to distinguish private fields with same name in different classes
+		brandedKey := c.getPrivateFieldKey(fieldName)
+		nameConstIdx := c.chunk.AddConstant(vm.String(brandedKey))
+		c.emitGetPrivateField(propResultReg, objectReg, nameConstIdx, node.Token.Line)
+	} else {
+		// Regular property access
+		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+		c.emitGetProp(propResultReg, objectReg, nameConstIdx, node.Token.Line)
+	}
 
 	// 6. Apply continuation chain if present (e.g., the .c.d in a?.b.c.d)
 	// Pass objectReg as the receiver for method calls in the continuation (e.g., a?.b() needs `a` as `this`)
@@ -409,8 +420,17 @@ func (c *Compiler) compileOptionalContinuationWithReceiver(cont parser.Expressio
 
 		// Now access the property
 		propertyName := c.extractPropertyName(node.Property)
-		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
-		c.emitGetProp(hint, objReg, nameConstIdx, line)
+		// Check for private field access (ECMAScript # fields)
+		if len(propertyName) > 0 && propertyName[0] == '#' {
+			// Private field access: base.#field in continuation
+			fieldName := propertyName[1:]
+			brandedKey := c.getPrivateFieldKey(fieldName)
+			nameConstIdx := c.chunk.AddConstant(vm.String(brandedKey))
+			c.emitGetPrivateField(hint, objReg, nameConstIdx, line)
+		} else {
+			nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+			c.emitGetProp(hint, objReg, nameConstIdx, line)
+		}
 		return hint, nil
 
 	case *parser.IndexExpression:
