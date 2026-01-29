@@ -8160,6 +8160,28 @@ startExecution:
 				}
 			} else {
 				// Regular private data field - set it (this also handles initial field creation)
+				// ECMAScript spec PrivateFieldAdd: If O.[[Extensible]] is false, throw a TypeError
+				// This only applies when ADDING a new field, not when updating an existing one
+				if !obj.HasPrivateField(fieldName) && !obj.IsExtensible() {
+					// Extract display name without brand prefix for error message
+					displayName := fieldName
+					if colonIdx := strings.Index(fieldName, ":"); colonIdx >= 0 {
+						displayName = fieldName[colonIdx+1:]
+					}
+					frame.ip = ip
+					vm.ThrowTypeError(fmt.Sprintf("Cannot add private field #%s to a non-extensible object", displayName))
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				obj.SetPrivateField(fieldName, registers[valReg])
 			}
 
@@ -8317,6 +8339,29 @@ startExecution:
 				return status, Undefined
 			}
 
+			// ECMAScript spec PrivateFieldAdd: If O.[[Extensible]] is false, throw a TypeError
+			// This applies when adding private methods to the object
+			if !obj.IsExtensible() {
+				// Extract display name without brand prefix for error message
+				displayName := methodName
+				if colonIdx := strings.Index(methodName, ":"); colonIdx >= 0 {
+					displayName = methodName[colonIdx+1:]
+				}
+				frame.ip = ip
+				vm.ThrowTypeError(fmt.Sprintf("Cannot add private method #%s to a non-extensible object", displayName))
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
 			// Store as private method (not writable)
 			obj.SetPrivateMethod(methodName, registers[valReg])
 
@@ -8448,6 +8493,29 @@ startExecution:
 				frame.ip = ip
 				status := vm.runtimeError("Cannot set private accessor '%s' on %s", fieldName, objVal.TypeName())
 				return status, Undefined
+			}
+
+			// ECMAScript spec PrivateFieldAdd: If O.[[Extensible]] is false, throw a TypeError
+			// This applies when adding private accessors to the object
+			if !obj.IsExtensible() {
+				// Extract display name without brand prefix for error message
+				displayName := fieldName
+				if colonIdx := strings.Index(fieldName, ":"); colonIdx >= 0 {
+					displayName = fieldName[colonIdx+1:]
+				}
+				frame.ip = ip
+				vm.ThrowTypeError(fmt.Sprintf("Cannot add private accessor #%s to a non-extensible object", displayName))
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
 			}
 
 			// Set up the private accessor using the SetPrivateAccessor method

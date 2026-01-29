@@ -1298,6 +1298,9 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 
 		// No trap, delegate to target
 		return objectGetPrototypeOfWithVM(vmInstance, []vm.Value{proxy.Target()})
+	case vm.TypePromise:
+		// For promises, return Promise.prototype
+		return vmInstance.PromisePrototype, nil
 	default:
 		// For primitive values, return null
 		return vm.Null, nil
