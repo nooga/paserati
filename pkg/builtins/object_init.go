@@ -1727,7 +1727,8 @@ func objectGetOwnPropertySymbolsImpl(args []vm.Value) (vm.Value, error) {
 		return vm.NewArray(), nil
 	}
 	obj := args[0]
-	if !obj.IsObject() {
+	// In ECMAScript, functions are objects and can have symbol properties
+	if !obj.IsObject() && !obj.IsCallable() {
 		return vm.NewArray(), nil
 	}
 	arr := vm.NewArray()
@@ -1735,6 +1736,26 @@ func objectGetOwnPropertySymbolsImpl(args []vm.Value) (vm.Value, error) {
 	if po := obj.AsPlainObject(); po != nil {
 		for _, s := range po.OwnSymbolKeys() {
 			arrObj.Append(s)
+		}
+	} else if obj.Type() == vm.TypeFunction {
+		// Functions store properties in their Properties field
+		fn := obj.AsFunction()
+		if fn.Properties != nil {
+			for _, s := range fn.Properties.OwnSymbolKeys() {
+				arrObj.Append(s)
+			}
+		}
+	} else if obj.Type() == vm.TypeClosure {
+		// Closures store properties in their Properties field
+		cl := obj.AsClosure()
+		if cl.Properties != nil {
+			for _, s := range cl.Properties.OwnSymbolKeys() {
+				arrObj.Append(s)
+			}
+		} else if cl.Fn.Properties != nil {
+			for _, s := range cl.Fn.Properties.OwnSymbolKeys() {
+				arrObj.Append(s)
+			}
 		}
 	}
 	// DictObject does not support symbols; returns empty array

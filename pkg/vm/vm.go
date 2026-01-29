@@ -2047,6 +2047,61 @@ startExecution:
 							cur = pv.AsPlainObject()
 						}
 					}
+				case TypeFunction:
+					// Check function's own symbol properties first
+					fn := AsFunction(objVal)
+					symKey := NewSymbolKey(propVal)
+					if fn.Properties != nil {
+						if _, ok := fn.Properties.GetOwnByKey(symKey); ok {
+							hasProperty = true
+							break
+						}
+					}
+					// Walk Function.prototype chain
+					if vm.FunctionPrototype.IsObject() {
+						for cur := vm.FunctionPrototype.AsPlainObject(); cur != nil; {
+							if _, ok := cur.GetOwnByKey(symKey); ok {
+								hasProperty = true
+								break
+							}
+							pv := cur.GetPrototype()
+							if !pv.IsObject() {
+								break
+							}
+							cur = pv.AsPlainObject()
+						}
+					}
+				case TypeClosure:
+					// Check closure's own properties first (shadows Fn.Properties)
+					closure := objVal.AsClosure()
+					symKey := NewSymbolKey(propVal)
+					if closure.Properties != nil {
+						if _, ok := closure.Properties.GetOwnByKey(symKey); ok {
+							hasProperty = true
+							break
+						}
+					}
+					// Then check Fn.Properties
+					if closure.Fn.Properties != nil {
+						if _, ok := closure.Fn.Properties.GetOwnByKey(symKey); ok {
+							hasProperty = true
+							break
+						}
+					}
+					// Walk Function.prototype chain
+					if vm.FunctionPrototype.IsObject() {
+						for cur := vm.FunctionPrototype.AsPlainObject(); cur != nil; {
+							if _, ok := cur.GetOwnByKey(symKey); ok {
+								hasProperty = true
+								break
+							}
+							pv := cur.GetPrototype()
+							if !pv.IsObject() {
+								break
+							}
+							cur = pv.AsPlainObject()
+						}
+					}
 				default:
 					hasProperty = false
 				}
