@@ -2076,6 +2076,10 @@ func (c *Compiler) compileObjectDestructuringAssignment(node *parser.ObjectDestr
 		return BadRegister, err
 	}
 
+	// Per ECMAScript spec: RequireObjectCoercible check
+	// Throw TypeError if value is null or undefined (even for empty patterns like {})
+	c.emitDestructuringNullCheck(tempReg, line)
+
 	// 2. For each property, compile: target = temp.propertyName
 	for _, prop := range node.Properties {
 		if prop.Target == nil {
