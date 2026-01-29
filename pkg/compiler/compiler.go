@@ -453,6 +453,11 @@ type Compiler struct {
 	currentPrivateBrand      int                // Current class brand ID (0 if not in a class)
 	currentPrivateBrandInfo  PrivateBrandInfo   // Current class brand info including declared fields
 	privateBrandStack        []PrivateBrandInfo // Stack for nested classes (with declared field tracking)
+
+	// --- Computed Field Key Pre-evaluation ---
+	// Maps property index to synthetic variable name for pre-computed field keys
+	// Per ECMAScript, computed property keys must be evaluated at class definition time, not instantiation
+	computedFieldKeyVars map[int]string
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -4561,6 +4566,19 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 
 	// Declare all private fields this class has
 	c.declareClassPrivateNames(node)
+
+	// Pre-evaluate computed field keys at class definition time
+	// Per ECMAScript, computed property keys ([expr]) must be evaluated when the class
+	// is defined, not when instances are created
+	if err := c.preEvaluateComputedFieldKeys(node); err != nil {
+		if prevSymbolTable != nil {
+			c.currentSymbolTable = prevSymbolTable
+		}
+		if needToFreeSuperReg {
+			c.regAlloc.Free(superConstructorReg)
+		}
+		return BadRegister, err
+	}
 
 	// 1. Create constructor function
 	constructorReg, err := c.compileConstructor(node, BadRegister)

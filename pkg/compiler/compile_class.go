@@ -120,6 +120,59 @@ func (c *Compiler) tryExtractConstantComputedPropertyName(expr parser.Expression
 	}
 }
 
+// preEvaluateComputedFieldKeys evaluates computed property keys at class definition time
+// Per ECMAScript, the key expression in `[expr] = value` must be evaluated when the class
+// is defined, not when instances are created. This function:
+// 1. Iterates through instance (non-static) fields with computed keys
+// 2. Allocates a register and compiles the key expression into it
+// 3. Defines a synthetic variable name that can be captured by the constructor closure
+// 4. Returns a mapping from property index to synthetic variable name
+func (c *Compiler) preEvaluateComputedFieldKeys(node *parser.ClassDeclaration) errors.PaseratiError {
+	c.computedFieldKeyVars = make(map[int]string)
+
+	for i, property := range node.Body.Properties {
+		// Skip static fields - they're handled separately in setupStaticMembers
+		if property.IsStatic {
+			continue
+		}
+
+		// Check if this is a computed property key
+		computedKey, isComputed := property.Key.(*parser.ComputedPropertyName)
+		if !isComputed {
+			continue
+		}
+
+		// Create a synthetic variable name for this computed key
+		varName := fmt.Sprintf("__cfk_%d__", i)
+
+		// Allocate a register for this key
+		keyReg := c.regAlloc.Alloc()
+
+		// Compile the key expression
+		_, err := c.compileNode(computedKey.Expr, keyReg)
+		if err != nil {
+			c.regAlloc.Free(keyReg)
+			return err
+		}
+
+		// Convert to property key (calls ToString/ToPrimitive as needed)
+		c.emitOpCode(vm.OpToPropertyKey, property.Token.Line)
+		c.emitByte(byte(keyReg))
+		c.emitByte(byte(keyReg))
+
+		// Define the synthetic variable in the symbol table
+		// This will be captured as an upvalue by the constructor closure
+		c.currentSymbolTable.Define(varName, keyReg)
+
+		// Track the mapping
+		c.computedFieldKeyVars[i] = varName
+
+		debugPrintf("// DEBUG preEvaluateComputedFieldKeys: Pre-evaluated key for property %d -> %s (R%d)\n", i, varName, keyReg)
+	}
+
+	return nil
+}
+
 // declareClassPrivateNames scans a class body and declares all private field names
 // that this class defines. This must be called after enterClassBrand and before
 // compiling any methods, so that nested classes can distinguish their own private
@@ -304,6 +357,19 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	// This must happen BEFORE compiling any methods so nested classes can distinguish
 	// their own private fields from the outer class's private fields
 	c.declareClassPrivateNames(node)
+
+	// 1.7. Pre-evaluate computed field keys at class definition time
+	// Per ECMAScript, computed property keys ([expr]) must be evaluated when the class
+	// is defined, not when instances are created
+	if err := c.preEvaluateComputedFieldKeys(node); err != nil {
+		if prevSymbolTable != nil {
+			c.currentSymbolTable = prevSymbolTable
+		}
+		if needToFreeSuperReg {
+			c.regAlloc.Free(superConstructorReg)
+		}
+		return BadRegister, err
+	}
 
 	// 2. Create constructor function
 	constructorReg, err := c.compileConstructor(node, superConstructorReg)
@@ -798,7 +864,7 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 
 	// Extract field initializers from class properties
 	// Only include instance (non-static) fields - static fields are initialized separately
-	for _, property := range node.Body.Properties {
+	for i, property := range node.Body.Properties {
 		// Skip static fields - they're handled by setupStaticMembers, not the constructor
 		if property.IsStatic {
 			continue
@@ -811,6 +877,21 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 			initValue = &parser.UndefinedLiteral{Token: property.Token}
 		}
 
+		// Determine the property key to use
+		// For computed keys, use the pre-evaluated variable (captured as upvalue)
+		// For static keys, use the original key
+		var propertyKey parser.Expression
+		if varName, hasPreComputed := c.computedFieldKeyVars[i]; hasPreComputed {
+			// Use the pre-computed key variable - wrap in ComputedPropertyName to indicate
+			// this should be evaluated as an expression (not a static property name)
+			propertyKey = &parser.ComputedPropertyName{
+				Expr: &parser.Identifier{Token: property.Token, Value: varName},
+			}
+			debugPrintf("// DEBUG injectFieldInitializers: Using pre-computed key %s for property %d\n", varName, i)
+		} else {
+			propertyKey = property.Key
+		}
+
 		// Create assignment statement: this.propertyName = initializerExpression
 		// Mark as field initializer so eval inside can detect this context and forbid 'arguments'
 		assignment := &parser.AssignmentExpression{
@@ -819,7 +900,7 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 			Left: &parser.MemberExpression{
 				Token:    property.Token,
 				Object:   &parser.ThisExpression{Token: property.Token},
-				Property: property.Key,
+				Property: propertyKey,
 			},
 			Value:              initValue,
 			IsFieldInitializer: true, // Per ES spec, eval in field initializers forbids 'arguments'
