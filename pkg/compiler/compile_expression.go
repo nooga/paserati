@@ -1806,7 +1806,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		return c.compileReflectCall(node, hint)
 	}
 
-	// Check if this is a __setPrivateAccessor__ or __setPrivateMethod__ marker call (synthetic call from class compilation)
+	// Check if this is a __setPrivateAccessor__, __setPrivateMethod__, or __copyPrivateMethod__ marker call (synthetic call from class compilation)
 	if memberExpr, ok := node.Function.(*parser.MemberExpression); ok {
 		if propIdent, ok := memberExpr.Property.(*parser.Identifier); ok {
 			if propIdent.Value == "__setPrivateAccessor__" {
@@ -1814,6 +1814,9 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			}
 			if propIdent.Value == "__setPrivateMethod__" {
 				return c.compilePrivateMethodSetup(node, memberExpr.Object, hint, &tempRegs)
+			}
+			if propIdent.Value == "__copyPrivateMethod__" {
+				return c.compilePrivateMethodCopy(node, memberExpr.Object, hint, &tempRegs)
 			}
 		}
 	}
@@ -2996,6 +2999,62 @@ func (c *Compiler) compilePrivateMethodSetup(node *parser.CallExpression, objExp
 
 	// Emit OpSetPrivateMethod: obj, method, nameIdx
 	c.emitSetPrivateMethod(objReg, methodReg, nameIdx, line)
+
+	// Return undefined as the result
+	if hint == BadRegister {
+		hint = c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, hint)
+	}
+	c.emitLoadUndefined(hint, line)
+	return hint, nil
+}
+
+// compilePrivateMethodCopy compiles a synthetic __copyPrivateMethod__ call
+// This copies a pre-compiled private method from the constructor to the instance.
+// Per ECMAScript spec, private methods should be the same function object for all instances.
+// Arguments: [name: string]
+func (c *Compiler) compilePrivateMethodCopy(node *parser.CallExpression, objExpr parser.Expression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
+	line := node.Token.Line
+	debugPrintf("// DEBUG compilePrivateMethodCopy: called\n")
+
+	// Verify we have exactly 1 argument (the field name)
+	if len(node.Arguments) != 1 {
+		return BadRegister, NewCompileError(node, "__copyPrivateMethod__ requires exactly 1 argument")
+	}
+
+	// Get the field name (should be a string literal)
+	nameArg, ok := node.Arguments[0].(*parser.StringLiteral)
+	if !ok {
+		return BadRegister, NewCompileError(node.Arguments[0], "__copyPrivateMethod__ name must be a string literal")
+	}
+
+	// Compile the object (should be 'this' - the instance)
+	objReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, objReg)
+	_, err := c.compileNode(objExpr, objReg)
+	if err != nil {
+		return BadRegister, err
+	}
+
+	// Load new.target (the constructor) to get the pre-compiled method
+	constructorReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, constructorReg)
+	c.emitLoadNewTarget(constructorReg, line)
+
+	// Get the method from constructor using the storage key "__ipm_<brandedKey>"
+	brandedKey := c.getPrivateFieldKey(nameArg.Value)
+	storageKey := "__ipm_" + brandedKey
+	storageKeyIdx := c.chunk.AddConstant(vm.String(storageKey))
+
+	methodReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, methodReg)
+	c.emitGetProp(methodReg, constructorReg, storageKeyIdx, line)
+
+	// Store the method on the instance using OpSetPrivateMethod
+	nameIdx := c.chunk.AddConstant(vm.String(brandedKey))
+	c.emitSetPrivateMethod(objReg, methodReg, nameIdx, line)
+
+	debugPrintf("// DEBUG compilePrivateMethodCopy: copied method '%s' from constructor to instance\n", nameArg.Value)
 
 	// Return undefined as the result
 	if hint == BadRegister {

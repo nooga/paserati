@@ -525,6 +525,16 @@ func (c *Compiler) emitSetProp(obj, val Register, nameConstIdx uint16, line int)
 	c.emitUint16(nameConstIdx)
 }
 
+// emitSetFunctionName emits OpSetFunctionName FuncReg, NameConstIdx(Uint16)
+// Per ECMAScript DefineField step 7: if the field initializer is an anonymous function,
+// set the function's name to the field name
+func (c *Compiler) emitSetFunctionName(funcReg Register, name string, line int) {
+	nameConstIdx := c.chunk.AddConstant(vm.String(name))
+	c.emitOpCode(vm.OpSetFunctionName, line)
+	c.emitByte(byte(funcReg))
+	c.emitUint16(nameConstIdx)
+}
+
 // emitDefineDataProperty emits OpDefineDataProperty ObjReg, ValueReg, NameConstIdx(Uint16)
 // This uses DefineOwnProperty semantics and can overwrite any existing property including accessors.
 // Used for object literal data properties.

@@ -237,7 +237,8 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		target := args[0]
 		propKey := args[1].ToString()
 
-		if !target.IsObject() {
+		// In ECMAScript, Reflect.has works with any object, including functions
+		if !target.IsObject() && !target.IsCallable() {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.has called on non-object")
 		}
 
@@ -254,6 +255,24 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				hasProperty = true
 			} else if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 && idx < arr.Length() {
 				hasProperty = true
+			}
+		case vm.TypeFunction:
+			// Functions have properties like name, length, prototype
+			fn := target.AsFunction()
+			if propKey == "name" || propKey == "length" || propKey == "prototype" {
+				hasProperty = true
+			} else if fn.Properties != nil {
+				hasProperty = fn.Properties.Has(propKey)
+			}
+		case vm.TypeClosure:
+			// Closures also have properties
+			cl := target.AsClosure()
+			if propKey == "name" || propKey == "length" || propKey == "prototype" {
+				hasProperty = true
+			} else if cl.Properties != nil {
+				hasProperty = cl.Properties.Has(propKey)
+			} else if cl.Fn.Properties != nil {
+				hasProperty = cl.Fn.Properties.Has(propKey)
 			}
 		}
 

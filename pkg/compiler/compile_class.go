@@ -918,6 +918,9 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 	// Add private methods as field initializers
 	// Private methods are stored via OpSetPrivateMethod (not writable)
 	// This allows them to be referenced (e.g., const fn = this.#method) but not reassigned
+	// NOTE: The method function is pre-compiled and stored on the constructor in setupStaticMembers.
+	// Here we just copy the reference from the constructor to each instance, ensuring all instances
+	// share the same function object (per ECMAScript spec).
 	// NOTE: Private getters/setters are handled separately below
 	for _, method := range node.Body.Methods {
 		if method.Kind != "constructor" && !method.IsStatic {
@@ -933,17 +936,17 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 				fieldName := methodName[1:]
 
 				// Create a marker call that we'll recognize during compilation
-				// this.__setPrivateMethod__(fieldName, methodFunction)
+				// this.__copyPrivateMethod__(fieldName)
+				// This copies the pre-compiled method from new.target (constructor) to this instance
 				callExpr := &parser.CallExpression{
 					Token: method.Token,
 					Function: &parser.MemberExpression{
 						Token:    method.Token,
 						Object:   &parser.ThisExpression{Token: method.Token},
-						Property: &parser.Identifier{Token: method.Token, Value: "__setPrivateMethod__"},
+						Property: &parser.Identifier{Token: method.Token, Value: "__copyPrivateMethod__"},
 					},
 					Arguments: []parser.Expression{
 						&parser.StringLiteral{Token: method.Token, Value: fieldName},
-						method.Value, // The function literal
 					},
 				}
 
@@ -953,7 +956,7 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 				}
 
 				fieldInitializers = append(fieldInitializers, fieldInitStatement)
-				debugPrintf("// DEBUG injectFieldInitializers: Added private method initializer for '%s'\n", methodName)
+				debugPrintf("// DEBUG injectFieldInitializers: Added private method copy for '%s'\n", methodName)
 			}
 		}
 	}
@@ -1218,7 +1221,59 @@ func (c *Compiler) setupStaticMembers(node *parser.ClassDeclaration, constructor
 		}
 	}
 
+	// Store instance private methods on the constructor for sharing across instances
+	// Per ECMAScript spec, private methods should be the same function object for all instances
+	// We compile them once here and store with a special key prefix "__ipm_"
+	for _, method := range node.Body.Methods {
+		if method.Kind != "constructor" && !method.IsStatic {
+			methodName := c.extractPropertyName(method.Key)
+			if len(methodName) > 0 && methodName[0] == '#' {
+				// Skip private getters/setters - they have their own handling
+				if method.Kind == "getter" || method.Kind == "setter" {
+					continue
+				}
+
+				// Compile the instance private method and store on constructor
+				err := c.storeInstancePrivateMethodOnConstructor(method, constructorReg)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	debugPrintf("// DEBUG setupStaticMembers: Static members setup complete for class '%s'\n", node.Name.Value)
+	return nil
+}
+
+// storeInstancePrivateMethodOnConstructor compiles an instance private method and stores it
+// on the constructor for sharing across all instances. Per ECMAScript spec, private methods
+// should return the same function object for all instances of the class.
+func (c *Compiler) storeInstancePrivateMethodOnConstructor(method *parser.MethodDefinition, constructorReg Register) errors.PaseratiError {
+	methodName := c.extractPropertyName(method.Key)
+	debugPrintf("// DEBUG storeInstancePrivateMethodOnConstructor: Storing instance private method '%s' on constructor\n", methodName)
+
+	// Compile the method function with correct name hint
+	// All class code is strict mode per ECMAScript spec
+	funcConstIndex, freeSymbols, err := c.compileFunctionLiteralStrict(method.Value, methodName)
+	if err != nil {
+		return err
+	}
+
+	// Create closure for method
+	methodReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(methodReg)
+	c.emitClosure(methodReg, funcConstIndex, method.Value, freeSymbols)
+
+	// Store on constructor using special key prefix "__ipm_" (instance private method)
+	// This allows us to retrieve it during instance creation
+	fieldName := methodName[1:] // Strip the # prefix
+	brandedKey := c.getPrivateFieldKey(fieldName)
+	storageKey := "__ipm_" + brandedKey
+	storageKeyIdx := c.chunk.AddConstant(vm.String(storageKey))
+	c.emitSetProp(constructorReg, methodReg, storageKeyIdx, method.Token.Line)
+
+	debugPrintf("// DEBUG storeInstancePrivateMethodOnConstructor: Method '%s' stored with key '%s'\n", methodName, storageKey)
 	return nil
 }
 
@@ -1271,7 +1326,17 @@ func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constr
 	defer c.regAlloc.Free(valueReg)
 
 	// Compile the property value (if it has an initializer)
+	// Per ECMAScript spec (DefineField step 7), if the initializer is an anonymous function,
+	// set its name to the field name
+	isAnonymousFunction := false
 	if property.Value != nil {
+		// Check if the initializer is an anonymous function (for SetFunctionName)
+		if funcLit, ok := property.Value.(*parser.FunctionLiteral); ok && funcLit.Name == nil {
+			isAnonymousFunction = true
+		} else if _, ok := property.Value.(*parser.ArrowFunctionLiteral); ok {
+			isAnonymousFunction = true
+		}
+
 		// Per ECMAScript, static field initializers are evaluated with `this` = class constructor
 		// We wrap the initializer in a function and call it with `this` = constructor
 		// This ensures arrow functions capture the correct `this` value
@@ -1307,6 +1372,12 @@ func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constr
 		c.emitByte(byte(funcReg))        // Function register
 		c.emitByte(byte(constructorReg)) // This register (constructor)
 		c.emitByte(0)                    // Argument count (0)
+
+		// Per ECMAScript DefineField step 7: if IsAnonymousFunctionDefinition is true,
+		// set the function's name to the field name
+		if isAnonymousFunction {
+			c.emitSetFunctionName(valueReg, propertyName, property.Token.Line)
+		}
 	} else {
 		// No initializer, use undefined
 		c.emitLoadUndefined(valueReg, property.Token.Line)

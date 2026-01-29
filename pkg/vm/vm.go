@@ -5382,6 +5382,33 @@ startExecution:
 			regexValue := vm.NewRegExpDeferred(pattern, flags)
 			registers[destReg] = regexValue
 
+		case OpSetFunctionName:
+			// OpSetFunctionName: Rx NameIdx(16bit)
+			// Per ECMAScript DefineField step 7: if the field value is an anonymous function,
+			// set its name to the field name
+			funcReg := code[ip]
+			nameIdxHi := code[ip+1]
+			nameIdxLo := code[ip+2]
+			ip += 3
+
+			nameIdx := int(uint16(nameIdxHi)<<8 | uint16(nameIdxLo))
+			name := AsString(constants[nameIdx])
+
+			funcVal := registers[funcReg]
+			// Only set name if the function currently has no name (anonymous)
+			if funcVal.Type() == TypeClosure {
+				fn := funcVal.AsClosure().Fn
+				if fn.Name == "" {
+					fn.Name = name
+				}
+			} else if funcVal.Type() == TypeFunction {
+				fn := AsFunction(funcVal)
+				if fn.Name == "" {
+					fn.Name = name
+				}
+			}
+			// If not a function, just ignore (the value might be something else)
+
 		case OpDefineAccessor:
 			objReg := code[ip]
 			getterReg := code[ip+1]

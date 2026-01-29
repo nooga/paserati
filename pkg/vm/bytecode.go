@@ -165,6 +165,10 @@ const (
 	// --- RegExp Creation ---
 	OpMakeRegExp OpCode = 163 // Rx PatternIdx(16bit) FlagsIdx(16bit): Create new RegExp from pattern and flags constants
 
+	// --- Function Name Setting ---
+	// Per ECMAScript DefineField step 7: set name of anonymous function assigned to field
+	OpSetFunctionName OpCode = 164 // Rx NameIdx(16bit): If Rx is a function without a name, set its name to constants[NameIdx]
+
 	OpSetThis       OpCode = 82 // Ry: Set 'this' value in current call context from register Ry
 	OpLoadNewTarget OpCode = 81 // Rx: Load 'new.target' value from current call context into register Rx
 	// --- END NEW ---
@@ -484,6 +488,8 @@ func (op OpCode) String() string {
 		return "OpDeleteWithProperty"
 	case OpMakeRegExp:
 		return "OpMakeRegExp"
+	case OpSetFunctionName:
+		return "OpSetFunctionName"
 	case OpNew:
 		return "OpNew"
 	case OpSpreadNew:
@@ -1092,6 +1098,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.deleteWithPropertyInstruction(builder, instruction.String(), offset) // Rx NameIdx(16bit) Fallback
 	case OpMakeRegExp:
 		return c.registerConstantConstantInstruction(builder, instruction.String(), offset) // Rx PatternIdx(16bit) FlagsIdx(16bit)
+	case OpSetFunctionName:
+		return c.registerConstantInstruction(builder, instruction.String(), offset, true) // Rx NameIdx(16bit)
 	case OpNew:
 		return c.newInstruction(builder, instruction.String(), offset)
 	case OpSpreadNew:
