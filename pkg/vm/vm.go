@@ -6871,6 +6871,16 @@ startExecution:
 					if closure.Properties == nil {
 						closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
 					}
+					// Check if prototype already exists and is non-writable
+					// Per ECMAScript, class constructors have prototype: {writable: false, configurable: false}
+					if key == "prototype" {
+						if _, w, _, _, exists := closure.Properties.GetOwnDescriptor("prototype"); exists && !w {
+							// Property exists and is not writable - throw TypeError
+							frame.ip = ip
+							vm.ThrowTypeError("Cannot assign to read only property 'prototype' of function")
+							return InterpretRuntimeError, Undefined
+						}
+					}
 					// Check if this is an accessor property with a setter
 					if _, setter, _, _, ok := closure.Properties.GetOwnAccessor(key); ok && setter.Type() != TypeUndefined {
 						// Call the setter with the value

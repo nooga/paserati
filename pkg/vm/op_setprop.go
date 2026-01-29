@@ -225,8 +225,18 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			return true, InterpretOK, *valueToSet
 		}
 		if propName == "prototype" {
-			// For class constructors, prototype must be: writable=false, enumerable=false, configurable=false
-			w, e, c := false, false, false
+			// Check if prototype already exists and is non-writable
+			if fn.Properties != nil {
+				if _, w, _, _, exists := fn.Properties.GetOwnDescriptor("prototype"); exists && !w {
+					vm.ThrowTypeError("Cannot assign to read only property 'prototype' of function")
+					return false, InterpretRuntimeError, Undefined
+				}
+			}
+			// Per ECMAScript:
+			// - Class constructors: prototype is {writable: false, enumerable: false, configurable: false}
+			// - Regular functions: prototype is {writable: true, enumerable: false, configurable: false}
+			e, c := false, false
+			w := !fn.IsClassConstructor // writable = true for regular functions, false for class constructors
 			fn.Properties.DefineOwnProperty("prototype", *valueToSet, &w, &e, &c)
 		} else {
 			fn.Properties.SetOwn(propName, *valueToSet)
@@ -286,8 +296,21 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			return true, InterpretOK, *valueToSet
 		}
 		if propName == "prototype" {
-			// For class constructors, prototype must be: writable=false, enumerable=false, configurable=false
-			w, e, c := false, false, false
+			// Check if prototype already exists and is non-writable
+			// Per ECMAScript, class constructors have prototype: {writable: false, configurable: false}
+			// Attempting to set it should throw TypeError
+			if closure.Properties != nil {
+				if _, w, _, _, exists := closure.Properties.GetOwnDescriptor("prototype"); exists && !w {
+					// Property exists and is not writable - throw TypeError
+					vm.ThrowTypeError("Cannot assign to read only property 'prototype' of function")
+					return false, InterpretRuntimeError, Undefined
+				}
+			}
+			// Per ECMAScript:
+			// - Class constructors: prototype is {writable: false, enumerable: false, configurable: false}
+			// - Regular functions: prototype is {writable: true, enumerable: false, configurable: false}
+			e, c := false, false
+			w := !closure.Fn.IsClassConstructor // writable = true for regular functions, false for class constructors
 			closure.Properties.DefineOwnProperty("prototype", *valueToSet, &w, &e, &c)
 		} else {
 			closure.Properties.SetOwn(propName, *valueToSet)
