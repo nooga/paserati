@@ -4476,6 +4476,8 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 	// capture the inner class name binding (per spec step 6a)
 	var superConstructorReg Register = BadRegister
 	var needToFreeSuperReg bool
+	var cachedProtoReg Register = BadRegister
+	var needToFreeCachedProtoReg bool
 	if node.SuperClass != nil {
 		if _, isNull := node.SuperClass.(*parser.NullLiteral); !isNull {
 			// Check if it's an Identifier or GenericTypeRef - we can resolve by name
@@ -4554,9 +4556,13 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 	// Emit runtime validation that the superclass is a valid constructor
 	// Per ECMAScript: must be callable with [[Construct]], or null
 	// The VM will throw TypeError if invalid (e.g., arrow functions)
+	// OpValidateSuperclass also caches the prototype value to avoid duplicate access
 	if superConstructorReg != BadRegister {
+		cachedProtoReg = c.regAlloc.Alloc()
+		needToFreeCachedProtoReg = true
 		c.emitOpCode(vm.OpValidateSuperclass, node.Token.Line)
 		c.emitByte(byte(superConstructorReg))
+		c.emitByte(byte(cachedProtoReg))
 	}
 
 	// Enter class brand context for private field tracking
@@ -4603,13 +4609,16 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 	}
 
 	// 2. Set up prototype object with methods
-	err = c.setupClassPrototype(node, constructorReg, superConstructorReg)
+	err = c.setupClassPrototype(node, constructorReg, superConstructorReg, cachedProtoReg)
 	if err != nil {
 		return BadRegister, err
 	}
 
 	if needToFreeSuperReg {
 		c.regAlloc.Free(superConstructorReg)
+	}
+	if needToFreeCachedProtoReg {
+		c.regAlloc.Free(cachedProtoReg)
 	}
 
 	// 3. Set up static members on the constructor

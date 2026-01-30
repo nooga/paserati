@@ -5854,19 +5854,22 @@ startExecution:
 			}
 
 		case OpValidateSuperclass:
-			// OpValidateSuperclass: Rx
+			// OpValidateSuperclass: Rx Ry
 			// Validates that the value in Rx is a valid superclass:
 			// - Must be callable (a function/constructor), OR
 			// - Must be null
 			// Per ECMAScript 15.7.14 ClassDefinitionEvaluation step 5
+			// Also retrieves and caches the prototype value in Ry to avoid duplicate access
 			superclassReg := code[ip]
-			ip++
+			protoDestReg := code[ip+1]
+			ip += 2
 
 			superclassVal := registers[superclassReg]
 
-			// null is valid (class extends null)
+			// null is valid (class extends null) - output null for prototype too
 			if superclassVal.Type() == TypeNull {
-				// Valid - do nothing
+				// Valid - store null as the prototype
+				registers[protoDestReg] = Null
 			} else if !vm.IsConstructor(superclassVal) {
 				// Not a constructor and not null - throw TypeError
 				// Per ECMAScript spec 15.7.14 step 5.f: "if IsConstructor(superclass) is false, throw TypeError"
@@ -5965,6 +5968,10 @@ startExecution:
 					ip = frame.ip
 					continue
 				}
+
+				// Store the validated prototype in the output register for later use
+				// This avoids needing to access .prototype again during class setup
+				registers[protoDestReg] = protoVal
 			}
 
 		case OpArrayCopy:

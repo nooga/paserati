@@ -257,6 +257,8 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	// capture the inner class name binding (per spec step 6a)
 	var superConstructorReg Register = BadRegister
 	var needToFreeSuperReg bool
+	var cachedProtoReg Register = BadRegister
+	var needToFreeCachedProtoReg bool
 	if node.SuperClass != nil {
 		// Check if extending null (class extends null)
 		if _, isNull := node.SuperClass.(*parser.NullLiteral); isNull {
@@ -342,8 +344,12 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 			// Emit runtime validation that the superclass is a valid constructor
 			// Per ECMAScript: must be callable with [[Construct]], or null
 			// The VM will throw TypeError if invalid
+			// OpValidateSuperclass also caches the prototype value to avoid duplicate access
+			cachedProtoReg = c.regAlloc.Alloc()
+			needToFreeCachedProtoReg = true
 			c.emitOpCode(vm.OpValidateSuperclass, node.Token.Line)
 			c.emitByte(byte(superConstructorReg))
+			c.emitByte(byte(cachedProtoReg))
 		}
 	}
 
@@ -395,7 +401,7 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	}
 
 	// 3. Set up prototype object with methods
-	err = c.setupClassPrototype(node, constructorReg, superConstructorReg)
+	err = c.setupClassPrototype(node, constructorReg, superConstructorReg, cachedProtoReg)
 	if err != nil {
 		if prevSymbolTable != nil {
 			c.currentSymbolTable = prevSymbolTable
@@ -405,6 +411,9 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 
 	if needToFreeSuperReg {
 		c.regAlloc.Free(superConstructorReg)
+	}
+	if needToFreeCachedProtoReg {
+		c.regAlloc.Free(cachedProtoReg)
 	}
 
 	// 4. Set up static members on the constructor
@@ -577,7 +586,7 @@ func (c *Compiler) createDefaultConstructor(node *parser.ClassDeclaration) *pars
 
 // setupClassPrototype sets up the prototype object with class methods
 // superConstructorReg is the register holding the evaluated superclass constructor (BadRegister if none)
-func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructorReg Register, superConstructorReg Register) errors.PaseratiError {
+func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructorReg Register, superConstructorReg Register, cachedSuperProtoReg Register) errors.PaseratiError {
 	debugPrintf("// DEBUG setupClassPrototype: Setting up prototype for class '%s'\n", node.Name.Value)
 
 	// Create prototype object - if inheriting, use parent instance, otherwise empty object
@@ -623,7 +632,13 @@ func (c *Compiler) setupClassPrototype(node *parser.ClassDeclaration, constructo
 			resultReg := c.regAlloc.Alloc()
 			defer c.regAlloc.Free(resultReg)
 			c.emitCall(resultReg, callRegs, 2, node.Token.Line)
+		} else if cachedSuperProtoReg != BadRegister {
+			// Use the cached prototype from OpValidateSuperclass to avoid duplicate .prototype access
+			// Call Object.create(cachedSuperProtoReg) to create the derived prototype
+			debugPrintf("// DEBUG setupClassPrototype: Using cached prototype from OpValidateSuperclass\n")
+			c.createInheritedPrototypeFromCachedProto(cachedSuperProtoReg, prototypeReg, node.Token.Line)
 		} else {
+			// Fallback path (shouldn't normally happen for non-null superclasses)
 			// Get the superclass name for compilation
 			var superClassName string
 			var isNamedRef bool
@@ -1764,6 +1779,33 @@ func (c *Compiler) createInheritedPrototypeFromReg(parentConstructorReg Register
 	c.emitCall(prototypeReg, callRegs, 1, line)
 
 	return nil
+}
+
+// createInheritedPrototypeFromCachedProto creates a prototype via Object.create(cachedProto)
+// using an already-retrieved prototype value (cached from OpValidateSuperclass).
+// This avoids duplicate access to the superclass's .prototype property.
+func (c *Compiler) createInheritedPrototypeFromCachedProto(cachedProtoReg Register, prototypeReg Register, line int) {
+	// Call Object.create(cachedProtoReg)
+	objectCreateReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(objectCreateReg)
+
+	objectGlobalIdx := c.GetOrAssignGlobalIndex("Object")
+	objectReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(objectReg)
+	c.emitGetGlobal(objectReg, objectGlobalIdx, line)
+
+	createNameIdx := c.chunk.AddConstant(vm.String("create"))
+	c.emitGetProp(objectCreateReg, objectReg, createNameIdx, line)
+
+	callRegs := c.regAlloc.AllocContiguous(2)
+	defer func() {
+		c.regAlloc.Free(callRegs)
+		c.regAlloc.Free(callRegs + 1)
+	}()
+
+	c.emitMove(callRegs, objectCreateReg, line)
+	c.emitMove(callRegs+1, cachedProtoReg, line)
+	c.emitCall(prototypeReg, callRegs, 1, line)
 }
 
 // getParentConstructorArity determines the number of parameters for a parent class constructor
