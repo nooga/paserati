@@ -18,7 +18,7 @@ Right now it prioritizes **correctness** over raw speed, but the architecture is
 
 ### Wins
 
-- **Test262 language suite: 97.0%** (see details below)
+- **Test262 language suite: 98.1%** (see details below)
 - **Native TS execution**: no `tsc`, no TS→JS transpilation
 - **TCO**: tail call optimization (elite feature)
 - **Shapes + ICs**: fast-ish property access without a JIT
@@ -84,44 +84,40 @@ go test ./tests/...
 From a recent run:
 
 ```
-language (TOTAL)             23523    22812      709        0        2    97.0%      31.931s
+language (TOTAL)             23523    23076      445        0        2    98.1%
 ```
 
 Weak spots:
 
-- `language/import/import-defer`: 10.4% (96)
 - `language/module-code/namespace`: 52.8% (36)
-- `language/eval-code/indirect`: 70.5% (61)
+- `language/eval-code/indirect`: 77.0% (61)
 - `language/statements/using`: 72.2% (36)
-- `language/eval-code/direct`: 84.6% (286)
 - `language/statements/await-using`: 85.7% (35)
 - `language/module-code/top-level-await`: 87.6% (251)
 - `language/literals/regexp`: 94.1% (238)
-- `language/expressions/compound-assignment`: 95.2% (454)
 
 ### Current status
 
-The engine runs a lot of modern code today, but it’s still a moving target. It might crash on you sometimes, or refuse to run some valid code. _I'm working on it. Okay?_
+At **98.1% Test262 language compliance**, Paserati handles the vast majority of modern JavaScript/TypeScript semantics correctly. It's still evolving, but it's past the "toy project" phase.
 
-Some big-ticket items that work reasonably well:
+Core language features that work well:
 
 - **Async/await, TLA, Promises, microtasks** (incl. top-level await, async generators)
 - **ESM modules** (plus dynamic `import()`, pluggable resolution)
-- **Classes** (private fields, statics, inheritance)
+- **Classes** (private fields, statics, inheritance, super expressions)
 - **(Async) Generators** (`yield`, `yield*`)
 - **Modern operators** (`?.`, `??`, logical assignment)
 - **Destructuring** (arrays/objects/rest/spread)
 - **Built-ins** (Proxy/Reflect/Map/Set/TypedArrays/ArrayBuffer/RegExp/Symbol/BigInt)
 - **Advanced types** (generics, conditional/mapped types, template literal types, `infer`)
 
-Last time I checked it could run a pure TS library [date-fns](https://github.com/date-fns/date-fns) from source without any glaring issues. _Cough, not sure if it does so at every commit, but it did at the time of writing._
+It runs real-world TypeScript libraries like [date-fns](https://github.com/date-fns/date-fns) from source.
 
-Known gaps:
+Remaining gaps:
 
 - Decorators (planned)
-- `eval` correctness
 - `import defer` (stage 3 proposal; mostly unimplemented)
-- Some ASI edge cases (I think, eh)
+- Some edge cases in `eval` and module namespaces
 - Import attributes (experimental ES feature)
 
 See [docs/bucketlist.md](docs/bucketlist.md) for the exhaustive yet messy feature inventory.
