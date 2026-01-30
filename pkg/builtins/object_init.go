@@ -763,16 +763,26 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj.Properties.SetOwnNonEnumerable("keys", vm.NewNativeFunction(1, false, "keys", func(args []vm.Value) (vm.Value, error) {
 			return objectKeysWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwnNonEnumerable("values", vm.NewNativeFunction(1, false, "values", objectValuesImpl))
-		ctorPropsObj.Properties.SetOwnNonEnumerable("entries", vm.NewNativeFunction(1, false, "entries", objectEntriesImpl))
-		ctorPropsObj.Properties.SetOwnNonEnumerable("getOwnPropertyNames", vm.NewNativeFunction(1, false, "getOwnPropertyNames", objectGetOwnPropertyNamesImpl))
-		ctorPropsObj.Properties.SetOwnNonEnumerable("getOwnPropertySymbols", vm.NewNativeFunction(1, false, "getOwnPropertySymbols", objectGetOwnPropertySymbolsImpl))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("values", vm.NewNativeFunction(1, false, "values", func(args []vm.Value) (vm.Value, error) {
+			return objectValuesWithVM(vmInstance, args)
+		}))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("entries", vm.NewNativeFunction(1, false, "entries", func(args []vm.Value) (vm.Value, error) {
+			return objectEntriesWithVM(vmInstance, args)
+		}))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("getOwnPropertyNames", vm.NewNativeFunction(1, false, "getOwnPropertyNames", func(args []vm.Value) (vm.Value, error) {
+			return objectGetOwnPropertyNamesWithVM(vmInstance, args)
+		}))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("getOwnPropertySymbols", vm.NewNativeFunction(1, false, "getOwnPropertySymbols", func(args []vm.Value) (vm.Value, error) {
+			return objectGetOwnPropertySymbolsWithVM(vmInstance, args)
+		}))
 		// Reflect-like ownKeys: strings first, then symbols
 		ctorPropsObj.Properties.SetOwnNonEnumerable("__ownKeys", vm.NewNativeFunction(1, false, "__ownKeys", reflectOwnKeysImpl))
 		ctorPropsObj.Properties.SetOwnNonEnumerable("assign", vm.NewNativeFunction(1, true, "assign", func(args []vm.Value) (vm.Value, error) {
 			return objectAssignWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwnNonEnumerable("hasOwn", vm.NewNativeFunction(2, false, "hasOwn", objectHasOwnImpl))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("hasOwn", vm.NewNativeFunction(2, false, "hasOwn", func(args []vm.Value) (vm.Value, error) {
+			return objectHasOwnWithVM(vmInstance, args)
+		}))
 		ctorPropsObj.Properties.SetOwnNonEnumerable("fromEntries", vm.NewNativeFunction(1, false, "fromEntries", objectFromEntriesImpl))
 		ctorPropsObj.Properties.SetOwnNonEnumerable("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", func(args []vm.Value) (vm.Value, error) {
 			return objectGetPrototypeOfWithVM(vmInstance, args)
@@ -1098,10 +1108,15 @@ func objectDefinePropertiesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value,
 
 func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
-		return vm.NewArray(), nil
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined to object")
 	}
 
 	obj := args[0]
+	// ECMAScript: throw TypeError for null/undefined
+	if obj.Type() == vm.TypeNull || obj.Type() == vm.TypeUndefined {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+	}
+	// Primitives (non-object/non-callable) have no enumerable own keys
 	if !obj.IsObject() && !obj.IsCallable() {
 		return vm.NewArray(), nil
 	}
@@ -1413,15 +1428,17 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	return obj, nil
 }
 
-func objectValuesImpl(args []vm.Value) (vm.Value, error) {
+func objectValuesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.NewArray(), nil
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined to object")
 	}
 
 	obj := args[0]
+	// ECMAScript: throw TypeError for null/undefined
+	if obj.Type() == vm.TypeNull || obj.Type() == vm.TypeUndefined {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+	}
 	if !obj.IsObject() && !obj.IsCallable() {
-		// TODO: Throw TypeError when error objects are implemented
 		return vm.NewArray(), nil
 	}
 
@@ -1508,15 +1525,17 @@ func sameValue(x, y vm.Value) bool {
 	}
 }
 
-func objectEntriesImpl(args []vm.Value) (vm.Value, error) {
+func objectEntriesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.NewArray(), nil
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined to object")
 	}
 
 	obj := args[0]
+	// ECMAScript: throw TypeError for null/undefined
+	if obj.Type() == vm.TypeNull || obj.Type() == vm.TypeUndefined {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+	}
 	if !obj.IsObject() && !obj.IsCallable() {
-		// TODO: Throw TypeError when error objects are implemented
 		return vm.NewArray(), nil
 	}
 
@@ -1600,17 +1619,30 @@ func isIntegerIndex(s string) bool {
 	return true
 }
 
-func objectGetOwnPropertyNamesImpl(args []vm.Value) (vm.Value, error) {
+func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
-		return vm.NewArray(), nil
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined to object")
 	}
 	obj := args[0]
+
+	// ECMAScript: throw TypeError for null/undefined
+	if obj.Type() == vm.TypeNull || obj.Type() == vm.TypeUndefined {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+	}
 
 	arr := vm.NewArray()
 	arrObj := arr.AsArray()
 
 	// Handle different object types
 	switch obj.Type() {
+	case vm.TypeString:
+		// String primitives have own properties for each character index plus "length"
+		s := obj.ToString()
+		for i := 0; i < len(s); i++ {
+			arrObj.Append(vm.NewString(strconv.Itoa(i)))
+		}
+		arrObj.Append(vm.NewString("length"))
+		return arr, nil
 	case vm.TypeObject:
 		if po := obj.AsPlainObject(); po != nil {
 			// OwnPropertyNames returns ALL own string property names including non-enumerable
@@ -1724,12 +1756,17 @@ func objectGetOwnPropertyNamesImpl(args []vm.Value) (vm.Value, error) {
 	return arr, nil
 }
 
-func objectGetOwnPropertySymbolsImpl(args []vm.Value) (vm.Value, error) {
+func objectGetOwnPropertySymbolsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
-		return vm.NewArray(), nil
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined to object")
 	}
 	obj := args[0]
+	// ECMAScript: throw TypeError for null/undefined
+	if obj.Type() == vm.TypeNull || obj.Type() == vm.TypeUndefined {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+	}
 	// In ECMAScript, functions are objects and can have symbol properties
+	// For primitives (boolean, number, string), ToObject wraps them - they have no own symbols
 	if !obj.IsObject() && !obj.IsCallable() {
 		return vm.NewArray(), nil
 	}
@@ -1888,32 +1925,53 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	return target, nil
 }
 
-func objectHasOwnImpl(args []vm.Value) (vm.Value, error) {
+func objectHasOwnWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) < 2 {
-		// TODO: Throw TypeError when error objects are implemented
-		return vm.BooleanValue(false), nil
+		return vm.Undefined, vmInstance.NewTypeError("Object.hasOwn requires 2 arguments")
 	}
 
+	// Step 1: ToObject(O)
 	obj := args[0]
+	if obj.Type() == vm.TypeNull || obj.Type() == vm.TypeUndefined {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+	}
+
+	// Step 2: ToPropertyKey(P) - this may call valueOf/toString
 	keyVal := args[1]
+
+	// For objects/callables, call ToPrimitive with "string" hint to get the property key
+	if keyVal.IsObject() || keyVal.IsCallable() {
+		vmInstance.EnterHelperCall()
+		primitiveVal := vmInstance.ToPrimitive(keyVal, "string")
+		vmInstance.ExitHelperCall()
+
+		// Check if ToPrimitive threw an exception
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+			return vm.Undefined, nil // Let exception propagate
+		}
+		keyVal = primitiveVal
+	}
+
+	// Now keyVal is either a Symbol or can be converted to string
+	isSymbol := keyVal.Type() == vm.TypeSymbol
 
 	// Check if object has the property as own property
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
-		if keyVal.Type() == vm.TypeSymbol {
+		if isSymbol {
 			return vm.BooleanValue(plainObj.HasOwnByKey(vm.NewSymbolKey(keyVal))), nil
 		}
 		_, hasOwn := plainObj.GetOwn(keyVal.ToString())
 		return vm.BooleanValue(hasOwn), nil
 	}
 	if dictObj := obj.AsDictObject(); dictObj != nil {
-		if keyVal.Type() == vm.TypeSymbol {
+		if isSymbol {
 			return vm.BooleanValue(false), nil
 		}
 		_, hasOwn := dictObj.GetOwn(keyVal.ToString())
 		return vm.BooleanValue(hasOwn), nil
 	}
 	if arrObj := obj.AsArray(); arrObj != nil {
-		if keyVal.Type() == vm.TypeSymbol {
+		if isSymbol {
 			return vm.BooleanValue(false), nil
 		}
 		propName := keyVal.ToString()

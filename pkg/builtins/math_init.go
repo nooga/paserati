@@ -388,16 +388,31 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NumberValue(float64ToFloat16ToFloat64(x)), nil
 	}))
 
-	mathObj.SetOwnNonEnumerable("hypot", vm.NewNativeFunction(0, true, "hypot", func(args []vm.Value) (vm.Value, error) {
+	mathObj.SetOwnNonEnumerable("hypot", vm.NewNativeFunction(2, true, "hypot", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(0), nil
 		}
-		// ECMAScript spec: If any argument is ±Infinity, return +Infinity (even if NaN present)
-		// If any argument is NaN (and no infinity), return NaN
+		// ECMAScript spec: First coerce ALL arguments, then check for infinity/NaN
+		// This ensures valueOf/toString is called on all arguments before returning
+		coerced := make([]float64, len(args))
+		for i, arg := range args {
+			// Use ToPrimitive with proper helper call tracking for exception propagation
+			if arg.IsObject() || arg.IsCallable() {
+				vmInstance.EnterHelperCall()
+				primVal := vmInstance.ToPrimitive(arg, "number")
+				vmInstance.ExitHelperCall()
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.Undefined, nil // Let exception propagate
+				}
+				coerced[i] = primVal.ToFloat()
+			} else {
+				coerced[i] = arg.ToFloat()
+			}
+		}
+		// Now check for infinity/NaN in coerced values
 		hasNaN := false
 		sum := 0.0
-		for _, arg := range args {
-			val := vmInstance.ToNumber(arg)
+		for _, val := range coerced {
 			if math.IsInf(val, 0) {
 				return vm.NumberValue(math.Inf(1)), nil
 			}
@@ -463,12 +478,25 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) == 0 {
 			return vm.NumberValue(math.Inf(-1)), nil // -Infinity
 		}
-		result := vmInstance.ToNumber(args[0])
-		if math.IsNaN(result) {
-			return vm.NumberValue(math.NaN()), nil
+		// ECMAScript spec: First coerce ALL arguments, then find max
+		coerced := make([]float64, len(args))
+		for i, arg := range args {
+			// Use ToPrimitive with proper helper call tracking for exception propagation
+			if arg.IsObject() || arg.IsCallable() {
+				vmInstance.EnterHelperCall()
+				primVal := vmInstance.ToPrimitive(arg, "number")
+				vmInstance.ExitHelperCall()
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.Undefined, nil // Let exception propagate
+				}
+				coerced[i] = primVal.ToFloat()
+			} else {
+				coerced[i] = arg.ToFloat()
+			}
 		}
-		for i := 1; i < len(args); i++ {
-			val := vmInstance.ToNumber(args[i])
+		// Find max in coerced values
+		result := coerced[0]
+		for _, val := range coerced {
 			if math.IsNaN(val) {
 				return vm.NumberValue(math.NaN()), nil
 			}
@@ -484,12 +512,25 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) == 0 {
 			return vm.NumberValue(math.Inf(1)), nil // +Infinity
 		}
-		result := vmInstance.ToNumber(args[0])
-		if math.IsNaN(result) {
-			return vm.NumberValue(math.NaN()), nil
+		// ECMAScript spec: First coerce ALL arguments, then find min
+		coerced := make([]float64, len(args))
+		for i, arg := range args {
+			// Use ToPrimitive with proper helper call tracking for exception propagation
+			if arg.IsObject() || arg.IsCallable() {
+				vmInstance.EnterHelperCall()
+				primVal := vmInstance.ToPrimitive(arg, "number")
+				vmInstance.ExitHelperCall()
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.Undefined, nil // Let exception propagate
+				}
+				coerced[i] = primVal.ToFloat()
+			} else {
+				coerced[i] = arg.ToFloat()
+			}
 		}
-		for i := 1; i < len(args); i++ {
-			val := vmInstance.ToNumber(args[i])
+		// Find min in coerced values
+		result := coerced[0]
+		for _, val := range coerced {
 			if math.IsNaN(val) {
 				return vm.NumberValue(math.NaN()), nil
 			}
