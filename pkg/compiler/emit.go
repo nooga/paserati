@@ -278,6 +278,19 @@ func (c *Compiler) emitCallMethod(dest, funcReg, thisReg Register, argCount byte
 	c.emitByte(argCount)
 }
 
+// emitCallFromWithContext emits OpCallFromWithContext for calls inside with blocks
+// Per ECMAScript 12.3.4.1: When calling a function resolved from a with environment,
+// the thisValue should be the with base object (refEnv.WithBaseObject())
+func (c *Compiler) emitCallFromWithContext(dest Register, nameIdx uint16, localReg, funcReg Register, argCount byte, line int) {
+	c.emitOpCode(vm.OpCallFromWithContext, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(nameIdx >> 8))   // NameIdx high byte
+	c.emitByte(byte(nameIdx & 0xFF)) // NameIdx low byte
+	c.emitByte(byte(localReg))
+	c.emitByte(byte(funcReg))
+	c.emitByte(argCount)
+}
+
 // emitSpreadCall emits OpSpreadCall for function calls with spread arguments
 func (c *Compiler) emitSpreadCall(dest, funcReg, spreadArgReg Register, line int) {
 	c.emitOpCode(vm.OpSpreadCall, line)

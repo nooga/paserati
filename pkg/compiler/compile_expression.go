@@ -2234,12 +2234,26 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 		// Note: argCount is not used for generator creation, but let's keep it for consistency
 		c.emitByte(byte(actualArgCount)) // Argument count
 	} else {
-		// Regular function call - check if in tail position
-		// NOTE: Tail calls are disabled inside try blocks because exception handlers need the frame intact
-		if enableTCO && c.inTailPosition && c.tryDepth == 0 {
-			c.emitTailCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
+		// Check if this is a plain identifier call inside a with block
+		// Per ECMAScript 12.3.4.1: When calling a function resolved from a with environment,
+		// the thisValue should be the with base object (refEnv.WithBaseObject())
+		if ident, isIdent := node.Function.(*parser.Identifier); isIdent && c.currentFuncWithDepth > 0 {
+			// Use OpCallFromWithContext to handle proper 'this' binding for with blocks
+			// Get local register (255 = no local, use global fallback)
+			var localReg Register = 255
+			if sym, _, found := c.currentSymbolTable.Resolve(ident.Value); found && !sym.IsGlobal && sym.Register != nilRegister {
+				localReg = sym.Register
+			}
+			nameIdx := c.chunk.AddConstant(vm.NewString(ident.Value))
+			c.emitCallFromWithContext(hint, nameIdx, localReg, funcReg, byte(actualArgCount), node.Token.Line)
 		} else {
-			c.emitCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
+			// Regular function call - check if in tail position
+			// NOTE: Tail calls are disabled inside try blocks because exception handlers need the frame intact
+			if enableTCO && c.inTailPosition && c.tryDepth == 0 {
+				c.emitTailCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
+			} else {
+				c.emitCall(hint, funcReg, byte(actualArgCount), node.Token.Line)
+			}
 		}
 	}
 

@@ -455,12 +455,14 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			if c.parameterNames != nil && c.parameterNames[node.Name.Value] {
 				// Variable is a function parameter - preserve its value
 				debugPrintf("// [VarStmt] '%s' is a parameter, skipping undefined init\n", node.Name.Value)
-			} else if sym, funcTable := c.findVarInFunctionScope(node.Name.Value); funcTable != nil && sym.Register != nilRegister && !sym.IsGlobal {
+			} else if sym, funcTable := c.findVarInFunctionScope(node.Name.Value); funcTable != nil && sym.Register != nilRegister && !sym.IsGlobal && !sym.IsImmutable {
 				// Variable was already pre-defined during block var hoisting IN THE CURRENT FUNCTION
 				// The register already has undefined loaded, so nothing to do
+				// NOTE: Immutable bindings (NFE names) don't count - var shadows them with new binding
 				debugPrintf("// [VarStmt] '%s' was pre-defined in R%d, skipping (already initialized to undefined)\n", node.Name.Value, sym.Register)
-			} else if sym, funcTable := c.findVarInFunctionScope(node.Name.Value); funcTable != nil && sym.IsSpilled {
+			} else if sym, funcTable := c.findVarInFunctionScope(node.Name.Value); funcTable != nil && sym.IsSpilled && !sym.IsImmutable {
 				// Variable was pre-defined as spilled IN THE CURRENT FUNCTION, already initialized to undefined
+				// NOTE: Immutable bindings (NFE names) don't count - var shadows them with new binding
 				debugPrintf("// [VarStmt] '%s' was pre-defined as SPILLED (slot %d), skipping\n", node.Name.Value, sym.SpillIndex)
 			} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsGlobal {
 				// ECMAScript: var re-declaration without initializer is a no-op if variable already exists

@@ -4388,6 +4388,96 @@ startExecution:
 				}
 			}
 
+		case OpCallFromWithContext:
+			// Dest NameIdx(16bit) LocalReg FuncReg ArgCount
+			// Per ECMAScript 12.3.4.1: When calling a function resolved from a with environment,
+			// the thisValue should be the with base object (refEnv.WithBaseObject())
+			//
+			// IMPORTANT: We don't re-check the with object here. The function was already
+			// resolved by OpGetWithOrLocal which triggered the necessary Proxy traps.
+			// To determine if the function came from a with object, we compare by identity:
+			// if the function in funcReg equals what's directly stored on the with object
+			// (without triggering [[Get]]), then we use the with object as 'this'.
+			// For non-Proxy objects, we can safely check using GetOwn which doesn't trigger traps.
+			destReg := code[ip]
+			nameHi := code[ip+1]
+			nameLo := code[ip+2]
+			_ = code[ip+3] // localReg - unused, function already in funcReg
+			funcReg := code[ip+4]
+			argCount := int(code[ip+5])
+			ip += 6
+
+			nameIdx := int(uint16(nameHi)<<8 | uint16(nameLo))
+			nameVal := constants[nameIdx]
+			propName := nameVal.AsString()
+
+			calleeVal := registers[funcReg]
+			var thisVal Value = Undefined
+
+			// Check all with-object sources (current stack + closure captured)
+			// Use direct property access (GetOwn) which doesn't trigger Proxy traps
+			withSources := [][]Value{vm.withObjectStack}
+			if closure != nil && len(closure.WithObjects) > 0 {
+				withSources = append(withSources, closure.WithObjects)
+			}
+
+		callFromWithLoop:
+			for _, withObjects := range withSources {
+				for i := len(withObjects) - 1; i >= 0; i-- {
+					withObj := withObjects[i]
+					var ownVal Value
+					hasOwn := false
+
+					// Check own property directly without triggering Proxy traps
+					switch withObj.Type() {
+					case TypeObject:
+						ownVal, hasOwn = withObj.AsPlainObject().GetOwn(propName)
+					case TypeDictObject:
+						ownVal, hasOwn = withObj.AsDictObject().GetOwn(propName)
+					case TypeProxy:
+						// For Proxy, we can't check without triggering traps.
+						// Use the resolved function as-is and assume it came from the proxy
+						// if there's a proxy in the with stack.
+						// This is a simplification - for full spec compliance we'd need to
+						// track this during resolution.
+						thisVal = withObj
+						break callFromWithLoop
+					}
+
+					// Check if the own property value matches the resolved function
+					// This works because OpGetWithOrLocal already did the full lookup
+					// and if it found the value on this with object, they should match
+					if hasOwn && ownVal == calleeVal {
+						thisVal = withObj
+						break callFromWithLoop
+					}
+				}
+			}
+
+			// Get arguments from registers after funcReg
+			args := registers[funcReg+1 : funcReg+1+byte(argCount)]
+
+			// Perform the call
+			frame.ip = ip
+			shouldSwitch, err := vm.prepareCall(calleeVal, thisVal, args, destReg, registers, ip)
+
+			if vm.handlerFound {
+				vm.handlerFound = false
+				goto reloadFrame
+			}
+			if vm.unwinding {
+				return InterpretRuntimeError, Undefined
+			}
+			if err != nil {
+				frame.ip = ip
+				vm.runtimeError("%s", err.Error())
+				return InterpretRuntimeError, Undefined
+			}
+
+			if shouldSwitch {
+				goto reloadFrame
+			}
+
 		case OpDeleteWithProperty:
 			// Rx NameIdx(16bit) Fallback: Delete from with-object, Fallback=0:true, 1:false
 			destReg := code[ip]

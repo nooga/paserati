@@ -169,6 +169,11 @@ const (
 	// Per ECMAScript DefineField step 7: set name of anonymous function assigned to field
 	OpSetFunctionName OpCode = 164 // Rx NameIdx(16bit): If Rx is a function without a name, set its name to constants[NameIdx]
 
+	// --- With Statement Call Support ---
+	// Per ECMAScript 12.3.4.1: When calling a function resolved from a with environment,
+	// the thisValue should be the with base object (refEnv.WithBaseObject())
+	OpCallFromWithContext OpCode = 165 // Dest NameIdx(16bit) LocalReg FuncReg ArgCount: Call with proper 'this' based on with context
+
 	OpSetThis       OpCode = 82 // Ry: Set 'this' value in current call context from register Ry
 	OpLoadNewTarget OpCode = 81 // Rx: Load 'new.target' value from current call context into register Rx
 	// --- END NEW ---
@@ -490,6 +495,8 @@ func (op OpCode) String() string {
 		return "OpMakeRegExp"
 	case OpSetFunctionName:
 		return "OpSetFunctionName"
+	case OpCallFromWithContext:
+		return "OpCallFromWithContext"
 	case OpNew:
 		return "OpNew"
 	case OpSpreadNew:
@@ -1100,6 +1107,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerConstantConstantInstruction(builder, instruction.String(), offset) // Rx PatternIdx(16bit) FlagsIdx(16bit)
 	case OpSetFunctionName:
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true) // Rx NameIdx(16bit)
+	case OpCallFromWithContext:
+		return c.callFromWithContextInstruction(builder, instruction.String(), offset) // Dest NameIdx(16bit) LocalReg FuncReg ArgCount
 	case OpNew:
 		return c.newInstruction(builder, instruction.String(), offset)
 	case OpSpreadNew:
@@ -2003,6 +2012,29 @@ func (c *Chunk) callMethodInstruction(builder *strings.Builder, name string, off
 	argCount := c.Code[offset+4]
 	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, R%d, Args %d\n", name, destReg, funcReg, thisReg, argCount))
 	return offset + 5 // Opcode + Rx + FuncReg + ThisReg + ArgCount
+}
+
+// callFromWithContextInstruction handles OpCallFromWithContext Dest NameIdx(16bit) LocalReg FuncReg ArgCount
+func (c *Chunk) callFromWithContextInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+6 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		return offset + 1
+	}
+	destReg := c.Code[offset+1]
+	nameIdx := uint16(c.Code[offset+2])<<8 | uint16(c.Code[offset+3])
+	localReg := c.Code[offset+4]
+	funcReg := c.Code[offset+5]
+	argCount := c.Code[offset+6]
+
+	constValue := "invalid"
+	if int(nameIdx) < len(c.Constants) {
+		v := c.Constants[nameIdx]
+		constValue = v.Inspect()
+	}
+
+	fmt.Fprintf(builder, "%-16s R%d, NameIdx %d (%s), LocalR%d, FuncR%d, Args %d\n",
+		name, destReg, nameIdx, constValue, localReg, funcReg, argCount)
+	return offset + 7 // Opcode + Dest + NameIdx(2 bytes) + LocalReg + FuncReg + ArgCount
 }
 
 // loadThisInstruction handles OpLoadThis Rx
