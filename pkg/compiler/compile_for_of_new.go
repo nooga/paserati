@@ -500,18 +500,29 @@ func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.Arra
 			if i != len(arrayLit.Elements)-1 {
 				return NewCompileError(arrayLit, "rest element must be last in destructuring pattern")
 			}
+
+			// Per ECMAScript spec, evaluate the rest element target FIRST
+			// before collecting iterator values
+			targetRef, err := c.compileDestructuringTargetRef(spreadExpr.Argument, line)
+			if err != nil {
+				return err
+			}
+
 			// Collect remaining values into array
 			// IMPORTANT: Pass doneReg so it gets updated before each next() call.
 			// This ensures if next() throws during rest iteration, done=true and we don't call return().
 			restArrayReg := c.regAlloc.Alloc()
-			err := c.compileIteratorToArrayWithDone(iteratorObjReg, restArrayReg, doneReg, line)
+			err = c.compileIteratorToArrayWithDone(iteratorObjReg, restArrayReg, doneReg, line)
 			if err != nil {
 				c.regAlloc.Free(restArrayReg)
+				c.freeDestructuringTargetRef(targetRef)
 				return err
 			}
-			// Assign to target
-			err = c.compileRecursiveAssignment(spreadExpr.Argument, restArrayReg, line)
+
+			// Assign to target using pre-evaluated reference
+			err = c.assignToDestructuringTargetRef(targetRef, restArrayReg, line)
 			c.regAlloc.Free(restArrayReg)
+			c.freeDestructuringTargetRef(targetRef)
 			if err != nil {
 				return err
 			}
