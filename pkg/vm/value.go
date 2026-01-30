@@ -365,6 +365,20 @@ func (vm *VM) NewRangeError(message string) error {
 	return exceptionError{exception: NewValueFromPlainObject(obj)}
 }
 
+// NewSyntaxError constructs a SyntaxError exception error for builtin helpers to return
+func (vm *VM) NewSyntaxError(message string) error {
+	ctor, _ := vm.GetGlobal("SyntaxError")
+	if ctor != Undefined {
+		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
+		return exceptionError{exception: errObj}
+	}
+	// Fallback generic error object
+	obj := NewObject(Null).AsPlainObject()
+	obj.SetOwn("name", NewString("SyntaxError"))
+	obj.SetOwn("message", NewString(message))
+	return exceptionError{exception: NewValueFromPlainObject(obj)}
+}
+
 var (
 	Undefined     = Value{typ: TypeUndefined}
 	Null          = Value{typ: TypeNull}

@@ -1,8 +1,6 @@
 package builtins
 
 import (
-	"fmt"
-
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
@@ -142,7 +140,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if !executor.IsCallable() {
-			return vm.Undefined, fmt.Errorf("TypeError: Promise resolver %s is not a function", executor.TypeName())
+			return vm.Undefined, vmInstance.NewTypeError("Promise resolver " + executor.TypeName() + " is not a function")
 		}
 
 		return vmInstance.NewPromiseFromExecutor(executor)
@@ -221,12 +219,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
 		if err != nil {
-			return vm.Undefined, fmt.Errorf("TypeError: Promise.all requires an iterable")
+			return vm.Undefined, vmInstance.NewTypeError("Promise.all requires an iterable")
 		}
 
 		arrayObj := arr.AsArray()
 		if arrayObj == nil {
-			return vm.Undefined, fmt.Errorf("TypeError: Promise.all requires an iterable")
+			return vm.Undefined, vmInstance.NewTypeError("Promise.all requires an iterable")
 		}
 
 		length := arrayObj.Length()
@@ -326,12 +324,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
 		if err != nil {
-			return vm.Undefined, fmt.Errorf("TypeError: Promise.race requires an iterable")
+			return vm.Undefined, vmInstance.NewTypeError("Promise.race requires an iterable")
 		}
 
 		arrayObj := arr.AsArray()
 		if arrayObj == nil {
-			return vm.Undefined, fmt.Errorf("TypeError: Promise.race requires an iterable")
+			return vm.Undefined, vmInstance.NewTypeError("Promise.race requires an iterable")
 		}
 
 		length := arrayObj.Length()
@@ -409,12 +407,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
 		if err != nil {
-			return vm.Undefined, fmt.Errorf("TypeError: Promise.any requires an iterable")
+			return vm.Undefined, vmInstance.NewTypeError("Promise.any requires an iterable")
 		}
 
 		arrayObj := arr.AsArray()
 		if arrayObj == nil {
-			return vm.Undefined, fmt.Errorf("TypeError: Promise.any requires an iterable")
+			return vm.Undefined, vmInstance.NewTypeError("Promise.any requires an iterable")
 		}
 
 		length := arrayObj.Length()
@@ -509,12 +507,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
 		if err != nil {
-			return vm.Undefined, fmt.Errorf("TypeError: Promise.allSettled requires an iterable")
+			return vm.Undefined, vmInstance.NewTypeError("Promise.allSettled requires an iterable")
 		}
 
 		arrayObj := arr.AsArray()
 		if arrayObj == nil {
-			return vm.Undefined, fmt.Errorf("TypeError: Promise.allSettled requires an iterable")
+			return vm.Undefined, vmInstance.NewTypeError("Promise.allSettled requires an iterable")
 		}
 
 		length := arrayObj.Length()

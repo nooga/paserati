@@ -1,7 +1,6 @@
 package builtins
 
 import (
-	"fmt"
 	"math/big"
 	"strings"
 
@@ -133,8 +132,7 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Cannot convert other types to BigInt
-		// In real JS this would throw TypeError
-		return vm.Undefined, fmt.Errorf("TypeError: Cannot convert to BigInt")
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert to BigInt")
 	}))
 
 	// Set BigInt.prototype
@@ -144,7 +142,7 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 	bigintConstructor := vm.NewNativeFunctionWithProps(1, false, "BigInt", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			// BigInt() without arguments should throw TypeError
-			return vm.Undefined, fmt.Errorf("TypeError: BigInt constructor requires an argument")
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined to a BigInt")
 		}
 
 		arg := args[0]
@@ -168,13 +166,13 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 			str := strings.TrimSpace(arg.ToString())
 			if str == "" {
 				// Empty string should throw SyntaxError
-				return vm.Undefined, fmt.Errorf("SyntaxError: Cannot convert empty string to BigInt")
+				return vm.Undefined, vmInstance.NewSyntaxError("Cannot convert empty string to BigInt")
 			}
 
 			// Try to parse as BigInt
 			bigVal := new(big.Int)
 			if _, ok := bigVal.SetString(str, 0); !ok {
-				return vm.Undefined, fmt.Errorf("SyntaxError: Cannot convert string to BigInt")
+				return vm.Undefined, vmInstance.NewSyntaxError("Cannot convert string to BigInt")
 			}
 			return vm.NewBigInt(bigVal), nil
 		case vm.TypeIntegerNumber:
@@ -186,7 +184,7 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Check if float is actually an integer
 			floatVal := arg.ToFloat()
 			if floatVal != float64(int64(floatVal)) {
-				return vm.Undefined, fmt.Errorf("RangeError: Cannot convert non-integer number to BigInt")
+				return vm.Undefined, vmInstance.NewRangeError("Cannot convert non-integer number to BigInt")
 			}
 			bigVal := big.NewInt(int64(floatVal))
 			return vm.NewBigInt(bigVal), nil
@@ -196,27 +194,27 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			return vm.NewBigInt(big.NewInt(0)), nil
 		case vm.TypeNull, vm.TypeUndefined:
-			return vm.Undefined, fmt.Errorf("TypeError: Cannot convert null/undefined to BigInt")
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert null/undefined to BigInt")
 		default:
-			return vm.Undefined, fmt.Errorf("TypeError: Cannot convert to BigInt")
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert to BigInt")
 		}
 	})
 
 	// Add BigInt static methods
 	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("asIntN", vm.NewNativeFunction(2, false, "asIntN", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
-			return vm.Undefined, fmt.Errorf("TypeError: BigInt.asIntN requires 2 arguments")
+			return vm.Undefined, vmInstance.NewTypeError("BigInt.asIntN requires 2 arguments")
 		}
 
 		bits := int(args[0].ToFloat())
 		bigintVal := args[1]
 
 		if bigintVal.Type() != vm.TypeBigInt {
-			return vm.Undefined, fmt.Errorf("TypeError: Second argument must be a BigInt")
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert to BigInt")
 		}
 
-		if bits < 0 || bits > 64 {
-			return vm.Undefined, fmt.Errorf("RangeError: Invalid bit width")
+		if bits < 0 {
+			return vm.Undefined, vmInstance.NewRangeError("Invalid bit width")
 		}
 
 		// Truncate to N bits with sign extension
@@ -230,18 +228,18 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("asUintN", vm.NewNativeFunction(2, false, "asUintN", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
-			return vm.Undefined, fmt.Errorf("TypeError: BigInt.asUintN requires 2 arguments")
+			return vm.Undefined, vmInstance.NewTypeError("BigInt.asUintN requires 2 arguments")
 		}
 
 		bits := int(args[0].ToFloat())
 		bigintVal := args[1]
 
 		if bigintVal.Type() != vm.TypeBigInt {
-			return vm.Undefined, fmt.Errorf("TypeError: Second argument must be a BigInt")
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert to BigInt")
 		}
 
-		if bits < 0 || bits > 64 {
-			return vm.Undefined, fmt.Errorf("RangeError: Invalid bit width")
+		if bits < 0 {
+			return vm.Undefined, vmInstance.NewRangeError("Invalid bit width")
 		}
 
 		// Truncate to N bits without sign extension

@@ -1,7 +1,6 @@
 package builtins
 
 import (
-	"fmt"
 	"math"
 	"time"
 
@@ -559,12 +558,12 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisDate := vmInstance.GetThis()
 		dateObj := thisDate.AsPlainObject()
 		if dateObj == nil {
-			return vm.Undefined, fmt.Errorf("setYear called on non-Date object")
+			return vm.Undefined, vmInstance.NewTypeError("setYear called on non-Date object")
 		}
 
 		// Check if it's a Date object by verifying it has __timestamp__ property
 		if _, exists := dateObj.GetOwn("__timestamp__"); !exists {
-			return vm.Undefined, fmt.Errorf("setYear called on non-Date object")
+			return vm.Undefined, vmInstance.NewTypeError("setYear called on non-Date object")
 		}
 
 		if len(args) == 0 {

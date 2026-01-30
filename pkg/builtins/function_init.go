@@ -101,7 +101,7 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, vmInstance.NewExceptionError(errInstance)
 			}
 		}
-		return vm.Undefined, fmt.Errorf("TypeError: 'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
+		return vm.Undefined, vmInstance.NewTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
 	}
 	callerGetter := vm.NewNativeFunction(0, false, "ThrowTypeError", throwTypeErrorFn)
 	callerSetter := vm.NewNativeFunction(1, false, "ThrowTypeError", throwTypeErrorFn)
@@ -169,7 +169,7 @@ func functionPrototypeCallImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, er
 	thisFunction := vmInstance.GetThis()
 
 	if !thisFunction.IsCallable() {
-		return vm.Undefined, fmt.Errorf("TypeError: %v is not a function", thisFunction.Type())
+		return vm.Undefined, vmInstance.NewTypeError(thisFunction.TypeName() + " is not a function")
 	}
 
 	// Extract thisArg and function arguments
@@ -190,7 +190,7 @@ func functionPrototypeApplyImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	thisFunction := vmInstance.GetThis()
 
 	if !thisFunction.IsCallable() {
-		return vm.Undefined, fmt.Errorf("TypeError: %v is not a function", thisFunction.Type())
+		return vm.Undefined, vmInstance.NewTypeError(thisFunction.TypeName() + " is not a function")
 	}
 
 	// Extract thisArg and arguments array
@@ -248,7 +248,7 @@ func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, er
 	originalFunc := vmInstance.GetThis()
 
 	if !originalFunc.IsCallable() {
-		return vm.Undefined, fmt.Errorf("TypeError: %v is not a function", originalFunc.Type())
+		return vm.Undefined, vmInstance.NewTypeError(originalFunc.TypeName() + " is not a function")
 	}
 
 	var boundThis vm.Value = vm.Undefined
@@ -294,7 +294,7 @@ func functionPrototypeToStringImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value
 	thisFunction := vmInstance.GetThis()
 
 	if !thisFunction.IsCallable() {
-		return vm.Undefined, fmt.Errorf("TypeError: %v is not a function", thisFunction.Type())
+		return vm.Undefined, vmInstance.NewTypeError(thisFunction.TypeName() + " is not a function")
 	}
 
 	// Return a string representation of the function
@@ -391,7 +391,7 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 	// IMPORTANT: We use CompileProgram instead of RunString to avoid corrupting
 	// the parent compilation's state (EnableModuleMode, etc.)
 	if driver == nil {
-		return vm.Undefined, fmt.Errorf("SyntaxError: Function constructor - driver is nil")
+		return vm.Undefined, vmInstance.NewSyntaxError("Function constructor - driver is nil")
 	}
 
 	// Define interface for accessing compiler without state modification
@@ -402,7 +402,7 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 
 	d, ok := driver.(driverInterface)
 	if !ok {
-		return vm.Undefined, fmt.Errorf("SyntaxError: Function constructor - driver doesn't implement CompileProgramAsScript (got type %T)", driver)
+		return vm.Undefined, vmInstance.NewSyntaxError("Function constructor - driver doesn't implement CompileProgramAsScript")
 	}
 
 	// Parse the source code
@@ -410,27 +410,17 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 	p := parser.NewParser(lx)
 	prog, parseErrs := p.ParseProgram()
 	if len(parseErrs) > 0 {
-		// Create a proper SyntaxError instance that can be caught
-		if ctor, ok := vmInstance.GetGlobal("SyntaxError"); ok && ctor != vm.Undefined {
-			errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(parseErrs[0].Error())})
-			return vm.Undefined, vmInstance.NewExceptionError(errObj)
-		}
-		return vm.Undefined, fmt.Errorf("SyntaxError: %v", parseErrs[0])
+		return vm.Undefined, vmInstance.NewSyntaxError(parseErrs[0].Error())
 	}
 
 	// Compile the program as Script code (not Module) - import.meta not allowed
 	chunk, compileErrs := d.CompileProgramAsScript(prog)
 	if len(compileErrs) > 0 {
-		// Create a proper SyntaxError instance that can be caught
-		if ctor, ok := vmInstance.GetGlobal("SyntaxError"); ok && ctor != vm.Undefined {
-			errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(compileErrs[0].Error())})
-			return vm.Undefined, vmInstance.NewExceptionError(errObj)
-		}
-		return vm.Undefined, fmt.Errorf("SyntaxError: %v", compileErrs[0])
+		return vm.Undefined, vmInstance.NewSyntaxError(compileErrs[0].Error())
 	}
 
 	if chunk == nil {
-		return vm.Undefined, fmt.Errorf("SyntaxError: compilation returned nil chunk")
+		return vm.Undefined, vmInstance.NewSyntaxError("compilation returned nil chunk")
 	}
 
 	// IMPORTANT: Don't execute the chunk! The compiled code is:
@@ -441,7 +431,7 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 	// We can skip execution and just return constants[0] directly.
 
 	if len(chunk.Constants) == 0 {
-		return vm.Undefined, fmt.Errorf("Internal Error: compiled Function() code has no constants")
+		return vm.Undefined, vmInstance.NewTypeError("compiled Function() code has no constants")
 	}
 
 	// The first constant is the function object we created
@@ -449,7 +439,7 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 
 	// Verify it's actually a function
 	if !functionValue.IsCallable() {
-		return vm.Undefined, fmt.Errorf("Internal Error: Function() constant is not callable (got %s)", functionValue.TypeName())
+		return vm.Undefined, vmInstance.NewTypeError("Function() constant is not callable (got " + functionValue.TypeName() + ")")
 	}
 
 	return functionValue, nil
@@ -499,7 +489,7 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 
 	// We need access to the driver to compile this source code
 	if driver == nil {
-		return vm.Undefined, fmt.Errorf("SyntaxError: AsyncFunction constructor - driver is nil")
+		return vm.Undefined, vmInstance.NewSyntaxError("AsyncFunction constructor - driver is nil")
 	}
 
 	// Define interface for accessing compiler without state modification
@@ -510,7 +500,7 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 
 	d, ok := driver.(driverInterface)
 	if !ok {
-		return vm.Undefined, fmt.Errorf("SyntaxError: AsyncFunction constructor - driver doesn't implement CompileProgramAsScript")
+		return vm.Undefined, vmInstance.NewSyntaxError("AsyncFunction constructor - driver doesn't implement CompileProgramAsScript")
 	}
 
 	// Parse the source code
@@ -518,31 +508,21 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 	p := parser.NewParser(lx)
 	prog, parseErrs := p.ParseProgram()
 	if len(parseErrs) > 0 {
-		// Create a proper SyntaxError instance that can be caught
-		if ctor, ok := vmInstance.GetGlobal("SyntaxError"); ok && ctor != vm.Undefined {
-			errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(parseErrs[0].Error())})
-			return vm.Undefined, vmInstance.NewExceptionError(errObj)
-		}
-		return vm.Undefined, fmt.Errorf("SyntaxError: %v", parseErrs[0])
+		return vm.Undefined, vmInstance.NewSyntaxError(parseErrs[0].Error())
 	}
 
 	// Compile the program as Script code (not Module) - import.meta not allowed
 	chunk, compileErrs := d.CompileProgramAsScript(prog)
 	if len(compileErrs) > 0 {
-		// Create a proper SyntaxError instance that can be caught
-		if ctor, ok := vmInstance.GetGlobal("SyntaxError"); ok && ctor != vm.Undefined {
-			errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(compileErrs[0].Error())})
-			return vm.Undefined, vmInstance.NewExceptionError(errObj)
-		}
-		return vm.Undefined, fmt.Errorf("SyntaxError: %v", compileErrs[0])
+		return vm.Undefined, vmInstance.NewSyntaxError(compileErrs[0].Error())
 	}
 
 	if chunk == nil {
-		return vm.Undefined, fmt.Errorf("SyntaxError: compilation returned nil chunk")
+		return vm.Undefined, vmInstance.NewSyntaxError("compilation returned nil chunk")
 	}
 
 	if len(chunk.Constants) == 0 {
-		return vm.Undefined, fmt.Errorf("Internal Error: compiled AsyncFunction() code has no constants")
+		return vm.Undefined, vmInstance.NewTypeError("compiled AsyncFunction() code has no constants")
 	}
 
 	// The first constant is the async function object we created
@@ -550,7 +530,7 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 
 	// Verify it's actually a function
 	if !functionValue.IsCallable() {
-		return vm.Undefined, fmt.Errorf("Internal Error: AsyncFunction() constant is not callable (got %s)", functionValue.TypeName())
+		return vm.Undefined, vmInstance.NewTypeError("AsyncFunction() constant is not callable (got " + functionValue.TypeName() + ")")
 	}
 
 	return functionValue, nil

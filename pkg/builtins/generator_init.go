@@ -1,8 +1,6 @@
 package builtins
 
 import (
-	"fmt"
-
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
@@ -94,7 +92,7 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisValue := vmInstance.GetThis()
 		if !thisValue.IsGenerator() {
 			// TypeError: Method Generator.prototype.next called on incompatible receiver
-			return vm.Undefined, fmt.Errorf("TypeError: Method Generator.prototype.next called on incompatible receiver")
+			return vm.Undefined, vmInstance.NewTypeError("Method Generator.prototype.next called on incompatible receiver")
 		}
 		thisGen := thisValue.AsGenerator()
 
@@ -120,7 +118,7 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	generatorProto.SetOwnNonEnumerable("return", vm.NewNativeFunction(1, false, "return", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if !thisValue.IsGenerator() {
-			return vm.Undefined, fmt.Errorf("TypeError: Method Generator.prototype.return called on incompatible receiver")
+			return vm.Undefined, vmInstance.NewTypeError("Method Generator.prototype.return called on incompatible receiver")
 		}
 		thisGen := thisValue.AsGenerator()
 
@@ -235,7 +233,7 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	generatorProto.SetOwnNonEnumerable("throw", vm.NewNativeFunction(1, false, "throw", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if !thisValue.IsGenerator() {
-			return vm.Undefined, fmt.Errorf("TypeError: Method Generator.prototype.throw called on incompatible receiver")
+			return vm.Undefined, vmInstance.NewTypeError("Method Generator.prototype.throw called on incompatible receiver")
 		}
 		thisGen := thisValue.AsGenerator()
 
@@ -390,7 +388,7 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	genIterFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if !thisValue.IsGenerator() {
-			return vm.Undefined, fmt.Errorf("TypeError: Method Generator.prototype[Symbol.iterator] called on incompatible receiver")
+			return vm.Undefined, vmInstance.NewTypeError("Method Generator.prototype[Symbol.iterator] called on incompatible receiver")
 		}
 		// Generators are self-iterable - return the generator itself
 		return thisValue, nil

@@ -1,7 +1,6 @@
 package builtins
 
 import (
-	"fmt"
 	"math"
 	"strconv"
 
@@ -1273,7 +1272,7 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		// For proxies, call the getPrototypeOf trap if present
 		proxy := obj.AsProxy()
 		if proxy.Revoked {
-			return vm.Undefined, fmt.Errorf("Cannot get prototype of revoked Proxy")
+			return vm.Undefined, vmInstance.NewTypeError("Cannot get prototype of revoked Proxy")
 		}
 
 		// Check if handler has a getPrototypeOf trap
@@ -1801,7 +1800,7 @@ func reflectOwnKeysImpl(args []vm.Value) (vm.Value, error) {
 
 func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
-		return vm.Undefined, fmt.Errorf("TypeError: Cannot convert undefined or null to object")
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 	}
 
 	// First argument is the target
@@ -1809,7 +1808,7 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 
 	// Convert primitives to objects (except null/undefined which throw)
 	if target.Type() == vm.TypeNull || target.Type() == vm.TypeUndefined {
-		return vm.Undefined, fmt.Errorf("TypeError: Cannot convert undefined or null to object")
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 	}
 
 	// Box primitive targets to objects

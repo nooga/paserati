@@ -364,7 +364,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// TypeError: String.prototype.valueOf requires that 'this' be a String
-		return vm.Undefined, fmt.Errorf("String.prototype.valueOf requires that 'this' be a String")
+		return vm.Undefined, vmInstance.NewTypeError("String.prototype.valueOf requires that 'this' be a String")
 	}))
 
 	stringProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
@@ -385,7 +385,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// TypeError: String.prototype.toString requires that 'this' be a String
-		return vm.Undefined, fmt.Errorf("String.prototype.toString requires that 'this' be a String")
+		return vm.Undefined, vmInstance.NewTypeError("String.prototype.toString requires that 'this' be a String")
 	}))
 
 	stringProto.SetOwnNonEnumerable("charAt", vm.NewNativeFunction(1, false, "charAt", func(args []vm.Value) (vm.Value, error) {
@@ -1442,7 +1442,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			regex := separatorArg.AsRegExpObject()
 			// Check for deferred compile error
 			if regex.HasCompileError() {
-				return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+				return vm.Undefined, vmInstance.NewSyntaxError("Invalid regular expression: " + regex.GetCompileError())
 			}
 
 			parts := regex.Split(thisStr, -1)
@@ -1793,7 +1793,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Create a new RegExp
 		rx, regexpErr := vm.NewRegExp(pattern, "")
 		if regexpErr != nil {
-			return vm.Undefined, fmt.Errorf("Invalid regular expression: %s", regexpErr.Error())
+			return vm.Undefined, vmInstance.NewSyntaxError("Invalid regular expression: " + regexpErr.Error())
 		}
 
 		// Invoke rx[@@match](string)
@@ -1910,7 +1910,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Create a new global RegExp (fresh object without overridden properties)
 		rx, regexpErr := vm.NewRegExp(pattern, flags)
 		if regexpErr != nil {
-			return vm.Undefined, fmt.Errorf("Invalid regular expression: %s", regexpErr.Error())
+			return vm.Undefined, vmInstance.NewSyntaxError("Invalid regular expression: " + regexpErr.Error())
 		}
 
 		// Invoke rx[@@matchAll](string)
@@ -2019,7 +2019,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			rx, regexpErr = vm.NewRegExp(pattern, "")
 			if regexpErr != nil {
 				// Invalid regex pattern - return SyntaxError
-				return vm.Undefined, fmt.Errorf("Invalid regular expression: %s", regexpErr.Error())
+				return vm.Undefined, vmInstance.NewSyntaxError("Invalid regular expression: " + regexpErr.Error())
 			}
 		}
 

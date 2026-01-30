@@ -1,7 +1,6 @@
 package builtins
 
 import (
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -186,7 +185,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.NewString(thisNum.ToString()), nil
 			}
 			// For non-numbers, throw a TypeError
-			return vm.Undefined, fmt.Errorf("Number.prototype.toString requires that 'this' be a Number")
+			return vm.Undefined, vmInstance.NewTypeError("Number.prototype.toString requires that 'this' be a Number")
 		}
 
 		var radix int = 10
@@ -258,7 +257,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// TypeError: Number.prototype.valueOf requires that 'this' be a Number
-		return vm.Undefined, fmt.Errorf("Number.prototype.valueOf requires that 'this' be a Number")
+		return vm.Undefined, vmInstance.NewTypeError("Number.prototype.valueOf requires that 'this' be a Number")
 	}))
 
 	numberProto.SetOwnNonEnumerable("toFixed", vm.NewNativeFunction(1, false, "toFixed", func(args []vm.Value) (vm.Value, error) {

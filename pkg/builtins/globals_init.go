@@ -1,7 +1,6 @@
 package builtins
 
 import (
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -543,7 +542,7 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// (0, eval)(...), globalThis.eval(...), eval?.(...), or aliased eval
 		// The driver's IndirectEvalCode handles proper isolation of let/const/class bindings.
 		if ctx.Driver == nil {
-			return vm.Undefined, fmt.Errorf("eval: driver is nil")
+			return vm.Undefined, ctx.VM.NewTypeError("eval: driver is nil")
 		}
 
 		// Define interface for indirect eval
@@ -553,18 +552,13 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		driver, ok := ctx.Driver.(indirectEvalInterface)
 		if !ok {
-			return vm.Undefined, fmt.Errorf("eval: driver doesn't implement IndirectEvalCode")
+			return vm.Undefined, ctx.VM.NewTypeError("eval: driver doesn't implement IndirectEvalCode")
 		}
 
 		result, evalErrs := driver.IndirectEvalCode(codeStr)
 		if len(evalErrs) > 0 {
 			// Error (parse/compile/runtime) - throw SyntaxError for compile errors
-			if ctor, ok := ctx.VM.GetGlobal("SyntaxError"); ok {
-				msg := vm.NewString(evalErrs[0].Error())
-				errObj, _ := ctx.VM.Call(ctor, vm.Undefined, []vm.Value{msg})
-				return vm.Undefined, ctx.VM.NewExceptionError(errObj)
-			}
-			return vm.Undefined, fmt.Errorf("SyntaxError: %v", evalErrs[0])
+			return vm.Undefined, ctx.VM.NewSyntaxError(evalErrs[0].Error())
 		}
 
 		return result, nil

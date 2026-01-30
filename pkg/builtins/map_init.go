@@ -84,8 +84,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisMap := vmInstance.GetThis()
 
 		if thisMap.Type() != vm.TypeMap {
-			// TODO: Should throw TypeError
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.set called on incompatible receiver")
 		}
 
 		if len(args) < 2 {
@@ -106,7 +105,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisMap := vmInstance.GetThis()
 
 		if thisMap.Type() != vm.TypeMap {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.get called on incompatible receiver")
 		}
 
 		if len(args) < 1 {
@@ -125,7 +124,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisMap := vmInstance.GetThis()
 
 		if thisMap.Type() != vm.TypeMap {
-			return vm.BooleanValue(false), nil
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.has called on incompatible receiver")
 		}
 
 		if len(args) < 1 {
@@ -144,7 +143,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisMap := vmInstance.GetThis()
 
 		if thisMap.Type() != vm.TypeMap {
-			return vm.BooleanValue(false), nil
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.delete called on incompatible receiver")
 		}
 
 		if len(args) < 1 {
@@ -163,7 +162,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisMap := vmInstance.GetThis()
 
 		if thisMap.Type() != vm.TypeMap {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.clear called on incompatible receiver")
 		}
 
 		mapObj := thisMap.AsMap()
@@ -180,13 +179,11 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisMap := vmInstance.GetThis()
 
 		if thisMap.Type() != vm.TypeMap {
-			vmInstance.ThrowTypeError("Map.prototype.forEach called on non-Map")
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.forEach called on incompatible receiver")
 		}
 
 		if len(args) < 1 || !args[0].IsCallable() {
-			vmInstance.ThrowTypeError("callback is not a function")
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("callback is not a function")
 		}
 
 		callback := args[0]
@@ -196,10 +193,17 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		mapObj := thisMap.AsMap()
-		mapObj.ForEach(func(key vm.Value, value vm.Value) {
-			// Call callback(value, key, map) with thisArg as 'this'
-			_, _ = vmInstance.Call(callback, thisArg, []vm.Value{value, key, thisMap})
-		})
+		// Iterate manually so we can propagate callback errors
+		for i := 0; i < mapObj.OrderLen(); i++ {
+			key, value, exists := mapObj.GetEntryAt(i)
+			if exists {
+				// Call callback(value, key, map) with thisArg as 'this'
+				_, err := vmInstance.Call(callback, thisArg, []vm.Value{value, key, thisMap})
+				if err != nil {
+					return vm.Undefined, err
+				}
+			}
+		}
 
 		return vm.Undefined, nil
 	}))
@@ -212,7 +216,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	sizeGetter := vm.NewNativeFunction(0, false, "get size", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		if thisMap.Type() != vm.TypeMap {
-			return vm.IntegerValue(0), nil
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.size called on incompatible receiver")
 		}
 		mapObj := thisMap.AsMap()
 		return vm.IntegerValue(int32(mapObj.Size())), nil
@@ -225,7 +229,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	mapProto.SetOwnNonEnumerable("entries", vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		if thisMap.Type() != vm.TypeMap {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.entries called on incompatible receiver")
 		}
 		mapObj := thisMap.AsMap()
 
@@ -273,7 +277,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	mapProto.SetOwnNonEnumerable("values", vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		if thisMap.Type() != vm.TypeMap {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.values called on incompatible receiver")
 		}
 		mapObj := thisMap.AsMap()
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
@@ -307,7 +311,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	mapProto.SetOwnNonEnumerable("keys", vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		if thisMap.Type() != vm.TypeMap {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.keys called on incompatible receiver")
 		}
 		mapObj := thisMap.AsMap()
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()

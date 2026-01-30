@@ -1,7 +1,6 @@
 package builtins
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -148,7 +147,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		regex := thisRegex.AsRegExpObject()
 		// Check for deferred compile error
 		if regex.HasCompileError() {
-			return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+			return vm.Undefined, vmInstance.NewSyntaxError("Invalid regular expression: " + regex.GetCompileError())
 		}
 		if len(args) == 0 {
 			return vm.BooleanValue(false), nil
@@ -166,7 +165,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		regex := thisRegex.AsRegExpObject()
 		// Check for deferred compile error
 		if regex.HasCompileError() {
-			return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+			return vm.Undefined, vmInstance.NewSyntaxError("Invalid regular expression: " + regex.GetCompileError())
 		}
 		if len(args) == 0 {
 			return vm.Null, nil
@@ -236,7 +235,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		regex := thisRegex.AsRegExpObject()
 		// Check for deferred compile error
 		if regex.HasCompileError() {
-			return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+			return vm.Undefined, vmInstance.NewSyntaxError("Invalid regular expression: " + regex.GetCompileError())
 		}
 
 		// Get string argument with proper ToString conversion (ECMAScript step 3)
@@ -301,7 +300,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		regex := thisRegex.AsRegExpObject()
 		// Check for deferred compile error
 		if regex.HasCompileError() {
-			return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+			return vm.Undefined, vmInstance.NewSyntaxError("Invalid regular expression: " + regex.GetCompileError())
 		}
 
 		// Get string argument with proper ToString conversion
@@ -348,7 +347,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		regex := thisRegex.AsRegExpObject()
 		// Check for deferred compile error
 		if regex.HasCompileError() {
-			return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+			return vm.Undefined, vmInstance.NewSyntaxError("Invalid regular expression: " + regex.GetCompileError())
 		}
 
 		// Get string argument with proper ToString conversion
@@ -436,7 +435,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		regex := thisRegex.AsRegExpObject()
 		// Check for deferred compile error
 		if regex.HasCompileError() {
-			return vm.Undefined, fmt.Errorf("SyntaxError: Invalid regular expression: %s", regex.GetCompileError())
+			return vm.Undefined, vmInstance.NewSyntaxError("Invalid regular expression: " + regex.GetCompileError())
 		}
 
 		// Get string argument with proper ToString conversion
@@ -577,7 +576,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// new RegExp() - empty pattern
 			result, err := vm.NewRegExp("(?:)", "")
 			if err != nil {
-				return vm.Undefined, fmt.Errorf("SyntaxError: %s", err.Error())
+				return vm.Undefined, vmInstance.NewSyntaxError(err.Error())
 			}
 			return result, nil
 		}
@@ -589,7 +588,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				existing := arg.AsRegExpObject()
 				result, err := vm.NewRegExp(existing.GetSource(), existing.GetFlags())
 				if err != nil {
-					return vm.Undefined, fmt.Errorf("SyntaxError: %s", err.Error())
+					return vm.Undefined, vmInstance.NewSyntaxError(err.Error())
 				}
 				return result, nil
 			} else {
@@ -597,7 +596,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				pattern := arg.ToString()
 				result, err := vm.NewRegExp(pattern, "")
 				if err != nil {
-					return vm.Undefined, fmt.Errorf("SyntaxError: %s", err.Error())
+					return vm.Undefined, vmInstance.NewSyntaxError(err.Error())
 				}
 				return result, nil
 			}
@@ -608,7 +607,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		flags := args[1].ToString()
 		result, err := vm.NewRegExp(pattern, flags)
 		if err != nil {
-			return vm.Undefined, fmt.Errorf("SyntaxError: %s", err.Error())
+			return vm.Undefined, vmInstance.NewSyntaxError(err.Error())
 		}
 		return result, nil
 	})

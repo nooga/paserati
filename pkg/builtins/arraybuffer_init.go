@@ -1,8 +1,6 @@
 package builtins
 
 import (
-	"fmt"
-
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
@@ -44,26 +42,27 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Add ArrayBuffer prototype properties and methods
 	arrayBufferProto.SetOwnNonEnumerable("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
 		thisBuffer := vmInstance.GetThis()
-		if buffer := thisBuffer.AsArrayBuffer(); buffer != nil {
-			// Return 0 for detached buffers per spec
-			if buffer.IsDetached() {
-				return vm.Number(0), nil
-			}
-			return vm.Number(float64(len(buffer.GetData()))), nil
+		buffer := thisBuffer.AsArrayBuffer()
+		if buffer == nil {
+			return vm.Undefined, vmInstance.NewTypeError("ArrayBuffer.prototype.byteLength called on incompatible receiver")
 		}
-		return vm.Undefined, nil
+		// Return 0 for detached buffers per spec
+		if buffer.IsDetached() {
+			return vm.Number(0), nil
+		}
+		return vm.Number(float64(len(buffer.GetData()))), nil
 	}))
 
 	arrayBufferProto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
 		thisBuffer := vmInstance.GetThis()
 		buffer := thisBuffer.AsArrayBuffer()
 		if buffer == nil {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("ArrayBuffer.prototype.slice called on incompatible receiver")
 		}
 
 		// Throw TypeError if buffer is detached
 		if buffer.IsDetached() {
-			return vm.Undefined, fmt.Errorf("TypeError: Cannot perform slice on a detached ArrayBuffer")
+			return vm.Undefined, vmInstance.NewTypeError("Cannot perform slice on a detached ArrayBuffer")
 		}
 
 		data := buffer.GetData()
@@ -122,8 +121,7 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		size := int(args[0].ToFloat())
 		if size < 0 {
-			// Proper error handling instead of returning Undefined
-			return vm.Undefined, fmt.Errorf("Invalid ArrayBuffer length")
+			return vm.Undefined, vmInstance.NewRangeError("Invalid array buffer length")
 		}
 
 		return vm.NewArrayBuffer(size), nil

@@ -94,8 +94,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisSet := vmInstance.GetThis()
 
 		if thisSet.Type() != vm.TypeSet {
-			// TODO: Should throw TypeError
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.add called on incompatible receiver")
 		}
 
 		if len(args) < 1 {
@@ -115,7 +114,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisSet := vmInstance.GetThis()
 
 		if thisSet.Type() != vm.TypeSet {
-			return vm.BooleanValue(false), nil
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.has called on incompatible receiver")
 		}
 
 		if len(args) < 1 {
@@ -134,7 +133,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisSet := vmInstance.GetThis()
 
 		if thisSet.Type() != vm.TypeSet {
-			return vm.BooleanValue(false), nil
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.delete called on incompatible receiver")
 		}
 
 		if len(args) < 1 {
@@ -153,7 +152,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisSet := vmInstance.GetThis()
 
 		if thisSet.Type() != vm.TypeSet {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.clear called on incompatible receiver")
 		}
 
 		setObj := thisSet.AsSet()
@@ -169,7 +168,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	setProto.SetOwnNonEnumerable("forEach", vm.NewNativeFunction(1, false, "forEach", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
-			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.forEach called on non-Set")
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.forEach called on incompatible receiver")
 		}
 
 		if len(args) < 1 || !args[0].IsCallable() {
@@ -185,10 +184,17 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		setObj := thisSet.AsSet()
-		setObj.ForEach(func(val vm.Value) {
-			// forEach callback receives (value, value, set) - value is passed twice for consistency with Map
-			_, _ = vmInstance.Call(callback, thisArg, []vm.Value{val, val, thisSet})
-		})
+		// Iterate manually so we can propagate callback errors
+		for i := 0; i < setObj.OrderLen(); i++ {
+			val, exists := setObj.GetValueAt(i)
+			if exists {
+				// forEach callback receives (value, value, set) - value is passed twice for consistency with Map
+				_, err := vmInstance.Call(callback, thisArg, []vm.Value{val, val, thisSet})
+				if err != nil {
+					return vm.Undefined, err
+				}
+			}
+		}
 
 		return vm.Undefined, nil
 	}))
@@ -202,7 +208,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	setProto.SetOwnNonEnumerable("values", vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.values called on incompatible receiver")
 		}
 		setObj := thisSet.AsSet()
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
@@ -236,7 +242,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	setProto.SetOwnNonEnumerable("keys", vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.keys called on incompatible receiver")
 		}
 		setObj := thisSet.AsSet()
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
@@ -270,7 +276,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	setProto.SetOwnNonEnumerable("entries", vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.entries called on incompatible receiver")
 		}
 		setObj := thisSet.AsSet()
 		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
@@ -320,7 +326,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	sizeGetter := vm.NewNativeFunction(0, false, "get size", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
-			return vm.IntegerValue(0), nil
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.size called on incompatible receiver")
 		}
 		setObj := thisSet.AsSet()
 		return vm.IntegerValue(int32(setObj.Size())), nil

@@ -1,8 +1,6 @@
 package builtins
 
 import (
-	"fmt"
-
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
@@ -43,7 +41,7 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	asyncGeneratorProto.SetOwnNonEnumerable("next", vm.NewNativeFunction(1, false, "next", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if thisValue.Type() != vm.TypeAsyncGenerator {
-			return vm.Undefined, fmt.Errorf("TypeError: Method AsyncGenerator.prototype.next called on incompatible receiver")
+			return vm.Undefined, vmInstance.NewTypeError("Method AsyncGenerator.prototype.next called on incompatible receiver")
 		}
 		thisGen := thisValue.AsAsyncGenerator()
 
@@ -111,7 +109,7 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	asyncGeneratorProto.SetOwnNonEnumerable("return", vm.NewNativeFunction(1, false, "return", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if thisValue.Type() != vm.TypeAsyncGenerator {
-			return vm.Undefined, fmt.Errorf("TypeError: Method AsyncGenerator.prototype.return called on incompatible receiver")
+			return vm.Undefined, vmInstance.NewTypeError("Method AsyncGenerator.prototype.return called on incompatible receiver")
 		}
 		thisGen := thisValue.AsAsyncGenerator()
 
@@ -137,7 +135,7 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	asyncGeneratorProto.SetOwnNonEnumerable("throw", vm.NewNativeFunction(1, false, "throw", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if thisValue.Type() != vm.TypeAsyncGenerator {
-			return vm.Undefined, fmt.Errorf("TypeError: Method AsyncGenerator.prototype.throw called on incompatible receiver")
+			return vm.Undefined, vmInstance.NewTypeError("Method AsyncGenerator.prototype.throw called on incompatible receiver")
 		}
 		thisGen := thisValue.AsAsyncGenerator()
 

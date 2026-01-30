@@ -2,7 +2,7 @@ package builtins
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"math"
 	"sort"
 	"strconv"
@@ -58,13 +58,7 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 	jsonObj.SetOwnNonEnumerable("parse", vm.NewNativeFunction(1, false, "parse", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			// Throw SyntaxError for missing argument
-			// Create a real SyntaxError instance and return it as an exception
-			ctor, _ := ctx.VM.GetGlobal("SyntaxError")
-			if ctor != vm.Undefined {
-				errObj, _ := ctx.VM.Call(ctor, vm.Undefined, []vm.Value{vm.NewString("Unexpected end of JSON input")})
-				return vm.Undefined, ctx.VM.NewExceptionError(errObj)
-			}
-			return vm.Undefined, fmt.Errorf("SyntaxError: Unexpected end of JSON input")
+			return vm.Undefined, ctx.VM.NewSyntaxError("Unexpected end of JSON input")
 		}
 
 		text := args[0].ToString()
@@ -371,13 +365,9 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 		if visited[ptr] {
 			// Throw TypeError for circular reference
 			if vmInstance != nil {
-				ctor, _ := vmInstance.GetGlobal("TypeError")
-				if ctor != vm.Undefined {
-					errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString("Converting circular structure to JSON")})
-					return "", vmInstance.NewExceptionError(errObj)
-				}
+				return "", vmInstance.NewTypeError("Converting circular structure to JSON")
 			}
-			return "", fmt.Errorf("TypeError: Converting circular structure to JSON")
+			return "", errors.New("TypeError: Converting circular structure to JSON")
 		}
 
 		// Mark as visited
@@ -442,13 +432,9 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 		if visited[ptr] {
 			// Throw TypeError for circular reference
 			if vmInstance != nil {
-				ctor, _ := vmInstance.GetGlobal("TypeError")
-				if ctor != vm.Undefined {
-					errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString("Converting circular structure to JSON")})
-					return "", vmInstance.NewExceptionError(errObj)
-				}
+				return "", vmInstance.NewTypeError("Converting circular structure to JSON")
 			}
-			return "", fmt.Errorf("TypeError: Converting circular structure to JSON")
+			return "", errors.New("TypeError: Converting circular structure to JSON")
 		}
 
 		// Mark as visited
