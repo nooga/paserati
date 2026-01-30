@@ -2113,7 +2113,8 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(stringProto))
 
 	// Add static methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("fromCharCode", vm.NewNativeFunction(0, true, "fromCharCode", func(args []vm.Value) (vm.Value, error) {
+	// ECMAScript spec: String.fromCharCode.length = 1
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("fromCharCode", vm.NewNativeFunction(1, true, "fromCharCode", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewString(""), nil
 		}
@@ -2128,7 +2129,8 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// String.fromCodePoint - creates string from code points (supports full Unicode range)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("fromCodePoint", vm.NewNativeFunction(0, true, "fromCodePoint", func(args []vm.Value) (vm.Value, error) {
+	// ECMAScript spec: String.fromCodePoint.length = 1
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("fromCodePoint", vm.NewNativeFunction(1, true, "fromCodePoint", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewString(""), nil
 		}

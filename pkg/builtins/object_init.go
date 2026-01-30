@@ -823,10 +823,15 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}))
 		// Object.is
 		ctorPropsObj.Properties.SetOwnNonEnumerable("is", vm.NewNativeFunction(2, false, "is", func(args []vm.Value) (vm.Value, error) {
-			if len(args) < 2 {
-				return vm.BooleanValue(false), nil
+			// Missing arguments are treated as undefined per ECMAScript spec
+			var x, y vm.Value = vm.Undefined, vm.Undefined
+			if len(args) >= 1 {
+				x = args[0]
 			}
-			return vm.BooleanValue(sameValue(args[0], args[1])), nil
+			if len(args) >= 2 {
+				y = args[1]
+			}
+			return vm.BooleanValue(sameValue(x, y)), nil
 		}))
 
 		objectCtor = ctorWithProps

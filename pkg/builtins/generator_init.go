@@ -395,6 +395,17 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 	generatorProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), genIterFn, nil, nil, nil)
 
+	// Add Symbol.toStringTag = "Generator" per ECMAScript spec
+	falseVal := false
+	trueVal := true
+	generatorProto.DefineOwnPropertyByKey(
+		vm.NewSymbolKey(SymbolToStringTag),
+		vm.NewString("Generator"),
+		&falseVal, // writable: false
+		&falseVal, // enumerable: false
+		&trueVal,  // configurable: true
+	)
+
 	// Set Generator prototype in VM
 	vmInstance.GeneratorPrototype = vm.NewValueFromPlainObject(generatorProto)
 
