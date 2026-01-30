@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/nooga/paserati/pkg/types"
@@ -2214,7 +2215,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 
 				if !nextMethod.IsCallable() {
-					rejectWithError(fmt.Errorf("iterator.next is not a function"))
+					rejectWithError(errors.New("iterator.next is not a function"))
 					return
 				}
 
@@ -2288,13 +2289,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 										iterateNext()
 									})
 									vmInstance.AddPromiseReaction(mappedValue, false, func(r vm.Value) {
-										rejectWithError(fmt.Errorf("%s", r.ToString()))
+										rejectWithError(errors.New(r.ToString()))
 									})
 									return
 								} else if mp != nil && mp.State == vm.PromiseFulfilled {
 									mappedValue = mp.Result
 								} else if mp != nil && mp.State == vm.PromiseRejected {
-									rejectWithError(fmt.Errorf("%s", mp.Result.ToString()))
+									rejectWithError(errors.New(mp.Result.ToString()))
 									return
 								}
 							}
@@ -2315,13 +2316,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 							if vp != nil && vp.State == vm.PromisePending {
 								vmInstance.AddPromiseReaction(value, true, handleValue)
 								vmInstance.AddPromiseReaction(value, false, func(r vm.Value) {
-									rejectWithError(fmt.Errorf("%s", r.ToString()))
+									rejectWithError(errors.New(r.ToString()))
 								})
 								return
 							} else if vp != nil && vp.State == vm.PromiseFulfilled {
 								value = vp.Result
 							} else if vp != nil && vp.State == vm.PromiseRejected {
-								rejectWithError(fmt.Errorf("%s", vp.Result.ToString()))
+								rejectWithError(errors.New(vp.Result.ToString()))
 								return
 							}
 						}
@@ -2334,13 +2335,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 						if np != nil && np.State == vm.PromisePending {
 							vmInstance.AddPromiseReaction(nextResult, true, handleNextResult)
 							vmInstance.AddPromiseReaction(nextResult, false, func(r vm.Value) {
-								rejectWithError(fmt.Errorf("%s", r.ToString()))
+								rejectWithError(errors.New(r.ToString()))
 							})
 							return
 						} else if np != nil && np.State == vm.PromiseFulfilled {
 							nextResult = np.Result
 						} else if np != nil && np.State == vm.PromiseRejected {
-							rejectWithError(fmt.Errorf("%s", np.Result.ToString()))
+							rejectWithError(errors.New(np.Result.ToString()))
 							return
 						}
 					}
@@ -2429,13 +2430,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 									processNext()
 								})
 								vmInstance.AddPromiseReaction(mappedValue, false, func(r vm.Value) {
-									rejectWithError(fmt.Errorf("%s", r.ToString()))
+									rejectWithError(errors.New(r.ToString()))
 								})
 								return
 							} else if mp != nil && mp.State == vm.PromiseFulfilled {
 								mappedValue = mp.Result
 							} else if mp != nil && mp.State == vm.PromiseRejected {
-								rejectWithError(fmt.Errorf("%s", mp.Result.ToString()))
+								rejectWithError(errors.New(mp.Result.ToString()))
 								return
 							}
 						}
@@ -2456,13 +2457,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 						if kp != nil && kp.State == vm.PromisePending {
 							vmInstance.AddPromiseReaction(kValue, true, handleKValue)
 							vmInstance.AddPromiseReaction(kValue, false, func(r vm.Value) {
-								rejectWithError(fmt.Errorf("%s", r.ToString()))
+								rejectWithError(errors.New(r.ToString()))
 							})
 							return
 						} else if kp != nil && kp.State == vm.PromiseFulfilled {
 							kValue = kp.Result
 						} else if kp != nil && kp.State == vm.PromiseRejected {
-							rejectWithError(fmt.Errorf("%s", kp.Result.ToString()))
+							rejectWithError(errors.New(kp.Result.ToString()))
 							return
 						}
 					}

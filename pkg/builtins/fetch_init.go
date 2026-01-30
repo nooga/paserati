@@ -3,7 +3,7 @@ package builtins
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -276,7 +276,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Response.redirect(url, status?) - returns a redirect response
 		ctorProps.Properties.SetOwnNonEnumerable("redirect", vm.NewNativeFunction(2, false, "redirect", func(args []vm.Value) (vm.Value, error) {
 			if len(args) < 1 {
-				return vm.Undefined, fmt.Errorf("TypeError: Response.redirect requires a URL")
+				return vm.Undefined, vmInstance.NewTypeError("Response.redirect requires a URL")
 			}
 			url := args[0].ToString()
 			status := 302 // Default redirect status
@@ -285,7 +285,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			// Validate redirect status
 			if status != 301 && status != 302 && status != 303 && status != 307 && status != 308 {
-				return vm.Undefined, fmt.Errorf("RangeError: Invalid redirect status code")
+				return vm.Undefined, vmInstance.NewRangeError("Invalid redirect status code")
 			}
 			headers := &FetchHeaders{headers: make(http.Header)}
 			headers.headers.Set("Location", url)
@@ -307,11 +307,11 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Response.json(data, init?) - returns a response with JSON body
 		ctorProps.Properties.SetOwnNonEnumerable("json", vm.NewNativeFunction(2, false, "json", func(args []vm.Value) (vm.Value, error) {
 			if len(args) < 1 {
-				return vm.Undefined, fmt.Errorf("TypeError: Response.json requires data")
+				return vm.Undefined, vmInstance.NewTypeError("Response.json requires data")
 			}
 			jsonBytes, err := args[0].MarshalJSON()
 			if err != nil {
-				return vm.Undefined, fmt.Errorf("TypeError: Failed to serialize data to JSON")
+				return vm.Undefined, vmInstance.NewTypeError("Failed to serialize data to JSON")
 			}
 
 			status := 200
@@ -367,7 +367,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create Request constructor
 	requestConstructorFn := func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
-			return vm.Undefined, fmt.Errorf("TypeError: Request constructor requires at least 1 argument")
+			return vm.Undefined, vmInstance.NewTypeError("Request constructor requires at least 1 argument")
 		}
 
 		req := &FetchRequest{
@@ -456,7 +456,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create fetch function - truly async via goroutines
 	fetchFn := vm.NewNativeFunction(2, false, "fetch", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
-			return vm.Undefined, fmt.Errorf("TypeError: fetch requires at least 1 argument")
+			return vm.Undefined, vmInstance.NewTypeError("fetch requires at least 1 argument")
 		}
 
 		url := args[0].ToString()
@@ -897,7 +897,7 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 	// clone() -> Response (creates a copy of the response)
 	obj.SetOwnNonEnumerable("clone", vm.NewNativeFunction(0, false, "clone", func(args []vm.Value) (vm.Value, error) {
 		if r.bodyUsed {
-			return vm.Undefined, fmt.Errorf("TypeError: Response body is already used")
+			return vm.Undefined, vmInstance.NewTypeError("Response body is already used")
 		}
 
 		// Create a copy of the response with the same body
@@ -977,14 +977,14 @@ func doFetchRequestWithContext(ctx context.Context, vmInstance *vm.VM, url strin
 						// Auto-stringify objects for JSON content type
 						jsonBytes, err := b.MarshalJSON()
 						if err != nil {
-							return vm.Undefined, fmt.Errorf("failed to serialize body to JSON: %w", err)
+							return vm.Undefined, vmInstance.NewTypeError("failed to serialize body to JSON: " + err.Error())
 						}
 						body = bytes.NewReader(jsonBytes)
 					} else if b.Type() == vm.TypeObject || b.Type() == vm.TypeDictObject {
 						// Default to JSON for objects
 						jsonBytes, err := b.MarshalJSON()
 						if err != nil {
-							return vm.Undefined, fmt.Errorf("failed to serialize body to JSON: %w", err)
+							return vm.Undefined, vmInstance.NewTypeError("failed to serialize body to JSON: " + err.Error())
 						}
 						body = bytes.NewReader(jsonBytes)
 					} else {
@@ -1031,12 +1031,12 @@ func doFetchRequestWithContext(ctx context.Context, vmInstance *vm.VM, url strin
 			}
 			switch redirectMode {
 			case "error":
-				return fmt.Errorf("fetch redirect not allowed")
+				return errors.New("fetch redirect not allowed")
 			case "manual":
 				return http.ErrUseLastResponse
 			default: // "follow"
 				if len(via) >= 20 {
-					return fmt.Errorf("too many redirects")
+					return errors.New("too many redirects")
 				}
 				return nil
 			}
@@ -1255,7 +1255,7 @@ func createRequestObject(vmInstance *vm.VM, req *FetchRequest, _ *vm.PlainObject
 	// clone() -> Request
 	obj.SetOwnNonEnumerable("clone", vm.NewNativeFunction(0, false, "clone", func(args []vm.Value) (vm.Value, error) {
 		if req.bodyUsed {
-			return vm.Undefined, fmt.Errorf("TypeError: Request body is already used")
+			return vm.Undefined, vmInstance.NewTypeError("Request body is already used")
 		}
 
 		clonedReq := &FetchRequest{
