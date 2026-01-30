@@ -401,6 +401,24 @@ func (p *Parser) nextToken() {
 	debugPrint("nextToken(): cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
 }
 
+// rescanPeekAsRegex rescans the peek token as a regex literal if it's a SLASH.
+// This is called after parsing statement-ending braces where the next / should be regex.
+func (p *Parser) rescanPeekAsRegex() {
+	if p.peekToken.Type != lexer.SLASH {
+		return // Not a slash, nothing to rescan
+	}
+	// Save lexer state, reposition to peek token's start, and rescan with regex context
+	state := p.l.SaveState()
+	p.l.SetPosition(p.peekToken.StartPos)
+	p.l.SetRegexContext()
+	p.peekToken = p.l.NextToken()
+	// If rescan failed (still SLASH), restore original state
+	if p.peekToken.Type == lexer.SLASH {
+		p.l.RestoreState(state)
+		p.peekToken = p.l.NextToken()
+	}
+}
+
 // expectPeekGT is like expectPeek(GT) but handles >>, >>>, >>=, and >= in generic contexts
 // If peek is >> or >>>, it splits the token and consumes one >
 func (p *Parser) expectPeekGT() bool {
@@ -541,15 +559,27 @@ func (p *Parser) parseStatement() Statement {
 	case lexer.RETURN:
 		return p.parseReturnStatement()
 	case lexer.IF:
-		return p.parseIfStatement()
+		stmt := p.parseIfStatement()
+		// After if/else ending with }, next / should be regex
+		p.rescanPeekAsRegex()
+		return stmt
 	case lexer.WHILE:
-		return p.parseWhileStatement()
+		stmt := p.parseWhileStatement()
+		// After while body ending with }, next / should be regex
+		p.rescanPeekAsRegex()
+		return stmt
 	case lexer.DO:
 		return p.parseDoWhileStatement()
 	case lexer.FOR:
-		return p.parseForStatement()
+		stmt := p.parseForStatement()
+		// After for body ending with }, next / should be regex
+		p.rescanPeekAsRegex()
+		return stmt
 	case lexer.WITH:
-		return p.parseWithStatement()
+		stmt := p.parseWithStatement()
+		// After with body ending with }, next / should be regex
+		p.rescanPeekAsRegex()
+		return stmt
 	case lexer.BREAK:
 		return p.parseBreakStatement()
 	case lexer.SEMICOLON:
@@ -565,29 +595,52 @@ func (p *Parser) parseStatement() Statement {
 		}
 		return p.parseExpressionStatement()
 	case lexer.INTERFACE:
-		return p.parseInterfaceDeclaration()
+		stmt := p.parseInterfaceDeclaration()
+		// After interface ending with }, next / should be regex
+		p.rescanPeekAsRegex()
+		return stmt
 	case lexer.SWITCH:
-		return p.parseSwitchStatement()
+		stmt := p.parseSwitchStatement()
+		// After switch ending with }, next / should be regex
+		p.rescanPeekAsRegex()
+		return stmt
 	case lexer.FUNCTION:
 		stmt := p.parseFunctionDeclarationStatement()
+		// After function declaration ending with }, next / should be regex
+		p.rescanPeekAsRegex()
 		return stmt
 	case lexer.ASYNC:
 		// Check if this is 'async function' (declaration) or async arrow expression
 		// Per ECMAScript spec: async [no LineTerminator here] function
 		// If there's a newline between async and function, 'async' is an identifier reference
 		if p.peekTokenIs(lexer.FUNCTION) && p.peekToken.Line == p.curToken.Line {
-			return p.parseAsyncFunctionDeclarationStatement()
+			stmt := p.parseAsyncFunctionDeclarationStatement()
+			// After async function declaration ending with }, next / should be regex
+			p.rescanPeekAsRegex()
+			return stmt
 		}
 		// Otherwise, treat as expression (async arrow function or 'async' as identifier)
 		return p.parseExpressionStatement()
 	case lexer.CLASS:
-		return p.parseClassDeclarationStatement()
+		stmt := p.parseClassDeclarationStatement()
+		// After class declaration ending with }, next / should be regex
+		p.rescanPeekAsRegex()
+		return stmt
 	case lexer.ENUM:
-		return p.parseEnumDeclarationStatement()
+		stmt := p.parseEnumDeclarationStatement()
+		// After enum ending with }, next / should be regex
+		p.rescanPeekAsRegex()
+		return stmt
 	case lexer.ABSTRACT:
-		return p.parseAbstractClassDeclarationStatement()
+		stmt := p.parseAbstractClassDeclarationStatement()
+		// After abstract class declaration ending with }, next / should be regex
+		p.rescanPeekAsRegex()
+		return stmt
 	case lexer.TRY:
-		return p.parseTryStatement()
+		stmt := p.parseTryStatement()
+		// After try/catch/finally ending with }, next / should be regex
+		p.rescanPeekAsRegex()
+		return stmt
 	case lexer.THROW:
 		return p.parseThrowStatement()
 	case lexer.DEBUGGER:
@@ -611,7 +664,10 @@ func (p *Parser) parseStatement() Statement {
 		if p.isDestructuringAssignment() {
 			return p.parseExpressionStatement()
 		}
-		return p.parseBlockStatement()
+		stmt := p.parseBlockStatement()
+		// After block statement ending with }, next / should be regex
+		p.rescanPeekAsRegex()
+		return stmt
 	case lexer.RBRACE:
 		// End of current block scope; let the caller handle it
 		return nil

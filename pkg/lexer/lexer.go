@@ -365,6 +365,9 @@ type Lexer struct {
 
 	// --- NEW: Previous token tracking for regex context determination ---
 	prevToken TokenType // tracks the previous token type to determine if '/' starts a regex
+
+	// --- NEW: Parser-controlled regex context ---
+	forceRegexContext bool // when true, next '/' is always treated as regex start
 }
 
 // CurrentPosition returns the lexer's current byte position in the input.
@@ -411,6 +414,12 @@ func (l *Lexer) RestoreState(state LexerState) {
 	l.templateStack = state.TemplateStack
 	l.pushedToken = state.PushedToken
 	l.prevToken = state.PrevToken // Restore for regex context determination
+}
+
+// SetRegexContext tells the lexer that the next '/' should be interpreted as a regex literal start.
+// This is called by the parser after parsing statement-ending braces (blocks, functions, classes).
+func (l *Lexer) SetRegexContext() {
+	l.forceRegexContext = true
 }
 
 // SetPosition sets lexer position (legacy method, use SaveState/RestoreState for proper backtracking)
@@ -1200,8 +1209,10 @@ func (l *Lexer) NextToken() Token {
 				return tok // Explicitly return, don't advance char
 			}
 			return l.NextToken() // Get the token after the multiline comment
-		} else if canBeRegexStart(l.prevToken) {
+		} else if l.forceRegexContext || canBeRegexStart(l.prevToken) {
 			// Check for regex context BEFORE /= - patterns like /=/ are valid regex
+			// forceRegexContext is set by parser after statement-ending braces
+			l.forceRegexContext = false // Reset the flag
 			debugPrintf("Attempting regex parse: prevToken=%s, position=%d", l.prevToken, l.position)
 			// Try to read as regex literal
 			pattern, flags, success, foundComplete := l.readRegexLiteral()
