@@ -8,6 +8,38 @@ import (
 	"github.com/nooga/paserati/pkg/vm"
 )
 
+// toIntegerOrInfinityWithVM converts a value to an integer using proper ECMAScript semantics.
+// It calls ToPrimitive if needed and propagates exceptions from valueOf/toString.
+// Returns (result, nil) on success, (0, ErrVMUnwinding) if ToPrimitive threw, or a TypeError for Symbols.
+func toIntegerOrInfinityWithVM(vmInstance *vm.VM, val vm.Value) (int, error) {
+	// Check for Symbol first - cannot convert Symbol to number
+	if val.Type() == vm.TypeSymbol {
+		return 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+	}
+
+	// For primitives, no ToPrimitive call is needed
+	if !val.IsObject() && !val.IsCallable() {
+		return int(val.ToFloat()), nil
+	}
+
+	// For objects, call ToPrimitive which may invoke valueOf/toString
+	vmInstance.EnterHelperCall()
+	primVal := vmInstance.ToPrimitive(val, "number")
+	vmInstance.ExitHelperCall()
+
+	// Check if ToPrimitive threw an exception
+	if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+		return 0, ErrVMUnwinding
+	}
+
+	// Check if ToPrimitive returned a Symbol (from [Symbol.toPrimitive])
+	if primVal.Type() == vm.TypeSymbol {
+		return 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+	}
+
+	return int(primVal.ToFloat()), nil
+}
+
 type ArrayInitializer struct{}
 
 func (a *ArrayInitializer) Name() string {
@@ -183,7 +215,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		length := thisArray.Length()
 		start := 0
 		if len(args) >= 1 && !args[0].IsUndefined() {
-			start = int(args[0].ToFloat())
+			var err error
+			start, err = toIntegerOrInfinityWithVM(vmInstance, args[0])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 			if start < 0 {
 				start = length + start
 				if start < 0 {
@@ -195,7 +234,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		end := length
 		if len(args) >= 2 && !args[1].IsUndefined() {
-			end = int(args[1].ToFloat())
+			var err error
+			end, err = toIntegerOrInfinityWithVM(vmInstance, args[1])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 			if end < 0 {
 				end = length + end
 				if end < 0 {
@@ -223,7 +269,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		length := thisArray.Length()
 		start := 0
 		if len(args) >= 1 {
-			start = int(args[0].ToFloat())
+			var err error
+			start, err = toIntegerOrInfinityWithVM(vmInstance, args[0])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 			if start < 0 {
 				start = length + start
 				if start < 0 {
@@ -235,7 +288,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		deleteCount := length - start
 		if len(args) >= 2 {
-			deleteCount = int(args[1].ToFloat())
+			var err error
+			deleteCount, err = toIntegerOrInfinityWithVM(vmInstance, args[1])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 			if deleteCount < 0 {
 				deleteCount = 0
 			} else if deleteCount > length-start {
@@ -416,7 +476,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		fromIndex := 0
 		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
-			fromIndex = int(args[1].ToFloat())
+			var err error
+			fromIndex, err = toIntegerOrInfinityWithVM(vmInstance, args[1])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 			if fromIndex < 0 {
 				fromIndex = length + fromIndex
 				if fromIndex < 0 {
@@ -456,7 +523,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		fromIndex := length - 1
 		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
-			fromIndex = int(args[1].ToFloat())
+			var err error
+			fromIndex, err = toIntegerOrInfinityWithVM(vmInstance, args[1])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 			if fromIndex < 0 {
 				fromIndex = length + fromIndex
 			} else if fromIndex >= length {
@@ -495,7 +569,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		fromIndex := 0
 		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
-			fromIndex = int(args[1].ToFloat())
+			var err error
+			fromIndex, err = toIntegerOrInfinityWithVM(vmInstance, args[1])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 			if fromIndex < 0 {
 				fromIndex = length + fromIndex
 				if fromIndex < 0 {
@@ -1129,7 +1210,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// 3. Let relativeIndex be ? ToIntegerOrInfinity(index).
 		var relativeIndex int
 		if len(args) >= 1 {
-			relativeIndex = int(args[0].ToFloat())
+			var err error
+			relativeIndex, err = toIntegerOrInfinityWithVM(vmInstance, args[0])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 		}
 
 		// 4. If relativeIndex ≥ 0, let k be relativeIndex. Else let k be len + relativeIndex.
@@ -1280,14 +1368,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		length := arr.Length()
-		if length == 0 {
-			return thisVal, nil
-		}
 
 		// 3. Let relativeTarget be ? ToIntegerOrInfinity(target).
+		// Note: Must process arguments before any early returns, as they may throw
 		var target int
 		if len(args) >= 1 {
-			target = int(args[0].ToFloat())
+			var err error
+			target, err = toIntegerOrInfinityWithVM(vmInstance, args[0])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil // Let exception propagate
+				}
+				return vm.Undefined, err // Return TypeError
+			}
 		}
 		// 4. If relativeTarget < 0, let to be max(len + relativeTarget, 0); else let to be min(relativeTarget, len).
 		var to int
@@ -1306,7 +1399,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// 5. Let relativeStart be ? ToIntegerOrInfinity(start).
 		var start int
 		if len(args) >= 2 {
-			start = int(args[1].ToFloat())
+			var err error
+			start, err = toIntegerOrInfinityWithVM(vmInstance, args[1])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil // Let exception propagate
+				}
+				return vm.Undefined, err // Return TypeError
+			}
 		}
 		// 6. If relativeStart < 0, let from be max(len + relativeStart, 0); else let from be min(relativeStart, len).
 		var from int
@@ -1325,7 +1425,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// 7. If end is undefined, let relativeEnd be len; else let relativeEnd be ? ToIntegerOrInfinity(end).
 		var end int
 		if len(args) >= 3 && args[2].Type() != vm.TypeUndefined {
-			end = int(args[2].ToFloat())
+			var err error
+			end, err = toIntegerOrInfinityWithVM(vmInstance, args[2])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil // Let exception propagate
+				}
+				return vm.Undefined, err // Return TypeError
+			}
 		} else {
 			end = length
 		}
@@ -1389,10 +1496,17 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			value = args[0]
 		}
 
-		// Get start index
+		// Get start index (? ToIntegerOrInfinity)
 		var start int
 		if len(args) >= 2 {
-			start = int(args[1].ToFloat())
+			var err error
+			start, err = toIntegerOrInfinityWithVM(vmInstance, args[1])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 		}
 		if start < 0 {
 			start = length + start
@@ -1403,10 +1517,17 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			start = length
 		}
 
-		// Get end index
+		// Get end index (? ToIntegerOrInfinity)
 		end := length
 		if len(args) >= 3 && args[2].Type() != vm.TypeUndefined {
-			end = int(args[2].ToFloat())
+			var err error
+			end, err = toIntegerOrInfinityWithVM(vmInstance, args[2])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 		}
 		if end < 0 {
 			end = length + end
@@ -1433,10 +1554,17 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.flat called on null or undefined")
 		}
 
-		// 3. Let depthNum be 1 or the provided depth
+		// 3. Let depthNum be ? ToIntegerOrInfinity(depth) (default 1)
 		depth := 1
 		if len(args) >= 1 && args[0].Type() != vm.TypeUndefined {
-			depth = int(args[0].ToFloat())
+			var err error
+			depth, err = toIntegerOrInfinityWithVM(vmInstance, args[0])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 		}
 
 		result := vm.NewArray()
@@ -1644,10 +1772,16 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// Parse start argument
+		// Parse start argument (? ToIntegerOrInfinity)
 		var actualStart int
 		if len(args) >= 1 {
-			start := int(args[0].ToFloat())
+			start, err := toIntegerOrInfinityWithVM(vmInstance, args[0])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 			if start < 0 {
 				actualStart = sourceLength + start
 				if actualStart < 0 {
@@ -1661,10 +1795,16 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// Parse deleteCount argument
+		// Parse deleteCount argument (? ToIntegerOrInfinity)
 		actualDeleteCount := 0
 		if len(args) >= 2 {
-			deleteCount := int(args[1].ToFloat())
+			deleteCount, err := toIntegerOrInfinityWithVM(vmInstance, args[1])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 			if deleteCount < 0 {
 				deleteCount = 0
 			}
@@ -1738,7 +1878,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// 3. Let relativeIndex be ? ToIntegerOrInfinity(index).
 		var index int
 		if len(args) >= 1 {
-			index = int(args[0].ToFloat())
+			var err error
+			index, err = toIntegerOrInfinityWithVM(vmInstance, args[0])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 		}
 
 		// 4. If relativeIndex ≥ 0, let actualIndex be relativeIndex. Else let actualIndex be len + relativeIndex.

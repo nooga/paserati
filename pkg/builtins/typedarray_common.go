@@ -20,7 +20,13 @@ func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {
 			return vm.Undefined, nil
 		}
 
-		index := int(args[0].ToFloat())
+		index, err := toIntegerOrInfinityWithVM(vmInstance, args[0])
+		if err != nil {
+			if err == ErrVMUnwinding {
+				return vm.Undefined, nil
+			}
+			return vm.Undefined, err
+		}
 		if index < 0 {
 			index = length + index
 		}
@@ -46,7 +52,14 @@ func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {
 		searchElement := args[0]
 		fromIndex := 0
 		if len(args) > 1 {
-			fromIndex = int(args[1].ToFloat())
+			var err error
+			fromIndex, err = toIntegerOrInfinityWithVM(vmInstance, args[1])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 		}
 
 		length := ta.GetLength()
@@ -83,7 +96,14 @@ func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {
 		length := ta.GetLength()
 		fromIndex := length - 1
 		if len(args) > 1 {
-			fromIndex = int(args[1].ToFloat())
+			var err error
+			fromIndex, err = toIntegerOrInfinityWithVM(vmInstance, args[1])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 		}
 		if fromIndex < 0 {
 			fromIndex = length + fromIndex
@@ -444,7 +464,13 @@ func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {
 			return thisArray, nil
 		}
 
-		target := int(args[0].ToFloat())
+		target, err := toIntegerOrInfinityWithVM(vmInstance, args[0])
+		if err != nil {
+			if err == ErrVMUnwinding {
+				return vm.Undefined, nil
+			}
+			return vm.Undefined, err
+		}
 		if target < 0 {
 			target = length + target
 			if target < 0 {
@@ -457,7 +483,13 @@ func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {
 
 		start := 0
 		if len(args) > 1 {
-			start = int(args[1].ToFloat())
+			start, err = toIntegerOrInfinityWithVM(vmInstance, args[1])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 		}
 		if start < 0 {
 			start = length + start
@@ -468,7 +500,13 @@ func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {
 
 		end := length
 		if len(args) > 2 && !args[2].IsUndefined() {
-			end = int(args[2].ToFloat())
+			end, err = toIntegerOrInfinityWithVM(vmInstance, args[2])
+			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, err
+			}
 		}
 		if end < 0 {
 			end = length + end
