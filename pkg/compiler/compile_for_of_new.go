@@ -519,11 +519,11 @@ func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.Arra
 			break
 		}
 
-		// Regular element - extract value from iterator
-		extractedReg := c.regAlloc.Alloc()
-		c.compileIteratorNext(iteratorObjReg, extractedReg, doneReg, line, false)
+		// Per ECMAScript 13.15.5.6, evaluate the target reference BEFORE calling iterator.next()
+		// This is critical for correct evaluation order - if target evaluation throws,
+		// next() should not have been called yet, and return() should be called to close iterator.
 
-		// Handle assignment with default value
+		// First, parse the target and default expressions
 		var target parser.Expression
 		var defaultExpr parser.Expression
 
@@ -534,16 +534,31 @@ func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.Arra
 			target = element
 		}
 
-		// Assign to target (with optional default)
+		// Step 1: Evaluate target reference FIRST (this may throw, which triggers iterator cleanup)
+		targetRef, err := c.compileDestructuringTargetRef(target, line)
+		if err != nil {
+			return err
+		}
+
+		// Step 2: NOW call iterator.next() to get the value
+		extractedReg := c.regAlloc.Alloc()
+		c.compileIteratorNext(iteratorObjReg, extractedReg, doneReg, line, false)
+
+		// Step 3: Complete assignment using the pre-evaluated reference
 		if defaultExpr != nil {
-			err := c.compileConditionalAssignment(target, extractedReg, defaultExpr, line)
+			// For default values, we need the conditional assignment pattern
+			// But we already evaluated the target reference, so we need to handle this carefully
+			// The conditional check and default compilation can proceed, then we assign
+			err := c.compileConditionalAssignmentWithTargetRef(targetRef, extractedReg, defaultExpr, line)
 			c.regAlloc.Free(extractedReg)
+			c.freeDestructuringTargetRef(targetRef)
 			if err != nil {
 				return err
 			}
 		} else {
-			err := c.compileRecursiveAssignment(target, extractedReg, line)
+			err := c.assignToDestructuringTargetRef(targetRef, extractedReg, line)
 			c.regAlloc.Free(extractedReg)
+			c.freeDestructuringTargetRef(targetRef)
 			if err != nil {
 				return err
 			}
