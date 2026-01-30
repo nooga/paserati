@@ -311,6 +311,23 @@ func (p *Paserati) CompileProgramWithStrictMode(program *parser.Program, strict 
 	return chunk, errs
 }
 
+// CompileProgramAsScript compiles a parsed program explicitly as Script code (not Module)
+// This is used by Function() constructor where import.meta must not be allowed
+// even if the outer context is a module
+func (p *Paserati) CompileProgramAsScript(program *parser.Program) (*vm.Chunk, []errors.PaseratiError) {
+	// Honor session settings to ignore/skip type errors (used for Test262)
+	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+	p.compiler.SetSkipTypeCheck(p.skipTypeCheck)
+	// Force script mode to disallow import.meta
+	p.compiler.SetForceScriptMode(true)
+	chunk, errs := p.compiler.Compile(program)
+	// Reset the flag after compilation
+	p.compiler.SetForceScriptMode(false)
+	// Sync global names to VM so Function constructor code can access globals
+	p.SyncGlobalNamesFromCompiler()
+	return chunk, errs
+}
+
 // EvalCode implements vm.EvalDriver interface for direct eval at global scope
 // It compiles and executes eval code with the given strict mode inheritance
 // This is used by OpDirectEval when there's no scope descriptor (global scope).

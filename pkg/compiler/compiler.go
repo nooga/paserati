@@ -435,6 +435,9 @@ type Compiler struct {
 	isIndirectEval      bool // True when compiling indirect eval code (let/const should be local, not global)
 	newTargetAvailable  bool // True if new.target is available in current context (false for indirect eval at global scope)
 
+	// --- Script Mode for Function Constructor ---
+	forceScriptMode bool // True when compiling code from Function() constructor (import.meta not allowed)
+
 	// --- Parameter Names Tracking ---
 	parameterNames map[string]bool // Set of parameter names for current function (for var hoisting)
 
@@ -588,6 +591,13 @@ func (c *Compiler) SetStrictMode(strict bool) {
 	c.inheritedStrictMode = strict
 }
 
+// SetForceScriptMode forces script mode for compilation
+// When true, import.meta is not allowed even if the parent is in module mode
+// This is used by Function() constructor to compile code as Script (not Module)
+func (c *Compiler) SetForceScriptMode(force bool) {
+	c.forceScriptMode = force
+}
+
 // syncImportsFromTypeChecker synchronizes import information from the type checker
 // This ensures that imports processed during type checking are available during compilation
 func (c *Compiler) syncImportsFromTypeChecker() {
@@ -678,6 +688,8 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		currentPrivateBrand:     enclosingCompiler.currentPrivateBrand,
 		currentPrivateBrandInfo: enclosingCompiler.currentPrivateBrandInfo,
 		privateBrandStack:       enclosingCompiler.privateBrandStack, // Inherited so nested can access outer class fields
+		// Inherit script mode from Function() constructor - import.meta not allowed in nested functions
+		forceScriptMode:         enclosingCompiler.forceScriptMode,
 	}
 }
 
@@ -1842,6 +1854,13 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		return hint, nil
 
 	case *parser.ImportMetaExpression:
+		// import.meta is only valid in module code (ECMAScript spec)
+		// Also check forceScriptMode which is set by Function() constructor
+		if !c.IsModuleMode() || c.forceScriptMode {
+			err := NewCompileError(node, "'import.meta' is only valid in module code")
+			c.errors = append(c.errors, err) // Also add to errors list for proper propagation
+			return BadRegister, err
+		}
 		// Load import.meta value from module context
 		c.emitLoadImportMeta(hint, node.Token.Line)
 		return hint, nil

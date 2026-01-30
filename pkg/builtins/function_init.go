@@ -395,13 +395,14 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 	}
 
 	// Define interface for accessing compiler without state modification
+	// Use CompileProgramAsScript which forces script mode (disallows import.meta)
 	type driverInterface interface {
-		CompileProgram(*parser.Program) (*vm.Chunk, []errors.PaseratiError)
+		CompileProgramAsScript(*parser.Program) (*vm.Chunk, []errors.PaseratiError)
 	}
 
 	d, ok := driver.(driverInterface)
 	if !ok {
-		return vm.Undefined, fmt.Errorf("SyntaxError: Function constructor - driver doesn't implement CompileProgram (got type %T)", driver)
+		return vm.Undefined, fmt.Errorf("SyntaxError: Function constructor - driver doesn't implement CompileProgramAsScript (got type %T)", driver)
 	}
 
 	// Parse the source code
@@ -417,8 +418,8 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 		return vm.Undefined, fmt.Errorf("SyntaxError: %v", parseErrs[0])
 	}
 
-	// Compile the program (this uses the existing compiler without modifying its state)
-	chunk, compileErrs := d.CompileProgram(prog)
+	// Compile the program as Script code (not Module) - import.meta not allowed
+	chunk, compileErrs := d.CompileProgramAsScript(prog)
 	if len(compileErrs) > 0 {
 		// Create a proper SyntaxError instance that can be caught
 		if ctor, ok := vmInstance.GetGlobal("SyntaxError"); ok && ctor != vm.Undefined {
@@ -502,13 +503,14 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 	}
 
 	// Define interface for accessing compiler without state modification
+	// Use CompileProgramAsScript which forces script mode (disallows import.meta)
 	type driverInterface interface {
-		CompileProgram(*parser.Program) (*vm.Chunk, []errors.PaseratiError)
+		CompileProgramAsScript(*parser.Program) (*vm.Chunk, []errors.PaseratiError)
 	}
 
 	d, ok := driver.(driverInterface)
 	if !ok {
-		return vm.Undefined, fmt.Errorf("SyntaxError: AsyncFunction constructor - driver doesn't implement CompileProgram")
+		return vm.Undefined, fmt.Errorf("SyntaxError: AsyncFunction constructor - driver doesn't implement CompileProgramAsScript")
 	}
 
 	// Parse the source code
@@ -516,12 +518,22 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 	p := parser.NewParser(lx)
 	prog, parseErrs := p.ParseProgram()
 	if len(parseErrs) > 0 {
+		// Create a proper SyntaxError instance that can be caught
+		if ctor, ok := vmInstance.GetGlobal("SyntaxError"); ok && ctor != vm.Undefined {
+			errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(parseErrs[0].Error())})
+			return vm.Undefined, vmInstance.NewExceptionError(errObj)
+		}
 		return vm.Undefined, fmt.Errorf("SyntaxError: %v", parseErrs[0])
 	}
 
-	// Compile the program
-	chunk, compileErrs := d.CompileProgram(prog)
+	// Compile the program as Script code (not Module) - import.meta not allowed
+	chunk, compileErrs := d.CompileProgramAsScript(prog)
 	if len(compileErrs) > 0 {
+		// Create a proper SyntaxError instance that can be caught
+		if ctor, ok := vmInstance.GetGlobal("SyntaxError"); ok && ctor != vm.Undefined {
+			errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(compileErrs[0].Error())})
+			return vm.Undefined, vmInstance.NewExceptionError(errObj)
+		}
 		return vm.Undefined, fmt.Errorf("SyntaxError: %v", compileErrs[0])
 	}
 
