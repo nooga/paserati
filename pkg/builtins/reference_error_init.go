@@ -63,6 +63,9 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		referenceErrorInstance := vm.NewObject(vm.NewValueFromPlainObject(referenceErrorPrototype))
 		referenceErrorInstancePtr := referenceErrorInstance.AsPlainObject()
 
+		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
+		referenceErrorInstancePtr.SetOwn("[[ErrorData]]", vm.Undefined)
+
 		// Set properties (override name, set message and stack)
 		referenceErrorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("ReferenceError"))
 		referenceErrorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))

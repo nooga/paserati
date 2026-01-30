@@ -414,16 +414,53 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.apply: target is not a function")
 		}
 
-		// Convert argsList to array of values
+		// CreateListFromArrayLike(argumentsList)
+		// Per ECMAScript spec:
+		// 1. If Type(obj) is not Object, throw TypeError
+		// 2. Get length from obj.length (may throw)
+		// 3. Iterate indexed properties
+		if !argsList.IsObject() && argsList.Type() != vm.TypeArray {
+			return vm.Undefined, vmInstance.NewTypeError("Reflect.apply: argumentsList is not an object")
+		}
+
 		var callArgs []vm.Value
 		if argsList.Type() == vm.TypeArray {
+			// Fast path for arrays
 			arr := argsList.AsArray()
 			callArgs = make([]vm.Value, arr.Length())
 			for i := 0; i < arr.Length(); i++ {
 				callArgs[i] = arr.Get(i)
 			}
 		} else {
-			return vm.Undefined, vmInstance.NewTypeError("Reflect.apply: argumentsList must be an array")
+			// Generic array-like object: access .length property (may throw)
+			vmInstance.EnterHelperCall()
+			lengthVal, err := vmInstance.GetProperty(argsList, "length")
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				// Exception thrown while accessing .length - propagate it
+				return vm.Undefined, nil
+			}
+			if err != nil {
+				return vm.Undefined, err
+			}
+			length := int(lengthVal.ToFloat())
+			if length < 0 {
+				length = 0
+			}
+			callArgs = make([]vm.Value, length)
+			for i := 0; i < length; i++ {
+				vmInstance.EnterHelperCall()
+				val, err := vmInstance.GetProperty(argsList, strconv.Itoa(i))
+				vmInstance.ExitHelperCall()
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.Undefined, nil
+				}
+				if err != nil {
+					callArgs[i] = vm.Undefined
+				} else {
+					callArgs[i] = val
+				}
+			}
 		}
 
 		// Call the function

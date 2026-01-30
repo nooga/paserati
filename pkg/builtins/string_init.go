@@ -2121,8 +2121,25 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Use runes to properly handle Unicode code points
 		result := make([]rune, len(args))
 		for i, arg := range args {
+			// BigInt to Number throws TypeError per ECMAScript
+			if arg.Type() == vm.TypeBigInt {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
+			}
 			// Use ToNumber to properly call ToPrimitive for objects
-			code := int(vmInstance.ToNumber(arg)) & 0xFFFF // Mask to 16 bits like JS
+			vmInstance.EnterHelperCall()
+			num := vmInstance.ToNumber(arg)
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			// ToUint16: If number is not finite (NaN, +∞, or -∞), return +0
+			var code int
+			if math.IsNaN(num) || math.IsInf(num, 0) {
+				code = 0
+			} else {
+				// Truncate to integer and mask to 16 bits
+				code = int(math.Trunc(num)) & 0xFFFF
+			}
 			result[i] = rune(code)
 		}
 		return vm.NewString(string(result)), nil

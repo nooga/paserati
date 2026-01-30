@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/nooga/paserati/pkg/types"
@@ -190,15 +191,87 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 	return ctx.DefineGlobal("JSON", vm.NewValueFromPlainObject(jsonObj))
 }
 
-// parseJSONToValue converts a JSON string to a VM Value
+// parseJSONToValue converts a JSON string to a VM Value, preserving object key order
 func parseJSONToValue(text string) (vm.Value, error) {
-	var jsonValue interface{}
-	if err := json.Unmarshal([]byte(text), &jsonValue); err != nil {
-		// Return error up so caller can wrap as SyntaxError
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.UseNumber() // Use json.Number to preserve number precision
+	val, err := parseJSONValueFromDecoder(dec)
+	if err != nil {
+		return vm.Undefined, err
+	}
+	// Check for trailing content (JSON should have exactly one value)
+	if dec.More() {
+		return vm.Undefined, errors.New("unexpected token after JSON")
+	}
+	return val, nil
+}
+
+// parseJSONValueFromDecoder reads a JSON value from a decoder, preserving object key order
+func parseJSONValueFromDecoder(dec *json.Decoder) (vm.Value, error) {
+	token, err := dec.Token()
+	if err != nil {
 		return vm.Undefined, err
 	}
 
-	return convertJSONValue(jsonValue), nil
+	switch t := token.(type) {
+	case nil:
+		return vm.Null, nil
+	case bool:
+		return vm.BooleanValue(t), nil
+	case json.Number:
+		f, err := t.Float64()
+		if err != nil {
+			return vm.Undefined, err
+		}
+		return vm.NumberValue(f), nil
+	case string:
+		return vm.NewString(t), nil
+	case json.Delim:
+		switch t {
+		case '{':
+			// Parse object, preserving key order
+			obj := vm.NewObject(vm.Null).AsPlainObject()
+			for dec.More() {
+				// Read key
+				keyToken, err := dec.Token()
+				if err != nil {
+					return vm.Undefined, err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return vm.Undefined, errors.New("expected string key in object")
+				}
+				// Read value
+				value, err := parseJSONValueFromDecoder(dec)
+				if err != nil {
+					return vm.Undefined, err
+				}
+				obj.SetOwnNonEnumerable(key, value)
+			}
+			// Consume closing '}'
+			if _, err := dec.Token(); err != nil {
+				return vm.Undefined, err
+			}
+			return vm.NewValueFromPlainObject(obj), nil
+		case '[':
+			// Parse array
+			var elements []vm.Value
+			for dec.More() {
+				elem, err := parseJSONValueFromDecoder(dec)
+				if err != nil {
+					return vm.Undefined, err
+				}
+				elements = append(elements, elem)
+			}
+			// Consume closing ']'
+			if _, err := dec.Token(); err != nil {
+				return vm.Undefined, err
+			}
+			return vm.NewArrayWithArgs(elements), nil
+		}
+	}
+
+	return vm.Undefined, errors.New("unexpected JSON token")
 }
 
 // convertJSONValue converts a Go interface{} from json.Unmarshal to a VM Value

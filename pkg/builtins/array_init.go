@@ -2008,7 +2008,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
 		}
-		return vm.BooleanValue(args[0].Type() == vm.TypeArray), nil
+		arg := args[0]
+		// Check if it's an Array type
+		if arg.Type() == vm.TypeArray {
+			return vm.BooleanValue(true), nil
+		}
+		// Per ECMAScript, Array.prototype is an Array exotic object and isArray should return true
+		// Check if arg is the Array.prototype object
+		if arg.IsObject() && vmInstance.ArrayPrototype.IsObject() {
+			if arg.AsPlainObject() == vmInstance.ArrayPrototype.AsPlainObject() {
+				return vm.BooleanValue(true), nil
+			}
+		}
+		return vm.BooleanValue(false), nil
 	}))
 
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {

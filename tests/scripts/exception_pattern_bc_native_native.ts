@@ -1,4 +1,4 @@
-// expect: Caught native->native error: invalid character 'i' looking for beginning of object key string
+// expect: Caught native->native error: invalid character 'i'
 // Test bc -> native -> native exception pattern
 // We need to find a native function that calls another native function
 

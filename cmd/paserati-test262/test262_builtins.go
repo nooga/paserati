@@ -137,6 +137,8 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 				}
 				// Create instance with the realm's local prototype
 				inst := vm.NewObject(vm.NewValueFromPlainObject(localProto)).AsPlainObject()
+				// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
+				inst.SetOwn("[[ErrorData]]", vm.Undefined)
 				inst.SetOwn("name", vm.NewString(name))
 				inst.SetOwn("message", vm.NewString(msg))
 				inst.SetOwn("stack", vm.NewString(ctx.VM.CaptureStackTrace()))

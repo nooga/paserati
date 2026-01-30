@@ -42,6 +42,65 @@ func formatExponent(s string) string {
 	return mantissa + sign + expPart
 }
 
+// formatToExponential formats a number in exponential notation with JavaScript-style rounding.
+// JavaScript uses "round half away from zero" while Go uses "round half to even" (banker's rounding).
+// For high precision (>= 15 digits), we use Go's default formatting to preserve precision.
+func formatToExponential(num float64, fractionDigits int) string {
+	if num == 0 {
+		if fractionDigits == 0 {
+			return "0e+0"
+		}
+		return "0." + strings.Repeat("0", fractionDigits) + "e+0"
+	}
+
+	// For high precision, use Go's format to preserve IEEE 754 precision correctly
+	if fractionDigits >= 15 {
+		result := strconv.FormatFloat(num, 'e', fractionDigits, 64)
+		return formatExponent(result)
+	}
+
+	// Handle negative numbers
+	negative := num < 0
+	num = math.Abs(num)
+
+	// Calculate the exponent
+	exp := int(math.Floor(math.Log10(num)))
+
+	// Scale the number to have one digit before the decimal point
+	mantissa := num / math.Pow(10, float64(exp))
+
+	// Apply JavaScript-style rounding (round half away from zero)
+	// Scale up to the desired precision, round, then scale back
+	scale := math.Pow(10, float64(fractionDigits))
+	mantissa = math.Floor(mantissa*scale+0.5) / scale
+
+	// Check if rounding caused mantissa to overflow (e.g., 9.9999... -> 10.0)
+	if mantissa >= 10 {
+		mantissa /= 10
+		exp++
+	}
+
+	// Format the result
+	var result string
+	if fractionDigits == 0 {
+		result = strconv.FormatFloat(mantissa, 'f', 0, 64)
+	} else {
+		result = strconv.FormatFloat(mantissa, 'f', fractionDigits, 64)
+	}
+
+	// Build exponential string
+	expSign := "+"
+	if exp < 0 {
+		expSign = "-"
+		exp = -exp
+	}
+
+	if negative {
+		return "-" + result + "e" + expSign + strconv.Itoa(exp)
+	}
+	return result + "e" + expSign + strconv.Itoa(exp)
+}
+
 // formatToPrecision formats a number with the given precision, matching JS behavior
 func formatToPrecision(num float64, precision int) string {
 	if num == 0 {
@@ -190,7 +249,22 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		var radix int = 10
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
-			r := args[0].ToFloat()
+			// ECMAScript: ToInteger must be called first, which can throw
+			// Symbol and BigInt to Number throw TypeError, valueOf() can throw
+			arg := args[0]
+			if arg.Type() == vm.TypeSymbol {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+			}
+			if arg.Type() == vm.TypeBigInt {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
+			}
+			// For objects, call ToNumber which invokes valueOf/toString
+			vmInstance.EnterHelperCall()
+			r := vmInstance.ToNumber(arg)
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
 			// ToInteger per spec (truncate to integer)
 			if math.IsNaN(r) {
 				r = 0
@@ -228,7 +302,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 	}))
 
-	numberProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(2, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
+	numberProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
 		thisNum := vmInstance.GetThis()
 
 		// Check if this is a number
@@ -250,9 +324,14 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// If this is a Number wrapper object, extract [[PrimitiveValue]]
+		// IMPORTANT: Must verify the [[PrimitiveValue]] is actually a Number type
+		// (String objects also have [[PrimitiveValue]] but with string type)
 		if thisNum.IsObject() {
 			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
-				return primitiveVal, nil
+				// Verify it's a Number primitive
+				if primitiveVal.Type() == vm.TypeFloatNumber || primitiveVal.Type() == vm.TypeIntegerNumber {
+					return primitiveVal, nil
+				}
 			}
 		}
 
@@ -277,7 +356,23 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// ToInteger the fractionDigits (default 0)
 		digits := 0
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
-			fd := args[0].ToFloat()
+			// ECMAScript: ToInteger must be called first, which can throw
+			// Symbol and BigInt to Number throw TypeError, valueOf() can throw
+			arg := args[0]
+			if arg.Type() == vm.TypeSymbol {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+			}
+			if arg.Type() == vm.TypeBigInt {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
+			}
+			// For objects, call ToNumber which invokes valueOf/toString
+			vmInstance.EnterHelperCall()
+			fd := vmInstance.ToNumber(arg)
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			// ToInteger per spec (truncate to integer)
 			if math.IsNaN(fd) {
 				fd = 0
 			}
@@ -326,7 +421,45 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		numVal := thisNum.ToFloat()
 
-		// Handle special cases first
+		// ECMAScript spec order:
+		// 1. thisNumberValue(this) - done above
+		// 2. ToInteger(fractionDigits) - must happen BEFORE NaN/Infinity check
+		// 3. If x is not finite, return ! Number::toString(x)
+
+		// ECMAScript spec order:
+		// Step 2: Let f be ? ToInteger(fractionDigits) - can throw
+		// Step 4: If x is not finite, return ! Number::toString(x)
+		// Step 5: If f < 0 or f > 100, throw a RangeError exception
+
+		// Step 2: Check fractionDigits argument FIRST
+		digits := 0
+		fractionDigitsSpecified := false
+		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
+			fractionDigitsSpecified = true
+			// ECMAScript: ToInteger must be called first, which can throw
+			// Symbol and BigInt to Number throw TypeError, valueOf() can throw
+			arg := args[0]
+			if arg.Type() == vm.TypeSymbol {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+			}
+			if arg.Type() == vm.TypeBigInt {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
+			}
+			// For objects, call ToNumber which invokes valueOf/toString
+			vmInstance.EnterHelperCall()
+			fd := vmInstance.ToNumber(arg)
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			// ToInteger per spec (truncate to integer)
+			if math.IsNaN(fd) {
+				fd = 0
+			}
+			digits = int(fd)
+		}
+
+		// Step 4: Handle NaN/Infinity AFTER ToInteger but BEFORE range check
 		if math.IsNaN(numVal) {
 			return vm.NewString("NaN"), nil
 		}
@@ -337,35 +470,28 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewString("-Infinity"), nil
 		}
 
+		// Step 5: Range check AFTER NaN/Infinity check (only if fractionDigits was specified)
+		if fractionDigitsSpecified && (digits < 0 || digits > 100) {
+			return vm.Undefined, vmInstance.NewRangeError("toExponential() digits argument must be between 0 and 100")
+		}
+
 		// Normalize -0 to 0 (per ECMAScript spec, toExponential(-0) returns "0e+0")
 		if numVal == 0 {
 			numVal = math.Abs(numVal) // This converts -0 to +0
 		}
 
-		// Check fractionDigits argument
-		digits := -1 // -1 means "as many as needed"
-		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
-			// ToInteger the fractionDigits
-			fd := args[0].ToFloat()
-			if math.IsNaN(fd) {
-				fd = 0
-			}
-			digits = int(fd)
-			if digits < 0 || digits > 100 {
-				return vm.Undefined, vmInstance.NewRangeError("toExponential() digits argument must be between 0 and 100")
-			}
-		}
-
 		var result string
-		if digits == -1 {
+		if !fractionDigitsSpecified {
 			// Use minimum digits needed (Go's default precision)
 			result = strconv.FormatFloat(numVal, 'e', -1, 64)
+			// Remove leading zeros from exponent (e.g., "1e+02" -> "1e+2")
+			result = formatExponent(result)
 		} else {
-			result = strconv.FormatFloat(numVal, 'e', digits, 64)
+			// Use custom formatting with JavaScript-style rounding (round half away from zero)
+			result = formatToExponential(numVal, digits)
 		}
 
-		// Remove leading zeros from exponent (e.g., "1e+02" -> "1e+2")
-		return vm.NewString(formatExponent(result)), nil
+		return vm.NewString(result), nil
 	}))
 
 	numberProto.SetOwnNonEnumerable("toPrecision", vm.NewNativeFunction(1, false, "toPrecision", func(args []vm.Value) (vm.Value, error) {
@@ -399,14 +525,29 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewString(thisNum.ToString()), nil
 		}
 
-		// ToInteger the precision
-		p := args[0].ToFloat()
+		// ECMAScript: ToInteger must be called FIRST, which can throw
+		// Symbol and BigInt to Number throw TypeError, valueOf() can throw
+		arg := args[0]
+		if arg.Type() == vm.TypeSymbol {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+		}
+		if arg.Type() == vm.TypeBigInt {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
+		}
+		// For objects, call ToNumber which invokes valueOf/toString
+		vmInstance.EnterHelperCall()
+		p := vmInstance.ToNumber(arg)
+		vmInstance.ExitHelperCall()
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+			return vm.Undefined, nil
+		}
+		// ToInteger per spec (truncate to integer)
 		if math.IsNaN(p) {
 			p = 0
 		}
 		precision := int(p)
 
-		// Per ECMAScript spec: Check NaN/Infinity BEFORE range error
+		// Per ECMAScript spec: Check NaN/Infinity AFTER ToInteger, but BEFORE range error
 		// See https://tc39.es/ecma262/#sec-number.prototype.toprecision steps 4-7
 		if math.IsNaN(numVal) {
 			return vm.NewString("NaN"), nil
@@ -629,7 +770,11 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil
 	}))
 
-	numberConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vmInstance.NumberPrototype)
+	// Set Number.prototype with proper property descriptor (writable:false, enumerable:false, configurable:false)
+	protoWritable := false
+	protoEnumerable := false
+	protoConfigurable := false
+	numberConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("prototype", vmInstance.NumberPrototype, &protoWritable, &protoEnumerable, &protoConfigurable)
 
 	// Set constructor property on prototype
 	numberProto.SetOwnNonEnumerable("constructor", numberConstructor)

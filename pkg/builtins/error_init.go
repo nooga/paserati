@@ -94,6 +94,9 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		errorInstance := vm.NewObject(vm.NewValueFromPlainObject(errorPrototype))
 		errorInstancePtr := errorInstance.AsPlainObject()
 
+		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
+		errorInstancePtr.SetOwn("[[ErrorData]]", vm.Undefined)
+
 		// Set properties
 		errorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("Error"))
 		errorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
@@ -193,6 +196,8 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 			message = args[0].ToString()
 		}
 		inst := vm.NewObject(vm.NewValueFromPlainObject(proto)).AsPlainObject()
+		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
+		inst.SetOwn("[[ErrorData]]", vm.Undefined)
 		inst.SetOwnNonEnumerable("name", vm.NewString(name))
 		inst.SetOwnNonEnumerable("message", vm.NewString(message))
 		inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))
@@ -208,48 +213,23 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 	return ctx.DefineGlobal(name, ctor)
 }
 
-// isErrorValue checks if a value is an Error instance (has Error.prototype in its chain)
+// isErrorValue checks if a value has the [[ErrorData]] internal slot
+// Per ECMAScript spec, Error.isError checks for [[ErrorData]], not prototype chain
 func isErrorValue(vmInstance *vm.VM, val vm.Value) bool {
 	// Must be an object-like value
 	if !val.IsObject() {
 		return false
 	}
 
-	// Get the Error.prototype to compare against
-	errorProto := vmInstance.ErrorPrototype
-
-	// Walk the prototype chain
-	current := val
-	for {
-		var proto vm.Value
-
-		// Get prototype based on object type
-		if po := current.AsPlainObject(); po != nil {
-			proto = po.GetPrototype()
-		} else if d := current.AsDictObject(); d != nil {
-			proto = d.GetPrototype()
-		} else {
-			// Not a valid object type for prototype chain walking
-			return false
-		}
-
-		// End of prototype chain
-		if proto.Type() == vm.TypeNull || proto.Type() == vm.TypeUndefined {
-			return false
-		}
-
-		// Check if this prototype is Error.prototype
-		if proto.Type() == errorProto.Type() {
-			// Compare the actual objects
-			if protoPO := proto.AsPlainObject(); protoPO != nil {
-				if errorProtoPO := errorProto.AsPlainObject(); errorProtoPO != nil {
-					if protoPO == errorProtoPO {
-						return true
-					}
-				}
-			}
-		}
-
-		current = proto
+	// Check for [[ErrorData]] internal slot on the object itself
+	if po := val.AsPlainObject(); po != nil {
+		_, hasErrorData := po.GetOwn("[[ErrorData]]")
+		return hasErrorData
 	}
+	if d := val.AsDictObject(); d != nil {
+		_, hasErrorData := d.GetOwn("[[ErrorData]]")
+		return hasErrorData
+	}
+
+	return false
 }
