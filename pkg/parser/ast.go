@@ -2122,11 +2122,14 @@ func (edd *ExportDefaultDeclaration) String() string {
 }
 
 // ExportAllDeclaration represents: export * from "module" or export * as name from "module"
+// Also handles: export * as "string" from "module" (arbitrary module namespace names)
+// And: export * from "module" with { type: "json" } (import attributes)
 type ExportAllDeclaration struct {
-	Token      lexer.Token    // The 'export' token
-	Exported   *Identifier    // Optional: export * as name from "module"
-	Source     *StringLiteral // The module source
-	IsTypeOnly bool           // true for "export type * from" statements
+	Token      lexer.Token       // The 'export' token
+	Exported   Expression        // Optional: export * as name from "module" or export * as "string" from "module"
+	Source     *StringLiteral    // The module source
+	IsTypeOnly bool              // true for "export type * from" statements
+	Attributes map[string]string // Optional import attributes (e.g., { type: "json" })
 }
 
 func (ead *ExportAllDeclaration) statementNode()       {}

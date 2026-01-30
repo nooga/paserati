@@ -4063,8 +4063,14 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 		}(), sourceModule)
 
 	if node.Exported != nil {
-		// export * as name from "module"
-		exportName := node.Exported.Value
+		// export * as name from "module" or export * as "string" from "module"
+		var exportName string
+		switch exp := node.Exported.(type) {
+		case *parser.Identifier:
+			exportName = exp.Value
+		case *parser.StringLiteral:
+			exportName = exp.Value
+		}
 		debugPrintf("// [Checker] Export all as namespace: %s\n", exportName)
 
 		if c.IsModuleMode() {

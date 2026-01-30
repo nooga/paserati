@@ -10330,6 +10330,13 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 			p.nextToken() // consume current identifier/alias
 			p.nextToken() // consume comma
 
+			// Check for trailing comma: { x, }
+			if p.curToken.Type == lexer.RBRACE {
+				// Trailing comma allowed, we're already at RBRACE
+				// Don't call expectPeek since we're already there
+				return specs
+			}
+
 			// Next specifier should be identifier, string, default, or type
 			if p.curToken.Type != lexer.IDENT && p.curToken.Type != lexer.STRING &&
 				p.curToken.Type != lexer.DEFAULT && p.curToken.Type != lexer.TYPE {
@@ -10419,20 +10426,29 @@ func (p *Parser) parseExportDefaultDeclaration(exportToken lexer.Token) *ExportD
 }
 
 // parseExportAllDeclaration parses: export * from "module" or export * as name from "module" or export type * from "module"
+// Also handles: export * as "string" from "module" (arbitrary module namespace names)
+// And: export * as default from "module"
 func (p *Parser) parseExportAllDeclaration(exportToken lexer.Token, isTypeOnly bool) *ExportAllDeclaration {
 	stmt := &ExportAllDeclaration{Token: exportToken, IsTypeOnly: isTypeOnly}
 
-	// Check for optional 'as name'
+	// Check for optional 'as name' or 'as "string"' or 'as default'
 	if p.peekToken.Type == lexer.AS {
 		p.nextToken() // consume '*'
 		p.nextToken() // consume 'as'
 
-		if p.curToken.Type != lexer.IDENT {
-			p.peekError(lexer.IDENT)
+		// Accept identifier, string literal, or 'default' keyword
+		if p.curToken.Type == lexer.IDENT {
+			stmt.Exported = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		} else if p.curToken.Type == lexer.STRING {
+			// Arbitrary module namespace names: export * as "name" from "module"
+			stmt.Exported = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+		} else if p.curToken.Type == lexer.DEFAULT {
+			// export * as default from "module"
+			stmt.Exported = &Identifier{Token: p.curToken, Value: "default"}
+		} else {
+			p.addError(p.curToken, "expected identifier, string literal, or 'default' after 'as' in export declaration")
 			return nil
 		}
-
-		stmt.Exported = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
 
 	// Expect 'from' keyword
@@ -10448,6 +10464,17 @@ func (p *Parser) parseExportAllDeclaration(exportToken lexer.Token, isTypeOnly b
 	stmt.Source = &StringLiteral{
 		Token: p.curToken,
 		Value: p.curToken.Literal,
+	}
+
+	// Parse import attributes (import assertions): with { type: "json" }
+	if p.peekToken.Type == lexer.WITH {
+		p.nextToken() // consume source string
+		p.nextToken() // consume 'with'
+
+		stmt.Attributes = p.parseImportAttributes()
+		if stmt.Attributes == nil {
+			return nil
+		}
 	}
 
 	// Optional semicolon
@@ -10497,12 +10524,33 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken lexer.Tok
 
 	// Parse export specifiers - first specifier can be identifier, string, or keyword
 	p.nextToken() // move past '{'
+
+	var specifiers []ExportSpecifier
+
+	// Handle empty export: export {}
+	if p.curToken.Type == lexer.RBRACE {
+		stmt.Specifiers = specifiers
+		// Check for optional 'from' clause
+		if p.peekToken.Type == lexer.FROM {
+			p.nextToken() // consume '}'
+			p.nextToken() // consume 'from'
+
+			if p.curToken.Type != lexer.STRING {
+				p.peekError(lexer.STRING)
+				return nil
+			}
+			stmt.Source = &StringLiteral{
+				Token: p.curToken,
+				Value: p.curToken.Literal,
+			}
+		}
+		return stmt
+	}
+
 	if !isExportSpecifierName(p.curToken.Type) {
 		p.addError(p.curToken, "expected identifier or string in export specifier")
 		return nil
 	}
-
-	var specifiers []ExportSpecifier
 
 	for {
 		// Parse export specifier - can be identifier, string literal, or keyword
@@ -10542,6 +10590,27 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken lexer.Tok
 		}
 		p.nextToken() // consume current identifier/alias
 		p.nextToken() // consume comma
+
+		// Check for trailing comma: export { a, }
+		if p.curToken.Type == lexer.RBRACE {
+			// Trailing comma allowed, we're already at RBRACE
+			stmt.Specifiers = specifiers
+			// Now handle optional 'from' clause
+			if p.peekToken.Type == lexer.FROM {
+				p.nextToken() // consume '}'
+				p.nextToken() // consume 'from'
+
+				if p.curToken.Type != lexer.STRING {
+					p.peekError(lexer.STRING)
+					return nil
+				}
+				stmt.Source = &StringLiteral{
+					Token: p.curToken,
+					Value: p.curToken.Literal,
+				}
+			}
+			return stmt
+		}
 
 		if !isExportSpecifierName(p.curToken.Type) {
 			p.addError(p.curToken, "expected identifier or string in export specifier")
