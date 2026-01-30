@@ -1789,12 +1789,19 @@ func (c *Compiler) compileNestedObjectDestructuring(objectLit *parser.ObjectLite
 
 	// Convert object properties to destructuring properties
 	for _, pair := range objectLit.Properties {
-		// Check for spread element first - this is a rest property like {...rest}
+		// Check for spread element first - this is a rest property like {...rest} or {...src.y}
 		if spread, ok := pair.Key.(*parser.SpreadElement); ok {
-			// SpreadElement's Argument is the target identifier (e.g., 'rest' in '...rest')
-			if ident, ok := spread.Argument.(*parser.Identifier); ok {
+			// SpreadElement's Argument is the target - can be an identifier or member expression
+			// e.g., 'rest' in '...rest' or 'src.y' in '...src.y'
+			switch target := spread.Argument.(type) {
+			case *parser.Identifier:
 				destructureAssign.RestProperty = &parser.DestructuringElement{
-					Target: ident,
+					Target: target,
+					IsRest: true,
+				}
+			case *parser.MemberExpression:
+				destructureAssign.RestProperty = &parser.DestructuringElement{
+					Target: target,
 					IsRest: true,
 				}
 			}
