@@ -316,8 +316,15 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		// Arrow functions inherit homeObject from their enclosing scope
 		if calleeFunc.IsArrowFunction {
 			newFrame.homeObject = currentFrame.homeObject
-		} else {
+		} else if calleeFunc.HomeObject.Type() != TypeUndefined && calleeFunc.HomeObject.Type() != TypeNull {
+			// Use the function's defined HomeObject (set when method is defined on prototype/object)
 			newFrame.homeObject = calleeFunc.HomeObject
+		} else if thisValue.Type() != TypeUndefined && thisValue.Type() != TypeNull {
+			// Fall back to thisValue for method calls where HomeObject wasn't explicitly set
+			// This is important for static field initializers called as methods on the constructor
+			newFrame.homeObject = thisValue
+		} else {
+			newFrame.homeObject = Undefined
 		}
 		newFrame.isConstructorCall = false
 		newFrame.isDirectCall = false

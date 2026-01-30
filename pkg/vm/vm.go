@@ -5130,6 +5130,14 @@ startExecution:
 					} else if frame.isConstructorCall {
 						cl.CapturedNewTarget = frame.newTargetValue
 					}
+					// Capture [[HomeObject]] from enclosing scope for super property access (super.prop)
+					// If enclosing frame is itself an arrow function, use its captured home object
+					// Otherwise use the frame's homeObject
+					if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+						cl.CapturedHomeObject = frame.closure.CapturedHomeObject
+					} else {
+						cl.CapturedHomeObject = frame.homeObject
+					}
 					// Capture arguments from enclosing non-arrow function
 					// NOTE: Do NOT set frame.argumentsObject here - that would pollute the frame
 					if frame.argumentsObject.Type() != TypeUndefined {
@@ -5271,6 +5279,14 @@ startExecution:
 						cl.CapturedNewTarget = frame.closure.CapturedNewTarget
 					} else if frame.isConstructorCall {
 						cl.CapturedNewTarget = frame.newTargetValue
+					}
+					// Capture [[HomeObject]] from enclosing scope for super property access (super.prop)
+					// If enclosing frame is itself an arrow function, use its captured home object
+					// Otherwise use the frame's homeObject
+					if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+						cl.CapturedHomeObject = frame.closure.CapturedHomeObject
+					} else {
+						cl.CapturedHomeObject = frame.homeObject
 					}
 					// Capture arguments from enclosing non-arrow function
 					// NOTE: Do NOT set frame.argumentsObject here - that would pollute the frame
@@ -9900,7 +9916,13 @@ startExecution:
 			// Per ECMAScript spec: super.prop looks up property in the prototype of the home object
 			// The home object is where the method was originally defined
 
-			homeObject := frame.homeObject
+			// For arrow functions, use the captured [[HomeObject]] from lexical scope
+			var homeObject Value
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+				homeObject = frame.closure.CapturedHomeObject
+			} else {
+				homeObject = frame.homeObject
+			}
 			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
 				frame.ip = ip
 				vm.runtimeError("super keyword is only valid inside methods")
@@ -9949,14 +9971,26 @@ startExecution:
 			}
 
 			// Get 'this' value for receiver binding
-			thisValue := frame.thisValue
+			// For arrow functions, use the captured 'this' from lexical scope
+			var thisValue Value
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+				thisValue = frame.closure.CapturedThis
+			} else {
+				thisValue = frame.thisValue
+			}
 			if debugVM {
 				fmt.Printf("[DEBUG OpGetSuper] thisValue type=%d, value=%s\n", thisValue.Type(), thisValue.Inspect())
 			}
 
 			// Get the home object to determine super base
 			// Per ECMAScript spec: super base = Object.getPrototypeOf([[HomeObject]])
-			homeObject := frame.homeObject
+			// For arrow functions, use the captured [[HomeObject]] from lexical scope
+			var homeObject Value
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+				homeObject = frame.closure.CapturedHomeObject
+			} else {
+				homeObject = frame.homeObject
+			}
 			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
 				frame.ip = ip
 				vm.runtimeError("super keyword is only valid inside methods")
@@ -10175,11 +10209,23 @@ startExecution:
 			propertyName := constants[nameIdx].ToString()
 
 			// Get 'this' value for receiver binding
-			thisValue := frame.thisValue
+			// For arrow functions, use the captured 'this' from lexical scope
+			var thisValue Value
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+				thisValue = frame.closure.CapturedThis
+			} else {
+				thisValue = frame.thisValue
+			}
 
 			// Get the home object to determine super base
 			// Per ECMAScript spec: super base = Object.getPrototypeOf([[HomeObject]])
-			homeObject := frame.homeObject
+			// For arrow functions, use the captured [[HomeObject]] from lexical scope
+			var homeObject Value
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+				homeObject = frame.closure.CapturedHomeObject
+			} else {
+				homeObject = frame.homeObject
+			}
 			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
 				frame.ip = ip
 				vm.runtimeError("super keyword is only valid inside methods")
@@ -10221,118 +10267,152 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
-			// Set the property on the prototype (or call setter if it exists)
-			if protoValue.Type() == TypeObject {
-				protoObj := protoValue.AsPlainObject()
-				value := registers[valueReg]
+			// Set the property: look up setter in protoValue, set on thisValue
+			value := registers[valueReg]
 
-				// Check if the property is an accessor (getter/setter)
-				if _, setter, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && setter.Type() != TypeUndefined {
-					// Call the setter with 'this' bound to the original object (not the prototype)
-					_, err := vm.Call(setter, thisValue, []Value{value})
-					if err != nil {
-						frame.ip = ip
-						if ee, ok := err.(ExceptionError); ok {
-							vm.throwException(ee.GetExceptionValue())
-							if !vm.unwinding {
-								continue
-							}
-							return InterpretRuntimeError, Undefined
+			// Check if the super base has a setter for this property
+			var setter Value = Undefined
+			switch protoValue.Type() {
+			case TypeObject:
+				protoObj := protoValue.AsPlainObject()
+				if _, s, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && s.Type() != TypeUndefined {
+					setter = s
+				}
+			case TypeClosure:
+				// For closures (class constructors), check Properties
+				cl := protoValue.AsClosure()
+				if cl.Properties != nil {
+					if _, s, _, _, ok := cl.Properties.GetOwnAccessor(propertyName); ok && s.Type() != TypeUndefined {
+						setter = s
+					}
+				}
+			case TypeFunction:
+				fn := protoValue.AsFunction()
+				if fn.Properties != nil {
+					if _, s, _, _, ok := fn.Properties.GetOwnAccessor(propertyName); ok && s.Type() != TypeUndefined {
+						setter = s
+					}
+				}
+			}
+
+			// If there's a setter, call it with 'this' bound to the original object
+			if setter.Type() != TypeUndefined {
+				_, err := vm.Call(setter, thisValue, []Value{value})
+				if err != nil {
+					frame.ip = ip
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+						if !vm.unwinding {
+							continue
 						}
-						// Wrap non-exception Go error
-						var excVal Value
-						if errCtor, ok := vm.GetGlobal("Error"); ok {
-							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-								excVal = res
-							} else {
-								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-								eo.SetOwn("name", NewString("Error"))
-								eo.SetOwn("message", NewString(err.Error()))
-								excVal = NewValueFromPlainObject(eo)
-							}
+						return InterpretRuntimeError, Undefined
+					}
+					// Wrap non-exception Go error
+					var excVal Value
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							excVal = res
 						} else {
 							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
 							eo.SetOwn("name", NewString("Error"))
 							eo.SetOwn("message", NewString(err.Error()))
 							excVal = NewValueFromPlainObject(eo)
 						}
-						vm.throwException(excVal)
-						if !vm.unwinding {
-							continue
-						}
-						return InterpretRuntimeError, Undefined
-					}
-				} else {
-					// Regular property (not an accessor) - set it on 'this', not the prototype
-					// This is important: super.x = v should set x on 'this', not on the prototype
-					if thisValue.Type() == TypeObject {
-						thisObj := thisValue.AsPlainObject()
-
-						// Check for strict mode property assignment restrictions
-						isStrict := frame.closure != nil && frame.closure.Fn != nil &&
-							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
-
-						// Check if property exists and its attributes
-						propertyExists := false
-						for _, f := range thisObj.shape.fields {
-							if f.keyKind == KeyKindString && f.name == propertyName {
-								propertyExists = true
-								if !f.writable {
-									// Property is not writable - throw TypeError in strict mode
-									if isStrict {
-										frame.ip = ip
-										vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
-										if vm.frameCount == 0 {
-											return InterpretRuntimeError, vm.currentException
-										}
-										frame = &vm.frames[vm.frameCount-1]
-										closure = frame.closure
-										function = closure.Fn
-										code = function.Chunk.Code
-										constants = function.Chunk.Constants
-										registers = frame.registers
-										ip = frame.ip
-										continue
-									}
-									// Non-strict: silently fail
-									break
-								}
-								break
-							}
-						}
-
-						// Check extensibility for new properties
-						if !propertyExists && !thisObj.IsExtensible() {
-							// Cannot add new property to non-extensible object
-							if isStrict {
-								frame.ip = ip
-								vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
-								if vm.frameCount == 0 {
-									return InterpretRuntimeError, vm.currentException
-								}
-								frame = &vm.frames[vm.frameCount-1]
-								closure = frame.closure
-								function = closure.Fn
-								code = function.Chunk.Code
-								constants = function.Chunk.Constants
-								registers = frame.registers
-								ip = frame.ip
-								continue
-							}
-							// Non-strict: silently fail (don't set the property)
-						} else {
-							thisObj.SetOwn(propertyName, value)
-						}
 					} else {
-						frame.ip = ip
-						vm.runtimeError("Cannot set property on non-object 'this'")
-						return InterpretRuntimeError, Undefined
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
 					}
+					vm.throwException(excVal)
+					if !vm.unwinding {
+						continue
+					}
+					return InterpretRuntimeError, Undefined
 				}
 			} else {
-				frame.ip = ip
-				vm.runtimeError("Cannot assign super property: prototype is not an object")
-				return InterpretRuntimeError, Undefined
+				// Regular property (not an accessor) - set it on 'this', not the prototype
+				// This is important: super.x = v should set x on 'this', not on the prototype
+				isStrict := frame.closure != nil && frame.closure.Fn != nil &&
+					frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
+
+				switch thisValue.Type() {
+				case TypeObject:
+					thisObj := thisValue.AsPlainObject()
+
+					// Check if property exists and its attributes
+					propertyExists := false
+					for _, f := range thisObj.shape.fields {
+						if f.keyKind == KeyKindString && f.name == propertyName {
+							propertyExists = true
+							if !f.writable {
+								// Property is not writable - throw TypeError in strict mode
+								if isStrict {
+									frame.ip = ip
+									vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
+									if vm.frameCount == 0 {
+										return InterpretRuntimeError, vm.currentException
+									}
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
+								// Non-strict: silently fail
+								break
+							}
+							break
+						}
+					}
+
+					// Check extensibility for new properties
+					if !propertyExists && !thisObj.IsExtensible() {
+						// Cannot add new property to non-extensible object
+						if isStrict {
+							frame.ip = ip
+							vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
+							if vm.frameCount == 0 {
+								return InterpretRuntimeError, vm.currentException
+							}
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+						// Non-strict: silently fail (don't set the property)
+					} else {
+						thisObj.SetOwn(propertyName, value)
+					}
+
+				case TypeClosure:
+					// Setting property on a closure (e.g., static method on class constructor)
+					cl := thisValue.AsClosure()
+					if cl.Properties == nil {
+						cl.Properties = NewObject(Undefined).AsPlainObject()
+					}
+					cl.Properties.SetOwn(propertyName, value)
+
+				case TypeFunction:
+					// Setting property on a function
+					fn := thisValue.AsFunction()
+					if fn.Properties == nil {
+						fn.Properties = NewObject(Undefined).AsPlainObject()
+					}
+					fn.Properties.SetOwn(propertyName, value)
+
+				default:
+					frame.ip = ip
+					vm.runtimeError("Cannot set property on non-object 'this'")
+					return InterpretRuntimeError, Undefined
+				}
 			}
 
 		case OpGetSuperComputed:
@@ -10342,10 +10422,22 @@ startExecution:
 			ip++
 
 			// Get 'this' value for receiver binding
-			thisValue := frame.thisValue
+			// For arrow functions, use the captured 'this' from lexical scope
+			var thisValue Value
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+				thisValue = frame.closure.CapturedThis
+			} else {
+				thisValue = frame.thisValue
+			}
 
 			// Get the home object to determine super base
-			homeObject := frame.homeObject
+			// For arrow functions, use the captured [[HomeObject]] from lexical scope
+			var homeObject Value
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+				homeObject = frame.closure.CapturedHomeObject
+			} else {
+				homeObject = frame.homeObject
+			}
 			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
 				frame.ip = ip
 				vm.runtimeError("super keyword is only valid inside methods")
@@ -10510,10 +10602,22 @@ startExecution:
 			ip++
 
 			// Get 'this' value for receiver binding
-			thisValue := frame.thisValue
+			// For arrow functions, use the captured 'this' from lexical scope
+			var thisValue Value
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+				thisValue = frame.closure.CapturedThis
+			} else {
+				thisValue = frame.thisValue
+			}
 
 			// Get the home object to determine super base
-			homeObject := frame.homeObject
+			// For arrow functions, use the captured [[HomeObject]] from lexical scope
+			var homeObject Value
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+				homeObject = frame.closure.CapturedHomeObject
+			} else {
+				homeObject = frame.homeObject
+			}
 			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
 				frame.ip = ip
 				vm.runtimeError("super keyword is only valid inside methods")
@@ -10720,7 +10824,13 @@ startExecution:
 			ip++
 
 			// Get 'this' value for receiver binding
-			thisValue := frame.thisValue
+			// For arrow functions, use the captured 'this' from lexical scope
+			var thisValue Value
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+				thisValue = frame.closure.CapturedThis
+			} else {
+				thisValue = frame.thisValue
+			}
 
 			// Check that we're in a valid context for super property access
 			if frame.isConstructorCall && thisValue.Type() == TypeUninitialized {

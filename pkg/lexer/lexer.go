@@ -734,7 +734,17 @@ func PreprocessUnicodeEscapesContextAware(input string) string {
 	for i < len(input) {
 		if inLineComment {
 			// Inside line comment - copy everything until end of line
-			if input[i] == '\n' {
+			// ECMAScript line terminators: LF, CR, LS (U+2028), PS (U+2029)
+			isLineEnd := false
+			if input[i] == '\n' || input[i] == '\r' {
+				isLineEnd = true
+			} else if input[i] == 0xE2 && i+2 < len(input) {
+				// Check for Unicode line terminators (UTF-8: E2 80 A8 or E2 80 A9)
+				if input[i+1] == 0x80 && (input[i+2] == 0xA8 || input[i+2] == 0xA9) {
+					isLineEnd = true
+				}
+			}
+			if isLineEnd {
 				inLineComment = false
 			}
 			result.WriteByte(input[i])
@@ -2321,7 +2331,20 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, 
 
 // skipComment reads until the end of the line.
 func (l *Lexer) skipComment() {
-	for l.ch != '\n' && l.ch != 0 {
+	// Skip until end of line (ECMAScript line terminators: LF, CR, LS, PS)
+	for l.ch != 0 {
+		// Check for standard line terminators
+		if l.ch == '\n' || l.ch == '\r' {
+			break
+		}
+		// Check for Unicode line terminators U+2028 (LS) and U+2029 (PS)
+		// UTF-8: U+2028 = E2 80 A8, U+2029 = E2 80 A9
+		if l.ch == 0xE2 && l.readPosition+1 < len(l.input) {
+			if l.input[l.readPosition] == 0x80 &&
+				(l.input[l.readPosition+1] == 0xA8 || l.input[l.readPosition+1] == 0xA9) {
+				break // Unicode line terminator
+			}
+		}
 		l.readChar()
 	}
 	// Don't skip the newline itself, let skipWhitespace handle it
@@ -2334,8 +2357,20 @@ func (l *Lexer) skipHashbangComment() {
 	l.readChar() // Consume '#'
 	l.readChar() // Consume '!'
 
-	// Skip until end of line
-	for l.ch != '\n' && l.ch != 0 {
+	// Skip until end of line (ECMAScript line terminators: LF, CR, LS, PS)
+	for l.ch != 0 {
+		// Check for standard line terminators
+		if l.ch == '\n' || l.ch == '\r' {
+			break
+		}
+		// Check for Unicode line terminators U+2028 (LS) and U+2029 (PS)
+		// UTF-8: U+2028 = E2 80 A8, U+2029 = E2 80 A9
+		if l.ch == 0xE2 && l.readPosition+1 < len(l.input) {
+			if l.input[l.readPosition] == 0x80 &&
+				(l.input[l.readPosition+1] == 0xA8 || l.input[l.readPosition+1] == 0xA9) {
+				break // Unicode line terminator
+			}
+		}
 		l.readChar()
 	}
 	// Don't skip the newline itself, let skipWhitespace handle it

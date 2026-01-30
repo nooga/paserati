@@ -68,6 +68,7 @@ type ClosureObject struct {
 	CapturedSuperConstructor Value   // Captured super constructor for arrow functions with super() calls
 	CapturedArguments        Value   // Captured 'arguments' for arrow functions (lexical arguments binding)
 	CapturedNewTarget        Value   // Captured 'new.target' for arrow functions (lexical new.target binding)
+	CapturedHomeObject       Value   // Captured [[HomeObject]] for arrow functions (for super property access)
 	Properties               *PlainObject // Per-closure properties like .prototype (created lazily, shadows Fn.Properties)
 	constructorFixed         bool         // True after we've fixed the constructor property to point to this closure
 }
