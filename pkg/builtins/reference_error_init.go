@@ -50,9 +50,11 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Override the name property to "ReferenceError"
 	referenceErrorPrototype.SetOwnNonEnumerable("name", vm.NewString("ReferenceError"))
+	// Per ECMAScript 19.5.6.3.2, NativeError.prototype.message is the empty string
+	referenceErrorPrototype.SetOwnNonEnumerable("message", vm.NewString(""))
 
-	// ReferenceError constructor function
-	referenceErrorConstructor := vm.NewNativeFunction(-1, true, "ReferenceError", func(args []vm.Value) (vm.Value, error) {
+	// ReferenceError constructor function (length is 1 per ECMAScript 19.5.6.2)
+	referenceErrorConstructor := vm.NewNativeFunction(1, true, "ReferenceError", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
 		var message string
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
@@ -85,6 +87,11 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Add prototype property
 		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(referenceErrorPrototype))
+
+		// Per ECMAScript 19.5.6.2, the [[Prototype]] of a NativeError constructor is Error
+		if !vmInstance.ErrorConstructor.IsUndefined() {
+			ctorPropsObj.Properties.SetPrototype(vmInstance.ErrorConstructor)
+		}
 
 		referenceErrorConstructor = ctorWithProps
 	}

@@ -435,9 +435,12 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		case vm.TypeArguments:
 			builtinTag = "Arguments"
 		case vm.TypeObject:
-			// Check for wrapper objects with [[PrimitiveValue]]
+			// Check for wrapper objects with [[PrimitiveValue]] or [[ErrorData]]
 			if plainObj := thisValue.AsPlainObject(); plainObj != nil {
-				if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
+				// Step 8: If O has [[ErrorData]], let builtinTag be "Error"
+				if _, hasErrorData := plainObj.GetOwn("[[ErrorData]]"); hasErrorData {
+					builtinTag = "Error"
+				} else if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
 					switch primitiveVal.Type() {
 					case vm.TypeBoolean:
 						builtinTag = "Boolean"

@@ -50,9 +50,11 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Override the name property to "SyntaxError"
 	syntaxErrorPrototype.SetOwnNonEnumerable("name", vm.NewString("SyntaxError"))
+	// Per ECMAScript 19.5.6.3.2, NativeError.prototype.message is the empty string
+	syntaxErrorPrototype.SetOwnNonEnumerable("message", vm.NewString(""))
 
-	// SyntaxError constructor function
-	syntaxErrorConstructor := vm.NewNativeFunction(-1, true, "SyntaxError", func(args []vm.Value) (vm.Value, error) {
+	// SyntaxError constructor function (length is 1 per ECMAScript 19.5.6.2)
+	syntaxErrorConstructor := vm.NewNativeFunction(1, true, "SyntaxError", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
 		var message string
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
@@ -85,6 +87,11 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Add prototype property
 		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(syntaxErrorPrototype))
+
+		// Per ECMAScript 19.5.6.2, the [[Prototype]] of a NativeError constructor is Error
+		if !vmInstance.ErrorConstructor.IsUndefined() {
+			ctorPropsObj.Properties.SetPrototype(vmInstance.ErrorConstructor)
+		}
 
 		syntaxErrorConstructor = ctorWithProps
 	}

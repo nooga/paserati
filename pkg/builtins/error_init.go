@@ -48,42 +48,70 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	errorPrototype.SetOwnNonEnumerable("message", vm.NewString(""))
 
 	// Error.prototype.toString()
+	// Per ECMAScript spec: https://tc39.es/ecma262/#sec-error.prototype.tostring
 	errorPrototype.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		// Get 'this' context from VM
 		thisValue := vmInstance.GetThis()
+
+		// Step 2: If Type(O) is not Object, throw a TypeError exception
+		if !thisValue.IsObject() {
+			return vm.Undefined, vmInstance.NewTypeError("Error.prototype.toString requires that 'this' be an Object")
+		}
 
 		// Default values
 		name := "Error"
 		message := ""
 
-		// If 'this' is an object, try to get name and message properties
-		if thisValue.IsObject() {
-			if plainObj := thisValue.AsPlainObject(); plainObj != nil {
-				if nameValue, exists := plainObj.GetOwn("name"); exists && nameValue.IsString() {
-					name = nameValue.AsString()
+		// Get name and message properties
+		if plainObj := thisValue.AsPlainObject(); plainObj != nil {
+			// Step 3-4: Get name property, default to "Error"
+			if nameValue, exists := plainObj.GetOwn("name"); exists {
+				if nameValue.Type() == vm.TypeUndefined {
+					name = "Error"
+				} else {
+					name = nameValue.ToString()
 				}
-				if messageValue, exists := plainObj.GetOwn("message"); exists && messageValue.IsString() {
-					message = messageValue.AsString()
+			}
+			// Step 5-6: Get message property, default to ""
+			if messageValue, exists := plainObj.GetOwn("message"); exists {
+				if messageValue.Type() == vm.TypeUndefined {
+					message = ""
+				} else {
+					message = messageValue.ToString()
 				}
-			} else if dictObj := thisValue.AsDictObject(); dictObj != nil {
-				if nameValue, exists := dictObj.GetOwn("name"); exists && nameValue.IsString() {
-					name = nameValue.AsString()
+			}
+		} else if dictObj := thisValue.AsDictObject(); dictObj != nil {
+			if nameValue, exists := dictObj.GetOwn("name"); exists {
+				if nameValue.Type() == vm.TypeUndefined {
+					name = "Error"
+				} else {
+					name = nameValue.ToString()
 				}
-				if messageValue, exists := dictObj.GetOwn("message"); exists && messageValue.IsString() {
-					message = messageValue.AsString()
+			}
+			if messageValue, exists := dictObj.GetOwn("message"); exists {
+				if messageValue.Type() == vm.TypeUndefined {
+					message = ""
+				} else {
+					message = messageValue.ToString()
 				}
 			}
 		}
 
-		// Return "name: message" format, or just "name" if no message
+		// Step 7-9: Return formatted string
+		// If name is "", return msg
+		// If msg is "", return name
+		// Otherwise return name + ": " + msg
+		if name == "" {
+			return vm.NewString(message), nil
+		}
 		if message == "" {
 			return vm.NewString(name), nil
 		}
 		return vm.NewString(name + ": " + message), nil
 	}))
 
-	// Error constructor function
-	errorConstructor := vm.NewNativeFunction(-1, true, "Error", func(args []vm.Value) (vm.Value, error) {
+	// Error constructor function (length is 1 per ECMAScript 19.5.1.1)
+	errorConstructor := vm.NewNativeFunction(1, true, "Error", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
 		var message string
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
@@ -132,10 +160,10 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Set constructor property on prototype
 	errorPrototype.SetOwnNonEnumerable("constructor", errorConstructor)
-	// DEBUG (optional): we could print or assert here if needed
 
 	// Store in VM
 	vmInstance.ErrorPrototype = vm.NewValueFromPlainObject(errorPrototype)
+	vmInstance.ErrorConstructor = errorConstructor // For NativeError constructors to inherit from
 
 	// Define globally
 	return ctx.DefineGlobal("Error", errorConstructor)
@@ -190,7 +218,10 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 	vmInstance := ctx.VM
 	proto := vm.NewObject(vmInstance.ErrorPrototype).AsPlainObject()
 	proto.SetOwnNonEnumerable("name", vm.NewString(name))
-	ctor := vm.NewNativeFunction(-1, true, name, func(args []vm.Value) (vm.Value, error) {
+	// Per ECMAScript 19.5.6.3.2, NativeError.prototype.message is the empty string
+	proto.SetOwnNonEnumerable("message", vm.NewString(""))
+	// Per ECMAScript 19.5.6.2, NativeError constructors have length 1
+	ctor := vm.NewNativeFunction(1, true, name, func(args []vm.Value) (vm.Value, error) {
 		var message string
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
 			message = args[0].ToString()
@@ -205,7 +236,14 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 	})
 	if nf := ctor.AsNativeFunction(); nf != nil {
 		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
-		withProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+		ctorProps := withProps.AsNativeFunctionWithProps()
+		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+
+		// Per ECMAScript 19.5.6.2, the [[Prototype]] of a NativeError constructor is Error
+		if !vmInstance.ErrorConstructor.IsUndefined() {
+			ctorProps.Properties.SetPrototype(vmInstance.ErrorConstructor)
+		}
+
 		proto.SetOwnNonEnumerable("constructor", withProps)
 		return ctx.DefineGlobal(name, withProps)
 	}

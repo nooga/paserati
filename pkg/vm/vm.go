@@ -207,6 +207,7 @@ type VM struct {
 	AsyncGeneratorPrototype Value
 	PromisePrototype        Value
 	ErrorPrototype          Value
+	ErrorConstructor        Value // For NativeError constructors to inherit from
 	TypeErrorPrototype      Value
 	ReferenceErrorPrototype Value
 	SymbolPrototype         Value

@@ -50,9 +50,11 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Override the name property to "TypeError"
 	typeErrorPrototype.SetOwnNonEnumerable("name", vm.NewString("TypeError"))
+	// Per ECMAScript 19.5.6.3.2, NativeError.prototype.message is the empty string
+	typeErrorPrototype.SetOwnNonEnumerable("message", vm.NewString(""))
 
-	// TypeError constructor function
-	typeErrorConstructor := vm.NewNativeFunction(-1, true, "TypeError", func(args []vm.Value) (vm.Value, error) {
+	// TypeError constructor function (length is 1 per ECMAScript 19.5.6.2)
+	typeErrorConstructor := vm.NewNativeFunction(1, true, "TypeError", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
 		var message string
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
@@ -85,6 +87,11 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Add prototype property
 		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(typeErrorPrototype))
+
+		// Per ECMAScript 19.5.6.2, the [[Prototype]] of a NativeError constructor is Error
+		if !vmInstance.ErrorConstructor.IsUndefined() {
+			ctorPropsObj.Properties.SetPrototype(vmInstance.ErrorConstructor)
+		}
 
 		typeErrorConstructor = ctorWithProps
 	}
