@@ -10129,6 +10129,14 @@ func (p *Parser) parseImportDeclaration() *ImportDeclaration {
 		p.nextToken() // consume 'type' keyword
 	}
 
+	// Check for deferred namespace import: import defer * as ns from "module"
+	// Note: defer is a contextual keyword - only treated as keyword if followed by *
+	// If followed by anything else (e.g., 'from'), defer is an identifier (default binding name)
+	if p.curToken.Type == lexer.IDENT && p.curToken.Literal == "defer" && p.peekToken.Type == lexer.ASTERISK {
+		stmt.IsDeferred = true
+		p.nextToken() // consume 'defer', now on '*'
+	}
+
 	// Check for bare import: import "module-name"
 	if p.curToken.Type == lexer.STRING {
 		// This is a bare import with no specifiers

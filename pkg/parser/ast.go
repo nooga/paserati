@@ -1933,6 +1933,7 @@ type ImportDeclaration struct {
 	Specifiers []ImportSpecifier // What to import (default, named, namespace)
 	Source     *StringLiteral    // From where ("./module")
 	IsTypeOnly bool              // true for "import type" statements
+	IsDeferred bool              // true for "import defer * as ns" statements
 	Attributes map[string]string // Import attributes (e.g., { type: "json" })
 }
 
@@ -1943,6 +1944,9 @@ func (id *ImportDeclaration) String() string {
 	out.WriteString("import ")
 	if id.IsTypeOnly {
 		out.WriteString("type ")
+	}
+	if id.IsDeferred {
+		out.WriteString("defer ")
 	}
 
 	if len(id.Specifiers) > 0 {
