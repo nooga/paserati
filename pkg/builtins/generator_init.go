@@ -96,6 +96,11 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		thisGen := thisValue.AsGenerator()
 
+		// Per ECMAScript GeneratorValidate: if generator is "executing", throw TypeError
+		if thisGen.State == vm.GeneratorExecuting {
+			return vm.Undefined, vmInstance.NewTypeError("Generator is already executing")
+		}
+
 		// If generator is completed, return { value: undefined, done: true }
 		if thisGen.Done || thisGen.State == vm.GeneratorCompleted {
 			result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
@@ -121,6 +126,11 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Method Generator.prototype.return called on incompatible receiver")
 		}
 		thisGen := thisValue.AsGenerator()
+
+		// Per ECMAScript GeneratorValidate: if generator is "executing", throw TypeError
+		if thisGen.State == vm.GeneratorExecuting {
+			return vm.Undefined, vmInstance.NewTypeError("Generator is already executing")
+		}
 
 		// Get the return value
 		returnValue := vm.Undefined
@@ -236,6 +246,11 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Method Generator.prototype.throw called on incompatible receiver")
 		}
 		thisGen := thisValue.AsGenerator()
+
+		// Per ECMAScript GeneratorValidate: if generator is "executing", throw TypeError
+		if thisGen.State == vm.GeneratorExecuting {
+			return vm.Undefined, vmInstance.NewTypeError("Generator is already executing")
+		}
 
 		// Get the exception value (argument to .throw())
 		exception := vm.Undefined
@@ -369,13 +384,9 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, typeErr
 		}
 
-		// If generator is completed, throw the exception (as an Error object for clearer runtime message)
+		// If generator is completed, re-throw the original exception
 		if thisGen.Done || thisGen.State == vm.GeneratorCompleted {
-			// Wrap into Error object to match expected test messages
-			errObj := vm.NewObject(vm.Null).AsPlainObject()
-			errObj.SetOwnNonEnumerable("name", vm.NewString("Error"))
-			errObj.SetOwnNonEnumerable("message", vm.NewString("exception thrown: "+exception.ToString()))
-			return vm.Undefined, vmInstance.NewExceptionError(vm.NewValueFromPlainObject(errObj))
+			return vm.Undefined, vmInstance.NewExceptionError(exception)
 		}
 
 		// Inject the original exception value into the generator so user catch(e) sees the same value
@@ -419,12 +430,14 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	w, e, c := false, false, false // writable=false, enumerable=false, configurable=false
 	generatorFunctionProto.DefineOwnProperty("prototype", vmInstance.GeneratorPrototype, &w, &e, &c)
 
-	// Set constructor property (pointing to GeneratorFunction constructor)
-	// Note: GeneratorFunction is not a global but is accessible via (function*(){}).constructor
-	// We'll set this up later if needed, for now just mark it as not enumerable
-
-	// Store in VM
+	// Store in VM (before setting constructor so we can reference it)
 	vmInstance.GeneratorFunctionPrototype = vm.NewValueFromPlainObject(generatorFunctionProto)
+
+	// Set constructor property on GeneratorPrototype pointing to GeneratorFunction.prototype
+	// Per ECMAScript 25.3.1.1: GeneratorPrototype.constructor is %GeneratorFunction%.prototype
+	// Attributes: writable: false, enumerable: false, configurable: true
+	cTrue := true
+	generatorProto.DefineOwnProperty("constructor", vmInstance.GeneratorFunctionPrototype, &falseVal, &falseVal, &cTrue)
 
 	// Note: In JavaScript, Generator is not directly constructible
 	// Generators are created by calling generator functions (function*)

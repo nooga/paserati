@@ -580,6 +580,10 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if x == 0 {
 			return vm.NumberValue(x), nil // preserves -0
 		}
+		// If x is already an integer, return it directly (avoids precision loss with large numbers)
+		if x == math.Trunc(x) {
+			return vm.NumberValue(x), nil
+		}
 		if x > 0 && x < 0.5 {
 			return vm.NumberValue(0), nil
 		}

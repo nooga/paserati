@@ -1,5 +1,6 @@
 // Test generator throw() method on completed generator
-// expect_runtime_error: exception thrown: test error
+// Per ECMAScript spec, throw() on completed generator re-throws the original exception
+// expect_runtime_error: test error
 
 function* gen() {
   yield 1;

@@ -158,6 +158,15 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.AsyncFunctionConstructor = asyncFunctionCtor
 	vmInstance.AsyncFunctionPrototype = asyncFunctionProto
 
+	// Create %ThrowTypeError% intrinsic - singleton function that throws TypeError
+	// Per ECMAScript spec, this is NOT extensible (unlike normal functions)
+	// Used for strict mode arguments.callee and arguments.caller accessors
+	throwTypeErrorFunc := vm.NewNativeFunction(0, false, "ThrowTypeError", func(args []vm.Value) (vm.Value, error) {
+		vmInstance.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
+		return vm.Undefined, nil
+	})
+	vmInstance.ThrowTypeErrorFunc = throwTypeErrorFunc
+
 	// Define globally
 	return ctx.DefineGlobal("Function", functionCtor)
 }

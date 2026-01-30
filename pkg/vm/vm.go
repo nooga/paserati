@@ -232,6 +232,10 @@ type VM struct {
 	SymbolUnscopables        Value
 	SymbolAsyncIterator      Value
 
+	// %ThrowTypeError% intrinsic - singleton function used for strict mode arguments callee/caller
+	// Per ECMAScript spec, this function is NOT extensible (unlike normal functions)
+	ThrowTypeErrorFunc Value
+
 	// Constructor call context for native functions
 	inConstructorCall bool // true when executing a native function via OpNew
 
@@ -11640,6 +11644,13 @@ startExecution:
 				for i := 0; i < arr.Length(); i++ {
 					keys[i] = strconv.Itoa(i)
 				}
+			case TypeArguments:
+				// Arguments objects enumerate their indices as strings
+				argsObj := objValue.AsArguments()
+				keys = make([]string, argsObj.length)
+				for i := 0; i < argsObj.length; i++ {
+					keys[i] = strconv.Itoa(i)
+				}
 			case TypeFunction:
 				// Enumerate own enumerable properties on the function's Properties object
 				funcObj := objValue.AsFunction()
@@ -15542,9 +15553,10 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	status, result := vm.run()
 
 	if status == InterpretRuntimeError {
-		// Exception occurred - clean up frames before returning
-		// NOTE: Don't modify generator state here - let the exception propagate
-		// The generator will be marked as completed if no handler catches the exception
+		// Exception occurred - generator is now completed
+		genObj.State = GeneratorCompleted
+		genObj.Done = true
+		genObj.Frame = nil
 
 		// Pop the generator frame and sentinel frame
 		// During exception, frames may still be on the stack
@@ -15749,9 +15761,10 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	// Execute the VM run loop - it will return when the generator yields or the sentinel frame is hit
 	status, result := vm.run()
 	if status == InterpretRuntimeError {
-		// Exception occurred - clean up frames before returning
-		// NOTE: Don't modify generator state here - let the exception propagate
-		// The generator will be marked as completed if no handler catches the exception
+		// Exception occurred - generator is now completed
+		genObj.State = GeneratorCompleted
+		genObj.Done = true
+		genObj.Frame = nil
 
 		// Pop the generator frame and sentinel frame
 		// During exception, frames may still be on the stack
@@ -15932,13 +15945,20 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 
 	// Check if the exception unwound all frames (uncaught exception)
 	if vm.frameCount == 0 && vm.unwinding {
-		// Exception propagated through all frames - surface as ExceptionError
+		// Exception propagated through all frames - generator is now completed
+		genObj.State = GeneratorCompleted
+		genObj.Done = true
+		genObj.Frame = nil
 		return Undefined, exceptionError{exception: vm.currentException}
 	}
 
 	// Check if unwinding hit the direct-call boundary (isDirectCall frame)
 	// In this case, we should return the exception instead of continuing
 	if vm.unwinding && vm.unwindingCrossedNative {
+		// Exception propagated out - generator is now completed
+		genObj.State = GeneratorCompleted
+		genObj.Done = true
+		genObj.Frame = nil
 		savedEx := vm.currentException
 		// Clean up VM state
 		vm.unwinding = false
@@ -15959,6 +15979,10 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	status, result := vm.run()
 
 	if status == InterpretRuntimeError {
+		// Exception propagated out - generator is now completed
+		genObj.State = GeneratorCompleted
+		genObj.Done = true
+		genObj.Frame = nil
 		if vm.currentException != Null {
 			return Undefined, exceptionError{exception: vm.currentException}
 		}

@@ -1320,6 +1320,9 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	case vm.TypePromise:
 		// For promises, return Promise.prototype
 		return vmInstance.PromisePrototype, nil
+	case vm.TypeNativeFunction, vm.TypeBoundFunction, vm.TypeAsyncNativeFunction:
+		// For native functions and bound functions, return Function.prototype
+		return vmInstance.FunctionPrototype, nil
 	default:
 		// For primitive values, return null
 		return vm.Null, nil
@@ -2714,18 +2717,10 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		if propName == "callee" {
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			if argsObj.IsStrict() {
-				// In strict mode: accessor descriptor with thrower get/set
-				// Create thrower functions that throw TypeError
-				throwerGet := vm.NewNativeFunction(0, false, "ThrowTypeError", func(args []vm.Value) (vm.Value, error) {
-					vmInstance.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
-					return vm.Undefined, nil
-				})
-				throwerSet := vm.NewNativeFunction(1, false, "ThrowTypeError", func(args []vm.Value) (vm.Value, error) {
-					vmInstance.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
-					return vm.Undefined, nil
-				})
-				descriptor.SetOwn("get", throwerGet)
-				descriptor.SetOwn("set", throwerSet)
+				// In strict mode: accessor descriptor with %ThrowTypeError% intrinsic as get/set
+				// Per ECMAScript spec, the same %ThrowTypeError% function is used for both
+				descriptor.SetOwn("get", vmInstance.ThrowTypeErrorFunc)
+				descriptor.SetOwn("set", vmInstance.ThrowTypeErrorFunc)
 				descriptor.SetOwn("enumerable", vm.BooleanValue(false))
 				descriptor.SetOwn("configurable", vm.BooleanValue(false))
 			} else {
@@ -3074,8 +3069,17 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 		return vm.BooleanValue(true), nil
 	}
 
-	// Functions and closures are objects and extensible by default per ECMAScript
-	if obj.Type() == vm.TypeFunction || obj.Type() == vm.TypeClosure {
+	// Check for %ThrowTypeError% intrinsic - it's NOT extensible per ECMAScript spec
+	if obj.Type() == vm.TypeNativeFunction && vmInstance != nil &&
+		vmInstance.ThrowTypeErrorFunc.Type() == vm.TypeNativeFunction &&
+		obj.AsNativeFunction() == vmInstance.ThrowTypeErrorFunc.AsNativeFunction() {
+		return vm.BooleanValue(false), nil
+	}
+
+	// Functions, closures, and native functions are objects and extensible by default per ECMAScript
+	if obj.Type() == vm.TypeFunction || obj.Type() == vm.TypeClosure ||
+		obj.Type() == vm.TypeNativeFunction || obj.Type() == vm.TypeNativeFunctionWithProps ||
+		obj.Type() == vm.TypeBoundFunction || obj.Type() == vm.TypeAsyncNativeFunction {
 		return vm.BooleanValue(true), nil
 	}
 
