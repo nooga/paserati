@@ -31,7 +31,10 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	// 1. Create a compiler for the function scope
 	funcCompiler := newFunctionCompiler(c)
 	funcCompiler.compilingFuncName = "" // Arrow functions have empty name by default (per ECMAScript spec)
-	funcCompiler.isArrowFunction = true        // Arrow functions don't have own 'arguments' binding
+	funcCompiler.isArrowFunction = true // Arrow functions don't have own 'arguments' binding
+	// Arrow functions inherit new.target availability from enclosing scope
+	funcCompiler.isIndirectEval = c.isIndirectEval
+	funcCompiler.newTargetAvailable = c.newTargetAvailable
 
 	// 1.5. Check for 'use strict' directive in arrow function body (if it's a block statement)
 	if blockBody, ok := node.Body.(*parser.BlockStatement); ok {
@@ -305,6 +308,9 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	funcCompiler := newFunctionCompiler(c)
 	funcCompiler.compilingFuncName = nameHint // Use the provided name instead of "<arrow>"
 	funcCompiler.isArrowFunction = true       // Arrow functions don't have own 'arguments' binding
+	// Arrow functions inherit new.target availability from enclosing scope
+	funcCompiler.isIndirectEval = c.isIndirectEval
+	funcCompiler.newTargetAvailable = c.newTargetAvailable
 
 	// Define parameters
 	for _, p := range node.Parameters {

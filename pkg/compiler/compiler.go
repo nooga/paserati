@@ -432,7 +432,8 @@ type Compiler struct {
 	callerScopeDesc *vm.ScopeDescriptor // Scope descriptor from caller (for direct eval compilation)
 
 	// --- Indirect Eval Mode ---
-	isIndirectEval bool // True when compiling indirect eval code (let/const should be local, not global)
+	isIndirectEval      bool // True when compiling indirect eval code (let/const should be local, not global)
+	newTargetAvailable  bool // True if new.target is available in current context (false for indirect eval at global scope)
 
 	// --- Parameter Names Tracking ---
 	parameterNames map[string]bool // Set of parameter names for current function (for var hoisting)
@@ -1828,6 +1829,14 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		return hint, nil
 
 	case *parser.NewTargetExpression:
+		// Per ECMAScript, new.target is only valid inside functions.
+		// In indirect eval (evaluated in global scope without a caller), it's a SyntaxError.
+		// Check: isIndirectEval + no callerScopeDesc (no function context to inherit from) + no newTargetAvailable
+		// For direct eval, callerScopeDesc provides the enclosing function context.
+		// For arrow functions in indirect eval, they inherit newTargetAvailable from enclosing scope.
+		if c.isIndirectEval && c.callerScopeDesc == nil && !c.newTargetAvailable {
+			return BadRegister, NewCompileError(node, "new.target expression is not allowed in indirect eval")
+		}
 		// Load new.target value from constructor context
 		c.emitLoadNewTarget(hint, node.Token.Line)
 		return hint, nil
@@ -2597,8 +2606,12 @@ func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint16 {
 // SetCallerScopeDesc sets the caller's scope descriptor for direct eval compilation.
 // This allows eval code to resolve variable names to caller's registers.
 // Note: The actual symbol table population happens in Compile() after the symbol table is reset.
+// Also sets newTargetAvailable - if scopeDesc is provided, new.target is available from caller.
 func (c *Compiler) SetCallerScopeDesc(scopeDesc *vm.ScopeDescriptor) {
 	c.callerScopeDesc = scopeDesc
+	// For direct eval (scopeDesc != nil), new.target is available from caller's context
+	// For indirect eval (scopeDesc == nil), new.target is not available
+	c.newTargetAvailable = scopeDesc != nil
 }
 
 // GetCallerScopeDesc returns the caller's scope descriptor (if any).
@@ -2608,8 +2621,11 @@ func (c *Compiler) GetCallerScopeDesc() *vm.ScopeDescriptor {
 
 // SetIndirectEval sets the indirect eval mode.
 // When true, let/const/class declarations are kept local instead of becoming globals.
+// Note: newTargetAvailable is determined by callerScopeDesc - if present (direct eval),
+// new.target is available; if absent (indirect eval), new.target is not available.
 func (c *Compiler) SetIndirectEval(indirect bool) {
 	c.isIndirectEval = indirect
+	// newTargetAvailable is determined by SetCallerScopeDesc - don't set it here
 }
 
 // IsEvalCreatedBinding checks if a variable name would be a NEW binding created by eval.
