@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"math"
+	"math/big"
 	"math/rand"
 
 	"github.com/nooga/paserati/pkg/types"
@@ -695,15 +696,17 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// - If +Infinity and -Infinity both present, return NaN
 		// - If only +Infinity present, return +Infinity
 		// - If only -Infinity present, return -Infinity
-		// - Otherwise, use Kahan summation for precise sum
+		// - Otherwise, use arbitrary precision sum via big.Float
 		hasNaN := false
 		hasPosInf := false
 		hasNegInf := false
 		hasNegZero := false
 		hasPosZero := false
 		count := 0
-		sum := 0.0
-		compensation := 0.0 // Kahan summation compensation
+
+		// Use big.Float for arbitrary precision summation
+		// Use very high precision to handle extreme cases like 1e308 + 1e308 - 1e308 - 1e308
+		sum := new(big.Float).SetPrec(4096)
 
 		// Iterate through the iterator
 		for {
@@ -767,11 +770,9 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 						hasPosZero = true
 					}
 				}
-				// Kahan summation
-				y := val - compensation
-				t := sum + y
-				compensation = (t - sum) - y
-				sum = t
+				// Add to big.Float sum with high precision
+				valBig := new(big.Float).SetPrec(4096).SetFloat64(val)
+				sum.Add(sum, valBig)
 			}
 		}
 
@@ -794,8 +795,11 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NumberValue(math.Copysign(0, -1)), nil
 		}
 
+		// Convert back to float64
+		result, _ := sum.Float64()
+
 		// Handle zero result
-		if sum == 0 {
+		if result == 0 {
 			// Return -0 only if we had -0 and no +0
 			if hasNegZero && !hasPosZero {
 				return vm.NumberValue(math.Copysign(0, -1)), nil
@@ -804,7 +808,7 @@ func (m *MathInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NumberValue(0), nil
 		}
 
-		return vm.NumberValue(sum), nil
+		return vm.NumberValue(result), nil
 	}))
 
 	mathObj.SetOwnNonEnumerable("tan", vm.NewNativeFunction(1, false, "tan", func(args []vm.Value) (vm.Value, error) {

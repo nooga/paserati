@@ -943,6 +943,18 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 		return true, InterpretOK, *valueToSet
 	}
 
+	// Array objects: store symbol properties directly on the array
+	if objVal.Type() == TypeArray {
+		arr := objVal.AsArray()
+		if arr != nil {
+			sym := symKey.AsSymbolObject()
+			if sym != nil {
+				arr.SetSymbolProp(sym, *valueToSet)
+			}
+		}
+		return true, InterpretOK, *valueToSet
+	}
+
 	// Only PlainObject supports symbol keys for now
 	if objVal.Type() != TypeObject {
 		// DictObject or others: ignore symbol set (non-strict semantics)

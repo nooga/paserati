@@ -156,10 +156,11 @@ type ArrayObject struct {
 	Object
 	length       int
 	elements     []Value
-	properties   map[string]Value        // Named properties (e.g., "index", "input" for match results)
-	propertyDesc map[string]PropertyDesc // Property descriptors for named properties
-	extensible   bool                    // When false, no new properties can be added (for Object.freeze/seal)
-	frozen       bool                    // When true, elements are also non-writable and non-configurable
+	properties   map[string]Value           // Named properties (e.g., "index", "input" for match results)
+	propertyDesc map[string]PropertyDesc    // Property descriptors for named properties
+	symbolProps  map[*SymbolObject]Value    // Symbol-keyed properties (e.g., Symbol.iterator override)
+	extensible   bool                       // When false, no new properties can be added (for Object.freeze/seal)
+	frozen       bool                       // When true, elements are also non-writable and non-configurable
 }
 
 // PropertyDesc stores property descriptor attributes
@@ -1987,6 +1988,32 @@ func (a *ArrayObject) IsExtensible() bool {
 // SetExtensible sets whether new properties can be added to this array
 func (a *ArrayObject) SetExtensible(extensible bool) {
 	a.extensible = extensible
+}
+
+// GetSymbolProp returns a symbol-keyed property from the array object
+func (a *ArrayObject) GetSymbolProp(sym *SymbolObject) (Value, bool) {
+	if a.symbolProps == nil {
+		return Undefined, false
+	}
+	v, ok := a.symbolProps[sym]
+	return v, ok
+}
+
+// SetSymbolProp sets a symbol-keyed property on the array object
+func (a *ArrayObject) SetSymbolProp(sym *SymbolObject, val Value) {
+	if a.symbolProps == nil {
+		a.symbolProps = make(map[*SymbolObject]Value)
+	}
+	a.symbolProps[sym] = val
+}
+
+// HasOwnSymbolProp checks if the array object has an own symbol property
+func (a *ArrayObject) HasOwnSymbolProp(sym *SymbolObject) bool {
+	if a.symbolProps == nil {
+		return false
+	}
+	_, ok := a.symbolProps[sym]
+	return ok
 }
 
 // ArgumentsObject methods

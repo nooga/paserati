@@ -232,6 +232,18 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 		inst.SetOwnNonEnumerable("name", vm.NewString(name))
 		inst.SetOwnNonEnumerable("message", vm.NewString(message))
 		inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))
+
+		// Per ECMAScript 20.5.8.1 InstallErrorCause:
+		// If options is an Object and HasProperty(options, "cause") is true,
+		// install the cause property
+		if len(args) > 1 && args[1].IsObject() {
+			if optObj := args[1].AsPlainObject(); optObj != nil {
+				if cause, hasCause := optObj.Get("cause"); hasCause {
+					inst.SetOwnNonEnumerable("cause", cause)
+				}
+			}
+		}
+
 		return vm.NewValueFromPlainObject(inst), nil
 	})
 	if nf := ctor.AsNativeFunction(); nf != nil {

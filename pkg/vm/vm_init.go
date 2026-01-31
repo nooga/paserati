@@ -584,7 +584,14 @@ func (vm *VM) GetSymbolProperty(obj Value, symbol Value) (Value, bool) {
 	if obj.Type() == TypeArray {
 		arr := obj.AsArray()
 		if arr != nil {
-			// Arrays use ArrayPrototype for symbol properties
+			// First check array's own symbol properties (e.g., overridden Symbol.iterator)
+			sym := symbol.AsSymbolObject()
+			if sym != nil {
+				if v, ok := arr.GetSymbolProp(sym); ok {
+					return v, true
+				}
+			}
+			// Fall back to ArrayPrototype for inherited symbol properties
 			if vm.ArrayPrototype.Type() != TypeUndefined {
 				proto := vm.ArrayPrototype.AsPlainObject()
 				if proto != nil {

@@ -76,6 +76,17 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		stackTrace := vmInstance.CaptureStackTrace()
 		referenceErrorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))
 
+		// Per ECMAScript 20.5.8.1 InstallErrorCause:
+		// If options is an Object and HasProperty(options, "cause") is true,
+		// install the cause property
+		if len(args) > 1 && args[1].IsObject() {
+			if optObj := args[1].AsPlainObject(); optObj != nil {
+				if cause, hasCause := optObj.Get("cause"); hasCause {
+					referenceErrorInstancePtr.SetOwnNonEnumerable("cause", cause)
+				}
+			}
+		}
+
 		return referenceErrorInstance, nil
 	})
 
