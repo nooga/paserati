@@ -203,9 +203,12 @@ type VM struct {
 	SetPrototype            Value
 	WeakMapPrototype        Value
 	WeakSetPrototype        Value
-	GeneratorPrototype      Value
-	AsyncGeneratorPrototype Value
-	PromisePrototype        Value
+	GeneratorPrototype       Value
+	AsyncGeneratorPrototype  Value
+	IteratorPrototype        Value // %Iterator.prototype% - base for all iterators
+	IteratorHelperPrototype  Value // %IteratorHelperPrototype% - for iterator helper objects (map, filter, etc.)
+	WrapForValidIteratorPrototype Value // For Iterator.from() wrapped iterators
+	PromisePrototype         Value
 	ErrorPrototype          Value
 	ErrorConstructor        Value // For NativeError constructors to inherit from
 	TypeErrorPrototype      Value

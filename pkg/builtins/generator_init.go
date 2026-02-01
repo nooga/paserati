@@ -79,11 +79,13 @@ func (g *GeneratorInitializer) InitTypes(ctx *TypeContext) error {
 func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
-	// Get Object.prototype for inheritance
-	objectProto := vmInstance.ObjectPrototype
+	// Get Iterator.prototype for inheritance (generators are iterators)
+	// Iterator.prototype is initialized before Generator (priority 2 vs 5)
+	iteratorProto := vmInstance.IteratorPrototype
 
-	// Create Generator.prototype inheriting from Object.prototype
-	generatorProto := vm.NewObject(objectProto).AsPlainObject()
+	// Create Generator.prototype inheriting from Iterator.prototype
+	// This allows generators to use iterator helper methods like map, filter, etc.
+	generatorProto := vm.NewObject(iteratorProto).AsPlainObject()
 
 	// Add Generator prototype methods
 
