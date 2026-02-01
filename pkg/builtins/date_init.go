@@ -932,6 +932,73 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set constructor property on prototype
 	dateProto.SetOwnNonEnumerable("constructor", dateCtor)
 
+	// Add Symbol.toPrimitive method (ES6 20.3.4.45)
+	// Date.prototype[@@toPrimitive](hint)
+	if vmInstance.SymbolToPrimitive.Type() == vm.TypeSymbol {
+		toPrimitiveFunc := vm.NewNativeFunction(1, false, "[Symbol.toPrimitive]", func(args []vm.Value) (vm.Value, error) {
+			thisValue := vmInstance.GetThis()
+			// Step 1: If Type(O) is not Object, throw a TypeError
+			if !thisValue.IsObject() && thisValue.Type() != vm.TypeObject {
+				return vm.Undefined, vmInstance.NewTypeError("Date.prototype[@@toPrimitive] requires that 'this' be an Object")
+			}
+
+			// Step 2: Get hint
+			hint := "default"
+			if len(args) > 0 {
+				hint = args[0].ToString()
+			}
+
+			// Step 3: Validate hint
+			if hint != "string" && hint != "number" && hint != "default" {
+				return vm.Undefined, vmInstance.NewTypeError("Invalid hint: " + hint)
+			}
+
+			// Step 4: If hint is "default", let hint be "string"
+			if hint == "default" {
+				hint = "string"
+			}
+
+			// Step 5: Return ? OrdinaryToPrimitive(O, hint)
+			// For "string": try toString first, then valueOf
+			// For "number": try valueOf first, then toString
+			if hint == "string" {
+				// Try toString first
+				if toStringMethod, err := vmInstance.GetProperty(thisValue, "toString"); err == nil && toStringMethod.IsCallable() {
+					result, callErr := vmInstance.Call(toStringMethod, thisValue, nil)
+					if callErr == nil && !result.IsObject() {
+						return result, nil
+					}
+				}
+				// Try valueOf
+				if valueOfMethod, err := vmInstance.GetProperty(thisValue, "valueOf"); err == nil && valueOfMethod.IsCallable() {
+					result, callErr := vmInstance.Call(valueOfMethod, thisValue, nil)
+					if callErr == nil && !result.IsObject() {
+						return result, nil
+					}
+				}
+			} else {
+				// hint == "number": try valueOf first
+				if valueOfMethod, err := vmInstance.GetProperty(thisValue, "valueOf"); err == nil && valueOfMethod.IsCallable() {
+					result, callErr := vmInstance.Call(valueOfMethod, thisValue, nil)
+					if callErr == nil && !result.IsObject() {
+						return result, nil
+					}
+				}
+				// Try toString
+				if toStringMethod, err := vmInstance.GetProperty(thisValue, "toString"); err == nil && toStringMethod.IsCallable() {
+					result, callErr := vmInstance.Call(toStringMethod, thisValue, nil)
+					if callErr == nil && !result.IsObject() {
+						return result, nil
+					}
+				}
+			}
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert object to primitive value")
+		})
+		// Set as non-enumerable, non-writable, configurable (per spec)
+		wFalse, eFalse, cTrue := false, false, true
+		dateProto.DefineOwnPropertyByKey(vm.NewSymbolKey(vmInstance.SymbolToPrimitive), toPrimitiveFunc, &wFalse, &eFalse, &cTrue)
+	}
+
 	// Set Date prototype in VM (if needed)
 	// vmInstance.DatePrototype = vm.NewValueFromPlainObject(dateProto)
 

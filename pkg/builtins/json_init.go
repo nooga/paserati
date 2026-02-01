@@ -77,7 +77,8 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add stringify method (supports optional replacer and space parameters)
-	jsonObj.SetOwnNonEnumerable("stringify", vm.NewNativeFunction(1, true, "stringify", func(args []vm.Value) (vm.Value, error) {
+	// Per ECMAScript spec, JSON.stringify.length = 3 (value, replacer, space)
+	jsonObj.SetOwnNonEnumerable("stringify", vm.NewNativeFunction(3, true, "stringify", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.Undefined, nil
 		}

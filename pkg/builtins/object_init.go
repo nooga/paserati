@@ -673,6 +673,186 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	e, c := false, true
 	objectProto.DefineAccessorProperty("__proto__", protoGetter, true, protoSetter, true, &e, &c)
 
+	// __defineGetter__ (ES6 B.2.2.2) - legacy method to define a getter
+	defineGetterFunc := vm.NewNativeFunction(2, false, "__defineGetter__", func(args []vm.Value) (vm.Value, error) {
+		thisValue := vmInstance.GetThis()
+		if thisValue.Type() == vm.TypeUndefined || thisValue.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		if len(args) < 2 {
+			return vm.Undefined, vmInstance.NewTypeError("__defineGetter__ requires 2 arguments")
+		}
+		// ToPropertyKey
+		propName := args[0].ToString()
+		getter := args[1]
+		if !getter.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("__defineGetter__ getter must be a function")
+		}
+		// Define accessor property based on object type
+		// Per ES6 B.2.2.2: enumerable: true, configurable: true
+		en, conf := true, true
+		switch thisValue.Type() {
+		case vm.TypeObject:
+			thisValue.AsPlainObject().DefineAccessorProperty(propName, getter, true, vm.Undefined, false, &en, &conf)
+		case vm.TypeArray:
+			thisValue.AsArray().DefineAccessorProperty(propName, getter, true, vm.Undefined, false, &en, &conf)
+		default:
+			if po := thisValue.AsPlainObject(); po != nil {
+				po.DefineAccessorProperty(propName, getter, true, vm.Undefined, false, &en, &conf)
+			} else {
+				return vm.Undefined, vmInstance.NewTypeError("__defineGetter__ called on non-object")
+			}
+		}
+		return vm.Undefined, nil
+	})
+	objectProto.SetOwnNonEnumerable("__defineGetter__", defineGetterFunc)
+
+	// __defineSetter__ (ES6 B.2.2.3) - legacy method to define a setter
+	defineSetterFunc := vm.NewNativeFunction(2, false, "__defineSetter__", func(args []vm.Value) (vm.Value, error) {
+		thisValue := vmInstance.GetThis()
+		if thisValue.Type() == vm.TypeUndefined || thisValue.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		if len(args) < 2 {
+			return vm.Undefined, vmInstance.NewTypeError("__defineSetter__ requires 2 arguments")
+		}
+		// ToPropertyKey
+		propName := args[0].ToString()
+		setter := args[1]
+		if !setter.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("__defineSetter__ setter must be a function")
+		}
+		// Define accessor property based on object type
+		// Per ES6 B.2.2.3: enumerable: true, configurable: true
+		en, conf := true, true
+		switch thisValue.Type() {
+		case vm.TypeObject:
+			thisValue.AsPlainObject().DefineAccessorProperty(propName, vm.Undefined, false, setter, true, &en, &conf)
+		case vm.TypeArray:
+			thisValue.AsArray().DefineAccessorProperty(propName, vm.Undefined, false, setter, true, &en, &conf)
+		default:
+			if po := thisValue.AsPlainObject(); po != nil {
+				po.DefineAccessorProperty(propName, vm.Undefined, false, setter, true, &en, &conf)
+			} else {
+				return vm.Undefined, vmInstance.NewTypeError("__defineSetter__ called on non-object")
+			}
+		}
+		return vm.Undefined, nil
+	})
+	objectProto.SetOwnNonEnumerable("__defineSetter__", defineSetterFunc)
+
+	// __lookupGetter__ (ES6 B.2.2.4) - legacy method to lookup a getter
+	lookupGetterFunc := vm.NewNativeFunction(1, false, "__lookupGetter__", func(args []vm.Value) (vm.Value, error) {
+		thisValue := vmInstance.GetThis()
+		if thisValue.Type() == vm.TypeUndefined || thisValue.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		if len(args) < 1 {
+			return vm.Undefined, nil
+		}
+		propName := args[0].ToString()
+		// Walk up the prototype chain looking for accessor
+		current := thisValue
+		for {
+			var po *vm.PlainObject
+			switch current.Type() {
+			case vm.TypeObject:
+				po = current.AsPlainObject()
+			case vm.TypeArray:
+				arr := current.AsArray()
+				// Check if array has accessor property
+				if getter, _, _, _, isAccessor := arr.GetOwnAccessor(propName); isAccessor {
+					return getter, nil
+				}
+				// Check if array has data property (if so, return undefined)
+				if _, hasData := arr.GetOwn(propName); hasData {
+					return vm.Undefined, nil
+				}
+				// Move to array prototype
+				current = vmInstance.ArrayPrototype
+				continue
+			default:
+				po = current.AsPlainObject()
+			}
+			if po != nil {
+				// Check if it's an accessor property
+				if getter, _, _, _, isAccessor := po.GetOwnAccessor(propName); isAccessor {
+					return getter, nil
+				}
+				// Check if it's a data property (if so, return undefined per spec)
+				if _, hasData := po.GetOwn(propName); hasData {
+					return vm.Undefined, nil
+				}
+				// Move up prototype chain
+				proto := po.GetPrototype()
+				if proto.Type() == vm.TypeNull || proto.Type() == vm.TypeUndefined || proto.Type() == 0 {
+					break
+				}
+				current = proto
+			} else {
+				break
+			}
+		}
+		return vm.Undefined, nil
+	})
+	objectProto.SetOwnNonEnumerable("__lookupGetter__", lookupGetterFunc)
+
+	// __lookupSetter__ (ES6 B.2.2.5) - legacy method to lookup a setter
+	lookupSetterFunc := vm.NewNativeFunction(1, false, "__lookupSetter__", func(args []vm.Value) (vm.Value, error) {
+		thisValue := vmInstance.GetThis()
+		if thisValue.Type() == vm.TypeUndefined || thisValue.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		if len(args) < 1 {
+			return vm.Undefined, nil
+		}
+		propName := args[0].ToString()
+		// Walk up the prototype chain looking for accessor
+		current := thisValue
+		for {
+			var po *vm.PlainObject
+			switch current.Type() {
+			case vm.TypeObject:
+				po = current.AsPlainObject()
+			case vm.TypeArray:
+				arr := current.AsArray()
+				// Check if array has accessor property
+				if _, setter, _, _, isAccessor := arr.GetOwnAccessor(propName); isAccessor {
+					return setter, nil
+				}
+				// Check if array has data property (if so, return undefined)
+				if _, hasData := arr.GetOwn(propName); hasData {
+					return vm.Undefined, nil
+				}
+				// Move to array prototype
+				current = vmInstance.ArrayPrototype
+				continue
+			default:
+				po = current.AsPlainObject()
+			}
+			if po != nil {
+				// Check if it's an accessor property
+				if _, setter, _, _, isAccessor := po.GetOwnAccessor(propName); isAccessor {
+					return setter, nil
+				}
+				// Check if it's a data property (if so, return undefined per spec)
+				if _, hasData := po.GetOwn(propName); hasData {
+					return vm.Undefined, nil
+				}
+				// Move up prototype chain
+				proto := po.GetPrototype()
+				if proto.Type() == vm.TypeNull || proto.Type() == vm.TypeUndefined || proto.Type() == 0 {
+					break
+				}
+				current = proto
+			} else {
+				break
+			}
+		}
+		return vm.Undefined, nil
+	})
+	objectProto.SetOwnNonEnumerable("__lookupSetter__", lookupSetterFunc)
+
 	// Create Object constructor (length=1 per spec)
 	objectCtor := vm.NewNativeFunction(1, true, "Object", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {

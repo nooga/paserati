@@ -159,6 +159,8 @@ type ArrayObject struct {
 	properties   map[string]Value           // Named properties (e.g., "index", "input" for match results)
 	propertyDesc map[string]PropertyDesc    // Property descriptors for named properties
 	symbolProps  map[*SymbolObject]Value    // Symbol-keyed properties (e.g., Symbol.iterator override)
+	getters      map[string]Value           // Accessor getters for named properties
+	setters      map[string]Value           // Accessor setters for named properties
 	extensible   bool                       // When false, no new properties can be added (for Object.freeze/seal)
 	frozen       bool                       // When true, elements are also non-writable and non-configurable
 }
@@ -2014,6 +2016,82 @@ func (a *ArrayObject) HasOwnSymbolProp(sym *SymbolObject) bool {
 	}
 	_, ok := a.symbolProps[sym]
 	return ok
+}
+
+// DefineAccessorProperty defines an accessor property on the array object
+func (a *ArrayObject) DefineAccessorProperty(name string, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) {
+	// Initialize maps if needed
+	if a.getters == nil {
+		a.getters = make(map[string]Value)
+	}
+	if a.setters == nil {
+		a.setters = make(map[string]Value)
+	}
+	if a.propertyDesc == nil {
+		a.propertyDesc = make(map[string]PropertyDesc)
+	}
+
+	// Store getter/setter
+	if hasGetter {
+		a.getters[name] = getter
+	}
+	if hasSetter {
+		a.setters[name] = setter
+	}
+
+	// Store property descriptor
+	desc := PropertyDesc{
+		Writable:     false, // accessors don't have writable
+		Enumerable:   false,
+		Configurable: true,
+	}
+	if enumerable != nil {
+		desc.Enumerable = *enumerable
+	}
+	if configurable != nil {
+		desc.Configurable = *configurable
+	}
+	a.propertyDesc[name] = desc
+
+	// Remove from regular properties if it was a data property
+	delete(a.properties, name)
+}
+
+// GetOwnAccessor returns the getter and setter for an accessor property
+// Returns (getter, setter, enumerable, configurable, isAccessor)
+func (a *ArrayObject) GetOwnAccessor(name string) (Value, Value, bool, bool, bool) {
+	// Check if this is an accessor property
+	hasGetter := a.getters != nil && a.getters[name].Type() != 0
+	hasSetter := a.setters != nil && a.setters[name].Type() != 0
+
+	if !hasGetter && !hasSetter {
+		return Undefined, Undefined, false, false, false
+	}
+
+	getter := Undefined
+	setter := Undefined
+	if a.getters != nil {
+		if g, ok := a.getters[name]; ok {
+			getter = g
+		}
+	}
+	if a.setters != nil {
+		if s, ok := a.setters[name]; ok {
+			setter = s
+		}
+	}
+
+	// Get descriptor
+	enumerable := false
+	configurable := true
+	if a.propertyDesc != nil {
+		if desc, ok := a.propertyDesc[name]; ok {
+			enumerable = desc.Enumerable
+			configurable = desc.Configurable
+		}
+	}
+
+	return getter, setter, enumerable, configurable, true
 }
 
 // ArgumentsObject methods
