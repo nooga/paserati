@@ -53,12 +53,17 @@ func (m *MapInitializer) InitTypes(ctx *TypeContext) error {
 	// Register map primitive prototype
 	ctx.SetPrimitivePrototype("map", mapProtoType)
 
-	// Create Map constructor type - use a generic constructor
-	mapCtorType := &types.GenericType{
-		Name:           "Map",
-		TypeParameters: []*types.TypeParameter{kParam, vParam},
-		Body:           types.NewSimpleFunction([]types.Type{}, mapType),
-	}
+	// Create Map constructor type - use an ObjectType with call signature and static methods
+	mapCtorType := types.NewObjectType().
+		WithSimpleCallSignature([]types.Type{}, mapType). // new Map()
+		// Map.groupBy(items, callbackfn)
+		WithProperty("groupBy", types.NewSimpleFunction(
+			[]types.Type{
+				types.Any, // items: Iterable<T>
+				types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Any), // callbackfn: (value: T, index: number) => K
+			},
+			mapType, // Map<K, T[]>
+		))
 
 	// Define Map constructor in global environment
 	err := ctx.DefineGlobal("Map", mapCtorType)
@@ -414,6 +419,91 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := false, false, false
 		mapConstructor.AsNativeFunctionWithProps().Properties.DefineOwnProperty("prototype", v, &w, &e, &c)
 	}
+
+	// Add Map.groupBy(items, callbackfn) static method
+	mapConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("groupBy", vm.NewNativeFunction(2, false, "groupBy", func(args []vm.Value) (vm.Value, error) {
+		if len(args) < 2 {
+			return vm.Undefined, vmInstance.NewTypeError("Map.groupBy requires 2 arguments")
+		}
+
+		items := args[0]
+		callbackfn := args[1]
+
+		// Check that callbackfn is callable
+		if !callbackfn.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Map.groupBy: callback is not a function")
+		}
+
+		// Create result Map
+		result := vm.NewMap()
+		resultMap := result.AsMap()
+
+		// Get iterator from items
+		var iterator vm.Value
+		var iterMethod vm.Value
+		var hasIterator bool
+
+		// Handle string type specially - get iterator from String.prototype
+		if items.Type() == vm.TypeString {
+			if vmInstance.StringPrototype.Type() != vm.TypeUndefined {
+				proto := vmInstance.StringPrototype.AsPlainObject()
+				if proto != nil {
+					iterMethod, hasIterator = proto.GetOwnByKey(vm.NewSymbolKey(SymbolIterator))
+				}
+			}
+		} else {
+			iterMethod, hasIterator = vmInstance.GetSymbolProperty(items, SymbolIterator)
+		}
+
+		if hasIterator && iterMethod.IsCallable() {
+			iter, err := vmInstance.Call(iterMethod, items, []vm.Value{})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			iterator = iter
+		} else {
+			return vm.Undefined, vmInstance.NewTypeError("Map.groupBy: items is not iterable")
+		}
+
+		// Iterate over items
+		k := 0
+		for {
+			nextMethod, _ := vmInstance.GetProperty(iterator, "next")
+			iterResult, err := vmInstance.Call(nextMethod, iterator, []vm.Value{})
+			if err != nil {
+				return vm.Undefined, err
+			}
+
+			doneVal, _ := vmInstance.GetProperty(iterResult, "done")
+			if doneVal.IsTruthy() {
+				break
+			}
+
+			value, _ := vmInstance.GetProperty(iterResult, "value")
+
+			// Call callback with (value, k)
+			keyResult, err := vmInstance.Call(callbackfn, vm.Undefined, []vm.Value{value, vm.NumberValue(float64(k))})
+			if err != nil {
+				return vm.Undefined, err
+			}
+
+			// Get or create group array (key can be any value, not just string)
+			var group vm.Value
+			if existing := resultMap.Get(keyResult); !existing.IsUndefined() {
+				group = existing
+			} else {
+				group = vm.NewArray()
+				resultMap.Set(keyResult, group)
+			}
+
+			// Append value to group
+			group.AsArray().Append(value)
+
+			k++
+		}
+
+		return result, nil
+	}))
 
 	// Define Map constructor in global scope
 	return ctx.DefineGlobal("Map", mapConstructor)

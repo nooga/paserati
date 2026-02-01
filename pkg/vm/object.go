@@ -1240,7 +1240,10 @@ func NewObject(proto Value) Value {
 	// Create a new PlainObject and set its prototype to the shared DefaultObjectPrototype
 	// In ECMAScript, the prototype can be any object, including functions (which are objects)
 	prototype := DefaultObjectPrototype
-	if proto.IsObject() || proto.IsCallable() {
+	if proto.Type() == TypeNull {
+		// Explicitly null prototype (for Object.create(null), Object.groupBy, etc.)
+		prototype = Null
+	} else if proto.IsObject() || proto.IsCallable() {
 		// Functions are valid prototypes in JavaScript since they are objects
 		prototype = proto
 	}
@@ -1250,7 +1253,10 @@ func NewObject(proto Value) Value {
 
 func NewDictObject(proto Value) Value {
 	prototype := DefaultObjectPrototype
-	if proto.IsObject() || proto.IsCallable() {
+	if proto.Type() == TypeNull {
+		// Explicitly null prototype
+		prototype = Null
+	} else if proto.IsObject() || proto.IsCallable() {
 		// Functions are valid prototypes in JavaScript since they are objects
 		prototype = proto
 	}

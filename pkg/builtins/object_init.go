@@ -62,6 +62,14 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("isFrozen", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
 		WithProperty("isSealed", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
 		WithProperty("is", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Boolean)).
+		// Object.groupBy(items, callbackfn)
+		WithProperty("groupBy", types.NewSimpleFunction(
+			[]types.Type{
+				types.Any, // items: Iterable<T>
+				types.NewSimpleFunction([]types.Type{types.Any, types.Number}, keyStringOrSymbol), // callbackfn: (value: T, index: number) => PropertyKey
+			},
+			types.NewObjectType(), // Record<PropertyKey, T[]>
+		)).
 		WithProperty("prototype", objectProtoType)
 
 	// Define the constructor globally
@@ -1015,6 +1023,106 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				y = args[1]
 			}
 			return vm.BooleanValue(sameValue(x, y)), nil
+		}))
+
+		// Object.groupBy(items, callbackfn)
+		ctorPropsObj.Properties.SetOwnNonEnumerable("groupBy", vm.NewNativeFunction(2, false, "groupBy", func(args []vm.Value) (vm.Value, error) {
+			if len(args) < 2 {
+				return vm.Undefined, vmInstance.NewTypeError("Object.groupBy requires 2 arguments")
+			}
+
+			items := args[0]
+			callbackfn := args[1]
+
+			// Check that callbackfn is callable
+			if !callbackfn.IsCallable() {
+				return vm.Undefined, vmInstance.NewTypeError("Object.groupBy: callback is not a function")
+			}
+
+			// Create result object with null prototype
+			result := vm.NewObject(vm.Null).AsPlainObject()
+
+			// Get iterator from items
+			var iterator vm.Value
+			var iterMethod vm.Value
+			var hasIterator bool
+
+			// Handle string type specially - get iterator from String.prototype
+			if items.Type() == vm.TypeString {
+				if vmInstance.StringPrototype.Type() != vm.TypeUndefined {
+					proto := vmInstance.StringPrototype.AsPlainObject()
+					if proto != nil {
+						iterMethod, hasIterator = proto.GetOwnByKey(vm.NewSymbolKey(SymbolIterator))
+					}
+				}
+			} else {
+				iterMethod, hasIterator = vmInstance.GetSymbolProperty(items, SymbolIterator)
+			}
+
+			if hasIterator && iterMethod.IsCallable() {
+				iter, err := vmInstance.Call(iterMethod, items, []vm.Value{})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				iterator = iter
+			} else {
+				return vm.Undefined, vmInstance.NewTypeError("Object.groupBy: items is not iterable")
+			}
+
+			// Iterate over items
+			k := 0
+			for {
+				nextMethod, _ := vmInstance.GetProperty(iterator, "next")
+				iterResult, err := vmInstance.Call(nextMethod, iterator, []vm.Value{})
+				if err != nil {
+					return vm.Undefined, err
+				}
+
+				doneVal, _ := vmInstance.GetProperty(iterResult, "done")
+				if doneVal.IsTruthy() {
+					break
+				}
+
+				value, _ := vmInstance.GetProperty(iterResult, "value")
+
+				// Call callback with (value, k)
+				keyResult, err := vmInstance.Call(callbackfn, vm.Undefined, []vm.Value{value, vm.NumberValue(float64(k))})
+				if err != nil {
+					return vm.Undefined, err
+				}
+
+				// Coerce key to property key (ToPropertyKey)
+				// For objects, call ToPrimitive with "string" hint to get proper toString() call
+				var key string
+				if keyResult.IsObject() || keyResult.IsCallable() {
+					vmInstance.EnterHelperCall()
+					primitiveVal := vmInstance.ToPrimitive(keyResult, "string")
+					vmInstance.ExitHelperCall()
+					// Check if ToPrimitive threw an exception
+					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+						return vm.Undefined, nil // Let exception propagate
+					}
+					key = primitiveVal.ToString()
+				} else {
+					key = keyResult.ToString()
+				}
+
+				// Get or create group array
+				var group vm.Value
+				if existing, ok := result.GetOwn(key); ok {
+					group = existing
+				} else {
+					group = vm.NewArray()
+					result.SetOwn(key, group)
+				}
+
+				// Append value to group
+				group.AsArray().Append(value)
+
+				k++
+			}
+
+			return vm.NewValueFromPlainObject(result), nil
 		}))
 
 		objectCtor = ctorWithProps
