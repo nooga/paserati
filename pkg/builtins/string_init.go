@@ -310,8 +310,8 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("constructor", types.Any) // Avoid circular reference, use Any for constructor property
 
 	// Add Symbol.iterator to string prototype type to make strings iterable
-	// Get the Iterator<T> generic type if available
-	if iteratorType, found := ctx.GetType("Iterator"); found {
+	// Get the Iterator<T> generic type if available (use internal name)
+	if iteratorType, found := ctx.GetType("__IteratorGeneric__"); found {
 		if iteratorGeneric, ok := iteratorType.(*types.GenericType); ok {
 			// Create Iterator<string> type for strings
 			iteratorOfString := &types.InstantiatedType{

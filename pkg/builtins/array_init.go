@@ -109,8 +109,8 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("reduceRight", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Any), types.Any}, types.Any))
 
 	// Add Symbol.iterator to array prototype type to make arrays iterable
-	// Get the Iterator<T> generic type if available
-	if iteratorType, found := ctx.GetType("Iterator"); found {
+	// Get the Iterator<T> generic type if available (use internal name)
+	if iteratorType, found := ctx.GetType("__IteratorGeneric__"); found {
 		if iteratorGeneric, ok := iteratorType.(*types.GenericType); ok {
 			// Create Iterator<T> type for arrays
 			iteratorOfT := &types.InstantiatedType{

@@ -50,8 +50,8 @@ func (g *GeneratorInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Add Symbol.iterator to generator prototype type to make generators iterable
 	// Generators return themselves when Symbol.iterator is called
-	// Get the Iterator<T> generic type if available
-	if _, found := ctx.GetType("Iterator"); found {
+	// Check if Iterator type is available (use internal name)
+	if _, found := ctx.GetType("__IteratorGeneric__"); found {
 		// For generators, [Symbol.iterator]() returns Generator<T, TReturn, TNext> which extends Iterator<T>
 		// Since Generator<T, TReturn, TNext> is already an iterator, it returns itself
 		// Create the Generator<T, TReturn, TNext> type

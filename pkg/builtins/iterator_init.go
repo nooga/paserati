@@ -149,8 +149,58 @@ func (i *IteratorInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Register the types in global environment
 	_ = ctx.DefineGlobal("IteratorResult", iteratorResultGeneric)
-	_ = ctx.DefineGlobal("Iterator", iteratorGeneric)
 	_ = ctx.DefineGlobal("Iterable", iterableGeneric)
+	// Register the generic Iterator type for internal use (other initializers need it for type definitions)
+	_ = ctx.DefineGlobal("__IteratorGeneric__", iteratorGeneric)
+
+	// Create Iterator constructor type with static methods
+	// Iterator.from(items: Iterable<T>): Iterator<T>
+	// Iterator.concat(...iterables: Iterable<T>[]): Iterator<T>
+	// Iterator.zip(iterables: Iterable<T>[], options?: {...}): Iterator<T[]>
+	// Iterator.zipKeyed(iterables: {[key: string]: Iterable<any>}, options?: {...}): Iterator<{[key: string]: any}>
+	iteratorCtorType := types.NewObjectType().
+		// from(items: any): Iterator<any>
+		// Note: ideally from<T>(items: Iterable<T>): Iterator<T>, but simplified for now
+		WithProperty("from", types.NewSimpleFunction(
+			[]types.Type{types.Any},
+			&types.InstantiatedType{
+				Generic:       iteratorGeneric,
+				TypeArguments: []types.Type{types.Any},
+			})).
+		// concat(...iterables: any[]): Iterator<any>
+		// Note: ideally concat<T>(...iterables: Iterable<T>[]): Iterator<T>, but simplified for now
+		WithProperty("concat", types.NewVariadicFunction(
+			[]types.Type{},
+			&types.InstantiatedType{
+				Generic:       iteratorGeneric,
+				TypeArguments: []types.Type{types.Any},
+			},
+			&types.ArrayType{ElementType: types.Any})).
+		// zip<T>(iterables: Iterable<Iterable<T>>, options?: {mode?: string, padding?: T[]}): Iterator<T[]>
+		WithProperty("zip", types.NewOptionalFunction(
+			[]types.Type{
+				types.Any, // iterables
+				types.Any, // options
+			},
+			&types.InstantiatedType{
+				Generic:       iteratorGeneric,
+				TypeArguments: []types.Type{&types.ArrayType{ElementType: types.Any}},
+			},
+			[]bool{false, true})).
+		// zipKeyed(iterables: {[key: string]: Iterable<any>}, options?: {...}): Iterator<{[key: string]: any}>
+		WithProperty("zipKeyed", types.NewOptionalFunction(
+			[]types.Type{
+				types.Any, // iterables object
+				types.Any, // options
+			},
+			&types.InstantiatedType{
+				Generic:       iteratorGeneric,
+				TypeArguments: []types.Type{types.NewObjectType()},
+			},
+			[]bool{false, true})).
+		WithProperty("prototype", iteratorType)
+
+	_ = ctx.DefineGlobal("Iterator", iteratorCtorType)
 
 	return nil
 }
@@ -1057,7 +1107,618 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			wrapper.SetOwn("[[Iterated]]", iterator)
 			return vm.NewValueFromPlainObject(wrapper), nil
 		}))
+
+		// Add Iterator.concat(...items) static method
+		ctorProps.Properties.SetOwnNonEnumerable("concat", vm.NewNativeFunction(0, true, "concat", func(args []vm.Value) (vm.Value, error) {
+			// Collect all iterables from arguments
+			var iterables []vm.Value
+
+			for _, item := range args {
+				// Per spec: "If item is not an Object, throw a TypeError exception."
+				// This means primitives (string, number, boolean, etc.) are not allowed,
+				// even if they are iterable.
+				if !item.IsObject() && item.Type() != vm.TypeArray && item.Type() != vm.TypeSet && item.Type() != vm.TypeMap && !item.IsGenerator() {
+					return vm.Undefined, vmInstance.NewTypeError("Iterator.concat requires an Object argument")
+				}
+
+				// Now check if item has Symbol.iterator
+				var hasIterator bool
+				if item.Type() == vm.TypeArray || item.Type() == vm.TypeSet || item.Type() == vm.TypeMap {
+					hasIterator = true
+				} else if item.IsObject() || item.IsGenerator() {
+					if iterMethod, ok := vmInstance.GetSymbolProperty(item, SymbolIterator); ok && iterMethod.IsCallable() {
+						hasIterator = true
+					}
+				}
+
+				if !hasIterator {
+					return vm.Undefined, vmInstance.NewTypeError("Iterator.concat: argument is not iterable")
+				}
+
+				iterables = append(iterables, item)
+			}
+
+			// Create the concat iterator
+			concatIter := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
+			currentIterableIndex := 0
+			var currentIterator vm.Value = vm.Undefined
+			closed := false
+
+			// Helper to get iterator from value
+			getIteratorFromValue := func(value vm.Value) (vm.Value, error) {
+				// For strings, use Symbol.iterator which creates a string iterator
+				if iterMethod, ok := vmInstance.GetSymbolProperty(value, SymbolIterator); ok && iterMethod.IsCallable() {
+					return vmInstance.Call(iterMethod, value, []vm.Value{})
+				}
+				return vm.Undefined, vmInstance.NewTypeError("Value is not iterable")
+			}
+
+			concatIter.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(innerArgs []vm.Value) (vm.Value, error) {
+				if closed {
+					return createIteratorResult(vm.Undefined, true), nil
+				}
+
+				for {
+					// If we have a current iterator, try to get next value
+					if !currentIterator.IsUndefined() {
+						nextMethod, _ := vmInstance.GetProperty(currentIterator, "next")
+						if nextMethod.IsCallable() {
+							result, err := vmInstance.Call(nextMethod, currentIterator, []vm.Value{})
+							if err != nil {
+								return vm.Undefined, err
+							}
+							doneVal, _ := vmInstance.GetProperty(result, "done")
+							if !doneVal.IsTruthy() {
+								// Return the value
+								valueVal, _ := vmInstance.GetProperty(result, "value")
+								return createIteratorResult(valueVal, false), nil
+							}
+							// Current iterator exhausted, move to next
+							currentIterator = vm.Undefined
+						}
+					}
+
+					// Move to next iterable
+					if currentIterableIndex >= len(iterables) {
+						// All iterables exhausted
+						return createIteratorResult(vm.Undefined, true), nil
+					}
+
+					// Get iterator for next iterable
+					iter, err := getIteratorFromValue(iterables[currentIterableIndex])
+					if err != nil {
+						return vm.Undefined, err
+					}
+					currentIterator = iter
+					currentIterableIndex++
+				}
+			}))
+
+			// Add return method to close the iterator
+			concatIter.SetOwnNonEnumerable("return", vm.NewNativeFunction(0, false, "return", func(innerArgs []vm.Value) (vm.Value, error) {
+				if !closed {
+					closed = true
+					// Close the current underlying iterator if any
+					if !currentIterator.IsUndefined() {
+						returnMethod, _ := vmInstance.GetProperty(currentIterator, "return")
+						if returnMethod.IsCallable() {
+							_, _ = vmInstance.Call(returnMethod, currentIterator, []vm.Value{})
+						}
+						currentIterator = vm.Undefined
+					}
+				}
+				return createIteratorResult(vm.Undefined, true), nil
+			}))
+
+			// Add Symbol.iterator that returns self
+			iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(fnArgs []vm.Value) (vm.Value, error) {
+				return vm.NewValueFromPlainObject(concatIter), nil
+			})
+			concatIter.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterSelfFn, nil, nil, nil)
+
+			return vm.NewValueFromPlainObject(concatIter), nil
+		}))
+
+		// Add Iterator.zip(iterables, options) static method
+		ctorProps.Properties.SetOwnNonEnumerable("zip", vm.NewNativeFunction(1, false, "zip", func(args []vm.Value) (vm.Value, error) {
+			if len(args) == 0 {
+				return vm.Undefined, vmInstance.NewTypeError("Iterator.zip requires an iterable argument")
+			}
+
+			iterablesArg := args[0]
+
+			// Parse options
+			mode := "shortest" // default
+			var padding []vm.Value
+
+			if len(args) > 1 && !args[1].IsUndefined() {
+				options := args[1]
+				if options.IsObject() {
+					// Get mode - must be undefined or a valid string (no coercion)
+					modeVal, _ := vmInstance.GetProperty(options, "mode")
+					if !modeVal.IsUndefined() {
+						// Mode must be a string type, not coerced
+						if modeVal.Type() != vm.TypeString {
+							return vm.Undefined, vmInstance.NewTypeError("Iterator.zip: mode must be a string")
+						}
+						modeStr := modeVal.ToString()
+						if modeStr != "shortest" && modeStr != "longest" && modeStr != "strict" {
+							return vm.Undefined, vmInstance.NewTypeError("Iterator.zip: mode must be 'shortest', 'longest', or 'strict'")
+						}
+						mode = modeStr
+					}
+					// Get padding for "longest" mode
+					if mode == "longest" {
+						paddingVal, _ := vmInstance.GetProperty(options, "padding")
+						if !paddingVal.IsUndefined() {
+							// Convert padding iterable to array
+							if iterMethod, ok := vmInstance.GetSymbolProperty(paddingVal, SymbolIterator); ok && iterMethod.IsCallable() {
+								padIter, err := vmInstance.Call(iterMethod, paddingVal, []vm.Value{})
+								if err != nil {
+									return vm.Undefined, err
+								}
+								for {
+									nextMethod, _ := vmInstance.GetProperty(padIter, "next")
+									result, err := vmInstance.Call(nextMethod, padIter, []vm.Value{})
+									if err != nil {
+										break
+									}
+									doneVal, _ := vmInstance.GetProperty(result, "done")
+									if doneVal.IsTruthy() {
+										break
+									}
+									valueVal, _ := vmInstance.GetProperty(result, "value")
+									padding = append(padding, valueVal)
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// Helper: GetIteratorFlattenable - gets iterator from object
+			// Accepts both iterables (with Symbol.iterator) and iterators (with next method)
+			getIteratorFlattenable := func(obj vm.Value) (vm.Value, error) {
+				// Step 1: If obj is not an Object, throw TypeError
+				if !obj.IsObject() && obj.Type() != vm.TypeArray && obj.Type() != vm.TypeSet && obj.Type() != vm.TypeMap && !obj.IsGenerator() {
+					return vm.Undefined, vmInstance.NewTypeError("Iterator.zip: value is not an object")
+				}
+
+				// Step 2: Try to get Symbol.iterator method
+				if iterMethod, ok := vmInstance.GetSymbolProperty(obj, SymbolIterator); ok && iterMethod.IsCallable() {
+					// Step 4: Call the method to get iterator
+					iter, err := vmInstance.Call(iterMethod, obj, []vm.Value{})
+					if err != nil {
+						return vm.Undefined, err
+					}
+					// Step 5: Result must be an object
+					if !iter.IsObject() && !iter.IsGenerator() {
+						return vm.Undefined, vmInstance.NewTypeError("Iterator.zip: Symbol.iterator did not return an object")
+					}
+					return iter, nil
+				}
+
+				// Step 3: If method is undefined, use obj as iterator directly
+				// (it should have a next method)
+				nextMethod, _ := vmInstance.GetProperty(obj, "next")
+				if nextMethod.IsCallable() {
+					return obj, nil
+				}
+
+				return vm.Undefined, vmInstance.NewTypeError("Iterator.zip: value is not iterable")
+			}
+
+			// Collect iterators from the iterables argument
+			var iterators []vm.Value
+
+			// Get iterator for the iterables argument itself (using GetIterator, not GetIteratorFlattenable)
+			var iterablesIter vm.Value
+			if iterMethod, ok := vmInstance.GetSymbolProperty(iterablesArg, SymbolIterator); ok && iterMethod.IsCallable() {
+				iter, err := vmInstance.Call(iterMethod, iterablesArg, []vm.Value{})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				iterablesIter = iter
+			} else {
+				return vm.Undefined, vmInstance.NewTypeError("Iterator.zip: first argument is not iterable")
+			}
+
+			// Collect all iterators from iterables using GetIteratorFlattenable
+			for {
+				nextMethod, _ := vmInstance.GetProperty(iterablesIter, "next")
+				result, err := vmInstance.Call(nextMethod, iterablesIter, []vm.Value{})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				doneVal, _ := vmInstance.GetProperty(result, "done")
+				if doneVal.IsTruthy() {
+					break
+				}
+				item, _ := vmInstance.GetProperty(result, "value")
+				// Use GetIteratorFlattenable for each item
+				itemIter, err := getIteratorFlattenable(item)
+				if err != nil {
+					return vm.Undefined, err
+				}
+				iterators = append(iterators, itemIter)
+			}
+
+			// Create the zip iterator
+			zipIter := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
+			exhausted := make([]bool, len(iterators))
+			allDone := false
+			closed := false
+
+			// Helper to close all non-exhausted iterators
+			closeAllIterators := func() {
+				for i, iter := range iterators {
+					if !exhausted[i] {
+						returnMethod, _ := vmInstance.GetProperty(iter, "return")
+						if returnMethod.IsCallable() {
+							_, _ = vmInstance.Call(returnMethod, iter, []vm.Value{})
+						}
+						exhausted[i] = true
+					}
+				}
+			}
+
+			zipIter.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(innerArgs []vm.Value) (vm.Value, error) {
+				if allDone || closed {
+					return createIteratorResult(vm.Undefined, true), nil
+				}
+
+				results := make([]vm.Value, len(iterators))
+				anyDone := false
+				allExhausted := true
+
+				for i, iter := range iterators {
+					if exhausted[i] {
+						// Already exhausted, use padding
+						if i < len(padding) {
+							results[i] = padding[i]
+						} else {
+							results[i] = vm.Undefined
+						}
+						continue
+					}
+
+					allExhausted = false
+
+					nextMethod, _ := vmInstance.GetProperty(iter, "next")
+					result, err := vmInstance.Call(nextMethod, iter, []vm.Value{})
+					if err != nil {
+						return vm.Undefined, err
+					}
+
+					doneVal, _ := vmInstance.GetProperty(result, "done")
+					if doneVal.IsTruthy() {
+						exhausted[i] = true
+						anyDone = true
+						// Use padding for this position
+						if i < len(padding) {
+							results[i] = padding[i]
+						} else {
+							results[i] = vm.Undefined
+						}
+					} else {
+						valueVal, _ := vmInstance.GetProperty(result, "value")
+						results[i] = valueVal
+					}
+				}
+
+				// Handle modes
+				switch mode {
+				case "shortest":
+					if anyDone {
+						allDone = true
+						return createIteratorResult(vm.Undefined, true), nil
+					}
+				case "strict":
+					if anyDone {
+						// Check if ALL are done
+						allAreDone := true
+						for _, ex := range exhausted {
+							if !ex {
+								allAreDone = false
+								break
+							}
+						}
+						if !allAreDone {
+							allDone = true
+							return vm.Undefined, vmInstance.NewTypeError("Iterator.zip: iterators have different lengths in strict mode")
+						}
+						allDone = true
+						return createIteratorResult(vm.Undefined, true), nil
+					}
+				case "longest":
+					// Check if all iterators were already exhausted at the start
+					if allExhausted {
+						allDone = true
+						return createIteratorResult(vm.Undefined, true), nil
+					}
+					// Also check if all iterators became exhausted during this iteration
+					// (this handles the case where the last remaining iterators all finish together)
+					nowAllExhausted := true
+					for _, ex := range exhausted {
+						if !ex {
+							nowAllExhausted = false
+							break
+						}
+					}
+					if nowAllExhausted {
+						allDone = true
+						return createIteratorResult(vm.Undefined, true), nil
+					}
+				}
+
+				// Create result array
+				resultArr := vm.NewArray()
+				for _, v := range results {
+					resultArr.AsArray().Append(v)
+				}
+				return createIteratorResult(resultArr, false), nil
+			}))
+
+			// Add return method to close all iterators
+			zipIter.SetOwnNonEnumerable("return", vm.NewNativeFunction(0, false, "return", func(innerArgs []vm.Value) (vm.Value, error) {
+				if !closed {
+					closed = true
+					closeAllIterators()
+				}
+				return createIteratorResult(vm.Undefined, true), nil
+			}))
+
+			// Add Symbol.iterator that returns self
+			iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(fnArgs []vm.Value) (vm.Value, error) {
+				return vm.NewValueFromPlainObject(zipIter), nil
+			})
+			zipIter.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterSelfFn, nil, nil, nil)
+
+			return vm.NewValueFromPlainObject(zipIter), nil
+		}))
 	}
+
+	// Add Iterator.zipKeyed static method
+	ctorProps.Properties.SetOwnNonEnumerable("zipKeyed", vm.NewNativeFunction(1, false, "zipKeyed", func(args []vm.Value) (vm.Value, error) {
+		if len(args) < 1 {
+			return vm.Undefined, vmInstance.NewTypeError("Iterator.zipKeyed: expected object argument")
+		}
+
+		iterablesObj := args[0]
+		if !iterablesObj.IsObject() {
+			return vm.Undefined, vmInstance.NewTypeError("Iterator.zipKeyed: first argument must be an object")
+		}
+
+		// Parse options (same as zip)
+		mode := "shortest"
+		var padding map[string]vm.Value
+
+		if len(args) >= 2 && args[1].IsObject() {
+			optsObj := args[1]
+			// Get mode option - must be undefined or a valid string (no coercion)
+			modeVal, _ := vmInstance.GetProperty(optsObj, "mode")
+			if !modeVal.IsUndefined() {
+				// Mode must be a string type, not coerced
+				if modeVal.Type() != vm.TypeString {
+					return vm.Undefined, vmInstance.NewTypeError("Iterator.zipKeyed: mode must be a string")
+				}
+				modeStr := modeVal.ToString()
+				if modeStr != "shortest" && modeStr != "longest" && modeStr != "strict" {
+					return vm.Undefined, vmInstance.NewTypeError("Iterator.zipKeyed: mode must be 'shortest', 'longest', or 'strict'")
+				}
+				mode = modeStr
+			}
+			// Get padding option (for "longest" mode)
+			paddingVal, _ := vmInstance.GetProperty(optsObj, "padding")
+			if !paddingVal.IsUndefined() && paddingVal.IsObject() {
+				padding = make(map[string]vm.Value)
+				// Extract padding values keyed by property name
+				if plainObj := paddingVal.AsPlainObject(); plainObj != nil {
+					for _, key := range plainObj.OwnKeys() {
+						if val, exists := plainObj.GetOwn(key); exists {
+							padding[key] = val
+						}
+					}
+				}
+			}
+		}
+
+		// Helper: GetIteratorFlattenable - gets iterator from object
+		// Accepts both iterables (with Symbol.iterator) and iterators (with next method)
+		getIteratorFlattenable := func(obj vm.Value) (vm.Value, error) {
+			// Step 1: If obj is not an Object, throw TypeError
+			if !obj.IsObject() && obj.Type() != vm.TypeArray && obj.Type() != vm.TypeSet && obj.Type() != vm.TypeMap && !obj.IsGenerator() {
+				return vm.Undefined, vmInstance.NewTypeError("Iterator.zipKeyed: value is not an object")
+			}
+
+			// Step 2: Try to get Symbol.iterator method
+			if iterMethod, ok := vmInstance.GetSymbolProperty(obj, SymbolIterator); ok && iterMethod.IsCallable() {
+				// Step 4: Call the method to get iterator
+				iter, err := vmInstance.Call(iterMethod, obj, []vm.Value{})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				// Step 5: Result must be an object
+				if !iter.IsObject() && !iter.IsGenerator() {
+					return vm.Undefined, vmInstance.NewTypeError("Iterator.zipKeyed: Symbol.iterator did not return an object")
+				}
+				return iter, nil
+			}
+
+			// Step 3: If method is undefined, use obj as iterator directly
+			// (it should have a next method)
+			nextMethod, _ := vmInstance.GetProperty(obj, "next")
+			if nextMethod.IsCallable() {
+				return obj, nil
+			}
+
+			return vm.Undefined, vmInstance.NewTypeError("Iterator.zipKeyed: value is not iterable")
+		}
+
+		// Collect keys and iterators from the iterables object
+		var keys []string
+		iterators := make(map[string]vm.Value)
+
+		if plainObj := iterablesObj.AsPlainObject(); plainObj != nil {
+			for _, key := range plainObj.OwnKeys() {
+				keys = append(keys, key)
+				item, _ := plainObj.GetOwn(key)
+
+				// Use GetIteratorFlattenable for each item
+				itemIter, err := getIteratorFlattenable(item)
+				if err != nil {
+					return vm.Undefined, err
+				}
+				iterators[key] = itemIter
+			}
+		} else {
+			return vm.Undefined, vmInstance.NewTypeError("Iterator.zipKeyed: first argument must be a plain object")
+		}
+
+			// Create the zipKeyed iterator
+		zipKeyedIter := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
+		exhausted := make(map[string]bool)
+		for _, k := range keys {
+			exhausted[k] = false
+		}
+		allDone := false
+		closed := false
+
+		// Helper to close all non-exhausted iterators
+		closeAllIterators := func() {
+			for key, iter := range iterators {
+				if !exhausted[key] {
+					returnMethod, _ := vmInstance.GetProperty(iter, "return")
+					if returnMethod.IsCallable() {
+						_, _ = vmInstance.Call(returnMethod, iter, []vm.Value{})
+					}
+					exhausted[key] = true
+				}
+			}
+		}
+
+		zipKeyedIter.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(innerArgs []vm.Value) (vm.Value, error) {
+			if allDone || closed {
+				return createIteratorResult(vm.Undefined, true), nil
+			}
+
+				results := make(map[string]vm.Value)
+				anyDone := false
+				allExhausted := true
+
+				for _, key := range keys {
+					if exhausted[key] {
+						// Already exhausted, use padding
+						if padding != nil {
+							if padVal, ok := padding[key]; ok {
+								results[key] = padVal
+							} else {
+								results[key] = vm.Undefined
+							}
+						} else {
+							results[key] = vm.Undefined
+						}
+						continue
+					}
+
+					allExhausted = false
+					iter := iterators[key]
+
+					nextMethod, _ := vmInstance.GetProperty(iter, "next")
+					result, err := vmInstance.Call(nextMethod, iter, []vm.Value{})
+					if err != nil {
+						return vm.Undefined, err
+					}
+
+					doneVal, _ := vmInstance.GetProperty(result, "done")
+					if doneVal.IsTruthy() {
+						exhausted[key] = true
+						anyDone = true
+						// Use padding for this key
+						if padding != nil {
+							if padVal, ok := padding[key]; ok {
+								results[key] = padVal
+							} else {
+								results[key] = vm.Undefined
+							}
+						} else {
+							results[key] = vm.Undefined
+						}
+					} else {
+						valueVal, _ := vmInstance.GetProperty(result, "value")
+						results[key] = valueVal
+					}
+				}
+
+				// Handle modes
+				switch mode {
+				case "shortest":
+					if anyDone {
+						allDone = true
+						return createIteratorResult(vm.Undefined, true), nil
+					}
+				case "strict":
+					if anyDone {
+						// Check if ALL are done
+						allAreDone := true
+						for _, ex := range exhausted {
+							if !ex {
+								allAreDone = false
+								break
+							}
+						}
+						if !allAreDone {
+							allDone = true
+							return vm.Undefined, vmInstance.NewTypeError("Iterator.zipKeyed: iterators have different lengths in strict mode")
+						}
+						allDone = true
+						return createIteratorResult(vm.Undefined, true), nil
+					}
+				case "longest":
+					// Check if all iterators were already exhausted at the start
+					if allExhausted {
+						allDone = true
+						return createIteratorResult(vm.Undefined, true), nil
+					}
+					// Also check if all iterators became exhausted during this iteration
+					nowAllExhausted := true
+					for _, ex := range exhausted {
+						if !ex {
+							nowAllExhausted = false
+							break
+						}
+					}
+					if nowAllExhausted {
+						allDone = true
+						return createIteratorResult(vm.Undefined, true), nil
+					}
+				}
+
+				// Create result object
+				resultObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				for _, key := range keys {
+					resultObj.SetOwn(key, results[key])
+				}
+				return createIteratorResult(vm.NewValueFromPlainObject(resultObj), false), nil
+			}))
+
+		// Add return method to close all iterators
+		zipKeyedIter.SetOwnNonEnumerable("return", vm.NewNativeFunction(0, false, "return", func(innerArgs []vm.Value) (vm.Value, error) {
+			if !closed {
+				closed = true
+				closeAllIterators()
+			}
+			return createIteratorResult(vm.Undefined, true), nil
+		}))
+
+		// Add Symbol.iterator that returns self
+		iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(fnArgs []vm.Value) (vm.Value, error) {
+			return vm.NewValueFromPlainObject(zipKeyedIter), nil
+		})
+		zipKeyedIter.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterSelfFn, nil, nil, nil)
+
+		return vm.NewValueFromPlainObject(zipKeyedIter), nil
+	}))
 
 	// Set constructor property on Iterator.prototype
 	iteratorProto.DefineOwnProperty("constructor", iteratorCtor, &w, &e, &c)
