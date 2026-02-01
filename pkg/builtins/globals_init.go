@@ -131,8 +131,8 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return err
 	}
 
-	// Add parseInt function implementation
-	parseIntFunc := vm.NewNativeFunction(1, false, "parseInt", func(args []vm.Value) (vm.Value, error) {
+	// Add parseInt function implementation (length=2 per ECMAScript spec: string, radix)
+	parseIntFunc := vm.NewNativeFunction(2, false, "parseInt", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NumberValue(math.NaN()), nil
 		}
@@ -353,8 +353,16 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		val := args[0]
+		// Symbols cannot be converted to numbers - throw TypeError per ECMAScript
+		if val.Type() == vm.TypeSymbol {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+		}
 		// Use ToPrimitive to convert objects to number
 		val = vmInstance.ToPrimitive(val, "number")
+		// Check again after ToPrimitive in case it returned a Symbol
+		if val.Type() == vm.TypeSymbol {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+		}
 		// Convert to number (like JavaScript does)
 		numVal := val.ToFloat()
 		return vm.BooleanValue(math.IsNaN(numVal)), nil
@@ -371,8 +379,16 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		val := args[0]
+		// Symbols cannot be converted to numbers - throw TypeError per ECMAScript
+		if val.Type() == vm.TypeSymbol {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+		}
 		// Use ToPrimitive to convert objects to number
 		val = vmInstance.ToPrimitive(val, "number")
+		// Check again after ToPrimitive in case it returned a Symbol
+		if val.Type() == vm.TypeSymbol {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+		}
 		// Convert to number (like JavaScript does)
 		numVal := val.ToFloat()
 		return vm.BooleanValue(!math.IsNaN(numVal) && !math.IsInf(numVal, 0)), nil

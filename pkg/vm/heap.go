@@ -10,6 +10,7 @@ import (
 type Heap struct {
 	values       []Value        // The actual global values
 	configurable []bool         // Whether each global can be deleted (defaults to true for user vars)
+	writable     []bool         // Whether each global can be assigned to (defaults to true for user vars)
 	initialized  []bool         // Whether each slot has been explicitly set (for ReferenceError detection)
 	size         int            // Current size of the heap
 	// optional name -> index map to enable VM.GetGlobal(name)
@@ -21,14 +22,17 @@ type Heap struct {
 
 // NewHeap creates a new heap with the specified initial capacity
 func NewHeap(initialCapacity int) *Heap {
-	// Initialize configurable slice to all true (user variables are deletable by default)
+	// Initialize configurable and writable slices to all true (user variables are modifiable by default)
 	configurable := make([]bool, initialCapacity)
+	writable := make([]bool, initialCapacity)
 	for i := range configurable {
 		configurable[i] = true
+		writable[i] = true
 	}
 	return &Heap{
 		values:       make([]Value, initialCapacity),
 		configurable: configurable,
+		writable:     writable,
 		initialized:  make([]bool, initialCapacity),
 		size:         0,
 	}
@@ -54,6 +58,15 @@ func (h *Heap) Resize(newSize int) {
 			newConfigurable[i] = true
 		}
 		h.configurable = newConfigurable
+
+		// Grow the writable slice, preserving existing flags
+		newWritable := make([]bool, newSize)
+		copy(newWritable, h.writable)
+		// New slots default to true (writable) for user-defined variables
+		for i := len(h.writable); i < newSize; i++ {
+			newWritable[i] = true
+		}
+		h.writable = newWritable
 
 		// Grow the initialized slice, preserving existing flags
 		newInitialized := make([]bool, newSize)
@@ -132,6 +145,23 @@ func (h *Heap) IsConfigurable(index int) bool {
 	return h.configurable[index]
 }
 
+// SetWritable sets whether a global variable at the specified index can be assigned to
+func (h *Heap) SetWritable(index int, writable bool) error {
+	if index < 0 || index >= h.size {
+		return fmt.Errorf("heap index out of bounds: %d", index)
+	}
+	h.writable[index] = writable
+	return nil
+}
+
+// IsWritable returns whether a global variable at the specified index can be assigned to
+func (h *Heap) IsWritable(index int) bool {
+	if index < 0 || index >= h.size {
+		return true // Default to writable for non-existent slots
+	}
+	return h.writable[index]
+}
+
 // Delete removes a global variable at the specified index if it's configurable
 // Returns true if deletion succeeded, false if not configurable or doesn't exist
 func (h *Heap) Delete(index int) bool {
@@ -159,8 +189,9 @@ func (h *Heap) Values() []Value {
 // SetBuiltinGlobals initializes the heap with builtin global variables
 // This replaces the old SetBuiltinGlobals method on VM
 func (h *Heap) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]int) error {
-	// List of non-configurable built-in globals per ECMAScript spec
-	nonConfigurableGlobals := map[string]bool{
+	// List of non-configurable, non-writable built-in globals per ECMAScript spec
+	// NaN, Infinity, undefined are { writable: false, enumerable: false, configurable: false }
+	nonWritableGlobals := map[string]bool{
 		"NaN":       true,
 		"Infinity":  true,
 		"undefined": true,
@@ -183,15 +214,22 @@ func (h *Heap) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]i
 				if err := h.Set(index, value); err != nil {
 					return fmt.Errorf("failed to set builtin global '%s' at index %d: %v", name, index, err)
 				}
-				// Set configurable flag based on ECMAScript spec
-				if nonConfigurableGlobals[name] {
+				// Set configurable and writable flags based on ECMAScript spec
+				if nonWritableGlobals[name] {
 					if err := h.SetConfigurable(index, false); err != nil {
 						return fmt.Errorf("failed to mark '%s' as non-configurable: %v", name, err)
 					}
+					if err := h.SetWritable(index, false); err != nil {
+						return fmt.Errorf("failed to mark '%s' as non-writable: %v", name, err)
+					}
 				} else {
-					// Most builtins are configurable (can be deleted)
+					// Most builtins are configurable and writable
 					if err := h.SetConfigurable(index, true); err != nil {
 						return fmt.Errorf("failed to mark '%s' as configurable: %v", name, err)
+					}
+					// Default writable is already true from Resize, but be explicit
+					if err := h.SetWritable(index, true); err != nil {
+						return fmt.Errorf("failed to mark '%s' as writable: %v", name, err)
 					}
 				}
 			}

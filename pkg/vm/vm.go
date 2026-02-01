@@ -7158,8 +7158,12 @@ startExecution:
 								}
 								if !writable {
 									// Non-writable, throw TypeError
-									vm.throwException(vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", key)).(ExceptionError).GetExceptionValue())
-									return InterpretRuntimeError, Undefined
+									frame.ip = ip
+									vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", key))
+									if vm.unwinding {
+										return InterpretRuntimeError, Undefined
+									}
+									goto reloadFrame
 								}
 								_ = vm.heap.Set(globalIdx, valueVal)
 							}
@@ -11276,6 +11280,22 @@ startExecution:
 					varName = fmt.Sprintf("<index %d>", globalIdx)
 				}
 				vm.ThrowReferenceError(fmt.Sprintf("Cannot access '%s' before initialization", varName))
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+				goto reloadFrame
+			}
+
+			// Writable check: in strict mode, throw TypeError if trying to set a non-writable global
+			// This handles cases like `Infinity = 1` which should fail for read-only globals
+			isStrictForWritable := function != nil && function.Chunk != nil && function.Chunk.IsStrict
+			if isStrictForWritable && !vm.heap.IsWritable(int(globalIdx)) {
+				frame.ip = ip
+				varName := vm.heap.GetNameByIndex(int(globalIdx))
+				if varName == "" {
+					varName = fmt.Sprintf("<index %d>", globalIdx)
+				}
+				vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", varName))
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
 				}
