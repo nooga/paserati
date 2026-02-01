@@ -120,7 +120,30 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 			// Add [Symbol.iterator](): Iterator<T> method (computed symbol key in types)
 			arrayProtoType = arrayProtoType.WithProperty("__COMPUTED_PROPERTY__",
 				a.createGenericMethod("[Symbol.iterator]", tParam,
-					types.NewSimpleFunction([]types.Type{}, iteratorOfT.Substitute())))
+					types.NewSimpleFunction([]types.Type{}, iteratorOfT)))
+
+			// Add values(): Iterator<T> method (same as [Symbol.iterator])
+			arrayProtoType = arrayProtoType.WithProperty("values",
+				a.createGenericMethod("values", tParam,
+					types.NewSimpleFunction([]types.Type{}, iteratorOfT)))
+
+			// Add keys(): Iterator<number> method
+			iteratorOfNumber := &types.InstantiatedType{
+				Generic:       iteratorGeneric,
+				TypeArguments: []types.Type{types.Number},
+			}
+			arrayProtoType = arrayProtoType.WithProperty("keys",
+				types.NewSimpleFunction([]types.Type{}, iteratorOfNumber))
+
+			// Add entries(): Iterator<[number, T]> method
+			tupleType := &types.TupleType{ElementTypes: []types.Type{types.Number, tType}}
+			iteratorOfEntries := &types.InstantiatedType{
+				Generic:       iteratorGeneric,
+				TypeArguments: []types.Type{tupleType},
+			}
+			arrayProtoType = arrayProtoType.WithProperty("entries",
+				a.createGenericMethod("entries", tParam,
+					types.NewSimpleFunction([]types.Type{}, iteratorOfEntries)))
 		}
 	}
 
@@ -2730,8 +2753,8 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 // createArrayIterator creates an iterator object for array iteration
 func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
-	// Create iterator object inheriting from Object.prototype
-	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	// Create iterator object inheriting from Iterator.prototype
+	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
 	// Iterator state: current index
@@ -2769,8 +2792,8 @@ func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
 
 // createArgumentsIterator creates an iterator object for Arguments objects
 func createArgumentsIterator(vmInstance *vm.VM, args *vm.ArgumentsObject) vm.Value {
-	// Create iterator object inheriting from Object.prototype
-	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	// Create iterator object inheriting from Iterator.prototype
+	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
 	// Iterator state: current index
@@ -2808,8 +2831,8 @@ func createArgumentsIterator(vmInstance *vm.VM, args *vm.ArgumentsObject) vm.Val
 
 // createArrayLikeIterator creates an iterator for generic array-like objects (with length and indices)
 func createArrayLikeIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
-	// Create iterator object inheriting from Object.prototype
-	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	// Create iterator object inheriting from Iterator.prototype
+	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
 	// Iterator state: current index
@@ -2861,7 +2884,7 @@ func createArrayLikeIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 
 // createArrayKeysIterator creates an iterator that yields array indices
 func createArrayKeysIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
-	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 	currentIndex := 0
 
@@ -2902,7 +2925,7 @@ func createArrayKeysIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 
 // createArrayEntriesIterator creates an iterator that yields [index, value] pairs
 func createArrayEntriesIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
-	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 	currentIndex := 0
 

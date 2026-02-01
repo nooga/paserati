@@ -209,9 +209,9 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 		for i, arg := range t.TypeArguments {
 			newArgs[i] = substituteType(arg, substitutions)
 		}
-		newInstantiated := NewInstantiatedType(t.Generic, newArgs)
-		// Return the substituted result, not the InstantiatedType itself
-		return newInstantiated.Substitute()
+		// Return the InstantiatedType with substituted arguments
+		// Don't call Substitute() here to avoid infinite recursion with self-referential types
+		return NewInstantiatedType(t.Generic, newArgs)
 		
 	case *ReadonlyType:
 		// Substitute in the inner type

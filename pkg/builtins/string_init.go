@@ -2286,8 +2286,8 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 // createMatchAllIterator creates an iterator for String.prototype.matchAll
 func createMatchAllIterator(vmInstance *vm.VM, str string, allMatches [][]int) vm.Value {
-	// Create iterator object inheriting from Object.prototype
-	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	// Create iterator object inheriting from Iterator.prototype
+	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
 
 	// Iterator state: current match index
 	currentMatchIndex := 0
@@ -2343,8 +2343,8 @@ func createMatchAllIterator(vmInstance *vm.VM, str string, allMatches [][]int) v
 
 // createStringIterator creates an iterator object for string iteration
 func createStringIterator(vmInstance *vm.VM, str string) vm.Value {
-	// Create iterator object inheriting from Object.prototype
-	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	// Create iterator object inheriting from Iterator.prototype
+	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
 
 	// Convert string to UTF-16 code units for proper JavaScript semantics
 	// JavaScript strings are UTF-16 encoded, so we need to iterate by code points,

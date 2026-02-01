@@ -33,21 +33,103 @@ func (i *IteratorInitializer) InitTypes(ctx *TypeContext) error {
 		Body:           iteratorResultType,
 	}
 
-	// Create Iterator<T> interface
-	// interface Iterator<T> { next(): IteratorResult<T>; }
+	// Create Iterator<T> interface - first create the generic, then add self-referential [Symbol.iterator]
+	// interface Iterator<T> { next(): IteratorResult<T>; [Symbol.iterator](): Iterator<T>; ... helper methods }
+	iteratorGeneric := &types.GenericType{
+		Name:           "Iterator",
+		TypeParameters: []*types.TypeParameter{tParam},
+		Body:           nil, // Will be set below
+	}
+
+	// Create type parameter U for methods like map and flatMap
+	uParam := &types.TypeParameter{Name: "U", Constraint: nil, Index: 1}
+	uType := &types.TypeParameterType{Parameter: uParam}
+
+	// Create callback types for iterator methods
+	// (value: T) => boolean - for filter, some, every, find
+	predicateType := types.NewSimpleFunction([]types.Type{tType}, types.Boolean)
+	// (value: T) => U - for map
+	mapperType := types.NewSimpleFunction([]types.Type{tType}, uType)
+	// (value: T) => void - for forEach
+	forEachCallbackType := types.NewSimpleFunction([]types.Type{tType}, types.Undefined)
+
+	// Create the iterator type with all methods
 	iteratorType := types.NewObjectType().
+		// next(): IteratorResult<T>
 		WithProperty("next", types.NewSimpleFunction([]types.Type{},
 			&types.InstantiatedType{
 				Generic:       iteratorResultGeneric,
 				TypeArguments: []types.Type{tType},
-			}))
+			})).
+		// [Symbol.iterator](): Iterator<T> (self-referential)
+		WithProperty("__COMPUTED_PROPERTY__", types.NewSimpleFunction([]types.Type{},
+			&types.InstantiatedType{
+				Generic:       iteratorGeneric,
+				TypeArguments: []types.Type{tType},
+			})).
+		// map<U>(mapper: (value: T) => U): Iterator<U>
+		WithProperty("map", &types.GenericType{
+			Name:           "map",
+			TypeParameters: []*types.TypeParameter{uParam},
+			Body: types.NewSimpleFunction([]types.Type{mapperType},
+				&types.InstantiatedType{
+					Generic:       iteratorGeneric,
+					TypeArguments: []types.Type{uType},
+				}),
+		}).
+		// filter(predicate: (value: T) => boolean): Iterator<T>
+		WithProperty("filter", types.NewSimpleFunction([]types.Type{predicateType},
+			&types.InstantiatedType{
+				Generic:       iteratorGeneric,
+				TypeArguments: []types.Type{tType},
+			})).
+		// take(limit: number): Iterator<T>
+		WithProperty("take", types.NewSimpleFunction([]types.Type{types.Number},
+			&types.InstantiatedType{
+				Generic:       iteratorGeneric,
+				TypeArguments: []types.Type{tType},
+			})).
+		// drop(limit: number): Iterator<T>
+		WithProperty("drop", types.NewSimpleFunction([]types.Type{types.Number},
+			&types.InstantiatedType{
+				Generic:       iteratorGeneric,
+				TypeArguments: []types.Type{tType},
+			})).
+		// toArray(): T[]
+		WithProperty("toArray", types.NewSimpleFunction([]types.Type{},
+			&types.ArrayType{ElementType: tType})).
+		// forEach(fn: (value: T) => void): void
+		WithProperty("forEach", types.NewSimpleFunction([]types.Type{forEachCallbackType},
+			types.Undefined)).
+		// reduce(reducer: (acc: any, value: T) => any, initialValue?: any): any
+		// Note: reduce is complex with overloads, using any for simplicity
+		WithProperty("reduce", types.NewOptionalFunction(
+			[]types.Type{
+				types.NewSimpleFunction([]types.Type{types.Any, tType}, types.Any),
+				types.Any,
+			},
+			types.Any,
+			[]bool{false, true})).
+		// some(predicate: (value: T) => boolean): boolean
+		WithProperty("some", types.NewSimpleFunction([]types.Type{predicateType}, types.Boolean)).
+		// every(predicate: (value: T) => boolean): boolean
+		WithProperty("every", types.NewSimpleFunction([]types.Type{predicateType}, types.Boolean)).
+		// find(predicate: (value: T) => boolean): T | undefined
+		WithProperty("find", types.NewSimpleFunction([]types.Type{predicateType},
+			types.NewUnionType(tType, types.Undefined))).
+		// flatMap<U>(mapper: (value: T) => Iterable<U>): Iterator<U>
+		WithProperty("flatMap", &types.GenericType{
+			Name:           "flatMap",
+			TypeParameters: []*types.TypeParameter{uParam},
+			Body: types.NewSimpleFunction([]types.Type{mapperType},
+				&types.InstantiatedType{
+					Generic:       iteratorGeneric,
+					TypeArguments: []types.Type{uType},
+				}),
+		})
 
-	// Create generic Iterator type
-	iteratorGeneric := &types.GenericType{
-		Name:           "Iterator",
-		TypeParameters: []*types.TypeParameter{tParam},
-		Body:           iteratorType,
-	}
+	// Set the body of the generic type
+	iteratorGeneric.Body = iteratorType
 
 	// Create Iterable<T> interface
 	// interface Iterable<T> { [Symbol.iterator](): Iterator<T>; }

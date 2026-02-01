@@ -1,5 +1,19 @@
 package types
 
+import (
+	"fmt"
+	"os"
+)
+
+// Debug flag for property type resolution
+const propsDebug = false
+
+func propsDebugPrintf(format string, args ...interface{}) {
+	if propsDebug {
+		fmt.Fprintf(os.Stderr, "[PROPS DEBUG] "+format, args...)
+	}
+}
+
 // --- Property Type Access ---
 
 // GetMethodType is a function type for resolving prototype methods
@@ -21,6 +35,8 @@ func SetPrototypeMethodResolver(resolver GetMethodType) {
 func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bool) Type {
 	// Widen the object type for checks
 	widenedObjectType := GetWidenedType(objectType)
+	propsDebugPrintf("GetPropertyType: objectType=%T (%s), propertyName=%s, widened=%T (%s)\n",
+		objectType, objectType.String(), propertyName, widenedObjectType, widenedObjectType.String())
 
 	if widenedObjectType == Any {
 		return Any // Property access on 'any' results in 'any'
@@ -87,6 +103,11 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 		case *IntersectionType:
 			// Handle property access on intersection types
 			return GetPropertyTypeFromIntersection(obj, propertyName)
+		case *InstantiatedType:
+			// Handle property access on instantiated generic types (e.g., Iterator<number>)
+			// Substitute the type parameters and recursively get the property
+			substituted := obj.Substitute()
+			return GetPropertyType(substituted, propertyName, isOptionalChaining)
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
 			return Never

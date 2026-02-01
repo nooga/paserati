@@ -211,7 +211,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.values called on incompatible receiver")
 		}
 		setObj := thisSet.AsSet()
-		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+		it := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
 		currentIndex := 0
 		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
@@ -245,7 +245,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.keys called on incompatible receiver")
 		}
 		setObj := thisSet.AsSet()
-		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+		it := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
 		currentIndex := 0
 		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
@@ -279,7 +279,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.entries called on incompatible receiver")
 		}
 		setObj := thisSet.AsSet()
-		it := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+		it := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
 		currentIndex := 0
 		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
