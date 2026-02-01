@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/dlclark/regexp2"
@@ -260,6 +261,57 @@ func (r *RegExpObject) FindStringSubmatch(s string) []string {
 	return nil
 }
 
+// runeIndexToByteIndex converts rune indices to byte indices for a string.
+// This is needed because regexp2 returns rune indices, but Go strings are byte-indexed.
+func runeIndexToByteIndex(s string, runeIndices []int) []int {
+	if len(runeIndices) == 0 {
+		return runeIndices
+	}
+
+	// Build a mapping of rune index -> byte index
+	// We only need to build up to the max rune index we need to convert
+	maxRuneIdx := 0
+	for _, idx := range runeIndices {
+		if idx > maxRuneIdx {
+			maxRuneIdx = idx
+		}
+	}
+
+	// Create rune-to-byte mapping
+	runeToByteMap := make([]int, maxRuneIdx+1)
+	byteIdx := 0
+	runeIdx := 0
+	for byteIdx < len(s) && runeIdx <= maxRuneIdx {
+		runeToByteMap[runeIdx] = byteIdx
+		_, size := utf8.DecodeRuneInString(s[byteIdx:])
+		byteIdx += size
+		runeIdx++
+	}
+	// Handle the case where we need the end position (one past the last rune)
+	if runeIdx <= maxRuneIdx {
+		// Fill remaining with the final byte position
+		for i := runeIdx; i <= maxRuneIdx; i++ {
+			runeToByteMap[i] = byteIdx
+		}
+	}
+
+	// Convert the indices
+	result := make([]int, len(runeIndices))
+	for i, runePos := range runeIndices {
+		if runePos == -1 {
+			result[i] = -1
+		} else if runePos >= 0 && runePos < len(runeToByteMap) {
+			result[i] = runeToByteMap[runePos]
+		} else if runePos == len(runeToByteMap) {
+			// Position is at the very end
+			result[i] = len(s)
+		} else {
+			result[i] = len(s) // Clamp to end of string
+		}
+	}
+	return result
+}
+
 // FindStringSubmatchIndex returns the index pairs for the leftmost match
 func (r *RegExpObject) FindStringSubmatchIndex(s string) []int {
 	if r.compiledRegex != nil {
@@ -271,17 +323,18 @@ func (r *RegExpObject) FindStringSubmatchIndex(s string) []int {
 			return nil
 		}
 		groups := match.Groups()
-		result := make([]int, len(groups)*2)
+		runeIndices := make([]int, len(groups)*2)
 		for i, g := range groups {
 			if g.Length > 0 {
-				result[i*2] = g.Index
-				result[i*2+1] = g.Index + g.Length
+				runeIndices[i*2] = g.Index
+				runeIndices[i*2+1] = g.Index + g.Length
 			} else {
-				result[i*2] = -1
-				result[i*2+1] = -1
+				runeIndices[i*2] = -1
+				runeIndices[i*2+1] = -1
 			}
 		}
-		return result
+		// Convert rune indices to byte indices
+		return runeIndexToByteIndex(s, runeIndices)
 	}
 	return nil
 }
@@ -296,17 +349,18 @@ func (r *RegExpObject) FindAllStringSubmatchIndex(s string, n int) [][]int {
 		match, err := r.compiledRegex2.FindStringMatch(s)
 		for err == nil && match != nil && (n < 0 || len(results) < n) {
 			groups := match.Groups()
-			indices := make([]int, len(groups)*2)
+			runeIndices := make([]int, len(groups)*2)
 			for i, g := range groups {
 				if g.Length > 0 {
-					indices[i*2] = g.Index
-					indices[i*2+1] = g.Index + g.Length
+					runeIndices[i*2] = g.Index
+					runeIndices[i*2+1] = g.Index + g.Length
 				} else {
-					indices[i*2] = -1
-					indices[i*2+1] = -1
+					runeIndices[i*2] = -1
+					runeIndices[i*2+1] = -1
 				}
 			}
-			results = append(results, indices)
+			// Convert rune indices to byte indices
+			results = append(results, runeIndexToByteIndex(s, runeIndices))
 			match, err = r.compiledRegex2.FindNextMatch(match)
 		}
 		return results
@@ -341,7 +395,9 @@ func (r *RegExpObject) FindStringIndex(s string) []int {
 		if err != nil || match == nil {
 			return nil
 		}
-		return []int{match.Index, match.Index + match.Length}
+		// Convert rune indices to byte indices
+		runeIndices := []int{match.Index, match.Index + match.Length}
+		return runeIndexToByteIndex(s, runeIndices)
 	}
 	return nil
 }
@@ -369,9 +425,12 @@ func (r *RegExpObject) ReplaceAllStringFunc(src string, repl func(string) string
 		lastEnd := 0
 		match, err := r.compiledRegex2.FindStringMatch(src)
 		for err == nil && match != nil {
-			result.WriteString(src[lastEnd:match.Index])
+			// Convert rune indices to byte indices
+			byteIndices := runeIndexToByteIndex(src, []int{match.Index, match.Index + match.Length})
+			byteStart, byteEnd := byteIndices[0], byteIndices[1]
+			result.WriteString(src[lastEnd:byteStart])
 			result.WriteString(repl(match.String()))
-			lastEnd = match.Index + match.Length
+			lastEnd = byteEnd
 			match, err = r.compiledRegex2.FindNextMatch(match)
 		}
 		result.WriteString(src[lastEnd:])
@@ -394,8 +453,11 @@ func (r *RegExpObject) Split(s string, n int) []string {
 		lastEnd := 0
 		match, err := r.compiledRegex2.FindStringMatch(s)
 		for err == nil && match != nil && (n < 0 || len(results) < n-1) {
-			results = append(results, s[lastEnd:match.Index])
-			lastEnd = match.Index + match.Length
+			// Convert rune indices to byte indices
+			byteIndices := runeIndexToByteIndex(s, []int{match.Index, match.Index + match.Length})
+			byteStart, byteEnd := byteIndices[0], byteIndices[1]
+			results = append(results, s[lastEnd:byteStart])
+			lastEnd = byteEnd
 			match, err = r.compiledRegex2.FindNextMatch(match)
 		}
 		results = append(results, s[lastEnd:])

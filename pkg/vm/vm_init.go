@@ -1,6 +1,9 @@
 package vm
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // VMInitCallback is a function that initializes VM-specific functionality
 // It receives the VM instance and can set up prototypes, global objects, etc.
@@ -381,6 +384,14 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			if propName == "length" {
 				return NumberValue(float64(arr.Length())), nil
 			}
+			// Check for numeric index access (e.g., "0", "1", "2")
+			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < arr.Length() {
+				return arr.Get(idx), nil
+			}
+			// Check own named properties on the array
+			if v, ok := arr.GetOwn(propName); ok {
+				return v, nil
+			}
 			// Check array prototype
 			if vm.ArrayPrototype.IsObject() {
 				proto := vm.ArrayPrototype.AsPlainObject()
@@ -420,6 +431,43 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		}
 		return Undefined, nil
 
+	case TypeRegExp:
+		// RegExp objects: check own properties first, then RegExp.prototype
+		regexObj := obj.AsRegExpObject()
+		if regexObj != nil {
+			// Handle built-in properties
+			switch propName {
+			case "lastIndex":
+				return NumberValue(float64(regexObj.GetLastIndex())), nil
+			case "source":
+				return NewString(regexObj.GetSource()), nil
+			case "flags":
+				return NewString(regexObj.GetFlags()), nil
+			case "global":
+				return BooleanValue(regexObj.IsGlobal()), nil
+			case "ignoreCase":
+				return BooleanValue(regexObj.IsIgnoreCase()), nil
+			case "multiline":
+				return BooleanValue(regexObj.IsMultiline()), nil
+			case "dotAll":
+				return BooleanValue(regexObj.IsDotAll()), nil
+			}
+			// Check own properties (for overridden methods like custom exec)
+			if regexObj.Properties != nil {
+				if v, ok := regexObj.Properties.GetOwn(propName); ok {
+					return v, nil
+				}
+			}
+			// Check RegExp.prototype
+			if vm.RegExpPrototype.IsObject() {
+				proto := vm.RegExpPrototype.AsPlainObject()
+				if v, ok := proto.Get(propName); ok {
+					return v, nil
+				}
+			}
+		}
+		return Undefined, nil
+
 	default:
 		// For non-objects, just return undefined
 		return Undefined, nil
@@ -440,6 +488,21 @@ func (vm *VM) SetProperty(obj Value, propName string, value Value) error {
 		}
 		// Not an accessor, set as regular property
 		po.SetOwn(propName, value)
+		return nil
+
+	case TypeRegExp:
+		// Handle RegExp's lastIndex property specially
+		if propName == "lastIndex" {
+			regexObj := obj.AsRegExpObject()
+			regexObj.SetLastIndex(int(value.ToFloat()))
+			return nil
+		}
+		// For other properties, store on the wrapper Properties object
+		regexObj := obj.AsRegExpObject()
+		if regexObj.Properties == nil {
+			regexObj.Properties = NewObject(Undefined).AsPlainObject()
+		}
+		regexObj.Properties.SetOwn(propName, value)
 		return nil
 
 	default:

@@ -735,6 +735,11 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		// RegExp objects can have user-defined properties
 		regex := objVal.AsRegExpObject()
 		if regex != nil {
+			// Handle lastIndex specially - it's stored on the internal RegExpObject
+			if propName == "lastIndex" {
+				regex.SetLastIndex(int(valueToSet.ToFloat()))
+				return true, InterpretOK, *valueToSet
+			}
 			if regex.Properties == nil {
 				regex.Properties = NewObject(Undefined).AsPlainObject()
 			}
