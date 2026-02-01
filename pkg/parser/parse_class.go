@@ -861,14 +861,8 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) *MethodDefinition {
 	getToken := p.curToken // 'get' token
 
-	// Check if next token is an identifier, string literal, number, private identifier, or computed property
-	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.STRING) && !p.peekTokenIs(lexer.NUMBER) && !p.peekTokenIs(lexer.PRIVATE_IDENT) && !p.peekTokenIs(lexer.LBRACKET) {
-		p.addError(p.peekToken, "expected identifier, string literal, number, private identifier, or computed property after 'get'")
-		// Advance past the problematic token to avoid infinite loop
-		p.nextToken()
-		return nil
-	}
-	p.nextToken() // Move to property name token
+	// Move to property name token
+	p.nextToken()
 
 	var propertyName Expression
 	if p.curToken.Type == lexer.STRING {
@@ -895,8 +889,12 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 		// Private identifier property name: get #privateName()
 		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	} else {
-		// Regular identifier property name
-		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		// Try to parse as property name (handles IDENT and all keywords like 'return')
+		propertyName = p.parsePropertyName()
+		if propertyName == nil {
+			p.addError(p.curToken, "expected identifier, string literal, number, private identifier, or computed property after 'get'")
+			return nil
+		}
 	}
 
 	if !p.expectPeek(lexer.LPAREN) {
@@ -963,14 +961,8 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) *MethodDefinition {
 	setToken := p.curToken // 'set' token
 
-	// Check if next token is an identifier, string literal, number, private identifier, or computed property
-	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.STRING) && !p.peekTokenIs(lexer.NUMBER) && !p.peekTokenIs(lexer.PRIVATE_IDENT) && !p.peekTokenIs(lexer.LBRACKET) {
-		p.addError(p.peekToken, "expected identifier, string literal, number, private identifier, or computed property after 'set'")
-		// Advance past the problematic token to avoid infinite loop
-		p.nextToken()
-		return nil
-	}
-	p.nextToken() // Move to property name token
+	// Move to property name token
+	p.nextToken()
 
 	var propertyName Expression
 	if p.curToken.Type == lexer.STRING {
@@ -997,8 +989,12 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 		// Private identifier property name: set #privateName()
 		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	} else {
-		// Regular identifier property name
-		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		// Try to parse as property name (handles IDENT and all keywords like 'return')
+		propertyName = p.parsePropertyName()
+		if propertyName == nil {
+			p.addError(p.curToken, "expected identifier, string literal, number, private identifier, or computed property after 'set'")
+			return nil
+		}
 	}
 
 	if !p.expectPeek(lexer.LPAREN) {

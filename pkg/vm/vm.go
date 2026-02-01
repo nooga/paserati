@@ -208,7 +208,12 @@ type VM struct {
 	IteratorPrototype        Value // %Iterator.prototype% - base for all iterators
 	IteratorHelperPrototype  Value // %IteratorHelperPrototype% - for iterator helper objects (map, filter, etc.)
 	WrapForValidIteratorPrototype Value // For Iterator.from() wrapped iterators
-	PromisePrototype         Value
+	ArrayIteratorPrototype   Value // %ArrayIteratorPrototype% - for array iterators
+	MapIteratorPrototype     Value // %MapIteratorPrototype% - for map iterators
+	SetIteratorPrototype     Value // %SetIteratorPrototype% - for set iterators
+	StringIteratorPrototype        Value // %StringIteratorPrototype% - for string iterators
+	RegExpStringIteratorPrototype  Value // %RegExpStringIteratorPrototype% - for RegExp matchAll iterators
+	PromisePrototype               Value
 	ErrorPrototype          Value
 	ErrorConstructor        Value // For NativeError constructors to inherit from
 	TypeErrorPrototype      Value
@@ -235,6 +240,7 @@ type VM struct {
 	SymbolSplit              Value
 	SymbolUnscopables        Value
 	SymbolAsyncIterator      Value
+	SymbolDispose            Value
 
 	// %ThrowTypeError% intrinsic - singleton function used for strict mode arguments callee/caller
 	// Per ECMAScript spec, this function is NOT extensible (unlike normal functions)

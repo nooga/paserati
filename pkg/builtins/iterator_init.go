@@ -247,6 +247,48 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	w, e, c := true, false, true // writable, not enumerable, configurable
+	falseVal := false
+	trueVal := true
+
+	// Add Symbol.iterator to Iterator.prototype - returns this
+	iteratorProto.DefineOwnPropertyByKey(
+		vm.NewSymbolKey(SymbolIterator),
+		vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
+			return vmInstance.GetThis(), nil
+		}),
+		&w, // writable: true
+		&e, // enumerable: false
+		&c, // configurable: true
+	)
+
+	// Add Symbol.toStringTag = "Iterator" to Iterator.prototype
+	iteratorProto.DefineOwnPropertyByKey(
+		vm.NewSymbolKey(SymbolToStringTag),
+		vm.NewString("Iterator"),
+		&falseVal, // writable: false
+		&falseVal, // enumerable: false
+		&trueVal,  // configurable: true
+	)
+
+	// Add Symbol.dispose to Iterator.prototype - calls return() if it exists
+	iteratorProto.DefineOwnPropertyByKey(
+		vm.NewSymbolKey(SymbolDispose),
+		vm.NewNativeFunction(0, false, "[Symbol.dispose]", func(args []vm.Value) (vm.Value, error) {
+			thisValue := vmInstance.GetThis()
+			returnMethod, err := vmInstance.GetProperty(thisValue, "return")
+			if err != nil || returnMethod.IsUndefined() || !returnMethod.IsCallable() {
+				return vm.Undefined, nil
+			}
+			_, err = vmInstance.Call(returnMethod, thisValue, []vm.Value{})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			return vm.Undefined, nil
+		}),
+		&w, // writable: true
+		&e, // enumerable: false
+		&c, // configurable: true
+	)
 
 	// ============================================
 	// Create IteratorHelper prototype (%IteratorHelperPrototype%)
@@ -255,8 +297,6 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	iteratorHelperProto := vm.NewObject(vm.NewValueFromPlainObject(iteratorProto)).AsPlainObject()
 
 	// Add Symbol.toStringTag = "Iterator Helper" to IteratorHelperPrototype
-	falseVal := false
-	trueVal := true
 	iteratorHelperProto.DefineOwnPropertyByKey(
 		vm.NewSymbolKey(SymbolToStringTag),
 		vm.NewString("Iterator Helper"),
@@ -333,12 +373,20 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	iteratorProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), symbolIteratorFn, &w, &e, &c)
 
 	// ============================================
-	// Iterator.prototype[Symbol.toStringTag] = "Iterator"
+	// Iterator.prototype[Symbol.toStringTag] - accessor property
+	// Per spec: { get: function, set: function, enumerable: false, configurable: true }
 	// ============================================
-	iteratorProto.DefineOwnPropertyByKey(
+	toStringTagGetter := vm.NewNativeFunction(0, false, "get [Symbol.toStringTag]", func(args []vm.Value) (vm.Value, error) {
+		return vm.NewString("Iterator"), nil
+	})
+	toStringTagSetter := vm.NewNativeFunction(1, false, "set [Symbol.toStringTag]", func(args []vm.Value) (vm.Value, error) {
+		// Setter does nothing per spec
+		return vm.Undefined, nil
+	})
+	iteratorProto.DefineAccessorPropertyByKey(
 		vm.NewSymbolKey(SymbolToStringTag),
-		vm.NewString("Iterator"),
-		&falseVal, // writable: false
+		toStringTagGetter, true,
+		toStringTagSetter, true,
 		&falseVal, // enumerable: false
 		&trueVal,  // configurable: true
 	)
@@ -354,6 +402,8 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if len(args) == 0 || !args[0].IsCallable() {
+			// Close the iterator before throwing
+			closeIterator(thisValue)
 			return vm.Undefined, vmInstance.NewTypeError("Iterator.prototype.map requires a callable argument")
 		}
 		mapper := args[0]
@@ -428,6 +478,8 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if len(args) == 0 || !args[0].IsCallable() {
+			// Close the iterator before throwing
+			closeIterator(thisValue)
 			return vm.Undefined, vmInstance.NewTypeError("Iterator.prototype.filter requires a callable argument")
 		}
 		predicate := args[0]
@@ -506,12 +558,43 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Iterator.prototype.take called on non-object")
 		}
 
-		limit := 0
+		// Per spec: Let numLimit be ? ToNumber(limit)
+		var limitVal vm.Value
 		if len(args) > 0 {
-			limit = int(args[0].ToFloat())
+			limitVal = args[0]
+		} else {
+			limitVal = vm.Undefined
 		}
+
+		// Convert to number - for objects, call ToPrimitive first
+		var numLimit float64
+		if limitVal.IsObject() || limitVal.IsCallable() {
+			vmInstance.EnterHelperCall()
+			primitiveVal := vmInstance.ToPrimitive(limitVal, "number")
+			vmInstance.ExitHelperCall()
+			// Check if ToPrimitive threw an exception
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				closeIterator(thisValue)
+				return vm.Undefined, nil // Let exception propagate
+			}
+			numLimit = primitiveVal.ToFloat()
+		} else {
+			numLimit = limitVal.ToFloat()
+		}
+
+		// Per spec: If numLimit is NaN, throw a RangeError exception
+		if numLimit != numLimit { // NaN check
+			closeIterator(thisValue)
+			return vm.Undefined, vmInstance.NewRangeError("Iterator.prototype.take: limit must be a finite number")
+		}
+
+		// Per spec: Let integerLimit be ! ToIntegerOrInfinity(numLimit)
+		limit := int(numLimit)
+
+		// Per spec: If integerLimit < 0, throw a RangeError exception
 		if limit < 0 {
-			return vm.Undefined, vmInstance.NewRangeError("Iterator.prototype.take limit must be non-negative")
+			closeIterator(thisValue)
+			return vm.Undefined, vmInstance.NewRangeError("Iterator.prototype.take: limit must be non-negative")
 		}
 
 		// Create iterator helper object
@@ -582,12 +665,44 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Iterator.prototype.drop called on non-object")
 		}
 
-		count := 0
+		// Per spec: Let numLimit be ? ToNumber(limit)
+		var limitVal vm.Value
 		if len(args) > 0 {
-			count = int(args[0].ToFloat())
+			limitVal = args[0]
+		} else {
+			limitVal = vm.Undefined
 		}
+
+		// Convert to number - for objects, call ToPrimitive first
+		var numLimit float64
+		if limitVal.IsObject() || limitVal.IsCallable() {
+			vmInstance.EnterHelperCall()
+			primitiveVal := vmInstance.ToPrimitive(limitVal, "number")
+			vmInstance.ExitHelperCall()
+			// Check if ToPrimitive threw an exception
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				closeIterator(thisValue)
+				return vm.Undefined, nil // Let exception propagate
+			}
+			numLimit = primitiveVal.ToFloat()
+		} else {
+			numLimit = limitVal.ToFloat()
+		}
+
+		// Per spec: If numLimit is NaN, throw a RangeError exception
+		if numLimit != numLimit { // NaN check
+			closeIterator(thisValue)
+			return vm.Undefined, vmInstance.NewRangeError("Iterator.prototype.drop: limit must be a finite number")
+		}
+
+		// Per spec: Let integerLimit be ! ToIntegerOrInfinity(numLimit)
+		// ToIntegerOrInfinity: truncates towards zero
+		count := int(numLimit)
+
+		// Per spec: If integerLimit < 0, throw a RangeError exception
 		if count < 0 {
-			return vm.Undefined, vmInstance.NewRangeError("Iterator.prototype.drop count must be non-negative")
+			closeIterator(thisValue)
+			return vm.Undefined, vmInstance.NewRangeError("Iterator.prototype.drop: limit must be non-negative")
 		}
 
 		// Create iterator helper object
@@ -694,6 +809,8 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if len(args) == 0 || !args[0].IsCallable() {
+			// Close the iterator before throwing
+			closeIterator(thisValue)
 			return vm.Undefined, vmInstance.NewTypeError("Iterator.prototype.forEach requires a callable argument")
 		}
 		fn := args[0]
@@ -726,13 +843,15 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Iterator.prototype.reduce(reducer, initialValue?)
 	// Reduces iterator to a single value
 	// ============================================
-	iteratorProto.SetOwnNonEnumerable("reduce", vm.NewNativeFunction(2, false, "reduce", func(args []vm.Value) (vm.Value, error) {
+	iteratorProto.SetOwnNonEnumerable("reduce", vm.NewNativeFunction(1, false, "reduce", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if !thisValue.IsObject() && !thisValue.IsGenerator() {
 			return vm.Undefined, vmInstance.NewTypeError("Iterator.prototype.reduce called on non-object")
 		}
 
 		if len(args) == 0 || !args[0].IsCallable() {
+			// Close the iterator before throwing
+			closeIterator(thisValue)
 			return vm.Undefined, vmInstance.NewTypeError("Iterator.prototype.reduce requires a callable argument")
 		}
 		reducer := args[0]
@@ -790,6 +909,8 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if len(args) == 0 || !args[0].IsCallable() {
+			// Close the iterator before throwing
+			closeIterator(thisValue)
 			return vm.Undefined, vmInstance.NewTypeError("Iterator.prototype.some requires a callable argument")
 		}
 		predicate := args[0]
@@ -834,6 +955,8 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if len(args) == 0 || !args[0].IsCallable() {
+			// Close the iterator before throwing
+			closeIterator(thisValue)
 			return vm.Undefined, vmInstance.NewTypeError("Iterator.prototype.every requires a callable argument")
 		}
 		predicate := args[0]
@@ -878,6 +1001,8 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if len(args) == 0 || !args[0].IsCallable() {
+			// Close the iterator before throwing
+			closeIterator(thisValue)
 			return vm.Undefined, vmInstance.NewTypeError("Iterator.prototype.find requires a callable argument")
 		}
 		predicate := args[0]
@@ -922,6 +1047,8 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if len(args) == 0 || !args[0].IsCallable() {
+			// Close the iterator before throwing
+			closeIterator(thisValue)
 			return vm.Undefined, vmInstance.NewTypeError("Iterator.prototype.flatMap requires a callable argument")
 		}
 		mapper := args[0]
@@ -933,8 +1060,14 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		helper.SetOwn("[[InnerIterator]]", vm.Undefined)
 		helper.SetOwn("[[Counter]]", vm.NumberValue(0))
 
-		// Helper to get iterator from value
+		// Helper to get iterator from value using GetIteratorFlattenable semantics
+		// GetIteratorFlattenable ONLY accepts objects, not primitives
 		getIterator := func(value vm.Value) (vm.Value, error) {
+			// Per spec: GetIteratorFlattenable rejects primitives even if their prototype has Symbol.iterator
+			// Only objects are allowed to be flattened
+			if !value.IsObject() && !value.IsGenerator() {
+				return vm.Undefined, vmInstance.NewTypeError("Value is not an Object")
+			}
 			// Try to get Symbol.iterator
 			if iterMethod, ok := vmInstance.GetSymbolProperty(value, SymbolIterator); ok && iterMethod.IsCallable() {
 				return vmInstance.Call(iterMethod, value, []vm.Value{})
@@ -1034,6 +1167,66 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.IteratorPrototype = vm.NewValueFromPlainObject(iteratorProto)
 
 	// ============================================
+	// Create specific iterator prototypes
+	// These inherit from Iterator.prototype and have their own Symbol.toStringTag
+	// ============================================
+
+	// %ArrayIteratorPrototype%
+	arrayIteratorProto := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+	arrayIteratorProto.DefineOwnPropertyByKey(
+		vm.NewSymbolKey(SymbolToStringTag),
+		vm.NewString("Array Iterator"),
+		&falseVal, // writable: false
+		&falseVal, // enumerable: false
+		&trueVal,  // configurable: true
+	)
+	vmInstance.ArrayIteratorPrototype = vm.NewValueFromPlainObject(arrayIteratorProto)
+
+	// %MapIteratorPrototype%
+	mapIteratorProto := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+	mapIteratorProto.DefineOwnPropertyByKey(
+		vm.NewSymbolKey(SymbolToStringTag),
+		vm.NewString("Map Iterator"),
+		&falseVal, // writable: false
+		&falseVal, // enumerable: false
+		&trueVal,  // configurable: true
+	)
+	vmInstance.MapIteratorPrototype = vm.NewValueFromPlainObject(mapIteratorProto)
+
+	// %SetIteratorPrototype%
+	setIteratorProto := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+	setIteratorProto.DefineOwnPropertyByKey(
+		vm.NewSymbolKey(SymbolToStringTag),
+		vm.NewString("Set Iterator"),
+		&falseVal, // writable: false
+		&falseVal, // enumerable: false
+		&trueVal,  // configurable: true
+	)
+	vmInstance.SetIteratorPrototype = vm.NewValueFromPlainObject(setIteratorProto)
+
+	// %StringIteratorPrototype%
+	stringIteratorProto := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+	stringIteratorProto.DefineOwnPropertyByKey(
+		vm.NewSymbolKey(SymbolToStringTag),
+		vm.NewString("String Iterator"),
+		&falseVal, // writable: false
+		&falseVal, // enumerable: false
+		&trueVal,  // configurable: true
+	)
+	vmInstance.StringIteratorPrototype = vm.NewValueFromPlainObject(stringIteratorProto)
+
+	// %RegExpStringIteratorPrototype%
+	regexpStringIteratorProto := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+	regexpStringIteratorProto.DefineOwnPropertyByKey(
+		vm.NewSymbolKey(SymbolToStringTag),
+		vm.NewString("RegExp String Iterator"),
+		&falseVal, // writable: false
+		&falseVal, // enumerable: false
+		&trueVal,  // configurable: true
+	)
+	vmInstance.RegExpStringIteratorPrototype = vm.NewValueFromPlainObject(regexpStringIteratorProto)
+
+	// ============================================
 	// Create Iterator constructor
 	// ============================================
 	iteratorCtor := vm.NewConstructorWithProps(0, true, "Iterator", func(args []vm.Value) (vm.Value, error) {
@@ -1043,10 +1236,11 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewValueFromPlainObject(obj), nil
 	})
 
-	// Set Iterator.prototype
+	// Set Iterator.prototype with { writable: false, enumerable: false, configurable: false }
 	ctorProps := iteratorCtor.AsNativeFunctionWithProps()
 	if ctorProps != nil && ctorProps.Properties != nil {
-		ctorProps.Properties.SetOwn("prototype", vmInstance.IteratorPrototype)
+		w, e, c := false, false, false
+		ctorProps.Properties.DefineOwnProperty("prototype", vmInstance.IteratorPrototype, &w, &e, &c)
 
 		// Add Iterator.from() static method
 		ctorProps.Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
@@ -1720,8 +1914,16 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewValueFromPlainObject(zipKeyedIter), nil
 	}))
 
-	// Set constructor property on Iterator.prototype
-	iteratorProto.DefineOwnProperty("constructor", iteratorCtor, &w, &e, &c)
+	// Set constructor property on Iterator.prototype - accessor property
+	// Per spec: { get: function, set: function, enumerable: false, configurable: true }
+	constructorGetter := vm.NewNativeFunction(0, false, "get constructor", func(args []vm.Value) (vm.Value, error) {
+		return iteratorCtor, nil
+	})
+	constructorSetter := vm.NewNativeFunction(1, false, "set constructor", func(args []vm.Value) (vm.Value, error) {
+		// Setter does nothing per spec
+		return vm.Undefined, nil
+	})
+	iteratorProto.DefineAccessorProperty("constructor", constructorGetter, true, constructorSetter, true, &e, &c)
 
 	// Register Iterator constructor globally
 	return ctx.DefineGlobal("Iterator", iteratorCtor)

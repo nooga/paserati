@@ -239,7 +239,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		mapObj := thisMap.AsMap()
 
 		// Create iterator object with live reference to the Map, inheriting from Iterator.prototype
-		it := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+		it := vm.NewObject(vmInstance.MapIteratorPrototype).AsPlainObject()
 		currentIndex := 0 // Closure captures this for live iteration
 
 		// next() - iterates live over the Map, skipping deleted entries
@@ -285,7 +285,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.values called on incompatible receiver")
 		}
 		mapObj := thisMap.AsMap()
-		it := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+		it := vm.NewObject(vmInstance.MapIteratorPrototype).AsPlainObject()
 		currentIndex := 0
 		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
 			result := vm.NewObject(vm.Undefined).AsPlainObject()
@@ -319,7 +319,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.keys called on incompatible receiver")
 		}
 		mapObj := thisMap.AsMap()
-		it := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+		it := vm.NewObject(vmInstance.MapIteratorPrototype).AsPlainObject()
 		currentIndex := 0
 		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
 			result := vm.NewObject(vm.Undefined).AsPlainObject()

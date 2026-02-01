@@ -28,6 +28,7 @@ var (
 	SymbolSplit              vm.Value
 	SymbolUnscopables        vm.Value
 	SymbolAsyncIterator      vm.Value
+	SymbolDispose            vm.Value
 )
 
 type SymbolInitializer struct{}
@@ -59,6 +60,7 @@ func (s *SymbolInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("split", types.Symbol).
 		WithProperty("unscopables", types.Symbol).
 		WithProperty("asyncIterator", types.Symbol).
+		WithProperty("dispose", types.Symbol).
 		// Symbol constructor signature - returns symbol
 		WithSimpleCallSignature([]types.Type{}, types.Symbol). // Symbol()
 		WithSimpleCallSignature(
@@ -167,6 +169,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		SymbolSplit = vm.NewSymbol("Symbol.split")
 		SymbolUnscopables = vm.NewSymbol("Symbol.unscopables")
 		SymbolAsyncIterator = vm.NewSymbol("Symbol.asyncIterator")
+		SymbolDispose = vm.NewSymbol("Symbol.dispose")
 	} else {
 		// Reuse ALL existing symbols from VM (all are now stored as singletons)
 		SymbolIterator = vmInstance.SymbolIterator
@@ -182,6 +185,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		SymbolSplit = vmInstance.SymbolSplit
 		SymbolUnscopables = vmInstance.SymbolUnscopables
 		SymbolAsyncIterator = vmInstance.SymbolAsyncIterator
+		SymbolDispose = vmInstance.SymbolDispose
 	}
 
 	// Add static methods
@@ -243,6 +247,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("split", SymbolSplit)
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("unscopables", SymbolUnscopables)
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("asyncIterator", SymbolAsyncIterator)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("dispose", SymbolDispose)
 
 	symbolCtor := ctorWithProps
 
@@ -260,6 +265,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.SymbolSplit = SymbolSplit
 	vmInstance.SymbolUnscopables = SymbolUnscopables
 	vmInstance.SymbolAsyncIterator = SymbolAsyncIterator
+	vmInstance.SymbolDispose = SymbolDispose
 
 	// Register Symbol constructor as global
 	return ctx.DefineGlobal("Symbol", symbolCtor)

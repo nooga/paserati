@@ -2088,6 +2088,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Check if the source is iterable (has Symbol.iterator)
+		// This includes:
+		// - Objects with Symbol.iterator
+		// - Sets and Maps
+		// - Primitive strings (natively iterable)
+		// - Primitives whose prototype has Symbol.iterator (e.g., numbers with custom iterator)
 		iteratorMethod := vm.Undefined
 		hasIterator := false
 		if arrayLike.Type() == vm.TypeSet || arrayLike.Type() == vm.TypeMap {
@@ -2097,6 +2102,24 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		} else if arrayLike.IsObject() {
 			if method, ok := vmInstance.GetSymbolProperty(arrayLike, SymbolIterator); ok && method.IsCallable() {
+				iteratorMethod = method
+				hasIterator = true
+			}
+		} else if arrayLike.Type() == vm.TypeString {
+			// Primitive strings are natively iterable via String.prototype[Symbol.iterator]
+			if method, ok := vmInstance.GetSymbolProperty(vmInstance.StringPrototype, SymbolIterator); ok && method.IsCallable() {
+				iteratorMethod = method
+				hasIterator = true
+			}
+		} else if arrayLike.IsNumber() {
+			// Check if Number.prototype has Symbol.iterator (e.g., user-defined)
+			if method, ok := vmInstance.GetSymbolProperty(vmInstance.NumberPrototype, SymbolIterator); ok && method.IsCallable() {
+				iteratorMethod = method
+				hasIterator = true
+			}
+		} else if arrayLike.Type() == vm.TypeBoolean {
+			// Check if Boolean.prototype has Symbol.iterator (e.g., user-defined)
+			if method, ok := vmInstance.GetSymbolProperty(vmInstance.BooleanPrototype, SymbolIterator); ok && method.IsCallable() {
 				iteratorMethod = method
 				hasIterator = true
 			}
@@ -2753,8 +2776,8 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 // createArrayIterator creates an iterator object for array iteration
 func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
-	// Create iterator object inheriting from Iterator.prototype
-	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+	// Create iterator object inheriting from ArrayIteratorPrototype
+	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
 	// Iterator state: current index
@@ -2793,7 +2816,7 @@ func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
 // createArgumentsIterator creates an iterator object for Arguments objects
 func createArgumentsIterator(vmInstance *vm.VM, args *vm.ArgumentsObject) vm.Value {
 	// Create iterator object inheriting from Iterator.prototype
-	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
 	// Iterator state: current index
@@ -2832,7 +2855,7 @@ func createArgumentsIterator(vmInstance *vm.VM, args *vm.ArgumentsObject) vm.Val
 // createArrayLikeIterator creates an iterator for generic array-like objects (with length and indices)
 func createArrayLikeIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 	// Create iterator object inheriting from Iterator.prototype
-	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
 	// Iterator state: current index
@@ -2884,7 +2907,7 @@ func createArrayLikeIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 
 // createArrayKeysIterator creates an iterator that yields array indices
 func createArrayKeysIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
-	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 	currentIndex := 0
 
@@ -2925,7 +2948,7 @@ func createArrayKeysIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 
 // createArrayEntriesIterator creates an iterator that yields [index, value] pairs
 func createArrayEntriesIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
-	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 	currentIndex := 0
 

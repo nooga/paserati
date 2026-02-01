@@ -2270,7 +2270,12 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err := requireObjectCoercible(vmInstance, thisVal, "[Symbol.iterator]"); err != nil {
 			return vm.Undefined, err
 		}
-		thisStr := thisVal.ToString()
+		// Get string value - for String wrapper objects, extract [[PrimitiveValue]]
+		// For other objects, call ToPrimitive("string") to get proper conversion
+		thisStr, err := getStringValueWithVM(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 
 		// Create a string iterator object
 		return createStringIterator(vmInstance, thisStr), nil
@@ -2286,8 +2291,8 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 // createMatchAllIterator creates an iterator for String.prototype.matchAll
 func createMatchAllIterator(vmInstance *vm.VM, str string, allMatches [][]int) vm.Value {
-	// Create iterator object inheriting from Iterator.prototype
-	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+	// Create iterator object inheriting from %RegExpStringIteratorPrototype%
+	iterator := vm.NewObject(vmInstance.RegExpStringIteratorPrototype).AsPlainObject()
 
 	// Iterator state: current match index
 	currentMatchIndex := 0
@@ -2343,8 +2348,8 @@ func createMatchAllIterator(vmInstance *vm.VM, str string, allMatches [][]int) v
 
 // createStringIterator creates an iterator object for string iteration
 func createStringIterator(vmInstance *vm.VM, str string) vm.Value {
-	// Create iterator object inheriting from Iterator.prototype
-	iterator := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+	// Create iterator object inheriting from StringIteratorPrototype
+	iterator := vm.NewObject(vmInstance.StringIteratorPrototype).AsPlainObject()
 
 	// Convert string to UTF-16 code units for proper JavaScript semantics
 	// JavaScript strings are UTF-16 encoded, so we need to iterate by code points,
