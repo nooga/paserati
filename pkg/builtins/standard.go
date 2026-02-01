@@ -54,6 +54,7 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &AbortControllerInitializer{})
 	initializers = append(initializers, &FetchInitializer{})
 	initializers = append(initializers, &DateInitializer{})
+	initializers = append(initializers, &TemporalInitializer{})
 	initializers = append(initializers, &PerformanceInitializer{})
 	initializers = append(initializers, &ArrayBufferInitializer{})
 	initializers = append(initializers, &TypedArrayInitializer{}) // Abstract TypedArray base - must come before specific TypedArrays
