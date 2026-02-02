@@ -164,6 +164,439 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		setProto.DefineOwnProperty("clear", v, &w, &e, &c)
 	}
 
+	// Helper function to get a SetRecord from a set-like object
+	// Per ECMAScript spec: GetSetRecord(obj) returns { set, size, has, keys }
+	getSetRecord := func(other vm.Value, methodName string) (int, vm.Value, vm.Value, error) {
+		if !other.IsObject() {
+			return 0, vm.Undefined, vm.Undefined, vmInstance.NewTypeError(methodName + " requires an object argument")
+		}
+
+		// Get size property and coerce to number
+		// Per spec: if rawSize is undefined, throw TypeError
+		sizeVal, err := vmInstance.GetProperty(other, "size")
+		if err != nil {
+			return 0, vm.Undefined, vm.Undefined, vmInstance.NewTypeError(methodName + ": argument must have a size property")
+		}
+		if sizeVal.Type() == vm.TypeUndefined {
+			return 0, vm.Undefined, vm.Undefined, vmInstance.NewTypeError(methodName + ": argument must have a size property")
+		}
+		// Per spec: BigInt throws TypeError
+		if sizeVal.Type() == vm.TypeBigInt {
+			return 0, vm.Undefined, vm.Undefined, vmInstance.NewTypeError(methodName + ": Cannot convert a BigInt to a number")
+		}
+		// Use ToNumber which properly calls valueOf for objects
+		sizeFloat := vmInstance.ToNumber(sizeVal)
+		// Per spec: NaN throws TypeError, negative throws RangeError
+		if sizeFloat != sizeFloat { // NaN check
+			return 0, vm.Undefined, vm.Undefined, vmInstance.NewTypeError(methodName + ": size is not a valid number")
+		}
+		if sizeFloat < 0 {
+			return 0, vm.Undefined, vm.Undefined, vmInstance.NewRangeError(methodName + ": size cannot be negative")
+		}
+		size := int(sizeFloat)
+
+		// Get has method
+		hasMethod, err := vmInstance.GetProperty(other, "has")
+		if err != nil || !hasMethod.IsCallable() {
+			return 0, vm.Undefined, vm.Undefined, vmInstance.NewTypeError(methodName + ": argument must have a callable has method")
+		}
+
+		// Get keys method
+		keysMethod, err := vmInstance.GetProperty(other, "keys")
+		if err != nil || !keysMethod.IsCallable() {
+			return 0, vm.Undefined, vm.Undefined, vmInstance.NewTypeError(methodName + ": argument must have a callable keys method")
+		}
+
+		return size, hasMethod, keysMethod, nil
+	}
+
+	// Helper to iterate over keys from a set-like object
+	iterateSetLike := func(other vm.Value, keysMethod vm.Value, callback func(vm.Value) (bool, error)) error {
+		// Call keys() to get iterator
+		iter, err := vmInstance.Call(keysMethod, other, nil)
+		if err != nil {
+			return err
+		}
+
+		// Get next method from iterator
+		nextMethod, err := vmInstance.GetProperty(iter, "next")
+		if err != nil || !nextMethod.IsCallable() {
+			return vmInstance.NewTypeError("keys iterator must have a next method")
+		}
+
+		// Iterate
+		for {
+			result, err := vmInstance.Call(nextMethod, iter, nil)
+			if err != nil {
+				return err
+			}
+
+			// Check done
+			doneVal, _ := vmInstance.GetProperty(result, "done")
+			if doneVal.IsTruthy() {
+				break
+			}
+
+			// Get value
+			value, _ := vmInstance.GetProperty(result, "value")
+
+			// Call callback
+			cont, err := callback(value)
+			if err != nil {
+				return err
+			}
+			if !cont {
+				break
+			}
+		}
+		return nil
+	}
+
+	// Set.prototype.union(other) - ES2024
+	setProto.SetOwnNonEnumerable("union", vm.NewNativeFunction(1, false, "union", func(args []vm.Value) (vm.Value, error) {
+		thisSet := vmInstance.GetThis()
+		if thisSet.Type() != vm.TypeSet {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.union called on incompatible receiver")
+		}
+
+		if len(args) < 1 {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.union requires an argument")
+		}
+
+		_, _, keysMethod, err := getSetRecord(args[0], "Set.prototype.union")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		// Create new Set with all elements from this
+		result := vm.NewSet()
+		resultSet := result.AsSet()
+		thisSetObj := thisSet.AsSet()
+		for i := 0; i < thisSetObj.OrderLen(); i++ {
+			if val, exists := thisSetObj.GetValueAt(i); exists {
+				resultSet.Add(val)
+			}
+		}
+
+		// Add all elements from other
+		err = iterateSetLike(args[0], keysMethod, func(val vm.Value) (bool, error) {
+			resultSet.Add(val)
+			return true, nil
+		})
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		return result, nil
+	}))
+	if v, ok := setProto.GetOwn("union"); ok {
+		w, e, c := true, false, true
+		setProto.DefineOwnProperty("union", v, &w, &e, &c)
+	}
+
+	// Set.prototype.intersection(other) - ES2024
+	setProto.SetOwnNonEnumerable("intersection", vm.NewNativeFunction(1, false, "intersection", func(args []vm.Value) (vm.Value, error) {
+		thisSet := vmInstance.GetThis()
+		if thisSet.Type() != vm.TypeSet {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.intersection called on incompatible receiver")
+		}
+
+		if len(args) < 1 {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.intersection requires an argument")
+		}
+
+		otherSize, hasMethod, keysMethod, err := getSetRecord(args[0], "Set.prototype.intersection")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		result := vm.NewSet()
+		resultSet := result.AsSet()
+		thisSetObj := thisSet.AsSet()
+
+		// Optimization: iterate over the smaller set
+		if thisSetObj.Size() <= otherSize {
+			// Iterate over this, check has in other
+			for i := 0; i < thisSetObj.OrderLen(); i++ {
+				if val, exists := thisSetObj.GetValueAt(i); exists {
+					hasResult, err := vmInstance.Call(hasMethod, args[0], []vm.Value{val})
+					if err != nil {
+						return vm.Undefined, err
+					}
+					if hasResult.IsTruthy() {
+						resultSet.Add(val)
+					}
+				}
+			}
+		} else {
+			// Iterate over other, check has in this
+			err = iterateSetLike(args[0], keysMethod, func(val vm.Value) (bool, error) {
+				if thisSetObj.Has(val) {
+					resultSet.Add(val)
+				}
+				return true, nil
+			})
+			if err != nil {
+				return vm.Undefined, err
+			}
+		}
+
+		return result, nil
+	}))
+	if v, ok := setProto.GetOwn("intersection"); ok {
+		w, e, c := true, false, true
+		setProto.DefineOwnProperty("intersection", v, &w, &e, &c)
+	}
+
+	// Set.prototype.difference(other) - ES2024
+	setProto.SetOwnNonEnumerable("difference", vm.NewNativeFunction(1, false, "difference", func(args []vm.Value) (vm.Value, error) {
+		thisSet := vmInstance.GetThis()
+		if thisSet.Type() != vm.TypeSet {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.difference called on incompatible receiver")
+		}
+
+		if len(args) < 1 {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.difference requires an argument")
+		}
+
+		otherSize, hasMethod, keysMethod, err := getSetRecord(args[0], "Set.prototype.difference")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		result := vm.NewSet()
+		resultSet := result.AsSet()
+		thisSetObj := thisSet.AsSet()
+
+		// Copy all from this first
+		for i := 0; i < thisSetObj.OrderLen(); i++ {
+			if val, exists := thisSetObj.GetValueAt(i); exists {
+				resultSet.Add(val)
+			}
+		}
+
+		// Remove elements that are in other
+		if thisSetObj.Size() <= otherSize {
+			// Iterate this, check has in other, remove if found
+			for i := 0; i < thisSetObj.OrderLen(); i++ {
+				if val, exists := thisSetObj.GetValueAt(i); exists {
+					hasResult, err := vmInstance.Call(hasMethod, args[0], []vm.Value{val})
+					if err != nil {
+						return vm.Undefined, err
+					}
+					if hasResult.IsTruthy() {
+						resultSet.Delete(val)
+					}
+				}
+			}
+		} else {
+			// Iterate other, remove from result
+			err = iterateSetLike(args[0], keysMethod, func(val vm.Value) (bool, error) {
+				resultSet.Delete(val)
+				return true, nil
+			})
+			if err != nil {
+				return vm.Undefined, err
+			}
+		}
+
+		return result, nil
+	}))
+	if v, ok := setProto.GetOwn("difference"); ok {
+		w, e, c := true, false, true
+		setProto.DefineOwnProperty("difference", v, &w, &e, &c)
+	}
+
+	// Set.prototype.symmetricDifference(other) - ES2024
+	setProto.SetOwnNonEnumerable("symmetricDifference", vm.NewNativeFunction(1, false, "symmetricDifference", func(args []vm.Value) (vm.Value, error) {
+		thisSet := vmInstance.GetThis()
+		if thisSet.Type() != vm.TypeSet {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.symmetricDifference called on incompatible receiver")
+		}
+
+		if len(args) < 1 {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.symmetricDifference requires an argument")
+		}
+
+		_, _, keysMethod, err := getSetRecord(args[0], "Set.prototype.symmetricDifference")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		result := vm.NewSet()
+		resultSet := result.AsSet()
+		thisSetObj := thisSet.AsSet()
+
+		// Add all from this
+		for i := 0; i < thisSetObj.OrderLen(); i++ {
+			if val, exists := thisSetObj.GetValueAt(i); exists {
+				resultSet.Add(val)
+			}
+		}
+
+		// For each element in other: if in result, remove; else add
+		err = iterateSetLike(args[0], keysMethod, func(val vm.Value) (bool, error) {
+			if resultSet.Has(val) {
+				resultSet.Delete(val)
+			} else {
+				resultSet.Add(val)
+			}
+			return true, nil
+		})
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		return result, nil
+	}))
+	if v, ok := setProto.GetOwn("symmetricDifference"); ok {
+		w, e, c := true, false, true
+		setProto.DefineOwnProperty("symmetricDifference", v, &w, &e, &c)
+	}
+
+	// Set.prototype.isSubsetOf(other) - ES2024
+	setProto.SetOwnNonEnumerable("isSubsetOf", vm.NewNativeFunction(1, false, "isSubsetOf", func(args []vm.Value) (vm.Value, error) {
+		thisSet := vmInstance.GetThis()
+		if thisSet.Type() != vm.TypeSet {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.isSubsetOf called on incompatible receiver")
+		}
+
+		if len(args) < 1 {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.isSubsetOf requires an argument")
+		}
+
+		otherSize, hasMethod, _, err := getSetRecord(args[0], "Set.prototype.isSubsetOf")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		thisSetObj := thisSet.AsSet()
+
+		// If this is larger than other, can't be a subset
+		if thisSetObj.Size() > otherSize {
+			return vm.False, nil
+		}
+
+		// Check that every element of this is in other
+		for i := 0; i < thisSetObj.OrderLen(); i++ {
+			if val, exists := thisSetObj.GetValueAt(i); exists {
+				hasResult, err := vmInstance.Call(hasMethod, args[0], []vm.Value{val})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				if !hasResult.IsTruthy() {
+					return vm.False, nil
+				}
+			}
+		}
+
+		return vm.True, nil
+	}))
+	if v, ok := setProto.GetOwn("isSubsetOf"); ok {
+		w, e, c := true, false, true
+		setProto.DefineOwnProperty("isSubsetOf", v, &w, &e, &c)
+	}
+
+	// Set.prototype.isSupersetOf(other) - ES2024
+	setProto.SetOwnNonEnumerable("isSupersetOf", vm.NewNativeFunction(1, false, "isSupersetOf", func(args []vm.Value) (vm.Value, error) {
+		thisSet := vmInstance.GetThis()
+		if thisSet.Type() != vm.TypeSet {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.isSupersetOf called on incompatible receiver")
+		}
+
+		if len(args) < 1 {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.isSupersetOf requires an argument")
+		}
+
+		otherSize, _, keysMethod, err := getSetRecord(args[0], "Set.prototype.isSupersetOf")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		thisSetObj := thisSet.AsSet()
+
+		// If other is larger than this, can't be a superset
+		if otherSize > thisSetObj.Size() {
+			return vm.False, nil
+		}
+
+		// Check that every element of other is in this
+		isSuperset := true
+		err = iterateSetLike(args[0], keysMethod, func(val vm.Value) (bool, error) {
+			if !thisSetObj.Has(val) {
+				isSuperset = false
+				return false, nil // Stop iteration
+			}
+			return true, nil
+		})
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		return vm.BooleanValue(isSuperset), nil
+	}))
+	if v, ok := setProto.GetOwn("isSupersetOf"); ok {
+		w, e, c := true, false, true
+		setProto.DefineOwnProperty("isSupersetOf", v, &w, &e, &c)
+	}
+
+	// Set.prototype.isDisjointFrom(other) - ES2024
+	setProto.SetOwnNonEnumerable("isDisjointFrom", vm.NewNativeFunction(1, false, "isDisjointFrom", func(args []vm.Value) (vm.Value, error) {
+		thisSet := vmInstance.GetThis()
+		if thisSet.Type() != vm.TypeSet {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.isDisjointFrom called on incompatible receiver")
+		}
+
+		if len(args) < 1 {
+			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.isDisjointFrom requires an argument")
+		}
+
+		otherSize, hasMethod, keysMethod, err := getSetRecord(args[0], "Set.prototype.isDisjointFrom")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		thisSetObj := thisSet.AsSet()
+
+		// Optimization: iterate over the smaller set
+		if thisSetObj.Size() <= otherSize {
+			// Iterate this, check has in other
+			for i := 0; i < thisSetObj.OrderLen(); i++ {
+				if val, exists := thisSetObj.GetValueAt(i); exists {
+					hasResult, err := vmInstance.Call(hasMethod, args[0], []vm.Value{val})
+					if err != nil {
+						return vm.Undefined, err
+					}
+					if hasResult.IsTruthy() {
+						return vm.False, nil
+					}
+				}
+			}
+		} else {
+			// Iterate other, check has in this
+			isDisjoint := true
+			err = iterateSetLike(args[0], keysMethod, func(val vm.Value) (bool, error) {
+				if thisSetObj.Has(val) {
+					isDisjoint = false
+					return false, nil // Stop iteration
+				}
+				return true, nil
+			})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if !isDisjoint {
+				return vm.False, nil
+			}
+		}
+
+		return vm.True, nil
+	}))
+	if v, ok := setProto.GetOwn("isDisjointFrom"); ok {
+		w, e, c := true, false, true
+		setProto.DefineOwnProperty("isDisjointFrom", v, &w, &e, &c)
+	}
+
 	// forEach(callback, thisArg)
 	setProto.SetOwnNonEnumerable("forEach", vm.NewNativeFunction(1, false, "forEach", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
@@ -205,7 +638,8 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Minimal iterator helpers: values(), keys(), entries(), and [Symbol.iterator]
 	// These create iterator objects with internal slots that the prototype's next() uses.
-	setProto.SetOwnNonEnumerable("values", vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
+	// Per ECMAScript spec: Set.prototype.keys === Set.prototype.values === Set.prototype[@@iterator]
+	valuesFn := vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
 			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.values called on incompatible receiver")
@@ -222,34 +656,23 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewValueFromPlainObject(it), nil
 		}), nil, nil, nil)
 		return vm.NewValueFromPlainObject(it), nil
-	}))
+	})
+	// Set values, keys, and Symbol.iterator to the SAME function object
+	setProto.SetOwnNonEnumerable("values", valuesFn)
 	if v, ok := setProto.GetOwn("values"); ok {
 		w, e, c := true, false, true
 		setProto.DefineOwnProperty("values", v, &w, &e, &c)
 	}
-	// keys() is an alias of values() for Set - uses same internal slots pattern
-	setProto.SetOwnNonEnumerable("keys", vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
-		thisSet := vmInstance.GetThis()
-		if thisSet.Type() != vm.TypeSet {
-			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.keys called on incompatible receiver")
-		}
-
-		// Create iterator object with internal slots, inheriting from SetIteratorPrototype
-		it := vm.NewObject(vmInstance.SetIteratorPrototype).AsPlainObject()
-		it.SetOwn("[[IteratedSet]]", thisSet)
-		it.SetOwn("[[SetNextIndex]]", vm.NumberValue(0))
-		it.SetOwn("[[SetIterationKind]]", vm.NewString("keys"))
-		it.SetOwn("[[Exhausted]]", vm.BooleanValue(false))
-
-		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
-			return vm.NewValueFromPlainObject(it), nil
-		}), nil, nil, nil)
-		return vm.NewValueFromPlainObject(it), nil
-	}))
+	// keys() is the same function as values() per ECMAScript spec
+	setProto.SetOwnNonEnumerable("keys", valuesFn)
 	if v, ok := setProto.GetOwn("keys"); ok {
 		w, e, c := true, false, true
 		setProto.DefineOwnProperty("keys", v, &w, &e, &c)
 	}
+	// Set.prototype[Symbol.iterator] is the same function as values() per ECMAScript spec
+	wb, eb, cb := true, false, true
+	setProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), valuesFn, &wb, &eb, &cb)
+
 	// entries() yields [value, value] - uses internal slots pattern
 	setProto.SetOwnNonEnumerable("entries", vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
@@ -273,19 +696,8 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true
 		setProto.DefineOwnProperty("entries", v, &w, &e, &c)
 	}
-	// Set.prototype[Symbol.iterator] - calls values() to return an iterator
-	wIter := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
-		if v, ok := setProto.GetOwn("values"); ok {
-			// Call values() as a method on the current Set instance
-			thisSet := vmInstance.GetThis()
-			return vmInstance.Call(v, thisSet, []vm.Value{})
-		}
-		return vm.Undefined, nil
-	})
-	wb, eb, cb := true, false, true
-	setProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), wIter, &wb, &eb, &cb)
 
-	// Add size accessor (getter)
+	// Add size accessor (getter) - must be defined as an accessor property per spec
 	sizeGetter := vm.NewNativeFunction(0, false, "get size", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
@@ -294,9 +706,8 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		setObj := thisSet.AsSet()
 		return vm.IntegerValue(int32(setObj.Size())), nil
 	})
-	setProto.SetOwnNonEnumerable("size", sizeGetter)
-	w, e, c := true, false, true
-	setProto.DefineOwnProperty("size", sizeGetter, &w, &e, &c)
+	e, c := false, true
+	setProto.DefineAccessorProperty("size", sizeGetter, true, vm.Undefined, false, &e, &c)
 
 	// Create Set constructor function (before setting prototype, so we can reference it)
 	setConstructor := vm.NewConstructorWithProps(0, false, "Set", func(args []vm.Value) (vm.Value, error) {

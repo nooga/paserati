@@ -217,7 +217,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		mapProto.DefineOwnProperty("forEach", v, &w, &e, &c)
 	}
 
-	// Add size accessor (getter)
+	// Add size accessor (getter) - must be defined as an accessor property per spec
 	sizeGetter := vm.NewNativeFunction(0, false, "get size", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		if thisMap.Type() != vm.TypeMap {
@@ -226,12 +226,12 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		mapObj := thisMap.AsMap()
 		return vm.IntegerValue(int32(mapObj.Size())), nil
 	})
-	mapProto.SetOwnNonEnumerable("size", sizeGetter)
-	w, e, c := true, false, true
-	mapProto.DefineOwnProperty("size", sizeGetter, &w, &e, &c)
+	e, c := false, true
+	mapProto.DefineAccessorProperty("size", sizeGetter, true, vm.Undefined, false, &e, &c)
 
 	// Live iterator for Map.prototype.entries() - respects deletions during iteration
-	mapProto.SetOwnNonEnumerable("entries", vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
+	// Per ECMAScript spec: Map.prototype[@@iterator] === Map.prototype.entries
+	entriesFn := vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 		if thisMap.Type() != vm.TypeMap {
 			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.entries called on incompatible receiver")
@@ -250,10 +250,16 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewValueFromPlainObject(it), nil
 		}), nil, nil, nil)
 		return vm.NewValueFromPlainObject(it), nil
-	}))
-	if v, ok := mapProto.GetOwn("entries"); ok {
+	})
+	// Set entries and Symbol.iterator to the SAME function object per ECMAScript spec
+	mapProto.SetOwnNonEnumerable("entries", entriesFn)
+	{
 		w, e, c := true, false, true
-		mapProto.DefineOwnProperty("entries", v, &w, &e, &c)
+		mapProto.DefineOwnProperty("entries", entriesFn, &w, &e, &c)
+	}
+	{
+		wb, eb, cb := true, false, true
+		mapProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), entriesFn, &wb, &eb, &cb)
 	}
 	// Live iterator for Map.prototype.values() - respects deletions during iteration
 	mapProto.SetOwnNonEnumerable("values", vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
@@ -301,17 +307,6 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true
 		mapProto.DefineOwnProperty("keys", v, &w, &e, &c)
 	}
-	// Map.prototype[Symbol.iterator] - calls entries() to return an iterator
-	wIter := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
-		if v, ok := mapProto.GetOwn("entries"); ok {
-			// Call entries() as a method on the current Map instance
-			thisMap := vmInstance.GetThis()
-			return vmInstance.Call(v, thisMap, []vm.Value{})
-		}
-		return vm.Undefined, nil
-	})
-	wb, eb, cb := true, false, true
-	mapProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), wIter, &wb, &eb, &cb)
 
 	// Create Map constructor function (before setting prototype, so we can reference it)
 	mapConstructor := vm.NewConstructorWithProps(0, false, "Map", func(args []vm.Value) (vm.Value, error) {

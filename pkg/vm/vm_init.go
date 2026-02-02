@@ -557,6 +557,52 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		}
 		return Undefined, nil
 
+	case TypeSet:
+		// Set objects: check prototype chain (especially for accessor properties like size)
+		if vm.SetPrototype.IsObject() {
+			proto := vm.SetPrototype.AsPlainObject()
+			// Check for accessor (getter) first
+			if getter, _, _, _, ok := proto.GetOwnAccessor(propName); ok {
+				if getter.Type() != TypeUndefined {
+					// Call the getter with this=obj (the Set)
+					result, err := vm.Call(getter, obj, nil)
+					if err != nil {
+						return Undefined, err
+					}
+					return result, nil
+				}
+				return Undefined, nil
+			}
+			// Check for regular property
+			if v, ok := proto.Get(propName); ok {
+				return v, nil
+			}
+		}
+		return Undefined, nil
+
+	case TypeMap:
+		// Map objects: check prototype chain (especially for accessor properties like size)
+		if vm.MapPrototype.IsObject() {
+			proto := vm.MapPrototype.AsPlainObject()
+			// Check for accessor (getter) first
+			if getter, _, _, _, ok := proto.GetOwnAccessor(propName); ok {
+				if getter.Type() != TypeUndefined {
+					// Call the getter with this=obj (the Map)
+					result, err := vm.Call(getter, obj, nil)
+					if err != nil {
+						return Undefined, err
+					}
+					return result, nil
+				}
+				return Undefined, nil
+			}
+			// Check for regular property
+			if v, ok := proto.Get(propName); ok {
+				return v, nil
+			}
+		}
+		return Undefined, nil
+
 	default:
 		// For non-objects, just return undefined
 		return Undefined, nil
