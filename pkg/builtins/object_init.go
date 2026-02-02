@@ -2375,15 +2375,27 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	}
 
 	obj := args[0]
-	// Property key: support symbols natively
+	// Property key: support symbols natively, and use ToPrimitive for objects (ToPropertyKey)
 	var keyIsSymbol bool
 	var propName string
 	var propSym vm.Value
-	if args[1].Type() == vm.TypeSymbol {
+	keyArg := args[1]
+	if keyArg.Type() == vm.TypeSymbol {
 		keyIsSymbol = true
-		propSym = args[1]
+		propSym = keyArg
 	} else {
-		propName = args[1].ToString()
+		// ToPropertyKey: for objects, call ToPrimitive with "string" hint first
+		if keyArg.IsObject() || keyArg.IsCallable() {
+			primKey := vmInstance.ToPrimitive(keyArg, "string")
+			if primKey.Type() == vm.TypeSymbol {
+				keyIsSymbol = true
+				propSym = primKey
+			} else {
+				propName = primKey.ToString()
+			}
+		} else {
+			propName = keyArg.ToString()
+		}
 	}
 	descriptor := args[2]
 
@@ -2438,74 +2450,204 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperty called on non-object")
 	}
 
+	// Per ECMAScript 8.10.5 ToPropertyDescriptor step 1: If Type(Obj) is not Object, throw TypeError
+	// Check if descriptor is an object (including functions, which are objects in JS)
+	descIsObject := descriptor.IsObject() ||
+		descriptor.Type() == vm.TypeFunction ||
+		descriptor.Type() == vm.TypeClosure ||
+		descriptor.Type() == vm.TypeNativeFunction ||
+		descriptor.Type() == vm.TypeNativeFunctionWithProps ||
+		descriptor.Type() == vm.TypeBoundFunction
+	if !descIsObject {
+		return vm.Undefined, vmInstance.NewTypeError("Property description must be an object")
+	}
+
 	// Parse descriptor object fields: value, writable, enumerable, configurable, get, set
 	// Per ECMAScript 8.10.5 ToPropertyDescriptor, we use [[Get]] which follows prototype chain
+	// and properly invokes accessor getters when reading descriptor properties
 	var value vm.Value = vm.Undefined
 	var writablePtr, enumerablePtr, configurablePtr *bool
 	var getter vm.Value = vm.Undefined
 	var setter vm.Value = vm.Undefined
+	hasValue := false
 	hasGetter := false
 	hasSetter := false
-	if descObj := descriptor.AsPlainObject(); descObj != nil {
-		// Use Get() to follow prototype chain per spec
-		if val, exists := descObj.Get("value"); exists {
-			value = val
+
+	// Helper to check if property exists and get its value using GetProperty (calls getters)
+	// Per ECMAScript spec, this uses [[HasProperty]] (which checks prototype chain) and [[Get]]
+	hasAndGetProperty := func(obj vm.Value, propName string) (vm.Value, bool, error) {
+		// Check if property exists (including prototype chain)
+		// Note: Must check type BEFORE calling AsXxx() methods which panic on wrong type
+		var exists bool
+
+		// Helper to check Function.prototype for function types
+		checkFunctionPrototype := func() bool {
+			if vmInstance.FunctionPrototype.Type() == vm.TypeNativeFunctionWithProps {
+				nfp := vmInstance.FunctionPrototype.AsNativeFunctionWithProps()
+				if nfp != nil && nfp.Properties != nil {
+					return nfp.Properties.Has(propName)
+				}
+			}
+			return false
 		}
-		if w, exists := descObj.Get("writable"); exists {
-			b := w.IsTruthy()
-			writablePtr = &b
+
+		switch obj.Type() {
+		case vm.TypeObject:
+			if po := obj.AsPlainObject(); po != nil {
+				exists = po.Has(propName)
+			}
+		case vm.TypeDictObject:
+			if do := obj.AsDictObject(); do != nil {
+				_, exists = do.Get(propName)
+			}
+		case vm.TypeFunction:
+			fn := obj.AsFunction()
+			if fn != nil {
+				if fn.Properties != nil && fn.Properties.Has(propName) {
+					exists = true
+				} else {
+					// Check Function.prototype
+					exists = checkFunctionPrototype()
+				}
+			}
+		case vm.TypeClosure:
+			cl := obj.AsClosure()
+			if cl != nil {
+				if cl.Properties != nil && cl.Properties.Has(propName) {
+					exists = true
+				} else {
+					// Check Function.prototype
+					exists = checkFunctionPrototype()
+				}
+			}
+		case vm.TypeBoundFunction:
+			bf := obj.AsBoundFunction()
+			if bf != nil {
+				if bf.Properties != nil && bf.Properties.Has(propName) {
+					exists = true
+				} else {
+					// Check Function.prototype
+					exists = checkFunctionPrototype()
+				}
+			}
+		case vm.TypeNativeFunctionWithProps:
+			nfp := obj.AsNativeFunctionWithProps()
+			if nfp != nil {
+				if nfp.Properties != nil && nfp.Properties.Has(propName) {
+					exists = true
+				} else {
+					// Check Function.prototype
+					exists = checkFunctionPrototype()
+				}
+			}
+		case vm.TypeRegExp:
+			// RegExp objects: check own properties and RegExp.prototype
+			regex := obj.AsRegExpObject()
+			if regex != nil {
+				if regex.Properties != nil && regex.Properties.Has(propName) {
+					exists = true
+				} else if vmInstance.RegExpPrototype.IsObject() {
+					proto := vmInstance.RegExpPrototype.AsPlainObject()
+					exists = proto.Has(propName)
+				}
+			}
+		case vm.TypeArray:
+			// Array objects: check own properties and Array.prototype
+			arr := obj.AsArray()
+			if arr != nil {
+				if _, ok := arr.GetOwn(propName); ok {
+					exists = true
+				} else if vmInstance.ArrayPrototype.IsObject() {
+					proto := vmInstance.ArrayPrototype.AsPlainObject()
+					exists = proto.Has(propName)
+				}
+			}
+		case vm.TypeArguments:
+			// Arguments objects: check own properties and Object.prototype
+			args := obj.AsArguments()
+			if args != nil {
+				if args.HasNamedProp(propName) {
+					exists = true
+				} else if vmInstance.ObjectPrototype.IsObject() {
+					// Check Object.prototype for inherited properties (per spec 8.10.5)
+					proto := vmInstance.ObjectPrototype.AsPlainObject()
+					exists = proto.Has(propName)
+				}
+			}
+		case vm.TypeProxy:
+			// Proxy objects: use the "has" trap or target
+			// For simplicity, just try to get the property and see if it's defined
+			val, err := vmInstance.GetProperty(obj, propName)
+			if err != nil {
+				return vm.Undefined, false, err
+			}
+			// If GetProperty returns a value that's not undefined, consider it exists
+			// This is a simplification - proper proxy handling would use the "has" trap
+			if val.Type() != vm.TypeUndefined {
+				return val, true, nil
+			}
+			exists = false
 		}
-		if e, exists := descObj.Get("enumerable"); exists {
-			b := e.IsTruthy()
-			enumerablePtr = &b
+		if !exists {
+			return vm.Undefined, false, nil
 		}
-		if c, exists := descObj.Get("configurable"); exists {
-			b := c.IsTruthy()
-			configurablePtr = &b
+		// Property exists, use GetProperty to call getters
+		val, err := vmInstance.GetProperty(obj, propName)
+		if err != nil {
+			return vm.Undefined, false, err
 		}
-		if g, exists := descObj.Get("get"); exists {
-			hasGetter = true
-			getter = g
-		}
-		if s, exists := descObj.Get("set"); exists {
-			hasSetter = true
-			setter = s
-		}
-	} else if descObj := descriptor.AsDictObject(); descObj != nil {
-		// Use Get() to follow prototype chain per spec
-		if val, exists := descObj.Get("value"); exists {
-			value = val
-		}
-		if w, exists := descObj.Get("writable"); exists {
-			b := w.IsTruthy()
-			writablePtr = &b
-		}
-		if e, exists := descObj.Get("enumerable"); exists {
-			b := e.IsTruthy()
-			enumerablePtr = &b
-		}
-		if c, exists := descObj.Get("configurable"); exists {
-			b := c.IsTruthy()
-			configurablePtr = &b
-		}
-		if g, exists := descObj.Get("get"); exists {
-			hasGetter = true
-			getter = g
-		}
-		if s, exists := descObj.Get("set"); exists {
-			hasSetter = true
-			setter = s
-		}
-	} else {
-		// Non-object descriptor treated as { value: descriptor }
-		value = descriptor
+		return val, true, nil
 	}
 
-	// If accessor fields present with data fields, throw TypeError
-	if (hasGetter || hasSetter) && (value.Type() != vm.TypeUndefined || writablePtr != nil) {
-		// In absence of a direct VM reference here, mimic failure by returning undefined;
-		// harness verifyProperty will report descriptor mismatch. We will revisit once we thread VM here.
-		return vm.Undefined, nil
+	// Get each descriptor field using GetProperty (calls getters per spec)
+	if val, exists, err := hasAndGetProperty(descriptor, "value"); err != nil {
+		return vm.Undefined, err
+	} else if exists {
+		hasValue = true
+		value = val
+	}
+	if w, exists, err := hasAndGetProperty(descriptor, "writable"); err != nil {
+		return vm.Undefined, err
+	} else if exists {
+		b := w.IsTruthy()
+		writablePtr = &b
+	}
+	if e, exists, err := hasAndGetProperty(descriptor, "enumerable"); err != nil {
+		return vm.Undefined, err
+	} else if exists {
+		b := e.IsTruthy()
+		enumerablePtr = &b
+	}
+	if c, exists, err := hasAndGetProperty(descriptor, "configurable"); err != nil {
+		return vm.Undefined, err
+	} else if exists {
+		b := c.IsTruthy()
+		configurablePtr = &b
+	}
+	if g, exists, err := hasAndGetProperty(descriptor, "get"); err != nil {
+		return vm.Undefined, err
+	} else if exists {
+		hasGetter = true
+		getter = g
+	}
+	if s, exists, err := hasAndGetProperty(descriptor, "set"); err != nil {
+		return vm.Undefined, err
+	} else if exists {
+		hasSetter = true
+		setter = s
+	}
+
+	// Per ECMAScript 8.10.5 step 7.b/8.b: If 'get' or 'set' are not callable and not undefined, throw TypeError
+	if hasGetter && getter.Type() != vm.TypeUndefined && !getter.IsCallable() {
+		return vm.Undefined, vmInstance.NewTypeError("Getter must be a function")
+	}
+	if hasSetter && setter.Type() != vm.TypeUndefined && !setter.IsCallable() {
+		return vm.Undefined, vmInstance.NewTypeError("Setter must be a function")
+	}
+
+	// Per ECMAScript 8.10.5: If accessor fields (get/set) present with data fields (value/writable), throw TypeError
+	if (hasGetter || hasSetter) && (hasValue || writablePtr != nil) {
+		return vm.Undefined, vmInstance.NewTypeError("Invalid property descriptor. Cannot both specify accessors and a value or writable attribute")
 	}
 
 	// Handle BoundFunction first (before AsPlainObject which would panic)

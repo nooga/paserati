@@ -330,12 +330,12 @@ func (vm *VM) GetFrameCount() int {
 // This is safe to call from native functions and will trigger property getters/throw exceptions
 func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 	// Simple implementation that doesn't use opGetProp to avoid unwinding issues
-	// Just check for getter and call it, or return the property value
+	// Check for getter (including prototype chain) and call it, or return the property value
 
 	switch obj.Type() {
 	case TypeObject:
 		po := obj.AsPlainObject()
-		// Check if it's an accessor (getter)
+		// Check own accessor first
 		if g, _, _, _, ok := po.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
 			// Call the getter with this=obj
 			result, err := vm.Call(g, obj, nil)
@@ -344,9 +344,35 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			}
 			return result, nil
 		}
-		// Not an accessor, check for regular property including prototype chain
-		if value, exists := po.Get(propName); exists {
+		// Check for own data property
+		if value, exists := po.GetOwn(propName); exists {
 			return value, nil
+		}
+		// Walk prototype chain for accessor or data properties
+		current := po.GetPrototype()
+		for current.typ != TypeNull && current.typ != TypeUndefined {
+			if current.IsObject() {
+				if proto := current.AsPlainObject(); proto != nil {
+					// Check for accessor in prototype
+					if g, _, _, _, ok := proto.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
+						// Call the getter with this=original obj (not proto)
+						result, err := vm.Call(g, obj, nil)
+						if err != nil {
+							return Undefined, err
+						}
+						return result, nil
+					}
+					// Check for data property in prototype
+					if value, exists := proto.GetOwn(propName); exists {
+						return value, nil
+					}
+					current = proto.GetPrototype()
+				} else {
+					break
+				}
+			} else {
+				break
+			}
 		}
 		return Undefined, nil
 
@@ -599,6 +625,235 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			// Check for regular property
 			if v, ok := proto.Get(propName); ok {
 				return v, nil
+			}
+		}
+		return Undefined, nil
+
+	case TypeFunction:
+		// Function objects: check own properties, then Function.prototype
+		fn := obj.AsFunction()
+		if fn != nil {
+			// Check own properties first
+			if fn.Properties != nil {
+				// Check for accessor (getter) on own properties
+				if getter, _, _, _, ok := fn.Properties.GetOwnAccessor(propName); ok {
+					if getter.Type() != TypeUndefined {
+						result, err := vm.Call(getter, obj, nil)
+						if err != nil {
+							return Undefined, err
+						}
+						return result, nil
+					}
+					return Undefined, nil
+				}
+				if v, ok := fn.Properties.GetOwn(propName); ok {
+					return v, nil
+				}
+			}
+			// Check built-in properties
+			switch propName {
+			case "name":
+				return NewString(fn.Name), nil
+			case "length":
+				return NumberValue(float64(fn.Length)), nil
+			}
+			// Check Function.prototype (which is a NativeFunctionWithProps)
+			if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
+				nfp := vm.FunctionPrototype.AsNativeFunctionWithProps()
+				if nfp != nil && nfp.Properties != nil {
+					// Check for accessor first
+					if getter, _, _, _, ok := nfp.Properties.GetOwnAccessor(propName); ok {
+						if getter.Type() != TypeUndefined {
+							result, err := vm.Call(getter, obj, nil)
+							if err != nil {
+								return Undefined, err
+							}
+							return result, nil
+						}
+						return Undefined, nil
+					}
+					if v, ok := nfp.Properties.Get(propName); ok {
+						return v, nil
+					}
+				}
+			}
+		}
+		return Undefined, nil
+
+	case TypeClosure:
+		// Closure objects: check own properties, then Function.prototype
+		cl := obj.AsClosure()
+		if cl != nil {
+			// Check own properties first
+			if cl.Properties != nil {
+				// Check for accessor (getter) on own properties
+				if getter, _, _, _, ok := cl.Properties.GetOwnAccessor(propName); ok {
+					if getter.Type() != TypeUndefined {
+						result, err := vm.Call(getter, obj, nil)
+						if err != nil {
+							return Undefined, err
+						}
+						return result, nil
+					}
+					return Undefined, nil
+				}
+				if v, ok := cl.Properties.GetOwn(propName); ok {
+					return v, nil
+				}
+			}
+			// Check built-in properties
+			if cl.Fn != nil {
+				switch propName {
+				case "name":
+					return NewString(cl.Fn.Name), nil
+				case "length":
+					return NumberValue(float64(cl.Fn.Length)), nil
+				}
+			}
+			// Check Function.prototype (which is a NativeFunctionWithProps)
+			if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
+				nfp := vm.FunctionPrototype.AsNativeFunctionWithProps()
+				if nfp != nil && nfp.Properties != nil {
+					// Check for accessor first
+					if getter, _, _, _, ok := nfp.Properties.GetOwnAccessor(propName); ok {
+						if getter.Type() != TypeUndefined {
+							result, err := vm.Call(getter, obj, nil)
+							if err != nil {
+								return Undefined, err
+							}
+							return result, nil
+						}
+						return Undefined, nil
+					}
+					if v, ok := nfp.Properties.Get(propName); ok {
+						return v, nil
+					}
+				}
+			}
+		}
+		return Undefined, nil
+
+	case TypeNativeFunctionWithProps:
+		// Native function with props: check own properties, then Function.prototype
+		nfp := obj.AsNativeFunctionWithProps()
+		if nfp != nil && nfp.Properties != nil {
+			// Check for accessor (getter) on own properties
+			if getter, _, _, _, ok := nfp.Properties.GetOwnAccessor(propName); ok {
+				if getter.Type() != TypeUndefined {
+					result, err := vm.Call(getter, obj, nil)
+					if err != nil {
+						return Undefined, err
+					}
+					return result, nil
+				}
+				return Undefined, nil
+			}
+			if v, ok := nfp.Properties.GetOwn(propName); ok {
+				return v, nil
+			}
+		}
+		// Check built-in properties
+		if nfp != nil {
+			switch propName {
+			case "name":
+				if !nfp.DeletedName {
+					return NewString(nfp.Name), nil
+				}
+			case "length":
+				if !nfp.DeletedLength {
+					return NumberValue(float64(nfp.Arity)), nil
+				}
+			}
+		}
+		// Check Function.prototype (which is a NativeFunctionWithProps)
+		if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
+			fpNfp := vm.FunctionPrototype.AsNativeFunctionWithProps()
+			if fpNfp != nil && fpNfp.Properties != nil {
+				// Check for accessor first
+				if getter, _, _, _, ok := fpNfp.Properties.GetOwnAccessor(propName); ok {
+					if getter.Type() != TypeUndefined {
+						result, err := vm.Call(getter, obj, nil)
+						if err != nil {
+							return Undefined, err
+						}
+						return result, nil
+					}
+					return Undefined, nil
+				}
+				if v, ok := fpNfp.Properties.Get(propName); ok {
+					return v, nil
+				}
+			}
+		}
+		return Undefined, nil
+
+	case TypeBoundFunction:
+		// Bound function: check own properties, then Function.prototype
+		bf := obj.AsBoundFunction()
+		if bf != nil && bf.Properties != nil {
+			// Check for accessor (getter) on own properties
+			if getter, _, _, _, ok := bf.Properties.GetOwnAccessor(propName); ok {
+				if getter.Type() != TypeUndefined {
+					result, err := vm.Call(getter, obj, nil)
+					if err != nil {
+						return Undefined, err
+					}
+					return result, nil
+				}
+				return Undefined, nil
+			}
+			if v, ok := bf.Properties.GetOwn(propName); ok {
+				return v, nil
+			}
+		}
+		// Check Function.prototype (which is a NativeFunctionWithProps)
+		if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
+			nfp := vm.FunctionPrototype.AsNativeFunctionWithProps()
+			if nfp != nil && nfp.Properties != nil {
+				// Check for accessor first
+				if getter, _, _, _, ok := nfp.Properties.GetOwnAccessor(propName); ok {
+					if getter.Type() != TypeUndefined {
+						result, err := vm.Call(getter, obj, nil)
+						if err != nil {
+							return Undefined, err
+						}
+						return result, nil
+					}
+					return Undefined, nil
+				}
+				if v, ok := nfp.Properties.Get(propName); ok {
+					return v, nil
+				}
+			}
+		}
+		return Undefined, nil
+
+	case TypeArguments:
+		// Arguments objects: check length, numeric indices, and named properties
+		args := obj.AsArguments()
+		if args != nil {
+			// Check for 'length' property
+			if propName == "length" {
+				return NumberValue(float64(args.Length())), nil
+			}
+			// Check for 'callee' property (only in non-strict mode)
+			if propName == "callee" && !args.IsStrict() {
+				return args.Callee(), nil
+			}
+			// Check for numeric index access
+			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < args.Length() {
+				return args.Get(idx), nil
+			}
+			// Check for named properties (like value, writable, get, set, etc.)
+			if v, ok := args.GetNamedProp(propName); ok {
+				return v, nil
+			}
+			// Check Object.prototype for inherited properties
+			if vm.ObjectPrototype.IsObject() {
+				proto := vm.ObjectPrototype.AsPlainObject()
+				if v, ok := proto.Get(propName); ok {
+					return v, nil
+				}
 			}
 		}
 		return Undefined, nil
