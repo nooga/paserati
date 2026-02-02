@@ -9444,6 +9444,21 @@ startExecution:
 				result, err := builtin.Fn(args)
 				vm.inConstructorCall = false
 				if err != nil {
+					// Check if this is an ExceptionError (already has an exception value)
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					// Throw as proper Error instance instead of plain object
 					var errValue Value
 					if errCtor, ok := vm.GetGlobal("Error"); ok {
@@ -9462,7 +9477,17 @@ startExecution:
 						errValue = NewValueFromPlainObject(eo)
 					}
 					vm.throwException(errValue)
-					continue // Let exception handling take over
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				}
 
 				// Check if an exception was thrown and a handler was found during the native call
@@ -9534,6 +9559,16 @@ startExecution:
 					// Check if this is an ExceptionError (already has an exception value)
 					if ee, ok := err.(ExceptionError); ok {
 						vm.throwException(ee.GetExceptionValue())
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
 						continue
 					}
 
@@ -9579,11 +9614,17 @@ startExecution:
 						errValue = NewValueFromPlainObject(eo)
 					}
 					vm.throwException(errValue)
-					// If a catch handler was found, frame.ip was updated - reload it
-					if !vm.unwinding {
-						ip = frame.ip
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
 					}
-					continue // Let exception handling take over
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				}
 
 				// Check if an exception was thrown and a handler was found during the native call
@@ -9756,6 +9797,21 @@ startExecution:
 					result, err := nf.Fn(finalArgs)
 					vm.inConstructorCall = false
 					if err != nil {
+						// Check if this is an ExceptionError (already has an exception value)
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+							if vm.frameCount == 0 {
+								return InterpretRuntimeError, vm.currentException
+							}
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						var errValue Value
 						if errCtor, ok := vm.GetGlobal("Error"); ok {
 							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
@@ -9773,6 +9829,16 @@ startExecution:
 							errValue = NewValueFromPlainObject(eo)
 						}
 						vm.throwException(errValue)
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
 						continue
 					}
 					if vm.unwinding {

@@ -1546,6 +1546,18 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if month < 1 || month > 12 {
 			return vm.Undefined, vmInstance.NewRangeError("Invalid month")
 		}
+		// Validate year range: -271821 to 275760
+		// Min: year -271821, month >= 4
+		// Max: year 275760, month <= 9
+		if year < -271821 || year > 275760 {
+			return vm.Undefined, vmInstance.NewRangeError("year value out of range")
+		}
+		if year == -271821 && month < 4 {
+			return vm.Undefined, vmInstance.NewRangeError("date value out of range")
+		}
+		if year == 275760 && month > 9 {
+			return vm.Undefined, vmInstance.NewRangeError("date value out of range")
+		}
 		return createPlainYearMonth(year, month), nil
 	})
 	plainYearMonthCtorProps := plainYearMonthCtor.AsNativeFunctionWithProps()
@@ -1567,14 +1579,19 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		if item.Type() == vm.TypeString {
 			str := item.ToString()
-			t, err := time.Parse("2006-01", str)
-			if err == nil {
-				return createPlainYearMonth(t.Year(), int(t.Month())), nil
-			}
-			// Try with day component
-			t, err = time.Parse("2006-01-02", str)
-			if err == nil {
-				return createPlainYearMonth(t.Year(), int(t.Month())), nil
+			year, month, ok := parseYearMonthString(str)
+			if ok {
+				// Validate range
+				if year < -271821 || year > 275760 {
+					return vm.Undefined, vmInstance.NewRangeError("year value out of range")
+				}
+				if year == -271821 && month < 4 {
+					return vm.Undefined, vmInstance.NewRangeError("date value out of range")
+				}
+				if year == 275760 && month > 9 {
+					return vm.Undefined, vmInstance.NewRangeError("date value out of range")
+				}
+				return createPlainYearMonth(year, month), nil
 			}
 			return vm.Undefined, vmInstance.NewRangeError("Invalid Temporal.PlainYearMonth string")
 		}
@@ -2110,6 +2127,11 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
+		// Validate range of each component
+		if err := validateDurationRange(vmInstance, years, months, weeks, days, hours, minutes, seconds, ms, us, ns); err != nil {
+			return vm.Undefined, err
+		}
+
 		// Check for mixed signs - all non-zero values must have the same sign
 		values := []int{years, months, weeks, days, hours, minutes, seconds, ms, us, ns}
 		hasPositive, hasNegative := false, false
@@ -2530,8 +2552,18 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 		} else {
 			nanos = new(big.Int).SetInt64(int64(args[0].ToFloat()))
 		}
-		tzId := args[1].ToString()
-		// Validate timezone
+		// Validate timezone type - must be string or object (not null, boolean, number, symbol, bigint)
+		tzArg := args[1]
+		if tzArg.Type() == vm.TypeNull || tzArg.Type() == vm.TypeBoolean ||
+			tzArg.IsNumber() || tzArg.Type() == vm.TypeSymbol ||
+			tzArg.Type() == vm.TypeBigInt {
+			return vm.Undefined, vmInstance.NewTypeError("Invalid time zone type")
+		}
+		tzId := tzArg.ToString()
+		// Validate timezone - empty string is not valid
+		if tzId == "" {
+			return vm.Undefined, vmInstance.NewRangeError("Invalid time zone: empty string")
+		}
 		if _, err := time.LoadLocation(tzId); err != nil {
 			// Try as UTC offset format
 			if !strings.HasPrefix(tzId, "+") && !strings.HasPrefix(tzId, "-") && tzId != "UTC" {
@@ -2843,6 +2875,96 @@ func getOverflowOption(vmInstance *vm.VM, options vm.Value) (string, error) {
 		return "", vmInstance.NewRangeError("Invalid overflow option: " + overflow)
 	}
 	return overflow, nil
+}
+
+// parseYearMonthString parses a year-month string in ISO 8601 format
+// Supports standard format (YYYY-MM) and extended year format (+YYYYYY-MM or -YYYYYY-MM)
+func parseYearMonthString(str string) (year, month int, ok bool) {
+	// Try extended year format first: +YYYYYY-MM or -YYYYYY-MM
+	if len(str) >= 10 && (str[0] == '+' || str[0] == '-') {
+		// Reject "-000000" (negative zero) - must use "+000000" for year 0
+		if strings.HasPrefix(str, "-000000") {
+			return 0, 0, false
+		}
+		// Find the hyphen separating year and month
+		hyphenIdx := strings.LastIndex(str[:10], "-")
+		if hyphenIdx > 0 {
+			yearStr := str[:hyphenIdx]
+			monthStr := str[hyphenIdx+1:]
+			// Month might have more after it (day, time, etc.)
+			if len(monthStr) >= 2 {
+				monthStr = monthStr[:2]
+			}
+			var y, m int
+			if _, err := fmt.Sscanf(yearStr, "%d", &y); err == nil {
+				if _, err := fmt.Sscanf(monthStr, "%d", &m); err == nil {
+					if m >= 1 && m <= 12 {
+						return y, m, true
+					}
+				}
+			}
+		}
+	}
+	// Try standard format: YYYY-MM or YYYY-MM-DD
+	t, err := time.Parse("2006-01", str)
+	if err == nil {
+		return t.Year(), int(t.Month()), true
+	}
+	// Try with day component
+	t, err = time.Parse("2006-01-02", str)
+	if err == nil {
+		return t.Year(), int(t.Month()), true
+	}
+	return 0, 0, false
+}
+
+// Duration range limits per ECMAScript Temporal spec
+const (
+	maxYearsMonthsWeeks = 4294967295           // 2^32 - 1
+	maxDays             = 104249991374         // ceil(maxSafeInteger / 86400) - 1
+	maxHours            = 2501999792983        // ceil(maxSafeInteger / 3600) - 1
+	maxMinutes          = 150119987579016      // ceil(maxSafeInteger / 60) - 1
+	maxSeconds          = 9007199254740991     // max safe integer
+)
+
+// validateDurationRange checks if duration values are within valid range
+func validateDurationRange(vmInstance *vm.VM, years, months, weeks, days, hours, minutes, seconds, ms, us, ns int) error {
+	// Check years, months, weeks (max 2^32 - 1)
+	if years > maxYearsMonthsWeeks || years < -maxYearsMonthsWeeks {
+		return vmInstance.NewRangeError("years value out of range")
+	}
+	if months > maxYearsMonthsWeeks || months < -maxYearsMonthsWeeks {
+		return vmInstance.NewRangeError("months value out of range")
+	}
+	if weeks > maxYearsMonthsWeeks || weeks < -maxYearsMonthsWeeks {
+		return vmInstance.NewRangeError("weeks value out of range")
+	}
+	// Check days
+	if days > maxDays || days < -maxDays {
+		return vmInstance.NewRangeError("days value out of range")
+	}
+	// Check hours
+	if hours > maxHours || hours < -maxHours {
+		return vmInstance.NewRangeError("hours value out of range")
+	}
+	// Check minutes
+	if minutes > maxMinutes || minutes < -maxMinutes {
+		return vmInstance.NewRangeError("minutes value out of range")
+	}
+	// Check seconds, ms, us, ns (max safe integer)
+	if seconds > maxSeconds || seconds < -maxSeconds {
+		return vmInstance.NewRangeError("seconds value out of range")
+	}
+	if ms > maxSeconds || ms < -maxSeconds {
+		return vmInstance.NewRangeError("milliseconds value out of range")
+	}
+	if us > maxSeconds || us < -maxSeconds {
+		return vmInstance.NewRangeError("microseconds value out of range")
+	}
+	if ns > maxSeconds || ns < -maxSeconds {
+		return vmInstance.NewRangeError("nanoseconds value out of range")
+	}
+	return nil
 }
 
 // daysInMonth returns the number of days in a given month/year
@@ -3199,72 +3321,13 @@ func parseZonedDateTimeString(vmInstance *vm.VM, str string, createZonedDateTime
 		}
 	}
 
-	// Try to parse as instant
-	layouts := []string{
-		"2006-01-02T15:04:05.999999999Z07:00",
-		"2006-01-02T15:04:05Z07:00",
-		"2006-01-02T15:04:05.999999999Z",
-		"2006-01-02T15:04:05Z",
-		"2006-01-02T15:04:05.999999999-07:00",
-		"2006-01-02T15:04:05-07:00",
-		"2006-01-02T15:04:05.999999999+07:00",
-		"2006-01-02T15:04:05+07:00",
+	// Try RFC3339Nano first (handles nanoseconds), then RFC3339
+	// Both handle "Z" and "+/-HH:MM" offset formats
+	t, err := time.Parse(time.RFC3339Nano, str)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, str)
 	}
-
-	var t time.Time
-	var err error
-	parsed := false
-
-	for _, layout := range layouts {
-		t, err = time.Parse(layout, str)
-		if err == nil {
-			parsed = true
-			break
-		}
-	}
-
-	if !parsed {
-		// Try to handle +HH:MM format manually
-		if idx := strings.LastIndex(str, "+"); idx > 0 {
-			base := str[:idx]
-			offset := str[idx:]
-			if len(offset) == 6 && offset[3] == ':' {
-				hours, _ := strconv.Atoi(offset[1:3])
-				mins, _ := strconv.Atoi(offset[4:6])
-				totalMins := hours*60 + mins
-				loc := time.FixedZone("", totalMins*60)
-				for _, baseLayout := range []string{"2006-01-02T15:04:05.999999999", "2006-01-02T15:04:05"} {
-					if t, err = time.ParseInLocation(baseLayout, base, loc); err == nil {
-						parsed = true
-						if tzId == "" {
-							tzId = offset
-						}
-						break
-					}
-				}
-			}
-		} else if idx := strings.LastIndex(str, "-"); idx > 10 {
-			base := str[:idx]
-			offset := str[idx:]
-			if len(offset) == 6 && offset[3] == ':' {
-				hours, _ := strconv.Atoi(offset[1:3])
-				mins, _ := strconv.Atoi(offset[4:6])
-				totalMins := -(hours*60 + mins)
-				loc := time.FixedZone("", totalMins*60)
-				for _, baseLayout := range []string{"2006-01-02T15:04:05.999999999", "2006-01-02T15:04:05"} {
-					if t, err = time.ParseInLocation(baseLayout, base, loc); err == nil {
-						parsed = true
-						if tzId == "" {
-							tzId = offset
-						}
-						break
-					}
-				}
-			}
-		}
-	}
-
-	if !parsed {
+	if err != nil {
 		return vm.Undefined, vmInstance.NewRangeError("Invalid Temporal.ZonedDateTime string: " + str)
 	}
 
