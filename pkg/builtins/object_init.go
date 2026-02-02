@@ -1614,6 +1614,41 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	case vm.TypeNativeFunction, vm.TypeBoundFunction, vm.TypeAsyncNativeFunction:
 		// For native functions and bound functions, return Function.prototype
 		return vmInstance.FunctionPrototype, nil
+	case vm.TypeTypedArray:
+		// For TypedArrays, return the appropriate TypedArray prototype
+		ta := obj.AsTypedArray()
+		if ta == nil {
+			return vm.Null, nil
+		}
+		switch ta.GetElementType() {
+		case vm.TypedArrayUint8:
+			return vmInstance.Uint8ArrayPrototype, nil
+		case vm.TypedArrayInt8:
+			return vmInstance.Int8ArrayPrototype, nil
+		case vm.TypedArrayUint16:
+			return vmInstance.Uint16ArrayPrototype, nil
+		case vm.TypedArrayInt16:
+			return vmInstance.Int16ArrayPrototype, nil
+		case vm.TypedArrayUint32:
+			return vmInstance.Uint32ArrayPrototype, nil
+		case vm.TypedArrayInt32:
+			return vmInstance.Int32ArrayPrototype, nil
+		case vm.TypedArrayFloat32:
+			return vmInstance.Float32ArrayPrototype, nil
+		case vm.TypedArrayFloat64:
+			return vmInstance.Float64ArrayPrototype, nil
+		case vm.TypedArrayUint8Clamped:
+			return vmInstance.Uint8ClampedArrayPrototype, nil
+		case vm.TypedArrayBigInt64:
+			return vmInstance.BigInt64ArrayPrototype, nil
+		case vm.TypedArrayBigUint64:
+			return vmInstance.BigUint64ArrayPrototype, nil
+		default:
+			return vmInstance.TypedArrayPrototype, nil
+		}
+	case vm.TypeArrayBuffer:
+		// For ArrayBuffers, return Object.prototype (ArrayBuffer doesn't have its own stored prototype)
+		return vmInstance.ObjectPrototype, nil
 	default:
 		// For primitive values, return null
 		return vm.Null, nil

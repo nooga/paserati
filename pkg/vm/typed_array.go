@@ -223,6 +223,14 @@ func NewArrayBuffer(size int) Value {
 	return Value{typ: TypeArrayBuffer, obj: unsafe.Pointer(buffer)}
 }
 
+// NewArrayBufferFromObject creates a Value from an existing ArrayBufferObject
+func NewArrayBufferFromObject(buffer *ArrayBufferObject) Value {
+	if buffer == nil {
+		return Undefined
+	}
+	return Value{typ: TypeArrayBuffer, obj: unsafe.Pointer(buffer)}
+}
+
 func NewTypedArray(kind TypedArrayKind, lengthOrBuffer interface{}, byteOffset, length int) Value {
 	var buffer *ArrayBufferObject
 	var arrayLength int

@@ -46,44 +46,8 @@ func (i *Int32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create Int32Array.prototype inheriting from TypedArray.prototype
 	int32ArrayProto := vm.NewObject(vmInstance.TypedArrayPrototype).AsPlainObject()
 
-	// Add prototype properties
-	int32ArrayProto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(4))
-
-	// Add buffer getter
-	int32ArrayProto.SetOwnNonEnumerable("buffer", vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis()
-		if ta := thisArray.AsTypedArray(); ta != nil {
-			return vm.Value{}, nil // TODO: Return proper ArrayBuffer value
-		}
-		return vm.Undefined, nil
-	}))
-
-	// Add byteLength getter
-	int32ArrayProto.SetOwnNonEnumerable("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis()
-		if ta := thisArray.AsTypedArray(); ta != nil {
-			return vm.Number(float64(ta.GetByteLength())), nil
-		}
-		return vm.Undefined, nil
-	}))
-
-	// Add byteOffset getter
-	int32ArrayProto.SetOwnNonEnumerable("byteOffset", vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis()
-		if ta := thisArray.AsTypedArray(); ta != nil {
-			return vm.Number(float64(ta.GetByteOffset())), nil
-		}
-		return vm.Undefined, nil
-	}))
-
-	// Add length getter
-	int32ArrayProto.SetOwnNonEnumerable("length", vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis()
-		if ta := thisArray.AsTypedArray(); ta != nil {
-			return vm.Number(float64(ta.GetLength())), nil
-		}
-		return vm.Undefined, nil
-	}))
+	// Set up prototype properties with correct descriptors
+	SetupTypedArrayPrototypeProperties(int32ArrayProto, vmInstance, 4)
 
 	// Add set method
 	int32ArrayProto.SetOwnNonEnumerable("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
@@ -255,7 +219,8 @@ func (i *Int32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Create Int32Array constructor
-	ctorWithProps := vm.NewConstructorWithProps(-1, true, "Int32Array", func(args []vm.Value) (vm.Value, error) {
+	// Create Int32Array constructor (length is 3 per ECMAScript spec)
+	ctorWithProps := vm.NewConstructorWithProps(3, true, "Int32Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayInt32, 0, 0, 0), nil
 		}
@@ -301,11 +266,8 @@ func (i *Int32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewTypedArray(vm.TypedArrayInt32, 0, 0, 0), nil
 	})
 
-	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(int32ArrayProto))
-
-	// Add static properties and methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(4))
+	// Set up constructor properties with correct descriptors (BYTES_PER_ELEMENT, prototype)
+	SetupTypedArrayConstructorProperties(ctorWithProps, int32ArrayProto, 4)
 
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {

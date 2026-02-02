@@ -48,44 +48,8 @@ func (i *BigUint64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create BigUint64Array.prototype inheriting from TypedArray.prototype
 	bigUint64ArrayProto := vm.NewObject(vmInstance.TypedArrayPrototype).AsPlainObject()
 
-	// Add prototype properties
-	bigUint64ArrayProto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(8))
-
-	// Add buffer getter
-	bigUint64ArrayProto.SetOwnNonEnumerable("buffer", vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis()
-		if ta := thisArray.AsTypedArray(); ta != nil {
-			return vm.Value{}, nil // TODO: Return proper ArrayBuffer value
-		}
-		return vm.Undefined, nil
-	}))
-
-	// Add byteLength getter
-	bigUint64ArrayProto.SetOwnNonEnumerable("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis()
-		if ta := thisArray.AsTypedArray(); ta != nil {
-			return vm.Number(float64(ta.GetByteLength())), nil
-		}
-		return vm.Undefined, nil
-	}))
-
-	// Add byteOffset getter
-	bigUint64ArrayProto.SetOwnNonEnumerable("byteOffset", vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis()
-		if ta := thisArray.AsTypedArray(); ta != nil {
-			return vm.Number(float64(ta.GetByteOffset())), nil
-		}
-		return vm.Undefined, nil
-	}))
-
-	// Add length getter
-	bigUint64ArrayProto.SetOwnNonEnumerable("length", vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis()
-		if ta := thisArray.AsTypedArray(); ta != nil {
-			return vm.Number(float64(ta.GetLength())), nil
-		}
-		return vm.Undefined, nil
-	}))
+	// Set up prototype properties with correct descriptors (BYTES_PER_ELEMENT, buffer, byteLength, byteOffset, length)
+	SetupTypedArrayPrototypeProperties(bigUint64ArrayProto, vmInstance, 8)
 
 	// Add set method
 	bigUint64ArrayProto.SetOwnNonEnumerable("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
@@ -256,8 +220,8 @@ func (i *BigUint64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return newArray, nil
 	}))
 
-	// Create BigUint64Array constructor
-	ctorWithProps := vm.NewConstructorWithProps(-1, true, "BigUint64Array", func(args []vm.Value) (vm.Value, error) {
+	// Create BigUint64Array constructor (length is 3 per ECMAScript spec)
+	ctorWithProps := vm.NewConstructorWithProps(3, true, "BigUint64Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayBigUint64, 0, 0, 0), nil
 		}
@@ -308,11 +272,8 @@ func (i *BigUint64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewTypedArray(vm.TypedArrayBigUint64, 0, 0, 0), nil
 	})
 
-	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(bigUint64ArrayProto))
-
-	// Add static properties and methods
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(8))
+	// Set up constructor properties with correct descriptors (BYTES_PER_ELEMENT, prototype)
+	SetupTypedArrayConstructorProperties(ctorWithProps, bigUint64ArrayProto, 8)
 
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {

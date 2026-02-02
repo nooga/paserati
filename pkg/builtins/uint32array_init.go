@@ -38,6 +38,9 @@ func (u *Uint32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmx := ctx.VM
 	proto := vm.NewObject(vmx.TypedArrayPrototype).AsPlainObject()
 
+	// Set up prototype properties with correct descriptors (BYTES_PER_ELEMENT, buffer, byteLength, byteOffset, length)
+	SetupTypedArrayPrototypeProperties(proto, vmx, 4)
+
 	proto.SetOwnNonEnumerable("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
 		ta := vmx.GetThis().AsTypedArray()
 		if ta == nil {
@@ -174,7 +177,8 @@ func (u *Uint32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	ctor := vm.NewConstructorWithProps(-1, true, "Uint32Array", func(args []vm.Value) (vm.Value, error) {
+	// constructor (length is 3 per ECMAScript spec)
+	ctor := vm.NewConstructorWithProps(3, true, "Uint32Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayUint32, 0, 0, 0), nil
 		}
@@ -206,7 +210,30 @@ func (u *Uint32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		return vm.NewTypedArray(vm.TypedArrayUint32, 0, 0, 0), nil
 	})
-	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+	// Set up constructor properties with correct descriptors (BYTES_PER_ELEMENT, prototype)
+	SetupTypedArrayConstructorProperties(ctor, proto, 4)
+
+	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
+		if len(args) == 0 {
+			return vm.NewTypedArray(vm.TypedArrayUint32, 0, 0, 0), nil
+		}
+		src := args[0]
+		if a := src.AsArray(); a != nil {
+			vals := make([]vm.Value, a.Length())
+			for i := 0; i < a.Length(); i++ {
+				vals[i] = a.Get(i)
+			}
+			return vm.NewTypedArray(vm.TypedArrayUint32, vals, 0, 0), nil
+		}
+		return vm.NewTypedArray(vm.TypedArrayUint32, 0, 0, 0), nil
+	}))
+
+	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
+		return vm.NewTypedArray(vm.TypedArrayUint32, args, 0, 0), nil
+	}))
+
+	// Set constructor property on prototype
+	proto.SetOwnNonEnumerable("constructor", ctor)
 
 	// Set the constructor's [[Prototype]] to TypedArray (for proper inheritance chain)
 	// This makes Object.getPrototypeOf(Uint32Array) === TypedArray

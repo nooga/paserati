@@ -4,6 +4,78 @@ import (
 	"github.com/nooga/paserati/pkg/vm"
 )
 
+// SetupTypedArrayConstructorProperties sets up the constructor properties with correct descriptors.
+// Per ECMAScript spec:
+// - BYTES_PER_ELEMENT: { writable: false, enumerable: false, configurable: false }
+// - prototype: { writable: false, enumerable: false, configurable: false }
+// - length: { writable: false, enumerable: false, configurable: true } - value is 3
+func SetupTypedArrayConstructorProperties(ctor vm.Value, proto *vm.PlainObject, bytesPerElement int) {
+	props := ctor.AsNativeFunctionWithProps().Properties
+
+	// BYTES_PER_ELEMENT: { writable: false, enumerable: false, configurable: false }
+	w, e, c := false, false, false
+
+	props.DefineOwnProperty("BYTES_PER_ELEMENT", vm.Number(float64(bytesPerElement)), &w, &e, &c)
+
+	// prototype: { writable: false, enumerable: false, configurable: false }
+	props.DefineOwnProperty("prototype", vm.NewValueFromPlainObject(proto), &w, &e, &c)
+}
+
+// SetupTypedArrayPrototypeProperties sets up the prototype properties with correct descriptors.
+// Per ECMAScript spec:
+// - BYTES_PER_ELEMENT: { writable: false, enumerable: false, configurable: false }
+// - buffer, byteLength, byteOffset, length are getters that throw TypeError on non-TypedArray
+func SetupTypedArrayPrototypeProperties(proto *vm.PlainObject, vmInstance *vm.VM, bytesPerElement int) {
+	// BYTES_PER_ELEMENT: { writable: false, enumerable: false, configurable: false }
+	w, e, c := false, false, false
+	proto.DefineOwnProperty("BYTES_PER_ELEMENT", vm.Number(float64(bytesPerElement)), &w, &e, &c)
+
+	// buffer getter - throws TypeError if this is not a TypedArray
+	bufferGetter := vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis()
+		ta := thisArray.AsTypedArray()
+		if ta == nil {
+			return vm.Undefined, vmInstance.NewTypeError("get TypedArray.prototype.buffer called on incompatible receiver")
+		}
+		// Return the ArrayBuffer as a Value
+		return vm.NewArrayBufferFromObject(ta.GetBuffer()), nil
+	})
+	proto.DefineAccessorProperty("buffer", bufferGetter, true, vm.Undefined, false, &e, &c)
+
+	// byteLength getter - throws TypeError if this is not a TypedArray
+	byteLengthGetter := vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis()
+		ta := thisArray.AsTypedArray()
+		if ta == nil {
+			return vm.Undefined, vmInstance.NewTypeError("get TypedArray.prototype.byteLength called on incompatible receiver")
+		}
+		return vm.Number(float64(ta.GetByteLength())), nil
+	})
+	proto.DefineAccessorProperty("byteLength", byteLengthGetter, true, vm.Undefined, false, &e, &c)
+
+	// byteOffset getter - throws TypeError if this is not a TypedArray
+	byteOffsetGetter := vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis()
+		ta := thisArray.AsTypedArray()
+		if ta == nil {
+			return vm.Undefined, vmInstance.NewTypeError("get TypedArray.prototype.byteOffset called on incompatible receiver")
+		}
+		return vm.Number(float64(ta.GetByteOffset())), nil
+	})
+	proto.DefineAccessorProperty("byteOffset", byteOffsetGetter, true, vm.Undefined, false, &e, &c)
+
+	// length getter - throws TypeError if this is not a TypedArray
+	lengthGetter := vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis()
+		ta := thisArray.AsTypedArray()
+		if ta == nil {
+			return vm.Undefined, vmInstance.NewTypeError("get TypedArray.prototype.length called on incompatible receiver")
+		}
+		return vm.Number(float64(ta.GetLength())), nil
+	})
+	proto.DefineAccessorProperty("length", lengthGetter, true, vm.Undefined, false, &e, &c)
+}
+
 // SetupTypedArrayPrototype adds common TypedArray prototype methods to the given prototype object.
 // This should be called after setting up the type-specific properties.
 func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {

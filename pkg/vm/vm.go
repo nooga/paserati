@@ -259,8 +259,9 @@ type VM struct {
 	// TypedArray prototypes
 	TypedArrayConstructor   Value // Abstract %TypedArray% constructor - all typed arrays inherit from this
 	TypedArrayPrototype     Value // Abstract %TypedArray%.prototype - all typed arrays inherit from this
-	Uint8ArrayPrototype     Value
-	Int8ArrayPrototype      Value
+	Uint8ArrayPrototype        Value
+	Uint8ClampedArrayPrototype Value
+	Int8ArrayPrototype         Value
 	Int16ArrayPrototype     Value
 	Uint16ArrayPrototype    Value
 	Uint32ArrayPrototype    Value

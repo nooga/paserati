@@ -38,38 +38,8 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmx := ctx.VM
 	proto := vm.NewObject(vmx.TypedArrayPrototype).AsPlainObject()
 
-	proto.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(1))
-
-	// accessors
-	proto.SetOwnNonEnumerable("buffer", vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
-		thisVal := vmx.GetThis()
-		if ta := thisVal.AsTypedArray(); ta != nil {
-			// property_helpers exposes wrapping via Value{TypeArrayBuffer, ptr}; reuse by reading through a temporary Value
-			// We cannot construct directly here, so delegate to accessing a dummy object's 'buffer' property would be overkill.
-			// Instead, rely on opGetProp special-cased path already implemented; return undefined here to prefer that path.
-			// But to be practical, just return undefined and allow general get to handle it.
-			return vm.Undefined, nil
-		}
-		return vm.Undefined, nil
-	}))
-	proto.SetOwnNonEnumerable("byteLength", vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
-		if ta := vmx.GetThis().AsTypedArray(); ta != nil {
-			return vm.Number(float64(ta.GetByteLength())), nil
-		}
-		return vm.Undefined, nil
-	}))
-	proto.SetOwnNonEnumerable("byteOffset", vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
-		if ta := vmx.GetThis().AsTypedArray(); ta != nil {
-			return vm.Number(float64(ta.GetByteOffset())), nil
-		}
-		return vm.Undefined, nil
-	}))
-	proto.SetOwnNonEnumerable("length", vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
-		if ta := vmx.GetThis().AsTypedArray(); ta != nil {
-			return vm.Number(float64(ta.GetLength())), nil
-		}
-		return vm.Undefined, nil
-	}))
+	// Set up prototype properties with correct descriptors (BYTES_PER_ELEMENT, buffer, byteLength, byteOffset, length)
+	SetupTypedArrayPrototypeProperties(proto, vmx, 1)
 
 	// set
 	proto.SetOwnNonEnumerable("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
@@ -212,8 +182,8 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	// constructor
-	ctor := vm.NewConstructorWithProps(-1, true, "Int8Array", func(args []vm.Value) (vm.Value, error) {
+	// constructor (length is 3 per ECMAScript spec)
+	ctor := vm.NewConstructorWithProps(3, true, "Int8Array", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayInt8, 0, 0, 0), nil
 		}
@@ -245,8 +215,8 @@ func (i *Int8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		return vm.NewTypedArray(vm.TypedArrayInt8, 0, 0, 0), nil
 	})
-	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
-	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("BYTES_PER_ELEMENT", vm.Number(1))
+	// Set up constructor properties with correct descriptors (BYTES_PER_ELEMENT, prototype)
+	SetupTypedArrayConstructorProperties(ctor, proto, 1)
 	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayInt8, 0, 0, 0), nil
