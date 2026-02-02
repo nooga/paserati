@@ -766,6 +766,20 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			setObj.Properties.SetOwn(propName, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
+	case TypeArrayBuffer:
+		// ArrayBuffer objects can have user-defined properties (e.g., constructor override)
+		ab := objVal.AsArrayBuffer()
+		if ab != nil {
+			ab.SetOwnProperty(propName, *valueToSet)
+		}
+		return true, InterpretOK, *valueToSet
+	case TypeSharedArrayBuffer:
+		// SharedArrayBuffer objects can have user-defined properties (e.g., constructor override)
+		sab := objVal.AsSharedArrayBuffer()
+		if sab != nil {
+			sab.SetOwnProperty(propName, *valueToSet)
+		}
+		return true, InterpretOK, *valueToSet
 	default:
 		// Check if value is a PlainObject (TypeObject)
 		if objVal.Type() != TypeObject {

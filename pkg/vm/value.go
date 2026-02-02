@@ -76,6 +76,7 @@ const (
 	TypeWeakMap
 	TypeWeakSet
 	TypeArrayBuffer
+	TypeSharedArrayBuffer
 	TypeTypedArray
 	TypeProxy
 	TypeHole          // Internal marker for array holes (sparse arrays)
@@ -133,6 +134,8 @@ func (vt ValueType) String() string {
 		return "weakset"
 	case TypeArrayBuffer:
 		return "arraybuffer"
+	case TypeSharedArrayBuffer:
+		return "sharedarraybuffer"
 	case TypeTypedArray:
 		return "typed array"
 	case TypeProxy:
@@ -595,7 +598,7 @@ func (v Value) IsBoolean() bool {
 }
 
 func (v Value) IsObject() bool {
-	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeAsyncGenerator || v.typ == TypePromise || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer || v.typ == TypeProxy || v.typ == TypeMap || v.typ == TypeSet || v.typ == TypeWeakMap || v.typ == TypeWeakSet
+	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeAsyncGenerator || v.typ == TypePromise || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeArrayBuffer || v.typ == TypeSharedArrayBuffer || v.typ == TypeProxy || v.typ == TypeMap || v.typ == TypeSet || v.typ == TypeWeakMap || v.typ == TypeWeakSet
 }
 
 func (v Value) IsDictObject() bool {
@@ -661,7 +664,7 @@ func (v Value) TypeName() string {
 		return "object"
 	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeTypedArray,
 		TypeGenerator, TypeAsyncGenerator, TypePromise, TypeMap, TypeSet, TypeArrayBuffer,
-		TypeWeakMap, TypeWeakSet:
+		TypeSharedArrayBuffer, TypeWeakMap, TypeWeakSet:
 		return "object"
 	default:
 		return fmt.Sprintf("<unknown type: %d>", v.typ)
@@ -967,6 +970,8 @@ func (v Value) ToString() string {
 		return "/(?:)/"
 	case TypeArrayBuffer:
 		return "[object ArrayBuffer]"
+	case TypeSharedArrayBuffer:
+		return "[object SharedArrayBuffer]"
 	case TypeTypedArray:
 		ta := v.AsTypedArray()
 		if ta != nil {
@@ -1074,7 +1079,7 @@ func (v Value) ToFloat() float64 {
 		return 0
 	case TypeString:
 		return parseStringToNumber(v.AsString())
-	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeMap, TypeSet, TypeArrayBuffer, TypeTypedArray, TypeProxy:
+	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeMap, TypeSet, TypeArrayBuffer, TypeSharedArrayBuffer, TypeTypedArray, TypeProxy:
 		// Special case for Date objects - directly get timestamp
 		if obj := v.AsPlainObject(); obj != nil {
 			if timestampValue, exists := obj.GetOwn("__timestamp__"); exists {
@@ -1421,7 +1426,7 @@ func (v Value) IsFalsey() bool {
 		return v.AsBigInt().Cmp(bigZero) == 0
 	case TypeString:
 		return v.AsString() == ""
-	case TypeSymbol, TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeRegExp, TypeProxy, TypePromise, TypeMap, TypeSet, TypeDictObject, TypeBoundFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction, TypeGenerator, TypeAsyncGenerator, TypeArrayBuffer, TypeTypedArray:
+	case TypeSymbol, TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeRegExp, TypeProxy, TypePromise, TypeMap, TypeSet, TypeDictObject, TypeBoundFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction, TypeGenerator, TypeAsyncGenerator, TypeArrayBuffer, TypeSharedArrayBuffer, TypeTypedArray:
 		// All object types (including symbols, regex, proxies, promises, maps, sets, etc.) are truthy
 		return false
 	default:

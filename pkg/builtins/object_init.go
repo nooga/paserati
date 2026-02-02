@@ -442,6 +442,12 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			builtinTag = "Generator"
 		case vm.TypeArguments:
 			builtinTag = "Arguments"
+		case vm.TypeSharedArrayBuffer:
+			builtinTag = "SharedArrayBuffer"
+		case vm.TypeArrayBuffer:
+			builtinTag = "ArrayBuffer"
+		case vm.TypeTypedArray:
+			builtinTag = "TypedArray" // Will be overridden by @@toStringTag from prototype
 		case vm.TypeObject:
 			// Check for wrapper objects with [[PrimitiveValue]] or [[ErrorData]]
 			if plainObj := thisValue.AsPlainObject(); plainObj != nil {
@@ -622,6 +628,13 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return po.GetPrototype(), nil
 			}
 			return vm.Null, nil
+		case vm.TypeArrayBuffer:
+			return vmInstance.ObjectPrototype, nil
+		case vm.TypeSharedArrayBuffer:
+			return vmInstance.SharedArrayBufferPrototype, nil
+		case vm.TypeTypedArray:
+			// Delegate to objectGetPrototypeOfWithVM for typed arrays
+			return objectGetPrototypeOfWithVM(vmInstance, []vm.Value{thisValue})
 		}
 		// For primitives, return their prototype
 		switch thisValue.Type() {
@@ -1649,6 +1662,9 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	case vm.TypeArrayBuffer:
 		// For ArrayBuffers, return Object.prototype (ArrayBuffer doesn't have its own stored prototype)
 		return vmInstance.ObjectPrototype, nil
+	case vm.TypeSharedArrayBuffer:
+		// For SharedArrayBuffers, return SharedArrayBuffer.prototype
+		return vmInstance.SharedArrayBufferPrototype, nil
 	default:
 		// For primitive values, return null
 		return vm.Null, nil

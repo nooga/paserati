@@ -217,6 +217,32 @@ func (u *Uint32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			return vm.NewTypedArray(vm.TypedArrayUint32, buf, off, ln), nil
 		}
+		if sab := arg.AsSharedArrayBuffer(); sab != nil {
+			off := 0
+			if len(args) > 1 {
+				var err error
+				off, err = ValidateTypedArrayByteOffsetShared(vmx, args[1], 4)
+				if err != nil {
+					if err == ErrVMUnwinding {
+						return vm.Undefined, nil
+					}
+					return vm.Undefined, err
+				}
+			}
+			ln := -1
+			if len(args) > 2 && !args[2].IsUndefined() {
+				ln = int(args[2].ToFloat())
+			}
+			if ln == -1 {
+				if err := ValidateTypedArrayBufferAlignmentShared(vmx, sab, off, 4); err != nil {
+					if err == ErrVMUnwinding {
+						return vm.Undefined, nil
+					}
+					return vm.Undefined, err
+				}
+			}
+			return vm.NewTypedArray(vm.TypedArrayUint32, sab, off, ln), nil
+		}
 		if arr := arg.AsArray(); arr != nil {
 			vals := make([]vm.Value, arr.Length())
 			for i := 0; i < arr.Length(); i++ {

@@ -103,12 +103,83 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 			start = end
 		}
 
-		// Create new ArrayBuffer with sliced data
 		sliceLength := end - start
-		newBuffer := vm.NewArrayBuffer(sliceLength)
-		if newBufferObj := newBuffer.AsArrayBuffer(); newBufferObj != nil {
-			copy(newBufferObj.GetData(), data[start:end])
+
+		// SpeciesConstructor algorithm (ECMAScript 7.3.20)
+		// Step 1-2: Get constructor property
+		var ctor vm.Value
+		if buffer.HasOwnProperty("constructor") {
+			ctor, _ = buffer.GetOwnProperty("constructor")
+		} else {
+			// Check prototype chain for constructor
+			ctor, _ = vmInstance.GetProperty(thisBuffer, "constructor")
 		}
+
+		// Step 4: If C is undefined, use default constructor
+		if ctor.IsUndefined() {
+			// Use default ArrayBuffer constructor
+			newBuffer := vm.NewArrayBuffer(sliceLength)
+			if newBufferObj := newBuffer.AsArrayBuffer(); newBufferObj != nil {
+				copy(newBufferObj.GetData(), data[start:end])
+			}
+			return newBuffer, nil
+		}
+
+		// Step 5: If Type(C) is not Object, throw TypeError
+		if !ctor.IsObject() && !ctor.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("ArrayBuffer.prototype.slice: constructor property is not an object")
+		}
+
+		// Step 6: Get [Symbol.species] from constructor
+		var species vm.Value
+		if ctor.IsObject() {
+			if po := ctor.AsPlainObject(); po != nil {
+				species, _ = po.GetOwnByKey(vm.NewSymbolKey(vmInstance.SymbolSpecies))
+			}
+		}
+		if species.Type() == 0 || species.IsUndefined() {
+			// Try to get Symbol.species via GetProperty which handles symbol lookup
+			species, _ = vmInstance.GetProperty(ctor, string(vmInstance.SymbolSpecies.AsSymbol()))
+		}
+
+		// Step 7: If species is null or undefined, use default constructor
+		if species.Type() == 0 || species.IsUndefined() || species.Type() == vm.TypeNull {
+			newBuffer := vm.NewArrayBuffer(sliceLength)
+			if newBufferObj := newBuffer.AsArrayBuffer(); newBufferObj != nil {
+				copy(newBufferObj.GetData(), data[start:end])
+			}
+			return newBuffer, nil
+		}
+
+		// Step 8: If species is not a constructor, throw TypeError
+		if !vmInstance.IsConstructor(species) {
+			return vm.Undefined, vmInstance.NewTypeError("ArrayBuffer.prototype.slice: @@species is not a constructor")
+		}
+
+		// Step 9: Call the species constructor with sliceLength
+		newBuffer, err := vmInstance.Construct(species, []vm.Value{vm.Number(float64(sliceLength))})
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		// Validate that the result is an ArrayBuffer
+		newBufferObj := newBuffer.AsArrayBuffer()
+		if newBufferObj == nil {
+			return vm.Undefined, vmInstance.NewTypeError("ArrayBuffer.prototype.slice: species constructor did not return an ArrayBuffer")
+		}
+
+		// Check that we didn't get the same buffer back
+		if newBufferObj == buffer {
+			return vm.Undefined, vmInstance.NewTypeError("ArrayBuffer.prototype.slice: species constructor returned same buffer")
+		}
+
+		// Check that the new buffer is big enough
+		if len(newBufferObj.GetData()) < sliceLength {
+			return vm.Undefined, vmInstance.NewTypeError("ArrayBuffer.prototype.slice: species constructor returned a buffer that is too small")
+		}
+
+		// Copy the data
+		copy(newBufferObj.GetData(), data[start:end])
 
 		return newBuffer, nil
 	}))
@@ -143,6 +214,9 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Set constructor property on prototype
 	arrayBufferProto.SetOwnNonEnumerable("constructor", ctorWithProps)
+
+	// Set ArrayBuffer prototype in VM for proper prototype chain lookups
+	vmInstance.ArrayBufferPrototype = vm.NewValueFromPlainObject(arrayBufferProto)
 
 	// Register ArrayBuffer constructor as global
 	return ctx.DefineGlobal("ArrayBuffer", ctorWithProps)

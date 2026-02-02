@@ -268,8 +268,10 @@ type VM struct {
 	Int32ArrayPrototype     Value
 	Float32ArrayPrototype   Value
 	Float64ArrayPrototype   Value
-	BigInt64ArrayPrototype  Value
-	BigUint64ArrayPrototype Value
+	BigInt64ArrayPrototype      Value
+	BigUint64ArrayPrototype     Value
+	ArrayBufferPrototype        Value
+	SharedArrayBufferPrototype  Value
 
 	// Flag to disable method binding during Function.prototype.call to prevent infinite recursion
 	disableMethodBinding bool
@@ -6448,6 +6450,35 @@ startExecution:
 
 			case TypeSet, TypeMap:
 				// Sets and Maps support property access via prototype chain (for methods like Symbol.iterator)
+				switch indexVal.Type() {
+				case TypeString:
+					key := AsString(indexVal)
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
+					}
+				case TypeSymbol:
+					if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, indexVal, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
+					}
+				default:
+					// Convert to string for property access
+					key := indexVal.ToString()
+					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
+					}
+				}
+
+			case TypeSharedArrayBuffer, TypeArrayBuffer:
+				// SharedArrayBuffer and ArrayBuffer support property access via prototype chain
 				switch indexVal.Type() {
 				case TypeString:
 					key := AsString(indexVal)

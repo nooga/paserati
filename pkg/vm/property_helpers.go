@@ -720,6 +720,17 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 		}
 	}
 
+	// Handle SharedArrayBuffer properties
+	if objVal.Type() == TypeSharedArrayBuffer {
+		buffer := objVal.AsSharedArrayBuffer()
+		if buffer != nil {
+			switch propName {
+			case "byteLength":
+				return Number(float64(buffer.ByteLength())), true
+			}
+		}
+	}
+
 	// Handle TypedArray properties
 	if objVal.Type() == TypeTypedArray {
 		ta := objVal.AsTypedArray()

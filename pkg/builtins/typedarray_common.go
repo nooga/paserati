@@ -71,6 +71,48 @@ func ValidateTypedArrayBufferAlignment(vmInstance *vm.VM, buffer *vm.ArrayBuffer
 	return nil
 }
 
+// ValidateTypedArrayByteOffsetShared is the SharedArrayBuffer version of ValidateTypedArrayByteOffset
+func ValidateTypedArrayByteOffsetShared(vmInstance *vm.VM, byteOffsetArg vm.Value, elementSize int) (int, error) {
+	// If undefined, default to 0
+	if byteOffsetArg.IsUndefined() {
+		return 0, nil
+	}
+
+	// Call ToInteger which properly invokes valueOf() through ToPrimitive
+	offset, err := toIntegerOrInfinityWithVM(vmInstance, byteOffsetArg)
+	if err != nil {
+		return 0, err
+	}
+
+	// Step 8: If offset < 0, throw a RangeError
+	if offset < 0 {
+		return 0, vmInstance.NewRangeError("Start offset is negative")
+	}
+
+	// Step 10: If offset modulo elementSize ≠ 0, throw a RangeError
+	if elementSize > 1 && offset%elementSize != 0 {
+		return 0, vmInstance.NewRangeError(fmt.Sprintf("Start offset of %s should be a multiple of %d", getTypedArrayNameFromElementSize(elementSize), elementSize))
+	}
+
+	return offset, nil
+}
+
+// ValidateTypedArrayBufferAlignmentShared is the SharedArrayBuffer version of ValidateTypedArrayBufferAlignment
+func ValidateTypedArrayBufferAlignmentShared(vmInstance *vm.VM, buffer *vm.SharedArrayBufferObject, byteOffset, elementSize int) error {
+	bufferByteLength := len(buffer.GetData())
+	remainingBytes := bufferByteLength - byteOffset
+
+	if remainingBytes < 0 {
+		return vmInstance.NewRangeError("Start offset is outside the bounds of the buffer")
+	}
+
+	if remainingBytes%elementSize != 0 {
+		return vmInstance.NewRangeError(fmt.Sprintf("Byte length of %s should be a multiple of %d", getTypedArrayNameFromElementSize(elementSize), elementSize))
+	}
+
+	return nil
+}
+
 // SetupTypedArrayConstructorProperties sets up the constructor properties with correct descriptors.
 // Per ECMAScript spec:
 // - BYTES_PER_ELEMENT: { writable: false, enumerable: false, configurable: false }
@@ -104,7 +146,10 @@ func SetupTypedArrayPrototypeProperties(proto *vm.PlainObject, vmInstance *vm.VM
 		if ta == nil {
 			return vm.Undefined, vmInstance.NewTypeError("get TypedArray.prototype.buffer called on incompatible receiver")
 		}
-		// Return the ArrayBuffer as a Value
+		// Return the ArrayBuffer or SharedArrayBuffer as a Value
+		if ta.IsSharedBuffer() {
+			return vm.NewSharedArrayBufferFromObject(ta.GetSharedBuffer()), nil
+		}
 		return vm.NewArrayBufferFromObject(ta.GetBuffer()), nil
 	})
 	proto.DefineAccessorProperty("buffer", bufferGetter, true, vm.Undefined, false, &e, &c)

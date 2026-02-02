@@ -270,6 +270,33 @@ func (u *Uint16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewTypedArray(vm.TypedArrayUint16, buffer, byteOffset, length), nil
 		}
 
+		if sab := arg.AsSharedArrayBuffer(); sab != nil {
+			byteOffset := 0
+			if len(args) > 1 {
+				var err error
+				byteOffset, err = ValidateTypedArrayByteOffsetShared(vmInstance, args[1], 2)
+				if err != nil {
+					if err == ErrVMUnwinding {
+						return vm.Undefined, nil
+					}
+					return vm.Undefined, err
+				}
+			}
+			length := -1
+			if len(args) > 2 && !args[2].IsUndefined() {
+				length = int(args[2].ToFloat())
+			}
+			if length == -1 {
+				if err := ValidateTypedArrayBufferAlignmentShared(vmInstance, sab, byteOffset, 2); err != nil {
+					if err == ErrVMUnwinding {
+						return vm.Undefined, nil
+					}
+					return vm.Undefined, err
+				}
+			}
+			return vm.NewTypedArray(vm.TypedArrayUint16, sab, byteOffset, length), nil
+		}
+
 		if sourceArray := arg.AsArray(); sourceArray != nil {
 			// Uint16Array(array)
 			values := make([]vm.Value, sourceArray.Length())

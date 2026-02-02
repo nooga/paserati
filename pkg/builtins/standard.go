@@ -57,6 +57,7 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &TemporalInitializer{})
 	initializers = append(initializers, &PerformanceInitializer{})
 	initializers = append(initializers, &ArrayBufferInitializer{})
+	initializers = append(initializers, &SharedArrayBufferInitializer{})
 	initializers = append(initializers, &TypedArrayInitializer{}) // Abstract TypedArray base - must come before specific TypedArrays
 	initializers = append(initializers, &Uint8ArrayInitializer{})
 	initializers = append(initializers, &Uint8ClampedArrayInitializer{})

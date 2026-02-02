@@ -271,6 +271,33 @@ func (i *BigUint64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewTypedArray(vm.TypedArrayBigUint64, buffer, byteOffset, length), nil
 		}
 
+		if sab := arg.AsSharedArrayBuffer(); sab != nil {
+			byteOffset := 0
+			if len(args) > 1 {
+				var err error
+				byteOffset, err = ValidateTypedArrayByteOffsetShared(vmInstance, args[1], 8)
+				if err != nil {
+					if err == ErrVMUnwinding {
+						return vm.Undefined, nil
+					}
+					return vm.Undefined, err
+				}
+			}
+			length := -1
+			if len(args) > 2 && !args[2].IsUndefined() {
+				length = int(args[2].ToFloat())
+			}
+			if length == -1 {
+				if err := ValidateTypedArrayBufferAlignmentShared(vmInstance, sab, byteOffset, 8); err != nil {
+					if err == ErrVMUnwinding {
+						return vm.Undefined, nil
+					}
+					return vm.Undefined, err
+				}
+			}
+			return vm.NewTypedArray(vm.TypedArrayBigUint64, sab, byteOffset, length), nil
+		}
+
 		if sourceArray := arg.AsArray(); sourceArray != nil {
 			// BigUint64Array(array)
 			values := make([]vm.Value, sourceArray.Length())
