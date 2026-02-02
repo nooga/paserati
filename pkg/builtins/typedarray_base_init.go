@@ -156,24 +156,76 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		return result, nil
 	}
 
-	// Helper function for SpeciesConstructor validation (partial implementation)
-	// ECMAScript 7.3.20 SpeciesConstructor steps 2-4
-	// Returns error if constructor property is not undefined and not an Object
-	validateSpeciesConstructor := func(thisVal vm.Value) error {
-		// Get the constructor property using VM's property access
+	// TypedArraySpeciesCreate implements ECMAScript 22.2.4.7 TypedArraySpeciesCreate
+	// It creates a new TypedArray using the species constructor if available
+	// Returns the new TypedArray value and any error
+	typedArraySpeciesCreate := func(thisVal vm.Value, elementType vm.TypedArrayKind, elements []vm.Value) (vm.Value, error) {
+		ta := thisVal.AsTypedArray()
+		if ta == nil {
+			// Use default: create directly
+			return vm.NewTypedArray(elementType, elements, 0, 0), nil
+		}
+
+		// Step 2: Get constructor property
 		ctorVal, err := vmInstance.GetProperty(thisVal, "constructor")
 		if err != nil {
-			return err
+			return vm.Undefined, err
 		}
+
+		// Step 3: If C is undefined, use default constructor
 		if ctorVal.IsUndefined() {
-			// Step 3: If C is undefined, return defaultConstructor (no error)
-			return nil
+			return vm.NewTypedArray(elementType, elements, 0, 0), nil
 		}
-		// Step 4: If Type(C) is not Object, throw a TypeError exception
+
+		// Step 4: If C is not an Object, throw TypeError
 		if !ctorVal.IsObject() && !ctorVal.IsCallable() {
-			return vmInstance.NewTypeError("TypedArray.prototype method called on array with invalid constructor")
+			return vm.Undefined, vmInstance.NewTypeError("TypedArray.prototype method called on array with invalid constructor")
 		}
-		return nil
+
+		// Step 5: Get Symbol.species from constructor
+		var species vm.Value
+		speciesVal, found, err := vmInstance.GetSymbolPropertyWithGetter(ctorVal, vmInstance.SymbolSpecies)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if found {
+			species = speciesVal
+		}
+
+		// Step 6: If species is undefined or null, use default constructor
+		if species.Type() == 0 || species.IsUndefined() || species.Type() == vm.TypeNull {
+			return vm.NewTypedArray(elementType, elements, 0, 0), nil
+		}
+
+		// Step 7: If species is not a constructor, throw TypeError
+		if !vmInstance.IsConstructor(species) {
+			return vm.Undefined, vmInstance.NewTypeError("@@species is not a constructor")
+		}
+
+		// Step 8: Call species constructor with the length argument
+		lengthArg := vm.Number(float64(len(elements)))
+		result, err := vmInstance.Construct(species, []vm.Value{lengthArg})
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		// Verify result is a TypedArray
+		newTA := result.AsTypedArray()
+		if newTA == nil {
+			return vm.Undefined, vmInstance.NewTypeError("@@species constructor did not return a TypedArray")
+		}
+
+		// Step 3a of TypedArrayCreate: If the new array's length < requested length, throw TypeError
+		if newTA.GetLength() < len(elements) {
+			return vm.Undefined, vmInstance.NewTypeError("TypedArray species constructor returned array with insufficient length")
+		}
+
+		// Copy elements to the new TypedArray
+		for i, elem := range elements {
+			newTA.SetElement(i, elem)
+		}
+
+		return result, nil
 	}
 
 	// Helper function for ToBigInt - throws TypeError for null, undefined, Number, Symbol
@@ -601,13 +653,8 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			}
 		}
 
-		// Step 10: TypedArraySpeciesCreate - validate constructor property
-		if err := validateSpeciesConstructor(thisArray); err != nil {
-			return vm.Undefined, err
-		}
-
-		// Create new TypedArray of same type with filtered elements
-		return vm.NewTypedArray(ta.GetElementType(), kept, 0, 0), nil
+		// Step 10: TypedArraySpeciesCreate
+		return typedArraySpeciesCreate(thisArray, ta.GetElementType(), kept)
 	}))
 
 	// map(callback, thisArg?) - returns new array with mapped elements
@@ -635,13 +682,8 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			mapped[i] = result
 		}
 
-		// Step 6: TypedArraySpeciesCreate - validate constructor property
-		if err := validateSpeciesConstructor(thisArray); err != nil {
-			return vm.Undefined, err
-		}
-
-		// Create new TypedArray of same type with mapped elements
-		return vm.NewTypedArray(ta.GetElementType(), mapped, 0, 0), nil
+		// Step 6: TypedArraySpeciesCreate
+		return typedArraySpeciesCreate(thisArray, ta.GetElementType(), mapped)
 	}))
 
 	// reduce(callback, initialValue?) - reduces array to single value
@@ -1198,15 +1240,59 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			start = end
 		}
 
-		// Step 14: TypedArraySpeciesCreate - validate constructor property
-		if err := validateSpeciesConstructor(thisArray); err != nil {
+		// Step 14-15: TypedArraySpeciesCreate with buffer, byteOffset, length args
+		length := end - start
+		byteStart := ta.GetByteOffset() + start*ta.GetBytesPerElement()
+
+		// Get species constructor
+		ctorVal, err := vmInstance.GetProperty(thisArray, "constructor")
+		if err != nil {
 			return vm.Undefined, err
 		}
 
-		// Create new view into same buffer
-		byteStart := ta.GetByteOffset() + start*ta.GetBytesPerElement()
-		length := end - start
-		return vm.NewTypedArray(ta.GetElementType(), ta.GetBuffer(), byteStart, length), nil
+		if ctorVal.IsUndefined() {
+			// Use default: create view directly
+			return vm.NewTypedArray(ta.GetElementType(), ta.GetBuffer(), byteStart, length), nil
+		}
+
+		if !ctorVal.IsObject() && !ctorVal.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("TypedArray.prototype.subarray called on array with invalid constructor")
+		}
+
+		// Get Symbol.species from constructor
+		var species vm.Value
+		speciesVal, found, err := vmInstance.GetSymbolPropertyWithGetter(ctorVal, vmInstance.SymbolSpecies)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if found {
+			species = speciesVal
+		}
+
+		// If species is undefined or null, use default constructor
+		if species.Type() == 0 || species.IsUndefined() || species.Type() == vm.TypeNull {
+			return vm.NewTypedArray(ta.GetElementType(), ta.GetBuffer(), byteStart, length), nil
+		}
+
+		if !vmInstance.IsConstructor(species) {
+			return vm.Undefined, vmInstance.NewTypeError("@@species is not a constructor")
+		}
+
+		// Call species constructor with (buffer, byteOffset, length) arguments
+		bufferArg := vm.NewArrayBufferFromObject(ta.GetBuffer())
+		byteOffsetArg := vm.Number(float64(byteStart))
+		lengthArg := vm.Number(float64(length))
+		result, err := vmInstance.Construct(species, []vm.Value{bufferArg, byteOffsetArg, lengthArg})
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		// Verify result is a TypedArray
+		if result.AsTypedArray() == nil {
+			return vm.Undefined, vmInstance.NewTypeError("@@species constructor did not return a TypedArray")
+		}
+
+		return result, nil
 	}))
 
 	// slice(begin?, end?) - returns a new array with copied elements
@@ -1256,21 +1342,14 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			start = end
 		}
 
-		// Step 12: TypedArraySpeciesCreate - validate constructor property
-		if err := validateSpeciesConstructor(thisArray); err != nil {
-			return vm.Undefined, err
-		}
-
-		// Create new array with copied data
+		// Step 12: Collect elements and use TypedArraySpeciesCreate
 		length := end - start
-		newArray := vm.NewTypedArray(ta.GetElementType(), length, 0, 0)
-		if newTA := newArray.AsTypedArray(); newTA != nil {
-			for i := 0; i < length; i++ {
-				newTA.SetElement(i, ta.GetElement(start+i))
-			}
+		elements := make([]vm.Value, length)
+		for i := 0; i < length; i++ {
+			elements[i] = ta.GetElement(start + i)
 		}
 
-		return newArray, nil
+		return typedArraySpeciesCreate(thisArray, ta.GetElementType(), elements)
 	}))
 
 	// findLast(callback, thisArg?) - returns last element where callback returns true

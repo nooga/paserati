@@ -497,11 +497,61 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < ta.GetLength() {
 				return ta.GetElement(idx), nil
 			}
-			// Check TypedArray prototype
-			if vm.TypedArrayPrototype.IsObject() {
-				proto := vm.TypedArrayPrototype.AsPlainObject()
-				if v, ok := proto.Get(propName); ok {
-					return v, nil
+			// Get the specific TypedArray prototype based on element type
+			var proto Value
+			switch ta.GetElementType() {
+			case TypedArrayInt8:
+				proto = vm.Int8ArrayPrototype
+			case TypedArrayUint8:
+				proto = vm.Uint8ArrayPrototype
+			case TypedArrayUint8Clamped:
+				proto = vm.Uint8ClampedArrayPrototype
+			case TypedArrayInt16:
+				proto = vm.Int16ArrayPrototype
+			case TypedArrayUint16:
+				proto = vm.Uint16ArrayPrototype
+			case TypedArrayInt32:
+				proto = vm.Int32ArrayPrototype
+			case TypedArrayUint32:
+				proto = vm.Uint32ArrayPrototype
+			case TypedArrayFloat32:
+				proto = vm.Float32ArrayPrototype
+			case TypedArrayFloat64:
+				proto = vm.Float64ArrayPrototype
+			case TypedArrayBigInt64:
+				proto = vm.BigInt64ArrayPrototype
+			case TypedArrayBigUint64:
+				proto = vm.BigUint64ArrayPrototype
+			default:
+				proto = vm.TypedArrayPrototype
+			}
+			// Check prototype chain - need to check for accessors (getters) first
+			if proto.IsObject() {
+				cur := proto.AsPlainObject()
+				for cur != nil {
+					// Check for accessor (getter) first
+					if getter, _, _, _, ok := cur.GetOwnAccessor(propName); ok {
+						if getter.Type() != TypeUndefined {
+							// Call the getter with this=obj (the TypedArray)
+							result, err := vm.Call(getter, obj, nil)
+							if err != nil {
+								return Undefined, err
+							}
+							return result, nil
+						}
+						// Accessor exists but no getter - return undefined
+						return Undefined, nil
+					}
+					// Check for regular property
+					if v, ok := cur.GetOwn(propName); ok {
+						return v, nil
+					}
+					// Walk prototype chain
+					protoVal := cur.GetPrototype()
+					if protoVal.Type() != TypeObject {
+						break
+					}
+					cur = protoVal.AsPlainObject()
 				}
 			}
 		}

@@ -647,6 +647,20 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		// Walk the prototype chain to find the method (handles inheritance like TypedArray.prototype -> Uint8Array.prototype)
 		current := prototype
 		for current != nil {
+			// Check for accessor (getter) first
+			if getter, _, _, _, exists := current.GetOwnAccessor(propName); exists {
+				if getter.Type() != TypeUndefined {
+					// Call the getter with the original object as 'this'
+					result, err := vm.Call(getter, objVal, nil)
+					if err != nil {
+						return Undefined, false
+					}
+					return result, true
+				}
+				// Accessor exists but no getter - return undefined
+				return Undefined, true
+			}
+			// Check for regular property
 			if method, exists := current.GetOwn(propName); exists {
 				if EnableDetailedCacheStats {
 					UpdatePrototypeStats("primitive_method", 0)
