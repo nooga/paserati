@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"strconv"
+	"unsafe"
 )
 
 // VMInitCallback is a function that initializes VM-specific functionality
@@ -461,6 +462,44 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			// Check RegExp.prototype
 			if vm.RegExpPrototype.IsObject() {
 				proto := vm.RegExpPrototype.AsPlainObject()
+				if v, ok := proto.Get(propName); ok {
+					return v, nil
+				}
+			}
+		}
+		return Undefined, nil
+
+	case TypeTypedArray:
+		// TypedArray: check own properties first, then built-in properties, then prototype
+		ta := obj.AsTypedArray()
+		if ta != nil {
+			// Check own properties first (e.g., overridden constructor)
+			if v, ok := ta.GetOwnProperty(propName); ok {
+				return v, nil
+			}
+			// Check built-in properties
+			switch propName {
+			case "length":
+				return NumberValue(float64(ta.GetLength())), nil
+			case "byteLength":
+				return NumberValue(float64(ta.GetByteLength())), nil
+			case "byteOffset":
+				return NumberValue(float64(ta.GetByteOffset())), nil
+			case "buffer":
+				if ta.GetBuffer() != nil {
+					return Value{typ: TypeArrayBuffer, obj: unsafe.Pointer(ta.GetBuffer())}, nil
+				}
+				return Undefined, nil
+			case "BYTES_PER_ELEMENT":
+				return NumberValue(float64(ta.GetBytesPerElement())), nil
+			}
+			// Check numeric index access
+			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < ta.GetLength() {
+				return ta.GetElement(idx), nil
+			}
+			// Check TypedArray prototype
+			if vm.TypedArrayPrototype.IsObject() {
+				proto := vm.TypedArrayPrototype.AsPlainObject()
 				if v, ok := proto.Get(propName); ok {
 					return v, nil
 				}

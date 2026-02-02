@@ -1,6 +1,9 @@
 package builtins
 
 import (
+	"math/big"
+	"strconv"
+
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
@@ -70,6 +73,27 @@ func (i *TypedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set up all the common TypedArray prototype methods with proper error checking
 	setupTypedArrayPrototypeWithErrors(typedArrayProto, vmInstance)
 
+	// Add Symbol.iterator to TypedArray.prototype (must point to values method)
+	// Per ECMAScript spec, %TypedArray%.prototype[@@iterator] is the same function as %TypedArray%.prototype.values
+	if valuesMethod, ok := typedArrayProto.GetOwn("values"); ok {
+		w, e, c := true, false, true // writable, not enumerable, configurable
+		typedArrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), valuesMethod, &w, &e, &c)
+	}
+
+	// Add Symbol.toStringTag getter to TypedArray.prototype
+	// Per ECMAScript spec, this is a getter that returns the TypedArray's name (e.g., "Float64Array")
+	// Property descriptor: { [[Get]]: getter, [[Enumerable]]: false, [[Configurable]]: true }
+	toStringTagGetter := vm.NewNativeFunction(0, false, "get [Symbol.toStringTag]", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		ta := thisVal.AsTypedArray()
+		if ta == nil {
+			return vm.Undefined, nil
+		}
+		return vm.NewString(ta.GetElementType().Name()), nil
+	})
+	e, c := false, true // not enumerable, configurable
+	typedArrayProto.DefineAccessorPropertyByKey(vm.NewSymbolKey(SymbolToStringTag), toStringTagGetter, true, vm.Undefined, false, &e, &c)
+
 	// Store the prototype in VM for inheritance
 	vmInstance.TypedArrayPrototype = vm.NewValueFromPlainObject(typedArrayProto)
 
@@ -118,6 +142,77 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		return ta, nil
 	}
 
+	// Helper function for ToIntegerOrInfinity - throws TypeError for Symbol
+	// Uses VM's ToInteger to properly call user-defined valueOf methods
+	toIntegerOrInfinity := func(val vm.Value) (int, error) {
+		if val.Type() == vm.TypeSymbol {
+			return 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+		}
+		result := vmInstance.ToInteger(val)
+		// Check if valueOf threw an error (vm is unwinding)
+		if vmInstance.IsUnwinding() {
+			return 0, ErrVMUnwinding
+		}
+		return result, nil
+	}
+
+	// Helper function for SpeciesConstructor validation (partial implementation)
+	// ECMAScript 7.3.20 SpeciesConstructor steps 2-4
+	// Returns error if constructor property is not undefined and not an Object
+	validateSpeciesConstructor := func(thisVal vm.Value) error {
+		// Get the constructor property using VM's property access
+		ctorVal, err := vmInstance.GetProperty(thisVal, "constructor")
+		if err != nil {
+			return err
+		}
+		if ctorVal.IsUndefined() {
+			// Step 3: If C is undefined, return defaultConstructor (no error)
+			return nil
+		}
+		// Step 4: If Type(C) is not Object, throw a TypeError exception
+		if !ctorVal.IsObject() && !ctorVal.IsCallable() {
+			return vmInstance.NewTypeError("TypedArray.prototype method called on array with invalid constructor")
+		}
+		return nil
+	}
+
+	// Helper function for ToBigInt - throws TypeError for null, undefined, Number, Symbol
+	// ECMAScript 7.1.13 ToBigInt
+	toBigInt := func(val vm.Value) (vm.Value, error) {
+		// Check for Number first (before type switch since IsNumber covers multiple internal types)
+		if val.IsNumber() {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Number to a BigInt")
+		}
+		switch val.Type() {
+		case vm.TypeUndefined:
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined to a BigInt")
+		case vm.TypeNull:
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert null to a BigInt")
+		case vm.TypeSymbol:
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a BigInt")
+		case vm.TypeBigInt:
+			return val, nil
+		case vm.TypeBoolean:
+			if val == vm.True {
+				return vm.NewBigInt(big.NewInt(1)), nil
+			}
+			return vm.NewBigInt(big.NewInt(0)), nil
+		case vm.TypeString:
+			// Parse string as BigInt - for now, just use 0 for invalid strings
+			// TODO: Implement proper BigInt parsing from string
+			return vm.NewBigInt(big.NewInt(0)), nil
+		default:
+			// For objects, should call ToPrimitive first
+			return vm.NewBigInt(big.NewInt(0)), nil
+		}
+	}
+
+	// Helper to check if TypedArray is a BigInt array
+	isBigIntArray := func(ta *vm.TypedArrayObject) bool {
+		kind := ta.GetElementType()
+		return kind == vm.TypedArrayBigInt64 || kind == vm.TypedArrayBigUint64
+	}
+
 	// at(index) - returns element at index (supports negative indices)
 	proto.SetOwnNonEnumerable("at", vm.NewNativeFunction(1, false, "at", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
@@ -131,7 +226,10 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			return vm.Undefined, nil
 		}
 
-		index := int(args[0].ToFloat())
+		index, err := toIntegerOrInfinity(args[0])
+		if err != nil {
+			return vm.Undefined, err
+		}
 		if index < 0 {
 			index = length + index
 		}
@@ -157,7 +255,10 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		searchElement := args[0]
 		fromIndex := 0
 		if len(args) > 1 {
-			fromIndex = int(args[1].ToFloat())
+			fromIndex, err = toIntegerOrInfinity(args[1])
+			if err != nil {
+				return vm.Undefined, err
+			}
 		}
 
 		length := ta.GetLength()
@@ -194,7 +295,10 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		length := ta.GetLength()
 		fromIndex := length - 1
 		if len(args) > 1 {
-			fromIndex = int(args[1].ToFloat())
+			fromIndex, err = toIntegerOrInfinity(args[1])
+			if err != nil {
+				return vm.Undefined, err
+			}
 		}
 		if fromIndex < 0 {
 			fromIndex = length + fromIndex
@@ -228,7 +332,10 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		searchElement := args[0]
 		fromIndex := 0
 		if len(args) > 1 {
-			fromIndex = int(args[1].ToFloat())
+			fromIndex, err = toIntegerOrInfinity(args[1])
+			if err != nil {
+				return vm.Undefined, err
+			}
 		}
 
 		length := ta.GetLength()
@@ -259,6 +366,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 
 		separator := ","
 		if len(args) > 0 && !args[0].IsUndefined() {
+			if args[0].Type() == vm.TypeSymbol {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+			}
 			separator = args[0].ToString()
 		}
 
@@ -491,6 +601,11 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			}
 		}
 
+		// Step 10: TypedArraySpeciesCreate - validate constructor property
+		if err := validateSpeciesConstructor(thisArray); err != nil {
+			return vm.Undefined, err
+		}
+
 		// Create new TypedArray of same type with filtered elements
 		return vm.NewTypedArray(ta.GetElementType(), kept, 0, 0), nil
 	}))
@@ -518,6 +633,11 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 				return vm.Undefined, err
 			}
 			mapped[i] = result
+		}
+
+		// Step 6: TypedArraySpeciesCreate - validate constructor property
+		if err := validateSpeciesConstructor(thisArray); err != nil {
+			return vm.Undefined, err
 		}
 
 		// Create new TypedArray of same type with mapped elements
@@ -615,7 +735,30 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			return thisArray, nil
 		}
 
-		target := int(args[0].ToFloat())
+		// Convert all arguments to integers first (per ECMAScript spec)
+		// This ensures Symbol arguments throw before any early returns
+		target, err := toIntegerOrInfinity(args[0])
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		start := 0
+		if len(args) > 1 {
+			start, err = toIntegerOrInfinity(args[1])
+			if err != nil {
+				return vm.Undefined, err
+			}
+		}
+
+		end := length
+		if len(args) > 2 && !args[2].IsUndefined() {
+			end, err = toIntegerOrInfinity(args[2])
+			if err != nil {
+				return vm.Undefined, err
+			}
+		}
+
+		// Now do bounds adjustments
 		if target < 0 {
 			target = length + target
 			if target < 0 {
@@ -626,20 +769,11 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			return thisArray, nil
 		}
 
-		start := 0
-		if len(args) > 1 {
-			start = int(args[1].ToFloat())
-		}
 		if start < 0 {
 			start = length + start
 			if start < 0 {
 				start = 0
 			}
-		}
-
-		end := length
-		if len(args) > 2 && !args[2].IsUndefined() {
-			end = int(args[2].ToFloat())
 		}
 		if end < 0 {
 			end = length + end
@@ -651,6 +785,12 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		count := end - start
 		if target+count > length {
 			count = length - target
+		}
+
+		// Step 11.c: If count > 0 and buffer is detached, throw TypeError
+		// (Buffer might have been detached during argument coercion via valueOf)
+		if count > 0 && ta.GetBuffer().IsDetached() {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot perform %TypedArray%.prototype.copyWithin on a detached ArrayBuffer")
 		}
 
 		// Copy to temporary to handle overlapping
@@ -676,12 +816,22 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 
 		value := vm.Undefined
 		if len(args) > 0 {
+			// For BigInt typed arrays, Symbol value should throw TypeError
+			elementType := ta.GetElementType()
+			if elementType == vm.TypedArrayBigInt64 || elementType == vm.TypedArrayBigUint64 {
+				if args[0].Type() == vm.TypeSymbol {
+					return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a BigInt")
+				}
+			}
 			value = args[0]
 		}
 		start := 0
 		end := ta.GetLength()
 		if len(args) > 1 && !args[1].IsUndefined() {
-			start = int(args[1].ToFloat())
+			start, err = toIntegerOrInfinity(args[1])
+			if err != nil {
+				return vm.Undefined, err
+			}
 			if start < 0 {
 				start = ta.GetLength() + start
 			}
@@ -690,7 +840,10 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			}
 		}
 		if len(args) > 2 && !args[2].IsUndefined() {
-			end = int(args[2].ToFloat())
+			end, err = toIntegerOrInfinity(args[2])
+			if err != nil {
+				return vm.Undefined, err
+			}
 			if end < 0 {
 				end = ta.GetLength() + end
 			}
@@ -839,6 +992,15 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			return vm.Undefined, err
 		}
 
+		// Validate compareFn before checking length
+		var callback vm.Value
+		if len(args) > 0 && !args[0].IsUndefined() {
+			if !args[0].IsCallable() {
+				return vm.Undefined, vmInstance.NewTypeError("%TypedArray%.prototype.sort compareFn is not a function")
+			}
+			callback = args[0]
+		}
+
 		length := ta.GetLength()
 		if length <= 1 {
 			return thisArray, nil
@@ -848,11 +1010,6 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		elements := make([]vm.Value, length)
 		for i := 0; i < length; i++ {
 			elements[i] = ta.GetElement(i)
-		}
-
-		var callback vm.Value
-		if len(args) > 0 && args[0].IsCallable() {
-			callback = args[0]
 		}
 
 		// Simple bubble sort (not efficient but correct)
@@ -896,31 +1053,99 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		}
 
 		source := args[0]
+
+		// Step 15: Let src be ? ToObject(array)
+		// ToObject throws TypeError for undefined and null
+		if source.IsUndefined() {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined to object")
+		}
+		if source.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert null to object")
+		}
+
 		offset := 0
-		if len(args) > 1 {
-			offset = int(args[1].ToFloat())
+		if len(args) > 1 && !args[1].IsUndefined() {
+			offset, err = toIntegerOrInfinity(args[1])
+			if err != nil {
+				return vm.Undefined, err
+			}
 		}
 
 		if offset < 0 {
 			return vm.Undefined, vmInstance.NewRangeError("offset is out of bounds")
 		}
 
-		// Handle array-like source
-		if source.Type() == vm.TypeArray {
-			sourceArray := source.AsArray()
-			if offset+sourceArray.Length() > ta.GetLength() {
-				return vm.Undefined, vmInstance.NewRangeError("source is too large")
-			}
-			for i := 0; i < sourceArray.Length(); i++ {
-				ta.SetElement(offset+i, sourceArray.Get(i))
-			}
-		} else if sourceTypedArray := source.AsTypedArray(); sourceTypedArray != nil {
+		// Check if target is a BigInt array
+		isBigInt := isBigIntArray(ta)
+
+		// Handle TypedArray source
+		if sourceTypedArray := source.AsTypedArray(); sourceTypedArray != nil {
 			if offset+sourceTypedArray.GetLength() > ta.GetLength() {
 				return vm.Undefined, vmInstance.NewRangeError("source is too large")
 			}
 			for i := 0; i < sourceTypedArray.GetLength(); i++ {
-				ta.SetElement(offset+i, sourceTypedArray.GetElement(i))
+				val := sourceTypedArray.GetElement(i)
+				if isBigInt && !isBigIntArray(sourceTypedArray) {
+					// Converting from non-BigInt to BigInt array
+					val, err = toBigInt(val)
+					if err != nil {
+						return vm.Undefined, err
+					}
+				}
+				ta.SetElement(offset+i, val)
 			}
+			return vm.Undefined, nil
+		}
+
+		// Handle array-like source (including Array and plain objects with length)
+		var srcLength int
+		if source.Type() == vm.TypeArray {
+			srcLength = source.AsArray().Length()
+		} else if obj := source.AsPlainObject(); obj != nil {
+			// Get length property from object
+			lengthVal, exists := obj.GetOwn("length")
+			if !exists {
+				lengthVal = vm.Undefined
+			}
+			// Step 16: Let srcLength be ? ToLength(? Get(src, "length"))
+			// ToLength calls ToNumber which throws for Symbol
+			if lengthVal.Type() == vm.TypeSymbol {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+			}
+			srcLength = int(lengthVal.ToFloat())
+		} else {
+			// Primitive values have length 0 when coerced to objects
+			srcLength = 0
+		}
+
+		if offset+srcLength > ta.GetLength() {
+			return vm.Undefined, vmInstance.NewRangeError("source is too large")
+		}
+
+		// Copy elements
+		for i := 0; i < srcLength; i++ {
+			var val vm.Value
+			if source.Type() == vm.TypeArray {
+				val = source.AsArray().Get(i)
+			} else if obj := source.AsPlainObject(); obj != nil {
+				propVal, exists := obj.GetOwn(strconv.Itoa(i))
+				if exists {
+					val = propVal
+				} else {
+					val = vm.Undefined
+				}
+			} else {
+				val = vm.Undefined
+			}
+
+			if isBigInt {
+				// For BigInt typed arrays, convert using ToBigInt
+				val, err = toBigInt(val)
+				if err != nil {
+					return vm.Undefined, err
+				}
+			}
+			ta.SetElement(offset+i, val)
 		}
 
 		return vm.Undefined, nil
@@ -938,7 +1163,10 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		end := ta.GetLength()
 
 		if len(args) > 0 && !args[0].IsUndefined() {
-			start = int(args[0].ToFloat())
+			start, err = toIntegerOrInfinity(args[0])
+			if err != nil {
+				return vm.Undefined, err
+			}
 			if start < 0 {
 				start = ta.GetLength() + start
 			}
@@ -951,7 +1179,10 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		}
 
 		if len(args) > 1 && !args[1].IsUndefined() {
-			end = int(args[1].ToFloat())
+			end, err = toIntegerOrInfinity(args[1])
+			if err != nil {
+				return vm.Undefined, err
+			}
 			if end < 0 {
 				end = ta.GetLength() + end
 			}
@@ -965,6 +1196,11 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 
 		if start > end {
 			start = end
+		}
+
+		// Step 14: TypedArraySpeciesCreate - validate constructor property
+		if err := validateSpeciesConstructor(thisArray); err != nil {
+			return vm.Undefined, err
 		}
 
 		// Create new view into same buffer
@@ -985,7 +1221,10 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		end := ta.GetLength()
 
 		if len(args) > 0 && !args[0].IsUndefined() {
-			start = int(args[0].ToFloat())
+			start, err = toIntegerOrInfinity(args[0])
+			if err != nil {
+				return vm.Undefined, err
+			}
 			if start < 0 {
 				start = ta.GetLength() + start
 			}
@@ -998,7 +1237,10 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		}
 
 		if len(args) > 1 && !args[1].IsUndefined() {
-			end = int(args[1].ToFloat())
+			end, err = toIntegerOrInfinity(args[1])
+			if err != nil {
+				return vm.Undefined, err
+			}
 			if end < 0 {
 				end = ta.GetLength() + end
 			}
@@ -1014,12 +1256,195 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			start = end
 		}
 
+		// Step 12: TypedArraySpeciesCreate - validate constructor property
+		if err := validateSpeciesConstructor(thisArray); err != nil {
+			return vm.Undefined, err
+		}
+
 		// Create new array with copied data
 		length := end - start
 		newArray := vm.NewTypedArray(ta.GetElementType(), length, 0, 0)
 		if newTA := newArray.AsTypedArray(); newTA != nil {
 			for i := 0; i < length; i++ {
 				newTA.SetElement(i, ta.GetElement(start+i))
+			}
+		}
+
+		return newArray, nil
+	}))
+
+	// findLast(callback, thisArg?) - returns last element where callback returns true
+	proto.SetOwnNonEnumerable("findLast", vm.NewNativeFunction(2, false, "findLast", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis()
+		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.findLast")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		if len(args) == 0 || !args[0].IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("%TypedArray%.prototype.findLast callback is not a function")
+		}
+
+		callback := args[0]
+		length := ta.GetLength()
+		for i := length - 1; i >= 0; i-- {
+			elem := ta.GetElement(i)
+			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if !result.IsFalsey() {
+				return elem, nil
+			}
+		}
+
+		return vm.Undefined, nil
+	}))
+
+	// findLastIndex(callback, thisArg?) - returns last index where callback returns true
+	proto.SetOwnNonEnumerable("findLastIndex", vm.NewNativeFunction(2, false, "findLastIndex", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis()
+		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.findLastIndex")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		if len(args) == 0 || !args[0].IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("%TypedArray%.prototype.findLastIndex callback is not a function")
+		}
+
+		callback := args[0]
+		length := ta.GetLength()
+		for i := length - 1; i >= 0; i-- {
+			elem := ta.GetElement(i)
+			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if !result.IsFalsey() {
+				return vm.Number(float64(i)), nil
+			}
+		}
+
+		return vm.Number(-1), nil
+	}))
+
+	// toReversed() - returns new array with elements in reverse order (ES2023)
+	proto.SetOwnNonEnumerable("toReversed", vm.NewNativeFunction(0, false, "toReversed", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis()
+		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.toReversed")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		length := ta.GetLength()
+		newArray := vm.NewTypedArray(ta.GetElementType(), length, 0, 0)
+		if newTA := newArray.AsTypedArray(); newTA != nil {
+			for i := 0; i < length; i++ {
+				newTA.SetElement(i, ta.GetElement(length-1-i))
+			}
+		}
+
+		return newArray, nil
+	}))
+
+	// toSorted(compareFn?) - returns new sorted array (ES2023)
+	proto.SetOwnNonEnumerable("toSorted", vm.NewNativeFunction(1, false, "toSorted", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis()
+		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.toSorted")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		length := ta.GetLength()
+
+		// Copy elements to slice for sorting
+		elements := make([]vm.Value, length)
+		for i := 0; i < length; i++ {
+			elements[i] = ta.GetElement(i)
+		}
+
+		var callback vm.Value
+		if len(args) > 0 && !args[0].IsUndefined() {
+			if !args[0].IsCallable() {
+				return vm.Undefined, vmInstance.NewTypeError("compare function is not a function")
+			}
+			callback = args[0]
+		}
+
+		// Simple bubble sort (not efficient but correct)
+		for i := 0; i < length-1; i++ {
+			for j := 0; j < length-i-1; j++ {
+				var shouldSwap bool
+				if callback.IsCallable() {
+					result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elements[j], elements[j+1]})
+					if err != nil {
+						return vm.Undefined, err
+					}
+					shouldSwap = result.ToFloat() > 0
+				} else {
+					// Default numeric sort for typed arrays
+					shouldSwap = elements[j].ToFloat() > elements[j+1].ToFloat()
+				}
+				if shouldSwap {
+					elements[j], elements[j+1] = elements[j+1], elements[j]
+				}
+			}
+		}
+
+		// Create new TypedArray with sorted elements
+		newArray := vm.NewTypedArray(ta.GetElementType(), length, 0, 0)
+		if newTA := newArray.AsTypedArray(); newTA != nil {
+			for i := 0; i < length; i++ {
+				newTA.SetElement(i, elements[i])
+			}
+		}
+
+		return newArray, nil
+	}))
+
+	// with(index, value) - returns new array with one element replaced (ES2023)
+	proto.SetOwnNonEnumerable("with", vm.NewNativeFunction(2, false, "with", func(args []vm.Value) (vm.Value, error) {
+		thisArray := vmInstance.GetThis()
+		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.with")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		length := ta.GetLength()
+
+		if len(args) < 2 {
+			return vm.Undefined, vmInstance.NewTypeError("%TypedArray%.prototype.with requires 2 arguments")
+		}
+
+		// Convert index to integer
+		index := int(args[0].ToFloat())
+		if index < 0 {
+			index = length + index
+		}
+		if index < 0 || index >= length {
+			return vm.Undefined, vmInstance.NewRangeError("Invalid index")
+		}
+
+		value := args[1]
+
+		// For BigInt typed arrays, value must be a BigInt
+		elementType := ta.GetElementType()
+		if elementType == vm.TypedArrayBigInt64 || elementType == vm.TypedArrayBigUint64 {
+			if value.Type() != vm.TypeBigInt {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert non-BigInt value to BigInt")
+			}
+		}
+
+		// Create new array with copied data
+		newArray := vm.NewTypedArray(ta.GetElementType(), length, 0, 0)
+		if newTA := newArray.AsTypedArray(); newTA != nil {
+			for i := 0; i < length; i++ {
+				if i == index {
+					newTA.SetElement(i, value)
+				} else {
+					newTA.SetElement(i, ta.GetElement(i))
+				}
 			}
 		}
 

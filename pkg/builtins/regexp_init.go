@@ -243,7 +243,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 	regexpProto.SetOwnNonEnumerable("test", vm.NewNativeFunction(1, false, "test", func(args []vm.Value) (vm.Value, error) {
 		thisRegex := vmInstance.GetThis()
 		if !thisRegex.IsRegExp() {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Method RegExp.prototype.test called on incompatible receiver")
 		}
 		regex := thisRegex.AsRegExpObject()
 		// Check for deferred compile error
@@ -298,7 +298,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 	regexpProto.SetOwnNonEnumerable("exec", vm.NewNativeFunction(1, false, "exec", func(args []vm.Value) (vm.Value, error) {
 		thisRegex := vmInstance.GetThis()
 		if !thisRegex.IsRegExp() {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("Method RegExp.prototype.exec called on incompatible receiver")
 		}
 		regex := thisRegex.AsRegExpObject()
 		// Check for deferred compile error

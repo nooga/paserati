@@ -188,6 +188,15 @@ func SetupTypedArrayPrototypeProperties(proto *vm.PlainObject, vmInstance *vm.VM
 	proto.DefineAccessorProperty("length", lengthGetter, true, vm.Undefined, false, &e, &c)
 }
 
+// SetupTypedArrayToStringTag adds Symbol.toStringTag getter to a TypedArray prototype.
+// Per ECMAScript spec, %TypedArray%.prototype[@@toStringTag] is "TypedArray" and
+// each specific TypedArray prototype has its own [@@toStringTag] (e.g., "Uint8Array").
+// The property is: { writable: false, enumerable: false, configurable: true }
+func SetupTypedArrayToStringTag(proto *vm.PlainObject, typedArrayName string) {
+	e, c := false, true // not enumerable, configurable
+	proto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolToStringTag), vm.NewString(typedArrayName), nil, &e, &c)
+}
+
 // SetupTypedArrayPrototype adds common TypedArray prototype methods to the given prototype object.
 // This should be called after setting up the type-specific properties.
 func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {

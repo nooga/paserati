@@ -1197,15 +1197,49 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 		var proto Value
 		ta := base.AsTypedArray()
 		switch ta.GetElementType() {
+		case TypedArrayInt8:
+			proto = vm.Int8ArrayPrototype
+		case TypedArrayUint8:
+			proto = vm.Uint8ArrayPrototype
+		case TypedArrayUint8Clamped:
+			proto = vm.Uint8ClampedArrayPrototype
+		case TypedArrayInt16:
+			proto = vm.Int16ArrayPrototype
+		case TypedArrayUint16:
+			proto = vm.Uint16ArrayPrototype
+		case TypedArrayInt32:
+			proto = vm.Int32ArrayPrototype
+		case TypedArrayUint32:
+			proto = vm.Uint32ArrayPrototype
 		case TypedArrayFloat32:
 			proto = vm.Float32ArrayPrototype
-		// Add other typed array types as needed
+		case TypedArrayFloat64:
+			proto = vm.Float64ArrayPrototype
+		case TypedArrayBigInt64:
+			proto = vm.BigInt64ArrayPrototype
+		case TypedArrayBigUint64:
+			proto = vm.BigUint64ArrayPrototype
 		default:
-			proto = vm.Float32ArrayPrototype // fallback
+			proto = vm.TypedArrayPrototype // fallback to base TypedArray prototype
 		}
 		if proto.IsObject() {
 			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+			symKeyVal := NewSymbolKey(symKey)
+			// Check for accessor property first
+			if getter, _, _, _, exists := po.GetOwnAccessorByKey(symKeyVal); exists {
+				if getter.Type() != TypeUndefined {
+					// Call the getter with the TypedArray as 'this'
+					res, err := vm.Call(getter, base, nil)
+					if err != nil {
+						*dest = Undefined
+						return true, InterpretOK, *dest
+					}
+					*dest = res
+					return true, InterpretOK, *dest
+				}
+			}
+			// Check for data property
+			if v, ok := po.GetOwnByKey(symKeyVal); ok {
 				*dest = v
 				if debugVM {
 					fmt.Printf("[DBG opGetPropSymbol] TypedArray.prototype[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
@@ -1216,7 +1250,21 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
 					if proto2 := current.AsPlainObject(); proto2 != nil {
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+						// Check for accessor property first
+						if getter, _, _, _, exists := proto2.GetOwnAccessorByKey(symKeyVal); exists {
+							if getter.Type() != TypeUndefined {
+								// Call the getter with the TypedArray as 'this'
+								res, err := vm.Call(getter, base, nil)
+								if err != nil {
+									*dest = Undefined
+									return true, InterpretOK, *dest
+								}
+								*dest = res
+								return true, InterpretOK, *dest
+							}
+						}
+						// Check for data property
+						if v, ok := proto2.GetOwnByKey(symKeyVal); ok {
 							*dest = v
 							if debugVM {
 								fmt.Printf("[DBG opGetPropSymbol] TypedArray proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())

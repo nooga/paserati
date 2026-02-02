@@ -1320,6 +1320,12 @@ startExecution:
 				vm.ThrowTypeError("Cannot convert a BigInt value to a number")
 				return InterpretRuntimeError, Undefined
 			}
+			// ECMAScript: ToNumber(symbol) throws a TypeError
+			if primVal.Type() == TypeSymbol {
+				frame.ip = ip
+				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+				return InterpretRuntimeError, Undefined
+			}
 			registers[destReg] = Number(primVal.ToFloat())
 
 		case OpToNumeric:
@@ -1346,6 +1352,12 @@ startExecution:
 					vm.handlerFound = false
 					goto reloadFrame
 				}
+			}
+			// ECMAScript: ToNumeric(symbol) throws a TypeError
+			if primVal.Type() == TypeSymbol {
+				frame.ip = ip
+				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+				return InterpretRuntimeError, Undefined
 			}
 			// BigInt is preserved as-is, everything else converts to Number
 			if primVal.IsBigInt() {

@@ -140,6 +140,33 @@ type TypedArrayObject struct {
 	byteLength  int
 	length      int // number of elements
 	elementType TypedArrayKind
+	properties  map[string]Value // Own properties (e.g., constructor override)
+}
+
+// GetOwnProperty returns an own property value (non-index properties)
+func (ta *TypedArrayObject) GetOwnProperty(name string) (Value, bool) {
+	if ta.properties == nil {
+		return Undefined, false
+	}
+	v, ok := ta.properties[name]
+	return v, ok
+}
+
+// SetOwnProperty sets an own property value (non-index properties)
+func (ta *TypedArrayObject) SetOwnProperty(name string, value Value) {
+	if ta.properties == nil {
+		ta.properties = make(map[string]Value)
+	}
+	ta.properties[name] = value
+}
+
+// HasOwnProperty checks if the TypedArray has an own property
+func (ta *TypedArrayObject) HasOwnProperty(name string) bool {
+	if ta.properties == nil {
+		return false
+	}
+	_, ok := ta.properties[name]
+	return ok
 }
 
 // Getter methods for TypedArrayObject
@@ -205,6 +232,36 @@ func (kind TypedArrayKind) BytesPerElement() int {
 		return 8
 	default:
 		return 0
+	}
+}
+
+// Name returns the ECMAScript constructor name for this TypedArray kind
+func (kind TypedArrayKind) Name() string {
+	switch kind {
+	case TypedArrayInt8:
+		return "Int8Array"
+	case TypedArrayUint8:
+		return "Uint8Array"
+	case TypedArrayUint8Clamped:
+		return "Uint8ClampedArray"
+	case TypedArrayInt16:
+		return "Int16Array"
+	case TypedArrayUint16:
+		return "Uint16Array"
+	case TypedArrayInt32:
+		return "Int32Array"
+	case TypedArrayUint32:
+		return "Uint32Array"
+	case TypedArrayFloat32:
+		return "Float32Array"
+	case TypedArrayFloat64:
+		return "Float64Array"
+	case TypedArrayBigInt64:
+		return "BigInt64Array"
+	case TypedArrayBigUint64:
+		return "BigUint64Array"
+	default:
+		return "TypedArray"
 	}
 }
 

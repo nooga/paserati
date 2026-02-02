@@ -532,6 +532,10 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		// Get the appropriate typed array prototype based on element type
 		ta := objVal.AsTypedArray()
 		if ta != nil {
+			// Check own properties first (e.g., overridden constructor)
+			if val, ok := ta.GetOwnProperty(propName); ok {
+				return val, true
+			}
 			// Resolve prototype dynamically via global constructors to avoid missing VM fields
 			switch ta.GetElementType() {
 			case TypedArrayUint8:
@@ -615,6 +619,24 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 						}
 					}
 				}
+			case TypedArrayBigInt64:
+				if ctor, ok := vm.GetGlobal("BigInt64Array"); ok {
+					if ctor.Type() == TypeNativeFunctionWithProps {
+						fn := ctor.AsNativeFunctionWithProps()
+						if p, hit := fn.Properties.GetOwn("prototype"); hit {
+							prototype = p.AsPlainObject()
+						}
+					}
+				}
+			case TypedArrayBigUint64:
+				if ctor, ok := vm.GetGlobal("BigUint64Array"); ok {
+					if ctor.Type() == TypeNativeFunctionWithProps {
+						fn := ctor.AsNativeFunctionWithProps()
+						if p, hit := fn.Properties.GetOwn("prototype"); hit {
+							prototype = p.AsPlainObject()
+						}
+					}
+				}
 			}
 		}
 	default:
@@ -622,12 +644,22 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 	}
 
 	if prototype != nil {
-		if method, exists := prototype.GetOwn(propName); exists {
-			if EnableDetailedCacheStats {
-				UpdatePrototypeStats("primitive_method", 0)
+		// Walk the prototype chain to find the method (handles inheritance like TypedArray.prototype -> Uint8Array.prototype)
+		current := prototype
+		for current != nil {
+			if method, exists := current.GetOwn(propName); exists {
+				if EnableDetailedCacheStats {
+					UpdatePrototypeStats("primitive_method", 0)
+				}
+				// Return raw method so caller can supply correct 'this' (works for both o.m() and borrowed calls)
+				return method, true
 			}
-			// Return raw method so caller can supply correct 'this' (works for both o.m() and borrowed calls)
-			return method, true
+			// Move to parent prototype
+			protoVal := current.GetPrototype()
+			if protoVal.Type() == TypeNull || protoVal.Type() == TypeUndefined {
+				break
+			}
+			current = protoVal.AsPlainObject()
 		}
 	}
 

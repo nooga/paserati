@@ -731,6 +731,25 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			}
 		}
 		return true, InterpretOK, *valueToSet
+	case TypeTypedArray:
+		if debugOpSetProp {
+			fmt.Printf("[DEBUG opSetProp] TypeTypedArray case matched, propName=%q\n", propName)
+		}
+		ta := objVal.AsTypedArray()
+		if ta == nil {
+			return true, InterpretOK, *valueToSet
+		}
+		// Check for numeric string index
+		if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < ta.GetLength() {
+			ta.SetElement(idx, *valueToSet)
+		} else {
+			// Non-index property - store in own properties
+			if debugOpSetProp {
+				fmt.Printf("[DEBUG opSetProp] Setting own property on TypedArray: %q = %v\n", propName, *valueToSet)
+			}
+			ta.SetOwnProperty(propName, *valueToSet)
+		}
+		return true, InterpretOK, *valueToSet
 	case TypeRegExp:
 		// RegExp objects can have user-defined properties
 		regex := objVal.AsRegExpObject()
