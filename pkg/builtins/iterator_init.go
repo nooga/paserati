@@ -1191,6 +1191,86 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		&falseVal, // enumerable: false
 		&trueVal,  // configurable: true
 	)
+	// %MapIteratorPrototype%.next - defined on prototype with proper length/name
+	mapIterNextFn := vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// Check for internal slots (branding)
+		if !thisVal.IsObject() {
+			return vm.Undefined, vmInstance.NewTypeError("%MapIteratorPrototype%.next requires that 'this' be an Object")
+		}
+		thisObj := thisVal.AsPlainObject()
+		if thisObj == nil {
+			return vm.Undefined, vmInstance.NewTypeError("%MapIteratorPrototype%.next requires that 'this' be an Object")
+		}
+		// Check for [[IteratedMap]] internal slot
+		iteratedMap, hasSlot := thisObj.GetOwn("[[IteratedMap]]")
+		if !hasSlot {
+			return vm.Undefined, vmInstance.NewTypeError("%MapIteratorPrototype%.next requires that 'this' be a Map Iterator")
+		}
+
+		result := vm.NewObject(vm.Undefined).AsPlainObject()
+
+		// Check if exhausted
+		if exhaustedVal, ok := thisObj.GetOwn("[[Exhausted]]"); ok && exhaustedVal == vm.True {
+			result.SetOwn("value", vm.Undefined)
+			result.SetOwn("done", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(result), nil
+		}
+
+		// Get current index and kind
+		indexVal, _ := thisObj.GetOwn("[[MapNextIndex]]")
+		kindVal, _ := thisObj.GetOwn("[[MapIterationKind]]")
+		currentIndex := int(indexVal.ToFloat())
+		kind := kindVal.ToString() // "entries", "keys", or "values"
+
+		// Get the map
+		if iteratedMap.Type() != vm.TypeMap {
+			result.SetOwn("value", vm.Undefined)
+			result.SetOwn("done", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(result), nil
+		}
+		mapObj := iteratedMap.AsMap()
+
+		// Iterate
+		for currentIndex < mapObj.OrderLen() {
+			key, value, exists := mapObj.GetEntryAt(currentIndex)
+			currentIndex++
+			thisObj.SetOwn("[[MapNextIndex]]", vm.NumberValue(float64(currentIndex)))
+			if exists {
+				var resultValue vm.Value
+				switch kind {
+				case "entries":
+					entry := vm.NewArray()
+					entry.AsArray().Append(key)
+					entry.AsArray().Append(value)
+					resultValue = entry
+				case "keys":
+					resultValue = key
+				case "values":
+					resultValue = value
+				default:
+					entry := vm.NewArray()
+					entry.AsArray().Append(key)
+					entry.AsArray().Append(value)
+					resultValue = entry
+				}
+				result.SetOwn("value", resultValue)
+				result.SetOwn("done", vm.BooleanValue(false))
+				return vm.NewValueFromPlainObject(result), nil
+			}
+		}
+
+		// Exhausted
+		thisObj.SetOwn("[[Exhausted]]", vm.BooleanValue(true))
+		thisObj.SetOwn("[[MapNextIndex]]", vm.NumberValue(float64(currentIndex)))
+		result.SetOwn("value", vm.Undefined)
+		result.SetOwn("done", vm.BooleanValue(true))
+		return vm.NewValueFromPlainObject(result), nil
+	})
+	// Set length and name properties on the next function
+	mapIterNextFnObj := mapIterNextFn.AsNativeFunction()
+	_ = mapIterNextFnObj // length and name are already set by NewNativeFunction
+	mapIteratorProto.DefineOwnProperty("next", mapIterNextFn, &trueVal, &falseVal, &trueVal)
 	vmInstance.MapIteratorPrototype = vm.NewValueFromPlainObject(mapIteratorProto)
 
 	// %SetIteratorPrototype%
@@ -1202,6 +1282,79 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		&falseVal, // enumerable: false
 		&trueVal,  // configurable: true
 	)
+	// %SetIteratorPrototype%.next - defined on prototype with proper length/name
+	setIterNextFn := vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		// Check for internal slots (branding)
+		if !thisVal.IsObject() {
+			return vm.Undefined, vmInstance.NewTypeError("%SetIteratorPrototype%.next requires that 'this' be an Object")
+		}
+		thisObj := thisVal.AsPlainObject()
+		if thisObj == nil {
+			return vm.Undefined, vmInstance.NewTypeError("%SetIteratorPrototype%.next requires that 'this' be an Object")
+		}
+		// Check for [[IteratedSet]] internal slot
+		iteratedSet, hasSlot := thisObj.GetOwn("[[IteratedSet]]")
+		if !hasSlot {
+			return vm.Undefined, vmInstance.NewTypeError("%SetIteratorPrototype%.next requires that 'this' be a Set Iterator")
+		}
+
+		result := vm.NewObject(vm.Undefined).AsPlainObject()
+
+		// Check if exhausted
+		if exhaustedVal, ok := thisObj.GetOwn("[[Exhausted]]"); ok && exhaustedVal == vm.True {
+			result.SetOwn("value", vm.Undefined)
+			result.SetOwn("done", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(result), nil
+		}
+
+		// Get current index and kind
+		indexVal, _ := thisObj.GetOwn("[[SetNextIndex]]")
+		kindVal, _ := thisObj.GetOwn("[[SetIterationKind]]")
+		currentIndex := int(indexVal.ToFloat())
+		kind := kindVal.ToString() // "entries", "keys", or "values"
+
+		// Get the set
+		if iteratedSet.Type() != vm.TypeSet {
+			result.SetOwn("value", vm.Undefined)
+			result.SetOwn("done", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(result), nil
+		}
+		setObj := iteratedSet.AsSet()
+
+		// Iterate
+		for currentIndex < setObj.OrderLen() {
+			value, exists := setObj.GetValueAt(currentIndex)
+			currentIndex++
+			thisObj.SetOwn("[[SetNextIndex]]", vm.NumberValue(float64(currentIndex)))
+			if exists {
+				var resultValue vm.Value
+				switch kind {
+				case "entries":
+					// For Set entries(), return [value, value]
+					entry := vm.NewArray()
+					entry.AsArray().Append(value)
+					entry.AsArray().Append(value)
+					resultValue = entry
+				case "keys", "values":
+					resultValue = value
+				default:
+					resultValue = value
+				}
+				result.SetOwn("value", resultValue)
+				result.SetOwn("done", vm.BooleanValue(false))
+				return vm.NewValueFromPlainObject(result), nil
+			}
+		}
+
+		// Exhausted
+		thisObj.SetOwn("[[Exhausted]]", vm.BooleanValue(true))
+		thisObj.SetOwn("[[SetNextIndex]]", vm.NumberValue(float64(currentIndex)))
+		result.SetOwn("value", vm.Undefined)
+		result.SetOwn("done", vm.BooleanValue(true))
+		return vm.NewValueFromPlainObject(result), nil
+	})
+	setIteratorProto.DefineOwnProperty("next", setIterNextFn, &trueVal, &falseVal, &trueVal)
 	vmInstance.SetIteratorPrototype = vm.NewValueFromPlainObject(setIteratorProto)
 
 	// %StringIteratorPrototype%

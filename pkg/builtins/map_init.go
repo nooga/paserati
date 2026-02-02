@@ -236,37 +236,14 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisMap.Type() != vm.TypeMap {
 			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.entries called on incompatible receiver")
 		}
-		mapObj := thisMap.AsMap()
 
-		// Create iterator object with live reference to the Map, inheriting from Iterator.prototype
+		// Create iterator object with internal slots, inheriting from MapIteratorPrototype
+		// The prototype's next() method uses these slots for iteration
 		it := vm.NewObject(vmInstance.MapIteratorPrototype).AsPlainObject()
-		currentIndex := 0 // Closure captures this for live iteration
-
-		// next() - iterates live over the Map, skipping deleted entries
-		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
-			result := vm.NewObject(vm.Undefined).AsPlainObject()
-
-			// Skip deleted entries (tombstones) and find the next valid entry
-			for currentIndex < mapObj.OrderLen() {
-				key, value, exists := mapObj.GetEntryAt(currentIndex)
-				currentIndex++
-				if exists {
-					// Found a valid entry - return it
-					entry := vm.NewArray()
-					entry.AsArray().Append(key)
-					entry.AsArray().Append(value)
-					result.SetOwnNonEnumerable("value", entry)
-					result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-					return vm.NewValueFromPlainObject(result), nil
-				}
-				// Entry was deleted, continue to next
-			}
-
-			// No more entries
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-			return vm.NewValueFromPlainObject(result), nil
-		}))
+		it.SetOwn("[[IteratedMap]]", thisMap)
+		it.SetOwn("[[MapNextIndex]]", vm.NumberValue(0))
+		it.SetOwn("[[MapIterationKind]]", vm.NewString("entries"))
+		it.SetOwn("[[Exhausted]]", vm.BooleanValue(false))
 
 		// [Symbol.iterator]() { return this }
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
@@ -284,25 +261,14 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisMap.Type() != vm.TypeMap {
 			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.values called on incompatible receiver")
 		}
-		mapObj := thisMap.AsMap()
+
+		// Create iterator object with internal slots, inheriting from MapIteratorPrototype
 		it := vm.NewObject(vmInstance.MapIteratorPrototype).AsPlainObject()
-		currentIndex := 0
-		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
-			result := vm.NewObject(vm.Undefined).AsPlainObject()
-			// Live iteration: skip tombstones, check at each step
-			for currentIndex < mapObj.OrderLen() {
-				_, value, exists := mapObj.GetEntryAt(currentIndex)
-				currentIndex++
-				if exists {
-					result.SetOwnNonEnumerable("value", value)
-					result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-					return vm.NewValueFromPlainObject(result), nil
-				}
-			}
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-			return vm.NewValueFromPlainObject(result), nil
-		}))
+		it.SetOwn("[[IteratedMap]]", thisMap)
+		it.SetOwn("[[MapNextIndex]]", vm.NumberValue(0))
+		it.SetOwn("[[MapIterationKind]]", vm.NewString("values"))
+		it.SetOwn("[[Exhausted]]", vm.BooleanValue(false))
+
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
 			return vm.NewValueFromPlainObject(it), nil
 		}), nil, nil, nil)
@@ -318,25 +284,14 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisMap.Type() != vm.TypeMap {
 			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.keys called on incompatible receiver")
 		}
-		mapObj := thisMap.AsMap()
+
+		// Create iterator object with internal slots, inheriting from MapIteratorPrototype
 		it := vm.NewObject(vmInstance.MapIteratorPrototype).AsPlainObject()
-		currentIndex := 0
-		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
-			result := vm.NewObject(vm.Undefined).AsPlainObject()
-			// Live iteration: skip tombstones, check at each step
-			for currentIndex < mapObj.OrderLen() {
-				key, _, exists := mapObj.GetEntryAt(currentIndex)
-				currentIndex++
-				if exists {
-					result.SetOwnNonEnumerable("value", key)
-					result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-					return vm.NewValueFromPlainObject(result), nil
-				}
-			}
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-			return vm.NewValueFromPlainObject(result), nil
-		}))
+		it.SetOwn("[[IteratedMap]]", thisMap)
+		it.SetOwn("[[MapNextIndex]]", vm.NumberValue(0))
+		it.SetOwn("[[MapIterationKind]]", vm.NewString("keys"))
+		it.SetOwn("[[Exhausted]]", vm.BooleanValue(false))
+
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
 			return vm.NewValueFromPlainObject(it), nil
 		}), nil, nil, nil)

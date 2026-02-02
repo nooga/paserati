@@ -204,31 +204,20 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Minimal iterator helpers: values(), keys(), entries(), and [Symbol.iterator]
-	// These use live iteration - checking the set at each step, not a snapshot.
+	// These create iterator objects with internal slots that the prototype's next() uses.
 	setProto.SetOwnNonEnumerable("values", vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
 			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.values called on incompatible receiver")
 		}
-		setObj := thisSet.AsSet()
+
+		// Create iterator object with internal slots, inheriting from SetIteratorPrototype
 		it := vm.NewObject(vmInstance.SetIteratorPrototype).AsPlainObject()
-		currentIndex := 0
-		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
-			result := vm.NewObject(vm.Undefined).AsPlainObject()
-			// Live iteration: skip tombstones, check at each step
-			for currentIndex < setObj.OrderLen() {
-				val, exists := setObj.GetValueAt(currentIndex)
-				currentIndex++
-				if exists {
-					result.SetOwnNonEnumerable("value", val)
-					result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-					return vm.NewValueFromPlainObject(result), nil
-				}
-			}
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-			return vm.NewValueFromPlainObject(result), nil
-		}))
+		it.SetOwn("[[IteratedSet]]", thisSet)
+		it.SetOwn("[[SetNextIndex]]", vm.NumberValue(0))
+		it.SetOwn("[[SetIterationKind]]", vm.NewString("values"))
+		it.SetOwn("[[Exhausted]]", vm.BooleanValue(false))
+
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
 			return vm.NewValueFromPlainObject(it), nil
 		}), nil, nil, nil)
@@ -238,31 +227,20 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true
 		setProto.DefineOwnProperty("values", v, &w, &e, &c)
 	}
-	// keys() is an alias of values() for Set - uses same live iteration
+	// keys() is an alias of values() for Set - uses same internal slots pattern
 	setProto.SetOwnNonEnumerable("keys", vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
 			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.keys called on incompatible receiver")
 		}
-		setObj := thisSet.AsSet()
+
+		// Create iterator object with internal slots, inheriting from SetIteratorPrototype
 		it := vm.NewObject(vmInstance.SetIteratorPrototype).AsPlainObject()
-		currentIndex := 0
-		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
-			result := vm.NewObject(vm.Undefined).AsPlainObject()
-			// Live iteration: skip tombstones, check at each step
-			for currentIndex < setObj.OrderLen() {
-				val, exists := setObj.GetValueAt(currentIndex)
-				currentIndex++
-				if exists {
-					result.SetOwnNonEnumerable("value", val)
-					result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-					return vm.NewValueFromPlainObject(result), nil
-				}
-			}
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-			return vm.NewValueFromPlainObject(result), nil
-		}))
+		it.SetOwn("[[IteratedSet]]", thisSet)
+		it.SetOwn("[[SetNextIndex]]", vm.NumberValue(0))
+		it.SetOwn("[[SetIterationKind]]", vm.NewString("keys"))
+		it.SetOwn("[[Exhausted]]", vm.BooleanValue(false))
+
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
 			return vm.NewValueFromPlainObject(it), nil
 		}), nil, nil, nil)
@@ -272,35 +250,20 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true
 		setProto.DefineOwnProperty("keys", v, &w, &e, &c)
 	}
-	// entries() yields [value, value] - uses live iteration
+	// entries() yields [value, value] - uses internal slots pattern
 	setProto.SetOwnNonEnumerable("entries", vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
 		thisSet := vmInstance.GetThis()
 		if thisSet.Type() != vm.TypeSet {
 			return vm.Undefined, vmInstance.NewTypeError("Set.prototype.entries called on incompatible receiver")
 		}
-		setObj := thisSet.AsSet()
+
+		// Create iterator object with internal slots, inheriting from SetIteratorPrototype
 		it := vm.NewObject(vmInstance.SetIteratorPrototype).AsPlainObject()
-		currentIndex := 0
-		it.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(a []vm.Value) (vm.Value, error) {
-			result := vm.NewObject(vm.Undefined).AsPlainObject()
-			// Live iteration: skip tombstones, check at each step
-			for currentIndex < setObj.OrderLen() {
-				val, exists := setObj.GetValueAt(currentIndex)
-				currentIndex++
-				if exists {
-					// Set entries() yields [value, value]
-					entry := vm.NewArray()
-					entry.AsArray().Append(val)
-					entry.AsArray().Append(val)
-					result.SetOwnNonEnumerable("value", entry)
-					result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-					return vm.NewValueFromPlainObject(result), nil
-				}
-			}
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-			return vm.NewValueFromPlainObject(result), nil
-		}))
+		it.SetOwn("[[IteratedSet]]", thisSet)
+		it.SetOwn("[[SetNextIndex]]", vm.NumberValue(0))
+		it.SetOwn("[[SetIterationKind]]", vm.NewString("entries"))
+		it.SetOwn("[[Exhausted]]", vm.BooleanValue(false))
+
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
 			return vm.NewValueFromPlainObject(it), nil
 		}), nil, nil, nil)
