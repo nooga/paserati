@@ -632,6 +632,19 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		arr := objVal.AsArray()
 		if propName == "length" {
 			// Setting length truncates or expands the array
+			// First validate the length value per ECMAScript spec
+			// Use toPrimitive to handle Number objects like new Number(6)
+			primValue := vm.toPrimitive(*valueToSet, "number")
+			newLenFloat := primValue.ToFloat()
+			newLen := uint32(newLenFloat)
+			// Check if the value is a valid array length (non-negative integer < 2^32)
+			if newLenFloat != float64(newLen) || newLenFloat < 0 {
+				err := vm.NewRangeError("Invalid array length")
+				if excErr, ok := err.(ExceptionError); ok {
+					vm.throwException(excErr.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
+				}
+			}
 			// Frozen arrays can't have length changed
 			if !arr.IsExtensible() {
 				// In strict mode, throw TypeError; in non-strict, silently fail
@@ -644,11 +657,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				}
 				return true, InterpretOK, *valueToSet // Silently fail in non-strict
 			}
-			newLen := int(valueToSet.ToFloat())
-			if newLen < 0 {
-				newLen = 0
-			}
-			arr.SetLength(newLen)
+			arr.SetLength(int(newLen))
 		} else {
 			// Check if property exists
 			_, exists := arr.GetOwn(propName)

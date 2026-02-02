@@ -173,6 +173,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create Array.prototype inheriting from Object.prototype
 	arrayProto := vm.NewObject(objectProto).AsPlainObject()
 
+	// Set Array.prototype.length = 0 per ECMAScript spec
+	arrayProto.SetOwnNonEnumerable("length", vm.NumberValue(0))
+
 	// Add Array prototype methods
 	arrayProto.SetOwnNonEnumerable("push", vm.NewNativeFunction(1, true, "push", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis().AsArray()
@@ -2047,15 +2050,26 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
+		// Step 1: Get items argument
 		if len(args) < 1 {
-			return vm.NewArray(), nil
+			// No items provided - treat as undefined which throws TypeError
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
 		arrayLike := args[0]
 
-		// Get optional mapFn and thisArg
+		// Step 2: If items is null or undefined, throw TypeError
+		if arrayLike.Type() == vm.TypeNull || arrayLike.Type() == vm.TypeUndefined {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+
+		// Step 3: Get optional mapFn and thisArg
 		var mapFn vm.Value = vm.Undefined
 		var thisArg vm.Value = vm.Undefined
-		if len(args) >= 2 && args[1].IsCallable() {
+		if len(args) >= 2 && !args[1].IsUndefined() {
+			// If mapFn is provided but not callable, throw TypeError
+			if !args[1].IsCallable() {
+				return vm.Undefined, vmInstance.NewTypeError("Array.from: mapFn must be a function")
+			}
 			mapFn = args[1]
 		}
 		if len(args) >= 3 {
@@ -2682,10 +2696,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return promise, nil
 	}))
 
-	// Add Symbol.iterator implementation for arrays and array-like objects (Arguments)
-	// Use the global SymbolIterator (Symbol initializes before Array now)
-	// Register [Symbol.iterator] using native symbol key
-	iterFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
+	// Array.prototype.values() - returns iterator yielding values
+	// This is the same function as [Symbol.iterator] per ECMAScript spec
+	valuesFn := vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 
 		// First check for array type (AsArray() panics on wrong type, so check type first)
@@ -2711,23 +2724,12 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		return vm.Undefined, nil
 	})
+	arrayProto.SetOwnNonEnumerable("values", valuesFn)
+
+	// [Symbol.iterator] is the same function as values() per ECMAScript spec
 	// Native symbol key - make it writable and configurable like standard JavaScript
 	w, e, c := true, false, true // writable, not enumerable, configurable
-	arrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), iterFn, &w, &e, &c)
-
-	// Array.prototype.values() - returns iterator yielding values (same as [Symbol.iterator])
-	valuesFn := vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
-		thisVal := vmInstance.GetThis()
-		if thisVal.Type() == vm.TypeArray {
-			return createArrayIterator(vmInstance, thisVal.AsArray()), nil
-		}
-		// Handle array-like objects
-		if thisVal.IsObject() {
-			return createArrayLikeIterator(vmInstance, thisVal), nil
-		}
-		return vm.Undefined, nil
-	})
-	arrayProto.SetOwnNonEnumerable("values", valuesFn)
+	arrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), valuesFn, &w, &e, &c)
 
 	// Array.prototype.keys() - returns iterator yielding indices
 	keysFn := vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
@@ -2767,6 +2769,30 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		w, e, c := true, false, true // writable, not enumerable, configurable
 		arrayProto.DefineOwnProperty("constructor", v, &w, &e, &c)
 	}
+
+	// Add Symbol.unscopables per ECMAScript spec
+	// This object has properties that should be excluded from `with` statement bindings
+	unscopablesObj := vm.NewObject(vm.Null).AsPlainObject() // null prototype per spec
+	unscopablesObj.SetOwn("at", vm.True)
+	unscopablesObj.SetOwn("copyWithin", vm.True)
+	unscopablesObj.SetOwn("entries", vm.True)
+	unscopablesObj.SetOwn("fill", vm.True)
+	unscopablesObj.SetOwn("find", vm.True)
+	unscopablesObj.SetOwn("findIndex", vm.True)
+	unscopablesObj.SetOwn("findLast", vm.True)
+	unscopablesObj.SetOwn("findLastIndex", vm.True)
+	unscopablesObj.SetOwn("flat", vm.True)
+	unscopablesObj.SetOwn("flatMap", vm.True)
+	unscopablesObj.SetOwn("includes", vm.True)
+	unscopablesObj.SetOwn("keys", vm.True)
+	unscopablesObj.SetOwn("toReversed", vm.True)
+	unscopablesObj.SetOwn("toSorted", vm.True)
+	unscopablesObj.SetOwn("toSpliced", vm.True)
+	unscopablesObj.SetOwn("values", vm.True)
+	// Make Symbol.unscopables non-writable, non-enumerable, configurable
+	wU, eU, cU := false, false, true
+	arrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolUnscopables), vm.NewValueFromPlainObject(unscopablesObj), &wU, &eU, &cU)
+
 	// Set Array prototype in VM
 	vmInstance.ArrayPrototype = vm.NewValueFromPlainObject(arrayProto)
 
