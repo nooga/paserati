@@ -70,6 +70,7 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &Float64ArrayInitializer{})
 	initializers = append(initializers, &BigInt64ArrayInitializer{})
 	initializers = append(initializers, &BigUint64ArrayInitializer{})
+	initializers = append(initializers, &AtomicsInitializer{})
 
 	// Paserati intrinsics (compile-time type reflection)
 	initializers = append(initializers, &PaseratiInitializer{})
