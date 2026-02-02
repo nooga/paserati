@@ -241,12 +241,29 @@ func (u *Uint8ClampedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Uint8ClampedArray(buffer, byteOffset?, length?)
 			byteOffset := 0
 			if len(args) > 1 {
-				byteOffset = int(args[1].ToFloat())
+				var err error
+				byteOffset, err = ValidateTypedArrayByteOffset(vmInstance, args[1], 1)
+				if err != nil {
+					if err == ErrVMUnwinding {
+						return vm.Undefined, nil
+					}
+					return vm.Undefined, err
+				}
 			}
 
 			length := -1 // Use remaining buffer
-			if len(args) > 2 {
+			if len(args) > 2 && !args[2].IsUndefined() {
 				length = int(args[2].ToFloat())
+			}
+
+			// If length is auto-calculated, validate buffer alignment
+			if length == -1 {
+				if err := ValidateTypedArrayBufferAlignment(vmInstance, buffer, byteOffset, 1); err != nil {
+					if err == ErrVMUnwinding {
+						return vm.Undefined, nil
+					}
+					return vm.Undefined, err
+				}
 			}
 
 			return vm.NewTypedArray(vm.TypedArrayUint8Clamped, buffer, byteOffset, length), nil

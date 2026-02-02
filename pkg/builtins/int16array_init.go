@@ -193,11 +193,27 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if buf := arg.AsArrayBuffer(); buf != nil {
 			off := 0
 			if len(args) > 1 {
-				off = int(args[1].ToFloat())
+				var err error
+				off, err = ValidateTypedArrayByteOffset(vmx, args[1], 2)
+				if err != nil {
+					if err == ErrVMUnwinding {
+						return vm.Undefined, nil
+					}
+					return vm.Undefined, err
+				}
 			}
 			ln := -1
-			if len(args) > 2 {
+			if len(args) > 2 && !args[2].IsUndefined() {
 				ln = int(args[2].ToFloat())
+			}
+			// If length is auto-calculated, validate buffer alignment
+			if ln == -1 {
+				if err := ValidateTypedArrayBufferAlignment(vmx, buf, off, 2); err != nil {
+					if err == ErrVMUnwinding {
+						return vm.Undefined, nil
+					}
+					return vm.Undefined, err
+				}
 			}
 			return vm.NewTypedArray(vm.TypedArrayInt16, buf, off, ln), nil
 		}

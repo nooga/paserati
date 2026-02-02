@@ -1,8 +1,75 @@
 package builtins
 
 import (
+	"fmt"
+
 	"github.com/nooga/paserati/pkg/vm"
 )
+
+// ValidateTypedArrayByteOffset converts byteOffset to integer (calling valueOf if needed)
+// and validates that it's aligned to the element size.
+// Per ECMAScript spec 22.2.4.5:
+// - Step 7: Let offset be ? ToInteger(byteOffset)
+// - Step 10: If offset modulo elementSize ≠ 0, throw a RangeError
+func ValidateTypedArrayByteOffset(vmInstance *vm.VM, byteOffsetArg vm.Value, elementSize int) (int, error) {
+	// If undefined, default to 0
+	if byteOffsetArg.IsUndefined() {
+		return 0, nil
+	}
+
+	// Call ToInteger which properly invokes valueOf() through ToPrimitive
+	offset, err := toIntegerOrInfinityWithVM(vmInstance, byteOffsetArg)
+	if err != nil {
+		return 0, err
+	}
+
+	// Step 8: If offset < 0, throw a RangeError
+	if offset < 0 {
+		return 0, vmInstance.NewRangeError("Start offset is negative")
+	}
+
+	// Step 10: If offset modulo elementSize ≠ 0, throw a RangeError
+	if elementSize > 1 && offset%elementSize != 0 {
+		return 0, vmInstance.NewRangeError(fmt.Sprintf("Start offset of %s should be a multiple of %d", getTypedArrayNameFromElementSize(elementSize), elementSize))
+	}
+
+	return offset, nil
+}
+
+// getTypedArrayNameFromElementSize returns the TypedArray name based on element size
+func getTypedArrayNameFromElementSize(elementSize int) string {
+	switch elementSize {
+	case 1:
+		return "Int8Array" // or Uint8Array/Uint8ClampedArray
+	case 2:
+		return "Int16Array" // or Uint16Array
+	case 4:
+		return "Int32Array" // or Uint32Array/Float32Array
+	case 8:
+		return "Float64Array" // or BigInt64Array/BigUint64Array
+	default:
+		return "TypedArray"
+	}
+}
+
+// ValidateTypedArrayBufferAlignment checks that when length is undefined (auto-calculate),
+// the remaining buffer bytes after byteOffset is aligned to elementSize.
+// Per ECMAScript spec 22.2.4.5 step 13a:
+// - If bufferByteLength modulo elementSize ≠ 0, throw a RangeError
+func ValidateTypedArrayBufferAlignment(vmInstance *vm.VM, buffer *vm.ArrayBufferObject, byteOffset, elementSize int) error {
+	bufferByteLength := len(buffer.GetData())
+	remainingBytes := bufferByteLength - byteOffset
+
+	if remainingBytes < 0 {
+		return vmInstance.NewRangeError("Start offset is outside the bounds of the buffer")
+	}
+
+	if remainingBytes%elementSize != 0 {
+		return vmInstance.NewRangeError(fmt.Sprintf("Byte length of %s should be a multiple of %d", getTypedArrayNameFromElementSize(elementSize), elementSize))
+	}
+
+	return nil
+}
 
 // SetupTypedArrayConstructorProperties sets up the constructor properties with correct descriptors.
 // Per ECMAScript spec:
