@@ -787,6 +787,35 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		return true, InterpretOK, *dest
 	}
 
+	// 10e. DataView objects - check own properties first, then prototype chain
+	if objVal.Type() == TypeDataView {
+		// Then check prototype chain
+		proto := vm.DataViewPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			// Walk the prototype chain
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					cpo := current.AsPlainObject()
+					if v, ok := cpo.GetOwn(propName); ok {
+						*dest = v
+						return true, InterpretOK, *dest
+					}
+					current = cpo.prototype
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
 	// 11. Generator objects
 	if objVal.Type() == TypeGenerator {
 		// Generator objects: consult Generator.prototype chain for regular properties
@@ -1240,6 +1269,36 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 	case TypeArrayBuffer:
 		// ArrayBuffer: consult ArrayBuffer.prototype chain for symbol properties
 		proto := vm.ArrayBufferPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	case TypeDataView:
+		// DataView: consult DataView.prototype chain for symbol properties
+		proto := vm.DataViewPrototype
 		if proto.IsObject() {
 			po := proto.AsPlainObject()
 			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {

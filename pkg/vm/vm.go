@@ -272,6 +272,7 @@ type VM struct {
 	BigUint64ArrayPrototype     Value
 	ArrayBufferPrototype        Value
 	SharedArrayBufferPrototype  Value
+	DataViewPrototype           Value
 
 	// Flag to disable method binding during Function.prototype.call to prevent infinite recursion
 	disableMethodBinding bool
