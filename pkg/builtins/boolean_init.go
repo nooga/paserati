@@ -47,7 +47,7 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create Boolean.prototype inheriting from Object.prototype
 	// Boolean.prototype itself is a Boolean wrapper object with [[PrimitiveValue]] = false
 	booleanProto := vm.NewObject(objectProto).AsPlainObject()
-	booleanProto.SetOwn("[[PrimitiveValue]]", vm.BooleanValue(false))
+	booleanProto.SetOwnNonEnumerable("[[PrimitiveValue]]", vm.BooleanValue(false))
 
 	// Add Boolean prototype methods
 	booleanProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {

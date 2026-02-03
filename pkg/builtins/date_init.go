@@ -94,464 +94,629 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Add Date prototype methods
 	dateProto.SetOwnNonEnumerable("getTime", vm.NewNativeFunction(0, false, "getTime", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			return vm.NumberValue(timestamp), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		return vm.NumberValue(timestamp), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("getFullYear", vm.NewNativeFunction(0, false, "getFullYear", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Year())), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		return vm.NumberValue(float64(t.Year())), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("getMonth", vm.NewNativeFunction(0, false, "getMonth", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Month() - 1)), nil // JavaScript months are 0-based
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		return vm.NumberValue(float64(t.Month() - 1)), nil // JavaScript months are 0-based
 	}))
 
 	dateProto.SetOwnNonEnumerable("getDate", vm.NewNativeFunction(0, false, "getDate", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Day())), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		return vm.NumberValue(float64(t.Day())), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("getDay", vm.NewNativeFunction(0, false, "getDay", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Weekday())), nil // Sunday = 0 in JavaScript
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		return vm.NumberValue(float64(t.Weekday())), nil // Sunday = 0 in JavaScript
 	}))
 
 	dateProto.SetOwnNonEnumerable("getHours", vm.NewNativeFunction(0, false, "getHours", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Hour())), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		return vm.NumberValue(float64(t.Hour())), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("getMinutes", vm.NewNativeFunction(0, false, "getMinutes", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Minute())), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		return vm.NumberValue(float64(t.Minute())), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("getSeconds", vm.NewNativeFunction(0, false, "getSeconds", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Second())), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		return vm.NumberValue(float64(t.Second())), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("getMilliseconds", vm.NewNativeFunction(0, false, "getMilliseconds", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			return vm.NumberValue(float64(t.Nanosecond() / 1000000)), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		return vm.NumberValue(float64(t.Nanosecond() / 1000000)), nil
 	}))
 
 	// UTC getter methods
 	dateProto.SetOwnNonEnumerable("getUTCFullYear", vm.NewNativeFunction(0, false, "getUTCFullYear", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp)).UTC()
-			return vm.NumberValue(float64(t.Year())), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp)).UTC()
+		return vm.NumberValue(float64(t.Year())), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("getUTCMonth", vm.NewNativeFunction(0, false, "getUTCMonth", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp)).UTC()
-			return vm.NumberValue(float64(t.Month() - 1)), nil // JavaScript months are 0-based
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp)).UTC()
+		return vm.NumberValue(float64(t.Month() - 1)), nil // JavaScript months are 0-based
 	}))
 
 	dateProto.SetOwnNonEnumerable("getUTCDate", vm.NewNativeFunction(0, false, "getUTCDate", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp)).UTC()
-			return vm.NumberValue(float64(t.Day())), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp)).UTC()
+		return vm.NumberValue(float64(t.Day())), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("getUTCDay", vm.NewNativeFunction(0, false, "getUTCDay", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp)).UTC()
-			return vm.NumberValue(float64(t.Weekday())), nil // Sunday = 0 in JavaScript
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp)).UTC()
+		return vm.NumberValue(float64(t.Weekday())), nil // Sunday = 0 in JavaScript
 	}))
 
 	dateProto.SetOwnNonEnumerable("getUTCHours", vm.NewNativeFunction(0, false, "getUTCHours", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp)).UTC()
-			return vm.NumberValue(float64(t.Hour())), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp)).UTC()
+		return vm.NumberValue(float64(t.Hour())), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("getUTCMinutes", vm.NewNativeFunction(0, false, "getUTCMinutes", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp)).UTC()
-			return vm.NumberValue(float64(t.Minute())), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp)).UTC()
+		return vm.NumberValue(float64(t.Minute())), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("getUTCSeconds", vm.NewNativeFunction(0, false, "getUTCSeconds", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp)).UTC()
-			return vm.NumberValue(float64(t.Second())), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp)).UTC()
+		return vm.NumberValue(float64(t.Second())), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("getUTCMilliseconds", vm.NewNativeFunction(0, false, "getUTCMilliseconds", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp)).UTC()
-			return vm.NumberValue(float64(t.Nanosecond() / 1000000)), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp)).UTC()
+		return vm.NumberValue(float64(t.Nanosecond() / 1000000)), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("getTimezoneOffset", vm.NewNativeFunction(0, false, "getTimezoneOffset", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			_, offset := t.Zone()
-			return vm.NumberValue(float64(-offset / 60)), nil // JavaScript returns minutes, negative for east of UTC
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		_, offset := t.Zone()
+		return vm.NumberValue(float64(-offset / 60)), nil // JavaScript returns minutes, negative for east of UTC
 	}))
 
 	// setTime method
 	dateProto.SetOwnNonEnumerable("setTime", vm.NewNativeFunction(1, false, "setTime", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
-		if len(args) < 1 {
-			return vm.NaN, nil
+		// Step 1: Check this is a Date object
+		_, err := thisTimeValue(vmInstance, thisDate)
+		if err != nil {
+			return vm.Undefined, err
 		}
-		newTimestamp := args[0].ToFloat()
+		// Step 2: Convert argument to number
+		var newTimestamp float64
+		if len(args) < 1 {
+			newTimestamp = math.NaN()
+		} else {
+			newTimestamp = args[0].ToFloat()
+		}
+		// Step 3: Set the timestamp
 		setDateTimestamp(thisDate, newTimestamp)
 		return vm.NumberValue(newTimestamp), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("setDate", vm.NewNativeFunction(1, false, "setDate", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
+		// Step 1: Get current time value (and validate this is Date)
+		timestamp, err := thisTimeValue(vmInstance, thisDate)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// Step 2: Convert argument to number
+		var day float64
 		if len(args) < 1 {
+			day = math.NaN()
+		} else {
+			day = args[0].ToFloat()
+		}
+		// Step 3: If current date is invalid, return NaN
+		if math.IsNaN(timestamp) || math.IsNaN(day) {
+			setDateTimestamp(thisDate, math.NaN())
 			return vm.NaN, nil
 		}
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			day := int(args[0].ToFloat())
-			newTime := time.Date(t.Year(), t.Month(), day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
-			newTimestamp := float64(newTime.UnixMilli())
-			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp), nil
-		}
-		return vm.NaN, nil
+		t := time.UnixMilli(int64(timestamp))
+		newTime := time.Date(t.Year(), t.Month(), int(day), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+		newTimestamp := float64(newTime.UnixMilli())
+		setDateTimestamp(thisDate, newTimestamp)
+		return vm.NumberValue(newTimestamp), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("setMonth", vm.NewNativeFunction(2, false, "setMonth", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
+		// Step 1: Get current time value (and validate this is Date)
+		timestamp, err := thisTimeValue(vmInstance, thisDate)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// Step 2: Convert arguments to numbers
+		var monthNum float64
 		if len(args) < 1 {
+			monthNum = math.NaN()
+		} else {
+			monthNum = args[0].ToFloat()
+		}
+		// Step 3: If current date is invalid, return NaN
+		if math.IsNaN(timestamp) || math.IsNaN(monthNum) {
+			setDateTimestamp(thisDate, math.NaN())
 			return vm.NaN, nil
 		}
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			month := time.Month(int(args[0].ToFloat()) + 1) // JavaScript months are 0-based
-
-			// Use existing day if second parameter not provided
-			day := t.Day()
-			if len(args) >= 2 {
-				day = int(args[1].ToFloat())
-			}
-
-			newTime := time.Date(t.Year(), month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
-			newTimestamp := float64(newTime.UnixMilli())
-			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp), nil
+		t := time.UnixMilli(int64(timestamp))
+		month := time.Month(int(monthNum) + 1) // JavaScript months are 0-based
+		// Use existing day if second parameter not provided
+		day := t.Day()
+		if len(args) >= 2 {
+			day = int(args[1].ToFloat())
 		}
-		return vm.NaN, nil
+		newTime := time.Date(t.Year(), month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+		newTimestamp := float64(newTime.UnixMilli())
+		setDateTimestamp(thisDate, newTimestamp)
+		return vm.NumberValue(newTimestamp), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("setFullYear", vm.NewNativeFunction(3, false, "setFullYear", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
+		// Step 1: Get current time value (and validate this is Date)
+		timestamp, err := thisTimeValue(vmInstance, thisDate)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// Step 2: Convert arguments to numbers
+		var yearNum float64
 		if len(args) < 1 {
+			yearNum = math.NaN()
+		} else {
+			yearNum = args[0].ToFloat()
+		}
+		// Step 3: If current date is invalid for year, handle specially
+		// For setFullYear, if date is invalid but year is valid, start from a default date
+		var t time.Time
+		if math.IsNaN(timestamp) {
+			// Per spec, if time value is NaN, treat as if it's +0 for UTC
+			t = time.UnixMilli(0).UTC()
+		} else {
+			t = time.UnixMilli(int64(timestamp))
+		}
+		if math.IsNaN(yearNum) {
+			setDateTimestamp(thisDate, math.NaN())
 			return vm.NaN, nil
 		}
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			year := int(args[0].ToFloat())
-
-			// Use existing month if second parameter not provided
-			month := t.Month()
-			if len(args) >= 2 {
-				month = time.Month(int(args[1].ToFloat()) + 1) // JavaScript months are 0-based
-			}
-
-			// Use existing day if third parameter not provided
-			day := t.Day()
-			if len(args) >= 3 {
-				day = int(args[2].ToFloat())
-			}
-
-			newTime := time.Date(year, month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
-			newTimestamp := float64(newTime.UnixMilli())
-			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp), nil
+		year := int(yearNum)
+		// Use existing month if second parameter not provided
+		month := t.Month()
+		if len(args) >= 2 {
+			month = time.Month(int(args[1].ToFloat()) + 1) // JavaScript months are 0-based
 		}
-		return vm.NaN, nil
+		// Use existing day if third parameter not provided
+		day := t.Day()
+		if len(args) >= 3 {
+			day = int(args[2].ToFloat())
+		}
+		newTime := time.Date(year, month, day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+		newTimestamp := float64(newTime.UnixMilli())
+		setDateTimestamp(thisDate, newTimestamp)
+		return vm.NumberValue(newTimestamp), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("setHours", vm.NewNativeFunction(4, false, "setHours", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
+		// Step 1: Get current time value (and validate this is Date)
+		timestamp, err := thisTimeValue(vmInstance, thisDate)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// Step 2: Convert arguments to numbers
+		var hourNum float64
 		if len(args) < 1 {
+			hourNum = math.NaN()
+		} else {
+			hourNum = args[0].ToFloat()
+		}
+		// Step 3: If current date or hour is invalid, return NaN
+		if math.IsNaN(timestamp) || math.IsNaN(hourNum) {
+			setDateTimestamp(thisDate, math.NaN())
 			return vm.NaN, nil
 		}
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			hour := int(args[0].ToFloat())
-
-			// Use existing values if additional parameters not provided
-			minute := t.Minute()
-			if len(args) >= 2 {
-				minute = int(args[1].ToFloat())
-			}
-
-			second := t.Second()
-			if len(args) >= 3 {
-				second = int(args[2].ToFloat())
-			}
-
-			nanosecond := t.Nanosecond()
-			if len(args) >= 4 {
-				millisecond := int(args[3].ToFloat())
-				nanosecond = millisecond * 1000000
-			}
-
-			newTime := time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, nanosecond, t.Location())
-			newTimestamp := float64(newTime.UnixMilli())
-			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp), nil
+		t := time.UnixMilli(int64(timestamp))
+		hour := int(hourNum)
+		// Use existing values if additional parameters not provided
+		minute := t.Minute()
+		if len(args) >= 2 {
+			minute = int(args[1].ToFloat())
 		}
-		return vm.NaN, nil
+		second := t.Second()
+		if len(args) >= 3 {
+			second = int(args[2].ToFloat())
+		}
+		nanosecond := t.Nanosecond()
+		if len(args) >= 4 {
+			millisecond := int(args[3].ToFloat())
+			nanosecond = millisecond * 1000000
+		}
+		newTime := time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, nanosecond, t.Location())
+		newTimestamp := float64(newTime.UnixMilli())
+		setDateTimestamp(thisDate, newTimestamp)
+		return vm.NumberValue(newTimestamp), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("setMinutes", vm.NewNativeFunction(3, false, "setMinutes", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
+		// Step 1: Get current time value (and validate this is Date)
+		timestamp, err := thisTimeValue(vmInstance, thisDate)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// Step 2: Convert arguments to numbers
+		var minuteNum float64
 		if len(args) < 1 {
+			minuteNum = math.NaN()
+		} else {
+			minuteNum = args[0].ToFloat()
+		}
+		// Step 3: If current date or minute is invalid, return NaN
+		if math.IsNaN(timestamp) || math.IsNaN(minuteNum) {
+			setDateTimestamp(thisDate, math.NaN())
 			return vm.NaN, nil
 		}
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			minute := int(args[0].ToFloat())
-
-			// Use existing values if additional parameters not provided
-			second := t.Second()
-			if len(args) >= 2 {
-				second = int(args[1].ToFloat())
-			}
-
-			nanosecond := t.Nanosecond()
-			if len(args) >= 3 {
-				millisecond := int(args[2].ToFloat())
-				nanosecond = millisecond * 1000000
-			}
-
-			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), minute, second, nanosecond, t.Location())
-			newTimestamp := float64(newTime.UnixMilli())
-			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp), nil
+		t := time.UnixMilli(int64(timestamp))
+		minute := int(minuteNum)
+		// Use existing values if additional parameters not provided
+		second := t.Second()
+		if len(args) >= 2 {
+			second = int(args[1].ToFloat())
 		}
-		return vm.NaN, nil
+		nanosecond := t.Nanosecond()
+		if len(args) >= 3 {
+			millisecond := int(args[2].ToFloat())
+			nanosecond = millisecond * 1000000
+		}
+		newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), minute, second, nanosecond, t.Location())
+		newTimestamp := float64(newTime.UnixMilli())
+		setDateTimestamp(thisDate, newTimestamp)
+		return vm.NumberValue(newTimestamp), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("setSeconds", vm.NewNativeFunction(2, false, "setSeconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
+		// Step 1: Get current time value (and validate this is Date)
+		timestamp, err := thisTimeValue(vmInstance, thisDate)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// Step 2: Convert arguments to numbers
+		var secondNum float64
 		if len(args) < 1 {
+			secondNum = math.NaN()
+		} else {
+			secondNum = args[0].ToFloat()
+		}
+		// Step 3: If current date or second is invalid, return NaN
+		if math.IsNaN(timestamp) || math.IsNaN(secondNum) {
+			setDateTimestamp(thisDate, math.NaN())
 			return vm.NaN, nil
 		}
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			second := int(args[0].ToFloat())
-
-			// Use existing value if additional parameter not provided
-			nanosecond := t.Nanosecond()
-			if len(args) >= 2 {
-				millisecond := int(args[1].ToFloat())
-				nanosecond = millisecond * 1000000
-			}
-
-			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), second, nanosecond, t.Location())
-			newTimestamp := float64(newTime.UnixMilli())
-			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp), nil
+		t := time.UnixMilli(int64(timestamp))
+		second := int(secondNum)
+		// Use existing value if additional parameter not provided
+		nanosecond := t.Nanosecond()
+		if len(args) >= 2 {
+			millisecond := int(args[1].ToFloat())
+			nanosecond = millisecond * 1000000
 		}
-		return vm.NaN, nil
+		newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), second, nanosecond, t.Location())
+		newTimestamp := float64(newTime.UnixMilli())
+		setDateTimestamp(thisDate, newTimestamp)
+		return vm.NumberValue(newTimestamp), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("setMilliseconds", vm.NewNativeFunction(1, false, "setMilliseconds", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
+		// Step 1: Get current time value (and validate this is Date)
+		timestamp, err := thisTimeValue(vmInstance, thisDate)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// Step 2: Convert arguments to numbers
+		var msNum float64
 		if len(args) < 1 {
+			msNum = math.NaN()
+		} else {
+			msNum = args[0].ToFloat()
+		}
+		// Step 3: If current date or ms is invalid, return NaN
+		if math.IsNaN(timestamp) || math.IsNaN(msNum) {
+			setDateTimestamp(thisDate, math.NaN())
 			return vm.NaN, nil
 		}
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			millisecond := int(args[0].ToFloat()) * 1000000 // Convert ms to ns
-			newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), millisecond, t.Location())
-			newTimestamp := float64(newTime.UnixMilli())
-			setDateTimestamp(thisDate, newTimestamp)
-			return vm.NumberValue(newTimestamp), nil
-		}
-		return vm.NaN, nil
+		t := time.UnixMilli(int64(timestamp))
+		millisecond := int(msNum) * 1000000 // Convert ms to ns
+		newTime := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), millisecond, t.Location())
+		newTimestamp := float64(newTime.UnixMilli())
+		setDateTimestamp(thisDate, newTimestamp)
+		return vm.NumberValue(newTimestamp), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			return vm.NewString(t.Format("Mon Jan 02 2006 15:04:05 GMT-0700 (MST)")), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NewString("Invalid Date"), nil
+		if math.IsNaN(timestamp) {
+			return vm.NewString("Invalid Date"), nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		return vm.NewString(t.Format("Mon Jan 02 2006 15:04:05 GMT-0700 (MST)")), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("toISOString", vm.NewNativeFunction(0, false, "toISOString", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp)).UTC()
-			return vm.NewString(t.Format("2006-01-02T15:04:05.000Z")), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NewString("Invalid Date"), nil
+		if math.IsNaN(timestamp) {
+			return vm.Undefined, vmInstance.NewRangeError("Invalid time value")
+		}
+		t := time.UnixMilli(int64(timestamp)).UTC()
+		return vm.NewString(t.Format("2006-01-02T15:04:05.000Z")), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("toDateString", vm.NewNativeFunction(0, false, "toDateString", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			return vm.NewString(t.Format("Mon Jan 02 2006")), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NewString("Invalid Date"), nil
+		if math.IsNaN(timestamp) {
+			return vm.NewString("Invalid Date"), nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		return vm.NewString(t.Format("Mon Jan 02 2006")), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("toTimeString", vm.NewNativeFunction(0, false, "toTimeString", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			return vm.NewString(t.Format("15:04:05 GMT-0700 (MST)")), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NewString("Invalid Date"), nil
+		if math.IsNaN(timestamp) {
+			return vm.NewString("Invalid Date"), nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		return vm.NewString(t.Format("15:04:05 GMT-0700 (MST)")), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			return vm.NumberValue(timestamp), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		return vm.NumberValue(timestamp), nil
 	}))
 
 	// Locale methods
 	dateProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			// Simple locale format - could be enhanced with actual locale support
-			return vm.NewString(t.Format("1/2/2006, 3:04:05 PM")), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NewString("Invalid Date"), nil
+		if math.IsNaN(timestamp) {
+			return vm.NewString("Invalid Date"), nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		// Simple locale format - could be enhanced with actual locale support
+		return vm.NewString(t.Format("1/2/2006, 3:04:05 PM")), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("toLocaleDateString", vm.NewNativeFunction(0, false, "toLocaleDateString", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			// Simple locale format - could be enhanced with actual locale support
-			return vm.NewString(t.Format("1/2/2006")), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NewString("Invalid Date"), nil
+		if math.IsNaN(timestamp) {
+			return vm.NewString("Invalid Date"), nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		// Simple locale format - could be enhanced with actual locale support
+		return vm.NewString(t.Format("1/2/2006")), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("toLocaleTimeString", vm.NewNativeFunction(0, false, "toLocaleTimeString", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			// Simple locale format - could be enhanced with actual locale support
-			return vm.NewString(t.Format("3:04:05 PM")), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NewString("Invalid Date"), nil
+		if math.IsNaN(timestamp) {
+			return vm.NewString("Invalid Date"), nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		// Simple locale format - could be enhanced with actual locale support
+		return vm.NewString(t.Format("3:04:05 PM")), nil
 	}))
 
 	// toUTCString - returns date in UTC timezone as RFC 7231 format
 	dateProto.SetOwnNonEnumerable("toUTCString", vm.NewNativeFunction(0, false, "toUTCString", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			if math.IsNaN(timestamp) {
-				return vm.NewString("Invalid Date"), nil
-			}
-			t := time.UnixMilli(int64(timestamp)).UTC()
-			// Format: "Sun, 19 Jan 2025 10:30:00 GMT" (RFC 7231)
-			return vm.NewString(t.Format("Mon, 02 Jan 2006 15:04:05 GMT")), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NewString("Invalid Date"), nil
+		if math.IsNaN(timestamp) {
+			return vm.NewString("Invalid Date"), nil
+		}
+		t := time.UnixMilli(int64(timestamp)).UTC()
+		// Format: "Sun, 19 Jan 2025 10:30:00 GMT" (RFC 7231)
+		return vm.NewString(t.Format("Mon, 02 Jan 2006 15:04:05 GMT")), nil
 	}))
 
-	// toJSON method
+	// toJSON method - Per spec, works on any object with toISOString
 	dateProto.SetOwnNonEnumerable("toJSON", vm.NewNativeFunction(0, false, "toJSON", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			// Check if the timestamp is NaN (invalid date)
-			if math.IsNaN(timestamp) {
+		thisVal := vmInstance.GetThis()
+		// Step 1: Let O be ? ToObject(this value)
+		objVal, err := vmInstance.ToObject(thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// Step 2: ToPrimitive with hint Number
+		tv := vmInstance.ToPrimitive(objVal, "number")
+		// Step 3: If tv is Number and not finite, return null
+		if tv.IsNumber() {
+			numVal := tv.ToFloat()
+			if math.IsNaN(numVal) || math.IsInf(numVal, 0) {
 				return vm.Null, nil
 			}
-			// toJSON returns the same as toISOString
-			t := time.UnixMilli(int64(timestamp)).UTC()
-			return vm.NewString(t.Format("2006-01-02T15:04:05.000Z")), nil
 		}
-		// For invalid dates, toJSON returns null
-		return vm.Null, nil
+		// Step 4: Call toISOString method on this value (O, not the original this)
+		toISOString, err := vmInstance.GetProperty(objVal, "toISOString")
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if !toISOString.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("toISOString is not a function")
+		}
+		return vmInstance.Call(toISOString, objVal, nil)
 	}))
 
 	// Annex B methods
 	dateProto.SetOwnNonEnumerable("getYear", vm.NewNativeFunction(0, false, "getYear", func(args []vm.Value) (vm.Value, error) {
-		thisDate := vmInstance.GetThis()
-		if timestamp, ok := getDateTimestamp(thisDate); ok {
-			t := time.UnixMilli(int64(timestamp))
-			// getYear returns year - 1900
-			return vm.NumberValue(float64(t.Year() - 1900)), nil
+		timestamp, err := thisTimeValue(vmInstance, vmInstance.GetThis())
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NaN, nil
+		if math.IsNaN(timestamp) {
+			return vm.NaN, nil
+		}
+		t := time.UnixMilli(int64(timestamp))
+		// getYear returns year - 1900
+		return vm.NumberValue(float64(t.Year() - 1900)), nil
 	}))
 
 	dateProto.SetOwnNonEnumerable("setYear", vm.NewNativeFunction(1, false, "setYear", func(args []vm.Value) (vm.Value, error) {
@@ -805,7 +970,11 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 					if parsedTime, err := time.Parse(time.RFC3339, dateStr); err == nil {
 						timestamp = float64(parsedTime.UnixMilli())
 					} else if parsedTime, err := time.Parse("2006-01-02", dateStr); err == nil {
-						timestamp = float64(parsedTime.UnixMilli())
+						// Date-only format per ECMAScript spec defaults to UTC
+						timestamp = float64(parsedTime.UTC().UnixMilli())
+					} else if parsedTime, err := time.Parse("2006", dateStr); err == nil {
+						// Year-only format per ECMAScript spec defaults to January 1st UTC
+						timestamp = float64(parsedTime.UTC().UnixMilli())
 					} else {
 						// Invalid date string - use NaN to indicate invalid date
 						timestamp = float64(0x7FF8000000000000) // NaN value
@@ -817,7 +986,11 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if parsedTime, err := time.Parse(time.RFC3339, dateStr); err == nil {
 					timestamp = float64(parsedTime.UnixMilli())
 				} else if parsedTime, err := time.Parse("2006-01-02", dateStr); err == nil {
-					timestamp = float64(parsedTime.UnixMilli())
+					// Date-only format per ECMAScript spec defaults to UTC
+					timestamp = float64(parsedTime.UTC().UnixMilli())
+				} else if parsedTime, err := time.Parse("2006", dateStr); err == nil {
+					// Year-only format per ECMAScript spec defaults to January 1st UTC
+					timestamp = float64(parsedTime.UTC().UnixMilli())
 				} else {
 					// Invalid date string - use NaN to indicate invalid date
 					timestamp = math.NaN()
@@ -875,16 +1048,28 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		dateStr := args[0].ToString()
 
-		// Try common date formats
-		formats := []string{
-			time.RFC3339,
-			"2006-01-02T15:04:05Z",
-			"2006-01-02",
+		// Try common date formats (UTC formats first per ECMAScript spec)
+		// Year-only and date-only formats default to UTC
+		if parsedTime, err := time.Parse(time.RFC3339, dateStr); err == nil {
+			return vm.NumberValue(float64(parsedTime.UnixMilli())), nil
+		}
+		if parsedTime, err := time.Parse("2006-01-02T15:04:05Z", dateStr); err == nil {
+			return vm.NumberValue(float64(parsedTime.UnixMilli())), nil
+		}
+		if parsedTime, err := time.Parse("2006-01-02", dateStr); err == nil {
+			// Date-only per spec defaults to UTC
+			return vm.NumberValue(float64(parsedTime.UTC().UnixMilli())), nil
+		}
+		if parsedTime, err := time.Parse("2006", dateStr); err == nil {
+			// Year-only per spec defaults to January 1st UTC
+			return vm.NumberValue(float64(parsedTime.UTC().UnixMilli())), nil
+		}
+		// Try other common formats (local time)
+		otherFormats := []string{
 			"01/02/2006",
 			"January 2, 2006",
 		}
-
-		for _, format := range formats {
+		for _, format := range otherFormats {
 			if parsedTime, err := time.Parse(format, dateStr); err == nil {
 				return vm.NumberValue(float64(parsedTime.UnixMilli())), nil
 			}
@@ -1007,6 +1192,24 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 }
 
 // Helper functions to get/set timestamp from Date objects
+
+// thisTimeValue implements the abstract operation thisTimeValue(value) per ECMAScript spec.
+// It returns the [[DateValue]] internal slot if value is a Date object, otherwise returns an error.
+// This is used by Date.prototype methods to validate the "this" value.
+func thisTimeValue(vmInstance *vm.VM, dateValue vm.Value) (float64, error) {
+	obj := dateValue.AsPlainObject()
+	if obj == nil {
+		return 0, vmInstance.NewTypeError("this is not a Date object")
+	}
+	timestampValue, exists := obj.GetOwn("__timestamp__")
+	if !exists {
+		return 0, vmInstance.NewTypeError("this is not a Date object")
+	}
+	return timestampValue.ToFloat(), nil
+}
+
+// getDateTimestamp is a legacy helper that returns (timestamp, ok).
+// For new code, prefer thisTimeValue which properly throws TypeError.
 func getDateTimestamp(dateValue vm.Value) (float64, bool) {
 	if obj := dateValue.AsPlainObject(); obj != nil {
 		if timestampValue, exists := obj.GetOwn("__timestamp__"); exists {

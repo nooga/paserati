@@ -2102,6 +2102,37 @@ func (a *ArrayObject) GetOwnAccessor(name string) (Value, Value, bool, bool, boo
 	return getter, setter, enumerable, configurable, true
 }
 
+// NamedPropertyKeys returns all named (non-numeric) property keys on the array
+func (a *ArrayObject) NamedPropertyKeys() []string {
+	if a.properties == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(a.properties))
+	for k := range a.properties {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// GetNamedPropertyDescriptor returns the value and descriptor for a named property
+func (a *ArrayObject) GetNamedPropertyDescriptor(name string) (Value, bool, bool) {
+	if a.properties == nil {
+		return Undefined, false, false
+	}
+	v, ok := a.properties[name]
+	if !ok {
+		return Undefined, false, false
+	}
+	// Check if enumerable
+	enumerable := true
+	if a.propertyDesc != nil {
+		if desc, hasDesc := a.propertyDesc[name]; hasDesc {
+			enumerable = desc.Enumerable
+		}
+	}
+	return v, enumerable, true
+}
+
 // ArgumentsObject methods
 func (a *ArgumentsObject) Length() int {
 	return a.length

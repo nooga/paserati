@@ -343,7 +343,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create String.prototype inheriting from Object.prototype
 	// String.prototype itself has [[PrimitiveValue]] = "" per ES spec
 	stringProto := vm.NewObject(objectProto).AsPlainObject()
-	stringProto.SetOwn("[[PrimitiveValue]]", vm.NewString(""))
+	stringProto.SetOwnNonEnumerable("[[PrimitiveValue]]", vm.NewString(""))
 	// String.prototype.length should be 0 (length of empty string "")
 	stringProto.SetOwnNonEnumerable("length", vm.NumberValue(0))
 

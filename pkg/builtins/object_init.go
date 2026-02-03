@@ -1194,98 +1194,284 @@ func objectCreateWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		obj = vm.NewObject(proto)
 	}
 
-	// If properties descriptor is provided, define properties
+	// If properties descriptor is provided, define properties using defineProperties logic
 	if len(args) >= 2 && !args[1].IsUndefined() {
-		propertiesDesc := args[1]
-		if !propertiesDesc.IsObject() {
-			return vm.Undefined, vmInstance.NewTypeError("Properties must be an object")
+		// Call Object.defineProperties logic
+		_, err := objectDefinePropertiesImpl(vmInstance, obj, args[1])
+		if err != nil {
+			return vm.Undefined, err
 		}
+	}
 
-		// Iterate over own enumerable properties of the descriptor object
-		plainObj := obj.AsPlainObject()
-		if plainObj == nil {
-			return vm.Undefined, vmInstance.NewTypeError("Created object is not a plain object")
-		}
+	return obj, nil
+}
 
-		descObj := propertiesDesc.AsPlainObject()
-		if descObj != nil {
-			for _, key := range descObj.OwnKeys() {
-				propDesc, _, enumerable, _, ok := descObj.GetOwnDescriptor(key)
-				if !ok || !enumerable {
-					continue // Only process own enumerable properties
+// objectDefinePropertiesImpl is the core implementation for Object.defineProperties and Object.create
+// It properly handles getters on descriptor objects per ECMAScript 8.10.5 ToPropertyDescriptor
+func objectDefinePropertiesImpl(vmInstance *vm.VM, obj vm.Value, propertiesDesc vm.Value) (vm.Value, error) {
+	if !propertiesDesc.IsObject() && !propertiesDesc.IsCallable() {
+		return vm.Undefined, vmInstance.NewTypeError("Properties must be an object")
+	}
+
+	// Get the plain object to define properties on
+	plainObj := obj.AsPlainObject()
+	if plainObj == nil {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot define properties on non-plain object")
+	}
+
+	// Helper to check if property exists and get its value using GetProperty (calls getters)
+	hasAndGetProperty := func(descObj vm.Value, propName string) (vm.Value, bool, error) {
+		// Check if property exists (including prototype chain)
+		var exists bool
+
+		// Helper to check Function.prototype for function types
+		checkFunctionPrototype := func() bool {
+			if vmInstance.FunctionPrototype.Type() == vm.TypeNativeFunctionWithProps {
+				nfp := vmInstance.FunctionPrototype.AsNativeFunctionWithProps()
+				if nfp != nil && nfp.Properties != nil {
+					return nfp.Properties.Has(propName)
 				}
-
-				// propDesc should be an object containing property descriptor
-				if !propDesc.IsObject() {
-					continue
-				}
-
-				propDescObj := propDesc.AsPlainObject()
-				if propDescObj == nil {
-					continue
-				}
-
-				// Extract descriptor properties
-				// Per ECMAScript 8.10.5 ToPropertyDescriptor, we use [[Get]] which follows prototype chain
-				var value vm.Value
-				var writable, enumFlag, configurable bool
-				var hasValue, hasWritable, hasEnumerable, hasConfigurable bool
-
-				// Check for 'value' property (using Get to follow prototype chain)
-				if v, ok := propDescObj.Get("value"); ok {
-					value = v
-					hasValue = true
-				}
-
-				// Check for 'writable' property
-				if v, ok := propDescObj.Get("writable"); ok {
-					writable = v.AsBoolean()
-					hasWritable = true
-				}
-
-				// Check for 'enumerable' property
-				if v, ok := propDescObj.Get("enumerable"); ok {
-					enumFlag = v.AsBoolean()
-					hasEnumerable = true
-				}
-
-				// Check for 'configurable' property
-				if v, ok := propDescObj.Get("configurable"); ok {
-					configurable = v.AsBoolean()
-					hasConfigurable = true
-				}
-
-				// Apply defaults: if not specified, writable/enumerable/configurable default to false
-				if !hasValue {
-					value = vm.Undefined
-				}
-
-				// Use pointers for DefineOwnProperty
-				var wPtr, ePtr, cPtr *bool
-				if hasWritable {
-					wPtr = &writable
-				} else {
-					// Default to false
-					f := false
-					wPtr = &f
-				}
-				if hasEnumerable {
-					ePtr = &enumFlag
-				} else {
-					// Default to false
-					f := false
-					ePtr = &f
-				}
-				if hasConfigurable {
-					cPtr = &configurable
-				} else {
-					// Default to false
-					f := false
-					cPtr = &f
-				}
-
-				plainObj.DefineOwnProperty(key, value, wPtr, ePtr, cPtr)
 			}
+			return false
+		}
+
+		switch descObj.Type() {
+		case vm.TypeObject:
+			if po := descObj.AsPlainObject(); po != nil {
+				exists = po.Has(propName)
+			}
+		case vm.TypeDictObject:
+			if do := descObj.AsDictObject(); do != nil {
+				_, exists = do.Get(propName)
+			}
+		case vm.TypeFunction:
+			fn := descObj.AsFunction()
+			if fn != nil {
+				if fn.Properties != nil && fn.Properties.Has(propName) {
+					exists = true
+				} else {
+					exists = checkFunctionPrototype()
+				}
+			}
+		case vm.TypeClosure:
+			cl := descObj.AsClosure()
+			if cl != nil {
+				if cl.Properties != nil && cl.Properties.Has(propName) {
+					exists = true
+				} else {
+					exists = checkFunctionPrototype()
+				}
+			}
+		case vm.TypeBoundFunction:
+			bf := descObj.AsBoundFunction()
+			if bf != nil {
+				if bf.Properties != nil && bf.Properties.Has(propName) {
+					exists = true
+				} else {
+					exists = checkFunctionPrototype()
+				}
+			}
+		case vm.TypeNativeFunctionWithProps:
+			nfp := descObj.AsNativeFunctionWithProps()
+			if nfp != nil {
+				if nfp.Properties != nil && nfp.Properties.Has(propName) {
+					exists = true
+				} else {
+					exists = checkFunctionPrototype()
+				}
+			}
+		case vm.TypeRegExp:
+			regex := descObj.AsRegExpObject()
+			if regex != nil {
+				if regex.Properties != nil && regex.Properties.Has(propName) {
+					exists = true
+				} else if vmInstance.RegExpPrototype.IsObject() {
+					proto := vmInstance.RegExpPrototype.AsPlainObject()
+					exists = proto.Has(propName)
+				}
+			}
+		case vm.TypeArray:
+			arr := descObj.AsArray()
+			if arr != nil {
+				if _, ok := arr.GetOwn(propName); ok {
+					exists = true
+				} else if vmInstance.ArrayPrototype.IsObject() {
+					proto := vmInstance.ArrayPrototype.AsPlainObject()
+					exists = proto.Has(propName)
+				}
+			}
+		case vm.TypeArguments:
+			args := descObj.AsArguments()
+			if args != nil {
+				if args.HasNamedProp(propName) {
+					exists = true
+				} else if vmInstance.ObjectPrototype.IsObject() {
+					proto := vmInstance.ObjectPrototype.AsPlainObject()
+					exists = proto.Has(propName)
+				}
+			}
+		}
+
+		if !exists {
+			return vm.Undefined, false, nil
+		}
+
+		// Property exists, use GetProperty to call getters
+		val, err := vmInstance.GetProperty(descObj, propName)
+		if err != nil {
+			return vm.Undefined, false, err
+		}
+		return val, true, nil
+	}
+
+	// Get keys from the properties descriptor
+	var keys []string
+	switch propertiesDesc.Type() {
+	case vm.TypeObject:
+		if po := propertiesDesc.AsPlainObject(); po != nil {
+			for _, key := range po.OwnKeys() {
+				if _, _, enumerable, _, ok := po.GetOwnDescriptor(key); ok && enumerable {
+					keys = append(keys, key)
+				}
+			}
+		}
+	case vm.TypeArray:
+		if arr := propertiesDesc.AsArray(); arr != nil {
+			// Include numeric indices
+			for i := 0; i < arr.Length(); i++ {
+				keys = append(keys, strconv.Itoa(i))
+			}
+			// Include named properties (like "prop" in the test)
+			for _, key := range arr.NamedPropertyKeys() {
+				// Check if enumerable
+				if _, enumerable, ok := arr.GetNamedPropertyDescriptor(key); ok && enumerable {
+					keys = append(keys, key)
+				}
+			}
+		}
+	default:
+		// For function types and others, try to get as PlainObject if possible
+		if po := propertiesDesc.AsPlainObject(); po != nil {
+			for _, key := range po.OwnKeys() {
+				if _, _, enumerable, _, ok := po.GetOwnDescriptor(key); ok && enumerable {
+					keys = append(keys, key)
+				}
+			}
+		}
+	}
+
+	// Process each property
+	for _, key := range keys {
+		// Get the property descriptor object
+		propDesc, err := vmInstance.GetProperty(propertiesDesc, key)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		// propDesc should be an object
+		if !propDesc.IsObject() && !propDesc.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Property description must be an object: " + key)
+		}
+
+		// Extract descriptor properties using hasAndGetProperty (calls getters)
+		var value vm.Value
+		var writable, enumFlag, configurable bool
+		var hasValue, hasWritable, hasEnumerable, hasConfigurable bool
+		var getter, setter vm.Value
+		var hasGetter, hasSetter bool
+
+		// Check for 'value' property
+		if v, exists, err := hasAndGetProperty(propDesc, "value"); err != nil {
+			return vm.Undefined, err
+		} else if exists {
+			hasValue = true
+			value = v
+		}
+
+		// Check for 'writable' property
+		if v, exists, err := hasAndGetProperty(propDesc, "writable"); err != nil {
+			return vm.Undefined, err
+		} else if exists {
+			hasWritable = true
+			writable = v.IsTruthy()
+		}
+
+		// Check for 'enumerable' property
+		if v, exists, err := hasAndGetProperty(propDesc, "enumerable"); err != nil {
+			return vm.Undefined, err
+		} else if exists {
+			hasEnumerable = true
+			enumFlag = v.IsTruthy()
+		}
+
+		// Check for 'configurable' property
+		if v, exists, err := hasAndGetProperty(propDesc, "configurable"); err != nil {
+			return vm.Undefined, err
+		} else if exists {
+			hasConfigurable = true
+			configurable = v.IsTruthy()
+		}
+
+		// Check for 'get' property
+		if v, exists, err := hasAndGetProperty(propDesc, "get"); err != nil {
+			return vm.Undefined, err
+		} else if exists {
+			hasGetter = true
+			getter = v
+			// Validate getter
+			if getter.Type() != vm.TypeUndefined && !getter.IsCallable() {
+				return vm.Undefined, vmInstance.NewTypeError("Getter must be a function")
+			}
+		}
+
+		// Check for 'set' property
+		if v, exists, err := hasAndGetProperty(propDesc, "set"); err != nil {
+			return vm.Undefined, err
+		} else if exists {
+			hasSetter = true
+			setter = v
+			// Validate setter
+			if setter.Type() != vm.TypeUndefined && !setter.IsCallable() {
+				return vm.Undefined, vmInstance.NewTypeError("Setter must be a function")
+			}
+		}
+
+		// Validate: can't have both data and accessor properties
+		if (hasValue || hasWritable) && (hasGetter || hasSetter) {
+			return vm.Undefined, vmInstance.NewTypeError("Invalid property descriptor. Cannot both specify accessors and a value or writable attribute")
+		}
+
+		// Apply defaults
+		if !hasValue && !(hasGetter || hasSetter) {
+			value = vm.Undefined
+		}
+
+		// Use pointers for DefineOwnProperty
+		var wPtr, ePtr, cPtr *bool
+		if hasWritable {
+			wPtr = &writable
+		} else if !(hasGetter || hasSetter) {
+			f := false
+			wPtr = &f
+		}
+		if hasEnumerable {
+			ePtr = &enumFlag
+		} else {
+			f := false
+			ePtr = &f
+		}
+		if hasConfigurable {
+			cPtr = &configurable
+		} else {
+			f := false
+			cPtr = &f
+		}
+
+		// Use accessor path if getter or setter is specified
+		if hasGetter || hasSetter {
+			plainObj.DefineAccessorProperty(key, getter, hasGetter, setter, hasSetter, ePtr, cPtr)
+		} else {
+			plainObj.DefineOwnProperty(key, value, wPtr, ePtr, cPtr)
 		}
 	}
 
@@ -1302,117 +1488,7 @@ func objectDefinePropertiesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value,
 		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperties called on non-object")
 	}
 
-	propertiesDesc := args[1]
-	if !propertiesDesc.IsObject() {
-		return vm.Undefined, vmInstance.NewTypeError("Properties must be an object")
-	}
-
-	// Get the plain object to define properties on
-	plainObj := obj.AsPlainObject()
-	if plainObj == nil {
-		return vm.Undefined, vmInstance.NewTypeError("Cannot define properties on non-plain object")
-	}
-
-	// Iterate over own enumerable properties of the descriptor object
-	descObj := propertiesDesc.AsPlainObject()
-	if descObj != nil {
-		for _, key := range descObj.OwnKeys() {
-			propDesc, _, enumerable, _, ok := descObj.GetOwnDescriptor(key)
-			if !ok || !enumerable {
-				continue // Only process own enumerable properties
-			}
-
-			// propDesc should be an object containing property descriptor
-			if !propDesc.IsObject() {
-				continue
-			}
-
-			propDescObj := propDesc.AsPlainObject()
-			if propDescObj == nil {
-				continue
-			}
-
-			// Extract descriptor properties
-			// Per ECMAScript 8.10.5 ToPropertyDescriptor, we use [[Get]] which follows prototype chain
-			var value vm.Value
-			var writable, enumFlag, configurable bool
-			var hasValue, hasWritable, hasEnumerable, hasConfigurable bool
-			var getter, setter vm.Value
-			var hasGetter, hasSetter bool
-
-			// Check for 'value' property (using Get to follow prototype chain)
-			if v, ok := propDescObj.Get("value"); ok {
-				value = v
-				hasValue = true
-			}
-
-			// Check for 'writable' property
-			if v, ok := propDescObj.Get("writable"); ok {
-				writable = v.AsBoolean()
-				hasWritable = true
-			}
-
-			// Check for 'enumerable' property
-			if v, ok := propDescObj.Get("enumerable"); ok {
-				enumFlag = v.AsBoolean()
-				hasEnumerable = true
-			}
-
-			// Check for 'configurable' property
-			if v, ok := propDescObj.Get("configurable"); ok {
-				configurable = v.AsBoolean()
-				hasConfigurable = true
-			}
-
-			// Check for accessor properties (get/set)
-			if g, ok := propDescObj.Get("get"); ok {
-				hasGetter = true
-				getter = g
-			}
-			if s, ok := propDescObj.Get("set"); ok {
-				hasSetter = true
-				setter = s
-			}
-
-			// Apply defaults: if not specified, writable/enumerable/configurable default to false
-			if !hasValue {
-				value = vm.Undefined
-			}
-
-			// Use pointers for DefineOwnProperty
-			var wPtr, ePtr, cPtr *bool
-			if hasWritable {
-				wPtr = &writable
-			} else if !(hasGetter || hasSetter) {
-				// Default to false only for data properties
-				f := false
-				wPtr = &f
-			}
-			if hasEnumerable {
-				ePtr = &enumFlag
-			} else {
-				// Default to false
-				f := false
-				ePtr = &f
-			}
-			if hasConfigurable {
-				cPtr = &configurable
-			} else {
-				// Default to false
-				f := false
-				cPtr = &f
-			}
-
-			// Use accessor path if getter or setter is specified
-			if hasGetter || hasSetter {
-				plainObj.DefineAccessorProperty(key, getter, hasGetter, setter, hasSetter, ePtr, cPtr)
-			} else {
-				plainObj.DefineOwnProperty(key, value, wPtr, ePtr, cPtr)
-			}
-		}
-	}
-
-	return obj, nil
+	return objectDefinePropertiesImpl(vmInstance, obj, args[1])
 }
 
 func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {

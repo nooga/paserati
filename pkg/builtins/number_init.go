@@ -223,7 +223,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create Number.prototype as a Number object with [[PrimitiveValue]] = 0
 	// Per ECMAScript spec, Number.prototype is a Number object whose [[NumberData]] is +0
 	numberProto := vm.NewObject(objectProto).AsPlainObject()
-	numberProto.SetOwn("[[PrimitiveValue]]", vm.NumberValue(0))
+	numberProto.SetOwnNonEnumerable("[[PrimitiveValue]]", vm.NumberValue(0))
 
 	// Add Number prototype methods
 	numberProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(1, false, "toString", func(args []vm.Value) (vm.Value, error) {

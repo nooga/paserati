@@ -123,7 +123,7 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		errorInstancePtr := errorInstance.AsPlainObject()
 
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
-		errorInstancePtr.SetOwn("[[ErrorData]]", vm.Undefined)
+		errorInstancePtr.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
 
 		// Set properties
 		errorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("Error"))
@@ -228,7 +228,7 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 		}
 		inst := vm.NewObject(vm.NewValueFromPlainObject(proto)).AsPlainObject()
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
-		inst.SetOwn("[[ErrorData]]", vm.Undefined)
+		inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
 		inst.SetOwnNonEnumerable("name", vm.NewString(name))
 		inst.SetOwnNonEnumerable("message", vm.NewString(message))
 		inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))

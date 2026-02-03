@@ -66,7 +66,7 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		syntaxErrorInstancePtr := syntaxErrorInstance.AsPlainObject()
 
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
-		syntaxErrorInstancePtr.SetOwn("[[ErrorData]]", vm.Undefined)
+		syntaxErrorInstancePtr.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
 
 		// Set properties (override name, set message and stack)
 		syntaxErrorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("SyntaxError"))

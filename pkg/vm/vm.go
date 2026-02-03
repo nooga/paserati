@@ -14702,21 +14702,21 @@ func (vm *VM) IsInStrictMode() bool {
 // NewBooleanObject creates a Boolean wrapper object with the given primitive value
 func (vm *VM) NewBooleanObject(primitiveValue bool) Value {
 	obj := NewObject(vm.BooleanPrototype).AsPlainObject()
-	obj.SetOwn("[[PrimitiveValue]]", BooleanValue(primitiveValue))
+	obj.SetOwnNonEnumerable("[[PrimitiveValue]]", BooleanValue(primitiveValue))
 	return NewValueFromPlainObject(obj)
 }
 
 // NewNumberObject creates a Number wrapper object with the given primitive value
 func (vm *VM) NewNumberObject(primitiveValue float64) Value {
 	obj := NewObject(vm.NumberPrototype).AsPlainObject()
-	obj.SetOwn("[[PrimitiveValue]]", NumberValue(primitiveValue))
+	obj.SetOwnNonEnumerable("[[PrimitiveValue]]", NumberValue(primitiveValue))
 	return NewValueFromPlainObject(obj)
 }
 
 // NewStringObject creates a String wrapper object with the given primitive value
 func (vm *VM) NewStringObject(primitiveValue string) Value {
 	obj := NewObject(vm.StringPrototype).AsPlainObject()
-	obj.SetOwn("[[PrimitiveValue]]", NewString(primitiveValue))
+	obj.SetOwnNonEnumerable("[[PrimitiveValue]]", NewString(primitiveValue))
 	// Add length property (number of UTF-16 code units)
 	// Per ECMAScript spec, String object's length is non-writable, non-enumerable, non-configurable
 	writable := false
@@ -14724,6 +14724,35 @@ func (vm *VM) NewStringObject(primitiveValue string) Value {
 	configurable := false
 	obj.DefineOwnProperty("length", IntegerValue(int32(UTF16Length(primitiveValue))), &writable, &enumerable, &configurable)
 	return NewValueFromPlainObject(obj)
+}
+
+// NewSymbolObject creates a Symbol wrapper object with the given primitive value
+func (vm *VM) NewSymbolObject(symbolValue Value) Value {
+	obj := NewObject(vm.SymbolPrototype).AsPlainObject()
+	obj.SetOwnNonEnumerable("[[PrimitiveValue]]", symbolValue)
+	return NewValueFromPlainObject(obj)
+}
+
+// ToObject converts a value to an object per ECMAScript specification.
+// Returns error for undefined and null, wraps primitives, passes objects through.
+func (vm *VM) ToObject(val Value) (Value, error) {
+	switch val.Type() {
+	case TypeUndefined:
+		return Undefined, vm.NewTypeError("Cannot convert undefined to object")
+	case TypeNull:
+		return Undefined, vm.NewTypeError("Cannot convert null to object")
+	case TypeBoolean:
+		return vm.NewBooleanObject(val.AsBoolean()), nil
+	case TypeFloatNumber, TypeIntegerNumber:
+		return vm.NewNumberObject(val.ToFloat()), nil
+	case TypeString:
+		return vm.NewStringObject(val.ToString()), nil
+	case TypeSymbol:
+		return vm.NewSymbolObject(val), nil
+	default:
+		// Already an object (or object-like type)
+		return val, nil
+	}
 }
 
 // compareBigIntRelational handles relational comparison (< > <= >=) when one operand is BigInt

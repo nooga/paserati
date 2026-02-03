@@ -66,7 +66,7 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		typeErrorInstancePtr := typeErrorInstance.AsPlainObject()
 
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
-		typeErrorInstancePtr.SetOwn("[[ErrorData]]", vm.Undefined)
+		typeErrorInstancePtr.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
 
 		// Set properties (override name, set message and stack)
 		typeErrorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("TypeError"))
