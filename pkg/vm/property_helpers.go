@@ -508,6 +508,10 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		if vm.SymbolPrototype.Type() == TypeObject {
 			prototype = vm.SymbolPrototype.AsPlainObject()
 		}
+	case TypeBigInt:
+		if vm.BigIntPrototype.Type() == TypeObject {
+			prototype = vm.BigIntPrototype.AsPlainObject()
+		}
 	case TypeGenerator:
 		// Check if generator has a custom prototype, otherwise use default
 		genObj := objVal.AsGenerator()

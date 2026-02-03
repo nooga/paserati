@@ -858,6 +858,29 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		}
 		return Undefined, nil
 
+	case TypeBigInt:
+		// BigInt values: check BigInt.prototype chain
+		if vm.BigIntPrototype.IsObject() {
+			proto := vm.BigIntPrototype.AsPlainObject()
+			// Check for accessor (getter) first
+			if getter, _, _, _, ok := proto.GetOwnAccessor(propName); ok {
+				if getter.Type() != TypeUndefined {
+					// Call the getter with this=obj (the BigInt)
+					result, err := vm.Call(getter, obj, nil)
+					if err != nil {
+						return Undefined, err
+					}
+					return result, nil
+				}
+				return Undefined, nil
+			}
+			// Check for regular property
+			if v, ok := proto.Get(propName); ok {
+				return v, nil
+			}
+		}
+		return Undefined, nil
+
 	default:
 		// For non-objects, just return undefined
 		return Undefined, nil

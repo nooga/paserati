@@ -2788,6 +2788,19 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			if configurablePtr == nil {
 				configurablePtr = &c0
 			}
+			// Preserve existing value when descriptor doesn't specify a value
+			// and we're not converting to an accessor property
+			if !hasValue && !isAccessor0 && !(hasGetter || hasSetter) {
+				if keyIsSymbol {
+					if existingVal, ok := plainObj.GetOwnByKey(vm.NewSymbolKey(propSym)); ok {
+						value = existingVal
+					}
+				} else {
+					if existingVal, ok := plainObj.GetOwn(propName); ok {
+						value = existingVal
+					}
+				}
+			}
 		} else {
 			// New property: default missing attributes to false
 			if !(hasGetter || hasSetter) {
