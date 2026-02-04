@@ -1218,6 +1218,47 @@ func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {
 		// Use the bound 'this' value
 		return vm.Call(boundFunc.OriginalFunction, boundFunc.BoundThis, finalArgs)
 
+	case TypeProxy:
+		// Handle Proxy with apply trap
+		proxy := fn.AsProxy()
+		if proxy.Revoked {
+			return Undefined, vm.NewTypeError("Cannot perform 'apply' on a proxy that has been revoked")
+		}
+
+		// Get the apply trap from handler (handler can be PlainObject or DictObject)
+		handler := proxy.Handler()
+		var applyTrap Value
+		var hasApplyTrap bool
+
+		switch handler.Type() {
+		case TypeObject:
+			applyTrap, hasApplyTrap = handler.AsPlainObject().GetOwn("apply")
+		case TypeDictObject:
+			applyTrap, hasApplyTrap = handler.AsDictObject().GetOwn("apply")
+		}
+
+		// Check for apply trap
+		if hasApplyTrap && applyTrap.Type() != TypeUndefined && applyTrap.Type() != TypeNull {
+			// Validate trap is callable
+			if !applyTrap.IsCallable() {
+				return Undefined, vm.NewTypeError("'apply' on proxy: trap is not a function")
+			}
+
+			// Convert args to array for trap call
+			argsArray := NewArray()
+			arrObj := argsArray.AsArray()
+			for _, arg := range args {
+				arrObj.Append(arg)
+			}
+
+			// Call handler.apply(target, thisArg, argumentsList)
+			trapArgs := []Value{proxy.Target(), thisValue, argsArray}
+			return vm.Call(applyTrap, handler, trapArgs)
+		}
+
+		// No apply trap, delegate to target
+		return vm.Call(proxy.Target(), thisValue, args)
+
 	default:
 		return Undefined, fmt.Errorf("cannot call non-function value of type %v", fn.Type())
 	}

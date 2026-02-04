@@ -68,15 +68,31 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 	if calleeVal.Type() == TypeProxy {
 		proxy := calleeVal.AsProxy()
 		if proxy.Revoked {
-			vm.runtimeError("Cannot call revoked Proxy")
+			vm.ThrowTypeError("Cannot perform 'apply' on a proxy that has been revoked")
+			return false, nil
+		}
+
+		// Get the apply trap from handler (handler can be PlainObject or DictObject)
+		handler := proxy.Handler()
+		var applyTrap Value
+		var hasApplyTrap bool
+
+		switch handler.Type() {
+		case TypeObject:
+			applyTrap, hasApplyTrap = handler.AsPlainObject().GetOwn("apply")
+		case TypeDictObject:
+			applyTrap, hasApplyTrap = handler.AsDictObject().GetOwn("apply")
+		default:
+			// Handler is not an object - should not happen if proxy was constructed correctly
+			vm.ThrowTypeError("Proxy handler is not an object")
 			return false, nil
 		}
 
 		// Check for apply trap
-		if applyTrap, ok := proxy.Handler().AsPlainObject().GetOwn("apply"); ok {
+		if hasApplyTrap && applyTrap.Type() != TypeUndefined && applyTrap.Type() != TypeNull {
 			// Validate trap is callable
 			if !applyTrap.IsCallable() {
-				vm.runtimeError("'apply' on proxy: trap is not a function")
+				vm.ThrowTypeError("'apply' on proxy: trap is not a function")
 				return false, nil
 			}
 
@@ -89,7 +105,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 
 			// Call handler.apply(target, thisArg, argumentsList)
 			trapArgs := []Value{proxy.Target(), thisValue, argsArray}
-			result, err := vm.Call(applyTrap, proxy.Handler(), trapArgs)
+			result, err := vm.Call(applyTrap, handler, trapArgs)
 			if err != nil {
 				if ee, ok := err.(ExceptionError); ok {
 					vm.throwException(ee.GetExceptionValue())

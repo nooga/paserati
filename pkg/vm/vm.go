@@ -9034,16 +9034,47 @@ startExecution:
 				proxy := constructorVal.AsProxy()
 				if proxy.Revoked {
 					frame.ip = callerIP
-					vm.runtimeError("Cannot construct revoked Proxy")
+					vm.ThrowTypeError("Cannot perform 'construct' on a proxy that has been revoked")
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 
-				// Check for construct trap
-				if constructTrap, ok := proxy.Handler().AsPlainObject().GetOwn("construct"); ok {
+				// Check for construct trap (handler can be PlainObject or DictObject)
+				var constructTrap Value
+				var hasConstructTrap bool
+				switch proxy.Handler().Type() {
+				case TypeObject:
+					constructTrap, hasConstructTrap = proxy.Handler().AsPlainObject().GetOwn("construct")
+				case TypeDictObject:
+					constructTrap, hasConstructTrap = proxy.Handler().AsDictObject().GetOwn("construct")
+				}
+
+				if hasConstructTrap && constructTrap.Type() != TypeUndefined && constructTrap.Type() != TypeNull {
 					// Validate trap is callable
 					if !constructTrap.IsCallable() {
 						frame.ip = callerIP
-						vm.runtimeError("'construct' on proxy: trap is not a function")
+						vm.ThrowTypeError("'construct' on proxy: trap is not a function")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, Undefined
 					}
 
@@ -9081,7 +9112,18 @@ startExecution:
 					// Result must be an object
 					if !result.IsObject() {
 						frame.ip = callerIP
-						vm.runtimeError("'construct' on proxy: trap result must be an object")
+						vm.ThrowTypeError("'construct' on proxy: trap result must be an object")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, Undefined
 					}
 
@@ -9091,8 +9133,39 @@ startExecution:
 				}
 
 				// No construct trap, delegate to target
-				// Replace constructorVal with target and continue with normal flow
+				// Save original constructor (the proxy) for new.target before replacing
+				// This ensures prototype lookup goes through the proxy's get trap
+				originalConstructor := constructorVal
 				constructorVal = proxy.Target()
+
+				// For proxy delegation, need to get prototype through the proxy
+				// to trigger any get trap (per ECMAScript spec GetPrototypeFromConstructor)
+				var proxyPrototype Value
+				var proxyPrototypeOk bool
+				// Access "prototype" on the original proxy to trigger get trap
+				protoResult, _, _ := vm.opGetProp(frame, ip, &originalConstructor, "prototype", &proxyPrototype)
+				proxyPrototypeOk = protoResult && proxyPrototype.Type() != TypeUndefined
+
+				// Check if proxy was revoked during prototype access
+				if proxy.Revoked {
+					frame.ip = callerIP
+					vm.ThrowTypeError("Cannot perform 'construct' on a proxy that has been revoked")
+					if !vm.unwinding {
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					return InterpretRuntimeError, Undefined
+				}
+
+				_ = originalConstructor // Keep for new.target reference
+				_ = proxyPrototypeOk    // Used below for prototype selection
+				_ = proxyPrototype      // Used below for prototype selection
 			}
 
 			switch constructorVal.Type() {

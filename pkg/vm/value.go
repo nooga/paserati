@@ -621,7 +621,17 @@ func (v Value) IsGenerator() bool {
 }
 
 func (v Value) IsCallable() bool {
-	return v.typ == TypeFunction || v.typ == TypeNativeFunction || v.typ == TypeNativeFunctionWithProps || v.typ == TypeClosure || v.typ == TypeBoundFunction
+	if v.typ == TypeFunction || v.typ == TypeNativeFunction || v.typ == TypeNativeFunctionWithProps || v.typ == TypeClosure || v.typ == TypeBoundFunction {
+		return true
+	}
+	// Proxy is callable if its target is callable
+	if v.typ == TypeProxy {
+		proxy := v.AsProxy()
+		if proxy != nil && !proxy.Revoked {
+			return proxy.Target().IsCallable()
+		}
+	}
+	return false
 }
 
 func (v Value) IsFunction() bool {

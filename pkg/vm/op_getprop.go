@@ -949,9 +949,16 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			return false, InterpretRuntimeError, Undefined
 		}
 
-		// Check if handler has a get trap
-		getTrap, ok := proxy.handler.AsPlainObject().GetOwn("get")
-		if ok {
+		// Check if handler has a get trap (handler can be PlainObject or DictObject)
+		var getTrap Value
+		var hasGetTrap bool
+		switch proxy.handler.Type() {
+		case TypeObject:
+			getTrap, hasGetTrap = proxy.handler.AsPlainObject().GetOwn("get")
+		case TypeDictObject:
+			getTrap, hasGetTrap = proxy.handler.AsDictObject().GetOwn("get")
+		}
+		if hasGetTrap && getTrap.Type() != TypeUndefined && getTrap.Type() != TypeNull {
 			// Validate trap is callable
 			if !getTrap.IsCallable() {
 				var excVal Value
@@ -1087,6 +1094,59 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				} else {
 					*dest = Undefined
 				}
+				return true, InterpretOK, *dest
+			} else if target.IsCallable() {
+				// Function target - look up properties from Function.prototype
+				// Function.prototype can be TypeNativeFunctionWithProps (common case)
+				// or TypeObject (less common)
+				if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
+					funcProto := vm.FunctionPrototype.AsNativeFunctionWithProps()
+					if v, ok := funcProto.Properties.GetOwn(propName); ok {
+						*dest = v
+						return true, InterpretOK, *dest
+					}
+					// Walk prototype chain from Function.prototype.Properties
+					current := funcProto.Properties.GetPrototype()
+					for current.typ != TypeNull && current.typ != TypeUndefined {
+						if current.IsObject() {
+							if proto := current.AsPlainObject(); proto != nil {
+								if v, ok := proto.GetOwn(propName); ok {
+									*dest = v
+									return true, InterpretOK, *dest
+								}
+								current = proto.prototype
+							} else {
+								break
+							}
+						} else {
+							break
+						}
+					}
+				} else if vm.FunctionPrototype.IsObject() {
+					funcProto := vm.FunctionPrototype.AsPlainObject()
+					if v, ok := funcProto.GetOwn(propName); ok {
+						*dest = v
+						return true, InterpretOK, *dest
+					}
+					// Walk prototype chain from Function.prototype
+					current := funcProto.prototype
+					for current.typ != TypeNull && current.typ != TypeUndefined {
+						if current.IsObject() {
+							if proto := current.AsPlainObject(); proto != nil {
+								if v, ok := proto.GetOwn(propName); ok {
+									*dest = v
+									return true, InterpretOK, *dest
+								}
+								current = proto.prototype
+							} else {
+								break
+							}
+						} else {
+							break
+						}
+					}
+				}
+				*dest = Undefined
 				return true, InterpretOK, *dest
 			} else {
 				*dest = Undefined
