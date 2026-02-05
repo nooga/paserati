@@ -7310,7 +7310,7 @@
 +language/expressions/class/static-init-await-reference.js
 +language/expressions/class/static-method-length-dflt.js
 +language/expressions/class/static-method-param-dflt-yield.js
--language/expressions/class/subclass-builtins/subclass-AggregateError.js
++language/expressions/class/subclass-builtins/subclass-AggregateError.js
 +language/expressions/class/subclass-builtins/subclass-Array.js
 +language/expressions/class/subclass-builtins/subclass-ArrayBuffer.js
 +language/expressions/class/subclass-builtins/subclass-BigInt64Array.js
@@ -7344,7 +7344,7 @@
 +language/expressions/class/subclass-builtins/subclass-Uint8Array.js
 +language/expressions/class/subclass-builtins/subclass-Uint8ClampedArray.js
 +language/expressions/class/subclass-builtins/subclass-WeakMap.js
--language/expressions/class/subclass-builtins/subclass-WeakRef.js
++language/expressions/class/subclass-builtins/subclass-WeakRef.js
 +language/expressions/class/subclass-builtins/subclass-WeakSet.js
 +language/expressions/coalesce/abrupt-is-a-short-circuit.js
 +language/expressions/coalesce/cannot-chain-head-with-logical-and.js
@@ -18757,7 +18757,7 @@
 +language/statements/class/static-method-param-yield.js
 -language/statements/class/strict-mode/arguments-callee.js
 +language/statements/class/strict-mode/with.js
--language/statements/class/subclass-builtins/subclass-AggregateError.js
++language/statements/class/subclass-builtins/subclass-AggregateError.js
 +language/statements/class/subclass-builtins/subclass-Array.js
 +language/statements/class/subclass-builtins/subclass-ArrayBuffer.js
 +language/statements/class/subclass-builtins/subclass-BigInt64Array.js
@@ -18791,7 +18791,7 @@
 +language/statements/class/subclass-builtins/subclass-Uint8Array.js
 +language/statements/class/subclass-builtins/subclass-Uint8ClampedArray.js
 +language/statements/class/subclass-builtins/subclass-WeakMap.js
--language/statements/class/subclass-builtins/subclass-WeakRef.js
++language/statements/class/subclass-builtins/subclass-WeakRef.js
 +language/statements/class/subclass-builtins/subclass-WeakSet.js
 +language/statements/class/subclass/binding.js
 +language/statements/class/subclass/builtin-objects/Array/contructor-calls-super-multiple-arguments.js

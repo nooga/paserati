@@ -111,6 +111,9 @@ type PlainObject struct {
 	privateSetters map[string]Value
 	// Extensible flag - when false, no new properties can be added
 	extensible bool
+	// Module namespace exotic object flag - when true, this is a module namespace
+	// with special [[Delete]] and [[Set]] behavior per ECMAScript 10.4.6
+	isModuleNamespace bool
 }
 
 // GetOwn looks up a direct (own) property by name. Returns (value, true) if present.
@@ -256,6 +259,17 @@ func (o *PlainObject) DeleteOwnByKey(key PropertyKey) bool {
 func (o *PlainObject) IsOwnPropertyNonConfigurable(name string) (exists bool, nonConfigurable bool) {
 	for _, f := range o.shape.fields {
 		if f.keyKind == KeyKindString && f.name == name {
+			return true, !f.configurable
+		}
+	}
+	return false, false
+}
+
+// IsOwnPropertyNonConfigurableByKey checks if a property exists and is non-configurable by key
+func (o *PlainObject) IsOwnPropertyNonConfigurableByKey(key PropertyKey) (exists bool, nonConfigurable bool) {
+	for _, f := range o.shape.fields {
+		if (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
+			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj) {
 			return true, !f.configurable
 		}
 	}
@@ -1047,6 +1061,17 @@ func (o *PlainObject) SetExtensible(extensible bool) {
 		o.extensible = false
 	}
 	// Silently ignore attempts to set extensible back to true
+}
+
+// SetModuleNamespace marks this object as a module namespace exotic object
+// which has special [[Delete]] and [[Set]] behavior per ECMAScript 10.4.6
+func (o *PlainObject) SetModuleNamespace(isNamespace bool) {
+	o.isModuleNamespace = isNamespace
+}
+
+// IsModuleNamespace returns true if this is a module namespace exotic object
+func (o *PlainObject) IsModuleNamespace() bool {
+	return o.isModuleNamespace
 }
 
 type DictObject struct {

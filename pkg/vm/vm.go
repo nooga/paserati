@@ -13765,6 +13765,42 @@ startExecution:
 				}
 			} else if obj.IsObject() {
 				if po := obj.AsPlainObject(); po != nil {
+					// Module Namespace Exotic Object [[Delete]] behavior (ECMAScript 10.4.6.8)
+					// For string properties: if the property exists in exports, throw TypeError
+					// (Symbols are handled normally below - not applicable here since propName is string)
+					if po.IsModuleNamespace() {
+						// Check if property exists in the namespace (exports)
+						if _, exists := po.GetOwn(propName); exists {
+							// Export property exists - throw TypeError
+							frame.ip = ip
+							vm.ThrowTypeError("Cannot delete property '" + propName + "' of [object Module]")
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							if vm.unwindingCrossedNative || vm.frameCount == 0 {
+								return InterpretRuntimeError, vm.currentException
+							}
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+						// Property doesn't exist in exports - return true
+						registers[destReg] = BooleanValue(true)
+						continue
+					}
+
 					// For GlobalObject, also check the heap's configurable flag
 					// Global var declarations and function declarations are stored in heap
 					// and marked as non-configurable (DontDelete) per ECMAScript spec
@@ -14078,7 +14114,75 @@ startExecution:
 			if obj.IsObject() {
 				if po := obj.AsPlainObject(); po != nil {
 					if key.Type() == TypeSymbol {
-						success = po.DeleteOwnByKey(NewSymbolKey(key))
+						// Check if property is non-configurable
+						symKey := NewSymbolKey(key)
+						// Module Namespace Exotic Object [[Delete]] for symbols (ECMAScript 10.4.6.8)
+						// For symbols: return OrdinaryDelete(O, P)
+						// But if the property is non-configurable, throw TypeError
+						// (Namespaces only exist in module context which is always strict)
+						if po.IsModuleNamespace() {
+							if exists, nonConfig := po.IsOwnPropertyNonConfigurableByKey(symKey); exists && nonConfig {
+								// Non-configurable property on namespace - always throw TypeError
+								frame.ip = ip
+								vm.ThrowTypeError("Cannot delete property '" + key.ToString() + "' of [object Module]")
+								if !vm.unwinding {
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
+								if vm.unwindingCrossedNative || vm.frameCount == 0 {
+									return InterpretRuntimeError, vm.currentException
+								}
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							// Symbol property doesn't exist or is configurable - delete succeeds
+							success = po.DeleteOwnByKey(symKey)
+						} else {
+							// Regular objects - check strict mode for non-configurable properties
+							if exists, nonConfig := po.IsOwnPropertyNonConfigurableByKey(symKey); exists && nonConfig {
+								if function.Chunk.IsStrict {
+									frame.ip = ip
+									vm.ThrowTypeError("Cannot delete property '" + key.ToString() + "' of #<Object>")
+									if !vm.unwinding {
+										frame = &vm.frames[vm.frameCount-1]
+										closure = frame.closure
+										function = closure.Fn
+										code = function.Chunk.Code
+										constants = function.Chunk.Constants
+										registers = frame.registers
+										ip = frame.ip
+										continue
+									}
+									if vm.unwindingCrossedNative || vm.frameCount == 0 {
+										return InterpretRuntimeError, vm.currentException
+									}
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
+								// Non-strict mode: return false
+								registers[destReg] = BooleanValue(false)
+								continue
+							}
+							success = po.DeleteOwnByKey(symKey)
+						}
 					} else {
 						propName := key.ToString()
 						// For GlobalObject, check the heap's configurable flag first
@@ -17605,6 +17709,8 @@ func (vm *VM) createModuleNamespace(modulePath string) Value {
 		// ES6 9.4.6: [[Prototype]] is null
 		namespace := NewObject(Null).AsPlainObject()
 		namespace.SetPrototype(Null)
+		// Mark this as a module namespace exotic object for [[Delete]]/[[Set]] handling
+		namespace.SetModuleNamespace(true)
 
 		// ES6 9.4.6: [[ToStringTag]] is "Module"
 		// This property is non-writable, non-enumerable, non-configurable (actually spec says @@toStringTag is usually on prototype,
@@ -17638,15 +17744,18 @@ func (vm *VM) createModuleNamespace(modulePath string) Value {
 		// For now, we'll make them writable: false, configurable: false, enumerable: true to mimic the user-facing behavior.
 		// Updates to the export will need to update this object (which we don't fully support yet for live bindings, but this is a step forward).
 
-		// TODO: Implement true live bindings. For now, we snapshot the values.
-		// To prevent user modification, we set writable: false.
+		// Per ECMAScript 10.4.6:
+		// Module namespace export properties are:
+		// - [[Writable]]: true (allows internal binding updates, but [[Set]] returns false)
+		// - [[Enumerable]]: true
+		// - [[Configurable]]: false
 		for _, exportName := range exportNames {
 			exportValue := moduleCtx.exports[exportName]
 
 			namespace.DefineOwnProperty(
 				exportName,
 				exportValue,
-				&falseVal, // writable: false
+				&trueVal,  // writable: true (per spec)
 				&trueVal,  // enumerable: true
 				&falseVal, // configurable: false
 			)

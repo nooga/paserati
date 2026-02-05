@@ -128,15 +128,20 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, nil
 	}))
 
-	// Reflect.set(target, propertyKey, value [, receiver])
-	// Implements ECMAScript 10.1.9.2 OrdinarySetWithOwnDescriptor
+	// Reflect.set(target, propertyKey [, value [, receiver]])
+	// Per ECMAScript spec, value defaults to undefined, receiver defaults to target
 	reflectObj.SetOwnNonEnumerable("set", vm.NewNativeFunction(3, false, "set", func(args []vm.Value) (vm.Value, error) {
-		if len(args) < 3 {
-			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.set requires at least 3 arguments")
+		if len(args) < 2 {
+			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.set requires at least 2 arguments")
 		}
 		target := args[0]
 		propKey := args[1].ToString()
-		value := args[2]
+
+		// Value defaults to undefined if not provided
+		value := vm.Undefined
+		if len(args) >= 3 {
+			value = args[2]
+		}
 
 		// Receiver defaults to target if not provided
 		receiver := target
@@ -146,6 +151,12 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		if !target.IsObject() {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.set called on non-object")
+		}
+
+		// Module Namespace Exotic Object [[Set]] behavior (ECMAScript 10.4.6.9)
+		// [[Set]] on a namespace always returns false
+		if po := target.AsPlainObject(); po != nil && po.IsModuleNamespace() {
+			return vm.BooleanValue(false), nil
 		}
 
 		// For Proxy targets, we need to use the set trap differently
@@ -235,18 +246,28 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.has requires 2 arguments")
 		}
 		target := args[0]
-		propKey := args[1].ToString()
+		propKeyArg := args[1]
 
 		// In ECMAScript, Reflect.has works with any object, including functions
 		if !target.IsObject() && !target.IsCallable() {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.has called on non-object")
 		}
 
+		// Handle symbol property keys
+		isSymbol := propKeyArg.Type() == vm.TypeSymbol
+		propKey := propKeyArg.ToString()
+
 		// Use the 'in' operator logic
 		hasProperty := false
 		switch target.Type() {
 		case vm.TypeObject:
-			hasProperty = target.AsPlainObject().Has(propKey)
+			obj := target.AsPlainObject()
+			if isSymbol {
+				// For symbols, check using HasByKey with symbol key
+				_, hasProperty = obj.GetOwnByKey(vm.NewSymbolKey(propKeyArg))
+			} else {
+				hasProperty = obj.Has(propKey)
+			}
 		case vm.TypeDictObject:
 			hasProperty = target.AsDictObject().Has(propKey)
 		case vm.TypeArray:
@@ -280,19 +301,69 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.deleteProperty(target, propertyKey)
+	// Per ECMAScript spec, this invokes [[Delete]] and returns the result
 	reflectObj.SetOwnNonEnumerable("deleteProperty", vm.NewNativeFunction(2, false, "deleteProperty", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.deleteProperty requires 2 arguments")
 		}
 		target := args[0]
+		propKeyArg := args[1]
 
 		if !target.IsObject() {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.deleteProperty called on non-object")
 		}
 
-		// Delete property (simplified - just returns true)
-		// A full implementation would actually remove the property
-		// For now we don't have a Delete method on objects
+		// Handle PlainObject
+		if po := target.AsPlainObject(); po != nil {
+			// Module Namespace Exotic Object [[Delete]] behavior (ECMAScript 10.4.6.8)
+			if po.IsModuleNamespace() {
+				if propKeyArg.Type() == vm.TypeSymbol {
+					// For symbols: return OrdinaryDelete(O, P)
+					// Check if property is non-configurable
+					symKey := vm.NewSymbolKey(propKeyArg)
+					if exists, nonConfig := po.IsOwnPropertyNonConfigurableByKey(symKey); exists && nonConfig {
+						// Non-configurable property - return false
+						return vm.BooleanValue(false), nil
+					}
+					// Property doesn't exist or is configurable - delete it
+					success := po.DeleteOwnByKey(symKey)
+					return vm.BooleanValue(success), nil
+				}
+				// For string properties: if the property exists in exports, return false
+				propKey := propKeyArg.ToString()
+				if _, exists := po.GetOwn(propKey); exists {
+					// Export property exists - return false (don't throw)
+					return vm.BooleanValue(false), nil
+				}
+				// Property doesn't exist in exports - return true
+				return vm.BooleanValue(true), nil
+			}
+
+			propKey := propKeyArg.ToString()
+
+			// Check if property exists and is non-configurable
+			exists, nonConfig := po.IsOwnPropertyNonConfigurable(propKey)
+			if exists && nonConfig {
+				// Non-configurable property - [[Delete]] returns false
+				return vm.BooleanValue(false), nil
+			}
+
+			// Delete the property
+			success := po.DeleteOwn(propKey)
+			return vm.BooleanValue(success), nil
+		}
+
+		// Handle DictObject
+		if d := target.AsDictObject(); d != nil {
+			propKey := propKeyArg.ToString()
+			success := d.DeleteOwn(propKey)
+			return vm.BooleanValue(success), nil
+		}
+
+		// Handle Array - arrays use PlainObject for property storage
+		// so they're handled by the PlainObject case above
+
+		// Default: property deleted successfully or didn't exist
 		return vm.BooleanValue(true), nil
 	}))
 
@@ -312,10 +383,18 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.defineProperty(target, propertyKey, attributes)
+	// Per ECMAScript spec, this returns boolean instead of throwing for invalid operations
 	reflectObj.SetOwnNonEnumerable("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", func(args []vm.Value) (vm.Value, error) {
+		if len(args) < 1 {
+			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.defineProperty requires a target")
+		}
+
+		// Use objectDefinePropertyWithVM which handles namespace objects properly
+		// For Reflect.defineProperty, we convert errors to false return value
 		result, err := objectDefinePropertyWithVM(vmInstance, args)
 		if err != nil {
-			return vm.BooleanValue(false), err
+			// Object.defineProperty threw - Reflect.defineProperty returns false
+			return vm.BooleanValue(false), nil
 		}
 		// defineProperty returns the object on success
 		return vm.BooleanValue(result.Type() != vm.TypeUndefined), nil

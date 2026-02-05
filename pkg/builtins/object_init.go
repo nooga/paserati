@@ -1820,6 +1820,17 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		return vm.Undefined, vmInstance.NewTypeError("Object.setPrototypeOf called on non-object")
 	}
 
+	// Module Namespace Exotic Object [[SetPrototypeOf]] behavior (ECMAScript 10.4.6.3)
+	// Uses SetImmutablePrototype which returns true if V is same as [[Prototype]], false otherwise
+	// For namespace objects, [[Prototype]] is always null
+	if plainObj := obj.AsPlainObject(); plainObj != nil && plainObj.IsModuleNamespace() {
+		// Namespace prototype is always null
+		if proto.Type() == vm.TypeNull {
+			return obj, nil // Success - proto matches
+		}
+		return vm.Undefined, vmInstance.NewTypeError("Cannot set prototype of immutable prototype exotic object")
+	}
+
 	// Set the prototype based on object type
 	success := true
 	switch obj.Type() {
@@ -2531,6 +2542,60 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		obj.Type() == vm.TypeBoundFunction
 	if !isObjectLike {
 		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperty called on non-object")
+	}
+
+	// Module Namespace Exotic Object [[DefineOwnProperty]] behavior (ECMAScript 10.4.6.7)
+	// Returns true if no change is requested, false otherwise
+	if plainObj := obj.AsPlainObject(); plainObj != nil && plainObj.IsModuleNamespace() {
+		// Get current property descriptor
+		var currentDesc vm.Value
+		if keyIsSymbol {
+			if _, _, wr, en, conf := plainObj.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym)); wr || en || conf {
+				// Property exists
+				currentDesc = vm.NewObject(vmInstance.ObjectPrototype)
+			}
+		} else {
+			if _, exists := plainObj.GetOwn(propName); exists {
+				// Property exists
+				currentDesc = vm.NewObject(vmInstance.ObjectPrototype)
+			}
+		}
+
+		// If property doesn't exist, fail
+		if currentDesc.Type() == vm.TypeUndefined {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot define property " + propName + " on a module namespace object")
+		}
+
+		// Property exists - check if descriptor requests any changes
+		// For namespace properties, we only allow descriptors that don't change anything
+		descObj := descriptor.AsPlainObject()
+		if descObj != nil {
+			// Check for value change
+			if val, hasValue := descObj.GetOwn("value"); hasValue {
+				if keyIsSymbol {
+					if currentVal, ok := plainObj.GetOwnByKey(vm.NewSymbolKey(propSym)); ok {
+						if !val.StrictlyEquals(currentVal) {
+							return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property " + propName + " on a module namespace object")
+						}
+					}
+				} else {
+					if currentVal, ok := plainObj.GetOwn(propName); ok {
+						if !val.StrictlyEquals(currentVal) {
+							return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property " + propName + " on a module namespace object")
+						}
+					}
+				}
+			}
+			// Check for configurable change (namespace props are always non-configurable)
+			if conf, hasConf := descObj.GetOwn("configurable"); hasConf {
+				if conf.IsTruthy() {
+					return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property " + propName + " on a module namespace object")
+				}
+			}
+		}
+
+		// No changes requested or descriptor matches - return the object
+		return obj, nil
 	}
 
 	// Per ECMAScript 8.10.5 ToPropertyDescriptor step 1: If Type(Obj) is not Object, throw TypeError

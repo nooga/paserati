@@ -4030,12 +4030,15 @@ func (c *Compiler) compileExportDefaultDeclaration(node *parser.ExportDefaultDec
 
 	// Register the default export
 	if c.IsModuleMode() {
-		// For now, we can't get the runtime value until execution
-		// So we register it with undefined and resolve later
-		// Default exports get stored with a generated name, assign a global index
-		globalIdx := int(c.GetOrAssignGlobalIndex("default"))
-		c.moduleBindings.DefineExport("default", "default", vm.Undefined, nil, globalIdx)
-		debugPrintf("// [Compiler] Default export registered\n")
+		// Get or assign a global index for the default export
+		globalIdx := c.GetOrAssignGlobalIndex("default")
+		c.moduleBindings.DefineExport("default", "default", vm.Undefined, nil, int(globalIdx))
+
+		// IMPORTANT: Store the compiled value to the global slot
+		// This ensures the default export value is accessible via the module namespace
+		c.emitSetGlobal(globalIdx, resultReg, node.Token.Line)
+
+		debugPrintf("// [Compiler] Default export registered at global[%d]\n", globalIdx)
 	} else {
 		debugPrintf("// [Compiler] Default export processed (no module mode)\n")
 	}
