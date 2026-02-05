@@ -174,7 +174,13 @@ type VM struct {
 	// With statement support - runtime stack of with objects
 	withObjectStack []Value
 
+	// Realm management
+	defaultRealm *Realm // The initial/main realm
+	currentRealm *Realm // Currently executing realm
+	realmCounter int    // For generating unique realm IDs
+
 	// Unified global heap for all modules and main program
+	// DEPRECATED: Use currentRealm.Heap instead. Kept for backwards compatibility.
 	heap *Heap
 
 	// Global object - the object that globalThis refers to
@@ -214,6 +220,7 @@ type VM struct {
 	StringIteratorPrototype        Value // %StringIteratorPrototype% - for string iterators
 	RegExpStringIteratorPrototype  Value // %RegExpStringIteratorPrototype% - for RegExp matchAll iterators
 	PromisePrototype               Value
+	DatePrototype                  Value
 	ErrorPrototype          Value
 	ErrorConstructor        Value // For NativeError constructors to inherit from
 	TypeErrorPrototype      Value
@@ -225,6 +232,11 @@ type VM struct {
 	AsyncFunctionPrototype         Value
 	GeneratorFunctionPrototype     Value // %GeneratorFunction.prototype% - prototype of generator functions
 	AsyncGeneratorFunctionPrototype Value // %AsyncGeneratorFunction.prototype% - prototype of async generator functions
+
+	// Cached constructors for instanceof checks
+	ArrayConstructor    Value
+	ObjectConstructor   Value
+	FunctionConstructor Value
 
 	// Well-known symbols (stored as singletons)
 	SymbolIterator           Value
@@ -247,7 +259,8 @@ type VM struct {
 	ThrowTypeErrorFunc Value
 
 	// Constructor call context for native functions
-	inConstructorCall bool // true when executing a native function via OpNew
+	inConstructorCall bool  // true when executing a native function via OpNew
+	currentNewTarget  Value // newTarget for Reflect.construct cross-realm support
 
 	// Exception/call boundary diagnostics
 	lastThrownException       Value  // remembers the last thrown exception value
@@ -409,7 +422,6 @@ func NewVM() *VM {
 		openUpvalueMap:          make(map[*Value]*Upvalue, 16),   // Map for O(1) lookup
 		propCache:               make(map[int]*PropInlineCache),  // Initialize inline cache
 		cacheStats:              ICacheStats{},                   // Initialize cache statistics
-		heap:                    NewHeap(64),                     // Initialize unified global heap
 		emptyRestArray:          NewArray(),                      // Initialize singleton empty array for rest params
 		errors:                  make([]errors.PaseratiError, 0), // Initialize error list
 		moduleContexts:          make(map[string]*ModuleContext), // Initialize module context cache
@@ -417,18 +429,20 @@ func NewVM() *VM {
 		globalsFromGlobalObject: make(map[uint16]bool),           // Track globals read from GlobalObject
 	}
 
-	// Initialize built-in prototypes first
-	vm.initializePrototypes()
+	// Create and initialize the default realm
+	realm := NewRealm(vm, vm.nextRealmID())
+	realm.InitializePrototypes()
+	realm.InitializeSymbols()
+	vm.defaultRealm = realm
+	vm.currentRealm = realm
 
-	// Create the global object with Object.prototype in its prototype chain
-	// This ensures globalThis has access to Object.prototype methods like hasOwnProperty
-	vm.GlobalObject = NewObject(vm.ObjectPrototype).AsPlainObject()
+	// Sync realm values to VM's legacy fields for backwards compatibility
+	// This allows existing code that accesses vm.ObjectPrototype to still work
+	vm.syncPrototypesFromRealm()
 
-	// Run initialization callbacks
-	// if err := vm.initializeVM(); err != nil {
-	// 	// For now, just continue - we could add error handling later
-	// 	fmt.Fprintf(os.Stderr, "Warning: VM initialization callback failed: %v\n", err)
-	// }
+	// Use realm's heap and global object
+	vm.heap = realm.Heap
+	vm.GlobalObject = realm.GlobalObject
 
 	return vm
 }
@@ -446,6 +460,387 @@ func (vm *VM) IncrementCallDepth() {
 // DecrementCallDepth decrements the call depth counter
 func (vm *VM) DecrementCallDepth() {
 	vm.callDepth--
+}
+
+// nextRealmID generates a unique ID for a new realm
+func (vm *VM) nextRealmID() int {
+	vm.realmCounter++
+	return vm.realmCounter
+}
+
+// CurrentRealm returns the active realm for the current execution.
+func (vm *VM) CurrentRealm() *Realm {
+	return vm.currentRealm
+}
+
+// DefaultRealm returns the default/main realm.
+func (vm *VM) DefaultRealm() *Realm {
+	return vm.defaultRealm
+}
+
+// CreateRealm creates a new isolated realm with initialized prototypes and symbols.
+// Note: Builtins must be initialized separately by the driver using InitializeRealmBuiltins.
+func (vm *VM) CreateRealm() *Realm {
+	realm := NewRealm(vm, vm.nextRealmID())
+	realm.InitializePrototypes()
+	realm.InitializeSymbols()
+	return realm
+}
+
+// WithRealm executes a function in a specific realm context.
+// The current realm is temporarily switched to the given realm, then restored after fn returns.
+// After fn() completes, the VM's prototype fields are synced BACK to the realm so that
+// any changes made by builtins are preserved in the realm.
+func (vm *VM) WithRealm(realm *Realm, fn func()) {
+	prev := vm.currentRealm
+	vm.currentRealm = realm
+	vm.syncPrototypesFromRealm() // Update legacy fields for backwards compatibility
+	defer func() {
+		vm.currentRealm = prev
+		vm.syncPrototypesFromRealm()
+	}()
+	fn()
+	// Sync back to realm after fn() runs - this ensures builtins' prototype changes
+	// are stored in the realm (not just in VM's legacy fields)
+	vm.SyncPrototypesToRealm()
+}
+
+// WithRealmValue executes a function in a specific realm context and returns its result.
+// After fn() completes, the VM's prototype fields are synced BACK to the realm.
+func (vm *VM) WithRealmValue(realm *Realm, fn func() Value) Value {
+	prev := vm.currentRealm
+	vm.currentRealm = realm
+	vm.syncPrototypesFromRealm()
+	defer func() {
+		vm.currentRealm = prev
+		vm.syncPrototypesFromRealm()
+	}()
+	result := fn()
+	// Sync back to realm after fn() runs
+	vm.SyncPrototypesToRealm()
+	return result
+}
+
+// GetFunctionRealm returns the realm associated with a function.
+// Per ECMAScript 7.3.22 GetFunctionRealm:
+// - If function has [[Realm]], return it
+// - If bound function, recursively get realm of target
+// - If proxy, get realm of target (throws if revoked)
+// - Otherwise return current realm
+func (vm *VM) GetFunctionRealm(fn Value) (*Realm, error) {
+	switch fn.Type() {
+	case TypeFunction:
+		if fnObj := fn.AsFunction(); fnObj != nil {
+			if fnObj.HomeRealm != nil {
+				return fnObj.HomeRealm, nil
+			}
+		}
+	case TypeClosure:
+		if closure := fn.AsClosure(); closure != nil && closure.Fn != nil {
+			if closure.Fn.HomeRealm != nil {
+				return closure.Fn.HomeRealm, nil
+			}
+		}
+	case TypeNativeFunction:
+		if nfn := fn.AsNativeFunction(); nfn != nil {
+			if nfn.HomeRealm != nil {
+				return nfn.HomeRealm, nil
+			}
+		}
+	case TypeNativeFunctionWithProps:
+		if nfp := fn.AsNativeFunctionWithProps(); nfp != nil {
+			if nfp.HomeRealm != nil {
+				return nfp.HomeRealm, nil
+			}
+		}
+	case TypeBoundFunction:
+		if bf := fn.AsBoundFunction(); bf != nil {
+			// Recursively get realm from original function
+			return vm.GetFunctionRealm(bf.OriginalFunction)
+		}
+	case TypeProxy:
+		if proxy := fn.AsProxy(); proxy != nil {
+			if proxy.Revoked {
+				return nil, fmt.Errorf("cannot get realm of revoked proxy")
+			}
+			// Get realm from proxy target
+			return vm.GetFunctionRealm(proxy.Target())
+		}
+	}
+	// Default to current realm
+	return vm.currentRealm, nil
+}
+
+// GetNewTarget returns the current newTarget for native constructors.
+// Used by native constructors that need to implement GetPrototypeFromConstructor.
+func (vm *VM) GetNewTarget() Value {
+	return vm.currentNewTarget
+}
+
+// GetPrototypeFromConstructor implements ECMAScript 9.1.14 GetPrototypeFromConstructor.
+// Given a constructor (newTarget) and an intrinsic default prototype name, it returns the
+// prototype to use for creating a new object.
+// If the constructor's "prototype" property is an object, return it.
+// Otherwise, get the constructor's realm and return that realm's intrinsic.
+func (vm *VM) GetPrototypeFromConstructor(constructor Value, intrinsicDefault string) Value {
+	// Step 3: Let proto be ? Get(constructor, "prototype")
+	var proto Value
+	switch constructor.Type() {
+	case TypeFunction:
+		fn := constructor.AsFunction()
+		if fn != nil && fn.Properties != nil {
+			if p, ok := fn.Properties.GetOwn("prototype"); ok {
+				proto = p
+			}
+		}
+	case TypeClosure:
+		cl := constructor.AsClosure()
+		if cl != nil {
+			if cl.Properties != nil {
+				if p, ok := cl.Properties.GetOwn("prototype"); ok {
+					proto = p
+				}
+			} else if cl.Fn != nil && cl.Fn.Properties != nil {
+				if p, ok := cl.Fn.Properties.GetOwn("prototype"); ok {
+					proto = p
+				}
+			}
+		}
+	case TypeNativeFunctionWithProps:
+		nfp := constructor.AsNativeFunctionWithProps()
+		if nfp != nil && nfp.Properties != nil {
+			if p, ok := nfp.Properties.GetOwn("prototype"); ok {
+				proto = p
+			}
+		}
+	}
+
+	// Step 4: If Type(proto) is Object, return proto
+	if proto.IsObject() {
+		return proto
+	}
+
+	// Step 5: Let realm be ? GetFunctionRealm(constructor)
+	realm, err := vm.GetFunctionRealm(constructor)
+	if err != nil || realm == nil {
+		realm = vm.currentRealm
+	}
+
+	// Step 6: Return realm's intrinsic object named intrinsicDefaultProto
+	switch intrinsicDefault {
+	case "%ObjectPrototype%":
+		return realm.ObjectPrototype
+	case "%ArrayPrototype%":
+		return realm.ArrayPrototype
+	case "%FunctionPrototype%":
+		return realm.FunctionPrototype
+	case "%MapPrototype%":
+		return realm.MapPrototype
+	case "%SetPrototype%":
+		return realm.SetPrototype
+	case "%WeakMapPrototype%":
+		return realm.WeakMapPrototype
+	case "%WeakSetPrototype%":
+		return realm.WeakSetPrototype
+	case "%ErrorPrototype%":
+		return realm.ErrorPrototype
+	case "%TypeErrorPrototype%":
+		return realm.TypeErrorPrototype
+	case "%RegExpPrototype%":
+		return realm.RegExpPrototype
+	case "%PromisePrototype%":
+		return realm.PromisePrototype
+	case "%DatePrototype%":
+		return realm.DatePrototype
+	default:
+		// Fallback to ObjectPrototype
+		return realm.ObjectPrototype
+	}
+}
+
+// syncPrototypesFromRealm copies prototype and symbol values from currentRealm to VM's legacy fields.
+// This provides backwards compatibility for code that accesses vm.ObjectPrototype directly.
+func (vm *VM) syncPrototypesFromRealm() {
+	r := vm.currentRealm
+	if r == nil {
+		return
+	}
+
+	// Core prototypes
+	vm.ObjectPrototype = r.ObjectPrototype
+	vm.FunctionPrototype = r.FunctionPrototype
+	vm.ArrayPrototype = r.ArrayPrototype
+	vm.StringPrototype = r.StringPrototype
+	vm.NumberPrototype = r.NumberPrototype
+	vm.BigIntPrototype = r.BigIntPrototype
+	vm.BooleanPrototype = r.BooleanPrototype
+	vm.RegExpPrototype = r.RegExpPrototype
+	vm.MapPrototype = r.MapPrototype
+	vm.SetPrototype = r.SetPrototype
+	vm.WeakMapPrototype = r.WeakMapPrototype
+	vm.WeakSetPrototype = r.WeakSetPrototype
+	vm.PromisePrototype = r.PromisePrototype
+	vm.SymbolPrototype = r.SymbolPrototype
+	vm.DatePrototype = r.DatePrototype
+
+	// Error prototypes
+	vm.ErrorPrototype = r.ErrorPrototype
+	vm.TypeErrorPrototype = r.TypeErrorPrototype
+	vm.ReferenceErrorPrototype = r.ReferenceErrorPrototype
+
+	// Iterator prototypes
+	vm.IteratorPrototype = r.IteratorPrototype
+	vm.IteratorHelperPrototype = r.IteratorHelperPrototype
+	vm.WrapForValidIteratorPrototype = r.WrapForValidIteratorPrototype
+	vm.ArrayIteratorPrototype = r.ArrayIteratorPrototype
+	vm.MapIteratorPrototype = r.MapIteratorPrototype
+	vm.SetIteratorPrototype = r.SetIteratorPrototype
+	vm.StringIteratorPrototype = r.StringIteratorPrototype
+	vm.RegExpStringIteratorPrototype = r.RegExpStringIteratorPrototype
+
+	// Generator prototypes
+	vm.GeneratorPrototype = r.GeneratorPrototype
+	vm.GeneratorFunctionPrototype = r.GeneratorFunctionPrototype
+	vm.AsyncGeneratorPrototype = r.AsyncGeneratorPrototype
+	vm.AsyncGeneratorFunctionPrototype = r.AsyncGeneratorFunctionPrototype
+	vm.AsyncFunctionPrototype = r.AsyncFunctionPrototype
+
+	// TypedArray prototypes
+	vm.TypedArrayPrototype = r.TypedArrayPrototype
+	vm.Uint8ArrayPrototype = r.Uint8ArrayPrototype
+	vm.Uint8ClampedArrayPrototype = r.Uint8ClampedArrayPrototype
+	vm.Int8ArrayPrototype = r.Int8ArrayPrototype
+	vm.Int16ArrayPrototype = r.Int16ArrayPrototype
+	vm.Uint16ArrayPrototype = r.Uint16ArrayPrototype
+	vm.Uint32ArrayPrototype = r.Uint32ArrayPrototype
+	vm.Int32ArrayPrototype = r.Int32ArrayPrototype
+	vm.Float32ArrayPrototype = r.Float32ArrayPrototype
+	vm.Float64ArrayPrototype = r.Float64ArrayPrototype
+	vm.BigInt64ArrayPrototype = r.BigInt64ArrayPrototype
+	vm.BigUint64ArrayPrototype = r.BigUint64ArrayPrototype
+	vm.ArrayBufferPrototype = r.ArrayBufferPrototype
+	vm.SharedArrayBufferPrototype = r.SharedArrayBufferPrototype
+	vm.DataViewPrototype = r.DataViewPrototype
+
+	// Well-known symbols
+	vm.SymbolIterator = r.SymbolIterator
+	vm.SymbolToPrimitive = r.SymbolToPrimitive
+	vm.SymbolToStringTag = r.SymbolToStringTag
+	vm.SymbolHasInstance = r.SymbolHasInstance
+	vm.SymbolIsConcatSpreadable = r.SymbolIsConcatSpreadable
+	vm.SymbolSpecies = r.SymbolSpecies
+	vm.SymbolMatch = r.SymbolMatch
+	vm.SymbolMatchAll = r.SymbolMatchAll
+	vm.SymbolReplace = r.SymbolReplace
+	vm.SymbolSearch = r.SymbolSearch
+	vm.SymbolSplit = r.SymbolSplit
+	vm.SymbolUnscopables = r.SymbolUnscopables
+	vm.SymbolAsyncIterator = r.SymbolAsyncIterator
+	vm.SymbolDispose = r.SymbolDispose
+
+	// Constructors
+	vm.ErrorConstructor = r.ErrorConstructor
+	vm.TypedArrayConstructor = r.TypedArrayConstructor
+	vm.AsyncFunctionConstructor = r.AsyncFunctionConstructor
+	vm.ArrayConstructor = r.ArrayConstructor
+	vm.ObjectConstructor = r.ObjectConstructor
+	vm.FunctionConstructor = r.FunctionConstructor
+
+	// Intrinsics
+	vm.ThrowTypeErrorFunc = r.ThrowTypeErrorFunc
+}
+
+// SyncPrototypesToRealm copies prototype and symbol values from VM's legacy fields to currentRealm.
+// This is the reverse of syncPrototypesFromRealm and is used after builtins initialize
+// to ensure the realm gets the real prototypes (not just the initial placeholders).
+func (vm *VM) SyncPrototypesToRealm() {
+	r := vm.currentRealm
+	if r == nil {
+		return
+	}
+
+	// Core prototypes
+	r.ObjectPrototype = vm.ObjectPrototype
+	r.FunctionPrototype = vm.FunctionPrototype
+	r.ArrayPrototype = vm.ArrayPrototype
+	r.StringPrototype = vm.StringPrototype
+	r.NumberPrototype = vm.NumberPrototype
+	r.BigIntPrototype = vm.BigIntPrototype
+	r.BooleanPrototype = vm.BooleanPrototype
+	r.RegExpPrototype = vm.RegExpPrototype
+	r.MapPrototype = vm.MapPrototype
+	r.SetPrototype = vm.SetPrototype
+	r.WeakMapPrototype = vm.WeakMapPrototype
+	r.WeakSetPrototype = vm.WeakSetPrototype
+	r.PromisePrototype = vm.PromisePrototype
+	r.SymbolPrototype = vm.SymbolPrototype
+	r.DatePrototype = vm.DatePrototype
+
+	// Error prototypes
+	r.ErrorPrototype = vm.ErrorPrototype
+	r.TypeErrorPrototype = vm.TypeErrorPrototype
+	r.ReferenceErrorPrototype = vm.ReferenceErrorPrototype
+
+	// Iterator prototypes
+	r.IteratorPrototype = vm.IteratorPrototype
+	r.IteratorHelperPrototype = vm.IteratorHelperPrototype
+	r.WrapForValidIteratorPrototype = vm.WrapForValidIteratorPrototype
+	r.ArrayIteratorPrototype = vm.ArrayIteratorPrototype
+	r.MapIteratorPrototype = vm.MapIteratorPrototype
+	r.SetIteratorPrototype = vm.SetIteratorPrototype
+	r.StringIteratorPrototype = vm.StringIteratorPrototype
+	r.RegExpStringIteratorPrototype = vm.RegExpStringIteratorPrototype
+
+	// Generator prototypes
+	r.GeneratorPrototype = vm.GeneratorPrototype
+	r.GeneratorFunctionPrototype = vm.GeneratorFunctionPrototype
+	r.AsyncGeneratorPrototype = vm.AsyncGeneratorPrototype
+	r.AsyncGeneratorFunctionPrototype = vm.AsyncGeneratorFunctionPrototype
+	r.AsyncFunctionPrototype = vm.AsyncFunctionPrototype
+
+	// TypedArray prototypes
+	r.TypedArrayPrototype = vm.TypedArrayPrototype
+	r.Uint8ArrayPrototype = vm.Uint8ArrayPrototype
+	r.Uint8ClampedArrayPrototype = vm.Uint8ClampedArrayPrototype
+	r.Int8ArrayPrototype = vm.Int8ArrayPrototype
+	r.Int16ArrayPrototype = vm.Int16ArrayPrototype
+	r.Uint16ArrayPrototype = vm.Uint16ArrayPrototype
+	r.Uint32ArrayPrototype = vm.Uint32ArrayPrototype
+	r.Int32ArrayPrototype = vm.Int32ArrayPrototype
+	r.Float32ArrayPrototype = vm.Float32ArrayPrototype
+	r.Float64ArrayPrototype = vm.Float64ArrayPrototype
+	r.BigInt64ArrayPrototype = vm.BigInt64ArrayPrototype
+	r.BigUint64ArrayPrototype = vm.BigUint64ArrayPrototype
+	r.ArrayBufferPrototype = vm.ArrayBufferPrototype
+	r.SharedArrayBufferPrototype = vm.SharedArrayBufferPrototype
+	r.DataViewPrototype = vm.DataViewPrototype
+
+	// Well-known symbols
+	r.SymbolIterator = vm.SymbolIterator
+	r.SymbolToPrimitive = vm.SymbolToPrimitive
+	r.SymbolToStringTag = vm.SymbolToStringTag
+	r.SymbolHasInstance = vm.SymbolHasInstance
+	r.SymbolIsConcatSpreadable = vm.SymbolIsConcatSpreadable
+	r.SymbolSpecies = vm.SymbolSpecies
+	r.SymbolMatch = vm.SymbolMatch
+	r.SymbolMatchAll = vm.SymbolMatchAll
+	r.SymbolReplace = vm.SymbolReplace
+	r.SymbolSearch = vm.SymbolSearch
+	r.SymbolSplit = vm.SymbolSplit
+	r.SymbolUnscopables = vm.SymbolUnscopables
+	r.SymbolAsyncIterator = vm.SymbolAsyncIterator
+	r.SymbolDispose = vm.SymbolDispose
+
+	// Constructors
+	r.ErrorConstructor = vm.ErrorConstructor
+	r.TypedArrayConstructor = vm.TypedArrayConstructor
+	r.AsyncFunctionConstructor = vm.AsyncFunctionConstructor
+	r.ArrayConstructor = vm.ArrayConstructor
+	r.ObjectConstructor = vm.ObjectConstructor
+	r.FunctionConstructor = vm.FunctionConstructor
+
+	// Intrinsics
+	r.ThrowTypeErrorFunc = vm.ThrowTypeErrorFunc
 }
 
 // Reset clears the VM state, ready for new execution.
@@ -5119,6 +5514,9 @@ startExecution:
 
 			// Set the function's [[Prototype]] to the appropriate prototype
 			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
+				// Set the function's [[Realm]] to the current realm
+				cl.Fn.HomeRealm = vm.currentRealm
+
 				// Generator functions have GeneratorFunction.prototype as their [[Prototype]]
 				// Async generator functions have AsyncGeneratorFunction.prototype
 				// Regular functions have Function.prototype
@@ -5269,6 +5667,9 @@ startExecution:
 
 			// Set the function's [[Prototype]] to the appropriate prototype
 			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
+				// Set the function's [[Realm]] to the current realm
+				cl.Fn.HomeRealm = vm.currentRealm
+
 				// Generator functions have GeneratorFunction.prototype as their [[Prototype]]
 				// Async generator functions have AsyncGeneratorFunction.prototype
 				// Regular functions have Function.prototype

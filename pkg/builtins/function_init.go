@@ -112,8 +112,11 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	functionProtoObj.Properties.DefineAccessorProperty("arguments", argumentsGetter, true, argumentsSetter, true, &e, &c)
 
 	// Create Function constructor (length=1 per spec)
+	// Capture the realm at initialization time so functions created by this constructor
+	// will have their HomeRealm set to the realm where the constructor was defined
+	functionCtorRealm := vmInstance.CurrentRealm()
 	functionCtor := vm.NewNativeFunction(1, true, "Function", func(args []vm.Value) (vm.Value, error) {
-		return functionConstructorImpl(vmInstance, ctx.Driver, args)
+		return functionConstructorImpl(vmInstance, ctx.Driver, args, functionCtorRealm)
 	})
 
 	// Make it a proper constructor with static methods
@@ -135,8 +138,10 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.FunctionPrototype = functionProtoFn
 
 	// Create AsyncFunction constructor (not a global, but accessible via async function's constructor)
+	// Capture the realm at initialization time for cross-realm support
+	asyncFunctionCtorRealm := vmInstance.CurrentRealm()
 	asyncFunctionCtor := vm.NewNativeFunction(1, true, "AsyncFunction", func(args []vm.Value) (vm.Value, error) {
-		return asyncFunctionConstructorImpl(vmInstance, ctx.Driver, args)
+		return asyncFunctionConstructorImpl(vmInstance, ctx.Driver, args, asyncFunctionCtorRealm)
 	})
 
 	// Make it a proper constructor with prototype
@@ -353,7 +358,7 @@ func functionPrototypeToStringImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value
 	}
 }
 
-func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Value) (vm.Value, error) {
+func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Value, homeRealm *vm.Realm) (vm.Value, error) {
 	// The Function constructor has signature:
 	// Function(param1, param2, ..., paramN, body)
 	// Where all arguments are strings
@@ -451,10 +456,21 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 		return vm.Undefined, vmInstance.NewTypeError("Function() constant is not callable (got " + functionValue.TypeName() + ")")
 	}
 
+	// Set the function's HomeRealm to the realm where the Function constructor was defined
+	// This is critical for cross-realm behavior (GetFunctionRealm spec)
+	// If homeRealm was captured at constructor init time, use it; otherwise fall back to current realm
+	if fnObj := functionValue.AsFunction(); fnObj != nil {
+		if homeRealm != nil {
+			fnObj.HomeRealm = homeRealm
+		} else {
+			fnObj.HomeRealm = vmInstance.CurrentRealm()
+		}
+	}
+
 	return functionValue, nil
 }
 
-func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Value) (vm.Value, error) {
+func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Value, homeRealm *vm.Realm) (vm.Value, error) {
 	// The AsyncFunction constructor has signature:
 	// AsyncFunction(param1, param2, ..., paramN, body)
 	// Where all arguments are strings, creates an async function
@@ -540,6 +556,16 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 	// Verify it's actually a function
 	if !functionValue.IsCallable() {
 		return vm.Undefined, vmInstance.NewTypeError("AsyncFunction() constant is not callable (got " + functionValue.TypeName() + ")")
+	}
+
+	// Set the function's HomeRealm to the realm where the AsyncFunction constructor was defined
+	// This is critical for cross-realm behavior (GetFunctionRealm spec)
+	if fnObj := functionValue.AsFunction(); fnObj != nil {
+		if homeRealm != nil {
+			fnObj.HomeRealm = homeRealm
+		} else {
+			fnObj.HomeRealm = vmInstance.CurrentRealm()
+		}
 	}
 
 	return functionValue, nil

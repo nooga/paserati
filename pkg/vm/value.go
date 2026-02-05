@@ -289,7 +289,8 @@ type WeakMapEntry struct {
 // Keys must be objects (not primitives) and are held weakly, allowing GC.
 type WeakMapObject struct {
 	Object
-	entries map[uintptr]*WeakMapEntry // pointer address -> entry
+	entries   map[uintptr]*WeakMapEntry // pointer address -> entry
+	prototype Value                     // [[Prototype]] for cross-realm support
 }
 
 // WeakSetEntry holds a weak reference to a value
@@ -532,6 +533,20 @@ func NewWeakMap() Value {
 		entries: make(map[uintptr]*WeakMapEntry),
 	}
 	return Value{typ: TypeWeakMap, obj: unsafe.Pointer(wmObj)}
+}
+
+// NewWeakMapWithPrototype creates a new WeakMap object with a specific prototype
+func NewWeakMapWithPrototype(prototype Value) Value {
+	wmObj := &WeakMapObject{
+		entries:   make(map[uintptr]*WeakMapEntry),
+		prototype: prototype,
+	}
+	return Value{typ: TypeWeakMap, obj: unsafe.Pointer(wmObj)}
+}
+
+// GetPrototype returns the WeakMap's [[Prototype]]
+func (wm *WeakMapObject) GetPrototype() Value {
+	return wm.prototype
 }
 
 // NewWeakSet creates a new WeakSet object

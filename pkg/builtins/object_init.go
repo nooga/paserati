@@ -1652,6 +1652,13 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	case vm.TypeMap:
 		// For Maps, return Map.prototype
 		return vmInstance.MapPrototype, nil
+	case vm.TypeWeakMap:
+		// For WeakMaps, return per-instance prototype or default WeakMapPrototype
+		wm := obj.AsWeakMap()
+		if wm != nil && wm.GetPrototype().Type() != vm.TypeUndefined {
+			return wm.GetPrototype(), nil
+		}
+		return vmInstance.WeakMapPrototype, nil
 	case vm.TypeGenerator:
 		// For generators, return their custom prototype or GeneratorPrototype
 		genObj := obj.AsGenerator()

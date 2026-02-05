@@ -104,66 +104,52 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 	}))
 
 	harness262.SetOwn("createRealm", vm.NewNativeFunctionWithProps(0, false, "createRealm", func(args []vm.Value) (vm.Value, error) {
-		realm := vm.NewObject(vm.Null).AsPlainObject()
-		realmGlobal := vm.NewObject(vm.Null).AsPlainObject()
+		// Create a new realm with its own prototypes and symbols
+		newRealm := ctx.VM.CreateRealm()
 
-		// Create a realm-local error constructor that creates instances with
-		// the realm's own prototype, not the main realm's prototype.
-		// This is critical for cross-realm instanceof/constructor checks.
-		makeRealmErrorCtor := func(name string) vm.Value {
-			// Get the original prototype to inherit from (for proper prototype chain)
-			orig, _ := ctx.VM.GetGlobal(name)
-			var origProto vm.Value = vm.Undefined
-			if nfp := orig.AsNativeFunctionWithProps(); nfp != nil {
-				if p, ok := nfp.Properties.GetOwn("prototype"); ok {
-					origProto = p
-				}
-			}
-			if origProto == vm.Undefined {
-				origProto = ctx.VM.ErrorPrototype
-			}
-
-			// Create a local prototype that inherits from the original
-			localProto := vm.NewObject(origProto).AsPlainObject()
-			localProto.SetOwn("name", vm.NewString(name))
-
-			// The constructor must create instances with localProto, NOT call the original
-			// Use NewConstructorWithProps to ensure IsConstructor is true
-			var ctor vm.Value
-			ctor = vm.NewConstructorWithProps(-1, true, name, func(a []vm.Value) (vm.Value, error) {
-				msg := ""
-				if len(a) > 0 && a[0].Type() != vm.TypeUndefined {
-					msg = a[0].ToString()
-				}
-				// Create instance with the realm's local prototype
-				inst := vm.NewObject(vm.NewValueFromPlainObject(localProto)).AsPlainObject()
-				// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
-				inst.SetOwn("[[ErrorData]]", vm.Undefined)
-				inst.SetOwn("name", vm.NewString(name))
-				inst.SetOwn("message", vm.NewString(msg))
-				inst.SetOwn("stack", vm.NewString(ctx.VM.CaptureStackTrace()))
-				return vm.NewValueFromPlainObject(inst), nil
-			})
-			if withProps := ctor.AsNativeFunctionWithProps(); withProps != nil {
-				withProps.Properties.SetOwn("prototype", vm.NewValueFromPlainObject(localProto))
-				localProto.SetOwn("constructor", ctor)
-			}
-			return ctor
+		// Try to initialize builtins in the new realm if driver supports it
+		if driver, ok := ctx.Driver.(interface {
+			InitializeRealmBuiltins(*vm.Realm, []builtins.BuiltinInitializer) error
+		}); ok {
+			// Initialize standard builtins in the new realm
+			_ = driver.InitializeRealmBuiltins(newRealm, builtins.GetStandardInitializers())
 		}
 
-		realmGlobal.SetOwn("Error", makeRealmErrorCtor("Error"))
-		realmGlobal.SetOwn("TypeError", makeRealmErrorCtor("TypeError"))
-		realmGlobal.SetOwn("ReferenceError", makeRealmErrorCtor("ReferenceError"))
-		realmGlobal.SetOwn("SyntaxError", makeRealmErrorCtor("SyntaxError"))
-		realmGlobal.SetOwn("EvalError", makeRealmErrorCtor("EvalError"))
-		realmGlobal.SetOwn("RangeError", makeRealmErrorCtor("RangeError"))
-		realmGlobal.SetOwn("URIError", makeRealmErrorCtor("URIError"))
+		// Create the $262.createRealm() return object
+		realmObj := vm.NewObject(vm.Null).AsPlainObject()
 
-		realm.SetOwn("global", vm.NewValueFromPlainObject(realmGlobal))
-		realm.SetOwn("evalScript", vm.NewNativeFunctionWithProps(1, false, "evalScript", func(args []vm.Value) (vm.Value, error) {
-			return vm.Undefined, nil
+		// .global - the new realm's global object
+		realmObj.SetOwn("global", vm.NewValueFromPlainObject(newRealm.GlobalObject))
+
+		// .evalScript - evaluate code in the new realm
+		realmObj.SetOwn("evalScript", vm.NewNativeFunctionWithProps(1, false, "evalScript", func(evalArgs []vm.Value) (vm.Value, error) {
+			if len(evalArgs) < 1 {
+				return vm.Undefined, nil
+			}
+			code := evalArgs[0].ToString()
+
+			// Execute code in the new realm's context
+			var result vm.Value
+			ctx.VM.WithRealm(newRealm, func() {
+				// Use eval driver if available
+				if evalDriver, ok := ctx.Driver.(interface {
+					EvalCode(string, bool) (vm.Value, []error)
+				}); ok {
+					val, errs := evalDriver.EvalCode(code, false)
+					if len(errs) > 0 {
+						// Return undefined on error for now
+						result = vm.Undefined
+					} else {
+						result = val
+					}
+				} else {
+					result = vm.Undefined
+				}
+			})
+			return result, nil
 		}))
-		return vm.NewValueFromPlainObject(realm), nil
+
+		return vm.NewValueFromPlainObject(realmObj), nil
 	}))
 
 	if err := ctx.DefineGlobal("$262", vm.NewValueFromPlainObject(harness262)); err != nil {

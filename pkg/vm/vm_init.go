@@ -1381,10 +1381,15 @@ func (vm *VM) ConstructWithNewTarget(constructor Value, args []Value, newTarget 
 			return Undefined, fmt.Errorf("%s is not a constructor", nf.Name)
 		}
 		// For native constructors, call directly - they handle creating the object
-		// Note: native constructors don't fully support custom newTarget
+		// Set currentNewTarget so native constructors can use GetPrototypeFromConstructor
 		prevThis := vm.currentThis
+		prevNewTarget := vm.currentNewTarget
 		vm.currentThis = Undefined
-		defer func() { vm.currentThis = prevThis }()
+		vm.currentNewTarget = newTarget
+		defer func() {
+			vm.currentThis = prevThis
+			vm.currentNewTarget = prevNewTarget
+		}()
 		return nf.Fn(args)
 
 	case TypeNativeFunctionWithProps:
@@ -1392,9 +1397,15 @@ func (vm *VM) ConstructWithNewTarget(constructor Value, args []Value, newTarget 
 		if !nfp.IsConstructor {
 			return Undefined, fmt.Errorf("%s is not a constructor", nfp.Name)
 		}
+		// Set currentNewTarget so native constructors can use GetPrototypeFromConstructor
 		prevThis := vm.currentThis
+		prevNewTarget := vm.currentNewTarget
 		vm.currentThis = Undefined
-		defer func() { vm.currentThis = prevThis }()
+		vm.currentNewTarget = newTarget
+		defer func() {
+			vm.currentThis = prevThis
+			vm.currentNewTarget = prevNewTarget
+		}()
 		return nfp.Fn(args)
 
 	case TypeClosure, TypeFunction:

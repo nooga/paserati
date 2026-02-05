@@ -169,6 +169,10 @@ func NewPaseratiWithInitializersAndBaseDir(customInitializers []builtins.Builtin
 		fmt.Fprintf(os.Stderr, "Warning: Builtin initialization failed: %v\n", err)
 	}
 
+	// Sync the VM's prototype fields back to the default realm
+	// This ensures the realm has the real prototypes (not just initial placeholders)
+	vmInstance.SyncPrototypesToRealm()
+
 	// Set up the checker factory for the module loader
 	// This allows the module loader to create type checkers without circular imports
 	moduleLoader.SetCheckerFactory(func() modules.TypeChecker {
@@ -248,6 +252,10 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 	if err := initializeBuiltins(paserati); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Builtin initialization failed: %v\n", err)
 	}
+
+	// Sync the VM's prototype fields back to the default realm
+	// This ensures the realm has the real prototypes (not just initial placeholders)
+	vmInstance.SyncPrototypesToRealm()
 
 	// Set up the checker factory for the module loader
 	// This allows the module loader to create type checkers without circular imports
@@ -1304,6 +1312,47 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 	if err := vmInstance.SetBuiltinGlobals(globalVariables, indexMap); err != nil {
 		return err
 	}
+
+	return nil
+}
+
+// InitializeRealmBuiltins initializes builtins for a new realm.
+// This allows creating additional realms with their own builtins for cross-realm testing.
+func (p *Paserati) InitializeRealmBuiltins(realm *vm.Realm, initializers []builtins.BuiltinInitializer) error {
+	vmInstance := p.vmInstance
+
+	// Temporarily switch to the new realm for initialization
+	prevRealm := vmInstance.CurrentRealm()
+	vmInstance.WithRealm(realm, func() {
+		// Create runtime context for the new realm
+		// Use the realm's prototypes for proper initialization
+		runtimeCtx := &builtins.RuntimeContext{
+			VM:                vmInstance,
+			Driver:            p,
+			ObjectPrototype:   realm.ObjectPrototype,
+			FunctionPrototype: realm.FunctionPrototype,
+			ArrayPrototype:    realm.ArrayPrototype,
+			DefineGlobal: func(name string, value vm.Value) error {
+				realm.SetGlobal(name, value)
+				// Also set on realm's GlobalObject for property access
+				if realm.GlobalObject != nil {
+					realm.GlobalObject.SetOwn(name, value)
+				}
+				return nil
+			},
+		}
+
+		// Initialize builtins in the new realm
+		for _, init := range initializers {
+			if err := init.InitRuntime(runtimeCtx); err != nil {
+				// Log error but continue - some initializers may fail in secondary realms
+				continue
+			}
+		}
+	})
+
+	// Restore previous realm (already done by WithRealm defer)
+	_ = prevRealm
 
 	return nil
 }

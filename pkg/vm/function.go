@@ -22,6 +22,7 @@ type FunctionObject struct {
 	Properties           *PlainObject // For properties like .prototype (created lazily)
 	Prototype            Value        // [[Prototype]] - the function's prototype (usually Function.prototype)
 	HomeObject           Value        // [[HomeObject]] - object where method is defined (for super property access)
+	HomeRealm            *Realm       // [[Realm]] - the realm where this function was created
 	NameBindingRegister  int          // For named function expressions: register to initialize with closure (-1 if not used)
 
 	// Deleted intrinsic property tracking - these are configurable:true so can be deleted
@@ -82,6 +83,7 @@ type NativeFunctionObject struct {
 	Fn            func(args []Value) (Value, error)
 	IsConstructor bool         // If true, can be used with 'new'; false by default for most native functions
 	Properties    *PlainObject // Lazily created when user code sets properties on this function
+	HomeRealm     *Realm       // [[Realm]] - the realm where this function was created
 	DeletedName   bool         // True if the 'name' property has been deleted
 	DeletedLength bool         // True if the 'length' property has been deleted
 }
@@ -114,6 +116,7 @@ type NativeFunctionObjectWithProps struct {
 	Fn            func(args []Value) (Value, error)
 	Properties    *PlainObject // Can have properties like static methods
 	IsConstructor bool         // If true, can be used with 'new'; most built-in constructors set this to true
+	HomeRealm     *Realm       // [[Realm]] - the realm where this function was created
 	DeletedName   bool         // True if the 'name' property has been deleted
 	DeletedLength bool         // True if the 'length' property has been deleted
 }

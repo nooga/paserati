@@ -179,8 +179,18 @@ func (w *WeakMapInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create WeakMap constructor function
 	weakMapConstructor := vm.NewConstructorWithProps(0, false, "WeakMap", func(args []vm.Value) (vm.Value, error) {
-		// Create new WeakMap instance
-		newWeakMap := vm.NewWeakMap()
+		// Get the prototype from newTarget using GetPrototypeFromConstructor
+		// This implements ECMAScript spec behavior for cross-realm construction
+		newTarget := vmInstance.GetNewTarget()
+		var prototype vm.Value
+		if newTarget.Type() != vm.TypeUndefined {
+			prototype = vmInstance.GetPrototypeFromConstructor(newTarget, "%WeakMapPrototype%")
+		} else {
+			prototype = vmInstance.WeakMapPrototype
+		}
+
+		// Create new WeakMap instance with the determined prototype
+		newWeakMap := vm.NewWeakMapWithPrototype(prototype)
 		weakMapObj := newWeakMap.AsWeakMap()
 
 		// If an iterable argument is provided, add all its [key, value] pairs
