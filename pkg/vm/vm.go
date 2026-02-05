@@ -493,10 +493,20 @@ func (vm *VM) CreateRealm() *Realm {
 // any changes made by builtins are preserved in the realm.
 func (vm *VM) WithRealm(realm *Realm, fn func()) {
 	prev := vm.currentRealm
+	prevHeap := vm.heap
+	prevGlobalObject := vm.GlobalObject
+	prevGlobalsFromGO := vm.globalsFromGlobalObject
+
 	vm.currentRealm = realm
+	vm.heap = realm.Heap
+	vm.GlobalObject = realm.GlobalObject
+	vm.globalsFromGlobalObject = realm.globalsFromGlobalObject
 	vm.syncPrototypesFromRealm() // Update legacy fields for backwards compatibility
 	defer func() {
 		vm.currentRealm = prev
+		vm.heap = prevHeap
+		vm.GlobalObject = prevGlobalObject
+		vm.globalsFromGlobalObject = prevGlobalsFromGO
 		vm.syncPrototypesFromRealm()
 	}()
 	fn()
@@ -509,10 +519,20 @@ func (vm *VM) WithRealm(realm *Realm, fn func()) {
 // After fn() completes, the VM's prototype fields are synced BACK to the realm.
 func (vm *VM) WithRealmValue(realm *Realm, fn func() Value) Value {
 	prev := vm.currentRealm
+	prevHeap := vm.heap
+	prevGlobalObject := vm.GlobalObject
+	prevGlobalsFromGO := vm.globalsFromGlobalObject
+
 	vm.currentRealm = realm
+	vm.heap = realm.Heap
+	vm.GlobalObject = realm.GlobalObject
+	vm.globalsFromGlobalObject = realm.globalsFromGlobalObject
 	vm.syncPrototypesFromRealm()
 	defer func() {
 		vm.currentRealm = prev
+		vm.heap = prevHeap
+		vm.GlobalObject = prevGlobalObject
+		vm.globalsFromGlobalObject = prevGlobalsFromGO
 		vm.syncPrototypesFromRealm()
 	}()
 	result := fn()
@@ -5514,8 +5534,13 @@ startExecution:
 
 			// Set the function's [[Prototype]] to the appropriate prototype
 			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
-				// Set the function's [[Realm]] to the current realm
-				cl.Fn.HomeRealm = vm.currentRealm
+				// Set the function's [[Realm]] - inherit from enclosing function if it's
+				// from a different realm (e.g., cross-realm Function constructor calls).
+				if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.HomeRealm != nil {
+					cl.Fn.HomeRealm = frame.closure.Fn.HomeRealm
+				} else {
+					cl.Fn.HomeRealm = vm.currentRealm
+				}
 
 				// Generator functions have GeneratorFunction.prototype as their [[Prototype]]
 				// Async generator functions have AsyncGeneratorFunction.prototype
@@ -5667,8 +5692,13 @@ startExecution:
 
 			// Set the function's [[Prototype]] to the appropriate prototype
 			if cl := closureVal.AsClosure(); cl != nil && cl.Fn != nil {
-				// Set the function's [[Realm]] to the current realm
-				cl.Fn.HomeRealm = vm.currentRealm
+				// Set the function's [[Realm]] - inherit from enclosing function if it's
+				// from a different realm (e.g., cross-realm Function constructor calls).
+				if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.HomeRealm != nil {
+					cl.Fn.HomeRealm = frame.closure.Fn.HomeRealm
+				} else {
+					cl.Fn.HomeRealm = vm.currentRealm
+				}
 
 				// Generator functions have GeneratorFunction.prototype as their [[Prototype]]
 				// Async generator functions have AsyncGeneratorFunction.prototype
@@ -9630,10 +9660,11 @@ startExecution:
 					instancePrototype = constructorFunc.GetOrCreatePrototypeWithVM(vm)
 				}
 
-				// ECMAScript spec 13.2.2: If prototype is not an object, use Object.prototype
-				// This handles cases like: function F(){}; F.prototype = 1; new F();
+				// ECMAScript spec 9.1.14 GetPrototypeFromConstructor:
+				// If prototype is not an object, use the realm of newTarget's intrinsic default
+				// This handles cross-realm: var C = new other.Function(); C.prototype = null;
 				if !instancePrototype.IsObject() && !instancePrototype.IsCallable() {
-					instancePrototype = vm.ObjectPrototype
+					instancePrototype = vm.GetPrototypeFromConstructor(newTargetValue, "%ObjectPrototype%")
 				}
 
 				// For derived constructors, 'this' is uninitialized until super() is called
@@ -9807,10 +9838,10 @@ startExecution:
 					instancePrototype = constructorFunc.GetOrCreatePrototypeWithVM(vm)
 				}
 
-				// ECMAScript spec 13.2.2: If prototype is not an object, use Object.prototype
-				// This handles cases like: function F(){}; F.prototype = 1; new F();
+				// ECMAScript spec 9.1.14 GetPrototypeFromConstructor:
+				// If prototype is not an object, use the realm of newTarget's intrinsic default
 				if !instancePrototype.IsObject() && !instancePrototype.IsCallable() {
-					instancePrototype = vm.ObjectPrototype
+					instancePrototype = vm.GetPrototypeFromConstructor(newTargetValue, "%ObjectPrototype%")
 				}
 
 				// For derived constructors, 'this' is uninitialized until super() is called
@@ -17766,8 +17797,9 @@ func (vm *VM) createTypeError(message string) Value {
 
 // ThrowTypeError creates and throws a proper TypeError instance
 func (vm *VM) ThrowTypeError(message string) {
-	// Get the TypeError constructor from globals
-	typeErrorCtor, exists := vm.GetGlobal("TypeError")
+	// Per ECMAScript spec, the TypeError should come from the realm of the
+	// running execution context's function. Check the current frame's HomeRealm.
+	typeErrorCtor, exists := vm.getRealmAwareGlobal("TypeError")
 	if !exists || typeErrorCtor.Type() == TypeUndefined {
 		// Fallback: create a basic error object
 		errObj := NewObject(vm.TypeErrorPrototype).AsPlainObject()
@@ -17791,6 +17823,23 @@ func (vm *VM) ThrowTypeError(message string) {
 	}
 
 	vm.throwException(errorInstance)
+}
+
+// getRealmAwareGlobal retrieves a global variable, using the currently executing
+// function's HomeRealm if it differs from the current realm. This ensures that
+// error constructors (TypeError, ReferenceError, etc.) come from the correct realm
+// when cross-realm function calls are involved.
+func (vm *VM) getRealmAwareGlobal(name string) (Value, bool) {
+	if vm.frameCount > 0 {
+		frame := &vm.frames[vm.frameCount-1]
+		if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.HomeRealm != nil {
+			homeRealm := frame.closure.Fn.HomeRealm
+			if homeRealm != vm.currentRealm {
+				return homeRealm.GetGlobal(name)
+			}
+		}
+	}
+	return vm.GetGlobal(name)
 }
 
 // ThrowReferenceError creates and throws a proper ReferenceError instance

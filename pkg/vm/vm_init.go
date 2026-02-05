@@ -1439,6 +1439,12 @@ func (vm *VM) ConstructWithNewTarget(constructor Value, args []Value, newTarget 
 			prototype = fn.GetOrCreatePrototypeWithVM(vm)
 		}
 
+		// ECMAScript spec 9.1.14 GetPrototypeFromConstructor:
+		// If prototype is not an object, use the realm of newTarget's intrinsic default
+		if !prototype.IsObject() && !prototype.IsCallable() {
+			prototype = vm.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
+		}
+
 		// For derived constructors, 'this' is in TDZ until super() is called
 		// We don't create an object beforehand - super() will create it
 		var newObj Value

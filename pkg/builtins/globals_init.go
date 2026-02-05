@@ -398,6 +398,11 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return err
 	}
 
+	// Capture the home realm for this eval function.
+	// Per ECMAScript 18.2.1.1 (PerformEval), indirect eval uses evalRealm.[[GlobalEnv]],
+	// where evalRealm is the realm of the eval function itself (not the caller's realm).
+	evalHomeRealm := ctx.VM.CurrentRealm()
+
 	// Add eval function implementation
 	evalFunc := vm.NewNativeFunction(1, false, "eval", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
@@ -571,7 +576,13 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, ctx.VM.NewTypeError("eval: driver doesn't implement IndirectEvalCode")
 		}
 
-		result, evalErrs := driver.IndirectEvalCode(codeStr)
+		// Execute IndirectEvalCode in the eval function's home realm.
+		// This ensures 'var x = 23' in otherEval() writes to the other realm's heap.
+		var result vm.Value
+		var evalErrs []error
+		ctx.VM.WithRealm(evalHomeRealm, func() {
+			result, evalErrs = driver.IndirectEvalCode(codeStr)
+		})
 		if len(evalErrs) > 0 {
 			// Error (parse/compile/runtime) - throw SyntaxError for compile errors
 			return vm.Undefined, ctx.VM.NewSyntaxError(evalErrs[0].Error())

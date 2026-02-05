@@ -1321,6 +1321,13 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 func (p *Paserati) InitializeRealmBuiltins(realm *vm.Realm, initializers []builtins.BuiltinInitializer) error {
 	vmInstance := p.vmInstance
 
+	// Clone the main realm's heap layout so compiled bytecode indices match.
+	// The new realm gets the same nameToIndex mapping but separate value storage.
+	mainHeap := vmInstance.GetHeap()
+	if mainHeap != nil {
+		realm.Heap = mainHeap.CloneLayout()
+	}
+
 	// Temporarily switch to the new realm for initialization
 	prevRealm := vmInstance.CurrentRealm()
 	vmInstance.WithRealm(realm, func() {

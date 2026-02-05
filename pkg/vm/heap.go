@@ -279,6 +279,40 @@ func (h *Heap) UpdateNameToIndex(newMappings map[string]int) {
 	}
 }
 
+// CloneLayout creates a new Heap with the same nameToIndex mapping and size,
+// but with all value slots uninitialized. This is used for realm isolation:
+// compiled bytecode references globals by index, so the new heap must have the
+// same layout. But since values are separate, writes go to the new realm's storage.
+func (h *Heap) CloneLayout() *Heap {
+	newSize := len(h.values)
+	if h.size > newSize {
+		newSize = h.size
+	}
+
+	configurable := make([]bool, newSize)
+	writable := make([]bool, newSize)
+	for i := range configurable {
+		configurable[i] = true
+		writable[i] = true
+	}
+
+	// Clone the nameToIndex map
+	nameToIndex := make(map[string]int, len(h.nameToIndex))
+	for name, idx := range h.nameToIndex {
+		nameToIndex[name] = idx
+	}
+
+	return &Heap{
+		values:       make([]Value, newSize),
+		configurable: configurable,
+		writable:     writable,
+		initialized:  make([]bool, newSize),
+		size:         h.size,
+		nameToIndex:  nameToIndex,
+		builtinCount: h.builtinCount,
+	}
+}
+
 // ClearUserGlobals resets user-defined globals while preserving builtin globals
 // This is used by VM.Reset() to prevent memory leaks without destroying builtins
 func (h *Heap) ClearUserGlobals() {
