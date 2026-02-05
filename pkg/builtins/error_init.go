@@ -213,6 +213,99 @@ func (e *URIErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	return initErrorSubclass(ctx, "URIError")
 }
 
+// AggregateError - used by Promise.any when all promises reject
+type AggregateErrorInitializer struct{}
+
+func (e *AggregateErrorInitializer) Name() string  { return "AggregateError" }
+func (e *AggregateErrorInitializer) Priority() int { return 22 }
+func (e *AggregateErrorInitializer) InitTypes(ctx *TypeContext) error {
+	// AggregateError(errors, message?, options?)
+	t := types.NewObjectType().
+		WithSimpleCallSignature([]types.Type{types.Any}, types.Any).
+		WithSimpleCallSignature([]types.Type{types.Any, types.String}, types.Any).
+		WithSimpleCallSignature([]types.Type{types.Any, types.String, types.Any}, types.Any)
+	return ctx.DefineGlobal("AggregateError", t)
+}
+func (e *AggregateErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
+	vmInstance := ctx.VM
+
+	// Create AggregateError.prototype inheriting from Error.prototype
+	proto := vm.NewObject(vmInstance.ErrorPrototype).AsPlainObject()
+	proto.SetOwnNonEnumerable("name", vm.NewString("AggregateError"))
+	proto.SetOwnNonEnumerable("message", vm.NewString(""))
+
+	// AggregateError constructor: AggregateError(errors, message?, options?)
+	ctor := vm.NewNativeFunction(1, true, "AggregateError", func(args []vm.Value) (vm.Value, error) {
+		// Get errors iterable (first argument)
+		var errorsArray vm.Value
+		if len(args) > 0 {
+			// Convert iterable to array using IterableToArray
+			errorsArg := args[0]
+			if errorsArg.Type() == vm.TypeArray {
+				errorsArray = errorsArg
+			} else {
+				// Try to convert iterable to array
+				arr, err := vmInstance.IterableToArray(errorsArg)
+				if err != nil {
+					// If not iterable, use empty array
+					errorsArray = vm.NewArray()
+				} else {
+					errorsArray = arr
+				}
+			}
+		} else {
+			errorsArray = vm.NewArray()
+		}
+
+		// Get message (second argument)
+		var message string
+		if len(args) > 1 && args[1].Type() != vm.TypeUndefined {
+			message = args[1].ToString()
+		}
+
+		// Create instance
+		inst := vm.NewObject(vm.NewValueFromPlainObject(proto)).AsPlainObject()
+		inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
+		inst.SetOwnNonEnumerable("name", vm.NewString("AggregateError"))
+		inst.SetOwnNonEnumerable("message", vm.NewString(message))
+		inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))
+
+		// Set errors property (per ECMAScript spec, this is an own data property)
+		inst.SetOwn("errors", errorsArray)
+
+		// Handle options.cause if provided
+		if len(args) > 2 && args[2].IsObject() {
+			if optObj := args[2].AsPlainObject(); optObj != nil {
+				if cause, hasCause := optObj.Get("cause"); hasCause {
+					inst.SetOwnNonEnumerable("cause", cause)
+				}
+			}
+		}
+
+		return vm.NewValueFromPlainObject(inst), nil
+	})
+
+	if nf := ctor.AsNativeFunction(); nf != nil {
+		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
+		ctorProps := withProps.AsNativeFunctionWithProps()
+		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+
+		if !vmInstance.ErrorConstructor.IsUndefined() {
+			ctorProps.Properties.SetPrototype(vmInstance.ErrorConstructor)
+		}
+
+		proto.SetOwnNonEnumerable("constructor", withProps)
+
+		// Store in realm for cross-realm access
+		vmInstance.CurrentRealm().AggregateErrorPrototype = vm.NewValueFromPlainObject(proto)
+
+		return ctx.DefineGlobal("AggregateError", withProps)
+	}
+
+	proto.SetOwnNonEnumerable("constructor", ctor)
+	return ctx.DefineGlobal("AggregateError", ctor)
+}
+
 // helper to initialize simple Error subclasses inheriting Error.prototype
 func initErrorSubclass(ctx *RuntimeContext, name string) error {
 	vmInstance := ctx.VM

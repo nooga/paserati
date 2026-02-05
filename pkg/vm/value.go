@@ -75,6 +75,7 @@ const (
 	TypeSet
 	TypeWeakMap
 	TypeWeakSet
+	TypeWeakRef
 	TypeArrayBuffer
 	TypeSharedArrayBuffer
 	TypeTypedArray
@@ -133,6 +134,8 @@ func (vt ValueType) String() string {
 		return "weakmap"
 	case TypeWeakSet:
 		return "weakset"
+	case TypeWeakRef:
+		return "weakref"
 	case TypeArrayBuffer:
 		return "arraybuffer"
 	case TypeSharedArrayBuffer:
@@ -303,6 +306,15 @@ type WeakSetEntry struct {
 type WeakSetObject struct {
 	Object
 	entries map[uintptr]*WeakSetEntry // pointer address -> entry
+}
+
+// WeakRefObject implements ECMAScript WeakRef using Go's weak package.
+// A WeakRef holds a weak reference to a target object.
+type WeakRefObject struct {
+	Object
+	targetWeak weak.Pointer[byte] // Weak reference to the target object
+	targetPtr  uintptr            // Pointer address of the target (for checking liveness)
+	prototype  Value              // [[Prototype]] for cross-realm support
 }
 
 type ProxyObject struct {
@@ -557,6 +569,46 @@ func NewWeakSet() Value {
 	return Value{typ: TypeWeakSet, obj: unsafe.Pointer(wsObj)}
 }
 
+// NewWeakRef creates a new WeakRef object holding a weak reference to target
+func NewWeakRef(target Value) Value {
+	// Get the raw pointer to the target object
+	ptr := target.obj
+	wrObj := &WeakRefObject{
+		targetWeak: weak.Make((*byte)(ptr)),
+		targetPtr:  uintptr(ptr),
+	}
+	return Value{typ: TypeWeakRef, obj: unsafe.Pointer(wrObj)}
+}
+
+// NewWeakRefWithPrototype creates a new WeakRef object with a specific prototype
+func NewWeakRefWithPrototype(target Value, prototype Value) Value {
+	// Get the raw pointer to the target object
+	ptr := target.obj
+	wrObj := &WeakRefObject{
+		targetWeak: weak.Make((*byte)(ptr)),
+		targetPtr:  uintptr(ptr),
+		prototype:  prototype,
+	}
+	return Value{typ: TypeWeakRef, obj: unsafe.Pointer(wrObj)}
+}
+
+// GetPrototype returns the WeakRef's [[Prototype]]
+func (wr *WeakRefObject) GetPrototype() Value {
+	return wr.prototype
+}
+
+// Deref returns the target object if it's still alive, or undefined if collected
+func (wr *WeakRefObject) Deref() Value {
+	// Check if the weak reference is still valid
+	if wr.targetWeak.Value() == nil {
+		return Undefined
+	}
+	// Return a Value referencing the still-alive object
+	// We reconstruct the Value using the stored pointer
+	// The type is inferred from context (it must be an object for WeakRef)
+	return Value{typ: TypeObject, obj: unsafe.Pointer(wr.targetWeak.Value())}
+}
+
 // hashKey creates a unique string key for any JavaScript value
 // Uses SameValueZero equality (NaN === NaN, +0 === -0)
 func hashKey(v Value) string {
@@ -616,7 +668,7 @@ func (v Value) IsBoolean() bool {
 }
 
 func (v Value) IsObject() bool {
-	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeAsyncGenerator || v.typ == TypePromise || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeDataView || v.typ == TypeArrayBuffer || v.typ == TypeSharedArrayBuffer || v.typ == TypeProxy || v.typ == TypeMap || v.typ == TypeSet || v.typ == TypeWeakMap || v.typ == TypeWeakSet
+	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeAsyncGenerator || v.typ == TypePromise || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeDataView || v.typ == TypeArrayBuffer || v.typ == TypeSharedArrayBuffer || v.typ == TypeProxy || v.typ == TypeMap || v.typ == TypeSet || v.typ == TypeWeakMap || v.typ == TypeWeakSet || v.typ == TypeWeakRef
 }
 
 func (v Value) IsDictObject() bool {
@@ -692,7 +744,7 @@ func (v Value) TypeName() string {
 		return "object"
 	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeTypedArray,
 		TypeDataView, TypeGenerator, TypeAsyncGenerator, TypePromise, TypeMap, TypeSet,
-		TypeArrayBuffer, TypeSharedArrayBuffer, TypeWeakMap, TypeWeakSet:
+		TypeArrayBuffer, TypeSharedArrayBuffer, TypeWeakMap, TypeWeakSet, TypeWeakRef:
 		return "object"
 	default:
 		return fmt.Sprintf("<unknown type: %d>", v.typ)
@@ -831,6 +883,13 @@ func (v Value) AsWeakSet() *WeakSetObject {
 		panic("value is not a weakset")
 	}
 	return (*WeakSetObject)(v.obj)
+}
+
+func (v Value) AsWeakRef() *WeakRefObject {
+	if v.typ != TypeWeakRef {
+		panic("value is not a weakref")
+	}
+	return (*WeakRefObject)(v.obj)
 }
 
 func (v Value) AsFunction() *FunctionObject {

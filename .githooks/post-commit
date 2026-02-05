@@ -26,12 +26,22 @@ go build -o paserati-test262 ./cmd/paserati-test262 || {
     exit 0
 }
 
+# Run the language suite and dump baseline
+echo "Running Test262 language suite (this may take a minute)..."
+./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -dump baseline_language.txt 2>&1 | tail -1
+
+if [ -f "baseline_language.txt" ]; then
+    echo "✓ Language baseline saved to baseline_language.txt"
+else
+    echo "✗ Failed to generate baseline_language.txt"
+fi
+
 # Run the built-ins suite and dump baseline
 echo "Running Test262 built-ins suite (this may take a minute)..."
 ./paserati-test262 -path ./test262 -subpath "built-ins" -timeout 0.2s -dump baseline.txt 2>&1 | tail -1
 
 if [ -f "baseline.txt" ]; then
-    echo "✓ Baseline saved to baseline.txt"
+    echo "✓ Built-ins baseline saved to baseline.txt"
 else
     echo "✗ Failed to generate baseline.txt"
 fi

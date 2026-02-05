@@ -401,6 +401,34 @@ func (vm *VM) handleUncaughtException() {
 	vm.frameCount = 0
 }
 
+// formatExceptionDisplay converts a thrown exception Value into a human-readable string.
+// For Error objects, it extracts name and message properties (matching Error.prototype.toString behavior).
+// For non-Error objects, it falls back to ToString().
+func (vm *VM) formatExceptionDisplay(exception Value) string {
+	if exception.IsObject() && exception.Type() == TypeObject {
+		obj := exception.AsPlainObject()
+		nameVal, hasName := obj.GetOwn("name")
+		messageVal, hasMessage := obj.GetOwn("message")
+
+		if hasName || hasMessage {
+			var name, message string
+			if hasName {
+				name = nameVal.ToString()
+			} else {
+				name = "Error"
+			}
+			if hasMessage {
+				message = messageVal.ToString()
+			}
+			if message == "" {
+				return name
+			}
+			return name + ": " + message
+		}
+	}
+	return exception.ToString()
+}
+
 // --- OpThrow Implementation ---
 
 // executeOpThrow implements the OpThrow opcode

@@ -209,6 +209,7 @@ type VM struct {
 	SetPrototype            Value
 	WeakMapPrototype        Value
 	WeakSetPrototype        Value
+	WeakRefPrototype        Value
 	GeneratorPrototype       Value
 	AsyncGeneratorPrototype  Value
 	IteratorPrototype        Value // %Iterator.prototype% - base for all iterators
@@ -662,6 +663,8 @@ func (vm *VM) GetPrototypeFromConstructor(constructor Value, intrinsicDefault st
 		return realm.WeakMapPrototype
 	case "%WeakSetPrototype%":
 		return realm.WeakSetPrototype
+	case "%WeakRefPrototype%":
+		return realm.WeakRefPrototype
 	case "%ErrorPrototype%":
 		return realm.ErrorPrototype
 	case "%TypeErrorPrototype%":
@@ -699,6 +702,7 @@ func (vm *VM) syncPrototypesFromRealm() {
 	vm.SetPrototype = r.SetPrototype
 	vm.WeakMapPrototype = r.WeakMapPrototype
 	vm.WeakSetPrototype = r.WeakSetPrototype
+	vm.WeakRefPrototype = r.WeakRefPrototype
 	vm.PromisePrototype = r.PromisePrototype
 	vm.SymbolPrototype = r.SymbolPrototype
 	vm.DatePrototype = r.DatePrototype
@@ -792,6 +796,7 @@ func (vm *VM) SyncPrototypesToRealm() {
 	r.SetPrototype = vm.SetPrototype
 	r.WeakMapPrototype = vm.WeakMapPrototype
 	r.WeakSetPrototype = vm.WeakSetPrototype
+	r.WeakRefPrototype = vm.WeakRefPrototype
 	r.PromisePrototype = vm.PromisePrototype
 	r.SymbolPrototype = vm.SymbolPrototype
 	r.DatePrototype = vm.DatePrototype
@@ -17380,10 +17385,11 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	if resultStatus == InterpretRuntimeError {
 		// If we have a JS exception, that takes precedence
 		if moduleException != Null {
-			// Create a RuntimeError from the exception
+			// Create a RuntimeError from the exception - format like handleUncaughtException
+			displayStr := vm.formatExceptionDisplay(moduleException)
 			runtimeErr := &errors.RuntimeError{
 				Position: errors.Position{Line: 1, Column: 1},
-				Msg:      fmt.Sprintf("Uncaught exception: %s", moduleException.ToString()),
+				Msg:      fmt.Sprintf("Uncaught exception: %s", displayStr),
 			}
 			errs = []errors.PaseratiError{runtimeErr}
 			vm.errors = append(vm.errors[:0], runtimeErr) // Clear and add only the exception
