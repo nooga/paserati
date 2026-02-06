@@ -440,6 +440,18 @@ func (r *RegExpObject) FindStringIndex(s string) []int {
 	return nil
 }
 
+// ReplaceAllLiteralString replaces all matches with a literal replacement string (no $ expansion)
+func (r *RegExpObject) ReplaceAllLiteralString(src, repl string) string {
+	if r.compiledRegex != nil {
+		return r.compiledRegex.ReplaceAllLiteralString(src, repl)
+	}
+	if r.compiledRegex2 != nil {
+		result, _ := r.compiledRegex2.Replace(src, regexp2.Escape(repl), -1, -1)
+		return result
+	}
+	return src
+}
+
 // ReplaceAllString replaces all matches with the replacement string
 func (r *RegExpObject) ReplaceAllString(src, repl string) string {
 	if r.compiledRegex != nil {

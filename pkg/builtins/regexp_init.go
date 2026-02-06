@@ -366,9 +366,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		// Set required properties: index, input, groups
-		arr.SetOwn("index", vm.NumberValue(float64(loc[0])))
-		arr.SetOwn("input", vm.NewString(str))
-		arr.SetOwn("groups", vm.Undefined)
+		arr.SetExecMeta(loc[0], str)
 		return result, nil
 	}))
 
@@ -581,9 +579,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				arr.Append(vm.NewString(str[start:end]))
 			}
 		}
-		arr.SetOwn("index", vm.NumberValue(float64(loc[0])))
-		arr.SetOwn("input", vm.NewString(str))
-		arr.SetOwn("groups", vm.Undefined)
+		arr.SetExecMeta(loc[0], str)
 
 		return result, nil
 	}
@@ -803,6 +799,27 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 				if isGlobal {
 					regex.SetLastIndex(0)
+				}
+
+				// Ultra-fast path: global + literal string replacement (no $, no callable)
+				// Uses Go's ReplaceAllLiteralString which avoids building match index arrays
+				if !isCallable {
+					replaceStr := replaceValue.ToString()
+					if !strings.Contains(replaceStr, "$") {
+						if isGlobal {
+							return vm.NewString(regex.ReplaceAllLiteralString(str, replaceStr)), nil
+						}
+						// Non-global: replace first match only
+						match := regex.FindStringSubmatchIndex(str)
+						if match == nil {
+							return vm.NewString(str), nil
+						}
+						var result strings.Builder
+						result.WriteString(str[:match[0]])
+						result.WriteString(replaceStr)
+						result.WriteString(str[match[1]:])
+						return vm.NewString(result.String()), nil
+					}
 				}
 
 				var result strings.Builder

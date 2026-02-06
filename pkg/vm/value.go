@@ -161,6 +161,13 @@ type SymbolObject struct {
 	value string
 }
 
+// execResultMeta stores lazy exec/match result metadata.
+// Only allocated for arrays returned by RegExp.exec or String.match.
+type execResultMeta struct {
+	index int
+	input string
+}
+
 type ArrayObject struct {
 	Object
 	length       int
@@ -172,6 +179,7 @@ type ArrayObject struct {
 	setters      map[string]Value           // Accessor setters for named properties
 	extensible   bool                       // When false, no new properties can be added (for Object.freeze/seal)
 	frozen       bool                       // When true, elements are also non-writable and non-configurable
+	execMeta     *execResultMeta            // Lazy exec result properties (nil for normal arrays)
 }
 
 // PropertyDesc stores property descriptor attributes
@@ -2012,8 +2020,24 @@ func (a *ArrayObject) HasIndex(index int) bool {
 	return a.elements[index].typ != TypeHole
 }
 
+// SetExecMeta stores exec result metadata for lazy property access.
+// This avoids allocating a map for index/input/groups on every exec call.
+func (a *ArrayObject) SetExecMeta(index int, input string) {
+	a.execMeta = &execResultMeta{index: index, input: input}
+}
+
 // GetOwn returns a named property from the array (e.g., "index", "input" for match results)
 func (a *ArrayObject) GetOwn(name string) (Value, bool) {
+	if a.execMeta != nil {
+		switch name {
+		case "index":
+			return NumberValue(float64(a.execMeta.index)), true
+		case "input":
+			return NewString(a.execMeta.input), true
+		case "groups":
+			return Undefined, true
+		}
+	}
 	if a.properties == nil {
 		return Undefined, false
 	}
@@ -2047,6 +2071,17 @@ func (a *ArrayObject) DefineOwnProperty(name string, value Value, writable, enum
 
 // GetOwnPropertyDescriptor returns the descriptor for a named property
 func (a *ArrayObject) GetOwnPropertyDescriptor(name string) (Value, PropertyDesc, bool) {
+	if a.execMeta != nil {
+		desc := PropertyDesc{Writable: true, Enumerable: true, Configurable: true}
+		switch name {
+		case "index":
+			return NumberValue(float64(a.execMeta.index)), desc, true
+		case "input":
+			return NewString(a.execMeta.input), desc, true
+		case "groups":
+			return Undefined, desc, true
+		}
+	}
 	if a.properties == nil {
 		return Undefined, PropertyDesc{}, false
 	}
