@@ -61,8 +61,15 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			message = args[0].ToString()
 		}
 
-		// Create new SyntaxError instance that inherits from SyntaxError.prototype
-		syntaxErrorInstance := vm.NewObject(vm.NewValueFromPlainObject(syntaxErrorPrototype))
+		// Per spec: OrdinaryCreateFromConstructor(newTarget, "%SyntaxErrorPrototype%")
+		instProto := vm.NewValueFromPlainObject(syntaxErrorPrototype)
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			candidate := vmInstance.GetPrototypeFromConstructor(newTarget, "%SyntaxErrorPrototype%")
+			if candidate.IsObject() {
+				instProto = candidate
+			}
+		}
+		syntaxErrorInstance := vm.NewObject(instProto)
 		syntaxErrorInstancePtr := syntaxErrorInstance.AsPlainObject()
 
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
@@ -109,6 +116,11 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Set constructor property on prototype
 	syntaxErrorPrototype.SetOwnNonEnumerable("constructor", syntaxErrorConstructor)
+
+	// Sync prototype to realm for cross-realm GetPrototypeFromConstructor
+	if realm := vmInstance.CurrentRealm(); realm != nil {
+		realm.SyntaxErrorPrototype = vm.NewValueFromPlainObject(syntaxErrorPrototype)
+	}
 
 	// Define globally
 	return ctx.DefineGlobal("SyntaxError", syntaxErrorConstructor)

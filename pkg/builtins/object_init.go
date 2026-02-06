@@ -3226,14 +3226,60 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	}
 
 	obj := args[0]
+
+	// Step 1: ToObject(O) - throw TypeError for undefined/null
+	if obj.Type() == vm.TypeUndefined || obj.Type() == vm.TypeNull {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+	}
+
+	// Step 2: ToPropertyKey(P) - handle object keys via ToPrimitive
 	var keyIsSymbol bool
 	var propName string
 	var propSym vm.Value
-	if args[1].Type() == vm.TypeSymbol {
+	keyArg := args[1]
+	if keyArg.Type() == vm.TypeSymbol {
 		keyIsSymbol = true
-		propSym = args[1]
+		propSym = keyArg
+	} else if keyArg.IsObject() || keyArg.IsCallable() {
+		// ToPropertyKey: call ToPrimitive with "string" hint first
+		primKey := vmInstance.ToPrimitive(keyArg, "string")
+		// Check if ToPrimitive threw an exception
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert object to primitive value")
+		}
+		if primKey.Type() == vm.TypeSymbol {
+			keyIsSymbol = true
+			propSym = primKey
+		} else {
+			propName = primKey.ToString()
+		}
 	} else {
-		propName = args[1].ToString()
+		propName = keyArg.ToString()
+	}
+
+	// Handle string primitives: treat as String exotic object
+	if obj.Type() == vm.TypeString {
+		str := vm.AsString(obj)
+		if !keyIsSymbol {
+			if propName == "length" {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				descriptor.SetOwn("value", vm.NumberValue(float64(len([]rune(str)))))
+				descriptor.SetOwn("writable", vm.BooleanValue(false))
+				descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+				descriptor.SetOwn("configurable", vm.BooleanValue(false))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+			runes := []rune(str)
+			if index, err := strconv.Atoi(propName); err == nil && index >= 0 && index < len(runes) {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				descriptor.SetOwn("value", vm.NewString(string(runes[index])))
+				descriptor.SetOwn("writable", vm.BooleanValue(false))
+				descriptor.SetOwn("enumerable", vm.BooleanValue(true))
+				descriptor.SetOwn("configurable", vm.BooleanValue(false))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+		}
+		return vm.Undefined, nil
 	}
 
 	// Handle Proxy objects
@@ -3466,6 +3512,29 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	switch obj.Type() {
 	case vm.TypeObject:
 		plainObj := obj.AsPlainObject()
+		// String exotic object: check [[PrimitiveValue]] for index properties
+		if !keyIsSymbol {
+			if primVal, hasPrim := plainObj.GetOwn("[[PrimitiveValue]]"); hasPrim && primVal.Type() == vm.TypeString {
+				str := vm.AsString(primVal)
+				runes := []rune(str)
+				if propName == "length" {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", vm.NumberValue(float64(len(runes))))
+					descriptor.SetOwn("writable", vm.BooleanValue(false))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(false))
+					descriptor.SetOwn("configurable", vm.BooleanValue(false))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				if index, err := strconv.Atoi(propName); err == nil && index >= 0 && index < len(runes) {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", vm.NewString(string(runes[index])))
+					descriptor.SetOwn("writable", vm.BooleanValue(false))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(true))
+					descriptor.SetOwn("configurable", vm.BooleanValue(false))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+			}
+		}
 		if g, s, e, c, ok := func() (vm.Value, vm.Value, bool, bool, bool) {
 			if keyIsSymbol {
 				return plainObj.GetOwnAccessorByKey(vm.NewSymbolKey(propSym))

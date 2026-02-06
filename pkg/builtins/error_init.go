@@ -319,7 +319,16 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
 			message = args[0].ToString()
 		}
-		inst := vm.NewObject(vm.NewValueFromPlainObject(proto)).AsPlainObject()
+
+		// Per spec: OrdinaryCreateFromConstructor(newTarget, "%NativeErrorPrototype%")
+		instProto := vm.NewValueFromPlainObject(proto)
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			candidate := vmInstance.GetPrototypeFromConstructor(newTarget, "%"+name+"Prototype%")
+			if candidate.IsObject() {
+				instProto = candidate
+			}
+		}
+		inst := vm.NewObject(instProto).AsPlainObject()
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
 		inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
 		inst.SetOwnNonEnumerable("name", vm.NewString(name))
@@ -350,6 +359,22 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 		}
 
 		proto.SetOwnNonEnumerable("constructor", withProps)
+
+		// Sync prototype to realm so GetPrototypeFromConstructor can find it
+		protoVal := vm.NewValueFromPlainObject(proto)
+		if realm := vmInstance.CurrentRealm(); realm != nil {
+			switch name {
+			case "EvalError":
+				realm.EvalErrorPrototype = protoVal
+			case "RangeError":
+				realm.RangeErrorPrototype = protoVal
+			case "URIError":
+				realm.URIErrorPrototype = protoVal
+			case "SyntaxError":
+				realm.SyntaxErrorPrototype = protoVal
+			}
+		}
+
 		return ctx.DefineGlobal(name, withProps)
 	}
 	proto.SetOwnNonEnumerable("constructor", ctor)

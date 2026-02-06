@@ -61,8 +61,15 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			message = args[0].ToString()
 		}
 
-		// Create new TypeError instance that inherits from TypeError.prototype
-		typeErrorInstance := vm.NewObject(vm.NewValueFromPlainObject(typeErrorPrototype))
+		// Per spec: OrdinaryCreateFromConstructor(newTarget, "%TypeErrorPrototype%")
+		instProto := vm.NewValueFromPlainObject(typeErrorPrototype)
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			candidate := vmInstance.GetPrototypeFromConstructor(newTarget, "%TypeErrorPrototype%")
+			if candidate.IsObject() {
+				instProto = candidate
+			}
+		}
+		typeErrorInstance := vm.NewObject(instProto)
 		typeErrorInstancePtr := typeErrorInstance.AsPlainObject()
 
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)

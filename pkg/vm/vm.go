@@ -669,6 +669,18 @@ func (vm *VM) GetPrototypeFromConstructor(constructor Value, intrinsicDefault st
 		return realm.ErrorPrototype
 	case "%TypeErrorPrototype%":
 		return realm.TypeErrorPrototype
+	case "%RangeErrorPrototype%":
+		return realm.RangeErrorPrototype
+	case "%ReferenceErrorPrototype%":
+		return realm.ReferenceErrorPrototype
+	case "%SyntaxErrorPrototype%":
+		return realm.SyntaxErrorPrototype
+	case "%EvalErrorPrototype%":
+		return realm.EvalErrorPrototype
+	case "%URIErrorPrototype%":
+		return realm.URIErrorPrototype
+	case "%AggregateErrorPrototype%":
+		return realm.AggregateErrorPrototype
 	case "%RegExpPrototype%":
 		return realm.RegExpPrototype
 	case "%PromisePrototype%":

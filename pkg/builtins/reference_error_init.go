@@ -61,8 +61,15 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			message = args[0].ToString()
 		}
 
-		// Create new ReferenceError instance that inherits from ReferenceError.prototype
-		referenceErrorInstance := vm.NewObject(vm.NewValueFromPlainObject(referenceErrorPrototype))
+		// Per spec: OrdinaryCreateFromConstructor(newTarget, "%ReferenceErrorPrototype%")
+		instProto := vm.NewValueFromPlainObject(referenceErrorPrototype)
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			candidate := vmInstance.GetPrototypeFromConstructor(newTarget, "%ReferenceErrorPrototype%")
+			if candidate.IsObject() {
+				instProto = candidate
+			}
+		}
+		referenceErrorInstance := vm.NewObject(instProto)
 		referenceErrorInstancePtr := referenceErrorInstance.AsPlainObject()
 
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
