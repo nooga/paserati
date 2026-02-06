@@ -423,6 +423,20 @@ func (vm *VM) NewSyntaxError(message string) error {
 	return exceptionError{exception: NewValueFromPlainObject(obj)}
 }
 
+// NewURIError constructs a URIError exception error for builtin helpers to return
+func (vm *VM) NewURIError(message string) error {
+	ctor, _ := vm.GetGlobal("URIError")
+	if ctor != Undefined {
+		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
+		return exceptionError{exception: errObj}
+	}
+	// Fallback generic error object
+	obj := NewObject(Null).AsPlainObject()
+	obj.SetOwn("name", NewString("URIError"))
+	obj.SetOwn("message", NewString(message))
+	return exceptionError{exception: NewValueFromPlainObject(obj)}
+}
+
 var (
 	Undefined     = Value{typ: TypeUndefined}
 	Null          = Value{typ: TypeNull}

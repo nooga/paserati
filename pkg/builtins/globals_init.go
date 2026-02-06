@@ -102,6 +102,14 @@ func (g *GlobalsInitializer) InitTypes(ctx *TypeContext) error {
 		return err
 	}
 
+	// URI encoding/decoding functions
+	uriFuncType := types.NewSimpleFunction([]types.Type{types.String}, types.String)
+	for _, name := range []string{"encodeURI", "decodeURI", "encodeURIComponent", "decodeURIComponent"} {
+		if err := ctx.DefineGlobal(name, uriFuncType); err != nil {
+			return err
+		}
+	}
+
 	// Add globalThis (refers to the global object)
 	return ctx.DefineGlobal("globalThis", types.Any)
 }
@@ -598,6 +606,346 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Store the original eval intrinsic for direct eval detection
 	// This is used by OpDirectEval to check if global "eval" has been reassigned
 	ctx.VM.SetOriginalEval(evalFunc)
+
+	// ============================================
+	// URI encoding/decoding functions
+	// Per ECMAScript 19.2.6.1-4
+	// ============================================
+
+	// Characters that encodeURI does NOT encode (uriReserved + uriUnescaped + "#")
+	encodeURIUnescaped := func(r rune) bool {
+		// uriAlpha
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+			return true
+		}
+		// uriDigit
+		if r >= '0' && r <= '9' {
+			return true
+		}
+		// uriMark: - _ . ! ~ * ' ( )
+		switch r {
+		case '-', '_', '.', '!', '~', '*', '\'', '(', ')':
+			return true
+		}
+		return false
+	}
+
+	encodeURIComponentUnescaped := encodeURIUnescaped
+
+	encodeURIFullUnescaped := func(r rune) bool {
+		if encodeURIUnescaped(r) {
+			return true
+		}
+		// uriReserved: ; / ? : @ & = + $ ,
+		// Plus "#"
+		switch r {
+		case ';', '/', '?', ':', '@', '&', '=', '+', '$', ',', '#':
+			return true
+		}
+		return false
+	}
+
+	// Characters that decodeURI should NOT decode (keeps reserved chars encoded)
+	decodeURIReserved := func(r rune) bool {
+		switch r {
+		case ';', '/', '?', ':', '@', '&', '=', '+', '$', ',', '#':
+			return true
+		}
+		return false
+	}
+
+	hexDigit := func(b byte) (int, bool) {
+		switch {
+		case b >= '0' && b <= '9':
+			return int(b - '0'), true
+		case b >= 'A' && b <= 'F':
+			return int(b-'A') + 10, true
+		case b >= 'a' && b <= 'f':
+			return int(b-'a') + 10, true
+		}
+		return 0, false
+	}
+
+	hexChar := "0123456789ABCDEF"
+
+	// Encode implements the shared Encode abstract operation (ECMAScript 19.2.6.1.2)
+	// The input is a Go string (which we treat as a sequence of UTF-16 code units
+	// per JavaScript semantics).
+	uriEncode := func(str string, unescapedPredicate func(rune) bool) (string, error) {
+		// Convert to UTF-16 code units to match JavaScript string semantics
+		runes := []rune(str)
+		var result strings.Builder
+		for i := 0; i < len(runes); i++ {
+			c := runes[i]
+			if unescapedPredicate(c) {
+				result.WriteRune(c)
+				continue
+			}
+
+			var cp rune
+			// Handle UTF-16 surrogate pairs
+			if c >= 0xDC00 && c <= 0xDFFF {
+				// Lone trailing surrogate
+				return "", vmInstance.NewURIError("URI malformed")
+			}
+			if c >= 0xD800 && c <= 0xDBFF {
+				// Leading surrogate - must be followed by trailing surrogate
+				if i+1 >= len(runes) {
+					return "", vmInstance.NewURIError("URI malformed")
+				}
+				next := runes[i+1]
+				if next < 0xDC00 || next > 0xDFFF {
+					return "", vmInstance.NewURIError("URI malformed")
+				}
+				// Combine surrogate pair into code point
+				cp = 0x10000 + (c-0xD800)*0x400 + (next - 0xDC00)
+				i++
+			} else {
+				cp = c
+			}
+
+			// Encode the code point as UTF-8 bytes, then percent-encode each byte
+			var buf [4]byte
+			var n int
+			switch {
+			case cp <= 0x7F:
+				buf[0] = byte(cp)
+				n = 1
+			case cp <= 0x7FF:
+				buf[0] = byte(0xC0 | (cp >> 6))
+				buf[1] = byte(0x80 | (cp & 0x3F))
+				n = 2
+			case cp <= 0xFFFF:
+				buf[0] = byte(0xE0 | (cp >> 12))
+				buf[1] = byte(0x80 | ((cp >> 6) & 0x3F))
+				buf[2] = byte(0x80 | (cp & 0x3F))
+				n = 3
+			default:
+				buf[0] = byte(0xF0 | (cp >> 18))
+				buf[1] = byte(0x80 | ((cp >> 12) & 0x3F))
+				buf[2] = byte(0x80 | ((cp >> 6) & 0x3F))
+				buf[3] = byte(0x80 | (cp & 0x3F))
+				n = 4
+			}
+			for j := 0; j < n; j++ {
+				result.WriteByte('%')
+				result.WriteByte(hexChar[buf[j]>>4])
+				result.WriteByte(hexChar[buf[j]&0x0F])
+			}
+		}
+		return result.String(), nil
+	}
+
+	// Decode implements the shared Decode abstract operation (ECMAScript 19.2.6.1.1)
+	uriDecode := func(str string, reservedPredicate func(rune) bool) (string, error) {
+		var result strings.Builder
+		for i := 0; i < len(str); i++ {
+			if str[i] != '%' {
+				result.WriteByte(str[i])
+				continue
+			}
+			// Need at least 2 hex digits after %
+			if i+2 >= len(str) {
+				return "", vmInstance.NewURIError("URI malformed")
+			}
+			hi, ok1 := hexDigit(str[i+1])
+			lo, ok2 := hexDigit(str[i+2])
+			if !ok1 || !ok2 {
+				return "", vmInstance.NewURIError("URI malformed")
+			}
+			b := byte(hi<<4 | lo)
+
+			if b&0x80 == 0 {
+				// Single-byte character (ASCII)
+				ch := rune(b)
+				if reservedPredicate != nil && reservedPredicate(ch) {
+					// Keep reserved characters in encoded form
+					result.WriteString(str[i : i+3])
+				} else {
+					result.WriteRune(ch)
+				}
+				i += 2
+				continue
+			}
+
+			// Multi-byte UTF-8 sequence
+			var numBytes int
+			switch {
+			case b&0xE0 == 0xC0:
+				numBytes = 2
+			case b&0xF0 == 0xE0:
+				numBytes = 3
+			case b&0xF8 == 0xF0:
+				numBytes = 4
+			default:
+				return "", vmInstance.NewURIError("URI malformed")
+			}
+
+			// Read remaining bytes
+			utf8Bytes := make([]byte, numBytes)
+			utf8Bytes[0] = b
+			i += 2
+
+			for j := 1; j < numBytes; j++ {
+				i++
+				if i >= len(str) || str[i] != '%' {
+					return "", vmInstance.NewURIError("URI malformed")
+				}
+				if i+2 >= len(str) {
+					return "", vmInstance.NewURIError("URI malformed")
+				}
+				hi2, ok3 := hexDigit(str[i+1])
+				lo2, ok4 := hexDigit(str[i+2])
+				if !ok3 || !ok4 {
+					return "", vmInstance.NewURIError("URI malformed")
+				}
+				cb := byte(hi2<<4 | lo2)
+				if cb&0xC0 != 0x80 {
+					return "", vmInstance.NewURIError("URI malformed")
+				}
+				utf8Bytes[j] = cb
+				i += 2
+			}
+
+			// Decode UTF-8 bytes to code point
+			var cp rune
+			switch numBytes {
+			case 2:
+				cp = rune(utf8Bytes[0]&0x1F)<<6 | rune(utf8Bytes[1]&0x3F)
+				// Overlong encoding check
+				if cp < 0x80 {
+					return "", vmInstance.NewURIError("URI malformed")
+				}
+			case 3:
+				cp = rune(utf8Bytes[0]&0x0F)<<12 | rune(utf8Bytes[1]&0x3F)<<6 | rune(utf8Bytes[2]&0x3F)
+				// Overlong encoding check
+				if cp < 0x800 {
+					return "", vmInstance.NewURIError("URI malformed")
+				}
+				// Surrogate check: UTF-8 encoded surrogates are invalid
+				if cp >= 0xD800 && cp <= 0xDFFF {
+					return "", vmInstance.NewURIError("URI malformed")
+				}
+			case 4:
+				cp = rune(utf8Bytes[0]&0x07)<<18 | rune(utf8Bytes[1]&0x3F)<<12 | rune(utf8Bytes[2]&0x3F)<<6 | rune(utf8Bytes[3]&0x3F)
+				// Overlong encoding check
+				if cp < 0x10000 {
+					return "", vmInstance.NewURIError("URI malformed")
+				}
+				// Valid Unicode range check
+				if cp > 0x10FFFF {
+					return "", vmInstance.NewURIError("URI malformed")
+				}
+			}
+
+			if cp <= 0xFFFF {
+				// BMP character - check if it should stay encoded
+				if reservedPredicate != nil && reservedPredicate(cp) {
+					// Re-encode the bytes
+					for j := 0; j < numBytes; j++ {
+						result.WriteByte('%')
+						result.WriteByte(hexChar[utf8Bytes[j]>>4])
+						result.WriteByte(hexChar[utf8Bytes[j]&0x0F])
+					}
+				} else {
+					result.WriteRune(cp)
+				}
+			} else {
+				// Supplementary character - emit as surrogate pair in string
+				// (Go handles this automatically with WriteRune for valid code points)
+				result.WriteRune(cp)
+			}
+		}
+		return result.String(), nil
+	}
+
+	// Helper: convert argument to string via ECMAScript ToString (calls ToPrimitive for objects)
+	uriArgToString := func(arg vm.Value) (string, error) {
+		if arg.IsObject() || arg.IsCallable() {
+			prim := vmInstance.ToPrimitive(arg, "string")
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return "", vmInstance.NewTypeError("Cannot convert object to primitive value")
+			}
+			return prim.ToString(), nil
+		}
+		return arg.ToString(), nil
+	}
+
+	encodeURIFunc := vm.NewNativeFunction(1, false, "encodeURI", func(args []vm.Value) (vm.Value, error) {
+		str := "undefined"
+		if len(args) > 0 {
+			var err error
+			str, err = uriArgToString(args[0])
+			if err != nil {
+				return vm.Undefined, err
+			}
+		}
+		result, err := uriEncode(str, encodeURIFullUnescaped)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		return vm.NewString(result), nil
+	})
+	if err := ctx.DefineGlobal("encodeURI", encodeURIFunc); err != nil {
+		return err
+	}
+
+	decodeURIFunc := vm.NewNativeFunction(1, false, "decodeURI", func(args []vm.Value) (vm.Value, error) {
+		str := "undefined"
+		if len(args) > 0 {
+			var err error
+			str, err = uriArgToString(args[0])
+			if err != nil {
+				return vm.Undefined, err
+			}
+		}
+		result, err := uriDecode(str, decodeURIReserved)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		return vm.NewString(result), nil
+	})
+	if err := ctx.DefineGlobal("decodeURI", decodeURIFunc); err != nil {
+		return err
+	}
+
+	encodeURIComponentFunc := vm.NewNativeFunction(1, false, "encodeURIComponent", func(args []vm.Value) (vm.Value, error) {
+		str := "undefined"
+		if len(args) > 0 {
+			var err error
+			str, err = uriArgToString(args[0])
+			if err != nil {
+				return vm.Undefined, err
+			}
+		}
+		result, err := uriEncode(str, encodeURIComponentUnescaped)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		return vm.NewString(result), nil
+	})
+	if err := ctx.DefineGlobal("encodeURIComponent", encodeURIComponentFunc); err != nil {
+		return err
+	}
+
+	decodeURIComponentFunc := vm.NewNativeFunction(1, false, "decodeURIComponent", func(args []vm.Value) (vm.Value, error) {
+		str := "undefined"
+		if len(args) > 0 {
+			var err error
+			str, err = uriArgToString(args[0])
+			if err != nil {
+				return vm.Undefined, err
+			}
+		}
+		result, err := uriDecode(str, nil) // No reserved set for Component
+		if err != nil {
+			return vm.Undefined, err
+		}
+		return vm.NewString(result), nil
+	})
+	if err := ctx.DefineGlobal("decodeURIComponent", decodeURIComponentFunc); err != nil {
+		return err
+	}
 
 	// Add globalThis as a reference to the global object
 	// globalThis refers to the VM's GlobalObject which contains all global properties
