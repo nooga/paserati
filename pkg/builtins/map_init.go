@@ -283,8 +283,8 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return existing, nil
 		}
 
-		// Call callback with the key to compute the value
-		value, err := vmInstance.Call(callbackfn, key, []vm.Value{key})
+		// Call callback with the key as argument (this=undefined per spec)
+		value, err := vmInstance.Call(callbackfn, vm.Undefined, []vm.Value{key})
 		if err != nil {
 			return vm.Undefined, err
 		}

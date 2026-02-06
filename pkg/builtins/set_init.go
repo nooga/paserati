@@ -278,9 +278,9 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// Add all elements from other
+		// Add all elements from other (normalize -0 to +0 per spec)
 		err = iterateSetLike(args[0], keysMethod, func(val vm.Value) (bool, error) {
-			resultSet.Add(val)
+			resultSet.Add(vm.CanonicalizeKeyedCollectionKey(val))
 			return true, nil
 		})
 		if err != nil {
@@ -329,8 +329,9 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 			}
 		} else {
-			// Iterate over other, check has in this
+			// Iterate over other, check has in this (normalize -0 to +0 per spec)
 			err = iterateSetLike(args[0], keysMethod, func(val vm.Value) (bool, error) {
+				val = vm.CanonicalizeKeyedCollectionKey(val)
 				if thisSetObj.Has(val) {
 					resultSet.Add(val)
 				}
@@ -434,8 +435,9 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// For each element in other: if in result, remove; else add
+		// For each element in other: if in result, remove; else add (normalize -0 to +0 per spec)
 		err = iterateSetLike(args[0], keysMethod, func(val vm.Value) (bool, error) {
+			val = vm.CanonicalizeKeyedCollectionKey(val)
 			if resultSet.Has(val) {
 				resultSet.Delete(val)
 			} else {

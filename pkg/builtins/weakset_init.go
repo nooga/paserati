@@ -148,6 +148,12 @@ func (w *WeakSetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		weakSetProto.DefineOwnProperty("delete", v, &w, &e, &c)
 	}
 
+	// Add Symbol.toStringTag to WeakSet.prototype (writable: false, enumerable: false, configurable: true)
+	{
+		wFalse, eFalse, cTrue := false, false, true
+		weakSetProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolToStringTag), vm.NewString("WeakSet"), &wFalse, &eFalse, &cTrue)
+	}
+
 	// Create WeakSet constructor function
 	weakSetConstructor := vm.NewConstructorWithProps(0, false, "WeakSet", func(args []vm.Value) (vm.Value, error) {
 		// Create new WeakSet instance

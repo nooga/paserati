@@ -2396,12 +2396,17 @@ func (m *MapObject) Set(key, value Value) {
 	if _, exists := m.entries[keyStr]; !exists {
 		// Check if this key was deleted (has tombstone)
 		if m.tombstones != nil && m.tombstones[keyStr] {
-			// Revive the tombstone - don't add to order, just remove from tombstones
+			// Re-adding a deleted key: per ES spec, it goes to END of insertion order.
+			// Nullify old positions so they stay dead, then append at end.
 			delete(m.tombstones, keyStr)
-		} else {
-			// Truly new key - add to order
-			m.order = append(m.order, keyStr)
+			for i, k := range m.order {
+				if k == keyStr {
+					m.order[i] = "" // dead entry marker
+				}
+			}
 		}
+		// Add to end of order (both new and re-added keys)
+		m.order = append(m.order, keyStr)
 		m.size++
 	}
 	m.entries[keyStr] = value
@@ -2510,12 +2515,17 @@ func (s *SetObject) Add(value Value) {
 	if _, exists := s.values[keyStr]; !exists {
 		// Check if this value was deleted (has tombstone)
 		if s.tombstones != nil && s.tombstones[keyStr] {
-			// Revive the tombstone - don't add to order, just remove from tombstones
+			// Re-adding a deleted value: per ES spec, it goes to END of insertion order.
+			// Nullify old positions so they stay dead, then append at end.
 			delete(s.tombstones, keyStr)
-		} else {
-			// Truly new value - add to order
-			s.order = append(s.order, keyStr)
+			for i, k := range s.order {
+				if k == keyStr {
+					s.order[i] = "" // dead entry marker
+				}
+			}
 		}
+		// Add to end of order (both new and re-added values)
+		s.order = append(s.order, keyStr)
 		s.size++
 	}
 	s.values[keyStr] = value

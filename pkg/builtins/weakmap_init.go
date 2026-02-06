@@ -244,8 +244,8 @@ func (w *WeakMapInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return existing, nil
 		}
 
-		// Call callback with the key to compute the value
-		value, err := vmInstance.Call(callbackfn, key, []vm.Value{key})
+		// Call callback with the key as argument (this=undefined per spec)
+		value, err := vmInstance.Call(callbackfn, vm.Undefined, []vm.Value{key})
 		if err != nil {
 			return vm.Undefined, err
 		}
@@ -306,6 +306,12 @@ func (w *WeakMapInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		return newWeakMap, nil
 	})
+
+	// Add Symbol.toStringTag to WeakMap.prototype (writable: false, enumerable: false, configurable: true)
+	{
+		wFalse, eFalse, cTrue := false, false, true
+		weakMapProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolToStringTag), vm.NewString("WeakMap"), &wFalse, &eFalse, &cTrue)
+	}
 
 	// Set constructor property on WeakMap.prototype
 	weakMapProto.SetOwnNonEnumerable("constructor", weakMapConstructor)
