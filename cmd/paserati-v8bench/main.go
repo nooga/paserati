@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/builtins"
@@ -132,12 +133,26 @@ func (v *V8BenchInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 
 func main() {
 	var (
-		benchDir = flag.String("dir", "benchmarks/v8-v7", "Directory containing V8 benchmark files")
-		runFile  = flag.String("run", "run.js", "Entry point script to run")
-		verbose  = flag.Bool("verbose", false, "Verbose output")
+		benchDir   = flag.String("dir", "benchmarks/v8-v7", "Directory containing V8 benchmark files")
+		runFile    = flag.String("run", "run.js", "Entry point script to run")
+		verbose    = flag.Bool("verbose", false, "Verbose output")
+		cpuProfile = flag.String("cpuprofile", "", "Write CPU profile to file")
 	)
 
 	flag.Parse()
+
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating CPU profile: %v\n", err)
+			os.Exit(1)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting CPU profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	// Ensure AST dump is off
 	parser.DumpASTEnabled = false

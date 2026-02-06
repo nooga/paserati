@@ -255,10 +255,9 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		str := args[0].ToString()
 
-		// Check for global and sticky flags
-		flags := regex.GetFlags()
-		isGlobal := strings.Contains(flags, "g")
-		isSticky := strings.Contains(flags, "y")
+		// Check for global and sticky flags using cached booleans
+		isGlobal := regex.IsGlobal()
+		isSticky := regex.IsSticky()
 
 		if isGlobal || isSticky {
 			// Use lastIndex for stateful matching
@@ -310,10 +309,9 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		str := args[0].ToString()
 
-		// Check for global and sticky flags
-		flags := regex.GetFlags()
-		isGlobal := strings.Contains(flags, "g")
-		isSticky := strings.Contains(flags, "y")
+		// Check for global and sticky flags using cached booleans
+		isGlobal := regex.IsGlobal()
+		isSticky := regex.IsSticky()
 
 		var loc []int
 		if isGlobal || isSticky {
@@ -328,18 +326,12 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Null, nil
 			}
 
-			// Search full string to preserve lookbehind context
-			// Find all matches and return the first one at or after baseIndex
-			allMatches := regex.FindAllStringSubmatchIndex(str, -1)
-			for _, match := range allMatches {
-				if match[0] >= baseIndex {
-					// For sticky, must match exactly at baseIndex
-					if isSticky && match[0] != baseIndex {
-						break // No valid sticky match
-					}
-					loc = match
-					break
-				}
+			// Search from baseIndex position (preserves lookbehind context for regexp2)
+			loc = regex.FindStringSubmatchIndexAt(str, baseIndex)
+
+			// For sticky, match must occur exactly at baseIndex
+			if isSticky && loc != nil && loc[0] != baseIndex {
+				loc = nil
 			}
 
 			if loc != nil {
@@ -374,10 +366,9 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		// Set required properties: index, input, groups
-		// loc indices are already absolute positions in str
 		arr.SetOwn("index", vm.NumberValue(float64(loc[0])))
 		arr.SetOwn("input", vm.NewString(str))
-		arr.SetOwn("groups", vm.Undefined) // TODO: Named capture groups
+		arr.SetOwn("groups", vm.Undefined)
 		return result, nil
 	}))
 
@@ -533,8 +524,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Get lastIndex and flags for sticky handling
 		lastIndex := regex.GetLastIndex()
-		flags := regex.GetFlags()
-		isSticky := strings.Contains(flags, "y")
+		isSticky := regex.IsSticky()
 		isGlobal := regex.IsGlobal()
 
 		// For non-global, non-sticky, start from beginning
@@ -554,21 +544,10 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Null, nil
 		}
 
-		// Execute match - for sticky/global, search in substring starting at searchStart
+		// Execute match - search from searchStart position (preserves lookbehind context)
 		var loc []int
 		if searchStart > 0 {
-			subLoc := regex.FindStringSubmatchIndex(str[searchStart:])
-			if subLoc != nil {
-				// Adjust indices to original string
-				loc = make([]int, len(subLoc))
-				for i := range subLoc {
-					if subLoc[i] >= 0 {
-						loc[i] = subLoc[i] + searchStart
-					} else {
-						loc[i] = subLoc[i]
-					}
-				}
-			}
+			loc = regex.FindStringSubmatchIndexAt(str, searchStart)
 		} else {
 			loc = regex.FindStringSubmatchIndex(str)
 		}
@@ -625,6 +604,48 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			str = toStringJS(args[0])
 		}
 
+		// Fast path: native RegExp object
+		if rx.IsRegExp() {
+			regex := rx.AsRegExpObject()
+			if regex != nil && !regex.HasCompileError() {
+					if regex.IsGlobal() {
+					// Global match: find all matches, return array of matched strings
+					regex.SetLastIndex(0)
+					matches := regex.FindAllString(str, -1)
+					if len(matches) == 0 {
+						return vm.Null, nil
+					}
+					result := vm.NewArray()
+					arr := result.AsArray()
+					for _, match := range matches {
+						arr.Append(vm.NewString(match))
+					}
+					return result, nil
+				}
+				// Non-global: find first match with groups
+				loc := regex.FindStringSubmatchIndex(str)
+				if loc == nil {
+					return vm.Null, nil
+				}
+				result := vm.NewArray()
+				arr := result.AsArray()
+				for i := 0; i < len(loc); i += 2 {
+					start, end := loc[i], loc[i+1]
+					if start == -1 {
+						arr.Append(vm.Undefined)
+					} else {
+						arr.Append(vm.NewString(str[start:end]))
+					}
+				}
+				arr.SetOwn("index", vm.NumberValue(float64(loc[0])))
+				arr.SetOwn("input", vm.NewString(str))
+				arr.SetOwn("groups", vm.Undefined)
+				return result, nil
+			}
+		}
+
+		// Slow path: spec-compliant for non-native RegExp
+
 		// Step 4: Get flags
 		flagsVal, err := vmInstance.GetProperty(rx, "flags")
 		if err != nil {
@@ -639,22 +660,17 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Step 6: Global match
-		// Step 6a: Check for unicode
 		fullUnicode := strings.Contains(flags, "u")
 
-		// Step 6b: Set lastIndex to 0
 		if err := vmInstance.SetProperty(rx, "lastIndex", vm.NumberValue(0)); err != nil {
 			return vm.Undefined, err
 		}
 
-		// Step 6c: Create result array
 		resultArr := vm.NewArray()
 		arr := resultArr.AsArray()
 		n := 0
 
-		// Step 6e: Loop
 		for {
-			// Step 6e.i: Call RegExpExec
 			result, execErr := regexpExec(rx, str)
 			if execErr != nil {
 				return vm.Undefined, execErr
@@ -663,7 +679,6 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, nil
 			}
 
-			// Step 6e.ii: If result is null
 			if result.Type() == vm.TypeNull {
 				if n == 0 {
 					return vm.Null, nil
@@ -671,17 +686,14 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return resultArr, nil
 			}
 
-			// Step 6e.iii: Get match string (result[0])
 			matchStrVal, err := vmInstance.GetProperty(result, "0")
 			if err != nil {
 				return vm.Undefined, err
 			}
 			matchStr := matchStrVal.ToString()
 
-			// Step 6e.iv: Add to result array
 			arr.Append(vm.NewString(matchStr))
 
-			// Step 6e.v: If matchStr is empty, advance lastIndex
 			if matchStr == "" {
 				lastIndexVal, _ := vmInstance.GetProperty(rx, "lastIndex")
 				thisIndex := int(lastIndexVal.ToFloat())
@@ -692,8 +704,6 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			n++
-
-			// Safety limit to prevent infinite loops
 			if n > 1000000 {
 				return vm.Undefined, vmInstance.NewRangeError("Maximum match iterations exceeded")
 			}
@@ -783,6 +793,88 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Step 5: Check if replaceValue is callable
 		isCallable := replaceValue.IsCallable()
+
+		// Fast path: native RegExp object (no custom exec, no proxy)
+		// This avoids the overhead of regexpExec property lookup + VM call per match
+		if rx.IsRegExp() {
+			regex := rx.AsRegExpObject()
+			if regex != nil && !regex.HasCompileError() {
+				isGlobal := regex.IsGlobal()
+
+				if isGlobal {
+					regex.SetLastIndex(0)
+				}
+
+				var result strings.Builder
+				lastIndex := 0
+
+				if isGlobal {
+					allMatches := regex.FindAllStringSubmatchIndex(str, -1)
+					for _, match := range allMatches {
+						result.WriteString(str[lastIndex:match[0]])
+						var replacement string
+						if isCallable {
+							callArgs := make([]vm.Value, 0, len(match)/2+2)
+							callArgs = append(callArgs, vm.NewString(str[match[0]:match[1]]))
+							for i := 2; i < len(match); i += 2 {
+								if match[i] >= 0 && match[i+1] >= 0 {
+									callArgs = append(callArgs, vm.NewString(str[match[i]:match[i+1]]))
+								} else {
+									callArgs = append(callArgs, vm.Undefined)
+								}
+							}
+							callArgs = append(callArgs, vm.NumberValue(float64(match[0])))
+							callArgs = append(callArgs, vm.NewString(str))
+							vmInstance.EnterHelperCall()
+							res, err := vmInstance.Call(replaceValue, vm.Undefined, callArgs)
+							vmInstance.ExitHelperCall()
+							if err != nil {
+								return vm.Undefined, err
+							}
+							replacement = res.ToString()
+						} else {
+							replacement = processReplacementPattern(str, match, replaceValue.ToString())
+						}
+						result.WriteString(replacement)
+						lastIndex = match[1]
+					}
+				} else {
+					match := regex.FindStringSubmatchIndex(str)
+					if match != nil {
+						result.WriteString(str[lastIndex:match[0]])
+						var replacement string
+						if isCallable {
+							callArgs := make([]vm.Value, 0, len(match)/2+2)
+							callArgs = append(callArgs, vm.NewString(str[match[0]:match[1]]))
+							for i := 2; i < len(match); i += 2 {
+								if match[i] >= 0 && match[i+1] >= 0 {
+									callArgs = append(callArgs, vm.NewString(str[match[i]:match[i+1]]))
+								} else {
+									callArgs = append(callArgs, vm.Undefined)
+								}
+							}
+							callArgs = append(callArgs, vm.NumberValue(float64(match[0])))
+							callArgs = append(callArgs, vm.NewString(str))
+							vmInstance.EnterHelperCall()
+							res, err := vmInstance.Call(replaceValue, vm.Undefined, callArgs)
+							vmInstance.ExitHelperCall()
+							if err != nil {
+								return vm.Undefined, err
+							}
+							replacement = res.ToString()
+						} else {
+							replacement = processReplacementPattern(str, match, replaceValue.ToString())
+						}
+						result.WriteString(replacement)
+						lastIndex = match[1]
+					}
+				}
+				result.WriteString(str[lastIndex:])
+				return vm.NewString(result.String()), nil
+			}
+		}
+
+		// Slow path: spec-compliant for non-native RegExp (proxied, custom exec, etc.)
 
 		// Step 6: Get flags
 		flagsVal, err := vmInstance.GetProperty(rx, "flags")
@@ -900,17 +992,6 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 				replacement = replResult.ToString()
 			} else {
-				// Use GetSubstitution for string replacement
-				// Build match indices for $ substitution processing
-				matchIndices := []int{position, position + len(matched)}
-				for _, cap := range captures {
-					if cap.Type() == vm.TypeUndefined {
-						matchIndices = append(matchIndices, -1, -1)
-					} else {
-						// For captures we don't have position info, use -1
-						matchIndices = append(matchIndices, -1, -1)
-					}
-				}
 				replacement = processReplacementPatternEx(str, matched, position, captures, namedCaptures, replaceValue.ToString())
 			}
 
@@ -945,6 +1026,33 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) > 0 {
 			str = toStringJS(args[0])
 		}
+
+		// Fast path: native RegExp object - use Go's regex Split directly
+		if rx.IsRegExp() {
+			regex := rx.AsRegExpObject()
+			if regex != nil && !regex.HasCompileError() {
+				resultArr := vm.NewArray()
+				arr := resultArr.AsArray()
+
+				// Handle limit
+				limit := -1 // unlimited
+				if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
+					lim := int(args[1].ToFloat())
+					if lim == 0 {
+						return resultArr, nil
+					}
+					limit = lim
+				}
+
+				parts := regex.Split(str, limit)
+				for _, part := range parts {
+					arr.Append(vm.NewString(part))
+				}
+				return resultArr, nil
+			}
+		}
+
+		// Slow path: spec-compliant for non-native RegExp
 
 		// Step 4-6: Get constructor and create splitter
 		// For simplicity, we'll use the rx directly as the splitter

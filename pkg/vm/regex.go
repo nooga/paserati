@@ -32,6 +32,7 @@ type RegExpObject struct {
 	ignoreCase     bool            // Cached ignoreCase flag
 	multiline      bool            // Cached multiline flag
 	dotAll         bool            // Cached dotAll flag
+	sticky         bool            // Cached sticky flag for performance
 	lastIndex      int             // For global regex stateful matching
 	Properties     *PlainObject    // Storage for user-defined properties
 	compileError   string          // If non-empty, regex couldn't be compiled by either engine
@@ -70,6 +71,7 @@ func NewRegExp(pattern, flags string) (Value, error) {
 	ignoreCase := strings.Contains(flags, "i")
 	multiline := strings.Contains(flags, "m")
 	dotAll := strings.Contains(flags, "s")
+	sticky := strings.Contains(flags, "y")
 
 	regexObj := &RegExpObject{
 		Object:        Object{}, // Initialize base object
@@ -80,6 +82,7 @@ func NewRegExp(pattern, flags string) (Value, error) {
 		ignoreCase:    ignoreCase,
 		multiline:     multiline,
 		dotAll:        dotAll,
+		sticky:        sticky,
 		lastIndex:     0,
 	}
 
@@ -194,6 +197,7 @@ func (vm *VM) NewRegExpDeferred(pattern, flags string) Value {
 	ignoreCase := strings.Contains(flags, "i")
 	multiline := strings.Contains(flags, "m")
 	dotAll := strings.Contains(flags, "s")
+	sticky := strings.Contains(flags, "y")
 
 	// Create a NEW RegExpObject wrapper each time (per ECMAScript spec)
 	// but share the compiled engines from cache for performance
@@ -207,6 +211,7 @@ func (vm *VM) NewRegExpDeferred(pattern, flags string) Value {
 		ignoreCase:     ignoreCase,
 		multiline:      multiline,
 		dotAll:         dotAll,
+		sticky:         sticky,
 		lastIndex:      0,                   // Fresh per instance
 		compileError:   cached.compileError, // Shared from cache
 	}
@@ -322,21 +327,54 @@ func (r *RegExpObject) FindStringSubmatchIndex(s string) []int {
 		if err != nil || match == nil {
 			return nil
 		}
-		groups := match.Groups()
-		runeIndices := make([]int, len(groups)*2)
-		for i, g := range groups {
-			if g.Length > 0 {
-				runeIndices[i*2] = g.Index
-				runeIndices[i*2+1] = g.Index + g.Length
-			} else {
-				runeIndices[i*2] = -1
-				runeIndices[i*2+1] = -1
-			}
-		}
-		// Convert rune indices to byte indices
-		return runeIndexToByteIndex(s, runeIndices)
+		return r.matchToByteIndices(s, match)
 	}
 	return nil
+}
+
+// FindStringSubmatchIndexAt returns the index pairs for the first match starting at or after byteStartAt.
+// Unlike searching a substring, this preserves lookbehind context.
+func (r *RegExpObject) FindStringSubmatchIndexAt(s string, byteStartAt int) []int {
+	if r.compiledRegex != nil {
+		// stdlib regexp doesn't support lookbehinds, so substring is fine
+		sub := s[byteStartAt:]
+		loc := r.compiledRegex.FindStringSubmatchIndex(sub)
+		if loc == nil {
+			return nil
+		}
+		// Adjust indices to original string
+		for i := range loc {
+			if loc[i] >= 0 {
+				loc[i] += byteStartAt
+			}
+		}
+		return loc
+	}
+	if r.compiledRegex2 != nil {
+		match, err := r.compiledRegex2.FindStringMatchStartingAt(s, byteStartAt)
+		if err != nil || match == nil {
+			return nil
+		}
+		return r.matchToByteIndices(s, match)
+	}
+	return nil
+}
+
+// matchToByteIndices converts a regexp2 Match to byte index pairs
+func (r *RegExpObject) matchToByteIndices(s string, match *regexp2.Match) []int {
+	groups := match.Groups()
+	runeIndices := make([]int, len(groups)*2)
+	for i, g := range groups {
+		if g.Length > 0 {
+			runeIndices[i*2] = g.Index
+			runeIndices[i*2+1] = g.Index + g.Length
+		} else {
+			runeIndices[i*2] = -1
+			runeIndices[i*2+1] = -1
+		}
+	}
+	// Convert rune indices to byte indices
+	return runeIndexToByteIndex(s, runeIndices)
 }
 
 // FindAllStringSubmatchIndex returns all matches with their indices
@@ -628,6 +666,10 @@ func (r *RegExpObject) GetCompiledRegex() *regexp.Regexp {
 
 func (r *RegExpObject) IsGlobal() bool {
 	return r.global
+}
+
+func (r *RegExpObject) IsSticky() bool {
+	return r.sticky
 }
 
 func (r *RegExpObject) IsIgnoreCase() bool {
