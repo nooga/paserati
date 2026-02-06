@@ -205,8 +205,8 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return sym, nil
 		}
 
-		// Create new symbol and register it
-		sym := vm.NewSymbol(key)
+		// Create new registered symbol (cannot be used as WeakMap/WeakSet key per spec)
+		sym := vm.NewRegisteredSymbol(key)
 		globalSymbolRegistry[key] = sym
 		return sym, nil
 	}))

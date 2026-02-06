@@ -158,7 +158,21 @@ type StringObject struct {
 
 type SymbolObject struct {
 	Object
-	value string
+	value      string
+	Registered bool // true for Symbol.for() symbols (cannot be WeakMap/WeakSet keys)
+}
+
+// CanBeHeldWeakly returns true if this value can be used as a WeakMap/WeakSet key.
+// Per ECMAScript spec: objects and non-registered symbols can be held weakly.
+func (v Value) CanBeHeldWeakly() bool {
+	if v.IsObject() {
+		return true
+	}
+	if v.typ == TypeSymbol {
+		sym := (*SymbolObject)(v.obj)
+		return !sym.Registered
+	}
+	return false
 }
 
 // execResultMeta stores lazy exec/match result metadata.
@@ -434,6 +448,18 @@ func BooleanValue(value bool) Value {
 	return False
 }
 
+// CanonicalizeKeyedCollectionKey normalizes keys for Map/Set collections.
+// Per ECMAScript spec, -0 is canonicalized to +0.
+func CanonicalizeKeyedCollectionKey(key Value) Value {
+	if key.typ == TypeFloatNumber {
+		f := math.Float64frombits(key.payload)
+		if f == 0 && math.Signbit(f) {
+			return NumberValue(0)
+		}
+	}
+	return key
+}
+
 func NewBigInt(value *big.Int) Value {
 	return Value{typ: TypeBigInt, obj: unsafe.Pointer(&BigIntObject{value: value})}
 }
@@ -444,6 +470,10 @@ func NewString(value string) Value {
 
 func NewSymbol(value string) Value {
 	return Value{typ: TypeSymbol, obj: unsafe.Pointer(&SymbolObject{value: value})}
+}
+
+func NewRegisteredSymbol(value string) Value {
+	return Value{typ: TypeSymbol, obj: unsafe.Pointer(&SymbolObject{value: value, Registered: true})}
 }
 
 func NewArray() Value {
@@ -2563,13 +2593,12 @@ func (s *SetObject) GetValueAt(index int) (Value, bool) {
 }
 
 // WeakMapObject methods - implements ECMAScript WeakMap using Go's weak package
-// Keys must be objects (not primitives) and are held weakly, allowing GC.
+// Keys must be objects or non-registered symbols (CanBeHeldWeakly) and are held weakly.
 
 // Set adds or updates a key-value pair in the WeakMap
-// Returns false if the key is not a valid object type
+// Returns false if the key cannot be held weakly
 func (wm *WeakMapObject) Set(key, value Value) bool {
-	// WeakMap keys must be objects
-	if !key.IsObject() {
+	if !key.CanBeHeldWeakly() {
 		return false
 	}
 
@@ -2587,7 +2616,7 @@ func (wm *WeakMapObject) Set(key, value Value) bool {
 // Get retrieves a value from the WeakMap by key
 // Returns (Undefined, false) if key not found or key has been GC'd
 func (wm *WeakMapObject) Get(key Value) (Value, bool) {
-	if !key.IsObject() {
+	if !key.CanBeHeldWeakly() {
 		return Undefined, false
 	}
 
@@ -2609,7 +2638,7 @@ func (wm *WeakMapObject) Get(key Value) (Value, bool) {
 
 // Has checks if a key exists in the WeakMap
 func (wm *WeakMapObject) Has(key Value) bool {
-	if !key.IsObject() {
+	if !key.CanBeHeldWeakly() {
 		return false
 	}
 
@@ -2632,7 +2661,7 @@ func (wm *WeakMapObject) Has(key Value) bool {
 // Delete removes a key-value pair from the WeakMap
 // Returns true if the key was found and deleted
 func (wm *WeakMapObject) Delete(key Value) bool {
-	if !key.IsObject() {
+	if !key.CanBeHeldWeakly() {
 		return false
 	}
 
@@ -2645,13 +2674,12 @@ func (wm *WeakMapObject) Delete(key Value) bool {
 }
 
 // WeakSetObject methods - implements ECMAScript WeakSet using Go's weak package
-// Values must be objects and are held weakly, allowing GC.
+// Values must be objects or non-registered symbols (CanBeHeldWeakly) and are held weakly.
 
 // Add adds a value to the WeakSet
-// Returns false if the value is not a valid object type
+// Returns false if the value cannot be held weakly
 func (ws *WeakSetObject) Add(value Value) bool {
-	// WeakSet values must be objects
-	if !value.IsObject() {
+	if !value.CanBeHeldWeakly() {
 		return false
 	}
 
@@ -2667,7 +2695,7 @@ func (ws *WeakSetObject) Add(value Value) bool {
 
 // Has checks if a value exists in the WeakSet
 func (ws *WeakSetObject) Has(value Value) bool {
-	if !value.IsObject() {
+	if !value.CanBeHeldWeakly() {
 		return false
 	}
 
@@ -2690,7 +2718,7 @@ func (ws *WeakSetObject) Has(value Value) bool {
 // Delete removes a value from the WeakSet
 // Returns true if the value was found and deleted
 func (ws *WeakSetObject) Delete(value Value) bool {
-	if !value.IsObject() {
+	if !value.CanBeHeldWeakly() {
 		return false
 	}
 

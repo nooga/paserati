@@ -166,7 +166,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// getInt16
-	dataViewProto.SetOwnNonEnumerable("getInt16", vm.NewNativeFunction(2, false, "getInt16", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("getInt16", vm.NewNativeFunction(1, false, "getInt16", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.Undefined, vmInstance.NewTypeError("getInt16 requires 1 argument")
 		}
@@ -180,7 +180,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// getUint16
-	dataViewProto.SetOwnNonEnumerable("getUint16", vm.NewNativeFunction(2, false, "getUint16", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("getUint16", vm.NewNativeFunction(1, false, "getUint16", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.Undefined, vmInstance.NewTypeError("getUint16 requires 1 argument")
 		}
@@ -194,7 +194,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// getInt32
-	dataViewProto.SetOwnNonEnumerable("getInt32", vm.NewNativeFunction(2, false, "getInt32", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("getInt32", vm.NewNativeFunction(1, false, "getInt32", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.Undefined, vmInstance.NewTypeError("getInt32 requires 1 argument")
 		}
@@ -208,7 +208,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// getUint32
-	dataViewProto.SetOwnNonEnumerable("getUint32", vm.NewNativeFunction(2, false, "getUint32", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("getUint32", vm.NewNativeFunction(1, false, "getUint32", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.Undefined, vmInstance.NewTypeError("getUint32 requires 1 argument")
 		}
@@ -222,7 +222,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// getFloat32
-	dataViewProto.SetOwnNonEnumerable("getFloat32", vm.NewNativeFunction(2, false, "getFloat32", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("getFloat32", vm.NewNativeFunction(1, false, "getFloat32", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.Undefined, vmInstance.NewTypeError("getFloat32 requires 1 argument")
 		}
@@ -236,7 +236,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// getFloat64
-	dataViewProto.SetOwnNonEnumerable("getFloat64", vm.NewNativeFunction(2, false, "getFloat64", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("getFloat64", vm.NewNativeFunction(1, false, "getFloat64", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.Undefined, vmInstance.NewTypeError("getFloat64 requires 1 argument")
 		}
@@ -250,7 +250,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// getBigInt64
-	dataViewProto.SetOwnNonEnumerable("getBigInt64", vm.NewNativeFunction(2, false, "getBigInt64", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("getBigInt64", vm.NewNativeFunction(1, false, "getBigInt64", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.Undefined, vmInstance.NewTypeError("getBigInt64 requires 1 argument")
 		}
@@ -264,7 +264,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// getBigUint64
-	dataViewProto.SetOwnNonEnumerable("getBigUint64", vm.NewNativeFunction(2, false, "getBigUint64", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("getBigUint64", vm.NewNativeFunction(1, false, "getBigUint64", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.Undefined, vmInstance.NewTypeError("getBigUint64 requires 1 argument")
 		}
@@ -306,7 +306,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// setInt16
-	dataViewProto.SetOwnNonEnumerable("setInt16", vm.NewNativeFunction(3, false, "setInt16", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("setInt16", vm.NewNativeFunction(2, false, "setInt16", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("setInt16 requires 2 arguments")
 		}
@@ -321,7 +321,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// setUint16
-	dataViewProto.SetOwnNonEnumerable("setUint16", vm.NewNativeFunction(3, false, "setUint16", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("setUint16", vm.NewNativeFunction(2, false, "setUint16", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("setUint16 requires 2 arguments")
 		}
@@ -336,7 +336,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// setInt32
-	dataViewProto.SetOwnNonEnumerable("setInt32", vm.NewNativeFunction(3, false, "setInt32", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("setInt32", vm.NewNativeFunction(2, false, "setInt32", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("setInt32 requires 2 arguments")
 		}
@@ -351,7 +351,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// setUint32
-	dataViewProto.SetOwnNonEnumerable("setUint32", vm.NewNativeFunction(3, false, "setUint32", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("setUint32", vm.NewNativeFunction(2, false, "setUint32", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("setUint32 requires 2 arguments")
 		}
@@ -366,7 +366,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// setFloat32
-	dataViewProto.SetOwnNonEnumerable("setFloat32", vm.NewNativeFunction(3, false, "setFloat32", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("setFloat32", vm.NewNativeFunction(2, false, "setFloat32", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("setFloat32 requires 2 arguments")
 		}
@@ -381,7 +381,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// setFloat64
-	dataViewProto.SetOwnNonEnumerable("setFloat64", vm.NewNativeFunction(3, false, "setFloat64", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("setFloat64", vm.NewNativeFunction(2, false, "setFloat64", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("setFloat64 requires 2 arguments")
 		}
@@ -396,7 +396,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// setBigInt64
-	dataViewProto.SetOwnNonEnumerable("setBigInt64", vm.NewNativeFunction(3, false, "setBigInt64", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("setBigInt64", vm.NewNativeFunction(2, false, "setBigInt64", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("setBigInt64 requires 2 arguments")
 		}
@@ -416,7 +416,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// setBigUint64
-	dataViewProto.SetOwnNonEnumerable("setBigUint64", vm.NewNativeFunction(3, false, "setBigUint64", func(args []vm.Value) (vm.Value, error) {
+	dataViewProto.SetOwnNonEnumerable("setBigUint64", vm.NewNativeFunction(2, false, "setBigUint64", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("setBigUint64 requires 2 arguments")
 		}

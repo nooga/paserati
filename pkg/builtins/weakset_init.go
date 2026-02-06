@@ -87,7 +87,7 @@ func (w *WeakSetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		value := args[0]
-		if !value.IsObject() {
+		if !value.CanBeHeldWeakly() {
 			return vm.Undefined, vmInstance.NewTypeError("Invalid value used in weak set")
 		}
 
@@ -112,8 +112,8 @@ func (w *WeakSetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		value := args[0]
-		if !value.IsObject() {
-			return vm.BooleanValue(false), nil // Non-object values are never present
+		if !value.CanBeHeldWeakly() {
+			return vm.BooleanValue(false), nil // Values that can't be held weakly are never present
 		}
 
 		weakSetObj := thisWeakSet.AsWeakSet()
@@ -136,8 +136,8 @@ func (w *WeakSetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		value := args[0]
-		if !value.IsObject() {
-			return vm.BooleanValue(false), nil // Non-object values are never present
+		if !value.CanBeHeldWeakly() {
+			return vm.BooleanValue(false), nil // Values that can't be held weakly are never present
 		}
 
 		weakSetObj := thisWeakSet.AsWeakSet()
@@ -165,8 +165,8 @@ func (w *WeakSetInitializer) InitRuntime(ctx *RuntimeContext) error {
 				arr := iterable.AsArray()
 				for i := 0; i < arr.Length(); i++ {
 					value := arr.Get(i)
-					// WeakSet requires object values
-					if value.IsObject() {
+					// WeakSet requires values that can be held weakly
+					if value.CanBeHeldWeakly() {
 						weakSetObj.Add(value)
 					} else {
 						return vm.Undefined, vmInstance.NewTypeError("Invalid value used in weak set")

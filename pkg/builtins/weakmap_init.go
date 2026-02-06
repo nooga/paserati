@@ -91,7 +91,7 @@ func (w *WeakMapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		key := args[0]
-		if !key.IsObject() {
+		if !key.CanBeHeldWeakly() {
 			return vm.Undefined, vmInstance.NewTypeError("Invalid value used as weak map key")
 		}
 
@@ -116,8 +116,8 @@ func (w *WeakMapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		key := args[0]
-		if !key.IsObject() {
-			return vm.Undefined, nil // Non-object keys always return undefined
+		if !key.CanBeHeldWeakly() {
+			return vm.Undefined, nil // Keys that can't be held weakly always return undefined
 		}
 
 		weakMapObj := thisWeakMap.AsWeakMap()
@@ -141,8 +141,8 @@ func (w *WeakMapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		key := args[0]
-		if !key.IsObject() {
-			return vm.BooleanValue(false), nil // Non-object keys are never present
+		if !key.CanBeHeldWeakly() {
+			return vm.BooleanValue(false), nil // Keys that can't be held weakly are never present
 		}
 
 		weakMapObj := thisWeakMap.AsWeakMap()
@@ -165,8 +165,8 @@ func (w *WeakMapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		key := args[0]
-		if !key.IsObject() {
-			return vm.BooleanValue(false), nil // Non-object keys are never present
+		if !key.CanBeHeldWeakly() {
+			return vm.BooleanValue(false), nil // Keys that can't be held weakly are never present
 		}
 
 		weakMapObj := thisWeakMap.AsWeakMap()
@@ -175,6 +175,88 @@ func (w *WeakMapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	if v, ok := weakMapProto.GetOwn("delete"); ok {
 		w, e, c := true, false, true
 		weakMapProto.DefineOwnProperty("delete", v, &w, &e, &c)
+	}
+
+	// getOrInsert(key, value) - returns existing value if key present, otherwise inserts and returns value
+	weakMapProto.SetOwnNonEnumerable("getOrInsert", vm.NewNativeFunction(2, false, "getOrInsert", func(args []vm.Value) (vm.Value, error) {
+		thisWeakMap := vmInstance.GetThis()
+
+		if thisWeakMap.Type() != vm.TypeWeakMap {
+			return vm.Undefined, vmInstance.NewTypeError("WeakMap.prototype.getOrInsert called on non-WeakMap")
+		}
+
+		if len(args) < 1 {
+			return vm.Undefined, vmInstance.NewTypeError("WeakMap.prototype.getOrInsert requires at least 1 argument")
+		}
+
+		key := args[0]
+		if !key.CanBeHeldWeakly() {
+			return vm.Undefined, vmInstance.NewTypeError("Invalid value used as weak map key")
+		}
+
+		value := vm.Undefined
+		if len(args) >= 2 {
+			value = args[1]
+		}
+
+		weakMapObj := thisWeakMap.AsWeakMap()
+
+		// Check if key already exists
+		if existing, found := weakMapObj.Get(key); found {
+			return existing, nil
+		}
+
+		// Insert and return the value
+		weakMapObj.Set(key, value)
+		return value, nil
+	}))
+	if v, ok := weakMapProto.GetOwn("getOrInsert"); ok {
+		w, e, c := true, false, true
+		weakMapProto.DefineOwnProperty("getOrInsert", v, &w, &e, &c)
+	}
+
+	// getOrInsertComputed(key, callbackfn) - returns existing value or calls callback to compute value
+	weakMapProto.SetOwnNonEnumerable("getOrInsertComputed", vm.NewNativeFunction(2, false, "getOrInsertComputed", func(args []vm.Value) (vm.Value, error) {
+		thisWeakMap := vmInstance.GetThis()
+
+		if thisWeakMap.Type() != vm.TypeWeakMap {
+			return vm.Undefined, vmInstance.NewTypeError("WeakMap.prototype.getOrInsertComputed called on non-WeakMap")
+		}
+
+		if len(args) < 2 {
+			return vm.Undefined, vmInstance.NewTypeError("WeakMap.prototype.getOrInsertComputed requires 2 arguments")
+		}
+
+		key := args[0]
+		if !key.CanBeHeldWeakly() {
+			return vm.Undefined, vmInstance.NewTypeError("Invalid value used as weak map key")
+		}
+
+		callbackfn := args[1]
+		if !callbackfn.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("WeakMap.prototype.getOrInsertComputed: callback is not a function")
+		}
+
+		weakMapObj := thisWeakMap.AsWeakMap()
+
+		// Check if key already exists
+		if existing, found := weakMapObj.Get(key); found {
+			return existing, nil
+		}
+
+		// Call callback with the key to compute the value
+		value, err := vmInstance.Call(callbackfn, key, []vm.Value{key})
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		// Insert and return the computed value
+		weakMapObj.Set(key, value)
+		return value, nil
+	}))
+	if v, ok := weakMapProto.GetOwn("getOrInsertComputed"); ok {
+		w, e, c := true, false, true
+		weakMapProto.DefineOwnProperty("getOrInsertComputed", v, &w, &e, &c)
 	}
 
 	// Create WeakMap constructor function
@@ -210,8 +292,8 @@ func (w *WeakMapInitializer) InitRuntime(ctx *RuntimeContext) error {
 						if entryArr.Length() >= 2 {
 							key := entryArr.Get(0)
 							value := entryArr.Get(1)
-							// WeakMap requires object keys
-							if key.IsObject() {
+							// WeakMap requires keys that can be held weakly
+							if key.CanBeHeldWeakly() {
 								weakMapObj.Set(key, value)
 							} else {
 								return vm.Undefined, vmInstance.NewTypeError("Invalid value used as weak map key")

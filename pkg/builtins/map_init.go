@@ -180,7 +180,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// forEach(callback[, thisArg]) - calls callback(value, key, map) for each entry
-	mapProto.SetOwnNonEnumerable("forEach", vm.NewNativeFunction(2, false, "forEach", func(args []vm.Value) (vm.Value, error) {
+	mapProto.SetOwnNonEnumerable("forEach", vm.NewNativeFunction(1, false, "forEach", func(args []vm.Value) (vm.Value, error) {
 		thisMap := vmInstance.GetThis()
 
 		if thisMap.Type() != vm.TypeMap {
@@ -215,6 +215,87 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	if v, ok := mapProto.GetOwn("forEach"); ok {
 		w, e, c := true, false, true
 		mapProto.DefineOwnProperty("forEach", v, &w, &e, &c)
+	}
+
+	// getOrInsert(key, value) - returns existing value if key present, otherwise inserts and returns value
+	mapProto.SetOwnNonEnumerable("getOrInsert", vm.NewNativeFunction(2, false, "getOrInsert", func(args []vm.Value) (vm.Value, error) {
+		thisMap := vmInstance.GetThis()
+
+		if thisMap.Type() != vm.TypeMap {
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.getOrInsert called on incompatible receiver")
+		}
+
+		if len(args) < 1 {
+			return vm.Undefined, nil
+		}
+
+		key := args[0]
+		value := vm.Undefined
+		if len(args) >= 2 {
+			value = args[1]
+		}
+
+		mapObj := thisMap.AsMap()
+
+		// Canonicalize key: -0 -> +0
+		key = vm.CanonicalizeKeyedCollectionKey(key)
+
+		// Check if key already exists
+		if existing := mapObj.Get(key); !existing.IsUndefined() || mapObj.Has(key) {
+			return existing, nil
+		}
+
+		// Insert and return the value
+		mapObj.Set(key, value)
+		return value, nil
+	}))
+	if v, ok := mapProto.GetOwn("getOrInsert"); ok {
+		w, e, c := true, false, true
+		mapProto.DefineOwnProperty("getOrInsert", v, &w, &e, &c)
+	}
+
+	// getOrInsertComputed(key, callbackfn) - returns existing value or calls callback to compute value
+	mapProto.SetOwnNonEnumerable("getOrInsertComputed", vm.NewNativeFunction(2, false, "getOrInsertComputed", func(args []vm.Value) (vm.Value, error) {
+		thisMap := vmInstance.GetThis()
+
+		if thisMap.Type() != vm.TypeMap {
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.getOrInsertComputed called on incompatible receiver")
+		}
+
+		if len(args) < 2 {
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.getOrInsertComputed requires 2 arguments")
+		}
+
+		key := args[0]
+		callbackfn := args[1]
+
+		if !callbackfn.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Map.prototype.getOrInsertComputed: callback is not a function")
+		}
+
+		mapObj := thisMap.AsMap()
+
+		// Canonicalize key: -0 -> +0
+		key = vm.CanonicalizeKeyedCollectionKey(key)
+
+		// Check if key already exists
+		if existing := mapObj.Get(key); !existing.IsUndefined() || mapObj.Has(key) {
+			return existing, nil
+		}
+
+		// Call callback with the key to compute the value
+		value, err := vmInstance.Call(callbackfn, key, []vm.Value{key})
+		if err != nil {
+			return vm.Undefined, err
+		}
+
+		// Insert and return the computed value
+		mapObj.Set(key, value)
+		return value, nil
+	}))
+	if v, ok := mapProto.GetOwn("getOrInsertComputed"); ok {
+		w, e, c := true, false, true
+		mapProto.DefineOwnProperty("getOrInsertComputed", v, &w, &e, &c)
 	}
 
 	// Add size accessor (getter) - must be defined as an accessor property per spec

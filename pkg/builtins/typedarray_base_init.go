@@ -293,7 +293,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// indexOf(searchElement, fromIndex?) - returns first index of element
-	proto.SetOwnNonEnumerable("indexOf", vm.NewNativeFunction(2, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("indexOf", vm.NewNativeFunction(1, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.indexOf")
 		if err != nil {
@@ -332,7 +332,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// lastIndexOf(searchElement, fromIndex?) - returns last index of element
-	proto.SetOwnNonEnumerable("lastIndexOf", vm.NewNativeFunction(2, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("lastIndexOf", vm.NewNativeFunction(1, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.lastIndexOf")
 		if err != nil {
@@ -370,7 +370,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// includes(searchElement, fromIndex?) - returns true if element is found
-	proto.SetOwnNonEnumerable("includes", vm.NewNativeFunction(2, false, "includes", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("includes", vm.NewNativeFunction(1, false, "includes", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.includes")
 		if err != nil {
@@ -490,7 +490,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// forEach(callback, thisArg?) - calls callback for each element
-	proto.SetOwnNonEnumerable("forEach", vm.NewNativeFunction(2, false, "forEach", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("forEach", vm.NewNativeFunction(1, false, "forEach", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.forEach")
 		if err != nil {
@@ -515,7 +515,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// every(callback, thisArg?) - returns true if callback returns true for all elements
-	proto.SetOwnNonEnumerable("every", vm.NewNativeFunction(2, false, "every", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("every", vm.NewNativeFunction(1, false, "every", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.every")
 		if err != nil {
@@ -543,7 +543,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// some(callback, thisArg?) - returns true if callback returns true for any element
-	proto.SetOwnNonEnumerable("some", vm.NewNativeFunction(2, false, "some", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("some", vm.NewNativeFunction(1, false, "some", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.some")
 		if err != nil {
@@ -571,7 +571,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// find(callback, thisArg?) - returns first element where callback returns true
-	proto.SetOwnNonEnumerable("find", vm.NewNativeFunction(2, false, "find", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("find", vm.NewNativeFunction(1, false, "find", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.find")
 		if err != nil {
@@ -599,7 +599,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// findIndex(callback, thisArg?) - returns first index where callback returns true
-	proto.SetOwnNonEnumerable("findIndex", vm.NewNativeFunction(2, false, "findIndex", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("findIndex", vm.NewNativeFunction(1, false, "findIndex", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.findIndex")
 		if err != nil {
@@ -627,7 +627,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// filter(callback, thisArg?) - returns new array with elements where callback returns true
-	proto.SetOwnNonEnumerable("filter", vm.NewNativeFunction(2, false, "filter", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("filter", vm.NewNativeFunction(1, false, "filter", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.filter")
 		if err != nil {
@@ -658,7 +658,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// map(callback, thisArg?) - returns new array with mapped elements
-	proto.SetOwnNonEnumerable("map", vm.NewNativeFunction(2, false, "map", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("map", vm.NewNativeFunction(1, false, "map", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.map")
 		if err != nil {
@@ -687,7 +687,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// reduce(callback, initialValue?) - reduces array to single value
-	proto.SetOwnNonEnumerable("reduce", vm.NewNativeFunction(2, false, "reduce", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("reduce", vm.NewNativeFunction(1, false, "reduce", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.reduce")
 		if err != nil {
@@ -726,7 +726,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// reduceRight(callback, initialValue?) - reduces array from right to single value
-	proto.SetOwnNonEnumerable("reduceRight", vm.NewNativeFunction(2, false, "reduceRight", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("reduceRight", vm.NewNativeFunction(1, false, "reduceRight", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.reduceRight")
 		if err != nil {
@@ -765,7 +765,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// copyWithin(target, start, end?) - copies part of array to another location
-	proto.SetOwnNonEnumerable("copyWithin", vm.NewNativeFunction(3, false, "copyWithin", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("copyWithin", vm.NewNativeFunction(2, false, "copyWithin", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.copyWithin")
 		if err != nil {
@@ -849,7 +849,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// fill(value, start?, end?) - fills array with value
-	proto.SetOwnNonEnumerable("fill", vm.NewNativeFunction(3, false, "fill", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("fill", vm.NewNativeFunction(1, false, "fill", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.fill")
 		if err != nil {
@@ -1083,7 +1083,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// set(source, offset?) - copies elements from source
-	proto.SetOwnNonEnumerable("set", vm.NewNativeFunction(2, false, "set", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("set", vm.NewNativeFunction(1, false, "set", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.set")
 		if err != nil {
@@ -1353,7 +1353,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// findLast(callback, thisArg?) - returns last element where callback returns true
-	proto.SetOwnNonEnumerable("findLast", vm.NewNativeFunction(2, false, "findLast", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("findLast", vm.NewNativeFunction(1, false, "findLast", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.findLast")
 		if err != nil {
@@ -1381,7 +1381,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	}))
 
 	// findLastIndex(callback, thisArg?) - returns last index where callback returns true
-	proto.SetOwnNonEnumerable("findLastIndex", vm.NewNativeFunction(2, false, "findLastIndex", func(args []vm.Value) (vm.Value, error) {
+	proto.SetOwnNonEnumerable("findLastIndex", vm.NewNativeFunction(1, false, "findLastIndex", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
 		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.findLastIndex")
 		if err != nil {
