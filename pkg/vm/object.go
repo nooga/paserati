@@ -163,11 +163,18 @@ func (o *PlainObject) GetOwnDescriptorByKey(key PropertyKey) (Value, bool, bool,
 // GetOwnAccessor returns accessor pair for an own property if it is an accessor.
 // Returns (get, set, enumerable, configurable, exists)
 func (o *PlainObject) GetOwnAccessor(name string) (Value, Value, bool, bool, bool) {
+	if o.getters == nil && o.setters == nil {
+		return Undefined, Undefined, false, false, false
+	}
 	return o.GetOwnAccessorByKey(keyFromString(name))
 }
 
 // GetOwnAccessorByKey returns accessor pair for an own property by key.
 func (o *PlainObject) GetOwnAccessorByKey(key PropertyKey) (Value, Value, bool, bool, bool) {
+	// Fast path: no accessor storage means no accessors defined on this object
+	if o.getters == nil && o.setters == nil {
+		return Undefined, Undefined, false, false, false
+	}
 	for _, f := range o.shape.fields {
 		if ((key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
 			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj)) && f.isAccessor {

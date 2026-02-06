@@ -133,22 +133,14 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		}
 	}
 
-	// Module Namespace Exotic Object [[Set]] behavior (ECMAScript 10.4.6.9)
-	// [[Set]] on a namespace always returns false, which throws TypeError in strict mode
+	// Combined TypeObject checks: module namespace and globalThis
 	if objVal.Type() == TypeObject {
-		po := objVal.AsPlainObject()
+		po := AsPlainObject(*objVal)
+		// Module Namespace Exotic Object [[Set]] behavior (ECMAScript 10.4.6.9)
 		if po != nil && po.IsModuleNamespace() {
-			// [[Set]] always returns false for namespace objects
-			// Namespaces only exist in module context which is always strict, so throw TypeError
 			vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s' of object '[object Module]'", propName))
 			return false, InterpretRuntimeError, Undefined
 		}
-	}
-
-	// GlobalThis special case: transparently write to globals in heap
-	// This makes globalThis.propertyName = value work for top-level var/function declarations
-	if objVal.Type() == TypeObject {
-		po := AsPlainObject(*objVal)
 		if debugOpSetProp {
 			fmt.Printf("[DEBUG opSetProp] GlobalObject check: po=%p, vm.GlobalObject=%p, match=%v\n", po, vm.GlobalObject, po == vm.GlobalObject)
 		}

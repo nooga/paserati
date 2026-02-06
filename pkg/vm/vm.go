@@ -15771,9 +15771,13 @@ func (vm *VM) stringToBigInt(str string) (*big.Int, bool) {
 // toPrimitive implements JavaScript ToPrimitive abstract operation
 // hint can be "string", "number", or "default"
 func (vm *VM) toPrimitive(val Value, hint string) Value {
-	// If already primitive, return as-is
-	// Note: Functions are objects and should go through ToPrimitive to call toString/valueOf
-	if !val.IsObject() && !val.IsCallable() && val.typ != TypeArray && val.typ != TypeArguments && val.typ != TypeRegExp && val.typ != TypeMap && val.typ != TypeSet && val.typ != TypeProxy {
+	// Fast path: common primitive types return immediately without method calls
+	switch val.typ {
+	case TypeFloatNumber, TypeIntegerNumber, TypeBoolean, TypeString, TypeNull, TypeUndefined:
+		return val
+	}
+	// Less common non-object types (BigInt, Symbol, internal types like Hole)
+	if !val.IsObject() && !val.IsCallable() {
 		return val
 	}
 
