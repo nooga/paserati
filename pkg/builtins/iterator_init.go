@@ -216,16 +216,33 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// ============================================
 	iteratorProto := vm.NewObject(objectProto).AsPlainObject()
 
-	// Helper to get iterator's next method and call it
-	getIteratorNext := func(iterator vm.Value) (vm.Value, error) {
+	// GetIteratorDirect: reads the "next" method ONCE and returns it cached.
+	// Per spec, this is called once per consumer/producer setup.
+	// Does NOT validate callability - that check happens at call time per spec.
+	getIteratorDirect := func(iterator vm.Value) (vm.Value, error) {
 		nextMethod, err := vmInstance.GetProperty(iterator, "next")
 		if err != nil {
 			return vm.Undefined, err
 		}
+		return nextMethod, nil
+	}
+
+	// Call a cached next method on an iterator (no re-reading "next" property).
+	// Validates callability at call time per spec.
+	callIteratorNext := func(iterator vm.Value, nextMethod vm.Value) (vm.Value, error) {
 		if !nextMethod.IsCallable() {
-			return vm.Undefined, vmInstance.NewTypeError("Iterator next is not callable")
+			return vm.Undefined, vmInstance.NewTypeError("iterator.next is not a function")
 		}
 		return vmInstance.Call(nextMethod, iterator, []vm.Value{})
+	}
+
+	// Legacy helper: reads and calls in one step (for simple/one-off uses)
+	getIteratorNext := func(iterator vm.Value) (vm.Value, error) {
+		nextMethod, err := getIteratorDirect(iterator)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		return callIteratorNext(iterator, nextMethod)
 	}
 
 	// Helper to create iterator result object
@@ -325,14 +342,21 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("next called on non-object")
 		}
 
-		// Get the wrapped iterator
+		// Get the wrapped iterator and cached next method
 		wrappedIter, exists := obj.GetOwn("[[Iterated]]")
 		if !exists || wrappedIter.IsUndefined() {
 			return createIteratorResult(vm.Undefined, true), nil
 		}
+		nextMeth, _ := obj.GetOwn("[[NextMethod]]")
 
-		// Call next on wrapped iterator
-		result, err := getIteratorNext(wrappedIter)
+		// Call next on wrapped iterator using cached method
+		var result vm.Value
+		var err error
+		if !nextMeth.IsUndefined() && nextMeth.IsCallable() {
+			result, err = callIteratorNext(wrappedIter, nextMeth)
+		} else {
+			result, err = getIteratorNext(wrappedIter)
+		}
 		if err != nil {
 			return vm.Undefined, err
 		}
@@ -380,7 +404,31 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString("Iterator"), nil
 	})
 	toStringTagSetter := vm.NewNativeFunction(1, false, "set [Symbol.toStringTag]", func(args []vm.Value) (vm.Value, error) {
-		// Setter does nothing per spec
+		// SetterThatIgnoresPrototypeProperties(%Iterator.prototype%, %Symbol.toStringTag%, v)
+		thisVal := vmInstance.GetThis()
+		// 1. If this is not an Object, throw TypeError
+		if !thisVal.IsObject() {
+			return vm.Undefined, vmInstance.NewTypeError("setter called on non-object")
+		}
+		// 2. If this is home, throw TypeError
+		if thisVal.AsPlainObject() == iteratorProto {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot set Symbol.toStringTag on Iterator.prototype directly")
+		}
+		v := vm.Undefined
+		if len(args) > 0 {
+			v = args[0]
+		}
+		propKey := vm.NewSymbolKey(SymbolToStringTag)
+		po := thisVal.AsPlainObject()
+		// 3. Let desc = this.[[GetOwnProperty]](p)
+		if _, hasOwn := po.GetOwnByKey(propKey); !hasOwn {
+			// 4. If desc is undefined, CreateDataPropertyOrThrow(this, p, v)
+			w, e, c := true, true, true
+			po.DefineOwnPropertyByKey(propKey, v, &w, &e, &c)
+		} else {
+			// 5. Else, Set(this, p, v, true)
+			po.DefineOwnPropertyByKey(propKey, v, nil, nil, nil)
+		}
 		return vm.Undefined, nil
 	})
 	iteratorProto.DefineAccessorPropertyByKey(
@@ -408,11 +456,19 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		mapper := args[0]
 
+		// GetIteratorDirect: cache next method once per spec
+		cachedNext, err := getIteratorDirect(thisValue)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
 		// Create iterator helper object
 		helper := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
 		helper.SetOwn("[[UnderlyingIterator]]", thisValue)
+		helper.SetOwn("[[NextMethod]]", cachedNext)
 		helper.SetOwn("[[Mapper]]", mapper)
 		helper.SetOwn("[[Counter]]", vm.NumberValue(0))
+		helper.SetOwn("[[GeneratorState]]", vm.NewString("suspendedStart"))
 
 		// Add next method
 		helper.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
@@ -422,20 +478,34 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, vmInstance.NewTypeError("next called on non-object")
 			}
 
+			// Per spec: GeneratorValidate - if executing, throw TypeError
+			stateVal, _ := helperObj.GetOwn("[[GeneratorState]]")
+			state := vm.AsString(stateVal)
+			if state == "executing" {
+				return vm.Undefined, vmInstance.NewTypeError("Generator is already running")
+			}
+			if state == "completed" {
+				return createIteratorResult(vm.Undefined, true), nil
+			}
+			helperObj.SetOwn("[[GeneratorState]]", vm.NewString("executing"))
+
 			underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+			nextMeth, _ := helperObj.GetOwn("[[NextMethod]]")
 			mapperFn, _ := helperObj.GetOwn("[[Mapper]]")
 			counterVal, _ := helperObj.GetOwn("[[Counter]]")
 			counter := int(counterVal.ToFloat())
 
-			// Get next value from underlying iterator
-			result, err := getIteratorNext(underlyingIter)
+			// Get next value from underlying iterator using cached next method
+			result, err := callIteratorNext(underlyingIter, nextMeth)
 			if err != nil {
+				helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
 				return vm.Undefined, err
 			}
 
 			// Check if done
 			doneVal, _ := vmInstance.GetProperty(result, "done")
 			if doneVal.IsTruthy() {
+				helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
 				return createIteratorResult(vm.Undefined, true), nil
 			}
 
@@ -444,12 +514,14 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			mapped, err := vmInstance.Call(mapperFn, vm.Undefined, []vm.Value{valueVal, vm.NumberValue(float64(counter))})
 			if err != nil {
 				closeIterator(underlyingIter)
+				helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
 				return vm.Undefined, err
 			}
 
 			// Update counter
 			helperObj.SetOwn("[[Counter]]", vm.NumberValue(float64(counter+1)))
 
+			helperObj.SetOwn("[[GeneratorState]]", vm.NewString("suspendedYield"))
 			return createIteratorResult(mapped, false), nil
 		}))
 
@@ -458,8 +530,13 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			helperThis := vmInstance.GetThis()
 			helperObj := helperThis.AsPlainObject()
 			if helperObj != nil {
-				underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
-				closeIterator(underlyingIter)
+				stateVal, _ := helperObj.GetOwn("[[GeneratorState]]")
+				state := vm.AsString(stateVal)
+				if state != "completed" {
+					underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+					closeIterator(underlyingIter)
+					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+				}
 			}
 			return createIteratorResult(vm.Undefined, true), nil
 		}))
@@ -484,11 +561,19 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		predicate := args[0]
 
+		// GetIteratorDirect: cache next method once per spec
+		cachedNext, err := getIteratorDirect(thisValue)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
 		// Create iterator helper object
 		helper := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
 		helper.SetOwn("[[UnderlyingIterator]]", thisValue)
+		helper.SetOwn("[[NextMethod]]", cachedNext)
 		helper.SetOwn("[[Predicate]]", predicate)
 		helper.SetOwn("[[Counter]]", vm.NumberValue(0))
+		helper.SetOwn("[[GeneratorState]]", vm.NewString("suspendedStart"))
 
 		// Add next method
 		helper.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
@@ -498,21 +583,35 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, vmInstance.NewTypeError("next called on non-object")
 			}
 
+			// Per spec: GeneratorValidate - if executing, throw TypeError
+			stateVal, _ := helperObj.GetOwn("[[GeneratorState]]")
+			state := vm.AsString(stateVal)
+			if state == "executing" {
+				return vm.Undefined, vmInstance.NewTypeError("Generator is already running")
+			}
+			if state == "completed" {
+				return createIteratorResult(vm.Undefined, true), nil
+			}
+			helperObj.SetOwn("[[GeneratorState]]", vm.NewString("executing"))
+
 			underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+			nextMeth, _ := helperObj.GetOwn("[[NextMethod]]")
 			predicateFn, _ := helperObj.GetOwn("[[Predicate]]")
 			counterVal, _ := helperObj.GetOwn("[[Counter]]")
 			counter := int(counterVal.ToFloat())
 
 			for {
-				// Get next value from underlying iterator
-				result, err := getIteratorNext(underlyingIter)
+				// Get next value from underlying iterator using cached next method
+				result, err := callIteratorNext(underlyingIter, nextMeth)
 				if err != nil {
+					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
 					return vm.Undefined, err
 				}
 
 				// Check if done
 				doneVal, _ := vmInstance.GetProperty(result, "done")
 				if doneVal.IsTruthy() {
+					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
 					return createIteratorResult(vm.Undefined, true), nil
 				}
 
@@ -524,10 +623,12 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 				if err != nil {
 					closeIterator(underlyingIter)
+					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
 					return vm.Undefined, err
 				}
 
 				if passed.IsTruthy() {
+					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("suspendedYield"))
 					return createIteratorResult(valueVal, false), nil
 				}
 				// Continue to next value
@@ -539,8 +640,13 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			helperThis := vmInstance.GetThis()
 			helperObj := helperThis.AsPlainObject()
 			if helperObj != nil {
-				underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
-				closeIterator(underlyingIter)
+				stateVal, _ := helperObj.GetOwn("[[GeneratorState]]")
+				state := vm.AsString(stateVal)
+				if state != "completed" {
+					underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+					closeIterator(underlyingIter)
+					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+				}
 			}
 			return createIteratorResult(vm.Undefined, true), nil
 		}))
@@ -809,8 +915,14 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		result := vm.NewArray()
 		arr := result.AsArray()
 
+		// GetIteratorDirect: cache next method once per spec
+		nextMethod, err := getIteratorDirect(thisValue)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
 		for {
-			next, err := getIteratorNext(thisValue)
+			next, err := callIteratorNext(thisValue, nextMethod)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -844,9 +956,15 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		fn := args[0]
 
+		// GetIteratorDirect: cache next method once per spec
+		nextMethod, err := getIteratorDirect(thisValue)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
 		counter := 0
 		for {
-			next, err := getIteratorNext(thisValue)
+			next, err := callIteratorNext(thisValue, nextMethod)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -891,9 +1009,15 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			accumulator = args[1]
 		}
 
+		// GetIteratorDirect: cache next method once per spec
+		nextMethod, err := getIteratorDirect(thisValue)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
 		counter := 0
 		for {
-			next, err := getIteratorNext(thisValue)
+			next, err := callIteratorNext(thisValue, nextMethod)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -944,9 +1068,15 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		predicate := args[0]
 
+		// GetIteratorDirect: cache next method once per spec
+		nextMethod, err := getIteratorDirect(thisValue)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
 		counter := 0
 		for {
-			next, err := getIteratorNext(thisValue)
+			next, err := callIteratorNext(thisValue, nextMethod)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -990,9 +1120,15 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		predicate := args[0]
 
+		// GetIteratorDirect: cache next method once per spec
+		nextMethod, err := getIteratorDirect(thisValue)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
 		counter := 0
 		for {
-			next, err := getIteratorNext(thisValue)
+			next, err := callIteratorNext(thisValue, nextMethod)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -1036,9 +1172,15 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		predicate := args[0]
 
+		// GetIteratorDirect: cache next method once per spec
+		nextMethod, err := getIteratorDirect(thisValue)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
 		counter := 0
 		for {
-			next, err := getIteratorNext(thisValue)
+			next, err := callIteratorNext(thisValue, nextMethod)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -1082,31 +1224,57 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		mapper := args[0]
 
+		// GetIteratorDirect: cache next method once per spec
+		cachedNext, err := getIteratorDirect(thisValue)
+		if err != nil {
+			return vm.Undefined, err
+		}
+
 		// Create iterator helper object
 		helper := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
 		helper.SetOwn("[[UnderlyingIterator]]", thisValue)
+		helper.SetOwn("[[NextMethod]]", cachedNext)
 		helper.SetOwn("[[Mapper]]", mapper)
 		helper.SetOwn("[[InnerIterator]]", vm.Undefined)
+		helper.SetOwn("[[InnerNextMethod]]", vm.Undefined)
 		helper.SetOwn("[[Counter]]", vm.NumberValue(0))
+		helper.SetOwn("[[GeneratorState]]", vm.NewString("suspendedStart"))
 
 		// Helper to get iterator from value using GetIteratorFlattenable semantics
 		// GetIteratorFlattenable ONLY accepts objects, not primitives
-		getIterator := func(value vm.Value) (vm.Value, error) {
+		getIterator := func(value vm.Value) (vm.Value, vm.Value, error) {
 			// Per spec: GetIteratorFlattenable rejects primitives even if their prototype has Symbol.iterator
 			// Only objects are allowed to be flattened
 			if !value.IsObject() && !value.IsGenerator() {
-				return vm.Undefined, vmInstance.NewTypeError("Value is not an Object")
+				return vm.Undefined, vm.Undefined, vmInstance.NewTypeError("Value is not an Object")
 			}
-			// Try to get Symbol.iterator
-			if iterMethod, ok := vmInstance.GetSymbolProperty(value, SymbolIterator); ok && iterMethod.IsCallable() {
-				return vmInstance.Call(iterMethod, value, []vm.Value{})
+			var iterObj vm.Value
+			// Per spec: GetMethod(obj, @@iterator)
+			// GetMethod returns undefined for null/undefined, throws TypeError for non-callable
+			if iterMethod, ok := vmInstance.GetSymbolProperty(value, SymbolIterator); ok {
+				if iterMethod.IsUndefined() || iterMethod.Type() == vm.TypeNull {
+					// null/undefined → fall through to iterator protocol (treat as iterator)
+					iterObj = value
+				} else if iterMethod.IsCallable() {
+					obj, cerr := vmInstance.Call(iterMethod, value, []vm.Value{})
+					if cerr != nil {
+						return vm.Undefined, vm.Undefined, cerr
+					}
+					iterObj = obj
+				} else {
+					// Non-callable, non-nullish Symbol.iterator → TypeError per GetMethod
+					return vm.Undefined, vm.Undefined, vmInstance.NewTypeError("Result of the Symbol.iterator method is not callable")
+				}
+			} else {
+				// No Symbol.iterator property → treat as iterator (use next directly)
+				iterObj = value
 			}
-			// Check if it's already an iterator (has next method)
-			nextMethod, _ := vmInstance.GetProperty(value, "next")
-			if nextMethod.IsCallable() {
-				return value, nil
+			// GetIteratorDirect for the inner/returned iterator
+			innerNext, nerr := getIteratorDirect(iterObj)
+			if nerr != nil {
+				return vm.Undefined, vm.Undefined, nerr
 			}
-			return vm.Undefined, vmInstance.NewTypeError("Value is not iterable")
+			return iterObj, innerNext, nil
 		}
 
 		// Add next method
@@ -1117,40 +1285,58 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, vmInstance.NewTypeError("next called on non-object")
 			}
 
+			// Per spec: GeneratorValidate - if executing, throw TypeError
+			stateVal, _ := helperObj.GetOwn("[[GeneratorState]]")
+			state := vm.AsString(stateVal)
+			if state == "executing" {
+				return vm.Undefined, vmInstance.NewTypeError("Generator is already running")
+			}
+			if state == "completed" {
+				return createIteratorResult(vm.Undefined, true), nil
+			}
+			helperObj.SetOwn("[[GeneratorState]]", vm.NewString("executing"))
+
 			underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+			nextMeth, _ := helperObj.GetOwn("[[NextMethod]]")
 			mapperFn, _ := helperObj.GetOwn("[[Mapper]]")
 			innerIter, _ := helperObj.GetOwn("[[InnerIterator]]")
+			innerNextMeth, _ := helperObj.GetOwn("[[InnerNextMethod]]")
 			counterVal, _ := helperObj.GetOwn("[[Counter]]")
 			counter := int(counterVal.ToFloat())
 
 			for {
 				// If we have an inner iterator, try to get values from it
 				if !innerIter.IsUndefined() {
-					result, err := getIteratorNext(innerIter)
+					result, err := callIteratorNext(innerIter, innerNextMeth)
 					if err != nil {
 						closeIterator(underlyingIter)
+						helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
 						return vm.Undefined, err
 					}
 
 					doneVal, _ := vmInstance.GetProperty(result, "done")
 					if !doneVal.IsTruthy() {
 						valueVal, _ := vmInstance.GetProperty(result, "value")
+						helperObj.SetOwn("[[GeneratorState]]", vm.NewString("suspendedYield"))
 						return createIteratorResult(valueVal, false), nil
 					}
 
 					// Inner iterator exhausted
 					helperObj.SetOwn("[[InnerIterator]]", vm.Undefined)
+					helperObj.SetOwn("[[InnerNextMethod]]", vm.Undefined)
 					innerIter = vm.Undefined
 				}
 
-				// Get next value from underlying iterator
-				result, err := getIteratorNext(underlyingIter)
+				// Get next value from underlying iterator using cached next method
+				result, err := callIteratorNext(underlyingIter, nextMeth)
 				if err != nil {
+					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
 					return vm.Undefined, err
 				}
 
 				doneVal, _ := vmInstance.GetProperty(result, "done")
 				if doneVal.IsTruthy() {
+					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
 					return createIteratorResult(vm.Undefined, true), nil
 				}
 
@@ -1159,18 +1345,21 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				mapped, err := vmInstance.Call(mapperFn, vm.Undefined, []vm.Value{valueVal, vm.NumberValue(float64(counter))})
 				if err != nil {
 					closeIterator(underlyingIter)
+					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
 					return vm.Undefined, err
 				}
 				counter++
 				helperObj.SetOwn("[[Counter]]", vm.NumberValue(float64(counter)))
 
-				// Get iterator from mapped value
-				innerIter, err = getIterator(mapped)
+				// Get iterator from mapped value (also caches inner next method)
+				innerIter, innerNextMeth, err = getIterator(mapped)
 				if err != nil {
 					closeIterator(underlyingIter)
+					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
 					return vm.Undefined, err
 				}
 				helperObj.SetOwn("[[InnerIterator]]", innerIter)
+				helperObj.SetOwn("[[InnerNextMethod]]", innerNextMeth)
 			}
 		}))
 
@@ -1179,11 +1368,17 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			helperThis := vmInstance.GetThis()
 			helperObj := helperThis.AsPlainObject()
 			if helperObj != nil {
-				underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
-				closeIterator(underlyingIter)
-				innerIter, _ := helperObj.GetOwn("[[InnerIterator]]")
-				if !innerIter.IsUndefined() {
-					closeIterator(innerIter)
+				// Only close iterators if not already completed
+				stateVal, _ := helperObj.GetOwn("[[GeneratorState]]")
+				state := vm.AsString(stateVal)
+				if state != "completed" {
+					underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+					closeIterator(underlyingIter)
+					innerIter, _ := helperObj.GetOwn("[[InnerIterator]]")
+					if !innerIter.IsUndefined() {
+						closeIterator(innerIter)
+					}
+					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
 				}
 			}
 			return createIteratorResult(vm.Undefined, true), nil
@@ -1478,9 +1673,13 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 			}
 
-			// Wrap the iterator
+			// Wrap the iterator with cached next method
 			wrapper := vm.NewObject(vmInstance.WrapForValidIteratorPrototype).AsPlainObject()
 			wrapper.SetOwn("[[Iterated]]", iterator)
+			// Cache the next method per GetIteratorDirect
+			if iterNextMethod, nerr := getIteratorDirect(iterator); nerr == nil {
+				wrapper.SetOwn("[[NextMethod]]", iterNextMethod)
+			}
 			return vm.NewValueFromPlainObject(wrapper), nil
 		}))
 
@@ -2102,7 +2301,30 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return iteratorCtor, nil
 	})
 	constructorSetter := vm.NewNativeFunction(1, false, "set constructor", func(args []vm.Value) (vm.Value, error) {
-		// Setter does nothing per spec
+		// SetterThatIgnoresPrototypeProperties(%Iterator.prototype%, "constructor", v)
+		thisVal := vmInstance.GetThis()
+		// 1. If this is not an Object, throw TypeError
+		if !thisVal.IsObject() {
+			return vm.Undefined, vmInstance.NewTypeError("setter called on non-object")
+		}
+		// 2. If this is home, throw TypeError
+		if thisVal.AsPlainObject() == iteratorProto {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot set constructor on Iterator.prototype directly")
+		}
+		v := vm.Undefined
+		if len(args) > 0 {
+			v = args[0]
+		}
+		po := thisVal.AsPlainObject()
+		// 3. Let desc = this.[[GetOwnProperty]](p)
+		if _, hasOwn := po.GetOwn("constructor"); !hasOwn {
+			// 4. If desc is undefined, CreateDataPropertyOrThrow(this, p, v)
+			w, e, c := true, true, true
+			po.DefineOwnProperty("constructor", v, &w, &e, &c)
+		} else {
+			// 5. Else, Set(this, p, v, true)
+			po.SetOwn("constructor", v)
+		}
 		return vm.Undefined, nil
 	})
 	iteratorProto.DefineAccessorProperty("constructor", constructorGetter, true, constructorSetter, true, &e, &c)

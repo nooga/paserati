@@ -443,13 +443,19 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// For each element in other: if in result, remove; else add (normalize -0 to +0 per spec)
+		// For each element in other: check against O.[[SetData]] (live receiver), not resultSetData
+		// Per spec: SetDataHas(O.[[SetData]], nextValue) checks the ORIGINAL set (which may be mutated)
+		// If in O: remove from result. If not in O: add to result only if not already there.
 		err = iterateSetLike(args[0], keysMethod, func(val vm.Value) (bool, error) {
 			val = vm.CanonicalizeKeyedCollectionKey(val)
-			if resultSet.Has(val) {
+			if thisSetObj.Has(val) {
+				// Element is in the original (live) set → remove from result copy
 				resultSet.Delete(val)
 			} else {
-				resultSet.Add(val)
+				// Element is NOT in the original set → add to result only if not already present
+				if !resultSet.Has(val) {
+					resultSet.Add(val)
+				}
 			}
 			return true, nil
 		})

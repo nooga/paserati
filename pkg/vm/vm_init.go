@@ -1331,7 +1331,13 @@ func (vm *VM) Construct(constructor Value, args []Value) (Value, error) {
 		}
 
 		// Create new object with constructor's prototype
+		// First ensure lazy prototype initialization, then validate per spec
 		prototype := fn.GetOrCreatePrototypeWithVM(vm)
+		// Per ECMAScript 9.1.14 GetPrototypeFromConstructor:
+		// If prototype is not an object, fall back to constructor's realm intrinsic
+		if !prototype.IsObject() {
+			prototype = vm.GetPrototypeFromConstructor(constructor, "%ObjectPrototype%")
+		}
 		newObj := NewObject(prototype)
 
 		// Set constructor call flag so prepareCall allows class constructors

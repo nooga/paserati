@@ -1503,6 +1503,87 @@ func objectDefinePropertiesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value,
 	return objectDefinePropertiesImpl(vmInstance, obj, args[1])
 }
 
+// getTargetOwnKeys returns own property keys from a target object (non-Proxy path)
+func getTargetOwnKeys(vmInstance *vm.VM, target vm.Value) []vm.Value {
+	var result []vm.Value
+	switch target.Type() {
+	case vm.TypeObject:
+		po := target.AsPlainObject()
+		// OwnPropertyNames includes ALL keys (enumerable + non-enumerable)
+		for _, key := range po.OwnPropertyNames() {
+			result = append(result, vm.NewString(key))
+		}
+	case vm.TypeArray:
+		arr := target.AsArray()
+		for i := 0; i < arr.Length(); i++ {
+			result = append(result, vm.NewString(strconv.Itoa(i)))
+		}
+		// Include "length" as it's an own property of arrays
+		result = append(result, vm.NewString("length"))
+	case vm.TypeDictObject:
+		do := target.AsDictObject()
+		for _, key := range do.OwnPropertyNames() {
+			result = append(result, vm.NewString(key))
+		}
+	}
+	return result
+}
+
+// isTargetExtensible checks if a target object is extensible
+func isTargetExtensible(target vm.Value) bool {
+	switch target.Type() {
+	case vm.TypeObject:
+		return target.AsPlainObject().IsExtensible()
+	case vm.TypeArray:
+		return target.AsArray().IsExtensible()
+	case vm.TypeDictObject:
+		return target.AsDictObject().IsExtensible()
+	}
+	return true
+}
+
+// isTargetKeyNonConfigurable checks if a key on the target is non-configurable
+func isTargetKeyNonConfigurable(target vm.Value, key string) bool {
+	switch target.Type() {
+	case vm.TypeObject:
+		if _, _, _, configurable, ok := target.AsPlainObject().GetOwnDescriptor(key); ok {
+			return !configurable
+		}
+	case vm.TypeArray:
+		if key == "length" {
+			return true
+		}
+	}
+	return false
+}
+
+// isTargetKeyEnumerable checks if a key is enumerable on a target object (non-Proxy path)
+func isTargetKeyEnumerable(vmInstance *vm.VM, target vm.Value, key string) bool {
+	switch target.Type() {
+	case vm.TypeObject:
+		po := target.AsPlainObject()
+		if _, _, en, _, ok := po.GetOwnDescriptor(key); ok {
+			return en
+		}
+	case vm.TypeArray:
+		arr := target.AsArray()
+		// Numeric indices are enumerable
+		if n, err := strconv.Atoi(key); err == nil && n >= 0 && n < arr.Length() {
+			return true
+		}
+		// "length" is not enumerable
+		return false
+	case vm.TypeDictObject:
+		// DictObject keys are always enumerable
+		if do := target.AsDictObject(); do != nil {
+			if _, ok := do.Get(key); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
 		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined to object")
@@ -1521,45 +1602,177 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	keys := vm.NewArray()
 	keysArray := keys.AsArray()
 
-	// Handle Proxy objects - call ownKeys trap if present
+	// Handle Proxy objects per ECMAScript spec
 	if obj.Type() == vm.TypeProxy {
 		proxy := obj.AsProxy()
 		if proxy.Revoked {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot get keys of revoked Proxy")
 		}
 
-		// Check for ownKeys trap
-		if ownKeysTrap, ok := proxy.Handler().AsPlainObject().GetOwn("ownKeys"); ok {
-			// Validate trap is callable
-			if !ownKeysTrap.IsFunction() {
-				return vm.Undefined, vmInstance.NewTypeError("'ownKeys' on proxy: trap is not a function")
-			}
+		handler := proxy.Handler()
+		target := proxy.Target()
 
-			// Call handler.ownKeys(target)
-			result, err := vmInstance.Call(ownKeysTrap, proxy.Handler(), []vm.Value{proxy.Target()})
-			if err != nil {
-				return vm.Undefined, err
-			}
-
-			// Result must be an array-like object
-			if result.Type() != vm.TypeArray {
-				return vm.Undefined, vmInstance.NewTypeError("'ownKeys' on proxy: trap result must be an array")
-			}
-
-			// Use keys from trap result (trap is responsible for filtering)
-			resultArray := result.AsArray()
-			for i := 0; i < resultArray.Length(); i++ {
-				key := resultArray.Get(i)
-				// Object.keys only returns string keys (not symbols)
-				if key.Type() == vm.TypeString {
-					keysArray.Append(key)
-				}
-			}
-			return keys, nil
+		// === [[OwnPropertyKeys]] proxy internal method ===
+		// Step 1: GetMethod(handler, "ownKeys") - uses [[Get]] which is observable
+		ownKeysTrap, err := vmInstance.GetProperty(handler, "ownKeys")
+		if err != nil {
+			return vm.Undefined, err
 		}
 
-		// No ownKeys trap, delegate to target
-		return objectKeysWithVM(vmInstance, []vm.Value{proxy.Target()})
+		var ownKeysList []vm.Value
+		// GetMethod semantics: undefined/null → no trap; non-callable → TypeError
+		if !ownKeysTrap.IsUndefined() && ownKeysTrap.Type() != vm.TypeNull && !ownKeysTrap.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("'ownKeys' on proxy: trap is not a function")
+		}
+		if !ownKeysTrap.IsUndefined() && ownKeysTrap.Type() != vm.TypeNull && ownKeysTrap.IsCallable() {
+			// Call handler.ownKeys(target)
+			result, cerr := vmInstance.Call(ownKeysTrap, handler, []vm.Value{target})
+			if cerr != nil {
+				return vm.Undefined, cerr
+			}
+			// CreateListFromArrayLike(trapResultArray, « String, Symbol ») - step 8
+			if !result.IsObject() {
+				return vm.Undefined, vmInstance.NewTypeError("CreateListFromArrayLike called on non-object")
+			}
+			if result.Type() == vm.TypeArray {
+				arr := result.AsArray()
+				for i := 0; i < arr.Length(); i++ {
+					elem := arr.Get(i)
+					if elem.Type() != vm.TypeString && !elem.IsSymbol() {
+						return vm.Undefined, vmInstance.NewTypeError("'ownKeys' on proxy: trap result included a non-string, non-symbol key")
+					}
+					ownKeysList = append(ownKeysList, elem)
+				}
+			} else {
+				lenVal, lerr := vmInstance.GetProperty(result, "length")
+				if lerr != nil {
+					return vm.Undefined, lerr
+				}
+				length := int(lenVal.ToFloat())
+				for i := 0; i < length; i++ {
+					val, gerr := vmInstance.GetProperty(result, strconv.Itoa(i))
+					if gerr != nil {
+						return vm.Undefined, gerr
+					}
+					if val.Type() != vm.TypeString && !val.IsSymbol() {
+						return vm.Undefined, vmInstance.NewTypeError("'ownKeys' on proxy: trap result included a non-string, non-symbol key")
+					}
+					ownKeysList = append(ownKeysList, val)
+				}
+			}
+
+			// Step 9: Check for duplicate entries in trapResult
+			seen := make(map[string]bool)
+			for _, k := range ownKeysList {
+				var keyStr string
+				if k.Type() == vm.TypeString {
+					keyStr = "s:" + vm.AsString(k)
+				} else {
+					keyStr = "y:" + k.ToString()
+				}
+				if seen[keyStr] {
+					return vm.Undefined, vmInstance.NewTypeError("'ownKeys' on proxy: trap returned duplicate entries")
+				}
+				seen[keyStr] = true
+			}
+
+			// [[OwnPropertyKeys]] invariant validation (spec steps 11-22)
+			targetKeys := getTargetOwnKeys(vmInstance, target)
+			extensible := isTargetExtensible(target)
+
+			// Build set of trap result string keys for lookup
+			trapResultSet := make(map[string]bool)
+			for _, k := range ownKeysList {
+				if k.Type() == vm.TypeString {
+					trapResultSet[vm.AsString(k)] = true
+				}
+			}
+
+			// Build set of target keys for reverse lookup
+			targetKeySet := make(map[string]bool)
+			var targetNonconfigurableKeys []string
+			var targetConfigurableKeys []string
+			for _, tk := range targetKeys {
+				tkStr := vm.AsString(tk)
+				targetKeySet[tkStr] = true
+				if isTargetKeyNonConfigurable(target, tkStr) {
+					targetNonconfigurableKeys = append(targetNonconfigurableKeys, tkStr)
+				} else {
+					targetConfigurableKeys = append(targetConfigurableKeys, tkStr)
+				}
+			}
+
+			// Step 19: All non-configurable target keys must be in trapResult
+			for _, key := range targetNonconfigurableKeys {
+				if !trapResultSet[key] {
+					return vm.Undefined, vmInstance.NewTypeError("'ownKeys' on proxy: trap result did not include '" + key + "'")
+				}
+			}
+
+			// Steps 20-22: If target is not extensible, trapResult can't have extra keys
+			if !extensible {
+				// All target configurable keys must be in trapResult
+				for _, key := range targetConfigurableKeys {
+					if !trapResultSet[key] {
+						return vm.Undefined, vmInstance.NewTypeError("'ownKeys' on proxy: trap result did not include '" + key + "'")
+					}
+				}
+				// No extra keys allowed: all trap result keys must be in target
+				for _, k := range ownKeysList {
+					if k.Type() == vm.TypeString {
+						if !targetKeySet[vm.AsString(k)] {
+							return vm.Undefined, vmInstance.NewTypeError("'ownKeys' on proxy: trap returned extra keys for non-extensible target")
+						}
+					}
+				}
+			}
+		} else {
+			// No ownKeys trap: fall through to target.[[OwnPropertyKeys]]()
+			targetKeys := getTargetOwnKeys(vmInstance, target)
+			ownKeysList = targetKeys
+		}
+
+		// === EnumerableOwnPropertyNames - filter by enumerability ===
+		// Per spec, each key goes through O.[[GetOwnProperty]](key) which is
+		// the proxy [[GetOwnProperty]] internal method - this calls
+		// GetMethod(handler, "getOwnPropertyDescriptor") on EACH key (observable)
+		for _, key := range ownKeysList {
+			if key.Type() != vm.TypeString {
+				continue
+			}
+
+			// Proxy [[GetOwnProperty]]: GetMethod(handler, "getOwnPropertyDescriptor")
+			getOwnPropDescTrap, gerr := vmInstance.GetProperty(handler, "getOwnPropertyDescriptor")
+			if gerr != nil {
+				return vm.Undefined, gerr
+			}
+
+			if !getOwnPropDescTrap.IsUndefined() && getOwnPropDescTrap.IsCallable() {
+				descResult, derr := vmInstance.Call(getOwnPropDescTrap, handler, []vm.Value{target, key})
+				if derr != nil {
+					return vm.Undefined, derr
+				}
+				if descResult.IsUndefined() {
+					continue
+				}
+				enumVal, eerr := vmInstance.GetProperty(descResult, "enumerable")
+				if eerr != nil {
+					return vm.Undefined, eerr
+				}
+				if !enumVal.IsTruthy() {
+					continue
+				}
+			} else {
+				// No getOwnPropertyDescriptor trap: check target's own property
+				enumerable := isTargetKeyEnumerable(vmInstance, target, vm.AsString(key))
+				if !enumerable {
+					continue
+				}
+			}
+
+			keysArray.Append(key)
+		}
+		return keys, nil
 	}
 
 	// Handle regular objects - check type before calling As* methods to avoid panic
@@ -3090,12 +3303,8 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 				return fn.Properties.GetOwnAccessor(propName)
 			}(); ok {
 				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				if g.Type() != vm.TypeUndefined {
-					descriptor.SetOwn("get", g)
-				}
-				if s.Type() != vm.TypeUndefined {
-					descriptor.SetOwn("set", s)
-				}
+				descriptor.SetOwn("get", g)
+				descriptor.SetOwn("set", s)
 				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
 				descriptor.SetOwn("configurable", vm.BooleanValue(c))
 				return vm.NewValueFromPlainObject(descriptor), nil
@@ -3128,12 +3337,8 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 				return closure.Properties.GetOwnAccessor(propName)
 			}(); ok {
 				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				if g.Type() != vm.TypeUndefined {
-					descriptor.SetOwn("get", g)
-				}
-				if s.Type() != vm.TypeUndefined {
-					descriptor.SetOwn("set", s)
-				}
+				descriptor.SetOwn("get", g)
+				descriptor.SetOwn("set", s)
 				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
 				descriptor.SetOwn("configurable", vm.BooleanValue(c))
 				return vm.NewValueFromPlainObject(descriptor), nil
@@ -3163,12 +3368,8 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 				return closure.Fn.Properties.GetOwnAccessor(propName)
 			}(); ok {
 				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				if g.Type() != vm.TypeUndefined {
-					descriptor.SetOwn("get", g)
-				}
-				if s.Type() != vm.TypeUndefined {
-					descriptor.SetOwn("set", s)
-				}
+				descriptor.SetOwn("get", g)
+				descriptor.SetOwn("set", s)
 				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
 				descriptor.SetOwn("configurable", vm.BooleanValue(c))
 				return vm.NewValueFromPlainObject(descriptor), nil
@@ -3201,12 +3402,8 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 				return nfp.Properties.GetOwnAccessor(propName)
 			}(); ok {
 				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				if g.Type() != vm.TypeUndefined {
-					descriptor.SetOwn("get", g)
-				}
-				if s.Type() != vm.TypeUndefined {
-					descriptor.SetOwn("set", s)
-				}
+				descriptor.SetOwn("get", g)
+				descriptor.SetOwn("set", s)
 				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
 				descriptor.SetOwn("configurable", vm.BooleanValue(c))
 				return vm.NewValueFromPlainObject(descriptor), nil
@@ -3275,14 +3472,10 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			}
 			return plainObj.GetOwnAccessor(propName)
 		}(); ok {
-			// Accessor descriptor
+			// Accessor descriptor - always include both get and set per spec
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			if g.Type() != vm.TypeUndefined {
-				descriptor.SetOwn("get", g)
-			}
-			if s.Type() != vm.TypeUndefined {
-				descriptor.SetOwn("set", s)
-			}
+			descriptor.SetOwn("get", g)
+			descriptor.SetOwn("set", s)
 			descriptor.SetOwn("enumerable", vm.BooleanValue(e))
 			descriptor.SetOwn("configurable", vm.BooleanValue(c))
 			return vm.NewValueFromPlainObject(descriptor), nil
@@ -3314,12 +3507,8 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			}
 			if g.Type() != vm.TypeUndefined || s.Type() != vm.TypeUndefined {
 				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				if g.Type() != vm.TypeUndefined {
-					descriptor.SetOwn("get", g)
-				}
-				if s.Type() != vm.TypeUndefined {
-					descriptor.SetOwn("set", s)
-				}
+				descriptor.SetOwn("get", g)
+				descriptor.SetOwn("set", s)
 				// Object literal accessors default to enumerable:true, configurable:true
 				descriptor.SetOwn("enumerable", vm.BooleanValue(true))
 				descriptor.SetOwn("configurable", vm.BooleanValue(true))

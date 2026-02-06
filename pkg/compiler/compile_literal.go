@@ -1466,16 +1466,23 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	// For named function expressions like: function g() { g(); }
 	// The name 'g' should be accessible inside and refer to the closure itself
 	if needsInnerNameBinding {
-		// Allocate a register for the function name binding
-		nameBindingReg := functionCompiler.regAlloc.Alloc()
-		// Use DefineImmutable so assignments to the NFE name are silently ignored in non-strict mode
-		functionCompiler.currentSymbolTable.DefineImmutable(funcNameForInnerBinding, nameBindingReg)
-		functionCompiler.regAlloc.Pin(nameBindingReg) // Pin since it can be captured
+		// Per ECMAScript spec: if a parameter has the same name as the function name,
+		// the parameter shadows the function name binding. Skip creating the inner
+		// binding in this case to avoid overriding the parameter register.
+		if functionCompiler.parameterNames[funcNameForInnerBinding] {
+			needsInnerNameBinding = false
+		} else {
+			// Allocate a register for the function name binding
+			nameBindingReg := functionCompiler.regAlloc.Alloc()
+			// Use DefineImmutable so assignments to the NFE name are silently ignored in non-strict mode
+			functionCompiler.currentSymbolTable.DefineImmutable(funcNameForInnerBinding, nameBindingReg)
+			functionCompiler.regAlloc.Pin(nameBindingReg) // Pin since it can be captured
 
-		// No bytecode needs to be emitted here - the VM will initialize this register
-		// when the function is called (see call.go prepareCall)
-		debugPrintf("// [Compiler] Function name binding '%s' allocated in R%d (will be initialized by VM)\n",
-			funcNameForInnerBinding, nameBindingReg)
+			// No bytecode needs to be emitted here - the VM will initialize this register
+			// when the function is called (see call.go prepareCall)
+			debugPrintf("// [Compiler] Function name binding '%s' allocated in R%d (will be initialized by VM)\n",
+				funcNameForInnerBinding, nameBindingReg)
+		}
 	}
 
 	// 4.6. Generate destructuring code for rest parameter pattern (if needed)
