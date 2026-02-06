@@ -82,11 +82,10 @@ func (w *WeakSetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("WeakSet.prototype.add called on non-WeakSet")
 		}
 
-		if len(args) < 1 {
-			return thisWeakSet, nil // Return the WeakSet for chaining
+		value := vm.Undefined
+		if len(args) >= 1 {
+			value = args[0]
 		}
-
-		value := args[0]
 		if !value.CanBeHeldWeakly() {
 			return vm.Undefined, vmInstance.NewTypeError("Invalid value used in weak set")
 		}

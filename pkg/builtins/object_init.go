@@ -1209,8 +1209,20 @@ func objectCreateWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 // objectDefinePropertiesImpl is the core implementation for Object.defineProperties and Object.create
 // It properly handles getters on descriptor objects per ECMAScript 8.10.5 ToPropertyDescriptor
 func objectDefinePropertiesImpl(vmInstance *vm.VM, obj vm.Value, propertiesDesc vm.Value) (vm.Value, error) {
+	// Per spec: call ToObject(Properties) first - wraps primitives to their wrapper objects
 	if !propertiesDesc.IsObject() && !propertiesDesc.IsCallable() {
-		return vm.Undefined, vmInstance.NewTypeError("Properties must be an object")
+		// For strings, ToObject creates a String wrapper with indexed chars as enumerable properties.
+		// Since our String wrapper doesn't expose indexed chars, handle it directly:
+		// non-empty strings will fail in ToPropertyDescriptor when char values aren't objects.
+		if propertiesDesc.Type() == vm.TypeString && len(propertiesDesc.ToString()) > 0 {
+			ch := string(propertiesDesc.ToString()[0])
+			return vm.Undefined, vmInstance.NewTypeError("Property description must be an object: " + ch)
+		}
+		var err error
+		propertiesDesc, err = vmInstance.ToObject(propertiesDesc)
+		if err != nil {
+			return vm.Undefined, err
+		}
 	}
 
 	// Get the plain object to define properties on

@@ -243,9 +243,17 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Call callback
 			cont, err := callback(value)
 			if err != nil {
+				// Call iterator .return() on error if available
+				if returnMethod, rerr := vmInstance.GetProperty(iter, "return"); rerr == nil && returnMethod.IsCallable() {
+					_, _ = vmInstance.Call(returnMethod, iter, nil)
+				}
 				return err
 			}
 			if !cont {
+				// Call iterator .return() on early termination if available
+				if returnMethod, rerr := vmInstance.GetProperty(iter, "return"); rerr == nil && returnMethod.IsCallable() {
+					_, _ = vmInstance.Call(returnMethod, iter, nil)
+				}
 				break
 			}
 		}

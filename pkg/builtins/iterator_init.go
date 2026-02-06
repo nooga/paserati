@@ -597,9 +597,16 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewRangeError("Iterator.prototype.take: limit must be non-negative")
 		}
 
+		// Per spec step 7: GetIteratorDirect(O) - read next method eagerly
+		nextMethod, err := vmInstance.GetProperty(thisValue, "next")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
 		// Create iterator helper object
 		helper := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
 		helper.SetOwn("[[UnderlyingIterator]]", thisValue)
+		helper.SetOwn("[[NextMethod]]", nextMethod)
 		helper.SetOwn("[[Remaining]]", vm.NumberValue(float64(limit)))
 
 		// Add next method
@@ -620,9 +627,15 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+			storedNext, _ := helperObj.GetOwn("[[NextMethod]]")
 
-			// Get next value from underlying iterator
-			result, err := getIteratorNext(underlyingIter)
+			// Call stored next method
+			var result vm.Value
+			if storedNext.IsCallable() {
+				result, err = vmInstance.Call(storedNext, underlyingIter, []vm.Value{})
+			} else {
+				result, err = getIteratorNext(underlyingIter)
+			}
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -705,9 +718,16 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewRangeError("Iterator.prototype.drop: limit must be non-negative")
 		}
 
+		// Per spec step 7: GetIteratorDirect(O) - read next method eagerly
+		nextMethod, err := vmInstance.GetProperty(thisValue, "next")
+		if err != nil {
+			return vm.Undefined, err
+		}
+
 		// Create iterator helper object
 		helper := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
 		helper.SetOwn("[[UnderlyingIterator]]", thisValue)
+		helper.SetOwn("[[NextMethod]]", nextMethod)
 		helper.SetOwn("[[ToSkip]]", vm.NumberValue(float64(count)))
 
 		// Add next method
@@ -719,12 +739,21 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+			storedNext, _ := helperObj.GetOwn("[[NextMethod]]")
 			toSkipVal, _ := helperObj.GetOwn("[[ToSkip]]")
 			toSkip := int(toSkipVal.ToFloat())
 
+			// Helper to call stored next method
+			callNext := func() (vm.Value, error) {
+				if storedNext.IsCallable() {
+					return vmInstance.Call(storedNext, underlyingIter, []vm.Value{})
+				}
+				return getIteratorNext(underlyingIter)
+			}
+
 			// Skip values
 			for toSkip > 0 {
-				result, err := getIteratorNext(underlyingIter)
+				result, err := callNext()
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -737,7 +766,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			// Get next value from underlying iterator
-			result, err := getIteratorNext(underlyingIter)
+			result, err := callNext()
 			if err != nil {
 				return vm.Undefined, err
 			}
