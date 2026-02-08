@@ -220,7 +220,7 @@ func (vm *VM) CallFunctionDirectly(fn Value, thisValue Value, args []Value) (Val
 
 	// Get function arity and adjust arguments accordingly
 	var expectedArity int
-	if fn.IsFunction() {
+	if fn.Type() == TypeFunction {
 		fnObj := fn.AsFunction()
 		expectedArity = fnObj.Arity
 	} else if fn.IsClosure() {

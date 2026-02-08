@@ -533,8 +533,8 @@ func TestNativeFunctionValue(t *testing.T) {
 	if !v.IsCallable() {
 		t.Errorf("Expected IsCallable() == true")
 	}
-	if v.IsFunction() {
-		t.Errorf("Expected IsFunction() == false")
+	if !v.IsFunction() {
+		t.Errorf("Expected IsFunction() == true for native function")
 	}
 	if v.IsClosure() {
 		t.Errorf("Expected IsClosure() == false")
@@ -602,8 +602,8 @@ func TestClosureValue(t *testing.T) {
 	if !v.IsCallable() {
 		t.Errorf("Expected IsCallable() == true")
 	}
-	if v.IsFunction() {
-		t.Errorf("Expected IsFunction() == false")
+	if !v.IsFunction() {
+		t.Errorf("Expected IsFunction() == true for closure")
 	}
 	if !v.IsClosure() {
 		t.Errorf("Expected IsClosure() == true")
@@ -919,14 +919,14 @@ func TestIsFunctions(t *testing.T) {
 	if fn.IsClosure() {
 		t.Errorf("Function.IsClosure() unexpected")
 	}
-	if cl.IsFunction() {
-		t.Errorf("Closure.IsFunction() unexpected")
+	if !cl.IsFunction() {
+		t.Errorf("Closure.IsFunction() should be true")
 	}
 	if cl.IsNativeFunction() {
 		t.Errorf("Closure.IsNativeFunction() unexpected")
 	}
-	if na.IsFunction() {
-		t.Errorf("NativeFunction.IsFunction() unexpected")
+	if !na.IsFunction() {
+		t.Errorf("NativeFunction.IsFunction() should be true")
 	}
 	if na.IsClosure() {
 		t.Errorf("NativeFunction.IsClosure() unexpected")

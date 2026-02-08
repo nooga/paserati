@@ -1850,9 +1850,6 @@ func (c *Checker) visit(node parser.Node) {
 					c.addError(node.ReturnValue, msg)
 				}
 			} else if !types.IsAssignable(actualReturnType, c.currentExpectedReturnType) {
-				// Debug: check pointer addresses
-				fmt.Printf("DEBUG Return check: actualType=%T(%p) expectedType=%T(%p)\n",
-					actualReturnType, actualReturnType, c.currentExpectedReturnType, c.currentExpectedReturnType)
 				msg := fmt.Sprintf("cannot return value of type %s from function expecting %s",
 					actualReturnType, c.currentExpectedReturnType)
 				// Report the error at the return value expression node
@@ -2966,9 +2963,9 @@ func (c *Checker) visit(node parser.Node) {
 			var resolvedRestType types.Type
 			if node.RestParameter.TypeAnnotation != nil {
 				resolvedRestType = c.resolveTypeAnnotation(node.RestParameter.TypeAnnotation)
-				// Rest parameter type should be an array type
+				// Rest parameter type should be an array or tuple type
 				if resolvedRestType != nil {
-					if _, isArrayType := resolvedRestType.(*types.ArrayType); !isArrayType {
+					if !isValidRestParameterType(resolvedRestType) {
 						c.addError(node.RestParameter.TypeAnnotation, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
 						resolvedRestType = &types.ArrayType{ElementType: types.Any}
 					}

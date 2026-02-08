@@ -1184,8 +1184,18 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		dateProto.DefineOwnPropertyByKey(vm.NewSymbolKey(vmInstance.SymbolToPrimitive), toPrimitiveFunc, &wFalse, &eFalse, &cTrue)
 	}
 
-	// Set Date prototype in VM (if needed)
-	// vmInstance.DatePrototype = vm.NewValueFromPlainObject(dateProto)
+	// Set @@toStringTag to "Date" so Object.prototype.toString.call(new Date()) returns "[object Date]"
+	if vmInstance.SymbolToStringTag.Type() == vm.TypeSymbol {
+		falseVal := false
+		trueVal := true
+		dateProto.DefineOwnPropertyByKey(
+			vm.NewSymbolKey(vmInstance.SymbolToStringTag),
+			vm.NewString("Date"),
+			&falseVal, // writable: false
+			&falseVal, // enumerable: false
+			&trueVal,  // configurable: true
+		)
+	}
 
 	// Register Date constructor as global
 	return ctx.DefineGlobal("Date", dateCtor)

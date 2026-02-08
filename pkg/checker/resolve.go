@@ -475,8 +475,8 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 	if node.RestParameter != nil {
 		resolvedRestType := c.resolveTypeAnnotation(node.RestParameter)
 		if resolvedRestType != nil {
-			// Validate that rest parameter type is an array type
-			if _, isArrayType := resolvedRestType.(*types.ArrayType); !isArrayType {
+			// Validate that rest parameter type is an array or tuple type
+			if !isValidRestParameterType(resolvedRestType) {
 				c.addError(node.RestParameter, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
 				resolvedRestType = &types.ArrayType{ElementType: types.Any}
 			}
@@ -554,7 +554,7 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 	if node.RestParameter != nil {
 		resolvedRestType := c.resolveTypeAnnotation(node.RestParameter)
 		if resolvedRestType != nil {
-			if _, isArrayType := resolvedRestType.(*types.ArrayType); !isArrayType {
+			if !isValidRestParameterType(resolvedRestType) {
 				c.addError(node.RestParameter, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
 				resolvedRestType = &types.ArrayType{ElementType: types.Any}
 			}
@@ -832,9 +832,9 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 			resolvedRestType = c.resolveTypeAnnotation(node.RestParameter.TypeAnnotation)
 			c.env = originalEnv
 
-			// Rest parameter type should be an array type
+			// Rest parameter type should be an array or tuple type
 			if resolvedRestType != nil {
-				if _, isArrayType := resolvedRestType.(*types.ArrayType); !isArrayType {
+				if !isValidRestParameterType(resolvedRestType) {
 					c.addError(node.RestParameter.TypeAnnotation, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
 					resolvedRestType = &types.ArrayType{ElementType: types.Any}
 				}

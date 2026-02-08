@@ -231,7 +231,7 @@ func (c *Compiler) emitCall(dest, funcReg Register, argCount byte, line int) {
 			dest, funcReg, argCount, maxReg, line, c.compilingFuncName)
 	}
 
-	if dest >= maxReg {
+	if debugRegAlloc && dest >= maxReg {
 		fmt.Printf("[EMIT CALL BUG] Emitting OpCall with dest=R%d but function only has %d registers! funcReg=R%d argCount=%d line=%d func=%s\n",
 			dest, maxReg, funcReg, argCount, line, c.compilingFuncName)
 	}
@@ -267,7 +267,7 @@ func (c *Compiler) emitCallMethod(dest, funcReg, thisReg Register, argCount byte
 			dest, funcReg, thisReg, argCount, maxReg, line, c.compilingFuncName)
 	}
 
-	if dest >= maxReg {
+	if debugRegAlloc && dest >= maxReg {
 		fmt.Printf("[EMIT CALLMETHOD BUG] Emitting OpCallMethod with dest=R%d but function only has %d registers! funcReg=R%d thisReg=R%d argCount=%d line=%d func=%s\n",
 			dest, maxReg, funcReg, thisReg, argCount, line, c.compilingFuncName)
 	}

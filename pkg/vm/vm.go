@@ -10413,12 +10413,107 @@ startExecution:
 					}
 					callerRegisters[destReg] = result
 
-				case TypeBoundFunction:
-					// Nested bound function - recursively unwrap
-					// This is rare but should work by continuing to unwrap
+				case TypeNativeFunctionWithProps:
+					nfp := originalConstructor.AsNativeFunctionWithProps()
+					if !nfp.IsConstructor {
+						frame.ip = callerIP
+						vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", nfp.Name))
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					frame.ip = callerIP
-					vm.runtimeError("Nested bound function construction not yet supported")
-					return InterpretRuntimeError, Undefined
+					vm.inConstructorCall = true
+					result, err := nfp.Fn(finalArgs)
+					vm.inConstructorCall = false
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+							if vm.frameCount == 0 {
+								return InterpretRuntimeError, vm.currentException
+							}
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+						var errValue Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								errValue = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								errValue = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							errValue = NewValueFromPlainObject(eo)
+						}
+						vm.throwException(errValue)
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					if vm.unwinding {
+						continue
+					}
+					callerRegisters[destReg] = result
+
+				case TypeBoundFunction:
+					// Nested bound function - unwrap recursively
+					innerBound := originalConstructor.AsBoundFunction()
+					// Combine all partial args
+					nestedArgs := make([]Value, len(innerBound.PartialArgs)+len(finalArgs))
+					copy(nestedArgs, innerBound.PartialArgs)
+					copy(nestedArgs[len(innerBound.PartialArgs):], finalArgs)
+					finalArgs = nestedArgs
+					originalConstructor = innerBound.OriginalFunction
+
+					// Retry with unwrapped constructor - use vm.Construct
+					result, err := vm.Construct(originalConstructor, finalArgs)
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						} else {
+							vm.runtimeError("%s", err.Error())
+						}
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					callerRegisters[destReg] = result
 
 				default:
 					frame.ip = callerIP

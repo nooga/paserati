@@ -7,6 +7,18 @@ import (
 	"github.com/nooga/paserati/pkg/types"
 )
 
+// isValidRestParameterType checks if a type is valid for a rest parameter.
+// Valid types are array types and tuple types (including variadic tuples).
+func isValidRestParameterType(t types.Type) bool {
+	switch t.(type) {
+	case *types.ArrayType:
+		return true
+	case *types.TupleType:
+		return true
+	}
+	return false
+}
+
 // FunctionCheckContext holds the common context for function checking
 type FunctionCheckContext struct {
 	FunctionName             string                  // For logging and recursion
@@ -130,9 +142,9 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 			resolvedRestType = c.resolveTypeAnnotation(ctx.RestParameter.TypeAnnotation)
 			c.env = originalEnv
 
-			// Rest parameter type should be an array type
+			// Rest parameter type should be an array or tuple type
 			if resolvedRestType != nil {
-				if _, isArrayType := resolvedRestType.(*types.ArrayType); !isArrayType {
+				if !isValidRestParameterType(resolvedRestType) {
 					c.addError(ctx.RestParameter.TypeAnnotation, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
 					resolvedRestType = &types.ArrayType{ElementType: types.Any}
 				}

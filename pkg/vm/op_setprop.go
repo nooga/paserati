@@ -355,8 +355,20 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		}
 	}
 
-	// Bound/async native functions: check Function.prototype accessor setters
-	if objVal.Type() == TypeBoundFunction || objVal.Type() == TypeAsyncNativeFunction {
+	// Bound functions: check Function.prototype accessor setters, then store on Properties
+	if objVal.Type() == TypeBoundFunction {
+		if handled, ok, status, val := vm.checkFunctionProtoAccessorSetter(propName, objVal, valueToSet); handled {
+			return ok, status, val
+		}
+		bf := objVal.AsBoundFunction()
+		if bf.Properties != nil {
+			bf.Properties.SetOwn(propName, *valueToSet)
+		}
+		return true, InterpretOK, *valueToSet
+	}
+
+	// Async native functions: check Function.prototype accessor setters
+	if objVal.Type() == TypeAsyncNativeFunction {
 		if handled, ok, status, val := vm.checkFunctionProtoAccessorSetter(propName, objVal, valueToSet); handled {
 			return ok, status, val
 		}

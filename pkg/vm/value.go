@@ -754,7 +754,8 @@ func (v Value) IsCallable() bool {
 }
 
 func (v Value) IsFunction() bool {
-	return v.typ == TypeFunction
+	return v.typ == TypeFunction || v.typ == TypeClosure || v.typ == TypeNativeFunction ||
+		v.typ == TypeNativeFunctionWithProps || v.typ == TypeAsyncNativeFunction || v.typ == TypeBoundFunction
 }
 
 func (v Value) IsClosure() bool {

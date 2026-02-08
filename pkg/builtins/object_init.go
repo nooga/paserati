@@ -261,6 +261,11 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if propName == "name" || propName == "length" {
 				return vm.BooleanValue(true), nil
 			}
+			bf := thisValue.AsBoundFunction()
+			if bf.Properties != nil {
+				_, hasOwn := bf.Properties.GetOwn(propName)
+				return vm.BooleanValue(hasOwn), nil
+			}
 			return vm.BooleanValue(false), nil
 		case vm.TypeArguments:
 			argsObj := thisValue.AsArguments()
@@ -493,10 +498,21 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			if plainObj != nil {
-				// Check for @@toStringTag symbol property
-				if tag, ok := plainObj.GetOwnByKey(vm.NewSymbolKey(vmInstance.SymbolToStringTag)); ok {
-					if tag.Type() == vm.TypeString {
-						return vm.NewString("[object " + tag.ToString() + "]"), nil
+				// Check for @@toStringTag symbol property (walk prototype chain per spec)
+				symKey := vm.NewSymbolKey(vmInstance.SymbolToStringTag)
+				obj := plainObj
+				for obj != nil {
+					if tag, ok := obj.GetOwnByKey(symKey); ok {
+						if tag.Type() == vm.TypeString {
+							return vm.NewString("[object " + tag.ToString() + "]"), nil
+						}
+						break
+					}
+					proto := obj.GetPrototype()
+					if proto.Type() == vm.TypeObject {
+						obj = proto.AsPlainObject()
+					} else {
+						break
 					}
 				}
 			}

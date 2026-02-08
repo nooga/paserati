@@ -68,7 +68,7 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	callImpl := func(args []vm.Value) (vm.Value, error) {
 		return functionPrototypeCallImpl(vmInstance, args)
 	}
-	functionProtoObj.Properties.SetOwnNonEnumerable("call", vm.NewNativeFunction(0, true, "call", callImpl))
+	functionProtoObj.Properties.SetOwnNonEnumerable("call", vm.NewNativeFunction(1, true, "call", callImpl))
 
 	// Function.prototype.apply
 	applyImpl := func(args []vm.Value) (vm.Value, error) {
@@ -80,7 +80,7 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	bindImpl := func(args []vm.Value) (vm.Value, error) {
 		return functionPrototypeBindImpl(vmInstance, args)
 	}
-	functionProtoObj.Properties.SetOwnNonEnumerable("bind", vm.NewNativeFunction(0, true, "bind", bindImpl))
+	functionProtoObj.Properties.SetOwnNonEnumerable("bind", vm.NewNativeFunction(1, true, "bind", bindImpl))
 
 	// Function.prototype.toString
 	toStringImpl := func(args []vm.Value) (vm.Value, error) {
@@ -217,39 +217,39 @@ func functionPrototypeApplyImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 
 	if len(args) > 1 {
 		argsArray := args[1]
-		// Handle array-like arguments
-		if argsArray.IsArray() {
+		// Per spec: if argArray is undefined or null, no args are passed
+		if argsArray.IsUndefined() || argsArray.Type() == vm.TypeNull {
+			// No arguments
+		} else if argsArray.IsArray() {
+			// Handle array
 			arrayObj := argsArray.AsArray()
 			functionArgs = make([]vm.Value, arrayObj.Length())
 			for i := 0; i < arrayObj.Length(); i++ {
 				functionArgs[i] = arrayObj.Get(i)
 			}
 		} else if argsArray.Type() == vm.TypeArguments {
-			// Handle arguments object - use Length() and Get() methods
+			// Handle arguments object
 			argsObj := argsArray.AsArguments()
 			length := argsObj.Length()
 			functionArgs = make([]vm.Value, length)
 			for i := 0; i < length; i++ {
 				functionArgs[i] = argsObj.Get(i)
 			}
-		} else if argsArray.Type() == vm.TypeObject {
-			// Handle array-like objects (with length property)
-			obj := argsArray.AsPlainObject()
-			if lengthVal, hasLength := obj.GetOwn("length"); hasLength {
+		} else if argsArray.IsObject() || argsArray.IsFunction() {
+			// Handle any ECMAScript Object (plain objects, functions, maps, etc.)
+			// Per spec: CreateListFromArrayLike works on any Object type
+			// Use VM property access which handles all types generically
+			lengthVal, _ := vmInstance.GetProperty(argsArray, "length")
+			if lengthVal.Type() != vm.TypeUndefined {
 				length := int(lengthVal.ToInteger())
 				functionArgs = make([]vm.Value, length)
 				for i := 0; i < length; i++ {
-					key := vm.NewString(fmt.Sprintf("%d", i)).ToString()
-					if val, exists := obj.GetOwn(key); exists {
-						functionArgs[i] = val
-					} else {
-						functionArgs[i] = vm.Undefined
-					}
+					functionArgs[i], _ = vmInstance.GetProperty(argsArray, fmt.Sprintf("%d", i))
 				}
 			}
-		} else if !argsArray.IsUndefined() && argsArray.Type() != vm.TypeNull {
-			// Non-object, non-undefined/null - treat as empty
-			functionArgs = []vm.Value{}
+		} else {
+			// Per spec: CreateListFromArrayLike throws TypeError if arg is not an object
+			return vm.Undefined, vmInstance.NewTypeError("CreateListFromArrayLike called on non-object")
 		}
 	}
 
@@ -371,13 +371,14 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 		body = ""
 	} else if len(args) == 1 {
 		// Function(body) - no parameters, just body
-		body = args[0].ToString()
+		// Per spec: use ToString abstract operation (calls ToPrimitive for objects)
+		body = vmInstance.ToPrimitive(args[0], "string").ToString()
 	} else {
 		// Function(param1, ..., paramN, body) - last arg is body, rest are parameters
 		for i := 0; i < len(args)-1; i++ {
-			params = append(params, args[i].ToString())
+			params = append(params, vmInstance.ToPrimitive(args[i], "string").ToString())
 		}
-		body = args[len(args)-1].ToString()
+		body = vmInstance.ToPrimitive(args[len(args)-1], "string").ToString()
 	}
 
 	// Construct the function source code as an IIFE that returns the function
@@ -483,13 +484,13 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 		body = ""
 	} else if len(args) == 1 {
 		// AsyncFunction(body) - no parameters, just body
-		body = args[0].ToString()
+		body = vmInstance.ToPrimitive(args[0], "string").ToString()
 	} else {
 		// AsyncFunction(param1, ..., paramN, body) - last arg is body, rest are parameters
 		for i := 0; i < len(args)-1; i++ {
-			params = append(params, args[i].ToString())
+			params = append(params, vmInstance.ToPrimitive(args[i], "string").ToString())
 		}
-		body = args[len(args)-1].ToString()
+		body = vmInstance.ToPrimitive(args[len(args)-1], "string").ToString()
 	}
 
 	// Construct the async function source code as an IIFE that returns the function

@@ -318,11 +318,12 @@ func NewBoundFunction(originalFunction Value, boundThis Value, partialArgs []Val
 	// Copy partial args to avoid aliasing issues
 	argsCopy := make([]Value, len(partialArgs))
 	copy(argsCopy, partialArgs)
-	
+
 	return Value{typ: TypeBoundFunction, obj: unsafe.Pointer(&BoundFunctionObject{
 		OriginalFunction: originalFunction,
 		BoundThis:        boundThis,
 		PartialArgs:      argsCopy,
 		Name:             name,
+		Properties:       NewObject(Undefined).AsPlainObject(),
 	})}
 }
