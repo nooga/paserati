@@ -113,6 +113,35 @@ func ValidateTypedArrayBufferAlignmentShared(vmInstance *vm.VM, buffer *vm.Share
 	return nil
 }
 
+// TypedArrayGPFC calls GetPrototypeFromConstructor if newTarget is set.
+// This implements the GPFC portion of AllocateTypedArray.
+func TypedArrayGPFC(vmInstance *vm.VM) error {
+	if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+		_, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
+		if gpfcErr != nil {
+			return gpfcErr
+		}
+	}
+	return nil
+}
+
+// TypedArrayToIndex validates a non-object argument for TypedArray constructors.
+// Per spec, ToIndex calls ToNumber which throws TypeError for Symbol and BigInt.
+func TypedArrayToIndex(vmInstance *vm.VM, arg vm.Value) (int, error) {
+	if arg.Type() == vm.TypeSymbol {
+		return 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+	}
+	if arg.Type() == vm.TypeBigInt {
+		return 0, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
+	}
+	n := arg.ToFloat()
+	l := int(n)
+	if l < 0 {
+		return 0, vmInstance.NewRangeError("Invalid typed array length")
+	}
+	return l, nil
+}
+
 // SetupTypedArrayConstructorProperties sets up the constructor properties with correct descriptors.
 // Per ECMAScript spec:
 // - BYTES_PER_ELEMENT: { writable: false, enumerable: false, configurable: false }

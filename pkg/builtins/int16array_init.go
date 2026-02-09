@@ -44,25 +44,27 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// constructor (length is 3 per ECMAScript spec)
 	ctor := vm.NewConstructorWithProps(3, true, "Int16Array", func(args []vm.Value) (vm.Value, error) {
-		// Per ECMAScript spec: OrdinaryCreateFromConstructor(NewTarget, "%TypedArray.prototype%")
-		if newTarget := vmx.GetNewTarget(); !newTarget.IsUndefined() {
-			_, gpfcErr := vmx.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
-			if gpfcErr != nil {
-				return vm.Undefined, gpfcErr
-			}
-		}
 		if len(args) == 0 {
+			if err := TypedArrayGPFC(vmx); err != nil {
+				return vm.Undefined, err
+			}
 			return vm.NewTypedArray(vm.TypedArrayInt16, 0, 0, 0), nil
 		}
 		arg := args[0]
 		if arg.IsNumber() {
-			l := int(arg.ToFloat())
-			if l < 0 {
-				return vm.Undefined, nil
+			l, err := TypedArrayToIndex(vmx, arg)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if err := TypedArrayGPFC(vmx); err != nil {
+				return vm.Undefined, err
 			}
 			return vm.NewTypedArray(vm.TypedArrayInt16, l, 0, 0), nil
 		}
 		if buf := arg.AsArrayBuffer(); buf != nil {
+			if err := TypedArrayGPFC(vmx); err != nil {
+				return vm.Undefined, err
+			}
 			off := 0
 			if len(args) > 1 {
 				var err error
@@ -90,6 +92,9 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewTypedArray(vm.TypedArrayInt16, buf, off, ln), nil
 		}
 		if sab := arg.AsSharedArrayBuffer(); sab != nil {
+			if err := TypedArrayGPFC(vmx); err != nil {
+				return vm.Undefined, err
+			}
 			off := 0
 			if len(args) > 1 {
 				var err error
@@ -116,13 +121,30 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewTypedArray(vm.TypedArrayInt16, sab, off, ln), nil
 		}
 		if arr := arg.AsArray(); arr != nil {
+			if err := TypedArrayGPFC(vmx); err != nil {
+				return vm.Undefined, err
+			}
 			vals := make([]vm.Value, arr.Length())
 			for i := 0; i < arr.Length(); i++ {
 				vals[i] = arr.Get(i)
 			}
 			return vm.NewTypedArray(vm.TypedArrayInt16, vals, 0, 0), nil
 		}
-		return vm.NewTypedArray(vm.TypedArrayInt16, 0, 0, 0), nil
+		if arg.IsObject() {
+			if err := TypedArrayGPFC(vmx); err != nil {
+				return vm.Undefined, err
+			}
+			return vm.NewTypedArray(vm.TypedArrayInt16, 0, 0, 0), nil
+		}
+		// Non-number, non-object (e.g. string, Symbol, BigInt): ToIndex first, then GPFC
+		l, err := TypedArrayToIndex(vmx, arg)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if err := TypedArrayGPFC(vmx); err != nil {
+			return vm.Undefined, err
+		}
+		return vm.NewTypedArray(vm.TypedArrayInt16, l, 0, 0), nil
 	})
 	// Set up constructor properties with correct descriptors (BYTES_PER_ELEMENT, prototype)
 	SetupTypedArrayConstructorProperties(ctor, proto, 2)

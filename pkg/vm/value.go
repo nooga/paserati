@@ -367,74 +367,48 @@ type Value struct {
 	obj     unsafe.Pointer
 }
 
-// NewTypeError constructs a TypeError exception error for builtin helpers to return
-func (vm *VM) NewTypeError(message string) error {
-	ctor, _ := vm.GetGlobal("TypeError")
+// newErrorHelper constructs an error exception, clearing currentNewTarget to prevent
+// interference from outer ConstructWithNewTarget contexts (e.g., a custom newTarget
+// with a throwing prototype getter would prevent the error object from being created).
+func (vm *VM) newErrorHelper(name string, message string) error {
+	ctor, _ := vm.GetGlobal(name)
 	if ctor != Undefined {
+		prevNewTarget := vm.currentNewTarget
+		vm.currentNewTarget = Undefined
 		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
+		vm.currentNewTarget = prevNewTarget
 		return exceptionError{exception: errObj}
 	}
 	// Fallback generic error object
 	obj := NewObject(Null).AsPlainObject()
-	obj.SetOwn("name", NewString("TypeError"))
+	obj.SetOwn("name", NewString(name))
 	obj.SetOwn("message", NewString(message))
 	return exceptionError{exception: NewValueFromPlainObject(obj)}
+}
+
+// NewTypeError constructs a TypeError exception error for builtin helpers to return
+func (vm *VM) NewTypeError(message string) error {
+	return vm.newErrorHelper("TypeError", message)
 }
 
 // NewReferenceError constructs a ReferenceError exception error for builtin helpers to return
 func (vm *VM) NewReferenceError(message string) error {
-	ctor, _ := vm.GetGlobal("ReferenceError")
-	if ctor != Undefined {
-		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
-		return exceptionError{exception: errObj}
-	}
-	// Fallback generic error object
-	obj := NewObject(Null).AsPlainObject()
-	obj.SetOwn("name", NewString("ReferenceError"))
-	obj.SetOwn("message", NewString(message))
-	return exceptionError{exception: NewValueFromPlainObject(obj)}
+	return vm.newErrorHelper("ReferenceError", message)
 }
 
 // NewRangeError constructs a RangeError exception error for builtin helpers to return
 func (vm *VM) NewRangeError(message string) error {
-	ctor, _ := vm.GetGlobal("RangeError")
-	if ctor != Undefined {
-		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
-		return exceptionError{exception: errObj}
-	}
-	// Fallback generic error object
-	obj := NewObject(Null).AsPlainObject()
-	obj.SetOwn("name", NewString("RangeError"))
-	obj.SetOwn("message", NewString(message))
-	return exceptionError{exception: NewValueFromPlainObject(obj)}
+	return vm.newErrorHelper("RangeError", message)
 }
 
 // NewSyntaxError constructs a SyntaxError exception error for builtin helpers to return
 func (vm *VM) NewSyntaxError(message string) error {
-	ctor, _ := vm.GetGlobal("SyntaxError")
-	if ctor != Undefined {
-		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
-		return exceptionError{exception: errObj}
-	}
-	// Fallback generic error object
-	obj := NewObject(Null).AsPlainObject()
-	obj.SetOwn("name", NewString("SyntaxError"))
-	obj.SetOwn("message", NewString(message))
-	return exceptionError{exception: NewValueFromPlainObject(obj)}
+	return vm.newErrorHelper("SyntaxError", message)
 }
 
 // NewURIError constructs a URIError exception error for builtin helpers to return
 func (vm *VM) NewURIError(message string) error {
-	ctor, _ := vm.GetGlobal("URIError")
-	if ctor != Undefined {
-		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
-		return exceptionError{exception: errObj}
-	}
-	// Fallback generic error object
-	obj := NewObject(Null).AsPlainObject()
-	obj.SetOwn("name", NewString("URIError"))
-	obj.SetOwn("message", NewString(message))
-	return exceptionError{exception: NewValueFromPlainObject(obj)}
+	return vm.newErrorHelper("URIError", message)
 }
 
 var (

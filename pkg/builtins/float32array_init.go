@@ -52,36 +52,31 @@ func (f *Float32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// constructor (length is 3 per ECMAScript spec)
 	ctorWithProps := vm.NewConstructorWithProps(3, true, "Float32Array", func(args []vm.Value) (vm.Value, error) {
-		// Per ECMAScript spec: OrdinaryCreateFromConstructor(NewTarget, "%TypedArray.prototype%")
-		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
-			_, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
-			if gpfcErr != nil {
-				return vm.Undefined, gpfcErr
-			}
-		}
 		if len(args) == 0 {
+			if err := TypedArrayGPFC(vmInstance); err != nil {
+				return vm.Undefined, err
+			}
 			return vm.NewTypedArray(vm.TypedArrayFloat32, 0, 0, 0), nil
 		}
-
 		arg := args[0]
-
-		// Handle different constructor patterns
 		if arg.IsNumber() {
-			// Float32Array(length)
-			length := int(arg.ToFloat())
-			if length < 0 {
-				// Should throw RangeError
-				return vm.Undefined, nil
+			l, err := TypedArrayToIndex(vmInstance, arg)
+			if err != nil {
+				return vm.Undefined, err
 			}
-			return vm.NewTypedArray(vm.TypedArrayFloat32, length, 0, 0), nil
+			if err := TypedArrayGPFC(vmInstance); err != nil {
+				return vm.Undefined, err
+			}
+			return vm.NewTypedArray(vm.TypedArrayFloat32, l, 0, 0), nil
 		}
-
-		if buffer := arg.AsArrayBuffer(); buffer != nil {
-			// Float32Array(buffer, byteOffset?, length?)
-			byteOffset := 0
+		if buf := arg.AsArrayBuffer(); buf != nil {
+			if err := TypedArrayGPFC(vmInstance); err != nil {
+				return vm.Undefined, err
+			}
+			off := 0
 			if len(args) > 1 {
 				var err error
-				byteOffset, err = ValidateTypedArrayByteOffset(vmInstance, args[1], 4)
+				off, err = ValidateTypedArrayByteOffset(vmInstance, args[1], 4)
 				if err != nil {
 					if err == ErrVMUnwinding {
 						return vm.Undefined, nil
@@ -89,30 +84,29 @@ func (f *Float32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vm.Undefined, err
 				}
 			}
-
-			length := -1 // Use remaining buffer
+			ln := -1
 			if len(args) > 2 && !args[2].IsUndefined() {
-				length = int(args[2].ToFloat())
+				ln = int(args[2].ToFloat())
 			}
-
 			// If length is auto-calculated, validate buffer alignment
-			if length == -1 {
-				if err := ValidateTypedArrayBufferAlignment(vmInstance, buffer, byteOffset, 4); err != nil {
+			if ln == -1 {
+				if err := ValidateTypedArrayBufferAlignment(vmInstance, buf, off, 4); err != nil {
 					if err == ErrVMUnwinding {
 						return vm.Undefined, nil
 					}
 					return vm.Undefined, err
 				}
 			}
-
-			return vm.NewTypedArray(vm.TypedArrayFloat32, buffer, byteOffset, length), nil
+			return vm.NewTypedArray(vm.TypedArrayFloat32, buf, off, ln), nil
 		}
-
 		if sab := arg.AsSharedArrayBuffer(); sab != nil {
-			byteOffset := 0
+			if err := TypedArrayGPFC(vmInstance); err != nil {
+				return vm.Undefined, err
+			}
+			off := 0
 			if len(args) > 1 {
 				var err error
-				byteOffset, err = ValidateTypedArrayByteOffsetShared(vmInstance, args[1], 4)
+				off, err = ValidateTypedArrayByteOffsetShared(vmInstance, args[1], 4)
 				if err != nil {
 					if err == ErrVMUnwinding {
 						return vm.Undefined, nil
@@ -120,32 +114,45 @@ func (f *Float32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vm.Undefined, err
 				}
 			}
-			length := -1
+			ln := -1
 			if len(args) > 2 && !args[2].IsUndefined() {
-				length = int(args[2].ToFloat())
+				ln = int(args[2].ToFloat())
 			}
-			if length == -1 {
-				if err := ValidateTypedArrayBufferAlignmentShared(vmInstance, sab, byteOffset, 4); err != nil {
+			if ln == -1 {
+				if err := ValidateTypedArrayBufferAlignmentShared(vmInstance, sab, off, 4); err != nil {
 					if err == ErrVMUnwinding {
 						return vm.Undefined, nil
 					}
 					return vm.Undefined, err
 				}
 			}
-			return vm.NewTypedArray(vm.TypedArrayFloat32, sab, byteOffset, length), nil
+			return vm.NewTypedArray(vm.TypedArrayFloat32, sab, off, ln), nil
 		}
-
-		if sourceArray := arg.AsArray(); sourceArray != nil {
-			// Float32Array(array)
-			values := make([]vm.Value, sourceArray.Length())
-			for i := 0; i < sourceArray.Length(); i++ {
-				values[i] = sourceArray.Get(i)
+		if arr := arg.AsArray(); arr != nil {
+			if err := TypedArrayGPFC(vmInstance); err != nil {
+				return vm.Undefined, err
 			}
-			return vm.NewTypedArray(vm.TypedArrayFloat32, values, 0, 0), nil
+			vals := make([]vm.Value, arr.Length())
+			for i := 0; i < arr.Length(); i++ {
+				vals[i] = arr.Get(i)
+			}
+			return vm.NewTypedArray(vm.TypedArrayFloat32, vals, 0, 0), nil
 		}
-
-		// Default case
-		return vm.NewTypedArray(vm.TypedArrayFloat32, 0, 0, 0), nil
+		if arg.IsObject() {
+			if err := TypedArrayGPFC(vmInstance); err != nil {
+				return vm.Undefined, err
+			}
+			return vm.NewTypedArray(vm.TypedArrayFloat32, 0, 0, 0), nil
+		}
+		// Non-number, non-object (e.g. string, Symbol, BigInt): ToIndex first, then GPFC
+		l, err := TypedArrayToIndex(vmInstance, arg)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if err := TypedArrayGPFC(vmInstance); err != nil {
+			return vm.Undefined, err
+		}
+		return vm.NewTypedArray(vm.TypedArrayFloat32, l, 0, 0), nil
 	})
 
 	// Set up constructor properties with correct descriptors (BYTES_PER_ELEMENT, prototype)
