@@ -52,6 +52,13 @@ func (f *Float32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// constructor (length is 3 per ECMAScript spec)
 	ctorWithProps := vm.NewConstructorWithProps(3, true, "Float32Array", func(args []vm.Value) (vm.Value, error) {
+		// Per ECMAScript spec: OrdinaryCreateFromConstructor(NewTarget, "%TypedArray.prototype%")
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			_, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
+		}
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayFloat32, 0, 0, 0), nil
 		}

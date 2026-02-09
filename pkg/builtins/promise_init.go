@@ -143,6 +143,14 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Promise resolver " + executor.TypeName() + " is not a function")
 		}
 
+		// Per ECMAScript 25.6.3.1 step 3: OrdinaryCreateFromConstructor(NewTarget, "%Promise.prototype%")
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			_, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%PromisePrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
+		}
+
 		return vmInstance.NewPromiseFromExecutor(executor)
 	})
 

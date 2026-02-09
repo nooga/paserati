@@ -53,6 +53,13 @@ func (i *Int32ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create Int32Array constructor
 	// Create Int32Array constructor (length is 3 per ECMAScript spec)
 	ctorWithProps := vm.NewConstructorWithProps(3, true, "Int32Array", func(args []vm.Value) (vm.Value, error) {
+		// Per ECMAScript spec: OrdinaryCreateFromConstructor(NewTarget, "%TypedArray.prototype%")
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			_, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
+		}
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayInt32, 0, 0, 0), nil
 		}

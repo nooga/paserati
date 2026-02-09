@@ -64,7 +64,10 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Per spec: OrdinaryCreateFromConstructor(newTarget, "%TypeErrorPrototype%")
 		instProto := vm.NewValueFromPlainObject(typeErrorPrototype)
 		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
-			candidate := vmInstance.GetPrototypeFromConstructor(newTarget, "%TypeErrorPrototype%")
+			candidate, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%TypeErrorPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
 			if candidate.IsObject() {
 				instProto = candidate
 			}

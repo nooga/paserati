@@ -323,7 +323,10 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 		// Per spec: OrdinaryCreateFromConstructor(newTarget, "%NativeErrorPrototype%")
 		instProto := vm.NewValueFromPlainObject(proto)
 		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
-			candidate := vmInstance.GetPrototypeFromConstructor(newTarget, "%"+name+"Prototype%")
+			candidate, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%"+name+"Prototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
 			if candidate.IsObject() {
 				instProto = candidate
 			}

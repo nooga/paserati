@@ -186,6 +186,14 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create ArrayBuffer constructor
 	ctorWithProps := vm.NewConstructorWithProps(1, true, "ArrayBuffer", func(args []vm.Value) (vm.Value, error) {
+		// Per ECMAScript spec: OrdinaryCreateFromConstructor(NewTarget, "%ArrayBuffer.prototype%")
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			_, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
+		}
+
 		if len(args) == 0 {
 			return vm.NewArrayBuffer(0), nil
 		}

@@ -258,6 +258,13 @@ func (u *Uint8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create Uint8Array constructor (length is 3 per ECMAScript spec)
 	ctorWithProps := vm.NewConstructorWithProps(3, true, "Uint8Array", func(args []vm.Value) (vm.Value, error) {
+		// Per ECMAScript spec: OrdinaryCreateFromConstructor(NewTarget, "%TypedArray.prototype%")
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			_, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
+		}
 		if len(args) == 0 {
 			return vm.NewTypedArray(vm.TypedArrayUint8, 0, 0, 0), nil
 		}

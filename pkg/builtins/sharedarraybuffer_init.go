@@ -117,6 +117,14 @@ func (s *SharedArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// SharedArrayBuffer cannot be called without new
 		// The NewConstructorWithProps handles this for us
 
+		// Per ECMAScript spec: OrdinaryCreateFromConstructor(NewTarget, "%SharedArrayBuffer.prototype%")
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			_, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
+		}
+
 		if len(args) == 0 {
 			return vm.NewSharedArrayBuffer(0), nil
 		}

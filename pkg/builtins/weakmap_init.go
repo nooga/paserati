@@ -266,7 +266,11 @@ func (w *WeakMapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		newTarget := vmInstance.GetNewTarget()
 		var prototype vm.Value
 		if newTarget.Type() != vm.TypeUndefined {
-			prototype = vmInstance.GetPrototypeFromConstructor(newTarget, "%WeakMapPrototype%")
+			var gpfcErr error
+			prototype, gpfcErr = vmInstance.GetPrototypeFromConstructor(newTarget, "%WeakMapPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
 		} else {
 			prototype = vmInstance.WeakMapPrototype
 		}

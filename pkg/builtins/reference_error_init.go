@@ -64,7 +64,10 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Per spec: OrdinaryCreateFromConstructor(newTarget, "%ReferenceErrorPrototype%")
 		instProto := vm.NewValueFromPlainObject(referenceErrorPrototype)
 		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
-			candidate := vmInstance.GetPrototypeFromConstructor(newTarget, "%ReferenceErrorPrototype%")
+			candidate, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%ReferenceErrorPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
 			if candidate.IsObject() {
 				instProto = candidate
 			}

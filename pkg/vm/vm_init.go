@@ -1354,7 +1354,11 @@ func (vm *VM) Construct(constructor Value, args []Value) (Value, error) {
 		// Per ECMAScript 9.1.14 GetPrototypeFromConstructor:
 		// If prototype is not an object, fall back to constructor's realm intrinsic
 		if !prototype.IsObject() {
-			prototype = vm.GetPrototypeFromConstructor(constructor, "%ObjectPrototype%")
+			var gpfcErr error
+			prototype, gpfcErr = vm.GetPrototypeFromConstructor(constructor, "%ObjectPrototype%")
+			if gpfcErr != nil {
+				return Undefined, gpfcErr
+			}
 		}
 		newObj := NewObject(prototype)
 
@@ -1466,7 +1470,11 @@ func (vm *VM) ConstructWithNewTarget(constructor Value, args []Value, newTarget 
 		// ECMAScript spec 9.1.14 GetPrototypeFromConstructor:
 		// If prototype is not an object, use the realm of newTarget's intrinsic default
 		if !prototype.IsObject() && !prototype.IsCallable() {
-			prototype = vm.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
+			var gpfcErr error
+			prototype, gpfcErr = vm.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
+			if gpfcErr != nil {
+				return Undefined, gpfcErr
+			}
 		}
 
 		// For derived constructors, 'this' is in TDZ until super() is called

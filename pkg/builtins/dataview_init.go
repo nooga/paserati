@@ -491,6 +491,14 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
+		// Per ECMAScript 24.3.2.1 step 12: OrdinaryCreateFromConstructor(NewTarget, "%DataView.prototype%")
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			_, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
+		}
+
 		return vm.NewDataView(buffer, byteOffset, byteLength), nil
 	})
 

@@ -64,7 +64,10 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Per spec: OrdinaryCreateFromConstructor(newTarget, "%SyntaxErrorPrototype%")
 		instProto := vm.NewValueFromPlainObject(syntaxErrorPrototype)
 		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
-			candidate := vmInstance.GetPrototypeFromConstructor(newTarget, "%SyntaxErrorPrototype%")
+			candidate, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%SyntaxErrorPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
 			if candidate.IsObject() {
 				instProto = candidate
 			}

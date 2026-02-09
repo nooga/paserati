@@ -126,7 +126,11 @@ func (w *WeakRefInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// This implements ECMAScript spec behavior for cross-realm construction
 		var prototype vm.Value
 		if newTarget.Type() != vm.TypeUndefined {
-			prototype = vmInstance.GetPrototypeFromConstructor(newTarget, "%WeakRefPrototype%")
+			var gpfcErr error
+			prototype, gpfcErr = vmInstance.GetPrototypeFromConstructor(newTarget, "%WeakRefPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
 		} else {
 			prototype = vmInstance.WeakRefPrototype
 		}

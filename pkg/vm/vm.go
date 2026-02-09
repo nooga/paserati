@@ -603,113 +603,68 @@ func (vm *VM) GetNewTarget() Value {
 // prototype to use for creating a new object.
 // If the constructor's "prototype" property is an object, return it.
 // Otherwise, get the constructor's realm and return that realm's intrinsic.
-func (vm *VM) GetPrototypeFromConstructor(constructor Value, intrinsicDefault string) Value {
+func (vm *VM) GetPrototypeFromConstructor(constructor Value, intrinsicDefault string) (Value, error) {
 	// Step 3: Let proto be ? Get(constructor, "prototype")
-	var proto Value
-	switch constructor.Type() {
-	case TypeFunction:
-		fn := constructor.AsFunction()
-		if fn != nil && fn.Properties != nil {
-			if p, ok := fn.Properties.GetOwn("prototype"); ok {
-				proto = p
-			}
-		}
-	case TypeClosure:
-		cl := constructor.AsClosure()
-		if cl != nil {
-			if cl.Properties != nil {
-				if p, ok := cl.Properties.GetOwn("prototype"); ok {
-					proto = p
-				}
-			} else if cl.Fn != nil && cl.Fn.Properties != nil {
-				if p, ok := cl.Fn.Properties.GetOwn("prototype"); ok {
-					proto = p
-				}
-			}
-		}
-	case TypeNativeFunctionWithProps:
-		nfp := constructor.AsNativeFunctionWithProps()
-		if nfp != nil && nfp.Properties != nil {
-			if p, ok := nfp.Properties.GetOwn("prototype"); ok {
-				proto = p
-			}
-		}
-	case TypeBoundFunction:
-		bf := constructor.AsBoundFunction()
-		if bf.Properties != nil {
-			// Check for accessor properties first (getters defined via Object.defineProperty)
-			if getter, _, _, _, exists := bf.Properties.GetOwnAccessor("prototype"); exists {
-				if getter.Type() != TypeUndefined {
-					res, err := vm.Call(getter, constructor, nil)
-					if err != nil {
-						// Per spec: "Let proto be ? Get(constructor, 'prototype')" - ? means propagate
-						if ee, ok := err.(ExceptionError); ok {
-							vm.throwException(ee.GetExceptionValue())
-						}
-						return Undefined
-					}
-					proto = res
-				}
-			} else if p, ok := bf.Properties.GetOwn("prototype"); ok {
-				proto = p
-			}
-		}
+	// Use GetProperty which properly handles accessor properties (getters) and returns errors
+	proto, err := vm.GetProperty(constructor, "prototype")
+	if err != nil {
+		return Undefined, err
 	}
 
 	// Step 4: If Type(proto) is Object, return proto
 	if proto.IsObject() {
-		return proto
+		return proto, nil
 	}
 
 	// Step 5: Let realm be ? GetFunctionRealm(constructor)
-	realm, err := vm.GetFunctionRealm(constructor)
-	if err != nil || realm == nil {
+	realm, realmErr := vm.GetFunctionRealm(constructor)
+	if realmErr != nil || realm == nil {
 		realm = vm.currentRealm
 	}
 
 	// Step 6: Return realm's intrinsic object named intrinsicDefaultProto
 	switch intrinsicDefault {
 	case "%ObjectPrototype%":
-		return realm.ObjectPrototype
+		return realm.ObjectPrototype, nil
 	case "%ArrayPrototype%":
-		return realm.ArrayPrototype
+		return realm.ArrayPrototype, nil
 	case "%FunctionPrototype%":
-		return realm.FunctionPrototype
+		return realm.FunctionPrototype, nil
 	case "%MapPrototype%":
-		return realm.MapPrototype
+		return realm.MapPrototype, nil
 	case "%SetPrototype%":
-		return realm.SetPrototype
+		return realm.SetPrototype, nil
 	case "%WeakMapPrototype%":
-		return realm.WeakMapPrototype
+		return realm.WeakMapPrototype, nil
 	case "%WeakSetPrototype%":
-		return realm.WeakSetPrototype
+		return realm.WeakSetPrototype, nil
 	case "%WeakRefPrototype%":
-		return realm.WeakRefPrototype
+		return realm.WeakRefPrototype, nil
 	case "%ErrorPrototype%":
-		return realm.ErrorPrototype
+		return realm.ErrorPrototype, nil
 	case "%TypeErrorPrototype%":
-		return realm.TypeErrorPrototype
+		return realm.TypeErrorPrototype, nil
 	case "%RangeErrorPrototype%":
-		return realm.RangeErrorPrototype
+		return realm.RangeErrorPrototype, nil
 	case "%ReferenceErrorPrototype%":
-		return realm.ReferenceErrorPrototype
+		return realm.ReferenceErrorPrototype, nil
 	case "%SyntaxErrorPrototype%":
-		return realm.SyntaxErrorPrototype
+		return realm.SyntaxErrorPrototype, nil
 	case "%EvalErrorPrototype%":
-		return realm.EvalErrorPrototype
+		return realm.EvalErrorPrototype, nil
 	case "%URIErrorPrototype%":
-		return realm.URIErrorPrototype
+		return realm.URIErrorPrototype, nil
 	case "%AggregateErrorPrototype%":
-		return realm.AggregateErrorPrototype
+		return realm.AggregateErrorPrototype, nil
 	case "%RegExpPrototype%":
-		return realm.RegExpPrototype
+		return realm.RegExpPrototype, nil
 	case "%PromisePrototype%":
-		return realm.PromisePrototype
+		return realm.PromisePrototype, nil
 	case "%DatePrototype%":
-		return realm.DatePrototype
+		return realm.DatePrototype, nil
 	default:
 		// Fallback to ObjectPrototype
-		return realm.ObjectPrototype
+		return realm.ObjectPrototype, nil
 	}
 }
 
@@ -9727,7 +9682,16 @@ startExecution:
 				// If prototype is not an object, use the realm of newTarget's intrinsic default
 				// This handles cross-realm: var C = new other.Function(); C.prototype = null;
 				if !instancePrototype.IsObject() && !instancePrototype.IsCallable() {
-					instancePrototype = vm.GetPrototypeFromConstructor(newTargetValue, "%ObjectPrototype%")
+					var gpfcErr error
+					instancePrototype, gpfcErr = vm.GetPrototypeFromConstructor(newTargetValue, "%ObjectPrototype%")
+					if gpfcErr != nil {
+						if ee, ok := gpfcErr.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						} else {
+							vm.throwException(NewString(gpfcErr.Error()))
+						}
+						continue
+					}
 				}
 
 				// For derived constructors, 'this' is uninitialized until super() is called
@@ -9904,7 +9868,16 @@ startExecution:
 				// ECMAScript spec 9.1.14 GetPrototypeFromConstructor:
 				// If prototype is not an object, use the realm of newTarget's intrinsic default
 				if !instancePrototype.IsObject() && !instancePrototype.IsCallable() {
-					instancePrototype = vm.GetPrototypeFromConstructor(newTargetValue, "%ObjectPrototype%")
+					var gpfcErr error
+					instancePrototype, gpfcErr = vm.GetPrototypeFromConstructor(newTargetValue, "%ObjectPrototype%")
+					if gpfcErr != nil {
+						if ee, ok := gpfcErr.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						} else {
+							vm.throwException(NewString(gpfcErr.Error()))
+						}
+						continue
+					}
 				}
 
 				// For derived constructors, 'this' is uninitialized until super() is called
