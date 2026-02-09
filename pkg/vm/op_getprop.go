@@ -1023,6 +1023,32 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				}
 				return false, InterpretRuntimeError, Undefined
 			}
+			// ECMAScript 10.5.8 invariant validation
+			if targetObj := proxy.target.AsPlainObject(); targetObj != nil {
+				if g, _, _, c, isAccessor := targetObj.GetOwnAccessor(propName); isAccessor && !c {
+					if g.Type() == TypeUndefined && !result.IsUndefined() {
+						if frame != nil && !frameWasNil {
+							frame.ip = ip - 4
+						}
+						vm.ThrowTypeError("'get' on proxy: property '" + propName + "' is a non-configurable accessor without a getter, but the trap returned a non-undefined value")
+						if !vm.unwinding {
+							return false, InterpretOK, Undefined
+						}
+						return false, InterpretRuntimeError, Undefined
+					}
+				} else if v, w, _, c, found := targetObj.GetOwnDescriptor(propName); found && !c && !w {
+					if !v.StrictlyEquals(result) {
+						if frame != nil && !frameWasNil {
+							frame.ip = ip - 4
+						}
+						vm.ThrowTypeError("'get' on proxy: property '" + propName + "' is a read-only and non-configurable data property on the proxy target but the proxy did not return its actual value")
+						if !vm.unwinding {
+							return false, InterpretOK, Undefined
+						}
+						return false, InterpretRuntimeError, Undefined
+					}
+				}
+			}
 			*dest = result
 			return true, InterpretOK, *dest
 		} else {

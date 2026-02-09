@@ -112,6 +112,13 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			case vm.TypeArguments:
 				// Arguments objects have own symbol properties (e.g., Symbol.iterator)
 				return vm.BooleanValue(thisValue.AsArguments().HasOwnSymbolProp(keyVal.AsSymbolObject())), nil
+			case vm.TypeProxy:
+				// Per spec, hasOwnProperty uses [[GetOwnProperty]] which goes through the proxy protocol
+				desc, err := objectGetOwnPropertyDescriptorWithVM(vmInstance, []vm.Value{thisValue, keyVal})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				return vm.BooleanValue(!desc.IsUndefined()), nil
 			default:
 				return vm.BooleanValue(false), nil
 			}
@@ -295,6 +302,13 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.BooleanValue(hasOwn), nil
 			}
 			return vm.BooleanValue(false), nil
+		case vm.TypeProxy:
+			// Per spec, hasOwnProperty uses [[GetOwnProperty]] which goes through the proxy protocol
+			desc, err := objectGetOwnPropertyDescriptorWithVM(vmInstance, []vm.Value{thisValue, keyVal})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			return vm.BooleanValue(!desc.IsUndefined()), nil
 		default:
 			return vm.BooleanValue(false), nil
 		}
@@ -394,6 +408,21 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < argsObj.Length() {
 				return vm.BooleanValue(true), nil
+			}
+			return vm.BooleanValue(false), nil
+		case vm.TypeProxy:
+			// Per spec, propertyIsEnumerable uses [[GetOwnProperty]] which goes through the proxy protocol
+			desc, err := objectGetOwnPropertyDescriptorWithVM(vmInstance, []vm.Value{thisValue, keyVal})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if desc.IsUndefined() {
+				return vm.BooleanValue(false), nil
+			}
+			if descObj := desc.AsPlainObject(); descObj != nil {
+				if enumVal, hasEnum := descObj.GetOwn("enumerable"); hasEnum {
+					return vm.BooleanValue(!enumVal.IsFalsey()), nil
+				}
 			}
 			return vm.BooleanValue(false), nil
 		default:
@@ -1923,8 +1952,8 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return vm.Undefined, vmInstance.NewTypeError("Cannot get prototype of revoked Proxy")
 		}
 
-		// Check if handler has a getPrototypeOf trap
-		if trap, ok := proxy.Handler().AsPlainObject().GetOwn("getPrototypeOf"); ok {
+		// Check if handler has a getPrototypeOf trap (per spec: GetMethod treats null/undefined as absent)
+		if trap, ok := proxy.Handler().AsPlainObject().GetOwn("getPrototypeOf"); ok && !trap.IsUndefined() && trap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !trap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'getPrototypeOf' on proxy: trap is not a function")
@@ -2022,8 +2051,8 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return vm.Undefined, vmInstance.NewTypeError("Cannot set prototype of revoked Proxy")
 		}
 
-		// Check for setPrototypeOf trap
-		if setProtoTrap, ok := proxy.Handler().AsPlainObject().GetOwn("setPrototypeOf"); ok {
+		// Check for setPrototypeOf trap (per spec: GetMethod treats null/undefined as absent)
+		if setProtoTrap, ok := proxy.Handler().AsPlainObject().GetOwn("setPrototypeOf"); ok && !setProtoTrap.IsUndefined() && setProtoTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !setProtoTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'setPrototypeOf' on proxy: trap is not a function")
@@ -2741,8 +2770,8 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return vm.Undefined, vmInstance.NewTypeError("Cannot define property on revoked Proxy")
 		}
 
-		// Check for defineProperty trap
-		if defineTrap, ok := proxy.Handler().AsPlainObject().GetOwn("defineProperty"); ok {
+		// Check for defineProperty trap (per spec: GetMethod treats null/undefined as absent)
+		if defineTrap, ok := proxy.Handler().AsPlainObject().GetOwn("defineProperty"); ok && !defineTrap.IsUndefined() && defineTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !defineTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap is not a function")
@@ -2766,6 +2795,89 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			// Result should be truthy to indicate success
 			if result.IsFalsey() {
 				return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap returned falsish")
+			}
+
+			// ECMAScript 10.5.6 steps 14-20: Validate invariants
+			target := proxy.Target()
+
+			// Step 14: Determine if descriptor sets configurable to false
+			settingConfigFalse := false
+			descObj := descriptor.AsPlainObject()
+			if descObj != nil {
+				if confVal, hasConf := descObj.GetOwn("configurable"); hasConf {
+					settingConfigFalse = confVal.IsFalsey()
+				}
+			}
+
+			// Step 15: Let targetDesc be target.[[GetOwnProperty]](P)
+			// NOTE: Must re-read after trap, since trap may have modified target
+			var targetDescFound bool
+			var targetValue vm.Value
+			var targetConfigurable, targetWritable, targetEnumerable bool
+			if targetObj := target.AsPlainObject(); targetObj != nil {
+				var found bool
+				targetValue, targetWritable, targetEnumerable, targetConfigurable, found = targetObj.GetOwnDescriptor(propName)
+				targetDescFound = found
+			}
+
+			// Step 16: Let extensibleTarget be target.[[IsExtensible]]()
+			targetExtensible := true
+			if targetObj := target.AsPlainObject(); targetObj != nil {
+				targetExtensible = targetObj.IsExtensible()
+			}
+
+			if !targetDescFound {
+				// Step 19: targetDesc is undefined
+				// 19a: If target is not extensible, throw TypeError
+				if !targetExtensible {
+					return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap returned truish for adding property to a non-extensible target")
+				}
+				// 19b: If settingConfigFalse, throw TypeError
+				if settingConfigFalse {
+					return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap returned truish for defining non-configurable property which does not exist on the target")
+				}
+			} else {
+				// Step 20: targetDesc is defined
+				// 20a: IsCompatiblePropertyDescriptor check
+				if !targetConfigurable {
+					// Non-configurable target property - validate compatibility
+					if descObj != nil {
+						// Can't change configurable to true
+						if confVal, hasConf := descObj.GetOwn("configurable"); hasConf && confVal.IsTruthy() {
+							return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap returned truish for defining non-configurable property as configurable")
+						}
+						// Can't change enumerable
+						if enumVal, hasEnum := descObj.GetOwn("enumerable"); hasEnum {
+							if enumVal.IsTruthy() != targetEnumerable {
+								return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap returned truish for incompatible property descriptor")
+							}
+						}
+						// For non-configurable, non-writable data property, can't change value
+						if !targetWritable {
+							if valField, hasVal := descObj.GetOwn("value"); hasVal {
+								if !valField.StrictlyEquals(targetValue) {
+									return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap returned truish for incompatible property descriptor")
+								}
+							}
+							// Can't change writable to true either
+							if writableVal, hasW := descObj.GetOwn("writable"); hasW && writableVal.IsTruthy() {
+								return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap returned truish for incompatible property descriptor")
+							}
+						}
+					}
+				}
+				// 20b: If settingConfigFalse and target property is configurable, throw TypeError
+				if settingConfigFalse && targetConfigurable {
+					return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap returned truish for defining non-configurable property which is configurable on the target")
+				}
+				// 20c (ES2020+): If target is non-configurable data property and writable, descriptor sets writable to false → TypeError
+				if !targetConfigurable && targetWritable {
+					if descObj != nil {
+						if writableVal, hasWritable := descObj.GetOwn("writable"); hasWritable && writableVal.IsFalsey() {
+							return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap returned truish for making non-configurable writable property non-writable")
+						}
+					}
+				}
 			}
 
 			return obj, nil
@@ -3237,8 +3349,8 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 }
 
 func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
-	if len(args) < 2 {
-		return vm.Undefined, nil
+	if len(args) < 1 {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 	}
 
 	obj := args[0]
@@ -3249,10 +3361,16 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	}
 
 	// Step 2: ToPropertyKey(P) - handle object keys via ToPrimitive
+	// If P is not provided, it defaults to undefined which becomes "undefined" string
 	var keyIsSymbol bool
 	var propName string
 	var propSym vm.Value
-	keyArg := args[1]
+	var keyArg vm.Value
+	if len(args) >= 2 {
+		keyArg = args[1]
+	} else {
+		keyArg = vm.Undefined
+	}
 	if keyArg.Type() == vm.TypeSymbol {
 		keyIsSymbol = true
 		propSym = keyArg
@@ -3305,8 +3423,8 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			return vm.Undefined, vmInstance.NewTypeError("Cannot get property descriptor on revoked Proxy")
 		}
 
-		// Check for getOwnPropertyDescriptor trap
-		if getTrap, ok := proxy.Handler().AsPlainObject().GetOwn("getOwnPropertyDescriptor"); ok {
+		// Check for getOwnPropertyDescriptor trap (per spec: GetMethod treats null/undefined as absent)
+		if getTrap, ok := proxy.Handler().AsPlainObject().GetOwn("getOwnPropertyDescriptor"); ok && !getTrap.IsUndefined() && getTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !getTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap is not a function")
@@ -3327,9 +3445,94 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 				return vm.Undefined, err
 			}
 
-			// Result must be undefined or an object
+			// Step 9: Result must be undefined or an object
 			if result.Type() != vm.TypeUndefined && !result.IsObject() {
 				return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap result must be an object or undefined")
+			}
+
+			// ECMAScript 10.5.5 steps 11-22: Validate invariants
+			target := proxy.Target()
+
+			// Step 11: Get the target's own property descriptor
+			var targetDescFound bool
+			var targetConfigurable bool
+			if targetObj := target.AsPlainObject(); targetObj != nil {
+				_, _, _, targetConfigurable, targetDescFound = targetObj.GetOwnDescriptor(propName)
+			} else if target.Type() == vm.TypeArray {
+				arrObj := target.AsArray()
+				if propName == "length" {
+					targetDescFound = true
+					targetConfigurable = false
+				} else if index, parseErr := strconv.Atoi(propName); parseErr == nil && index >= 0 && index < arrObj.Length() {
+					targetDescFound = true
+					targetConfigurable = !arrObj.IsFrozen()
+				} else if _, desc, ok := arrObj.GetOwnPropertyDescriptor(propName); ok {
+					_ = desc
+					targetDescFound = true
+					targetConfigurable = desc.Configurable
+				}
+			}
+
+			// Step 12: Check target extensibility
+			targetExtensible := true
+			if targetObj := target.AsPlainObject(); targetObj != nil {
+				targetExtensible = targetObj.IsExtensible()
+			} else if target.Type() == vm.TypeArray {
+				targetExtensible = target.AsArray().IsExtensible()
+			}
+
+			if result.Type() == vm.TypeUndefined {
+				// Step 14: If trapResult is undefined
+				if targetDescFound {
+					// Step 14a: If targetDesc exists
+					if !targetConfigurable {
+						// Step 14a.i: Can't report non-configurable property as non-existent
+						return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap returned undefined for property '" + propName + "' which is non-configurable in the proxy target")
+					}
+					// Step 14b: If target is not extensible, can't report existing property as non-existent
+					if !targetExtensible {
+						return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap returned undefined for property '" + propName + "' which exists in the non-extensible proxy target")
+					}
+				}
+				return vm.Undefined, nil
+			}
+
+			// Step 15-22: Result is a descriptor object, validate against target
+			resultObj := result.AsPlainObject()
+			if resultObj == nil {
+				return result, nil
+			}
+
+			// Step 20: IsCompatiblePropertyDescriptor - non-extensible target can't have new properties reported
+			if !targetExtensible && !targetDescFound {
+				return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap returned descriptor for property '" + propName + "' on a non-extensible proxy target that does not have this property")
+			}
+
+			// Check if result descriptor says non-configurable
+			resultConfigurable := true
+			if confVal, hasConf := resultObj.GetOwn("configurable"); hasConf {
+				resultConfigurable = !confVal.IsFalsey()
+			}
+
+			// Step 22: Invariant checks for non-configurable result
+			if !resultConfigurable {
+				if !targetDescFound {
+					// Step 22a: Can't report non-configurable for property that doesn't exist on target
+					return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap reported non-configurable for property '" + propName + "' which does not exist on the proxy target")
+				}
+				if targetConfigurable {
+					// Step 22b: Can't report non-configurable when target property is configurable
+					return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap reported non-configurable for property '" + propName + "' which is configurable in the proxy target")
+				}
+				// Step 22 additional: If result is non-configurable+non-writable, target must also be non-writable
+				if writableVal, hasWritable := resultObj.GetOwn("writable"); hasWritable && writableVal.IsFalsey() {
+					if targetObj := target.AsPlainObject(); targetObj != nil {
+						_, targetWritable, _, _, found := targetObj.GetOwnDescriptor(propName)
+						if found && targetWritable {
+							return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap reported non-configurable and non-writable for property '" + propName + "' which is writable in the proxy target")
+						}
+					}
+				}
 			}
 
 			return result, nil
@@ -3963,8 +4166,8 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 			return vm.Undefined, vmInstance.NewTypeError("Cannot check extensibility of revoked Proxy")
 		}
 
-		// Check for isExtensible trap
-		if extTrap, ok := proxy.Handler().AsPlainObject().GetOwn("isExtensible"); ok {
+		// Check for isExtensible trap (per spec: GetMethod treats null/undefined as absent)
+		if extTrap, ok := proxy.Handler().AsPlainObject().GetOwn("isExtensible"); ok && !extTrap.IsUndefined() && extTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !extTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'isExtensible' on proxy: trap is not a function")
@@ -3977,8 +4180,18 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 				return vm.Undefined, err
 			}
 
-			// Convert to boolean
-			return vm.BooleanValue(result.IsTruthy()), nil
+			// ECMAScript 10.5.3: trap result must match target's IsExtensible
+			trapResult := result.IsTruthy()
+			targetExtensible := true
+			if targetObj := proxy.Target().AsPlainObject(); targetObj != nil {
+				targetExtensible = targetObj.IsExtensible()
+			} else if proxy.Target().Type() == vm.TypeArray {
+				targetExtensible = proxy.Target().AsArray().IsExtensible()
+			}
+			if trapResult != targetExtensible {
+				return vm.Undefined, vmInstance.NewTypeError("'isExtensible' on proxy: trap result does not reflect extensibility of proxy target")
+			}
+			return vm.BooleanValue(trapResult), nil
 		}
 
 		// No trap, delegate to target
@@ -4031,8 +4244,8 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 			return vm.Undefined, vmInstance.NewTypeError("Cannot prevent extensions on revoked Proxy")
 		}
 
-		// Check for preventExtensions trap
-		if prevTrap, ok := proxy.Handler().AsPlainObject().GetOwn("preventExtensions"); ok {
+		// Check for preventExtensions trap (per spec: GetMethod treats null/undefined as absent)
+		if prevTrap, ok := proxy.Handler().AsPlainObject().GetOwn("preventExtensions"); ok && !prevTrap.IsUndefined() && prevTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !prevTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'preventExtensions' on proxy: trap is not a function")
@@ -4045,9 +4258,21 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 				return vm.Undefined, err
 			}
 
-			// If trap returns falsy, throw TypeError
+			// If trap returns falsy, throw TypeError (Object.preventExtensions spec step 3)
+			// Reflect.preventExtensions catches this and returns false
 			if result.IsFalsey() {
 				return vm.Undefined, vmInstance.NewTypeError("'preventExtensions' on proxy: trap returned falsish")
+			}
+
+			// ECMAScript 10.5.4: if trap returns true, target must be non-extensible
+			targetExtensible := true
+			if targetObj := proxy.Target().AsPlainObject(); targetObj != nil {
+				targetExtensible = targetObj.IsExtensible()
+			} else if proxy.Target().Type() == vm.TypeArray {
+				targetExtensible = proxy.Target().AsArray().IsExtensible()
+			}
+			if targetExtensible {
+				return vm.Undefined, vmInstance.NewTypeError("'preventExtensions' on proxy: trap returned truish but the proxy target is extensible")
 			}
 
 			return obj, nil

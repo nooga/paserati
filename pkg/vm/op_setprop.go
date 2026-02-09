@@ -33,9 +33,9 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			return false, InterpretRuntimeError, Undefined
 		}
 
-		// Check if handler has a set trap
+		// Check if handler has a set trap (per spec: GetMethod returns undefined for null/undefined)
 		setTrap, ok := proxy.handler.AsPlainObject().GetOwn("set")
-		if ok {
+		if ok && setTrap.Type() != TypeUndefined && setTrap.Type() != TypeNull {
 			// Validate trap is callable
 			if !setTrap.IsCallable() {
 				var excVal Value
@@ -82,49 +82,89 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				vm.throwException(excVal)
 				return false, InterpretRuntimeError, Undefined
 			}
-			return true, InterpretOK, result
-		} else {
-			// No set trap, fallback to target - implement directly to avoid recursion
-			target := proxy.target
-			if target.Type() == TypeObject {
-				po := target.AsPlainObject()
-				// Check for accessor first
-				if _, s, _, _, ok := po.GetOwnAccessor(propName); ok {
-					if s.Type() != TypeUndefined {
-						_, err := vm.prepareMethodCall(s, target, []Value{*valueToSet}, 0, vm.frames[vm.frameCount-1].registers, ip)
-						if err != nil {
-							if ee, ok := err.(ExceptionError); ok {
-								vm.throwException(ee.GetExceptionValue())
-								return false, InterpretRuntimeError, Undefined
-							}
-							var excVal Value
-							if errCtor, ok := vm.GetGlobal("Error"); ok {
-								if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-									excVal = res
-								} else {
-									eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-									eo.SetOwn("name", NewString("Error"))
-									eo.SetOwn("message", NewString(err.Error()))
-									excVal = NewValueFromPlainObject(eo)
-								}
-							} else {
-								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-								eo.SetOwn("name", NewString("Error"))
-								eo.SetOwn("message", NewString(err.Error()))
-								excVal = NewValueFromPlainObject(eo)
-							}
-							vm.throwException(excVal)
+			// ECMAScript 10.5.9 invariant validation
+			if !result.IsFalsey() {
+				target := proxy.target
+				if targetObj := target.AsPlainObject(); targetObj != nil {
+					// Check for non-configurable target properties
+					if g, s, _, c, isAccessor := targetObj.GetOwnAccessor(propName); isAccessor {
+						// Accessor property invariant
+						if !c && s.Type() == TypeUndefined {
+							// Non-configurable accessor with undefined setter
+							_ = g
+							vm.ThrowTypeError("'set' on proxy: trap returned truish for property '" + propName + "' which exists in the proxy target as a non-configurable accessor without a setter")
 							return false, InterpretRuntimeError, Undefined
 						}
-						return true, InterpretOK, *valueToSet
+					} else if v, w, _, c, found := targetObj.GetOwnDescriptor(propName); found {
+						// Data property invariant
+						if !c && !w {
+							// Non-configurable, non-writable - must be SameValue
+							if !v.StrictlyEquals(*valueToSet) {
+								vm.ThrowTypeError("'set' on proxy: trap returned truish for property '" + propName + "' which exists in the proxy target as a non-configurable and non-writable data property with a different value")
+								return false, InterpretRuntimeError, Undefined
+							}
+						}
 					}
 				}
-				// Data property
+			}
+			return true, InterpretOK, result
+		} else {
+			// No set trap: per spec, return target.[[Set]](P, V, Receiver)
+			// The receiver should be the proxy itself, not the target
+			target := proxy.target
+			if target.Type() == TypeProxy {
+				// Target is also a proxy - recursively call through proxy protocol
+				return vm.opSetProp(ip, &target, propName, valueToSet)
+			}
+			if target.Type() == TypeObject {
+				po := target.AsPlainObject()
+				// Check for accessor on target (walk prototype chain)
+				cur := po
+				for cur != nil {
+					if _, s, _, _, ok := cur.GetOwnAccessor(propName); ok {
+						if s.Type() != TypeUndefined {
+							// Call setter with receiver (proxy) as this
+							_, err := vm.Call(s, *objVal, []Value{*valueToSet})
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+									return false, InterpretRuntimeError, Undefined
+								}
+							}
+							return true, InterpretOK, *valueToSet
+						}
+						// Accessor with no setter - silently fail
+						return true, InterpretOK, *valueToSet
+					}
+					proto := cur.GetPrototype()
+					if proto.Type() == TypeObject {
+						cur = proto.AsPlainObject()
+					} else {
+						break
+					}
+				}
+				// Data property - set on target directly
 				po.SetOwn(propName, *valueToSet)
 				return true, InterpretOK, *valueToSet
 			} else if target.Type() == TypeDictObject {
 				dict := target.AsDictObject()
 				dict.SetOwn(propName, *valueToSet)
+				return true, InterpretOK, *valueToSet
+			} else if target.Type() == TypeArray {
+				// Handle array targets (e.g., setting length)
+				arr := target.AsArray()
+				if propName == "length" {
+					if valueToSet.Type() == TypeIntegerNumber || valueToSet.Type() == TypeFloatNumber {
+						newLen := int(AsNumber(*valueToSet))
+						arr.SetLength(newLen)
+						return true, InterpretOK, *valueToSet
+					}
+				}
+				// Numeric index
+				if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 {
+					arr.Set(idx, *valueToSet)
+					return true, InterpretOK, *valueToSet
+				}
 				return true, InterpretOK, *valueToSet
 			} else {
 				// For other types, just return the value

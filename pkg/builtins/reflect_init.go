@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
@@ -376,6 +377,22 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	reflectObj.SetOwnNonEnumerable("setPrototypeOf", vm.NewNativeFunction(2, false, "setPrototypeOf", func(args []vm.Value) (vm.Value, error) {
 		result, err := objectSetPrototypeOfWithVM(vmInstance, args)
 		if err != nil {
+			// For proxies: "trap returned falsish" means the trap said no — return false.
+			// Invariant violations must still throw.
+			if len(args) > 0 && args[0].Type() == vm.TypeProxy {
+				isTrapFalsish := false
+				if ee, ok := err.(vm.ExceptionError); ok {
+					excVal := ee.GetExceptionValue()
+					if msgVal, _ := vmInstance.GetProperty(excVal, "message"); msgVal.Type() == vm.TypeString {
+						if strings.Contains(msgVal.ToString(), "trap returned falsish") {
+							isTrapFalsish = true
+						}
+					}
+				}
+				if isTrapFalsish {
+					return vm.BooleanValue(false), nil
+				}
+			}
 			return vm.BooleanValue(false), err
 		}
 		// Object.setPrototypeOf returns the object on success
@@ -384,16 +401,32 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Reflect.defineProperty(target, propertyKey, attributes)
 	// Per ECMAScript spec, this returns boolean instead of throwing for invalid operations
+	// EXCEPT: Proxy invariant violations must still throw TypeError
 	reflectObj.SetOwnNonEnumerable("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.defineProperty requires a target")
 		}
 
-		// Use objectDefinePropertyWithVM which handles namespace objects properly
-		// For Reflect.defineProperty, we convert errors to false return value
 		result, err := objectDefinePropertyWithVM(vmInstance, args)
 		if err != nil {
-			// Object.defineProperty threw - Reflect.defineProperty returns false
+			// Per spec: Proxy invariant violations must throw through Reflect.defineProperty.
+			// "trap returned falsish" is NOT an invariant violation — it means the trap said no.
+			// Only invariant violations (trap returned true but invariants violated) propagate.
+			if args[0].Type() == vm.TypeProxy {
+				// Extract the error message from the exception value
+				isTrapFalsish := false
+				if ee, ok := err.(vm.ExceptionError); ok {
+					excVal := ee.GetExceptionValue()
+					if msgVal, _ := vmInstance.GetProperty(excVal, "message"); msgVal.Type() == vm.TypeString {
+						if strings.Contains(msgVal.ToString(), "trap returned falsish") {
+							isTrapFalsish = true
+						}
+					}
+				}
+				if !isTrapFalsish {
+					return vm.Undefined, err
+				}
+			}
 			return vm.BooleanValue(false), nil
 		}
 		// defineProperty returns the object on success
@@ -475,6 +508,22 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	reflectObj.SetOwnNonEnumerable("preventExtensions", vm.NewNativeFunction(1, false, "preventExtensions", func(args []vm.Value) (vm.Value, error) {
 		result, err := objectPreventExtensionsWithVM(vmInstance, args)
 		if err != nil {
+			// For proxies: "trap returned falsish" means the trap said no — return false.
+			// Invariant violations (trap returned true but target still extensible) must throw.
+			if len(args) > 0 && args[0].Type() == vm.TypeProxy {
+				isTrapFalsish := false
+				if ee, ok := err.(vm.ExceptionError); ok {
+					excVal := ee.GetExceptionValue()
+					if msgVal, _ := vmInstance.GetProperty(excVal, "message"); msgVal.Type() == vm.TypeString {
+						if strings.Contains(msgVal.ToString(), "trap returned falsish") {
+							isTrapFalsish = true
+						}
+					}
+				}
+				if isTrapFalsish {
+					return vm.BooleanValue(false), nil
+				}
+			}
 			return vm.BooleanValue(false), err
 		}
 		return vm.BooleanValue(result.Type() != vm.TypeUndefined), nil

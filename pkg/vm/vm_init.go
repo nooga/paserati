@@ -436,12 +436,30 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			return Undefined, vm.NewTypeError("Cannot perform 'get' on a revoked Proxy")
 		}
 		getTrap, hasGetTrap := proxy.handler.AsPlainObject().GetOwn("get")
-		if hasGetTrap && getTrap.IsCallable() {
+		if hasGetTrap && getTrap.Type() != TypeUndefined && getTrap.Type() != TypeNull {
+			// Validate trap is callable
+			if !getTrap.IsCallable() {
+				return Undefined, vm.NewTypeError("'get' on proxy: trap is not a function")
+			}
 			// Call the get trap: handler.get(target, propertyKey, receiver)
 			trapArgs := []Value{proxy.target, NewString(propName), obj}
 			result, err := vm.Call(getTrap, proxy.handler, trapArgs)
 			if err != nil {
 				return Undefined, err
+			}
+			// ECMAScript 10.5.8 invariant validation
+			if targetObj := proxy.target.AsPlainObject(); targetObj != nil {
+				// Check for non-configurable accessor with get=undefined
+				if g, _, _, c, isAccessor := targetObj.GetOwnAccessor(propName); isAccessor && !c {
+					if g.Type() == TypeUndefined && !result.IsUndefined() {
+						return Undefined, vm.NewTypeError("'get' on proxy: property '" + propName + "' is a non-configurable accessor property on the proxy target and does not have a getter function, but the trap returned a non-undefined value")
+					}
+				} else if v, w, _, c, found := targetObj.GetOwnDescriptor(propName); found && !c && !w {
+					// Non-configurable, non-writable data property: trap must return SameValue
+					if !v.StrictlyEquals(result) {
+						return Undefined, vm.NewTypeError("'get' on proxy: property '" + propName + "' is a read-only and non-configurable data property on the proxy target but the proxy did not return its actual value")
+					}
+				}
 			}
 			return result, nil
 		}

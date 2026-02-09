@@ -2573,15 +2573,15 @@ startExecution:
 				case TypeProxy:
 					proxy := objVal.AsProxy()
 					if proxy.Revoked {
-						vm.runtimeError("Cannot perform 'in' on a revoked Proxy")
+						vm.ThrowTypeError("Cannot perform 'in' on a revoked Proxy")
 						return InterpretRuntimeError, Undefined
 					}
 
-					// Check if handler has a 'has' trap
-					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
+					// Check if handler has a 'has' trap (per spec: GetMethod treats null/undefined as absent)
+					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 						// Validate trap is callable
 						if !hasTrap.IsCallable() {
-							vm.runtimeError("'has' on proxy: trap is not a function")
+							vm.ThrowTypeError("'has' on proxy: trap is not a function")
 							return InterpretRuntimeError, Undefined
 						}
 
@@ -2598,24 +2598,28 @@ startExecution:
 						}
 						// Convert result to boolean (truthy check)
 						hasProperty = !result.IsFalsey()
-					} else {
-						// No has trap, fallback to target
-						target := proxy.target
-						switch target.Type() {
-						case TypeObject:
-							hasProperty = target.AsPlainObject().Has(propKey)
-						case TypeDictObject:
-							hasProperty = target.AsDictObject().Has(propKey)
-						case TypeArray:
-							arrayObj := target.AsArray()
-							if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
-								hasProperty = index < arrayObj.Length()
-							} else {
-								hasProperty = propKey == "length"
+
+						// ECMAScript 10.5.7 step 11: Invariant validation when trap returns false
+						if !hasProperty {
+							target := proxy.target
+							if targetObj := target.AsPlainObject(); targetObj != nil {
+								// Check if target has a non-configurable own property
+								if _, _, _, c, found := targetObj.GetOwnDescriptor(propKey); found && !c {
+									vm.ThrowTypeError("'has' on proxy: trap returned false for property '" + propKey + "' which exists in the proxy target as non-configurable")
+									return InterpretRuntimeError, Undefined
+								}
+								// Check if target is not extensible and has the property
+								if !targetObj.IsExtensible() {
+									if _, found := targetObj.GetOwn(propKey); found {
+										vm.ThrowTypeError("'has' on proxy: trap returned false for property '" + propKey + "' but the proxy target is not extensible")
+										return InterpretRuntimeError, Undefined
+									}
+								}
 							}
-						default:
-							hasProperty = false
 						}
+					} else {
+						// No has trap, fallback to target.[[HasProperty]]
+						hasProperty = vm.proxyHasPropertyFallback(proxy.target, propKey)
 					}
 				case TypeObject:
 					plainObj := objVal.AsPlainObject()
@@ -3743,8 +3747,8 @@ startExecution:
 							return status, Undefined
 						}
 
-						// Check if handler has a 'has' trap
-						if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
+						// Check if handler has a 'has' trap (per spec: GetMethod treats null/undefined as absent)
+						if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 							if !hasTrap.IsCallable() {
 								frame.ip = ip
 								status := vm.runtimeError("'has' on proxy: trap is not a function")
@@ -4170,8 +4174,8 @@ startExecution:
 							return status, Undefined
 						}
 
-						// Check if handler has a 'has' trap
-						if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
+						// Check if handler has a 'has' trap (per spec: GetMethod treats null/undefined as absent)
+						if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 							if !hasTrap.IsCallable() {
 								frame.ip = ip
 								status := vm.runtimeError("'has' on proxy: trap is not a function")
@@ -4349,7 +4353,7 @@ startExecution:
 							return status, Undefined
 						}
 
-						if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
+						if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 							if !hasTrap.IsCallable() {
 								frame.ip = ip
 								status := vm.runtimeError("'has' on proxy: trap is not a function")
@@ -4471,8 +4475,8 @@ startExecution:
 						return false, true
 					}
 
-					// Check if handler has a 'has' trap
-					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok {
+					// Check if handler has a 'has' trap (per spec: GetMethod treats null/undefined as absent)
+					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 						if !hasTrap.IsCallable() {
 							frame.ip = ip
 							vm.runtimeError("'has' on proxy: trap is not a function")
@@ -6987,9 +6991,14 @@ startExecution:
 					return InterpretRuntimeError, Undefined
 				}
 
-				// Check if handler has a get trap
+				// Check if handler has a get trap (per spec: GetMethod treats null/undefined as absent)
 				getTrap, ok := proxy.handler.AsPlainObject().GetOwn("get")
-				if ok && getTrap.IsCallable() {
+				if ok && getTrap.Type() != TypeUndefined && getTrap.Type() != TypeNull {
+					// Validate trap is callable
+					if !getTrap.IsCallable() {
+						vm.ThrowTypeError("'get' on proxy: trap is not a function")
+						return InterpretRuntimeError, Undefined
+					}
 					// Call the get trap: handler.get(target, propertyKey, receiver)
 					trapArgs := []Value{proxy.target, indexVal, baseVal}
 					result, err := vm.Call(getTrap, proxy.handler, trapArgs)
@@ -6998,25 +7007,23 @@ startExecution:
 							vm.throwException(ee.GetExceptionValue())
 							return InterpretRuntimeError, Undefined
 						}
-						// Wrap non-exception Go error
-						var excVal Value
-						if errCtor, ok := vm.GetGlobal("Error"); ok {
-							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-								excVal = res
-							} else {
-								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-								eo.SetOwn("name", NewString("Error"))
-								eo.SetOwn("message", NewString(err.Error()))
-								excVal = NewValueFromPlainObject(eo)
-							}
-						} else {
-							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-							eo.SetOwn("name", NewString("Error"))
-							eo.SetOwn("message", NewString(err.Error()))
-							excVal = NewValueFromPlainObject(eo)
-						}
-						vm.throwException(excVal)
+						vm.ThrowTypeError(err.Error())
 						return InterpretRuntimeError, Undefined
+					}
+					// ECMAScript 10.5.8 invariant validation
+					propName := indexVal.ToString()
+					if targetObj := proxy.target.AsPlainObject(); targetObj != nil {
+						if g, _, _, c, isAccessor := targetObj.GetOwnAccessor(propName); isAccessor && !c {
+							if g.Type() == TypeUndefined && !result.IsUndefined() {
+								vm.ThrowTypeError("'get' on proxy: property '" + propName + "' is a non-configurable accessor without a getter, but the trap returned a non-undefined value")
+								return InterpretRuntimeError, Undefined
+							}
+						} else if v, w, _, c, found := targetObj.GetOwnDescriptor(propName); found && !c && !w {
+							if !v.StrictlyEquals(result) {
+								vm.ThrowTypeError("'get' on proxy: property '" + propName + "' is a read-only and non-configurable data property on the proxy target but the proxy did not return its actual value")
+								return InterpretRuntimeError, Undefined
+							}
+						}
 					}
 					registers[destReg] = result
 				} else {
@@ -7699,6 +7706,25 @@ startExecution:
 						if ok, status, value := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
 							return status, value
 						}
+					}
+				}
+
+			case TypeProxy:
+				// Proxy objects: route all property setting through the proxy protocol via opSetProp
+				switch indexVal.Type() {
+				case TypeSymbol:
+					if ok, status, value := vm.opSetPropSymbol(ip, &baseVal, indexVal, &valueVal); !ok {
+						return status, value
+					}
+				case TypeString:
+					key := AsString(indexVal)
+					if ok, status, value := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+						return status, value
+					}
+				default:
+					key := indexVal.ToString()
+					if ok, status, value := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+						return status, value
 					}
 				}
 
@@ -13822,12 +13848,12 @@ startExecution:
 					return InterpretRuntimeError, Undefined
 				}
 
-				// Check if handler has a delete trap
+				// Check if handler has a delete trap (per spec: GetMethod treats null/undefined as absent)
 				deleteTrap, ok := proxy.handler.AsPlainObject().GetOwn("deleteProperty")
-				if ok {
+				if ok && deleteTrap.Type() != TypeUndefined && deleteTrap.Type() != TypeNull {
 					// Validate trap is callable
 					if !deleteTrap.IsCallable() {
-						vm.runtimeError("'deleteProperty' on proxy: trap is not a function")
+						vm.ThrowTypeError("'deleteProperty' on proxy: trap is not a function")
 						return InterpretRuntimeError, Undefined
 					}
 
@@ -13839,27 +13865,20 @@ startExecution:
 							vm.throwException(ee.GetExceptionValue())
 							return InterpretRuntimeError, Undefined
 						}
-						// Wrap non-exception Go error
-						var excVal Value
-						if errCtor, ok := vm.GetGlobal("Error"); ok {
-							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-								excVal = res
-							} else {
-								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-								eo.SetOwn("name", NewString("Error"))
-								eo.SetOwn("message", NewString(err.Error()))
-								excVal = NewValueFromPlainObject(eo)
-							}
-						} else {
-							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-							eo.SetOwn("name", NewString("Error"))
-							eo.SetOwn("message", NewString(err.Error()))
-							excVal = NewValueFromPlainObject(eo)
-						}
-						vm.throwException(excVal)
+						vm.ThrowTypeError(err.Error())
 						return InterpretRuntimeError, Undefined
 					}
 					success = result.IsTruthy()
+
+					// ECMAScript 10.5.10 invariant: can't delete non-configurable property
+					if success {
+						if targetObj := proxy.target.AsPlainObject(); targetObj != nil {
+							if _, _, _, c, found := targetObj.GetOwnDescriptor(propName); found && !c {
+								vm.ThrowTypeError("'deleteProperty' on proxy: trap returned truish for property '" + propName + "' which is non-configurable in the proxy target")
+								return InterpretRuntimeError, Undefined
+							}
+						}
+					}
 				} else {
 					// No delete trap, fallback to target
 					if proxy.target.IsObject() {
@@ -18022,6 +18041,103 @@ func (vm *VM) createTypeError(message string) Value {
 }
 
 // ThrowTypeError creates and throws a proper TypeError instance
+// proxyHasPropertyFallback implements [[HasProperty]] fallback for proxy targets
+// when no 'has' trap is defined, handling recursive proxy targets.
+func (vm *VM) proxyHasPropertyFallback(target Value, propKey string) bool {
+	switch target.Type() {
+	case TypeProxy:
+		proxy := target.AsProxy()
+		if proxy.Revoked {
+			return false
+		}
+		// Check if the proxy's handler has a 'has' trap
+		if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
+			if hasTrap.IsCallable() {
+				trapArgs := []Value{proxy.target, NewString(propKey)}
+				result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+				if err != nil {
+					return false
+				}
+				return !result.IsFalsey()
+			}
+			return false
+		}
+		// Recursively check the nested proxy's target
+		return vm.proxyHasPropertyFallback(proxy.target, propKey)
+	case TypeObject:
+		return target.AsPlainObject().Has(propKey)
+	case TypeDictObject:
+		return target.AsDictObject().Has(propKey)
+	case TypeArray:
+		arrayObj := target.AsArray()
+		if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
+			return index < arrayObj.Length()
+		}
+		if propKey == "length" {
+			return true
+		}
+		if _, ok := arrayObj.GetOwn(propKey); ok {
+			return true
+		}
+		if vm.ArrayPrototype.Type() == TypeObject {
+			return vm.ArrayPrototype.AsPlainObject().Has(propKey)
+		}
+		return false
+	case TypeRegExp:
+		if propKey == "lastIndex" {
+			return true
+		}
+		regexObj := target.AsRegExpObject()
+		if regexObj != nil && regexObj.Properties != nil {
+			if _, ok := regexObj.Properties.GetOwn(propKey); ok {
+				return true
+			}
+		}
+		if vm.RegExpPrototype.Type() == TypeObject {
+			return vm.RegExpPrototype.AsPlainObject().Has(propKey)
+		}
+		return false
+	case TypeFunction:
+		fn := target.AsFunction()
+		if propKey == "name" || propKey == "length" || propKey == "prototype" {
+			return true
+		}
+		if fn.Properties != nil {
+			if _, ok := fn.Properties.GetOwn(propKey); ok {
+				return true
+			}
+		}
+		if vm.FunctionPrototype.Type() == TypeObject {
+			return vm.FunctionPrototype.AsPlainObject().Has(propKey)
+		}
+		return false
+	case TypeClosure:
+		cl := target.AsClosure()
+		if propKey == "name" || propKey == "length" {
+			return true
+		}
+		if propKey == "prototype" && !cl.Fn.IsArrowFunction {
+			return true
+		}
+		if cl.Properties != nil {
+			if _, ok := cl.Properties.GetOwn(propKey); ok {
+				return true
+			}
+		}
+		if cl.Fn.Properties != nil {
+			if _, ok := cl.Fn.Properties.GetOwn(propKey); ok {
+				return true
+			}
+		}
+		if vm.FunctionPrototype.Type() == TypeObject {
+			return vm.FunctionPrototype.AsPlainObject().Has(propKey)
+		}
+		return false
+	default:
+		return false
+	}
+}
+
 func (vm *VM) ThrowTypeError(message string) {
 	// Per ECMAScript spec, the TypeError should come from the realm of the
 	// running execution context's function. Check the current frame's HomeRealm.
