@@ -675,9 +675,13 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			case "length":
 				return NumberValue(float64(fn.Length)), nil
 			}
-			// Check Function.prototype (which is a NativeFunctionWithProps)
-			if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
-				nfp := vm.FunctionPrototype.AsNativeFunctionWithProps()
+			// Check Function.prototype - use function's own realm if available (cross-realm)
+			funcProto := vm.FunctionPrototype
+			if fn.HomeRealm != nil && fn.HomeRealm != vm.currentRealm {
+				funcProto = fn.HomeRealm.FunctionPrototype
+			}
+			if funcProto.Type() == TypeNativeFunctionWithProps {
+				nfp := funcProto.AsNativeFunctionWithProps()
 				if nfp != nil && nfp.Properties != nil {
 					// Check for accessor first
 					if getter, _, _, _, ok := nfp.Properties.GetOwnAccessor(propName); ok {
@@ -1324,14 +1328,17 @@ func (vm *VM) ConstructWithNewTarget(constructor Value, args []Value, newTarget 
 			return Undefined, fmt.Errorf("%s is not a constructor", nf.Name)
 		}
 		// For native constructors, call directly - they handle creating the object
-		// Set currentNewTarget so native constructors can use GetPrototypeFromConstructor
+		// Set currentNewTarget and inConstructorCall so native constructors can detect constructor calls
 		prevThis := vm.currentThis
 		prevNewTarget := vm.currentNewTarget
+		prevInConstructorCall := vm.inConstructorCall
 		vm.currentThis = Undefined
 		vm.currentNewTarget = newTarget
+		vm.inConstructorCall = true
 		defer func() {
 			vm.currentThis = prevThis
 			vm.currentNewTarget = prevNewTarget
+			vm.inConstructorCall = prevInConstructorCall
 		}()
 		return nf.Fn(args)
 
@@ -1340,14 +1347,17 @@ func (vm *VM) ConstructWithNewTarget(constructor Value, args []Value, newTarget 
 		if !nfp.IsConstructor {
 			return Undefined, fmt.Errorf("%s is not a constructor", nfp.Name)
 		}
-		// Set currentNewTarget so native constructors can use GetPrototypeFromConstructor
+		// Set currentNewTarget and inConstructorCall so native constructors can detect constructor calls
 		prevThis := vm.currentThis
 		prevNewTarget := vm.currentNewTarget
+		prevInConstructorCall := vm.inConstructorCall
 		vm.currentThis = Undefined
 		vm.currentNewTarget = newTarget
+		vm.inConstructorCall = true
 		defer func() {
 			vm.currentThis = prevThis
 			vm.currentNewTarget = prevNewTarget
+			vm.inConstructorCall = prevInConstructorCall
 		}()
 		return nfp.Fn(args)
 

@@ -948,6 +948,20 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewString(t.Format("Mon Jan 02 2006 15:04:05 GMT-0700 (MST)")), nil
 		}
 
+		// Per ECMAScript 21.4.2.1 step 4:
+		// Let O be ? OrdinaryCreateFromConstructor(NewTarget, "%Date.prototype%", ...)
+		// Determine the prototype to use (may differ from dateProto for cross-realm construction)
+		instanceProto := vm.NewValueFromPlainObject(dateProto)
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			candidate, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%DatePrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
+			if candidate.IsObject() {
+				instanceProto = candidate
+			}
+		}
+
 		// When called as constructor with 'new', create Date object
 		var timestamp float64
 
@@ -1028,7 +1042,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Create Date object with timestamp stored as a property
-		dateObj := vm.NewObject(vm.NewValueFromPlainObject(dateProto))
+		dateObj := vm.NewObject(instanceProto)
 		dateObj.AsPlainObject().SetOwnNonEnumerable("__timestamp__", vm.NumberValue(timestamp))
 
 		return dateObj, nil
@@ -1036,6 +1050,9 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Add prototype property
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(dateProto))
+
+	// Store Date prototype on VM for cross-realm support (GetPrototypeFromConstructor)
+	vmInstance.DatePrototype = vm.NewValueFromPlainObject(dateProto)
 
 	// Add static methods
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("now", vm.NewNativeFunction(0, false, "now", func(args []vm.Value) (vm.Value, error) {

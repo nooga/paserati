@@ -391,6 +391,29 @@ func (vm *VM) NewTypeError(message string) error {
 	return vm.newErrorHelper("TypeError", message)
 }
 
+// NewTypeErrorInRealm constructs a TypeError from a specific realm's TypeError constructor.
+// Per ECMAScript, built-in functions throw errors from their own realm (§10.3.1 step 5-6).
+func (vm *VM) NewTypeErrorInRealm(realm *Realm, message string) error {
+	if realm == nil || realm == vm.currentRealm {
+		return vm.NewTypeError(message)
+	}
+	return vm.newErrorHelperInRealm(realm, "TypeError", message)
+}
+
+// newErrorHelperInRealm constructs an error exception using a constructor from the specified realm.
+func (vm *VM) newErrorHelperInRealm(realm *Realm, name string, message string) error {
+	ctor, ok := realm.GetGlobal(name)
+	if ok && ctor != Undefined {
+		prevNewTarget := vm.currentNewTarget
+		vm.currentNewTarget = Undefined
+		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
+		vm.currentNewTarget = prevNewTarget
+		return exceptionError{exception: errObj}
+	}
+	// Fallback to current realm
+	return vm.newErrorHelper(name, message)
+}
+
 // NewReferenceError constructs a ReferenceError exception error for builtin helpers to return
 func (vm *VM) NewReferenceError(message string) error {
 	return vm.newErrorHelper("ReferenceError", message)

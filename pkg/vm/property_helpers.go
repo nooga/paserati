@@ -336,8 +336,13 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 
 	// Check function prototype methods using the VM's FunctionPrototype
 	// and walk the prototype chain (Function.prototype -> Object.prototype)
-	if vm.FunctionPrototype.Type() == TypeObject {
-		funcProto := vm.FunctionPrototype.AsPlainObject()
+	// For cross-realm functions, use their home realm's FunctionPrototype
+	funcPrototype := vm.FunctionPrototype
+	if fn != nil && fn.HomeRealm != nil && fn.HomeRealm != vm.currentRealm {
+		funcPrototype = fn.HomeRealm.FunctionPrototype
+	}
+	if funcPrototype.Type() == TypeObject {
+		funcProto := funcPrototype.AsPlainObject()
 		if method, exists := funcProto.GetOwn(propName); exists {
 			UpdatePrototypeStats("function_proto", 1)
 			// Always return the raw method. The VM's OpCallMethod path binds 'this' correctly.
@@ -356,9 +361,9 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 				break
 			}
 		}
-	} else if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
+	} else if funcPrototype.Type() == TypeNativeFunctionWithProps {
 		// Function.prototype is a callable NativeFunctionWithProps
-		funcProtoObj := vm.FunctionPrototype.AsNativeFunctionWithProps()
+		funcProtoObj := funcPrototype.AsNativeFunctionWithProps()
 		// Check for accessor properties first (e.g., caller, arguments throwing accessors)
 		if getter, _, _, _, exists := funcProtoObj.Properties.GetOwnAccessor(propName); exists {
 			if getter.Type() != TypeUndefined {

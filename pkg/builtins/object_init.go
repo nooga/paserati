@@ -918,7 +918,20 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	objectProto.SetOwnNonEnumerable("__lookupSetter__", lookupSetterFunc)
 
 	// Create Object constructor (length=1 per spec)
+	// objectCtorRef is used for the "nor the active function" check in step 1 of 20.1.1.1
+	var objectCtorRef vm.Value
 	objectCtor := vm.NewNativeFunction(1, true, "Object", func(args []vm.Value) (vm.Value, error) {
+		// Per ECMAScript 20.1.1.1 step 1:
+		// If NewTarget is neither undefined nor the active function,
+		// return OrdinaryCreateFromConstructor(NewTarget, "%Object.prototype%")
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() && !newTarget.StrictlyEquals(objectCtorRef) {
+			proto, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
+			return vm.NewObject(proto), nil
+		}
+
 		if len(args) == 0 {
 			return vm.NewObject(vm.NewValueFromPlainObject(objectProto)), nil
 		}
@@ -1183,6 +1196,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		objectCtor = ctorWithProps
 	}
+
+	// Set objectCtorRef so the constructor's closure can check "nor the active function"
+	objectCtorRef = objectCtor
 
 	// Set constructor property on prototype
 	objectProto.SetOwnNonEnumerable("constructor", objectCtor)

@@ -63,16 +63,19 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set prototype chain: Function.prototype.[[Prototype]] = Object.prototype
 	functionProtoObj.Properties.SetPrototype(ctx.ObjectPrototype)
 
+	// Capture home realm for cross-realm error throwing (ECMAScript §10.3.1 step 5-6)
+	homeRealm := vmInstance.CurrentRealm()
+
 	// Add prototype methods
 	// Function.prototype.call
 	callImpl := func(args []vm.Value) (vm.Value, error) {
-		return functionPrototypeCallImpl(vmInstance, args)
+		return functionPrototypeCallImpl(vmInstance, homeRealm, args)
 	}
 	functionProtoObj.Properties.SetOwnNonEnumerable("call", vm.NewNativeFunction(1, true, "call", callImpl))
 
 	// Function.prototype.apply
 	applyImpl := func(args []vm.Value) (vm.Value, error) {
-		return functionPrototypeApplyImpl(vmInstance, args)
+		return functionPrototypeApplyImpl(vmInstance, homeRealm, args)
 	}
 	functionProtoObj.Properties.SetOwnNonEnumerable("apply", vm.NewNativeFunction(2, false, "apply", applyImpl))
 
@@ -178,12 +181,12 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 // Implementation methods
 
-func functionPrototypeCallImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+func functionPrototypeCallImpl(vmInstance *vm.VM, homeRealm *vm.Realm, args []vm.Value) (vm.Value, error) {
 	// Get 'this' function from VM context
 	thisFunction := vmInstance.GetThis()
 
 	if !thisFunction.IsCallable() {
-		return vm.Undefined, vmInstance.NewTypeError(thisFunction.TypeName() + " is not a function")
+		return vm.Undefined, vmInstance.NewTypeErrorInRealm(homeRealm, thisFunction.TypeName()+" is not a function")
 	}
 
 	// Extract thisArg and function arguments
@@ -199,12 +202,12 @@ func functionPrototypeCallImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, er
 	return vmInstance.Call(thisFunction, thisArg, functionArgs)
 }
 
-func functionPrototypeApplyImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+func functionPrototypeApplyImpl(vmInstance *vm.VM, homeRealm *vm.Realm, args []vm.Value) (vm.Value, error) {
 	// Get 'this' function from VM context
 	thisFunction := vmInstance.GetThis()
 
 	if !thisFunction.IsCallable() {
-		return vm.Undefined, vmInstance.NewTypeError(thisFunction.TypeName() + " is not a function")
+		return vm.Undefined, vmInstance.NewTypeErrorInRealm(homeRealm, thisFunction.TypeName()+" is not a function")
 	}
 
 	// Extract thisArg and arguments array
@@ -249,7 +252,7 @@ func functionPrototypeApplyImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			}
 		} else {
 			// Per spec: CreateListFromArrayLike throws TypeError if arg is not an object
-			return vm.Undefined, vmInstance.NewTypeError("CreateListFromArrayLike called on non-object")
+			return vm.Undefined, vmInstance.NewTypeErrorInRealm(homeRealm, "CreateListFromArrayLike called on non-object")
 		}
 	}
 
