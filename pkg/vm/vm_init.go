@@ -1305,94 +1305,9 @@ func (vm *VM) IsConstructor(val Value) bool {
 }
 
 // Construct calls a constructor function with the given arguments, similar to 'new Constructor(args)'
-// This creates a new object and calls the constructor with that object as 'this'
+// Per ECMAScript spec, Construct(F, args) defaults newTarget to F and delegates to [[Construct]].
 func (vm *VM) Construct(constructor Value, args []Value) (Value, error) {
-	if !constructor.IsCallable() {
-		return Undefined, fmt.Errorf("%s is not a constructor", constructor.TypeName())
-	}
-
-	switch constructor.Type() {
-	case TypeNativeFunction:
-		nf := constructor.AsNativeFunction()
-		if !nf.IsConstructor {
-			return Undefined, fmt.Errorf("%s is not a constructor", nf.Name)
-		}
-		// For native constructors, call directly - they handle creating the object
-		prevThis := vm.currentThis
-		vm.currentThis = Undefined // Native constructors typically create their own 'this'
-		defer func() { vm.currentThis = prevThis }()
-		return nf.Fn(args)
-
-	case TypeNativeFunctionWithProps:
-		nfp := constructor.AsNativeFunctionWithProps()
-		if !nfp.IsConstructor {
-			return Undefined, fmt.Errorf("%s is not a constructor", nfp.Name)
-		}
-		prevThis := vm.currentThis
-		vm.currentThis = Undefined
-		defer func() { vm.currentThis = prevThis }()
-		return nfp.Fn(args)
-
-	case TypeClosure, TypeFunction:
-		// For user-defined constructors, create a new object with the prototype
-		// and call the function with that object as 'this'
-		var fn *FunctionObject
-		if constructor.Type() == TypeClosure {
-			fn = constructor.AsClosure().Fn
-		} else {
-			fn = constructor.AsFunction()
-		}
-
-		// Check if constructable
-		if fn.IsArrowFunction || (fn.IsAsync && !fn.IsGenerator) {
-			return Undefined, fmt.Errorf("function is not a constructor")
-		}
-
-		// Create new object with constructor's prototype
-		// First ensure lazy prototype initialization, then validate per spec
-		prototype := fn.GetOrCreatePrototypeWithVM(vm)
-		// Per ECMAScript 9.1.14 GetPrototypeFromConstructor:
-		// If prototype is not an object, fall back to constructor's realm intrinsic
-		if !prototype.IsObject() {
-			var gpfcErr error
-			prototype, gpfcErr = vm.GetPrototypeFromConstructor(constructor, "%ObjectPrototype%")
-			if gpfcErr != nil {
-				return Undefined, gpfcErr
-			}
-		}
-		newObj := NewObject(prototype)
-
-		// Set constructor call flag so prepareCall allows class constructors
-		prevInConstructorCall := vm.inConstructorCall
-		vm.inConstructorCall = true
-
-		// Call the constructor with the new object as 'this'
-		result, err := vm.executeUserFunctionSafe(constructor, newObj, args)
-
-		// Restore previous state
-		vm.inConstructorCall = prevInConstructorCall
-		if err != nil {
-			return Undefined, err
-		}
-
-		// If the constructor returns an object, use that; otherwise use the new object
-		if result.IsObject() {
-			return result, nil
-		}
-		return newObj, nil
-
-	case TypeBoundFunction:
-		bf := constructor.AsBoundFunction()
-		// Combine partial args with call-time args
-		finalArgs := make([]Value, len(bf.PartialArgs)+len(args))
-		copy(finalArgs, bf.PartialArgs)
-		copy(finalArgs[len(bf.PartialArgs):], args)
-		// Bound functions ignore their boundThis when called as constructors
-		return vm.Construct(bf.OriginalFunction, finalArgs)
-
-	default:
-		return Undefined, fmt.Errorf("%s is not a constructor", constructor.TypeName())
-	}
+	return vm.ConstructWithNewTarget(constructor, args, constructor)
 }
 
 // ConstructWithNewTarget calls a constructor function with a custom new.target value
@@ -1517,7 +1432,11 @@ func (vm *VM) ConstructWithNewTarget(constructor Value, args []Value, newTarget 
 		finalArgs := make([]Value, len(bf.PartialArgs)+len(args))
 		copy(finalArgs, bf.PartialArgs)
 		copy(finalArgs[len(bf.PartialArgs):], args)
-		// Bound functions ignore their boundThis when called as constructors
+		// Per ECMAScript §10.4.1.2 step 5:
+		// If SameValue(F, newTarget) is true, let newTarget be target.
+		if constructor.StrictlyEquals(newTarget) {
+			newTarget = bf.OriginalFunction
+		}
 		return vm.ConstructWithNewTarget(bf.OriginalFunction, finalArgs, newTarget)
 
 	default:
