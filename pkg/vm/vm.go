@@ -634,6 +634,26 @@ func (vm *VM) GetPrototypeFromConstructor(constructor Value, intrinsicDefault st
 				proto = p
 			}
 		}
+	case TypeBoundFunction:
+		bf := constructor.AsBoundFunction()
+		if bf.Properties != nil {
+			// Check for accessor properties first (getters defined via Object.defineProperty)
+			if getter, _, _, _, exists := bf.Properties.GetOwnAccessor("prototype"); exists {
+				if getter.Type() != TypeUndefined {
+					res, err := vm.Call(getter, constructor, nil)
+					if err != nil {
+						// Per spec: "Let proto be ? Get(constructor, 'prototype')" - ? means propagate
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						}
+						return Undefined
+					}
+					proto = res
+				}
+			} else if p, ok := bf.Properties.GetOwn("prototype"); ok {
+				proto = p
+			}
+		}
 	}
 
 	// Step 4: If Type(proto) is Object, return proto
@@ -14216,6 +14236,15 @@ startExecution:
 				} else {
 					success = true
 				}
+			} else if obj.Type() == TypeBoundFunction {
+				// Delete from bound function's properties
+				bf := obj.AsBoundFunction()
+				if bf.Properties != nil && bf.Properties.HasOwn(propName) {
+					success = bf.Properties.DeleteOwn(propName)
+				} else {
+					// Property doesn't exist - delete returns true per ECMAScript spec
+					success = true
+				}
 			}
 			registers[destReg] = BooleanValue(success)
 
@@ -14448,6 +14477,14 @@ startExecution:
 					success = true
 				} else if nf.Properties != nil && nf.Properties.HasOwn(propName) {
 					success = nf.Properties.DeleteOwn(propName)
+				} else {
+					success = true
+				}
+			} else if obj.Type() == TypeBoundFunction {
+				bf := obj.AsBoundFunction()
+				propName := key.ToString()
+				if bf.Properties != nil && bf.Properties.HasOwn(propName) {
+					success = bf.Properties.DeleteOwn(propName)
 				} else {
 					success = true
 				}

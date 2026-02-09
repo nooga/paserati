@@ -402,6 +402,11 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		}
 		bf := objVal.AsBoundFunction()
 		if bf.Properties != nil {
+			// Check if property exists and is non-writable (e.g., "length", "name")
+			if _, w, _, _, found := bf.Properties.GetOwnDescriptor(propName); found && !w {
+				// Non-writable: silently fail in sloppy mode
+				return true, InterpretOK, *valueToSet
+			}
 			bf.Properties.SetOwn(propName, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet

@@ -298,8 +298,46 @@ func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, er
 		}
 	}
 
+	// Compute bound function length per ECMAScript spec:
+	// Let targetHasLength be ? HasOwnProperty(Target, "length").
+	// If targetHasLength is true, then let targetLen be ? Get(Target, "length").
+	// If targetLen is not a Number, set L to 0. Else set L to max(0, targetLen - argCount).
+	// Else set L to 0.
+	var originalLength int
+	switch originalFunc.Type() {
+	case vm.TypeFunction:
+		originalLength = originalFunc.AsFunction().Length
+	case vm.TypeClosure:
+		originalLength = originalFunc.AsClosure().Fn.Length
+	case vm.TypeNativeFunction:
+		originalLength = originalFunc.AsNativeFunction().Arity
+	case vm.TypeNativeFunctionWithProps:
+		originalLength = originalFunc.AsNativeFunctionWithProps().Arity
+	case vm.TypeAsyncNativeFunction:
+		originalLength = originalFunc.AsAsyncNativeFunction().Arity
+	case vm.TypeBoundFunction:
+		bf := originalFunc.AsBoundFunction()
+		if bf.Properties != nil {
+			if lv, ok := bf.Properties.GetOwn("length"); ok && lv.IsNumber() {
+				originalLength = int(lv.ToFloat())
+			}
+		}
+	}
+	boundLength := originalLength - len(partialArgs)
+	if boundLength < 0 {
+		boundLength = 0
+	}
+
 	// Create a bound function using the new BoundFunction type
 	result := vm.NewBoundFunction(originalFunc, boundThis, partialArgs, functionName)
+
+	// Per ECMAScript spec: set "length" and "name" as real own properties
+	// with {writable: false, enumerable: false, configurable: true}
+	bf := result.AsBoundFunction()
+	w, e, c := false, false, true
+	bf.Properties.DefineOwnProperty("length", vm.NumberValue(float64(boundLength)), &w, &e, &c)
+	bf.Properties.DefineOwnProperty("name", vm.NewString(functionName), &w, &e, &c)
+
 	return result, nil
 }
 

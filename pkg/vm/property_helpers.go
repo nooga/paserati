@@ -246,7 +246,15 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 			}
 			return NewString(nfp.Name), true
 		case TypeBoundFunction:
-			return NewString(objVal.AsBoundFunction().Name), true
+			// Bound functions: "name" is a real own property set at bind time.
+			// If it was deleted (configurable:true), fall through to prototype lookup.
+			bf := objVal.AsBoundFunction()
+			if bf.Properties != nil {
+				if v, ok := bf.Properties.GetOwn("name"); ok {
+					return v, true
+				}
+			}
+			// Deleted — fall through
 		}
 	}
 
@@ -284,35 +292,15 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 			}
 			return NumberValue(float64(nfp.Arity)), true
 		case TypeBoundFunction:
-			// Bound functions have reduced length by the number of bound arguments
+			// Bound functions: "length" is a real own property set at bind time.
+			// If it was deleted (configurable:true), fall through to prototype lookup.
 			bf := objVal.AsBoundFunction()
-			// Get the original function's length
-			var originalLength int
-			switch bf.OriginalFunction.Type() {
-			case TypeFunction:
-				originalLength = bf.OriginalFunction.AsFunction().Length
-			case TypeClosure:
-				originalLength = bf.OriginalFunction.AsClosure().Fn.Length
-			case TypeNativeFunction:
-				originalLength = bf.OriginalFunction.AsNativeFunction().Arity
-			case TypeNativeFunctionWithProps:
-				originalLength = bf.OriginalFunction.AsNativeFunctionWithProps().Arity
-			case TypeAsyncNativeFunction:
-				originalLength = bf.OriginalFunction.AsAsyncNativeFunction().Arity
-			case TypeBoundFunction:
-				// Recursively get the bound function's length
-				if length, ok := vm.handleCallableProperty(bf.OriginalFunction, "length"); ok {
-					if length.IsNumber() {
-						originalLength = int(length.ToFloat())
-					}
+			if bf.Properties != nil {
+				if v, ok := bf.Properties.GetOwn("length"); ok {
+					return v, true
 				}
 			}
-			// Subtract the number of partial arguments
-			boundLength := originalLength - len(bf.PartialArgs)
-			if boundLength < 0 {
-				boundLength = 0
-			}
-			return NumberValue(float64(boundLength)), true
+			// Deleted — fall through
 		}
 	}
 
@@ -977,28 +965,56 @@ func (vm *VM) resolvePropertyMeta(objVal Value, propName string, cache *PropInli
 		if pv.IsObject() {
 			current = pv.AsPlainObject()
 			depth++
-		} else if pv.Type() == TypeClosure {
-			// Functions can be prototypes - check their properties
-			closure := pv.AsClosure()
-			if closure.Properties != nil {
-				if _, exists := closure.Properties.GetOwn(propName); exists {
-					// Found on function prototype - return nil holder to signal non-cacheable
-					// The caller will use PlainObject.Get which handles function prototypes
-					return nil, -1, false, false
+		} else if pv.Type() == TypeClosure || pv.Type() == TypeFunction || pv.Type() == TypeNativeFunction || pv.Type() == TypeNativeFunctionWithProps {
+			// Functions can be prototypes - check their own properties
+			found := false
+			switch pv.Type() {
+			case TypeClosure:
+				closure := pv.AsClosure()
+				if closure.Properties != nil {
+					if _, exists := closure.Properties.GetOwn(propName); exists {
+						found = true
+					}
+				}
+				if !found && closure.Fn.Properties != nil {
+					if _, exists := closure.Fn.Properties.GetOwn(propName); exists {
+						found = true
+					}
+				}
+			case TypeFunction:
+				fn := pv.AsFunction()
+				if fn.Properties != nil {
+					if _, exists := fn.Properties.GetOwn(propName); exists {
+						found = true
+					}
+				}
+			case TypeNativeFunction:
+				nf := pv.AsNativeFunction()
+				if nf != nil && nf.Properties != nil {
+					if _, exists := nf.Properties.GetOwn(propName); exists {
+						found = true
+					}
+				}
+			case TypeNativeFunctionWithProps:
+				nfp := pv.AsNativeFunctionWithProps()
+				if _, exists := nfp.Properties.GetOwn(propName); exists {
+					found = true
 				}
 			}
-			if closure.Fn.Properties != nil {
-				if _, exists := closure.Fn.Properties.GetOwn(propName); exists {
-					return nil, -1, false, false
-				}
+			if found {
+				// Found on function prototype - return nil holder to signal non-cacheable
+				return nil, -1, false, false
 			}
-			break
-		} else if pv.Type() == TypeFunction {
-			fn := pv.AsFunction()
-			if fn.Properties != nil {
-				if _, exists := fn.Properties.GetOwn(propName); exists {
-					return nil, -1, false, false
-				}
+			// Continue to Function.prototype's properties (functions inherit from it)
+			if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
+				funcProtoPO := vm.FunctionPrototype.AsNativeFunctionWithProps().Properties
+				current = funcProtoPO
+				depth++
+				continue
+			} else if vm.FunctionPrototype.Type() == TypeObject {
+				current = vm.FunctionPrototype.AsPlainObject()
+				depth++
+				continue
 			}
 			break
 		} else {

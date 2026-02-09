@@ -264,10 +264,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			return vm.BooleanValue(false), nil
 		case vm.TypeBoundFunction:
-			// Bound functions have intrinsic own properties: name, length
-			if propName == "name" || propName == "length" {
-				return vm.BooleanValue(true), nil
-			}
+			// Bound functions: name/length are real own properties stored in Properties
+			// They can be deleted (configurable:true), so check Properties directly
 			bf := thisValue.AsBoundFunction()
 			if bf.Properties != nil {
 				_, hasOwn := bf.Properties.GetOwn(propName)
@@ -2899,7 +2897,8 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 
 	// Module Namespace Exotic Object [[DefineOwnProperty]] behavior (ECMAScript 10.4.6.7)
 	// Returns true if no change is requested, false otherwise
-	if plainObj := obj.AsPlainObject(); plainObj != nil && plainObj.IsModuleNamespace() {
+	if obj.Type() == vm.TypeObject {
+		if plainObj := obj.AsPlainObject(); plainObj != nil && plainObj.IsModuleNamespace() {
 		// Get current property descriptor
 		var currentDesc vm.Value
 		if keyIsSymbol {
@@ -2949,6 +2948,7 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 
 		// No changes requested or descriptor matches - return the object
 		return obj, nil
+	}
 	}
 
 	// Per ECMAScript 8.10.5 ToPropertyDescriptor step 1: If Type(Obj) is not Object, throw TypeError
@@ -3969,37 +3969,32 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		}
 	case vm.TypeBoundFunction:
 		bf := obj.AsBoundFunction()
-		if propName == "name" {
-			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			descriptor.SetOwn("value", vm.NewString(bf.Name))
-			descriptor.SetOwn("writable", vm.BooleanValue(false))
-			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
-			descriptor.SetOwn("configurable", vm.BooleanValue(true))
-			return vm.NewValueFromPlainObject(descriptor), nil
-		}
-		if propName == "length" {
-			// Bound functions have reduced length by the number of bound arguments
-			var originalLength int
-			switch bf.OriginalFunction.Type() {
-			case vm.TypeFunction:
-				originalLength = bf.OriginalFunction.AsFunction().Length
-			case vm.TypeClosure:
-				originalLength = bf.OriginalFunction.AsClosure().Fn.Length
-			case vm.TypeNativeFunction:
-				originalLength = bf.OriginalFunction.AsNativeFunction().Arity
-			case vm.TypeNativeFunctionWithProps:
-				originalLength = bf.OriginalFunction.AsNativeFunctionWithProps().Arity
+		// Bound function name/length are real own properties in bf.Properties
+		// They can be deleted (configurable:true) or redefined via Object.defineProperty
+		if bf.Properties != nil {
+			if propName == "name" || propName == "length" {
+				if val, ok := bf.Properties.GetOwn(propName); ok {
+					_, w, e, c, _ := bf.Properties.GetOwnDescriptor(propName)
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", val)
+					descriptor.SetOwn("writable", vm.BooleanValue(w))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				// Property was deleted — return undefined
+				return vm.Undefined, nil
 			}
-			boundLength := originalLength - len(bf.PartialArgs)
-			if boundLength < 0 {
-				boundLength = 0
+			// Other properties
+			if val, ok := bf.Properties.GetOwn(propName); ok {
+				_, w, e, c, _ := bf.Properties.GetOwnDescriptor(propName)
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				descriptor.SetOwn("value", val)
+				descriptor.SetOwn("writable", vm.BooleanValue(w))
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
 			}
-			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			descriptor.SetOwn("value", vm.NumberValue(float64(boundLength)))
-			descriptor.SetOwn("writable", vm.BooleanValue(false))
-			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
-			descriptor.SetOwn("configurable", vm.BooleanValue(true))
-			return vm.NewValueFromPlainObject(descriptor), nil
 		}
 	}
 
