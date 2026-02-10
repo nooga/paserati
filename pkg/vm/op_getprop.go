@@ -1890,31 +1890,10 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			}
 		}
 		// Walk Function.prototype chain
-		proto := vm.FunctionPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(key); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
-						if v, ok := proto2.GetOwnByKey(key); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
+		// Function.prototype is TypeNativeFunctionWithProps, so handle that type too
+		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
+			*dest = v
+			return true, InterpretOK, *dest
 		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
@@ -1932,31 +1911,46 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			}
 		}
 		// Walk Function.prototype chain
-		proto := vm.FunctionPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(key); ok {
+		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
+			*dest = v
+			return true, InterpretOK, *dest
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// NativeFunctionWithProps: check own symbol properties, then prototype chain
+	if base.Type() == TypeNativeFunctionWithProps {
+		nfp := base.AsNativeFunctionWithProps()
+		key := NewSymbolKey(symKey)
+		if nfp.Properties != nil {
+			if v, ok := nfp.Properties.GetOwnByKey(key); ok {
 				*dest = v
 				return true, InterpretOK, *dest
 			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
-						if v, ok := proto2.GetOwnByKey(key); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
+			// Walk prototype chain from Properties
+			if found, v := vm.lookupSymbolOnProtoChain(nfp.Properties.GetPrototype(), key); found {
+				*dest = v
+				return true, InterpretOK, *dest
 			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// BoundFunction: check own properties, then Function.prototype chain
+	if base.Type() == TypeBoundFunction {
+		bf := base.AsBoundFunction()
+		key := NewSymbolKey(symKey)
+		if bf.Properties != nil {
+			if v, ok := bf.Properties.GetOwnByKey(key); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+		}
+		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
+			*dest = v
+			return true, InterpretOK, *dest
 		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
@@ -1965,4 +1959,40 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 	// DictObject: no symbol identity support yet
 	*dest = Undefined
 	return true, InterpretOK, *dest
+}
+
+// lookupSymbolOnProtoChain walks a prototype chain starting from proto,
+// looking for a symbol-keyed property. Handles PlainObject, NativeFunctionWithProps,
+// and DictObject prototype types.
+func (vm *VM) lookupSymbolOnProtoChain(proto Value, key PropertyKey) (bool, Value) {
+	current := proto
+	for i := 0; i < 100; i++ { // safety limit
+		switch current.Type() {
+		case TypeObject:
+			po := current.AsPlainObject()
+			if v, ok := po.GetOwnByKey(key); ok {
+				return true, v
+			}
+			current = po.prototype
+		case TypeNativeFunctionWithProps:
+			nfp := current.AsNativeFunctionWithProps()
+			if nfp.Properties != nil {
+				if v, ok := nfp.Properties.GetOwnByKey(key); ok {
+					return true, v
+				}
+				current = nfp.Properties.GetPrototype()
+			} else {
+				return false, Undefined
+			}
+		case TypeDictObject:
+			dict := current.AsDictObject()
+			current = dict.GetPrototype()
+		default:
+			return false, Undefined
+		}
+		if current.typ == TypeNull || current.typ == TypeUndefined {
+			break
+		}
+	}
+	return false, Undefined
 }

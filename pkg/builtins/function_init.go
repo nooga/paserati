@@ -2,6 +2,8 @@ package builtins
 
 import (
 	"fmt"
+	"strings"
+	"unicode"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
@@ -91,12 +93,26 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 	functionProtoObj.Properties.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", toStringImpl))
 
+	// Function.prototype[Symbol.hasInstance] — ES2015 §19.2.3.6
+	// Implements OrdinaryHasInstance (ES 7.3.21)
+	hasInstanceImpl := func(args []vm.Value) (vm.Value, error) {
+		thisFunc := vmInstance.GetThis()
+		if len(args) == 0 {
+			return vm.False, nil
+		}
+		return functionHasInstanceImpl(vmInstance, thisFunc, args[0])
+	}
+	hasInstanceFn := vm.NewNativeFunction(1, false, "[Symbol.hasInstance]", hasInstanceImpl)
+	w, eHI, cHI := false, false, false
+	functionProtoObj.Properties.DefineOwnPropertyByKey(
+		vm.NewSymbolKey(vmInstance.SymbolHasInstance), hasInstanceFn, &w, &eHI, &cHI,
+	)
+
 	// Per ECMAScript spec, Function.prototype has "caller" and "arguments" as
 	// throwing accessor properties (non-enumerable, configurable).
 	// Accessing these on strict mode functions throws TypeError.
+	// Use a SINGLE %ThrowTypeError% function for all 4 accessor slots (spec identity requirement).
 	throwTypeErrorFn := func(args []vm.Value) (vm.Value, error) {
-		// Create a TypeError instance and return it as an ExceptionError
-		// so that it propagates correctly through vm.Call -> accessor getter path.
 		typeErrorCtor, exists := vmInstance.GetGlobal("TypeError")
 		if exists && typeErrorCtor != vm.Undefined {
 			errInstance, err := vmInstance.Call(typeErrorCtor, vm.Undefined, []vm.Value{vm.NewString("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")})
@@ -106,13 +122,10 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		return vm.Undefined, vmInstance.NewTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
 	}
-	callerGetter := vm.NewNativeFunction(0, false, "ThrowTypeError", throwTypeErrorFn)
-	callerSetter := vm.NewNativeFunction(1, false, "ThrowTypeError", throwTypeErrorFn)
-	argumentsGetter := vm.NewNativeFunction(0, false, "ThrowTypeError", throwTypeErrorFn)
-	argumentsSetter := vm.NewNativeFunction(1, false, "ThrowTypeError", throwTypeErrorFn)
+	thrower := vm.NewNativeFunction(0, false, "ThrowTypeError", throwTypeErrorFn)
 	e, c := false, true
-	functionProtoObj.Properties.DefineAccessorProperty("caller", callerGetter, true, callerSetter, true, &e, &c)
-	functionProtoObj.Properties.DefineAccessorProperty("arguments", argumentsGetter, true, argumentsSetter, true, &e, &c)
+	functionProtoObj.Properties.DefineAccessorProperty("caller", thrower, true, thrower, true, &e, &c)
+	functionProtoObj.Properties.DefineAccessorProperty("arguments", thrower, true, thrower, true, &e, &c)
 
 	// Create Function constructor (length=1 per spec)
 	// Capture the realm at initialization time so functions created by this constructor
@@ -348,55 +361,76 @@ func functionPrototypeToStringImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value
 	// Get 'this' function from VM context
 	thisFunction := vmInstance.GetThis()
 
+	// Per spec: throw TypeError if this is not callable.
+	// Callable proxies are handled in the switch below.
 	if !thisFunction.IsCallable() {
 		return vm.Undefined, vmInstance.NewTypeError(thisFunction.TypeName() + " is not a function")
 	}
 
 	// Return a string representation of the function
-	var name string
+	// Per NativeFunction syntax: "function" <space> [name] "(" ")" <space> "{" <space> "[native code]" <space> "}"
 	switch thisFunction.Type() {
 	case vm.TypeNativeFunction:
-		nf := thisFunction.AsNativeFunction()
-		name = nf.Name
-		if name == "" {
-			name = "anonymous"
-		}
-		return vm.NewString(fmt.Sprintf("function %s() { [native code] }", name)), nil
+		name := thisFunction.AsNativeFunction().Name
+		return vm.NewString(formatNativeFunctionString(name)), nil
 	case vm.TypeNativeFunctionWithProps:
-		nfp := thisFunction.AsNativeFunctionWithProps()
-		name = nfp.Name
-		if name == "" {
-			name = "anonymous"
-		}
-		return vm.NewString(fmt.Sprintf("function %s() { [native code] }", name)), nil
+		name := thisFunction.AsNativeFunctionWithProps().Name
+		return vm.NewString(formatNativeFunctionString(name)), nil
 	case vm.TypeFunction:
-		fn := thisFunction.AsFunction()
-		name = fn.Name
-		if name == "" {
-			name = "anonymous"
-		}
-		// Per NativeFunction syntax spec: function [name]() { [native code] }
-		return vm.NewString(fmt.Sprintf("function %s() { [native code] }", name)), nil
+		name := thisFunction.AsFunction().Name
+		return vm.NewString(formatNativeFunctionString(name)), nil
 	case vm.TypeClosure:
 		cl := thisFunction.AsClosure()
+		name := ""
 		if cl.Fn != nil {
 			name = cl.Fn.Name
 		}
-		if name == "" {
-			name = "anonymous"
-		}
-		// Per NativeFunction syntax spec: function [name]() { [native code] }
-		return vm.NewString(fmt.Sprintf("function %s() { [native code] }", name)), nil
+		return vm.NewString(formatNativeFunctionString(name)), nil
 	case vm.TypeBoundFunction:
-		bf := thisFunction.AsBoundFunction()
-		name = bf.Name
-		if name == "" {
-			name = "bound anonymous"
-		}
-		return vm.NewString(fmt.Sprintf("function %s() { [bound] }", name)), nil
+		// Per spec: bound functions use NativeFunction syntax with "function () { [native code] }"
+		return vm.NewString("function () { [native code] }"), nil
+	case vm.TypeProxy:
+		// Per spec: callable proxies use NativeFunction syntax
+		return vm.NewString("function () { [native code] }"), nil
 	default:
-		return vm.NewString("function() { [unknown] }"), nil
+		return vm.NewString("function () { [native code] }"), nil
 	}
+}
+
+// isValidFunctionToStringName checks if a name is valid for Function.prototype.toString output.
+// Private names (starting with #) and names containing special characters are not valid.
+func isValidFunctionToStringName(name string) bool {
+	if name == "" {
+		return false
+	}
+	// Private names start with #
+	if strings.HasPrefix(name, "#") {
+		return false
+	}
+	// Check for characters that are not valid in identifiers
+	for i, r := range name {
+		if i == 0 {
+			// First character must be letter, underscore, or dollar
+			if !unicode.IsLetter(r) && r != '_' && r != '$' {
+				return false
+			}
+		} else {
+			// Subsequent characters: letter, digit, underscore, dollar, or space (for "get x"/"set x")
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' && r != '$' && r != ' ' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// formatNativeFunctionString formats a function name for toString output.
+// Per spec: "function <name>() { [native code] }" or "function () { [native code] }" if name is invalid.
+func formatNativeFunctionString(name string) string {
+	if isValidFunctionToStringName(name) {
+		return fmt.Sprintf("function %s() { [native code] }", name)
+	}
+	return "function () { [native code] }"
 }
 
 func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Value, homeRealm *vm.Realm) (vm.Value, error) {
@@ -611,4 +645,98 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 	}
 
 	return functionValue, nil
+}
+
+// functionHasInstanceImpl implements OrdinaryHasInstance (ES 7.3.21)
+// Used by Function.prototype[Symbol.hasInstance]
+func functionHasInstanceImpl(vmInstance *vm.VM, thisFunc vm.Value, arg vm.Value) (vm.Value, error) {
+	// Step 1: If this is not callable, return false
+	if !thisFunc.IsCallable() {
+		return vm.False, nil
+	}
+
+	// Step 2: If this is a BoundFunction, recurse with target
+	if thisFunc.Type() == vm.TypeBoundFunction {
+		bf := thisFunc.AsBoundFunction()
+		return functionHasInstanceImpl(vmInstance, bf.OriginalFunction, arg)
+	}
+
+	// Step 3: If arg is not an object, return false
+	if !arg.IsObject() && !arg.IsCallable() && arg.Type() != vm.TypeArray {
+		return vm.False, nil
+	}
+
+	// Step 4: Let P be ? Get(F, "prototype").
+	// For TypeFunction/TypeClosure, use GetOrCreatePrototypeWithVM to ensure lazy creation
+	var proto vm.Value
+	switch thisFunc.Type() {
+	case vm.TypeFunction:
+		proto = thisFunc.AsFunction().GetOrCreatePrototypeWithVM(vmInstance)
+	case vm.TypeClosure:
+		proto = thisFunc.AsClosure().GetPrototypeWithVM(vmInstance)
+	default:
+		var err error
+		proto, err = vmInstance.GetProperty(thisFunc, "prototype")
+		if err != nil {
+			return vm.Undefined, err
+		}
+	}
+
+	// Step 5: If Type(P) is not Object, throw a TypeError exception.
+	if !proto.IsObject() && !proto.IsCallable() && proto.Type() != vm.TypeArray {
+		return vm.Undefined, vmInstance.NewTypeError("Function has non-object prototype '" + proto.TypeName() + "' in instanceof check")
+	}
+
+	// Step 6: Walk arg's prototype chain, matching the pattern used by OpInstanceof
+	current := getPrototypeOfValue(vmInstance, arg)
+	for i := 0; i < 1000; i++ { // safety limit
+		if current.Type() == vm.TypeNull || current.IsUndefined() {
+			return vm.False, nil
+		}
+		if current.Equals(proto) {
+			return vm.True, nil
+		}
+		// Walk up prototype chain
+		switch current.Type() {
+		case vm.TypeObject:
+			current = current.AsPlainObject().GetPrototype()
+		case vm.TypeDictObject:
+			current = current.AsDictObject().GetPrototype()
+		case vm.TypeNativeFunctionWithProps:
+			current = current.AsNativeFunctionWithProps().Properties.GetPrototype()
+		default:
+			return vm.False, nil
+		}
+	}
+	return vm.False, nil
+}
+
+// getPrototypeOfValue returns the [[Prototype]] of a value, similar to OpInstanceof's logic.
+func getPrototypeOfValue(vmInstance *vm.VM, val vm.Value) vm.Value {
+	switch val.Type() {
+	case vm.TypeObject:
+		return val.AsPlainObject().GetPrototype()
+	case vm.TypeDictObject:
+		return val.AsDictObject().GetPrototype()
+	case vm.TypeArray:
+		return vmInstance.ArrayPrototype
+	case vm.TypeRegExp:
+		return vmInstance.RegExpPrototype
+	case vm.TypeMap:
+		return vmInstance.MapPrototype
+	case vm.TypeSet:
+		return vmInstance.SetPrototype
+	case vm.TypeArguments:
+		return vmInstance.ObjectPrototype
+	case vm.TypePromise:
+		return vmInstance.PromisePrototype
+	case vm.TypeFunction:
+		return vmInstance.FunctionPrototype
+	case vm.TypeClosure:
+		return vmInstance.FunctionPrototype
+	case vm.TypeNativeFunctionWithProps:
+		return val.AsNativeFunctionWithProps().Properties.GetPrototype()
+	default:
+		return vm.Undefined
+	}
 }

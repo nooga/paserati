@@ -119,6 +119,29 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vm.Undefined, err
 				}
 				return vm.BooleanValue(!desc.IsUndefined()), nil
+			case vm.TypeNativeFunctionWithProps:
+				nfp := thisValue.AsNativeFunctionWithProps()
+				if nfp.Properties != nil {
+					return vm.BooleanValue(nfp.Properties.HasOwnByKey(key)), nil
+				}
+				return vm.BooleanValue(false), nil
+			case vm.TypeFunction:
+				fn := thisValue.AsFunction()
+				if fn.Properties != nil {
+					return vm.BooleanValue(fn.Properties.HasOwnByKey(key)), nil
+				}
+				return vm.BooleanValue(false), nil
+			case vm.TypeClosure:
+				cl := thisValue.AsClosure()
+				if cl.Properties != nil {
+					if cl.Properties.HasOwnByKey(key) {
+						return vm.BooleanValue(true), nil
+					}
+				}
+				if cl.Fn != nil && cl.Fn.Properties != nil {
+					return vm.BooleanValue(cl.Fn.Properties.HasOwnByKey(key)), nil
+				}
+				return vm.BooleanValue(false), nil
 			default:
 				return vm.BooleanValue(false), nil
 			}
@@ -168,21 +191,10 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if propName == "length" && !fn.DeletedLength {
 				return vm.BooleanValue(true), nil
 			}
-			// prototype is only an own property for non-arrow functions that are NOT methods
-			// Arrow functions and methods don't have prototype
-			// We check if it exists in Properties (created lazily or explicitly)
-			// or if the function is a class constructor (always has prototype)
+			// Per ECMAScript spec, all non-arrow functions have "prototype" as an own property.
+			// It is created lazily but should always be reported as present.
 			if propName == "prototype" && !fn.IsArrowFunction {
-				// Class constructors always have prototype
-				if fn.IsClassConstructor {
-					return vm.BooleanValue(true), nil
-				}
-				// For other functions, only report prototype if it's been accessed/created
-				if fn.Properties != nil {
-					if _, hasOwn := fn.Properties.GetOwn("prototype"); hasOwn {
-						return vm.BooleanValue(true), nil
-					}
-				}
+				return vm.BooleanValue(true), nil
 			}
 			// Check custom properties
 			if fn.Properties != nil {
@@ -2475,6 +2487,27 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 
 		if !hasPrototype {
 			arrObj.Append(vm.NewString("prototype"))
+		}
+	case vm.TypeNativeFunctionWithProps:
+		nfp := obj.AsNativeFunctionWithProps()
+		propNames := nfp.Properties.OwnPropertyNames()
+
+		// Add integer indices first
+		for _, k := range propNames {
+			if isIntegerIndex(k) {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
+
+		// Then standard function properties
+		arrObj.Append(vm.NewString("length"))
+		arrObj.Append(vm.NewString("name"))
+
+		// Add remaining string properties excluding builtins and integer indices
+		for _, k := range propNames {
+			if k != "length" && k != "name" && !isIntegerIndex(k) {
+				arrObj.Append(vm.NewString(k))
+			}
 		}
 	default:
 		// Non-object types return empty array

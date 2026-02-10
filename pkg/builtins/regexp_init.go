@@ -1270,7 +1270,17 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.RegExpPrototype = vm.NewValueFromPlainObject(regexpProto)
 
 	// Set up prototype relationship
-	regexpCtor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(regexpProto))
+	regexpCtorProps := regexpCtor.AsNativeFunctionWithProps()
+	regexpCtorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(regexpProto))
+
+	// Add get [Symbol.species] accessor — returns `this` (ES 21.2.4.2)
+	speciesGetter := vm.NewNativeFunction(0, false, "get [Symbol.species]", func(args []vm.Value) (vm.Value, error) {
+		return vmInstance.GetThis(), nil
+	})
+	speciesE, speciesC := false, true
+	regexpCtorProps.Properties.DefineAccessorPropertyByKey(
+		vm.NewSymbolKey(vmInstance.SymbolSpecies), speciesGetter, true, vm.Undefined, false, &speciesE, &speciesC,
+	)
 
 	return ctx.DefineGlobal("RegExp", regexpCtor)
 }
