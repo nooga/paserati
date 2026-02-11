@@ -688,7 +688,10 @@ func functionHasInstanceImpl(vmInstance *vm.VM, thisFunc vm.Value, arg vm.Value)
 	}
 
 	// Step 6: Walk arg's prototype chain, matching the pattern used by OpInstanceof
-	current := getPrototypeOfValue(vmInstance, arg)
+	current, err := getPrototypeOfValue(vmInstance, arg)
+	if err != nil {
+		return vm.Undefined, err
+	}
 	for i := 0; i < 1000; i++ { // safety limit
 		if current.Type() == vm.TypeNull || current.IsUndefined() {
 			return vm.False, nil
@@ -697,46 +700,67 @@ func functionHasInstanceImpl(vmInstance *vm.VM, thisFunc vm.Value, arg vm.Value)
 			return vm.True, nil
 		}
 		// Walk up prototype chain
-		switch current.Type() {
-		case vm.TypeObject:
-			current = current.AsPlainObject().GetPrototype()
-		case vm.TypeDictObject:
-			current = current.AsDictObject().GetPrototype()
-		case vm.TypeNativeFunctionWithProps:
-			current = current.AsNativeFunctionWithProps().Properties.GetPrototype()
-		default:
-			return vm.False, nil
+		current, err = getPrototypeOfValue(vmInstance, current)
+		if err != nil {
+			return vm.Undefined, err
 		}
 	}
 	return vm.False, nil
 }
 
 // getPrototypeOfValue returns the [[Prototype]] of a value, similar to OpInstanceof's logic.
-func getPrototypeOfValue(vmInstance *vm.VM, val vm.Value) vm.Value {
+// For Proxy objects, it calls the getPrototypeOf trap which may throw.
+func getPrototypeOfValue(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
 	switch val.Type() {
 	case vm.TypeObject:
-		return val.AsPlainObject().GetPrototype()
+		return val.AsPlainObject().GetPrototype(), nil
 	case vm.TypeDictObject:
-		return val.AsDictObject().GetPrototype()
+		return val.AsDictObject().GetPrototype(), nil
 	case vm.TypeArray:
-		return vmInstance.ArrayPrototype
+		return vmInstance.ArrayPrototype, nil
 	case vm.TypeRegExp:
-		return vmInstance.RegExpPrototype
+		return vmInstance.RegExpPrototype, nil
 	case vm.TypeMap:
-		return vmInstance.MapPrototype
+		return vmInstance.MapPrototype, nil
 	case vm.TypeSet:
-		return vmInstance.SetPrototype
+		return vmInstance.SetPrototype, nil
 	case vm.TypeArguments:
-		return vmInstance.ObjectPrototype
+		return vmInstance.ObjectPrototype, nil
 	case vm.TypePromise:
-		return vmInstance.PromisePrototype
+		return vmInstance.PromisePrototype, nil
 	case vm.TypeFunction:
-		return vmInstance.FunctionPrototype
+		return vmInstance.FunctionPrototype, nil
 	case vm.TypeClosure:
-		return vmInstance.FunctionPrototype
+		return vmInstance.FunctionPrototype, nil
 	case vm.TypeNativeFunctionWithProps:
-		return val.AsNativeFunctionWithProps().Properties.GetPrototype()
+		return val.AsNativeFunctionWithProps().Properties.GetPrototype(), nil
+	case vm.TypeProxy:
+		proxy := val.AsProxy()
+		if proxy.Revoked {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot perform 'getPrototypeOf' on a proxy that has been revoked")
+		}
+		handler := proxy.Handler()
+		var trap vm.Value
+		var hasTrap bool
+		switch handler.Type() {
+		case vm.TypeObject:
+			trap, hasTrap = handler.AsPlainObject().GetOwn("getPrototypeOf")
+		case vm.TypeDictObject:
+			trap, hasTrap = handler.AsDictObject().GetOwn("getPrototypeOf")
+		}
+		if hasTrap && trap.IsCallable() {
+			result, err := vmInstance.Call(trap, handler, []vm.Value{proxy.Target()})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if result.Type() != vm.TypeNull && !result.IsObject() {
+				return vm.Undefined, vmInstance.NewTypeError("'getPrototypeOf' on proxy: trap returned neither object nor null")
+			}
+			return result, nil
+		}
+		// No trap — fall through to target's prototype
+		return getPrototypeOfValue(vmInstance, proxy.Target())
 	default:
-		return vm.Undefined
+		return vm.Undefined, nil
 	}
 }

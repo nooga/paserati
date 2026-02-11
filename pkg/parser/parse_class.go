@@ -329,6 +329,16 @@ func (p *Parser) parseClassBody() *ClassBody {
 				}
 				methods = append(methods, method)
 			}
+		} else if isAsync && p.curTokenIs(lexer.LBRACKET) {
+			// async [expr]() { ... } — async computed method
+			result := p.parseComputedClassMemberAsync(isStatic, isReadonly, isPublic, isPrivate, isProtected, isAbstract, isOverride, true)
+			if result != nil {
+				if sig, ok := result.(*MethodSignature); ok {
+					methodSigs = append(methodSigs, sig)
+				} else if method, ok := result.(*MethodDefinition); ok {
+					methods = append(methods, method)
+				}
+			}
 		} else if isAsync {
 			// async method (without asterisk): async methodName() { ... }
 			method := p.parseAsyncMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
@@ -1078,6 +1088,33 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 		// It's a computed property: [expr]: type = value or [expr] = value
 		return p.parseComputedProperty(bracketToken, keyExpr, isStatic, isReadonly, isPublic, isPrivate, isProtected)
 	}
+}
+
+// parseComputedClassMemberAsync is like parseComputedClassMember but passes isAsync through.
+func (p *Parser) parseComputedClassMemberAsync(isStatic, isReadonly, isPublic, isPrivate, isProtected, isAbstract, isOverride, isAsync bool) interface{} {
+	if !p.curTokenIs(lexer.LBRACKET) {
+		p.addError(p.curToken, "internal error: parseComputedClassMemberAsync called without '['")
+		return nil
+	}
+
+	bracketToken := p.curToken
+
+	p.nextToken() // move past '['
+	keyExpr := p.parseExpression(COMMA)
+	if keyExpr == nil {
+		p.addError(p.curToken, "expected expression inside computed property brackets")
+		return nil
+	}
+
+	if !p.expectPeek(lexer.RBRACKET) {
+		return nil
+	}
+
+	if p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) {
+		return p.parseComputedMethod(bracketToken, keyExpr, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, isAsync)
+	}
+	// Computed property (not method) — fall back to non-async handling
+	return p.parseComputedProperty(bracketToken, keyExpr, isStatic, isReadonly, isPublic, isPrivate, isProtected)
 }
 
 // parseComputedMethod parses a computed method in a class
