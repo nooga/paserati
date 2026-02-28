@@ -80,6 +80,59 @@ func (i *TypedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		typedArrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), valuesMethod, &w, &e, &c)
 	}
 
+	// Per ECMAScript spec, buffer/byteLength/byteOffset/length accessors live on %TypedArray%.prototype
+	// (NOT on each subtype prototype). Property attributes: { [[Enumerable]]: false, [[Configurable]]: true }
+	{
+		eFalse, cTrue := false, true
+
+		// buffer getter
+		bufferGetter := vm.NewNativeFunction(0, false, "get buffer", func(args []vm.Value) (vm.Value, error) {
+			thisArray := vmInstance.GetThis()
+			ta := thisArray.AsTypedArray()
+			if ta == nil {
+				return vm.Undefined, vmInstance.NewTypeError("get TypedArray.prototype.buffer called on incompatible receiver")
+			}
+			if ta.IsSharedBuffer() {
+				return vm.NewSharedArrayBufferFromObject(ta.GetSharedBuffer()), nil
+			}
+			return vm.NewArrayBufferFromObject(ta.GetBuffer()), nil
+		})
+		typedArrayProto.DefineAccessorProperty("buffer", bufferGetter, true, vm.Undefined, false, &eFalse, &cTrue)
+
+		// byteLength getter
+		byteLengthGetter := vm.NewNativeFunction(0, false, "get byteLength", func(args []vm.Value) (vm.Value, error) {
+			thisArray := vmInstance.GetThis()
+			ta := thisArray.AsTypedArray()
+			if ta == nil {
+				return vm.Undefined, vmInstance.NewTypeError("get TypedArray.prototype.byteLength called on incompatible receiver")
+			}
+			return vm.Number(float64(ta.GetByteLength())), nil
+		})
+		typedArrayProto.DefineAccessorProperty("byteLength", byteLengthGetter, true, vm.Undefined, false, &eFalse, &cTrue)
+
+		// byteOffset getter
+		byteOffsetGetter := vm.NewNativeFunction(0, false, "get byteOffset", func(args []vm.Value) (vm.Value, error) {
+			thisArray := vmInstance.GetThis()
+			ta := thisArray.AsTypedArray()
+			if ta == nil {
+				return vm.Undefined, vmInstance.NewTypeError("get TypedArray.prototype.byteOffset called on incompatible receiver")
+			}
+			return vm.Number(float64(ta.GetByteOffset())), nil
+		})
+		typedArrayProto.DefineAccessorProperty("byteOffset", byteOffsetGetter, true, vm.Undefined, false, &eFalse, &cTrue)
+
+		// length getter
+		lengthGetter := vm.NewNativeFunction(0, false, "get length", func(args []vm.Value) (vm.Value, error) {
+			thisArray := vmInstance.GetThis()
+			ta := thisArray.AsTypedArray()
+			if ta == nil {
+				return vm.Undefined, vmInstance.NewTypeError("get TypedArray.prototype.length called on incompatible receiver")
+			}
+			return vm.Number(float64(ta.GetLength())), nil
+		})
+		typedArrayProto.DefineAccessorProperty("length", lengthGetter, true, vm.Undefined, false, &eFalse, &cTrue)
+	}
+
 	// Add Symbol.toStringTag getter to TypedArray.prototype
 	// Per ECMAScript spec, this is a getter that returns the TypedArray's name (e.g., "Float64Array")
 	// Property descriptor: { [[Get]]: getter, [[Enumerable]]: false, [[Configurable]]: true }

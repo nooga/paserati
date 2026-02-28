@@ -152,6 +152,17 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Symbol.prototype.constructor
 	symbolProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 
+	// Add Symbol.prototype[@@toStringTag] = "Symbol" (writable: false, enumerable: false, configurable: true)
+	// Per ECMAScript 20.4.3.6
+	if vmInstance.SymbolToStringTag.Type() == vm.TypeSymbol {
+		wFalse, eFalse, cTrue := false, false, true
+		symbolProto.DefineOwnPropertyByKey(
+			vm.NewSymbolKey(vmInstance.SymbolToStringTag),
+			vm.NewString("Symbol"),
+			&wFalse, &eFalse, &cTrue,
+		)
+	}
+
 	// Initialize well-known symbols - reuse existing ones if already created
 	// This ensures symbols are true singletons across VM resets
 	if vmInstance.SymbolIterator.Type() != vm.TypeSymbol {

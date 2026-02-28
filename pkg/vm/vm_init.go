@@ -173,6 +173,8 @@ func (vm *VM) executeUserFunctionReentrant(fn Value, thisValue Value, args []Val
 func (vm *VM) initializePrototypes() {
 	// Create the root Object.prototype (with null prototype)
 	vm.ObjectPrototype = NewObject(Null)
+	// Object.prototype is an Immutable Prototype Exotic Object (ECMAScript 9.4.7)
+	vm.ObjectPrototype.AsPlainObject().SetImmutablePrototype()
 
 	// Function.prototype inherits from Object.prototype
 	vm.FunctionPrototype = NewObject(vm.ObjectPrototype)
@@ -648,7 +650,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		return Undefined, nil
 
 	case TypeFunction:
-		// Function objects: check own properties, then Function.prototype
+		// Function objects: check own properties, then [[Prototype]] chain, then Function.prototype
 		fn := obj.AsFunction()
 		if fn != nil {
 			// Check own properties first
@@ -675,7 +677,11 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			case "length":
 				return NumberValue(float64(fn.Length)), nil
 			}
-			// Check Function.prototype - use function's own realm if available (cross-realm)
+			// Walk [[Prototype]] chain (set by Object.setPrototypeOf)
+			if fn.Prototype.Type() != TypeUndefined && fn.Prototype.Type() != TypeNull {
+				return vm.GetProperty(fn.Prototype, propName)
+			}
+			// Fall back to Function.prototype - use function's own realm if available (cross-realm)
 			funcProto := vm.FunctionPrototype
 			if fn.HomeRealm != nil && fn.HomeRealm != vm.currentRealm {
 				funcProto = fn.HomeRealm.FunctionPrototype
@@ -703,7 +709,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		return Undefined, nil
 
 	case TypeClosure:
-		// Closure objects: check own properties, then Function.prototype
+		// Closure objects: check own properties, then [[Prototype]] chain, then Function.prototype
 		cl := obj.AsClosure()
 		if cl != nil {
 			// Check own properties first
@@ -731,8 +737,12 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 				case "length":
 					return NumberValue(float64(cl.Fn.Length)), nil
 				}
+				// Walk [[Prototype]] chain (set by Object.setPrototypeOf)
+				if cl.Fn.Prototype.Type() != TypeUndefined && cl.Fn.Prototype.Type() != TypeNull {
+					return vm.GetProperty(cl.Fn.Prototype, propName)
+				}
 			}
-			// Check Function.prototype (which is a NativeFunctionWithProps)
+			// Fall back to Function.prototype (which is a NativeFunctionWithProps)
 			if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
 				nfp := vm.FunctionPrototype.AsNativeFunctionWithProps()
 				if nfp != nil && nfp.Properties != nil {
@@ -904,7 +914,57 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		return Undefined, nil
 
 	default:
-		// For non-objects, just return undefined
+		// For primitive types, look up property on their wrapper prototype
+		var proto Value
+		switch obj.Type() {
+		case TypeBoolean:
+			proto = vm.BooleanPrototype
+		case TypeFloatNumber, TypeIntegerNumber:
+			proto = vm.NumberPrototype
+		case TypeString:
+			proto = vm.StringPrototype
+		case TypeSymbol:
+			proto = vm.SymbolPrototype
+		case TypeBigInt:
+			proto = vm.BigIntPrototype
+		}
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			// Check for accessor (getter) first
+			if g, _, _, _, ok := po.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
+				result, err := vm.Call(g, obj, nil)
+				if err != nil {
+					return Undefined, err
+				}
+				return result, nil
+			}
+			if v, ok := po.GetOwn(propName); ok {
+				return v, nil
+			}
+			// Walk prototype chain
+			current := po.GetPrototype()
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if cur := current.AsPlainObject(); cur != nil {
+						if g, _, _, _, ok := cur.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
+							result, err := vm.Call(g, obj, nil)
+							if err != nil {
+								return Undefined, err
+							}
+							return result, nil
+						}
+						if v, ok := cur.GetOwn(propName); ok {
+							return v, nil
+						}
+						current = cur.GetPrototype()
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
 		return Undefined, nil
 	}
 }

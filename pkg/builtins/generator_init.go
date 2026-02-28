@@ -432,6 +432,15 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	w, e, c := false, false, false // writable=false, enumerable=false, configurable=false
 	generatorFunctionProto.DefineOwnProperty("prototype", vmInstance.GeneratorPrototype, &w, &e, &c)
 
+	// Add GeneratorFunction.prototype[@@toStringTag] = "GeneratorFunction"
+	// Per ECMAScript 25.2.3.3: writable: false, enumerable: false, configurable: true
+	gfpCTrue := true
+	generatorFunctionProto.DefineOwnPropertyByKey(
+		vm.NewSymbolKey(SymbolToStringTag),
+		vm.NewString("GeneratorFunction"),
+		&falseVal, &falseVal, &gfpCTrue,
+	)
+
 	// Store in VM (before setting constructor so we can reference it)
 	vmInstance.GeneratorFunctionPrototype = vm.NewValueFromPlainObject(generatorFunctionProto)
 

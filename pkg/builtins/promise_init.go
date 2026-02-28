@@ -129,6 +129,16 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vmInstance.PromiseThen(thisVal, wrapper, wrapper)
 	}))
 
+	// Add Promise.prototype[@@toStringTag] = "Promise" (writable: false, enumerable: false, configurable: true)
+	if vmInstance.SymbolToStringTag.Type() == vm.TypeSymbol {
+		wFalse, eFalse, cTrue := false, false, true
+		promiseProto.DefineOwnPropertyByKey(
+			vm.NewSymbolKey(vmInstance.SymbolToStringTag),
+			vm.NewString("Promise"),
+			&wFalse, &eFalse, &cTrue,
+		)
+	}
+
 	// Store Promise.prototype on VM
 	vmInstance.PromisePrototype = vm.NewValueFromPlainObject(promiseProto)
 
@@ -213,6 +223,36 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return thisVal
 	}
 
+	// getPromiseResolve implements GetPromiseResolve(C) per ECMAScript spec.
+	// Returns C.resolve if it's callable, otherwise returns an error.
+	getPromiseResolve := func(constructor vm.Value) (vm.Value, error) {
+		resolve, err := vmInstance.GetProperty(constructor, "resolve")
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if !resolve.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Promise resolve is not a function")
+		}
+		return resolve, nil
+	}
+
+	// invokeThen calls .then(onFulfilled, onRejected) on any value.
+	// For native Promises, uses PromiseThen directly. For other objects, calls .then() method.
+	invokeThen := func(obj, onFulfilled, onRejected vm.Value) (vm.Value, error) {
+		if obj.Type() == vm.TypePromise {
+			return vmInstance.PromiseThen(obj, onFulfilled, onRejected)
+		}
+		thenMethod, err := vmInstance.GetProperty(obj, "then")
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if thenMethod.IsCallable() {
+			return vmInstance.Call(thenMethod, obj, []vm.Value{onFulfilled, onRejected})
+		}
+		// If no .then() method, wrap in a resolved promise and chain
+		return vmInstance.PromiseThen(vmInstance.NewResolvedPromise(obj), onFulfilled, onRejected)
+	}
+
 	// Promise.all(iterable)
 	props.SetOwnNonEnumerable("all", vm.NewNativeFunction(1, false, "all", func(args []vm.Value) (vm.Value, error) {
 		iterable := vm.Undefined
@@ -224,7 +264,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisVal := vmInstance.GetThis()
 		constructor := getSpeciesConstructor(thisVal)
 
-		// Convert iterable to array
+		// Convert iterable to array (before promise creation per spec)
 		arr, err := vmInstance.IterableToArray(iterable)
 		if err != nil {
 			return vm.Undefined, vmInstance.NewTypeError("Promise.all requires an iterable")
@@ -236,25 +276,30 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		length := arrayObj.Length()
-		if length == 0 {
-			// Empty array resolves immediately to empty array
-			// Use the species constructor to create the result promise
-			executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
-				resolve := execArgs[0]
-				_, _ = vmInstance.Call(resolve, vm.Undefined, []vm.Value{arr})
-				return vm.Undefined, nil
-			})
 
-			if constructor.IsCallable() {
-				return vmInstance.Call(constructor, vm.Undefined, []vm.Value{executor})
-			}
-			return vmInstance.NewResolvedPromise(arr), nil
-		}
-
-		// Create a new promise that resolves when all promises resolve
+		// Create the result promise via executor
+		// Per spec: NewPromiseCapability(C) first, then GetPromiseResolve(C),
+		// then IfAbruptRejectPromise if it fails
 		executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
 			resolve := execArgs[0]
 			reject := execArgs[1]
+
+			if length == 0 {
+				_, _ = vmInstance.Call(resolve, vm.Undefined, []vm.Value{arr})
+				return vm.Undefined, nil
+			}
+
+			// GetPromiseResolve(C) - per spec, if this fails, reject the promise (IfAbruptRejectPromise)
+			promiseResolve, resolveErr := getPromiseResolve(constructor)
+			if resolveErr != nil {
+				errVal := vm.NewString(resolveErr.Error())
+				if ee, ok := resolveErr.(vm.ExceptionError); ok {
+					errVal = ee.GetExceptionValue()
+				}
+				vmInstance.ClearUnwindingState()
+				_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+				return vm.Undefined, nil
+			}
 
 			// Track results and completion count
 			results := make([]vm.Value, length)
@@ -265,15 +310,19 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 				idx := i // Capture index for closure
 				promiseOrValue := arrayObj.Get(i)
 
-				// Convert non-promises to resolved promises
-				var promise vm.Value
-				if promiseOrValue.Type() == vm.TypePromise {
-					promise = promiseOrValue
-				} else {
-					promise = vmInstance.NewResolvedPromise(promiseOrValue)
+				// Call C.resolve(promiseOrValue) per spec
+				nextPromise, callErr := vmInstance.Call(promiseResolve, constructor, []vm.Value{promiseOrValue})
+				if callErr != nil {
+					errVal := vm.NewString(callErr.Error())
+					if ee, ok := callErr.(vm.ExceptionError); ok {
+						errVal = ee.GetExceptionValue()
+					}
+					vmInstance.ClearUnwindingState()
+					_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+					return vm.Undefined, nil
 				}
 
-				// Attach fulfillment handler
+				// Attach fulfillment handler (not a constructor per spec)
 				onFulfilled := vm.NewNativeFunction(1, false, "onFulfilled", func(valueArgs []vm.Value) (vm.Value, error) {
 					value := vm.Undefined
 					if len(valueArgs) > 0 {
@@ -304,8 +353,8 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vm.Undefined, nil
 				})
 
-				// Attach handlers
-				_, _ = vmInstance.PromiseThen(promise, onFulfilled, onRejected)
+				// Attach handlers via .then()
+				_, _ = invokeThen(nextPromise, onFulfilled, onRejected)
 			}
 
 			return vm.Undefined, nil
@@ -352,15 +401,32 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, nil
 			}
 
+			// GetPromiseResolve(C) - per spec, if this fails, reject the promise
+			promiseResolve, resolveErr := getPromiseResolve(constructor)
+			if resolveErr != nil {
+				errVal := vm.NewString(resolveErr.Error())
+				if ee, ok := resolveErr.(vm.ExceptionError); ok {
+					errVal = ee.GetExceptionValue()
+				}
+				vmInstance.ClearUnwindingState()
+				_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+				return vm.Undefined, nil
+			}
+
 			// Attach handlers to each promise
 			for i := 0; i < length; i++ {
 				promiseOrValue := arrayObj.Get(i)
-				// Convert non-promises to resolved promises
-				var promise vm.Value
-				if promiseOrValue.Type() == vm.TypePromise {
-					promise = promiseOrValue
-				} else {
-					promise = vmInstance.NewResolvedPromise(promiseOrValue)
+
+				// Call C.resolve(promiseOrValue) per spec
+				nextPromise, callErr := vmInstance.Call(promiseResolve, constructor, []vm.Value{promiseOrValue})
+				if callErr != nil {
+					errVal := vm.NewString(callErr.Error())
+					if ee, ok := callErr.(vm.ExceptionError); ok {
+						errVal = ee.GetExceptionValue()
+					}
+					vmInstance.ClearUnwindingState()
+					_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+					return vm.Undefined, nil
 				}
 
 				// Attach fulfillment handler
@@ -387,8 +453,8 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vm.Undefined, nil
 				})
 
-				// Attach handlers
-				_, _ = vmInstance.PromiseThen(promise, onFulfilled, onRejected)
+				// Attach handlers via .then()
+				_, _ = invokeThen(nextPromise, onFulfilled, onRejected)
 			}
 
 			return vm.Undefined, nil
@@ -436,6 +502,18 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			resolve := execArgs[0]
 			reject := execArgs[1]
 
+			// GetPromiseResolve(C) - per spec, if this fails, reject the promise
+			promiseResolve, resolveErr := getPromiseResolve(constructor)
+			if resolveErr != nil {
+				errVal := vm.NewString(resolveErr.Error())
+				if ee, ok := resolveErr.(vm.ExceptionError); ok {
+					errVal = ee.GetExceptionValue()
+				}
+				vmInstance.ClearUnwindingState()
+				_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+				return vm.Undefined, nil
+			}
+
 			// Track rejections and completion count
 			errors := make([]vm.Value, length)
 			remaining := length
@@ -445,12 +523,16 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 				idx := i // Capture index for closure
 				promiseOrValue := arrayObj.Get(i)
 
-				// Convert non-promises to resolved promises
-				var promise vm.Value
-				if promiseOrValue.Type() == vm.TypePromise {
-					promise = promiseOrValue
-				} else {
-					promise = vmInstance.NewResolvedPromise(promiseOrValue)
+				// Call C.resolve(promiseOrValue) per spec
+				nextPromise, callErr := vmInstance.Call(promiseResolve, constructor, []vm.Value{promiseOrValue})
+				if callErr != nil {
+					errVal := vm.NewString(callErr.Error())
+					if ee, ok := callErr.(vm.ExceptionError); ok {
+						errVal = ee.GetExceptionValue()
+					}
+					vmInstance.ClearUnwindingState()
+					_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+					return vm.Undefined, nil
 				}
 
 				// Attach fulfillment handler
@@ -487,8 +569,8 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vm.Undefined, nil
 				})
 
-				// Attach handlers
-				_, _ = vmInstance.PromiseThen(promise, onFulfilled, onRejected)
+				// Attach handlers via .then()
+				_, _ = invokeThen(nextPromise, onFulfilled, onRejected)
 			}
 
 			return vm.Undefined, nil
@@ -532,6 +614,19 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Create a new promise that resolves when all promises settle
 		executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
 			resolve := execArgs[0]
+			reject := execArgs[1]
+
+			// GetPromiseResolve(C) - per spec, if this fails, reject the promise
+			promiseResolve, resolveErr := getPromiseResolve(constructor)
+			if resolveErr != nil {
+				errVal := vm.NewString(resolveErr.Error())
+				if ee, ok := resolveErr.(vm.ExceptionError); ok {
+					errVal = ee.GetExceptionValue()
+				}
+				vmInstance.ClearUnwindingState()
+				_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+				return vm.Undefined, nil
+			}
 
 			// Track results and completion count
 			results := make([]vm.Value, length)
@@ -542,12 +637,16 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 				idx := i // Capture index for closure
 				promiseOrValue := arrayObj.Get(i)
 
-				// Convert non-promises to resolved promises
-				var promise vm.Value
-				if promiseOrValue.Type() == vm.TypePromise {
-					promise = promiseOrValue
-				} else {
-					promise = vmInstance.NewResolvedPromise(promiseOrValue)
+				// Call C.resolve(promiseOrValue) per spec
+				nextPromise, callErr := vmInstance.Call(promiseResolve, constructor, []vm.Value{promiseOrValue})
+				if callErr != nil {
+					errVal := vm.NewString(callErr.Error())
+					if ee, ok := callErr.(vm.ExceptionError); ok {
+						errVal = ee.GetExceptionValue()
+					}
+					vmInstance.ClearUnwindingState()
+					_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+					return vm.Undefined, nil
 				}
 
 				// Attach fulfillment handler
@@ -598,8 +697,8 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vm.Undefined, nil
 				})
 
-				// Attach handlers
-				_, _ = vmInstance.PromiseThen(promise, onFulfilled, onRejected)
+				// Attach handlers via .then()
+				_, _ = invokeThen(nextPromise, onFulfilled, onRejected)
 			}
 
 			return vm.Undefined, nil

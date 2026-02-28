@@ -161,6 +161,17 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Use DefineOwnPropertyByKey with symbol key (like generators do with Symbol.iterator)
 	asyncGeneratorProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolAsyncIterator), asyncIteratorMethod, nil, nil, nil)
 
+	// Add AsyncGenerator.prototype[@@toStringTag] = "AsyncGenerator"
+	// Per ECMAScript 25.5.1.5: writable: false, enumerable: false, configurable: true
+	if vmInstance.SymbolToStringTag.Type() == vm.TypeSymbol {
+		agWFalse, agEFalse, agCTrue := false, false, true
+		asyncGeneratorProto.DefineOwnPropertyByKey(
+			vm.NewSymbolKey(vmInstance.SymbolToStringTag),
+			vm.NewString("AsyncGenerator"),
+			&agWFalse, &agEFalse, &agCTrue,
+		)
+	}
+
 	vmInstance.AsyncGeneratorPrototype = vm.NewValueFromPlainObject(asyncGeneratorProto)
 
 	// Create AsyncGeneratorFunction.prototype (%AsyncGeneratorFunction.prototype%)
@@ -172,6 +183,17 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Per ECMAScript: AsyncGeneratorFunction.prototype.prototype === AsyncGenerator.prototype
 	w, e, c := false, false, false // writable=false, enumerable=false, configurable=false
 	asyncGeneratorFunctionProto.DefineOwnProperty("prototype", vmInstance.AsyncGeneratorPrototype, &w, &e, &c)
+
+	// Add AsyncGeneratorFunction.prototype[@@toStringTag] = "AsyncGeneratorFunction"
+	// Per ECMAScript 25.4.3.4: writable: false, enumerable: false, configurable: true
+	if vmInstance.SymbolToStringTag.Type() == vm.TypeSymbol {
+		wTrue, eTrue, cTrue := false, false, true
+		asyncGeneratorFunctionProto.DefineOwnPropertyByKey(
+			vm.NewSymbolKey(vmInstance.SymbolToStringTag),
+			vm.NewString("AsyncGeneratorFunction"),
+			&wTrue, &eTrue, &cTrue,
+		)
+	}
 
 	// Store in VM
 	vmInstance.AsyncGeneratorFunctionPrototype = vm.NewValueFromPlainObject(asyncGeneratorFunctionProto)

@@ -6613,10 +6613,18 @@ startExecution:
 						}
 					}
 				case TypeSymbol:
-					// Delegate symbol property access to Array.prototype (for Symbol.iterator etc.)
-					if vm.ArrayPrototype.Type() == TypeObject {
-						proto := vm.ArrayPrototype.AsPlainObject()
-						if prop, found := proto.GetOwnByKey(NewSymbolKey(indexVal)); found {
+					// Check own symbol properties first (e.g., arguments[Symbol.toStringTag] = ...)
+					symKey := NewSymbolKey(indexVal)
+					if sym := indexVal.AsSymbolObject(); sym != nil {
+						if val, ok := args.GetSymbolProp(sym); ok {
+							registers[destReg] = val
+							continue
+						}
+					}
+					// Then check Object.prototype (arguments inherit from Object.prototype)
+					if vm.ObjectPrototype.IsObject() {
+						proto := vm.ObjectPrototype.AsPlainObject()
+						if prop, found := proto.GetOwnByKey(symKey); found {
 							registers[destReg] = prop
 						} else {
 							registers[destReg] = Undefined
@@ -7308,6 +7316,11 @@ startExecution:
 						// Beyond original length - store as named property (DO NOT extend length)
 						// Per ECMAScript, arguments objects have fixed length based on actual arguments
 						argObj.SetNamedProp(strconv.Itoa(idx), valueVal)
+					}
+				} else if indexVal.Type() == TypeSymbol {
+					// Symbol key access on arguments object
+					if sym := indexVal.AsSymbolObject(); sym != nil {
+						argObj.SetSymbolProp(sym, valueVal)
 					}
 				} else {
 					// String key access (e.g., arguments["callee"], arguments["length"])

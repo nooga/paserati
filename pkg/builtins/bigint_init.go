@@ -135,6 +135,16 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Undefined, vmInstance.NewTypeError("Cannot convert to BigInt")
 	}))
 
+	// Add BigInt.prototype[@@toStringTag] = "BigInt" (writable: false, enumerable: false, configurable: true)
+	if vmInstance.SymbolToStringTag.Type() == vm.TypeSymbol {
+		wFalse, eFalse, cTrue := false, false, true
+		bigintProto.DefineOwnPropertyByKey(
+			vm.NewSymbolKey(vmInstance.SymbolToStringTag),
+			vm.NewString("BigInt"),
+			&wFalse, &eFalse, &cTrue,
+		)
+	}
+
 	// Set BigInt.prototype
 	vmInstance.BigIntPrototype = vm.NewValueFromPlainObject(bigintProto)
 

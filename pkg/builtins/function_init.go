@@ -175,6 +175,17 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 		asyncFunctionProtoObj.SetOwnNonEnumerable("constructor", asyncFunctionCtor)
 	}
 
+	// Add AsyncFunction.prototype[@@toStringTag] = "AsyncFunction"
+	// Per ECMAScript 25.7.3.4: writable: false, enumerable: false, configurable: true
+	if vmInstance.SymbolToStringTag.Type() == vm.TypeSymbol {
+		wFalse, eFalse, cTrue := false, false, true
+		asyncFunctionProtoObj.DefineOwnPropertyByKey(
+			vm.NewSymbolKey(vmInstance.SymbolToStringTag),
+			vm.NewString("AsyncFunction"),
+			&wFalse, &eFalse, &cTrue,
+		)
+	}
+
 	// Store AsyncFunction constructor and prototype in VM
 	vmInstance.AsyncFunctionConstructor = asyncFunctionCtor
 	vmInstance.AsyncFunctionPrototype = asyncFunctionProto
@@ -729,11 +740,42 @@ func getPrototypeOfValue(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
 	case vm.TypePromise:
 		return vmInstance.PromisePrototype, nil
 	case vm.TypeFunction:
+		fn := val.AsFunction()
+		if fn.IsAsync && fn.IsGenerator {
+			return vmInstance.AsyncGeneratorFunctionPrototype, nil
+		} else if fn.IsGenerator {
+			return vmInstance.GeneratorFunctionPrototype, nil
+		} else if fn.IsAsync {
+			return vmInstance.AsyncFunctionPrototype, nil
+		}
 		return vmInstance.FunctionPrototype, nil
 	case vm.TypeClosure:
+		cl := val.AsClosure()
+		if cl.Fn.IsAsync && cl.Fn.IsGenerator {
+			return vmInstance.AsyncGeneratorFunctionPrototype, nil
+		} else if cl.Fn.IsGenerator {
+			return vmInstance.GeneratorFunctionPrototype, nil
+		} else if cl.Fn.IsAsync {
+			return vmInstance.AsyncFunctionPrototype, nil
+		}
 		return vmInstance.FunctionPrototype, nil
 	case vm.TypeNativeFunctionWithProps:
-		return val.AsNativeFunctionWithProps().Properties.GetPrototype(), nil
+		// All functions (including built-in constructors) have Function.prototype as [[Prototype]]
+		// Special case: Function.prototype itself has Object.prototype
+		if val.Is(vmInstance.FunctionPrototype) {
+			return vmInstance.ObjectPrototype, nil
+		}
+		return vmInstance.FunctionPrototype, nil
+	case vm.TypeNativeFunction, vm.TypeBoundFunction:
+		return vmInstance.FunctionPrototype, nil
+	case vm.TypeGenerator:
+		return vmInstance.GeneratorPrototype, nil
+	case vm.TypeAsyncGenerator:
+		return vmInstance.AsyncGeneratorPrototype, nil
+	case vm.TypeArrayBuffer:
+		return vmInstance.ObjectPrototype, nil
+	case vm.TypeSharedArrayBuffer:
+		return vmInstance.SharedArrayBufferPrototype, nil
 	case vm.TypeProxy:
 		proxy := val.AsProxy()
 		if proxy.Revoked {
@@ -760,7 +802,16 @@ func getPrototypeOfValue(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
 		}
 		// No trap — fall through to target's prototype
 		return getPrototypeOfValue(vmInstance, proxy.Target())
+	// Primitives
+	case vm.TypeString:
+		return vmInstance.StringPrototype, nil
+	case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+		return vmInstance.NumberPrototype, nil
+	case vm.TypeBoolean:
+		return vmInstance.BooleanPrototype, nil
+	case vm.TypeSymbol:
+		return vmInstance.SymbolPrototype, nil
 	default:
-		return vm.Undefined, nil
+		return vm.Null, nil
 	}
 }

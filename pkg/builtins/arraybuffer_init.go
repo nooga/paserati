@@ -223,6 +223,16 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set constructor property on prototype
 	arrayBufferProto.SetOwnNonEnumerable("constructor", ctorWithProps)
 
+	// Add ArrayBuffer.prototype[@@toStringTag] = "ArrayBuffer" (writable: false, enumerable: false, configurable: true)
+	if vmInstance.SymbolToStringTag.Type() == vm.TypeSymbol {
+		wFalse, eFalse, cTrue := false, false, true
+		arrayBufferProto.DefineOwnPropertyByKey(
+			vm.NewSymbolKey(vmInstance.SymbolToStringTag),
+			vm.NewString("ArrayBuffer"),
+			&wFalse, &eFalse, &cTrue,
+		)
+	}
+
 	// Set ArrayBuffer prototype in VM for proper prototype chain lookups
 	vmInstance.ArrayBufferPrototype = vm.NewValueFromPlainObject(arrayBufferProto)
 

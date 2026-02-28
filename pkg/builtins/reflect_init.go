@@ -377,20 +377,21 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	reflectObj.SetOwnNonEnumerable("setPrototypeOf", vm.NewNativeFunction(2, false, "setPrototypeOf", func(args []vm.Value) (vm.Value, error) {
 		result, err := objectSetPrototypeOfWithVM(vmInstance, args)
 		if err != nil {
-			// For proxies: "trap returned falsish" means the trap said no — return false.
-			// Invariant violations must still throw.
-			if len(args) > 0 && args[0].Type() == vm.TypeProxy {
-				isTrapFalsish := false
-				if ee, ok := err.(vm.ExceptionError); ok {
-					excVal := ee.GetExceptionValue()
-					if msgVal, _ := vmInstance.GetProperty(excVal, "message"); msgVal.Type() == vm.TypeString {
-						if strings.Contains(msgVal.ToString(), "trap returned falsish") {
-							isTrapFalsish = true
-						}
+			// Reflect.setPrototypeOf returns false (instead of throwing) for:
+			// - Prototype cycle detection
+			// - Non-extensible objects
+			// - Immutable prototype exotic objects
+			// - Proxy trap returning falsish
+			// Only actual type errors (wrong arg types, revoked proxy) should throw
+			if ee, ok := err.(vm.ExceptionError); ok {
+				excVal := ee.GetExceptionValue()
+				if msgVal, _ := vmInstance.GetProperty(excVal, "message"); msgVal.Type() == vm.TypeString {
+					msg := msgVal.ToString()
+					if strings.Contains(msg, "Cannot set prototype") ||
+						strings.Contains(msg, "non-extensible") ||
+						strings.Contains(msg, "trap returned falsish") {
+						return vm.BooleanValue(false), nil
 					}
-				}
-				if isTrapFalsish {
-					return vm.BooleanValue(false), nil
 				}
 			}
 			return vm.BooleanValue(false), err

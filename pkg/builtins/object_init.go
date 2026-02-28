@@ -94,8 +94,23 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
 		}
-		thisValue := vmInstance.GetThis()
+		// Step 1: Let P be ? ToPropertyKey(V). (BEFORE ToObject per spec)
 		keyVal := args[0]
+		if keyVal.IsObject() || keyVal.IsCallable() {
+			resolved, err := toPropertyKeyValue(vmInstance, keyVal)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			keyVal = resolved
+		}
+		// Step 2: Let O be ? ToObject(this value). Throws TypeError for null/undefined.
+		thisValue := vmInstance.GetThis()
+		if thisValue.Type() == vm.TypeNull || thisValue.Type() == vm.TypeUndefined {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
 		// Handle symbol and string keys
 		if keyVal.Type() == vm.TypeSymbol {
 			key := vm.NewSymbolKey(keyVal)
@@ -335,7 +350,22 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.BooleanValue(false), nil
 		}
 		thisValue := vmInstance.GetThis()
+		// Step 1: Let O be ? ToObject(this value). Throws TypeError for null/undefined.
+		if thisValue.Type() == vm.TypeNull || thisValue.Type() == vm.TypeUndefined {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
 		keyVal := args[0]
+		// ToPropertyKey — if key is an object, call ToPrimitive("string")
+		if keyVal.IsObject() || keyVal.IsCallable() {
+			resolved, err := toPropertyKeyValue(vmInstance, keyVal)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, nil
+			}
+			keyVal = resolved
+		}
 		if keyVal.Type() == vm.TypeSymbol {
 			key := vm.NewSymbolKey(keyVal)
 			if po := thisValue.AsPlainObject(); po != nil {
@@ -456,105 +486,75 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewString("[object Undefined]"), nil
 		}
 
-		// Step 3: Let O be ! ToObject(this value)
-		// For objects, we check for @@toStringTag first
+		// Step 4: Let isArray be ? IsArray(O).
+		isArr, isArrErr := isArrayValueOrError(vmInstance, thisValue)
+		if isArrErr != nil {
+			return vm.Undefined, isArrErr
+		}
 
-		// Determine the built-in tag based on type
+		// Steps 5-14: Determine builtinTag
+		// Per spec, only these internal slots determine builtinTag:
+		// IsArray → "Array", [[ParameterMap]] → "Arguments", [[Call]] → "Function",
+		// [[ErrorData]] → "Error", [[BooleanData]] → "Boolean", [[NumberData]] → "Number",
+		// [[StringData]] → "String", [[DateValue]] → "Date", [[RegExpMatcher]] → "RegExp"
+		// Everything else → "Object"
 		var builtinTag string
-		switch thisValue.Type() {
-		case vm.TypeBoolean:
-			builtinTag = "Boolean"
-		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
-			builtinTag = "Number"
-		case vm.TypeString:
-			builtinTag = "String"
-		case vm.TypeArray:
+		if isArr {
 			builtinTag = "Array"
-		case vm.TypeFunction, vm.TypeNativeFunction, vm.TypeClosure, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
-			builtinTag = "Function"
-		case vm.TypeRegExp:
-			builtinTag = "RegExp"
-		case vm.TypeMap:
-			builtinTag = "Map"
-		case vm.TypeSet:
-			builtinTag = "Set"
-		case vm.TypePromise:
-			builtinTag = "Promise"
-		case vm.TypeSymbol:
-			builtinTag = "Symbol"
-		case vm.TypeGenerator:
-			builtinTag = "Generator"
-		case vm.TypeArguments:
-			builtinTag = "Arguments"
-		case vm.TypeSharedArrayBuffer:
-			builtinTag = "SharedArrayBuffer"
-		case vm.TypeArrayBuffer:
-			builtinTag = "ArrayBuffer"
-		case vm.TypeTypedArray:
-			builtinTag = "TypedArray" // Will be overridden by @@toStringTag from prototype
-		case vm.TypeObject:
-			// Check for wrapper objects with [[PrimitiveValue]] or [[ErrorData]]
-			if plainObj := thisValue.AsPlainObject(); plainObj != nil {
-				// Step 8: If O has [[ErrorData]], let builtinTag be "Error"
-				if _, hasErrorData := plainObj.GetOwn("[[ErrorData]]"); hasErrorData {
-					builtinTag = "Error"
-				} else if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
-					switch primitiveVal.Type() {
-					case vm.TypeBoolean:
-						builtinTag = "Boolean"
-					case vm.TypeFloatNumber, vm.TypeIntegerNumber:
-						builtinTag = "Number"
-					case vm.TypeString:
-						builtinTag = "String"
-					default:
+		} else {
+			switch thisValue.Type() {
+			case vm.TypeArguments:
+				builtinTag = "Arguments"
+			case vm.TypeFunction, vm.TypeNativeFunction, vm.TypeClosure, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
+				builtinTag = "Function"
+			case vm.TypeRegExp:
+				builtinTag = "RegExp"
+			case vm.TypeObject:
+				if plainObj := thisValue.AsPlainObject(); plainObj != nil {
+					if _, hasErrorData := plainObj.GetOwn("[[ErrorData]]"); hasErrorData {
+						builtinTag = "Error"
+					} else if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
+						switch primitiveVal.Type() {
+						case vm.TypeBoolean:
+							builtinTag = "Boolean"
+						case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+							builtinTag = "Number"
+						case vm.TypeString:
+							builtinTag = "String"
+						default:
+							builtinTag = "Object"
+						}
+					} else {
 						builtinTag = "Object"
 					}
 				} else {
 					builtinTag = "Object"
 				}
-			} else {
+			case vm.TypeProxy:
+				// Proxy builtinTag: if callable → "Function", else "Object"
+				if thisValue.IsCallable() {
+					builtinTag = "Function"
+				} else {
+					builtinTag = "Object"
+				}
+			case vm.TypeBoolean:
+				builtinTag = "Boolean"
+			case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+				builtinTag = "Number"
+			case vm.TypeString:
+				builtinTag = "String"
+			default:
 				builtinTag = "Object"
 			}
-		default:
-			builtinTag = "Object"
 		}
 
-		// Step 14-16: Check for @@toStringTag property
-		// If the object has @@toStringTag and it's a string, use that instead
-		if thisValue.IsObject() || thisValue.IsCallable() {
-			var plainObj *vm.PlainObject
-			switch thisValue.Type() {
-			case vm.TypeObject:
-				plainObj = thisValue.AsPlainObject()
-			case vm.TypeClosure:
-				if cl := thisValue.AsClosure(); cl != nil && cl.Fn != nil && cl.Fn.Properties != nil {
-					plainObj = cl.Fn.Properties
-				}
-			case vm.TypeFunction:
-				if fn := thisValue.AsFunction(); fn != nil && fn.Properties != nil {
-					plainObj = fn.Properties
-				}
-			}
-
-			if plainObj != nil {
-				// Check for @@toStringTag symbol property (walk prototype chain per spec)
-				symKey := vm.NewSymbolKey(vmInstance.SymbolToStringTag)
-				obj := plainObj
-				for obj != nil {
-					if tag, ok := obj.GetOwnByKey(symKey); ok {
-						if tag.Type() == vm.TypeString {
-							return vm.NewString("[object " + tag.ToString() + "]"), nil
-						}
-						break
-					}
-					proto := obj.GetPrototype()
-					if proto.Type() == vm.TypeObject {
-						obj = proto.AsPlainObject()
-					} else {
-						break
-					}
-				}
-			}
+		// Step 15-17: Let tag be ? Get(O, @@toStringTag). If not String, use builtinTag.
+		tag, tagErr := lookupToStringTag(vmInstance, thisValue)
+		if tagErr != nil {
+			return vm.Undefined, tagErr
+		}
+		if tag.Type() == vm.TypeString {
+			return vm.NewString("[object " + tag.ToString() + "]"), nil
 		}
 
 		return vm.NewString("[object " + builtinTag + "]"), nil
@@ -565,7 +565,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	objectProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
-		return vmInstance.GetThis(), nil // Return this
+		// ECMAScript 20.1.3.7: Let O be ? ToObject(this value). Return O.
+		return vmInstance.ToObject(vmInstance.GetThis())
 	}))
 	if v, ok := objectProto.GetOwn("valueOf"); ok {
 		w, e, c := true, false, true
@@ -573,8 +574,17 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	objectProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
-		// Default implementation: call toString()
+		// ECMAScript 20.1.3.5: Object.prototype.toLocaleString
+		// 1. Let O be the this value.
+		// 2. Return ? Invoke(O, "toString").
 		thisValue := vmInstance.GetThis()
+
+		// Invoke(O, "toString") throws TypeError for null/undefined (can't get property from them)
+		if thisValue.IsUndefined() || thisValue.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot read properties of " + thisValue.ToString() + " (reading 'toString')")
+		}
+
+		// Get toString method and call with the original this value (no ToObject wrapping)
 		if toStringMethod, err := vmInstance.GetProperty(thisValue, "toString"); err == nil && toStringMethod.IsCallable() {
 			return vmInstance.Call(toStringMethod, thisValue, []vm.Value{})
 		}
@@ -589,51 +599,34 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
 		}
-		thisValue := vmInstance.GetThis()
 		obj := args[0]
 
-		// Walk up the prototype chain of obj to see if thisValue is in it
-		current := obj
-		for {
-			// Get the prototype of current object
-			var proto vm.Value
-			switch current.Type() {
-			case vm.TypeObject:
-				if plainObj := current.AsPlainObject(); plainObj != nil {
-					proto = plainObj.GetPrototype()
-				}
-			case vm.TypeDictObject:
-				if dictObj := current.AsDictObject(); dictObj != nil {
-					proto = dictObj.GetPrototype()
-				}
-			case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeAsyncNativeFunction, vm.TypeBoundFunction:
-				// All functions have FunctionPrototype as their prototype
-				// Special case: Function.prototype itself has Object.prototype as its prototype
-				if current.Is(vmInstance.FunctionPrototype) {
-					proto = vmInstance.ObjectPrototype
-				} else {
-					proto = vmInstance.FunctionPrototype
-				}
-			case vm.TypeArray:
-				proto = vmInstance.ArrayPrototype
-			default:
-				// No prototype for this type
-				break
-			}
+		// Step 1: If Type(V) is not Object, return false
+		if !obj.IsObject() && !obj.IsCallable() {
+			return vm.BooleanValue(false), nil
+		}
 
-			// If we couldn't get a prototype or reached null/undefined, we're done
-			if proto.Type() == vm.TypeNull || proto.Type() == vm.TypeUndefined || proto.Type() == 0 {
-				break
-			}
+		// Step 2: Let O be ? ToObject(this value). Throws TypeError for null/undefined.
+		thisValue := vmInstance.GetThis()
+		if thisValue.Type() == vm.TypeNull || thisValue.Type() == vm.TypeUndefined {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
 
-			// Check if this prototype is the one we're looking for
+		// Walk up the prototype chain of obj via [[GetPrototypeOf]]
+		// This uses getPrototypeOfValue which handles Proxy getPrototypeOf traps
+		for i := 0; i < 1000; i++ {
+			proto, err := getPrototypeOfValue(vmInstance, obj)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if proto.Type() == vm.TypeNull || proto.IsUndefined() {
+				return vm.BooleanValue(false), nil
+			}
 			if proto.Is(thisValue) {
 				return vm.BooleanValue(true), nil
 			}
-
-			current = proto
+			obj = proto
 		}
-
 		return vm.BooleanValue(false), nil
 	}))
 	if v, ok := objectProto.GetOwn("isPrototypeOf"); ok {
@@ -642,70 +635,18 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// __proto__ accessor property (ES6 B.2.2.1)
-	// Getter: Object.getPrototypeOf(this)
+	// Getter: B.2.2.1.1 get Object.prototype.__proto__
 	protoGetter := vm.NewNativeFunction(0, false, "get __proto__", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if thisValue.Type() == vm.TypeUndefined || thisValue.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot read property '__proto__' of " + thisValue.TypeName())
 		}
-		// Get prototype from various object types
-		switch thisValue.Type() {
-		case vm.TypeObject:
-			if po := thisValue.AsPlainObject(); po != nil {
-				return po.GetPrototype(), nil
-			}
-		case vm.TypeDictObject:
-			if d := thisValue.AsDictObject(); d != nil {
-				return d.GetPrototype(), nil
-			}
-		case vm.TypeArray:
-			return vmInstance.ArrayPrototype, nil
-		case vm.TypeFunction:
-			return vmInstance.FunctionPrototype, nil
-		case vm.TypeClosure:
-			return vmInstance.FunctionPrototype, nil
-		case vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
-			return vmInstance.FunctionPrototype, nil
-		case vm.TypeRegExp:
-			return vmInstance.RegExpPrototype, nil
-		case vm.TypeMap:
-			return vmInstance.MapPrototype, nil
-		case vm.TypeSet:
-			return vmInstance.SetPrototype, nil
-		case vm.TypeProxy:
-			// For proxy, get the target's prototype through the proxy
-			proxy := thisValue.AsProxy()
-			if proxy.Revoked {
-				return vm.Undefined, vmInstance.NewTypeError("Cannot read property '__proto__' of a revoked Proxy")
-			}
-			target := proxy.Target()
-			if po := target.AsPlainObject(); po != nil {
-				return po.GetPrototype(), nil
-			}
-			return vm.Null, nil
-		case vm.TypeArrayBuffer:
-			return vmInstance.ObjectPrototype, nil
-		case vm.TypeSharedArrayBuffer:
-			return vmInstance.SharedArrayBufferPrototype, nil
-		case vm.TypeTypedArray:
-			// Delegate to objectGetPrototypeOfWithVM for typed arrays
-			return objectGetPrototypeOfWithVM(vmInstance, []vm.Value{thisValue})
-		}
-		// For primitives, return their prototype
-		switch thisValue.Type() {
-		case vm.TypeString:
-			return vmInstance.StringPrototype, nil
-		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
-			return vmInstance.NumberPrototype, nil
-		case vm.TypeBoolean:
-			return vmInstance.BooleanPrototype, nil
-		case vm.TypeSymbol:
-			return vmInstance.SymbolPrototype, nil
-		}
-		return vm.Null, nil
+		// Use getPrototypeOfValue which handles Proxy traps and all object types
+		return getPrototypeOfValue(vmInstance, thisValue)
 	})
-	// Setter: Object.setPrototypeOf(this, value)
+	// Setter: Object.prototype.__proto__ (B.2.2.1.2)
 	protoSetter := vm.NewNativeFunction(1, false, "set __proto__", func(args []vm.Value) (vm.Value, error) {
+		// Step 1: Let O be ? RequireObjectCoercible(this value)
 		thisValue := vmInstance.GetThis()
 		if thisValue.Type() == vm.TypeUndefined || thisValue.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot set property '__proto__' of " + thisValue.TypeName())
@@ -714,34 +655,61 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, nil
 		}
 		protoArg := args[0]
-		// Prototype must be object or null
-		if protoArg.Type() != vm.TypeNull && !protoArg.IsObject() {
-			// Non-object, non-null values are silently ignored per spec
+		// Step 2: If Type(proto) is neither Object nor Null, return undefined
+		if protoArg.Type() != vm.TypeNull && !protoArg.IsObject() && !protoArg.IsCallable() {
 			return vm.Undefined, nil
 		}
-		// Set prototype on object types
+		// Step 3: If Type(O) is not Object, return undefined
+		if !thisValue.IsObject() && !thisValue.IsCallable() {
+			return vm.Undefined, nil
+		}
+		// Step 4-5: Let status be ? O.[[SetPrototypeOf]](proto). If false, throw TypeError.
+		// Handle Proxy objects with setPrototypeOf trap
+		if thisValue.Type() == vm.TypeProxy {
+			proxy := thisValue.AsProxy()
+			if proxy.Revoked {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot set prototype of revoked Proxy")
+			}
+			handler := proxy.Handler()
+			var setProtoTrap vm.Value
+			var hasTrap bool
+			if po := handler.AsPlainObject(); po != nil {
+				setProtoTrap, hasTrap = po.GetOwn("setPrototypeOf")
+			}
+			if hasTrap && setProtoTrap.IsCallable() {
+				result, err := vmInstance.Call(setProtoTrap, handler, []vm.Value{proxy.Target(), protoArg})
+				if err != nil {
+					return vm.Undefined, err
+				}
+				if result.IsFalsey() {
+					return vm.Undefined, vmInstance.NewTypeError("'setPrototypeOf' on proxy: trap returned falsish")
+				}
+				return vm.Undefined, nil
+			}
+			// No trap, delegate to target
+			thisValue = proxy.Target()
+		}
+		// Set prototype via OrdinarySetPrototypeOf (handles cycle detection + non-extensible)
+		success := true
 		switch thisValue.Type() {
 		case vm.TypeObject:
 			if po := thisValue.AsPlainObject(); po != nil {
-				if !po.SetPrototype(protoArg) {
-					// SetPrototype returns false if object is non-extensible and prototype differs
-					// In strict mode, this would throw TypeError
-					// Per spec B.2.2.1.2, we return undefined (silent failure in non-strict)
-					return vm.Undefined, nil
-				}
+				success = po.SetPrototype(protoArg)
 			}
 		case vm.TypeDictObject:
 			if d := thisValue.AsDictObject(); d != nil {
-				if !d.SetPrototype(protoArg) {
-					return vm.Undefined, nil
-				}
+				success = d.SetPrototype(protoArg)
 			}
-		case vm.TypeArray:
-			// Arrays have a fixed prototype (Array.prototype)
-			// Setting __proto__ on an array is silently ignored per spec
 		default:
-			// Other object types (functions, etc.) - prototype change is typically not allowed
-			// Silently ignore per spec
+			// Other object types (arrays, functions, etc.) - delegate to objectSetPrototypeOfWithVM
+			_, err := objectSetPrototypeOfWithVM(vmInstance, []vm.Value{thisValue, protoArg})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			return vm.Undefined, nil
+		}
+		if !success {
+			return vm.Undefined, vmInstance.NewTypeError("Cyclic __proto__ value")
 		}
 		return vm.Undefined, nil
 	})
@@ -750,6 +718,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	objectProto.DefineAccessorProperty("__proto__", protoGetter, true, protoSetter, true, &e, &c)
 
 	// __defineGetter__ (ES6 B.2.2.2) - legacy method to define a getter
+	// Per spec: 1. ToObject(this), 2. IsCallable check, 3. ToPropertyKey(P), 4. DefinePropertyOrThrow
 	defineGetterFunc := vm.NewNativeFunction(2, false, "__defineGetter__", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if thisValue.Type() == vm.TypeUndefined || thisValue.Type() == vm.TypeNull {
@@ -758,28 +727,22 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("__defineGetter__ requires 2 arguments")
 		}
-		// ToPropertyKey
-		propName := args[0].ToString()
 		getter := args[1]
 		if !getter.IsCallable() {
 			return vm.Undefined, vmInstance.NewTypeError("__defineGetter__ getter must be a function")
 		}
-		// Define accessor property based on object type
-		// Per ES6 B.2.2.2: enumerable: true, configurable: true
-		en, conf := true, true
-		switch thisValue.Type() {
-		case vm.TypeObject:
-			thisValue.AsPlainObject().DefineAccessorProperty(propName, getter, true, vm.Undefined, false, &en, &conf)
-		case vm.TypeArray:
-			thisValue.AsArray().DefineAccessorProperty(propName, getter, true, vm.Undefined, false, &en, &conf)
-		default:
-			if po := thisValue.AsPlainObject(); po != nil {
-				po.DefineAccessorProperty(propName, getter, true, vm.Undefined, false, &en, &conf)
-			} else {
-				return vm.Undefined, vmInstance.NewTypeError("__defineGetter__ called on non-object")
-			}
+		// Step 4: ToPropertyKey - may call toString() which can throw
+		keyVal, err := toPropertyKeyValue(vmInstance, args[0])
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.Undefined, nil
+		// Step 5: DefinePropertyOrThrow with {get: getter, enumerable: true, configurable: true}
+		descObj := vm.NewObject(vm.Null).AsPlainObject()
+		descObj.SetOwn("get", getter)
+		descObj.SetOwn("enumerable", vm.True)
+		descObj.SetOwn("configurable", vm.True)
+		_, err = objectDefinePropertyWithVM(vmInstance, []vm.Value{thisValue, keyVal, vm.NewValueFromPlainObject(descObj)})
+		return vm.Undefined, err
 	})
 	objectProto.SetOwnNonEnumerable("__defineGetter__", defineGetterFunc)
 
@@ -792,28 +755,22 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("__defineSetter__ requires 2 arguments")
 		}
-		// ToPropertyKey
-		propName := args[0].ToString()
 		setter := args[1]
 		if !setter.IsCallable() {
 			return vm.Undefined, vmInstance.NewTypeError("__defineSetter__ setter must be a function")
 		}
-		// Define accessor property based on object type
-		// Per ES6 B.2.2.3: enumerable: true, configurable: true
-		en, conf := true, true
-		switch thisValue.Type() {
-		case vm.TypeObject:
-			thisValue.AsPlainObject().DefineAccessorProperty(propName, vm.Undefined, false, setter, true, &en, &conf)
-		case vm.TypeArray:
-			thisValue.AsArray().DefineAccessorProperty(propName, vm.Undefined, false, setter, true, &en, &conf)
-		default:
-			if po := thisValue.AsPlainObject(); po != nil {
-				po.DefineAccessorProperty(propName, vm.Undefined, false, setter, true, &en, &conf)
-			} else {
-				return vm.Undefined, vmInstance.NewTypeError("__defineSetter__ called on non-object")
-			}
+		// Step 4: ToPropertyKey - may call toString() which can throw
+		keyVal, err := toPropertyKeyValue(vmInstance, args[0])
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.Undefined, nil
+		// Step 5: DefinePropertyOrThrow with {set: setter, enumerable: true, configurable: true}
+		descObj := vm.NewObject(vm.Null).AsPlainObject()
+		descObj.SetOwn("set", setter)
+		descObj.SetOwn("enumerable", vm.True)
+		descObj.SetOwn("configurable", vm.True)
+		_, err = objectDefinePropertyWithVM(vmInstance, []vm.Value{thisValue, keyVal, vm.NewValueFromPlainObject(descObj)})
+		return vm.Undefined, err
 	})
 	objectProto.SetOwnNonEnumerable("__defineSetter__", defineSetterFunc)
 
@@ -826,7 +783,15 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.Undefined, nil
 		}
-		propName := args[0].ToString()
+		// Step 2: Let key be ? ToPropertyKey(P).
+		keyVal, err := toPropertyKeyValue(vmInstance, args[0])
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+			return vm.Undefined, nil
+		}
+		propName := keyVal.ToString()
 		// Walk up the prototype chain looking for accessor
 		current := thisValue
 		for {
@@ -882,7 +847,15 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.Undefined, nil
 		}
-		propName := args[0].ToString()
+		// Step 2: Let key be ? ToPropertyKey(P).
+		keyVal, err := toPropertyKeyValue(vmInstance, args[0])
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+			return vm.Undefined, nil
+		}
+		propName := keyVal.ToString()
 		// Walk up the prototype chain looking for accessor
 		current := thisValue
 		for {
@@ -949,9 +922,10 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		arg := args[0]
 
-		// If already an object type, return as-is
-		if arg.IsObject() || arg.Type() == vm.TypeArray || arg.Type() == vm.TypeRegExp ||
-			arg.Type() == vm.TypeMap || arg.Type() == vm.TypeSet || arg.Type() == vm.TypeProxy {
+		// If already an object type, return as-is (per spec: ToObject for objects returns the same object)
+		if arg.IsObject() || arg.IsCallable() || arg.Type() == vm.TypeArray || arg.Type() == vm.TypeRegExp ||
+			arg.Type() == vm.TypeMap || arg.Type() == vm.TypeSet || arg.Type() == vm.TypeProxy ||
+			arg.Type() == vm.TypeGenerator || arg.Type() == vm.TypeAsyncGenerator {
 			return arg, nil
 		}
 
@@ -1227,6 +1201,297 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Define globally
 	return ctx.DefineGlobal("Object", objectCtor)
+}
+
+// toPropertyKeyValue implements ECMAScript ToPropertyKey (§7.1.14).
+// It converts a value to a property key (string or symbol), calling ToPrimitive if needed.
+// Returns the key as a vm.Value (either TypeString or TypeSymbol).
+func toPropertyKeyValue(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
+	// If already a symbol, return directly
+	if val.Type() == vm.TypeSymbol {
+		return val, nil
+	}
+	// If already a string/number/boolean primitive, convert to string
+	if !val.IsObject() && !val.IsCallable() {
+		return vm.NewString(val.ToString()), nil
+	}
+	// For objects, call ToPrimitive with "string" hint
+	vmInstance.EnterHelperCall()
+	result := vmInstance.ToPrimitive(val, "string")
+	vmInstance.ExitHelperCall()
+	// Check if ToPrimitive threw an exception
+	if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+		return vm.Undefined, nil // Exception propagates through VM
+	}
+	// If result is a symbol, return it
+	if result.Type() == vm.TypeSymbol {
+		return result, nil
+	}
+	return vm.NewString(result.ToString()), nil
+}
+
+// isArrayValueOrError implements the ECMAScript IsArray abstract operation (§7.2.2).
+// For revoked Proxy objects, it throws TypeError. For non-revoked proxies, recursively checks target.
+func isArrayValueOrError(vmInstance *vm.VM, val vm.Value) (bool, error) {
+	for i := 0; i < 100; i++ { // safety limit for proxy chains
+		switch val.Type() {
+		case vm.TypeArray:
+			return true, nil
+		case vm.TypeProxy:
+			proxy := val.AsProxy()
+			if proxy.Revoked {
+				return false, vmInstance.NewTypeError("Cannot perform 'IsArray' on a proxy that has been revoked")
+			}
+			val = proxy.Target()
+			continue
+		default:
+			return false, nil
+		}
+	}
+	return false, nil
+}
+
+// lookupToStringTag implements Get(O, @@toStringTag) for toString.
+// It properly handles all value types, accessor properties (getters), and prototype chains.
+// Returns (tag value, error). Error is non-nil if a getter throws.
+func lookupToStringTag(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
+	symKey := vm.NewSymbolKey(vmInstance.SymbolToStringTag)
+	symObj := vmInstance.SymbolToStringTag.AsSymbolObject()
+	return lookupSymbolProp(vmInstance, val, symKey, symObj, 0)
+}
+
+// lookupSymbolProp walks the value's own properties and prototype chain
+// looking for a symbol-keyed property. Handles accessor properties by invoking getters.
+func lookupSymbolProp(vmInstance *vm.VM, val vm.Value, symKey vm.PropertyKey, symObj *vm.SymbolObject, depth int) (vm.Value, error) {
+	if depth > 50 {
+		return vm.Undefined, nil // safety limit
+	}
+
+	switch val.Type() {
+	case vm.TypeProxy:
+		proxy := val.AsProxy()
+		if proxy.Revoked {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot perform 'get' on a proxy that has been revoked")
+		}
+		handler := proxy.Handler()
+		var getTrap vm.Value
+		var hasGetTrap bool
+		switch handler.Type() {
+		case vm.TypeObject:
+			getTrap, hasGetTrap = handler.AsPlainObject().GetOwn("get")
+		case vm.TypeDictObject:
+			getTrap, hasGetTrap = handler.AsDictObject().GetOwn("get")
+		}
+		if hasGetTrap && getTrap.IsCallable() {
+			return vmInstance.Call(getTrap, handler, []vm.Value{proxy.Target(), vmInstance.SymbolToStringTag, val})
+		}
+		// No get trap — check target
+		return lookupSymbolProp(vmInstance, proxy.Target(), symKey, symObj, depth+1)
+
+	case vm.TypeObject:
+		return lookupSymbolPropInPlainObj(vmInstance, val, val.AsPlainObject(), symKey, symObj, depth)
+
+	case vm.TypeArray:
+		arr := val.AsArray()
+		if v, ok := arr.GetSymbolProp(symObj); ok {
+			return v, nil
+		}
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.ArrayPrototype, symKey, symObj, depth)
+
+	case vm.TypeFunction:
+		fn := val.AsFunction()
+		if fn != nil && fn.Properties != nil {
+			if v, err := checkPlainObjOwnSymbol(vmInstance, val, fn.Properties, symKey); v.Type() != 0 || err != nil {
+				return v, err
+			}
+			// Walk up the function's __proto__ chain
+			proto := fn.Properties.GetPrototype()
+			if proto.Type() != vm.TypeNull && !proto.IsUndefined() && proto.Type() != 0 {
+				return lookupSymbolPropFromProto(vmInstance, proto, symKey, symObj, depth)
+			}
+		}
+		// Use correct prototype based on function kind
+		fnProto, _ := getPrototypeOfValue(vmInstance, val)
+		return lookupSymbolPropFromProto(vmInstance, fnProto, symKey, symObj, depth)
+
+	case vm.TypeClosure:
+		cl := val.AsClosure()
+		if cl != nil {
+			// Check closure's own Properties
+			if cl.Properties != nil {
+				if v, err := checkPlainObjOwnSymbol(vmInstance, val, cl.Properties, symKey); v.Type() != 0 || err != nil {
+					return v, err
+				}
+			}
+			// Check underlying function's Properties
+			if cl.Fn != nil && cl.Fn.Properties != nil {
+				if v, err := checkPlainObjOwnSymbol(vmInstance, val, cl.Fn.Properties, symKey); v.Type() != 0 || err != nil {
+					return v, err
+				}
+				// Walk up the function's __proto__ chain
+				proto := cl.Fn.Properties.GetPrototype()
+				if proto.Type() != vm.TypeNull && !proto.IsUndefined() && proto.Type() != 0 {
+					return lookupSymbolPropFromProto(vmInstance, proto, symKey, symObj, depth)
+				}
+			}
+		}
+		// Use correct prototype based on closure kind (generator, async, etc.)
+		clProto, _ := getPrototypeOfValue(vmInstance, val)
+		return lookupSymbolPropFromProto(vmInstance, clProto, symKey, symObj, depth)
+
+	case vm.TypeNativeFunctionWithProps:
+		nfp := val.AsNativeFunctionWithProps()
+		if v, err := checkPlainObjOwnSymbol(vmInstance, val, nfp.Properties, symKey); v.Type() != 0 || err != nil {
+			return v, err
+		}
+		proto := nfp.Properties.GetPrototype()
+		if proto.Type() != vm.TypeNull && !proto.IsUndefined() && proto.Type() != 0 {
+			return lookupSymbolPropFromProto(vmInstance, proto, symKey, symObj, depth)
+		}
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.FunctionPrototype, symKey, symObj, depth)
+
+	case vm.TypeNativeFunction:
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.FunctionPrototype, symKey, symObj, depth)
+
+	case vm.TypeBoundFunction:
+		bf := val.AsBoundFunction()
+		if bf.Properties != nil {
+			if v, err := checkPlainObjOwnSymbol(vmInstance, val, bf.Properties, symKey); v.Type() != 0 || err != nil {
+				return v, err
+			}
+		}
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.FunctionPrototype, symKey, symObj, depth)
+
+	case vm.TypeRegExp:
+		regex := val.AsRegExpObject()
+		if regex != nil && regex.Properties != nil {
+			if v, err := checkPlainObjOwnSymbol(vmInstance, val, regex.Properties, symKey); v.Type() != 0 || err != nil {
+				return v, err
+			}
+		}
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.RegExpPrototype, symKey, symObj, depth)
+
+	case vm.TypeMap:
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.MapPrototype, symKey, symObj, depth)
+	case vm.TypeSet:
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.SetPrototype, symKey, symObj, depth)
+	case vm.TypePromise:
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.PromisePrototype, symKey, symObj, depth)
+	case vm.TypeGenerator:
+		// Check the generator's own prototype chain (genFn.prototype → Generator.prototype)
+		genObj := val.AsGenerator()
+		if genObj.Prototype != nil {
+			return lookupSymbolPropInPlainObj(vmInstance, val, genObj.Prototype, symKey, symObj, depth)
+		}
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.GeneratorPrototype, symKey, symObj, depth)
+	case vm.TypeAsyncGenerator:
+		// Check the async generator's own prototype chain
+		asyncGenObj := val.AsAsyncGenerator()
+		if asyncGenObj.Prototype != nil {
+			return lookupSymbolPropInPlainObj(vmInstance, val, asyncGenObj.Prototype, symKey, symObj, depth)
+		}
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.AsyncGeneratorPrototype, symKey, symObj, depth)
+	case vm.TypeArrayBuffer:
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.ArrayBufferPrototype, symKey, symObj, depth)
+	case vm.TypeSharedArrayBuffer:
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.SharedArrayBufferPrototype, symKey, symObj, depth)
+	case vm.TypeTypedArray:
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.ObjectPrototype, symKey, symObj, depth)
+	case vm.TypeArguments:
+		// Check own symbol properties first
+		argObj := val.AsArguments()
+		if symObj != nil {
+			if v, ok := argObj.GetSymbolProp(symObj); ok {
+				return v, nil
+			}
+		}
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.ObjectPrototype, symKey, symObj, depth)
+
+	// Primitives - check their wrapper prototype
+	case vm.TypeBoolean:
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.BooleanPrototype, symKey, symObj, depth)
+	case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.NumberPrototype, symKey, symObj, depth)
+	case vm.TypeString:
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.StringPrototype, symKey, symObj, depth)
+	case vm.TypeSymbol:
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.SymbolPrototype, symKey, symObj, depth)
+	case vm.TypeBigInt:
+		return lookupSymbolPropFromProto(vmInstance, vmInstance.BigIntPrototype, symKey, symObj, depth)
+
+	default:
+		return vm.Undefined, nil
+	}
+}
+
+// lookupSymbolPropFromProto starts a symbol property lookup from a prototype value.
+func lookupSymbolPropFromProto(vmInstance *vm.VM, proto vm.Value, symKey vm.PropertyKey, symObj *vm.SymbolObject, depth int) (vm.Value, error) {
+	if proto.Type() == vm.TypeNull || proto.IsUndefined() || proto.Type() == 0 {
+		return vm.Undefined, nil
+	}
+	return lookupSymbolProp(vmInstance, proto, symKey, symObj, depth+1)
+}
+
+// lookupSymbolPropInPlainObj walks a PlainObject and its prototype chain for a symbol property.
+// Handles accessor properties by invoking getters on the original receiver.
+func lookupSymbolPropInPlainObj(vmInstance *vm.VM, receiver vm.Value, obj *vm.PlainObject, symKey vm.PropertyKey, symObj *vm.SymbolObject, depth int) (vm.Value, error) {
+	for obj != nil && depth < 50 {
+		depth++
+		// Check for accessor property first
+		if getter, _, _, _, isAccessor := obj.GetOwnAccessorByKey(symKey); isAccessor {
+			if getter.IsCallable() {
+				return vmInstance.Call(getter, receiver, []vm.Value{})
+			}
+			return vm.Undefined, nil
+		}
+		// Check for data property
+		if tag, ok := obj.GetOwnByKey(symKey); ok {
+			return tag, nil
+		}
+		// Walk up prototype chain
+		proto := obj.GetPrototype()
+		if proto.Type() == vm.TypeObject {
+			obj = proto.AsPlainObject()
+		} else if proto.Type() == vm.TypeNativeFunctionWithProps {
+			nfp := proto.AsNativeFunctionWithProps()
+			// Check accessor on NativeFunctionWithProps
+			if getter, _, _, _, isAccessor := nfp.Properties.GetOwnAccessorByKey(symKey); isAccessor {
+				if getter.IsCallable() {
+					return vmInstance.Call(getter, receiver, []vm.Value{})
+				}
+				return vm.Undefined, nil
+			}
+			if tag, ok := nfp.Properties.GetOwnByKey(symKey); ok {
+				return tag, nil
+			}
+			// Continue up nfp's prototype chain
+			proto = nfp.Properties.GetPrototype()
+			if proto.Type() == vm.TypeObject {
+				obj = proto.AsPlainObject()
+			} else {
+				break
+			}
+		} else {
+			break
+		}
+	}
+	return vm.Undefined, nil
+}
+
+// checkPlainObjOwnSymbol checks a PlainObject for an own symbol property (data or accessor).
+// Returns (Undefined with type 0, nil) if not found, so caller can continue lookup.
+func checkPlainObjOwnSymbol(vmInstance *vm.VM, receiver vm.Value, obj *vm.PlainObject, symKey vm.PropertyKey) (vm.Value, error) {
+	if getter, _, _, _, isAccessor := obj.GetOwnAccessorByKey(symKey); isAccessor {
+		if getter.IsCallable() {
+			result, err := vmInstance.Call(getter, receiver, []vm.Value{})
+			return result, err
+		}
+		return vm.Undefined, nil
+	}
+	if tag, ok := obj.GetOwnByKey(symKey); ok {
+		return tag, nil
+	}
+	return vm.Value{}, nil // zero-value type (0) signals "not found"
 }
 
 // Static method implementations
@@ -1936,7 +2201,7 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		}
 		return vm.Null, nil
 	case vm.TypeNativeFunctionWithProps:
-		// For NativeFunctionWithProps (like Function.prototype), return its internal prototype
+		// Return Properties prototype (may be custom, e.g. TypedArray constructors)
 		nfp := obj.AsNativeFunctionWithProps()
 		if nfp != nil && nfp.Properties != nil {
 			return nfp.Properties.GetPrototype(), nil
@@ -3020,6 +3285,7 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	var getter vm.Value = vm.Undefined
 	var setter vm.Value = vm.Undefined
 	hasValue := false
+	hasWritable := false
 	hasGetter := false
 	hasSetter := false
 
@@ -3159,6 +3425,7 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	if w, exists, err := hasAndGetProperty(descriptor, "writable"); err != nil {
 		return vm.Undefined, err
 	} else if exists {
+		hasWritable = true
 		b := w.IsTruthy()
 		writablePtr = &b
 	}
@@ -3276,6 +3543,14 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 				}
 			}
 		} else {
+			// New property: check extensibility first
+			if !plainObj.IsExtensible() {
+				keyStr := propName
+				if keyIsSymbol {
+					keyStr = propSym.ToString()
+				}
+				return vm.Undefined, vmInstance.NewTypeError("Cannot define property " + keyStr + ", object is not extensible")
+			}
 			// New property: default missing attributes to false
 			if !(hasGetter || hasSetter) {
 				if writablePtr == nil {
@@ -3294,23 +3569,24 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		}
 
 		if exists && !c0 {
-			// Non-configurable: cannot change configurable or enumerable
+			// Non-configurable property validation - throw TypeError per DefinePropertyOrThrow
 			if configurablePtr != nil && *configurablePtr != c0 {
-				return obj, nil
+				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
 			}
 			if enumerablePtr != nil && *enumerablePtr != e0 {
-				return obj, nil
+				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
 			}
 			// If data non-writable cannot make writable true
 			if !isAccessor0 && !w0 && writablePtr != nil && *writablePtr {
-				return obj, nil
+				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
 			}
-			// Disallow converting kind when not configurable
-			if isAccessor0 && !(hasGetter || hasSetter) {
-				return obj, nil
+			// Disallow converting kind when not configurable (step 7c)
+			// A generic descriptor (no value/writable/get/set) does NOT trigger kind conversion
+			if isAccessor0 && (hasValue || hasWritable) {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
 			}
 			if !isAccessor0 && (hasGetter || hasSetter) {
-				return obj, nil
+				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
 			}
 		}
 		if hasGetter || hasSetter {

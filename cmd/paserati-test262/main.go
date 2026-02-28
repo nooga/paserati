@@ -154,6 +154,11 @@ func main() {
 		printGCStats()
 	}
 
+	// Stop CPU profile before exiting (os.Exit skips defers)
+	if *cpuprofile != "" {
+		pprof.StopCPUProfile()
+	}
+
 	// Exit with appropriate code
 	if stats.Failed > 0 {
 		os.Exit(1)

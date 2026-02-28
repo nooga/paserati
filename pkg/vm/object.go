@@ -114,6 +114,9 @@ type PlainObject struct {
 	// Module namespace exotic object flag - when true, this is a module namespace
 	// with special [[Delete]] and [[Set]] behavior per ECMAScript 10.4.6
 	isModuleNamespace bool
+	// Immutable prototype flag - when true, [[SetPrototypeOf]] only succeeds if
+	// the new value is SameValue as current prototype (ECMAScript 9.4.7)
+	immutablePrototype bool
 }
 
 // GetOwn looks up a direct (own) property by name. Returns (value, true) if present.
@@ -570,10 +573,11 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 					return
 				}
 			}
-			if !f.writable && writable != nil && *writable {
+			if !f.configurable && !f.writable && writable != nil && *writable {
 				return
 			}
-			if f.writable {
+			// Update value: if configurable, always allow; otherwise only if writable
+			if f.configurable || f.writable {
 				o.properties[f.offset] = value
 			}
 			if writable != nil {
@@ -930,16 +934,41 @@ func (o *PlainObject) GetPrototype() Value {
 // SetPrototype sets the object's prototype.
 // Returns true if successful, false if the operation failed (e.g. object is non-extensible)
 func (o *PlainObject) SetPrototype(proto Value) bool {
-	// ES6 9.1.2 [[SetPrototypeOf]]
+	// ECMAScript 9.4.7.1: Immutable Prototype Exotic Objects [[SetPrototypeOf]](V)
+	// If immutablePrototype, only succeed if V is SameValue as current
+	if o.immutablePrototype {
+		return proto.Is(o.prototype)
+	}
+	// ECMAScript 10.1.2 OrdinarySetPrototypeOf(O, V)
+	// Step 1-2: If SameValue(V, current), return true
 	current := o.prototype
 	if proto.Is(current) {
 		return true
 	}
+	// Step 3-4: If not extensible, return false
 	if !o.extensible {
 		return false
 	}
+	// Steps 5-7: Cycle detection - walk V's prototype chain to ensure O is not in it
+	p := proto
+	for i := 0; i < 1000; i++ { // safety limit
+		if p.Type() == TypeNull || p.IsUndefined() || p.Type() == 0 {
+			break // Step 7a: p is null, done
+		}
+		// Step 7b: If SameValue(p, O), return false (cycle detected)
+		if p.Type() == TypeObject {
+			if p.AsPlainObject() == o {
+				return false
+			}
+			// Step 7d: Set p to p.[[Prototype]]
+			p = p.AsPlainObject().prototype
+		} else {
+			// Step 7c: If p's [[GetPrototypeOf]] is not ordinary, stop checking
+			break
+		}
+	}
+	// Step 8: Set O.[[Prototype]] to V
 	o.prototype = proto
-	// TODO: Invalidate related caches
 	return true
 }
 
@@ -1079,6 +1108,11 @@ func (o *PlainObject) SetModuleNamespace(isNamespace bool) {
 // IsModuleNamespace returns true if this is a module namespace exotic object
 func (o *PlainObject) IsModuleNamespace() bool {
 	return o.isModuleNamespace
+}
+
+// SetImmutablePrototype marks this object's prototype as immutable (ECMAScript 9.4.7).
+func (o *PlainObject) SetImmutablePrototype() {
+	o.immutablePrototype = true
 }
 
 type DictObject struct {
