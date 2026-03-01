@@ -984,11 +984,15 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 					// Use OpDefineMethodComputedEnumerable to set [[HomeObject]], name, and make enumerable
 					c.emitDefineMethodComputedEnumerable(hint, valueReg, keyReg, line)
 				} else {
-					// Use OpSetIndex for computed keys: obj[keyReg] = valueReg
-					c.emitOpCode(vm.OpSetIndex, line)
+					// Use OpDefineComputedDataProperty for computed keys in object literals.
+					// Per ECMAScript, computed properties use CreateDataPropertyOrThrow
+					// (i.e., [[DefineOwnProperty]]), NOT [[Set]]. This is critical:
+					// { __proto__: proto, ['__proto__']: ownProp } must create an own property
+					// for the computed case, not trigger the __proto__ setter.
+					c.emitOpCode(vm.OpDefineComputedDataProperty, line)
 					c.emitByte(byte(hint))     // Object register
-					c.emitByte(byte(keyReg))   // Key register (computed at runtime)
 					c.emitByte(byte(valueReg)) // Value register
+					c.emitByte(byte(keyReg))   // Key register (computed at runtime)
 				}
 			} else {
 				// Use OpDefineDataProperty for static keys in object literals

@@ -64,3 +64,57 @@ func (vm *VM) handleOpDefineDataProperty(code []byte, ip *int, constants []Value
 		return status, Undefined
 	}
 }
+
+// handleOpDefineComputedDataProperty handles the OpDefineComputedDataProperty opcode.
+// Like OpDefineDataProperty but the property name comes from a register (computed key).
+// Per ECMAScript, computed properties in object literals use CreateDataPropertyOrThrow,
+// which is [[DefineOwnProperty]] — NOT [[Set]]. This is critical for __proto__:
+// static `__proto__: v` sets prototype, but computed `['__proto__']: v` creates own property.
+func (vm *VM) handleOpDefineComputedDataProperty(code []byte, ip *int, registers []Value) (InterpretResult, Value) {
+	objReg := code[*ip]
+	valReg := code[*ip+1]
+	keyReg := code[*ip+2]
+	*ip += 3
+
+	objVal := registers[objReg]
+	valueToSet := registers[valReg]
+	keyVal := registers[keyReg]
+
+	// Convert key to property name (string or symbol)
+	propertyName := keyVal.ToString()
+
+	if objVal.Type() == TypeObject {
+		plainObj := objVal.AsPlainObject()
+
+		// Check for symbol keys
+		if keyVal.IsSymbol() {
+			symKey := NewSymbolKey(keyVal)
+			wTrue, eTrue, cTrue := true, true, true
+			plainObj.DefineOwnPropertyByKey(symKey, valueToSet, &wTrue, &eTrue, &cTrue)
+			return InterpretOK, Undefined
+		}
+
+		// Fast path: if existing property is a data property, use SetOwn for shape reuse
+		for _, f := range plainObj.shape.fields {
+			if f.keyKind == KeyKindString && f.name == propertyName {
+				if !f.isAccessor {
+					plainObj.SetOwn(propertyName, valueToSet)
+					return InterpretOK, Undefined
+				}
+				// Accessor present: must redefine as a data property
+				writable := true
+				enumerable := true
+				configurable := true
+				plainObj.DefineOwnProperty(propertyName, valueToSet, &writable, &enumerable, &configurable)
+				return InterpretOK, Undefined
+			}
+		}
+
+		// Missing property: SetOwn creates w/e/c all true
+		plainObj.SetOwn(propertyName, valueToSet)
+		return InterpretOK, Undefined
+	}
+
+	status := vm.runtimeError("Cannot define property on non-object type '%s'", objVal.TypeName())
+	return status, Undefined
+}

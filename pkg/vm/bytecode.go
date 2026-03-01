@@ -138,6 +138,7 @@ const (
 	OpDefineMethodEnumerable         OpCode = 117 // ObjReg ValueReg NameIdx(16bit): Define enumerable method on object (for object literals, sets [[HomeObject]])
 	OpDefineMethodComputedEnumerable OpCode = 122 // ObjReg ValueReg KeyReg: Define enumerable method on object with computed key (sets [[HomeObject]], for object literals)
 	OpDefineDataProperty             OpCode = 125 // ObjReg ValueReg NameIdx(16bit): Define enumerable data property on object (uses DefineOwnProperty, for object literals)
+	OpDefineComputedDataProperty     OpCode = 146 // ObjReg ValueReg KeyReg: Define enumerable data property on object with computed key (uses DefineOwnProperty, for object literals)
 
 	// --- Direct Eval Support ---
 	OpDirectEval OpCode = 126 // Rx CodeReg: Execute direct eval with code string in CodeReg, result in Rx (inherits caller's strict mode and scope)
@@ -471,6 +472,8 @@ func (op OpCode) String() string {
 		return "OpDefineMethodComputedEnumerable"
 	case OpDefineDataProperty:
 		return "OpDefineDataProperty"
+	case OpDefineComputedDataProperty:
+		return "OpDefineComputedDataProperty"
 	case OpPushWithObject:
 		return "OpPushWithObject"
 	case OpPopWithObject:
@@ -1083,6 +1086,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // ObjReg ValueReg KeyReg
 	case OpDefineDataProperty:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "property") // ObjReg ValueReg NameIdx(16bit)
+	case OpDefineComputedDataProperty:
+		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // ObjReg ValueReg KeyReg
 	case OpPushWithObject:
 		return c.registerInstruction(builder, instruction.String(), offset) // ObjReg
 	case OpPopWithObject:

@@ -10241,7 +10241,7 @@
 +language/expressions/object/S11.1.5_A4.1.js
 +language/expressions/object/S11.1.5_A4.2.js
 +language/expressions/object/S11.1.5_A4.3.js
-+language/expressions/object/__proto__-duplicate-computed.js
+-language/expressions/object/__proto__-duplicate-computed.js
 +language/expressions/object/__proto__-duplicate.js
 +language/expressions/object/__proto__-fn-name.js
 +language/expressions/object/__proto__-permitted-dup-shorthand.js
@@ -10274,7 +10274,7 @@
 +language/expressions/object/accessor-name-literal-string-line-continuation.js
 +language/expressions/object/accessor-name-literal-string-single-quote.js
 +language/expressions/object/accessor-name-literal-string-unicode-escape.js
-+language/expressions/object/computed-__proto__.js
+-language/expressions/object/computed-__proto__.js
 +language/expressions/object/computed-property-evaluation-order.js
 +language/expressions/object/computed-property-name-topropertykey-before-value-evaluation.js
 +language/expressions/object/concise-generator.js
