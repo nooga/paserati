@@ -101,7 +101,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		target := args[0]
 		propKey := args[1].ToString()
 
-		if !target.IsObject() {
+		if !target.IsObject() && !target.IsCallable() {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.get called on non-object")
 		}
 
@@ -150,7 +150,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			receiver = args[3]
 		}
 
-		if !target.IsObject() {
+		if !target.IsObject() && !target.IsCallable() {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.set called on non-object")
 		}
 
@@ -368,8 +368,23 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.BooleanValue(true), nil
 	}))
 
-	// Reflect.getPrototypeOf(target) - reuse Object.getPrototypeOf
+	// Helper: check target is an object, throw TypeError if not (Reflect methods require objects)
+	requireObject := func(methodName string, args []vm.Value) error {
+		if len(args) == 0 {
+			return vmInstance.NewTypeError("Reflect." + methodName + " requires a target")
+		}
+		target := args[0]
+		if !target.IsObject() && !target.IsCallable() {
+			return vmInstance.NewTypeError("Reflect." + methodName + " called on non-object")
+		}
+		return nil
+	}
+
+	// Reflect.getPrototypeOf(target) - must be an object (unlike Object.getPrototypeOf which coerces)
 	reflectObj.SetOwnNonEnumerable("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", func(args []vm.Value) (vm.Value, error) {
+		if err := requireObject("getPrototypeOf", args); err != nil {
+			return vm.Undefined, err
+		}
 		return objectGetPrototypeOfWithVM(vmInstance, args)
 	}))
 
@@ -404,8 +419,8 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Per ECMAScript spec, this returns boolean instead of throwing for invalid operations
 	// EXCEPT: Proxy invariant violations must still throw TypeError
 	reflectObj.SetOwnNonEnumerable("defineProperty", vm.NewNativeFunction(3, false, "defineProperty", func(args []vm.Value) (vm.Value, error) {
-		if len(args) < 1 {
-			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.defineProperty requires a target")
+		if err := requireObject("defineProperty", args); err != nil {
+			return vm.BooleanValue(false), err
 		}
 
 		result, err := objectDefinePropertyWithVM(vmInstance, args)
@@ -436,6 +451,9 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Reflect.getOwnPropertyDescriptor(target, propertyKey)
 	reflectObj.SetOwnNonEnumerable("getOwnPropertyDescriptor", vm.NewNativeFunction(2, false, "getOwnPropertyDescriptor", func(args []vm.Value) (vm.Value, error) {
+		if err := requireObject("getOwnPropertyDescriptor", args); err != nil {
+			return vm.Undefined, err
+		}
 		return objectGetOwnPropertyDescriptorWithVM(vmInstance, args)
 	}))
 
@@ -500,13 +518,19 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return keysArray, nil
 	}))
 
-	// Reflect.isExtensible(target)
+	// Reflect.isExtensible(target) - must be an object
 	reflectObj.SetOwnNonEnumerable("isExtensible", vm.NewNativeFunction(1, false, "isExtensible", func(args []vm.Value) (vm.Value, error) {
+		if err := requireObject("isExtensible", args); err != nil {
+			return vm.Undefined, err
+		}
 		return objectIsExtensibleWithVM(vmInstance, args)
 	}))
 
-	// Reflect.preventExtensions(target)
+	// Reflect.preventExtensions(target) - must be an object
 	reflectObj.SetOwnNonEnumerable("preventExtensions", vm.NewNativeFunction(1, false, "preventExtensions", func(args []vm.Value) (vm.Value, error) {
+		if err := requireObject("preventExtensions", args); err != nil {
+			return vm.Undefined, err
+		}
 		result, err := objectPreventExtensionsWithVM(vmInstance, args)
 		if err != nil {
 			// For proxies: "trap returned falsish" means the trap said no — return false.

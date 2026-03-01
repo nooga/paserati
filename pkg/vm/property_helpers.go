@@ -729,24 +729,11 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 		}
 	}
 
-	// Handle RegExp properties
+	// Handle RegExp own properties
 	if objVal.Type() == TypeRegExp {
 		regexObj := objVal.AsRegExpObject()
 		if regexObj != nil {
-			switch propName {
-			case "source":
-				return NewString(regexObj.GetSource()), true
-			case "flags":
-				return NewString(regexObj.GetFlags()), true
-			case "global":
-				return BooleanValue(regexObj.IsGlobal()), true
-			case "ignoreCase":
-				return BooleanValue(regexObj.IsIgnoreCase()), true
-			case "multiline":
-				return BooleanValue(regexObj.IsMultiline()), true
-			case "dotAll":
-				return BooleanValue(regexObj.IsDotAll()), true
-			case "lastIndex":
+			if propName == "lastIndex" {
 				return Number(float64(regexObj.GetLastIndex())), true
 			}
 		}

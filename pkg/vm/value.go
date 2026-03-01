@@ -158,8 +158,9 @@ type StringObject struct {
 
 type SymbolObject struct {
 	Object
-	value      string
-	Registered bool // true for Symbol.for() symbols (cannot be WeakMap/WeakSet keys)
+	value          string
+	Registered     bool // true for Symbol.for() symbols (cannot be WeakMap/WeakSet keys)
+	HasDescription bool // true when Symbol was created with an explicit description argument
 }
 
 // CanBeHeldWeakly returns true if this value can be used as a WeakMap/WeakSet key.
@@ -480,11 +481,17 @@ func NewString(value string) Value {
 }
 
 func NewSymbol(value string) Value {
-	return Value{typ: TypeSymbol, obj: unsafe.Pointer(&SymbolObject{value: value})}
+	// NewSymbol creates a symbol with HasDescription=true (has an explicit description)
+	return Value{typ: TypeSymbol, obj: unsafe.Pointer(&SymbolObject{value: value, HasDescription: true})}
+}
+
+// NewSymbolNoDescription creates a symbol with no description (Symbol() with no args)
+func NewSymbolNoDescription() Value {
+	return Value{typ: TypeSymbol, obj: unsafe.Pointer(&SymbolObject{value: "", HasDescription: false})}
 }
 
 func NewRegisteredSymbol(value string) Value {
-	return Value{typ: TypeSymbol, obj: unsafe.Pointer(&SymbolObject{value: value, Registered: true})}
+	return Value{typ: TypeSymbol, obj: unsafe.Pointer(&SymbolObject{value: value, Registered: true, HasDescription: true})}
 }
 
 func NewArray() Value {
@@ -2141,14 +2148,65 @@ func (a *ArrayObject) GetOwnPropertyDescriptor(name string) (Value, PropertyDesc
 	return v, PropertyDesc{Writable: true, Enumerable: true, Configurable: true}, true
 }
 
-// IsFrozen returns whether this array is frozen
+// IsFrozen returns whether this array is frozen (elements and named properties)
 func (a *ArrayObject) IsFrozen() bool {
-	return a.frozen
+	if !a.frozen {
+		return false
+	}
+	// Also check named properties
+	if a.propertyDesc != nil {
+		for _, desc := range a.propertyDesc {
+			if desc.Configurable || desc.Writable {
+				return false
+			}
+		}
+	}
+	// Check properties that don't have explicit descriptors (default: writable+configurable)
+	if a.properties != nil {
+		for name := range a.properties {
+			if a.propertyDesc == nil {
+				return false // no descriptors means default (writable/configurable)
+			}
+			if _, hasDesc := a.propertyDesc[name]; !hasDesc {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // SetFrozen sets whether this array is frozen (elements non-writable/non-configurable)
 func (a *ArrayObject) SetFrozen(frozen bool) {
 	a.frozen = frozen
+	if frozen {
+		a.sealOrFreezeProperties(true)
+	}
+}
+
+// SealProperties makes all named properties non-configurable (but preserves writable)
+func (a *ArrayObject) SealProperties() {
+	a.sealOrFreezeProperties(false)
+}
+
+func (a *ArrayObject) sealOrFreezeProperties(freeze bool) {
+	if a.properties == nil {
+		return
+	}
+	if a.propertyDesc == nil {
+		a.propertyDesc = make(map[string]PropertyDesc)
+	}
+	for name, val := range a.properties {
+		_ = val
+		desc, hasDesc := a.propertyDesc[name]
+		if !hasDesc {
+			desc = PropertyDesc{Writable: true, Enumerable: true, Configurable: true}
+		}
+		desc.Configurable = false
+		if freeze {
+			desc.Writable = false
+		}
+		a.propertyDesc[name] = desc
+	}
 }
 
 // IsExtensible returns whether new properties can be added to this array

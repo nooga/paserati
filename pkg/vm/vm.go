@@ -7627,46 +7627,13 @@ startExecution:
 						closure.Properties.SetOwn(key, valueVal)
 					}
 				} else {
-					obj := AsPlainObject(baseVal)
-					// Check if this is an accessor property with a setter
-					if _, setter, _, _, ok := obj.GetOwnAccessor(key); ok && setter.Type() != TypeUndefined {
-						// Call the setter with the value
-						_, err := vm.Call(setter, baseVal, []Value{valueVal})
-						if err != nil {
-							if ee, ok := err.(ExceptionError); ok {
-								vm.throwException(ee.GetExceptionValue())
-								return InterpretRuntimeError, Undefined
-							}
-							frame.ip = ip
-							status := vm.runtimeError("Error calling setter: %v", err)
-							return status, Undefined
+					// Route through opSetProp which handles extensibility, writable,
+					// prototype chain accessors, and global object sync
+					if ok, status, res := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+						if status != InterpretOK {
+							return status, res
 						}
-					} else {
-						// GlobalThis special case: keep heap and PlainObject in sync
-						if obj == vm.GlobalObject {
-							if globalIdx, exists := vm.heap.nameToIndex[key]; exists {
-								// Check if property is writable
-								writable := true
-								for _, f := range obj.shape.fields {
-									if f.keyKind == KeyKindString && f.name == key {
-										writable = f.writable
-										break
-									}
-								}
-								if !writable {
-									// Non-writable, throw TypeError
-									frame.ip = ip
-									vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", key))
-									if vm.unwinding {
-										return InterpretRuntimeError, Undefined
-									}
-									goto reloadFrame
-								}
-								_ = vm.heap.Set(globalIdx, valueVal)
-							}
-						}
-						// No setter, set as data property
-						obj.SetOwn(key, valueVal)
+						goto reloadFrame
 					}
 				}
 
@@ -15480,12 +15447,22 @@ func (vm *VM) NewNumberObject(primitiveValue float64) Value {
 func (vm *VM) NewStringObject(primitiveValue string) Value {
 	obj := NewObject(vm.StringPrototype).AsPlainObject()
 	obj.SetOwnNonEnumerable("[[PrimitiveValue]]", NewString(primitiveValue))
+
+	// Add indexed character properties per ECMAScript String exotic object
+	// Each character is enumerable, non-writable, non-configurable
+	utf16 := StringToUTF16(primitiveValue)
+	wFalse := false
+	eTrue := true
+	cFalse := false
+	for i, ch := range utf16 {
+		key := strconv.Itoa(i)
+		obj.DefineOwnProperty(key, NewString(string(rune(ch))), &wFalse, &eTrue, &cFalse)
+	}
+
 	// Add length property (number of UTF-16 code units)
 	// Per ECMAScript spec, String object's length is non-writable, non-enumerable, non-configurable
-	writable := false
-	enumerable := false
-	configurable := false
-	obj.DefineOwnProperty("length", IntegerValue(int32(UTF16Length(primitiveValue))), &writable, &enumerable, &configurable)
+	eFalse := false
+	obj.DefineOwnProperty("length", IntegerValue(int32(len(utf16))), &wFalse, &eFalse, &cFalse)
 	return NewValueFromPlainObject(obj)
 }
 

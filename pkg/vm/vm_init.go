@@ -482,22 +482,9 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		// RegExp objects: check own properties first, then RegExp.prototype
 		regexObj := obj.AsRegExpObject()
 		if regexObj != nil {
-			// Handle built-in properties
-			switch propName {
-			case "lastIndex":
+			// Handle lastIndex as own data property
+			if propName == "lastIndex" {
 				return NumberValue(float64(regexObj.GetLastIndex())), nil
-			case "source":
-				return NewString(regexObj.GetSource()), nil
-			case "flags":
-				return NewString(regexObj.GetFlags()), nil
-			case "global":
-				return BooleanValue(regexObj.IsGlobal()), nil
-			case "ignoreCase":
-				return BooleanValue(regexObj.IsIgnoreCase()), nil
-			case "multiline":
-				return BooleanValue(regexObj.IsMultiline()), nil
-			case "dotAll":
-				return BooleanValue(regexObj.IsDotAll()), nil
 			}
 			// Check own properties (for overridden methods like custom exec)
 			if regexObj.Properties != nil {
@@ -505,11 +492,46 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 					return v, nil
 				}
 			}
-			// Check RegExp.prototype
+			// Check RegExp.prototype (with accessor invocation)
 			if vm.RegExpPrototype.IsObject() {
 				proto := vm.RegExpPrototype.AsPlainObject()
-				if v, ok := proto.Get(propName); ok {
-					return v, nil
+				if proto != nil {
+					// Check for accessor property (getter) on prototype
+					if g, _, _, _, ok := proto.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
+						// Call the getter with this=original RegExp object
+						result, err := vm.Call(g, obj, nil)
+						if err != nil {
+							return Undefined, err
+						}
+						return result, nil
+					}
+					// Check for data property on prototype
+					if v, ok := proto.GetOwn(propName); ok {
+						return v, nil
+					}
+					// Walk prototype chain (Object.prototype)
+					current := proto.GetPrototype()
+					for current.typ != TypeNull && current.typ != TypeUndefined {
+						if current.IsObject() {
+							if grandProto := current.AsPlainObject(); grandProto != nil {
+								if g, _, _, _, ok := grandProto.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
+									result, err := vm.Call(g, obj, nil)
+									if err != nil {
+										return Undefined, err
+									}
+									return result, nil
+								}
+								if v, ok := grandProto.GetOwn(propName); ok {
+									return v, nil
+								}
+								current = grandProto.GetPrototype()
+							} else {
+								break
+							}
+						} else {
+							break
+						}
+					}
 				}
 			}
 		}

@@ -530,9 +530,21 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			fmt.Printf("[DEBUG opSetProp setter check] propName=%q\n", propName)
 		}
 
-		// Walk prototype chain looking for setter
+		// Per ECMAScript 10.1.9 OrdinarySet: check receiver's own property first.
+		// If receiver has an own DATA property, skip prototype accessor walk entirely.
+		hasOwnDataProperty := false
+		for _, f := range po.shape.fields {
+			if f.keyKind == KeyKindString && f.name == propName {
+				if !f.isAccessor {
+					hasOwnDataProperty = true
+				}
+				break
+			}
+		}
+
+		// Walk prototype chain looking for setter (only if receiver doesn't have own data property)
 		current := po
-		for current != nil {
+		for !hasOwnDataProperty && current != nil {
 			if _, s, _, _, ok := current.GetOwnAccessor(propName); ok {
 				if debugOpSetProp {
 					fmt.Printf("[DEBUG opSetProp] GetOwnAccessor found accessor for %q, setter type=%s\n", propName, s.Type().String())
@@ -575,14 +587,16 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 					}
 					return true, InterpretOK, *valueToSet
 				}
-				// No setter: throw TypeError in strict mode (we assume strict mode)
+				// No setter: throw TypeError in strict mode, silently fail in non-strict
 				if debugOpSetProp {
-					fmt.Printf("[DEBUG opSetProp] Setter is undefined, throwing TypeError\n")
+					fmt.Printf("[DEBUG opSetProp] Setter is undefined\n")
 				}
-				err := vm.NewTypeError(fmt.Sprintf("Cannot set property '%s' which has only a getter", propName))
-				if excErr, ok := err.(ExceptionError); ok {
-					vm.throwException(excErr.GetExceptionValue())
-					return false, InterpretRuntimeError, Undefined
+				if vm.IsInStrictMode() {
+					err := vm.NewTypeError(fmt.Sprintf("Cannot set property '%s' which has only a getter", propName))
+					if excErr, ok := err.(ExceptionError); ok {
+						vm.throwException(excErr.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
 				}
 				return true, InterpretOK, *valueToSet
 			}
@@ -656,11 +670,15 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 
 		// Check if we're trying to add a new property to a non-extensible object
 		if !propertyExists && !po.IsExtensible() {
-			err := vm.NewTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propName))
-			if excErr, ok := err.(ExceptionError); ok {
-				vm.throwException(excErr.GetExceptionValue())
-				return false, InterpretRuntimeError, Undefined
+			if vm.IsInStrictMode() {
+				err := vm.NewTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propName))
+				if excErr, ok := err.(ExceptionError); ok {
+					vm.throwException(excErr.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
+				}
 			}
+			// Non-strict mode: silently fail
+			return true, InterpretOK, *valueToSet
 		}
 
 		po.SetOwn(propName, *valueToSet)
@@ -758,11 +776,14 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		_, exists := d.GetOwn(propName)
 		// Check if we're trying to add a new property to a non-extensible object
 		if !exists && !d.IsExtensible() {
-			err := vm.NewTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propName))
-			if excErr, ok := err.(ExceptionError); ok {
-				vm.throwException(excErr.GetExceptionValue())
-				return false, InterpretRuntimeError, Undefined
+			if vm.IsInStrictMode() {
+				err := vm.NewTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propName))
+				if excErr, ok := err.(ExceptionError); ok {
+					vm.throwException(excErr.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
+				}
 			}
+			return true, InterpretOK, *valueToSet
 		}
 		d.SetOwn(propName, *valueToSet)
 	case TypeArguments:
@@ -902,11 +923,14 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		}
 		// Check if we're trying to add a new property to a non-extensible object
 		if !propertyExists && !po.IsExtensible() {
-			err := vm.NewTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propName))
-			if excErr, ok := err.(ExceptionError); ok {
-				vm.throwException(excErr.GetExceptionValue())
-				return false, InterpretRuntimeError, Undefined
+			if vm.IsInStrictMode() {
+				err := vm.NewTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propName))
+				if excErr, ok := err.(ExceptionError); ok {
+					vm.throwException(excErr.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
+				}
 			}
+			return true, InterpretOK, *valueToSet
 		}
 		po.SetOwn(propName, *valueToSet)
 	}

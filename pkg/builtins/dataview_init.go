@@ -72,22 +72,56 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 		)
 	}
 
-	// Helper to validate DataView and get byte offset
+	// Helper to validate DataView and get byte offset per GetViewValue spec
 	validateDataViewAccess := func(thisVal vm.Value, byteOffsetArg vm.Value, elementSize int) (*vm.DataViewObject, int, error) {
 		dv := thisVal.AsDataView()
 		if dv == nil {
 			return nil, 0, vmInstance.NewTypeError("Method called on incompatible receiver")
 		}
 
-		// Check if buffer is detached
-		if dv.GetBufferData().IsDetached() {
-			return nil, 0, vmInstance.NewTypeError("Cannot perform operation on a detached ArrayBuffer")
+		// Per spec: ToNumber(requestIndex) BEFORE checking detached buffer
+		// Must call ToPrimitive for proper valueOf/toString/Symbol/BigInt handling
+		var byteOffsetNum float64
+		if byteOffsetArg.Type() == vm.TypeSymbol {
+			return nil, 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+		}
+		if byteOffsetArg.Type() == vm.TypeBigInt {
+			return nil, 0, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
+		}
+		if byteOffsetArg.IsObject() || byteOffsetArg.IsCallable() {
+			vmInstance.EnterHelperCall()
+			prim := vmInstance.ToPrimitive(byteOffsetArg, "number")
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return nil, 0, ErrVMUnwinding
+			}
+			// ToPrimitive may return a BigInt or Symbol, which can't be converted to number
+			if prim.Type() == vm.TypeBigInt {
+				return nil, 0, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
+			}
+			if prim.Type() == vm.TypeSymbol {
+				return nil, 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+			}
+			byteOffsetNum = prim.ToFloat()
+		} else {
+			byteOffsetNum = byteOffsetArg.ToFloat()
 		}
 
-		// Get byte offset
-		byteOffset := int(vmInstance.ToNumber(byteOffsetArg))
+		// ToIndex: truncate to integer, then check for negative or Infinity
+		if math.IsNaN(byteOffsetNum) {
+			byteOffsetNum = 0
+		}
+		if math.IsInf(byteOffsetNum, 0) {
+			return nil, 0, vmInstance.NewRangeError("Offset is outside the bounds of the DataView")
+		}
+		byteOffset := int(byteOffsetNum) // Truncates towards 0 (e.g., -0.9 -> 0)
 		if byteOffset < 0 {
 			return nil, 0, vmInstance.NewRangeError("Offset is outside the bounds of the DataView")
+		}
+
+		// Check if buffer is detached (AFTER ToNumber per spec)
+		if dv.GetBufferData().IsDetached() {
+			return nil, 0, vmInstance.NewTypeError("Cannot perform operation on a detached ArrayBuffer")
 		}
 
 		// Check bounds

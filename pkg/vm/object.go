@@ -1085,6 +1085,56 @@ func (o *PlainObject) IsPrivateAccessor(name string) bool {
 	return false
 }
 
+// FreezeAllProperties makes all own properties (including non-enumerable and symbol-keyed)
+// non-configurable. Data properties also become non-writable. Accessor properties keep
+// their getter/setter but become non-configurable.
+func (o *PlainObject) FreezeAllProperties() {
+	for i, f := range o.shape.fields {
+		newF := f
+		newF.configurable = false
+		if !f.isAccessor {
+			newF.writable = false
+		}
+		o.shape.fields[i] = newF
+	}
+	o.shape.version++
+}
+
+// SealAllProperties makes all own properties (including non-enumerable and symbol-keyed)
+// non-configurable, but preserves the writable attribute of data properties.
+func (o *PlainObject) SealAllProperties() {
+	for i, f := range o.shape.fields {
+		newF := f
+		newF.configurable = false
+		o.shape.fields[i] = newF
+	}
+	o.shape.version++
+}
+
+// IsFrozenProperty checks if all own properties are non-configurable and
+// (for data properties) non-writable.
+func (o *PlainObject) IsFrozenProperties() bool {
+	for _, f := range o.shape.fields {
+		if f.configurable {
+			return false
+		}
+		if !f.isAccessor && f.writable {
+			return false
+		}
+	}
+	return true
+}
+
+// IsSealedProperties checks if all own properties are non-configurable.
+func (o *PlainObject) IsSealedProperties() bool {
+	for _, f := range o.shape.fields {
+		if f.configurable {
+			return false
+		}
+	}
+	return true
+}
+
 // IsExtensible returns whether new properties can be added to this object
 func (o *PlainObject) IsExtensible() bool {
 	return o.extensible

@@ -1259,6 +1259,99 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return result, nil
 	})
 
+	// Define flag accessor properties on RegExp.prototype per ECMAScript spec.
+	// These are getter-only accessor properties (no setter), enumerable: false, configurable: true.
+	{
+		eFalse, cTrue := false, true
+
+		// Helper to create a flag getter that validates this and returns the flag
+		makeFlagGetter := func(name string, flagFn func(*vm.RegExpObject) bool) vm.Value {
+			return vm.NewNativeFunction(0, false, "get "+name, func(args []vm.Value) (vm.Value, error) {
+				thisVal := vmInstance.GetThis()
+				// Per spec: if this is not an object, throw TypeError
+				if !thisVal.IsObject() && !thisVal.IsRegExp() {
+					return vm.Undefined, vmInstance.NewTypeError("RegExp.prototype." + name + " getter called on non-object")
+				}
+				// Per spec: RegExp.prototype itself returns undefined for flag getters
+				if thisVal.IsObject() && !thisVal.IsRegExp() {
+					protoObj := thisVal.AsPlainObject()
+					if protoObj != nil {
+						rpObj := vmInstance.RegExpPrototype.AsPlainObject()
+						if rpObj != nil && protoObj == rpObj {
+							return vm.Undefined, nil
+						}
+					}
+					return vm.Undefined, vmInstance.NewTypeError("RegExp.prototype." + name + " getter called on incompatible receiver")
+				}
+				regex := thisVal.AsRegExpObject()
+				if regex == nil {
+					return vm.Undefined, vmInstance.NewTypeError("RegExp.prototype." + name + " getter called on incompatible receiver")
+				}
+				return vm.BooleanValue(flagFn(regex)), nil
+			})
+		}
+
+		regexpProto.DefineAccessorProperty("global", makeFlagGetter("global", func(r *vm.RegExpObject) bool { return r.IsGlobal() }), true, vm.Undefined, false, &eFalse, &cTrue)
+		regexpProto.DefineAccessorProperty("ignoreCase", makeFlagGetter("ignoreCase", func(r *vm.RegExpObject) bool { return r.IsIgnoreCase() }), true, vm.Undefined, false, &eFalse, &cTrue)
+		regexpProto.DefineAccessorProperty("multiline", makeFlagGetter("multiline", func(r *vm.RegExpObject) bool { return r.IsMultiline() }), true, vm.Undefined, false, &eFalse, &cTrue)
+		regexpProto.DefineAccessorProperty("dotAll", makeFlagGetter("dotAll", func(r *vm.RegExpObject) bool { return r.IsDotAll() }), true, vm.Undefined, false, &eFalse, &cTrue)
+		regexpProto.DefineAccessorProperty("sticky", makeFlagGetter("sticky", func(r *vm.RegExpObject) bool { return r.IsSticky() }), true, vm.Undefined, false, &eFalse, &cTrue)
+		regexpProto.DefineAccessorProperty("unicode", makeFlagGetter("unicode", func(r *vm.RegExpObject) bool { return strings.Contains(r.GetFlags(), "u") }), true, vm.Undefined, false, &eFalse, &cTrue)
+		regexpProto.DefineAccessorProperty("hasIndices", makeFlagGetter("hasIndices", func(r *vm.RegExpObject) bool { return strings.Contains(r.GetFlags(), "d") }), true, vm.Undefined, false, &eFalse, &cTrue)
+
+		// source accessor
+		sourceGetter := vm.NewNativeFunction(0, false, "get source", func(args []vm.Value) (vm.Value, error) {
+			thisVal := vmInstance.GetThis()
+			if !thisVal.IsRegExp() {
+				if thisVal.IsObject() {
+					protoObj := thisVal.AsPlainObject()
+					rpObj := vmInstance.RegExpPrototype.AsPlainObject()
+					if protoObj != nil && rpObj != nil && protoObj == rpObj {
+						return vm.NewString("(?:)"), nil
+					}
+				}
+				return vm.Undefined, vmInstance.NewTypeError("RegExp.prototype.source getter called on incompatible receiver")
+			}
+			return vm.NewString(thisVal.AsRegExpObject().GetSource()), nil
+		})
+		regexpProto.DefineAccessorProperty("source", sourceGetter, true, vm.Undefined, false, &eFalse, &cTrue)
+
+		// flags accessor
+		flagsGetter := vm.NewNativeFunction(0, false, "get flags", func(args []vm.Value) (vm.Value, error) {
+			thisVal := vmInstance.GetThis()
+			// Per spec: get RegExp.prototype.flags works on ANY object (reads boolean properties)
+			if !thisVal.IsObject() && !thisVal.IsRegExp() && !thisVal.IsCallable() {
+				return vm.Undefined, vmInstance.NewTypeError("RegExp.prototype.flags getter called on non-object")
+			}
+			// Build flags string by reading properties (works for any object, not just RegExp)
+			result := ""
+			if v, err := vmInstance.GetProperty(thisVal, "hasIndices"); err == nil && v.IsTruthy() {
+				result += "d"
+			}
+			if v, err := vmInstance.GetProperty(thisVal, "global"); err == nil && v.IsTruthy() {
+				result += "g"
+			}
+			if v, err := vmInstance.GetProperty(thisVal, "ignoreCase"); err == nil && v.IsTruthy() {
+				result += "i"
+			}
+			if v, err := vmInstance.GetProperty(thisVal, "multiline"); err == nil && v.IsTruthy() {
+				result += "m"
+			}
+			if v, err := vmInstance.GetProperty(thisVal, "dotAll"); err == nil && v.IsTruthy() {
+				result += "s"
+			}
+			if v, err := vmInstance.GetProperty(thisVal, "unicode"); err == nil && v.IsTruthy() {
+				result += "u"
+			}
+			// TODO: unicodeSets (v flag)
+			if v, err := vmInstance.GetProperty(thisVal, "sticky"); err == nil && v.IsTruthy() {
+				result += "y"
+			}
+			return vm.NewString(result), nil
+		})
+		regexpProto.DefineAccessorProperty("flags", flagsGetter, true, vm.Undefined, false, &eFalse, &cTrue)
+	}
+
 	// Set constructor property on RegExp.prototype to point to RegExp constructor
 	regexpProto.SetOwnNonEnumerable("constructor", regexpCtor)
 	if v, ok := regexpProto.GetOwn("constructor"); ok {

@@ -86,43 +86,76 @@ func (s *SymbolInitializer) InitTypes(ctx *TypeContext) error {
 func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
-	// Debug print to see if this is being called
-	//fmt.Printf("[DEBUG] SymbolInitializer.InitRuntime called\n")
-
 	// Use the VM's Symbol.prototype
 	symbolProto := vmInstance.SymbolPrototype.AsPlainObject()
 
-	// Symbol.prototype.toString
-	symbolProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
-		// Get 'this' value
+	// thisSymbolValue extracts the symbol from `this`:
+	// - If `this` is a Symbol primitive, return it directly
+	// - If `this` is a Symbol wrapper object (Object(sym)), return [[PrimitiveValue]]
+	// - Otherwise return error
+	thisSymbolValue := func() (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
+		if thisVal.IsSymbol() {
+			return thisVal, nil
+		}
+		// Check for Symbol wrapper object
+		if thisVal.IsObject() {
+			po := thisVal.AsPlainObject()
+			if po != nil {
+				if pv, ok := po.GetOwn("[[PrimitiveValue]]"); ok && pv.IsSymbol() {
+					return pv, nil
+				}
+			}
+		}
+		return vm.Undefined, vmInstance.NewTypeError("Symbol.prototype.valueOf requires that 'this' be a Symbol")
+	}
 
-		// Check if it's a symbol
-		if !thisVal.IsSymbol() {
-			// Should throw TypeError
-			return vm.NewString("Symbol()"), nil
+	// Symbol.prototype.toString - per 20.4.3.3
+	symbolProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
+		sym, err := thisSymbolValue()
+		if err != nil {
+			return vm.Undefined, err
 		}
 
-		desc := thisVal.AsSymbol()
+		desc := sym.AsSymbol()
 		if desc == "" {
 			return vm.NewString("Symbol()"), nil
 		}
 		return vm.NewString("Symbol(" + desc + ")"), nil
 	}))
 
-	// Symbol.prototype.valueOf
+	// Symbol.prototype.valueOf - per 20.4.3.4
 	symbolProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
-		// Get 'this' value
-		thisVal := vmInstance.GetThis()
-
-		// Check if it's a symbol
-		if !thisVal.IsSymbol() {
-			// Should throw TypeError
-			return vm.Undefined, nil
+		sym, err := thisSymbolValue()
+		if err != nil {
+			return vm.Undefined, err
 		}
-
-		return thisVal, nil
+		return sym, nil
 	}))
+
+	// Symbol.prototype.description - accessor property per 20.4.3.2
+	{
+		eFalse, cTrue := false, true
+		descriptionGetter := vm.NewNativeFunction(0, false, "get description", func(args []vm.Value) (vm.Value, error) {
+			sym, err := thisSymbolValue()
+			if err != nil {
+				return vm.Undefined, err
+			}
+			desc := sym.AsSymbol()
+			// Symbol() with no argument has description undefined
+			// Symbol("") has description ""
+			// We distinguish by checking the SymbolObject's HasDescription field
+			symObj := sym.AsSymbolObject()
+			if !symObj.HasDescription {
+				return vm.Undefined, nil
+			}
+			return vm.NewString(desc), nil
+		})
+		symbolProto.DefineAccessorProperty("description", descriptionGetter, true, vm.Undefined, false, &eFalse, &cTrue)
+	}
+
+	// Symbol.prototype[Symbol.toPrimitive] - per 20.4.3.5
+	// Defined after well-known symbols are initialized (see below)
 
 	// Create Symbol constructor with properties (like Date does)
 	ctorWithProps := vm.NewNativeFunctionWithProps(0, true, "Symbol", func(args []vm.Value) (vm.Value, error) {
@@ -133,13 +166,12 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Get description argument
-		var description string
-		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
-			description = args[0].ToString()
+		if len(args) == 0 || args[0].Type() == vm.TypeUndefined {
+			return vm.NewSymbolNoDescription(), nil
 		}
 
-		// Create new symbol
-		return vm.NewSymbol(description), nil
+		// Create new symbol with description
+		return vm.NewSymbol(args[0].ToString()), nil
 	})
 
 	// Mark Symbol as a constructor for class extends validation
@@ -277,6 +309,24 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.SymbolUnscopables = SymbolUnscopables
 	vmInstance.SymbolAsyncIterator = SymbolAsyncIterator
 	vmInstance.SymbolDispose = SymbolDispose
+
+	// Symbol.prototype[Symbol.toPrimitive] - per 20.4.3.5
+	// Must be defined after well-known symbols are initialized
+	if vmInstance.SymbolToPrimitive.Type() == vm.TypeSymbol {
+		toPrimitiveFn := vm.NewNativeFunction(1, false, "[Symbol.toPrimitive]", func(args []vm.Value) (vm.Value, error) {
+			sym, err := thisSymbolValue()
+			if err != nil {
+				return vm.Undefined, err
+			}
+			return sym, nil
+		})
+		wFalse, eFalse, cTrue := false, false, true
+		symbolProto.DefineOwnPropertyByKey(
+			vm.NewSymbolKey(vmInstance.SymbolToPrimitive),
+			toPrimitiveFn,
+			&wFalse, &eFalse, &cTrue,
+		)
+	}
 
 	// Register Symbol constructor as global
 	return ctx.DefineGlobal("Symbol", symbolCtor)

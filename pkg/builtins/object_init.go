@@ -1561,117 +1561,6 @@ func objectDefinePropertiesImpl(vmInstance *vm.VM, obj vm.Value, propertiesDesc 
 		}
 	}
 
-	// Get the plain object to define properties on
-	plainObj := obj.AsPlainObject()
-	if plainObj == nil {
-		return vm.Undefined, vmInstance.NewTypeError("Cannot define properties on non-plain object")
-	}
-
-	// Helper to check if property exists and get its value using GetProperty (calls getters)
-	hasAndGetProperty := func(descObj vm.Value, propName string) (vm.Value, bool, error) {
-		// Check if property exists (including prototype chain)
-		var exists bool
-
-		// Helper to check Function.prototype for function types
-		checkFunctionPrototype := func() bool {
-			if vmInstance.FunctionPrototype.Type() == vm.TypeNativeFunctionWithProps {
-				nfp := vmInstance.FunctionPrototype.AsNativeFunctionWithProps()
-				if nfp != nil && nfp.Properties != nil {
-					return nfp.Properties.Has(propName)
-				}
-			}
-			return false
-		}
-
-		switch descObj.Type() {
-		case vm.TypeObject:
-			if po := descObj.AsPlainObject(); po != nil {
-				exists = po.Has(propName)
-			}
-		case vm.TypeDictObject:
-			if do := descObj.AsDictObject(); do != nil {
-				_, exists = do.Get(propName)
-			}
-		case vm.TypeFunction:
-			fn := descObj.AsFunction()
-			if fn != nil {
-				if fn.Properties != nil && fn.Properties.Has(propName) {
-					exists = true
-				} else {
-					exists = checkFunctionPrototype()
-				}
-			}
-		case vm.TypeClosure:
-			cl := descObj.AsClosure()
-			if cl != nil {
-				if cl.Properties != nil && cl.Properties.Has(propName) {
-					exists = true
-				} else {
-					exists = checkFunctionPrototype()
-				}
-			}
-		case vm.TypeBoundFunction:
-			bf := descObj.AsBoundFunction()
-			if bf != nil {
-				if bf.Properties != nil && bf.Properties.Has(propName) {
-					exists = true
-				} else {
-					exists = checkFunctionPrototype()
-				}
-			}
-		case vm.TypeNativeFunctionWithProps:
-			nfp := descObj.AsNativeFunctionWithProps()
-			if nfp != nil {
-				if nfp.Properties != nil && nfp.Properties.Has(propName) {
-					exists = true
-				} else {
-					exists = checkFunctionPrototype()
-				}
-			}
-		case vm.TypeRegExp:
-			regex := descObj.AsRegExpObject()
-			if regex != nil {
-				if regex.Properties != nil && regex.Properties.Has(propName) {
-					exists = true
-				} else if vmInstance.RegExpPrototype.IsObject() {
-					proto := vmInstance.RegExpPrototype.AsPlainObject()
-					exists = proto.Has(propName)
-				}
-			}
-		case vm.TypeArray:
-			arr := descObj.AsArray()
-			if arr != nil {
-				if _, ok := arr.GetOwn(propName); ok {
-					exists = true
-				} else if vmInstance.ArrayPrototype.IsObject() {
-					proto := vmInstance.ArrayPrototype.AsPlainObject()
-					exists = proto.Has(propName)
-				}
-			}
-		case vm.TypeArguments:
-			args := descObj.AsArguments()
-			if args != nil {
-				if args.HasNamedProp(propName) {
-					exists = true
-				} else if vmInstance.ObjectPrototype.IsObject() {
-					proto := vmInstance.ObjectPrototype.AsPlainObject()
-					exists = proto.Has(propName)
-				}
-			}
-		}
-
-		if !exists {
-			return vm.Undefined, false, nil
-		}
-
-		// Property exists, use GetProperty to call getters
-		val, err := vmInstance.GetProperty(descObj, propName)
-		if err != nil {
-			return vm.Undefined, false, err
-		}
-		return val, true, nil
-	}
-
 	// Get keys from the properties descriptor
 	var keys []string
 	switch propertiesDesc.Type() {
@@ -1708,7 +1597,8 @@ func objectDefinePropertiesImpl(vmInstance *vm.VM, obj vm.Value, propertiesDesc 
 		}
 	}
 
-	// Process each property
+	// Process each property by delegating to objectDefinePropertyWithVM
+	// This reuses all validation (extensibility checks, non-configurable violations, etc.)
 	for _, key := range keys {
 		// Get the property descriptor object
 		propDesc, err := vmInstance.GetProperty(propertiesDesc, key)
@@ -1716,110 +1606,10 @@ func objectDefinePropertiesImpl(vmInstance *vm.VM, obj vm.Value, propertiesDesc 
 			return vm.Undefined, err
 		}
 
-		// propDesc should be an object
-		if !propDesc.IsObject() && !propDesc.IsCallable() {
-			return vm.Undefined, vmInstance.NewTypeError("Property description must be an object: " + key)
-		}
-
-		// Extract descriptor properties using hasAndGetProperty (calls getters)
-		var value vm.Value
-		var writable, enumFlag, configurable bool
-		var hasValue, hasWritable, hasEnumerable, hasConfigurable bool
-		var getter, setter vm.Value
-		var hasGetter, hasSetter bool
-
-		// Check for 'value' property
-		if v, exists, err := hasAndGetProperty(propDesc, "value"); err != nil {
+		// Delegate to Object.defineProperty which handles all validation
+		_, err = objectDefinePropertyWithVM(vmInstance, []vm.Value{obj, vm.NewString(key), propDesc})
+		if err != nil {
 			return vm.Undefined, err
-		} else if exists {
-			hasValue = true
-			value = v
-		}
-
-		// Check for 'writable' property
-		if v, exists, err := hasAndGetProperty(propDesc, "writable"); err != nil {
-			return vm.Undefined, err
-		} else if exists {
-			hasWritable = true
-			writable = v.IsTruthy()
-		}
-
-		// Check for 'enumerable' property
-		if v, exists, err := hasAndGetProperty(propDesc, "enumerable"); err != nil {
-			return vm.Undefined, err
-		} else if exists {
-			hasEnumerable = true
-			enumFlag = v.IsTruthy()
-		}
-
-		// Check for 'configurable' property
-		if v, exists, err := hasAndGetProperty(propDesc, "configurable"); err != nil {
-			return vm.Undefined, err
-		} else if exists {
-			hasConfigurable = true
-			configurable = v.IsTruthy()
-		}
-
-		// Check for 'get' property
-		if v, exists, err := hasAndGetProperty(propDesc, "get"); err != nil {
-			return vm.Undefined, err
-		} else if exists {
-			hasGetter = true
-			getter = v
-			// Validate getter
-			if getter.Type() != vm.TypeUndefined && !getter.IsCallable() {
-				return vm.Undefined, vmInstance.NewTypeError("Getter must be a function")
-			}
-		}
-
-		// Check for 'set' property
-		if v, exists, err := hasAndGetProperty(propDesc, "set"); err != nil {
-			return vm.Undefined, err
-		} else if exists {
-			hasSetter = true
-			setter = v
-			// Validate setter
-			if setter.Type() != vm.TypeUndefined && !setter.IsCallable() {
-				return vm.Undefined, vmInstance.NewTypeError("Setter must be a function")
-			}
-		}
-
-		// Validate: can't have both data and accessor properties
-		if (hasValue || hasWritable) && (hasGetter || hasSetter) {
-			return vm.Undefined, vmInstance.NewTypeError("Invalid property descriptor. Cannot both specify accessors and a value or writable attribute")
-		}
-
-		// Apply defaults
-		if !hasValue && !(hasGetter || hasSetter) {
-			value = vm.Undefined
-		}
-
-		// Use pointers for DefineOwnProperty
-		var wPtr, ePtr, cPtr *bool
-		if hasWritable {
-			wPtr = &writable
-		} else if !(hasGetter || hasSetter) {
-			f := false
-			wPtr = &f
-		}
-		if hasEnumerable {
-			ePtr = &enumFlag
-		} else {
-			f := false
-			ePtr = &f
-		}
-		if hasConfigurable {
-			cPtr = &configurable
-		} else {
-			f := false
-			cPtr = &f
-		}
-
-		// Use accessor path if getter or setter is specified
-		if hasGetter || hasSetter {
-			plainObj.DefineAccessorProperty(key, getter, hasGetter, setter, hasSetter, ePtr, cPtr)
-		} else {
-			plainObj.DefineOwnProperty(key, value, wPtr, ePtr, cPtr)
 		}
 	}
 
@@ -1930,9 +1720,13 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if obj.Type() == vm.TypeNull || obj.Type() == vm.TypeUndefined {
 		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 	}
-	// Primitives (non-object/non-callable) have no enumerable own keys
+	// ToObject for primitives (strings have enumerable indexed properties)
 	if !obj.IsObject() && !obj.IsCallable() {
-		return vm.NewArray(), nil
+		converted, err := vmInstance.ToObject(obj)
+		if err != nil {
+			return vm.NewArray(), nil
+		}
+		obj = converted
 	}
 
 	keys := vm.NewArray()
@@ -2168,6 +1962,28 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 
 	obj := args[0]
 
+	// Per spec: ToObject first — converts primitives to their wrapper types
+	// Null and undefined throw TypeError
+	if obj.Type() == vm.TypeNull || obj.Type() == vm.TypeUndefined {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+	}
+	// Handle primitive types by returning their prototype directly
+	if obj.IsNumber() {
+		return vmInstance.NumberPrototype, nil
+	}
+	if obj.Type() == vm.TypeBoolean {
+		return vmInstance.BooleanPrototype, nil
+	}
+	if obj.Type() == vm.TypeString {
+		return vmInstance.StringPrototype, nil
+	}
+	if obj.Type() == vm.TypeSymbol {
+		return vmInstance.SymbolPrototype, nil
+	}
+	if obj.Type() == vm.TypeBigInt {
+		return vmInstance.BigIntPrototype, nil
+	}
+
 	// For objects with prototypes, return their prototype
 	switch obj.Type() {
 	case vm.TypeObject:
@@ -2184,8 +2000,8 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		// For arguments objects, return Object.prototype
 		return vmInstance.ObjectPrototype, nil
 	case vm.TypeString:
-		// For strings, return String.prototype if available
-		return vm.Null, nil // TODO: Return proper String.prototype
+		// For strings, return String.prototype
+		return vmInstance.StringPrototype, nil
 	case vm.TypeFunction:
 		// For functions, return their [[Prototype]]
 		fn := obj.AsFunction()
@@ -2443,8 +2259,13 @@ func objectValuesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if obj.Type() == vm.TypeNull || obj.Type() == vm.TypeUndefined {
 		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 	}
+	// ToObject for primitives
 	if !obj.IsObject() && !obj.IsCallable() {
-		return vm.NewArray(), nil
+		converted, err := vmInstance.ToObject(obj)
+		if err != nil {
+			return vm.NewArray(), nil
+		}
+		obj = converted
 	}
 
 	values := vm.NewArray()
@@ -2540,8 +2361,13 @@ func objectEntriesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if obj.Type() == vm.TypeNull || obj.Type() == vm.TypeUndefined {
 		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 	}
+	// ToObject for primitives
 	if !obj.IsObject() && !obj.IsCallable() {
-		return vm.NewArray(), nil
+		converted, err := vmInstance.ToObject(obj)
+		if err != nil {
+			return vm.NewArray(), nil
+		}
+		obj = converted
 	}
 
 	entries := vm.NewArray()
@@ -4640,21 +4466,15 @@ func objectFreezeWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if obj.Type() == vm.TypeArray {
 		arr := obj.AsArray()
 		arr.SetExtensible(false)
+		arr.SetFrozen(true)
 		return obj, nil
 	}
 
 	// Freeze: make object non-extensible and all properties non-configurable and non-writable
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
 		plainObj.SetExtensible(false)
-		// Mark all properties as non-configurable and non-writable
-		for _, key := range plainObj.OwnKeys() {
-			value, _, enumerable, _, ok := plainObj.GetOwnDescriptor(key)
-			if ok {
-				w := false
-				c := false
-				plainObj.DefineOwnProperty(key, value, &w, &enumerable, &c)
-			}
-		}
+		// Use FreezeAllProperties to freeze ALL own properties (including non-enumerable and symbol)
+		plainObj.FreezeAllProperties()
 	}
 
 	return obj, nil
@@ -4672,16 +4492,18 @@ func objectSealWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		return obj, nil
 	}
 
+	// Handle arrays specially
+	if obj.Type() == vm.TypeArray {
+		arr := obj.AsArray()
+		arr.SetExtensible(false)
+		arr.SealProperties() // Seal named properties but leave elements writable
+		return obj, nil
+	}
+
 	// Seal: make object non-extensible and all properties non-configurable (but leave writable as-is)
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
 		plainObj.SetExtensible(false)
-		for _, key := range plainObj.OwnKeys() {
-			value, writable, enumerable, _, ok := plainObj.GetOwnDescriptor(key)
-			if ok {
-				c := false
-				plainObj.DefineOwnProperty(key, value, &writable, &enumerable, &c)
-			}
-		}
+		plainObj.SealAllProperties()
 	}
 
 	return obj, nil
@@ -4695,14 +4517,14 @@ func objectIsFrozenWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 	obj := args[0]
 
 	// Primitives are frozen
-	if !obj.IsObject() {
+	if !obj.IsObject() && !obj.IsCallable() {
 		return vm.BooleanValue(true), nil
 	}
 
 	// Handle arrays specially
 	if obj.Type() == vm.TypeArray {
 		arr := obj.AsArray()
-		return vm.BooleanValue(!arr.IsExtensible()), nil
+		return vm.BooleanValue(!arr.IsExtensible() && arr.IsFrozen()), nil
 	}
 
 	// Check if extensible - frozen objects must not be extensible
@@ -4710,16 +4532,32 @@ func objectIsFrozenWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 		if plainObj.IsExtensible() {
 			return vm.BooleanValue(false), nil
 		}
-		// Check all properties are non-configurable and non-writable
-		for _, key := range plainObj.OwnKeys() {
-			_, writable, _, configurable, ok := plainObj.GetOwnDescriptor(key)
-			if ok {
-				if configurable || writable {
-					return vm.BooleanValue(false), nil
-				}
+		return vm.BooleanValue(plainObj.IsFrozenProperties()), nil
+	}
+
+	// Functions are objects - check their properties object
+	if fn := obj.AsFunction(); fn != nil {
+		if fn.Properties != nil {
+			if fn.Properties.IsExtensible() {
+				return vm.BooleanValue(false), nil
 			}
+			return vm.BooleanValue(fn.Properties.IsFrozenProperties()), nil
 		}
-		return vm.BooleanValue(true), nil
+		return vm.BooleanValue(false), nil // extensible by default
+	}
+	if cl := obj.AsClosure(); cl != nil {
+		if cl.Properties != nil {
+			if cl.Properties.IsExtensible() {
+				return vm.BooleanValue(false), nil
+			}
+			return vm.BooleanValue(cl.Properties.IsFrozenProperties()), nil
+		}
+		return vm.BooleanValue(false), nil
+	}
+
+	// Other callable/object types - not frozen by default
+	if obj.IsCallable() {
+		return vm.BooleanValue(false), nil
 	}
 
 	return vm.BooleanValue(false), nil
@@ -4733,8 +4571,14 @@ func objectIsSealedWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 	obj := args[0]
 
 	// Primitives are sealed
-	if !obj.IsObject() {
+	if !obj.IsObject() && !obj.IsCallable() {
 		return vm.BooleanValue(true), nil
+	}
+
+	// Handle arrays
+	if obj.Type() == vm.TypeArray {
+		arr := obj.AsArray()
+		return vm.BooleanValue(!arr.IsExtensible()), nil
 	}
 
 	// Check if extensible - sealed objects must not be extensible
@@ -4742,16 +4586,32 @@ func objectIsSealedWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 		if plainObj.IsExtensible() {
 			return vm.BooleanValue(false), nil
 		}
-		// Check all properties are non-configurable
-		for _, key := range plainObj.OwnKeys() {
-			_, _, _, configurable, ok := plainObj.GetOwnDescriptor(key)
-			if ok {
-				if configurable {
-					return vm.BooleanValue(false), nil
-				}
+		return vm.BooleanValue(plainObj.IsSealedProperties()), nil
+	}
+
+	// Functions are objects
+	if fn := obj.AsFunction(); fn != nil {
+		if fn.Properties != nil {
+			if fn.Properties.IsExtensible() {
+				return vm.BooleanValue(false), nil
 			}
+			return vm.BooleanValue(fn.Properties.IsSealedProperties()), nil
 		}
-		return vm.BooleanValue(true), nil
+		return vm.BooleanValue(false), nil
+	}
+	if cl := obj.AsClosure(); cl != nil {
+		if cl.Properties != nil {
+			if cl.Properties.IsExtensible() {
+				return vm.BooleanValue(false), nil
+			}
+			return vm.BooleanValue(cl.Properties.IsSealedProperties()), nil
+		}
+		return vm.BooleanValue(false), nil
+	}
+
+	// Other callable/object types
+	if obj.IsCallable() {
+		return vm.BooleanValue(false), nil
 	}
 
 	return vm.BooleanValue(false), nil
