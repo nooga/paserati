@@ -462,6 +462,10 @@ type Compiler struct {
 	// Maps property index to synthetic variable name for pre-computed field keys
 	// Per ECMAScript, computed property keys must be evaluated at class definition time, not instantiation
 	computedFieldKeyVars map[int]string
+
+	// --- Decorator Support ---
+	// Pre-evaluated decorators for the current class being compiled
+	currentClassDecorators []*decoratorInfo
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -1697,6 +1701,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			Implements:     node.Implements,
 			Body:           node.Body,
 			IsAbstract:     node.IsAbstract,
+			Decorators:     node.Decorators,
 		}
 		// For class expressions, we need to return the constructor function
 		// instead of just defining it in the environment like class declarations

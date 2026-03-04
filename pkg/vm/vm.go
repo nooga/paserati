@@ -14656,6 +14656,54 @@ startExecution:
 			}
 			vm.evalCallerRegs[callerRegIdx] = registers[srcReg]
 
+		case OpMakeAddInitializer:
+			// OpMakeAddInitializer: Rx Ry
+			// Create a native function in Rx that pushes its argument onto the array in Ry
+			destReg := code[ip]
+			arrayReg := code[ip+1]
+			ip += 2
+
+			// Capture the array value for the closure
+			arrayVal := registers[arrayReg]
+
+			addInitFn := NewNativeFunction(1, false, "addInitializer", func(args []Value) (Value, error) {
+				if len(args) < 1 || !args[0].IsCallable() {
+					return Undefined, fmt.Errorf("addInitializer requires a callable argument")
+				}
+				// Push the function onto the array
+				arr := arrayVal.AsArray()
+				arr.Append(args[0])
+				return Undefined, nil
+			})
+			registers[destReg] = addInitFn
+
+		case OpRunInitializers:
+			// OpRunInitializers: ArrayReg ThisReg
+			// Run all initializer functions in array with 'this' = ThisReg
+			arrayReg := code[ip]
+			thisReg := code[ip+1]
+			ip += 2
+
+			arrayVal := registers[arrayReg]
+			if arrayVal.Type() == TypeArray {
+				arr := arrayVal.AsArray()
+				thisVal := registers[thisReg]
+				frame.ip = ip
+				for i := 0; i < arr.Length(); i++ {
+					initFn := arr.Get(i)
+					if initFn.IsCallable() {
+						_, callErr := vm.Call(initFn, thisVal, nil)
+						if callErr != nil {
+							return InterpretRuntimeError, Undefined
+						}
+						if vm.unwinding {
+							return InterpretRuntimeError, Undefined
+						}
+					}
+				}
+				ip = frame.ip
+			}
+
 		default:
 			frame.ip = ip // Save IP before erroring
 			// Extra diagnostics for opcode 255 (often indicates unpatched jump placeholder bytes)

@@ -2,7 +2,7 @@
 
 This document tracks implemented and planned features for the Paserati TypeScript/JavaScript runtime, based on ES2025 and TypeScript specifications.
 
-**Test262 Language Suite: 91.9%** (21,514/23,410 tests passing)
+**Test262 Language Suite: 98.4%** (23,155/23,523 tests passing)
 
 ## Test262 Weak Spots
 
@@ -184,11 +184,11 @@ Areas with lower pass rates that need attention:
 - [x] `readonly` properties
 - [x] Property parameter shortcuts (`constructor(public name: string)`)
 - [x] Private fields (`#private`)
-- [ ] Decorators - planned
+- [x] Decorators (TC39 Stage 3 - class, method, getter/setter, static, addInitializer)
 
 ## Not Implemented
 
-- [ ] Decorators (`@decorator`)
+- [ ] Auto-accessor decorators (`accessor` keyword)
 - [ ] Namespaces (`namespace N {}`)
 - [ ] Declaration files (`.d.ts`)
 - [ ] Triple-slash directives

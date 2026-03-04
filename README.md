@@ -18,7 +18,7 @@ Right now it prioritizes **correctness** over raw speed, but the architecture is
 
 ### Wins
 
-- **Test262 language suite: 98.1%** (see details below)
+- **Test262 language suite: 98.4%** (see details below)
 - **Native TS execution**: no `tsc`, no TS→JS transpilation
 - **TCO**: tail call optimization (elite feature)
 - **Shapes + ICs**: fast-ish property access without a JIT
@@ -84,7 +84,7 @@ go test ./tests/...
 From a recent run:
 
 ```
-language (TOTAL)             23523    23076      445        0        2    98.1%
+language (TOTAL)             23523    23155      365        0        3    98.4%
 ```
 
 Weak spots:
@@ -98,13 +98,13 @@ Weak spots:
 
 ### Current status
 
-At **98.1% Test262 language compliance**, Paserati handles the vast majority of modern JavaScript/TypeScript semantics correctly. It's still evolving, but it's past the "toy project" phase.
+At **98.4% Test262 language compliance**, Paserati handles the vast majority of modern JavaScript/TypeScript semantics correctly. It's still evolving, but it's past the "toy project" phase.
 
 Core language features that work well:
 
 - **Async/await, TLA, Promises, microtasks** (incl. top-level await, async generators)
 - **ESM modules** (plus dynamic `import()`, pluggable resolution)
-- **Classes** (private fields, statics, inheritance, super expressions)
+- **Classes** (private fields, statics, inheritance, super expressions, **decorators**)
 - **(Async) Generators** (`yield`, `yield*`)
 - **Modern operators** (`?.`, `??`, logical assignment)
 - **Destructuring** (arrays/objects/rest/spread)
@@ -115,7 +115,6 @@ It runs real-world TypeScript libraries like [date-fns](https://github.com/date-
 
 Remaining gaps:
 
-- Decorators (planned)
 - `import defer` (stage 3 proposal; mostly unimplemented)
 - Some edge cases in `eval` and module namespaces
 - Import attributes (experimental ES feature)

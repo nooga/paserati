@@ -376,6 +376,27 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 		return BadRegister, err
 	}
 
+	// 1.8. Pre-evaluate decorator expressions at class definition time
+	// Per TC39 spec, decorator expressions are evaluated in source order
+	var classDecorators []*decoratorInfo
+	if hasDecorators(node) {
+		var decErr errors.PaseratiError
+		classDecorators, decErr = c.preEvaluateDecorators(node)
+		if decErr != nil {
+			if prevSymbolTable != nil {
+				c.currentSymbolTable = prevSymbolTable
+			}
+			if needToFreeSuperReg {
+				c.regAlloc.Free(superConstructorReg)
+			}
+			return BadRegister, decErr
+		}
+		defer c.freeDecoratorRegs(classDecorators)
+	}
+
+	// Store decorators for use by setupClassPrototype
+	c.currentClassDecorators = classDecorators
+
 	// 2. Create constructor function
 	constructorReg, err := c.compileConstructor(node, superConstructorReg)
 	if err != nil {
@@ -424,6 +445,17 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 		}
 		return BadRegister, err
 	}
+
+	// 4.5. Apply class-level decorators (after all members are set up)
+	if classDecorators != nil {
+		if err := c.applyClassDecorators(node, constructorReg, classDecorators); err != nil {
+			if prevSymbolTable != nil {
+				c.currentSymbolTable = prevSymbolTable
+			}
+			return BadRegister, err
+		}
+	}
+	c.currentClassDecorators = nil
 
 	// 5. Update the class constructor register/global
 	// For local classes, update BOTH the inner and outer bindings before restoring the outer scope
@@ -759,6 +791,14 @@ func (c *Compiler) addMethodToPrototype(method *parser.MethodDefinition, prototy
 	defer c.regAlloc.Free(methodReg)
 	c.emitClosure(methodReg, funcConstIndex, method.Value, freeSymbols)
 
+	// Apply method decorators (if any) before installing on prototype
+	if len(method.Decorators) > 0 && c.currentClassDecorators != nil {
+		decs := c.getMethodDecorators(method, c.currentClassDecorators)
+		if err := c.applyMethodDecorators(decs, methodReg, method); err != nil {
+			return err
+		}
+	}
+
 	// Add method to prototype: prototype[methodName] = methodFunction
 	if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
 		// For computed properties, use OpDefineMethodComputed to set [[HomeObject]]
@@ -798,6 +838,14 @@ func (c *Compiler) addGetterToPrototype(method *parser.MethodDefinition, prototy
 	getterReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(getterReg)
 	c.emitClosure(getterReg, funcConstIndex, method.Value, freeSymbols)
+
+	// Apply getter decorators (if any)
+	if len(method.Decorators) > 0 && c.currentClassDecorators != nil {
+		decs := c.getMethodDecorators(method, c.currentClassDecorators)
+		if err := c.applyMethodDecorators(decs, getterReg, method); err != nil {
+			return err
+		}
+	}
 
 	// Undefined setter
 	setterReg := c.regAlloc.Alloc()
@@ -842,6 +890,14 @@ func (c *Compiler) addSetterToPrototype(method *parser.MethodDefinition, prototy
 	setterReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(setterReg)
 	c.emitClosure(setterReg, funcConstIndex, method.Value, freeSymbols)
+
+	// Apply setter decorators (if any)
+	if len(method.Decorators) > 0 && c.currentClassDecorators != nil {
+		decs := c.getMethodDecorators(method, c.currentClassDecorators)
+		if err := c.applyMethodDecorators(decs, setterReg, method); err != nil {
+			return err
+		}
+	}
 
 	// Undefined getter
 	getterReg := c.regAlloc.Alloc()
@@ -1459,6 +1515,14 @@ func (c *Compiler) addStaticMethod(method *parser.MethodDefinition, constructorR
 	defer c.regAlloc.Free(methodReg)
 	c.emitClosure(methodReg, funcConstIndex, method.Value, freeSymbols)
 
+	// Apply static method decorators (if any)
+	if len(method.Decorators) > 0 && c.currentClassDecorators != nil {
+		decs := c.getMethodDecorators(method, c.currentClassDecorators)
+		if err := c.applyMethodDecorators(decs, methodReg, method); err != nil {
+			return err
+		}
+	}
+
 	// Set constructor[methodName] = methodFunction
 	// Handle computed property names dynamically
 	if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
@@ -1533,6 +1597,14 @@ func (c *Compiler) addStaticGetter(method *parser.MethodDefinition, constructorR
 	defer c.regAlloc.Free(getterReg)
 	c.emitClosure(getterReg, funcConstIndex, method.Value, freeSymbols)
 
+	// Apply static getter decorators (if any)
+	if len(method.Decorators) > 0 && c.currentClassDecorators != nil {
+		decs := c.getMethodDecorators(method, c.currentClassDecorators)
+		if err := c.applyMethodDecorators(decs, getterReg, method); err != nil {
+			return err
+		}
+	}
+
 	// Undefined setter
 	setterReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(setterReg)
@@ -1577,6 +1649,14 @@ func (c *Compiler) addStaticSetter(method *parser.MethodDefinition, constructorR
 	setterReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(setterReg)
 	c.emitClosure(setterReg, funcConstIndex, method.Value, freeSymbols)
+
+	// Apply static setter decorators (if any)
+	if len(method.Decorators) > 0 && c.currentClassDecorators != nil {
+		decs := c.getMethodDecorators(method, c.currentClassDecorators)
+		if err := c.applyMethodDecorators(decs, setterReg, method); err != nil {
+			return err
+		}
+	}
 
 	// Undefined getter
 	getterReg := c.regAlloc.Alloc()

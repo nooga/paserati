@@ -239,6 +239,12 @@ func (p *Parser) parseClassBody() *ClassBody {
 			continue
 		}
 
+		// Parse decorators on class elements: @dec method() {} or @dec field = val
+		var memberDecorators []*Decorator
+		if p.curTokenIs(lexer.AT) {
+			memberDecorators = p.parseDecoratorList()
+		}
+
 		// Parse modifiers in any order
 		isReadonly := false
 		isStatic := false
@@ -301,6 +307,19 @@ func (p *Parser) parseClassBody() *ClassBody {
 		// Parse constructor, method, getter, setter, generator, or computed member
 		// Per ECMAScript spec: "get [no LineTerminator here] ClassElementName"
 		// If there's a newline after 'get', it's a field named "get", not a getter accessor
+		// Helper to attach decorators to a parsed method or property
+		attachDecorators := func(node interface{}) {
+			if len(memberDecorators) == 0 {
+				return
+			}
+			switch n := node.(type) {
+			case *MethodDefinition:
+				n.Decorators = memberDecorators
+			case *PropertyDefinition:
+				n.Decorators = memberDecorators
+			}
+		}
+
 		hasNewlineAfterCur := p.peekToken.Line > p.curToken.Line
 		if p.curTokenIs(lexer.GET) && !p.peekTokenIs(lexer.LPAREN) && !hasNewlineAfterCur {
 			// Parse getter method: get propertyName() {}
@@ -308,6 +327,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 			// And NOT if there's a newline (ASI) - that's a field named "get"
 			method := p.parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
 			if method != nil {
+				attachDecorators(method)
 				methods = append(methods, method)
 			}
 		} else if p.curTokenIs(lexer.SET) && !p.peekTokenIs(lexer.LPAREN) && !hasNewlineAfterCur {
@@ -316,6 +336,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 			// And NOT if there's a newline (ASI) - that's a field named "set"
 			method := p.parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
 			if method != nil {
+				attachDecorators(method)
 				methods = append(methods, method)
 			}
 		} else if p.curTokenIs(lexer.ASTERISK) {
@@ -327,6 +348,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 				if isAsync && method.Value != nil {
 					method.Value.IsAsync = true
 				}
+				attachDecorators(method)
 				methods = append(methods, method)
 			}
 		} else if isAsync && p.curTokenIs(lexer.LBRACKET) {
@@ -336,6 +358,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 				if sig, ok := result.(*MethodSignature); ok {
 					methodSigs = append(methodSigs, sig)
 				} else if method, ok := result.(*MethodDefinition); ok {
+					attachDecorators(method)
 					methods = append(methods, method)
 				}
 			}
@@ -343,6 +366,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 			// async method (without asterisk): async methodName() { ... }
 			method := p.parseAsyncMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
 			if method != nil {
+				attachDecorators(method)
 				methods = append(methods, method)
 			}
 		} else if p.curTokenIs(lexer.LBRACKET) {
@@ -352,8 +376,10 @@ func (p *Parser) parseClassBody() *ClassBody {
 				if sig, ok := result.(*MethodSignature); ok {
 					methodSigs = append(methodSigs, sig)
 				} else if method, ok := result.(*MethodDefinition); ok {
+					attachDecorators(method)
 					methods = append(methods, method)
 				} else if property, ok := result.(*PropertyDefinition); ok {
+					attachDecorators(property)
 					properties = append(properties, property)
 				}
 			}
@@ -374,12 +400,14 @@ func (p *Parser) parseClassBody() *ClassBody {
 				// Private method: #methodName()
 				method := p.parsePrivateMethod(isStatic)
 				if method != nil {
+					attachDecorators(method)
 					methods = append(methods, method)
 				}
 			} else {
 				// Private field: #fieldName
 				property := p.parsePrivateProperty(isStatic, isReadonly)
 				if property != nil {
+					attachDecorators(property)
 					properties = append(properties, property)
 				}
 			}
@@ -409,6 +437,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 						constructorSigs = append(constructorSigs, sig)
 					} else if method, ok := result.(*MethodDefinition); ok {
 						// It's an implementation
+						attachDecorators(method)
 						methods = append(methods, method)
 					}
 				}
@@ -424,6 +453,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 							methodSigs = append(methodSigs, sig)
 						} else if method, ok := result.(*MethodDefinition); ok {
 							// It's a method implementation
+							attachDecorators(method)
 							methods = append(methods, method)
 						}
 					}
@@ -431,6 +461,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 					// It's a property
 					property := p.parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProtected)
 					if property != nil {
+						attachDecorators(property)
 						properties = append(properties, property)
 					}
 				}

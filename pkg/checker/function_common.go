@@ -10,11 +10,16 @@ import (
 // isValidRestParameterType checks if a type is valid for a rest parameter.
 // Valid types are array types and tuple types (including variadic tuples).
 func isValidRestParameterType(t types.Type) bool {
-	switch t.(type) {
+	switch tt := t.(type) {
 	case *types.ArrayType:
 		return true
 	case *types.TupleType:
 		return true
+	case *types.TypeParameterType:
+		// A type parameter with an array/tuple constraint is valid (e.g., Args extends any[])
+		if tt.Parameter != nil && tt.Parameter.Constraint != nil {
+			return isValidRestParameterType(tt.Parameter.Constraint)
+		}
 	}
 	return false
 }

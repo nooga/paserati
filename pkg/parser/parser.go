@@ -248,6 +248,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.FUNCTION, func() Expression { return p.parseFunctionLiteral(false) })
 	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
+	p.registerPrefix(lexer.AT, p.parseDecoratedClassExpression)
 	p.registerPrefix(lexer.BANG, p.parsePrefixExpression)
 	p.registerPrefix(lexer.MINUS, p.parsePrefixExpression)
 	p.registerPrefix(lexer.PLUS, p.parsePrefixExpression) // Added for unary plus
@@ -621,6 +622,11 @@ func (p *Parser) parseStatement() Statement {
 		}
 		// Otherwise, treat as expression (async arrow function or 'async' as identifier)
 		return p.parseExpressionStatement()
+	case lexer.AT:
+		// Decorators: @expr class C {} or @expr export class C {} or @expr abstract class C {}
+		stmt := p.parseDecoratedStatement()
+		p.rescanPeekAsRegex()
+		return stmt
 	case lexer.CLASS:
 		stmt := p.parseClassDeclarationStatement()
 		// After class declaration ending with }, next / should be regex

@@ -177,6 +177,11 @@ const (
 
 	OpSetThis       OpCode = 82 // Ry: Set 'this' value in current call context from register Ry
 	OpLoadNewTarget OpCode = 81 // Rx: Load 'new.target' value from current call context into register Rx
+
+	// --- Decorator Support ---
+	OpMakeAddInitializer OpCode = 166 // Rx Ry: Create addInitializer function in Rx that pushes to array in Ry
+	OpRunInitializers    OpCode = 167 // Rx ThisReg: Run all initializer functions in array Rx with 'this' = ThisReg
+	// --- END Decorator Support ---
 	// --- END NEW ---
 
 	// --- NEW: Global Variable Operations ---
@@ -500,6 +505,10 @@ func (op OpCode) String() string {
 		return "OpSetFunctionName"
 	case OpCallFromWithContext:
 		return "OpCallFromWithContext"
+	case OpMakeAddInitializer:
+		return "OpMakeAddInitializer"
+	case OpRunInitializers:
+		return "OpRunInitializers"
 	case OpNew:
 		return "OpNew"
 	case OpSpreadNew:
@@ -952,6 +961,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
 	case OpLoadNull, OpLoadUndefined, OpLoadTrue, OpLoadFalse, OpReturn, OpMakeEmptyObject, OpLoadUninitialized, OpCheckUninitialized, OpCloseUpvalue, OpIteratorCleanupAbrupt, OpValidateSuperclass:
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
+	case OpMakeAddInitializer, OpRunInitializers:
+		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx Ry
 	case OpNegate, OpNot, OpTypeof, OpToNumber, OpToNumeric, OpLoadNumericOne, OpBitwiseNot, OpGetLength, OpIsNull, OpIsUndefined, OpIsNullish, OpIteratorCleanupAbruptIfNotDone:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
 	case OpMove:

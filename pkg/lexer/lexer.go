@@ -170,6 +170,7 @@ const (
 	LBRACKET  TokenType = "["  // Added for Arrays
 	RBRACKET  TokenType = "]"  // Added for Arrays
 	ARROW     TokenType = "=>" // Added for arrow functions
+	AT        TokenType = "@"  // Decorator prefix
 
 	// Keywords
 	FUNCTION TokenType = "FUNCTION"
@@ -1334,6 +1335,10 @@ func (l *Lexer) NextToken() Token {
 		literal := charString(l.ch) // Read "~"
 		l.readChar()            // Advance past '~'
 		tok = Token{Type: BITWISE_NOT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+	case '@': // Decorator prefix
+		literal := charString(l.ch)
+		l.readChar()
+		tok = Token{Type: AT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 
 	case '<':
 		// Check if next non-whitespace character is '=' for <=

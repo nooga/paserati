@@ -74,6 +74,9 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 		debugPrintf("// [Checker Class] Marked class '%s' as abstract\n", node.Name.Value)
 	}
 
+	// Note: decorator type checking is deferred to after all declarations
+	// are processed (see checkAllDecorators in checker.go)
+
 	// Set up class context for access control checking
 	prevContext := c.currentClassContext
 	c.setClassContext(node.Name.Value, types.AccessContextExternal)

@@ -104,6 +104,27 @@ func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*ty
 			for _, propType := range typ.Properties {
 				extractFromType(propType)
 			}
+			// Also search CallSignatures (function types are ObjectTypes with call signatures)
+			for _, callSig := range typ.CallSignatures {
+				for _, paramType := range callSig.ParameterTypes {
+					extractFromType(paramType)
+				}
+				if callSig.ReturnType != nil {
+					extractFromType(callSig.ReturnType)
+				}
+				if callSig.RestParameterType != nil {
+					extractFromType(callSig.RestParameterType)
+				}
+			}
+			// Also search ConstructSignatures
+			for _, consSig := range typ.ConstructSignatures {
+				for _, paramType := range consSig.ParameterTypes {
+					extractFromType(paramType)
+				}
+				if consSig.ReturnType != nil {
+					extractFromType(consSig.ReturnType)
+				}
+			}
 		case *types.MappedType:
 			// Extract from constraint type (e.g., K in { [P in K]: V })
 			if typ.ConstraintType != nil {
@@ -1034,6 +1055,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// --- Pass 4: Resolve forward references ---
 	debugPrintf("\n// --- Checker - Pass 4: Resolve Forward References ---\n")
 	c.resolveForwardReferences()
+
+	// --- Pass 4.5: Check decorator types (after all declarations are in scope) ---
+	c.checkAllDecorators(program)
 
 	// --- Pass 5: Final Check of Remaining Statements & Initializers ---
 	debugPrintf("\n// --- Checker - Pass 5: Final Checks & Remaining Statements ---\n")

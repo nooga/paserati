@@ -3221,6 +3221,18 @@ func (fog *FunctionOverloadGroup) String() string {
 
 // --- Class-related AST Nodes ---
 
+// Decorator represents a decorator applied to a class or class element: @expression
+type Decorator struct {
+	BaseExpression
+	Token      lexer.Token // The '@' token
+	Expression Expression  // The decorator expression (identifier, member, call, paren)
+}
+
+func (d *Decorator) TokenLiteral() string { return d.Token.Literal }
+func (d *Decorator) String() string {
+	return "@" + d.Expression.String()
+}
+
 // ClassDeclaration represents a class declaration statement
 type ClassDeclaration struct {
 	Token          lexer.Token      // The 'class' token
@@ -3230,6 +3242,7 @@ type ClassDeclaration struct {
 	Implements     []*Identifier    // Interfaces this class implements
 	Body           *ClassBody       // Class body containing methods and properties
 	IsAbstract     bool             // true if this is an abstract class
+	Decorators     []*Decorator     // Decorators applied to the class
 }
 
 func (cd *ClassDeclaration) statementNode()       {}
@@ -3285,6 +3298,7 @@ type ClassExpression struct {
 	Implements     []*Identifier    // Interfaces this class implements
 	Body           *ClassBody       // Class body containing methods and properties
 	IsAbstract     bool             // true if this is an abstract class
+	Decorators     []*Decorator     // Decorators applied to the class
 }
 
 func (ce *ClassExpression) TokenLiteral() string { return ce.Token.Literal }
@@ -3374,6 +3388,7 @@ type MethodDefinition struct {
 	IsProtected bool             // For protected access modifier
 	IsAbstract  bool             // For abstract methods (no implementation)
 	IsOverride  bool             // For override keyword
+	Decorators  []*Decorator     // Decorators applied to this method
 }
 
 func (md *MethodDefinition) TokenLiteral() string { return md.Token.Literal }
@@ -3564,16 +3579,17 @@ func (cpn *ComputedPropertyName) String() string       { return "[" + cpn.Expr.S
 // PropertyDefinition represents a property declaration in a class
 type PropertyDefinition struct {
 	BaseExpression
-	Token          lexer.Token // The property name token
-	Key            Expression  // Property name (Identifier or ComputedPropertyName)
-	TypeAnnotation Expression  // Type annotation (can be nil)
-	Value          Expression  // Initializer expression (can be nil)
-	IsStatic       bool        // For static property support
-	Optional       bool        // Whether the property is optional (prop?)
-	Readonly       bool        // Whether the property is readonly
-	IsPublic       bool        // For public access modifier
-	IsPrivate      bool        // For private access modifier
-	IsProtected    bool        // For protected access modifier
+	Token          lexer.Token  // The property name token
+	Key            Expression   // Property name (Identifier or ComputedPropertyName)
+	TypeAnnotation Expression   // Type annotation (can be nil)
+	Value          Expression   // Initializer expression (can be nil)
+	IsStatic       bool         // For static property support
+	Optional       bool         // Whether the property is optional (prop?)
+	Readonly       bool         // Whether the property is readonly
+	IsPublic       bool         // For public access modifier
+	IsPrivate      bool         // For private access modifier
+	IsProtected    bool         // For protected access modifier
+	Decorators     []*Decorator // Decorators applied to this property
 }
 
 func (pd *PropertyDefinition) TokenLiteral() string { return pd.Token.Literal }
