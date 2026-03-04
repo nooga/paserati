@@ -208,6 +208,9 @@ func (r *RegExpInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("ignoreCase", types.Boolean).
 		WithProperty("multiline", types.Boolean).
 		WithProperty("dotAll", types.Boolean).
+		WithProperty("sticky", types.Boolean).
+		WithProperty("unicode", types.Boolean).
+		WithProperty("hasIndices", types.Boolean).
 		WithProperty("lastIndex", types.Number).
 		WithProperty("test", types.NewSimpleFunction([]types.Type{types.String}, types.Boolean)).
 		WithProperty("exec", types.NewSimpleFunction([]types.Type{types.String}, types.NewUnionType(types.Null, &types.ArrayType{ElementType: types.String}))).

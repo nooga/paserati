@@ -37,6 +37,17 @@ func (s *SetInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("delete", types.NewSimpleFunction([]types.Type{tType}, types.Boolean)).
 		WithProperty("clear", types.NewSimpleFunction([]types.Type{}, types.Void)).
 		WithProperty("forEach", types.NewSimpleFunction([]types.Type{forEachCallbackType}, types.Void)).
+		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).    // IterableIterator<T>
+		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any)).  // IterableIterator<T>
+		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)). // IterableIterator<[T, T]>
+		// ES2024 Set methods
+		WithProperty("union", types.NewSimpleFunction([]types.Type{setType}, setType)).
+		WithProperty("intersection", types.NewSimpleFunction([]types.Type{setType}, setType)).
+		WithProperty("difference", types.NewSimpleFunction([]types.Type{setType}, setType)).
+		WithProperty("symmetricDifference", types.NewSimpleFunction([]types.Type{setType}, setType)).
+		WithProperty("isSubsetOf", types.NewSimpleFunction([]types.Type{setType}, types.Boolean)).
+		WithProperty("isSupersetOf", types.NewSimpleFunction([]types.Type{setType}, types.Boolean)).
+		WithProperty("isDisjointFrom", types.NewSimpleFunction([]types.Type{setType}, types.Boolean)).
 		WithProperty("size", types.Number)
 
 	// Now set the body of the generic type
@@ -49,6 +60,16 @@ func (s *SetInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("delete", types.NewSimpleFunction([]types.Type{tType}, types.Boolean)).
 		WithProperty("clear", types.NewSimpleFunction([]types.Type{}, types.Void)).
 		WithProperty("forEach", types.NewSimpleFunction([]types.Type{forEachCallbackType}, types.Void)).
+		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("union", types.NewSimpleFunction([]types.Type{setType}, setType)).
+		WithProperty("intersection", types.NewSimpleFunction([]types.Type{setType}, setType)).
+		WithProperty("difference", types.NewSimpleFunction([]types.Type{setType}, setType)).
+		WithProperty("symmetricDifference", types.NewSimpleFunction([]types.Type{setType}, setType)).
+		WithProperty("isSubsetOf", types.NewSimpleFunction([]types.Type{setType}, types.Boolean)).
+		WithProperty("isSupersetOf", types.NewSimpleFunction([]types.Type{setType}, types.Boolean)).
+		WithProperty("isDisjointFrom", types.NewSimpleFunction([]types.Type{setType}, types.Boolean)).
 		WithProperty("size", types.Number)
 
 	// Register set primitive prototype

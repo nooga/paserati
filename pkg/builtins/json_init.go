@@ -32,12 +32,14 @@ func (j *JSONInitializer) Priority() int {
 func (j *JSONInitializer) InitTypes(ctx *TypeContext) error {
 	// Create JSON namespace type with parse and stringify methods
 	jsonType := types.NewObjectType().
-		WithProperty("parse", types.NewSimpleFunction([]types.Type{types.String}, types.Any)).
+		WithProperty("parse", types.NewOptionalFunction([]types.Type{types.String, types.Any}, types.Any, []bool{false, true})).
 		WithProperty("stringify", types.NewOptionalFunction(
 			[]types.Type{types.Any, types.Any, types.Any}, // value, replacer, space
 			types.String,
 			[]bool{false, true, true}, // value is required, replacer and space are optional
-		))
+		)).
+		WithProperty("rawJSON", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
+		WithProperty("isRawJSON", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean))
 
 	// Define JSON namespace in global environment
 	return ctx.DefineGlobal("JSON", jsonType)

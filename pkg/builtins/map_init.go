@@ -36,6 +36,12 @@ func (m *MapInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("has", types.NewSimpleFunction([]types.Type{kType}, types.Boolean)).
 		WithProperty("delete", types.NewSimpleFunction([]types.Type{kType}, types.Boolean)).
 		WithProperty("clear", types.NewSimpleFunction([]types.Type{}, types.Void)).
+		WithProperty("forEach", types.NewOptionalFunction(
+			[]types.Type{types.NewSimpleFunction([]types.Type{vType, kType, mapType}, types.Void), types.Any},
+			types.Void, []bool{false, true})).
+		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).    // IterableIterator<K>
+		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any)).  // IterableIterator<V>
+		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)). // IterableIterator<[K, V]>
 		WithProperty("size", types.Number)
 
 	// Now set the body of the generic type
@@ -48,6 +54,12 @@ func (m *MapInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("has", types.NewSimpleFunction([]types.Type{kType}, types.Boolean)).
 		WithProperty("delete", types.NewSimpleFunction([]types.Type{kType}, types.Boolean)).
 		WithProperty("clear", types.NewSimpleFunction([]types.Type{}, types.Void)).
+		WithProperty("forEach", types.NewOptionalFunction(
+			[]types.Type{types.NewSimpleFunction([]types.Type{vType, kType, mapType}, types.Void), types.Any},
+			types.Void, []bool{false, true})).
+		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithProperty("size", types.Number)
 
 	// Register map primitive prototype

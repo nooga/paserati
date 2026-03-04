@@ -301,9 +301,19 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("padStart", types.NewOptionalFunction([]types.Type{types.Number, types.String}, types.String, []bool{false, true})).
 		WithProperty("padEnd", types.NewOptionalFunction([]types.Type{types.Number, types.String}, types.String, []bool{false, true})).
 		WithProperty("concat", types.NewVariadicFunction([]types.Type{}, types.String, types.String)).
-		WithProperty("split", types.NewOptionalFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.Number}, &types.ArrayType{ElementType: types.String}, []bool{false, true})).
-		WithProperty("replace", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.String}, types.String)).
-		WithProperty("replaceAll", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.String}, types.String)).
+		WithProperty("split", types.NewOptionalFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.Number}, &types.ArrayType{ElementType: types.String}, []bool{true, true})).
+		WithProperty("replace", types.NewSimpleFunction([]types.Type{
+			types.NewUnionType(types.String, types.RegExp),
+			types.NewUnionType(types.String, types.NewSimpleFunction([]types.Type{types.String}, types.String)),
+		}, types.String)).
+		WithProperty("replaceAll", types.NewSimpleFunction([]types.Type{
+			types.NewUnionType(types.String, types.RegExp),
+			types.NewUnionType(types.String, types.NewSimpleFunction([]types.Type{types.String}, types.String)),
+		}, types.String)).
+		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("isWellFormed", types.NewSimpleFunction([]types.Type{}, types.Boolean)).
+		WithProperty("toWellFormed", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("match", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp)}, types.NewUnionType(&types.ArrayType{ElementType: types.String}, types.Null))).
 		WithProperty("matchAll", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp)}, types.Any)). // Returns IterableIterator<RegExpMatchArray>
 		WithProperty("search", types.NewSimpleFunction([]types.Type{types.NewUnionType(types.String, types.RegExp)}, types.Number)).

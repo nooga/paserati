@@ -55,6 +55,7 @@ func (o *ObjectInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("defineProperty", types.NewSimpleFunction([]types.Type{types.Any, keyStringOrSymbol, types.Any}, types.Any)).
 		WithProperty("defineProperties", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any)).
 		WithProperty("getOwnPropertyDescriptor", types.NewSimpleFunction([]types.Type{types.Any, keyStringOrSymbol}, types.Any)).
+		WithProperty("getOwnPropertyDescriptors", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
 		WithProperty("isExtensible", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
 		WithProperty("preventExtensions", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
 		WithProperty("freeze", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).

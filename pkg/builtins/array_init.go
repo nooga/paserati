@@ -68,7 +68,7 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 			types.NewOptionalFunction([]types.Type{types.Number, types.Number}, tArrayType, []bool{true, true}))).
 		// Keep concat non-generic for flexibility with different array types
 		WithVariadicProperty("concat", []types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}).
-		WithProperty("join", types.NewSimpleFunction([]types.Type{types.String}, types.String)).
+		WithProperty("join", types.NewOptionalFunction([]types.Type{types.String}, types.String, []bool{true})).
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("reverse", a.createGenericMethod("reverse", tParam,
 			types.NewSimpleFunction([]types.Type{}, tArrayType))).
@@ -105,8 +105,66 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
 				types.Boolean))).
 		// Keep reduce non-generic for now since it's complex
-		WithProperty("reduce", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Any), types.Any}, types.Any)).
-		WithProperty("reduceRight", types.NewSimpleFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Any), types.Any}, types.Any))
+		WithProperty("reduce", types.NewOptionalFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Any), types.Any}, types.Any, []bool{false, true})).
+		WithProperty("reduceRight", types.NewOptionalFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Any), types.Any}, types.Any, []bool{false, true})).
+		// splice: (start: number, deleteCount?: number, ...items: T[]) => T[]
+		WithProperty("splice", a.createGenericMethod("splice", tParam,
+			&types.ObjectType{
+				CallSignatures: []*types.Signature{
+					types.SigOptional([]types.Type{types.Number, types.Number}, tArrayType, []bool{false, true}),
+					types.SigVariadic([]types.Type{types.Number, types.Number}, tArrayType, tType),
+				},
+			})).
+		// sort: (comparefn?: (a: T, b: T) => number) => T[]
+		WithProperty("sort", a.createGenericMethod("sort", tParam,
+			types.NewOptionalFunction([]types.Type{
+				types.NewSimpleFunction([]types.Type{tType, tType}, types.Number)},
+				tArrayType, []bool{true}))).
+		// at: (index: number) => T | undefined
+		WithProperty("at", a.createGenericMethod("at", tParam,
+			types.NewSimpleFunction([]types.Type{types.Number}, types.NewUnionType(tType, types.Undefined)))).
+		// findLast: (predicate: (value: T, index?: number, array?: T[]) => boolean) => T | undefined
+		WithProperty("findLast", a.createGenericMethod("findLast", tParam,
+			types.NewSimpleFunction([]types.Type{
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.NewUnionType(tType, types.Undefined)))).
+		// findLastIndex: (predicate: (value: T, index?: number, array?: T[]) => boolean) => number
+		WithProperty("findLastIndex", a.createGenericMethod("findLastIndex", tParam,
+			types.NewSimpleFunction([]types.Type{
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.Number))).
+		// copyWithin: (target: number, start?: number, end?: number) => T[]
+		WithProperty("copyWithin", a.createGenericMethod("copyWithin", tParam,
+			types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Number}, tArrayType, []bool{false, true, true}))).
+		// fill: (value: T, start?: number, end?: number) => T[]
+		WithProperty("fill", a.createGenericMethod("fill", tParam,
+			types.NewOptionalFunction([]types.Type{tType, types.Number, types.Number}, tArrayType, []bool{false, true, true}))).
+		// flat: (depth?: number) => any[]
+		WithProperty("flat", types.NewOptionalFunction([]types.Type{types.Number}, &types.ArrayType{ElementType: types.Any}, []bool{true})).
+		// flatMap: (callback: (value: T, index: number, array: T[]) => any) => any[]
+		WithProperty("flatMap", a.createGenericMethod("flatMap", tParam,
+			types.NewSimpleFunction([]types.Type{
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Any, []bool{false, true, true})},
+				&types.ArrayType{ElementType: types.Any}))).
+		// toSorted: (comparefn?: (a: T, b: T) => number) => T[]
+		WithProperty("toSorted", a.createGenericMethod("toSorted", tParam,
+			types.NewOptionalFunction([]types.Type{
+				types.NewSimpleFunction([]types.Type{tType, tType}, types.Number)},
+				tArrayType, []bool{true}))).
+		// toSpliced: (start: number, deleteCount?: number, ...items: T[]) => T[]
+		WithProperty("toSpliced", a.createGenericMethod("toSpliced", tParam,
+			&types.ObjectType{
+				CallSignatures: []*types.Signature{
+					types.SigOptional([]types.Type{types.Number, types.Number}, tArrayType, []bool{false, true}),
+					types.SigVariadic([]types.Type{types.Number, types.Number}, tArrayType, tType),
+				},
+			})).
+		// toReversed: () => T[]
+		WithProperty("toReversed", a.createGenericMethod("toReversed", tParam,
+			types.NewSimpleFunction([]types.Type{}, tArrayType))).
+		// with: (index: number, value: T) => T[]
+		WithProperty("with", a.createGenericMethod("with", tParam,
+			types.NewSimpleFunction([]types.Type{types.Number, tType}, tArrayType)))
 
 	// Add Symbol.iterator to array prototype type to make arrays iterable
 	// Get the Iterator<T> generic type if available (use internal name)

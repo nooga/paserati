@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
+    "lib": ["es2023", "esnext", "dom"],
+    "downlevelIteration": true,
     "moduleDetection": "force"
   }
 }
