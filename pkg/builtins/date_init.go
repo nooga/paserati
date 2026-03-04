@@ -1374,38 +1374,70 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NaN, nil // Invalid date
 	}))
 
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("UTC", vm.NewNativeFunction(2, true, "UTC", func(args []vm.Value) (vm.Value, error) {
-		if len(args) < 2 {
+	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("UTC", vm.NewNativeFunction(7, true, "UTC", func(args []vm.Value) (vm.Value, error) {
+		if len(args) < 1 {
 			return vm.NaN, nil
 		}
 
-		year := int(args[0].ToFloat())
-		month := int(args[1].ToFloat()) + 1 // JavaScript months are 0-based
-		day := 1
-		hour := 0
-		minute := 0
-		second := 0
-		nanosecond := 0
-
+		// Step 1-7: Coerce all arguments to number in order
+		y := args[0].ToFloat()
+		var m float64
+		if len(args) >= 2 {
+			m = args[1].ToFloat()
+		}
+		dt := 1.0
 		if len(args) >= 3 {
-			day = int(args[2].ToFloat())
+			dt = args[2].ToFloat()
 		}
+		var h float64
 		if len(args) >= 4 {
-			hour = int(args[3].ToFloat())
+			h = args[3].ToFloat()
 		}
+		var min float64
 		if len(args) >= 5 {
-			minute = int(args[4].ToFloat())
+			min = args[4].ToFloat()
 		}
+		var s float64
 		if len(args) >= 6 {
-			second = int(args[5].ToFloat())
+			s = args[5].ToFloat()
 		}
+		var milli float64
 		if len(args) >= 7 {
-			millisecond := int(args[6].ToFloat())
-			nanosecond = millisecond * 1000000
+			milli = args[6].ToFloat()
 		}
 
-		t := time.Date(year, time.Month(month), day, hour, minute, second, nanosecond, time.UTC)
-		return vm.NumberValue(float64(t.UnixMilli())), nil
+		// Step 8-10: Year offset
+		if math.IsNaN(y) {
+			return vm.NaN, nil
+		}
+		yi := math.Trunc(y)
+		var yr float64
+		if yi >= 0 && yi <= 99 {
+			yr = 1900 + yi
+		} else {
+			yr = y
+		}
+
+		// MakeDay + MakeTime: return NaN if any argument is non-finite
+		if math.IsNaN(yr) || math.IsInf(yr, 0) ||
+			math.IsNaN(m) || math.IsInf(m, 0) ||
+			math.IsNaN(dt) || math.IsInf(dt, 0) ||
+			math.IsNaN(h) || math.IsInf(h, 0) ||
+			math.IsNaN(min) || math.IsInf(min, 0) ||
+			math.IsNaN(s) || math.IsInf(s, 0) ||
+			math.IsNaN(milli) || math.IsInf(milli, 0) {
+			return vm.NaN, nil
+		}
+
+		t := time.Date(int(yr), time.Month(int(m)+1), int(dt), int(h), int(min), int(s), int(milli)*1000000, time.UTC)
+		result := float64(t.UnixMilli())
+
+		// TimeClip: if abs(result) > 8.64e15, return NaN
+		if math.Abs(result) > 8640000000000000 {
+			return vm.NaN, nil
+		}
+
+		return vm.NumberValue(result), nil
 	}))
 
 	dateCtor := ctorWithProps

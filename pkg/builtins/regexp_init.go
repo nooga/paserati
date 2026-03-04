@@ -1,13 +1,77 @@
 package builtins
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
+
+// encodeForRegExpEscape implements the EncodeForRegExpEscape abstract operation.
+func encodeForRegExpEscape(c rune) string {
+	// Step 1: SyntaxCharacter or U+002F (SOLIDUS)
+	switch c {
+	case '^', '$', '\\', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '/':
+		return "\\" + string(c)
+	}
+	// Step 2: Table 64 control escapes
+	switch c {
+	case '\t':
+		return "\\t"
+	case '\n':
+		return "\\n"
+	case 0x0b: // vertical tab
+		return "\\v"
+	case '\f':
+		return "\\f"
+	case '\r':
+		return "\\r"
+	}
+	// Step 3-5: otherPunctuators, WhiteSpace, LineTerminator, or surrogates
+	isOtherPunct := false
+	switch c {
+	case ',', '-', '=', '<', '>', '#', '&', '!', '%', ':', ';', '@', '~', '\'', '`', '"':
+		isOtherPunct = true
+	}
+	isSurrogate := c >= 0xD800 && c <= 0xDFFF
+	isWSOrLT := false
+	if !isOtherPunct && !isSurrogate {
+		switch c {
+		case 0x0020, 0x00A0, 0xFEFF: // WhiteSpace (non-control)
+			isWSOrLT = true
+		case 0x2028, 0x2029: // LineTerminator (non-control)
+			isWSOrLT = true
+		default:
+			if unicode.Is(unicode.Zs, c) { // Unicode Space_Separator category
+				isWSOrLT = true
+			}
+		}
+	}
+	if isOtherPunct || isWSOrLT || isSurrogate {
+		return regexpUnicodeEscape(c)
+	}
+	// Step 6: Return UTF16EncodeCodePoint(c) as-is
+	return string(c)
+}
+
+// regexpUnicodeEscape produces \xHH, \uHHHH, or \uHHHH\uHHHH for a code point.
+func regexpUnicodeEscape(c rune) string {
+	if c <= 0xFF {
+		return fmt.Sprintf("\\x%02x", c)
+	}
+	if c <= 0xFFFF {
+		return fmt.Sprintf("\\u%04x", c)
+	}
+	// Code point > 0xFFFF: encode as surrogate pair
+	c -= 0x10000
+	hi := 0xD800 + (c >> 10)
+	lo := 0xDC00 + (c & 0x3FF)
+	return fmt.Sprintf("\\u%04x\\u%04x", hi, lo)
+}
 
 // processReplacementPattern processes $ patterns in replacement strings
 // $$ -> $
@@ -229,6 +293,7 @@ func (r *RegExpInitializer) InitTypes(ctx *TypeContext) error {
 		WithSimpleConstructSignature([]types.Type{types.String}, types.RegExp).               // new RegExp(pattern) -> RegExp
 		WithSimpleConstructSignature([]types.Type{types.String, types.String}, types.RegExp). // new RegExp(pattern, flags) -> RegExp
 		WithSimpleConstructSignature([]types.Type{types.RegExp}, types.RegExp).               // new RegExp(regexObj) -> RegExp
+		WithProperty("escape", types.NewSimpleFunction([]types.Type{types.String}, types.String)).
 		WithProperty("prototype", regexpProtoType)
 
 	return ctx.DefineGlobal("RegExp", regexpCtorType)
@@ -257,7 +322,17 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) == 0 {
 			return vm.BooleanValue(false), nil
 		}
-		str := args[0].ToString()
+		// Per spec, test calls ToString on the argument (which calls ToPrimitive for objects)
+		argVal := args[0]
+		if argVal.IsObject() || argVal.IsCallable() {
+			vmInstance.EnterHelperCall()
+			argVal = vmInstance.ToPrimitive(argVal, "string")
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert argument to string")
+			}
+		}
+		str := argVal.ToString()
 
 		// Check for global and sticky flags using cached booleans
 		isGlobal := regex.IsGlobal()
@@ -311,7 +386,17 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) == 0 {
 			return vm.Null, nil
 		}
-		str := args[0].ToString()
+		// Per spec, exec calls ToString on the argument (which calls ToPrimitive for objects)
+		argVal := args[0]
+		if argVal.IsObject() || argVal.IsCallable() {
+			vmInstance.EnterHelperCall()
+			argVal = vmInstance.ToPrimitive(argVal, "string")
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert argument to string")
+			}
+		}
+		str := argVal.ToString()
 
 		// Check for global and sticky flags using cached booleans
 		isGlobal := regex.IsGlobal()
@@ -1375,6 +1460,37 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set up prototype relationship
 	regexpCtorProps := regexpCtor.AsNativeFunctionWithProps()
 	regexpCtorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(regexpProto))
+
+	// RegExp.escape(string) - ES2025
+	regexpCtorProps.Properties.SetOwnNonEnumerable("escape", vm.NewNativeFunction(1, false, "escape", func(args []vm.Value) (vm.Value, error) {
+		if len(args) < 1 {
+			return vm.Undefined, vmInstance.NewTypeError("RegExp.escape requires a string argument")
+		}
+		// Step 1: If S is not a String, throw a TypeError exception
+		if args[0].Type() != vm.TypeString {
+			if args[0].Type() == vm.TypeSymbol {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+			}
+			return vm.Undefined, vmInstance.NewTypeError("RegExp.escape requires a string argument")
+		}
+		s := args[0].ToString()
+
+		var result strings.Builder
+		isFirst := true
+		for _, c := range s {
+			if isFirst {
+				isFirst = false
+				// Step 4a: If first char is DecimalDigit or AsciiLetter, escape with \xHH
+				if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+					fmt.Fprintf(&result, "\\x%02x", c)
+					continue
+				}
+			}
+			// Step 4b: EncodeForRegExpEscape(c)
+			result.WriteString(encodeForRegExpEscape(c))
+		}
+		return vm.NewString(result.String()), nil
+	}))
 
 	// Add get [Symbol.species] accessor — returns `this` (ES 21.2.4.2)
 	speciesGetter := vm.NewNativeFunction(0, false, "get [Symbol.species]", func(args []vm.Value) (vm.Value, error) {

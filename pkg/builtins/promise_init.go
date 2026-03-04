@@ -57,6 +57,11 @@ func (p *PromiseInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("any", types.NewSimpleFunction(
 			[]types.Type{types.Any}, // iterable
 			types.Any,               // Promise<any>
+		)).
+		WithProperty("try", types.NewVariadicFunction(
+			[]types.Type{types.Any}, // callbackfn
+			types.Any,               // Promise<any>
+			&types.ArrayType{ElementType: types.Any}, // ...args
 		))
 
 	// Add call signature for Promise constructor
@@ -729,6 +734,53 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		})
 
 		// Use the species constructor to create the result promise
+		if constructor.IsCallable() {
+			return vmInstance.Call(constructor, vm.Undefined, []vm.Value{executor})
+		}
+		return vmInstance.NewPromiseFromExecutor(executor)
+	}))
+
+	// Promise.try(callbackfn, ...args) - ES2025
+	props.SetOwnNonEnumerable("try", vm.NewNativeFunction(1, true, "try", func(args []vm.Value) (vm.Value, error) {
+		if len(args) < 1 || !args[0].IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Promise.try requires a callable argument")
+		}
+		callbackfn := args[0]
+
+		// Get extra arguments to pass to the callback
+		var callArgs []vm.Value
+		if len(args) > 1 {
+			callArgs = args[1:]
+		}
+
+		// Create a new promise via executor
+		executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
+			resolve := execArgs[0]
+			reject := execArgs[1]
+
+			// Call the callback synchronously
+			result, err := vmInstance.Call(callbackfn, vm.Undefined, callArgs)
+			if err != nil || vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				// Callback threw - reject with the error
+				errVal := vm.Undefined
+				if ee, ok := err.(vm.ExceptionError); ok {
+					errVal = ee.GetExceptionValue()
+				} else if err != nil {
+					errVal = vm.NewString(err.Error())
+				}
+				vmInstance.ClearUnwindingState()
+				_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+				return vm.Undefined, nil
+			}
+
+			// Callback succeeded - resolve with the result
+			_, _ = vmInstance.Call(resolve, vm.Undefined, []vm.Value{result})
+			return vm.Undefined, nil
+		})
+
+		// Use the species constructor to create the result promise
+		thisVal := vmInstance.GetThis()
+		constructor := getSpeciesConstructor(thisVal)
 		if constructor.IsCallable() {
 			return vmInstance.Call(constructor, vm.Undefined, []vm.Value{executor})
 		}

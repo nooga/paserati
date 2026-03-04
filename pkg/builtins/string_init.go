@@ -2191,77 +2191,78 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(result.String()), nil
 	}))
 
-	// String.raw - template tag function for raw string literals
+	// String.raw - template tag function for raw string literals (21.1.2.4)
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("raw", vm.NewNativeFunction(1, true, "raw", func(args []vm.Value) (vm.Value, error) {
 		if len(args) == 0 {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
 
-		// Get the template object (first argument)
+		// Step 3: Let cooked be ToObject(template)
 		template := args[0]
-		if !template.IsObject() && !template.IsArray() {
+		if template.Type() == vm.TypeNull || template.Type() == vm.TypeUndefined {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
 
-		// Get the 'raw' property from template
-		var rawArray vm.Value
-		if template.IsObject() {
-			if po := template.AsPlainObject(); po != nil {
-				if rawProp, exists := po.Get("raw"); exists {
-					rawArray = rawProp
-				} else {
-					return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
-				}
-			} else {
-				return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
-			}
-		} else {
+		// Step 5: Let raw be ToObject(Get(cooked, "raw"))
+		rawVal, err := vmInstance.GetProperty(template, "raw")
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if rawVal.Type() == vm.TypeNull || rawVal.Type() == vm.TypeUndefined {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
 
-		// Get length and elements from raw array
-		var rawElements []vm.Value
-		if rawArray.IsArray() {
-			arr := rawArray.AsArray()
-			if arr != nil {
-				rawLength := arr.Length()
-				rawElements = make([]vm.Value, rawLength)
-				for i := 0; i < rawLength; i++ {
-					rawElements[i] = arr.Get(i)
-				}
-			}
-		} else if rawArray.IsObject() {
-			// Could be array-like object
-			if po := rawArray.AsPlainObject(); po != nil {
-				if lengthVal, exists := po.Get("length"); exists {
-					rawLength := int(lengthVal.ToFloat())
-					rawElements = make([]vm.Value, rawLength)
-					for i := 0; i < rawLength; i++ {
-						if elem, exists := po.Get(fmt.Sprintf("%d", i)); exists {
-							rawElements[i] = elem
-						} else {
-							rawElements[i] = vm.Undefined
-						}
-					}
-				}
-			}
+		// Step 7: Let literalSegments be ToLength(Get(raw, "length"))
+		lengthVal, err := vmInstance.GetProperty(rawVal, "length")
+		if err != nil {
+			return vm.Undefined, err
 		}
-
-		if len(rawElements) == 0 {
+		if lengthVal.Type() == vm.TypeSymbol {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+		}
+		rawLength := int(lengthVal.ToFloat())
+		if rawLength <= 0 {
 			return vm.NewString(""), nil
 		}
 
-		// Build the result by interleaving raw strings and substitutions
+		// Build result by interleaving raw strings and substitutions
 		var result strings.Builder
-		substitutions := args[1:] // Rest of args are substitutions
+		substitutions := args[1:]
 
-		for i, rawElement := range rawElements {
-			// Convert raw element to string
-			result.WriteString(rawElement.ToString())
+		for i := 0; i < rawLength; i++ {
+			// Step 12b: Let nextSeg be ToString(Get(raw, nextKey))
+			elemVal, getErr := vmInstance.GetProperty(rawVal, fmt.Sprintf("%d", i))
+			if getErr != nil {
+				return vm.Undefined, getErr
+			}
+			if elemVal.Type() == vm.TypeSymbol {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+			}
+			if elemVal.IsObject() || elemVal.IsCallable() {
+				vmInstance.EnterHelperCall()
+				elemVal = vmInstance.ToPrimitive(elemVal, "string")
+				vmInstance.ExitHelperCall()
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.Undefined, vmInstance.NewTypeError("Cannot convert value to string")
+				}
+			}
+			result.WriteString(elemVal.ToString())
 
-			// Add substitution if available (between raw strings)
-			if i < len(rawElements)-1 && i < len(substitutions) {
-				result.WriteString(substitutions[i].ToString())
+			// Step 12e: Add substitution if available
+			if i < rawLength-1 && i < len(substitutions) {
+				sub := substitutions[i]
+				if sub.Type() == vm.TypeSymbol {
+					return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+				}
+				if sub.IsObject() || sub.IsCallable() {
+					vmInstance.EnterHelperCall()
+					sub = vmInstance.ToPrimitive(sub, "string")
+					vmInstance.ExitHelperCall()
+					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+						return vm.Undefined, vmInstance.NewTypeError("Cannot convert value to string")
+					}
+				}
+				result.WriteString(sub.ToString())
 			}
 		}
 
