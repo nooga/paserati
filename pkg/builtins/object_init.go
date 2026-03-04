@@ -2017,12 +2017,18 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		}
 		return vm.Null, nil
 	case vm.TypeNativeFunctionWithProps:
-		// Return Properties prototype (may be custom, e.g. TypedArray constructors)
+		// Per ECMAScript spec, all built-in functions have Function.prototype as their
+		// [[Prototype]], unless explicitly set otherwise (e.g. TypedArray constructors
+		// whose [[Prototype]] is %TypedArray%).
 		nfp := obj.AsNativeFunctionWithProps()
 		if nfp != nil && nfp.Properties != nil {
-			return nfp.Properties.GetPrototype(), nil
+			proto := nfp.Properties.GetPrototype()
+			// Check if a custom prototype was explicitly set (not the default ObjectPrototype)
+			if proto.Type() != vm.TypeUndefined && proto.Type() != vm.TypeNull && proto != vm.DefaultObjectPrototype {
+				return proto, nil
+			}
 		}
-		return vm.Null, nil
+		return vmInstance.FunctionPrototype, nil
 	case vm.TypeSet:
 		// For Sets, return Set.prototype
 		return vmInstance.SetPrototype, nil

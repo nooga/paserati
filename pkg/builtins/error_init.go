@@ -129,6 +129,28 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		errorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("Error"))
 		errorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
 
+		// Handle options parameter (ES2022 InstallErrorCause): new Error(message, { cause })
+		if len(args) > 1 && args[1].IsObject() {
+			options := args[1]
+			// Per spec: If HasProperty(options, "cause") is true, install it
+			causeVal, err := vmInstance.GetProperty(options, "cause")
+			if err != nil {
+				return vm.Undefined, err
+			}
+			// Check if cause property actually exists on options
+			hasCause := false
+			if options.Type() == vm.TypeObject {
+				hasCause = options.AsPlainObject().HasOwn("cause")
+			} else if options.Type() == vm.TypeDictObject {
+				hasCause = options.AsDictObject().HasOwn("cause")
+			}
+			if hasCause || causeVal.Type() != vm.TypeUndefined {
+				// Per spec: CreateNonEnumerableDataPropertyOrThrow(O, "cause", value)
+				wTrue, eFalse, cTrue := true, false, true
+				errorInstancePtr.DefineOwnProperty("cause", causeVal, &wTrue, &eFalse, &cTrue)
+			}
+		}
+
 		// Capture stack trace at the time of Error creation
 		stackTrace := vmInstance.CaptureStackTrace()
 		errorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))

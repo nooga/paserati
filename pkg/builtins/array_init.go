@@ -178,7 +178,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Add Array prototype methods
 	arrayProto.SetOwnNonEnumerable("push", vm.NewNativeFunction(1, true, "push", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil {
 			return vm.NumberValue(0), nil
 		}
@@ -189,7 +193,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("pop", vm.NewNativeFunction(0, false, "pop", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil || thisArray.Length() == 0 {
 			return vm.Undefined, nil
 		}
@@ -200,7 +208,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("shift", vm.NewNativeFunction(0, false, "shift", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil || thisArray.Length() == 0 {
 			return vm.Undefined, nil
 		}
@@ -215,7 +227,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("unshift", vm.NewNativeFunction(1, true, "unshift", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil {
 			return vm.NumberValue(0), nil
 		}
@@ -234,7 +250,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil {
 			return vm.NewArray(), nil
 		}
@@ -288,7 +308,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("splice", vm.NewNativeFunction(2, true, "splice", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil {
 			return vm.NewArray(), nil
 		}
@@ -384,7 +408,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("join", vm.NewNativeFunction(1, false, "join", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil {
 			return vm.NewString(""), nil
 		}
@@ -405,7 +433,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	arrayProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
 		// Per ECMAScript spec, Array.prototype.toString is equivalent to calling join() with no arguments
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil {
 			return vm.NewString(""), nil
 		}
@@ -421,9 +453,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("reverse", vm.NewNativeFunction(0, false, "reverse", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil {
-			return vmInstance.GetThis(), nil
+			return thisVal, nil
 		}
 		length := thisArray.Length()
 		// Reverse elements in place
@@ -438,9 +474,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("sort", vm.NewNativeFunction(1, false, "sort", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil {
-			return vmInstance.GetThis(), nil
+			return thisVal, nil
 		}
 		length := thisArray.Length()
 		if length <= 1 {
@@ -485,7 +525,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("indexOf", vm.NewNativeFunction(1, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil {
 			return vm.NumberValue(-1), nil
 		}
@@ -532,7 +576,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("lastIndexOf", vm.NewNativeFunction(1, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil {
 			return vm.NumberValue(-1), nil
 		}
@@ -578,7 +626,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("includes", vm.NewNativeFunction(1, false, "includes", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil {
 			return vm.BooleanValue(false), nil
 		}
@@ -621,17 +673,28 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("find", vm.NewNativeFunction(1, false, "find", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.find called on null or undefined")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.Undefined, nil
 		}
 		callback := args[0]
 		if !callback.IsCallable() {
-			return vm.Undefined, nil
+			return vm.Undefined, vmInstance.NewTypeError("predicate is not a function")
+		}
+		// Get thisArg (second argument to find)
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			result, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -643,17 +706,28 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("findIndex", vm.NewNativeFunction(1, false, "findIndex", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.findIndex called on null or undefined")
+		}
+		thisArray := thisVal.AsArray()
 		if thisArray == nil || len(args) < 1 {
 			return vm.NumberValue(-1), nil
 		}
 		callback := args[0]
 		if !callback.IsCallable() {
-			return vm.NumberValue(-1), nil
+			return vm.Undefined, vmInstance.NewTypeError("predicate is not a function")
+		}
+		// Get thisArg (second argument to findIndex)
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			result, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
 			if err != nil {
 				return vm.NumberValue(-1), err
 			}
@@ -1290,11 +1364,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("predicate is not a function")
 		}
 
+		// Get thisArg (second argument to findLast)
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
 		// Get length and iterate backwards
 		if arr := thisVal.AsArray(); arr != nil {
 			for i := arr.Length() - 1; i >= 0; i-- {
 				element := arr.Get(i)
-				result, err := vmInstance.Call(predicate, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				result, err := vmInstance.Call(predicate, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1313,7 +1395,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if v, ok := po.Get(key); ok {
 					elem = v
 				}
-				result, err := vmInstance.Call(predicate, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				result, err := vmInstance.Call(predicate, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1344,11 +1426,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("predicate is not a function")
 		}
 
+		// Get thisArg (second argument to findLastIndex)
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
 		// Get length and iterate backwards
 		if arr := thisVal.AsArray(); arr != nil {
 			for i := arr.Length() - 1; i >= 0; i-- {
 				element := arr.Get(i)
-				result, err := vmInstance.Call(predicate, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				result, err := vmInstance.Call(predicate, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
 				if err != nil {
 					return vm.NumberValue(-1), err
 				}
@@ -1367,7 +1457,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if v, ok := po.Get(key); ok {
 					elem = v
 				}
-				result, err := vmInstance.Call(predicate, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				result, err := vmInstance.Call(predicate, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
 				if err != nil {
 					return vm.NumberValue(-1), err
 				}
@@ -1652,6 +1742,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("flatMap mapper is not a function")
 		}
 
+		// Get thisArg (second argument to flatMap)
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
 		result := vm.NewArray()
 		resultArr := result.AsArray()
 
@@ -1659,7 +1757,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if arr := thisVal.AsArray(); arr != nil {
 			for i := 0; i < arr.Length(); i++ {
 				element := arr.Get(i)
-				mapped, err := vmInstance.Call(mapper, vm.Undefined, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				mapped, err := vmInstance.Call(mapper, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1683,7 +1781,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if v, ok := po.Get(key); ok {
 					elem = v
 				}
-				mapped, err := vmInstance.Call(mapper, vm.Undefined, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				mapped, err := vmInstance.Call(mapper, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -2700,6 +2798,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// This is the same function as [Symbol.iterator] per ECMAScript spec
 	valuesFn := vm.NewNativeFunction(0, false, "values", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
 
 		// First check for array type (AsArray() panics on wrong type, so check type first)
 		if thisVal.Type() == vm.TypeArray {
@@ -2734,6 +2835,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Array.prototype.keys() - returns iterator yielding indices
 	keysFn := vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
 		return createArrayKeysIterator(vmInstance, thisVal), nil
 	})
 	arrayProto.SetOwnNonEnumerable("keys", keysFn)
@@ -2741,6 +2845,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Array.prototype.entries() - returns iterator yielding [index, value] pairs
 	entriesFn := vm.NewNativeFunction(0, false, "entries", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
 		return createArrayEntriesIterator(vmInstance, thisVal), nil
 	})
 	arrayProto.SetOwnNonEnumerable("entries", entriesFn)

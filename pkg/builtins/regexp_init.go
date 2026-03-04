@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -1051,18 +1052,24 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				resultArr := vm.NewArray()
 				arr := resultArr.AsArray()
 
-				// Handle limit
-				limit := -1 // unlimited
+				// Handle limit per ECMAScript: split fully, then truncate
+				var limit uint32 = 0xFFFFFFFF
 				if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
-					lim := int(args[1].ToFloat())
-					if lim == 0 {
+					lim := args[1].ToFloat()
+					if lim == 0 || math.IsNaN(lim) {
 						return resultArr, nil
 					}
-					limit = lim
+					if lim > 0 && lim < float64(0xFFFFFFFF) {
+						limit = uint32(lim)
+					}
 				}
 
-				parts := regex.Split(str, limit)
-				for _, part := range parts {
+				// Split fully (unlimited), then truncate to limit
+				parts := regex.Split(str, -1)
+				for i, part := range parts {
+					if uint32(i) >= limit {
+						break
+					}
 					arr.Append(vm.NewString(part))
 				}
 				return resultArr, nil

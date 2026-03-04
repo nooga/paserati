@@ -424,10 +424,17 @@ func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {
 			return vm.Undefined, vmInstance.NewTypeError("forEach callback is not a function")
 		}
 
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
 		length := ta.GetLength()
 		for i := 0; i < length; i++ {
 			elem := ta.GetElement(i)
-			_, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			_, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -449,10 +456,17 @@ func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {
 			return vm.Undefined, vmInstance.NewTypeError("every callback is not a function")
 		}
 
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
 		length := ta.GetLength()
 		for i := 0; i < length; i++ {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -477,10 +491,17 @@ func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {
 			return vm.Undefined, vmInstance.NewTypeError("some callback is not a function")
 		}
 
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
 		length := ta.GetLength()
 		for i := 0; i < length; i++ {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -505,10 +526,17 @@ func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {
 			return vm.Undefined, vmInstance.NewTypeError("find callback is not a function")
 		}
 
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
 		length := ta.GetLength()
 		for i := 0; i < length; i++ {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -533,10 +561,17 @@ func SetupTypedArrayPrototype(proto *vm.PlainObject, vmInstance *vm.VM) {
 			return vm.Undefined, vmInstance.NewTypeError("findIndex callback is not a function")
 		}
 
+		var thisArg vm.Value
+		if len(args) >= 2 {
+			thisArg = args[1]
+		} else {
+			thisArg = vm.Undefined
+		}
+
 		length := ta.GetLength()
 		for i := 0; i < length; i++ {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
 			if err != nil {
 				return vm.Undefined, err
 			}

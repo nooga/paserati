@@ -1278,25 +1278,19 @@ startExecution:
 			// Save IP before erroring
 			frame.ip = ip
 			if vm.frameCount > 1 {
-				// If we run off the end of a function without OpReturn, that's an error
-				if debugVM {
-					fmt.Printf("[DBG IP-OUT-OF-BOUNDS] IP=%d >= codeLen=%d\n", ip, len(code))
-					dumpFrameStack(vm, "ip-overflow")
-					if frame.closure != nil && frame.closure.Fn != nil {
-						fmt.Printf("[DBG CHUNK] Function=%s IsGenerator=%v ChunkCodeLen=%d\n",
-							frame.closure.Fn.Name, frame.closure.Fn.IsGenerator, len(frame.closure.Fn.Chunk.Code))
-						fmt.Printf("[DBG BYTECODE] Last 20 bytes of chunk:\n")
-						start := 0
-						if len(frame.closure.Fn.Chunk.Code) > 20 {
-							start = len(frame.closure.Fn.Chunk.Code) - 20
-						}
-						for i := start; i < len(frame.closure.Fn.Chunk.Code); i++ {
-							fmt.Printf("  [%04d] %02x (%s)\n", i, frame.closure.Fn.Chunk.Code[i], OpCode(frame.closure.Fn.Chunk.Code[i]).String())
-						}
-					}
-				}
-				status := vm.runtimeError("Implicit return missing in function?")
-				return status, Undefined
+				// Per ECMAScript, running off the end of a function without an explicit
+				// return statement returns undefined. This can happen with certain control
+				// flow patterns (e.g., if/else with returns but no trailing return).
+				vm.frameCount--
+				parentFrame := &vm.frames[vm.frameCount-1]
+				parentFrame.registers[frame.targetRegister] = Undefined
+				frame = parentFrame
+				function = frame.closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
 			} else {
 				// Running off end of main script - return the final expression result
 				// For scripts, the final expression result should be in register 0

@@ -172,6 +172,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Promise.resolve(value)
 	props.SetOwnNonEnumerable("resolve", vm.NewNativeFunction(1, false, "resolve", func(args []vm.Value) (vm.Value, error) {
+		// Step 1-2: Let C be the this value. If Type(C) is not Object, throw TypeError.
+		thisVal := vmInstance.GetThis()
+		if !thisVal.IsObject() && !thisVal.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Promise.resolve called on non-object")
+		}
+
 		value := vm.Undefined
 		if len(args) > 0 {
 			value = args[0]
@@ -187,6 +193,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Promise.reject(reason)
 	props.SetOwnNonEnumerable("reject", vm.NewNativeFunction(1, false, "reject", func(args []vm.Value) (vm.Value, error) {
+		// Step 1-2: Let C be the this value. If Type(C) is not Object, throw TypeError.
+		thisVal := vmInstance.GetThis()
+		if !thisVal.IsObject() && !thisVal.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Promise.reject called on non-object")
+		}
+
 		reason := vm.Undefined
 		if len(args) > 0 {
 			reason = args[0]
@@ -260,8 +272,11 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			iterable = args[0]
 		}
 
-		// Get the constructor to use (species or 'this')
+		// Step 1-2: Let C be the this value. If Type(C) is not Object, throw TypeError.
 		thisVal := vmInstance.GetThis()
+		if !thisVal.IsObject() && !thisVal.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Promise.all called on non-object")
+		}
 		constructor := getSpeciesConstructor(thisVal)
 
 		// Convert iterable to array (before promise creation per spec)
@@ -374,8 +389,11 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			iterable = args[0]
 		}
 
-		// Get the constructor to use (species or 'this')
+		// Step 1-2: Let C be the this value. If Type(C) is not Object, throw TypeError.
 		thisVal := vmInstance.GetThis()
+		if !thisVal.IsObject() && !thisVal.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Promise.race called on non-object")
+		}
 		constructor := getSpeciesConstructor(thisVal)
 
 		// Convert iterable to array
@@ -474,8 +492,11 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			iterable = args[0]
 		}
 
-		// Get the constructor to use (species or 'this')
+		// Step 1-2: Let C be the this value. If Type(C) is not Object, throw TypeError.
 		thisVal := vmInstance.GetThis()
+		if !thisVal.IsObject() && !thisVal.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Promise.any called on non-object")
+		}
 		constructor := getSpeciesConstructor(thisVal)
 
 		// Convert iterable to array
@@ -590,8 +611,11 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			iterable = args[0]
 		}
 
-		// Get the constructor to use (species or 'this')
+		// Step 1-2: Let C be the this value. If Type(C) is not Object, throw TypeError.
 		thisVal := vmInstance.GetThis()
+		if !thisVal.IsObject() && !thisVal.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Promise.allSettled called on non-object")
+		}
 		constructor := getSpeciesConstructor(thisVal)
 
 		// Convert iterable to array

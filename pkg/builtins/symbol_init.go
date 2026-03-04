@@ -277,20 +277,25 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Add well-known symbols as static properties
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("iterator", SymbolIterator)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("toStringTag", SymbolToStringTag)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("hasInstance", SymbolHasInstance)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("toPrimitive", SymbolToPrimitive)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("isConcatSpreadable", SymbolIsConcatSpreadable)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("species", SymbolSpecies)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("match", SymbolMatch)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("matchAll", SymbolMatchAll)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("replace", SymbolReplace)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("search", SymbolSearch)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("split", SymbolSplit)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("unscopables", SymbolUnscopables)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("asyncIterator", SymbolAsyncIterator)
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("dispose", SymbolDispose)
+	// Per ECMAScript 20.4.2.*, these have attributes { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false }
+	{
+		wFalse, eFalse, cFalse := false, false, false
+		props := ctorWithProps.AsNativeFunctionWithProps().Properties
+		props.DefineOwnProperty("iterator", SymbolIterator, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("toStringTag", SymbolToStringTag, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("hasInstance", SymbolHasInstance, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("toPrimitive", SymbolToPrimitive, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("isConcatSpreadable", SymbolIsConcatSpreadable, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("species", SymbolSpecies, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("match", SymbolMatch, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("matchAll", SymbolMatchAll, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("replace", SymbolReplace, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("search", SymbolSearch, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("split", SymbolSplit, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("unscopables", SymbolUnscopables, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("asyncIterator", SymbolAsyncIterator, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("dispose", SymbolDispose, &wFalse, &eFalse, &cFalse)
+	}
 
 	symbolCtor := ctorWithProps
 
