@@ -10466,8 +10466,8 @@ func (p *Parser) parseExportDeclaration() Statement {
 		// export { name1, name2 } or export { name1 } from "module"
 		return p.parseExportNamedDeclarationWithSpecifiers(exportToken, isTypeOnly)
 
-	case lexer.CONST, lexer.LET, lexer.VAR, lexer.FUNCTION, lexer.CLASS, lexer.INTERFACE, lexer.TYPE, lexer.ENUM:
-		// export const x = 1; export function foo() {}
+	case lexer.CONST, lexer.LET, lexer.VAR, lexer.FUNCTION, lexer.CLASS, lexer.INTERFACE, lexer.TYPE, lexer.ENUM, lexer.ASYNC:
+		// export const x = 1; export function foo() {} export async function bar() {}
 		return p.parseExportNamedDeclarationWithDeclaration(exportToken)
 
 	default:

@@ -28,6 +28,8 @@ const debugCalls = false           // Function call tracing
 const debugExceptions = false      // Exception handling tracing
 const debugOpNew = false           // OpNew operation tracing
 const debugGeneratorStates = false // Generator state transition logging (temporary for development)
+const debugAsyncAwait = false      // Async/await debug tracing (temporary)
+const debugAsyncTrace = false      // Instruction-level tracing for async functions (temporary)
 
 // ModuleLoader interface for loading modules without circular imports
 type ModuleLoader interface {
@@ -1273,6 +1275,12 @@ startExecution:
 		// if ip < len(code) {
 		//	fmt.Printf("// [VM DEBUG] Executing instruction at IP %d: %s\n", ip, OpCode(code[ip]).String())
 		// }
+
+		if debugAsyncTrace && frame.promiseObj != nil && frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.Name == "readFile" {
+			if ip < len(code) {
+				fmt.Printf("[TRACE readFile] IP=%d opcode=%s frameCount=%d\n", ip, OpCode(code[ip]).String(), vm.frameCount)
+			}
+		}
 
 		if ip >= len(code) {
 			// Save IP before erroring
@@ -5079,6 +5087,26 @@ startExecution:
 			}
 
 			// Check if we hit a sentinel frame - if so, remove it and return immediately
+			if debugAsyncTrace {
+				parentIsSentinel := vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame
+				parentIsDirectCall := isDirectCall
+				parentPromiseObj := "nil"
+				if vm.frameCount > 0 && vm.frames[vm.frameCount-1].promiseObj != nil {
+					parentPromiseObj = "SET"
+				}
+				if parentIsSentinel || parentIsDirectCall {
+					funcN := "?"
+					if function != nil {
+						funcN = function.Name
+					}
+					parentN := "?"
+					if vm.frameCount > 0 && vm.frames[vm.frameCount-1].closure != nil && vm.frames[vm.frameCount-1].closure.Fn != nil {
+						parentN = vm.frames[vm.frameCount-1].closure.Fn.Name
+					}
+					fmt.Printf("[RETURN-DEBUG] from=%s parent=%s parentIsSentinel=%v isDirectCall=%v parentPromiseObj=%s frameCount=%d result=%s\n",
+						funcN, parentN, parentIsSentinel, parentIsDirectCall, parentPromiseObj, vm.frameCount, result.Inspect())
+				}
+			}
 			if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
 				// Handle constructor return semantics for sentinel frame returns
 				var finalResult Value
@@ -13612,10 +13640,22 @@ startExecution:
 			// Get the value being awaited
 			awaitedValue := registers[promiseReg]
 
+			if debugAsyncAwait {
+				funcName := "?"
+				if frame.closure != nil && frame.closure.Fn != nil {
+					funcName = frame.closure.Fn.Name
+				}
+				fmt.Printf("[AWAIT-DEBUG] func=%s resultReg=%d promiseReg=%d awaitedType=%s awaitedVal=%s\n",
+					funcName, resultReg, promiseReg, awaitedValue.TypeName(), awaitedValue.Inspect())
+			}
+
 			// JavaScript allows awaiting non-promises - they resolve immediately
 			if awaitedValue.Type() != TypePromise {
 				// Non-promise value - just store it and continue
 				registers[resultReg] = awaitedValue
+				if debugAsyncAwait {
+					fmt.Printf("[AWAIT-DEBUG] non-promise fast path: stored %s in R%d\n", awaitedValue.Inspect(), resultReg)
+				}
 				continue
 			}
 
@@ -13685,6 +13725,14 @@ startExecution:
 			case PromiseFulfilled:
 				// Promise already fulfilled - schedule resumption with value as microtask
 				fulfilledValue := awaitedPromise.Result
+				if debugAsyncAwait {
+					funcName := "?"
+					if frame.closure != nil && frame.closure.Fn != nil {
+						funcName = frame.closure.Fn.Name
+					}
+					fmt.Printf("[AWAIT-DEBUG] func=%s FULFILLED: scheduling resume with value=%s, outputReg=%d\n",
+						funcName, fulfilledValue.Inspect(), resultReg)
+				}
 				rt.ScheduleMicrotask(func() {
 					result, err := vm.resumeAsyncFunction(asyncPromise, fulfilledValue)
 					if err != nil {
@@ -17224,6 +17272,8 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	frame.homeObject = promiseObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
 	frame.isDirectCall = true // Mark as direct call for proper return handling
+	frame.isSentinelFrame = false  // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
+	frame.generatorObj = nil       // Clear generator object when reusing frame
 	frame.argCount = 0
 	frame.promiseObj = promiseObj // Link frame to promise object
 
@@ -17240,6 +17290,13 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 
 	// Store the resolved value in the register specified by the await instruction
 	if promiseObj.Frame != nil && int(promiseObj.Frame.outputReg) < len(frame.registers) {
+		if debugAsyncAwait {
+			fmt.Printf("[RESUME-DEBUG] func=%s outputReg=%d resolvedValue=%s pc=%d\n",
+				funcObj.Name, promiseObj.Frame.outputReg, resolvedValue.Inspect(), promiseObj.Frame.pc)
+			for i := 0; i < len(frame.registers) && i < 12; i++ {
+				fmt.Printf("[RESUME-DEBUG]   R%d = %s\n", i, frame.registers[i].Inspect())
+			}
+		}
 		frame.registers[promiseObj.Frame.outputReg] = resolvedValue
 	}
 
@@ -17339,6 +17396,8 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	frame.homeObject = promiseObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
 	frame.isDirectCall = true // Mark as direct call for proper return handling
+	frame.isSentinelFrame = false  // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
+	frame.generatorObj = nil       // Clear generator object when reusing frame
 	frame.argCount = 0
 	frame.promiseObj = promiseObj // Link frame to promise object
 

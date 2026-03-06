@@ -27,13 +27,44 @@ func (vm *VM) executeAsyncFunction(calleeVal Value, thisValue Value, args []Valu
 
 	if err != nil {
 		// Reject the promise with the error
-		vm.rejectPromise(promiseObj, NewString(err.Error()))
+		if debugAsyncAwait {
+			funcName := "?"
+			if calleeVal.Type() == TypeClosure {
+				funcName = calleeVal.AsClosure().Fn.Name
+			} else if calleeVal.Type() == TypeFunction {
+				funcName = calleeVal.AsFunction().Name
+			}
+			fmt.Printf("[ASYNC-DEBUG] func=%s ERROR: %v\n", funcName, err)
+		}
+		// Reject with the original exception value (not stringified) so catch handlers
+		// receive the actual Error object, not a string representation
+		if exErr, ok := err.(exceptionError); ok {
+			vm.rejectPromise(promiseObj, exErr.exception)
+		} else {
+			vm.rejectPromise(promiseObj, NewString(err.Error()))
+		}
 	} else if promiseObj.Frame != nil {
 		// Function hit an await and is suspended (Frame is set by OpAwait)
-		// The promise will be resolved when the async function completes via resumption
+		if debugAsyncAwait {
+			funcName := "?"
+			if calleeVal.Type() == TypeClosure {
+				funcName = calleeVal.AsClosure().Fn.Name
+			} else if calleeVal.Type() == TypeFunction {
+				funcName = calleeVal.AsFunction().Name
+			}
+			fmt.Printf("[ASYNC-DEBUG] func=%s SUSPENDED at await\n", funcName)
+		}
 	} else {
 		// Function completed synchronously without hitting await
-		// promiseObj.Frame is nil, meaning no suspension occurred
+		if debugAsyncAwait {
+			funcName := "?"
+			if calleeVal.Type() == TypeClosure {
+				funcName = calleeVal.AsClosure().Fn.Name
+			} else if calleeVal.Type() == TypeFunction {
+				funcName = calleeVal.AsFunction().Name
+			}
+			fmt.Printf("[ASYNC-DEBUG] func=%s completed sync, result=%s\n", funcName, result.Inspect())
+		}
 		vm.resolvePromise(promiseObj, result)
 	}
 
@@ -99,7 +130,9 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	frame.homeObject = funcObj.HomeObject // Set [[HomeObject]] for super property access (object literal methods)
 	frame.isConstructorCall = false
 	frame.isDirectCall = true      // Mark as direct call for proper return handling
+	frame.isSentinelFrame = false  // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
 	frame.promiseObj = promiseObj  // Link frame to promise object - critical for OpAwait!
+	frame.generatorObj = nil       // Clear generator object when reusing frame
 
 	if closureObj != nil {
 		frame.closure = closureObj
@@ -116,6 +149,12 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 		frame.spillSlots = nil
 	}
 
+	// Zero out all registers first to prevent stale data from previous calls
+	// that used the same register stack region
+	for i := range frame.registers {
+		frame.registers[i] = Undefined
+	}
+
 	// Set up arguments in registers
 	frame.argCount = len(args)
 	for i, arg := range args {
@@ -127,6 +166,14 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	// Update VM state
 	vm.frameCount++
 	vm.nextRegSlot += regSize
+
+	if debugAsyncAwait {
+		fmt.Printf("[ASYNC-BODY] func=%s starting execution, regSize=%d, args=%d, frameCount=%d, nextRegSlot=%d\n",
+			funcObj.Name, regSize, len(args), vm.frameCount, vm.nextRegSlot)
+		for i := 0; i < len(frame.registers) && i < 5; i++ {
+			fmt.Printf("[ASYNC-BODY]   R%d = %s\n", i, frame.registers[i].Inspect())
+		}
+	}
 
 	// Execute the VM run loop - it will return when the async function yields or completes
 	status, result := vm.run()
@@ -143,7 +190,16 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 
 	if status == InterpretRuntimeError {
 		if vm.unwinding && vm.currentException != Null {
-			return Undefined, exceptionError{exception: vm.currentException}
+			exc := vm.currentException
+			// CRITICAL: Clear exception state so it doesn't leak to the caller's vm.run().
+			// The exception is captured in the returned error and will be used to reject
+			// the async function's promise. Without this, the caller's OpCall handler
+			// sees stale unwinding/crossedNative flags and returns InterpretRuntimeError
+			// from the wrong vm.run() invocation.
+			vm.currentException = Null
+			vm.unwinding = false
+			vm.unwindingCrossedNative = false
+			return Undefined, exceptionError{exception: exc}
 		}
 		return Undefined, fmt.Errorf("runtime error during async function execution")
 	}

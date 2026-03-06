@@ -2,6 +2,8 @@
   "compilerOptions": {
     "lib": ["es2023", "esnext", "dom"],
     "downlevelIteration": true,
-    "moduleDetection": "force"
+    "moduleDetection": "force",
+    "module": "nodenext",
+    "target": "es2023"
   }
 }
