@@ -11,6 +11,9 @@ import (
 )
 
 func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register) (Register, errors.PaseratiError) {
+	if node.Declare {
+		return BadRegister, nil
+	}
 	// Process all variable declarations in the statement
 	for _, declarator := range node.Declarations {
 		// Set current declarator in legacy fields for backward compatibility
@@ -242,6 +245,9 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 }
 
 func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register) (Register, errors.PaseratiError) {
+	if node.Declare {
+		return BadRegister, nil
+	}
 	// Process all variable declarations in the statement
 	for _, declarator := range node.Declarations {
 		// Strict mode check: 'var arguments' and 'var eval' are forbidden in strict mode
@@ -579,6 +585,10 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 }
 
 func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Register) (Register, errors.PaseratiError) {
+	// Ambient declarations produce no runtime code
+	if node.Declare {
+		return BadRegister, nil
+	}
 	// Process all constant declarations in the statement
 	for _, declarator := range node.Declarations {
 		// Set current declarator in legacy fields for backward compatibility

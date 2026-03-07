@@ -1614,6 +1614,13 @@ func (c *Checker) visit(node parser.Node) {
 					c.visit(declarator.Value) // Regular visit if no type annotation
 				}
 				computedInitializerType = declarator.Value.GetComputedType()
+			} else if node.Declare {
+				// Ambient declaration — no initializer needed, use declared type or any
+				if declaredType != nil {
+					computedInitializerType = declaredType
+				} else {
+					computedInitializerType = types.Any
+				}
 			} else {
 				// Constants MUST be initialized
 				c.addError(declarator.Name, fmt.Sprintf("const declaration '%s' must be initialized", declarator.Name.Value))

@@ -678,6 +678,14 @@ func (p *Parser) parseStatement() Statement {
 		// End of current block scope; let the caller handle it
 		return nil
 	case lexer.IDENT:
+		// Handle TypeScript 'declare' keyword for ambient declarations
+		// declare const/let/var/function/class/interface/type/enum — no code emitted
+		if p.curToken.Literal == "declare" {
+			switch p.peekToken.Type {
+			case lexer.CONST, lexer.LET, lexer.VAR, lexer.FUNCTION, lexer.CLASS, lexer.INTERFACE, lexer.TYPE, lexer.ENUM, lexer.ASYNC, lexer.ABSTRACT:
+				return p.parseDeclareStatement()
+			}
+		}
 		// Check if this is a labeled statement (identifier followed by colon)
 		if p.peekTokenIs(lexer.COLON) {
 			return p.parseLabeledStatement()
@@ -812,6 +820,147 @@ func (p *Parser) parseAbstractClassDeclarationStatement() Statement {
 	}
 
 	return classDeclStmt
+}
+
+// parseDeclareStatement handles TypeScript 'declare' ambient declarations.
+// These are type-only declarations that produce no runtime code.
+// For const/let/var, we parse the declaration properly so the type checker
+// can register the declared types. For other forms, we skip tokens.
+func (p *Parser) parseDeclareStatement() Statement {
+	// Skip 'declare' keyword
+	p.nextToken()
+
+	// For interface and type, parse normally (they already produce no code)
+	switch p.curToken.Type {
+	case lexer.INTERFACE, lexer.TYPE:
+		return p.parseStatement()
+	case lexer.CONST:
+		return p.parseDeclareVarStatement()
+	case lexer.LET:
+		return p.parseDeclareVarStatement()
+	case lexer.VAR:
+		return p.parseDeclareVarStatement()
+	}
+
+	// For all other forms (function, class, enum, async, abstract),
+	// skip tokens with balanced bracket tracking until we find a terminating semicolon
+	// at depth 0, or reach a point where ASI should apply.
+	return p.skipDeclareBody()
+}
+
+// parseDeclareVarStatement parses `declare const/let/var name: Type;`
+// It creates a proper AST node with Declare=true so the checker registers
+// the type but the compiler skips code generation.
+func (p *Parser) parseDeclareVarStatement() Statement {
+	varToken := p.curToken // const, let, or var token
+	varType := varToken.Type
+
+	p.nextToken() // Move past const/let/var to the identifier
+
+	// Parse declarator: name: Type
+	declarator := &VarDeclarator{}
+	if !p.curTokenIsIdentLike() {
+		p.addError(p.curToken, fmt.Sprintf("expected identifier after 'declare %s', got %s", varToken.Literal, p.curToken.Type))
+		return nil
+	}
+	declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+	// Type annotation (expected for declare, but not strictly required)
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Consume ':'
+		p.nextToken() // Move to type expression start
+		declarator.TypeAnnotation = p.parseTypeExpression()
+	}
+
+	declarations := []*VarDeclarator{declarator}
+
+	// Parse additional declarations separated by commas
+	for p.peekTokenIs(lexer.COMMA) {
+		p.nextToken() // Consume ','
+		p.nextToken() // Move to identifier
+
+		d := &VarDeclarator{}
+		if !p.curTokenIsIdentLike() {
+			break
+		}
+		d.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		if p.peekTokenIs(lexer.COLON) {
+			p.nextToken()
+			p.nextToken()
+			d.TypeAnnotation = p.parseTypeExpression()
+		}
+		declarations = append(declarations, d)
+	}
+
+	// Optional semicolon
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+
+	// Create the appropriate statement type with Declare=true
+	switch varType {
+	case lexer.CONST:
+		stmt := &ConstStatement{Token: varToken, Declarations: declarations, Declare: true}
+		if len(declarations) > 0 {
+			stmt.Name = declarations[0].Name
+			stmt.TypeAnnotation = declarations[0].TypeAnnotation
+		}
+		return stmt
+	case lexer.LET:
+		stmt := &LetStatement{Token: varToken, Declarations: declarations, Declare: true}
+		if len(declarations) > 0 {
+			stmt.Name = declarations[0].Name
+			stmt.TypeAnnotation = declarations[0].TypeAnnotation
+		}
+		return stmt
+	case lexer.VAR:
+		stmt := &VarStatement{Token: varToken, Declarations: declarations, Declare: true}
+		if len(declarations) > 0 {
+			stmt.Name = declarations[0].Name
+			stmt.TypeAnnotation = declarations[0].TypeAnnotation
+		}
+		return stmt
+	}
+	return nil
+}
+
+// skipDeclareBody skips the body of a declare statement using balanced bracket tracking.
+func (p *Parser) skipDeclareBody() Statement {
+	braceDepth := 0
+	bracketDepth := 0
+	parenDepth := 0
+
+	for !p.curTokenIs(lexer.EOF) {
+		switch p.curToken.Type {
+		case lexer.LBRACE:
+			braceDepth++
+		case lexer.RBRACE:
+			braceDepth--
+			if braceDepth < 0 {
+				return nil
+			}
+			if braceDepth == 0 && bracketDepth == 0 && parenDepth == 0 {
+				if p.peekTokenIs(lexer.SEMICOLON) {
+					p.nextToken()
+				}
+				return nil
+			}
+		case lexer.LBRACKET:
+			bracketDepth++
+		case lexer.RBRACKET:
+			bracketDepth--
+		case lexer.LPAREN:
+			parenDepth++
+		case lexer.RPAREN:
+			parenDepth--
+		case lexer.SEMICOLON:
+			if braceDepth == 0 && bracketDepth == 0 && parenDepth == 0 {
+				return nil
+			}
+		}
+		p.nextToken()
+	}
+	return nil
 }
 
 // --- NEW: Type Alias Statement Parsing ---
@@ -3768,6 +3917,17 @@ func (p *Parser) canStartExpression(t lexer.Token) bool {
 	default:
 		return false
 	}
+}
+
+// curTokenIsIdentLike returns true if the current token is IDENT or a contextual keyword usable as an identifier.
+func (p *Parser) curTokenIsIdentLike() bool {
+	switch p.curToken.Type {
+	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
+		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF, lexer.FROM,
+		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.NULL, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT:
+		return true
+	}
+	return false
 }
 
 // expectPeekIdentifierOrKeyword accepts IDENT or contextual keywords that can be used as identifiers.
@@ -10469,6 +10629,13 @@ func (p *Parser) parseExportDeclaration() Statement {
 	case lexer.CONST, lexer.LET, lexer.VAR, lexer.FUNCTION, lexer.CLASS, lexer.INTERFACE, lexer.TYPE, lexer.ENUM, lexer.ASYNC:
 		// export const x = 1; export function foo() {} export async function bar() {}
 		return p.parseExportNamedDeclarationWithDeclaration(exportToken)
+
+	case lexer.IDENT:
+		if p.curToken.Literal == "declare" {
+			// export declare const x: number; — ambient declaration
+			return p.parseDeclareStatement()
+		}
+		return nil
 
 	default:
 		// Should not reach here due to expectPeek checks above

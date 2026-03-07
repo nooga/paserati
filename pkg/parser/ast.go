@@ -79,6 +79,7 @@ func (p *Program) String() string {
 type LetStatement struct {
 	Token        lexer.Token      // The lexer.LET token
 	Declarations []*VarDeclarator // List of variable declarations
+	Declare      bool             // True for ambient declarations (declare let)
 	// Legacy fields for backward compatibility (first declaration)
 	Name           *Identifier // The variable name
 	TypeAnnotation Expression  // Parsed type node (e.g., *Identifier)
@@ -126,6 +127,7 @@ type VarDeclarator struct {
 type VarStatement struct {
 	Token        lexer.Token      // The lexer.VAR token
 	Declarations []*VarDeclarator // List of variable declarations
+	Declare      bool             // True for ambient declarations (declare var)
 	// Legacy fields for backward compatibility
 	Name           *Identifier // The variable name (first declaration)
 	TypeAnnotation Expression  // Parsed type node (first declaration)
@@ -165,6 +167,7 @@ func (vs *VarStatement) String() string {
 type ConstStatement struct {
 	Token        lexer.Token      // The lexer.CONST token
 	Declarations []*VarDeclarator // List of variable declarations
+	Declare      bool             // True for ambient declarations (declare const)
 	// Legacy fields for backward compatibility (first declaration)
 	Name           *Identifier // The variable name
 	TypeAnnotation Expression  // Parsed type node

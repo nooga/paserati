@@ -114,7 +114,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		// Create instance (or leave undefined for derived constructors)
 		var newInstance Value
 		if constructorFunc.IsDerivedConstructor {
-			newInstance = Undefined
+			newInstance = Uninitialized // 'this' is in TDZ until super() is called
 		} else {
 			newInstance = NewObject(instancePrototype)
 		}
@@ -213,10 +213,10 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 			instancePrototype = constructorFunc.GetOrCreatePrototypeWithVM(vm)
 		}
 
-		// Create instance (or leave undefined for derived constructors)
+		// Create instance (or leave uninitialized for derived constructors)
 		var newInstance Value
 		if constructorFunc.IsDerivedConstructor {
-			newInstance = Undefined
+			newInstance = Uninitialized // 'this' is in TDZ until super() is called
 		} else {
 			newInstance = NewObject(instancePrototype)
 		}

@@ -148,6 +148,9 @@ func collectVarDeclarations(stmts []parser.Statement) []string {
 		}
 		switch s := stmt.(type) {
 		case *parser.VarStatement:
+			if s.Declare {
+				break
+			}
 			for _, decl := range s.Declarations {
 				if decl.Name != nil && !seen[decl.Name.Value] {
 					names = append(names, decl.Name.Value)
@@ -264,12 +267,12 @@ func collectLetConstDeclarations(stmts []parser.Statement) []string {
 		}
 		switch s := stmt.(type) {
 		case *parser.LetStatement:
-			if s.Name != nil && !seen[s.Name.Value] {
+			if !s.Declare && s.Name != nil && !seen[s.Name.Value] {
 				names = append(names, s.Name.Value)
 				seen[s.Name.Value] = true
 			}
 		case *parser.ConstStatement:
-			if s.Name != nil && !seen[s.Name.Value] {
+			if !s.Declare && s.Name != nil && !seen[s.Name.Value] {
 				names = append(names, s.Name.Value)
 				seen[s.Name.Value] = true
 			}
