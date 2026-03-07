@@ -3957,12 +3957,17 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 			if !isTypeOnly {
 				// If this is a class (constructor function), also register it in the value environment
 				// Classes need to be available for both type annotations and runtime usage (new expressions)
-				if objectType, ok := resolvedType.(*types.ObjectType); ok {
-					if len(objectType.ConstructSignatures) > 0 {
+				switch rt := resolvedType.(type) {
+				case *types.ObjectType:
+					if len(rt.ConstructSignatures) > 0 {
 						// This is a constructor function type (class)
-						c.env.Define(localName, resolvedType, false)
+						c.env.Update(localName, resolvedType)
 						debugPrintf("// [Checker] Registered imported class %s in value environment\n", localName)
 					}
+				case *types.GenericType:
+					// Generic classes need to be in the value environment for extends and new expressions
+					c.env.Update(localName, resolvedType)
+					debugPrintf("// [Checker] Registered imported generic class %s in value environment\n", localName)
 				}
 			} else {
 				debugPrintf("// [Checker] Skipped value environment registration for type-only import %s\n", localName)
@@ -4236,6 +4241,20 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 
 		default:
 			debugPrintf("// [Checker] Exported expression: %T\n", expr)
+		}
+
+	case *parser.ClassDeclaration:
+		if node.Name != nil {
+			localName := node.Name.Value
+			// Look up the constructor type from the environment (already processed in Pass 1)
+			exportType, _, exists := c.env.Resolve(localName)
+			if !exists {
+				exportType = types.Any
+			}
+			if c.IsModuleMode() {
+				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
+			}
+			debugPrintf("// [Checker] Exported class declaration: %s (type: %s)\n", localName, exportType.String())
 		}
 
 	case *parser.InterfaceDeclaration:

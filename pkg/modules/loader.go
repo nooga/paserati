@@ -196,7 +196,6 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 			// Skip type extraction for native modules - they already have their exports set
 			if !record.isNative {
 				record.Exports = moduleChecker.GetModuleExports()
-				debugPrintf("// [ModuleLoader] Extracted %d exports from module %s\n", len(record.Exports), record.ResolvedPath)
 				for name, typ := range record.Exports {
 					debugPrintf("// [ModuleLoader]   Export '%s': %s\n", name, typ.String())
 				}
@@ -794,6 +793,7 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 				// Skip type extraction for native modules - they already have their exports set
 				if !record.isNative {
 					record.Exports = moduleChecker.GetModuleExports()
+					debugPrintf("// [ModuleLoader] Extracted %d exports from %s\n", len(record.Exports), modulePath)
 				}
 			}
 		} else {

@@ -1126,7 +1126,12 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 				debugPrintf("// [Checker Class] Resolved type arg %d: %s\n", i, resolvedTypeArgs[i].String())
 			}
 
-			instantiatedConstructor := c.instantiateGenericType(baseConstructor.(*types.GenericType), resolvedTypeArgs, nil)
+			genericType, isGeneric := baseConstructor.(*types.GenericType)
+			if !isGeneric {
+				c.addError(superClassExpr, fmt.Sprintf("'%s' is not a generic type", genRef.Name.Value))
+				return
+			}
+			instantiatedConstructor := c.instantiateGenericType(genericType, resolvedTypeArgs, nil)
 			constructorType = instantiatedConstructor
 		} else {
 			// No type arguments provided, use base constructor as-is
