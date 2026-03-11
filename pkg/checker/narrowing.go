@@ -1191,10 +1191,42 @@ func (c *Checker) applyTypeNarrowingFromCondition(condition parser.Expression) *
 		return leftEnv
 	}
 
-	// Handle logical OR expressions - for "a || b", we can't really narrow much
-	// (would need union of constraints, which is complex)
+	// Handle logical OR expressions: if (x === "a" || x === "b" || x === "c")
+	// Each operand narrows x to a literal; the union gives x: "a" | "b" | "c"
 	if infixExpr, ok := condition.(*parser.InfixExpression); ok && infixExpr.Operator == "||" {
-		// For now, don't handle OR expressions in type narrowing
+		// Collect all equality guards from the || chain
+		guards := c.collectOrEqualityGuards(condition)
+		if len(guards) > 0 {
+			// All guards must be on the same variable and be positive (===)
+			varName := guards[0].VariableName
+			allSameVar := true
+			var literalTypes []types.Type
+			for _, g := range guards {
+				if g.VariableName != varName || g.IsNegated {
+					allSameVar = false
+					break
+				}
+				if g.NarrowedType != nil {
+					literalTypes = append(literalTypes, g.NarrowedType)
+				}
+			}
+			if allSameVar && len(literalTypes) == len(guards) {
+				// Narrow to the union of all literal types
+				var narrowedType types.Type
+				if len(literalTypes) == 1 {
+					narrowedType = literalTypes[0]
+				} else {
+					narrowedType = types.NewUnionType(literalTypes...)
+				}
+				originalType, isConst, found := c.env.Resolve(varName)
+				if found && originalType != nil {
+					narrowedEnv := NewEnclosedEnvironment(c.env)
+					narrowedEnv.Define(varName, narrowedType, isConst)
+					debugPrintf("// [TypeNarrowing] OR-chain equality narrowing: '%s' -> %s\n", varName, narrowedType.String())
+					return narrowedEnv
+				}
+			}
+		}
 		return nil
 	}
 
@@ -1207,6 +1239,24 @@ func (c *Checker) applyTypeNarrowingFromCondition(condition parser.Expression) *
 	// Handle single type guard expressions
 	guard := c.detectTypeGuard(condition)
 	return c.applyTypeNarrowing(guard)
+}
+
+// collectOrEqualityGuards recursively walks an || chain and collects type guards
+// from each leaf condition. Returns nil if any leaf is not a simple equality guard.
+func (c *Checker) collectOrEqualityGuards(condition parser.Expression) []*TypeGuard {
+	if infixExpr, ok := condition.(*parser.InfixExpression); ok && infixExpr.Operator == "||" {
+		left := c.collectOrEqualityGuards(infixExpr.Left)
+		right := c.collectOrEqualityGuards(infixExpr.Right)
+		if left == nil || right == nil {
+			return nil
+		}
+		return append(left, right...)
+	}
+	guard := c.detectTypeGuard(condition)
+	if guard == nil {
+		return nil
+	}
+	return []*TypeGuard{guard}
 }
 
 // applyInvertedOrNarrowing handles control flow narrowing for compound || conditions.

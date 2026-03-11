@@ -139,7 +139,12 @@ func (c *Checker) validateSpreadArgument(spreadElement *parser.SpreadElement, is
 
 // checkFixedArgumentsWithSpread checks fixed parameters against arguments,
 // properly expanding spread elements
-func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, paramTypes []types.Type, isVariadicFunction bool) bool {
+func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, paramTypes []types.Type, isVariadicFunction bool, optionalParams ...[]bool) bool {
+	// Extract optional params info if provided
+	var isOptional []bool
+	if len(optionalParams) > 0 {
+		isOptional = optionalParams[0]
+	}
 	allOk := true
 	effectiveArgIndex := 0
 
@@ -214,8 +219,12 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 			if effectiveArgIndex < len(paramTypes) {
 				paramType := paramTypes[effectiveArgIndex]
 				if argType != nil && !c.isAssignableWithExpansion(argType, paramType) {
-					c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", effectiveArgIndex+1, argType.String(), paramType.String()))
-					allOk = false
+					// Optional parameters implicitly accept undefined
+					paramIsOptional := effectiveArgIndex < len(isOptional) && isOptional[effectiveArgIndex]
+					if !(paramIsOptional && argType == types.Undefined) {
+						c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", effectiveArgIndex+1, argType.String(), paramType.String()))
+						allOk = false
+					}
 				}
 			}
 			effectiveArgIndex += 1
@@ -664,7 +673,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 			// Don't check args if minimum count isn't met.
 		} else {
 			// Check fixed arguments with spread expansion support
-			fixedArgsOk := c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic)
+			fixedArgsOk := c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic, funcSignature.OptionalParams)
 
 			// Check variadic arguments
 			if fixedArgsOk { // Only check variadic part if fixed part was okay
@@ -746,7 +755,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 			// 2. Generators often use this pattern with zero declared parameters
 			// 3. TypeScript only warns about this in strict mode, it's not a hard error
 			// Check argument types with spread expansion support
-			c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic)
+			c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic, funcSignature.OptionalParams)
 		}
 	}
 	// --- END MODIFIED Checking ---
