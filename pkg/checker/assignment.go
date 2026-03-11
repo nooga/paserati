@@ -114,16 +114,42 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			}
 		}
 
+		// For member expressions, if the property has been narrowed (e.g., this._tools
+		// narrowed from string[] | null to null), check assignment against the original
+		// declared property type, not the narrowed type.
+		if memberLHS, isMember := node.Left.(*parser.MemberExpression); isMember {
+			key := expressionToNarrowingKey(memberLHS)
+			if key != "" {
+				// Check if there's a narrowing active for this member expression
+				if origType := c.resolveMemberExpressionOriginalType(key); origType != nil {
+					// Only use original type if it's wider than the narrowed type
+					if !c.typesEqual(origType, lhsType) {
+						targetType = origType
+					}
+				}
+			}
+		}
+
 		if !types.IsAssignable(rhsType, targetType) { // <<< Use targetType (usually widened LHS)
-			// Special case for ??= handled within isAssignable now?
-			// Let's keep the explicit check here for clarity just for ??=
+			// If the resolved type rejected the RHS, check if we're in a narrowing scope
+			// where the declared type is wider and would accept the assignment.
+			// This handles: if (x === null) { x = "default"; } where x: string | null
+			// is narrowed to null, but "default" is assignable to the declared string | null.
 			allowAssignment := false
-			if node.Operator == "??=" && (lhsType == types.Null || lhsType == types.Undefined) {
-				// Allow ??= if LHS is null/undefined, check if RHS assignable to WIDENED LHS
-				if types.IsAssignable(rhsType, widenedLhsType) { // Check assignability to widened target
+			if identLHS, isIdent := node.Left.(*parser.Identifier); isIdent {
+				declaredType := c.env.ResolveDeclaredType(identLHS.Value)
+				if declaredType != nil && declaredType != targetType {
+					if types.IsAssignable(rhsType, declaredType) {
+						allowAssignment = true
+					}
+				}
+			}
+
+			// Special case for ??=
+			if !allowAssignment && node.Operator == "??=" && (lhsType == types.Null || lhsType == types.Undefined) {
+				if types.IsAssignable(rhsType, widenedLhsType) {
 					allowAssignment = true
 				}
-				// If RHS is not assignable even to widened LHS, error will be reported below
 			}
 
 			if !allowAssignment {
@@ -137,6 +163,38 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 				}
 				// Report error comparing RHS to the potentially stricter targetType
 				c.addError(node.Value, fmt.Sprintf("type '%s' is not assignable to %s of type '%s'", rhsType.String(), leftDesc, targetType.String()))
+			}
+		}
+	}
+
+	// After assignment, update the variable's type in the scope chain.
+	// This enables narrowing after assignments: if (x === null) { x = value; }
+	// should narrow x to the RHS type within the current scope.
+	// We use UpdateInChain to walk up through block scopes and narrowing scopes
+	// to find and update the nearest definition of the variable.
+	if node.Operator == "=" {
+		if identLHS, ok := node.Left.(*parser.Identifier); ok {
+			if rhsType != nil && rhsType != types.Any {
+				_, isConst, found := c.env.Resolve(identLHS.Value)
+				if found && !isConst {
+					// Update the type in the nearest defining scope to the widened RHS type
+					widenedRhs := types.GetWidenedType(rhsType)
+					c.env.UpdateInChain(identLHS.Value, widenedRhs)
+					debugPrintf("// [Checker Assignment] Updated '%s' type to '%s' after assignment\n",
+						identLHS.Value, widenedRhs.String())
+				}
+			}
+		}
+
+		// For member expression assignments (e.g., this._tools = [...]),
+		// update the narrowings map so post-if merging can see the assignment effect.
+		if memberLHS, ok := node.Left.(*parser.MemberExpression); ok {
+			if rhsType != nil {
+				key := expressionToNarrowingKey(memberLHS)
+				if key != "" {
+					widenedRhs := types.GetWidenedType(rhsType)
+					c.updateNarrowingInChain(key, widenedRhs)
+				}
 			}
 		}
 	}

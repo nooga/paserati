@@ -1369,7 +1369,10 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			}
 			c.addError(node.Object, fmt.Sprintf("could not resolve type alias '%s'", obj.AliasName))
 			resultType = types.Never
-		// Add cases for other struct-based types here if needed
+		case *types.ObjectTypeMarker:
+			// typeof x === "object" narrows to object type marker
+			// Property access on object type returns any (same as TypeScript)
+			resultType = types.Any
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
 			// e.g., trying to access property on number, boolean, null, undefined
@@ -1827,7 +1830,10 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 				// This is because the type parameter could be instantiated with any type that has this property
 				baseResultType = types.Any
 			}
-		// Add cases for other struct-based types here if needed (e.g., FunctionType methods?)
+		case *types.ObjectTypeMarker:
+			// typeof x === "object" narrows to object type marker
+			// Property access on object type returns any (same as TypeScript)
+			baseResultType = types.Any
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
 			// e.g., trying to access property on number, boolean, null, undefined

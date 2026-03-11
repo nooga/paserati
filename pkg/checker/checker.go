@@ -2740,8 +2740,7 @@ func (c *Checker) visit(node parser.Node) {
 		node.SetComputedType(types.Void) // Use checker's method
 
 	case *parser.IfStatement:
-		// --- NEW: Handle IfStatement with Type Narrowing ---
-		// Similar to IfExpression but for statement context
+		// --- Handle IfStatement with Type Narrowing and Post-If Merging ---
 		// 1. Check Condition
 		c.visit(node.Condition)
 
@@ -2756,13 +2755,18 @@ func (c *Checker) visit(node parser.Node) {
 
 		c.visit(node.Consequence)
 
+		// After visiting consequence, c.env is back to narrowedEnv (BlockStatement restores)
+		// but narrowedEnv's symbols may have been updated by assignments via UpdateInChain
+		// Save reference to the (possibly modified) narrowed env before restoring
+		consequenceNarrowedEnv := narrowedEnv
+
 		// Restore original environment before checking alternative
 		c.env = originalEnv
 
 		// Detect type guard for inverted narrowing
 		typeGuard := c.detectTypeGuard(node.Condition)
 
-		// 4. Check Alternative block (if it exists) with inverted narrowing
+		// 3. Check Alternative block (if it exists) with inverted narrowing
 		if node.Alternative != nil {
 			var invertedEnv *Environment
 			if typeGuard != nil {
@@ -2780,8 +2784,7 @@ func (c *Checker) visit(node parser.Node) {
 			c.env = originalEnv
 		}
 
-		// 5. Control flow narrowing: if consequence block always terminates (returns, throws, etc.)
-		// then apply inverted narrowing for the code after the if statement
+		// 4. Control flow narrowing after the if statement
 		consequenceTerminates := blockAlwaysTerminates(node.Consequence)
 		if consequenceTerminates && node.Alternative == nil {
 			// The if block terminates, so code after only runs when condition was false
@@ -2806,6 +2809,13 @@ func (c *Checker) visit(node parser.Node) {
 				// After throw, both !A and !B hold, so apply inverted narrowing for each
 				c.applyInvertedOrNarrowing(node.Condition)
 			}
+		} else if !consequenceTerminates && node.Alternative == nil && consequenceNarrowedEnv != nil {
+			// 5. Post-if type merging: consequence doesn't terminate and no else block.
+			// Merge types from the then-branch (with possible assignments) and the
+			// else-branch (inverted narrowing). This handles patterns like:
+			//   if (x === null) { x = "default"; }
+			//   return x;  // x should be string, not string | null
+			c.mergePostIfTypes(originalEnv, consequenceNarrowedEnv, typeGuard)
 		} else {
 			// Restore original environment after if statement
 			c.env = originalEnv

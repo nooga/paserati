@@ -216,6 +216,33 @@ func (e *Environment) Update(name string, typ types.Type) bool {
 	return true
 }
 
+// UpdateInChain modifies the type of an *existing* variable by walking up the scope chain
+// to find the nearest scope where it's defined, but ONLY if the binding is a narrowing
+// shadow (i.e., another definition exists further out). This prevents mutating the
+// original declared type for normal assignments.
+func (e *Environment) UpdateInChain(name string, typ types.Type) bool {
+	current := e
+	for current != nil {
+		if info, exists := current.symbols[name]; exists {
+			// Check if this is a shadow (another definition exists further out)
+			if current.outer != nil {
+				if _, _, outerFound := current.outer.Resolve(name); outerFound {
+					// This is a narrowing shadow — safe to update
+					debugPrintf("// [Env UpdateInChain] Updating shadow '%s' from %s to %s in env %p\n",
+						name, info.Type.String(), typ.String(), current)
+					current.symbols[name] = SymbolInfo{Type: typ, IsConst: info.IsConst}
+					return true
+				}
+			}
+			// This is the original declaration — don't mutate it
+			debugPrintf("// [Env UpdateInChain] '%s' is at declaring scope, not updating\n", name)
+			return false
+		}
+		current = current.outer
+	}
+	return false
+}
+
 // DefineTypeAlias adds a new *type alias* binding to the current environment scope.
 // Returns false if the alias name conflicts with an existing type alias in this scope,
 // unless the existing alias is a forward reference (which can be overwritten).
@@ -292,6 +319,28 @@ func (e *Environment) Resolve(name string) (typ types.Type, isConst bool, found 
 	// Not found in any scope
 	debugPrintf("// [Env Resolve] '%s' not found in env %p (no outer)\n", name, e) // DEBUG
 	return nil, false, false                                                       // Return nil type, isConst=false, found=false
+}
+
+// ResolveDeclaredType walks the scope chain to find the outermost (declared) type for a variable,
+// skipping narrowed redefinitions in enclosed scopes. This is used for assignment targets where
+// TypeScript checks against the declared type, not the narrowed type.
+func (e *Environment) ResolveDeclaredType(name string) types.Type {
+	if e == nil {
+		return nil
+	}
+
+	// Walk the chain collecting all definitions of this name
+	var outermost types.Type
+	current := e
+	for current != nil {
+		if current.symbols != nil {
+			if info, ok := current.symbols[name]; ok {
+				outermost = info.Type // Keep overwriting — the last (outermost) one wins
+			}
+		}
+		current = current.outer
+	}
+	return outermost
 }
 
 // ResolveType looks up a *type name* (could be alias or primitive) in the current environment and its outer scopes.

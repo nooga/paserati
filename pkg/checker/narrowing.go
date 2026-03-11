@@ -183,7 +183,50 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 				}
 			}
 
-			// Pattern 3.5: member.property === literal (discriminated union narrowing)
+			// Pattern 3.5a: memberExpr === null/undefined (direct member expression narrowing)
+			// e.g., this._tools === null narrows this._tools to null
+			// Must come BEFORE discriminated union to handle null/undefined checks directly
+			if memberExpr, ok := infix.Left.(*parser.MemberExpression); ok {
+				if narrowedType := c.literalToType(infix.Right); narrowedType != nil {
+					if narrowedType == types.Null || narrowedType == types.Undefined {
+						key := expressionToNarrowingKey(memberExpr)
+						if key != "" {
+							isLoose := infix.Operator == "==" || infix.Operator == "!="
+							if isLoose {
+								narrowedType = types.NewUnionType(types.Null, types.Undefined)
+							}
+							debugPrintf("// [detectTypeGuard] Direct member narrowing: %s === %s\n",
+								key, narrowedType.String())
+							return &TypeGuard{
+								VariableName: key,
+								NarrowedType: narrowedType,
+								IsNegated:    isNegative,
+							}
+						}
+					}
+				}
+			}
+			// Also reversed: null/undefined === memberExpr
+			if memberExpr, ok := infix.Right.(*parser.MemberExpression); ok {
+				if narrowedType := c.literalToType(infix.Left); narrowedType != nil {
+					if narrowedType == types.Null || narrowedType == types.Undefined {
+						key := expressionToNarrowingKey(memberExpr)
+						if key != "" {
+							isLoose := infix.Operator == "==" || infix.Operator == "!="
+							if isLoose {
+								narrowedType = types.NewUnionType(types.Null, types.Undefined)
+							}
+							return &TypeGuard{
+								VariableName: key,
+								NarrowedType: narrowedType,
+								IsNegated:    isNegative,
+							}
+						}
+					}
+				}
+			}
+
+			// Pattern 3.5b: member.property === literal (discriminated union narrowing)
 			// e.g., expr.kind === "num" narrows expr to the union member where kind is "num"
 			if memberExpr, ok := infix.Left.(*parser.MemberExpression); ok {
 				if propIdent, ok := memberExpr.Property.(*parser.Identifier); ok {
@@ -1492,6 +1535,238 @@ func (c *Checker) typeHasProperty(t types.Type, propertyName string) bool {
 			return true
 		}
 		return false
+	}
+}
+
+// mergePostIfTypes merges variable types from the then-branch and else-branch after
+// a non-terminating if-statement without an else clause. This handles patterns like:
+//
+//	if (x === null) { x = "default"; }
+//	return x;  // x should be string, not string | null
+//
+// The merged type is the union of the then-branch final type and the else-branch type.
+// When both branches narrow to the same type, the union simplifies (e.g., string | string = string).
+func (c *Checker) mergePostIfTypes(originalEnv *Environment, narrowedEnv *Environment, typeGuard *TypeGuard) {
+	if narrowedEnv == nil || typeGuard == nil {
+		return
+	}
+
+	varName := typeGuard.VariableName
+	isMemberExpr := false
+	for _, ch := range varName {
+		if ch == '.' {
+			isMemberExpr = true
+			break
+		}
+	}
+
+	if !isMemberExpr {
+		// --- Identifier-based narrowing merge ---
+		// Get the then-branch final type from the narrowed env (may have been updated by assignments)
+		thenInfo, exists := narrowedEnv.symbols[varName]
+		if !exists {
+			return
+		}
+		thenType := thenInfo.Type
+
+		// Get the else-branch type via inverted narrowing
+		var elseType types.Type
+		invertedEnv := c.applyInvertedTypeNarrowing(typeGuard)
+		if invertedEnv != nil {
+			if elseInfo, exists := invertedEnv.symbols[varName]; exists {
+				elseType = elseInfo.Type
+			}
+		}
+		if elseType == nil {
+			// Fall back to original type
+			origType, _, found := originalEnv.Resolve(varName)
+			if found {
+				elseType = origType
+			}
+		}
+		if elseType == nil {
+			return
+		}
+
+		// Compute merged type
+		mergedType := c.computeMergedType(thenType, elseType)
+
+		// Only create narrowing if merged type differs from original
+		origType, _, _ := originalEnv.Resolve(varName)
+		if origType != nil && !c.typesEqual(mergedType, origType) {
+			mergedEnv := NewEnclosedEnvironment(originalEnv)
+			mergedEnv.Define(varName, mergedType, false)
+			c.env = mergedEnv
+			debugPrintf("// [MergePostIf] Merged '%s': then=%s, else=%s → %s\n",
+				varName, thenType.String(), elseType.String(), mergedType.String())
+		}
+	} else {
+		// --- Member expression narrowing merge ---
+		// Check if the narrowed env's member expression was updated by assignment
+		thenType, exists := narrowedEnv.narrowings[varName]
+		if !exists {
+			return
+		}
+
+		// If the type wasn't modified (still equals what the condition narrowed to),
+		// no merge needed — the then-branch didn't reassign
+		if c.typesEqual(thenType, typeGuard.NarrowedType) {
+			return
+		}
+
+		// The then-branch assigned a new value. Compute the else-branch type.
+		// For the else branch, the condition was false, so the member has the
+		// "original type minus the guard type" (e.g., string[] | null minus null = string[]).
+		elseType := c.resolveMemberExpressionOriginalType(varName)
+		if elseType != nil {
+			// Remove the guard type from the original type to get the else-branch type
+			elseType = c.subtractTypeFromUnion(elseType, typeGuard.NarrowedType)
+		}
+
+		if elseType == nil {
+			// Can't determine else type — use the then type as best effort
+			elseType = thenType
+		}
+
+		// For member expressions, the merged type is the else-branch type (declared minus guard).
+		// The then-branch assignment was validated against the declared type, so its value
+		// is always a subtype. Using elseType avoids contamination from type inference
+		// artifacts (e.g., [] typed as unknown[] instead of contextually as T[]).
+		mergedType := elseType
+
+		// Apply the merged narrowing
+		mergedEnv := NewEnclosedEnvironment(originalEnv)
+		for k, v := range originalEnv.narrowings {
+			mergedEnv.narrowings[k] = v
+		}
+		mergedEnv.narrowings[varName] = mergedType
+		c.env = mergedEnv
+		debugPrintf("// [MergePostIf] Merged member '%s': then=%s, else=%s → %s\n",
+			varName, thenType.String(), elseType.String(), mergedType.String())
+	}
+}
+
+// resolveMemberExpressionOriginalType resolves the declared type of a member expression
+// from its narrowing key (e.g., "this._tools" → string[] | null from the class property).
+func (c *Checker) resolveMemberExpressionOriginalType(key string) types.Type {
+	// Split the key into parts: "this._tools" → ["this", "_tools"]
+	parts := splitNarrowingKey(key)
+	if len(parts) < 2 {
+		return nil
+	}
+
+	// Resolve the root identifier type
+	var rootType types.Type
+	if parts[0] == "this" {
+		rootType = c.currentThisType
+	} else {
+		rootType, _, _ = c.env.Resolve(parts[0])
+	}
+	if rootType == nil {
+		return nil
+	}
+
+	// Walk through property chain
+	currentType := rootType
+	for i := 1; i < len(parts); i++ {
+		currentType = types.GetWidenedType(currentType)
+		if objType, ok := currentType.(*types.ObjectType); ok {
+			propType, exists := objType.Properties[parts[i]]
+			if !exists {
+				return nil
+			}
+			currentType = propType
+		} else {
+			return nil
+		}
+	}
+	return currentType
+}
+
+// splitNarrowingKey splits a narrowing key like "this._tools" into ["this", "_tools"].
+func splitNarrowingKey(key string) []string {
+	var parts []string
+	start := 0
+	for i, ch := range key {
+		if ch == '.' {
+			parts = append(parts, key[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, key[start:])
+	return parts
+}
+
+// subtractTypeFromUnion removes a specific type from a union type.
+// E.g., subtractTypeFromUnion(string | null, null) → string
+func (c *Checker) subtractTypeFromUnion(original types.Type, toRemove types.Type) types.Type {
+	unionType, ok := original.(*types.UnionType)
+	if !ok {
+		// Not a union — if it equals the type to remove, return never
+		if c.typesEqual(original, toRemove) {
+			return types.Never
+		}
+		return original
+	}
+
+	var remaining []types.Type
+	for _, member := range unionType.Types {
+		if !c.typesEqual(member, toRemove) {
+			remaining = append(remaining, member)
+		}
+	}
+
+	if len(remaining) == 0 {
+		return types.Never
+	}
+	if len(remaining) == 1 {
+		return remaining[0]
+	}
+	return types.NewUnionType(remaining...)
+}
+
+// computeMergedType creates a union of two types, simplifying when possible.
+func (c *Checker) computeMergedType(t1, t2 types.Type) types.Type {
+	// If they're the same type, no union needed
+	if c.typesEqual(t1, t2) {
+		return t1
+	}
+	// If one is assignable to the other, use the wider type
+	if types.IsAssignable(t1, t2) {
+		return t2
+	}
+	if types.IsAssignable(t2, t1) {
+		return t1
+	}
+	// Create a union
+	return types.NewUnionType(t1, t2)
+}
+
+// typesEqual checks if two types are structurally equal.
+func (c *Checker) typesEqual(t1, t2 types.Type) bool {
+	if t1 == t2 {
+		return true
+	}
+	if t1 == nil || t2 == nil {
+		return false
+	}
+	return t1.String() == t2.String()
+}
+
+// updateNarrowingInChain walks up the environment chain to find and update a member
+// expression narrowing. This is used when assignments like this._tools = [...] happen
+// inside narrowed scopes, so the narrowing map reflects the assigned type.
+func (c *Checker) updateNarrowingInChain(key string, typ types.Type) {
+	current := c.env
+	for current != nil {
+		if current.narrowings != nil {
+			if _, exists := current.narrowings[key]; exists {
+				current.narrowings[key] = typ
+				debugPrintf("// [updateNarrowingInChain] Updated '%s' to '%s'\n", key, typ.String())
+				return
+			}
+		}
+		current = current.outer
 	}
 }
 

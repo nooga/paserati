@@ -218,13 +218,14 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 
 			if effectiveArgIndex < len(paramTypes) {
 				paramType := paramTypes[effectiveArgIndex]
+				// Optional parameters implicitly accept undefined
+				paramIsOptional := effectiveArgIndex < len(isOptional) && isOptional[effectiveArgIndex]
+				if paramIsOptional {
+					paramType = types.NewUnionType(paramType, types.Undefined)
+				}
 				if argType != nil && !c.isAssignableWithExpansion(argType, paramType) {
-					// Optional parameters implicitly accept undefined
-					paramIsOptional := effectiveArgIndex < len(isOptional) && isOptional[effectiveArgIndex]
-					if !(paramIsOptional && argType == types.Undefined) {
-						c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", effectiveArgIndex+1, argType.String(), paramType.String()))
-						allOk = false
-					}
+					c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", effectiveArgIndex+1, argType.String(), paramType.String()))
+					allOk = false
 				}
 			}
 			effectiveArgIndex += 1
