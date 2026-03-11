@@ -2372,7 +2372,26 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.InfixExpression:
 		// --- UPDATED: Handle InfixExpression ---
 		c.visit(node.Left)
+
+		// For && expressions, apply narrowing from left operand before checking right
+		// This ensures that in `isObjectRecord(node) && node["fn"]`, the right side
+		// sees `node` narrowed by the type predicate on the left side.
+		var savedEnvForLogical *Environment
+		if node.Operator == "&&" {
+			savedEnvForLogical = c.env
+			narrowedEnv := c.applyTypeNarrowingFromCondition(node.Left)
+			if narrowedEnv != nil {
+				c.env = narrowedEnv
+			}
+		}
+
 		c.visit(node.Right)
+
+		// Restore environment after && narrowing
+		if savedEnvForLogical != nil {
+			c.env = savedEnvForLogical
+		}
+
 		leftType := node.Left.GetComputedType()
 
 		if leftType == nil {
@@ -2766,13 +2785,23 @@ func (c *Checker) visit(node parser.Node) {
 		consequenceTerminates := blockAlwaysTerminates(node.Consequence)
 		if consequenceTerminates && node.Alternative == nil {
 			// The if block terminates, so code after only runs when condition was false
+			narrowingApplied := false
 			if typeGuard != nil {
 				invertedEnv := c.applyInvertedTypeNarrowing(typeGuard)
 				if invertedEnv != nil {
 					debugPrintf("// [Checker IfStmt] Consequence terminates, applying inverted narrowing after if\n")
 					c.env = invertedEnv
+					narrowingApplied = true
 				}
-			} else {
+			}
+			if !narrowingApplied {
+				// Try truthiness narrowing: if (!x) { return } => x is truthy after
+				if invertedEnv := c.applyInvertedTruthinessNarrowing(node.Condition); invertedEnv != nil {
+					c.env = invertedEnv
+					narrowingApplied = true
+				}
+			}
+			if !narrowingApplied {
 				// Handle compound || conditions: if (A || B) { throw }
 				// After throw, both !A and !B hold, so apply inverted narrowing for each
 				c.applyInvertedOrNarrowing(node.Condition)

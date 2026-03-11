@@ -285,7 +285,8 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 								}
 								if len(objType.CallSignatures) > 0 {
 									instanceType := objType.CallSignatures[0].ReturnType
-									if instanceType != nil {
+									// Don't narrow to void (ES5 constructor functions return void)
+									if instanceType != nil && instanceType != types.Void {
 										return &TypeGuard{
 											VariableName: ident.Value,
 											NarrowedType: instanceType,
@@ -329,9 +330,13 @@ func (c *Checker) applyTypeNarrowing(guard *TypeGuard) *Environment {
 		return nil
 	}
 
-	// If the guard is negated (e.g., !== check), apply inverted narrowing instead
+	// If the guard is negated (e.g., x !== undefined), we need complement narrowing:
+	// "x !== undefined" is true → x is NOT undefined → remove undefined from type.
+	// Create a non-negated copy and use applyInvertedTypeNarrowing (complement logic).
 	if guard.IsNegated {
-		return c.applyInvertedTypeNarrowing(guard)
+		nonNegated := *guard
+		nonNegated.IsNegated = false
+		return c.applyInvertedTypeNarrowing(&nonNegated)
 	}
 
 	return c.applyPositiveTypeNarrowing(guard)
@@ -587,6 +592,13 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 				// This handles cases like narrowing DriverNode|ChildMap to ValueNode<unknown>
 				canNarrow = true
 				narrowedType = guard.NarrowedType
+			} else if c.unionContainsTypeParam(unionType) {
+				// When the union contains a type parameter (generic context),
+				// type predicate narrowing should still work — TypeScript narrows
+				// to the predicate type directly since type params could be anything.
+				canNarrow = true
+				narrowedType = guard.NarrowedType
+				debugPrintf("// [TypeNarrowing] Generic union narrowed to predicate type: %s\n", narrowedType.String())
 			} else {
 				// For instanceof narrowing, filter union members that are compatible with the narrowed type
 				var compatibleMembers []types.Type
@@ -659,9 +671,13 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 		return nil
 	}
 
-	// If the guard is negated (e.g., !== check), apply positive narrowing instead
+	// If the guard is negated (e.g., x !== undefined), the else branch means
+	// "x !== undefined" is false → x IS undefined → narrow TO undefined.
+	// Create a non-negated copy and use applyPositiveTypeNarrowing.
 	if guard.IsNegated {
-		return c.applyPositiveTypeNarrowing(guard)
+		nonNegated := *guard
+		nonNegated.IsNegated = false
+		return c.applyPositiveTypeNarrowing(&nonNegated)
 	}
 
 	// Check if this is a member expression narrowing
@@ -808,6 +824,36 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 
 	// Handle union types: remove the narrowed type from the union
 	if unionType, ok := originalType.(*types.UnionType); ok {
+		// For typeof "function" inverted narrowing, filter out callable members
+		if guard.NarrowedType != nil {
+			if guardObj, ok := guard.NarrowedType.(*types.ObjectType); ok && guardObj.IsCallable() {
+				var nonCallableMembers []types.Type
+				for _, memberType := range unionType.Types {
+					resolvedMember := c.resolveTypeAlias(memberType)
+					isCallable := false
+					if memberObj, ok := resolvedMember.(*types.ObjectType); ok && memberObj.IsCallable() {
+						isCallable = true
+					}
+					if !isCallable {
+						nonCallableMembers = append(nonCallableMembers, memberType)
+					}
+				}
+				if len(nonCallableMembers) < len(unionType.Types) && len(nonCallableMembers) > 0 {
+					var narrowedType types.Type
+					if len(nonCallableMembers) == 1 {
+						narrowedType = nonCallableMembers[0]
+					} else {
+						narrowedType = types.NewUnionType(nonCallableMembers...)
+					}
+					narrowedEnv := NewEnclosedEnvironment(c.env)
+					narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
+					debugPrintf("// [InvertedTypeNarrowing] typeof function: '%s' narrowed to non-callable: %s\n",
+						guard.VariableName, narrowedType.String())
+					return narrowedEnv
+				}
+			}
+		}
+
 		// When the guard's narrowed type is itself a union (e.g., null | undefined from == null),
 		// remove each member individually
 		canRemove := false
@@ -1196,6 +1242,23 @@ func (c *Checker) applyInvertedOrNarrowing(condition parser.Expression) {
 	c.applyInvertedOrNarrowing(infixExpr.Right)
 }
 
+// applyInvertedTruthinessNarrowing handles control flow narrowing for truthiness conditions
+// that guard a terminating block. For example:
+//   if (!x) { return } => after return, x is truthy (non-null/undefined)
+//   if (x) { return }  => after return, x is falsy (null/undefined) - less useful
+// Returns a narrowed environment or nil if no narrowing was applied.
+func (c *Checker) applyInvertedTruthinessNarrowing(condition parser.Expression) *Environment {
+	// Handle !x pattern: if (!x) { return } => x is truthy after
+	if prefixExpr, ok := condition.(*parser.PrefixExpression); ok && prefixExpr.Operator == "!" {
+		if ident, ok := prefixExpr.Right.(*parser.Identifier); ok {
+			return c.applyTruthinessNarrowing(ident.Value)
+		}
+	}
+	// Handle bare x pattern: if (x) { return } => x is falsy after (null/undefined)
+	// This is less common and less useful, skip for now
+	return nil
+}
+
 // applyTruthinessNarrowing handles bare identifier checks like "if (x)"
 // This eliminates null and undefined from union types
 func (c *Checker) applyTruthinessNarrowing(varName string) *Environment {
@@ -1247,6 +1310,16 @@ func (c *Checker) isObjectLikeType(t types.Type) bool {
 		// Primitives like string, number, boolean are not object-like
 		return false
 	}
+}
+
+// unionContainsTypeParam checks if a union type contains any TypeParameterType member
+func (c *Checker) unionContainsTypeParam(unionType *types.UnionType) bool {
+	for _, member := range unionType.Types {
+		if _, ok := member.(*types.TypeParameterType); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // isTypeCompatibleForInstanceof checks if a type could be an instance of the target type
