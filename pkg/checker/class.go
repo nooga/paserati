@@ -7,6 +7,16 @@ import (
 	"github.com/nooga/paserati/pkg/types"
 )
 
+// deferredMethodBodyCheck stores the information needed to check class method bodies
+// after function hoisting is complete (Pass 2), so that type predicate functions
+// and other hoisted functions are available during method body type checking.
+type deferredMethodBodyCheck struct {
+	className    string
+	body         *parser.ClassBody
+	instanceType *types.ObjectType
+	env          *Environment // The environment that was active during class processing
+}
+
 // extractPropertyName extracts the property name from a class member key
 func (c *Checker) extractPropertyName(key parser.Expression) string {
 	switch k := key.(type) {
@@ -548,7 +558,20 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	// FINAL PASS: Check method bodies now that all properties and methods are in the instance type
 	// Note: This may report errors for forward references to variables declared after the class.
 	// TypeScript allows these at runtime since variables are only accessed when methods are called.
-	c.checkMethodBodiesInInstance(className, body, instanceType)
+	if c.deferMethodBodies {
+		// Defer method body checking until after function hoisting (Pass 2)
+		// This ensures hoisted functions (including type predicate functions) are available
+		// Save the current environment so type parameters and class context are preserved
+		c.deferredMethodBodies = append(c.deferredMethodBodies, deferredMethodBodyCheck{
+			className:    className,
+			body:         body,
+			instanceType: instanceType,
+			env:          c.env,
+		})
+		debugPrintf("// [Checker Class] Deferred method body checking for class '%s'\n", className)
+	} else {
+		c.checkMethodBodiesInInstance(className, body, instanceType)
+	}
 
 	// VALIDATE INTERFACES: Now that all properties and methods are added, validate interface implementations
 	for _, interfaceName := range interfaceNames {
@@ -570,6 +593,10 @@ func (c *Checker) checkMethodBodiesInInstance(className string, body *parser.Cla
 	prevThisType := c.currentThisType
 	c.currentThisType = instanceType
 	defer func() { c.currentThisType = prevThisType }()
+
+	// Save and restore class context so it doesn't leak after deferred checks
+	prevClassContext := c.currentClassContext
+	defer func() { c.currentClassContext = prevClassContext }()
 
 	debugPrintf("// [Checker Class] Final pass: checking method bodies for class '%s'\n", className)
 
@@ -1179,8 +1206,28 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		// Create a placeholder ObjectType for now
 		superObjType = types.NewObjectType()
 		ok = true
+	case *types.InstantiatedType:
+		// Instantiated generic type (e.g., Agent<MyState, MyResult>)
+		debugPrintf("// [Checker Class] Constructor is an InstantiatedType, accepting as valid class\n")
+		if subst := ct.Substitute(); subst != nil {
+			if objType, isObj := subst.(*types.ObjectType); isObj {
+				superObjType = objType
+			} else {
+				superObjType = types.NewObjectType()
+			}
+		} else {
+			superObjType = types.NewObjectType()
+		}
+		ok = true
 	default:
-		ok = false
+		// If the type is 'any' (e.g., from unresolved cross-module import), allow it
+		if constructorType == types.Any {
+			debugPrintf("// [Checker Class] Constructor type is any, accepting as valid class\n")
+			superObjType = types.NewObjectType()
+			ok = true
+		} else {
+			ok = false
+		}
 	}
 
 	if !ok {
@@ -1209,28 +1256,67 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 	if ident, ok := superClassExpr.(*parser.Identifier); ok {
 		superInstanceType = c.getClassInstanceType(ident.Value)
 		if superInstanceType == nil {
-			// For function constructors (which have CallSignatures but no ConstructSignatures),
-			// there's no registered instance type. Use a placeholder ObjectType.
+			// Try to extract instance type from constructor's return type
 			if objType, isObjType := constructorType.(*types.ObjectType); isObjType {
-				if len(objType.CallSignatures) > 0 && len(objType.ConstructSignatures) == 0 {
+				if len(objType.ConstructSignatures) > 0 && objType.ConstructSignatures[0].ReturnType != nil {
+					// Use the constructor's return type as the instance type
+					if instType, ok := objType.ConstructSignatures[0].ReturnType.(*types.ObjectType); ok {
+						debugPrintf("// [Checker Class] Extracted instance type from constructor return type for '%s'\n", ident.Value)
+						superInstanceType = instType
+					} else {
+						debugPrintf("// [Checker Class] Constructor return type is not ObjectType for '%s', using placeholder\n", ident.Value)
+						superInstanceType = types.NewObjectType()
+					}
+				} else if len(objType.CallSignatures) > 0 {
 					debugPrintf("// [Checker Class] Using placeholder instance type for function constructor '%s'\n", ident.Value)
 					superInstanceType = types.NewObjectType()
 				} else {
-					c.addError(superClassExpr, fmt.Sprintf("could not find instance type for superclass '%s'", ident.Value))
-					return
+					// Fallback: use empty ObjectType rather than failing
+					debugPrintf("// [Checker Class] No signatures found for '%s', using empty instance type\n", ident.Value)
+					superInstanceType = types.NewObjectType()
+				}
+			} else if genericType, isGeneric := constructorType.(*types.GenericType); isGeneric {
+				// Generic class constructor - extract instance type from body's ConstructSignatures
+				if bodyObj, ok := genericType.Body.(*types.ObjectType); ok {
+					if len(bodyObj.ConstructSignatures) > 0 && bodyObj.ConstructSignatures[0].ReturnType != nil {
+						if instType, ok := bodyObj.ConstructSignatures[0].ReturnType.(*types.ObjectType); ok {
+							debugPrintf("// [Checker Class] Extracted instance type from generic constructor body for '%s'\n", ident.Value)
+							superInstanceType = instType
+						} else {
+							superInstanceType = types.NewObjectType()
+						}
+					} else {
+						superInstanceType = types.NewObjectType()
+					}
+				} else {
+					superInstanceType = types.NewObjectType()
 				}
 			} else {
-				c.addError(superClassExpr, fmt.Sprintf("could not find instance type for superclass '%s'", ident.Value))
-				return
+				// Non-ObjectType constructor (e.g., types.Any from unresolved import)
+				debugPrintf("// [Checker Class] Non-ObjectType constructor for '%s', using placeholder\n", ident.Value)
+				superInstanceType = types.NewObjectType()
 			}
 		}
 	} else {
-		// For generic applications, use the resolved type as the instance type
-		if instanceType, ok := superType.(*types.ObjectType); ok {
-			superInstanceType = instanceType
-		} else {
-			// For GenericType, use the placeholder we created
-			superInstanceType = superObjType
+		// For generic applications (e.g., extends Agent<any, any>), extract instance type
+		// from the constructor's ConstructSignatures return type
+		extracted := false
+		if superObjType != nil && len(superObjType.ConstructSignatures) > 0 {
+			if retType := superObjType.ConstructSignatures[0].ReturnType; retType != nil {
+				if instType, ok := retType.(*types.ObjectType); ok {
+					debugPrintf("// [Checker Class] Extracted instance type from generic constructor return type\n")
+					superInstanceType = instType
+					extracted = true
+				}
+			}
+		}
+		if !extracted {
+			// Fallback: try superType directly
+			if instType, ok := superType.(*types.ObjectType); ok {
+				superInstanceType = instType
+			} else {
+				superInstanceType = superObjType
+			}
 		}
 	}
 

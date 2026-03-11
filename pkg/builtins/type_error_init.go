@@ -29,6 +29,8 @@ func (t *TypeErrorInitializer) InitTypes(ctx *TypeContext) error {
 		// Constructor is callable with optional message parameter
 		WithSimpleCallSignature([]types.Type{}, typeErrorProtoType).
 		WithSimpleCallSignature([]types.Type{types.String}, typeErrorProtoType).
+		WithSimpleConstructSignature([]types.Type{}, typeErrorProtoType).
+		WithSimpleConstructSignature([]types.Type{types.String}, typeErrorProtoType).
 		WithProperty("prototype", typeErrorProtoType)
 
 	// Define the constructor globally

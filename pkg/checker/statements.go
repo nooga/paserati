@@ -621,6 +621,24 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 			// Regular for...of (synchronous iteration)
 			if arrayType, ok := iterableType.(*types.ArrayType); ok {
 				elementType = arrayType.ElementType
+			} else if unionType, ok := iterableType.(*types.UnionType); ok {
+				// Handle union types like T[] | undefined (common after optional property access)
+				var elemTypes []types.Type
+				for _, member := range unionType.Types {
+					if at, ok := member.(*types.ArrayType); ok {
+						elemTypes = append(elemTypes, at.ElementType)
+					} else if member == types.String {
+						elemTypes = append(elemTypes, types.String)
+					}
+					// Skip undefined/null members (they're non-iterable but guarded at runtime)
+				}
+				if len(elemTypes) == 1 {
+					elementType = elemTypes[0]
+				} else if len(elemTypes) > 1 {
+					elementType = types.NewUnionType(elemTypes...)
+				} else {
+					elementType = types.Any
+				}
 			} else if iterableType == types.String || types.IsAssignable(iterableType, types.String) {
 				// String iteration yields individual characters (strings)
 				// This handles both the general string type and string literal types

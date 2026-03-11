@@ -754,10 +754,12 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			}
 			fields[keyName] = valueType
 		} else if _, isArrowFunction := prop.Value.(*parser.ArrowFunctionLiteral); isArrowFunction {
-			// Arrow functions don't bind 'this', so we can visit them normally
-			// But for consistency, let's still visit them in this pass
-			debugPrintf("// [Checker ObjectLit] Visiting arrow function property '%s'\n", keyName)
+			// Arrow functions capture 'this' lexically from enclosing scope, NOT from object literal
+			// Temporarily restore outer this type so arrow functions see the class/function 'this'
+			debugPrintf("// [Checker ObjectLit] Visiting arrow function property '%s' with outer this context\n", keyName)
+			c.currentThisType = outerThisType
 			c.visit(prop.Value)
+			c.currentThisType = preliminaryObjType
 			valueType := prop.Value.GetComputedType()
 			if valueType == nil {
 				valueType = types.Any
@@ -1159,13 +1161,24 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					resultType = propType
 					debugPrintf("// [Checker MemberExpr] Found property '%s' in expanded type: %s\n", propertyName, propType.String())
 				} else {
-					// Check if property is optional
-					isOptional := expandedObj.OptionalProperties != nil && expandedObj.OptionalProperties[propertyName]
-					if !isOptional {
-						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
-						resultType = types.Never
-					} else {
-						resultType = types.Undefined
+					// Check index signatures before reporting error
+					found := false
+					for _, sig := range expandedObj.IndexSignatures {
+						if sig.KeyType == types.String || sig.KeyType == types.Any {
+							resultType = sig.ValueType
+							found = true
+							break
+						}
+					}
+					if !found {
+						// Check if property is optional
+						isOptional := expandedObj.OptionalProperties != nil && expandedObj.OptionalProperties[propertyName]
+						if !isOptional {
+							c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+							resultType = types.Never
+						} else {
+							resultType = types.Undefined
+						}
 					}
 				}
 			} else if expandedType == types.Any {
@@ -1239,13 +1252,45 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					if fieldType, exists := member.Properties[propertyName]; exists {
 						memberHasProperty = true
 						memberResultType = fieldType
+					} else {
+						// Check index signatures as fallback
+						for _, sig := range member.IndexSignatures {
+							if sig.KeyType == types.String || sig.KeyType == types.Any {
+								memberHasProperty = true
+								memberResultType = sig.ValueType
+								break
+							}
+						}
 					}
 				case *types.ArrayType:
 					if propertyName == "length" {
 						memberHasProperty = true
 						memberResultType = types.Number
+					} else if methodType := c.env.GetPrimitivePrototypeMethodType("array", propertyName); methodType != nil {
+						memberHasProperty = true
+						memberResultType = c.instantiateGenericMethod(methodType, member.ElementType)
 					}
-					// Add other cases as needed for primitives with prototypes, etc.
+				default:
+					// Check primitive prototypes for string, number, boolean, symbol, RegExp
+					var prototypeName string
+					switch memberType {
+					case types.String:
+						prototypeName = "string"
+					case types.Number:
+						prototypeName = "number"
+					case types.Boolean:
+						prototypeName = "boolean"
+					case types.Symbol:
+						prototypeName = "symbol"
+					case types.RegExp:
+						prototypeName = "RegExp"
+					}
+					if prototypeName != "" {
+						if methodType := c.env.GetPrimitivePrototypeMethodType(prototypeName, propertyName); methodType != nil {
+							memberHasProperty = true
+							memberResultType = methodType
+						}
+					}
 				}
 
 				if memberHasProperty {
@@ -1405,6 +1450,9 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 	// This allows "lol"[1] to be treated as string[number]
 	leftType = types.GetWidenedType(leftType)
 
+	// Expand MappedType (e.g., Record<string, string>) to ObjectType with index signatures
+	leftType = c.expandIfMappedType(leftType)
+
 	// 3. Check base type (allow Array for now)
 	// First handle the special case of 'any'
 	if leftType == types.Any {
@@ -1486,16 +1534,33 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 							resultType = propType
 						}
 					} else {
-						// In TypeScript, obj["unknownProp"] should return 'any' if no index signature exists
-						// This is different from obj.unknownProp which should error
-						// TODO: Check for index signatures first, for now default to 'any'
-						resultType = types.Any
+						// Check index signatures before defaulting to any
+						found := false
+						for _, sig := range base.IndexSignatures {
+							if sig.KeyType == types.String || sig.KeyType == types.Any {
+								resultType = sig.ValueType
+								found = true
+								break
+							}
+						}
+						if !found {
+							resultType = types.Any
+						}
 					}
 				} else {
-					// Index is a general string/number/any - cannot determine specific property type.
-					// TODO: Support index signatures later?
-					// For now, result is 'any' as we don't know which property is accessed.
-					resultType = types.Any
+					// Index is a general string/number/any - check index signatures
+					found := false
+					for _, sig := range base.IndexSignatures {
+						w := types.GetWidenedType(indexType)
+						if sig.KeyType == w || sig.KeyType == types.Any {
+							resultType = sig.ValueType
+							found = true
+							break
+						}
+					}
+					if !found {
+						resultType = types.Any
+					}
 				}
 			} else {
 				// Invalid index type for object

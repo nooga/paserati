@@ -131,9 +131,10 @@ func (me *ModuleEnvironment) ResolveImportedType(localName string) types.Type {
 	// Try to resolve the type from the source module using ModuleLoader
 	if me.ModuleLoader != nil {
 		sourceModule := me.ModuleLoader.GetModule(binding.SourceModule)
-		// If module not loaded yet, trigger loading (needed for type checking before compilation)
+			// If module not loaded yet, trigger loading (needed for type checking before compilation)
 		if sourceModule == nil {
-			if loaded, err := me.ModuleLoader.LoadModule(binding.SourceModule, me.ModulePath); err == nil {
+			loaded, err := me.ModuleLoader.LoadModule(binding.SourceModule, me.ModulePath)
+					if err == nil {
 				if mr, ok := loaded.(*modules.ModuleRecord); ok {
 					sourceModule = mr
 				}

@@ -24,12 +24,21 @@ func (e *ErrorInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("stack", types.String).
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String))
 
+	// Allow arbitrary properties on Error instances (common JS pattern: err.code, etc.)
+	errorProtoType.IndexSignatures = append(errorProtoType.IndexSignatures, &types.IndexSignature{
+		KeyType:   types.String,
+		ValueType: types.Any,
+	})
+
 	// Create Error constructor type
 	errorCtorType := types.NewObjectType().
 		// Constructor is callable with optional message parameter
 		WithSimpleCallSignature([]types.Type{}, errorProtoType).
 		WithSimpleCallSignature([]types.Type{types.String}, errorProtoType).
 		WithSimpleCallSignature([]types.Type{types.String, types.Any}, errorProtoType). // Error(msg, options)
+		WithSimpleConstructSignature([]types.Type{}, errorProtoType).                     // new Error()
+		WithSimpleConstructSignature([]types.Type{types.String}, errorProtoType).          // new Error(msg)
+		WithSimpleConstructSignature([]types.Type{types.String, types.Any}, errorProtoType). // new Error(msg, options)
 		WithProperty("isError", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
 		WithProperty("prototype", errorProtoType)
 
@@ -204,7 +213,9 @@ type EvalErrorInitializer struct{}
 func (e *EvalErrorInitializer) Name() string  { return "EvalError" }
 func (e *EvalErrorInitializer) Priority() int { return 22 }
 func (e *EvalErrorInitializer) InitTypes(ctx *TypeContext) error {
-	t := types.NewObjectType().WithSimpleCallSignature([]types.Type{}, types.Any).WithSimpleCallSignature([]types.Type{types.String}, types.Any)
+	t := types.NewObjectType().WithSimpleCallSignature([]types.Type{}, types.Any).WithSimpleCallSignature([]types.Type{types.String}, types.Any).
+		WithSimpleConstructSignature([]types.Type{}, types.Any).
+		WithSimpleConstructSignature([]types.Type{types.String}, types.Any)
 	return ctx.DefineGlobal("EvalError", t)
 }
 func (e *EvalErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
@@ -217,7 +228,9 @@ type RangeErrorInitializer struct{}
 func (e *RangeErrorInitializer) Name() string  { return "RangeError" }
 func (e *RangeErrorInitializer) Priority() int { return 22 }
 func (e *RangeErrorInitializer) InitTypes(ctx *TypeContext) error {
-	t := types.NewObjectType().WithSimpleCallSignature([]types.Type{}, types.Any).WithSimpleCallSignature([]types.Type{types.String}, types.Any)
+	t := types.NewObjectType().WithSimpleCallSignature([]types.Type{}, types.Any).WithSimpleCallSignature([]types.Type{types.String}, types.Any).
+		WithSimpleConstructSignature([]types.Type{}, types.Any).
+		WithSimpleConstructSignature([]types.Type{types.String}, types.Any)
 	return ctx.DefineGlobal("RangeError", t)
 }
 func (e *RangeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
@@ -230,7 +243,9 @@ type URIErrorInitializer struct{}
 func (e *URIErrorInitializer) Name() string  { return "URIError" }
 func (e *URIErrorInitializer) Priority() int { return 22 }
 func (e *URIErrorInitializer) InitTypes(ctx *TypeContext) error {
-	t := types.NewObjectType().WithSimpleCallSignature([]types.Type{}, types.Any).WithSimpleCallSignature([]types.Type{types.String}, types.Any)
+	t := types.NewObjectType().WithSimpleCallSignature([]types.Type{}, types.Any).WithSimpleCallSignature([]types.Type{types.String}, types.Any).
+		WithSimpleConstructSignature([]types.Type{}, types.Any).
+		WithSimpleConstructSignature([]types.Type{types.String}, types.Any)
 	return ctx.DefineGlobal("URIError", t)
 }
 func (e *URIErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
@@ -247,7 +262,10 @@ func (e *AggregateErrorInitializer) InitTypes(ctx *TypeContext) error {
 	t := types.NewObjectType().
 		WithSimpleCallSignature([]types.Type{types.Any}, types.Any).
 		WithSimpleCallSignature([]types.Type{types.Any, types.String}, types.Any).
-		WithSimpleCallSignature([]types.Type{types.Any, types.String, types.Any}, types.Any)
+		WithSimpleCallSignature([]types.Type{types.Any, types.String, types.Any}, types.Any).
+		WithSimpleConstructSignature([]types.Type{types.Any}, types.Any).
+		WithSimpleConstructSignature([]types.Type{types.Any, types.String}, types.Any).
+		WithSimpleConstructSignature([]types.Type{types.Any, types.String, types.Any}, types.Any)
 	return ctx.DefineGlobal("AggregateError", t)
 }
 func (e *AggregateErrorInitializer) InitRuntime(ctx *RuntimeContext) error {

@@ -51,13 +51,32 @@ func expressionToNarrowingKey(expr parser.Expression) string {
 // isString(x) (type predicate function calls)
 // x && typeof x === "object" (compound conditions)
 func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
+	// Handle ! prefix: unwrap and flip IsNegated
+	if prefixExpr, ok := condition.(*parser.PrefixExpression); ok && prefixExpr.Operator == "!" {
+		guard := c.detectTypeGuard(prefixExpr.Right)
+		if guard != nil {
+			guard.IsNegated = !guard.IsNegated
+			return guard
+		}
+	}
+
 	// Pattern 0: Type predicate function calls like isString(x)
 	if callExpr, ok := condition.(*parser.CallExpression); ok {
 		// Check if this is a single-argument call to a function with type predicate return
 		if len(callExpr.Arguments) == 1 {
 			if ident, ok := callExpr.Arguments[0].(*parser.Identifier); ok {
 				// Check if the function being called has a type predicate return type
+				// Try computed type first, then resolve from environment
 				functionType := callExpr.Function.GetComputedType()
+				// If computed type is a Primitive (e.g., boolean from return type)
+				// or doesn't have call signatures, try resolving from the environment
+				if funcIdent, ok := callExpr.Function.(*parser.Identifier); ok {
+					if envType, _, found := c.env.Resolve(funcIdent.Value); found {
+						if envType != functionType {
+							functionType = envType
+						}
+					}
+				}
 				if functionType != nil {
 					if objType, ok := functionType.(*types.ObjectType); ok {
 						if len(objType.CallSignatures) > 0 {
@@ -135,6 +154,11 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 			// Pattern 2: identifier === literal (e.g., x === "foo")
 			if ident, ok := infix.Left.(*parser.Identifier); ok {
 				if narrowedType := c.literalToType(infix.Right); narrowedType != nil {
+					// For loose equality (== null), narrow both null and undefined
+					isLoose := infix.Operator == "==" || infix.Operator == "!="
+					if isLoose && (narrowedType == types.Null || narrowedType == types.Undefined) {
+						narrowedType = types.NewUnionType(types.Null, types.Undefined)
+					}
 					return &TypeGuard{
 						VariableName: ident.Value,
 						NarrowedType: narrowedType,
@@ -146,6 +170,11 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 			// Pattern 3: literal === identifier (e.g., "foo" === x)
 			if ident, ok := infix.Right.(*parser.Identifier); ok {
 				if narrowedType := c.literalToType(infix.Left); narrowedType != nil {
+					// For loose equality (== null), narrow both null and undefined
+					isLoose := infix.Operator == "==" || infix.Operator == "!="
+					if isLoose && (narrowedType == types.Null || narrowedType == types.Undefined) {
+						narrowedType = types.NewUnionType(types.Null, types.Undefined)
+					}
 					return &TypeGuard{
 						VariableName: ident.Value,
 						NarrowedType: narrowedType,
@@ -223,36 +252,48 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 		// Pattern 5: identifier instanceof Constructor (e.g., date instanceof Date)
 		if infix.Operator == "instanceof" {
 			if ident, ok := infix.Left.(*parser.Identifier); ok {
-				// For instanceof, we need to determine what type the constructor produces
 				if constructorIdent, ok := infix.Right.(*parser.Identifier); ok {
+					// Special cases for built-in types
 					switch constructorIdent.Value {
-					case "Date":
-						// For Date instanceof, narrow to the Date instance type
-						// Look up the actual Date constructor and get its instance type
-						if dateType, _, found := c.env.Resolve("Date"); found {
-							if objType, ok := dateType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
-								// Use the return type of the constructor (the instance type)
-								instanceType := objType.CallSignatures[0].ReturnType
-								return &TypeGuard{
-									VariableName: ident.Value,
-									NarrowedType: instanceType,
-									IsNegated:    false,
-								}
-							}
-						}
 					case "Array":
-						// For Array, narrow to a generic array type
 						return &TypeGuard{
 							VariableName: ident.Value,
 							NarrowedType: &types.ArrayType{ElementType: types.Any},
 							IsNegated:    false,
 						}
 					case "Object":
-						// For Object, narrow to a generic object type
 						return &TypeGuard{
 							VariableName: ident.Value,
 							NarrowedType: types.NewObjectType(),
 							IsNegated:    false,
+						}
+					default:
+						// Generic constructor lookup: resolve the constructor from the environment
+						// and use its call/construct signature return type as the narrowed type
+						if ctorType, _, found := c.env.Resolve(constructorIdent.Value); found {
+							if objType, ok := ctorType.(*types.ObjectType); ok {
+								// Prefer ConstructSignatures, fall back to CallSignatures
+								if len(objType.ConstructSignatures) > 0 {
+									instanceType := objType.ConstructSignatures[0].ReturnType
+									if instanceType != nil {
+										return &TypeGuard{
+											VariableName: ident.Value,
+											NarrowedType: instanceType,
+											IsNegated:    false,
+										}
+									}
+								}
+								if len(objType.CallSignatures) > 0 {
+									instanceType := objType.CallSignatures[0].ReturnType
+									if instanceType != nil {
+										return &TypeGuard{
+											VariableName: ident.Value,
+											NarrowedType: instanceType,
+											IsNegated:    false,
+										}
+									}
+								}
+							}
 						}
 					}
 				}
@@ -449,6 +490,13 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		return nil
 	}
 
+	// Resolve forward references in the guard's narrowed type
+	// This handles cases where type predicate functions were hoisted early (Pass 1a)
+	// and the predicate type is still a GenericTypeAliasForwardReference
+	if guard.NarrowedType != nil {
+		guard.NarrowedType = c.resolveTypeAlias(guard.NarrowedType)
+	}
+
 	// Handle unknown types and union types
 	var canNarrow bool
 	var narrowedType types.Type
@@ -532,6 +580,11 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 				}
 			} else if unionType.ContainsType(guard.NarrowedType) {
 				// Regular type narrowing - union contains the exact target type
+				canNarrow = true
+				narrowedType = guard.NarrowedType
+			} else if types.IsAssignable(guard.NarrowedType, originalType) {
+				// Type predicate narrowing - the predicate type is assignable to the original
+				// This handles cases like narrowing DriverNode|ChildMap to ValueNode<unknown>
 				canNarrow = true
 				narrowedType = guard.NarrowedType
 			} else {
@@ -755,8 +808,33 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 
 	// Handle union types: remove the narrowed type from the union
 	if unionType, ok := originalType.(*types.UnionType); ok {
-		if guard.NarrowedType != nil && unionType.ContainsType(guard.NarrowedType) {
-			remainingType := unionType.RemoveType(guard.NarrowedType)
+		// When the guard's narrowed type is itself a union (e.g., null | undefined from == null),
+		// remove each member individually
+		canRemove := false
+		if guard.NarrowedType != nil {
+			if guardUnion, ok := guard.NarrowedType.(*types.UnionType); ok {
+				// Check if ANY member of the guard union is in the original union
+				for _, guardMember := range guardUnion.Types {
+					if unionType.ContainsType(guardMember) {
+						canRemove = true
+						break
+					}
+				}
+			} else {
+				canRemove = unionType.ContainsType(guard.NarrowedType)
+			}
+		}
+		if canRemove {
+			remainingType := types.Type(unionType)
+			if guardUnion, ok := guard.NarrowedType.(*types.UnionType); ok {
+				for _, guardMember := range guardUnion.Types {
+					if ut, ok := remainingType.(*types.UnionType); ok {
+						remainingType = ut.RemoveType(guardMember)
+					}
+				}
+			} else {
+				remainingType = unionType.RemoveType(guard.NarrowedType)
+			}
 
 			// Create environment with the remaining type(s)
 			narrowedEnv := NewEnclosedEnvironment(c.env)
@@ -1008,15 +1086,22 @@ func (c *Checker) resolveTypeAlias(t types.Type) types.Type {
 	case *types.GenericTypeAliasForwardReference:
 		// Try to resolve forward references by looking up the alias name
 		debugPrintf("// [TypeNarrowing] Attempting to resolve GenericTypeAliasForwardReference: %s\n", typ.AliasName)
-		if resolvedType, _, found := c.env.Resolve(typ.AliasName); found {
-			debugPrintf("// [TypeNarrowing] Found type alias '%s' in environment: %s (type: %T)\n", typ.AliasName, resolvedType.String(), resolvedType)
-			// If it's a generic type and we have type arguments, try to instantiate it
+		// First try type namespace (interfaces, type aliases), then value namespace
+		if resolvedType, found := c.env.ResolveType(typ.AliasName); found {
+			debugPrintf("// [TypeNarrowing] Found type '%s' in type environment: %s (type: %T)\n", typ.AliasName, resolvedType.String(), resolvedType)
 			if genericType, ok := resolvedType.(*types.GenericType); ok && len(typ.TypeArguments) > 0 {
 				debugPrintf("// [TypeNarrowing] Instantiating generic type with %d args\n", len(typ.TypeArguments))
 				instantiated := types.NewInstantiatedType(genericType, typ.TypeArguments)
 				return c.resolveTypeAlias(instantiated.Substitute())
 			}
-			// Otherwise, just resolve the found type
+			return c.resolveTypeAlias(resolvedType)
+		} else if resolvedType, _, found := c.env.Resolve(typ.AliasName); found {
+			debugPrintf("// [TypeNarrowing] Found type alias '%s' in value environment: %s (type: %T)\n", typ.AliasName, resolvedType.String(), resolvedType)
+			if genericType, ok := resolvedType.(*types.GenericType); ok && len(typ.TypeArguments) > 0 {
+				debugPrintf("// [TypeNarrowing] Instantiating generic type with %d args\n", len(typ.TypeArguments))
+				instantiated := types.NewInstantiatedType(genericType, typ.TypeArguments)
+				return c.resolveTypeAlias(instantiated.Substitute())
+			}
 			return c.resolveTypeAlias(resolvedType)
 		} else {
 			debugPrintf("// [TypeNarrowing] Could not resolve GenericTypeAliasForwardReference: %s\n", typ.AliasName)
@@ -1076,6 +1161,39 @@ func (c *Checker) applyTypeNarrowingFromCondition(condition parser.Expression) *
 	// Handle single type guard expressions
 	guard := c.detectTypeGuard(condition)
 	return c.applyTypeNarrowing(guard)
+}
+
+// applyInvertedOrNarrowing handles control flow narrowing for compound || conditions.
+// For "if (A || B) { throw }", after the throw both !A and !B must hold.
+// This recursively processes || chains and applies inverted narrowing for each term.
+func (c *Checker) applyInvertedOrNarrowing(condition parser.Expression) {
+	infixExpr, ok := condition.(*parser.InfixExpression)
+	if !ok || infixExpr.Operator != "||" {
+		// Base case: single condition — detect guard and apply inverted narrowing
+		guard := c.detectTypeGuard(condition)
+		if guard != nil {
+			invertedEnv := c.applyInvertedTypeNarrowing(guard)
+			if invertedEnv != nil {
+				debugPrintf("// [Checker IfStmt] OR-compound: applying inverted narrowing for guard on '%s'\n", guard.VariableName)
+				c.env = invertedEnv
+			}
+		} else {
+			// Try truthiness narrowing (e.g., "node == null" is an equality check)
+			narrowedEnv := c.applyTypeNarrowingFromCondition(condition)
+			if narrowedEnv != nil {
+				// applyTypeNarrowingFromCondition gives the "truthy" env,
+				// but we need the inverted (falsy) version for post-throw.
+				// For equality checks like "x == null", the guard detection handles it.
+				// Skip this path to avoid double-narrowing.
+				_ = narrowedEnv
+			}
+		}
+		return
+	}
+
+	// Recursive case: A || B — apply inverted narrowing for both sides
+	c.applyInvertedOrNarrowing(infixExpr.Left)
+	c.applyInvertedOrNarrowing(infixExpr.Right)
 }
 
 // applyTruthinessNarrowing handles bare identifier checks like "if (x)"

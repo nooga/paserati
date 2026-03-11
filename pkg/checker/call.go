@@ -529,6 +529,39 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		}
 	}
 
+	// Handle union of callable types - e.g. string.includes | Uint8Array.includes
+	if unionType, isUnion := funcNodeType.(*types.UnionType); isUnion {
+		// Visit arguments
+		for _, argNode := range node.Arguments {
+			c.visit(argNode)
+		}
+		// Check that all members are callable and collect return types
+		var returnTypes []types.Type
+		allCallable := true
+		for _, member := range unionType.Types {
+			if objMember, ok := member.(*types.ObjectType); ok && objMember.IsCallable() {
+				if len(objMember.CallSignatures) > 0 {
+					returnTypes = append(returnTypes, objMember.CallSignatures[0].ReturnType)
+				}
+			} else {
+				allCallable = false
+				break
+			}
+		}
+		if allCallable && len(returnTypes) > 0 {
+			if len(returnTypes) == 1 {
+				node.SetComputedType(returnTypes[0])
+			} else {
+				node.SetComputedType(types.NewUnionType(returnTypes...))
+			}
+			return
+		}
+		// Fall through to error if not all callable
+		c.addError(node, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
+		node.SetComputedType(types.Any)
+		return
+	}
+
 	// Handle callable ObjectType with unified approach
 	objType, ok := funcNodeType.(*types.ObjectType)
 	if !ok {
@@ -1320,6 +1353,22 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 				valueConstraints := c.collectConstraintsFromType(pType.ValueType, propType)
 				constraints = append(constraints, valueConstraints...)
 			}
+		}
+
+	case *types.UnionType:
+		// For union parameter types like T | Getter<T> | Node<T>,
+		// try matching argType against each union member and collect constraints from the best match.
+		// The member that produces the most constraints (deepest structural match) wins.
+		var bestMemberConstraints []TypeParameterConstraint
+		for _, memberType := range pType.Types {
+			memberConstraints := c.collectConstraintsFromType(memberType, argType)
+			if len(memberConstraints) > len(bestMemberConstraints) {
+				bestMemberConstraints = memberConstraints
+			}
+		}
+		if len(bestMemberConstraints) > 0 {
+			constraints = append(constraints, bestMemberConstraints...)
+			debugPrintf("// [Checker Constraints] Union type: collected %d constraints from best-matching member\n", len(bestMemberConstraints))
 		}
 
 		// Add more cases for other generic type constructs as needed

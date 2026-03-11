@@ -295,6 +295,12 @@ type Checker struct {
 	// --- NEW: Anonymous class tracking ---
 	// Counter for generating unique anonymous class names
 	anonymousClassCounter int
+
+	// --- Deferred class method body checking ---
+	// When true, class method body checking is deferred until after function hoisting (Pass 2)
+	// This ensures type predicate functions and other hoisted functions are available
+	deferMethodBodies      bool
+	deferredMethodBodies   []deferredMethodBodyCheck
 }
 
 // NewChecker creates a new type checker with standard built-in types.
@@ -498,6 +504,16 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					debugPrintf("// [Checker Pass 0] Pre-registered type alias '%s'\n", aliasStmt.Name.Value)
 				}
 			}
+		} else if classStmt, ok := stmt.(*parser.ClassDeclaration); ok {
+			// Pre-register class names so they can be used as types before declaration
+			if _, exists := c.env.ResolveType(classStmt.Name.Value); !exists {
+				placeholderType := &types.ObjectType{
+					Properties:         make(map[string]types.Type),
+					OptionalProperties: make(map[string]bool),
+				}
+				c.env.DefineTypeAlias(classStmt.Name.Value, placeholderType)
+				debugPrintf("// [Checker Pass 0] Pre-registered class '%s'\n", classStmt.Name.Value)
+			}
 		} else if exportStmt, ok := stmt.(*parser.ExportNamedDeclaration); ok {
 			if exportStmt.Declaration != nil {
 				if interfaceStmt, ok := exportStmt.Declaration.(*parser.InterfaceDeclaration); ok {
@@ -523,12 +539,26 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 							debugPrintf("// [Checker Pass 0] Pre-registered exported type alias '%s'\n", aliasStmt.Name.Value)
 						}
 					}
+				} else if classDecl, ok := exportStmt.Declaration.(*parser.ClassDeclaration); ok {
+					// Pre-register exported class names
+					if _, exists := c.env.ResolveType(classDecl.Name.Value); !exists {
+						placeholderType := &types.ObjectType{
+							Properties:         make(map[string]types.Type),
+							OptionalProperties: make(map[string]bool),
+						}
+						c.env.DefineTypeAlias(classDecl.Name.Value, placeholderType)
+						debugPrintf("// [Checker Pass 0] Pre-registered exported class '%s'\n", classDecl.Name.Value)
+					}
 				}
 			}
 		}
 	}
 
 	// --- Pass 1: Define ALL Type Aliases ---
+	// Defer class method body checking until after Pass 2 (function hoisting)
+	// so that hoisted functions (including type predicate functions) are available
+	c.deferMethodBodies = true
+	c.deferredMethodBodies = nil
 	debugPrintf("\n// --- Checker - Pass 1: Defining Type Aliases, Interfaces, Classes, and Processing Imports ---\n")
 	for _, stmt := range program.Statements {
 		debugPrintf("// [Checker Pass 1] Examining statement type: %T\n", stmt)
@@ -563,18 +593,28 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				if interfaceStmt, ok := exportStmt.Declaration.(*parser.InterfaceDeclaration); ok {
 					debugPrintf("// [Checker Pass 1] Processing Exported Interface: %s\n", interfaceStmt.Name.Value)
 					c.checkInterfaceDeclaration(interfaceStmt)
+					c.processExportDeclaration(interfaceStmt)
 					nodesProcessedPass1[interfaceStmt] = true
-					nodesProcessedPass2[interfaceStmt] = true // Also mark for Pass 2 skip
+					nodesProcessedPass2[interfaceStmt] = true
+					nodesProcessedPass1[exportStmt] = true
+					nodesProcessedPass2[exportStmt] = true
 				} else if aliasStmt, ok := exportStmt.Declaration.(*parser.TypeAliasStatement); ok {
 					debugPrintf("// [Checker Pass 1] Processing Exported Type Alias: %s\n", aliasStmt.Name.Value)
 					c.checkTypeAliasStatement(aliasStmt)
+					c.processExportDeclaration(aliasStmt)
 					nodesProcessedPass1[aliasStmt] = true
-					nodesProcessedPass2[aliasStmt] = true // Also mark for Pass 2 skip
+					nodesProcessedPass2[aliasStmt] = true
+					nodesProcessedPass1[exportStmt] = true
+					nodesProcessedPass2[exportStmt] = true
 				} else if classStmt, ok := exportStmt.Declaration.(*parser.ClassDeclaration); ok {
 					debugPrintf("// [Checker Pass 1] Processing Exported Class: %s\n", classStmt.Name.Value)
 					c.checkClassDeclaration(classStmt)
+					c.processExportDeclaration(classStmt)
 					nodesProcessedPass1[classStmt] = true
-					nodesProcessedPass2[classStmt] = true // Also mark for Pass 2 skip
+					nodesProcessedPass2[classStmt] = true
+					// Mark the export statement itself as processed to prevent double-visiting in Pass 5
+					nodesProcessedPass1[exportStmt] = true
+					nodesProcessedPass2[exportStmt] = true
 				}
 			}
 		} else if exprStmt, ok := stmt.(*parser.ExpressionStatement); ok {
@@ -770,6 +810,25 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 	}
 	debugPrintf("// --- Checker - Pass 2: Complete ---\n")
+
+	// --- Pass 2.5: Process deferred class method bodies ---
+	// Now that function signatures are hoisted (Pass 2), check class method bodies
+	// that were deferred during Pass 1. This ensures type predicate functions and
+	// other hoisted functions are available for narrowing in class methods.
+	c.deferMethodBodies = false
+	if len(c.deferredMethodBodies) > 0 {
+		debugPrintf("\n// --- Checker - Pass 2.5: Deferred Class Method Body Checking ---\n")
+		for _, deferred := range c.deferredMethodBodies {
+			debugPrintf("// [Checker Pass 2.5] Checking method bodies for class '%s'\n", deferred.className)
+			// Restore the environment that was active during class processing
+			// (includes type parameters for generic classes)
+			c.env = deferred.env
+			c.checkMethodBodiesInInstance(deferred.className, deferred.body, deferred.instanceType)
+		}
+		c.env = globalEnv
+		c.deferredMethodBodies = nil
+		debugPrintf("// --- Checker - Pass 2.5: Complete ---\n")
+	}
 
 	// --- Pass 3: Function Body Analysis & Type Refinement ---
 	debugPrintf("\n// --- Checker - Pass 3: Function Body Analysis ---\n")
@@ -985,14 +1044,23 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
 		} else if funcLit.IsAsync {
 			// For async functions, wrap the return type in Promise<T>
-			debugPrintf("// [Checker Pass 3] Async function detected, wrapping return type in Promise\n")
-			innerType := actualReturnType
-			if innerType == nil {
-				innerType = types.Void
+			// But skip wrapping if the annotated type is already Promise<T>
+			alreadyPromise := false
+			if instType, ok := actualReturnType.(*types.InstantiatedType); ok {
+				if instType.Generic != nil && instType.Generic.Name == "Promise" {
+					alreadyPromise = true
+				}
 			}
-			promiseType := c.createPromiseType(innerType)
-			actualReturnType = promiseType
-			debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
+			if !alreadyPromise {
+				debugPrintf("// [Checker Pass 3] Async function detected, wrapping return type in Promise\n")
+				innerType := actualReturnType
+				if innerType == nil {
+					innerType = types.Void
+				}
+				promiseType := c.createPromiseType(innerType)
+				actualReturnType = promiseType
+				debugPrintf("// [Checker Pass 3] Wrapped return type: %s\n", actualReturnType.String())
+			}
 		}
 
 		// Create the FINAL ObjectType with updated signature
@@ -1845,8 +1913,17 @@ func (c *Checker) visit(node parser.Node) {
 			// Use contextual typing if we have an expected return type
 			// This allows array literals to be typed as tuples when expected
 			if c.currentExpectedReturnType != nil {
+				contextType := c.currentExpectedReturnType
+				// For async functions, unwrap Promise<T> so contextual typing uses T
+				if c.inAsyncFunction {
+					if instType, ok := contextType.(*types.InstantiatedType); ok {
+						if instType.Generic != nil && instType.Generic.Name == "Promise" && len(instType.TypeArguments) > 0 {
+							contextType = instType.TypeArguments[0]
+						}
+					}
+				}
 				c.visitWithContext(node.ReturnValue, &ContextualType{
-					ExpectedType: c.currentExpectedReturnType,
+					ExpectedType: contextType,
 				})
 			} else {
 				c.visit(node.ReturnValue)
@@ -1880,11 +1957,21 @@ func (c *Checker) visit(node parser.Node) {
 						actualReturnType)
 					c.addError(node.ReturnValue, msg)
 				}
-			} else if !types.IsAssignable(actualReturnType, c.currentExpectedReturnType) {
-				msg := fmt.Sprintf("cannot return value of type %s from function expecting %s",
-					actualReturnType, c.currentExpectedReturnType)
-				// Report the error at the return value expression node
-				c.addError(node.ReturnValue, msg)
+			} else {
+				expectedType := c.currentExpectedReturnType
+				// For async functions, unwrap Promise<T> to T before comparing
+				if c.inAsyncFunction {
+					if instType, ok := expectedType.(*types.InstantiatedType); ok {
+						if instType.Generic != nil && instType.Generic.Name == "Promise" && len(instType.TypeArguments) > 0 {
+							expectedType = instType.TypeArguments[0]
+						}
+					}
+				}
+				if !c.isAssignableWithExpansion(actualReturnType, expectedType) {
+					msg := fmt.Sprintf("cannot return value of type %s from function expecting %s",
+						actualReturnType, expectedType)
+					c.addError(node.ReturnValue, msg)
+				}
 			}
 		}
 
@@ -2685,6 +2772,10 @@ func (c *Checker) visit(node parser.Node) {
 					debugPrintf("// [Checker IfStmt] Consequence terminates, applying inverted narrowing after if\n")
 					c.env = invertedEnv
 				}
+			} else {
+				// Handle compound || conditions: if (A || B) { throw }
+				// After throw, both !A and !B hold, so apply inverted narrowing for each
+				c.applyInvertedOrNarrowing(node.Condition)
 			}
 		} else {
 			// Restore original environment after if statement
@@ -3945,30 +4036,30 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 
 		// Try to resolve the actual type from the source module
 		resolvedType := c.moduleEnv.ResolveImportedType(localName)
-		if resolvedType != types.Any {
+		if resolvedType != nil && resolvedType != types.Any {
 			debugPrintf("// [Checker] Imported %s: %s = %s (resolved, type-only: %v)\n", localName, sourceName, resolvedType.String(), isTypeOnly)
 
-			// Always register the imported type in the local type environment for type annotation resolution
-			// This allows interfaces and type aliases to be used in type annotations
-			c.env.DefineTypeAlias(localName, resolvedType)
+			// Register the imported type in the local type environment for type annotation resolution
+			// For classes (constructor types), register the instance type (not the constructor)
+			typeAliasValue := resolvedType
+			if objType, ok := resolvedType.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
+				// Use the constructor's return type as the type alias (instance type)
+				if objType.ConstructSignatures[0].ReturnType != nil {
+					typeAliasValue = objType.ConstructSignatures[0].ReturnType
+				}
+			}
+			c.env.DefineTypeAlias(localName, typeAliasValue)
 			debugPrintf("// [Checker] Registered imported type %s in local type environment\n", localName)
 
 			// For type-only imports, don't register in the value environment
 			if !isTypeOnly {
-				// If this is a class (constructor function), also register it in the value environment
-				// Classes need to be available for both type annotations and runtime usage (new expressions)
-				switch rt := resolvedType.(type) {
-				case *types.ObjectType:
-					if len(rt.ConstructSignatures) > 0 {
-						// This is a constructor function type (class)
-						c.env.Update(localName, resolvedType)
-						debugPrintf("// [Checker] Registered imported class %s in value environment\n", localName)
-					}
-				case *types.GenericType:
-					// Generic classes need to be in the value environment for extends and new expressions
-					c.env.Update(localName, resolvedType)
-					debugPrintf("// [Checker] Registered imported generic class %s in value environment\n", localName)
+				// Update the value environment with the resolved type
+				// This covers classes (ConstructSignatures), functions (CallSignatures), and other exports
+				if !c.env.Update(localName, resolvedType) {
+					// Fallback: define instead of update (in case DefineImport didn't pre-define)
+					c.env.Define(localName, resolvedType, false)
 				}
+				debugPrintf("// [Checker] Registered imported value %s in value environment: %T\n", localName, resolvedType)
 			} else {
 				debugPrintf("// [Checker] Skipped value environment registration for type-only import %s\n", localName)
 			}

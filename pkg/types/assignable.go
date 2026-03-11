@@ -8,10 +8,36 @@ import (
 
 // IsAssignable checks if a value of type `source` can be assigned to a variable
 // of type `target`. This is moved from checker to types package for clean separation.
+// simplifyMappedType converts a MappedType with a simple constraint (string/number)
+// to an ObjectType with an index signature, so assignability checks work correctly.
+func simplifyMappedType(t Type) Type {
+	mt, ok := t.(*MappedType)
+	if !ok {
+		return t
+	}
+	if mt.ConstraintType == String || mt.ConstraintType == Number {
+		obj := NewObjectType()
+		valueType := mt.ValueType
+		if valueType == nil {
+			valueType = Any
+		}
+		obj.IndexSignatures = append(obj.IndexSignatures, &IndexSignature{
+			KeyType:   mt.ConstraintType,
+			ValueType: valueType,
+		})
+		return obj
+	}
+	return t
+}
+
 func IsAssignable(source, target Type) bool {
 	if source == nil || target == nil {
 		return false
 	}
+
+	// Simplify mapped types (e.g., Record<string, T>) to ObjectType with index signatures
+	source = simplifyMappedType(source)
+	target = simplifyMappedType(target)
 
 	// Handle forward references - they should be treated as equivalent to each other
 	// This is a simple approach for now - in a full implementation, we'd resolve them properly
@@ -319,6 +345,21 @@ func IsAssignable(source, target Type) bool {
 			}
 		}
 
+		// If target has ONLY index signatures (no named properties), like Record<string, T>,
+		// check that all source properties are assignable to the index signature value type.
+		// Skip when target has named properties to preserve specific error messages from the checker.
+		if len(targetProps) == 0 && len(targetObj.IndexSignatures) > 0 {
+			for _, idxSig := range targetObj.IndexSignatures {
+				if idxSig.KeyType == String || idxSig.KeyType == Any {
+					for _, sourcePropType := range sourceProps {
+						if !IsAssignable(sourcePropType, idxSig.ValueType) {
+							return false
+						}
+					}
+				}
+			}
+		}
+
 		// Check call signatures
 		if len(targetObj.CallSignatures) > 0 {
 			if len(sourceObj.CallSignatures) == 0 {
@@ -436,7 +477,9 @@ func isSignatureAssignable(source, target *Signature) bool {
 	for i := 0; i < checkParamCount; i++ {
 		targetParam := target.ParameterTypes[i]
 		sourceParam := source.ParameterTypes[i]
-		if !IsAssignable(targetParam, sourceParam) { // Note: reversed for contravariance
+		// TypeScript uses bivariant parameter checking for method signatures
+		// (contravariant only applies to function types with --strictFunctionTypes)
+		if !IsAssignable(targetParam, sourceParam) && !IsAssignable(sourceParam, targetParam) {
 			return false
 		}
 	}

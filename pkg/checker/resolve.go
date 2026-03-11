@@ -283,10 +283,13 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			if valueType == nil {
 				return nil // Error already reported
 			}
-			// For now, return a simple ObjectType with Promise-like structure
-			// In a full implementation, we'd have a dedicated PromiseType
+			// Use the global PromiseGeneric type to create a proper InstantiatedType
+			if types.PromiseGeneric != nil {
+				return types.NewInstantiatedType(types.PromiseGeneric, []types.Type{valueType})
+			}
+			// Fallback: simple ObjectType with Promise-like structure
 			promiseType := types.NewObjectType()
-			promiseType.WithProperty("then", types.Any) // Simplified for now
+			promiseType.WithProperty("then", types.Any)
 			promiseType.WithProperty("catch", types.Any)
 			return promiseType
 
@@ -1646,9 +1649,47 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 		// Handle single literal constraint: [P in "name"]
 		iterationKeys = []types.Type{literalType}
 	} else if constraintType == types.String {
-		// Handle case where constraint is just 'string' (from keyof any)
-		// This means we're mapping over all possible string keys, so return Any
-		return types.Any
+		// Handle case where constraint is 'string' (e.g., Record<string, V>)
+		// Create an ObjectType with a string index signature
+		resultObj := types.NewObjectType()
+		valueType := mappedType.ValueType
+		// Substitute the type parameter with string in the value type
+		if valueType != nil {
+			valueType = c.substituteTypeParameterInType(valueType, mappedType.TypeParameter, types.String)
+			if valueType == nil {
+				valueType = types.Any
+			}
+			// Resolve IndexedAccessType: any[X] -> any
+			if iat, ok := valueType.(*types.IndexedAccessType); ok {
+				if iat.ObjectType == types.Any {
+					valueType = types.Any
+				}
+			}
+		} else {
+			valueType = types.Any
+		}
+		resultObj.IndexSignatures = append(resultObj.IndexSignatures, &types.IndexSignature{
+			KeyType:   types.String,
+			ValueType: valueType,
+		})
+		return resultObj
+	} else if constraintType == types.Number {
+		// Handle case where constraint is 'number'
+		resultObj := types.NewObjectType()
+		valueType := mappedType.ValueType
+		if valueType != nil {
+			valueType = c.substituteTypeParameterInType(valueType, mappedType.TypeParameter, types.Number)
+			if valueType == nil {
+				valueType = types.Any
+			}
+		} else {
+			valueType = types.Any
+		}
+		resultObj.IndexSignatures = append(resultObj.IndexSignatures, &types.IndexSignature{
+			KeyType:   types.Number,
+			ValueType: valueType,
+		})
+		return resultObj
 	} else {
 		// Unsupported constraint type for now
 		return nil

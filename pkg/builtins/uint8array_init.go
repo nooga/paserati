@@ -29,7 +29,23 @@ func (u *Uint8ArrayInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("BYTES_PER_ELEMENT", types.Number).
 		WithProperty("set", types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Undefined)).
 		WithProperty("subarray", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true}))
+		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
+		WithProperty("includes", types.NewSimpleFunction([]types.Type{types.Number}, types.Boolean)).
+		WithProperty("indexOf", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
+		WithProperty("find", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
+		WithProperty("findIndex", types.NewSimpleFunction([]types.Type{types.Any}, types.Number)).
+		WithProperty("forEach", types.NewSimpleFunction([]types.Type{types.Any}, types.Undefined)).
+		WithProperty("map", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
+		WithProperty("filter", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
+		WithProperty("every", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
+		WithProperty("some", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
+		WithProperty("reduce", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
+		WithProperty("join", types.NewSimpleFunction([]types.Type{types.String}, types.String)).
+		WithProperty("fill", types.NewSimpleFunction([]types.Type{types.Number}, types.Any)).
+		WithProperty("reverse", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("sort", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("at", types.NewSimpleFunction([]types.Type{types.Number}, types.Any)).
+		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String))
 
 	// Create Uint8Array constructor type with multiple overloads
 	uint8ArrayCtorType := types.NewObjectType().

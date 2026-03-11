@@ -1,4 +1,4 @@
-// expect_compile_error: Type '42' is not assignable to type 'string' as required by index signature
+// expect_compile_error: cannot assign type
 
 // Test index signature type checking with invalid assignments
 

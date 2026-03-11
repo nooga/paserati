@@ -79,18 +79,23 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 		debugPrintf("// [Checker FuncLit] Created generator type: %s\n", finalReturnType.String())
 	} else if node.IsAsync {
 		// For async functions, the actual return type becomes Promise<T>
-		debugPrintf("// [Checker FuncLit] Async function detected, wrapping return type in Promise\n")
-
-		// Handle nil return type (async functions without explicit return default to Promise<void>)
-		innerType := finalReturnType
-		if innerType == nil {
-			innerType = types.Void
+		// But skip wrapping if already Promise<T> (explicit annotation)
+		alreadyPromise := false
+		if instType, ok := finalReturnType.(*types.InstantiatedType); ok {
+			if instType.Generic != nil && instType.Generic.Name == "Promise" {
+				alreadyPromise = true
+			}
 		}
-
-		// Create Promise<T> type
-		promiseType := c.createPromiseType(innerType)
-		finalReturnType = promiseType
-		debugPrintf("// [Checker FuncLit] Created Promise type: %s\n", finalReturnType.String())
+		if !alreadyPromise {
+			debugPrintf("// [Checker FuncLit] Async function detected, wrapping return type in Promise\n")
+			innerType := finalReturnType
+			if innerType == nil {
+				innerType = types.Void
+			}
+			promiseType := c.createPromiseType(innerType)
+			finalReturnType = promiseType
+			debugPrintf("// [Checker FuncLit] Created Promise type: %s\n", finalReturnType.String())
+		}
 	}
 
 	// 5. Create final function type

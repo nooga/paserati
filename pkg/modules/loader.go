@@ -184,14 +184,10 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		moduleChecker.EnableModuleMode(record.ResolvedPath, ml)
 
 		checkErrors := moduleChecker.Check(record.AST)
-		if len(checkErrors) > 0 && !ml.config.IgnoreTypeErrors {
-			record.Error = fmt.Errorf("type checking failed: %s", checkErrors[0].Error())
-			record.State = ModuleError
-			debugPrintf("// [ModuleLoader] loadModuleSequential EARLY RETURN (type check error): %s\n", specifier)
-			return record, nil
-		}
 
-		// Extract exported types
+		// Always extract exported types, even if type checking had errors.
+		// The checker registers exports during its passes regardless of errors,
+		// and importing modules need these types to resolve cross-module references.
 		if moduleChecker.IsModuleMode() {
 			// Skip type extraction for native modules - they already have their exports set
 			if !record.isNative {
@@ -202,6 +198,15 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 			} else {
 				debugPrintf("// [ModuleLoader] Skipping export extraction for native module %s (already has %d exports)\n", record.ResolvedPath, len(record.Exports))
 			}
+		}
+
+		// If type checking failed and we're not ignoring errors, still allow compilation
+		// but store the error for later reporting
+		if len(checkErrors) > 0 && !ml.config.IgnoreTypeErrors {
+			record.Error = fmt.Errorf("type checking failed: %s", checkErrors[0].Error())
+			record.State = ModuleError
+			debugPrintf("// [ModuleLoader] Type check error in %s (exports still extracted): %s\n", specifier, checkErrors[0].Error())
+			return record, nil
 		}
 
 		// Compile the module

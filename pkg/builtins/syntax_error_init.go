@@ -29,6 +29,8 @@ func (s *SyntaxErrorInitializer) InitTypes(ctx *TypeContext) error {
 		// Constructor is callable with optional message parameter
 		WithSimpleCallSignature([]types.Type{}, syntaxErrorProtoType).
 		WithSimpleCallSignature([]types.Type{types.String}, syntaxErrorProtoType).
+		WithSimpleConstructSignature([]types.Type{}, syntaxErrorProtoType).
+		WithSimpleConstructSignature([]types.Type{types.String}, syntaxErrorProtoType).
 		WithProperty("prototype", syntaxErrorProtoType)
 
 	// Define the constructor globally
