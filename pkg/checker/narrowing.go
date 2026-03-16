@@ -1520,31 +1520,58 @@ func (c *Checker) narrowBaseObjectFromOptionalChaining(baseExpr parser.Expressio
 		return
 	}
 
+	// Helper to remove null/undefined from a type, returning the narrowed type or nil if no change
+	removeNullUndefined := func(t types.Type) types.Type {
+		unionType, ok := t.(*types.UnionType)
+		if !ok {
+			return nil
+		}
+		var nonNullMembers []types.Type
+		for _, member := range unionType.Types {
+			if member != types.Null && member != types.Undefined {
+				nonNullMembers = append(nonNullMembers, member)
+			}
+		}
+		if len(nonNullMembers) >= len(unionType.Types) || len(nonNullMembers) == 0 {
+			return nil // nothing to narrow
+		}
+		if len(nonNullMembers) == 1 {
+			return nonNullMembers[0]
+		}
+		return types.NewUnionType(nonNullMembers...)
+	}
+
+	// Case 1: base is an identifier (e.g., opts in opts?.prop)
 	if ident, ok := baseExpr.(*parser.Identifier); ok {
 		originalType, isConst, found := c.env.Resolve(ident.Value)
 		if !found || originalType == nil {
 			return
 		}
+		if narrowedType := removeNullUndefined(originalType); narrowedType != nil {
+			env.Define(ident.Value, narrowedType, isConst)
+			debugPrintf("// [TypeNarrowing] Back-propagated optional chaining narrowing: '%s' from '%s' to '%s'\n",
+				ident.Value, originalType.String(), narrowedType.String())
+		}
+		return
+	}
 
-		// Remove null and undefined from the base object's type
-		if unionType, ok := originalType.(*types.UnionType); ok {
-			var nonNullMembers []types.Type
-			for _, member := range unionType.Types {
-				if member != types.Null && member != types.Undefined {
-					nonNullMembers = append(nonNullMembers, member)
-				}
-			}
-			if len(nonNullMembers) < len(unionType.Types) && len(nonNullMembers) > 0 {
-				var narrowedType types.Type
-				if len(nonNullMembers) == 1 {
-					narrowedType = nonNullMembers[0]
-				} else {
-					narrowedType = types.NewUnionType(nonNullMembers...)
-				}
-				env.Define(ident.Value, narrowedType, isConst)
-				debugPrintf("// [TypeNarrowing] Back-propagated optional chaining narrowing: '%s' from '%s' to '%s'\n",
-					ident.Value, originalType.String(), narrowedType.String())
-			}
+	// Case 2: base is a member expression (e.g., req.options in req.options?.effort)
+	// Store the narrowed type in env.narrowings using the member key
+	if memberExpr, ok := baseExpr.(*parser.MemberExpression); ok {
+		memberKey := expressionToNarrowingKey(memberExpr)
+		if memberKey == "" {
+			return
+		}
+		// Visit the member expression to get its current type
+		c.visit(memberExpr)
+		memberType := memberExpr.GetComputedType()
+		if memberType == nil {
+			return
+		}
+		if narrowedType := removeNullUndefined(memberType); narrowedType != nil {
+			env.narrowings[memberKey] = narrowedType
+			debugPrintf("// [TypeNarrowing] Back-propagated optional chaining narrowing for member: '%s' from '%s' to '%s'\n",
+				memberKey, memberType.String(), narrowedType.String())
 		}
 	}
 }
