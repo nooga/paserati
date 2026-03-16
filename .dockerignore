@@ -1,0 +1,47 @@
+.git
+.cursor/
+.claude/
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# Local build outputs and binaries.
+/paserati
+/paserati-*
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+*.pprof
+*.baseline
+
+# Large or dev-only inputs that are not required to build the CLI or library.
+/test262/
+/tests/
+/scratch/
+/bench/
+/benchmarks/
+/quickjs-bench/
+/docs/
+
+# Local notes and tooling artifacts.
+/baseline.txt
+/timing.py
+/timing.json
+/.tally.py
+/mcp-go-debugger.log
+/stvm*.js
+/CLAUDE.md
+/GEMINI.md
+/HOWTO_TEST262.md
+/paserati-bugs.md
+
+# Editor/debug leftovers checked into the repo history.
+*.bak
+*.orig
