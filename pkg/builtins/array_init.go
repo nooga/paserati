@@ -213,7 +213,7 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 		WithSimpleCallSignature([]types.Type{}, &types.ArrayType{ElementType: types.Any}).                                             // Array() -> array
 		WithSimpleCallSignature([]types.Type{types.Number}, &types.ArrayType{ElementType: types.Any}).                                 // Array(length) -> array
 		WithVariadicCallSignature([]types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}). // Array(...elements) -> array
-		WithProperty("isArray", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
+		WithProperty("isArray", types.NewSimpleFunction([]types.Type{types.Any}, &types.TypePredicateType{ParameterName: "arg", Type: &types.ArrayType{ElementType: types.Any}})).
 		WithProperty("from", types.NewOptionalFunction([]types.Type{types.Any, types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Any)}, &types.ArrayType{ElementType: types.Any}, []bool{false, true})).
 		WithVariadicProperty("of", []types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}).
 		WithProperty("prototype", arrayProtoType)

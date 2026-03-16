@@ -10,11 +10,44 @@ import (
 
 // TypeGuard represents a detected type guard pattern
 type TypeGuard struct {
-	VariableName      string     // The variable being narrowed (e.g., "x" or "this.value" or "obj.prop")
-	NarrowedType      types.Type // The type it's narrowed to (e.g., types.String)
-	IsNegated         bool       // true for !== checks, false for === checks
-	DiscriminantProp  string     // For discriminated unions: the property being checked (e.g., "kind")
-	DiscriminantValue types.Type // For discriminated unions: the value being compared (e.g., literal "num")
+	VariableName             string              // The variable being narrowed (e.g., "x" or "this.value" or "obj.prop")
+	NarrowedType             types.Type          // The type it's narrowed to (e.g., types.String)
+	IsNegated                bool                // true for !== checks, false for === checks
+	DiscriminantProp         string              // For discriminated unions: the property being checked (e.g., "kind")
+	DiscriminantValue        types.Type          // For discriminated unions: the value being compared (e.g., literal "num")
+	OptionalChainingBaseExpr parser.Expression   // For optional chaining guards: the base object expression (e.g., "opts" in "opts?.prop")
+}
+
+// extractTypePredicateFromType checks if a type has call signatures with a type predicate return type.
+// Returns the TypePredicateType if found, nil otherwise.
+func extractTypePredicateFromType(functionType types.Type) *types.TypePredicateType {
+	if objType, ok := functionType.(*types.ObjectType); ok {
+		for _, sig := range objType.CallSignatures {
+			if predType, ok := sig.ReturnType.(*types.TypePredicateType); ok {
+				return predType
+			}
+		}
+	}
+	return nil
+}
+
+// isMemberOrOptionalChaining checks if an expression is a MemberExpression or OptionalChainingExpression
+func isMemberOrOptionalChaining(expr parser.Expression) bool {
+	switch expr.(type) {
+	case *parser.MemberExpression, *parser.OptionalChainingExpression:
+		return true
+	}
+	return false
+}
+
+// extractOptionalChainingBase returns the base object expression if the expression is
+// an OptionalChainingExpression, or nil otherwise. This is used to back-propagate
+// narrowing to the base object (e.g., narrowing "opts" when "opts?.prop !== undefined").
+func extractOptionalChainingBase(expr parser.Expression) parser.Expression {
+	if optChain, ok := expr.(*parser.OptionalChainingExpression); ok {
+		return optChain.Object
+	}
+	return nil
 }
 
 // expressionToNarrowingKey converts an expression to a string key for narrowing.
@@ -33,6 +66,16 @@ func expressionToNarrowingKey(expr parser.Expression) string {
 			return ""
 		}
 		// Only handle simple property access (not computed properties like obj[expr])
+		if propIdent, ok := e.Property.(*parser.Identifier); ok {
+			return objectKey + "." + propIdent.Value
+		}
+		return ""
+	case *parser.OptionalChainingExpression:
+		// Treat opts?.prop the same as opts.prop for narrowing key purposes
+		objectKey := expressionToNarrowingKey(e.Object)
+		if objectKey == "" {
+			return ""
+		}
 		if propIdent, ok := e.Property.(*parser.Identifier); ok {
 			return objectKey + "." + propIdent.Value
 		}
@@ -60,16 +103,18 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 		}
 	}
 
-	// Pattern 0: Type predicate function calls like isString(x)
+	// Pattern 0: Type predicate function calls like isString(x) or Array.isArray(x)
 	if callExpr, ok := condition.(*parser.CallExpression); ok {
 		// Check if this is a single-argument call to a function with type predicate return
 		if len(callExpr.Arguments) == 1 {
-			if ident, ok := callExpr.Arguments[0].(*parser.Identifier); ok {
-				// Check if the function being called has a type predicate return type
-				// Try computed type first, then resolve from environment
+			// Get narrowing key for the argument — supports identifiers, member expressions,
+			// and optional chaining expressions
+			argKey := expressionToNarrowingKey(callExpr.Arguments[0])
+			if argKey != "" {
+				// Resolve the function's type — try computed type, then environment
 				functionType := callExpr.Function.GetComputedType()
-				// If computed type is a Primitive (e.g., boolean from return type)
-				// or doesn't have call signatures, try resolving from the environment
+
+				// For simple identifier calls like isString(x)
 				if funcIdent, ok := callExpr.Function.(*parser.Identifier); ok {
 					if envType, _, found := c.env.Resolve(funcIdent.Value); found {
 						if envType != functionType {
@@ -77,20 +122,33 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 						}
 					}
 				}
-				if functionType != nil {
-					if objType, ok := functionType.(*types.ObjectType); ok {
-						if len(objType.CallSignatures) > 0 {
-							returnType := objType.CallSignatures[0].ReturnType
-							if predType, ok := returnType.(*types.TypePredicateType); ok {
-								// This is a type predicate function call!
-								// Extract the type being tested for
-								return &TypeGuard{
-									VariableName: ident.Value,
-									NarrowedType: predType.Type,
-									IsNegated:    false, // Type predicate calls are always positive
-								}
+
+				// For member expression calls like Array.isArray(x) — resolve the
+				// property type from the object (e.g., Array's "isArray" property)
+				if memberFunc, ok := callExpr.Function.(*parser.MemberExpression); ok {
+					c.visit(memberFunc.Object)
+					objType := memberFunc.Object.GetComputedType()
+					if objType != nil {
+						propName := c.extractPropertyName(memberFunc.Property)
+						if widened, ok := types.GetWidenedType(objType).(*types.ObjectType); ok {
+							if propType, exists := widened.Properties[propName]; exists {
+								functionType = propType
 							}
 						}
+					}
+				}
+
+				if functionType != nil {
+					// Extract type predicate from call signatures
+					if predType := extractTypePredicateFromType(functionType); predType != nil {
+						guard := &TypeGuard{
+							VariableName: argKey,
+							NarrowedType: predType.Type,
+							IsNegated:    false,
+						}
+						// If the argument is optional chaining, also record the base for back-propagation
+						guard.OptionalChainingBaseExpr = extractOptionalChainingBase(callExpr.Arguments[0])
+						return guard
 					}
 				}
 			}
@@ -185,11 +243,12 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 
 			// Pattern 3.5a: memberExpr === null/undefined (direct member expression narrowing)
 			// e.g., this._tools === null narrows this._tools to null
+			// Also handles optional chaining: opts?.prop === undefined
 			// Must come BEFORE discriminated union to handle null/undefined checks directly
-			if memberExpr, ok := infix.Left.(*parser.MemberExpression); ok {
+			if isMemberOrOptionalChaining(infix.Left) {
 				if narrowedType := c.literalToType(infix.Right); narrowedType != nil {
 					if narrowedType == types.Null || narrowedType == types.Undefined {
-						key := expressionToNarrowingKey(memberExpr)
+						key := expressionToNarrowingKey(infix.Left)
 						if key != "" {
 							isLoose := infix.Operator == "==" || infix.Operator == "!="
 							if isLoose {
@@ -198,28 +257,30 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 							debugPrintf("// [detectTypeGuard] Direct member narrowing: %s === %s\n",
 								key, narrowedType.String())
 							return &TypeGuard{
-								VariableName: key,
-								NarrowedType: narrowedType,
-								IsNegated:    isNegative,
+								VariableName:             key,
+								NarrowedType:             narrowedType,
+								IsNegated:                isNegative,
+								OptionalChainingBaseExpr: extractOptionalChainingBase(infix.Left),
 							}
 						}
 					}
 				}
 			}
 			// Also reversed: null/undefined === memberExpr
-			if memberExpr, ok := infix.Right.(*parser.MemberExpression); ok {
+			if isMemberOrOptionalChaining(infix.Right) {
 				if narrowedType := c.literalToType(infix.Left); narrowedType != nil {
 					if narrowedType == types.Null || narrowedType == types.Undefined {
-						key := expressionToNarrowingKey(memberExpr)
+						key := expressionToNarrowingKey(infix.Right)
 						if key != "" {
 							isLoose := infix.Operator == "==" || infix.Operator == "!="
 							if isLoose {
 								narrowedType = types.NewUnionType(types.Null, types.Undefined)
 							}
 							return &TypeGuard{
-								VariableName: key,
-								NarrowedType: narrowedType,
-								IsNegated:    isNegative,
+								VariableName:             key,
+								NarrowedType:             narrowedType,
+								IsNegated:                isNegative,
+								OptionalChainingBaseExpr: extractOptionalChainingBase(infix.Right),
 							}
 						}
 					}
@@ -626,6 +687,27 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 					debugPrintf("// [TypeNarrowing] No callable members found in union\n")
 					return nil
 				}
+			} else if _, isArray := guard.NarrowedType.(*types.ArrayType); isArray {
+				// Array type predicate narrowing (e.g., Array.isArray) - keep only array members
+				var arrayMembers []types.Type
+				for _, memberType := range unionType.Types {
+					if _, isArr := memberType.(*types.ArrayType); isArr {
+						arrayMembers = append(arrayMembers, memberType)
+					}
+				}
+				if len(arrayMembers) > 0 {
+					canNarrow = true
+					if len(arrayMembers) == 1 {
+						narrowedType = arrayMembers[0]
+					} else {
+						narrowedType = types.NewUnionType(arrayMembers...)
+					}
+					debugPrintf("// [TypeNarrowing] Narrowed to array types: %s\n", narrowedType.String())
+				} else {
+					// No array in the union — narrow to the predicate type directly
+					canNarrow = true
+					narrowedType = guard.NarrowedType
+				}
 			} else if unionType.ContainsType(guard.NarrowedType) {
 				// Regular type narrowing - union contains the exact target type
 				canNarrow = true
@@ -819,6 +901,13 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 			newEnv.narrowings[guard.VariableName+"__complement"] = guard.NarrowedType
 			debugPrintf("// [InvertedTypeNarrowing] Stored complement marker for %s\n", guard.VariableName)
 		}
+
+		// Back-propagate narrowing to the base object for optional chaining guards
+		// e.g., opts?.prop !== undefined means opts itself is not undefined
+		if guard.OptionalChainingBaseExpr != nil {
+			c.narrowBaseObjectFromOptionalChaining(guard.OptionalChainingBaseExpr, newEnv)
+		}
+
 		return newEnv
 	}
 
@@ -867,6 +956,30 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 
 	// Handle union types: remove the narrowed type from the union
 	if unionType, ok := originalType.(*types.UnionType); ok {
+		// For array type predicate inverted narrowing (e.g., !Array.isArray(x)), remove array members
+		if guard.NarrowedType != nil {
+			if _, isArray := guard.NarrowedType.(*types.ArrayType); isArray {
+				var nonArrayMembers []types.Type
+				for _, memberType := range unionType.Types {
+					if _, isArr := memberType.(*types.ArrayType); !isArr {
+						nonArrayMembers = append(nonArrayMembers, memberType)
+					}
+				}
+				if len(nonArrayMembers) < len(unionType.Types) && len(nonArrayMembers) > 0 {
+					var narrowedType types.Type
+					if len(nonArrayMembers) == 1 {
+						narrowedType = nonArrayMembers[0]
+					} else {
+						narrowedType = types.NewUnionType(nonArrayMembers...)
+					}
+					narrowedEnv := NewEnclosedEnvironment(c.env)
+					narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
+					debugPrintf("// [InvertedTypeNarrowing] Array.isArray false: '%s' narrowed to non-array: %s\n",
+						guard.VariableName, narrowedType.String())
+					return narrowedEnv
+				}
+			}
+		}
 		// For typeof "function" inverted narrowing, filter out callable members
 		if guard.NarrowedType != nil {
 			if guardObj, ok := guard.NarrowedType.(*types.ObjectType); ok && guardObj.IsCallable() {
@@ -1397,6 +1510,43 @@ func (c *Checker) applyTruthinessNarrowing(varName string) *Environment {
 	}
 
 	return nil
+}
+
+// narrowBaseObjectFromOptionalChaining narrows the base object of an optional chaining expression.
+// When opts?.prop !== undefined, opts itself must not be undefined (otherwise opts?.prop would be undefined).
+// This removes null and undefined from the base object's type in the given environment.
+func (c *Checker) narrowBaseObjectFromOptionalChaining(baseExpr parser.Expression, env *Environment) {
+	if baseExpr == nil {
+		return
+	}
+
+	if ident, ok := baseExpr.(*parser.Identifier); ok {
+		originalType, isConst, found := c.env.Resolve(ident.Value)
+		if !found || originalType == nil {
+			return
+		}
+
+		// Remove null and undefined from the base object's type
+		if unionType, ok := originalType.(*types.UnionType); ok {
+			var nonNullMembers []types.Type
+			for _, member := range unionType.Types {
+				if member != types.Null && member != types.Undefined {
+					nonNullMembers = append(nonNullMembers, member)
+				}
+			}
+			if len(nonNullMembers) < len(unionType.Types) && len(nonNullMembers) > 0 {
+				var narrowedType types.Type
+				if len(nonNullMembers) == 1 {
+					narrowedType = nonNullMembers[0]
+				} else {
+					narrowedType = types.NewUnionType(nonNullMembers...)
+				}
+				env.Define(ident.Value, narrowedType, isConst)
+				debugPrintf("// [TypeNarrowing] Back-propagated optional chaining narrowing: '%s' from '%s' to '%s'\n",
+					ident.Value, originalType.String(), narrowedType.String())
+			}
+		}
+	}
 }
 
 // applyMemberTruthinessNarrowing handles truthiness checks on member expressions like "if (this.next)"
