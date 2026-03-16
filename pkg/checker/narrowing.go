@@ -1279,6 +1279,11 @@ func (c *Checker) applyTypeNarrowingFromCondition(condition parser.Expression) *
 		return c.applyTruthinessNarrowing(ident.Value)
 	}
 
+	// Handle truthiness checks on member expressions like "if (this.next)"
+	if memberExpr, ok := condition.(*parser.MemberExpression); ok {
+		return c.applyMemberTruthinessNarrowing(memberExpr)
+	}
+
 	// Handle single type guard expressions
 	guard := c.detectTypeGuard(condition)
 	return c.applyTypeNarrowing(guard)
@@ -1317,14 +1322,12 @@ func (c *Checker) applyInvertedOrNarrowing(condition parser.Expression) {
 				c.env = invertedEnv
 			}
 		} else {
-			// Try truthiness narrowing (e.g., "node == null" is an equality check)
-			narrowedEnv := c.applyTypeNarrowingFromCondition(condition)
-			if narrowedEnv != nil {
-				// applyTypeNarrowingFromCondition gives the "truthy" env,
-				// but we need the inverted (falsy) version for post-throw.
-				// For equality checks like "x == null", the guard detection handles it.
-				// Skip this path to avoid double-narrowing.
-				_ = narrowedEnv
+			// Try inverted truthiness narrowing for the base case
+			// e.g., for "!c.items" in "if (!c.items || ...) { return }"
+			// after the if, c.items is truthy (not null/undefined)
+			invertedEnv := c.applyInvertedTruthinessNarrowing(condition)
+			if invertedEnv != nil {
+				c.env = invertedEnv
 			}
 		}
 		return
@@ -1345,6 +1348,9 @@ func (c *Checker) applyInvertedTruthinessNarrowing(condition parser.Expression) 
 	if prefixExpr, ok := condition.(*parser.PrefixExpression); ok && prefixExpr.Operator == "!" {
 		if ident, ok := prefixExpr.Right.(*parser.Identifier); ok {
 			return c.applyTruthinessNarrowing(ident.Value)
+		}
+		if memberExpr, ok := prefixExpr.Right.(*parser.MemberExpression); ok {
+			return c.applyMemberTruthinessNarrowing(memberExpr)
 		}
 	}
 	// Handle bare x pattern: if (x) { return } => x is falsy after (null/undefined)
@@ -1391,6 +1397,65 @@ func (c *Checker) applyTruthinessNarrowing(varName string) *Environment {
 	}
 
 	return nil
+}
+
+// applyMemberTruthinessNarrowing handles truthiness checks on member expressions like "if (this.next)"
+// This eliminates null and undefined from the member expression's type
+func (c *Checker) applyMemberTruthinessNarrowing(memberExpr *parser.MemberExpression) *Environment {
+	memberKey := expressionToNarrowingKey(memberExpr)
+	if memberKey == "" {
+		return nil
+	}
+
+	// Visit the member expression to get its current type
+	c.visit(memberExpr)
+	memberType := memberExpr.GetComputedType()
+	if memberType == nil {
+		return nil
+	}
+
+	// If it's a union type, remove null and undefined
+	unionType, ok := memberType.(*types.UnionType)
+	if !ok {
+		return nil
+	}
+
+	var truthyMembers []types.Type
+	for _, member := range unionType.Types {
+		if member != types.Null && member != types.Undefined {
+			truthyMembers = append(truthyMembers, member)
+		}
+	}
+
+	if len(truthyMembers) >= len(unionType.Types) {
+		return nil // Nothing was narrowed
+	}
+
+	var narrowedType types.Type
+	if len(truthyMembers) == 0 {
+		return nil
+	} else if len(truthyMembers) == 1 {
+		narrowedType = truthyMembers[0]
+	} else {
+		narrowedType = types.NewUnionType(truthyMembers...)
+	}
+
+	// Create narrowed environment with member narrowing
+	newEnv := NewEnclosedEnvironment(c.env)
+	for k, v := range c.env.narrowings {
+		newEnv.narrowings[k] = v
+	}
+	if c.env.outer != nil && c.env.outer.narrowings != nil {
+		for k, v := range c.env.outer.narrowings {
+			if _, exists := newEnv.narrowings[k]; !exists {
+				newEnv.narrowings[k] = v
+			}
+		}
+	}
+	newEnv.narrowings[memberKey] = narrowedType
+	debugPrintf("// [TypeNarrowing] Member truthiness check narrowed '%s' from '%s' to '%s'\n",
+		memberKey, memberType.String(), narrowedType.String())
+	return newEnv
 }
 
 // isObjectLikeType checks if a type represents an object-like value (objects, arrays, functions)

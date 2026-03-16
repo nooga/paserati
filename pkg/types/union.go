@@ -134,7 +134,16 @@ func NewUnionType(ts ...Type) Type {
 	if len(uniqueMembers) == 0 {
 		// If only Never types were input, or input was empty
 		return Never
-	} else if len(uniqueMembers) == 1 {
+	}
+
+	// any absorbs all other types: any | T => any
+	for _, m := range uniqueMembers {
+		if m == Any {
+			return Any
+		}
+	}
+
+	if len(uniqueMembers) == 1 {
 		// If only one unique type remains, return it directly
 		return uniqueMembers[0]
 	}

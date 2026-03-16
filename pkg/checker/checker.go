@@ -2376,12 +2376,21 @@ func (c *Checker) visit(node parser.Node) {
 		// For && expressions, apply narrowing from left operand before checking right
 		// This ensures that in `isObjectRecord(node) && node["fn"]`, the right side
 		// sees `node` narrowed by the type predicate on the left side.
+		// For || expressions, apply inverted narrowing (left is falsy, so right sees negation)
+		// This ensures that in `!c.items || c.items.length === 0`, the right side
+		// sees `c.items` narrowed to non-null/non-undefined.
 		var savedEnvForLogical *Environment
 		if node.Operator == "&&" {
 			savedEnvForLogical = c.env
 			narrowedEnv := c.applyTypeNarrowingFromCondition(node.Left)
 			if narrowedEnv != nil {
 				c.env = narrowedEnv
+			}
+		} else if node.Operator == "||" {
+			savedEnvForLogical = c.env
+			invertedEnv := c.applyInvertedTruthinessNarrowing(node.Left)
+			if invertedEnv != nil {
+				c.env = invertedEnv
 			}
 		}
 

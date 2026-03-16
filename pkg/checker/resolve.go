@@ -1503,6 +1503,34 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 	debugPrintf("// [ConditionalType] TrueType: %s (Go type: %T)\n", trueType.String(), trueType)
 	debugPrintf("// [ConditionalType] FalseType: %s (Go type: %T)\n", falseType.String(), falseType)
 
+	// Distributive conditional types: when checkType is a union, distribute over its members
+	// This implements TypeScript's distributive conditional types behavior
+	// e.g., ("a" | "b" | "c") extends "b" ? never : T  =>  ("a" extends "b" ? never : "a") | ("b" extends "b" ? never : "b") | ("c" extends "b" ? never : "c")
+	// When the falseType equals the original checkType (as in Exclude<T, U> = T extends U ? never : T),
+	// each distributed member replaces T in the false branch.
+	if unionCheck, ok := checkType.(*types.UnionType); ok {
+		var resultTypes []types.Type
+		for _, member := range unionCheck.Types {
+			// Substitute: if falseType is the same union as checkType, use the member
+			effectiveFalse := falseType
+			if falseType != nil && falseType.Equals(checkType) {
+				effectiveFalse = member
+			}
+			effectiveTrue := trueType
+			if trueType != nil && trueType != types.Never && trueType.Equals(checkType) {
+				effectiveTrue = member
+			}
+			result := c.computeConditionalType(member, extendsType, effectiveTrue, effectiveFalse)
+			if result != nil && result != types.Never {
+				resultTypes = append(resultTypes, result)
+			}
+		}
+		if len(resultTypes) == 0 {
+			return types.Never
+		}
+		return types.NewUnionType(resultTypes...)
+	}
+
 	// Check if we have unresolved TypeofType that we should defer
 	if c.containsUnresolvedTypeofType(checkType) || c.containsUnresolvedTypeofType(extendsType) {
 		debugPrintf("// [ConditionalType] Contains unresolved TypeofType, deferring evaluation\n")
@@ -1627,10 +1655,12 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 
 	// Handle keyof constraint: [P in keyof SomeType]
 	var iterationKeys []types.Type
+	var sourceObjectType *types.ObjectType // Track source object for inheriting optionality
 	if keyofType, ok := constraintType.(*types.KeyofType); ok {
 		// Get the keys from the keyof operand
 		operandType := keyofType.OperandType
 		if objType, ok := operandType.(*types.ObjectType); ok {
+			sourceObjectType = objType
 			// Extract all property names as literal types
 			for propName := range objType.Properties {
 				iterationKeys = append(iterationKeys, &types.LiteralType{
@@ -1690,6 +1720,49 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 			ValueType: valueType,
 		})
 		return resultObj
+	} else if condType, ok := constraintType.(*types.ConditionalType); ok {
+		// Handle conditional type constraints like Exclude<keyof T, K>
+		// Distribute the conditional type over its check type to compute the result
+		var checkKeys []types.Type
+		switch ct := condType.CheckType.(type) {
+		case *types.KeyofType:
+			if objType, ok := ct.OperandType.(*types.ObjectType); ok {
+				sourceObjectType = objType
+				for propName := range objType.Properties {
+					checkKeys = append(checkKeys, &types.LiteralType{Value: vm.String(propName)})
+				}
+			}
+		case *types.UnionType:
+			checkKeys = ct.Types
+		case *types.LiteralType:
+			checkKeys = []types.Type{ct}
+		}
+		// Distribute: for each key, evaluate the conditional type
+		for _, key := range checkKeys {
+			extends := key.Equals(condType.ExtendsType)
+			if !extends {
+				// Check if key is a member of a union ExtendsType
+				if unionExtends, ok := condType.ExtendsType.(*types.UnionType); ok {
+					for _, member := range unionExtends.Types {
+						if key.Equals(member) {
+							extends = true
+							break
+						}
+					}
+				}
+			}
+			if extends {
+				// Key extends the excluded type - use TrueType
+				if condType.TrueType != types.Never {
+					iterationKeys = append(iterationKeys, condType.TrueType)
+				}
+				// If TrueType is Never, this key is excluded (filtered out)
+			} else {
+				// Key does not extend the excluded type - use FalseType
+				// For Exclude, FalseType is typically the key itself
+				iterationKeys = append(iterationKeys, key)
+			}
+		}
 	} else {
 		// Unsupported constraint type for now
 		return nil
@@ -1724,11 +1797,18 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 			properties[keyName] = valueType
 
 			// Handle optional modifier
-			if mappedType.OptionalModifier == "+" || mappedType.OptionalModifier == "" {
-				// Make property optional (default behavior for ? modifier)
+			if mappedType.OptionalModifier == "+" {
+				// Explicitly make property optional
 				optionalProperties[keyName] = true
+			} else if mappedType.OptionalModifier == "-" {
+				// Explicitly make property required (remove optional)
+				optionalProperties[keyName] = false
+			} else if mappedType.OptionalModifier == "" && sourceObjectType != nil {
+				// No modifier: inherit optionality from source type
+				if sourceObjectType.IsPropertyOptional(keyName) {
+					optionalProperties[keyName] = true
+				}
 			}
-			// Note: "-" modifier would make required, but that's advanced
 		}
 	}
 
@@ -2093,6 +2173,44 @@ func (c *Checker) substituteMappedType(mappedType *types.MappedType, typeParams 
 	}
 }
 
+// evaluateConditionalType evaluates a conditional type after substitution.
+// It distributes over union check types (TypeScript's distributive conditional types).
+// For example, Exclude<"a" | "b" | "c", "b"> distributes as:
+//   ("a" extends "b" ? never : "a") | ("b" extends "b" ? never : "b") | ("c" extends "b" ? never : "c")
+//   = "a" | never | "c" = "a" | "c"
+func (c *Checker) evaluateConditionalType(checkType, extendsType, trueType, falseType types.Type) types.Type {
+	// Handle KeyofType in checkType: expand to union of literal keys
+	if keyofType, ok := checkType.(*types.KeyofType); ok {
+		if objType, ok := keyofType.OperandType.(*types.ObjectType); ok {
+			var keyTypes []types.Type
+			for propName := range objType.Properties {
+				keyTypes = append(keyTypes, &types.LiteralType{Value: vm.String(propName)})
+			}
+			if len(keyTypes) > 0 {
+				checkType = types.NewUnionType(keyTypes...)
+			}
+		}
+	}
+
+	// Distributive conditional types: distribute over union check types
+	if unionCheck, ok := checkType.(*types.UnionType); ok {
+		var resultTypes []types.Type
+		for _, member := range unionCheck.Types {
+			result := c.computeConditionalType(member, extendsType, trueType, falseType)
+			if result != types.Never {
+				resultTypes = append(resultTypes, result)
+			}
+		}
+		if len(resultTypes) == 0 {
+			return types.Never
+		}
+		return types.NewUnionType(resultTypes...)
+	}
+
+	// Non-union: evaluate directly
+	return c.computeConditionalType(checkType, extendsType, trueType, falseType)
+}
+
 // substituteInType performs type substitution based on a substitution map
 func (c *Checker) substituteInType(typ types.Type, substitutions map[string]types.Type) types.Type {
 	if typ == nil {
@@ -2119,6 +2237,22 @@ func (c *Checker) substituteInType(typ types.Type, substitutions map[string]type
 			ObjectType: substitutedObject,
 			IndexType:  substitutedIndex,
 		}
+
+	case *types.ConditionalType:
+		substitutedCheck := c.substituteInType(t.CheckType, substitutions)
+		substitutedExtends := c.substituteInType(t.ExtendsType, substitutions)
+		substitutedTrue := c.substituteInType(t.TrueType, substitutions)
+		substitutedFalse := c.substituteInType(t.FalseType, substitutions)
+		// After substitution, try to evaluate the conditional type
+		// This handles Exclude<keyof T, K> by distributing over the union
+		return c.evaluateConditionalType(substitutedCheck, substitutedExtends, substitutedTrue, substitutedFalse)
+
+	case *types.UnionType:
+		substitutedMembers := make([]types.Type, len(t.Types))
+		for i, member := range t.Types {
+			substitutedMembers[i] = c.substituteInType(member, substitutions)
+		}
+		return types.NewUnionType(substitutedMembers...)
 
 	default:
 		return typ

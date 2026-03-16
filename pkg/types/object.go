@@ -485,6 +485,24 @@ func (ot *ObjectType) GetEffectiveProperties() map[string]Type {
 	return result
 }
 
+// IsPropertyOptional checks whether a property is optional, including inherited properties
+func (ot *ObjectType) IsPropertyOptional(name string) bool {
+	if ot.OptionalProperties != nil {
+		if opt, exists := ot.OptionalProperties[name]; exists {
+			return opt
+		}
+	}
+	// Check base types
+	for _, baseType := range ot.BaseTypes {
+		if baseObj, ok := baseType.(*ObjectType); ok {
+			if baseObj.IsPropertyOptional(name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // AddCallSignature adds a call signature to this ObjectType
 func (ot *ObjectType) AddCallSignature(sig *Signature) {
 	ot.CallSignatures = append(ot.CallSignatures, sig)

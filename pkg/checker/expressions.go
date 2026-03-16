@@ -934,9 +934,24 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				propertyName := c.extractPropertyName(node.Property)
 				if objType, ok := types.GetWidenedType(objectType).(*types.ObjectType); ok {
 					if propType, found := objType.Properties[propertyName]; found {
-						if unionType, ok := propType.(*types.UnionType); ok {
-							// Compute complement: union minus the narrowed type
-							remainingType := unionType.RemoveType(complementType)
+						// For optional properties, add undefined to the type
+						effectivePropType := propType
+						if objType.IsPropertyOptional(propertyName) {
+							effectivePropType = types.NewUnionType(propType, types.Undefined)
+						}
+						if unionType, ok := effectivePropType.(*types.UnionType); ok {
+							// Compute complement: union minus the narrowed type(s)
+							var remainingType types.Type = effectivePropType
+							if complementUnion, ok := complementType.(*types.UnionType); ok {
+								// Remove each member of the complement union
+								for _, ct := range complementUnion.Types {
+									if ut, ok := remainingType.(*types.UnionType); ok {
+										remainingType = ut.RemoveType(ct)
+									}
+								}
+							} else {
+								remainingType = unionType.RemoveType(complementType)
+							}
 							debugPrintf("// [MemberExpr] Using complement narrowing for %s: %s (removing %s)\n", memberKey, remainingType.String(), complementType.String())
 							node.SetComputedType(remainingType)
 							return
@@ -961,8 +976,22 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						propertyName := c.extractPropertyName(node.Property)
 						if objType, ok := types.GetWidenedType(objectType).(*types.ObjectType); ok {
 							if propType, found := objType.Properties[propertyName]; found {
-								if unionType, ok := propType.(*types.UnionType); ok {
-									remainingType := unionType.RemoveType(complementType)
+								// For optional properties, add undefined to the type
+								effectivePropType := propType
+								if objType.IsPropertyOptional(propertyName) {
+									effectivePropType = types.NewUnionType(propType, types.Undefined)
+								}
+								if unionType, ok := effectivePropType.(*types.UnionType); ok {
+									var remainingType types.Type = effectivePropType
+									if complementUnion, ok := complementType.(*types.UnionType); ok {
+										for _, ct := range complementUnion.Types {
+											if ut, ok := remainingType.(*types.UnionType); ok {
+												remainingType = ut.RemoveType(ct)
+											}
+										}
+									} else {
+										remainingType = unionType.RemoveType(complementType)
+									}
 									debugPrintf("// [MemberExpr] Using complement narrowing from outer env for %s: %s\n", memberKey, remainingType.String())
 									node.SetComputedType(remainingType)
 									return
@@ -1066,6 +1095,10 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						resultType = types.Never
 					} else {
 						resultType = fieldType
+						// Optional properties have type T | undefined
+						if obj.IsPropertyOptional(propertyName) {
+							resultType = types.NewUnionType(fieldType, types.Undefined)
+						}
 					}
 				} else {
 					// Property not found in explicit properties - check index signatures
