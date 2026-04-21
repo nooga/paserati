@@ -18,7 +18,7 @@ func (p *Parser) parseEnumDeclarationStatement() *ExpressionStatement {
 }
 
 // parseConstEnumDeclarationStatement parses a const enum declaration statement
-func (p *Parser) parseConstEnumDeclarationStatement(constToken lexer.Token) *ExpressionStatement {
+func (p *Parser) parseConstEnumDeclarationStatement(constToken *lexer.Token) *ExpressionStatement {
 	enumDecl := p.parseEnumDeclaration(true) // true for const enum
 	if enumDecl == nil {
 		return nil
@@ -95,7 +95,7 @@ func (p *Parser) parseEnumDeclaration(isConst bool) *EnumDeclaration {
 // Syntax: MemberName [= value]
 func (p *Parser) parseEnumMember() *EnumMember {
 	// Enum members can be identifiers, keywords (used as names), or string literals
-	var memberToken lexer.Token
+	var memberToken *lexer.Token
 	var name *Identifier
 
 	if p.curTokenIs(lexer.STRING) {

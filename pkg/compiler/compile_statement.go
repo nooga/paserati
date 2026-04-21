@@ -90,7 +90,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			} else {
 				body = &parser.BlockStatement{}
 			}
-			minimalFuncLit := &parser.FunctionLiteral{Body: body}
+			minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 			c.emitClosure(closureReg, funcConstIndex, minimalFuncLit, freeSymbols)
 
 			// 4. Update the symbol table entry for the variable with the closure register
@@ -375,7 +375,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			} else {
 				body = &parser.BlockStatement{}
 			}
-			minimalFuncLit := &parser.FunctionLiteral{Body: body}
+			minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 			c.emitClosure(closureReg, funcConstIndex, minimalFuncLit, freeSymbols)
 
 			if preDefinedReg == nilRegister {
@@ -663,7 +663,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			} else {
 				body = &parser.BlockStatement{}
 			}
-			minimalFuncLit := &parser.FunctionLiteral{Body: body}
+			minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 			c.emitClosure(closureReg, funcConstIndex, minimalFuncLit, freeSymbols)
 
 			// 4. Update the symbol table entry for the const with the closure register

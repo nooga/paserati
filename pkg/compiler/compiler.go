@@ -3386,7 +3386,7 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 			}
 		} else {
 			// Variable is from an outer function's scope
-			dummyNode := &parser.Identifier{Token: lexer.Token{}, Value: freeSym.Name}
+			dummyNode := &parser.Identifier{Token: &lexer.Token{}, Value: freeSym.Name}
 			enclosingFreeIndex := c.addFreeSymbol(dummyNode, &enclosingSymbol)
 			debugPrintf("// [emitClosureGeneric] Free '%s' is from Outer function, upvalue index=%d\n", freeSym.Name, enclosingFreeIndex)
 			if enclosingFreeIndex > 255 {

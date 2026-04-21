@@ -1181,7 +1181,7 @@ func (p *Parser) parseComputedClassMemberAsync(isStatic, isReadonly, isPublic, i
 }
 
 // parseComputedMethod parses a computed method in a class
-func (p *Parser) parseComputedMethod(bracketToken lexer.Token, keyExpr Expression, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, isAsync bool) interface{} {
+func (p *Parser) parseComputedMethod(bracketToken *lexer.Token, keyExpr Expression, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, isAsync bool) interface{} {
 	// Try to parse type parameters: [expr]<T, U>()
 	typeParameters := p.tryParseTypeParameters()
 
@@ -1297,7 +1297,7 @@ func (p *Parser) parseComputedMethod(bracketToken lexer.Token, keyExpr Expressio
 }
 
 // parseComputedProperty parses a computed property in a class
-func (p *Parser) parseComputedProperty(bracketToken lexer.Token, keyExpr Expression, isStatic, isReadonly, isPublic, isPrivate, isProtected bool) *PropertyDefinition {
+func (p *Parser) parseComputedProperty(bracketToken *lexer.Token, keyExpr Expression, isStatic, isReadonly, isPublic, isPrivate, isProtected bool) *PropertyDefinition {
 	// Check for optional marker '?' first
 	var isOptional bool
 	if p.peekTokenIs(lexer.QUESTION) {
@@ -1378,7 +1378,7 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 	}
 
 	var methodName Expression
-	var methodToken lexer.Token
+	var methodToken *lexer.Token
 
 	if p.curTokenIs(lexer.LBRACKET) {
 		// Computed generator method: *[expr]() { ... }

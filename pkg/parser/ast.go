@@ -77,7 +77,7 @@ func (p *Program) String() string {
 // LetStatement represents a `let` variable declaration.
 // let <Name> : <TypeAnnotation> = <Value>;
 type LetStatement struct {
-	Token        lexer.Token      // The lexer.LET token
+	Token        *lexer.Token      // The lexer.LET token
 	Declarations []*VarDeclarator // List of variable declarations
 	Declare      bool             // True for ambient declarations (declare let)
 	// Legacy fields for backward compatibility (first declaration)
@@ -125,7 +125,7 @@ type VarDeclarator struct {
 // var <Name> : <TypeAnnotation> = <Value>;
 // Supports multiple declarations: var x, y = 1, z: string = "hello";
 type VarStatement struct {
-	Token        lexer.Token      // The lexer.VAR token
+	Token        *lexer.Token      // The lexer.VAR token
 	Declarations []*VarDeclarator // List of variable declarations
 	Declare      bool             // True for ambient declarations (declare var)
 	// Legacy fields for backward compatibility
@@ -165,7 +165,7 @@ func (vs *VarStatement) String() string {
 // const <Name> : <TypeAnnotation> = <Value>;
 // Note: Structurally identical to LetStatement for now, but semantically different.
 type ConstStatement struct {
-	Token        lexer.Token      // The lexer.CONST token
+	Token        *lexer.Token      // The lexer.CONST token
 	Declarations []*VarDeclarator // List of variable declarations
 	Declare      bool             // True for ambient declarations (declare const)
 	// Legacy fields for backward compatibility (first declaration)
@@ -199,7 +199,7 @@ func (cs *ConstStatement) String() string {
 // ReturnStatement represents a `return` statement.
 // return <ReturnValue>;
 type ReturnStatement struct {
-	Token       lexer.Token // The lexer.RETURN token
+	Token       *lexer.Token // The lexer.RETURN token
 	ReturnValue Expression  // The expression to return
 }
 
@@ -218,7 +218,7 @@ func (rs *ReturnStatement) String() string {
 // ExpressionStatement represents a statement consisting of a single expression.
 // <expression>;
 type ExpressionStatement struct {
-	Token      lexer.Token // The first token of the expression
+	Token      *lexer.Token // The first token of the expression
 	Expression Expression
 }
 
@@ -240,7 +240,7 @@ func (es *ExpressionStatement) String() string {
 // Identifier represents an identifier in the source code.
 type Identifier struct {
 	BaseExpression // Embed base for ComputedType
-	Token          lexer.Token
+	Token          *lexer.Token
 	Value          string // The name of the identifier
 	IsConstant     bool   // Populated by Type Checker
 	IsFromWith     bool   // True if this identifier comes from a with object (populated by Type Checker)
@@ -254,7 +254,7 @@ func (i *Identifier) String() string       { return i.Value }
 // Syntax: #field in obj - checks if private field exists on object
 type PrivateIdentifier struct {
 	BaseExpression
-	Token lexer.Token
+	Token *lexer.Token
 	Value string // The name including the # prefix (e.g., "#field")
 }
 
@@ -267,7 +267,7 @@ func (pi *PrivateIdentifier) String() string       { return pi.Value }
 // <Name> : <TypeAnnotation>
 // Also supports destructuring patterns: ([a, b]: [number, number]) or ({x, y}: Point)
 type Parameter struct {
-	Token           lexer.Token // The token of the parameter name
+	Token           *lexer.Token // The token of the parameter name
 	Name            *Identifier // For simple parameters
 	Pattern         Expression  // For destructuring patterns (ArrayParameterPattern/ObjectParameterPattern)
 	TypeAnnotation  Expression  // Parsed type node (e.g., *Identifier)
@@ -327,7 +327,7 @@ func (p *Parameter) String() string {
 // RestParameter represents a rest parameter (...args) in function definitions
 type RestParameter struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The '...' token
+	Token          *lexer.Token // The '...' token
 	Name           *Identifier // The parameter name (e.g., 'args' in ...args)
 	Pattern        Expression  // Optional destructuring pattern (e.g., ...[x, y] or ...{a, b})
 	TypeAnnotation Expression  // Optional type annotation (e.g., 'string[]' in ...args: string[])
@@ -354,7 +354,7 @@ func (rp *RestParameter) String() string {
 // Used in function<T, U extends string, V = DefaultType>() syntax
 type TypeParameter struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The identifier token (e.g., 'T')
+	Token          *lexer.Token // The identifier token (e.g., 'T')
 	Name           *Identifier // The type parameter name
 	Constraint     Expression  // Optional constraint (e.g., 'string' in 'T extends string')
 	DefaultType    Expression  // Optional default type (e.g., 'string' in 'T = string')
@@ -381,7 +381,7 @@ func (tp *TypeParameter) String() string {
 // SpreadElement represents spread syntax (...arr) in function calls and other contexts
 type SpreadElement struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The '...' token
+	Token          *lexer.Token // The '...' token
 	Argument       Expression  // The expression being spread (e.g., 'arr' in ...arr)
 }
 
@@ -399,7 +399,7 @@ func (se *SpreadElement) String() string {
 // BooleanLiteral represents `true` or `false`.
 type BooleanLiteral struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.TRUE or lexer.FALSE token
+	Token          *lexer.Token // The lexer.TRUE or lexer.FALSE token
 	Value          bool
 }
 
@@ -410,7 +410,7 @@ func (b *BooleanLiteral) String() string       { return b.Token.Literal }
 // NumberLiteral represents numeric literals (integers or floats).
 type NumberLiteral struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.NUMBER token
+	Token          *lexer.Token // The lexer.NUMBER token
 	Value          float64     // Store as float64 for simplicity
 }
 
@@ -421,7 +421,7 @@ func (n *NumberLiteral) String() string       { return n.Token.Literal }
 // BigIntLiteral represents BigInt literals (e.g., 123n).
 type BigIntLiteral struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.BIGINT token
+	Token          *lexer.Token // The lexer.BIGINT token
 	Value          string      // Store the numeric part (without 'n' suffix)
 }
 
@@ -432,7 +432,7 @@ func (b *BigIntLiteral) String() string       { return b.Token.Literal }
 // StringLiteral represents string literals.
 type StringLiteral struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.STRING token
+	Token          *lexer.Token // The lexer.STRING token
 	Value          string
 }
 
@@ -444,7 +444,7 @@ func (s *StringLiteral) String() string       { return s.Token.Literal } // Mayb
 // `hello ${name} world` becomes: ["hello ", Expression("name"), " world"]
 type TemplateLiteral struct {
 	BaseExpression             // Embed base for ComputedType (always string)
-	Token          lexer.Token // The opening '`' token
+	Token          *lexer.Token // The opening '`' token
 	Parts          []Node      // Alternating string parts and expressions
 }
 
@@ -487,7 +487,7 @@ func (tsp *TemplateStringPart) String() string       { return tsp.Value }
 // TaggedTemplateExpression represents a tagged template: tag`...`
 type TaggedTemplateExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // token of the tag expression's first token (for position)
+	Token          *lexer.Token // token of the tag expression's first token (for position)
 	Tag            Expression  // the tag function/expression
 	Template       *TemplateLiteral
 }
@@ -501,7 +501,7 @@ func (tte *TaggedTemplateExpression) String() string {
 // NullLiteral represents the `null` keyword.
 type NullLiteral struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.NULL token
+	Token          *lexer.Token // The lexer.NULL token
 }
 
 func (nl *NullLiteral) expressionNode()      {}
@@ -511,7 +511,7 @@ func (nl *NullLiteral) String() string       { return nl.Token.Literal }
 // UndefinedLiteral represents the `undefined` keyword.
 type UndefinedLiteral struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.UNDEFINED token
+	Token          *lexer.Token // The lexer.UNDEFINED token
 }
 
 func (ul *UndefinedLiteral) expressionNode()      {}
@@ -521,7 +521,7 @@ func (ul *UndefinedLiteral) String() string       { return ul.Token.Literal }
 // RegexLiteral represents a regular expression literal /pattern/flags.
 type RegexLiteral struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.REGEX_LITERAL token
+	Token          *lexer.Token // The lexer.REGEX_LITERAL token
 	Pattern        string      // The pattern part (without slashes)
 	Flags          string      // The flags part
 }
@@ -533,7 +533,7 @@ func (rl *RegexLiteral) String() string       { return rl.Token.Literal }
 // ThisExpression represents the `this` keyword.
 type ThisExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.THIS token
+	Token          *lexer.Token // The lexer.THIS token
 }
 
 func (te *ThisExpression) expressionNode()      {}
@@ -543,7 +543,7 @@ func (te *ThisExpression) String() string       { return "this" }
 // SuperExpression represents super keyword expressions (super(), super.method())
 type SuperExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.SUPER token
+	Token          *lexer.Token // The lexer.SUPER token
 }
 
 func (se *SuperExpression) expressionNode()      {}
@@ -553,7 +553,7 @@ func (se *SuperExpression) String() string       { return "super" }
 // NewTargetExpression represents the new.target meta-property
 type NewTargetExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.NEW token
+	Token          *lexer.Token // The lexer.NEW token
 }
 
 func (nte *NewTargetExpression) expressionNode()      {}
@@ -563,7 +563,7 @@ func (nte *NewTargetExpression) String() string       { return "new.target" }
 // ImportMetaExpression represents the import.meta meta-property
 type ImportMetaExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.IMPORT token
+	Token          *lexer.Token // The lexer.IMPORT token
 }
 
 func (ime *ImportMetaExpression) expressionNode()      {}
@@ -574,7 +574,7 @@ func (ime *ImportMetaExpression) String() string       { return "import.meta" }
 // import(specifier) or import(specifier, options) returns a Promise that resolves to a module namespace object
 type DynamicImportExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.IMPORT token
+	Token          *lexer.Token // The lexer.IMPORT token
 	Source         Expression  // The module specifier expression
 	Options        Expression  // Optional import options expression (for import attributes)
 }
@@ -592,7 +592,7 @@ func (die *DynamicImportExpression) String() string {
 // import.defer(specifier) returns a Promise that resolves to a deferred module namespace object
 type DeferredImportExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The lexer.IMPORT token
+	Token          *lexer.Token // The lexer.IMPORT token
 	Source         Expression  // The module specifier expression
 }
 
@@ -607,7 +607,7 @@ func (die *DeferredImportExpression) String() string {
 // Or anonymous: function(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 type FunctionLiteral struct {
 	BaseExpression                        // Embed base for ComputedType (Function type)
-	Token                lexer.Token      // The 'function' token
+	Token                *lexer.Token      // The 'function' token
 	Name                 *Identifier      // Optional function name
 	IsGenerator          bool             // true for function* (generator functions)
 	IsAsync              bool             // true for async functions
@@ -673,7 +673,7 @@ func (fl *FunctionLiteral) String() string {
 // <Left Expression (Identifier)> = <Value Expression>
 type AssignmentExpression struct {
 	BaseExpression               // Embed base for ComputedType (usually type of Value)
-	Token            lexer.Token // The assignment token (e.g., '=', '+=')
+	Token            *lexer.Token // The assignment token (e.g., '=', '+=')
 	Operator         string      // The operator literal (e.g., "=", "+=")
 	Left             Expression  // The target of the assignment (must be Identifier for now)
 	Value            Expression  // The value being assigned
@@ -699,7 +699,7 @@ func (ae *AssignmentExpression) String() string {
 // Currently restricted to identifiers as arguments.
 type UpdateExpression struct {
 	BaseExpression             // Embed base for ComputedType (usually number)
-	Token          lexer.Token // The '++' or '--' token
+	Token          *lexer.Token // The '++' or '--' token
 	Operator       string      // "++" or "--"
 	Argument       Expression  // The expression being updated (e.g., Identifier)
 	Prefix         bool        // true if operator is prefix (++x), false if postfix (x++)
@@ -726,7 +726,7 @@ func (ue *UpdateExpression) String() string {
 // (<Parameters>) => <BodyExpression | BodyStatements>
 type ArrowFunctionLiteral struct {
 	BaseExpression                        // Embed base for ComputedType (Function type)
-	Token                lexer.Token      // The '=>' token
+	Token                *lexer.Token      // The '=>' token
 	IsAsync              bool             // true for async arrow functions
 	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	Parameters           []*Parameter     // Regular parameters
@@ -790,7 +790,7 @@ func (afl *ArrowFunctionLiteral) String() string {
 // BlockStatement represents a sequence of statements enclosed in braces.
 // { <statement1>; <statement2>; ... }
 type BlockStatement struct {
-	Token               lexer.Token // The { token
+	Token               *lexer.Token // The { token
 	Statements          []Statement
 	HoistedDeclarations map[string]Expression // Changed: Store hoisted Expression within this block
 }
@@ -820,7 +820,7 @@ func (bs *BlockStatement) String() string {
 // if (<Condition>) { <Consequence> } else { <Alternative> }
 type IfExpression struct {
 	BaseExpression             // Embed base for ComputedType (Union of consequence/alternative types?)
-	Token          lexer.Token // The 'if' token
+	Token          *lexer.Token // The 'if' token
 	Condition      Expression
 	Consequence    *BlockStatement
 	Alternative    *BlockStatement // Optional
@@ -848,7 +848,7 @@ func (ie *IfExpression) String() string {
 
 // IfStatement represents a 'if (condition) { consequence } else { alternative }' statement.
 type IfStatement struct {
-	Token       lexer.Token // The 'if' token
+	Token       *lexer.Token // The 'if' token
 	Condition   Expression
 	Consequence *BlockStatement
 	Alternative *BlockStatement // Optional
@@ -878,7 +878,7 @@ func (is *IfStatement) String() string {
 
 // WhileStatement represents a 'while (condition) { body }' statement.
 type WhileStatement struct {
-	Token     lexer.Token // The 'while' token
+	Token     *lexer.Token // The 'while' token
 	Condition Expression
 	Body      *BlockStatement
 }
@@ -905,7 +905,7 @@ func (ws *WhileStatement) String() string {
 // Initializer can be a LetStatement or an ExpressionStatement.
 // Condition and Update are optional expressions.
 type ForStatement struct {
-	Token       lexer.Token // The 'for' token
+	Token       *lexer.Token // The 'for' token
 	Initializer Statement   // Can be *LetStatement or *ExpressionStatement or nil
 	Condition   Expression  // Can be nil
 	Update      Expression  // Can be nil
@@ -947,7 +947,7 @@ func (fs *ForStatement) String() string {
 // a variable declaration like *LetStatement (e.g., for (let item of items))
 // For async iteration, use 'for await (variable of asyncIterable)'
 type ForOfStatement struct {
-	Token    lexer.Token     // The 'for' token
+	Token    *lexer.Token     // The 'for' token
 	Variable Statement       // Can be *LetStatement or *ConstStatement or *ExpressionStatement with *Identifier
 	Iterable Expression      // The expression being iterated over (array, string, etc.)
 	Body     *BlockStatement // The loop body
@@ -979,7 +979,7 @@ func (fos *ForOfStatement) String() string {
 // Variable can be either a *Identifier (e.g., for (key in obj)) or
 // a variable declaration like *LetStatement (e.g., for (let key in obj))
 type ForInStatement struct {
-	Token    lexer.Token     // The 'for' token
+	Token    *lexer.Token     // The 'for' token
 	Variable Statement       // Can be *LetStatement or *ConstStatement or *ExpressionStatement with *Identifier
 	Object   Expression      // The object being iterated over
 	Body     *BlockStatement // The loop body
@@ -1006,7 +1006,7 @@ func (fis *ForInStatement) String() string {
 
 // --- New: Labeled Statement ---
 type LabeledStatement struct {
-	Token     lexer.Token // The label identifier token
+	Token     *lexer.Token // The label identifier token
 	Label     *Identifier // The label name
 	Statement Statement   // The statement being labeled
 }
@@ -1023,7 +1023,7 @@ func (ls *LabeledStatement) String() string {
 
 // --- New: Break Statement ---
 type BreakStatement struct {
-	Token lexer.Token // The 'break' token
+	Token *lexer.Token // The 'break' token
 	Label *Identifier // Optional label to break to
 }
 
@@ -1042,7 +1042,7 @@ func (bs *BreakStatement) String() string {
 
 // --- New: Empty Statement ---
 type EmptyStatement struct {
-	Token lexer.Token // The ';' token
+	Token *lexer.Token // The ';' token
 }
 
 func (es *EmptyStatement) statementNode()       {}
@@ -1051,7 +1051,7 @@ func (es *EmptyStatement) String() string       { return ";" }
 
 // --- New: Continue Statement ---
 type ContinueStatement struct {
-	Token lexer.Token // The 'continue' token
+	Token *lexer.Token // The 'continue' token
 	Label *Identifier // Optional label to continue to
 }
 
@@ -1072,7 +1072,7 @@ func (cs *ContinueStatement) String() string {
 
 // DoWhileStatement represents a `do { ... } while (condition);` loop.
 type DoWhileStatement struct {
-	Token     lexer.Token     // The 'do' token
+	Token     *lexer.Token     // The 'do' token
 	Body      *BlockStatement // The loop body
 	Condition Expression      // The condition to check after the body
 }
@@ -1093,7 +1093,7 @@ func (dws *DoWhileStatement) String() string {
 
 // WithStatement represents a 'with (expression) statement' statement.
 type WithStatement struct {
-	Token      lexer.Token // The 'with' token
+	Token      *lexer.Token // The 'with' token
 	Expression Expression  // The object expression to extend the scope with
 	Body       Statement   // The statement to execute with the extended scope
 }
@@ -1117,7 +1117,7 @@ func (ws *WithStatement) String() string {
 
 // TryStatement represents a try/catch/finally block.
 type TryStatement struct {
-	Token        lexer.Token     // The 'try' token
+	Token        *lexer.Token     // The 'try' token
 	Body         *BlockStatement // The try block
 	CatchClause  *CatchClause    // Optional catch clause
 	FinallyBlock *BlockStatement // Optional finally block (Phase 3)
@@ -1142,7 +1142,7 @@ func (ts *TryStatement) String() string {
 
 // CatchClause represents a catch block.
 type CatchClause struct {
-	Token     lexer.Token     // The 'catch' token
+	Token     *lexer.Token     // The 'catch' token
 	Parameter Expression      // Exception variable: identifier or destructuring pattern (optional in ES2019+)
 	Body      *BlockStatement // The catch block
 }
@@ -1162,7 +1162,7 @@ func (cc *CatchClause) String() string {
 
 // ThrowStatement represents a throw statement.
 type ThrowStatement struct {
-	Token lexer.Token // The 'throw' token
+	Token *lexer.Token // The 'throw' token
 	Value Expression  // The expression to throw
 }
 
@@ -1181,7 +1181,7 @@ func (ths *ThrowStatement) String() string {
 
 // DebuggerStatement represents a debugger statement (no-op in runtime).
 type DebuggerStatement struct {
-	Token lexer.Token // The 'debugger' token
+	Token *lexer.Token // The 'debugger' token
 }
 
 func (ds *DebuggerStatement) statementNode()       {}
@@ -1195,7 +1195,7 @@ func (ds *DebuggerStatement) String() string       { return "debugger;" }
 // e.g., !true, -15
 type PrefixExpression struct {
 	BaseExpression                // Embed base for ComputedType
-	Token            lexer.Token // The prefix token, e.g. ! or -
+	Token            *lexer.Token // The prefix token, e.g. ! or -
 	Operator         string      // "!" or "-"
 	Right            Expression  // The expression to the right of the operator
 	Parenthesized    bool        // True if this expression was wrapped in parens: (-x)
@@ -1221,7 +1221,7 @@ func (pe *PrefixExpression) String() string {
 // typeof <operand>
 type TypeofExpression struct {
 	BaseExpression             // Embed base for ComputedType (always string)
-	Token          lexer.Token // The 'typeof' token
+	Token          *lexer.Token // The 'typeof' token
 	Operand        Expression  // The expression whose type we want to get
 }
 
@@ -1243,7 +1243,7 @@ func (te *TypeofExpression) String() string {
 // yield [expression] or yield* [expression] for delegation
 type YieldExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The 'yield' token
+	Token          *lexer.Token // The 'yield' token
 	Value          Expression  // The expression to yield (optional, can be nil)
 	Delegate       bool        // True for yield* delegation
 }
@@ -1270,7 +1270,7 @@ func (ye *YieldExpression) String() string {
 // await <Argument>
 type AwaitExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The 'await' token
+	Token          *lexer.Token // The 'await' token
 	Argument       Expression  // The expression to await (typically a Promise)
 }
 
@@ -1291,7 +1291,7 @@ func (ae *AwaitExpression) String() string {
 // TypeAssertionExpression represents a type assertion expression (value as Type)
 type TypeAssertionExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The 'as' token
+	Token          *lexer.Token // The 'as' token
 	Expression     Expression  // The expression being asserted
 	TargetType     Expression  // The target type annotation
 }
@@ -1318,7 +1318,7 @@ func (tae *TypeAssertionExpression) String() string {
 // SatisfiesExpression represents a satisfies expression (value satisfies Type)
 type SatisfiesExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The 'satisfies' token
+	Token          *lexer.Token // The 'satisfies' token
 	Expression     Expression  // The expression being validated
 	TargetType     Expression  // The target type annotation
 }
@@ -1346,7 +1346,7 @@ func (se *SatisfiesExpression) String() string {
 // This is a TypeScript-only operator that asserts a value is not null/undefined
 type NonNullExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The '!' token
+	Token          *lexer.Token // The '!' token
 	Expression     Expression  // The expression being asserted as non-null
 }
 
@@ -1369,7 +1369,7 @@ func (nne *NonNullExpression) String() string {
 // e.g., 5 + 5, x == y
 type InfixExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The operator token, e.g. +
+	Token          *lexer.Token // The operator token, e.g. +
 	Left           Expression  // The expression to the left of the operator
 	Operator       string      // e.g., "+", "-", "*", "/", "==", "!=", "<", ">"
 	Right          Expression  // The expression to the right of the operator
@@ -1395,7 +1395,7 @@ func (ie *InfixExpression) String() string {
 // Function can be an identifier or a function literal.
 type CallExpression struct {
 	BaseExpression                   // Embed base for ComputedType (Function's return type)
-	Token               lexer.Token  // The '(' token
+	Token               *lexer.Token  // The '(' token
 	Function            Expression   // Identifier or FunctionLiteral being called
 	TypeArguments       []Expression // Type arguments (e.g., <string, number>)
 	Arguments           []Expression // List of arguments
@@ -1441,7 +1441,7 @@ func (ce *CallExpression) String() string {
 // new <Constructor>(<Arguments>)
 type NewExpression struct {
 	BaseExpression              // Embed base for ComputedType (constructed object type)
-	Token          lexer.Token  // The 'new' token
+	Token          *lexer.Token  // The 'new' token
 	Constructor    Expression   // Identifier or function being called as constructor
 	TypeArguments  []Expression // Type arguments (e.g., <string, number>)
 	Arguments      []Expression // List of arguments
@@ -1490,7 +1490,7 @@ func (ne *NewExpression) String() string {
 // <Condition> ? <Consequence> : <Alternative>
 type TernaryExpression struct {
 	BaseExpression             // Embed base for ComputedType (Union of consequence/alternative types?)
-	Token          lexer.Token // The '?' token
+	Token          *lexer.Token // The '?' token
 	Condition      Expression
 	Consequence    Expression
 	Alternative    Expression
@@ -1517,7 +1517,7 @@ func (te *TernaryExpression) String() string {
 
 // TypeAliasStatement represents a `type Name = Type;` declaration.
 type TypeAliasStatement struct {
-	Token          lexer.Token      // The 'type' token
+	Token          *lexer.Token      // The 'type' token
 	Name           *Identifier      // The name of the alias
 	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	Type           Expression       // The type expression being aliased
@@ -1554,7 +1554,7 @@ func (tas *TypeAliasStatement) String() string {
 // For now, just binary unions (A | B). Can be nested for more types.
 type UnionTypeExpression struct {
 	BaseExpression             // Embed base for ComputedType (which will be a UnionType)
-	Token          lexer.Token // The '|' token
+	Token          *lexer.Token // The '|' token
 	Left           Expression  // The type expression on the left
 	Right          Expression  // The type expression on the right
 }
@@ -1580,7 +1580,7 @@ func (ute *UnionTypeExpression) String() string {
 // For now, just binary intersections (A & B). Can be nested for more types.
 type IntersectionTypeExpression struct {
 	BaseExpression             // Embed base for ComputedType (which will be an IntersectionType)
-	Token          lexer.Token // The '&' token
+	Token          *lexer.Token // The '&' token
 	Left           Expression  // The type expression on the left
 	Right          Expression  // The type expression on the right
 }
@@ -1605,7 +1605,7 @@ func (ite *IntersectionTypeExpression) String() string {
 // GenericTypeRef represents a generic type reference (e.g., Array<string>, Promise<number>).
 type GenericTypeRef struct {
 	BaseExpression              // Embed base for ComputedType
-	Token          lexer.Token  // The identifier token
+	Token          *lexer.Token  // The identifier token
 	Name           *Identifier  // The generic type name (e.g., "Array")
 	TypeArguments  []Expression // The type arguments (e.g., [string] in Array<string>)
 }
@@ -1633,7 +1633,7 @@ func (g *GenericTypeRef) String() string {
 // ArrayLiteral represents an array literal expression (e.g., [1, "two"]).
 type ArrayLiteral struct {
 	BaseExpression             // Embed base for ComputedType (e.g., types.ArrayType)
-	Token          lexer.Token // The '[' token
+	Token          *lexer.Token // The '[' token
 	Elements       []Expression
 }
 
@@ -1661,7 +1661,7 @@ func (al *ArrayLiteral) String() string {
 // ArrayTypeExpression represents an array type syntax (e.g., number[]).
 type ArrayTypeExpression struct {
 	BaseExpression             // Embed base for ComputedType (types.ArrayType)
-	Token          lexer.Token // The '[' token
+	Token          *lexer.Token // The '[' token
 	ElementType    Expression  // The type expression for the elements
 }
 
@@ -1682,7 +1682,7 @@ func (ate *ArrayTypeExpression) String() string {
 // TupleTypeExpression represents a tuple type syntax (e.g., [string, number, boolean?]).
 type TupleTypeExpression struct {
 	BaseExpression              // Embed base for ComputedType (types.TupleType)
-	Token          lexer.Token  // The '[' token
+	Token          *lexer.Token  // The '[' token
 	ElementTypes   []Expression // The type expressions for each element
 	OptionalFlags  []bool       // Which elements are optional (same length as ElementTypes)
 	RestElement    Expression   // Optional rest element type (...T[])
@@ -1732,7 +1732,7 @@ func (tte *TupleTypeExpression) String() string {
 // IndexExpression represents accessing an element by index (e.g., myArray[i]).
 type IndexExpression struct {
 	BaseExpression             // Embed base for ComputedType (element type)
-	Token          lexer.Token // The '[' token
+	Token          *lexer.Token // The '[' token
 	Left           Expression  // The expression evaluating to the array/object being indexed
 	Index          Expression  // The expression evaluating to the index
 }
@@ -1757,7 +1757,7 @@ func (ie *IndexExpression) String() string {
 // MemberExpression represents accessing a property (e.g., object.property).
 type MemberExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The '.' token
+	Token          *lexer.Token // The '.' token
 	Object         Expression  // The expression on the left (e.g., identifier, call result)
 	Property       Expression  // The property access (identifier or computed expression)
 }
@@ -1781,7 +1781,7 @@ func (me *MemberExpression) String() string {
 // For long chains like obj?.a.b.c, the entire chain after ?. is captured to enable proper short-circuiting.
 type OptionalChainingExpression struct {
 	BaseExpression               // Embed base for ComputedType
-	Token          lexer.Token   // The '?.' token
+	Token          *lexer.Token   // The '?.' token
 	Object         Expression    // The expression on the left (e.g., identifier, call result)
 	Property       Expression    // The property access (identifier or computed expression)
 	Continuation   Expression    // Optional: continuation of the chain (.b.c, [x], (), etc.) that should short-circuit together
@@ -1808,7 +1808,7 @@ func (oce *OptionalChainingExpression) String() string {
 // OptionalIndexExpression represents optional computed property access (e.g., object?.[expression]).
 type OptionalIndexExpression struct {
 	BaseExpression               // Embed base for ComputedType
-	Token          lexer.Token   // The '?.' token
+	Token          *lexer.Token   // The '?.' token
 	Object         Expression    // The expression on the left (e.g., identifier, call result)
 	Index          Expression    // The index expression (e.g., string, number, variable)
 	Continuation   Expression    // Optional: continuation of the chain that should short-circuit together
@@ -1836,7 +1836,7 @@ func (oie *OptionalIndexExpression) String() string {
 // OptionalCallExpression represents optional function call (e.g., func?.()).
 type OptionalCallExpression struct {
 	BaseExpression               // Embed base for ComputedType
-	Token          lexer.Token   // The '?.' token
+	Token          *lexer.Token   // The '?.' token
 	Function       Expression    // The function expression on the left
 	Arguments      []Expression  // The function arguments
 	Continuation   Expression    // Optional: continuation of the chain that should short-circuit together
@@ -1867,7 +1867,7 @@ func (oce *OptionalCallExpression) String() string {
 
 // SwitchCase represents a single case or default clause within a switch statement.
 type SwitchCase struct {
-	Token     lexer.Token     // The 'case' or 'default' token
+	Token     *lexer.Token     // The 'case' or 'default' token
 	Condition Expression      // The expression to match (nil for default)
 	Body      *BlockStatement // The block of statements to execute
 }
@@ -1896,7 +1896,7 @@ func (sc *SwitchCase) String() string {
 // SwitchStatement represents a switch statement.
 // switch (Expression) { Case* Default? Case* }
 type SwitchStatement struct {
-	Token      lexer.Token   // The 'switch' token
+	Token      *lexer.Token   // The 'switch' token
 	Expression Expression    // The expression being evaluated
 	Cases      []*SwitchCase // The list of case/default clauses
 }
@@ -1933,7 +1933,7 @@ func (ss *SwitchStatement) String() string {
 // import defaultImport, { export1, export2 } from "module"
 // import defaultImport, * as name from "module"
 type ImportDeclaration struct {
-	Token      lexer.Token       // The 'import' token
+	Token      *lexer.Token       // The 'import' token
 	Specifiers []ImportSpecifier // What to import (default, named, namespace)
 	Source     *StringLiteral    // From where ("./module")
 	IsTypeOnly bool              // true for "import type" statements
@@ -2022,7 +2022,7 @@ type ImportSpecifier interface {
 
 // ImportDefaultSpecifier represents: import defaultName from "module"
 type ImportDefaultSpecifier struct {
-	Token lexer.Token // The identifier token
+	Token *lexer.Token // The identifier token
 	Local *Identifier // Local binding name
 }
 
@@ -2032,7 +2032,7 @@ func (ids *ImportDefaultSpecifier) String() string       { return ids.Local.Stri
 
 // ImportNamedSpecifier represents: import { name } or import { name as alias }
 type ImportNamedSpecifier struct {
-	Token      lexer.Token // The imported name token
+	Token      *lexer.Token // The imported name token
 	Imported   *Identifier // Original export name
 	Local      *Identifier // Local binding name (same as Imported if no alias)
 	IsTypeOnly bool        // true for "import { type name }" syntax
@@ -2049,7 +2049,7 @@ func (ins *ImportNamedSpecifier) String() string {
 
 // ImportNamespaceSpecifier represents: import * as name from "module"
 type ImportNamespaceSpecifier struct {
-	Token lexer.Token // The '*' token
+	Token *lexer.Token // The '*' token
 	Local *Identifier // Local binding name
 }
 
@@ -2070,7 +2070,7 @@ type ExportDeclaration interface {
 // export { name1 as alias1 };
 // export { name1 } from "module";
 type ExportNamedDeclaration struct {
-	Token       lexer.Token       // The 'export' token
+	Token       *lexer.Token       // The 'export' token
 	Declaration Statement         // Direct export: export const x = 1
 	Specifiers  []ExportSpecifier // Named exports: export { x, y }
 	Source      *StringLiteral    // Re-export source: export { x } from "mod"
@@ -2112,7 +2112,7 @@ func (end *ExportNamedDeclaration) String() string {
 
 // ExportDefaultDeclaration represents: export default expression
 type ExportDefaultDeclaration struct {
-	Token       lexer.Token // The 'export' token
+	Token       *lexer.Token // The 'export' token
 	Declaration Expression  // The default export expression
 }
 
@@ -2133,7 +2133,7 @@ func (edd *ExportDefaultDeclaration) String() string {
 // Also handles: export * as "string" from "module" (arbitrary module namespace names)
 // And: export * from "module" with { type: "json" } (import attributes)
 type ExportAllDeclaration struct {
-	Token      lexer.Token       // The 'export' token
+	Token      *lexer.Token       // The 'export' token
 	Exported   Expression        // Optional: export * as name from "module" or export * as "string" from "module"
 	Source     *StringLiteral    // The module source
 	IsTypeOnly bool              // true for "export type * from" statements
@@ -2171,7 +2171,7 @@ type ExportSpecifier interface {
 
 // ExportNamedSpecifier represents: export { name } or export { name as alias } or export { name as "string" }
 type ExportNamedSpecifier struct {
-	Token    lexer.Token // The exported name token
+	Token    *lexer.Token // The exported name token
 	Local    Expression  // Local name being exported (Identifier or StringLiteral)
 	Exported Expression  // Export name (Identifier or StringLiteral, same as Local if no alias)
 }
@@ -2194,7 +2194,7 @@ func (ens *ExportNamedSpecifier) String() string {
 // FunctionTypeExpression represents a type like (number, string) => boolean
 type FunctionTypeExpression struct {
 	BaseExpression                  // Embed base for ComputedType (Function type)
-	Token          lexer.Token      // The '(' token starting the parameter list
+	Token          *lexer.Token      // The '(' token starting the parameter list
 	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	Parameters     []Expression     // Slice of Expression nodes representing parameter types
 	RestParameter  Expression       // Optional rest parameter type (e.g., ...args: string[])
@@ -2245,7 +2245,7 @@ func (fte *FunctionTypeExpression) GetComputedType() types.Type { return nil }
 // This is used for utility types like Partial<T>, Readonly<T>, etc.
 type MappedTypeExpression struct {
 	BaseExpression             // Embed base for ComputedType (types.MappedType)
-	Token          lexer.Token // The '{' token
+	Token          *lexer.Token // The '{' token
 	TypeParameter  *Identifier // The iteration variable (e.g., "P" in [P in K])
 	ConstraintType Expression  // The type being iterated over (e.g., K in [P in K])
 	ValueType      Expression  // The resulting value type for each property
@@ -2310,11 +2310,11 @@ func (mte *MappedTypeExpression) GetComputedType() types.Type { return mte.Compu
 type ConditionalTypeExpression struct {
 	BaseExpression             // Embed base for ComputedType (types.ConditionalType)
 	CheckType      Expression  // The type being checked (T in T extends U ? X : Y)
-	ExtendsToken   lexer.Token // The 'extends' token
+	ExtendsToken   *lexer.Token // The 'extends' token
 	ExtendsType    Expression  // The type being extended/checked against (U in T extends U ? X : Y)
-	QuestionToken  lexer.Token // The '?' token
+	QuestionToken  *lexer.Token // The '?' token
 	TrueType       Expression  // The type when condition is true (X in T extends U ? X : Y)
-	ColonToken     lexer.Token // The ':' token
+	ColonToken     *lexer.Token // The ':' token
 	FalseType      Expression  // The type when condition is false (Y in T extends U ? X : Y)
 }
 
@@ -2354,7 +2354,7 @@ func (cte *ConditionalTypeExpression) GetComputedType() types.Type { return cte.
 // TemplateLiteralTypeExpression represents a template literal type like `Hello ${T}!`
 type TemplateLiteralTypeExpression struct {
 	BaseExpression             // Embed base for ComputedType (types.TemplateLiteralType)
-	Token          lexer.Token // The opening '`' token
+	Token          *lexer.Token // The opening '`' token
 	Parts          []Node      // Alternating string parts and type expressions
 }
 
@@ -2392,7 +2392,7 @@ func (tlte *TemplateLiteralTypeExpression) GetComputedType() types.Type { return
 // KeyofTypeExpression represents a keyof type operator like keyof T
 type KeyofTypeExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The 'keyof' token
+	Token          *lexer.Token // The 'keyof' token
 	Type           Expression  // The type to get keys from
 }
 
@@ -2423,7 +2423,7 @@ func (kte *KeyofTypeExpression) GetComputedType() types.Type { return kte.Comput
 // Used in type contexts to extract the type of a value
 type TypeofTypeExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The 'typeof' token
+	Token          *lexer.Token // The 'typeof' token
 	Identifier     string      // The identifier whose type we want to get
 }
 
@@ -2452,7 +2452,7 @@ func (tte *TypeofTypeExpression) GetComputedType() types.Type { return tte.Compu
 // Used within conditional types to infer and capture types
 type InferTypeExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The 'infer' token
+	Token          *lexer.Token // The 'infer' token
 	TypeParameter  string      // The type parameter being inferred (e.g., 'R' in 'infer R')
 }
 
@@ -2481,7 +2481,7 @@ func (ite *InferTypeExpression) GetComputedType() types.Type { return ite.Comput
 // Used in function return types to indicate that the function is a type guard
 type TypePredicateExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The 'is' token
+	Token          *lexer.Token // The 'is' token
 	Parameter      *Identifier // The parameter being tested (e.g., "x" in "x is string")
 	Type           Expression  // The type being tested for
 }
@@ -2516,7 +2516,7 @@ func (tpe *TypePredicateExpression) GetComputedType() types.Type { return tpe.Co
 // Used to access properties of a type using a key type (e.g., Person["name"])
 type IndexedAccessTypeExpression struct {
 	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The '[' token
+	Token          *lexer.Token // The '[' token
 	ObjectType     Expression  // The type being indexed into (e.g., T in T[K])
 	IndexType      Expression  // The key type used for indexing (e.g., K in T[K])
 }
@@ -2582,7 +2582,7 @@ func (op *ObjectProperty) String() string {
 // ShorthandMethod represents a shorthand method in object literals like { method() { ... } }
 type ShorthandMethod struct {
 	BaseExpression                       // Embed base for ComputedType (Function type)
-	Token                lexer.Token     // The identifier token (method name)
+	Token                *lexer.Token     // The identifier token (method name)
 	Name                 *Identifier     // Method name
 	Parameters           []*Parameter    // Regular method parameters
 	RestParameter        *RestParameter  // Optional rest parameter (...args)
@@ -2630,7 +2630,7 @@ func (sm *ShorthandMethod) String() string {
 // ObjectLiteral represents an object literal expression (e.g., { key: value, "str_key": 1 }).
 type ObjectLiteral struct {
 	BaseExpression             // Embed base for ComputedType (e.g., types.ObjectType)
-	Token          lexer.Token // The '{' token
+	Token          *lexer.Token // The '{' token
 	// --- MODIFIED: Use slice instead of map to preserve order ---
 	Properties []*ObjectProperty
 }
@@ -2659,7 +2659,7 @@ func (ol *ObjectLiteral) String() string {
 // ObjectTypeExpression represents an object type literal (e.g., { name: string; age: number }).
 type ObjectTypeExpression struct {
 	BaseExpression             // Embed base for ComputedType (which will be an ObjectType)
-	Token          lexer.Token // The '{' token
+	Token          *lexer.Token // The '{' token
 	Properties     []*ObjectTypeProperty
 }
 
@@ -2751,7 +2751,7 @@ func (otp *ObjectTypeProperty) String() string {
 // InterfaceDeclaration represents an interface declaration.
 // interface Name { property: Type; method(): ReturnType; }
 type InterfaceDeclaration struct {
-	Token          lexer.Token          // The 'interface' token
+	Token          *lexer.Token          // The 'interface' token
 	Name           *Identifier          // Interface name
 	TypeParameters []*TypeParameter     // Generic type parameters (e.g., <T, U>)
 	Extends        []Expression         // Interfaces this interface extends (supports generic types)
@@ -2860,7 +2860,7 @@ func (ip *InterfaceProperty) String() string {
 // ConstructorTypeExpression represents a constructor type signature like `new () => T`
 type ConstructorTypeExpression struct {
 	BaseExpression              // Embed base for ComputedType
-	Token          lexer.Token  // The 'new' token
+	Token          *lexer.Token  // The 'new' token
 	Parameters     []Expression // Parameter types for the constructor
 	ReturnType     Expression   // The constructed type (T in `new (): T`)
 }
@@ -2912,7 +2912,7 @@ func (de *DestructuringElement) String() string {
 // ArrayDestructuringAssignment represents [a, b, c] = expr
 type ArrayDestructuringAssignment struct {
 	BaseExpression                         // Embed base for ComputedType
-	Token          lexer.Token             // The '[' token
+	Token          *lexer.Token             // The '[' token
 	Elements       []*DestructuringElement // Target variables/patterns
 	Value          Expression              // RHS expression to destructure
 }
@@ -2966,7 +2966,7 @@ func (dp *DestructuringProperty) String() string {
 // ObjectDestructuringAssignment represents {a, b} = expr
 type ObjectDestructuringAssignment struct {
 	BaseExpression                          // Embed base for ComputedType
-	Token          lexer.Token              // The '{' token
+	Token          *lexer.Token              // The '{' token
 	Properties     []*DestructuringProperty // Target properties/patterns
 	RestProperty   *DestructuringElement    // Rest property (...rest) - optional
 	Value          Expression               // RHS expression to destructure
@@ -3003,7 +3003,7 @@ func (oda *ObjectDestructuringAssignment) String() string {
 
 // ArrayDestructuringDeclaration represents let/const/var [a, b, c] = expr
 type ArrayDestructuringDeclaration struct {
-	Token          lexer.Token             // The 'let', 'const', or 'var' token
+	Token          *lexer.Token             // The 'let', 'const', or 'var' token
 	IsConst        bool                    // true for const, false for let/var
 	Elements       []*DestructuringElement // Target variables/patterns
 	TypeAnnotation Expression              // Optional type annotation (e.g., : [number, string])
@@ -3042,7 +3042,7 @@ func (add *ArrayDestructuringDeclaration) String() string {
 
 // ObjectDestructuringDeclaration represents let/const/var {a, b} = expr
 type ObjectDestructuringDeclaration struct {
-	Token          lexer.Token              // The 'let', 'const', or 'var' token
+	Token          *lexer.Token              // The 'let', 'const', or 'var' token
 	IsConst        bool                     // true for const, false for let/var
 	Properties     []*DestructuringProperty // Target properties/patterns
 	RestProperty   *DestructuringElement    // Rest property (...rest) - optional
@@ -3094,7 +3094,7 @@ func (odd *ObjectDestructuringDeclaration) String() string {
 // Examples: ([a, b]: [number, number]) => {}
 type ArrayParameterPattern struct {
 	BaseExpression                         // Embed base for ComputedType
-	Token          lexer.Token             // The '[' token
+	Token          *lexer.Token             // The '[' token
 	Elements       []*DestructuringElement // Parameter elements (can have defaults and rest)
 }
 
@@ -3121,7 +3121,7 @@ func (app *ArrayParameterPattern) String() string {
 // Examples: ({x, y}: Point) => {}, ({name = "Unknown"}: {name?: string}) => {}
 type ObjectParameterPattern struct {
 	BaseExpression                          // Embed base for ComputedType
-	Token          lexer.Token              // The '{' token
+	Token          *lexer.Token              // The '{' token
 	Properties     []*DestructuringProperty // Parameter properties (can have defaults)
 	RestProperty   *DestructuringElement    // Rest property (...rest) - optional
 }
@@ -3155,7 +3155,7 @@ func (opp *ObjectParameterPattern) String() string {
 // FunctionSignature represents a function signature without a body (used in overloads)
 type FunctionSignature struct {
 	BaseExpression                      // Embed base for ComputedType (so it can be an Expression too)
-	Token                lexer.Token    // The 'function' token
+	Token                *lexer.Token    // The 'function' token
 	Name                 *Identifier    // Function name (must match other overloads)
 	Parameters           []*Parameter   // Regular function parameters with type annotations
 	RestParameter        *RestParameter // Optional rest parameter (...args)
@@ -3198,7 +3198,7 @@ func (fs *FunctionSignature) String() string {
 
 // FunctionOverloadGroup represents a group of function overload signatures plus an implementation
 type FunctionOverloadGroup struct {
-	Token          lexer.Token          // The token of the first function declaration
+	Token          *lexer.Token          // The token of the first function declaration
 	Name           *Identifier          // Function name (shared by all overloads)
 	Overloads      []*FunctionSignature // The overload signatures (without bodies)
 	Implementation *FunctionLiteral     // The implementation (with body)
@@ -3228,7 +3228,7 @@ func (fog *FunctionOverloadGroup) String() string {
 // Decorator represents a decorator applied to a class or class element: @expression
 type Decorator struct {
 	BaseExpression
-	Token      lexer.Token // The '@' token
+	Token      *lexer.Token // The '@' token
 	Expression Expression  // The decorator expression (identifier, member, call, paren)
 }
 
@@ -3239,7 +3239,7 @@ func (d *Decorator) String() string {
 
 // ClassDeclaration represents a class declaration statement
 type ClassDeclaration struct {
-	Token          lexer.Token      // The 'class' token
+	Token          *lexer.Token      // The 'class' token
 	Name           *Identifier      // Class name
 	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	SuperClass     Expression       // nil for basic classes (supports generic extends)
@@ -3295,7 +3295,7 @@ func (cd *ClassDeclaration) String() string {
 // ClassExpression represents a class expression (can be anonymous)
 type ClassExpression struct {
 	BaseExpression
-	Token          lexer.Token      // The 'class' token
+	Token          *lexer.Token      // The 'class' token
 	Name           *Identifier      // nil for anonymous classes
 	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	SuperClass     Expression       // nil for basic classes (supports generic extends)
@@ -3350,7 +3350,7 @@ func (ce *ClassExpression) String() string {
 
 // ClassBody represents the body of a class containing methods and properties
 type ClassBody struct {
-	Token              lexer.Token             // The '{' token
+	Token              *lexer.Token             // The '{' token
 	Methods            []*MethodDefinition     // Class method implementations
 	Properties         []*PropertyDefinition   // Class properties
 	ConstructorSigs    []*ConstructorSignature // Constructor overload signatures
@@ -3382,7 +3382,7 @@ func (cb *ClassBody) String() string {
 // MethodDefinition represents a method in a class
 type MethodDefinition struct {
 	BaseExpression
-	Token       lexer.Token      // The method name token
+	Token       *lexer.Token      // The method name token
 	Key         Expression       // Method name (Identifier or ComputedPropertyName)
 	Value       *FunctionLiteral // Function implementation
 	Kind        string           // "constructor", "method"
@@ -3453,7 +3453,7 @@ func (md *MethodDefinition) String() string {
 
 // ConstructorSignature represents a constructor overload signature in a class
 type ConstructorSignature struct {
-	Token                lexer.Token      // The 'constructor' token
+	Token                *lexer.Token      // The 'constructor' token
 	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	Parameters           []*Parameter     // Parameter list
 	RestParameter        *RestParameter   // Rest parameter (if any)
@@ -3503,7 +3503,7 @@ func (cs *ConstructorSignature) String() string {
 
 // MethodSignature represents a method overload signature in a class
 type MethodSignature struct {
-	Token                lexer.Token      // The method name token
+	Token                *lexer.Token      // The method name token
 	Key                  Expression       // Method name (Identifier or ComputedPropertyName)
 	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
 	Parameters           []*Parameter     // Parameter list
@@ -3583,7 +3583,7 @@ func (cpn *ComputedPropertyName) String() string       { return "[" + cpn.Expr.S
 // PropertyDefinition represents a property declaration in a class
 type PropertyDefinition struct {
 	BaseExpression
-	Token          lexer.Token  // The property name token
+	Token          *lexer.Token  // The property name token
 	Key            Expression   // Property name (Identifier or ComputedPropertyName)
 	TypeAnnotation Expression   // Type annotation (can be nil)
 	Value          Expression   // Initializer expression (can be nil)
@@ -3685,7 +3685,7 @@ func DumpAST(program *Program, title string) {
 // EnumDeclaration represents an enum declaration (enum Name { ... })
 type EnumDeclaration struct {
 	BaseExpression
-	Token   lexer.Token   // The 'enum' token
+	Token   *lexer.Token   // The 'enum' token
 	Name    *Identifier   // Enum name
 	Members []*EnumMember // Enum members
 	IsConst bool          // true for const enums
@@ -3716,7 +3716,7 @@ func (ed *EnumDeclaration) String() string {
 
 // EnumMember represents a member of an enum
 type EnumMember struct {
-	Token lexer.Token // The member name token
+	Token *lexer.Token // The member name token
 	Name  *Identifier // Member name
 	Value Expression  // Optional initializer (nil for auto-increment)
 }

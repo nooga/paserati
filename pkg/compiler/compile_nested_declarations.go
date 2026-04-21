@@ -250,7 +250,7 @@ func (c *Compiler) compileArrayDestructuringDeclarationWithValueReg(node *parser
 					} else {
 						body = &parser.BlockStatement{}
 					}
-					minimalFuncLit := &parser.FunctionLiteral{Body: body}
+					minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 					c.emitClosure(resultReg, funcConstIndex, minimalFuncLit, freeSymbols)
 				} else {
 					// Not a function, compile normally

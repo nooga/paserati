@@ -834,7 +834,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					} else {
 						body = &parser.BlockStatement{}
 					}
-					minimalFuncLit := &parser.FunctionLiteral{Body: body}
+					minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 					c.emitClosure(rhsValueReg, funcConstIndex, minimalFuncLit, freeSymbols)
 				} else if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
 					// Anonymous function literal - set name before compilation
@@ -952,7 +952,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					} else {
 						body = &parser.BlockStatement{}
 					}
-					minimalFuncLit := &parser.FunctionLiteral{Body: body}
+					minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 					c.emitClosure(rhsValueReg, funcConstIndex, minimalFuncLit, freeSymbols)
 				} else if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
 					// Anonymous function literal - set name before compilation
@@ -2228,7 +2228,7 @@ func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueR
 				// Expression body - wrap in block for emitClosure
 				body = &parser.BlockStatement{}
 			}
-			minimalFuncLit := &parser.FunctionLiteral{Body: body}
+			minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 			c.emitClosure(defaultReg, funcConstIndex, minimalFuncLit, freeSymbols)
 		} else {
 			// Not a function, compile normally
@@ -2544,7 +2544,7 @@ func (c *Compiler) compileArrayDestructuringFastPath(node *parser.ArrayDestructu
 					} else {
 						body = &parser.BlockStatement{}
 					}
-					minimalFuncLit := &parser.FunctionLiteral{Body: body}
+					minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 					c.emitClosure(resultReg, funcConstIndex, minimalFuncLit, freeSymbols)
 				} else {
 					// Not a function, compile normally
@@ -2759,7 +2759,7 @@ func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestr
 					} else {
 						body = &parser.BlockStatement{}
 					}
-					minimalFuncLit := &parser.FunctionLiteral{Body: body}
+					minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 					c.emitClosure(resultReg, funcConstIndex, minimalFuncLit, freeSymbols)
 				} else {
 					// Not a function, compile normally

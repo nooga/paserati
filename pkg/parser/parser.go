@@ -27,8 +27,12 @@ type Parser struct {
 	source *source.SourceFile // cached from lexer
 	errors []errors.PaseratiError
 
-	curToken  lexer.Token
-	peekToken lexer.Token
+	curToken  *lexer.Token
+	peekToken *lexer.Token
+
+	// Pool for stable *lexer.Token storage. AST nodes reference tokens
+	// by pointer to avoid embedding the ~80-byte Token struct in every node.
+	tokenPool *TokenPool
 
 	// Pratt parser for VALUE expressions
 	prefixParseFns map[lexer.TokenType]prefixParseFn
@@ -199,10 +203,11 @@ var typePrecedences = map[lexer.TokenType]int{
 // NewParser creates a new Parser.
 func NewParser(l *lexer.Lexer) *Parser {
 	p := &Parser{
-		l:      l,
-		source: l.GetSource(), // Cache source from lexer
-		errors: []errors.PaseratiError{},
-		arena:  NewASTArena(), // Initialize arena for AST node allocation
+		l:         l,
+		source:    l.GetSource(), // Cache source from lexer
+		errors:    []errors.PaseratiError{},
+		arena:     NewASTArena(),  // Initialize arena for AST node allocation
+		tokenPool: NewTokenPool(), // Initialize pool for *lexer.Token storage
 	}
 
 	// Initialize Pratt parser maps for VALUE expressions
@@ -398,8 +403,10 @@ func (p *Parser) SetStrictMode(strict bool) {
 // nextToken advances the current and peek tokens.
 func (p *Parser) nextToken() {
 	p.curToken = p.peekToken
-	p.peekToken = p.l.NextToken()
-	debugPrint("nextToken(): cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
+	p.peekToken = p.tokenPool.Take(p.l.NextToken())
+	if debugParser && p.curToken != nil {
+		debugPrint("nextToken(): cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
+	}
 }
 
 // rescanPeekAsRegex rescans the peek token as a regex literal if it's a SLASH.
@@ -412,11 +419,11 @@ func (p *Parser) rescanPeekAsRegex() {
 	state := p.l.SaveState()
 	p.l.SetPosition(p.peekToken.StartPos)
 	p.l.SetRegexContext()
-	p.peekToken = p.l.NextToken()
+	p.peekToken = p.tokenPool.Take(p.l.NextToken())
 	// If rescan failed (still SLASH), restore original state
 	if p.peekToken.Type == lexer.SLASH {
 		p.l.RestoreState(state)
-		p.peekToken = p.l.NextToken()
+		p.peekToken = p.tokenPool.Take(p.l.NextToken())
 	}
 }
 
@@ -428,32 +435,32 @@ func (p *Parser) expectPeekGT() bool {
 		return true
 	} else if p.peekToken.Type == lexer.RIGHT_SHIFT {
 		// Split >> into > and > using lexer's split method
-		splitToken := p.l.SplitRightShiftToken(p.peekToken)
+		splitToken := p.l.SplitRightShiftToken(*p.peekToken)
 		// Update peek to be the first > and advance
-		p.peekToken = splitToken
+		p.peekToken = p.tokenPool.Take(splitToken)
 		p.nextToken() // This will make current = first >, peek = second >
 		return true
 	} else if p.peekToken.Type == lexer.UNSIGNED_RIGHT_SHIFT {
 		// Split >>> into > and >> using lexer's split method
-		splitToken := p.l.SplitUnsignedRightShiftToken(p.peekToken)
+		splitToken := p.l.SplitUnsignedRightShiftToken(*p.peekToken)
 		// Update peek to be the first > and advance
-		p.peekToken = splitToken
+		p.peekToken = p.tokenPool.Take(splitToken)
 		p.nextToken() // This will make current = first >, peek = >>
 		return true
 	} else if p.peekToken.Type == lexer.RIGHT_SHIFT_ASSIGN {
 		// Split >>= into > and >= using lexer's split method
 		// This handles cases like: Array<Array<T>> = []
-		splitToken := p.l.SplitRightShiftAssignToken(p.peekToken)
+		splitToken := p.l.SplitRightShiftAssignToken(*p.peekToken)
 		// Update peek to be the first > and advance
-		p.peekToken = splitToken
+		p.peekToken = p.tokenPool.Take(splitToken)
 		p.nextToken() // This will make current = first >, peek = >=
 		return true
 	} else if p.peekToken.Type == lexer.GE {
 		// Split >= into > and = using lexer's split method
 		// This handles deeply nested generics like: Array<Array<Array<T>>> = []
-		splitToken := p.l.SplitGreaterEqualToken(p.peekToken)
+		splitToken := p.l.SplitGreaterEqualToken(*p.peekToken)
 		// Update peek to be the first > and advance
-		p.peekToken = splitToken
+		p.peekToken = p.tokenPool.Take(splitToken)
 		p.nextToken() // This will make current = first >, peek = =
 		return true
 	}
@@ -1252,7 +1259,7 @@ func (p *Parser) parseRestParameterType() Expression {
 		// No type annotation - default to any[]
 		// Return an ArrayTypeExpression with 'any' as element type
 		anyType := &Identifier{
-			Token: lexer.Token{Type: lexer.IDENT, Literal: "any"},
+			Token: &lexer.Token{Type: lexer.IDENT, Literal: "any"},
 			Value: "any",
 		}
 		return &ArrayTypeExpression{
@@ -3352,7 +3359,7 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 					Elements:       arrayPattern.Elements,
 					TypeAnnotation: param.TypeAnnotation,
 					Value: &Identifier{
-						Token: lexer.Token{
+						Token: &lexer.Token{
 							Type:     lexer.IDENT,
 							Literal:  newParamName,
 							Line:     param.Token.Line,
@@ -3372,7 +3379,7 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 					RestProperty:   objectPattern.RestProperty,
 					TypeAnnotation: param.TypeAnnotation,
 					Value: &Identifier{
-						Token: lexer.Token{
+						Token: &lexer.Token{
 							Type:     lexer.IDENT,
 							Literal:  newParamName,
 							Line:     param.Token.Line,
@@ -3464,7 +3471,7 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 					Elements:       arrayPattern.Elements,
 					TypeAnnotation: param.TypeAnnotation,
 					Value: &Identifier{
-						Token: lexer.Token{
+						Token: &lexer.Token{
 							Type:     lexer.IDENT,
 							Literal:  newParamName,
 							Line:     param.Token.Line,
@@ -3483,7 +3490,7 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 					RestProperty:   objectPattern.RestProperty,
 					TypeAnnotation: param.TypeAnnotation,
 					Value: &Identifier{
-						Token: lexer.Token{
+						Token: &lexer.Token{
 							Type:     lexer.IDENT,
 							Literal:  newParamName,
 							Line:     param.Token.Line,
@@ -3593,7 +3600,7 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 					Elements:       arrayPattern.Elements,
 					TypeAnnotation: param.TypeAnnotation,
 					Value: &Identifier{
-						Token: lexer.Token{
+						Token: &lexer.Token{
 							Type:     lexer.IDENT,
 							Literal:  newParamName,
 							Line:     param.Token.Line,
@@ -3612,7 +3619,7 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 					RestProperty:   objectPattern.RestProperty,
 					TypeAnnotation: param.TypeAnnotation,
 					Value: &Identifier{
-						Token: lexer.Token{
+						Token: &lexer.Token{
 							Type:     lexer.IDENT,
 							Literal:  newParamName,
 							Line:     param.Token.Line,
@@ -3846,7 +3853,7 @@ func (p *Parser) peekTokenIs2(t lexer.TokenType) bool {
 // Uses lexer state save/restore to avoid corrupting parser state
 func (p *Parser) lookAhead(pos int) lexer.Token {
 	if pos == 0 {
-		return p.peekToken
+		return *p.peekToken
 	}
 
 	// Save complete lexer state
@@ -3904,7 +3911,7 @@ func (p *Parser) isKeywordThatCanBeIdentifier(tokenType lexer.TokenType) bool {
 
 // canStartExpression checks if a token can be the start of an expression
 // This is used to determine if 'await' should be parsed as an AwaitExpression or as an Identifier
-func (p *Parser) canStartExpression(t lexer.Token) bool {
+func (p *Parser) canStartExpression(t *lexer.Token) bool {
 	switch t.Type {
 	case lexer.IDENT, lexer.NUMBER, lexer.BIGINT, lexer.STRING, lexer.REGEX_LITERAL,
 		lexer.TEMPLATE_START, lexer.TRUE, lexer.FALSE, lexer.NULL, lexer.UNDEFINED,
@@ -5318,7 +5325,7 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 }
 
 // parseArrayDestructuringDeclaration handles let/const/var [a, b] = expr
-func (p *Parser) parseArrayDestructuringDeclaration(declToken lexer.Token, isConst bool, requireInitializer bool) *ArrayDestructuringDeclaration {
+func (p *Parser) parseArrayDestructuringDeclaration(declToken *lexer.Token, isConst bool, requireInitializer bool) *ArrayDestructuringDeclaration {
 	decl := &ArrayDestructuringDeclaration{
 		Token:   declToken,
 		IsConst: isConst,
@@ -5693,7 +5700,7 @@ func (p *Parser) parseObjectDestructuringPattern() ([]*DestructuringProperty, *D
 }
 
 // parseObjectDestructuringDeclaration handles let/const/var {a, b} = expr
-func (p *Parser) parseObjectDestructuringDeclaration(declToken lexer.Token, isConst bool, requireInitializer bool) *ObjectDestructuringDeclaration {
+func (p *Parser) parseObjectDestructuringDeclaration(declToken *lexer.Token, isConst bool, requireInitializer bool) *ObjectDestructuringDeclaration {
 	decl := &ObjectDestructuringDeclaration{
 		Token:   declToken,
 		IsConst: isConst,
@@ -6272,7 +6279,7 @@ func (p *Parser) parseMemberExpression(left Expression) Expression {
 
 // addError creates a SyntaxError and appends it to the parser's error list.
 // Limits the number of errors to prevent memory exhaustion from infinite parsing loops.
-func (p *Parser) addError(tok lexer.Token, msg string) {
+func (p *Parser) addError(tok *lexer.Token, msg string) {
 	// Prevent memory exhaustion from infinite error generation
 	const maxErrors = 1000
 	if len(p.errors) >= maxErrors {
@@ -8116,7 +8123,7 @@ func (p *Parser) tryParseFunctionOverloadGroup() *FunctionOverloadGroup {
 
 	var overloads []*FunctionSignature
 	var functionName string
-	var firstToken lexer.Token
+	var firstToken *lexer.Token
 
 	// Try to parse function signatures
 	for p.curToken.Type == lexer.FUNCTION {
@@ -8390,7 +8397,7 @@ func (p *Parser) parseOptionalChainContinuation() Expression {
 }
 
 // parseOptionalIndexExpression handles optional computed access (obj?.[expr])
-func (p *Parser) parseOptionalIndexExpression(left Expression, optToken lexer.Token) Expression {
+func (p *Parser) parseOptionalIndexExpression(left Expression, optToken *lexer.Token) Expression {
 	exp := &OptionalIndexExpression{
 		Token:  optToken, // The '?.' token
 		Object: left,
@@ -8412,7 +8419,7 @@ func (p *Parser) parseOptionalIndexExpression(left Expression, optToken lexer.To
 }
 
 // parseOptionalCallExpression handles optional function calls (func?.())
-func (p *Parser) parseOptionalCallExpression(left Expression, optToken lexer.Token) Expression {
+func (p *Parser) parseOptionalCallExpression(left Expression, optToken *lexer.Token) Expression {
 	exp := &OptionalCallExpression{
 		Token:    optToken, // The '?.' token
 		Function: left,
@@ -8523,7 +8530,7 @@ func (p *Parser) parseForOfStatement() *ForOfStatement {
 }
 
 // parseForStatementOrForOf determines if this is for...of, for...in, or regular for and parses accordingly
-func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) Statement {
+func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) Statement {
 	// We're positioned at the variable declaration or identifier
 	// Parse the variable part and see what comes next
 
@@ -8821,7 +8828,7 @@ func (p *Parser) parseForStatementOrForOf(forToken lexer.Token, isAsync bool) St
 
 // parseRegularForStatement parses a standard C-style for loop
 // Precondition: curToken is the first token after '(' or we're at '(' for empty initializer
-func (p *Parser) parseRegularForStatement(forToken lexer.Token) *ForStatement {
+func (p *Parser) parseRegularForStatement(forToken *lexer.Token) *ForStatement {
 	stmt := &ForStatement{Token: forToken}
 
 	debugPrint("parseRegularForStatement: START")
@@ -8968,7 +8975,7 @@ func (p *Parser) parseRegularForStatement(forToken lexer.Token) *ForStatement {
 }
 
 // parseRegularForStatementWithVar parses regular for loop when we already parsed a variable
-func (p *Parser) parseRegularForStatementWithVar(forToken lexer.Token, varStmt Statement, varName string) *ForStatement {
+func (p *Parser) parseRegularForStatementWithVar(forToken *lexer.Token, varStmt Statement, varName string) *ForStatement {
 	stmt := &ForStatement{Token: forToken}
 	stmt.Initializer = varStmt
 
@@ -9246,7 +9253,7 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 
 	// Create a FunctionTypeExpression to represent the method signature
 	funcType := &FunctionTypeExpression{
-		Token:      lexer.Token{Type: lexer.LPAREN, Literal: "("},
+		Token:      &lexer.Token{Type: lexer.LPAREN, Literal: "("},
 		Parameters: params,
 		ReturnType: returnType,
 	}
@@ -9256,8 +9263,8 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 
 // GetTokenFromNode attempts to extract the primary token associated with a parser node.
 // This is useful for getting line numbers for error reporting.
-// Returns the zero value of lexer.Token if no specific token can be easily extracted.
-func GetTokenFromNode(node Node) lexer.Token {
+// Returns nil if no specific token can be easily extracted.
+func GetTokenFromNode(node Node) *lexer.Token {
 	switch n := node.(type) {
 	// Statements (use the primary keyword/token)
 	case *LetStatement:
@@ -9369,12 +9376,12 @@ func GetTokenFromNode(node Node) lexer.Token {
 		if len(n.Statements) > 0 {
 			return GetTokenFromNode(n.Statements[0]) // Use first statement's token
 		}
-		return lexer.Token{} // Empty program, return zero value
+		return &lexer.Token{} // Empty program, return zero value
 
 	// Add other node types as needed
 	default:
 		// Cannot easily determine a representative token
-		return lexer.Token{} // Return zero value
+		return &lexer.Token{} // Return zero value
 	}
 }
 
@@ -10157,7 +10164,7 @@ func (p *Parser) isMappedTypePattern() bool {
 	found := false
 
 	// Start from peekToken position
-	token := p.peekToken
+	token := *p.peekToken
 	tokenCount := 0
 
 	// Skip readonly/+/- modifiers
@@ -10194,7 +10201,7 @@ func (p *Parser) isMappedTypePattern() bool {
 }
 
 // parseMappedTypeExpression parses mapped types like { [P in K]: T } or { readonly [P in keyof T]?: T[P] }
-func (p *Parser) parseMappedTypeExpression(startToken lexer.Token) Expression {
+func (p *Parser) parseMappedTypeExpression(startToken *lexer.Token) Expression {
 	debugPrint("=== STARTING MAPPED TYPE PARSING ===")
 	debugPrint("startToken: %s, cur: %s, peek: %s", startToken.Literal, p.curToken.Literal, p.peekToken.Literal)
 
@@ -10529,7 +10536,7 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 
 		for {
 			var imported *Identifier
-			var importedToken lexer.Token
+			var importedToken *lexer.Token
 
 			// Check for type-only import: { type name }
 			isTypeOnlySpecifier := false
@@ -10681,7 +10688,7 @@ func (p *Parser) parseExportDeclaration() Statement {
 }
 
 // parseExportDefaultDeclaration parses: export default expression;
-func (p *Parser) parseExportDefaultDeclaration(exportToken lexer.Token) *ExportDefaultDeclaration {
+func (p *Parser) parseExportDefaultDeclaration(exportToken *lexer.Token) *ExportDefaultDeclaration {
 	stmt := &ExportDefaultDeclaration{Token: exportToken}
 
 	// Parse the default export expression
@@ -10702,7 +10709,7 @@ func (p *Parser) parseExportDefaultDeclaration(exportToken lexer.Token) *ExportD
 // parseExportAllDeclaration parses: export * from "module" or export * as name from "module" or export type * from "module"
 // Also handles: export * as "string" from "module" (arbitrary module namespace names)
 // And: export * as default from "module"
-func (p *Parser) parseExportAllDeclaration(exportToken lexer.Token, isTypeOnly bool) *ExportAllDeclaration {
+func (p *Parser) parseExportAllDeclaration(exportToken *lexer.Token, isTypeOnly bool) *ExportAllDeclaration {
 	stmt := &ExportAllDeclaration{Token: exportToken, IsTypeOnly: isTypeOnly}
 
 	// Check for optional 'as name' or 'as "string"' or 'as default'
@@ -10793,7 +10800,7 @@ func (p *Parser) parseExportSpecifierExpr() Expression {
 }
 
 // parseExportNamedDeclarationWithSpecifiers parses: export { name1, name2 } [from "module"]
-func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken lexer.Token, isTypeOnly bool) *ExportNamedDeclaration {
+func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken *lexer.Token, isTypeOnly bool) *ExportNamedDeclaration {
 	stmt := &ExportNamedDeclaration{Token: exportToken, IsTypeOnly: isTypeOnly}
 
 	// Parse export specifiers - first specifier can be identifier, string, or keyword
@@ -10924,7 +10931,7 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken lexer.Tok
 }
 
 // parseExportNamedDeclarationWithDeclaration parses: export const x = 1; export function foo() {}
-func (p *Parser) parseExportNamedDeclarationWithDeclaration(exportToken lexer.Token) *ExportNamedDeclaration {
+func (p *Parser) parseExportNamedDeclarationWithDeclaration(exportToken *lexer.Token) *ExportNamedDeclaration {
 	stmt := &ExportNamedDeclaration{Token: exportToken}
 
 	// Parse the declaration statement

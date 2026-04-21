@@ -1038,7 +1038,7 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 	type accessorInfo struct {
 		getter *parser.FunctionLiteral
 		setter *parser.FunctionLiteral
-		token  lexer.Token
+		token  *lexer.Token
 	}
 	privateAccessors := make(map[string]accessorInfo)
 
