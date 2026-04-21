@@ -83,8 +83,71 @@ type Shape struct {
 	fields            []Field
 	stringTransitions map[string]*Shape // Fast path: keyed by property name directly (string keys only)
 	transitions       map[string]*Shape // Slow path: keyed by PropertyKey.hash() (symbols, etc.)
-	mu                sync.RWMutex      // Protects transitions maps
+	mu                sync.RWMutex      // Protects transitions maps, childExtended, fields mutation
 	version           uint32            // Bumped on any layout/flags change
+
+	// Shared-backing invariant (protected by mu):
+	//   - When a new shape is created by appending a single field to `parent`,
+	//     the new shape MAY reuse parent.fields' backing array (slice[:len+1])
+	//     if parent has capacity left and hasn't yet given its backing to
+	//     another child. This turns O(N^2) total Field storage for a linear
+	//     chain of N shapes into O(N).
+	//   - childExtended: true once a child has claimed parent's backing; any
+	//     subsequent sibling branches must allocate a fresh slice.
+	//   - ownedFields: true if this shape's `fields` slice has a private
+	//     backing array. Mutation sites must call privatizeFields() before
+	//     modifying `fields` to avoid bleeding into shapes that share our
+	//     backing (ancestors we extended from, or children we extended to).
+	childExtended bool
+	ownedFields   bool
+}
+
+// extendFields returns a new fields slice equal to cur.fields with fld appended.
+// Attempts to reuse cur's backing array if available. Caller MUST hold cur.mu.Lock().
+// Returns the new slice and whether it shares backing with cur.
+func (cur *Shape) extendFields(fld Field) (newFields []Field, shared bool) {
+	n := len(cur.fields)
+	if !cur.childExtended && cap(cur.fields) > n {
+		// First successor: reuse cur's backing array.
+		newFields = cur.fields[:n+1]
+		newFields[n] = fld
+		cur.childExtended = true
+		return newFields, true
+	}
+	// Fresh allocation with slack capacity so future transitions from the new
+	// shape can extend in-place.
+	newCap := n + 1
+	switch {
+	case newCap < 8:
+		newCap = 8
+	case newCap < 32:
+		newCap = newCap * 2
+	default:
+		newCap = newCap + newCap/2
+	}
+	newFields = make([]Field, n+1, newCap)
+	copy(newFields, cur.fields)
+	newFields[n] = fld
+	return newFields, false
+}
+
+// privatizeFields ensures o.shape.fields has a private backing array before
+// callers mutate a Field in place. If the backing is already private, this is
+// a no-op. Must be called before any `o.shape.fields[i] = ...` mutation.
+func (o *PlainObject) privatizeFields() {
+	s := o.shape
+	if s.ownedFields {
+		return
+	}
+	// Clone the fields slice into a private backing. This severs any sharing
+	// with ancestors (our parent's backing) or descendants (children who
+	// extended from our backing).
+	newFields := make([]Field, len(s.fields))
+	copy(newFields, s.fields)
+	s.fields = newFields
+	s.ownedFields = true
+	// We have fresh backing, so a future child could potentially extend it.
+	s.childExtended = false
 }
 
 type Object struct {
@@ -246,8 +309,10 @@ func (o *PlainObject) DeleteOwnByKey(key PropertyKey) bool {
 		}
 		newProps = append(newProps, o.properties[i])
 	}
-	// Create new shape without transitions for simplicity and bump version
-	o.shape = &Shape{parent: o.shape.parent, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: make(map[string]*Shape), version: o.shape.version + 1}
+	// Create new shape without transitions for simplicity and bump version.
+	// Leave transition maps nil - they'll be lazily allocated if/when another
+	// property is added. Fields slice is freshly allocated so it's private.
+	o.shape = &Shape{parent: o.shape.parent, fields: newFields, ownedFields: true, version: o.shape.version + 1}
 	o.properties = newProps
 
 	// If the deleted field was an accessor, also remove the getter/setter from the maps
@@ -342,10 +407,11 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 	// Actually need to create new shape - allocate only when necessary
 	off := len(cur.fields)
 	fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: true, enumerable: true, configurable: true}
-	newFields := make([]Field, len(cur.fields)+1)
-	copy(newFields, cur.fields)
-	newFields[len(cur.fields)] = fld
-	next = &Shape{parent: cur, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: make(map[string]*Shape), version: cur.version + 1}
+	newFields, shared := cur.extendFields(fld)
+	next = &Shape{parent: cur, fields: newFields, ownedFields: !shared, version: cur.version + 1}
+	if cur.stringTransitions == nil {
+		cur.stringTransitions = make(map[string]*Shape)
+	}
 	cur.stringTransitions[name] = next
 	cur.mu.Unlock()
 	o.shape = next
@@ -391,10 +457,11 @@ func (o *PlainObject) SetOwnNonEnumerable(name string, v Value) {
 		// Actually need to create new shape
 		off := len(cur.fields)
 		fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: true, enumerable: false, configurable: true}
-		newFields := make([]Field, len(cur.fields)+1)
-		copy(newFields, cur.fields)
-		newFields[len(cur.fields)] = fld
-		next = &Shape{parent: cur, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: make(map[string]*Shape), version: cur.version + 1}
+		newFields, shared := cur.extendFields(fld)
+		next = &Shape{parent: cur, fields: newFields, ownedFields: !shared, version: cur.version + 1}
+		if cur.transitions == nil {
+			cur.transitions = make(map[string]*Shape)
+		}
 		cur.transitions[hashKey] = next
 		cur.mu.Unlock()
 	}
@@ -454,6 +521,7 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 			if configurable != nil {
 				newF.configurable = *configurable
 			}
+			o.privatizeFields()
 			o.shape.fields[i] = newF
 			o.shape.version++
 			return
@@ -472,10 +540,10 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 	if configurable != nil {
 		fld.configurable = *configurable
 	}
-	newFields := make([]Field, len(cur.fields)+1)
-	copy(newFields, cur.fields)
-	newFields[len(cur.fields)] = fld
-	next := &Shape{parent: cur, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: make(map[string]*Shape), version: cur.version + 1}
+	cur.mu.Lock()
+	newFields, shared := cur.extendFields(fld)
+	cur.mu.Unlock()
+	next := &Shape{parent: cur, fields: newFields, ownedFields: !shared, version: cur.version + 1}
 	o.shape = next
 	o.properties = append(o.properties, value)
 }
@@ -500,6 +568,7 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 			if configurable != nil {
 				newF.configurable = *configurable
 			}
+			o.privatizeFields()
 			o.shape.fields[i] = newF
 			o.shape.version++
 			if o.getters == nil {
@@ -528,11 +597,10 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 	if configurable != nil {
 		fld.configurable = *configurable
 	}
-	newFields := make([]Field, len(cur.fields)+1)
-	copy(newFields, cur.fields)
-	newFields[len(cur.fields)] = fld
-	newTrans := make(map[string]*Shape)
-	next := &Shape{parent: cur, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: newTrans, version: cur.version + 1}
+	cur.mu.Lock()
+	newFields, shared := cur.extendFields(fld)
+	cur.mu.Unlock()
+	next := &Shape{parent: cur, fields: newFields, ownedFields: !shared, version: cur.version + 1}
 	o.shape = next
 	// Ensure maps
 	if o.getters == nil {
@@ -589,6 +657,7 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 			if configurable != nil {
 				newF.configurable = *configurable
 			}
+			o.privatizeFields()
 			o.shape.fields[i] = newF
 			o.shape.version++
 			return
@@ -610,10 +679,10 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 	if configurable != nil {
 		fld.configurable = *configurable
 	}
-	newFields := make([]Field, len(cur.fields)+1)
-	copy(newFields, cur.fields)
-	newFields[len(cur.fields)] = fld
-	next := &Shape{parent: cur, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: make(map[string]*Shape), version: cur.version + 1}
+	cur.mu.Lock()
+	newFields, shared := cur.extendFields(fld)
+	cur.mu.Unlock()
+	next := &Shape{parent: cur, fields: newFields, ownedFields: !shared, version: cur.version + 1}
 	o.shape = next
 	o.properties = append(o.properties, value)
 }
@@ -637,6 +706,7 @@ func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value,
 			if configurable != nil {
 				newF.configurable = *configurable
 			}
+			o.privatizeFields()
 			o.shape.fields[i] = newF
 			o.shape.version++
 			if o.getters == nil {
@@ -660,29 +730,31 @@ func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value,
 	next, ok := cur.transitions[key.hash()]
 	cur.mu.RUnlock()
 	if !ok {
-		off := len(cur.fields)
-		fld := Field{offset: off, name: key.debugName(), keyKind: key.kind, writable: false, enumerable: false, configurable: false, isAccessor: true}
-		if key.isSymbol() {
-			fld.symbolVal = key.symbolVal
-		}
-		if enumerable != nil {
-			fld.enumerable = *enumerable
-		}
-		if configurable != nil {
-			fld.configurable = *configurable
-		}
-		newFields := make([]Field, len(cur.fields)+1)
-		copy(newFields, cur.fields)
-		newFields[len(cur.fields)] = fld
-		newTrans := make(map[string]*Shape)
-		next = &Shape{parent: cur, fields: newFields, stringTransitions: make(map[string]*Shape), transitions: newTrans, version: cur.version + 1}
 		cur.mu.Lock()
+		// Re-check under write lock: another goroutine might have added this
 		if existing, exists := cur.transitions[key.hash()]; exists {
 			next = existing
+			cur.mu.Unlock()
 		} else {
+			off := len(cur.fields)
+			fld := Field{offset: off, name: key.debugName(), keyKind: key.kind, writable: false, enumerable: false, configurable: false, isAccessor: true}
+			if key.isSymbol() {
+				fld.symbolVal = key.symbolVal
+			}
+			if enumerable != nil {
+				fld.enumerable = *enumerable
+			}
+			if configurable != nil {
+				fld.configurable = *configurable
+			}
+			newFields, shared := cur.extendFields(fld)
+			next = &Shape{parent: cur, fields: newFields, ownedFields: !shared, version: cur.version + 1}
+			if cur.transitions == nil {
+				cur.transitions = make(map[string]*Shape)
+			}
 			cur.transitions[key.hash()] = next
+			cur.mu.Unlock()
 		}
-		cur.mu.Unlock()
 	}
 	o.shape = next
 	if o.getters == nil {
@@ -1089,6 +1161,7 @@ func (o *PlainObject) IsPrivateAccessor(name string) bool {
 // non-configurable. Data properties also become non-writable. Accessor properties keep
 // their getter/setter but become non-configurable.
 func (o *PlainObject) FreezeAllProperties() {
+	o.privatizeFields()
 	for i, f := range o.shape.fields {
 		newF := f
 		newF.configurable = false
@@ -1103,6 +1176,7 @@ func (o *PlainObject) FreezeAllProperties() {
 // SealAllProperties makes all own properties (including non-enumerable and symbol-keyed)
 // non-configurable, but preserves the writable attribute of data properties.
 func (o *PlainObject) SealAllProperties() {
+	o.privatizeFields()
 	for i, f := range o.shape.fields {
 		newF := f
 		newF.configurable = false
@@ -1332,6 +1406,7 @@ func init() {
 	// Initialize RootShape first
 	RootShape = &Shape{
 		fields:            []Field{},
+		ownedFields:       true,
 		stringTransitions: make(map[string]*Shape),
 		transitions:       make(map[string]*Shape),
 	}
