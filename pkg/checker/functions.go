@@ -28,16 +28,16 @@ func (c *Checker) processFunctionSignature(node *parser.FunctionSignature) {
 		}
 	}
 
-	// Check return type annotation (required for signatures)
-	if node.ReturnTypeAnnotation == nil {
-		c.addError(node, "function signature must have return type annotation")
-		return
-	}
-
-	returnType := c.resolveTypeAnnotation(node.ReturnTypeAnnotation)
-	if returnType == nil {
-		c.addError(node.ReturnTypeAnnotation, "invalid return type annotation")
-		return
+	// Parse return type annotation (optional — defaults to void if not specified)
+	var returnType types.Type
+	if node.ReturnTypeAnnotation != nil {
+		returnType = c.resolveTypeAnnotation(node.ReturnTypeAnnotation)
+		if returnType == nil {
+			c.addError(node.ReturnTypeAnnotation, "invalid return type annotation")
+			return
+		}
+	} else {
+		returnType = types.Void
 	}
 
 	// Add the signature to pending overloads in the environment

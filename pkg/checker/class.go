@@ -360,6 +360,11 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 				c.validateOverrideMethod(getter, superClass, className)
 			}
 
+			// TS2378: A 'get' accessor must return a value.
+			if getter.Value != nil && getter.Value.Body != nil && !bodyContainsReturn(getter.Value.Body) {
+				c.addError(getter.Key, "A 'get' accessor must return a value.")
+			}
+
 			methodType := c.inferMethodType(getter)
 			if objType, ok := methodType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
 				propType = objType.CallSignatures[0].ReturnType
@@ -1723,4 +1728,39 @@ func (c *Checker) synthesizeParameterProperties(body *parser.ClassBody) {
 				param.Name.Value, param.IsPublic, param.IsPrivate, param.IsProtected, param.IsReadonly)
 		}
 	}
+}
+
+// bodyContainsReturn checks if a block statement contains at least one return statement
+// with a value (not just bare `return;`). This is a shallow check — it only looks at
+// top-level statements and if/else branches, not deeply nested control flow.
+func bodyContainsReturn(body *parser.BlockStatement) bool {
+	for _, stmt := range body.Statements {
+		if containsReturnWithValue(stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsReturnWithValue(node parser.Node) bool {
+	switch n := node.(type) {
+	case *parser.ReturnStatement:
+		return n.ReturnValue != nil
+	case *parser.IfStatement:
+		if n.Consequence != nil && containsReturnWithValue(n.Consequence) {
+			return true
+		}
+		if n.Alternative != nil && containsReturnWithValue(n.Alternative) {
+			return true
+		}
+	case *parser.BlockStatement:
+		for _, s := range n.Statements {
+			if containsReturnWithValue(s) {
+				return true
+			}
+		}
+	case *parser.ExpressionStatement:
+		// Not a return
+	}
+	return false
 }

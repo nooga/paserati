@@ -147,6 +147,10 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			return types.Void
 		case "object":
 			return types.NewObjectType()
+		case "symbol":
+			return types.Symbol
+		case "bigint":
+			return types.BigInt
 		default:
 			// 3. Check if this is an imported type (interface, type alias, etc.)
 			if c.IsModuleMode() && c.moduleEnv != nil {

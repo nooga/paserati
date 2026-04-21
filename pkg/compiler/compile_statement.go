@@ -1372,8 +1372,20 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 		}
 
 		// Check that the target is actually a loop (continue only works with loops)
+		// If this label wraps a nested labeled statement that contains a loop,
+		// find the actual loop context deeper in the stack
 		if targetContext.ContinueTargetPos == -1 {
-			return BadRegister, NewCompileError(node, fmt.Sprintf("continue statement cannot target non-loop label '%s'", node.Label.Value))
+			foundLoop := false
+			for j := targetIndex + 1; j < len(c.loopContextStack); j++ {
+				if c.loopContextStack[j].ContinueTargetPos != -1 {
+					targetContext = c.loopContextStack[j]
+					foundLoop = true
+					break
+				}
+			}
+			if !foundLoop {
+				return BadRegister, NewCompileError(node, fmt.Sprintf("continue statement cannot target non-loop label '%s'", node.Label.Value))
+			}
 		}
 
 		// If continuing to an outer loop, need to close any inner loop iterators

@@ -70,6 +70,31 @@ func IsEnumMemberType(t Type) bool {
 	return ok
 }
 
+// IsNumericEnumLikeType checks if a type is a numeric enum or numeric enum member.
+// This is used for arithmetic operator type checking - enums with numeric members
+// are treated as compatible with 'number' for operators like +, -, *, /, %, **.
+func IsNumericEnumLikeType(t Type) bool {
+	if em, ok := t.(*EnumMemberType); ok {
+		if _, isNumeric := em.Value.(int); isNumeric {
+			return true
+		}
+		return false
+	}
+	if et, ok := t.(*EnumType); ok {
+		return et.IsNumeric
+	}
+	// Also check union types that are all numeric enum members
+	if u, ok := t.(*UnionType); ok {
+		for _, m := range u.Types {
+			if !IsNumericEnumLikeType(m) {
+				return false
+			}
+		}
+		return len(u.Types) > 0
+	}
+	return false
+}
+
 // GetEnumMemberValue returns the value of an enum member if it's an enum member type
 func GetEnumMemberValue(t Type) (interface{}, bool) {
 	if em, ok := t.(*EnumMemberType); ok {

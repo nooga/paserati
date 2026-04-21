@@ -1625,8 +1625,9 @@ func (c *Checker) visit(node parser.Node) {
 						debugPrintf("// [Checker LetStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					}
 				} else {
-					finalVariableType = types.Undefined
-					debugPrintf("// [Checker LetStmt] '%s': Inferred final type (no initializer): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+					// No type annotation and no initializer: let x; → implicitly 'any' (like TypeScript)
+					finalVariableType = types.Any
+					debugPrintf("// [Checker LetStmt] '%s': Inferred final type (no initializer, implicit any): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 				}
 			}
 
@@ -1881,8 +1882,9 @@ func (c *Checker) visit(node parser.Node) {
 						debugPrintf("// [Checker VarStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					}
 				} else {
-					finalVariableType = types.Undefined
-					debugPrintf("// [Checker VarStmt] '%s': Inferred final type (no initializer): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
+					// No type annotation and no initializer: var x; → implicitly 'any' (like TypeScript)
+					finalVariableType = types.Any
+					debugPrintf("// [Checker VarStmt] '%s': Inferred final type (no initializer, implicit any): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 				}
 			}
 
@@ -2428,39 +2430,12 @@ func (c *Checker) visit(node parser.Node) {
 			debugPrintf("// [Checker Infix Pre-Check] Proceeding with operator: %s\n", node.Operator)
 			switch node.Operator {
 			case "+":
+				leftIsNumeric := widenedLeftType == types.Number || types.IsNumericEnumLikeType(leftType)
+				rightIsNumeric := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
 				if isAnyOperand {
 					resultType = types.Any
-				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
+				} else if leftIsNumeric && rightIsNumeric {
 					resultType = types.Number
-				} else if types.IsEnumMemberType(leftType) && types.IsEnumMemberType(rightType) {
-					// Check if both enum members are numeric
-					leftValue, _ := types.GetEnumMemberValue(leftType)
-					rightValue, _ := types.GetEnumMemberValue(rightType)
-					if _, leftIsNumeric := leftValue.(int); leftIsNumeric {
-						if _, rightIsNumeric := rightValue.(int); rightIsNumeric {
-							resultType = types.Number
-						} else {
-							c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
-						}
-					} else {
-						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
-					}
-				} else if types.IsEnumMemberType(leftType) && widenedRightType == types.Number {
-					// Enum member + number
-					leftValue, _ := types.GetEnumMemberValue(leftType)
-					if _, leftIsNumeric := leftValue.(int); leftIsNumeric {
-						resultType = types.Number
-					} else {
-						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
-					}
-				} else if widenedLeftType == types.Number && types.IsEnumMemberType(rightType) {
-					// Number + enum member
-					rightValue, _ := types.GetEnumMemberValue(rightType)
-					if _, rightIsNumeric := rightValue.(int); rightIsNumeric {
-						resultType = types.Number
-					} else {
-						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
-					}
 				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
 					resultType = types.BigInt
 				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
@@ -2503,114 +2478,51 @@ func (c *Checker) visit(node parser.Node) {
 					// Keep resultType = types.Any (default)
 				}
 			case "-", "*", "/":
+				leftIsNumeric := widenedLeftType == types.Number || types.IsNumericEnumLikeType(leftType)
+				rightIsNumeric := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
 				if isAnyOperand {
 					resultType = types.Any
-				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
+				} else if leftIsNumeric && rightIsNumeric {
 					resultType = types.Number
-				} else if types.IsEnumMemberType(leftType) && types.IsEnumMemberType(rightType) {
-					// Check if both enum members are numeric
-					leftValue, _ := types.GetEnumMemberValue(leftType)
-					rightValue, _ := types.GetEnumMemberValue(rightType)
-					if _, leftIsNumeric := leftValue.(int); leftIsNumeric {
-						if _, rightIsNumeric := rightValue.(int); rightIsNumeric {
-							resultType = types.Number
-						} else {
-							c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
-						}
-					} else {
-						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
-					}
-				} else if types.IsEnumMemberType(leftType) && widenedRightType == types.Number {
-					// Enum member with number
-					leftValue, _ := types.GetEnumMemberValue(leftType)
-					if _, leftIsNumeric := leftValue.(int); leftIsNumeric {
-						resultType = types.Number
-					} else {
-						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
-					}
-				} else if widenedLeftType == types.Number && types.IsEnumMemberType(rightType) {
-					// Number with enum member
-					rightValue, _ := types.GetEnumMemberValue(rightType)
-					if _, rightIsNumeric := rightValue.(int); rightIsNumeric {
-						resultType = types.Number
-					} else {
-						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
-					}
 				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
 					resultType = types.BigInt
 				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
 					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s' (cannot mix BigInt and other types)", node.Operator, widenedLeftType.String(), widenedRightType.String()))
-					// Keep resultType = types.Any (default)
 				} else if (widenedLeftType == types.String && widenedRightType == types.Number) ||
 					(widenedLeftType == types.Number && widenedRightType == types.String) {
-					// JavaScript allows string-number arithmetic, resulting in NaN
 					resultType = types.Number
 				} else if (widenedLeftType == types.String && widenedRightType == types.BigInt) ||
 					(widenedLeftType == types.BigInt && widenedRightType == types.String) {
-					// JavaScript allows string-BigInt arithmetic, resulting in NaN
 					resultType = types.BigInt
 				} else {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
 					// Keep resultType = types.Any (default)
 				}
-			// --- NEW: Handle % and ** type checking ---
-			case "%", "**": // Ensure both % and ** are listed here
-				debugPrintf("// [Checker Infix Pre-Check] Proceeding with operator: %s\n", node.Operator)
+			// --- Handle % and ** type checking ---
+			case "%", "**":
+				leftIsNumeric := widenedLeftType == types.Number || types.IsNumericEnumLikeType(leftType)
+				rightIsNumeric := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
 				if isAnyOperand {
 					resultType = types.Any
-				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
+				} else if leftIsNumeric && rightIsNumeric {
 					resultType = types.Number
-				} else if types.IsEnumMemberType(leftType) && types.IsEnumMemberType(rightType) {
-					// Check if both enum members are numeric
-					leftValue, _ := types.GetEnumMemberValue(leftType)
-					rightValue, _ := types.GetEnumMemberValue(rightType)
-					if _, leftIsNumeric := leftValue.(int); leftIsNumeric {
-						if _, rightIsNumeric := rightValue.(int); rightIsNumeric {
-							resultType = types.Number
-						} else {
-							c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
-						}
-					} else {
-						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
-					}
-				} else if types.IsEnumMemberType(leftType) && widenedRightType == types.Number {
-					// Enum member with number
-					leftValue, _ := types.GetEnumMemberValue(leftType)
-					if _, leftIsNumeric := leftValue.(int); leftIsNumeric {
-						resultType = types.Number
-					} else {
-						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
-					}
-				} else if widenedLeftType == types.Number && types.IsEnumMemberType(rightType) {
-					// Number with enum member
-					rightValue, _ := types.GetEnumMemberValue(rightType)
-					if _, rightIsNumeric := rightValue.(int); rightIsNumeric {
-						resultType = types.Number
-					} else {
-						c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, leftType.String(), rightType.String()))
-					}
 				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
 					resultType = types.BigInt
 				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
 					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s' (cannot mix BigInt and other types)", node.Operator, widenedLeftType.String(), widenedRightType.String()))
-					// Keep resultType = types.Any (default)
 				} else {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
-					// Keep resultType = types.Any
 				}
-			// --- END NEW ---
 
-			// --- NEW: Handle Bitwise/Shift Operators ---
+			// --- Handle Bitwise/Shift Operators ---
 			case "&", "|", "^", "<<", ">>", ">>>":
+				leftIsNumericBit := widenedLeftType == types.Number || types.IsNumericEnumLikeType(leftType)
+				rightIsNumericBit := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
 				if isAnyOperand {
-					// If either operand is 'any', the result is likely 'number'
-					// as these ops coerce non-numbers in JS (often to 0 or NaN).
-					// Let's assume 'number' is the most probable outcome type.
 					resultType = types.Number
-				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
-					// Both operands are numbers, result is number.
+				} else if leftIsNumericBit && rightIsNumericBit {
 					resultType = types.Number
 				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
 					// Both operands are BigInt, result is BigInt.
@@ -2653,16 +2565,17 @@ func (c *Checker) visit(node parser.Node) {
 			// --- END NEW ---
 
 			case "<", ">", "<=", ">=":
+				leftIsNumericCmp := widenedLeftType == types.Number || types.IsNumericEnumLikeType(leftType)
+				rightIsNumericCmp := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
 				if isAnyOperand {
-					resultType = types.Any // Comparison with any results in any? Or boolean? Let's try Any first.
-					// Alternatively: resultType = types.Boolean (safer, result is always boolean)
-				} else if widenedLeftType == types.Number && widenedRightType == types.Number {
+					resultType = types.Boolean
+				} else if leftIsNumericCmp && rightIsNumericCmp {
 					resultType = types.Boolean
 				} else if widenedLeftType == types.String && widenedRightType == types.String {
 					resultType = types.Boolean
 				} else {
 					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
-					resultType = types.Boolean // Comparison errors still result in boolean
+					resultType = types.Boolean
 				}
 			case "==", "!=", "===", "!==":
 				// Check for impossible comparisons before setting result type

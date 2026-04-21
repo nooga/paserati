@@ -52,6 +52,14 @@ func (c *Compiler) compileEnumDeclaration(node *parser.EnumDeclaration, hint Reg
 				} else {
 					return BadRegister, NewCompileError(member.Value, "enum member must have constant initializer")
 				}
+			case *parser.InfixExpression:
+				if val, ok := evalEnumConstExpr(member.Value); ok {
+					memberValue = vm.Number(float64(val))
+					nextValue = val + 1
+					isThisMemberNumeric = true
+				} else {
+					return BadRegister, NewCompileError(member.Value, "enum member initializer must be a constant expression")
+				}
 			default:
 				// For complex expressions, we would need runtime evaluation
 				// For now, only support compile-time constants
@@ -104,4 +112,67 @@ func (c *Compiler) compileEnumDeclaration(node *parser.EnumDeclaration, hint Reg
 		node.Name.Value, len(node.Members))
 
 	return hint, nil
+}
+
+// evalEnumConstExpr evaluates a constant expression at compile time for enum initializers.
+func evalEnumConstExpr(expr parser.Expression) (int, bool) {
+	switch e := expr.(type) {
+	case *parser.NumberLiteral:
+		return int(e.Value), true
+	case *parser.PrefixExpression:
+		if e.Operator == "-" {
+			if val, ok := evalEnumConstExpr(e.Right); ok {
+				return -val, true
+			}
+		} else if e.Operator == "+" {
+			return evalEnumConstExpr(e.Right)
+		} else if e.Operator == "~" {
+			if val, ok := evalEnumConstExpr(e.Right); ok {
+				return ^val, true
+			}
+		}
+	case *parser.InfixExpression:
+		left, lok := evalEnumConstExpr(e.Left)
+		right, rok := evalEnumConstExpr(e.Right)
+		if !lok || !rok {
+			return 0, false
+		}
+		switch e.Operator {
+		case "+":
+			return left + right, true
+		case "-":
+			return left - right, true
+		case "*":
+			return left * right, true
+		case "/":
+			if right == 0 {
+				return 0, false
+			}
+			return left / right, true
+		case "%":
+			if right == 0 {
+				return 0, false
+			}
+			return left % right, true
+		case "<<":
+			return left << uint(right), true
+		case ">>":
+			return left >> uint(right), true
+		case ">>>":
+			return int(uint32(left) >> uint(right)), true
+		case "|":
+			return left | right, true
+		case "&":
+			return left & right, true
+		case "^":
+			return left ^ right, true
+		case "**":
+			result := 1
+			for i := 0; i < right; i++ {
+				result *= left
+			}
+			return result, true
+		}
+	}
+	return 0, false
 }

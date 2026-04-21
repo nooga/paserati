@@ -4401,6 +4401,11 @@ func (p *Parser) parseGroupedExpression() Expression {
 		return nil // Missing closing parenthesis
 	}
 	debugPrint("parseGroupedExpression: Finished grouped expr %T", exp)
+	// Mark prefix expressions as parenthesized so we can distinguish
+	// (-x) ** y (valid) from -x ** y (syntax error per ES2016)
+	if prefix, ok := exp.(*PrefixExpression); ok {
+		prefix.Parenthesized = true
+	}
 	return exp
 }
 
@@ -4550,6 +4555,18 @@ func (p *Parser) parseInfixExpression(left Expression) Expression {
 	expression.Token = p.curToken // The operator token
 	expression.Operator = p.curToken.Literal
 	expression.Left = left
+
+	// ES2016: Unary operators on the left of ** are a syntax error (ambiguous without parens)
+	// e.g., -x ** y is an error, must write (-x) ** y or -(x ** y)
+	if expression.Token.Type == lexer.EXPONENT {
+		if prefix, ok := left.(*PrefixExpression); ok && !prefix.Parenthesized {
+			op := prefix.Operator
+			if op == "-" || op == "+" || op == "~" || op == "!" ||
+				op == "typeof" || op == "void" || op == "delete" {
+				p.addError(expression.Token, fmt.Sprintf("unary operator '%s' used immediately before exponentiation expression. Parentheses must be used to disambiguate operator precedence", op))
+			}
+		}
+	}
 
 	// --- Associativity Fix ---
 	precedence := p.curPrecedence()
@@ -7464,8 +7481,8 @@ func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
 			stmt.Properties = append(stmt.Properties, prop)
 		}
 
-		// Skip optional semicolon
-		if p.peekTokenIs(lexer.SEMICOLON) {
+		// Skip optional semicolon or comma separator
+		if p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.COMMA) {
 			p.nextToken()
 		}
 	}
@@ -7479,8 +7496,9 @@ func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
 
 // parseInterfaceProperty parses a single property in an interface
 func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
-	// Check for constructor signature first: `new (): T`
-	if p.curTokenIs(lexer.NEW) {
+	// Check for constructor signature first: `new (): T` or `new <T>(): T`
+	// Only treat as constructor signature if followed by '(' or '<'
+	if p.curTokenIs(lexer.NEW) && (p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT)) {
 		prop := &InterfaceProperty{
 			IsConstructorSignature: true,
 		}
@@ -7532,6 +7550,12 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 			ComputedName:       stringLit,
 			IsComputedProperty: true,
 		}
+	} else if p.curTokenIs(lexer.NUMBER) {
+		// Handle numeric literal property names like { 0: string; 1: number }
+		numIdent := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		prop = &InterfaceProperty{
+			Name: numIdent,
+		}
 	} else {
 		p.addError(p.curToken, "expected property name (identifier or string literal) or call signature '(' in interface")
 		return nil
@@ -7577,10 +7601,13 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 	}
 
 	// Regular property: PropertyName : TypeExpression
-	// Expect ':'
-	if !p.expectPeek(lexer.COLON) {
-		return nil // Error message already added by expectPeek
+	// If peek is not ':', this is a property without type annotation (defaults to any)
+	// This handles: `;`, `,`, `}`, EOF, and ASI (newlines stripped by lexer)
+	if !p.peekTokenIs(lexer.COLON) {
+		return prop
 	}
+
+	p.nextToken() // Consume ':'
 
 	// Parse the type expression
 	p.nextToken() // Move to the start of the type expression
@@ -7947,6 +7974,12 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 				prop = &ObjectTypeProperty{
 					Name: identFromString,
 				}
+			} else if p.curTokenIs(lexer.NUMBER) {
+				// Handle numeric literal property names
+				numIdent := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+				prop = &ObjectTypeProperty{
+					Name: numIdent,
+				}
 			} else {
 				p.addError(p.curToken, "expected property name (identifier or string literal), call signature '(', or index signature '[' in object type")
 				return nil
@@ -7972,25 +8005,25 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 				prop.Type = funcType
 			} else {
 				// Regular property: PropertyName?: TypeExpression
+				// If peek is not ':', this is a property without type annotation (defaults to any)
+				if p.peekTokenIs(lexer.COLON) {
+					p.nextToken() // Consume ':'
 
-				// Expect ':'
-				if !p.expectPeek(lexer.COLON) {
-					return nil // Error message already added by expectPeek
+					// Parse the type expression
+					p.nextToken() // Move to the start of the type expression
+					prop.Type = p.parseTypeExpression()
+					if prop.Type == nil {
+						// Error should have been added by parseTypeExpression
+						return nil
+					}
 				}
-
-				// Parse the type expression
-				p.nextToken() // Move to the start of the type expression
-				prop.Type = p.parseTypeExpression()
-				if prop.Type == nil {
-					// Error should have been added by parseTypeExpression
-					return nil
-				}
+				// else: no type annotation - property defaults to 'any'
 			}
 
 			objType.Properties = append(objType.Properties, prop)
 		}
 
-		// Expect ';', ',' or '}' next
+		// Expect ';', ',' or '}' next (newlines act as implicit separators)
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Consume ';'
 		} else if p.peekTokenIs(lexer.COMMA) {
@@ -7998,6 +8031,10 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 		} else if p.peekTokenIs(lexer.RBRACE) {
 			// End of object type, will be consumed by outer loop condition
 			break
+		} else if p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) ||
+			p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.NEW) ||
+			p.peekTokenIs(lexer.READONLY) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type) {
+			// ASI: next token can start a new property, treat newline as separator
 		} else {
 			p.addError(p.peekToken, "expected ';', ',' or '}' after object type property")
 			return nil
@@ -9195,16 +9232,16 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 		}
 	}
 
-	// Now expect ':' for return type (not '=>' like in arrow functions)
-	if !p.expectPeek(lexer.COLON) {
-		return nil
-	}
-
-	// Parse the return type
-	p.nextToken() // Move to the start of the return type expression
-	returnType := p.parseTypeExpression()
-	if returnType == nil {
-		return nil
+	// Check for ':' for return type (not '=>' like in arrow functions)
+	// Return type is optional — if missing, defaults to void
+	var returnType Expression
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Consume ':'
+		p.nextToken() // Move to the start of the return type expression
+		returnType = p.parseTypeExpression()
+		if returnType == nil {
+			return nil
+		}
 	}
 
 	// Create a FunctionTypeExpression to represent the method signature
@@ -11058,17 +11095,29 @@ func (p *Parser) parseObjectTypeBracketProperty() *ObjectTypeProperty {
 			prop.Optional = true
 		}
 
-		// Expect ':'
-		if !p.expectPeek(lexer.COLON) {
-			return nil
+		// Check for method signature: [expr](): returnType
+		if p.peekTokenIs(lexer.LPAREN) {
+			// This is a computed method signature
+			p.nextToken() // Move to '('
+			sig := p.parseMethodTypeSignature()
+			if sig != nil {
+				prop.Type = sig
+			}
+			return prop
 		}
 
-		// Parse property type
-		p.nextToken() // Move to the start of the type expression
-		prop.Type = p.parseTypeExpression()
-		if prop.Type == nil {
-			return nil
+		// Expect ':' for property type annotation
+		if p.peekTokenIs(lexer.COLON) {
+			p.nextToken() // consume ':'
+
+			// Parse property type
+			p.nextToken() // Move to the start of the type expression
+			prop.Type = p.parseTypeExpression()
+			if prop.Type == nil {
+				return nil
+			}
 		}
+		// else: no type annotation, property defaults to 'any'
 
 		return prop
 	} else {

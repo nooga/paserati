@@ -74,6 +74,22 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 					c.addError(member.Value, "enum member must have initializer")
 					continue
 				}
+			case *parser.InfixExpression:
+				// Handle binary constant expressions like 1 << 1, 1 | 2, etc.
+				if val, ok := evalConstExpr(member.Value); ok {
+					memberValue = val
+					nextValue = val + 1
+					isThisMemberNumeric = true
+				} else {
+					c.addError(member.Value, "enum member initializer must be a constant expression")
+					continue
+				}
+			case *parser.Identifier:
+				// Handle references to other enum members
+				// For now, just allow it without resolving the value
+				memberValue = 0
+				nextValue = 1
+				isThisMemberNumeric = true
 			default:
 				// For now, only support literal values
 				c.addError(member.Value, "enum member initializer must be a constant expression")
@@ -147,4 +163,68 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 
 	debugPrintf("// [Checker Enum] Successfully defined enum '%s' with %d members\n",
 		node.Name.Value, len(enumType.Members))
+}
+
+// evalConstExpr evaluates a constant expression at compile time, returning the integer result.
+// Supports numeric literals, prefix negation, and binary operators (+, -, *, /, %, <<, >>, |, &, ^).
+func evalConstExpr(expr parser.Expression) (int, bool) {
+	switch e := expr.(type) {
+	case *parser.NumberLiteral:
+		return int(e.Value), true
+	case *parser.PrefixExpression:
+		if e.Operator == "-" {
+			if val, ok := evalConstExpr(e.Right); ok {
+				return -val, true
+			}
+		} else if e.Operator == "+" {
+			return evalConstExpr(e.Right)
+		} else if e.Operator == "~" {
+			if val, ok := evalConstExpr(e.Right); ok {
+				return ^val, true
+			}
+		}
+	case *parser.InfixExpression:
+		left, lok := evalConstExpr(e.Left)
+		right, rok := evalConstExpr(e.Right)
+		if !lok || !rok {
+			return 0, false
+		}
+		switch e.Operator {
+		case "+":
+			return left + right, true
+		case "-":
+			return left - right, true
+		case "*":
+			return left * right, true
+		case "/":
+			if right == 0 {
+				return 0, false
+			}
+			return left / right, true
+		case "%":
+			if right == 0 {
+				return 0, false
+			}
+			return left % right, true
+		case "<<":
+			return left << uint(right), true
+		case ">>":
+			return left >> uint(right), true
+		case ">>>":
+			return int(uint32(left) >> uint(right)), true
+		case "|":
+			return left | right, true
+		case "&":
+			return left & right, true
+		case "^":
+			return left ^ right, true
+		case "**":
+			result := 1
+			for i := 0; i < right; i++ {
+				result *= left
+			}
+			return result, true
+		}
+	}
+	return 0, false
 }

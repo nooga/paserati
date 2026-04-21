@@ -256,10 +256,13 @@ func (p *Parser) parseClassBody() *ClassBody {
 		isAsync := false
 
 		// Helper to check if current token is likely a field name (not a modifier)
-		// A keyword is a field name if followed by ;, =, :, or ?
+		// A keyword is a field name if followed by tokens that indicate it's a name, not a modifier
 		isFieldName := func() bool {
 			return p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.ASSIGN) ||
-				p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION)
+				p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION) ||
+				p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) ||
+				p.peekTokenIs(lexer.RBRACE) || p.peekTokenIs(lexer.BANG) ||
+				p.peekToken.Line > p.curToken.Line // ASI: newline means it's a name
 		}
 
 		// Check for static initializer block before parsing modifiers: static { ... }
@@ -274,6 +277,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 		}
 
 		// Parse all modifiers until we hit something that's not a modifier
+		hasAccessibility := false
 		for {
 			if p.curTokenIs(lexer.READONLY) && !isReadonly && !isFieldName() {
 				isReadonly = true
@@ -281,14 +285,21 @@ func (p *Parser) parseClassBody() *ClassBody {
 			} else if p.curTokenIs(lexer.STATIC) && !isStatic && !isFieldName() {
 				isStatic = true
 				p.nextToken()
-			} else if p.curTokenIs(lexer.PUBLIC) && !isPublic && !isPrivate && !isProtected && !isFieldName() {
-				isPublic = true
-				p.nextToken()
-			} else if p.curTokenIs(lexer.PRIVATE) && !isPublic && !isPrivate && !isProtected && !isFieldName() {
-				isPrivate = true
-				p.nextToken()
-			} else if p.curTokenIs(lexer.PROTECTED) && !isPublic && !isPrivate && !isProtected && !isFieldName() {
-				isProtected = true
+			} else if (p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) || p.curTokenIs(lexer.PROTECTED)) && !isFieldName() {
+				if hasAccessibility {
+					p.addError(p.curToken, "Accessibility modifier already seen.")
+				}
+				if isStatic {
+					p.addError(p.curToken, fmt.Sprintf("'%s' modifier must precede 'static' modifier.", p.curToken.Literal))
+				}
+				hasAccessibility = true
+				if p.curTokenIs(lexer.PUBLIC) {
+					isPublic = true
+				} else if p.curTokenIs(lexer.PRIVATE) {
+					isPrivate = true
+				} else {
+					isProtected = true
+				}
 				p.nextToken()
 			} else if p.curTokenIs(lexer.ABSTRACT) && !isAbstract && !isFieldName() {
 				isAbstract = true
@@ -1105,6 +1116,27 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 	if keyExpr == nil {
 		p.addError(p.curToken, "expected expression inside computed property brackets")
 		return nil
+	}
+
+	// Check for index signature pattern: [key: type]: valueType
+	if p.peekTokenIs(lexer.COLON) {
+		if _, ok := keyExpr.(*Identifier); ok {
+			// This looks like an index signature — skip the key type, ]: valueType
+			p.nextToken() // consume ':'
+			p.nextToken() // move to key type
+			_ = p.parseTypeExpression()
+			if !p.expectPeek(lexer.RBRACKET) {
+				return nil
+			}
+			// Optionally parse ': valueType'
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken() // consume ':'
+				p.nextToken() // move to value type
+				_ = p.parseTypeExpression()
+			}
+			// Index signatures in classes are just type declarations; skip for now
+			return nil
+		}
 	}
 
 	if !p.expectPeek(lexer.RBRACKET) {

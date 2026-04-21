@@ -1194,10 +1194,11 @@ func (ds *DebuggerStatement) String() string       { return "debugger;" }
 // <operator><Right>
 // e.g., !true, -15
 type PrefixExpression struct {
-	BaseExpression             // Embed base for ComputedType
-	Token          lexer.Token // The prefix token, e.g. ! or -
-	Operator       string      // "!" or "-"
-	Right          Expression  // The expression to the right of the operator
+	BaseExpression                // Embed base for ComputedType
+	Token            lexer.Token // The prefix token, e.g. ! or -
+	Operator         string      // "!" or "-"
+	Right            Expression  // The expression to the right of the operator
+	Parenthesized    bool        // True if this expression was wrapped in parens: (-x)
 }
 
 func (pe *PrefixExpression) expressionNode()      {}

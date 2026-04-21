@@ -94,13 +94,22 @@ func (p *Parser) parseEnumDeclaration(isConst bool) *EnumDeclaration {
 // parseEnumMember parses a single enum member
 // Syntax: MemberName [= value]
 func (p *Parser) parseEnumMember() *EnumMember {
-	if !p.curTokenIs(lexer.IDENT) {
+	// Enum members can be identifiers, keywords (used as names), or string literals
+	var memberToken lexer.Token
+	var name *Identifier
+
+	if p.curTokenIs(lexer.STRING) {
+		// String literal member name: enum E { "A", "B" }
+		memberToken = p.curToken
+		name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	} else if p.curTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.curToken.Type) {
+		// Identifier or keyword used as member name: enum E { interface, delete }
+		memberToken = p.curToken
+		name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	} else {
 		p.addError(p.curToken, "expected enum member name")
 		return nil
 	}
-
-	memberToken := p.curToken
-	name := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
 	var value Expression
 	if p.peekTokenIs(lexer.ASSIGN) {
