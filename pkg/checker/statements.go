@@ -144,6 +144,12 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	// Called during Pass 1 for interface declarations
 
+	// Check that interface name is not a primitive type name (TS2427)
+	switch node.Name.Value {
+	case "string", "number", "boolean", "symbol", "bigint", "object":
+		c.addError(node.Name, fmt.Sprintf("Interface name cannot be '%s'.", node.Name.Value))
+	}
+
 	// 1. Handle generic interfaces
 	if len(node.TypeParameters) > 0 {
 		c.checkGenericInterfaceDeclaration(node)
@@ -251,6 +257,9 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			// Constructor signatures are always required (not optional)
 		} else if prop.IsComputedProperty {
 			// This is a computed property: [expr]: Type
+			if prop.ComputedName != nil {
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: prop.ComputedName, env: c.env})
+			}
 			propType := c.resolveTypeAnnotation(prop.Type)
 			if propType == nil {
 				debugPrintf("// [Checker Interface P1] Failed to resolve computed property type in interface '%s'. Using Any.\n", node.Name.Value)
@@ -543,7 +552,9 @@ func (c *Checker) checkSwitchStatement(node *parser.SwitchStatement) {
 		}
 
 		// Visit case body (BlockStatement, handles its own scope)
+		c.switchDepth++
 		c.visit(caseClause.Body)
+		c.switchDepth--
 	}
 
 	// Switch statements don't produce a value themselves
@@ -562,7 +573,9 @@ func (c *Checker) checkForStatement(node *parser.ForStatement) {
 	c.visit(node.Initializer)
 	c.visit(node.Condition)
 	c.visit(node.Update)
+	c.loopDepth++
 	c.visit(node.Body)
+	c.loopDepth--
 
 	// 3. Restore the outer environment
 	c.env = originalEnv
@@ -744,7 +757,9 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 
 		// Visit the body
 		if node.Body != nil {
+			c.loopDepth++
 			c.visit(node.Body)
+			c.loopDepth--
 		}
 	} else {
 		c.addError(node, "for...of statement missing iterable expression")
@@ -973,7 +988,9 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 
 		// Visit the body
 		if node.Body != nil {
+			c.loopDepth++
 			c.visit(node.Body)
+			c.loopDepth--
 		}
 	} else {
 		c.addError(node, "for...in statement missing object expression")

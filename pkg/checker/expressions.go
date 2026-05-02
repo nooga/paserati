@@ -785,6 +785,10 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 			// Store getter/setter with appropriate prefix to match compiler expectations
 			if methodDef.Kind == "getter" {
+				// Check that getter has a return statement (TS2378)
+				if methodDef.Value != nil && methodDef.Value.Body != nil && !bodyContainsReturn(methodDef.Value.Body) {
+					c.addError(methodDef.Key, "A 'get' accessor must return a value.")
+				}
 				// For getters, store both the implementation and the property type
 				getterName := "__get__" + keyName
 				fields[getterName] = valueType // Implementation for compiler

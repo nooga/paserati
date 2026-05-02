@@ -278,12 +278,26 @@ func (p *Parser) parseClassBody() *ClassBody {
 
 		// Parse all modifiers until we hit something that's not a modifier
 		hasAccessibility := false
+		isDeclare := false
 		for {
 			if p.curTokenIs(lexer.READONLY) && !isReadonly && !isFieldName() {
 				isReadonly = true
 				p.nextToken()
 			} else if p.curTokenIs(lexer.STATIC) && !isStatic && !isFieldName() {
 				isStatic = true
+				p.nextToken()
+			} else if p.curTokenIs(lexer.STATIC) && isStatic && !isFieldName() {
+				// Duplicate 'static' modifier
+				p.addError(p.curToken, "Unexpected keyword or identifier.")
+				p.nextToken()
+			} else if p.curTokenIs(lexer.EXPORT) && !isFieldName() {
+				// 'export' is not a valid class element modifier
+				p.addError(p.curToken, "'export' modifier cannot appear on class elements of this kind.")
+				p.nextToken()
+			} else if p.curToken.Type == lexer.IDENT && p.curToken.Literal == "declare" && !isFieldName() {
+				// 'declare' is not a valid class element modifier
+				isDeclare = true
+				p.addError(p.curToken, "'declare' modifier cannot appear on class elements of this kind.")
 				p.nextToken()
 			} else if (p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) || p.curTokenIs(lexer.PROTECTED)) && !isFieldName() {
 				if hasAccessibility {
@@ -464,6 +478,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 							methodSigs = append(methodSigs, sig)
 						} else if method, ok := result.(*MethodDefinition); ok {
 							// It's a method implementation
+							if isDeclare && method.Value != nil && method.Value.Body != nil {
+								p.addError(method.Token, "An implementation cannot be declared in ambient contexts.")
+							}
 							attachDecorators(method)
 							methods = append(methods, method)
 						}
@@ -1121,6 +1138,16 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 	// Check for index signature pattern: [key: type]: valueType
 	if p.peekTokenIs(lexer.COLON) {
 		if _, ok := keyExpr.(*Identifier); ok {
+			// Check for invalid modifier on index signature (TS1071)
+			if isPublic || isPrivate || isProtected {
+				modifier := "public"
+				if isPrivate {
+					modifier = "private"
+				} else if isProtected {
+					modifier = "protected"
+				}
+				p.addError(bracketToken, fmt.Sprintf("'%s' modifier cannot appear on an index signature.", modifier))
+			}
 			// This looks like an index signature — skip the key type, ]: valueType
 			p.nextToken() // consume ':'
 			p.nextToken() // move to key type

@@ -11,6 +11,42 @@ import (
 
 // --- Helper Functions ---
 
+// checkTypeRefDefined walks a type expression and emits TS2304 for any type name
+// that is not defined in the current environment. Used for strict contexts like
+// generic class/interface constraints where forward references are not allowed.
+func (c *Checker) checkTypeRefDefined(node parser.Expression) {
+	if node == nil {
+		return
+	}
+	switch n := node.(type) {
+	case *parser.Identifier:
+		// Skip built-in primitive names and type parameters
+		if _, found := c.env.ResolveTypeParameter(n.Value); found {
+			return
+		}
+		if _, found := c.env.ResolveType(n.Value); found {
+			return
+		}
+		if _, _, found := c.env.Resolve(n.Value); found {
+			return
+		}
+		// Check primitives
+		switch n.Value {
+		case "string", "number", "boolean", "any", "void", "never", "unknown",
+			"null", "undefined", "object", "symbol", "bigint":
+			return
+		}
+		c.addError(n, fmt.Sprintf("Cannot find name '%s'.", n.Value))
+	case *parser.GenericTypeRef:
+		// Check the base name
+		c.checkTypeRefDefined(n.Name)
+		// Check type arguments recursively
+		for _, arg := range n.TypeArguments {
+			c.checkTypeRefDefined(arg)
+		}
+	}
+}
+
 // resolveTypeAnnotation converts a parser node representing a type annotation
 // into a types.Type representation.
 func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
@@ -325,13 +361,12 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			}
 
 			if !exists {
-				// During type alias resolution, if we encounter a forward reference to another
-				// type alias that might be defined later, create a placeholder for it
-				// This allows mutual recursion between type aliases
+				// Create a forward reference placeholder (may be resolved later or reported
+				// as an error by the caller in strict contexts like generic constraints)
 				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Creating forward reference for unknown type '%s'\n", node.Name.Value)
 				return &types.GenericTypeAliasForwardReference{
 					AliasName:     node.Name.Value,
-					TypeArguments: make([]types.Type, len(node.TypeArguments)), // Placeholder args
+					TypeArguments: make([]types.Type, len(node.TypeArguments)),
 				}
 			}
 
@@ -659,6 +694,9 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 
 		} else if prop.IsComputedProperty {
 			// This is a computed property: [expr]: Type
+			if prop.ComputedName != nil {
+				c.visit(prop.ComputedName) // check for undefined identifiers in computed key
+			}
 			propType := c.resolveTypeAnnotation(prop.Type)
 			if propType == nil {
 				propType = types.Any

@@ -68,9 +68,92 @@ func (c *Checker) tryExtractConstantComputedPropertyName(expr parser.Expression)
 	}
 }
 
+// validateParamListBasic checks TS1015 (optional+default) and TS1016 (required after optional)
+// on any parameter list.
+func (c *Checker) validateParamListBasic(params []*parser.Parameter) {
+	seenOptional := false
+	for _, param := range params {
+		if param.IsThis {
+			continue
+		}
+		isOptional := param.Optional || param.DefaultValue != nil
+		if param.Optional && param.DefaultValue != nil {
+			c.addError(param.Name, "Parameter cannot have question mark and initializer.")
+		}
+		if seenOptional && !isOptional {
+			c.addError(param.Name, "A required parameter cannot follow an optional parameter.")
+		}
+		if isOptional {
+			seenOptional = true
+		}
+	}
+}
+
+// validateClassMemberConstraints checks for invalid modifier/structural combinations in class bodies.
+func (c *Checker) validateClassMemberConstraints(body *parser.ClassBody) {
+	if body == nil {
+		return
+	}
+	for _, method := range body.Methods {
+		if method.Value != nil {
+			c.validateParamListBasic(method.Value.Parameters)
+		}
+		if method.Kind == "constructor" {
+			if method.IsStatic {
+				c.addError(method.Key, "'static' modifier cannot appear on a constructor declaration.")
+			}
+			if method.Value != nil {
+				if method.Value.TypeParameters != nil {
+					if len(method.Value.TypeParameters) > 0 {
+						c.addError(method.Value.TypeParameters[0], "Type parameters cannot appear on a constructor declaration.")
+					} else {
+						c.addError(method.Key, "Type parameters cannot appear on a constructor declaration.")
+					}
+				}
+				if method.Value.ReturnTypeAnnotation != nil {
+					c.addError(method.Value.ReturnTypeAnnotation, "Type annotation cannot appear on a constructor declaration.")
+				}
+			}
+		} else if method.Kind == "setter" && method.Value != nil {
+			for _, param := range method.Value.Parameters {
+				if param.Optional {
+					c.addError(param.Name, "A 'set' accessor cannot have an optional parameter.")
+				}
+				if param.DefaultValue != nil {
+					c.addError(param.Name, "A 'set' accessor parameter cannot have an initializer.")
+				}
+			}
+		}
+	}
+	// Validate constructor signatures (overloads)
+	for _, sig := range body.ConstructorSigs {
+		for _, param := range sig.Parameters {
+			if param.IsPublic || param.IsPrivate || param.IsProtected || param.IsReadonly {
+				c.addError(param.Name, "A parameter property is only allowed in a constructor implementation.")
+			}
+			if param.DefaultValue != nil {
+				c.addError(param.Name, "A parameter initializer is only allowed in a function or constructor implementation.")
+			}
+		}
+		c.validateParamListBasic(sig.Parameters)
+	}
+	// Validate method signatures (overloads)
+	for _, sig := range body.MethodSigs {
+		for _, param := range sig.Parameters {
+			if param.DefaultValue != nil {
+				c.addError(param.Name, "A parameter initializer is only allowed in a function or constructor implementation.")
+			}
+		}
+		c.validateParamListBasic(sig.Parameters)
+	}
+}
+
 // checkClassDeclaration handles type checking for class declarations
 func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	debugPrintf("// [Checker Class] Checking class declaration '%s'\n", node.Name.Value)
+
+	// Validate class member constraints before type-building
+	c.validateClassMemberConstraints(node.Body)
 
 	// Handle generic classes
 	if len(node.TypeParameters) > 0 {
@@ -160,6 +243,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 
 		// Handle constraint if present
 		if param.Constraint != nil {
+			c.checkTypeRefDefined(param.Constraint)
 			constraintType := c.resolveTypeAnnotation(param.Constraint)
 			if constraintType != nil {
 				typeParam.Constraint = constraintType
@@ -326,11 +410,17 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	getters := make(map[string]*parser.MethodDefinition)
 	setters := make(map[string]*parser.MethodDefinition)
 
-	// First pass: collect getters and setters
+	// First pass: collect getters and setters (also visit computed keys)
 	for _, method := range body.Methods {
 		if method.Kind == "getter" && !method.IsStatic {
+			if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env})
+			}
 			getters[c.extractPropertyName(method.Key)] = method
 		} else if method.Kind == "setter" && !method.IsStatic {
+			if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env})
+			}
 			setters[c.extractPropertyName(method.Key)] = method
 		}
 	}
@@ -446,6 +536,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 			// Check if this is a computed property
 			if computedKey, isComputed := method.Key.(*parser.ComputedPropertyName); isComputed {
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env})
 				// Try to extract constant property name
 				if constantName, isConstant := c.tryExtractConstantComputedPropertyName(computedKey.Expr); isConstant {
 					// This is a constant computed property like [Symbol.iterator] - add as specific method
@@ -472,6 +563,9 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	// Process method signatures (overloads and abstract methods)
 	for _, methodSig := range body.MethodSigs {
 		if !methodSig.IsStatic {
+			if computedKey, isComputed := methodSig.Key.(*parser.ComputedPropertyName); isComputed {
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env})
+			}
 			methodName := c.extractPropertyName(methodSig.Key)
 			c.setClassContext(className, types.AccessContextInstanceMethod)
 
@@ -509,6 +603,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 			// Check if this is a computed property
 			if computedKey, isComputed := prop.Key.(*parser.ComputedPropertyName); isComputed {
+				c.deferredComputedKeyChecks = append(c.deferredComputedKeyChecks, deferredComputedKeyCheck{expr: computedKey.Expr, env: c.env})
 				// Try to extract constant property name
 				if constantName, isConstant := c.tryExtractConstantComputedPropertyName(computedKey.Expr); isConstant {
 					// This is a constant computed property like [Symbol.iterator] - add as specific property

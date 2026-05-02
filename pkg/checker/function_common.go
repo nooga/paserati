@@ -382,6 +382,14 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	outerInGeneratorFunction := c.inGeneratorFunction
 	c.inAsyncFunction = ctx.IsAsync
 	c.inGeneratorFunction = ctx.IsGenerator
+
+	// Reset loop/switch/label context for new function scope
+	outerLoopDepth := c.loopDepth
+	outerSwitchDepth := c.switchDepth
+	outerActiveLabels := c.activeLabels
+	c.loopDepth = 0
+	c.switchDepth = 0
+	c.activeLabels = make(map[string]bool)
 	c.functionNestingDepth++
 
 	// Set up 'this' context - check for explicit 'this' parameter
@@ -455,6 +463,9 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	c.currentThisType = outerThisType
 	c.inAsyncFunction = outerInAsyncFunction
 	c.inGeneratorFunction = outerInGeneratorFunction
+	c.loopDepth = outerLoopDepth
+	c.switchDepth = outerSwitchDepth
+	c.activeLabels = outerActiveLabels
 	c.functionNestingDepth--
 
 	return finalReturnType

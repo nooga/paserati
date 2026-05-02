@@ -280,6 +280,14 @@ type Checker struct {
 	inGeneratorFunction  bool
 	functionNestingDepth int // 0 = top level, >0 = inside function(s)
 
+	// --- Loop/switch/label context (reset when entering a new function scope) ---
+	loopDepth    int             // depth of enclosing iteration statements in current function
+	switchDepth  int             // depth of enclosing switch statements in current function
+	activeLabels map[string]bool // labels active in the current function scope
+
+	// --- Block context ---
+	blockDepth int // depth of non-function BlockStatements (bare blocks, if/for bodies)
+
 	// --- NEW: Object method context ---
 	// Track if we're currently inside an object method (for super support)
 	inObjectMethod bool
@@ -301,6 +309,16 @@ type Checker struct {
 	// This ensures type predicate functions and other hoisted functions are available
 	deferMethodBodies      bool
 	deferredMethodBodies   []deferredMethodBodyCheck
+
+	// --- Deferred computed key expression checking ---
+	// Computed key expressions in class/interface bodies are checked after Pass 3
+	// so that const/let declarations earlier in the file are already in scope.
+	deferredComputedKeyChecks []deferredComputedKeyCheck
+}
+
+type deferredComputedKeyCheck struct {
+	expr parser.Expression
+	env  *Environment
 }
 
 // NewChecker creates a new type checker with standard built-in types.
@@ -866,12 +884,18 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		outerThisType := c.currentThisType
 		outerInAsyncFunction := c.inAsyncFunction
 		outerInGeneratorFunction := c.inGeneratorFunction
+		outerLoopDepth := c.loopDepth
+		outerSwitchDepth := c.switchDepth
+		outerActiveLabels := c.activeLabels
 
 		c.currentExpectedReturnType = funcSignature.ReturnType // Use return type from initial signature
 		c.currentInferredReturnTypes = nil
 		c.currentInferredYieldTypes = []types.Type{} // Always collect yield types for generators
 		c.inAsyncFunction = funcLit.IsAsync
 		c.inGeneratorFunction = funcLit.IsGenerator
+		c.loopDepth = 0
+		c.switchDepth = 0
+		c.activeLabels = make(map[string]bool)
 		c.functionNestingDepth++
 
 		if c.currentExpectedReturnType == nil {
@@ -1116,9 +1140,25 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.currentThisType = outerThisType
 		c.inAsyncFunction = outerInAsyncFunction
 		c.inGeneratorFunction = outerInGeneratorFunction
+		c.loopDepth = outerLoopDepth
+		c.switchDepth = outerSwitchDepth
+		c.activeLabels = outerActiveLabels
 		c.functionNestingDepth--
 	}
 	debugPrintf("// --- Checker - Pass 3: Complete ---\n")
+
+	// --- Pass 3.5: Check deferred computed key expressions ---
+	// These are computed property keys from class/interface bodies that were deferred
+	// so that const/let declarations earlier in the file are already in scope.
+	if len(c.deferredComputedKeyChecks) > 0 {
+		savedEnv := c.env
+		for _, check := range c.deferredComputedKeyChecks {
+			c.env = check.env
+			c.visit(check.expr)
+		}
+		c.env = savedEnv
+		c.deferredComputedKeyChecks = nil
+	}
 
 	// --- Pass 4: Resolve forward references ---
 	debugPrintf("\n// --- Checker - Pass 4: Resolve Forward References ---\n")
@@ -1909,7 +1949,9 @@ func (c *Checker) visit(node parser.Node) {
 		c.checkObjectDestructuringDeclaration(node)
 
 	case *parser.ReturnStatement:
-		// --- UPDATED: Handle ReturnStatement ---
+		if c.functionNestingDepth == 0 {
+			c.addError(node, "A 'return' statement can only be used within a function body.")
+		}
 		var actualReturnType types.Type = types.Undefined // Default if no return value
 		if node.ReturnValue != nil {
 			// Use contextual typing if we have an expected return type
@@ -2035,6 +2077,7 @@ func (c *Checker) visit(node parser.Node) {
 		// --- END DEBUG ---
 
 		// 3. Visit statements within the new scope
+		c.blockDepth++
 		for i, stmt := range node.Statements { // Add index 'i' for logging
 			// --- DEBUG ---
 			debugPrintf("// [Checker Visit Block Loop] Index: %d, Stmt Type: %T, Stmt Ptr: %p\n", i, stmt, stmt)
@@ -2053,6 +2096,7 @@ func (c *Checker) visit(node parser.Node) {
 		}
 		// --- END DEBUG ---
 		// 4. Restore the outer environment
+		c.blockDepth--
 		c.env = originalEnv
 
 	// --- Literal Expressions ---
@@ -2253,6 +2297,13 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.PrefixExpression:
 		// --- UPDATED: Handle PrefixExpression ---
+		if (node.Operator == "++" || node.Operator == "--") {
+			if ident, ok := node.Right.(*parser.Identifier); ok {
+				if ident.Value == "eval" || ident.Value == "arguments" {
+					c.addError(ident, fmt.Sprintf("Cannot assign to '%s' because it is a function.", ident.Value))
+				}
+			}
+		}
 		// Special case: delete operator with identifier - don't throw error for undefined identifiers
 		// Similar to typeof, delete on unresolvable reference should work in non-strict mode
 		if node.Operator == "delete" {
@@ -2838,6 +2889,11 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.UpdateExpression:
 		// --- NEW: Handle UpdateExpression ---
+		if ident, ok := node.Argument.(*parser.Identifier); ok {
+			if ident.Value == "eval" || ident.Value == "arguments" {
+				c.addError(ident, fmt.Sprintf("Cannot assign to '%s' because it is a function.", ident.Value))
+			}
+		}
 		c.visit(node.Argument)
 		argType := node.Argument.GetComputedType()
 		resultType := types.Number // Default result is number
@@ -2891,10 +2947,14 @@ func (c *Checker) visit(node parser.Node) {
 	// --- Loop Statements (Control flow, check condition/body) ---
 	case *parser.WhileStatement:
 		c.visit(node.Condition)
+		c.loopDepth++
 		c.visit(node.Body)
+		c.loopDepth--
 
 	case *parser.DoWhileStatement:
+		c.loopDepth++
 		c.visit(node.Body)
+		c.loopDepth--
 		c.visit(node.Condition)
 
 	case *parser.ForStatement:
@@ -2910,13 +2970,25 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.WithStatement:
 		c.checkWithStatement(node)
 
-	// --- Loop Control (No specific type checking needed?) ---
+	// --- Loop Control ---
 	case *parser.BreakStatement:
-		break // Nothing to check type-wise
+		if node.Label != nil {
+			if c.activeLabels == nil || !c.activeLabels[node.Label.Value] {
+				c.addError(node, fmt.Sprintf("A 'break' statement can only jump to a label of an enclosing statement."))
+			}
+		} else if c.loopDepth == 0 && c.switchDepth == 0 {
+			c.addError(node, "A 'break' statement can only be used within an enclosing iteration or switch statement.")
+		}
 	case *parser.EmptyStatement:
 		break // Nothing to check type-wise for empty statements
 	case *parser.ContinueStatement:
-		break // Nothing to check type-wise
+		if node.Label != nil {
+			if c.activeLabels == nil || !c.activeLabels[node.Label.Value] {
+				c.addError(node, fmt.Sprintf("A 'continue' statement can only jump to a label of an enclosing iteration statement."))
+			}
+		} else if c.loopDepth == 0 {
+			c.addError(node, "A 'continue' statement can only be used within an enclosing iteration statement.")
+		}
 
 	case *parser.SwitchStatement: // Added
 		c.checkSwitchStatement(node)
@@ -3011,13 +3083,20 @@ func (c *Checker) visit(node parser.Node) {
 			resolvedReturnType = c.resolveTypeAnnotation(node.ReturnTypeAnnotation)
 		}
 
-		// 2. Save outer return context
+		// 2. Save outer return context and loop/label context
 		outerExpectedReturnType := c.currentExpectedReturnType
 		outerInferredReturnTypes := c.currentInferredReturnTypes
+		outerLoopDepthSM := c.loopDepth
+		outerSwitchDepthSM := c.switchDepth
+		outerActiveLabelsSM := c.activeLabels
 
 		// 3. Set context for body check
 		c.currentExpectedReturnType = resolvedReturnType
 		c.currentInferredReturnTypes = nil
+		c.loopDepth = 0
+		c.switchDepth = 0
+		c.activeLabels = make(map[string]bool)
+		c.functionNestingDepth++
 		if resolvedReturnType == nil {
 			c.currentInferredReturnTypes = []types.Type{}
 		}
@@ -3106,6 +3185,10 @@ func (c *Checker) visit(node parser.Node) {
 		c.env = originalEnv
 		c.currentExpectedReturnType = outerExpectedReturnType
 		c.currentInferredReturnTypes = outerInferredReturnTypes
+		c.loopDepth = outerLoopDepthSM
+		c.switchDepth = outerSwitchDepthSM
+		c.activeLabels = outerActiveLabelsSM
+		c.functionNestingDepth--
 
 	// --- NEW: Handle SpreadElement ---
 	case *parser.SpreadElement:
@@ -3165,8 +3248,16 @@ func (c *Checker) visit(node parser.Node) {
 
 	// --- Labeled Statements ---
 	case *parser.LabeledStatement:
-		// Type check the labeled statement - labels themselves don't have types
+		labelName := node.Label.Value
+		if c.activeLabels == nil {
+			c.activeLabels = make(map[string]bool)
+		}
+		if c.activeLabels[labelName] {
+			c.addError(node, fmt.Sprintf("Duplicate identifier '%s'.", labelName))
+		}
+		c.activeLabels[labelName] = true
 		c.visit(node.Statement)
+		delete(c.activeLabels, labelName)
 
 	// --- Exception Handling Statements ---
 	case *parser.TryStatement:
@@ -4047,6 +4138,10 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 
 // checkExportNamedDeclaration handles type checking for named export statements
 func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaration) {
+	if c.functionNestingDepth > 0 || c.blockDepth > 0 {
+		c.addError(node, "Modifiers cannot appear here.")
+		return
+	}
 	if node.Declaration != nil {
 		// Direct export: export const x = 1; export function foo() {}
 		debugPrintf("// [Checker] Processing direct export declaration\n")

@@ -7503,6 +7503,16 @@ func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
 
 // parseInterfaceProperty parses a single property in an interface
 func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
+	// Check for invalid access modifiers on interface type members (TS1070)
+	if (p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) ||
+		p.curTokenIs(lexer.PROTECTED) || p.curTokenIs(lexer.STATIC)) &&
+		!p.peekTokenIs(lexer.LPAREN) && !p.peekTokenIs(lexer.QUESTION) &&
+		!p.peekTokenIs(lexer.COLON) && !p.peekTokenIs(lexer.SEMICOLON) &&
+		!p.peekTokenIs(lexer.RBRACE) && p.peekToken.Line == p.curToken.Line {
+		p.addError(p.curToken, fmt.Sprintf("'%s' modifier cannot appear on a type member.", p.curToken.Literal))
+		p.nextToken() // consume the invalid modifier and continue parsing the actual member
+	}
+
 	// Check for constructor signature first: `new (): T` or `new <T>(): T`
 	// Only treat as constructor signature if followed by '(' or '<'
 	if p.curTokenIs(lexer.NEW) && (p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT)) {
@@ -9401,7 +9411,8 @@ func (p *Parser) parseTypeParameters() ([]*TypeParameter, error) {
 
 	// Handle empty type parameter list
 	if p.curTokenIs(lexer.GT) {
-		return typeParams, nil // Empty list is valid
+		p.addError(p.curToken, "Type parameter list cannot be empty.")
+		return typeParams, nil
 	}
 
 	// Parse first type parameter
@@ -10642,6 +10653,12 @@ func (p *Parser) parseExportDeclaration() Statement {
 
 	// Move to the next token to see what kind of export this is
 	p.nextToken()
+
+	// Check for duplicate 'export' modifier (TS1030)
+	if p.curTokenIs(lexer.EXPORT) {
+		p.addError(p.curToken, "'export' modifier already seen.")
+		p.nextToken() // consume the duplicate export
+	}
 
 	// Check for type-only export: export type { ... } from "module" or export type * from "module"
 	// But distinguish from type alias: export type TypeAlias = ...
