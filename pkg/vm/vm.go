@@ -116,6 +116,7 @@ type CallFrame struct {
 	targetRegister      byte    // Which register in the CALLER the result should go into
 	thisValue           Value   // The 'this' value for method calls (undefined for regular function calls)
 	homeObject          Value   // The [[HomeObject]] for super property access (object where method is defined)
+	hasOwnUpvalues      bool    // True iff captureUpvalue created an upvalue pointing into this frame's registers/spill slots. Runtime-tighter gate for closeUpvalues than the compile-time HasLocalCaptures flag.
 	isConstructorCall   bool    // Whether this frame was created by a constructor call (new expression)
 	newTargetValue      Value   // The constructor that was invoked with 'new' (for new.target)
 	isDirectCall        bool    // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
@@ -3013,8 +3014,9 @@ startExecution:
 					}
 
 					// 4. Close upvalues for current frame BEFORE overwriting (only if needed)
-					if frame.closure != nil && frame.closure.Fn.HasLocalCaptures {
+					if frame.hasOwnUpvalues {
 						vm.closeUpvalues(registers)
+						frame.hasOwnUpvalues = false
 					}
 
 					// 5. Expand register window if needed (but never shrink)
@@ -3237,8 +3239,9 @@ startExecution:
 					// We can perform TCO!
 
 					// 5. Close upvalues for current frame BEFORE overwriting (only if needed)
-					if frame.closure != nil && frame.closure.Fn.HasLocalCaptures {
+					if frame.hasOwnUpvalues {
 						vm.closeUpvalues(registers)
+						frame.hasOwnUpvalues = false
 					}
 
 					// 6. Expand register window if needed (but never shrink)
@@ -5033,8 +5036,9 @@ startExecution:
 
 			// No finally handler, proceed with normal return
 			// Close upvalues for the returning frame (only if this function has captured locals)
-			if frame.closure != nil && frame.closure.Fn.HasLocalCaptures {
+			if frame.hasOwnUpvalues {
 				vm.closeUpvalues(frame.registers)
+				frame.hasOwnUpvalues = false
 			}
 
 			// Check if this is a generator function returning (not yielding)
@@ -5304,11 +5308,12 @@ startExecution:
 
 			// No finally handler, proceed with normal return
 			// Close upvalues for the returning frame (only if this function has captured locals)
-			if frame.closure != nil && frame.closure.Fn.HasLocalCaptures {
+			if frame.hasOwnUpvalues {
 				if debugVM {
 					fmt.Printf("[DBG] About to closeUpvalues for frame with %d registers, openUpvalues=%d\n", len(frame.registers), len(vm.openUpvalues))
 				}
 				vm.closeUpvalues(frame.registers)
+				frame.hasOwnUpvalues = false
 				if debugVM {
 					fmt.Printf("[DBG] closeUpvalues completed\n")
 				}
@@ -12841,8 +12846,9 @@ startExecution:
 			}
 
 			// Close upvalues for the returning frame (only if this function has captured locals)
-			if frame.closure != nil && frame.closure.Fn.HasLocalCaptures {
+			if frame.hasOwnUpvalues {
 				vm.closeUpvalues(frame.registers)
+				frame.hasOwnUpvalues = false
 			}
 
 			// Pop the current frame (same logic as OpReturn)
@@ -13012,8 +13018,9 @@ startExecution:
 				vm.pendingValue = Undefined
 
 				// Close upvalues for the returning frame (only if this function has captured locals)
-				if frame.closure != nil && frame.closure.Fn.HasLocalCaptures {
+				if frame.hasOwnUpvalues {
 					vm.closeUpvalues(frame.registers)
+					frame.hasOwnUpvalues = false
 				}
 
 				// Check if this is a generator function returning
@@ -14908,6 +14915,8 @@ reloadFrame:
 
 // captureUpvalue creates a new Upvalue object for a local variable at the given stack location.
 // It checks if an upvalue for this location already exists using a map for O(1) lookup.
+// Callers MUST ensure location points into the currently-active frame's registers or
+// spill slots; this is relied on for the hasOwnUpvalues flag below.
 func (vm *VM) captureUpvalue(location *Value) *Upvalue {
 	// O(1) lookup using map
 	if upvalue, exists := vm.openUpvalueMap[location]; exists {
@@ -14918,6 +14927,13 @@ func (vm *VM) captureUpvalue(location *Value) *Upvalue {
 	newUpvalue := &Upvalue{Location: location} // Closed field is zero-value (Undefined)
 	vm.openUpvalues = append(vm.openUpvalues, newUpvalue)
 	vm.openUpvalueMap[location] = newUpvalue // Add to map for future lookups
+	// Mark the active frame as owning at least one upvalue. This lets closeUpvalues
+	// skip the full-list scan entirely for frames that never actually captured a
+	// local (even if their bytecode's HasLocalCaptures flag is true due to an
+	// unexecuted branch).
+	if vm.frameCount > 0 {
+		vm.frames[vm.frameCount-1].hasOwnUpvalues = true
+	}
 	return newUpvalue
 }
 
@@ -14966,10 +14982,10 @@ func (vm *VM) closeUpvalues(frameRegisters []Value) {
 			if debugVM {
 				fmt.Printf("[DBG closeUpvalues]   Closing upvalue (in frame range)\n")
 			}
-			location := upvalue.Location     // Save location for map removal
-			closedValue := *upvalue.Location // Copy the value from the stack
-			upvalue.Closed = closedValue     // Store the value
-			upvalue.Location = nil           // Mark as closed
+			location := upvalue.Location        // Save location for map removal
+			closedValue := *upvalue.Location    // Copy the value from the stack
+			upvalue.Closed = closedValue        // Store the value
+			upvalue.Location = nil              // Mark as closed
 			delete(vm.openUpvalueMap, location) // Remove from map
 			// Do NOT add it back to newOpenUpvalues
 		} else {
