@@ -92,11 +92,19 @@ func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
 	}
 
 	// --- Method overloads ---
-	// Build set of method implementation key names
+	// Build set of method implementation key names; detect duplicates (TS2393)
+	// Use "kind:name" as key to distinguish getter/setter from regular methods
 	implNames := make(map[string]bool)
+	seenNames := make(map[string]bool) // for duplicate detection
 	for _, method := range body.Methods {
 		if method.Kind != "constructor" && method.Key != nil {
-			implNames[getMethodKeyString(method.Key)] = true
+			name := getMethodKeyString(method.Key)
+			implNames[name] = true
+			kindKey := method.Kind + ":" + name
+			if seenNames[kindKey] && !method.IsAbstract {
+				c.addError(method.Key, "Duplicate function implementation.")
+			}
+			seenNames[kindKey] = true
 		}
 	}
 
