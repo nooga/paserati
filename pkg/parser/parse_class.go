@@ -170,7 +170,47 @@ func (p *Parser) parseDeclareClassStatement() Statement {
 			}
 		}
 	}
+	// Check computed property/method keys in ambient class bodies.
+	// Bare identifier keys (e.g. [e]) emit TS2304; unknown Symbol.X emit TS2339.
+	checkComputedKey := func(keyExpr Expression) {
+		cpn, ok := keyExpr.(*ComputedPropertyName)
+		if !ok {
+			return
+		}
+		switch expr := cpn.Expr.(type) {
+		case *Identifier:
+			p.addError(expr.Token, fmt.Sprintf("Cannot find name '%s'.", expr.Value))
+		case *MemberExpression:
+			if obj, ok := expr.Object.(*Identifier); ok && obj.Value == "Symbol" {
+				if prop, ok := expr.Property.(*Identifier); ok {
+					if !isWellKnownSymbol(prop.Value) {
+						p.addError(prop.Token, fmt.Sprintf("Property '%s' does not exist on type 'SymbolConstructor'.", prop.Value))
+					}
+				}
+			}
+		}
+	}
+	for _, prop := range cd.Body.Properties {
+		checkComputedKey(prop.Key)
+	}
+	for _, method := range cd.Body.Methods {
+		checkComputedKey(method.Key)
+	}
+	for _, sig := range cd.Body.MethodSigs {
+		checkComputedKey(sig.Key)
+	}
 	return nil
+}
+
+// isWellKnownSymbol returns true if name is a standard well-known Symbol property.
+func isWellKnownSymbol(name string) bool {
+	switch name {
+	case "iterator", "asyncIterator", "hasInstance", "isConcatSpreadable",
+		"species", "match", "matchAll", "replace", "search", "split",
+		"toPrimitive", "toStringTag", "unscopables", "observable":
+		return true
+	}
+	return false
 }
 
 // parseClassExpression parses a class expression
