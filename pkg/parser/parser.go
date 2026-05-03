@@ -7316,13 +7316,18 @@ func (p *Parser) parseObjectLiteral() Expression {
 
 				// Create an ObjectProperty with the string literal as key and the function literal as value
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: stringKey, Value: funcLit})
-			} else if p.curTokenIs(lexer.NUMBER) && p.peekTokenIs(lexer.LPAREN) {
-				// This is a number literal shorthand method like 1() { ... }
+			} else if p.curTokenIs(lexer.NUMBER) && (p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT)) {
+				// This is a number literal shorthand method like 1() { ... } or 1<T>() { ... }
 				numberKey := p.parseNumberLiteral()
 
 				// Create a function literal for the method implementation
 				funcLit := &FunctionLiteral{
 					Token: p.curToken, // The number literal token
+				}
+
+				// Parse optional type parameters <T, U, ...>
+				if p.peekTokenIs(lexer.LT) {
+					funcLit.TypeParameters = p.tryParseTypeParameters()
 				}
 
 				// Expect '(' for parameters
