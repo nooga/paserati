@@ -1559,7 +1559,17 @@ func (p *Parser) parseLetStatement() Statement {
 
 		// Parse additional declarations separated by commas
 		for p.peekTokenIs(lexer.COMMA) {
+			commaToken := p.peekToken
 			p.nextToken() // Consume ','
+
+			// TS1009: detect trailing comma before statement keywords or end-of-statement
+			if p.peekTokenIs(lexer.RETURN) || p.peekTokenIs(lexer.BREAK) ||
+				p.peekTokenIs(lexer.CONTINUE) || p.peekTokenIs(lexer.THROW) ||
+				p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.EOF) ||
+				p.peekTokenIs(lexer.RBRACE) {
+				p.addError(commaToken, "Trailing comma not allowed.")
+				break
+			}
 
 			if !p.expectPeekIdentifierOrKeyword() {
 				return nil
@@ -1752,7 +1762,17 @@ func (p *Parser) parseVarStatement() Statement {
 
 		// Parse additional declarations separated by commas
 		for p.peekTokenIs(lexer.COMMA) {
+			commaToken := p.peekToken
 			p.nextToken() // Consume ','
+
+			// TS1009: detect trailing comma before statement keywords or end-of-statement
+			if p.peekTokenIs(lexer.RETURN) || p.peekTokenIs(lexer.BREAK) ||
+				p.peekTokenIs(lexer.CONTINUE) || p.peekTokenIs(lexer.THROW) ||
+				p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.EOF) ||
+				p.peekTokenIs(lexer.RBRACE) {
+				p.addError(commaToken, "Trailing comma not allowed.")
+				break
+			}
 
 			if !p.expectPeekIdentifierOrKeyword() {
 				return nil
