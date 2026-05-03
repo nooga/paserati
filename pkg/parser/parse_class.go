@@ -1220,6 +1220,15 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 				p.nextToken() // move to value type
 				_ = p.parseTypeExpression()
 			}
+			// Index signature must be followed by ';', '}', or newline (ASI)
+			if !p.peekTokenIs(lexer.SEMICOLON) && !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) &&
+				p.peekToken.Line == p.curToken.Line {
+				// Same line: ';' is required (no ASI applies)
+				p.addError(p.peekToken, "';' expected.")
+			}
+			if p.peekTokenIs(lexer.SEMICOLON) {
+				p.nextToken()
+			}
 			// Index signatures in classes are just type declarations; skip for now
 			return nil
 		}
