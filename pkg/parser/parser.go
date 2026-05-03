@@ -2312,10 +2312,47 @@ func (p *Parser) parseRegexLiteral() Expression {
 	pattern := literal[1:lastSlash] // Extract pattern between slashes
 	flags := literal[lastSlash+1:]  // Extract flags after last slash
 
+	// Basic regex pattern validation: check for unmatched parentheses
+	p.validateRegexPattern(pattern)
+
 	return &RegexLiteral{
 		Token:   p.curToken,
 		Pattern: pattern,
 		Flags:   flags,
+	}
+}
+
+// validateRegexPattern checks for basic regex syntax errors like unmatched parentheses.
+func (p *Parser) validateRegexPattern(pattern string) {
+	depth := 0
+	inCharClass := false
+	for i := 0; i < len(pattern); i++ {
+		ch := pattern[i]
+		if ch == '\\' {
+			i++ // skip next char (escaped)
+			continue
+		}
+		if inCharClass {
+			if ch == ']' {
+				inCharClass = false
+			}
+			continue
+		}
+		switch ch {
+		case '[':
+			inCharClass = true
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				p.addError(p.curToken, "')' expected.")
+				return
+			}
+		}
+	}
+	if depth > 0 {
+		p.addError(p.curToken, "')' expected.")
 	}
 }
 
