@@ -422,6 +422,11 @@ func (e *Environment) GetPendingOverloads(name string) []*parser.FunctionSignatu
 	return e.pendingOverloads[name]
 }
 
+// GetAllPendingOverloads returns all pending overload signatures in this environment.
+func (e *Environment) GetAllPendingOverloads() map[string][]*parser.FunctionSignature {
+	return e.pendingOverloads
+}
+
 // CompleteOverloadedFunction creates a unified ObjectType from pending signatures,
 // then stores it and clears the pending overloads.
 func (e *Environment) CompleteOverloadedFunction(name string, overloadSignatures []*types.Signature) bool {

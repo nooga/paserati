@@ -1333,6 +1333,15 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	}
 	debugPrintf("// --- Checker - Pass 5: Complete ---\n")
 
+	// Emit TS2391 for any function overload signatures that never got an implementation
+	for _, sigs := range globalEnv.GetAllPendingOverloads() {
+		for _, sig := range sigs {
+			if sig.Name != nil {
+				c.addError(sig.Name, "Function implementation is missing or not immediately following the declaration.")
+			}
+		}
+	}
+
 	return c.errors
 }
 
@@ -2096,6 +2105,14 @@ func (c *Checker) visit(node parser.Node) {
 		}
 		// --- END DEBUG ---
 		// 4. Restore the outer environment
+		// Check for block-scoped function overload signatures without implementations (TS2391)
+		for _, sigs := range c.env.GetAllPendingOverloads() {
+			for _, sig := range sigs {
+				if sig.Name != nil {
+					c.addError(sig.Name, "Function implementation is missing or not immediately following the declaration.")
+				}
+			}
+		}
 		c.blockDepth--
 		c.env = originalEnv
 
@@ -2304,18 +2321,20 @@ func (c *Checker) visit(node parser.Node) {
 				}
 			}
 		}
-		// Special case: delete operator with identifier - don't throw error for undefined identifiers
-		// Similar to typeof, delete on unresolvable reference should work in non-strict mode
+		// TS2703: delete on non-property-reference expressions
 		if node.Operator == "delete" {
-			if ident, ok := node.Right.(*parser.Identifier); ok {
-				// Check if identifier exists
-				_, _, found := c.env.Resolve(ident.Value)
+			switch rhs := node.Right.(type) {
+			case *parser.Identifier:
+				c.addError(rhs, "The operand of a 'delete' operator must be a property reference.")
+				_, _, found := c.env.Resolve(rhs.Value)
 				if !found {
-					// Identifier doesn't exist - this is valid for delete (returns true)
-					// Set computed type and return early
 					node.SetComputedType(types.Boolean)
 					return
 				}
+			case *parser.ThisExpression:
+				c.addError(rhs, "The operand of a 'delete' operator must be a property reference.")
+				node.SetComputedType(types.Boolean)
+				return
 			}
 		}
 		c.visit(node.Right) // Visit the operand first
@@ -2392,12 +2411,8 @@ func (c *Checker) visit(node parser.Node) {
 					}
 				case *parser.IndexExpression:
 					// Valid delete target (bracket notation)
-				case *parser.Identifier:
-					// Allow delete on identifiers (returns true in non-strict mode, throws in strict)
-					// We're lenient here for JavaScript compatibility
 				default:
-					// All other expressions are allowed (literals, typeof, arithmetic, etc.)
-					// They all return true per ECMAScript spec
+					// Other expressions (literals, typeof, arithmetic) — valid delete targets
 				}
 			// --- END NEW ---
 			default:

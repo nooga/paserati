@@ -847,9 +847,20 @@ func (p *Parser) parseDeclareStatement() Statement {
 		return p.parseDeclareVarStatement()
 	case lexer.VAR:
 		return p.parseDeclareVarStatement()
+	case lexer.FUNCTION:
+		// Parse the function to consume tokens; emit TS1183 if it has a body
+		exprStmt := p.parseFunctionDeclarationStatement()
+		if exprStmt != nil {
+			if fl, ok := exprStmt.Expression.(*FunctionLiteral); ok && fl.Body != nil {
+				p.addError(fl.Body.Token, "An implementation cannot be declared in ambient contexts.")
+			}
+		}
+		return nil
+	case lexer.CLASS:
+		return p.parseDeclareClassStatement()
 	}
 
-	// For all other forms (function, class, enum, async, abstract),
+	// For all other forms (enum, async, abstract, namespace),
 	// skip tokens with balanced bracket tracking until we find a terminating semicolon
 	// at depth 0, or reach a point where ASI should apply.
 	return p.skipDeclareBody()
@@ -10690,6 +10701,23 @@ func (p *Parser) parseExportDeclaration() Statement {
 	case lexer.CONST, lexer.LET, lexer.VAR, lexer.FUNCTION, lexer.CLASS, lexer.INTERFACE, lexer.TYPE, lexer.ENUM, lexer.ASYNC, lexer.ABSTRACT:
 		// export const x = 1; export function foo() {} export async function bar() {} export abstract class Foo {}
 		return p.parseExportNamedDeclarationWithDeclaration(exportToken)
+
+	case lexer.ASSIGN:
+		// export = expr; (CommonJS module export assignment)
+		p.nextToken() // consume '='
+		if p.curTokenIs(lexer.SEMICOLON) || p.curTokenIs(lexer.EOF) {
+			p.addError(exportToken, "Expression expected.")
+			return nil
+		}
+		// Parse the expression and return it as a statement so the checker can validate it
+		expr := p.parseExpression(LOWEST)
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken()
+		}
+		if expr != nil {
+			return &ExpressionStatement{Token: exportToken, Expression: expr}
+		}
+		return nil
 
 	case lexer.IDENT:
 		if p.curToken.Literal == "declare" {

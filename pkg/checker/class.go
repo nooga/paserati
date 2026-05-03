@@ -17,6 +17,100 @@ type deferredMethodBodyCheck struct {
 	env          *Environment // The environment that was active during class processing
 }
 
+// getMethodKeyString returns a normalized string key for a class member name expression.
+// Handles Identifier, StringLiteral, NumberLiteral, and ComputedPropertyName.
+func getMethodKeyString(key parser.Expression) string {
+	switch k := key.(type) {
+	case *parser.Identifier:
+		return k.Value
+	case *parser.StringLiteral:
+		return k.Value
+	case *parser.NumberLiteral:
+		return fmt.Sprintf("%v", k.Value)
+	case *parser.ComputedPropertyName:
+		switch e := k.Expr.(type) {
+		case *parser.Identifier:
+			return e.Value
+		case *parser.StringLiteral:
+			return e.Value
+		case *parser.NumberLiteral:
+			return fmt.Sprintf("%v", e.Value)
+		}
+		return "__computed"
+	}
+	return "__unknown"
+}
+
+// countRequiredParams returns the number of required (non-optional, non-default) parameters.
+func countRequiredParams(params []*parser.Parameter) int {
+	count := 0
+	for _, p := range params {
+		if !p.IsThis && !p.Optional && p.DefaultValue == nil {
+			count++
+		}
+	}
+	return count
+}
+
+// validateOverloadImplementations checks that every constructor/method overload signature
+// has a matching implementation, and that constructor overloads are compatible with their impl.
+func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
+	if body == nil {
+		return
+	}
+
+	// --- Constructor overloads ---
+	hasConstructorImpl := false
+	var constructorImpl *parser.MethodDefinition
+	for _, method := range body.Methods {
+		if method.Kind == "constructor" {
+			hasConstructorImpl = true
+			constructorImpl = method
+			break
+		}
+	}
+
+	if len(body.ConstructorSigs) > 0 {
+		if !hasConstructorImpl {
+			for _, sig := range body.ConstructorSigs {
+				c.addError(sig, "Constructor implementation is missing.")
+			}
+		} else if constructorImpl != nil && constructorImpl.Value != nil {
+			// TS2394: check overload sig compatibility with implementation
+			implRequired := countRequiredParams(constructorImpl.Value.Parameters)
+			implHasRest := constructorImpl.Value.RestParameter != nil
+			for _, sig := range body.ConstructorSigs {
+				if sig.RestParameter != nil {
+					continue // rest sig is variadic, skip count check
+				}
+				sigCount := len(sig.Parameters)
+				if !implHasRest && sigCount < implRequired {
+					c.addError(sig, "This overload signature is not compatible with its implementation signature.")
+				}
+			}
+		}
+	}
+
+	// --- Method overloads ---
+	// Build set of method implementation key names
+	implNames := make(map[string]bool)
+	for _, method := range body.Methods {
+		if method.Kind != "constructor" && method.Key != nil {
+			implNames[getMethodKeyString(method.Key)] = true
+		}
+	}
+
+	for _, sig := range body.MethodSigs {
+		if sig.IsAbstract || sig.Key == nil {
+			continue
+		}
+		name := getMethodKeyString(sig.Key)
+		if !implNames[name] {
+			c.addError(sig.Key, "Function implementation is missing or not immediately following the declaration.")
+		}
+	}
+}
+
 // extractPropertyName extracts the property name from a class member key
 func (c *Checker) extractPropertyName(key parser.Expression) string {
 	switch k := key.(type) {
@@ -146,6 +240,9 @@ func (c *Checker) validateClassMemberConstraints(body *parser.ClassBody) {
 		}
 		c.validateParamListBasic(sig.Parameters)
 	}
+
+	// Validate that overload signatures have matching implementations
+	c.validateOverloadImplementations(body)
 }
 
 // checkClassDeclaration handles type checking for class declarations

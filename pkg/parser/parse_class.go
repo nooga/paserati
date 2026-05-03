@@ -129,6 +129,50 @@ func (p *Parser) parseClassDeclaration() Statement {
 	}
 }
 
+// parseDeclareClassStatement parses a `declare class` by consuming its tokens,
+// emitting appropriate errors (TS1183, TS2369, TS2371), and returning nil so
+// the class is not registered in the program AST (ambient context).
+func (p *Parser) parseDeclareClassStatement() Statement {
+	classStmt := p.parseClassDeclaration()
+	if classStmt == nil {
+		return nil
+	}
+	cd, ok := classStmt.(*ClassDeclaration)
+	if !ok || cd.Body == nil {
+		return nil
+	}
+	// TS1183: method with a body in ambient context
+	for _, method := range cd.Body.Methods {
+		if method.Value != nil && method.Value.Body != nil {
+			p.addError(method.Value.Body.Token, "An implementation cannot be declared in ambient contexts.")
+		}
+	}
+	// TS2369: parameter property in constructor overload signature
+	for _, sig := range cd.Body.ConstructorSigs {
+		for _, param := range sig.Parameters {
+			if param.IsPublic || param.IsPrivate || param.IsProtected || param.IsReadonly {
+				p.addError(param.Token, "A parameter property is only allowed in a constructor implementation.")
+			}
+		}
+	}
+	// TS2371: default value in method/constructor overload signature
+	for _, sig := range cd.Body.ConstructorSigs {
+		for _, param := range sig.Parameters {
+			if param.DefaultValue != nil {
+				p.addError(param.Token, "A parameter initializer is only allowed in a function or constructor implementation.")
+			}
+		}
+	}
+	for _, sig := range cd.Body.MethodSigs {
+		for _, param := range sig.Parameters {
+			if param.DefaultValue != nil {
+				p.addError(param.Token, "A parameter initializer is only allowed in a function or constructor implementation.")
+			}
+		}
+	}
+	return nil
+}
+
 // parseClassExpression parses a class expression
 // Syntax: class [ClassName] [extends SuperClass] { classBody }
 func (p *Parser) parseClassExpression() Expression {
@@ -435,6 +479,16 @@ func (p *Parser) parseClassBody() *ClassBody {
 					attachDecorators(property)
 					properties = append(properties, property)
 				}
+			}
+		} else if p.curTokenIs(lexer.VAR) && p.peekTokenIs(lexer.IDENT) {
+			// TS1068: 'var' declaration inside class body is invalid
+			p.addError(p.curToken, "Unexpected token. A constructor, method, accessor, or property was expected.")
+			// Skip until end of this declaration
+			for !p.curTokenIs(lexer.SEMICOLON) && !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+				p.nextToken()
+			}
+			if p.curTokenIs(lexer.SEMICOLON) {
+				p.nextToken()
 			}
 		} else if p.isValidMethodName() {
 			if p.curToken.Literal == "constructor" {
