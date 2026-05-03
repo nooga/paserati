@@ -480,6 +480,12 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	inDirectivePrologue := true
 
 	for p.curToken.Type != lexer.EOF {
+		if p.curTokenIs(lexer.RBRACE) {
+			// Extra '}' at top level (TS1128: Declaration or statement expected.)
+			p.addError(p.curToken, "Declaration or statement expected.")
+			p.nextToken()
+			continue
+		}
 		stmt := p.parseStatement()
 		if stmt != nil {
 			program.Statements = append(program.Statements, stmt)
