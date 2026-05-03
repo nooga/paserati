@@ -1026,38 +1026,63 @@ func (p *Parser) isEmptyDeclareNamespace() bool {
 }
 
 // isEmptyNamespaceDeclaration checks via lookahead whether the current 'namespace' token
-// is followed by a dotted name and then an empty body {}.
-// e.g. namespace number {}, namespace a.b.c {} — returns true.
-// e.g. namespace Formatting { ... code ... } — returns false.
+// is followed by a dotted name and then a body that contains ONLY other namespace declarations
+// (including nested declare namespace / namespace blocks).
+// e.g. namespace number {}, namespace a.b.c {} — true (empty body)
+// e.g. namespace M { declare namespace M1 { namespace M2 {} } } — true (only namespace decls)
+// e.g. namespace Formatting { var x; } — false (has non-namespace content)
 // Called when curToken is 'namespace' and peek is IDENT-like.
 func (p *Parser) isEmptyNamespaceDeclaration() bool {
-	// Look ahead: skip dotted name tokens (IDENT, DOT) then expect '{' followed by '}'
-	// We use lookAhead starting at pos=0 (peekToken) to scan ahead.
+	// Look ahead: skip dotted name tokens (IDENT, DOT) then find '{'
 	pos := 0 // pos=0 is peekToken (the first IDENT of the name)
 	for {
 		tok := p.lookAhead(pos)
 		if tok.Type == lexer.EOF {
 			return false
 		}
-		// Skip IDENT or keyword-as-identifier (name component)
 		if tok.Type == lexer.IDENT || p.isKeywordThatCanBeIdentifier(tok.Type) {
 			pos++
-			// Check if next is DOT (dotted name continues)
 			next := p.lookAhead(pos)
 			if next.Type == lexer.DOT {
-				pos++ // skip the dot, continue loop to read next IDENT
+				pos++
 				continue
 			}
-			// Not a dot — next should be '{' for the body
 			if next.Type == lexer.LBRACE {
-				// Check the token after '{' — if it's '}', the body is empty
-				afterBrace := p.lookAhead(pos + 1)
-				return afterBrace.Type == lexer.RBRACE
+				// '{' is at lookAhead(pos); body content starts at lookAhead(pos+1)
+				break
 			}
 			return false
 		}
 		return false
 	}
+	// Scan body with two constraints:
+	// 1. At depth 1 (direct contents): only IDENT and DOT — namespace declarations only.
+	//    Non-IDENT (VAR, FUNCTION, SEMICOLON, etc.) means real executable content → skip false.
+	// 2. At depth ≥ 2: if we find 'declare' IDENT, it signals a nested ambient context that
+	//    TypeScript will flag TS1038 (declare inside ambient). Those tests need their errors.
+	depth := 1
+	scan := pos + 1
+	for depth > 0 {
+		tok := p.lookAhead(scan)
+		if tok.Type == lexer.EOF {
+			return false
+		}
+		switch tok.Type {
+		case lexer.LBRACE:
+			depth++
+		case lexer.RBRACE:
+			depth--
+		default:
+			if depth == 1 && tok.Type != lexer.IDENT && tok.Type != lexer.DOT {
+				return false // real code at depth 1
+			}
+			if depth >= 2 && tok.Type == lexer.IDENT && tok.Literal == "declare" {
+				return false // nested declare (TS1038 territory) — preserve random errors
+			}
+		}
+		scan++
+	}
+	return true
 }
 
 // skipDeclareBody skips the body of a declare statement using balanced bracket tracking.
