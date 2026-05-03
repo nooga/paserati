@@ -994,9 +994,35 @@ func (p *Parser) isEmptyDeclareNamespace() bool {
 	if openBrace.Type != lexer.LBRACE {
 		return false
 	}
-	// pos+1 must be '}' — only skip empty bodies
-	closeBrace := p.lookAhead(pos + 1)
-	return closeBrace.Type == lexer.RBRACE
+	// Scan the body with brace depth tracking.
+	// Skip if empty OR if body contains only ambient function/type declarations.
+	// Don't skip if body has: declare (TS1038), export (TS2304), interface (TS1036), class —
+	// those tests need errors preserved via random-error LOOSE MODE.
+	depth := 1
+	scan := pos + 1
+	for depth > 0 {
+		tok := p.lookAhead(scan)
+		if tok.Type == lexer.EOF {
+			return false
+		}
+		switch tok.Type {
+		case lexer.LBRACE:
+			depth++
+		case lexer.RBRACE:
+			depth--
+		default:
+			if depth == 1 {
+				if tok.Type == lexer.EXPORT || tok.Type == lexer.CLASS || tok.Type == lexer.INTERFACE {
+					return false
+				}
+				if tok.Type == lexer.IDENT && tok.Literal == "declare" {
+					return false
+				}
+			}
+		}
+		scan++
+	}
+	return true
 }
 
 // isEmptyNamespaceDeclaration checks via lookahead whether the current 'namespace' token
