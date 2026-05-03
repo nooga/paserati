@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 
+	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -590,11 +591,15 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 		return
 	}
 
-	// TS1106: bare 'async' identifier on LHS of non-async for-of is ambiguous with async generators
+	// TS1106: bare 'async' identifier (not parenthesized) on LHS of non-async for-of is ambiguous
+	// parenthesized (async) has Token.Type == LPAREN, bare async has Token.Type == ASYNC
 	if !node.IsAsync {
 		if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
 			if ident, ok := exprStmt.Expression.(*parser.Identifier); ok && ident.Value == "async" {
-				c.addError(ident, "The left-hand side of a 'for...of' statement may not be 'async'.")
+				// Only emit if the ExpressionStatement token is the async keyword itself (not a paren)
+				if exprStmt.Token.Type != lexer.LPAREN {
+					c.addError(ident, "The left-hand side of a 'for...of' statement may not be 'async'.")
+				}
 			}
 		}
 	}
