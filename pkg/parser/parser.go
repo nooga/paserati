@@ -6678,10 +6678,10 @@ func (p *Parser) parseTypeIdentifier() Expression {
 	// Save the identifier
 	ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
-	// Check if this could be a generic type reference
-	// We need to be careful here - only parse as generic if we see '<' followed by a valid type
-	if p.peekTokenIs(lexer.LT) {
-		// Try to parse as generic, but be ready to backtrack
+	// Check if this could be a generic type reference.
+	// Per TypeScript ASI: '<' must be on the same line as the identifier.
+	// 'B\n<T>' is two separate items; 'B<T>' is a generic type.
+	if p.peekTokenIs(lexer.LT) && p.peekToken.Line == p.curToken.Line {
 		return p.tryParseGenericTypeRef(ident)
 	}
 

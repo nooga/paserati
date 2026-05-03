@@ -38,6 +38,10 @@ var directiveRegex = regexp.MustCompile(`^/{2}\s*@(\w+)\s*:\s*([^\r\n]*)`)
 // Format: filename.ts(line,col): error TS1234: message
 var errorLineRegex = regexp.MustCompile(`^[^(]+\((\d+),(\d+)\):\s+error\s+(TS\d+):\s+(.*)`)
 
+// globalErrorLineRegex parses global error lines without file/line info
+// Format: error TS1234: message  (used e.g. for @noLib tests, TS2318 cannot find global type)
+var globalErrorLineRegex = regexp.MustCompile(`^error\s+(TS\d+):\s+(.*)`)
+
 // TestDirectives holds parsed // @ directives from a test file
 type TestDirectives struct {
 	Target    string
@@ -283,19 +287,24 @@ func loadExpectedErrors(baselinesDir, baselineName string) (bool, []ExpectedErro
 	var errors []ExpectedError
 	for _, line := range strings.Split(string(content), "\n") {
 		m := errorLineRegex.FindStringSubmatch(line)
-		if m == nil {
+		if m != nil {
+			lineNum := 0
+			colNum := 0
+			_, _ = fmt.Sscanf(m[1], "%d", &lineNum)
+			_, _ = fmt.Sscanf(m[2], "%d", &colNum)
+			errors = append(errors, ExpectedError{
+				Line:    lineNum,
+				Col:     colNum,
+				Code:    m[3],
+				Message: m[4],
+			})
 			continue
 		}
-		lineNum := 0
-		colNum := 0
-		_, _ = fmt.Sscanf(m[1], "%d", &lineNum)
-		_, _ = fmt.Sscanf(m[2], "%d", &colNum)
-		errors = append(errors, ExpectedError{
-			Line:    lineNum,
-			Col:     colNum,
-			Code:    m[3],
-			Message: m[4],
-		})
+		// Also handle global errors without file/line info (e.g. @noLib tests, TS2318)
+		g := globalErrorLineRegex.FindStringSubmatch(line)
+		if g != nil {
+			errors = append(errors, ExpectedError{Code: g[1], Message: g[2]})
+		}
 	}
 	return true, errors
 }
