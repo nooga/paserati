@@ -103,6 +103,13 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			return resolvedAlias
 		}
 
+		// Special case: 'Object' (capital O) as a type annotation means the Object interface,
+		// not the Object constructor. The constructor is callable returning 'any', but in type
+		// position we want an empty object type so assignment checking works correctly.
+		if node.Value == "Object" {
+			return types.NewObjectType()
+		}
+
 		// --- Check if this is a forward reference or constructor defined as a regular value ---
 		if value, _, found := c.env.Resolve(node.Value); found {
 			debugPrintf("// [Checker resolveTypeAnno Ident] Found value for '%s': %T\n", node.Value, value)
