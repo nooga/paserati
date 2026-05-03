@@ -630,6 +630,23 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		bindingReg   Register // Pre-resolved binding index
 	}
 
+	// Namespace property: rewrite `++X` (where X is a namespace export) into
+	// `++<ns>.X` and reuse the MemberExpression update path.
+	if ident, ok := node.Argument.(*parser.Identifier); ok {
+		if sym, _, found := c.currentSymbolTable.Resolve(ident.Value); found && sym.IsNamespaceProperty {
+			rewritten := *node
+			rewritten.Argument = &parser.MemberExpression{
+				Token:  ident.Token,
+				Object: sym.NamespaceAccess,
+				Property: &parser.Identifier{
+					Token: ident.Token,
+					Value: ident.Value,
+				},
+			}
+			return c.compileUpdateExpression(&rewritten, hint)
+		}
+	}
+
 	// 1. Determine lvalue type and load current value
 	switch argNode := node.Argument.(type) {
 	case *parser.Identifier:

@@ -46,6 +46,7 @@ type Parser struct {
 	inGenerator        int // Counter for nested generator contexts (0 = not in generator)
 	inAsyncFunction    int // Counter for nested async function contexts (0 = not in async function)
 	inNonAsyncFunction int // Counter for nested non-async function contexts (for await-as-identifier)
+	inAmbientContext   int // Counter for nested ambient contexts (declare namespace / declare module bodies)
 
 	// Eval context flags
 	disallowSuper bool // When true, super expressions throw SyntaxError (for indirect eval)
@@ -698,21 +699,23 @@ func (p *Parser) parseStatement() Statement {
 			case lexer.CONST, lexer.LET, lexer.VAR, lexer.FUNCTION, lexer.CLASS, lexer.INTERFACE, lexer.TYPE, lexer.ENUM, lexer.ASYNC, lexer.ABSTRACT:
 				return p.parseDeclareStatement()
 			case lexer.IDENT:
-				// declare namespace/module/global with empty body — skip silently.
+				// declare namespace X { ... } — parse as a real namespace declaration with Declare=true.
+				if p.peekToken.Literal == "namespace" {
+					p.nextToken() // move to 'namespace'
+					return p.parseNamespaceDeclaration(true)
+				}
+				// declare module/global with empty body — skip silently.
 				// Only skip empty bodies to avoid suppressing TS1038 errors inside non-empty bodies.
-				if (p.peekToken.Literal == "namespace" || p.peekToken.Literal == "module" || p.peekToken.Literal == "global") &&
+				if (p.peekToken.Literal == "module" || p.peekToken.Literal == "global") &&
 					p.isEmptyDeclareNamespace() {
 					return p.parseDeclareStatement()
 				}
 			}
 		}
-		// Bare 'namespace X {}' — skip empty ambient namespace declarations silently.
-		// Only skip when the body is empty ({}), to avoid eating real code in non-empty namespaces.
+		// `namespace X { ... }` — TypeScript namespace declaration (contextual keyword).
 		if p.curToken.Literal == "namespace" &&
 			(p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
-			if p.isEmptyNamespaceDeclaration() {
-				return p.skipDeclareBody()
-			}
+			return p.parseNamespaceDeclaration(false)
 		}
 		// Check if this is a labeled statement (identifier followed by colon)
 		if p.peekTokenIs(lexer.COLON) {
@@ -855,6 +858,11 @@ func (p *Parser) parseAbstractClassDeclarationStatement() Statement {
 // For const/let/var, we parse the declaration properly so the type checker
 // can register the declared types. For other forms, we skip tokens.
 func (p *Parser) parseDeclareStatement() Statement {
+	declareToken := p.curToken
+	// TS1038: a 'declare' modifier cannot be used in an already ambient context.
+	if p.inAmbientContext > 0 {
+		p.addError(declareToken, "A 'declare' modifier cannot be used in an already ambient context.")
+	}
 	// Skip 'declare' keyword
 	p.nextToken()
 
@@ -6197,6 +6205,11 @@ func (p *Parser) parseBreakStatement() *BreakStatement {
 
 func (p *Parser) parseEmptyStatement() *EmptyStatement {
 	stmt := &EmptyStatement{Token: p.curToken} // Current token is ';'
+	// TS1036: statements are not allowed in ambient contexts. A stray empty
+	// statement inside `declare namespace X { ... }` triggers this in tsc.
+	if p.inAmbientContext > 0 {
+		p.addError(p.curToken, "Statements are not allowed in ambient contexts.")
+	}
 	// Empty statement is just a semicolon, no additional parsing needed
 	return stmt
 }
@@ -10928,6 +10941,16 @@ func (p *Parser) parseExportDeclaration() Statement {
 		if p.curToken.Literal == "declare" {
 			// export declare const x: number; — ambient declaration
 			return p.parseDeclareStatement()
+		}
+		// export namespace X { ... } — TypeScript namespace export
+		if p.curToken.Literal == "namespace" &&
+			(p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
+			ns := p.parseNamespaceDeclaration(false)
+			if ns == nil {
+				return nil
+			}
+			ns.IsExported = true
+			return &ExportNamedDeclaration{Token: exportToken, Declaration: ns}
 		}
 		return nil
 

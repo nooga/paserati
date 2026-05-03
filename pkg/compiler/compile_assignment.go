@@ -134,6 +134,24 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		}
 	}()
 
+	// Namespace property: rewrite `X = expr` (where X is a namespace export
+	// in the current scope) as `<ns>.X = expr` and let the MemberExpression
+	// path handle storage. Compound assignment operators are handled there too.
+	if ident, ok := node.Left.(*parser.Identifier); ok {
+		if sym, _, found := c.currentSymbolTable.Resolve(ident.Value); found && sym.IsNamespaceProperty {
+			rewritten := *node
+			rewritten.Left = &parser.MemberExpression{
+				Token:  ident.Token,
+				Object: sym.NamespaceAccess,
+				Property: &parser.Identifier{
+					Token: ident.Token,
+					Value: ident.Value,
+				},
+			}
+			return c.compileAssignmentExpression(&rewritten, hint)
+		}
+	}
+
 	switch lhsNode := node.Left.(type) {
 	case *parser.Identifier:
 		lhsType = lhsIsIdentifier

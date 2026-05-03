@@ -2498,6 +2498,17 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 	enumName := enumIdent.Value
 	memberName := memberIdent.Value
 
+	// Try the type environment first — namespaces and type aliases live there.
+	if typAlias, found := c.env.ResolveType(enumName); found {
+		if ns, ok := typAlias.(*types.NamespaceType); ok {
+			if member := ns.LookupTypeMember(memberName); member != nil {
+				return member
+			}
+			c.addError(node.Property, fmt.Sprintf("Namespace '%s' has no exported member '%s'", enumName, memberName))
+			return nil
+		}
+	}
+
 	// Look up the enum type in the environment
 	enumType, _, found := c.env.Resolve(enumName)
 	if !found {

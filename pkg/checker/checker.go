@@ -598,6 +598,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			c.checkClassDeclaration(classStmt)
 			nodesProcessedPass1[classStmt] = true
 			nodesProcessedPass2[classStmt] = true // Also mark for Pass 2 skip
+		} else if nsStmt, ok := stmt.(*parser.NamespaceDeclaration); ok {
+			debugPrintf("// [Checker Pass 1] Processing Namespace: %s\n", nsStmt.Name.Value)
+			c.checkNamespaceDeclaration(nsStmt)
+			nodesProcessedPass1[nsStmt] = true
+			nodesProcessedPass2[nsStmt] = true
 		} else if importStmt, ok := stmt.(*parser.ImportDeclaration); ok {
 			// Add defensive check for nil Source
 			if importStmt.Source != nil {
@@ -634,6 +639,14 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					nodesProcessedPass1[classStmt] = true
 					nodesProcessedPass2[classStmt] = true
 					// Mark the export statement itself as processed to prevent double-visiting in Pass 5
+					nodesProcessedPass1[exportStmt] = true
+					nodesProcessedPass2[exportStmt] = true
+				} else if nsStmt, ok := exportStmt.Declaration.(*parser.NamespaceDeclaration); ok {
+					debugPrintf("// [Checker Pass 1] Processing Exported Namespace: %s\n", nsStmt.Name.Value)
+					c.checkNamespaceDeclaration(nsStmt)
+					c.processExportDeclaration(nsStmt)
+					nodesProcessedPass1[nsStmt] = true
+					nodesProcessedPass2[nsStmt] = true
 					nodesProcessedPass1[exportStmt] = true
 					nodesProcessedPass2[exportStmt] = true
 				}
@@ -3325,6 +3338,9 @@ func (c *Checker) visit(node parser.Node) {
 		// The type of a ComputedPropertyName is the type of its expression
 		// This will be used as a key, so it should be string-like
 		node.SetComputedType(node.Expr.GetComputedType())
+
+	case *parser.NamespaceDeclaration:
+		c.checkNamespaceDeclaration(node)
 
 	case *parser.ArrayParameterPattern:
 		// Array destructuring pattern in catch clause or function parameters

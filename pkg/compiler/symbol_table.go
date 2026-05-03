@@ -1,6 +1,10 @@
 package compiler
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/nooga/paserati/pkg/parser"
+)
 
 // Register represents a VM register. Using byte for now, max 256 registers.
 
@@ -25,6 +29,16 @@ type Symbol struct {
 	// Caller local support: for direct eval, symbols that reference caller's local variables
 	IsCallerLocal    bool // True if this is a reference to a caller's local variable
 	CallerLocalIndex int  // Index in caller's register file (only valid if IsCallerLocal is true)
+	// Namespace property support: identifier reads/writes are emitted as
+	// OpGetProp/OpSetProp on the namespace object identified by NamespaceAccess.
+	// Used by `namespace X { export ... }`: exported names resolve to property
+	// access on X's runtime object, so internal references and external mutations
+	// stay in sync (matching tsc semantics). NamespaceAccess is an Expression
+	// node (Identifier or chained MemberExpression) that yields the namespace
+	// object when compiled — supports both top-level (`N`) and nested
+	// (`Outer.Inner`) namespaces.
+	IsNamespaceProperty bool
+	NamespaceAccess     parser.Expression
 }
 
 // WithObjectInfo tracks information about a with object in the compiler
@@ -64,6 +78,18 @@ func NewEnclosedSymbolTable(outer *SymbolTable) *SymbolTable {
 // It does not check outer scopes. Assumes the symbol is being defined in this scope.
 func (st *SymbolTable) Define(name string, reg Register) Symbol {
 	symbol := Symbol{Name: name, Register: reg, IsGlobal: false}
+	st.store[name] = symbol
+	return symbol
+}
+
+// DefineNamespaceProperty adds a symbol whose loads/stores compile to
+// property access on the namespace object produced by accessExpr.
+func (st *SymbolTable) DefineNamespaceProperty(name string, accessExpr parser.Expression) Symbol {
+	symbol := Symbol{
+		Name:                name,
+		IsNamespaceProperty: true,
+		NamespaceAccess:     accessExpr,
+	}
 	st.store[name] = symbol
 	return symbol
 }

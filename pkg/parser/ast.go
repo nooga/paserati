@@ -3734,6 +3734,44 @@ func (em *EnumMember) String() string {
 	return out.String()
 }
 
+// NamespaceDeclaration represents a TypeScript namespace declaration:
+//
+//	namespace Foo { ... }
+//	export namespace Foo { ... }
+//	declare namespace Foo { ... }
+//
+// Dotted forms (`namespace A.B.C { ... }`) are desugared at parse time into
+// nested NamespaceDeclarations whose inner blocks carry IsExported=true.
+type NamespaceDeclaration struct {
+	BaseExpression
+	Token      *lexer.Token    // The 'namespace' token
+	Name       *Identifier     // Simple name (one segment)
+	Body       *BlockStatement // Body block; statements may be ExportNamedDeclaration wrappers
+	Declare    bool            // True for `declare namespace`
+	IsExported bool            // True if declared as `export namespace ...`
+}
+
+func (n *NamespaceDeclaration) statementNode()       {}
+func (n *NamespaceDeclaration) TokenLiteral() string { return n.Token.Literal }
+func (n *NamespaceDeclaration) String() string {
+	var out bytes.Buffer
+	if n.Declare {
+		out.WriteString("declare ")
+	}
+	if n.IsExported {
+		out.WriteString("export ")
+	}
+	out.WriteString("namespace ")
+	if n.Name != nil {
+		out.WriteString(n.Name.String())
+	}
+	out.WriteString(" ")
+	if n.Body != nil {
+		out.WriteString(n.Body.String())
+	}
+	return out.String()
+}
+
 // dumpNode prints a structured representation of an AST node
 func dumpNode(node Node, indent string) {
 	if node == nil {

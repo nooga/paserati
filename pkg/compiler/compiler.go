@@ -378,6 +378,13 @@ type Compiler struct {
 	// Maps constant index to register that currently holds it
 	constantCache map[uint16]Register
 
+	// currentNamespaceAccess is non-nil while compiling inside a TypeScript
+	// namespace body. It is the AST expression that evaluates to the
+	// namespace's runtime object (e.g. Identifier("N") or
+	// MemberExpression(Identifier("Outer"), "Inner")). Used by nested
+	// namespace declarations to chain off the parent.
+	currentNamespaceAccess parser.Expression
+
 	// --- Phase 4a: Finally Context Tracking ---
 	inFinallyBlock  bool // Track if we're compiling inside finally block
 	tryFinallyDepth int  // Number of enclosing try-with-finally blocks
@@ -1680,6 +1687,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.EnumDeclaration:
 		return c.compileEnumDeclaration(node, hint)
 
+	case *parser.NamespaceDeclaration:
+		return c.compileNamespaceDeclaration(node, hint)
+
 	case *parser.ClassExpression:
 		// Convert ClassExpression to ClassDeclaration for compilation
 		// The compiler treats them the same way
@@ -1974,6 +1984,18 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		}
 		debugPrintf("// DEBUG Identifier '%s': Looking up in %s scope\n", node.Value, scopeName) // <<< ADDED
 		symbolRef, definingTable, found := c.currentSymbolTable.Resolve(node.Value)
+
+		// Namespace property: emit OpGetProp on the namespace object.
+		if found && symbolRef.IsNamespaceProperty {
+			nsReg := c.regAlloc.Alloc()
+			defer c.regAlloc.Free(nsReg)
+			if _, err := c.compileNode(symbolRef.NamespaceAccess, nsReg); err != nil {
+				return BadRegister, err
+			}
+			nameIdx := c.chunk.AddConstant(vm.String(node.Value))
+			c.emitGetProp(hint, nsReg, uint16(nameIdx), node.Token.Line)
+			return hint, nil
+		}
 
 		// Note: TDZ (Temporal Dead Zone) checking is a runtime property that requires tracking
 		// variable initialization state at runtime. Compile-time TDZ checking doesn't work correctly
