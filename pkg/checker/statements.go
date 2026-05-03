@@ -590,6 +590,15 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 		return
 	}
 
+	// TS1106: bare 'async' identifier on LHS of non-async for-of is ambiguous with async generators
+	if !node.IsAsync {
+		if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
+			if ident, ok := exprStmt.Expression.(*parser.Identifier); ok && ident.Value == "async" {
+				c.addError(ident, "The left-hand side of a 'for...of' statement may not be 'async'.")
+			}
+		}
+	}
+
 	// for-await-of can only be used in async contexts
 	if node.IsAsync && !c.isInAsyncContext() {
 		debugPrintf("// [Checker ForOfStmt] IsAsync check: node.IsAsync=%v, c.inAsyncFunction=%v, c.inGeneratorFunction=%v\n", node.IsAsync, c.inAsyncFunction, c.inGeneratorFunction)
@@ -898,6 +907,12 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 	if node == nil {
 		c.addError(nil, "nil ForInStatement node")
 		return
+	}
+
+	// TS2491: destructuring pattern on LHS of for-in is not allowed
+	switch node.Variable.(type) {
+	case *parser.ArrayDestructuringDeclaration, *parser.ObjectDestructuringDeclaration:
+		c.addError(node.Variable, "The left-hand side of a 'for...in' statement cannot be a destructuring pattern.")
 	}
 
 	originalEnv := c.env
