@@ -1273,9 +1273,9 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 	debugPrintf("// [Checker resolveTypeofType] Looking up '%s' in env: found=%v\n", node.Identifier, found)
 
 	if !found {
-		// Instead of failing immediately, create a forward reference for typeof
-		// This will be resolved later when the variable is defined
+		// Create a forward reference; track the node to emit TS2304 if still unresolved after all passes
 		debugPrintf("// [Checker resolveTypeofType] Creating forward reference for typeof %s\n", node.Identifier)
+		c.unresolvedTypeofNodes = append(c.unresolvedTypeofNodes, node)
 		return &types.TypeofType{
 			Identifier: node.Identifier,
 		}

@@ -270,6 +270,9 @@ type Checker struct {
 	// This allows checking method bodies that reference variables declared later
 	allowForwardReferences bool
 
+	// Track TypeofTypeExpression nodes with unresolved identifiers for deferred TS2304 reporting
+	unresolvedTypeofNodes []*parser.TypeofTypeExpression
+
 	// --- NEW: Generator function tracking ---
 	// Track generator function names for yield* validation
 	generatorFunctions map[string]bool
@@ -1332,6 +1335,14 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 	}
 	debugPrintf("// --- Checker - Pass 5: Complete ---\n")
+
+	// Emit TS2304 for typeof expressions with identifiers that were never resolved
+	for _, node := range c.unresolvedTypeofNodes {
+		if _, _, found := globalEnv.Resolve(node.Identifier); !found {
+			c.addError(node, fmt.Sprintf("Cannot find name '%s'.", node.Identifier))
+		}
+	}
+	c.unresolvedTypeofNodes = nil
 
 	// Emit TS2391 for any function overload signatures that never got an implementation
 	for _, sigs := range globalEnv.GetAllPendingOverloads() {
