@@ -399,6 +399,16 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		case *parser.ComputedPropertyName:
 			// Handle computed properties: [expression]
 			c.visit(key.Expr)
+			// TS2464: computed property name must be string, number, symbol, or any
+			// Only flag types that are clearly invalid (boolean, null, undefined, void, never)
+			if keyExprType := key.Expr.GetComputedType(); keyExprType != nil {
+				widenedKeyType := types.GetWidenedType(keyExprType)
+				switch widenedKeyType {
+				case types.Boolean, types.Null, types.Undefined, types.Void, types.Never:
+					c.addError(key, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.")
+				}
+			}
+
 			// Note: keyType is computed but primarily used for validation
 			// The actual key name is determined at runtime for computed properties
 
