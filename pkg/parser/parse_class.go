@@ -339,9 +339,8 @@ func (p *Parser) parseClassBody() *ClassBody {
 				p.addError(p.curToken, "'export' modifier cannot appear on class elements of this kind.")
 				p.nextToken()
 			} else if p.curToken.Type == lexer.IDENT && p.curToken.Literal == "declare" && !isFieldName() {
-				// 'declare' is not a valid class element modifier
+				// 'declare' modifier on class member (valid for properties; only error if method has body)
 				isDeclare = true
-				p.addError(p.curToken, "'declare' modifier cannot appear on class elements of this kind.")
 				p.nextToken()
 			} else if (p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) || p.curTokenIs(lexer.PROTECTED)) && !isFieldName() {
 				if hasAccessibility {
@@ -509,6 +508,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 					continue
 				}
 				// Parse constructor - let it decide if it's signature or implementation
+				if isDeclare {
+					p.addError(p.curToken, "'declare' modifier cannot appear on class elements of this kind.")
+				}
 				result := p.parseConstructor(isStatic, isPublic, isPrivate, isProtected)
 				if result != nil {
 					if sig, ok := result.(*ConstructorSignature); ok {
@@ -525,6 +527,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 				// Look ahead to distinguish
 				if p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) {
 					// It's a method (either regular or generic) - parse it and handle signatures/implementations
+					if isDeclare {
+						p.addError(p.curToken, "'declare' modifier cannot appear on class elements of this kind.")
+					}
 					result := p.parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, false)
 					if result != nil {
 						if sig, ok := result.(*MethodSignature); ok {
