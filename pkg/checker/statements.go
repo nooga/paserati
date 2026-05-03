@@ -592,12 +592,13 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 	}
 
 	// TS1106: bare 'async' identifier (not parenthesized) on LHS of non-async for-of is ambiguous
-	// parenthesized (async) has Token.Type == LPAREN, bare async has Token.Type == ASYNC
+	// For bare async: parseForStatementOrForOf stores ExpressionStatement{Token: asyncToken, ...}
+	// so Token.Type == ASYNC. For parenthesized (async): the token stored after parseExpression
+	// is the closing ')' (RPAREN), not LPAREN. Only emit for bare ASYNC token.
 	if !node.IsAsync {
 		if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
 			if ident, ok := exprStmt.Expression.(*parser.Identifier); ok && ident.Value == "async" {
-				// Only emit if the ExpressionStatement token is the async keyword itself (not a paren)
-				if exprStmt.Token.Type != lexer.LPAREN {
+				if exprStmt.Token.Type == lexer.ASYNC {
 					c.addError(ident, "The left-hand side of a 'for...of' statement may not be 'async'.")
 				}
 			}
@@ -615,6 +616,12 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 	loopEnv := NewEnclosedEnvironment(originalEnv)
 	c.env = loopEnv
 	debugPrintf("// [Checker ForOfStmt] Created loop scope %p (outer: %p)\n", loopEnv, originalEnv)
+
+	// Hoist var declarations to the outer scope so they're visible in the iterable expression.
+	// e.g. `for (var of of of)` — the iterable `of` must find `var of` in scope.
+	if varStmt, ok := node.Variable.(*parser.VarStatement); ok && varStmt.Name != nil {
+		originalEnv.Define(varStmt.Name.Value, types.Any, false)
+	}
 
 	// Visit the iterable first to determine its type
 	if node.Iterable != nil {
@@ -924,6 +931,11 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 	loopEnv := NewEnclosedEnvironment(originalEnv)
 	c.env = loopEnv
 	debugPrintf("// [Checker ForInStmt] Created loop scope %p (outer: %p)\n", loopEnv, originalEnv)
+
+	// Hoist var declarations to the outer scope so they're visible in the object expression.
+	if varStmt, ok := node.Variable.(*parser.VarStatement); ok && varStmt.Name != nil {
+		originalEnv.Define(varStmt.Name.Value, types.Any, false)
+	}
 
 	// Visit the object first to determine its type
 	if node.Object != nil {

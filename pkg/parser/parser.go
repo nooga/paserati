@@ -697,6 +697,21 @@ func (p *Parser) parseStatement() Statement {
 			switch p.peekToken.Type {
 			case lexer.CONST, lexer.LET, lexer.VAR, lexer.FUNCTION, lexer.CLASS, lexer.INTERFACE, lexer.TYPE, lexer.ENUM, lexer.ASYNC, lexer.ABSTRACT:
 				return p.parseDeclareStatement()
+			case lexer.IDENT:
+				// declare namespace/module/global with empty body — skip silently.
+				// Only skip empty bodies to avoid suppressing TS1038 errors inside non-empty bodies.
+				if (p.peekToken.Literal == "namespace" || p.peekToken.Literal == "module" || p.peekToken.Literal == "global") &&
+					p.isEmptyDeclareNamespace() {
+					return p.parseDeclareStatement()
+				}
+			}
+		}
+		// Bare 'namespace X {}' — skip empty ambient namespace declarations silently.
+		// Only skip when the body is empty ({}), to avoid eating real code in non-empty namespaces.
+		if p.curToken.Literal == "namespace" &&
+			(p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
+			if p.isEmptyNamespaceDeclaration() {
+				return p.skipDeclareBody()
 			}
 		}
 		// Check if this is a labeled statement (identifier followed by colon)
@@ -946,6 +961,77 @@ func (p *Parser) parseDeclareVarStatement() Statement {
 		return stmt
 	}
 	return nil
+}
+
+// isEmptyDeclareNamespace checks via lookahead whether we're at a 'declare namespace/module X {}'
+// with an empty body. Called when curToken='declare', peek='namespace'/'module'/'global'.
+// e.g. declare module "Foo" {}, declare namespace M {} — returns true.
+// e.g. declare namespace M { function foo(); } — returns false.
+func (p *Parser) isEmptyDeclareNamespace() bool {
+	// pos=0 is peek = "namespace"/"module"/"global"
+	// pos=1 is the name (IDENT or STRING)
+	name := p.lookAhead(1)
+	if name.Type != lexer.IDENT && name.Type != lexer.STRING && !p.isKeywordThatCanBeIdentifier(name.Type) {
+		return false
+	}
+	// Handle dotted names: skip additional IDENT . IDENT segments
+	pos := 2
+	for {
+		next := p.lookAhead(pos)
+		if next.Type == lexer.DOT {
+			pos++
+			component := p.lookAhead(pos)
+			if component.Type != lexer.IDENT && !p.isKeywordThatCanBeIdentifier(component.Type) {
+				return false
+			}
+			pos++
+			continue
+		}
+		break
+	}
+	// pos now points to what should be '{'
+	openBrace := p.lookAhead(pos)
+	if openBrace.Type != lexer.LBRACE {
+		return false
+	}
+	// pos+1 must be '}' — only skip empty bodies
+	closeBrace := p.lookAhead(pos + 1)
+	return closeBrace.Type == lexer.RBRACE
+}
+
+// isEmptyNamespaceDeclaration checks via lookahead whether the current 'namespace' token
+// is followed by a dotted name and then an empty body {}.
+// e.g. namespace number {}, namespace a.b.c {} — returns true.
+// e.g. namespace Formatting { ... code ... } — returns false.
+// Called when curToken is 'namespace' and peek is IDENT-like.
+func (p *Parser) isEmptyNamespaceDeclaration() bool {
+	// Look ahead: skip dotted name tokens (IDENT, DOT) then expect '{' followed by '}'
+	// We use lookAhead starting at pos=0 (peekToken) to scan ahead.
+	pos := 0 // pos=0 is peekToken (the first IDENT of the name)
+	for {
+		tok := p.lookAhead(pos)
+		if tok.Type == lexer.EOF {
+			return false
+		}
+		// Skip IDENT or keyword-as-identifier (name component)
+		if tok.Type == lexer.IDENT || p.isKeywordThatCanBeIdentifier(tok.Type) {
+			pos++
+			// Check if next is DOT (dotted name continues)
+			next := p.lookAhead(pos)
+			if next.Type == lexer.DOT {
+				pos++ // skip the dot, continue loop to read next IDENT
+				continue
+			}
+			// Not a dot — next should be '{' for the body
+			if next.Type == lexer.LBRACE {
+				// Check the token after '{' — if it's '}', the body is empty
+				afterBrace := p.lookAhead(pos + 1)
+				return afterBrace.Type == lexer.RBRACE
+			}
+			return false
+		}
+		return false
+	}
 }
 
 // skipDeclareBody skips the body of a declare statement using balanced bracket tracking.

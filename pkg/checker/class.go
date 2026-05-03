@@ -1931,8 +1931,8 @@ func (c *Checker) synthesizeParameterProperties(body *parser.ClassBody) {
 }
 
 // bodyContainsReturn checks if a block statement contains at least one return statement
-// with a value (not just bare `return;`). This is a shallow check — it only looks at
-// top-level statements and if/else branches, not deeply nested control flow.
+// (with or without a value). A bare `return` is valid in a getter — it returns undefined.
+// This is a shallow check — it only looks at top-level statements and if/else branches.
 func bodyContainsReturn(body *parser.BlockStatement) bool {
 	for _, stmt := range body.Statements {
 		if containsReturnWithValue(stmt) {
@@ -1945,7 +1945,8 @@ func bodyContainsReturn(body *parser.BlockStatement) bool {
 func containsReturnWithValue(node parser.Node) bool {
 	switch n := node.(type) {
 	case *parser.ReturnStatement:
-		return n.ReturnValue != nil
+		_ = n
+		return true // bare `return` counts — getter returns undefined
 	case *parser.IfStatement:
 		if n.Consequence != nil && containsReturnWithValue(n.Consequence) {
 			return true
