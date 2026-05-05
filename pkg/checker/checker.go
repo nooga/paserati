@@ -259,6 +259,8 @@ type Checker struct {
 	// --- NEW: Abstract classes tracking ---
 	// Track abstract class names to prevent instantiation
 	abstractClasses map[string]bool
+	// Track abstract method names per class: className → set of abstract method names
+	abstractMethods map[string]map[string]bool
 
 	// --- NEW: Current generic class tracking ---
 	// Track the current generic class being processed to allow forward references
@@ -340,6 +342,7 @@ func NewCheckerWithInitializers(initializers []builtins.BuiltinInitializer) *Che
 		currentThisType:            nil, // Initialize this type context
 		currentClassContext:        nil, // No class context initially
 		abstractClasses:            make(map[string]bool),
+		abstractMethods:            make(map[string]map[string]bool),
 		generatorFunctions:         make(map[string]bool),
 		resolvingTypeAliases:       make(map[string]bool),
 	}

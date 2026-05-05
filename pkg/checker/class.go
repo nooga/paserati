@@ -342,6 +342,49 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 
 	debugPrintf("// [Checker Class] Successfully defined class '%s' as constructor type: %s\n",
 		node.Name.Value, constructorType.String())
+
+	// TS2515: Non-abstract class must implement all abstract members from superclass.
+	if !node.IsAbstract && node.SuperClass != nil {
+		c.checkAbstractMembersImplemented(node, instanceType)
+	}
+}
+
+// checkAbstractMembersImplemented emits TS2515 if a concrete class fails to implement
+// abstract members declared in its superclass chain.
+func (c *Checker) checkAbstractMembersImplemented(node *parser.ClassDeclaration, instanceType *types.ObjectType) {
+	superIdent, ok := node.SuperClass.(*parser.Identifier)
+	if !ok {
+		return // non-trivial superclass expression, skip
+	}
+	superName := superIdent.Value
+	if !c.abstractClasses[superName] {
+		return // superclass is not abstract, nothing to check
+	}
+
+	abstractMembers := c.abstractMethods[superName]
+	if len(abstractMembers) == 0 {
+		return // no abstract methods to check
+	}
+
+	// Collect method/property names implemented in this class (non-abstract)
+	implemented := make(map[string]bool)
+	for _, method := range node.Body.Methods {
+		if method.Key != nil && !method.IsAbstract {
+			implemented[c.extractPropertyName(method.Key)] = true
+		}
+	}
+	for _, prop := range node.Body.Properties {
+		if prop.Key != nil {
+			implemented[c.extractPropertyName(prop.Key)] = true
+		}
+	}
+
+	for memberName := range abstractMembers {
+		if !implemented[memberName] {
+			c.addError(node.Name, fmt.Sprintf("Non-abstract class '%s' does not implement inherited abstract member '%s' from class '%s'.",
+				node.Name.Value, memberName, superName))
+		}
+	}
 }
 
 // checkGenericClassDeclaration handles generic class declarations
@@ -693,13 +736,19 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			// Validate the signature types
 			c.validateMethodSignature(methodSig)
 
-			// For abstract methods, add them to the instance type
+			// For abstract methods, add them to the instance type and track for TS2515.
 			if methodSig.IsAbstract {
 				methodType := c.inferMethodTypeFromSignature(methodSig)
 				accessLevel := c.getAccessLevel(methodSig.IsPublic, methodSig.IsPrivate, methodSig.IsProtected)
 
 				instanceType.WithClassMember(methodName, methodType, accessLevel, false, false)
 				debugPrintf("// [Checker Class] Added abstract method '%s' to instance type: %s\n", methodName, methodType.String())
+
+				// Track abstract method for subclass implementation checking
+				if c.abstractMethods[className] == nil {
+					c.abstractMethods[className] = make(map[string]bool)
+				}
+				c.abstractMethods[className][methodName] = true
 			}
 
 			debugPrintf("// [Checker Class] Processed method signature '%s'\n", methodName)
