@@ -211,6 +211,9 @@ func (c *Compiler) declareClassPrivateNames(node *parser.ClassDeclaration) {
 // compileClassDeclaration compiles a class declaration into a constructor function + prototype setup
 // This follows the approach of desugaring classes to constructor functions + prototypes
 func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint Register) (Register, errors.PaseratiError) {
+	if node.Declare {
+		return hint, nil // ambient class: type-only, no runtime code
+	}
 	debugPrintf("// DEBUG compileClassDeclaration: Starting compilation for class '%s'\n", node.Name.Value)
 
 	// 1. Pre-define the class name in the OUTER scope so the constructor can reference it

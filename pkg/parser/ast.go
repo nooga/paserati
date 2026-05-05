@@ -3253,6 +3253,7 @@ type ClassDeclaration struct {
 	Implements     []*Identifier    // Interfaces this class implements
 	Body           *ClassBody       // Class body containing methods and properties
 	IsAbstract     bool             // true if this is an abstract class
+	Declare        bool             // true for `declare class` (ambient, type-only)
 	Decorators     []*Decorator     // Decorators applied to the class
 }
 

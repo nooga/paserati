@@ -307,6 +307,15 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		return types.Null
 	case *parser.UndefinedLiteral:
 		return types.Undefined
+	// Negative numeric literal types: -1, -2.5, etc.
+	case *parser.PrefixExpression:
+		if node.Operator == "-" {
+			if numLit, ok := node.Right.(*parser.NumberLiteral); ok {
+				return &types.LiteralType{Value: vm.Number(-numLit.Value)}
+			}
+		}
+		c.addError(node, fmt.Sprintf("unsupported type annotation node: %T", node))
+		return nil
 	// --- End Literal Type Nodes ---
 
 	// --- NEW: Handle FunctionTypeExpression --- <<<

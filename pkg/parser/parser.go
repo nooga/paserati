@@ -358,6 +358,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.BIGINT, p.parseBigIntLiteral)
 	p.registerTypePrefix(lexer.TRUE, p.parseBooleanLiteral)
 	p.registerTypePrefix(lexer.FALSE, p.parseBooleanLiteral)
+	p.registerTypePrefix(lexer.MINUS, p.parseNegativeLiteralType) // Negative literal types like -1
 	// Function types that start with '('
 	p.registerTypePrefix(lexer.LPAREN, p.parseFunctionTypeExpression) // Starts with '(', e.g., '() => number'
 	// Generic function types that start with '<'
@@ -2329,6 +2330,31 @@ func (p *Parser) parseBigIntLiteral() Expression {
 	lit.Value = cleanedLiteral
 
 	return lit
+}
+
+// parseNegativeLiteralType parses negative numeric literal types like -1 or -2.5 in type position.
+func (p *Parser) parseNegativeLiteralType() Expression {
+	minusToken := p.curToken
+	p.nextToken()
+	if p.curToken.Type != lexer.NUMBER {
+		p.addError(p.curToken, fmt.Sprintf("expected number after '-' in type, got %s", p.curToken.Type))
+		return nil
+	}
+	inner := p.parseNumberLiteral()
+	if inner == nil {
+		return nil
+	}
+	numLit, ok := inner.(*NumberLiteral)
+	if !ok {
+		return nil
+	}
+	// Return a PrefixExpression representing the negation so the checker/resolver
+	// sees it as a negative literal type (PrefixExpr with operator "-").
+	return &PrefixExpression{
+		Token:    minusToken,
+		Operator: "-",
+		Right:    numLit,
+	}
 }
 
 func (p *Parser) parseStringLiteral() Expression {

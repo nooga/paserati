@@ -93,14 +93,19 @@ func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
 
 	// --- Method overloads ---
 	// Build set of method implementation key names; detect duplicates (TS2393)
-	// Use "kind:name" as key to distinguish getter/setter from regular methods
+	// Use "static/instance:kind:name" as key to distinguish static from instance
+	// and getter/setter from regular methods.
 	implNames := make(map[string]bool)
 	seenNames := make(map[string]bool) // for duplicate detection
 	for _, method := range body.Methods {
 		if method.Kind != "constructor" && method.Key != nil {
 			name := getMethodKeyString(method.Key)
 			implNames[name] = true
-			kindKey := method.Kind + ":" + name
+			staticPrefix := "i:"
+			if method.IsStatic {
+				staticPrefix = "s:"
+			}
+			kindKey := staticPrefix + method.Kind + ":" + name
 			if seenNames[kindKey] && !method.IsAbstract {
 				c.addError(method.Key, "Duplicate function implementation.")
 			}
@@ -257,8 +262,12 @@ func (c *Checker) validateClassMemberConstraints(body *parser.ClassBody) {
 func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	debugPrintf("// [Checker Class] Checking class declaration '%s'\n", node.Name.Value)
 
-	// Validate class member constraints before type-building
-	c.validateClassMemberConstraints(node.Body)
+	// Validate class member constraints before type-building.
+	// Skip for declare classes: ambient bodies have signatures without implementations
+	// and no bodies — that's their intended form.
+	if !node.Declare {
+		c.validateClassMemberConstraints(node.Body)
+	}
 
 	// Handle generic classes
 	if len(node.TypeParameters) > 0 {

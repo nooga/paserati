@@ -129,9 +129,10 @@ func (p *Parser) parseClassDeclaration() Statement {
 	}
 }
 
-// parseDeclareClassStatement parses a `declare class` by consuming its tokens,
-// emitting appropriate errors (TS1183, TS2369, TS2371), and returning nil so
-// the class is not registered in the program AST (ambient context).
+// parseDeclareClassStatement parses a `declare class` (ambient class declaration).
+// Validates ambient constraints and returns the ClassDeclaration with Declare=true
+// so the checker registers the class type for inheritance/type checking, while the
+// compiler skips code generation for it.
 func (p *Parser) parseDeclareClassStatement() Statement {
 	classStmt := p.parseClassDeclaration()
 	if classStmt == nil {
@@ -141,6 +142,7 @@ func (p *Parser) parseDeclareClassStatement() Statement {
 	if !ok || cd.Body == nil {
 		return nil
 	}
+	cd.Declare = true
 	// TS1183: method with a body in ambient context
 	for _, method := range cd.Body.Methods {
 		if method.Value != nil && method.Value.Body != nil {
@@ -199,7 +201,7 @@ func (p *Parser) parseDeclareClassStatement() Statement {
 	for _, sig := range cd.Body.MethodSigs {
 		checkComputedKey(sig.Key)
 	}
-	return nil
+	return cd
 }
 
 // isWellKnownSymbol returns true if name is a standard well-known Symbol property.
