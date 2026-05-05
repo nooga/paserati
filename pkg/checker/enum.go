@@ -11,8 +11,9 @@ import (
 func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 	debugPrintf("// [Checker Enum] Checking enum declaration '%s' (const=%v)\n", node.Name.Value, node.IsConst)
 
-	// 1. Check if enum name is already defined
-	if _, _, exists := c.env.Resolve(node.Name.Value); exists {
+	// 1. Check if enum name is already defined in the current scope.
+	// Use HasLocalSymbol to avoid false positives from outer scopes.
+	if c.env.HasLocalSymbol(node.Name.Value) {
 		c.addError(node.Name, fmt.Sprintf("identifier '%s' already declared", node.Name.Value))
 		return
 	}
@@ -60,19 +61,28 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 				isThisMemberNumeric = false
 				// String members don't affect auto-increment
 			case *parser.PrefixExpression:
-				// Handle negative numbers
+				// Handle negative numbers and other unary expressions
 				if v.Operator == "-" {
 					if numLit, ok := v.Right.(*parser.NumberLiteral); ok {
 						memberValue = -int(numLit.Value)
 						nextValue = -int(numLit.Value) + 1
 						isThisMemberNumeric = true
-					} else {
-						c.addError(member.Value, "enum member must have initializer")
+					} else if node.IsConst {
+						c.addError(member.Value, "enum member initializer must be a constant expression")
 						continue
+					} else {
+						memberValue = 0
+						nextValue = 0
+						isThisMemberNumeric = false
 					}
-				} else {
-					c.addError(member.Value, "enum member must have initializer")
+				} else if node.IsConst {
+					c.addError(member.Value, "enum member initializer must be a constant expression")
 					continue
+				} else {
+					// Regular enum: allow computed unary expressions (e.g., +'foo')
+					memberValue = 0
+					nextValue = 0
+					isThisMemberNumeric = false
 				}
 			case *parser.InfixExpression:
 				// Handle binary constant expressions like 1 << 1, 1 | 2, etc.
@@ -80,9 +90,15 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 					memberValue = val
 					nextValue = val + 1
 					isThisMemberNumeric = true
-				} else {
+				} else if node.IsConst {
+					// Only const enums require fully constant initializers
 					c.addError(member.Value, "enum member initializer must be a constant expression")
 					continue
+				} else {
+					// Regular enums allow computed members
+					memberValue = 0
+					nextValue = 0
+					isThisMemberNumeric = false
 				}
 			case *parser.Identifier:
 				// Handle references to other enum members
@@ -91,9 +107,21 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 				nextValue = 1
 				isThisMemberNumeric = true
 			default:
-				// For now, only support literal values
-				c.addError(member.Value, "enum member initializer must be a constant expression")
-				continue
+				// await/yield are never valid in enum initializers
+				switch member.Value.(type) {
+				case *parser.AwaitExpression, *parser.YieldExpression:
+					c.addError(member.Value, "enum member initializer must be a constant expression")
+					continue
+				}
+				// For regular enums, other computed expressions are allowed
+				if node.IsConst {
+					c.addError(member.Value, "enum member initializer must be a constant expression")
+					continue
+				}
+				// Regular enum computed member — assign 0 as placeholder
+				memberValue = 0
+				nextValue = 0
+				isThisMemberNumeric = false
 			}
 		} else {
 			// No initializer - use auto-increment
