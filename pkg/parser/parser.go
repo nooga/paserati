@@ -1318,7 +1318,23 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, Expression, err
 		return params, restParam, nil
 	}
 
-	// --- MODIFIED: Handle optional parameter name ---
+	// --- MODIFIED: Handle optional parameter name and 'this' parameter ---
+	if p.curTokenIs(lexer.THIS) && p.peekTokenIs(lexer.COLON) {
+		// 'this' parameter: (this: Type, ...) — consume and skip it, not part of call signature
+		p.nextToken() // Consume 'this'
+		p.nextToken() // Consume ':'
+		p.parseTypeExpression() // consume the type but discard it
+		if p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // Consume ','
+			p.nextToken() // Move to next parameter
+		} else {
+			// 'this' was the only parameter
+			if !p.expectPeek(lexer.RPAREN) {
+				return nil, nil, fmt.Errorf("missing closing parenthesis")
+			}
+			return params, restParam, nil
+		}
+	}
 	if p.curTokenIs(lexer.IDENT) {
 		if p.peekTokenIs(lexer.QUESTION) {
 			// Optional parameter: name?: type

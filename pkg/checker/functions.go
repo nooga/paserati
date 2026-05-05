@@ -188,6 +188,12 @@ func (c *Checker) isSignatureCompatible(implementation, overload *types.Signatur
 	// Check return type compatibility
 	debugPrintf("// [Checker isSignatureCompatible] Checking return types: impl %s vs overload %s\n", implementation.ReturnType.String(), overload.ReturnType.String())
 
+	// TypeScript rule: an overload with return type 'void' is compatible with any implementation
+	// return type (the void overload means "callers don't use the return value").
+	if overload.ReturnType == types.Void {
+		return true
+	}
+
 	// For overloads, if the implementation return type is a union, check if the overload return type is one of the union members
 	if implUnion, isUnion := implementation.ReturnType.(*types.UnionType); isUnion {
 		// Check if the overload return type is assignable to any of the union types
