@@ -331,7 +331,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	constructorType := types.NewConstructorType(constructorSig)
 
 	// 6. Add static members to the constructor type (can now resolve class name in type annotations)
-	constructorType = c.addStaticMembers(node.Body, constructorType)
+	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
 
 	// 6. Update the constructor function in the environment (replacing forward reference)
 	// When we reference "Animal", we get the constructor function, not a separate class type
@@ -1194,8 +1194,9 @@ func (c *Checker) getAccessLevel(isPublic, isPrivate, isProtected bool) types.Ac
 	return types.AccessPublic
 }
 
-// addStaticMembers adds static methods and properties to the constructor type
-func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *types.ObjectType) *types.ObjectType {
+// addStaticMembers adds static methods and properties to the constructor type.
+// instanceType (the class instance type) is provided for setting super context in static field initializers.
+func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *types.ObjectType, instanceType ...*types.ObjectType) *types.ObjectType {
 	// Get the class name from constructor metadata
 	className := constructorType.GetClassName()
 
@@ -1221,9 +1222,17 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 
 	// Add static properties. In static field initializers, `this` refers to the
 	// constructor (class object), so set the this type accordingly.
+	// Also set class context so `super` resolves correctly.
 	prevStaticThisType := c.currentThisType
 	c.currentThisType = constructorType
 	defer func() { c.currentThisType = prevStaticThisType }()
+	c.setClassContext(className, types.AccessContextStaticMethod)
+	// Set currentClassInstanceType so super expression check can find the class.
+	prevStaticInstanceType := c.currentClassInstanceType
+	if len(instanceType) > 0 && instanceType[0] != nil {
+		c.currentClassInstanceType = instanceType[0]
+	}
+	defer func() { c.currentClassInstanceType = prevStaticInstanceType }()
 	for _, prop := range body.Properties {
 		if prop.IsStatic {
 			propType := c.inferPropertyType(prop)
