@@ -1168,7 +1168,11 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 		}
 	}
 
-	// Add static properties
+	// Add static properties. In static field initializers, `this` refers to the
+	// constructor (class object), so set the this type accordingly.
+	prevStaticThisType := c.currentThisType
+	c.currentThisType = constructorType
+	defer func() { c.currentThisType = prevStaticThisType }()
 	for _, prop := range body.Properties {
 		if prop.IsStatic {
 			propType := c.inferPropertyType(prop)
