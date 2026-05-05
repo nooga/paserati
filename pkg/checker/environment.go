@@ -188,6 +188,12 @@ func (e *Environment) GetPrimitivePrototypeMethodType(primitiveName, methodName 
 // Define adds a new *variable* type binding and its const status to the current environment scope.
 // Returns false if the name conflicts with an existing variable/const in this scope.
 // Note: TypeScript-style declaration merging allows the same name to exist as both a value and a type.
+// HasLocalSymbol returns true if name is defined in THIS scope (not parent scopes).
+func (e *Environment) HasLocalSymbol(name string) bool {
+	_, exists := e.symbols[name]
+	return exists
+}
+
 func (e *Environment) Define(name string, typ types.Type, isConst bool) bool {
 	// Check for conflict with existing variable/constant in this scope
 	if _, exists := e.symbols[name]; exists {

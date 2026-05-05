@@ -289,8 +289,10 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	c.setClassContext(node.Name.Value, types.AccessContextExternal)
 	defer func() { c.currentClassContext = prevContext }()
 
-	// 1. Check if class name is already defined
-	if _, _, exists := c.env.Resolve(node.Name.Value); exists {
+	// 1. Check if class name is already defined IN THE CURRENT SCOPE ONLY.
+	// Using Resolve() would walk up the scope chain and incorrectly flag a class
+	// inside a namespace as conflicting with an outer class of the same name.
+	if c.env.HasLocalSymbol(node.Name.Value) {
 		c.addError(node.Name, fmt.Sprintf("identifier '%s' already declared", node.Name.Value))
 		return
 	}
