@@ -190,6 +190,10 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			return types.Void
 		case "object":
 			return types.NonPrimitive
+		case "const":
+			// 'as const' const assertion — treat as 'any' since we don't narrow
+			// to readonly literal types yet.
+			return types.Any
 		case "symbol":
 			return types.Symbol
 		case "bigint":

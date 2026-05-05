@@ -4562,6 +4562,13 @@ func (p *Parser) parseTypeAssertionExpression(left Expression) Expression {
 
 	p.nextToken() // Move past 'as'
 
+	// Special case: `as const` (const assertion) — treat as `as any` for now
+	// since we don't have a separate ConstType; the expression still compiles.
+	if p.curTokenIs(lexer.CONST) {
+		expression.TargetType = &Identifier{Token: p.curToken, Value: "const"}
+		return expression
+	}
+
 	// Parse the target type expression
 	expression.TargetType = p.parseTypeExpression()
 	if expression.TargetType == nil {
