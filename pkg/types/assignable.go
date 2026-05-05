@@ -114,9 +114,28 @@ func IsAssignable(source, target Type) bool {
 		return true
 	}
 
-	// Check for identical types
+	// strictNullChecks: false (TypeScript default) — null and undefined are assignable
+	// to any non-never, non-void type.
+	if (source == Null || source == Undefined) && target != Never && target != Void {
+		return true
+	}
+
+	// Check for identical types before type-specific handling.
 	if source == target {
 		return true
+	}
+
+	// NonPrimitive (the `object` keyword) only accepts non-primitive types (ObjectType,
+	// arrays, functions). Primitive types are NOT assignable to `object`.
+	if target == NonPrimitive {
+		switch source {
+		case Number, String, Boolean, Symbol, BigInt, Null, Undefined, Void, Never:
+			return false
+		}
+		if _, ok := source.(*Primitive); ok {
+			return false // Any other primitive-like singleton
+		}
+		return true // ObjectTypes, arrays, functions, etc.
 	}
 
 	// Check using type-specific Equals method for complex types
@@ -324,6 +343,20 @@ func IsAssignable(source, target Type) bool {
 	// Object type handling
 	sourceObj, sourceIsObj := source.(*ObjectType)
 	targetObj, targetIsObj := target.(*ObjectType)
+
+	// An empty object type {} (no properties, no index sigs, no call/construct sigs) is
+	// essentially the TypeScript `{}` / `Object` type — any non-null, non-undefined,
+	// non-never value is assignable to it. This matches strictNullChecks:false semantics.
+	if targetIsObj &&
+		len(targetObj.Properties) == 0 &&
+		len(targetObj.IndexSignatures) == 0 &&
+		len(targetObj.CallSignatures) == 0 &&
+		len(targetObj.ConstructSignatures) == 0 {
+		// Only exclude null/undefined/never/void (already handled above).
+		if source != Never && source != Void {
+			return true
+		}
+	}
 
 	if sourceIsObj && targetIsObj {
 		// Check that all required properties in target exist in source and are assignable

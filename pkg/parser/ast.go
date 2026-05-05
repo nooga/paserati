@@ -2424,21 +2424,28 @@ func (kte *KeyofTypeExpression) GetComputedType() types.Type { return kte.Comput
 type TypeofTypeExpression struct {
 	BaseExpression             // Embed base for ComputedType
 	Token          *lexer.Token // The 'typeof' token
-	Identifier     string      // The identifier whose type we want to get
+	Identifier     string      // The identifier whose type we want (first segment, or full name for simple case)
+	Path           []string    // Full dotted path segments, e.g. ["M2", "Point"] for typeof M2.Point
 }
 
 func (tte *TypeofTypeExpression) expressionNode()      {}
 func (tte *TypeofTypeExpression) TokenLiteral() string { return tte.Token.Literal }
 func (tte *TypeofTypeExpression) String() string {
 	var out bytes.Buffer
-
 	out.WriteString("typeof ")
-	out.WriteString(tte.Identifier)
-
+	if len(tte.Path) > 0 {
+		for i, seg := range tte.Path {
+			if i > 0 {
+				out.WriteByte('.')
+			}
+			out.WriteString(seg)
+		}
+	} else {
+		out.WriteString(tte.Identifier)
+	}
 	if tte.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", tte.ComputedType.String()))
 	}
-
 	return out.String()
 }
 

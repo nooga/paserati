@@ -22,18 +22,21 @@ func (p *Primitive) Equals(other Type) bool {
 
 // Pre-defined instances for common primitive types
 var (
-	Number    = &Primitive{Name: "number"}
-	String    = &Primitive{Name: "string"}
-	Boolean   = &Primitive{Name: "boolean"}
-	Symbol    = &Primitive{Name: "symbol"}
-	BigInt    = &Primitive{Name: "bigint"}
-	Null      = &Primitive{Name: "null"}
-	Undefined = &Primitive{Name: "undefined"}
-	Any       = &Primitive{Name: "any"}
-	Unknown   = &Primitive{Name: "unknown"}
-	Never     = &Primitive{Name: "never"}
-	Void      = &Primitive{Name: "void"}
-	RegExp    = &Primitive{Name: "RegExp"}
+	Number       = &Primitive{Name: "number"}
+	String       = &Primitive{Name: "string"}
+	Boolean      = &Primitive{Name: "boolean"}
+	Symbol       = &Primitive{Name: "symbol"}
+	BigInt       = &Primitive{Name: "bigint"}
+	Null         = &Primitive{Name: "null"}
+	Undefined    = &Primitive{Name: "undefined"}
+	Any          = &Primitive{Name: "any"}
+	Unknown      = &Primitive{Name: "unknown"}
+	Never        = &Primitive{Name: "never"}
+	Void         = &Primitive{Name: "void"}
+	RegExp       = &Primitive{Name: "RegExp"}
+	// NonPrimitive is the type of the `object` keyword — excludes primitive types.
+	// Distinct from `{}` (empty ObjectType) which accepts all non-null values.
+	NonPrimitive = &Primitive{Name: "object"}
 )
 
 // TypeofResultType represents the union of all possible string literals that the typeof operator can return

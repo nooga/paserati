@@ -189,7 +189,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 		case "void":
 			return types.Void
 		case "object":
-			return types.NewObjectType()
+			return types.NonPrimitive
 		case "symbol":
 			return types.Symbol
 		case "bigint":
@@ -1278,30 +1278,58 @@ func (c *Checker) resolveKeyofTypeExpression(node *parser.KeyofTypeExpression) t
 	return c.computeKeyofType(operandType)
 }
 
-// resolveTypeofTypeExpression resolves a typeof type expression to the type of a variable
+// resolveTypeofTypeExpression resolves a typeof type expression to the type of a variable.
+// Handles both simple names ('typeof x') and dotted paths ('typeof M2.Point').
 func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression) types.Type {
-	debugPrintf("// [Checker resolveTypeofType] Resolving typeof %s\n", node.Identifier)
+	path := node.Path
+	if len(path) == 0 {
+		path = []string{node.Identifier}
+	}
+	debugPrintf("// [Checker resolveTypeofType] Resolving typeof %v\n", path)
 
-	if node.Identifier == "" {
+	if len(path) == 0 || path[0] == "" {
 		c.addError(node, "typeof expression missing identifier")
 		return nil
 	}
 
-	// Look up the identifier in the type environment
-	varType, _, found := c.env.Resolve(node.Identifier)
-	debugPrintf("// [Checker resolveTypeofType] Looking up '%s' in env: found=%v\n", node.Identifier, found)
-
+	// Resolve the first segment from the environment.
+	varType, _, found := c.env.Resolve(path[0])
 	if !found {
-		// Create a forward reference; track the node to emit TS2304 if still unresolved after all passes
-		debugPrintf("// [Checker resolveTypeofType] Creating forward reference for typeof %s\n", node.Identifier)
-		c.unresolvedTypeofNodes = append(c.unresolvedTypeofNodes, node)
-		return &types.TypeofType{
-			Identifier: node.Identifier,
+		if len(path) == 1 {
+			c.unresolvedTypeofNodes = append(c.unresolvedTypeofNodes, node)
+			return &types.TypeofType{Identifier: node.Identifier}
+		}
+		c.addError(node, fmt.Sprintf("Cannot find name '%s'", path[0]))
+		return nil
+	}
+
+	// Walk remaining path segments through namespace ValueShape properties.
+	for i := 1; i < len(path); i++ {
+		seg := path[i]
+		switch t := varType.(type) {
+		case *types.ObjectType:
+			if prop, ok := t.Properties[seg]; ok {
+				varType = prop
+			} else {
+				c.addError(node, fmt.Sprintf("property '%s' does not exist on type '%s'", seg, t.String()))
+				return nil
+			}
+		case *types.NamespaceType:
+			if prop, ok := t.ValueShape.Properties[seg]; ok {
+				varType = prop
+			} else if member := t.LookupTypeMember(seg); member != nil {
+				varType = member
+			} else {
+				c.addError(node, fmt.Sprintf("Namespace '%s' has no exported member '%s'", path[i-1], seg))
+				return nil
+			}
+		default:
+			c.addError(node, fmt.Sprintf("cannot access member '%s' on non-object type", seg))
+			return nil
 		}
 	}
 
-	debugPrintf("// [Checker resolveTypeofType] Found type for '%s': %T\n", node.Identifier, varType)
-	// Return the type of the variable
+	debugPrintf("// [Checker resolveTypeofType] Found type for '%v': %T\n", path, varType)
 	return varType
 }
 
@@ -2476,62 +2504,67 @@ func (c *Checker) computeTemplateLiteralType(tlt *types.TemplateLiteralType) typ
 	}
 }
 
-// resolveEnumMemberTypeExpression resolves enum member type access like 'Color.Red' in type context
+// resolveEnumMemberTypeExpression resolves qualified type access in type context:
+// 'Color.Red', 'N.MyType', or arbitrarily deep 'A.B.C.D'.
+// node.Object may be an *Identifier (simple name) or another *MemberExpression (chained).
 func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression) types.Type {
 	debugPrintf("// [Checker resolveEnumMemberType] Resolving %s.%s\n",
 		node.Object.String(), node.Property.String())
 
-	// Object should be an identifier representing the enum name
-	enumIdent, ok := node.Object.(*parser.Identifier)
-	if !ok {
-		c.addError(node.Object, "enum member access requires identifier before '.'")
-		return nil
-	}
-
-	// Property should be an identifier representing the member name
 	memberIdent, ok := node.Property.(*parser.Identifier)
 	if !ok {
 		c.addError(node.Property, "enum member access requires identifier after '.'")
 		return nil
 	}
-
-	enumName := enumIdent.Value
 	memberName := memberIdent.Value
 
-	// Try the type environment first — namespaces and type aliases live there.
-	if typAlias, found := c.env.ResolveType(enumName); found {
-		if ns, ok := typAlias.(*types.NamespaceType); ok {
-			if member := ns.LookupTypeMember(memberName); member != nil {
-				return member
+	// Resolve the object side to get the container type.
+	var containerType types.Type
+	switch obj := node.Object.(type) {
+	case *parser.Identifier:
+		// Prefer the type env for NamespaceType. Enums live in the value env as
+		// *types.EnumType (their type-env entry is the union of members, not EnumType).
+		if t, found := c.env.ResolveType(obj.Value); found {
+			if _, isNs := t.(*types.NamespaceType); isNs {
+				containerType = t
 			}
-			c.addError(node.Property, fmt.Sprintf("Namespace '%s' has no exported member '%s'", enumName, memberName))
+		}
+		if containerType == nil {
+			if t, _, found := c.env.Resolve(obj.Value); found {
+				containerType = t
+			} else {
+				c.addError(node.Object, fmt.Sprintf("Cannot find name '%s'", obj.Value))
+				return nil
+			}
+		}
+	case *parser.MemberExpression:
+		containerType = c.resolveEnumMemberTypeExpression(obj)
+		if containerType == nil {
 			return nil
 		}
-	}
-
-	// Look up the enum type in the environment
-	enumType, _, found := c.env.Resolve(enumName)
-	if !found {
-		c.addError(node.Object, fmt.Sprintf("Cannot find name '%s'", enumName))
+	default:
+		c.addError(node.Object, "enum member access requires identifier before '.'")
 		return nil
 	}
 
-	// Check if it's actually an enum type
-	enum, ok := enumType.(*types.EnumType)
-	if !ok {
-		c.addError(node.Object, fmt.Sprintf("'%s' is not an enum type", enumName))
+	switch ct := containerType.(type) {
+	case *types.NamespaceType:
+		if member := ct.LookupTypeMember(memberName); member != nil {
+			return member
+		}
+		c.addError(node.Property, fmt.Sprintf("Namespace '%s' has no exported member '%s'", node.Object.String(), memberName))
+		return nil
+	case *types.EnumType:
+		memberType, exists := ct.Members[memberName]
+		if !exists {
+			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on enum %s", memberName, node.Object.String()))
+			return nil
+		}
+		debugPrintf("// [Checker resolveEnumMemberType] Resolved %s.%s to %s\n",
+			node.Object.String(), memberName, memberType.String())
+		return memberType
+	default:
+		c.addError(node.Object, fmt.Sprintf("'%s' is not a namespace or enum type", node.Object.String()))
 		return nil
 	}
-
-	// Check if the member exists in the enum
-	memberType, exists := enum.Members[memberName]
-	if !exists {
-		c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on enum %s", memberName, enumName))
-		return nil
-	}
-
-	debugPrintf("// [Checker resolveEnumMemberType] Resolved %s.%s to %s\n",
-		enumName, memberName, memberType.String())
-
-	return memberType
 }

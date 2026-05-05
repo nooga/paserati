@@ -8108,16 +8108,11 @@ func (p *Parser) parseInterfaceConstructorSignature() Expression {
 	cte.Parameters = params
 	// Note: Constructor types don't typically use rest parameters, but we parse them anyway
 
-	// Expect ':' for return type (interface constructor signatures use colon syntax)
-	if !p.expectPeek(lexer.COLON) {
-		return nil
-	}
-
-	// Parse the constructed type
-	p.nextToken() // Move to the start of the return type expression
-	cte.ReturnType = p.parseTypeExpression()
-	if cte.ReturnType == nil {
-		return nil // Error should have been added by parseTypeExpression
+	// Return type is optional: `new (params): T` or just `new (params)`.
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // consume ':'
+		p.nextToken() // move to return type
+		cte.ReturnType = p.parseTypeExpression()
 	}
 
 	return cte
@@ -10204,22 +10199,32 @@ func (p *Parser) parseKeyofTypeExpression() Expression {
 }
 
 // parseTypeofTypeExpression parses a typeof type expression like 'typeof someVariable'
+// or a dotted path like 'typeof M2.Point'.
 func (p *Parser) parseTypeofTypeExpression() Expression {
 	tte := &TypeofTypeExpression{
 		Token: p.curToken, // The 'typeof' token
 	}
 
-	// Move to the identifier after 'typeof'
 	p.nextToken()
 
-	// The next token should be an identifier
-	if p.curToken.Type != lexer.IDENT {
+	if !p.curTokenIsIdentLike() {
 		p.addError(p.curToken, "expected identifier after 'typeof'")
 		return nil
 	}
 
-	tte.Identifier = p.curToken.Literal
+	path := []string{p.curToken.Literal}
+	for p.peekTokenIs(lexer.DOT) {
+		p.nextToken() // consume '.'
+		p.nextToken() // move to next segment
+		if !p.curTokenIsIdentLike() {
+			p.addError(p.curToken, fmt.Sprintf("expected identifier after '.' in typeof expression, got %s", p.curToken.Type))
+			return nil
+		}
+		path = append(path, p.curToken.Literal)
+	}
 
+	tte.Path = path
+	tte.Identifier = path[0]
 	return tte
 }
 
@@ -11254,30 +11259,28 @@ func (p *Parser) parseLeadingPipeUnionType() Expression {
 	return leftType
 }
 
-// parseEnumMemberTypeExpression handles enum member type access like 'Color.Red' in type context
+// parseEnumMemberTypeExpression handles qualified type access like 'Color.Red' or 'A.B.C' in type context.
+// Left may be an *Identifier (e.g. A) or a *MemberExpression already built from a prior chain step (e.g. A.B),
+// allowing arbitrarily deep qualified names like A.B.C.D.
 func (p *Parser) parseEnumMemberTypeExpression(left Expression) Expression {
 	debugPrint("parseEnumMemberTypeExpression: left=%T, cur='%s'", left, p.curToken.Literal)
 
-	// Current token should be DOT
 	if !p.curTokenIs(lexer.DOT) {
-		msg := fmt.Sprintf("internal error: parseEnumMemberTypeExpression called on non-DOT token %s", p.curToken.Type)
-		p.addError(p.curToken, msg)
+		p.addError(p.curToken, fmt.Sprintf("internal error: parseEnumMemberTypeExpression called on non-DOT token %s", p.curToken.Type))
 		return nil
 	}
 
-	// Left side should be an identifier (the enum name)
-	enumName, ok := left.(*Identifier)
-	if !ok {
+	switch left.(type) {
+	case *Identifier, *MemberExpression:
+		// OK — simple name or already-chained qualified name
+	default:
 		p.addError(p.curToken, "enum member type access requires identifier before '.'")
 		return nil
 	}
 
 	dotToken := p.curToken
-
-	// Move to the member name
 	p.nextToken()
 
-	// Member name should be an identifier
 	if !p.curTokenIs(lexer.IDENT) {
 		p.addError(p.curToken, fmt.Sprintf("expected member name after '.', got %s", p.curToken.Type))
 		return nil
@@ -11288,14 +11291,13 @@ func (p *Parser) parseEnumMemberTypeExpression(left Expression) Expression {
 		Value: p.curToken.Literal,
 	}
 
-	// Create a member expression to represent EnumName.MemberName in type context
 	memberExpr := &MemberExpression{
 		Token:    dotToken,
-		Object:   enumName,
+		Object:   left,
 		Property: memberName,
 	}
 
-	debugPrint("parseEnumMemberTypeExpression: created %s.%s", enumName.Value, memberName.Value)
+	debugPrint("parseEnumMemberTypeExpression: created %s.%s", left.String(), memberName.Value)
 	return memberExpr
 }
 

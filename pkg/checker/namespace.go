@@ -49,8 +49,15 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 	bodyEnv := NewEnclosedEnvironment(outerEnv)
 	c.env = bodyEnv
 
-	// Within the body, the namespace name itself should still resolve. The
-	// outer-scope bindings already cover this via lexical lookup.
+	// Seed bodyEnv with existing children from nsType so that merge passes
+	// (second+ namespace blocks with the same name) find and reuse child
+	// namespaces rather than creating new empty ones and losing prior members.
+	for childName, childT := range nsType.TypeMembers {
+		bodyEnv.DefineTypeAlias(childName, childT)
+	}
+	for childName, childT := range nsType.ValueShape.Properties {
+		bodyEnv.Define(childName, childT, false)
+	}
 
 	// 3. Walk each body statement and dispatch. We deliberately use a single-
 	//    pass walk inside namespaces (good enough for our smoke tests; can be
