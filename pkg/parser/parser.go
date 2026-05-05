@@ -351,7 +351,19 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.INFER, p.parseInferTypeExpression)          // 'infer' type operator
 	p.registerTypePrefix(lexer.TEMPLATE_START, p.parseTemplateLiteralType) // Template literal types
 	// NEW: Constructor types that start with 'new'
-	p.registerTypePrefix(lexer.NEW, p.parseConstructorTypeExpression) // NEW: Constructor types like 'new () => T'
+	p.registerTypePrefix(lexer.NEW, p.parseConstructorTypeExpression) // Constructor types like 'new () => T'
+	p.registerTypePrefix(lexer.READONLY, func() Expression {           // 'readonly T[]' (readonly array type)
+		p.nextToken() // consume 'readonly', parse the inner type
+		return p.parseTypeExpressionRecursive(TYPE_LOWEST)
+	})
+	p.registerTypePrefix(lexer.ABSTRACT, func() Expression {          // 'abstract new (...) => T'
+		p.nextToken() // consume 'abstract', next should be 'new'
+		if !p.curTokenIs(lexer.NEW) {
+			p.addError(p.curToken, fmt.Sprintf("expected 'new' after 'abstract' in type, got %s", p.curToken.Type))
+			return nil
+		}
+		return p.parseConstructorTypeExpression()
+	})
 	// Literal types in TYPE context too
 	p.registerTypePrefix(lexer.STRING, p.parseStringLiteral)
 	p.registerTypePrefix(lexer.NUMBER, p.parseNumberLiteral)
@@ -8079,9 +8091,21 @@ func (p *Parser) parseInterfaceIndexSignature() *InterfaceProperty {
 }
 
 // parseConstructorTypeExpression parses constructor type signatures like `new (): T`
+// or generic `new<T>(params): T`.
 func (p *Parser) parseConstructorTypeExpression() Expression {
 	cte := &ConstructorTypeExpression{
 		Token: p.curToken, // The 'new' token
+	}
+
+	// Optional type parameters: new<T>(...)
+	if p.peekTokenIs(lexer.LT) {
+		p.nextToken() // consume '<'
+		typeParams, err := p.parseTypeParameters()
+		if err != nil {
+			p.addError(p.curToken, err.Error())
+			return nil
+		}
+		cte.TypeParameters = typeParams
 	}
 
 	// Expect '(' for parameters
@@ -8113,11 +8137,29 @@ func (p *Parser) parseConstructorTypeExpression() Expression {
 	return cte
 }
 
-// parseInterfaceConstructorSignature parses constructor signatures in interfaces like `new (): T`
-// This is different from parseConstructorTypeExpression which uses arrow syntax for type aliases
+// parseInterfaceConstructorSignature parses constructor signatures in interfaces like:
+//   new (): T
+//   new?(): T              (optional construct signature)
+//   new<K, V>(params): T   (generic construct signature)
 func (p *Parser) parseInterfaceConstructorSignature() Expression {
 	cte := &ConstructorTypeExpression{
 		Token: p.curToken, // The 'new' token
+	}
+
+	// Optional '?' marker: new?()
+	if p.peekTokenIs(lexer.QUESTION) {
+		p.nextToken() // consume '?'
+	}
+
+	// Optional type parameters: new<T>(params)
+	if p.peekTokenIs(lexer.LT) {
+		p.nextToken() // consume '<'
+		typeParams, err := p.parseTypeParameters()
+		if err != nil {
+			p.addError(p.curToken, err.Error())
+			return nil
+		}
+		cte.TypeParameters = typeParams
 	}
 
 	// Expect '(' for parameters
@@ -8222,6 +8264,17 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 			prop := p.parseObjectTypeBracketProperty()
 			if prop == nil {
 				return nil
+			}
+			objType.Properties = append(objType.Properties, prop)
+		} else if p.curTokenIs(lexer.NEW) {
+			// Construct signature: new (params): T  or  new<T>(params): T
+			sig := p.parseInterfaceConstructorSignature()
+			if sig == nil {
+				return nil
+			}
+			prop := &ObjectTypeProperty{
+				IsConstructSignature: true,
+				Type:                 sig,
 			}
 			objType.Properties = append(objType.Properties, prop)
 		} else {

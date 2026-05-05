@@ -2693,9 +2693,10 @@ type ObjectTypeProperty struct {
 	Name            *Identifier  // Property name (nil for call signatures and index signatures)
 	Type            Expression   // Property type annotation or function type for call signatures
 	Optional        bool         // Whether the property is optional (for future use)
-	IsCallSignature bool         // Whether this is a call signature like (param: type): returnType
-	Parameters      []Expression // Parameters for call signatures (only used when IsCallSignature is true)
-	ReturnType      Expression   // Return type for call signatures (only used when IsCallSignature is true)
+	IsCallSignature      bool         // Whether this is a call signature like (param: type): returnType
+	IsConstructSignature bool         // Whether this is a construct signature like new (param: type): T
+	Parameters           []Expression // Parameters for call/construct signatures
+	ReturnType           Expression   // Return type for call/construct signatures
 
 	// Index signature fields
 	IsIndexSignature bool        // Whether this is an index signature like [key: string]: Type
@@ -2867,9 +2868,10 @@ func (ip *InterfaceProperty) String() string {
 // ConstructorTypeExpression represents a constructor type signature like `new () => T`
 type ConstructorTypeExpression struct {
 	BaseExpression              // Embed base for ComputedType
-	Token          *lexer.Token  // The 'new' token
-	Parameters     []Expression // Parameter types for the constructor
-	ReturnType     Expression   // The constructed type (T in `new (): T`)
+	Token          *lexer.Token   // The 'new' token
+	TypeParameters []*TypeParameter // Optional type parameters: new<T>(...)
+	Parameters     []Expression   // Parameter types for the constructor
+	ReturnType     Expression     // The constructed type (T in `new (): T`)
 }
 
 func (cte *ConstructorTypeExpression) expressionNode()      {}
