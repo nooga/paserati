@@ -8267,18 +8267,12 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 				return nil
 			}
 			prop.Parameters = params
-			// Note: Call signatures in object types don't typically use rest parameters, but we parse them anyway
 
-			// Expect ':' for return type
-			if !p.expectPeek(lexer.COLON) {
-				return nil
-			}
-
-			// Parse the return type
-			p.nextToken() // Move to the start of the return type expression
-			prop.ReturnType = p.parseTypeExpression()
-			if prop.ReturnType == nil {
-				return nil // Error should have been added by parseTypeExpression
+			// Return type is optional: (params): T or just (params)
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken() // consume ':'
+				p.nextToken() // move to return type
+				prop.ReturnType = p.parseTypeExpression()
 			}
 
 			objType.Properties = append(objType.Properties, prop)
