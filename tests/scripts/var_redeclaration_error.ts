@@ -1,5 +1,5 @@
-// var redeclaration should produce error
+// let/const redeclaration should produce an error (var allows redeclaration)
 
-var x = 1;
-var x = 2;
+let x = 1;
+let x = 2;
 // expect_compile_error: identifier 'x' already declared

@@ -827,9 +827,15 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					preliminaryType = types.Any // Or Undefined if no initializer? Let's use Any for now.
 				}
 
-				// Define variable in the environment
+				// Define variable in the environment.
+				// `var` allows re-declarations (JavaScript semantics); only `let`/`const` are errors.
 				if !globalEnv.Define(varName.Value, preliminaryType, isConst) {
-					c.addError(varName, fmt.Sprintf("identifier '%s' already declared", varName.Value))
+					if stmtType != "Var" {
+						c.addError(varName, fmt.Sprintf("identifier '%s' already declared", varName.Value))
+					} else {
+						// var re-declaration: update to the new type (widening allowed).
+						globalEnv.Update(varName.Value, preliminaryType)
+					}
 				} else {
 					debugPrintf("// [Checker Pass 2] Defined var '%s' with initial type: %s\n", varName.Value, preliminaryType.String())
 				}
