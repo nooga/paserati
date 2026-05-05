@@ -188,6 +188,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		interfaceType.OptionalProperties = optionalProperties
 	}
 	var indexSignatures []*types.IndexSignature
+	var callSignatures []*types.Signature
 
 	// First, inherit properties from extended interfaces
 	for _, extendedInterfaceExpr := range node.Extends {
@@ -287,25 +288,20 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			}
 		} else if prop.Name == nil {
 			// This is a call signature: (): T
+			// Store as a CallSignature on the ObjectType so IsCallable() returns true
+			// and call expressions properly resolve the return type.
 			propType := c.resolveTypeAnnotation(prop.Type)
 			if propType == nil {
-				debugPrintf("// [Checker Interface P1] Failed to resolve call signature type in interface '%s'. Using Any.\n", node.Name.Value)
 				propType = types.Any
 			}
-			// For now, we'll treat this as a callable interface by storing the call signature
-			// In a more sophisticated implementation, we'd use CallableType
-			// For simplicity, we'll just convert this to a function type and return it directly
-			// TODO: Handle multiple call signatures and mixed callable/object interfaces
 			debugPrintf("// [Checker Interface P1] Interface '%s' has call signature: %s\n", node.Name.Value, propType.String())
-
-			// For now, if an interface has a call signature, we'll make it the primary type
-			// This is a simplification - TypeScript allows both call signatures and properties
-			if len(properties) == 0 {
-				// Pure callable interface - we'll handle this after the loop
-				properties["__call"] = propType
+			// Extract the signature from the resolved function type
+			if funcObjType, ok := propType.(*types.ObjectType); ok && len(funcObjType.CallSignatures) > 0 {
+				callSignatures = append(callSignatures, funcObjType.CallSignatures...)
 			} else {
-				// Mixed interface - add as special property
-				properties["__call"] = propType
+				// Fallback: create a simple signature from the return type
+				sig := &types.Signature{ReturnType: propType}
+				callSignatures = append(callSignatures, sig)
 			}
 		} else {
 			propType := c.resolveTypeAnnotation(prop.Type)
@@ -334,9 +330,11 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		}
 	}
 
-	// 3. Update the pre-registered ObjectType with index signatures
-	// (properties and optionalProperties are already the same maps we passed during pre-registration)
+	// 3. Update the pre-registered ObjectType with index signatures and call signatures
 	interfaceType.IndexSignatures = indexSignatures
+	if len(callSignatures) > 0 {
+		interfaceType.CallSignatures = append(interfaceType.CallSignatures, callSignatures...)
+	}
 
 	debugPrintf("// [Checker Interface P1] Finalized interface '%s' as type '%s' in env %p (inherited from %d interfaces)\n",
 		node.Name.Value, interfaceType.String(), c.env, len(node.Extends))
