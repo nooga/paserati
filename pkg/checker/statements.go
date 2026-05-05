@@ -157,21 +157,19 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		return
 	}
 
-	// 2. Check if already defined - but allow updating pre-registered placeholders
+	// 2. Get or create the interface ObjectType. Multiple interface declarations with the
+	// same name are merged (TypeScript declaration merging). Each new declaration adds its
+	// members to the same ObjectType.
 	var interfaceType *types.ObjectType
 	if existingType, exists := c.env.ResolveType(node.Name.Value); exists {
-		// Check if this is a pre-registered placeholder (empty properties)
-		if objType, ok := existingType.(*types.ObjectType); ok && len(objType.Properties) == 0 {
-			// This is a placeholder from Pass 0 - use it and populate it
+		if objType, ok := existingType.(*types.ObjectType); ok {
+			// Merge into the existing interface type (declaration merging).
 			interfaceType = objType
-			debugPrintf("// [Checker Interface P1] Populating pre-registered placeholder for interface '%s'\n", node.Name.Value)
-		} else {
-			// Already fully defined, skip
-			debugPrintf("// [Checker Interface P1] Interface '%s' already defined? Skipping.\n", node.Name.Value)
-			return
+			debugPrintf("// [Checker Interface P1] Merging into existing interface '%s'\n", node.Name.Value)
 		}
-	} else {
-		// Not pre-registered, create new
+		// If it's not an ObjectType (e.g., a class type alias), fall through to create new.
+	}
+	if interfaceType == nil {
 		interfaceType = &types.ObjectType{
 			Properties:         make(map[string]types.Type),
 			OptionalProperties: make(map[string]bool),
@@ -179,7 +177,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		if !c.env.DefineTypeAlias(node.Name.Value, interfaceType) {
 			debugPrintf("// [Checker Interface P1] WARNING: DefineTypeAlias failed for interface '%s'.\n", node.Name.Value)
 		}
-		debugPrintf("// [Checker Interface P1] Pre-registered interface '%s' for self-reference support\n", node.Name.Value)
+		debugPrintf("// [Checker Interface P1] Registered interface '%s'\n", node.Name.Value)
 	}
 
 	// Use the interface type's properties maps (either from placeholder or new)

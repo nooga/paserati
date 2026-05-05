@@ -42,13 +42,13 @@ func (p *Parser) isValidMethodName() bool {
 func (p *Parser) parseClassDeclaration() Statement {
 	classToken := p.curToken
 
-	// Class name can be an identifier or 'await'/'yield' in script mode (non-module)
-	// These are the only contextual keywords valid as class names per ECMAScript spec
-	if !p.peekTokenIs(lexer.IDENT) && !p.peekTokenIs(lexer.AWAIT) && !p.peekTokenIs(lexer.YIELD) {
-		p.peekError(lexer.IDENT)
+	// Class name: must be an identifier-like token (includes contextual keywords
+	// like 'abstract', 'from', 'of', 'type', 'async', etc. that are valid names).
+	p.nextToken()
+	if !p.curTokenIsIdentLike() {
+		p.addError(p.curToken, fmt.Sprintf("expected class name, got %s", p.curToken.Type))
 		return nil
 	}
-	p.nextToken()
 
 	name := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
@@ -221,9 +221,13 @@ func (p *Parser) parseClassExpression() Expression {
 	classToken := p.curToken
 
 	var name *Identifier
-	// Class name can be an identifier or 'await'/'yield' in script mode (non-module)
-	// These are the only contextual keywords valid as class names per ECMAScript spec
-	if p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.AWAIT) || p.peekTokenIs(lexer.YIELD) {
+	// Class expression name is optional; it can be any identifier-like token.
+	// Peek ahead to see if the next token can start a class name.
+	if p.peekToken.Type == lexer.IDENT || p.peekToken.Type == lexer.AWAIT ||
+		p.peekToken.Type == lexer.YIELD || p.peekToken.Type == lexer.ABSTRACT ||
+		p.peekToken.Type == lexer.ASYNC || p.peekToken.Type == lexer.FROM ||
+		p.peekToken.Type == lexer.TYPE || p.peekToken.Type == lexer.OF ||
+		p.peekToken.Type == lexer.OVERRIDE || p.peekToken.Type == lexer.READONLY {
 		p.nextToken()
 		name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
