@@ -565,10 +565,12 @@ func (p *Parser) parseClassBody() *ClassBody {
 					}
 				}
 			} else {
-				// Could be a method or property
-				// Look ahead to distinguish
-				if p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) {
-					// It's a method (either regular or generic) - parse it and handle signatures/implementations
+				// Could be a method or property.
+				// Look ahead to distinguish: `name(` or `name<` → method;
+				// `name?(` or `name?<` → optional method; otherwise → property.
+				isOptionalMethod := p.peekTokenIs(lexer.QUESTION) &&
+					(p.peekTokenIs2(lexer.LPAREN) || p.peekTokenIs2(lexer.LT))
+				if p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) || isOptionalMethod {
 					if isDeclare {
 						p.addError(p.curToken, "'declare' modifier cannot appear on class elements of this kind.")
 					}
@@ -729,6 +731,12 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 	} else {
 		// Identifier method name
 		methodName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
+
+	// Optional method marker: name?() — consume the '?' if present.
+	if p.peekTokenIs(lexer.QUESTION) &&
+		(p.peekTokenIs2(lexer.LPAREN) || p.peekTokenIs2(lexer.LT)) {
+		p.nextToken() // consume '?'
 	}
 
 	// Try to parse type parameters: methodName<T, U>()
