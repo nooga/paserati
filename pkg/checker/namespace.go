@@ -49,14 +49,14 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 	bodyEnv := NewEnclosedEnvironment(outerEnv)
 	c.env = bodyEnv
 
-	// Seed bodyEnv with existing children from nsType so that merge passes
-	// (second+ namespace blocks with the same name) find and reuse child
-	// namespaces rather than creating new empty ones and losing prior members.
+	// Seed bodyEnv with existing NAMESPACE children from nsType so that merge passes
+	// find and reuse child namespaces. Only seed NamespaceType members — other types
+	// (classes, interfaces, enums) should be free to re-declare in merge bodies.
 	for childName, childT := range nsType.TypeMembers {
-		bodyEnv.DefineTypeAlias(childName, childT)
-	}
-	for childName, childT := range nsType.ValueShape.Properties {
-		bodyEnv.Define(childName, childT, false)
+		if nsChild, ok := childT.(*types.NamespaceType); ok {
+			bodyEnv.DefineTypeAlias(childName, nsChild)
+			bodyEnv.Define(childName, nsChild.ValueShape, false)
+		}
 	}
 
 	// 3. Walk each body statement and dispatch. We deliberately use a single-
