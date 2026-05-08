@@ -82,6 +82,19 @@ func (p *Parser) parseClassDeclaration() Statement {
 		} else {
 			// Type expression: Container, Container<T>, etc.
 			superClass = p.parseTypeExpression()
+			// Container<T>() — generic mixin call: wrap in CallExpression with explicit type args.
+			// Flatten GenericTypeRef into CallExpression{Function, TypeArguments} so the checker
+			// recognizes it as a generic call rather than a typed expression.
+			if p.peekTokenIs(lexer.LPAREN) && superClass != nil {
+				p.nextToken() // move to '('
+				callExpr := &CallExpression{Token: p.curToken, Function: superClass}
+				if genRef, ok := superClass.(*GenericTypeRef); ok {
+					callExpr.Function = genRef.Name
+					callExpr.TypeArguments = genRef.TypeArguments
+				}
+				callExpr.Arguments = p.parseExpressionList(lexer.RPAREN)
+				superClass = callExpr
+			}
 		}
 
 		if superClass == nil {
@@ -263,6 +276,19 @@ func (p *Parser) parseClassExpression() Expression {
 		} else {
 			// Type expression: Container, Container<T>, etc.
 			superClass = p.parseTypeExpression()
+			// Container<T>() — generic mixin call: wrap in CallExpression with explicit type args.
+			// Flatten GenericTypeRef into CallExpression{Function, TypeArguments} so the checker
+			// recognizes it as a generic call rather than a typed expression.
+			if p.peekTokenIs(lexer.LPAREN) && superClass != nil {
+				p.nextToken() // move to '('
+				callExpr := &CallExpression{Token: p.curToken, Function: superClass}
+				if genRef, ok := superClass.(*GenericTypeRef); ok {
+					callExpr.Function = genRef.Name
+					callExpr.TypeArguments = genRef.TypeArguments
+				}
+				callExpr.Arguments = p.parseExpressionList(lexer.RPAREN)
+				superClass = callExpr
+			}
 		}
 
 		if superClass == nil {
