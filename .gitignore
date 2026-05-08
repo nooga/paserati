@@ -59,3 +59,6 @@ stvm*.js
 paserati-v8bench-prof
 /paserati-testtsc
 typescript.js
+GEMINI.md
+CLAUDE.md
+.cursor/
