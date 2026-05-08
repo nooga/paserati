@@ -3361,6 +3361,17 @@ func (c *Checker) visit(node parser.Node) {
 		// Define all bindings with type 'any' (catch parameters are implicitly any)
 		c.checkObjectParameterPattern(node)
 
+	case *parser.GenericTypeRef:
+		// GenericTypeRef appearing as a value expression (e.g., in unusual call shapes
+		// the parser left flattening to). Resolve as the underlying identifier and let
+		// downstream call/instantiation logic handle the type arguments separately.
+		if node.Name != nil {
+			c.visit(node.Name)
+			node.SetComputedType(node.Name.GetComputedType())
+		} else {
+			node.SetComputedType(types.Any)
+		}
+
 	default:
 		// Optional: Add error for unhandled node types
 		c.addError(nil, fmt.Sprintf("Checker: Unhandled AST node type %T", node))
