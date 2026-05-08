@@ -2381,7 +2381,12 @@ func (c *Checker) visit(node parser.Node) {
 				if widenedRightType == types.Any {
 					resultType = types.Any
 				} else if widenedRightType == types.Number {
-					resultType = types.Number
+					// Preserve literal type for negation of a literal: -42 has type -42
+					if numLit, ok := node.Right.(*parser.NumberLiteral); ok {
+						resultType = &types.LiteralType{Value: vm.Number(-numLit.Value)}
+					} else {
+						resultType = types.Number
+					}
 				} else {
 					c.addError(node, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedRightType.String()))
 					// Keep resultType = types.Any (default)
