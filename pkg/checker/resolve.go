@@ -58,6 +58,12 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 
 	// Dispatch based on the structure of the type expression node
 	switch node := node.(type) {
+	case *parser.ThisExpression:
+		if c.currentThisType != nil {
+			return c.currentThisType
+		}
+		return types.Any
+
 	case *parser.Identifier:
 		// --- ADDED: Check if node or node.Value is nil ---
 		if node == nil || node.Value == "" {
@@ -1118,6 +1124,10 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 
 // substituteTypes recursively substitutes TypeParameterType with concrete types
 func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Type) types.Type {
+	return c.substituteTypesWithVisited(t, substitution, make(map[types.Type]types.Type))
+}
+
+func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[string]types.Type, visited map[types.Type]types.Type) types.Type {
 	if t == nil {
 		return nil
 	}
@@ -1143,7 +1153,7 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		// Substitute type arguments in the parameterized forward reference
 		newTypeArgs := make([]types.Type, len(typ.TypeArguments))
 		for i, argType := range typ.TypeArguments {
-			newTypeArgs[i] = c.substituteTypes(argType, substitution)
+			newTypeArgs[i] = c.substituteTypesWithVisited(argType, substitution, visited)
 		}
 
 		// Return a new parameterized forward reference with substituted type arguments
@@ -1154,22 +1164,46 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 
 	case *types.ArrayType:
 		// Recursively substitute element type
-		newElementType := c.substituteTypes(typ.ElementType, substitution)
+		newElementType := c.substituteTypesWithVisited(typ.ElementType, substitution, visited)
 		return &types.ArrayType{ElementType: newElementType}
 
 	case *types.ObjectType:
+		if replacement, exists := visited[typ]; exists {
+			return replacement
+		}
+
 		// Handle ObjectType with properties and call signatures
 		result := &types.ObjectType{
 			Properties:         make(map[string]types.Type),
 			OptionalProperties: make(map[string]bool),
+			ReadOnlyProperties: make(map[string]bool),
+			BaseTypes:          typ.BaseTypes,
+			IsReflectIntrinsic: typ.IsReflectIntrinsic,
 		}
+		visited[typ] = result
 
 		// Copy and substitute property types
 		for propName, propType := range typ.Properties {
-			result.Properties[propName] = c.substituteTypes(propType, substitution)
+			result.Properties[propName] = c.substituteTypesWithVisited(propType, substitution, visited)
 		}
 		for propName, isOptional := range typ.OptionalProperties {
 			result.OptionalProperties[propName] = isOptional
+		}
+		for propName, isReadOnly := range typ.ReadOnlyProperties {
+			result.ReadOnlyProperties[propName] = isReadOnly
+		}
+
+		if typ.IndexSignatures != nil {
+			result.IndexSignatures = make([]*types.IndexSignature, len(typ.IndexSignatures))
+			for i, sig := range typ.IndexSignatures {
+				result.IndexSignatures[i] = &types.IndexSignature{
+					KeyType:        c.substituteTypesWithVisited(sig.KeyType, substitution, visited),
+					ValueType:      c.substituteTypesWithVisited(sig.ValueType, substitution, visited),
+					IsMapped:       sig.IsMapped,
+					TypeParameter:  sig.TypeParameter,
+					ConstraintType: c.substituteTypesWithVisited(sig.ConstraintType, substitution, visited),
+				}
+			}
 		}
 
 		// Copy and substitute call signatures
@@ -1178,11 +1212,11 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 			for i, sig := range typ.CallSignatures {
 				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
 				for j, paramType := range sig.ParameterTypes {
-					newParamTypes[j] = c.substituteTypes(paramType, substitution)
+					newParamTypes[j] = c.substituteTypesWithVisited(paramType, substitution, visited)
 				}
 
-				newReturnType := c.substituteTypes(sig.ReturnType, substitution)
-				newRestParamType := c.substituteTypes(sig.RestParameterType, substitution)
+				newReturnType := c.substituteTypesWithVisited(sig.ReturnType, substitution, visited)
+				newRestParamType := c.substituteTypesWithVisited(sig.RestParameterType, substitution, visited)
 
 				result.CallSignatures[i] = &types.Signature{
 					ParameterTypes:    newParamTypes,
@@ -1200,11 +1234,11 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 			for i, sig := range typ.ConstructSignatures {
 				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
 				for j, paramType := range sig.ParameterTypes {
-					newParamTypes[j] = c.substituteTypes(paramType, substitution)
+					newParamTypes[j] = c.substituteTypesWithVisited(paramType, substitution, visited)
 				}
 
-				newReturnType := c.substituteTypes(sig.ReturnType, substitution)
-				newRestParamType := c.substituteTypes(sig.RestParameterType, substitution)
+				newReturnType := c.substituteTypesWithVisited(sig.ReturnType, substitution, visited)
+				newRestParamType := c.substituteTypesWithVisited(sig.RestParameterType, substitution, visited)
 
 				result.ConstructSignatures[i] = &types.Signature{
 					ParameterTypes:    newParamTypes,
@@ -1232,7 +1266,7 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		// Recursively substitute union member types
 		newTypes := make([]types.Type, len(typ.Types))
 		for i, memberType := range typ.Types {
-			newTypes[i] = c.substituteTypes(memberType, substitution)
+			newTypes[i] = c.substituteTypesWithVisited(memberType, substitution, visited)
 		}
 		return types.NewUnionType(newTypes...)
 
@@ -1240,7 +1274,7 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		// Recursively substitute intersection member types
 		newTypes := make([]types.Type, len(typ.Types))
 		for i, memberType := range typ.Types {
-			newTypes[i] = c.substituteTypes(memberType, substitution)
+			newTypes[i] = c.substituteTypesWithVisited(memberType, substitution, visited)
 		}
 		return types.NewIntersectionType(newTypes...)
 
@@ -1248,14 +1282,14 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 		// Recursively substitute tuple element types
 		newElementTypes := make([]types.Type, len(typ.ElementTypes))
 		for i, elementType := range typ.ElementTypes {
-			newElementTypes[i] = c.substituteTypes(elementType, substitution)
+			newElementTypes[i] = c.substituteTypesWithVisited(elementType, substitution, visited)
 		}
 		return &types.TupleType{ElementTypes: newElementTypes}
 
 	case *types.MappedType:
 		// Recursively substitute types in mapped type
-		newConstraintType := c.substituteTypes(typ.ConstraintType, substitution)
-		newValueType := c.substituteTypes(typ.ValueType, substitution)
+		newConstraintType := c.substituteTypesWithVisited(typ.ConstraintType, substitution, visited)
+		newValueType := c.substituteTypesWithVisited(typ.ValueType, substitution, visited)
 
 		return &types.MappedType{
 			TypeParameter:    typ.TypeParameter, // Keep parameter name as-is
@@ -1267,14 +1301,14 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 
 	case *types.KeyofType:
 		// Substitute the operand type
-		newOperandType := c.substituteTypes(typ.OperandType, substitution)
+		newOperandType := c.substituteTypesWithVisited(typ.OperandType, substitution, visited)
 		// Compute the keyof type after substitution
 		return c.computeKeyofType(newOperandType)
 
 	case *types.IndexedAccessType:
 		// Substitute both object and index types
-		newObjectType := c.substituteTypes(typ.ObjectType, substitution)
-		newIndexType := c.substituteTypes(typ.IndexType, substitution)
+		newObjectType := c.substituteTypesWithVisited(typ.ObjectType, substitution, visited)
+		newIndexType := c.substituteTypesWithVisited(typ.IndexType, substitution, visited)
 		return &types.IndexedAccessType{
 			ObjectType: newObjectType,
 			IndexType:  newIndexType,
@@ -1282,8 +1316,8 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 
 	case *types.ConditionalType:
 		// Substitute check type and false type
-		newCheckType := c.substituteTypes(typ.CheckType, substitution)
-		newFalseType := c.substituteTypes(typ.FalseType, substitution)
+		newCheckType := c.substituteTypesWithVisited(typ.CheckType, substitution, visited)
+		newFalseType := c.substituteTypesWithVisited(typ.FalseType, substitution, visited)
 
 		// For extends type, don't substitute infer types - they should remain as inference placeholders
 		newExtendsType := c.substituteTypesPreservingInfer(typ.ExtendsType, substitution)
@@ -1317,7 +1351,7 @@ func (c *Checker) substituteTypes(t types.Type, substitution map[string]types.Ty
 				newParts[i] = part
 			} else {
 				// Substitute the type in type interpolation parts
-				newType := c.substituteTypes(part.Type, substitution)
+				newType := c.substituteTypesWithVisited(part.Type, substitution, visited)
 				newParts[i] = types.TemplateLiteralPart{
 					IsLiteral: false,
 					Literal:   "",

@@ -190,6 +190,10 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	var indexSignatures []*types.IndexSignature
 	var callSignatures []*types.Signature
 
+	outerThisType := c.currentThisType
+	c.currentThisType = interfaceType
+	defer func() { c.currentThisType = outerThisType }()
+
 	// First, inherit properties from extended interfaces
 	for _, extendedInterfaceExpr := range node.Extends {
 		// Resolve the extended interface type expression (supports both simple names and generic applications)
@@ -203,7 +207,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		if extendedObjectType, ok := extendedType.(*types.ObjectType); ok {
 			// Copy all properties from the extended interface
 			for propName, propType := range extendedObjectType.Properties {
-				properties[propName] = propType
+				properties[propName] = c.rebindThisType(propType, extendedObjectType, interfaceType)
 				// Copy optional property flags
 				if extendedObjectType.OptionalProperties != nil && extendedObjectType.OptionalProperties[propName] {
 					optionalProperties[propName] = true
@@ -391,6 +395,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 
 	// Save current environment and switch to generic environment
 	savedEnv := c.env
+	savedThisType := c.currentThisType
 	c.env = genericEnv
 
 	// Build the ObjectType body with TypeParameterType references
@@ -398,6 +403,13 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	optionalProperties := make(map[string]bool)
 	var indexSignatures []*types.IndexSignature
 	var callSignatures []*types.Signature
+	bodyType := &types.ObjectType{
+		Properties:         properties,
+		OptionalProperties: optionalProperties,
+		IndexSignatures:    indexSignatures,
+		CallSignatures:     callSignatures,
+	}
+	c.currentThisType = bodyType
 
 	// Handle extends clause with generic environment
 	for _, extendedInterfaceExpr := range node.Extends {
@@ -416,7 +428,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 
 		if extendedObjectType, ok := extendedType.(*types.ObjectType); ok {
 			for propName, propType := range extendedObjectType.Properties {
-				properties[propName] = propType
+				properties[propName] = c.rebindThisType(propType, extendedObjectType, bodyType)
 				if extendedObjectType.OptionalProperties != nil && extendedObjectType.OptionalProperties[propName] {
 					optionalProperties[propName] = true
 				}
@@ -472,15 +484,12 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		}
 	}
 
+	bodyType.IndexSignatures = indexSignatures
+	bodyType.CallSignatures = callSignatures
+
 	// Restore environment
 	c.env = savedEnv
-
-	bodyType := &types.ObjectType{
-		Properties:         properties,
-		OptionalProperties: optionalProperties,
-		IndexSignatures:    indexSignatures,
-		CallSignatures:     callSignatures,
-	}
+	c.currentThisType = savedThisType
 
 	// 3. Create the GenericType
 	genericType := &types.GenericType{
@@ -496,6 +505,119 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		debugPrintf("// [Checker Interface P1] Defined generic interface '%s' with %d type parameters in env %p\n",
 			node.Name.Value, len(typeParams), c.env)
 	}
+}
+
+func (c *Checker) rebindThisType(t types.Type, from *types.ObjectType, to *types.ObjectType) types.Type {
+	return c.rebindThisTypeWithVisited(t, from, to, make(map[types.Type]types.Type))
+}
+
+func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType, to *types.ObjectType, visited map[types.Type]types.Type) types.Type {
+	if t == nil {
+		return nil
+	}
+	if t == from {
+		return to
+	}
+
+	switch typ := t.(type) {
+	case *types.ArrayType:
+		return &types.ArrayType{ElementType: c.rebindThisTypeWithVisited(typ.ElementType, from, to, visited)}
+
+	case *types.ObjectType:
+		if replacement, exists := visited[typ]; exists {
+			return replacement
+		}
+
+		result := &types.ObjectType{
+			Properties:         make(map[string]types.Type),
+			OptionalProperties: make(map[string]bool),
+			ReadOnlyProperties: make(map[string]bool),
+			IsReflectIntrinsic: typ.IsReflectIntrinsic,
+		}
+		visited[typ] = result
+
+		for propName, propType := range typ.Properties {
+			result.Properties[propName] = c.rebindThisTypeWithVisited(propType, from, to, visited)
+		}
+		for propName, isOptional := range typ.OptionalProperties {
+			result.OptionalProperties[propName] = isOptional
+		}
+		for propName, isReadOnly := range typ.ReadOnlyProperties {
+			result.ReadOnlyProperties[propName] = isReadOnly
+		}
+		for _, baseType := range typ.BaseTypes {
+			result.BaseTypes = append(result.BaseTypes, c.rebindThisTypeWithVisited(baseType, from, to, visited))
+		}
+		if typ.IndexSignatures != nil {
+			result.IndexSignatures = make([]*types.IndexSignature, len(typ.IndexSignatures))
+			for i, sig := range typ.IndexSignatures {
+				result.IndexSignatures[i] = &types.IndexSignature{
+					KeyType:        c.rebindThisTypeWithVisited(sig.KeyType, from, to, visited),
+					ValueType:      c.rebindThisTypeWithVisited(sig.ValueType, from, to, visited),
+					IsMapped:       sig.IsMapped,
+					TypeParameter:  sig.TypeParameter,
+					ConstraintType: c.rebindThisTypeWithVisited(sig.ConstraintType, from, to, visited),
+				}
+			}
+		}
+		result.CallSignatures = c.rebindSignaturesThisType(typ.CallSignatures, from, to, visited)
+		result.ConstructSignatures = c.rebindSignaturesThisType(typ.ConstructSignatures, from, to, visited)
+		if typ.ClassMeta != nil {
+			result.ClassMeta = &types.ClassMetadata{
+				ClassName:          typ.ClassMeta.ClassName,
+				IsClassInstance:    typ.ClassMeta.IsClassInstance,
+				IsClassConstructor: typ.ClassMeta.IsClassConstructor,
+				MemberAccess:       typ.ClassMeta.MemberAccess,
+			}
+		}
+
+		return result
+
+	case *types.UnionType:
+		newTypes := make([]types.Type, len(typ.Types))
+		for i, memberType := range typ.Types {
+			newTypes[i] = c.rebindThisTypeWithVisited(memberType, from, to, visited)
+		}
+		return types.NewUnionType(newTypes...)
+
+	case *types.IntersectionType:
+		newTypes := make([]types.Type, len(typ.Types))
+		for i, memberType := range typ.Types {
+			newTypes[i] = c.rebindThisTypeWithVisited(memberType, from, to, visited)
+		}
+		return types.NewIntersectionType(newTypes...)
+
+	case *types.TupleType:
+		newElementTypes := make([]types.Type, len(typ.ElementTypes))
+		for i, elementType := range typ.ElementTypes {
+			newElementTypes[i] = c.rebindThisTypeWithVisited(elementType, from, to, visited)
+		}
+		return &types.TupleType{ElementTypes: newElementTypes}
+	}
+
+	return t
+}
+
+func (c *Checker) rebindSignaturesThisType(signatures []*types.Signature, from *types.ObjectType, to *types.ObjectType, visited map[types.Type]types.Type) []*types.Signature {
+	if signatures == nil {
+		return nil
+	}
+
+	result := make([]*types.Signature, len(signatures))
+	for i, sig := range signatures {
+		newParamTypes := make([]types.Type, len(sig.ParameterTypes))
+		for j, paramType := range sig.ParameterTypes {
+			newParamTypes[j] = c.rebindThisTypeWithVisited(paramType, from, to, visited)
+		}
+		result[i] = &types.Signature{
+			ParameterTypes:    newParamTypes,
+			ReturnType:        c.rebindThisTypeWithVisited(sig.ReturnType, from, to, visited),
+			OptionalParams:    sig.OptionalParams,
+			IsVariadic:        sig.IsVariadic,
+			RestParameterType: c.rebindThisTypeWithVisited(sig.RestParameterType, from, to, visited),
+		}
+	}
+	return result
 }
 
 func (c *Checker) checkSwitchStatement(node *parser.SwitchStatement) {
