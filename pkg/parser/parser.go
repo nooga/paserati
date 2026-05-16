@@ -352,11 +352,11 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.TEMPLATE_START, p.parseTemplateLiteralType) // Template literal types
 	// NEW: Constructor types that start with 'new'
 	p.registerTypePrefix(lexer.NEW, p.parseConstructorTypeExpression) // Constructor types like 'new () => T'
-	p.registerTypePrefix(lexer.READONLY, func() Expression {           // 'readonly T[]' (readonly array type)
+	p.registerTypePrefix(lexer.READONLY, func() Expression {          // 'readonly T[]' (readonly array type)
 		p.nextToken() // consume 'readonly', parse the inner type
 		return p.parseTypeExpressionRecursive(TYPE_LOWEST)
 	})
-	p.registerTypePrefix(lexer.ABSTRACT, func() Expression {          // 'abstract new (...) => T'
+	p.registerTypePrefix(lexer.ABSTRACT, func() Expression { // 'abstract new (...) => T'
 		p.nextToken() // consume 'abstract', next should be 'new'
 		if !p.curTokenIs(lexer.NEW) {
 			p.addError(p.curToken, fmt.Sprintf("expected 'new' after 'abstract' in type, got %s", p.curToken.Type))
@@ -1321,8 +1321,8 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, Expression, err
 	// --- MODIFIED: Handle optional parameter name and 'this' parameter ---
 	if p.curTokenIs(lexer.THIS) && p.peekTokenIs(lexer.COLON) {
 		// 'this' parameter: (this: Type, ...) — consume and skip it, not part of call signature
-		p.nextToken() // Consume 'this'
-		p.nextToken() // Consume ':'
+		p.nextToken()           // Consume 'this'
+		p.nextToken()           // Consume ':'
 		p.parseTypeExpression() // consume the type but discard it
 		if p.peekTokenIs(lexer.COMMA) {
 			p.nextToken() // Consume ','
@@ -1335,6 +1335,7 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, Expression, err
 			return params, restParam, nil
 		}
 	}
+	parsedFirstParam := false
 	if p.curTokenIs(lexer.IDENT) {
 		if p.peekTokenIs(lexer.QUESTION) {
 			// Optional parameter: name?: type
@@ -1348,16 +1349,24 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, Expression, err
 			// Required parameter: name: type
 			p.nextToken() // Consume IDENT
 			p.nextToken() // Consume ':', move to the actual type
+		} else if p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) {
+			params = append(params, &Identifier{
+				Token: &lexer.Token{Type: lexer.IDENT, Literal: "any"},
+				Value: "any",
+			})
+			parsedFirstParam = true
 		}
 		// else: just a type without parameter name
 	} // Now curToken should be the start of the type expression
 	// --- END MODIFICATION ---
 
-	paramType := p.parseTypeExpression() // This call will use the updated recursive function
-	if paramType == nil {
-		return nil, nil, fmt.Errorf("failed to parse first function type parameter")
+	if !parsedFirstParam {
+		paramType := p.parseTypeExpression() // This call will use the updated recursive function
+		if paramType == nil {
+			return nil, nil, fmt.Errorf("failed to parse first function type parameter")
+		}
+		params = append(params, paramType)
 	}
-	params = append(params, paramType)
 
 	// Parse subsequent parameter types
 	for p.peekTokenIs(lexer.COMMA) {
@@ -1386,6 +1395,7 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, Expression, err
 		}
 
 		// --- MODIFIED: Handle optional parameter name ---
+		parsedParam := false
 		if p.curTokenIs(lexer.IDENT) {
 			if p.peekTokenIs(lexer.QUESTION) {
 				// Optional parameter: name?: type
@@ -1399,10 +1409,20 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, Expression, err
 				// Required parameter: name: type
 				p.nextToken() // Consume IDENT
 				p.nextToken() // Consume ':', move to the actual type
+			} else if p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) {
+				params = append(params, &Identifier{
+					Token: &lexer.Token{Type: lexer.IDENT, Literal: "any"},
+					Value: "any",
+				})
+				parsedParam = true
 			}
 			// else: just a type without parameter name
 		} // Now curToken should be the start of the type expression
 		// --- END MODIFICATION ---
+
+		if parsedParam {
+			continue
+		}
 
 		paramType := p.parseTypeExpression() // This call will use the updated recursive function
 		if paramType == nil {
@@ -1623,8 +1643,8 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 			}
 			tupleTypeExp.RestElement = restType
 			if debugParser {
-			debugPrint("parseTupleTypeExpression: Parsed rest element: %s", restType.String())
-		}
+				debugPrint("parseTupleTypeExpression: Parsed rest element: %s", restType.String())
+			}
 
 			// After rest element, we must have either ',' followed by ']' or just ']'
 			if p.peekTokenIs(lexer.COMMA) {
@@ -1863,7 +1883,7 @@ func (p *Parser) parseConstStatement() Statement {
 				return nil
 			}
 
-			p.nextToken()                                 // Consume token starting the expression
+			p.nextToken()                               // Consume token starting the expression
 			declarator.Value = p.parseExpression(COMMA) // Use COMMA precedence to allow chained assignments but stop at comma
 
 			stmt.Declarations = append(stmt.Declarations, declarator)
@@ -4620,8 +4640,8 @@ func (p *Parser) parseGroupedExpression() Expression {
 			return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, nil, false) // No return type annotation
 
 			// Case 2: Arrow function with params AND return type annotation: (a: T, b: U): R => body
-		// We need to save state here too, because ): might NOT be a return type annotation
-		// (e.g., in nested ternary: a ? b : (obj) : c - the ): c is ternary alternate, not arrow)
+			// We need to save state here too, because ): might NOT be a return type annotation
+			// (e.g., in nested ternary: a ? b : (obj) : c - the ): c is ternary alternate, not arrow)
 		} else if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.COLON) {
 			debugPrint("parseGroupedExpression: Successfully parsed arrow params: %v, found ':' next - could be return type annotation.", params)
 
@@ -5355,7 +5375,7 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 
 	// Regular assignment expression
 	expr := p.arena.NewAssignmentExpression()
-	expr.Token = p.curToken         // The assignment token (=, +=, etc.)
+	expr.Token = p.curToken            // The assignment token (=, +=, etc.)
 	expr.Operator = p.curToken.Literal // Store the operator string
 	expr.Left = left
 
@@ -8161,9 +8181,10 @@ func (p *Parser) parseConstructorTypeExpression() Expression {
 }
 
 // parseInterfaceConstructorSignature parses constructor signatures in interfaces like:
-//   new (): T
-//   new?(): T              (optional construct signature)
-//   new<K, V>(params): T   (generic construct signature)
+//
+//	new (): T
+//	new?(): T              (optional construct signature)
+//	new<K, V>(params): T   (generic construct signature)
 func (p *Parser) parseInterfaceConstructorSignature() Expression {
 	cte := &ConstructorTypeExpression{
 		Token: p.curToken, // The 'new' token
@@ -8883,59 +8904,59 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 
 			// Check for destructuring patterns
 			if p.curTokenIs(lexer.LBRACKET) {
-			// Array destructuring: for(let [a, b] ...)
-			// Parse pattern without requiring initializer initially
-			varStmt = p.parseArrayDestructuringDeclaration(letToken, false, false)
-			varName = "" // Destructuring doesn't have a single name
+				// Array destructuring: for(let [a, b] ...)
+				// Parse pattern without requiring initializer initially
+				varStmt = p.parseArrayDestructuringDeclaration(letToken, false, false)
+				varName = "" // Destructuring doesn't have a single name
 
-			// If parsing failed (e.g., invalid syntax), varStmt will be a typed nil
-			// In Go, when a function returns a typed nil pointer (*T)(nil) and it's assigned
-			// to an interface variable, the interface is not nil even though the value is nil
-			if varStmt == nil || varStmt.(*ArrayDestructuringDeclaration) == nil {
+				// If parsing failed (e.g., invalid syntax), varStmt will be a typed nil
+				// In Go, when a function returns a typed nil pointer (*T)(nil) and it's assigned
+				// to an interface variable, the interface is not nil even though the value is nil
+				if varStmt == nil || varStmt.(*ArrayDestructuringDeclaration) == nil {
+					return nil
+				}
+
+				// Check if there's an initializer for regular for loops: for(let [a,b] = [1,2]; ...)
+				if p.peekTokenIs(lexer.ASSIGN) {
+					p.nextToken() // consume '='
+					p.nextToken() // move to RHS
+					if arrayDecl, ok := varStmt.(*ArrayDestructuringDeclaration); ok {
+						arrayDecl.Value = p.parseExpression(LOWEST)
+					}
+				}
+			} else if p.curTokenIs(lexer.LBRACE) {
+				// Object destructuring: for(let {a, b} ...)
+				varStmt = p.parseObjectDestructuringDeclaration(letToken, false, false)
+				varName = "" // Destructuring doesn't have a single name
+
+				// If parsing failed (e.g., invalid syntax), varStmt will be a typed nil
+				// In Go, when a function returns a typed nil pointer (*T)(nil) and it's assigned
+				// to an interface variable, the interface is not nil even though the value is nil
+				if varStmt == nil || varStmt.(*ObjectDestructuringDeclaration) == nil {
+					return nil
+				}
+
+				// Check if there's an initializer for regular for loops: for(let {a,b} = obj; ...)
+				if p.peekTokenIs(lexer.ASSIGN) {
+					p.nextToken() // consume '='
+					p.nextToken() // move to RHS
+					if objDecl, ok := varStmt.(*ObjectDestructuringDeclaration); ok {
+						objDecl.Value = p.parseExpression(LOWEST)
+					}
+				}
+			} else if p.curTokenIs(lexer.IDENT) || p.isContextualKeywordAsIdent() {
+				// Regular identifier (including contextual keywords like 'type')
+				letStmt := &LetStatement{Token: letToken}
+				declarator := &VarDeclarator{}
+				declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+				letStmt.Declarations = []*VarDeclarator{declarator}
+				letStmt.Name = declarator.Name
+				varStmt = letStmt
+				varName = p.curToken.Literal
+			} else {
+				p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'let', got %s", p.curToken.Type))
 				return nil
 			}
-
-			// Check if there's an initializer for regular for loops: for(let [a,b] = [1,2]; ...)
-			if p.peekTokenIs(lexer.ASSIGN) {
-				p.nextToken() // consume '='
-				p.nextToken() // move to RHS
-				if arrayDecl, ok := varStmt.(*ArrayDestructuringDeclaration); ok {
-					arrayDecl.Value = p.parseExpression(LOWEST)
-				}
-			}
-		} else if p.curTokenIs(lexer.LBRACE) {
-			// Object destructuring: for(let {a, b} ...)
-			varStmt = p.parseObjectDestructuringDeclaration(letToken, false, false)
-			varName = "" // Destructuring doesn't have a single name
-
-			// If parsing failed (e.g., invalid syntax), varStmt will be a typed nil
-			// In Go, when a function returns a typed nil pointer (*T)(nil) and it's assigned
-			// to an interface variable, the interface is not nil even though the value is nil
-			if varStmt == nil || varStmt.(*ObjectDestructuringDeclaration) == nil {
-				return nil
-			}
-
-			// Check if there's an initializer for regular for loops: for(let {a,b} = obj; ...)
-			if p.peekTokenIs(lexer.ASSIGN) {
-				p.nextToken() // consume '='
-				p.nextToken() // move to RHS
-				if objDecl, ok := varStmt.(*ObjectDestructuringDeclaration); ok {
-					objDecl.Value = p.parseExpression(LOWEST)
-				}
-			}
-		} else if p.curTokenIs(lexer.IDENT) || p.isContextualKeywordAsIdent() {
-			// Regular identifier (including contextual keywords like 'type')
-			letStmt := &LetStatement{Token: letToken}
-			declarator := &VarDeclarator{}
-			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-			letStmt.Declarations = []*VarDeclarator{declarator}
-			letStmt.Name = declarator.Name
-			varStmt = letStmt
-			varName = p.curToken.Literal
-		} else {
-			p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'let', got %s", p.curToken.Type))
-			return nil
-		}
 		}
 	} else if p.curTokenIs(lexer.CONST) {
 		constToken := p.curToken
@@ -9499,6 +9520,7 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 		p.nextToken() // Consume '('
 
 		// Handle optional parameter name with potential '?' token
+		parsedFirstParam := false
 		if p.curTokenIs(lexer.IDENT) {
 			if p.peekTokenIs(lexer.QUESTION) {
 				// Optional parameter: name?: type
@@ -9514,15 +9536,23 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 				// Required parameter: name: type
 				p.nextToken() // Consume IDENT
 				p.nextToken() // Consume ':', move to the actual type
+			} else if p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) {
+				params = append(params, &Identifier{
+					Token: &lexer.Token{Type: lexer.IDENT, Literal: "any"},
+					Value: "any",
+				})
+				parsedFirstParam = true
 			}
 			// else: just a type without parameter name
 		} // Now curToken should be the start of the type expression
 
-		paramType := p.parseTypeExpression()
-		if paramType == nil {
-			return nil
+		if !parsedFirstParam {
+			paramType := p.parseTypeExpression()
+			if paramType == nil {
+				return nil
+			}
+			params = append(params, paramType)
 		}
-		params = append(params, paramType)
 
 		// Parse subsequent parameter types
 		for p.peekTokenIs(lexer.COMMA) {
@@ -9537,6 +9567,7 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 			}
 
 			// Handle optional parameter name with potential '?' token
+			parsedParam := false
 			if p.curTokenIs(lexer.IDENT) {
 				if p.peekTokenIs(lexer.QUESTION) {
 					// Optional parameter: name?: type
@@ -9552,9 +9583,19 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 					// Required parameter: name: type
 					p.nextToken() // Consume IDENT
 					p.nextToken() // Consume ':', move to the actual type
+				} else if p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) {
+					params = append(params, &Identifier{
+						Token: &lexer.Token{Type: lexer.IDENT, Literal: "any"},
+						Value: "any",
+					})
+					parsedParam = true
 				}
 				// else: just a type without parameter name
 			} // Now curToken should be the start of the type expression
+
+			if parsedParam {
+				continue
+			}
 
 			paramType := p.parseTypeExpression()
 			if paramType == nil {
