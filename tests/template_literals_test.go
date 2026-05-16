@@ -221,6 +221,11 @@ func TestTemplateLiteralErrors(t *testing.T) {
 			if tok.Type != tc.expected {
 				t.Errorf("Expected error token %s, got %s", tc.expected, tok.Type)
 			}
+
+			tok = l.NextToken()
+			if tok.Type != lexer.EOF {
+				t.Errorf("Expected EOF after template error, got %s", tok.Type)
+			}
 		})
 	}
 }

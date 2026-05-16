@@ -1123,7 +1123,7 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: ARROW, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
 			literal := charString(l.ch) // Just '='
-			l.readChar()            // Advance past '='
+			l.readChar()                // Advance past '='
 			tok = Token{Type: ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '!':
@@ -1141,7 +1141,7 @@ func (l *Lexer) NextToken() Token {
 			}
 		} else {
 			literal := charString(l.ch) // Just '!'
-			l.readChar()            // Advance past '!'
+			l.readChar()                // Advance past '!'
 			tok = Token{Type: BANG, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '+':
@@ -1157,7 +1157,7 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: INC, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
 			literal := charString(l.ch) // Just '+'
-			l.readChar()            // Advance past '+'
+			l.readChar()                // Advance past '+'
 			tok = Token{Type: PLUS, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '-':
@@ -1173,7 +1173,7 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: DEC, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
 			literal := charString(l.ch) // Just '-'
-			l.readChar()            // Advance past '-'
+			l.readChar()                // Advance past '-'
 			tok = Token{Type: MINUS, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '*':
@@ -1204,7 +1204,7 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: ASTERISK_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else { // Just *
 			literal := charString(l.ch) // Read "*"
-			l.readChar()            // Advance past *
+			l.readChar()                // Advance past *
 			tok = Token{Type: ASTERISK, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '/':
@@ -1256,7 +1256,7 @@ func (l *Lexer) NextToken() Token {
 				// Failed to find complete regex pattern - backtrack and treat as division
 				// readRegexLiteral already restored the lexer state
 				literal := charString(l.ch) // Just '/'
-				l.readChar()            // Advance past '/'
+				l.readChar()                // Advance past '/'
 				tok = Token{Type: SLASH, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			}
 		} else if l.peekChar() == '=' { // Check for /= only when NOT in regex context
@@ -1267,7 +1267,7 @@ func (l *Lexer) NextToken() Token {
 		} else {
 			// Context doesn't allow regex, treat as division operator
 			literal := charString(l.ch) // Just '/'
-			l.readChar()            // Advance past '/'
+			l.readChar()                // Advance past '/'
 			tok = Token{Type: SLASH, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '&':
@@ -1291,7 +1291,7 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: BITWISE_AND_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else { // Bitwise AND &
 			literal := charString(l.ch) // Read "&"
-			l.readChar()            // Advance past '&'
+			l.readChar()                // Advance past '&'
 			tok = Token{Type: BITWISE_AND, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '|':
@@ -1328,12 +1328,12 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: BITWISE_XOR_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else { // Bitwise XOR ^
 			literal := charString(l.ch) // Read "^"
-			l.readChar()            // Advance past '^'
+			l.readChar()                // Advance past '^'
 			tok = Token{Type: BITWISE_XOR, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '~': // Bitwise NOT ~
 		literal := charString(l.ch) // Read "~"
-		l.readChar()            // Advance past '~'
+		l.readChar()                // Advance past '~'
 		tok = Token{Type: BITWISE_NOT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 	case '@': // Decorator prefix
 		literal := charString(l.ch)
@@ -1366,7 +1366,7 @@ func (l *Lexer) NextToken() Token {
 			}
 		} else { // Just Less than <
 			literal := charString(l.ch) // Just '<'
-			l.readChar()            // Advance past '<'
+			l.readChar()                // Advance past '<'
 			tok = Token{Type: LT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '>':
@@ -1378,9 +1378,9 @@ func (l *Lexer) NextToken() Token {
 			l.readChar()
 			tok = Token{Type: GE, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else if l.peekChar() == '>' { // >> or >>> or >>= or >>>=
-			l.readChar() // Consume second '>'
+			l.readChar()             // Consume second '>'
 			if l.peekChar() == '>' { // >>> or >>>=
-				l.readChar() // Consume third '>'
+				l.readChar()             // Consume third '>'
 				if l.peekChar() == '=' { // >>>=
 					l.readChar()
 					literal := l.input[startPos : l.position+1]
@@ -1543,7 +1543,7 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: REMAINDER_ASSIGN, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		} else {
 			literal := charString(l.ch) // Just '%'
-			l.readChar()            // Advance past '%'
+			l.readChar()                // Advance past '%'
 			tok = Token{Type: REMAINDER, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 		}
 	case '`': // Template literal backtick
@@ -2826,7 +2826,7 @@ func (l *Lexer) readTemplateLiteral(startLine, startCol, startPos int) Token {
 		l.braceDepth = 0
 
 		literal := charString(l.ch) // The opening backtick
-		l.readChar()            // Consume the backtick
+		l.readChar()                // Consume the backtick
 		debugPrintf("readTemplateLiteral: OPENING - returning TEMPLATE_START, new ch='%c', position=%d", l.ch, l.position)
 
 		return Token{
@@ -2841,7 +2841,7 @@ func (l *Lexer) readTemplateLiteral(startLine, startCol, startPos int) Token {
 		// Closing backtick - end of template literal
 		debugPrintf("readTemplateLiteral: CLOSING - before readChar, ch='%c', position=%d", l.ch, l.position)
 		literal := charString(l.ch) // The closing backtick
-		l.readChar()            // Consume the backtick
+		l.readChar()                // Consume the backtick
 		debugPrintf("readTemplateLiteral: CLOSING - after readChar, ch='%c', position=%d", l.ch, l.position)
 
 		// Pop previous template state from stack if it exists
@@ -2888,6 +2888,9 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 		// Stop conditions - use isEOF() to distinguish from literal null bytes in source
 		if l.isEOF() {
 			// Unterminated template literal
+			l.inTemplate = false
+			l.braceDepth = 0
+			l.templateStack = nil
 			return Token{
 				Type:     ILLEGAL,
 				Literal:  "Unterminated template literal",
@@ -3092,6 +3095,9 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 					cooked.WriteByte(l.ch)
 				}
 			case 0: // EOF after backslash
+				l.inTemplate = false
+				l.braceDepth = 0
+				l.templateStack = nil
 				return Token{
 					Type:     ILLEGAL,
 					Literal:  "Invalid escape sequence in template literal",

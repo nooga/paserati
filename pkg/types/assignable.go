@@ -1,10 +1,15 @@
 package types
 
 import (
+	"fmt"
+	"sync"
+
 	"github.com/nooga/paserati/pkg/vm"
 )
 
 // --- Type Assignability ---
+
+var assignabilityVisited sync.Map
 
 // IsAssignable checks if a value of type `source` can be assigned to a variable
 // of type `target`. This is moved from checker to types package for clean separation.
@@ -31,9 +36,19 @@ func simplifyMappedType(t Type) Type {
 }
 
 func IsAssignable(source, target Type) bool {
+	return isAssignable(source, target)
+}
+
+func isAssignable(source, target Type) bool {
 	if source == nil || target == nil {
 		return false
 	}
+
+	pairKey := fmt.Sprintf("%T:%p->%T:%p", source, source, target, target)
+	if _, visited := assignabilityVisited.LoadOrStore(pairKey, true); visited {
+		return true
+	}
+	defer assignabilityVisited.Delete(pairKey)
 
 	// Simplify mapped types (e.g., Record<string, T>) to ObjectType with index signatures
 	source = simplifyMappedType(source)
@@ -78,7 +93,7 @@ func IsAssignable(source, target Type) bool {
 				return false
 			}
 			for i := range sourceParamRef.TypeArguments {
-				if !IsAssignable(sourceParamRef.TypeArguments[i], targetParamRef.TypeArguments[i]) {
+				if !isAssignable(sourceParamRef.TypeArguments[i], targetParamRef.TypeArguments[i]) {
 					return false
 				}
 			}
@@ -147,12 +162,12 @@ func IsAssignable(source, target Type) bool {
 	if sourceInst, ok := source.(*InstantiatedType); ok {
 		// Substitute the generic type with concrete type arguments
 		concreteSource := sourceInst.Substitute()
-		return IsAssignable(concreteSource, target)
+		return isAssignable(concreteSource, target)
 	}
 	if targetInst, ok := target.(*InstantiatedType); ok {
 		// Substitute the generic type with concrete type arguments
 		concreteTarget := targetInst.Substitute()
-		return IsAssignable(source, concreteTarget)
+		return isAssignable(source, concreteTarget)
 	}
 
 	// GenericType handling - for generic methods in interfaces
@@ -177,14 +192,14 @@ func IsAssignable(source, target Type) bool {
 		if sourceGeneric, ok := source.(*GenericType); ok {
 			// Compare type parameter counts and body types
 			if len(sourceGeneric.TypeParameters) == len(targetGeneric.TypeParameters) {
-				return IsAssignable(sourceGeneric.Body, targetGeneric.Body)
+				return isAssignable(sourceGeneric.Body, targetGeneric.Body)
 			}
 		}
 	}
 
 	if sourceGeneric, ok := source.(*GenericType); ok {
 		if targetObj, ok := target.(*ObjectType); ok && targetObj.IsCallable() {
-			return IsAssignable(sourceGeneric.Body, targetObj)
+			return isAssignable(sourceGeneric.Body, targetObj)
 		}
 	}
 
@@ -198,7 +213,7 @@ func IsAssignable(source, target Type) bool {
 			for _, sType := range sourceUnion.Types {
 				assignable := false
 				for _, tType := range targetUnion.Types {
-					if IsAssignable(sType, tType) {
+					if isAssignable(sType, tType) {
 						assignable = true
 						break
 					}
@@ -211,7 +226,7 @@ func IsAssignable(source, target Type) bool {
 		} else {
 			// Non-union to union: source must be assignable to at least one type in target
 			for _, tType := range targetUnion.Types {
-				if IsAssignable(source, tType) {
+				if isAssignable(source, tType) {
 					return true
 				}
 			}
@@ -220,7 +235,7 @@ func IsAssignable(source, target Type) bool {
 	} else if sourceIsUnion {
 		// Union to non-union: every type in source must be assignable to target
 		for _, sType := range sourceUnion.Types {
-			if !IsAssignable(sType, target) {
+			if !isAssignable(sType, target) {
 				return false
 			}
 		}
@@ -234,7 +249,7 @@ func IsAssignable(source, target Type) bool {
 	if targetIsIntersection {
 		// Source must be assignable to ALL types in target intersection
 		for _, tType := range targetIntersection.Types {
-			if !IsAssignable(source, tType) {
+			if !isAssignable(source, tType) {
 				return false
 			}
 		}
@@ -242,7 +257,7 @@ func IsAssignable(source, target Type) bool {
 	} else if sourceIsIntersection {
 		// At least one type in source intersection must be assignable to target
 		for _, sType := range sourceIntersection.Types {
-			if IsAssignable(sType, target) {
+			if isAssignable(sType, target) {
 				return true
 			}
 		}
@@ -283,7 +298,7 @@ func IsAssignable(source, target Type) bool {
 		default:
 			return false
 		}
-		return IsAssignable(primitiveType, target)
+		return isAssignable(primitiveType, target)
 	} else if targetIsLiteral {
 		// Non-literal to literal: generally false except for special cases
 		return false
@@ -297,7 +312,7 @@ func IsAssignable(source, target Type) bool {
 		if sourceArray.ElementType == nil || targetArray.ElementType == nil {
 			return false
 		}
-		return IsAssignable(sourceArray.ElementType, targetArray.ElementType)
+		return isAssignable(sourceArray.ElementType, targetArray.ElementType)
 	}
 
 	// Tuple type handling
@@ -311,7 +326,7 @@ func IsAssignable(source, target Type) bool {
 		}
 		// All tuple elements must be assignable to the array element type
 		for _, tupleElementType := range sourceTuple.ElementTypes {
-			if !IsAssignable(tupleElementType, targetArray.ElementType) {
+			if !isAssignable(tupleElementType, targetArray.ElementType) {
 				return false
 			}
 		}
@@ -329,7 +344,7 @@ func IsAssignable(source, target Type) bool {
 
 			if i < sourceLen {
 				sourceElementType := sourceTuple.ElementTypes[i]
-				if !IsAssignable(sourceElementType, targetElementType) {
+				if !isAssignable(sourceElementType, targetElementType) {
 					return false
 				}
 			} else if !targetIsOptional {
@@ -378,7 +393,7 @@ func IsAssignable(source, target Type) bool {
 					return false
 				}
 			} else {
-				if !IsAssignable(sourcePropType, targetPropType) {
+				if !isAssignable(sourcePropType, targetPropType) {
 					return false
 				}
 			}
@@ -391,7 +406,7 @@ func IsAssignable(source, target Type) bool {
 			for _, idxSig := range targetObj.IndexSignatures {
 				if idxSig.KeyType == String || idxSig.KeyType == Any {
 					for _, sourcePropType := range sourceProps {
-						if !IsAssignable(sourcePropType, idxSig.ValueType) {
+						if !isAssignable(sourcePropType, idxSig.ValueType) {
 							return false
 						}
 					}
@@ -432,14 +447,14 @@ func IsAssignable(source, target Type) bool {
 
 	if sourceIsReadonly && targetIsReadonly {
 		// readonly T to readonly U: T must be assignable to U
-		return IsAssignable(sourceReadonly.InnerType, targetReadonly.InnerType)
+		return isAssignable(sourceReadonly.InnerType, targetReadonly.InnerType)
 	} else if sourceIsReadonly && !targetIsReadonly {
 		// readonly T to T: allowed (covariance)
-		return IsAssignable(sourceReadonly.InnerType, target)
+		return isAssignable(sourceReadonly.InnerType, target)
 	} else if !sourceIsReadonly && targetIsReadonly {
 		// T to readonly T: allowed (source is assignable to target inner type)
 		// This is safe because we're making something more restrictive
-		return IsAssignable(source, targetReadonly.InnerType)
+		return isAssignable(source, targetReadonly.InnerType)
 	}
 
 	// TypeParameterType handling - type parameters with the same identity are assignable
@@ -464,7 +479,7 @@ func IsAssignable(source, target Type) bool {
 		}
 
 		if sourceTypeParam.Parameter.Constraint != nil {
-			return IsAssignable(sourceTypeParam.Parameter.Constraint, target)
+			return isAssignable(sourceTypeParam.Parameter.Constraint, target)
 		}
 
 		return false
@@ -475,7 +490,7 @@ func IsAssignable(source, target Type) bool {
 		// Check if the source type parameter's constraint is assignable to the target
 		// This handles cases like: U extends Date should be assignable to Date
 		if sourceTypeParam.Parameter.Constraint != nil {
-			return IsAssignable(sourceTypeParam.Parameter.Constraint, target)
+			return isAssignable(sourceTypeParam.Parameter.Constraint, target)
 		}
 		// If no constraint, fall back to checking if the type parameter itself can be assigned
 		// (this would typically be false for concrete types)
@@ -522,13 +537,13 @@ func isSignatureAssignable(source, target *Signature) bool {
 		sourceParam := source.ParameterTypes[i]
 		// TypeScript uses bivariant parameter checking for method signatures
 		// (contravariant only applies to function types with --strictFunctionTypes)
-		if !IsAssignable(targetParam, sourceParam) && !IsAssignable(sourceParam, targetParam) {
+		if !isAssignable(targetParam, sourceParam) && !isAssignable(sourceParam, targetParam) {
 			return false
 		}
 	}
 
 	// Check return type (covariant)
-	return IsAssignable(source.ReturnType, target.ReturnType)
+	return isAssignable(source.ReturnType, target.ReturnType)
 }
 
 // Helper function removed - FunctionType deprecated, use ObjectType with CallSignatures

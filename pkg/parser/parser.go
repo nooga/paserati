@@ -345,6 +345,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.IDENT, p.parseTypeIdentifier)               // Basic types like 'number', 'string', custom types
 	p.registerTypePrefix(lexer.NULL, p.parseNullLiteral)                   // 'null' type
 	p.registerTypePrefix(lexer.UNDEFINED, p.parseUndefinedLiteral)         // 'undefined' type
+	p.registerTypePrefix(lexer.THIS, p.parseThisExpression)                // polymorphic 'this' type
 	p.registerTypePrefix(lexer.VOID, p.parseVoidTypeLiteral)               // 'void' type
 	p.registerTypePrefix(lexer.KEYOF, p.parseKeyofTypeExpression)          // 'keyof' type operator
 	p.registerTypePrefix(lexer.TYPEOF, p.parseTypeofTypeExpression)        // 'typeof' type operator
@@ -1214,6 +1215,9 @@ func (p *Parser) parseTypeExpressionRecursive(precedence int) Expression {
 	// --- MODIFIED: Loop using peekTypePrecedence and typeInfixParseFns ---
 	for precedence < p.peekTypePrecedence() {
 		peekType := p.peekToken.Type
+		if peekType == lexer.LBRACKET && p.peekToken.Line != p.curToken.Line {
+			return leftExp
+		}
 		infix := p.typeInfixParseFns[peekType] // Look in the TYPE infix map
 		if infix == nil {
 			// No infix type operator found or lower precedence for the peek token
@@ -8006,6 +8010,37 @@ func (p *Parser) parseInterfaceBracketProperty() *InterfaceProperty {
 	// We're currently at '[', move to the content
 	p.nextToken()
 
+	// Parse index signatures directly before expression parsing can consume the
+	// colon as part of a non-type expression.
+	if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.COLON) {
+		prop := &InterfaceProperty{
+			IsIndexSignature: true,
+			KeyName:          &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+		}
+
+		p.nextToken() // Consume ':'
+		p.nextToken() // Move to the start of the key type expression
+		prop.KeyType = p.parseTypeExpression()
+		if prop.KeyType == nil {
+			return nil
+		}
+
+		if !p.curTokenIs(lexer.RBRACKET) && !p.expectPeek(lexer.RBRACKET) {
+			return nil
+		}
+		if !p.expectPeek(lexer.COLON) {
+			return nil
+		}
+
+		p.nextToken() // Move to the start of the value type expression
+		prop.ValueType = p.parseTypeExpression()
+		if prop.ValueType == nil {
+			return nil
+		}
+
+		return prop
+	}
+
 	// Parse the expression inside the brackets
 	expr := p.parseExpression(LOWEST)
 	if expr == nil {
@@ -9600,6 +9635,7 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 	// Parse parameter list (similar to parseFunctionTypeParameterList)
 	params := []Expression{}
 	optionalParams := []bool{}
+	var restParam Expression
 
 	// Handle empty parameter list: () : ...
 	if p.peekTokenIs(lexer.RPAREN) {
@@ -9608,61 +9644,17 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 		// Parse first parameter type
 		p.nextToken() // Consume '('
 
-		// Handle optional parameter name with potential '?' token
-		parsedFirstParam := false
-		if p.curTokenIs(lexer.IDENT) {
-			if p.peekTokenIs(lexer.QUESTION) {
-				// Optional parameter: name?: type
-				p.nextToken() // Consume IDENT
-				p.nextToken() // Consume '?'
-				// Current token should now be ':', just advance to the type
-				if !p.curTokenIs(lexer.COLON) {
-					p.addError(p.curToken, "expected ':' after '?' in optional parameter")
-					return nil
-				}
-				p.nextToken() // Move to the actual type
-				optionalParams = append(optionalParams, true)
-			} else if p.peekTokenIs(lexer.COLON) {
-				// Required parameter: name: type
-				p.nextToken() // Consume IDENT
-				p.nextToken() // Consume ':', move to the actual type
-				optionalParams = append(optionalParams, false)
-			} else if p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) {
-				params = append(params, &Identifier{
-					Token: &lexer.Token{Type: lexer.IDENT, Literal: "any"},
-					Value: "any",
-				})
-				optionalParams = append(optionalParams, false)
-				parsedFirstParam = true
-			}
-			// else: just a type without parameter name
-		} // Now curToken should be the start of the type expression
-
-		if !parsedFirstParam {
-			paramType := p.parseTypeExpression()
-			if paramType == nil {
+		if p.curTokenIs(lexer.SPREAD) {
+			restParam = p.parseRestParameterType()
+			if restParam == nil {
 				return nil
 			}
-			params = append(params, paramType)
-			if len(optionalParams) < len(params) {
-				optionalParams = append(optionalParams, false)
+			if !p.expectPeek(lexer.RPAREN) {
+				return nil
 			}
-		}
-
-		// Parse subsequent parameter types
-		for p.peekTokenIs(lexer.COMMA) {
-			p.nextToken() // Consume ','
-			p.nextToken() // Move to next token
-
-			// Handle trailing comma - if we see ')' after a comma, we're done
-			if p.curTokenIs(lexer.RPAREN) {
-				// This is a trailing comma, we're already at the closing paren
-				// Don't need to expectPeek for RPAREN later
-				break
-			}
-
+		} else {
 			// Handle optional parameter name with potential '?' token
-			parsedParam := false
+			parsedFirstParam := false
 			if p.curTokenIs(lexer.IDENT) {
 				if p.peekTokenIs(lexer.QUESTION) {
 					// Optional parameter: name?: type
@@ -9686,28 +9678,93 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 						Value: "any",
 					})
 					optionalParams = append(optionalParams, false)
-					parsedParam = true
+					parsedFirstParam = true
 				}
 				// else: just a type without parameter name
 			} // Now curToken should be the start of the type expression
 
-			if parsedParam {
-				continue
+			if !parsedFirstParam {
+				paramType := p.parseTypeExpression()
+				if paramType == nil {
+					return nil
+				}
+				params = append(params, paramType)
+				if len(optionalParams) < len(params) {
+					optionalParams = append(optionalParams, false)
+				}
 			}
 
-			paramType := p.parseTypeExpression()
-			if paramType == nil {
+			// Parse subsequent parameter types
+			for p.peekTokenIs(lexer.COMMA) {
+				p.nextToken() // Consume ','
+				p.nextToken() // Move to next token
+
+				// Handle trailing comma - if we see ')' after a comma, we're done
+				if p.curTokenIs(lexer.RPAREN) {
+					// This is a trailing comma, we're already at the closing paren
+					// Don't need to expectPeek for RPAREN later
+					break
+				}
+
+				if p.curTokenIs(lexer.SPREAD) {
+					restParam = p.parseRestParameterType()
+					if restParam == nil {
+						return nil
+					}
+					if !p.expectPeek(lexer.RPAREN) {
+						return nil
+					}
+					break
+				}
+
+				// Handle optional parameter name with potential '?' token
+				parsedParam := false
+				if p.curTokenIs(lexer.IDENT) {
+					if p.peekTokenIs(lexer.QUESTION) {
+						// Optional parameter: name?: type
+						p.nextToken() // Consume IDENT
+						p.nextToken() // Consume '?'
+						// Current token should now be ':', just advance to the type
+						if !p.curTokenIs(lexer.COLON) {
+							p.addError(p.curToken, "expected ':' after '?' in optional parameter")
+							return nil
+						}
+						p.nextToken() // Move to the actual type
+						optionalParams = append(optionalParams, true)
+					} else if p.peekTokenIs(lexer.COLON) {
+						// Required parameter: name: type
+						p.nextToken() // Consume IDENT
+						p.nextToken() // Consume ':', move to the actual type
+						optionalParams = append(optionalParams, false)
+					} else if p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) {
+						params = append(params, &Identifier{
+							Token: &lexer.Token{Type: lexer.IDENT, Literal: "any"},
+							Value: "any",
+						})
+						optionalParams = append(optionalParams, false)
+						parsedParam = true
+					}
+					// else: just a type without parameter name
+				} // Now curToken should be the start of the type expression
+
+				if parsedParam {
+					continue
+				}
+
+				paramType := p.parseTypeExpression()
+				if paramType == nil {
+					return nil
+				}
+				params = append(params, paramType)
+				if len(optionalParams) < len(params) {
+					optionalParams = append(optionalParams, false)
+				}
+			}
+
+			// Expect closing parenthesis (unless we already consumed it due to trailing comma)
+			if !p.curTokenIs(lexer.RPAREN) && !p.expectPeek(lexer.RPAREN) {
 				return nil
 			}
-			params = append(params, paramType)
-			if len(optionalParams) < len(params) {
-				optionalParams = append(optionalParams, false)
-			}
-		}
-
-		// Expect closing parenthesis (unless we already consumed it due to trailing comma)
-		if !p.curTokenIs(lexer.RPAREN) && !p.expectPeek(lexer.RPAREN) {
-			return nil
 		}
 	}
 
@@ -9728,6 +9785,7 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 		Token:          &lexer.Token{Type: lexer.LPAREN, Literal: "("},
 		Parameters:     params,
 		OptionalParams: optionalParams,
+		RestParameter:  restParam,
 		ReturnType:     returnType,
 	}
 
@@ -9963,6 +10021,7 @@ func (p *Parser) tryParseTypeParameters() []*TypeParameter {
 	// Save current state for potential backtracking
 	savedCur := p.curToken
 	savedPeek := p.peekToken
+	savedLexerState := p.l.SaveState()
 	savedErrorCount := len(p.errors)
 
 	// Try to parse type parameters
@@ -9973,6 +10032,7 @@ func (p *Parser) tryParseTypeParameters() []*TypeParameter {
 		// Backtrack on failure
 		p.curToken = savedCur
 		p.peekToken = savedPeek
+		p.l.RestoreState(savedLexerState)
 		// Remove any errors added during failed parse
 		if len(p.errors) > savedErrorCount {
 			p.errors = p.errors[:savedErrorCount]
@@ -9991,43 +10051,69 @@ func (p *Parser) parseGenericArrowFunction() Expression {
 		return nil
 	}
 
+	startState := p.l.SaveState()
+	startCur := p.curToken
+	startPeek := p.peekToken
+	startErrors := len(p.errors)
+
 	// Parse type parameters
 	typeParams, err := p.parseTypeParameters()
-	if err != nil {
+	if err == nil && p.expectPeek(lexer.LPAREN) {
+		// Parse regular parameters
+		params, restParam, parseErr := p.parseFunctionParameters(false) // No parameter properties in function type parameter lists
+		if parseErr == nil {
+			// Optional return type annotation
+			var returnTypeAnnotation Expression
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken() // consume ':'
+				p.nextToken() // move to type
+				returnTypeAnnotation = p.parseTypeExpression()
+				if returnTypeAnnotation == nil {
+					p.addError(p.curToken, "expected return type after ':'")
+					return nil
+				}
+			}
+
+			// Expect '=>'
+			if p.expectPeek(lexer.ARROW) {
+				p.errors = p.errors[:startErrors]
+				return p.parseArrowFunctionBodyAndFinish(typeParams, params, restParam, returnTypeAnnotation, false)
+			}
+		}
+	}
+
+	p.l.RestoreState(startState)
+	p.curToken = startCur
+	p.peekToken = startPeek
+	p.errors = p.errors[:startErrors]
+
+	p.nextToken() // Move to the asserted type
+	targetType := p.parseTypeExpression()
+	if targetType == nil {
 		p.addError(p.curToken, fmt.Sprintf("failed to parse type parameters: %v", err))
 		return nil
 	}
 
-	// Expect '(' for parameters
-	if !p.expectPeek(lexer.LPAREN) {
+	if !p.expectPeekGT() {
 		return nil
 	}
 
-	// Parse regular parameters
-	params, restParam, parseErr := p.parseFunctionParameters(false) // No parameter properties in function type parameter lists
-	if parseErr != nil {
-		p.addError(p.curToken, fmt.Sprintf("failed to parse arrow function parameters: %v", parseErr))
+	if !p.peekTokenIs(lexer.TEMPLATE_START) && !p.peekTokenIs(lexer.LPAREN) {
+		p.addError(p.peekToken, "expected '(' for generic arrow function")
 		return nil
 	}
 
-	// Optional return type annotation
-	var returnTypeAnnotation Expression
-	if p.peekTokenIs(lexer.COLON) {
-		p.nextToken() // consume ':'
-		p.nextToken() // move to type
-		returnTypeAnnotation = p.parseTypeExpression()
-		if returnTypeAnnotation == nil {
-			p.addError(p.curToken, "expected return type after ':'")
-			return nil
-		}
-	}
-
-	// Expect '=>'
-	if !p.expectPeek(lexer.ARROW) {
+	p.nextToken() // Move to the asserted expression
+	assertedExpr := p.parseExpression(PREFIX)
+	if assertedExpr == nil {
 		return nil
 	}
 
-	return p.parseArrowFunctionBodyAndFinish(typeParams, params, restParam, returnTypeAnnotation, false)
+	return &TypeAssertionExpression{
+		Token:      &lexer.Token{Type: lexer.AS, Literal: "as", Line: startCur.Line, Column: startCur.Column},
+		Expression: assertedExpr,
+		TargetType: targetType,
+	}
 }
 
 // parseGenericFunctionTypeExpression parses generic function types in type annotation context
@@ -10592,8 +10678,9 @@ func (p *Parser) parseGenericCallOrComparison(left Expression) Expression {
 	// This handles both foo<T>() and obj.method<T>() patterns
 	_, isIdent := left.(*Identifier)
 	_, isMember := left.(*MemberExpression)
+	_, isIndex := left.(*IndexExpression)
 
-	if isIdent || isMember {
+	if isIdent || isMember || isIndex {
 		// Check if this looks like a generic call by doing a simple lookahead
 		// We need to look for pattern: callee < TypeExpr > (
 		if p.looksLikeGenericCall() {
@@ -10625,6 +10712,23 @@ func (p *Parser) parseGenericCallOrComparison(left Expression) Expression {
 					p.errors = p.errors[:savedErrorCount]
 				}
 			}
+		}
+
+		// Tagged templates may also carry erased type arguments: tag<T> `...`.
+		savedCur := p.curToken
+		savedPeek := p.peekToken
+		savedErrorCount := len(p.errors)
+		lexerState := p.l.SaveState()
+
+		if typeArgs, err := p.parseTypeArguments(); err == nil && len(typeArgs) > 0 && p.peekTokenIs(lexer.TEMPLATE_START) {
+			return left
+		}
+
+		p.l.RestoreState(lexerState)
+		p.curToken = savedCur
+		p.peekToken = savedPeek
+		if len(p.errors) > savedErrorCount {
+			p.errors = p.errors[:savedErrorCount]
 		}
 	}
 
@@ -11544,6 +11648,37 @@ func (p *Parser) parseEnumMemberTypeExpression(left Expression) Expression {
 func (p *Parser) parseObjectTypeBracketProperty() *ObjectTypeProperty {
 	// We're currently at '[', move to the content
 	p.nextToken()
+
+	// Parse index signatures directly before expression parsing can consume the
+	// colon as part of a non-type expression.
+	if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.COLON) {
+		prop := &ObjectTypeProperty{
+			IsIndexSignature: true,
+			KeyName:          &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+		}
+
+		p.nextToken() // Consume ':'
+		p.nextToken() // Move to the start of the key type expression
+		prop.KeyType = p.parseTypeExpression()
+		if prop.KeyType == nil {
+			return nil
+		}
+
+		if !p.curTokenIs(lexer.RBRACKET) && !p.expectPeek(lexer.RBRACKET) {
+			return nil
+		}
+		if !p.expectPeek(lexer.COLON) {
+			return nil
+		}
+
+		p.nextToken() // Move to the start of the value type expression
+		prop.ValueType = p.parseTypeExpression()
+		if prop.ValueType == nil {
+			return nil
+		}
+
+		return prop
+	}
 
 	// Parse the expression inside the brackets
 	expr := p.parseExpression(LOWEST)

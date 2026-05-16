@@ -267,6 +267,15 @@ func (s *StringInitializer) Priority() int {
 }
 
 func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
+	templateStringsArrayType := types.NewObjectType().
+		WithProperty("raw", &types.ArrayType{ElementType: types.String}).
+		WithProperty("length", types.Number)
+	templateStringsArrayType.IndexSignatures = append(templateStringsArrayType.IndexSignatures, &types.IndexSignature{
+		KeyType:   types.Number,
+		ValueType: types.String,
+	})
+	_ = ctx.DefineTypeAlias("TemplateStringsArray", templateStringsArrayType)
+
 	// Create String constructor type first (needed for constructor property)
 	stringCtorType := types.NewSimpleFunction([]types.Type{types.Any}, types.String).
 		WithProperty("fromCharCode", types.NewVariadicFunction([]types.Type{}, types.String, &types.ArrayType{ElementType: types.Number})).

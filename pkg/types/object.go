@@ -9,6 +9,7 @@ import (
 // stringifyVisited tracks types being stringified to prevent infinite recursion
 // in self-referencing types (e.g., interface Foo { next(): Foo; })
 var stringifyVisited sync.Map
+var objectEqualsVisited sync.Map
 
 // --- Function/Object Signatures ---
 
@@ -129,7 +130,7 @@ func (sig *Signature) Equals(other *Signature) bool {
 type IndexSignature struct {
 	KeyType   Type // The type of the key (e.g., string, number, symbol)
 	ValueType Type // The type of the value
-	
+
 	// For mapped types: [P in K]: V
 	IsMapped       bool   // Whether this is a mapped type pattern
 	TypeParameter  string // The type parameter name (e.g., "P" in [P in K])
@@ -149,7 +150,7 @@ func (is *IndexSignature) String() string {
 		}
 		return fmt.Sprintf("[%s in %s]: %s", is.TypeParameter, constraintStr, valueStr)
 	}
-	
+
 	// Regular index signature: [key: string]: Type
 	keyStr := "unknown"
 	if is.KeyType != nil {
@@ -166,12 +167,12 @@ func (is *IndexSignature) Equals(other *IndexSignature) bool {
 	if is == nil || other == nil {
 		return is == other
 	}
-	
+
 	// Check if both are mapped types or both are regular index signatures
 	if is.IsMapped != other.IsMapped {
 		return false
 	}
-	
+
 	if is.IsMapped {
 		// For mapped types, compare type parameter and constraint
 		if is.TypeParameter != other.TypeParameter {
@@ -186,7 +187,7 @@ func (is *IndexSignature) Equals(other *IndexSignature) bool {
 			return false
 		}
 	}
-	
+
 	return is.ValueType.Equals(other.ValueType)
 }
 
@@ -284,6 +285,12 @@ func (ot *ObjectType) Equals(other Type) bool {
 		return true
 	}
 
+	pairKey := fmt.Sprintf("%p:%p", ot, otherOt)
+	if _, visited := objectEqualsVisited.LoadOrStore(pairKey, true); visited {
+		return true
+	}
+	defer objectEqualsVisited.Delete(pairKey)
+
 	// Check properties
 	if len(ot.Properties) != len(otherOt.Properties) {
 		return false // Different number of properties
@@ -351,8 +358,8 @@ func (ot *ObjectType) Equals(other Type) bool {
 	if ot.ClassMeta != nil {
 		// Compare class metadata - for type equality, class names must match
 		if ot.ClassMeta.ClassName != otherOt.ClassMeta.ClassName ||
-		   ot.ClassMeta.IsClassInstance != otherOt.ClassMeta.IsClassInstance ||
-		   ot.ClassMeta.IsClassConstructor != otherOt.ClassMeta.IsClassConstructor {
+			ot.ClassMeta.IsClassInstance != otherOt.ClassMeta.IsClassInstance ||
+			ot.ClassMeta.IsClassConstructor != otherOt.ClassMeta.IsClassConstructor {
 			return false
 		}
 		// Note: We don't compare member access info for type equality
@@ -405,7 +412,7 @@ func (ot *ObjectType) GetMemberAccessInfo(memberName string) *MemberAccessInfo {
 		if info := ot.ClassMeta.GetMemberAccess(memberName); info != nil {
 			return info
 		}
-		
+
 		// Then check parent classes
 		for _, baseType := range ot.BaseTypes {
 			if baseObj, ok := baseType.(*ObjectType); ok {
@@ -636,12 +643,12 @@ func (ot *ObjectType) AsClassConstructor(className string) *ObjectType {
 func (ot *ObjectType) WithClassMember(memberName string, memberType Type, accessLevel AccessModifier, isStatic, isReadonly bool) *ObjectType {
 	// Add the property to the type
 	ot.Properties[memberName] = memberType
-	
+
 	// Add access control metadata
 	if ot.ClassMeta != nil {
 		ot.ClassMeta.AddMember(memberName, accessLevel, isStatic, isReadonly)
 	}
-	
+
 	return ot
 }
 
