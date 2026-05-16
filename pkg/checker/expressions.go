@@ -2352,6 +2352,10 @@ func (c *Checker) checkTypeAssertionExpression(node *parser.TypeAssertionExpress
 		sourceType = types.Any
 	}
 
+	if node.Token.Literal == "as" {
+		c.checkDuplicateTypeAssertionProperties(node.TargetType)
+	}
+
 	// Resolve the target type
 	targetType := c.resolveTypeAnnotation(node.TargetType)
 	if targetType == nil {
@@ -2368,6 +2372,33 @@ func (c *Checker) checkTypeAssertionExpression(node *parser.TypeAssertionExpress
 
 	// The result type is always the target type
 	node.SetComputedType(targetType)
+}
+
+func (c *Checker) checkDuplicateTypeAssertionProperties(targetType parser.Expression) {
+	objectType, ok := targetType.(*parser.ObjectTypeExpression)
+	if !ok {
+		return
+	}
+
+	seen := make(map[string]parser.Expression)
+	for _, prop := range objectType.Properties {
+		if prop.Name == nil || prop.IsCallSignature || prop.IsConstructSignature || prop.IsIndexSignature || prop.IsComputedProperty {
+			continue
+		}
+
+		if previousType, exists := seen[prop.Name.Value]; exists {
+			if _, previousIsFunction := previousType.(*parser.FunctionTypeExpression); previousIsFunction {
+				if _, currentIsFunction := prop.Type.(*parser.FunctionTypeExpression); currentIsFunction {
+					continue
+				}
+			}
+			c.addError(prop.Name, fmt.Sprintf("Duplicate identifier '%s'.", prop.Name.Value))
+			c.addError(prop.Name, fmt.Sprintf("Duplicate identifier '%s'.", prop.Name.Value))
+			continue
+		}
+
+		seen[prop.Name.Value] = prop.Type
+	}
 }
 
 // checkSatisfiesExpression handles satisfies expressions (value satisfies Type)
