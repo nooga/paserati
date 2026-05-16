@@ -807,7 +807,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 			} else if c.isGeneratorType(iterableType) {
 				// Special handling for Generator types - they are iterable
 				elementType = types.Any // Safe fallback for generator elements
-			} else if c.isIterableBySymbolIterator(iterableType) {
+			} else if c.isSpreadableIterableType(iterableType) {
 				// If it has a Symbol.iterator method (computed), treat as iterable
 				elementType = types.Any
 			} else {

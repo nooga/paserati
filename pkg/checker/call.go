@@ -39,6 +39,9 @@ func (c *Checker) calculateEffectiveArgCount(arguments []parser.Expression) int 
 						debugPrintf("// [Checker EffectiveArgCount] Array type (not tuple) - unknown length, skipping arity check\n")
 						return -1 // Signal: arity check should be skipped
 					}
+				} else if c.isSpreadableIterableType(argType) {
+					debugPrintf("// [Checker EffectiveArgCount] Iterable type - unknown length, skipping arity check\n")
+					return -1
 				} else {
 					// Spread on non-array/tuple type - error
 					debugPrintf("// [Checker EffectiveArgCount] Spread on non-array type %T, adding 1\n", argType)
@@ -132,6 +135,10 @@ func (c *Checker) validateSpreadArgument(spreadElement *parser.SpreadElement, is
 		return true // Allow spreading arrays into fixed parameters
 	}
 
+	if isVariadicFunction && currentParamIndex >= len(expectedParamTypes) && c.isSpreadableIterableType(argType) {
+		return true
+	}
+
 	// Only reject if it's not an array or tuple at all
 	c.addError(spreadElement, fmt.Sprintf("spread syntax can only be applied to arrays or tuples, got '%s'", argType.String()))
 	return false
@@ -194,6 +201,9 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 					allOk = false
 					effectiveArgIndex += 1
 				}
+			} else if c.isSpreadableIterableType(argType) {
+				// Iterator protocol values have unknown length and element type here.
+				effectiveArgIndex = len(paramTypes)
 			} else {
 				// This should not happen due to validation above
 				allOk = false
@@ -706,6 +716,9 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 							}
 
 							// For variadic functions, spread arrays should match the rest parameter type
+							if c.isSpreadableIterableType(argType) {
+								continue
+							}
 							if !types.IsAssignable(argType, variadicParamType) {
 								c.addError(spreadElement, fmt.Sprintf("spread argument: cannot assign type '%s' to rest parameter type '%s'", argType.String(), variadicParamType.String()))
 							}

@@ -24,12 +24,15 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 				// Use the element type of the spread array
 				generalizedType := types.DeeplyWidenType(arrayType.ElementType)
 				generalizedElementTypes = append(generalizedElementTypes, generalizedType)
+			} else if c.isSpreadableIterableType(elemType) {
+				// Iterator protocol values are spreadable; element type is not inferred yet.
+				generalizedElementTypes = append(generalizedElementTypes, types.Any)
 			} else if elemType == types.Any {
 				// Spread of 'any' contributes 'any' element type
 				generalizedElementTypes = append(generalizedElementTypes, types.Any)
 			} else {
 				// Error case - spread of non-array: issue a clear compile error
-				c.addError(spreadElem, "spread syntax can only be applied to arrays")
+				c.addError(spreadElem, fmt.Sprintf("spread syntax can only be applied to arrays, got '%s'", elemType.String()))
 				generalizedElementTypes = append(generalizedElementTypes, types.Any)
 			}
 		} else {
@@ -2824,15 +2827,66 @@ func (c *Checker) checkAwaitExpression(node *parser.AwaitExpression) {
 	}
 }
 
-// isIterableBySymbolIterator returns true if the type has a computed Symbol.iterator method.
-func (c *Checker) isIterableBySymbolIterator(t types.Type) bool {
+// isSpreadableIterableType returns true if a type has a usable Symbol.iterator
+// shape for spread syntax. A bare computed property is not enough because
+// classes can define [Symbol.iterator]() without returning an iterator.
+func (c *Checker) isSpreadableIterableType(t types.Type) bool {
 	if t == nil {
 		return false
 	}
-	// We treat presence of a computed Symbol.iterator property of any type as iterable.
-	// The runtime will validate calling it.
+	if t == types.String {
+		return false
+	}
+	if literalType, ok := t.(*types.LiteralType); ok && literalType.Value.Type() == vm.TypeString {
+		return false
+	}
+	if genericType, ok := t.(*types.GenericType); ok {
+		if genericType.Name == "Iterable" || genericType.Name == "Iterator" {
+			return true
+		}
+	}
+	if genericRef, ok := t.(*types.GenericTypeAliasForwardReference); ok {
+		if genericRef.AliasName == "Iterable" || genericRef.AliasName == "Iterator" {
+			return true
+		}
+	}
+	if parameterizedRef, ok := t.(*types.ParameterizedForwardReferenceType); ok {
+		if parameterizedRef.ClassName == "Iterable" || parameterizedRef.ClassName == "Iterator" {
+			return true
+		}
+	}
+	if instantiatedType, ok := t.(*types.InstantiatedType); ok {
+		if instantiatedType.Generic != nil && (instantiatedType.Generic.Name == "Iterable" || instantiatedType.Generic.Name == "Iterator") {
+			return true
+		}
+	}
 	methodType := c.getPropertyTypeFromType(t, "__COMPUTED_PROPERTY__", false)
-	return methodType != nil && methodType != types.Never
+	if methodType == nil || methodType == types.Never {
+		return false
+	}
+
+	if c.hasIteratorNext(t) {
+		return true
+	}
+
+	if methodReturn := callableReturnType(methodType); methodReturn != nil && methodReturn != types.Any {
+		return c.hasIteratorNext(methodReturn)
+	}
+
+	return false
+}
+
+func (c *Checker) hasIteratorNext(t types.Type) bool {
+	nextType := c.getPropertyTypeFromType(t, "next", false)
+	return nextType != nil && nextType != types.Never
+}
+
+func callableReturnType(t types.Type) types.Type {
+	objType, ok := t.(*types.ObjectType)
+	if !ok || len(objType.CallSignatures) == 0 {
+		return nil
+	}
+	return objType.CallSignatures[0].ReturnType
 }
 
 // getTupleElementUnion creates a union type from all element types in a tuple
