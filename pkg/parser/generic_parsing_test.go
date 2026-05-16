@@ -75,6 +75,18 @@ func TestParseGenericFunctionLiteral(t *testing.T) {
 	}
 }
 
+func TestParseObjectTypeFunctionPropertyWithUntypedRest(t *testing.T) {
+	input := `var obj: { func1: (...rest) => void }`
+	sourceFile := source.NewEvalSource(input)
+	l := lexer.NewLexerWithSource(sourceFile)
+	p := NewParser(l)
+	_, parseErrs := p.ParseProgram()
+
+	if len(parseErrs) != 0 {
+		t.Fatalf("Parser had %d errors for input %q: %v", len(parseErrs), input, parseErrs)
+	}
+}
+
 func TestParseGenericArrowFunction(t *testing.T) {
 	tests := []struct {
 		input    string

@@ -1316,6 +1316,9 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, Expression, err
 			return nil, nil, fmt.Errorf("failed to parse rest parameter type")
 		}
 		// Expect closing parenthesis after rest parameter
+		if p.curTokenIs(lexer.RPAREN) {
+			return params, restParam, nil
+		}
 		if !p.expectPeek(lexer.RPAREN) {
 			return nil, nil, fmt.Errorf("missing closing parenthesis after rest parameter")
 		}
@@ -1392,6 +1395,9 @@ func (p *Parser) parseFunctionTypeParameterList() ([]Expression, Expression, err
 				return nil, nil, fmt.Errorf("failed to parse rest parameter type")
 			}
 			// Expect closing parenthesis after rest parameter
+			if p.curTokenIs(lexer.RPAREN) {
+				return params, restParam, nil
+			}
 			if !p.expectPeek(lexer.RPAREN) {
 				return nil, nil, fmt.Errorf("missing closing parenthesis after rest parameter")
 			}
