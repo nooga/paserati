@@ -571,10 +571,9 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 	sig := &types.Signature{
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
+		OptionalParams:    node.OptionalParams,
 		IsVariadic:        node.RestParameter != nil,
 		RestParameterType: restParameterType,
-		// Note: Function type expressions don't track optional parameters
-		// They are just type signatures, not parameter declarations
 	}
 
 	// Create a unified ObjectType with call signature
@@ -651,6 +650,7 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 	sig := &types.Signature{
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
+		OptionalParams:    node.OptionalParams,
 		IsVariadic:        node.RestParameter != nil,
 		RestParameterType: restParameterType,
 	}
@@ -668,6 +668,20 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 	return genericType
 }
 
+func (c *Checker) extractCallSignaturesFromType(typ types.Type) []*types.Signature {
+	switch t := typ.(type) {
+	case *types.ObjectType:
+		if len(t.CallSignatures) > 0 {
+			return t.CallSignatures
+		}
+	case *types.GenericType:
+		if bodyObj, ok := t.Body.(*types.ObjectType); ok && len(bodyObj.CallSignatures) > 0 {
+			return bodyObj.CallSignatures
+		}
+	}
+	return nil
+}
+
 // --- NEW: Helper to resolve ObjectTypeExpression nodes ---
 func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) types.Type {
 	properties := make(map[string]types.Type)
@@ -677,6 +691,14 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 
 	for _, prop := range node.Properties {
 		if prop.IsCallSignature {
+			if prop.Type != nil {
+				propType := c.resolveTypeAnnotation(prop.Type)
+				if sigs := c.extractCallSignaturesFromType(propType); len(sigs) > 0 {
+					callSignatures = append(callSignatures, sigs...)
+					continue
+				}
+			}
+
 			// Handle call signature like (param: type): returnType
 			var paramTypes []types.Type
 			for _, paramNode := range prop.Parameters {
@@ -2278,8 +2300,9 @@ func (c *Checker) substituteMappedType(mappedType *types.MappedType, typeParams 
 // evaluateConditionalType evaluates a conditional type after substitution.
 // It distributes over union check types (TypeScript's distributive conditional types).
 // For example, Exclude<"a" | "b" | "c", "b"> distributes as:
-//   ("a" extends "b" ? never : "a") | ("b" extends "b" ? never : "b") | ("c" extends "b" ? never : "c")
-//   = "a" | never | "c" = "a" | "c"
+//
+//	("a" extends "b" ? never : "a") | ("b" extends "b" ? never : "b") | ("c" extends "b" ? never : "c")
+//	= "a" | never | "c" = "a" | "c"
 func (c *Checker) evaluateConditionalType(checkType, extendsType, trueType, falseType types.Type) types.Type {
 	// Handle KeyofType in checkType: expand to union of literal keys
 	if keyofType, ok := checkType.(*types.KeyofType); ok {

@@ -7857,6 +7857,31 @@ func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 		return prop
 	}
 
+	// Check for generic call signature: `<T>(x: T): T`
+	if p.curTokenIs(lexer.LT) {
+		typeParams, err := p.parseTypeParameters()
+		if err != nil {
+			p.addError(p.curToken, fmt.Sprintf("failed to parse type parameters: %v", err))
+			return nil
+		}
+
+		if !p.expectPeek(lexer.LPAREN) {
+			return nil
+		}
+
+		funcType := p.parseMethodTypeSignature()
+		if funcType == nil {
+			return nil
+		}
+		if funcTypeExpr, ok := funcType.(*FunctionTypeExpression); ok {
+			funcTypeExpr.TypeParameters = typeParams
+		}
+
+		return &InterfaceProperty{
+			Type: funcType,
+		}
+	}
+
 	// Check for index signature or computed property: [...]
 	if p.curTokenIs(lexer.LBRACKET) {
 		return p.parseInterfaceBracketProperty()
@@ -8277,26 +8302,39 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 		// Check if this is a call signature starting with '('
 		if p.curTokenIs(lexer.LPAREN) {
 			// This is a call signature: (param: type, ...): returnType
-			prop := &ObjectTypeProperty{
-				IsCallSignature: true,
-			}
-
-			// Parse parameter types
-			params, _, err := p.parseFunctionTypeParameterList()
-			if err != nil {
-				p.addError(p.curToken, err.Error())
+			funcType := p.parseMethodTypeSignature()
+			if funcType == nil {
 				return nil
 			}
-			prop.Parameters = params
 
-			// Return type is optional: (params): T or just (params)
-			if p.peekTokenIs(lexer.COLON) {
-				p.nextToken() // consume ':'
-				p.nextToken() // move to return type
-				prop.ReturnType = p.parseTypeExpression()
+			objType.Properties = append(objType.Properties, &ObjectTypeProperty{
+				IsCallSignature: true,
+				Type:            funcType,
+			})
+		} else if p.curTokenIs(lexer.LT) {
+			// Generic call signature: <T>(param: T): T
+			typeParams, err := p.parseTypeParameters()
+			if err != nil {
+				p.addError(p.curToken, fmt.Sprintf("failed to parse type parameters: %v", err))
+				return nil
 			}
 
-			objType.Properties = append(objType.Properties, prop)
+			if !p.expectPeek(lexer.LPAREN) {
+				return nil
+			}
+
+			funcType := p.parseMethodTypeSignature()
+			if funcType == nil {
+				return nil
+			}
+			if funcTypeExpr, ok := funcType.(*FunctionTypeExpression); ok {
+				funcTypeExpr.TypeParameters = typeParams
+			}
+
+			objType.Properties = append(objType.Properties, &ObjectTypeProperty{
+				IsCallSignature: true,
+				Type:            funcType,
+			})
 		} else if p.curTokenIs(lexer.LBRACKET) {
 			// Handle both index signatures and computed properties
 			prop := p.parseObjectTypeBracketProperty()
@@ -8390,7 +8428,7 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 			// End of object type, will be consumed by outer loop condition
 			break
 		} else if p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) ||
-			p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.NEW) ||
+			p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) || p.peekTokenIs(lexer.NEW) ||
 			p.peekTokenIs(lexer.READONLY) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type) {
 			// ASI: next token can start a new property, treat newline as separator
 		} else {
@@ -9511,6 +9549,7 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 
 	// Parse parameter list (similar to parseFunctionTypeParameterList)
 	params := []Expression{}
+	optionalParams := []bool{}
 
 	// Handle empty parameter list: () : ...
 	if p.peekTokenIs(lexer.RPAREN) {
@@ -9532,15 +9571,18 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 					return nil
 				}
 				p.nextToken() // Move to the actual type
+				optionalParams = append(optionalParams, true)
 			} else if p.peekTokenIs(lexer.COLON) {
 				// Required parameter: name: type
 				p.nextToken() // Consume IDENT
 				p.nextToken() // Consume ':', move to the actual type
+				optionalParams = append(optionalParams, false)
 			} else if p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) {
 				params = append(params, &Identifier{
 					Token: &lexer.Token{Type: lexer.IDENT, Literal: "any"},
 					Value: "any",
 				})
+				optionalParams = append(optionalParams, false)
 				parsedFirstParam = true
 			}
 			// else: just a type without parameter name
@@ -9552,6 +9594,7 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 				return nil
 			}
 			params = append(params, paramType)
+			optionalParams = append(optionalParams, false)
 		}
 
 		// Parse subsequent parameter types
@@ -9579,15 +9622,18 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 						return nil
 					}
 					p.nextToken() // Move to the actual type
+					optionalParams = append(optionalParams, true)
 				} else if p.peekTokenIs(lexer.COLON) {
 					// Required parameter: name: type
 					p.nextToken() // Consume IDENT
 					p.nextToken() // Consume ':', move to the actual type
+					optionalParams = append(optionalParams, false)
 				} else if p.peekTokenIs(lexer.COMMA) || p.peekTokenIs(lexer.RPAREN) {
 					params = append(params, &Identifier{
 						Token: &lexer.Token{Type: lexer.IDENT, Literal: "any"},
 						Value: "any",
 					})
+					optionalParams = append(optionalParams, false)
 					parsedParam = true
 				}
 				// else: just a type without parameter name
@@ -9602,6 +9648,7 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 				return nil
 			}
 			params = append(params, paramType)
+			optionalParams = append(optionalParams, false)
 		}
 
 		// Expect closing parenthesis (unless we already consumed it due to trailing comma)
@@ -9624,9 +9671,10 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 
 	// Create a FunctionTypeExpression to represent the method signature
 	funcType := &FunctionTypeExpression{
-		Token:      &lexer.Token{Type: lexer.LPAREN, Literal: "("},
-		Parameters: params,
-		ReturnType: returnType,
+		Token:          &lexer.Token{Type: lexer.LPAREN, Literal: "("},
+		Parameters:     params,
+		OptionalParams: optionalParams,
+		ReturnType:     returnType,
 	}
 
 	return funcType

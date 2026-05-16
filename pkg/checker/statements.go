@@ -295,9 +295,8 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				propType = types.Any
 			}
 			debugPrintf("// [Checker Interface P1] Interface '%s' has call signature: %s\n", node.Name.Value, propType.String())
-			// Extract the signature from the resolved function type
-			if funcObjType, ok := propType.(*types.ObjectType); ok && len(funcObjType.CallSignatures) > 0 {
-				callSignatures = append(callSignatures, funcObjType.CallSignatures...)
+			if sigs := c.extractCallSignaturesFromType(propType); len(sigs) > 0 {
+				callSignatures = append(callSignatures, sigs...)
 			} else {
 				// Fallback: create a simple signature from the return type
 				sig := &types.Signature{ReturnType: propType}
@@ -397,6 +396,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	properties := make(map[string]types.Type)
 	optionalProperties := make(map[string]bool)
 	var indexSignatures []*types.IndexSignature
+	var callSignatures []*types.Signature
 
 	// Handle extends clause with generic environment
 	for _, extendedInterfaceExpr := range node.Extends {
@@ -453,7 +453,11 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			if propType == nil {
 				propType = types.Any
 			}
-			properties["__call"] = propType
+			if sigs := c.extractCallSignaturesFromType(propType); len(sigs) > 0 {
+				callSignatures = append(callSignatures, sigs...)
+			} else {
+				properties["__call"] = propType
+			}
 		} else {
 			propType := c.resolveTypeAnnotation(prop.Type)
 			if propType == nil {
@@ -473,6 +477,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		Properties:         properties,
 		OptionalProperties: optionalProperties,
 		IndexSignatures:    indexSignatures,
+		CallSignatures:     callSignatures,
 	}
 
 	// 3. Create the GenericType
