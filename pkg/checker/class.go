@@ -323,12 +323,15 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	debugPrintf("// [Checker Class] Finalized class type alias '%s': %s\n",
 		node.Name.Value, instanceType.String())
 
-	// 4. Create constructor signature from constructor method
-	constructorSig := c.createConstructorSignature(node.Body, instanceType, node.SuperClass != nil)
+	// 4. Create constructor signatures from constructor overloads or implementation
+	constructorSigs := c.createConstructorSignatures(node.Body, instanceType, node.SuperClass != nil)
 
 	// 5. Create constructor function type (ObjectType with construct signature)
 	// This represents the class constructor function, not a separate "class type"
-	constructorType := types.NewConstructorType(constructorSig)
+	constructorType := types.NewConstructorType(constructorSigs[0])
+	for _, sig := range constructorSigs[1:] {
+		constructorType.WithConstructSignature(sig)
+	}
 
 	// 6. Add static members to the constructor type (can now resolve class name in type annotations)
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
@@ -490,11 +493,14 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	// 5. Create the instance type body with TypeParameterType references
 	instanceType := c.createInstanceType(node.Name.Value, node.Body, node.SuperClass, node.Implements)
 
-	// 6. Create constructor signature from constructor method
-	constructorSig := c.createConstructorSignature(node.Body, instanceType, node.SuperClass != nil)
+	// 6. Create constructor signatures from constructor overloads or implementation
+	constructorSigs := c.createConstructorSignatures(node.Body, instanceType, node.SuperClass != nil)
 
 	// 7. Create constructor type
-	constructorType := types.NewConstructorType(constructorSig)
+	constructorType := types.NewConstructorType(constructorSigs[0])
+	for _, sig := range constructorSigs[1:] {
+		constructorType.WithConstructSignature(sig)
+	}
 	constructorType = c.addStaticMembers(node.Body, constructorType)
 
 	// 8. Create the GenericType for the class
@@ -1028,9 +1034,24 @@ func (c *Checker) validateOverrideMethodSignature(methodSig *parser.MethodSignat
 		methodName, className)
 }
 
-// createConstructorSignature creates a signature for the class constructor
-// Always uses the implementation signature for runtime, while overload signatures are for compile-time checking
-func (c *Checker) createConstructorSignature(body *parser.ClassBody, instanceType *types.ObjectType, isDerived bool) *types.Signature {
+// createConstructorSignatures creates the externally visible signatures for the class constructor.
+// Constructor overload signatures are what callers see; the implementation signature is only used
+// when no overload signatures are declared.
+func (c *Checker) createConstructorSignatures(body *parser.ClassBody, instanceType *types.ObjectType, isDerived bool) []*types.Signature {
+	if len(body.ConstructorSigs) > 0 {
+		signatures := make([]*types.Signature, 0, len(body.ConstructorSigs))
+		for _, sig := range body.ConstructorSigs {
+			signatures = append(signatures, &types.Signature{
+				ParameterTypes:    c.extractParameterTypesFromSignature(sig),
+				ReturnType:        instanceType,
+				OptionalParams:    c.extractOptionalParamsFromSignature(sig),
+				IsVariadic:        sig.RestParameter != nil,
+				RestParameterType: c.extractRestParameterTypeFromSignature(sig),
+			})
+		}
+		return signatures
+	}
+
 	// Find the constructor method implementation first (this is what's used at runtime)
 	var constructor *parser.MethodDefinition
 	for _, method := range body.Methods {
@@ -1050,29 +1071,13 @@ func (c *Checker) createConstructorSignature(body *parser.ClassBody, instanceTyp
 		debugPrintf("// [Checker Class] createConstructorSignature: RestParameter=%v, IsVariadic=%v, RestParamType=%v\n",
 			constructor.Value.RestParameter != nil, isVariadic, restParamType)
 
-		return &types.Signature{
+		return []*types.Signature{{
 			ParameterTypes:    paramTypes,
 			ReturnType:        instanceType,
 			OptionalParams:    optionalParams,
 			IsVariadic:        isVariadic,
 			RestParameterType: restParamType,
-		}
-	}
-
-	// If no implementation but there are signatures, use the first signature
-	// This handles the case where only signatures are provided (which should be an error)
-	if len(body.ConstructorSigs) > 0 {
-		firstSig := body.ConstructorSigs[0]
-		paramTypes := c.extractParameterTypesFromSignature(firstSig)
-		optionalParams := c.extractOptionalParamsFromSignature(firstSig)
-
-		return &types.Signature{
-			ParameterTypes:    paramTypes,
-			ReturnType:        instanceType,
-			OptionalParams:    optionalParams,
-			IsVariadic:        firstSig.RestParameter != nil,
-			RestParameterType: c.extractRestParameterTypeFromSignature(firstSig),
-		}
+		}}
 	}
 
 	// Default constructor
@@ -1080,23 +1085,23 @@ func (c *Checker) createConstructorSignature(body *parser.ClassBody, instanceTyp
 	// Derived class: constructor(...args) { super(...args); }
 	if isDerived {
 		// Derived class default constructor accepts any arguments
-		return &types.Signature{
+		return []*types.Signature{{
 			ParameterTypes:    []types.Type{},
 			ReturnType:        instanceType,
 			OptionalParams:    []bool{},
 			IsVariadic:        true,
 			RestParameterType: &types.ArrayType{ElementType: types.Any}, // Array of any
-		}
+		}}
 	}
 
 	// Base class default constructor: no parameters
-	return &types.Signature{
+	return []*types.Signature{{
 		ParameterTypes:    []types.Type{},
 		ReturnType:        instanceType,
 		OptionalParams:    []bool{},
 		IsVariadic:        false,
 		RestParameterType: nil,
-	}
+	}}
 }
 
 // isEmptyFunctionBody checks if a function body is empty (abstract methods)
