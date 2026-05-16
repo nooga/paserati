@@ -168,14 +168,25 @@ func (c *Checker) isImplementationCompatible(implementation, overload *types.Obj
 func (c *Checker) isSignatureCompatible(implementation, overload *types.Signature) bool {
 	debugPrintf("// [Checker isSignatureCompatible] Checking implementation %s against overload %s\n", implementation.String(), overload.String())
 
-	// The implementation must be able to accept all the parameter types from the overload
-	if len(implementation.ParameterTypes) != len(overload.ParameterTypes) {
-		debugPrintf("// [Checker isSignatureCompatible] Parameter count mismatch: impl %d vs overload %d\n", len(implementation.ParameterTypes), len(overload.ParameterTypes))
+	implMin := requiredParameterCount(implementation)
+	overloadMin := requiredParameterCount(overload)
+	implMax := len(implementation.ParameterTypes)
+	overloadMax := len(overload.ParameterTypes)
+
+	// The implementation signature must accept every call accepted by the overload.
+	if implMin > overloadMin || (!implementation.IsVariadic && implMax < overloadMax) {
+		debugPrintf("// [Checker isSignatureCompatible] Parameter count range mismatch: impl %d..%d vs overload %d..%d\n", implMin, implMax, overloadMin, overloadMax)
 		return false
 	}
 
 	// Check that each overload parameter type is assignable to the corresponding implementation parameter
 	for i, overloadParam := range overload.ParameterTypes {
+		if i >= len(implementation.ParameterTypes) {
+			if implementation.IsVariadic && implementation.RestParameterType != nil {
+				continue
+			}
+			return false
+		}
 		implParam := implementation.ParameterTypes[i]
 		debugPrintf("// [Checker isSignatureCompatible] Checking param %d: overload %s assignable to impl %s\n", i, overloadParam.String(), implParam.String())
 		if !types.IsAssignable(overloadParam, implParam) {
@@ -210,6 +221,38 @@ func (c *Checker) isSignatureCompatible(implementation, overload *types.Signatur
 		result := types.IsAssignable(implementation.ReturnType, overload.ReturnType)
 		debugPrintf("// [Checker isSignatureCompatible] Return type compatible: %t\n", result)
 		return result
+	}
+}
+
+func requiredParameterCount(sig *types.Signature) int {
+	if sig == nil {
+		return 0
+	}
+
+	count := len(sig.ParameterTypes)
+	if len(sig.OptionalParams) == len(sig.ParameterTypes) {
+		for i := len(sig.ParameterTypes) - 1; i >= 0; i-- {
+			if sig.OptionalParams[i] {
+				count--
+			} else {
+				break
+			}
+		}
+	}
+
+	return count
+}
+
+func (c *Checker) reportDuplicateIndexSignature(node parser.Node, indexSignatures []*types.IndexSignature, keyType types.Type) {
+	if keyType == nil {
+		return
+	}
+	for _, existing := range indexSignatures {
+		if existing != nil && existing.KeyType != nil && existing.KeyType.String() == keyType.String() {
+			c.addError(node, fmt.Sprintf("Duplicate index signature for type '%s'.", keyType.String()))
+			c.addError(node, fmt.Sprintf("Duplicate index signature for type '%s'.", keyType.String()))
+			return
+		}
 	}
 }
 
@@ -273,8 +316,8 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 				}
 			}
 		} else {
-			// For non-variadic overloads, argument count must match exactly
-			if len(argTypes) != len(overload.ParameterTypes) {
+			minRequiredArgs := requiredParameterCount(overload)
+			if len(argTypes) < minRequiredArgs || len(argTypes) > len(overload.ParameterTypes) {
 				continue // Argument count mismatch
 			}
 

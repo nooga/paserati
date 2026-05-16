@@ -4692,6 +4692,35 @@ func (p *Parser) parseGroupedExpression() Expression {
 		// Fall through to parse as regular grouped expression
 	}
 
+	// TypeScript angle-bracket assertion inside parentheses: (<T>expr)
+	if p.curTokenIs(lexer.LPAREN) && p.peekTokenIs(lexer.LT) {
+		assertState := p.l.SaveState()
+		assertCur := p.curToken
+		assertPeek := p.peekToken
+		assertErrors := len(p.errors)
+
+		p.nextToken() // Move to '<'
+		p.nextToken() // Move to the asserted type
+		targetType := p.parseTypeExpression()
+		if targetType != nil && p.peekTokenIs(lexer.GT) {
+			p.nextToken() // Consume '>'
+			p.nextToken() // Move to asserted expression
+			assertedExpr := p.parseExpression(LOWEST)
+			if assertedExpr != nil && p.expectPeek(lexer.RPAREN) {
+				return &TypeAssertionExpression{
+					Token:      &lexer.Token{Type: lexer.AS, Literal: "as", Line: assertCur.Line, Column: assertCur.Column},
+					Expression: assertedExpr,
+					TargetType: targetType,
+				}
+			}
+		}
+
+		p.l.RestoreState(assertState)
+		p.curToken = assertCur
+		p.peekToken = assertPeek
+		p.errors = p.errors[:assertErrors]
+	}
+
 	// --- If not arrow function, parse as regular Grouped Expression ---
 	debugPrint("parseGroupedExpression: Parsing as regular grouped expression.")
 	if !p.curTokenIs(lexer.LPAREN) { // Check curToken IS LPAREN after potential backtrack
@@ -8342,7 +8371,7 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 				return nil
 			}
 			objType.Properties = append(objType.Properties, prop)
-		} else if p.curTokenIs(lexer.NEW) {
+		} else if p.curTokenIs(lexer.NEW) && (p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) || p.peekTokenIs(lexer.QUESTION)) {
 			// Construct signature: new (params): T  or  new<T>(params): T
 			sig := p.parseInterfaceConstructorSignature()
 			if sig == nil {
@@ -8387,15 +8416,32 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 				prop.Optional = true
 			}
 
-			// Check for shorthand method syntax (identifier followed by '(')
-			if p.peekTokenIs(lexer.LPAREN) {
+			// Check for shorthand method syntax (identifier followed by '(' or generic '<')
+			if p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) {
 				// This is a shorthand method signature like methodName(): ReturnType or methodName?(): ReturnType
-				p.nextToken() // Move to '('
+				var typeParams []*TypeParameter
+				if p.peekTokenIs(lexer.LT) {
+					p.nextToken() // Move to '<'
+					parsedTypeParams, err := p.parseTypeParameters()
+					if err != nil {
+						p.addError(p.curToken, fmt.Sprintf("failed to parse type parameters: %v", err))
+						return nil
+					}
+					typeParams = parsedTypeParams
+					if !p.expectPeek(lexer.LPAREN) {
+						return nil
+					}
+				} else {
+					p.nextToken() // Move to '('
+				}
 
 				// Parse method type signature (uses ':' syntax, not '=>')
 				funcType := p.parseMethodTypeSignature()
 				if funcType == nil {
 					return nil // Error parsing method type
+				}
+				if funcTypeExpr, ok := funcType.(*FunctionTypeExpression); ok {
+					funcTypeExpr.TypeParameters = typeParams
 				}
 
 				prop.Type = funcType
@@ -8431,6 +8477,10 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 			p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT) || p.peekTokenIs(lexer.NEW) ||
 			p.peekTokenIs(lexer.READONLY) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type) {
 			// ASI: next token can start a new property, treat newline as separator
+			if p.peekToken.Line == p.curToken.Line {
+				p.addError(p.peekToken, "expected ';', ',' or '}' after object type property")
+				return nil
+			}
 		} else {
 			p.addError(p.peekToken, "expected ';', ',' or '}' after object type property")
 			return nil
@@ -9594,7 +9644,9 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 				return nil
 			}
 			params = append(params, paramType)
-			optionalParams = append(optionalParams, false)
+			if len(optionalParams) < len(params) {
+				optionalParams = append(optionalParams, false)
+			}
 		}
 
 		// Parse subsequent parameter types
@@ -9648,7 +9700,9 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 				return nil
 			}
 			params = append(params, paramType)
-			optionalParams = append(optionalParams, false)
+			if len(optionalParams) < len(params) {
+				optionalParams = append(optionalParams, false)
+			}
 		}
 
 		// Expect closing parenthesis (unless we already consumed it due to trailing comma)

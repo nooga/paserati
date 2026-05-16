@@ -839,8 +839,8 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 				}
 			}
 		} else {
-			// For non-variadic signatures, argument count must match exactly
-			if len(argTypes) != len(signature.ParameterTypes) {
+			minRequiredArgs := requiredParameterCount(signature)
+			if len(argTypes) < minRequiredArgs || len(argTypes) > len(signature.ParameterTypes) {
 				continue // Argument count mismatch
 			}
 

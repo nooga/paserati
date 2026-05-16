@@ -182,6 +182,12 @@ func IsAssignable(source, target Type) bool {
 		}
 	}
 
+	if sourceGeneric, ok := source.(*GenericType); ok {
+		if targetObj, ok := target.(*ObjectType); ok && targetObj.IsCallable() {
+			return IsAssignable(sourceGeneric.Body, targetObj)
+		}
+	}
+
 	// Union type handling
 	sourceUnion, sourceIsUnion := source.(*UnionType)
 	targetUnion, targetIsUnion := target.(*UnionType)
@@ -455,6 +461,10 @@ func IsAssignable(source, target Type) bool {
 		if sourceName == targetName {
 			// fmt.Printf("// [TypeParam Debug] Allowing name-based match: '%s'\n", sourceName)
 			return true
+		}
+
+		if sourceTypeParam.Parameter.Constraint != nil {
+			return IsAssignable(sourceTypeParam.Parameter.Constraint, target)
 		}
 
 		return false

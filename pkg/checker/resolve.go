@@ -561,10 +561,14 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 		restParameterType = resolvedRestType
 	}
 
-	returnType := c.resolveTypeAnnotation(node.ReturnType)
-	if returnType == nil {
-		// Error should have been added by resolveTypeAnnotation
-		return nil // Indicate error by returning nil
+	var returnType types.Type = types.Any
+	if node.ReturnType != nil {
+		resolvedReturnType := c.resolveTypeAnnotation(node.ReturnType)
+		if resolvedReturnType == nil {
+			// Error should have been added by resolveTypeAnnotation
+			return nil // Indicate error by returning nil
+		}
+		returnType = resolvedReturnType
 	}
 
 	// Create signature
@@ -582,13 +586,25 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 
 // resolveGenericFunctionType handles generic function types like <T>(x: T) => T
 func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression) types.Type {
-	// Create type parameters
+	// Create the type parameter environment first so constraints/defaults can
+	// reference any sibling type parameter, including later declarations.
+	typeParamEnv := NewEnclosedEnvironment(c.env)
 	typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
 	for i, paramNode := range node.TypeParameters {
 		typeParam := &types.TypeParameter{
 			Name:       paramNode.Name.Value,
 			Constraint: types.Any, // Default constraint
+			Index:      i,
 		}
+		typeParams[i] = typeParam
+		typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam)
+		paramNode.SetComputedType(&types.TypeParameterType{Parameter: typeParam})
+	}
+
+	originalEnv := c.env
+	c.env = typeParamEnv
+	for i, paramNode := range node.TypeParameters {
+		typeParam := typeParams[i]
 
 		// Handle constraint if present
 		if paramNode.Constraint != nil {
@@ -597,19 +613,7 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 				typeParam.Constraint = constraint
 			}
 		}
-
-		typeParams[i] = typeParam
 	}
-
-	// Create environment with type parameters in scope
-	typeParamEnv := NewEnclosedEnvironment(c.env)
-	for _, typeParam := range typeParams {
-		typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam)
-	}
-
-	// Temporarily switch to type parameter environment
-	originalEnv := c.env
-	c.env = typeParamEnv
 
 	// Resolve parameter types and return type in the new environment
 	paramTypes := []types.Type{}
@@ -637,10 +641,14 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 		restParameterType = resolvedRestType
 	}
 
-	returnType := c.resolveTypeAnnotation(node.ReturnType)
-	if returnType == nil {
-		c.env = originalEnv // Restore environment
-		return nil
+	var returnType types.Type = types.Any
+	if node.ReturnType != nil {
+		resolvedReturnType := c.resolveTypeAnnotation(node.ReturnType)
+		if resolvedReturnType == nil {
+			c.env = originalEnv // Restore environment
+			return nil
+		}
+		returnType = resolvedReturnType
 	}
 
 	// Restore original environment
@@ -744,6 +752,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 				prop.KeyName.Value, keyType.String(), valueType.String())
 
 			// Add to our collected index signatures
+			c.reportDuplicateIndexSignature(prop.KeyName, indexSignatures, keyType)
 			indexSignatures = append(indexSignatures, indexSig)
 
 		} else if prop.IsComputedProperty {
@@ -780,6 +789,11 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			propType := c.resolveTypeAnnotation(prop.Type)
 			if propType == nil {
 				propType = types.Any
+			}
+			if _, exists := properties[prop.Name.Value]; exists {
+				if optionalProperties[prop.Name.Value] != prop.Optional {
+					c.addError(prop.Name, fmt.Sprintf("All declarations of '%s' must have identical optionality.", prop.Name.Value))
+				}
 			}
 			properties[prop.Name.Value] = propType
 			if prop.Optional {
@@ -852,6 +866,38 @@ func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeEx
 func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, env *Environment) *types.Signature {
 	paramTypes := []types.Type{}
 	var optionalParams []bool
+
+	if len(node.TypeParameters) > 0 {
+		typeParamEnv := NewEnclosedEnvironment(env)
+		typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
+		for i, paramNode := range node.TypeParameters {
+			typeParam := &types.TypeParameter{
+				Name:       paramNode.Name.Value,
+				Constraint: types.Any,
+				Index:      i,
+			}
+			typeParams[i] = typeParam
+			typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam)
+			paramNode.SetComputedType(&types.TypeParameterType{Parameter: typeParam})
+		}
+
+		originalEnv := c.env
+		c.env = typeParamEnv
+		for i, paramNode := range node.TypeParameters {
+			if paramNode.Constraint != nil {
+				if constraint := c.resolveTypeAnnotation(paramNode.Constraint); constraint != nil {
+					typeParams[i].Constraint = constraint
+				}
+			}
+			if paramNode.DefaultType != nil {
+				if defaultType := c.resolveTypeAnnotation(paramNode.DefaultType); defaultType != nil {
+					typeParams[i].Default = defaultType
+				}
+			}
+		}
+		c.env = originalEnv
+		env = typeParamEnv
+	}
 
 	// Create a temporary environment that will progressively accumulate parameters
 	// This allows later parameters to reference earlier ones in their default values

@@ -30,7 +30,7 @@ func (p *Parser) isValidMethodName() bool {
 		lexer.TYPEOF, lexer.INSTANCEOF, lexer.IN, lexer.OF, lexer.THIS, lexer.SUPER,
 		lexer.AS, lexer.SATISFIES, lexer.GET, lexer.SET, lexer.ENUM, lexer.DO, lexer.VOID,
 		lexer.KEYOF, lexer.INFER, lexer.IS, lexer.FROM, lexer.TRUE, lexer.FALSE,
-		lexer.WITH, lexer.ASYNC, lexer.AWAIT, lexer.NULL, lexer.UNDEFINED:
+		lexer.WITH, lexer.ASYNC, lexer.AWAIT, lexer.NULL, lexer.UNDEFINED, lexer.DEBUGGER:
 		return true
 	default:
 		return false

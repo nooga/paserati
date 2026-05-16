@@ -51,9 +51,27 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 		// Create a new environment that includes type parameters
 		typeParamEnv = NewEnclosedEnvironment(c.env)
 
-		// Define each type parameter in the environment
+		typeParams := make([]*types.TypeParameter, len(ctx.TypeParameters))
 		for i, typeParamNode := range ctx.TypeParameters {
-			// Resolve constraint if present
+			typeParam := &types.TypeParameter{
+				Name:       typeParamNode.Name.Value,
+				Constraint: types.Any,
+				Index:      i,
+			}
+
+			if !typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam) {
+				c.addError(typeParamNode.Name, fmt.Sprintf("duplicate type parameter name: %s", typeParam.Name))
+			}
+
+			typeParams[i] = typeParam
+			typeParamNode.SetComputedType(&types.TypeParameterType{Parameter: typeParam})
+		}
+
+		// Resolve constraints/defaults after every type parameter is in scope.
+		// TypeScript permits later parameters in earlier constraints, e.g. <U extends T, T>.
+		for i, typeParamNode := range ctx.TypeParameters {
+			typeParam := typeParams[i]
+
 			var constraintType types.Type
 			if typeParamNode.Constraint != nil {
 				originalEnv := c.env
@@ -89,21 +107,8 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 				}
 			}
 
-			// Create the type parameter
-			typeParam := &types.TypeParameter{
-				Name:       typeParamNode.Name.Value,
-				Constraint: constraintType,
-				Default:    defaultType,
-				Index:      i,
-			}
-
-			// Define it in the environment
-			if !typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam) {
-				c.addError(typeParamNode.Name, fmt.Sprintf("duplicate type parameter name: %s", typeParam.Name))
-			}
-
-			// Set computed type on the AST node
-			typeParamNode.SetComputedType(&types.TypeParameterType{Parameter: typeParam})
+			typeParam.Constraint = constraintType
+			typeParam.Default = defaultType
 
 			debugPrintf("// [Checker Function Common] Defined type parameter '%s' with constraint %s\n",
 				typeParam.Name, constraintType.String())

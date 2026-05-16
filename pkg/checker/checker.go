@@ -312,8 +312,8 @@ type Checker struct {
 	// --- Deferred class method body checking ---
 	// When true, class method body checking is deferred until after function hoisting (Pass 2)
 	// This ensures type predicate functions and other hoisted functions are available
-	deferMethodBodies      bool
-	deferredMethodBodies   []deferredMethodBodyCheck
+	deferMethodBodies    bool
+	deferredMethodBodies []deferredMethodBodyCheck
 
 	// --- Deferred computed key expression checking ---
 	// Computed key expressions in class/interface bodies are checked after Pass 3
@@ -730,7 +730,15 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			// Convert signature to ObjectType for storage
 			initialObjectType := types.NewFunctionType(initialSignature)
 			if !globalEnv.Define(name, initialObjectType, false) { // Define with initial (maybe incomplete) signature
-				c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined (hoisted)", name))
+				if existingType, found := globalEnv.ResolveType(name); found {
+					if _, isNamespace := existingType.(*types.NamespaceType); isNamespace {
+						globalEnv.Update(name, initialObjectType)
+					} else {
+						c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined (hoisted)", name))
+					}
+				} else {
+					c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined (hoisted)", name))
+				}
 			}
 			funcLit.SetComputedType(initialObjectType) // Set initial type on node
 			functionsToVisitBody = append(functionsToVisitBody, funcLit)
@@ -1604,26 +1612,15 @@ func (c *Checker) visit(node parser.Node) {
 			// Determine a preliminary type for the initializer if it's a function literal.
 			var preliminaryInitializerType types.Type = nil
 			if funcLit, ok := declarator.Value.(*parser.FunctionLiteral); ok {
-				// Extract param types (default Any)
-				prelimParamTypes := []types.Type{}
-				for _, p := range funcLit.Parameters {
-					if p.TypeAnnotation != nil {
-						pt := c.resolveTypeAnnotation(p.TypeAnnotation)
-						if pt != nil {
-							prelimParamTypes = append(prelimParamTypes, pt)
-						} else {
-							prelimParamTypes = append(prelimParamTypes, types.Any) // Error resolving, use Any
-						}
-					} else {
-						prelimParamTypes = append(prelimParamTypes, types.Any) // No annotation, use Any
+				prelimSig := c.resolveFunctionLiteralSignature(funcLit, c.env)
+				if prelimSig == nil {
+					prelimSig = &types.Signature{
+						ParameterTypes: make([]types.Type, len(funcLit.Parameters)),
+						ReturnType:     types.Any,
 					}
-				}
-				// Extract return type annotation (can be nil)
-				prelimReturnType := c.resolveTypeAnnotation(funcLit.ReturnTypeAnnotation)
-				// Create unified ObjectType for preliminary function type
-				prelimSig := &types.Signature{
-					ParameterTypes: prelimParamTypes,
-					ReturnType:     prelimReturnType,
+					for i := range prelimSig.ParameterTypes {
+						prelimSig.ParameterTypes[i] = types.Any
+					}
 				}
 				preliminaryInitializerType = types.NewFunctionType(prelimSig)
 			}
@@ -1852,26 +1849,15 @@ func (c *Checker) visit(node parser.Node) {
 			// Determine a preliminary type for the initializer if it's a function literal.
 			var preliminaryInitializerType types.Type = nil
 			if funcLit, ok := declarator.Value.(*parser.FunctionLiteral); ok {
-				// Extract param types (default Any)
-				prelimParamTypes := []types.Type{}
-				for _, p := range funcLit.Parameters {
-					if p.TypeAnnotation != nil {
-						pt := c.resolveTypeAnnotation(p.TypeAnnotation)
-						if pt != nil {
-							prelimParamTypes = append(prelimParamTypes, pt)
-						} else {
-							prelimParamTypes = append(prelimParamTypes, types.Any) // Error resolving, use Any
-						}
-					} else {
-						prelimParamTypes = append(prelimParamTypes, types.Any) // No annotation, use Any
+				prelimSig := c.resolveFunctionLiteralSignature(funcLit, c.env)
+				if prelimSig == nil {
+					prelimSig = &types.Signature{
+						ParameterTypes: make([]types.Type, len(funcLit.Parameters)),
+						ReturnType:     types.Any,
 					}
-				}
-				// Extract return type annotation (can be nil)
-				prelimReturnType := c.resolveTypeAnnotation(funcLit.ReturnTypeAnnotation)
-				// Create unified ObjectType for preliminary function type
-				prelimSig := &types.Signature{
-					ParameterTypes: prelimParamTypes,
-					ReturnType:     prelimReturnType,
+					for i := range prelimSig.ParameterTypes {
+						prelimSig.ParameterTypes[i] = types.Any
+					}
 				}
 				preliminaryInitializerType = types.NewFunctionType(prelimSig)
 			}
@@ -2347,7 +2333,7 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.PrefixExpression:
 		// --- UPDATED: Handle PrefixExpression ---
-		if (node.Operator == "++" || node.Operator == "--") {
+		if node.Operator == "++" || node.Operator == "--" {
 			if ident, ok := node.Right.(*parser.Identifier); ok {
 				if ident.Value == "eval" || ident.Value == "arguments" {
 					c.addError(ident, fmt.Sprintf("Cannot assign to '%s' because it is a function.", ident.Value))
