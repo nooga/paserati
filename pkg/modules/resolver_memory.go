@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"path/filepath"
+	pathpkg "path"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +31,7 @@ func NewMemoryResolver(name string) *MemoryResolver {
 	if name == "" {
 		name = "Memory"
 	}
-	
+
 	return &MemoryResolver{
 		name:     name,
 		modules:  make(map[string]*MemoryModule),
@@ -63,13 +63,13 @@ func (r *MemoryResolver) Resolve(specifier string, fromPath string) (*ResolvedMo
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve %s: %w", specifier, err)
 	}
-	
+
 	// Create a ReadCloser for the module content
 	source := &memoryReadCloser{
 		reader: strings.NewReader(module.Content),
 		module: module,
 	}
-	
+
 	return &ResolvedModule{
 		Specifier:    specifier,
 		ResolvedPath: resolvedPath,
@@ -83,7 +83,7 @@ func (r *MemoryResolver) Resolve(specifier string, fromPath string) (*ResolvedMo
 func (r *MemoryResolver) findModule(specifier string, fromPath string) (string, *MemoryModule, error) {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	
+
 	// Handle relative paths
 	if strings.HasPrefix(specifier, "./") || strings.HasPrefix(specifier, "../") {
 		if fromPath == "" {
@@ -95,17 +95,17 @@ func (r *MemoryResolver) findModule(specifier string, fromPath string) (string, 
 				return "", nil, fmt.Errorf("relative import %s requires fromPath", specifier)
 			}
 		} else {
-			fromDir := filepath.Dir(fromPath)
-			targetPath := filepath.Join(fromDir, specifier)
-			specifier = filepath.Clean(targetPath)
+			fromDir := pathpkg.Dir(fromPath)
+			targetPath := pathpkg.Join(fromDir, specifier)
+			specifier = normalizeModulePath(pathpkg.Clean(targetPath))
 		}
 	}
-	
+
 	// Strategy 1: Try exact path
 	if module, exists := r.modules[specifier]; exists {
 		return specifier, module, nil
 	}
-	
+
 	// Strategy 2: Try with extensions
 	extensions := []string{".ts", ".tsx", ".js", ".jsx", ".d.ts"}
 	for _, ext := range extensions {
@@ -114,16 +114,16 @@ func (r *MemoryResolver) findModule(specifier string, fromPath string) (string, 
 			return pathWithExt, module, nil
 		}
 	}
-	
+
 	// Strategy 3: Try as directory with index files
 	indexFiles := []string{"index.ts", "index.tsx", "index.js", "index.jsx"}
 	for _, indexFile := range indexFiles {
-		indexPath := filepath.Join(specifier, indexFile)
+		indexPath := normalizeModulePath(pathpkg.Join(specifier, indexFile))
 		if module, exists := r.modules[indexPath]; exists {
 			return indexPath, module, nil
 		}
 	}
-	
+
 	return "", nil, fmt.Errorf("module not found: %s", specifier)
 }
 
@@ -131,7 +131,8 @@ func (r *MemoryResolver) findModule(specifier string, fromPath string) (string, 
 func (r *MemoryResolver) AddModule(path string, content string) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	
+
+	path = normalizeModulePath(path)
 	now := time.Now()
 	r.modules[path] = &MemoryModule{
 		Path:     path,
@@ -145,14 +146,19 @@ func (r *MemoryResolver) AddModule(path string, content string) {
 func (r *MemoryResolver) UpdateModule(path string, content string) error {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	
+
+	path = normalizeModulePath(path)
 	module, exists := r.modules[path]
 	if !exists {
 		return fmt.Errorf("module not found: %s", path)
 	}
-	
+
 	module.Content = content
-	module.Modified = time.Now()
+	now := time.Now()
+	if !now.After(module.Modified) {
+		now = module.Modified.Add(time.Nanosecond)
+	}
+	module.Modified = now
 	return nil
 }
 
@@ -160,15 +166,15 @@ func (r *MemoryResolver) UpdateModule(path string, content string) error {
 func (r *MemoryResolver) RemoveModule(path string) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	
-	delete(r.modules, path)
+
+	delete(r.modules, normalizeModulePath(path))
 }
 
 // ListModules returns all module paths in the store
 func (r *MemoryResolver) ListModules() []string {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	
+
 	paths := make([]string, 0, len(r.modules))
 	for path := range r.modules {
 		paths = append(paths, path)
@@ -180,7 +186,7 @@ func (r *MemoryResolver) ListModules() []string {
 func (r *MemoryResolver) Clear() {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	
+
 	r.modules = make(map[string]*MemoryModule)
 }
 
@@ -188,8 +194,12 @@ func (r *MemoryResolver) Clear() {
 func (r *MemoryResolver) GetModule(path string) *MemoryModule {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	
-	return r.modules[path]
+
+	return r.modules[normalizeModulePath(path)]
+}
+
+func normalizeModulePath(modulePath string) string {
+	return strings.ReplaceAll(modulePath, "\\", "/")
 }
 
 // SetPriority sets the resolver priority
@@ -222,7 +232,7 @@ type memoryFile struct {
 
 func (mf *memoryFile) Stat() (fs.FileInfo, error) {
 	return &memoryFileInfo{
-		name:    filepath.Base(mf.name),
+		name:    pathpkg.Base(mf.name),
 		size:    int64(len(mf.module.Content)),
 		modTime: mf.module.Modified,
 	}, nil
@@ -279,12 +289,12 @@ type memoryFS struct {
 func (mfs *memoryFS) Open(name string) (fs.File, error) {
 	mfs.resolver.mutex.RLock()
 	defer mfs.resolver.mutex.RUnlock()
-	
+
 	module, exists := mfs.resolver.modules[name]
 	if !exists {
 		return nil, fmt.Errorf("file not found: %s", name)
 	}
-	
+
 	return &memoryFile{
 		name:   name,
 		reader: strings.NewReader(module.Content),
@@ -295,12 +305,12 @@ func (mfs *memoryFS) Open(name string) (fs.File, error) {
 func (mfs *memoryFS) ReadFile(name string) ([]byte, error) {
 	mfs.resolver.mutex.RLock()
 	defer mfs.resolver.mutex.RUnlock()
-	
+
 	module, exists := mfs.resolver.modules[name]
 	if !exists {
 		return nil, fmt.Errorf("file not found: %s", name)
 	}
-	
+
 	return []byte(module.Content), nil
 }
 
@@ -314,7 +324,7 @@ export function greet(name: string): string {
 
 export const VERSION = "1.0.0";
 `)
-	
+
 	r.AddModule("test/module-b.ts", `
 import { greet, VERSION } from "./module-a";
 
@@ -322,12 +332,12 @@ export function welcome(name: string): string {
     return greet(name) + " Version: " + VERSION;
 }
 `)
-	
+
 	r.AddModule("test/utils/index.ts", `
 export * from "./helper";
 export { default as config } from "./config";
 `)
-	
+
 	r.AddModule("test/utils/helper.ts", `
 export function isString(value: any): value is string {
     return typeof value === "string";
@@ -337,7 +347,7 @@ export function isNumber(value: any): value is number {
     return typeof value === "number";
 }
 `)
-	
+
 	r.AddModule("test/utils/config.ts", `
 export default {
     debug: false,
