@@ -84,10 +84,19 @@ func (c *Checker) isStringConcatenatable(t types.Type) bool {
 func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*types.TypeParameter {
 	var typeParams []*types.TypeParameter
 	seen := make(map[*types.TypeParameter]bool)
+	visited := make(map[types.Type]bool)
 
 	// Helper function to extract type parameters from a type
 	var extractFromType func(t types.Type)
 	extractFromType = func(t types.Type) {
+		if t == nil {
+			return
+		}
+		if visited[t] {
+			return
+		}
+		visited[t] = true
+
 		switch typ := t.(type) {
 		case *types.TypeParameterType:
 			if !seen[typ.Parameter] {
@@ -1188,6 +1197,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		for _, check := range c.deferredComputedKeyChecks {
 			c.env = check.env
 			c.visit(check.expr)
+			c.validateComputedPropertyNameType(check.expr, check.expr)
 		}
 		c.env = savedEnv
 		c.deferredComputedKeyChecks = nil

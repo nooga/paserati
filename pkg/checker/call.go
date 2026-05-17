@@ -497,6 +497,10 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		return
 	}
 
+	if len(node.TypeArguments) > 0 && !c.callTargetAcceptsTypeArguments(funcNodeType) {
+		c.addError(node, "function is not generic but type arguments were provided")
+	}
+
 	if funcNodeType == types.Any {
 		// Allow calling 'any', result is 'any'. Check args against 'any'.
 		for _, argNode := range node.Arguments {
@@ -715,8 +719,11 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 								continue
 							}
 
-							// For variadic functions, spread arrays should match the rest parameter type
 							if c.isSpreadableIterableType(argType) {
+								spreadElementType := c.getSpreadElementType(argType)
+								if !types.IsAssignable(spreadElementType, variadicElementType) {
+									c.addError(spreadElement, fmt.Sprintf("spread element: cannot assign type '%s' to parameter element type '%s'", spreadElementType.String(), variadicElementType.String()))
+								}
 								continue
 							}
 							if !types.IsAssignable(argType, variadicParamType) {
@@ -792,6 +799,27 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	debugPrintf("// [Checker CallExpr] Setting result type from func '%s'. ReturnType from Sig: %T (%v)\n", node.Function.String(), resultType, resultType)
 	node.SetComputedType(resultType)
 
+}
+
+func (c *Checker) callTargetAcceptsTypeArguments(funcNodeType types.Type) bool {
+	switch typ := funcNodeType.(type) {
+	case *types.GenericType:
+		return true
+	case *types.ObjectType:
+		for _, sig := range typ.CallSignatures {
+			if c.isGenericSignature(sig) {
+				return true
+			}
+		}
+		return false
+	case *types.TypeParameterType:
+		if typ.Parameter != nil && typ.Parameter.Constraint != nil {
+			return c.callTargetAcceptsTypeArguments(typ.Parameter.Constraint)
+		}
+		return false
+	default:
+		return false
+	}
 }
 
 // checkOverloadedCallUnified handles function calls to overloaded functions using unified ObjectType
@@ -1025,6 +1053,15 @@ func (c *Checker) collectTypeParameterConstraintsPhase1(sig *types.Signature, ar
 		constraints = append(constraints, paramConstraints...)
 	}
 
+	if sig.RestParameterType != nil {
+		for i := len(sig.ParameterTypes); i < len(argTypes); i++ {
+			if argTypes[i] == nil {
+				continue
+			}
+			constraints = append(constraints, c.collectConstraintsFromType(sig.RestParameterType, argTypes[i])...)
+		}
+	}
+
 	return constraints
 }
 
@@ -1092,6 +1129,10 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		argType := argNode.GetComputedType()
 		if argType == nil {
 			argType = types.Any
+		}
+		if spreadElement, isSpread := argNode.(*parser.SpreadElement); isSpread && c.isSpreadableIterableType(argType) {
+			argType = &types.ArrayType{ElementType: c.getSpreadElementType(argType)}
+			spreadElement.SetComputedType(argType)
 		}
 		argTypes = append(argTypes, argType)
 		debugPrintf("// [Checker Inference] Phase 1: Argument %d type: %s\n", i, argType.String())
@@ -1190,6 +1231,12 @@ type TypeParameterConstraint struct {
 	TypeParameter *types.TypeParameter
 	InferredType  types.Type
 	Confidence    int // Higher = more confident
+	Combine       bool
+}
+
+type constraintTypePair struct {
+	param types.Type
+	arg   types.Type
 }
 
 // collectTypeParameterConstraints analyzes arguments to build constraints for type parameters
@@ -1206,6 +1253,15 @@ func (c *Checker) collectTypeParameterConstraints(sig *types.Signature, argTypes
 		// Collect constraints from this parameter-argument pair
 		paramConstraints := c.collectConstraintsFromType(paramType, argType)
 		constraints = append(constraints, paramConstraints...)
+	}
+
+	if sig.RestParameterType != nil {
+		for i := len(sig.ParameterTypes); i < len(argTypes); i++ {
+			if i >= len(argTypes) || argTypes[i] == nil {
+				continue
+			}
+			constraints = append(constraints, c.collectConstraintsFromType(sig.RestParameterType, argTypes[i])...)
+		}
 	}
 
 	return constraints
@@ -1254,7 +1310,19 @@ func shouldWidenForAccumulator(typeParamName string, argType types.Type) bool {
 
 // collectConstraintsFromType recursively collects constraints by matching parameter and argument types
 func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []TypeParameterConstraint {
+	return c.collectConstraintsFromTypeSeen(paramType, argType, make(map[constraintTypePair]bool))
+}
+
+func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, seen map[constraintTypePair]bool) []TypeParameterConstraint {
 	var constraints []TypeParameterConstraint
+	if paramType == nil || argType == nil {
+		return constraints
+	}
+	pair := constraintTypePair{param: paramType, arg: argType}
+	if seen[pair] {
+		return constraints
+	}
+	seen[pair] = true
 
 	switch pType := paramType.(type) {
 	case *types.TypeParameterType:
@@ -1278,7 +1346,7 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 		// Array<T> matched against Array<U> or U[]
 		if aType, isArray := argType.(*types.ArrayType); isArray {
 			// Recurse into element types
-			elemConstraints := c.collectConstraintsFromType(pType.ElementType, aType.ElementType)
+			elemConstraints := c.collectConstraintsFromTypeSeen(pType.ElementType, aType.ElementType, seen)
 			constraints = append(constraints, elemConstraints...)
 		}
 
@@ -1291,12 +1359,12 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 				minLen = len(aTuple.ElementTypes)
 			}
 			for i := 0; i < minLen; i++ {
-				elemConstraints := c.collectConstraintsFromType(pType.ElementTypes[i], aTuple.ElementTypes[i])
+				elemConstraints := c.collectConstraintsFromTypeSeen(pType.ElementTypes[i], aTuple.ElementTypes[i], seen)
 				constraints = append(constraints, elemConstraints...)
 			}
 			// Handle rest element type if present
 			if pType.RestElementType != nil && aTuple.RestElementType != nil {
-				restConstraints := c.collectConstraintsFromType(pType.RestElementType, aTuple.RestElementType)
+				restConstraints := c.collectConstraintsFromTypeSeen(pType.RestElementType, aTuple.RestElementType, seen)
 				constraints = append(constraints, restConstraints...)
 			}
 		}
@@ -1316,13 +1384,13 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 					minParams = len(aSig.ParameterTypes)
 				}
 				for i := 0; i < minParams; i++ {
-					paramConstraints := c.collectConstraintsFromType(pSig.ParameterTypes[i], aSig.ParameterTypes[i])
+					paramConstraints := c.collectConstraintsFromTypeSeen(pSig.ParameterTypes[i], aSig.ParameterTypes[i], seen)
 					constraints = append(constraints, paramConstraints...)
 				}
 
 				// Collect constraints from return type (covariant)
 				if pSig.ReturnType != nil && aSig.ReturnType != nil {
-					returnConstraints := c.collectConstraintsFromType(pSig.ReturnType, aSig.ReturnType)
+					returnConstraints := c.collectConstraintsFromTypeSeen(pSig.ReturnType, aSig.ReturnType, seen)
 					constraints = append(constraints, returnConstraints...)
 				}
 			}
@@ -1332,8 +1400,35 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 			if len(pType.Properties) > 0 {
 				for propName, paramPropType := range pType.Properties {
 					if argPropType, exists := aType.Properties[propName]; exists {
-						propConstraints := c.collectConstraintsFromType(paramPropType, argPropType)
+						propConstraints := c.collectConstraintsFromTypeSeen(paramPropType, argPropType, seen)
 						constraints = append(constraints, propConstraints...)
+					}
+				}
+			}
+
+			if len(pType.IndexSignatures) > 0 {
+				for _, idxSig := range pType.IndexSignatures {
+					if idxSig == nil || idxSig.ValueType == nil {
+						continue
+					}
+
+					for propName, argPropType := range aType.Properties {
+						if propertyMatchesIndexSignatureKey(propName, idxSig.KeyType) {
+							propConstraints := c.collectConstraintsFromTypeSeen(idxSig.ValueType, argPropType, seen)
+							markConstraintsCombine(propConstraints)
+							constraints = append(constraints, propConstraints...)
+						}
+					}
+
+					for _, argIdxSig := range aType.IndexSignatures {
+						if argIdxSig == nil || argIdxSig.ValueType == nil {
+							continue
+						}
+						if indexSignatureKeysOverlap(idxSig.KeyType, argIdxSig.KeyType) {
+							indexConstraints := c.collectConstraintsFromTypeSeen(idxSig.ValueType, argIdxSig.ValueType, seen)
+							markConstraintsCombine(indexConstraints)
+							constraints = append(constraints, indexConstraints...)
+						}
 					}
 				}
 			}
@@ -1373,7 +1468,7 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 			// Collect constraints from values - recursively handle complex value types
 			// This handles cases like { [P in K]: [B, C] } where B and C need to be inferred
 			for _, propType := range aType.Properties {
-				valueConstraints := c.collectConstraintsFromType(pType.ValueType, propType)
+				valueConstraints := c.collectConstraintsFromTypeSeen(pType.ValueType, propType, seen)
 				constraints = append(constraints, valueConstraints...)
 			}
 		}
@@ -1384,7 +1479,7 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 		// The member that produces the most constraints (deepest structural match) wins.
 		var bestMemberConstraints []TypeParameterConstraint
 		for _, memberType := range pType.Types {
-			memberConstraints := c.collectConstraintsFromType(memberType, argType)
+			memberConstraints := c.collectConstraintsFromTypeSeen(memberType, argType, seen)
 			if len(memberConstraints) > len(bestMemberConstraints) {
 				bestMemberConstraints = memberConstraints
 			}
@@ -1404,41 +1499,104 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 func (c *Checker) solveTypeParameterConstraints(constraints []TypeParameterConstraint) map[*types.TypeParameter]types.Type {
 	solution := make(map[*types.TypeParameter]types.Type)
 
-	// Simple solver: for each type parameter, pick the constraint with highest confidence
-	// In the future, this could be much more sophisticated (unification, etc.)
-
-	type bestConstraint struct {
-		constraint TypeParameterConstraint
-		confidence int
-	}
-
-	best := make(map[*types.TypeParameter]bestConstraint)
+	bestConfidence := make(map[*types.TypeParameter]int)
+	bestTypes := make(map[*types.TypeParameter][]types.Type)
+	bestCombine := make(map[*types.TypeParameter]bool)
 
 	for _, constraint := range constraints {
-		existing, exists := best[constraint.TypeParameter]
-		if !exists || constraint.Confidence > existing.confidence {
-			best[constraint.TypeParameter] = bestConstraint{
-				constraint: constraint,
-				confidence: constraint.Confidence,
+		existing, exists := bestConfidence[constraint.TypeParameter]
+		if !exists || constraint.Confidence > existing {
+			bestConfidence[constraint.TypeParameter] = constraint.Confidence
+			bestTypes[constraint.TypeParameter] = []types.Type{constraint.InferredType}
+			bestCombine[constraint.TypeParameter] = constraint.Combine
+		} else if constraint.Confidence == existing {
+			if bestCombine[constraint.TypeParameter] && constraint.Combine {
+				bestTypes[constraint.TypeParameter] = appendUniqueType(bestTypes[constraint.TypeParameter], constraint.InferredType)
 			}
 		}
 	}
 
 	// Convert best constraints to solution
-	for typeParam, bestConstr := range best {
-		solution[typeParam] = bestConstr.constraint.InferredType
+	for typeParam, inferredTypes := range bestTypes {
+		var inferredType types.Type
+		if len(inferredTypes) == 1 {
+			inferredType = inferredTypes[0]
+		} else {
+			inferredType = types.NewUnionType(inferredTypes...)
+		}
+		solution[typeParam] = inferredType
 		debugPrintf("// [Checker Solve] %s = %s (confidence: %d)\n",
-			typeParam.Name, bestConstr.constraint.InferredType.String(), bestConstr.confidence)
+			typeParam.Name, inferredType.String(), bestConfidence[typeParam])
 	}
 
 	return solution
 }
 
+func markConstraintsCombine(constraints []TypeParameterConstraint) {
+	for i := range constraints {
+		constraints[i].Combine = true
+	}
+}
+
+func appendUniqueType(typeList []types.Type, typ types.Type) []types.Type {
+	if typ == nil {
+		return typeList
+	}
+	for _, existing := range typeList {
+		if existing != nil && existing.Equals(typ) {
+			return typeList
+		}
+	}
+	return append(typeList, typ)
+}
+
+func propertyMatchesIndexSignatureKey(propName string, keyType types.Type) bool {
+	switch keyType {
+	case types.Any, types.String:
+		return true
+	case types.Number:
+		return isNumericPropertyName(propName)
+	default:
+		return false
+	}
+}
+
+func indexSignatureKeysOverlap(targetKeyType, sourceKeyType types.Type) bool {
+	if targetKeyType == types.Any || sourceKeyType == types.Any {
+		return true
+	}
+	if targetKeyType == types.String {
+		return sourceKeyType == types.String || sourceKeyType == types.Number
+	}
+	return targetKeyType == sourceKeyType
+}
+
+func isNumericPropertyName(propName string) bool {
+	if propName == "" {
+		return false
+	}
+	for _, char := range propName {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // substituteTypeParameters creates a new signature with type parameters replaced by inferred types
 func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*types.TypeParameter]types.Type) *types.Signature {
+	memo := make(map[types.Type]types.Type)
+
 	// Helper function to substitute type parameters in a type
 	var substitute func(t types.Type) types.Type
 	substitute = func(t types.Type) types.Type {
+		if t == nil {
+			return nil
+		}
+		if substituted, ok := memo[t]; ok {
+			return substituted
+		}
+
 		switch typ := t.(type) {
 		case *types.TypeParameterType:
 			if inferredType, found := solution[typ.Parameter]; found {
@@ -1469,15 +1627,32 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			newObj := &types.ObjectType{
 				Properties:          make(map[string]types.Type),
 				OptionalProperties:  typ.OptionalProperties, // Copy as-is
+				ReadOnlyProperties:  typ.ReadOnlyProperties, // Copy as-is
 				CallSignatures:      nil,
 				ConstructSignatures: nil,
-				BaseTypes:           typ.BaseTypes,       // Copy as-is for now
-				IndexSignatures:     typ.IndexSignatures, // Copy as-is for now
+				BaseTypes:           typ.BaseTypes, // Copy as-is for now
+				IndexSignatures:     nil,
+				ClassMeta:           typ.ClassMeta,
+				IsReflectIntrinsic:  typ.IsReflectIntrinsic,
 			}
+			memo[t] = newObj
 
 			// Substitute in properties
 			for name, propType := range typ.Properties {
 				newObj.Properties[name] = substitute(propType)
+			}
+
+			for _, indexSig := range typ.IndexSignatures {
+				if indexSig == nil {
+					continue
+				}
+				newObj.IndexSignatures = append(newObj.IndexSignatures, &types.IndexSignature{
+					KeyType:        substitute(indexSig.KeyType),
+					ValueType:      substitute(indexSig.ValueType),
+					IsMapped:       indexSig.IsMapped,
+					TypeParameter:  indexSig.TypeParameter,
+					ConstraintType: substitute(indexSig.ConstraintType),
+				})
 			}
 
 			// Substitute in call signatures

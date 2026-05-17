@@ -8,6 +8,41 @@ import (
 	"github.com/nooga/paserati/pkg/vm"
 )
 
+func (c *Checker) validateComputedPropertyNameType(expr parser.Expression, errorNode parser.Node) {
+	keyExprType := expr.GetComputedType()
+	if keyExprType == nil {
+		return
+	}
+	if !c.isValidComputedPropertyNameType(keyExprType) {
+		c.addError(errorNode, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.")
+	}
+}
+
+func (c *Checker) isValidComputedPropertyNameType(t types.Type) bool {
+	if t == nil {
+		return true
+	}
+	if t == types.Any || t == types.String || t == types.Number || t == types.Symbol {
+		return true
+	}
+	if literal, ok := t.(*types.LiteralType); ok {
+		switch literal.Value.Type() {
+		case vm.TypeString, vm.TypeIntegerNumber, vm.TypeFloatNumber, vm.TypeBigInt:
+			return true
+		}
+		return false
+	}
+	if union, ok := t.(*types.UnionType); ok {
+		for _, member := range union.Types {
+			if !c.isValidComputedPropertyNameType(types.GetWidenedType(member)) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 	generalizedElementTypes := []types.Type{} // Store generalized types
 	for _, elemNode := range node.Elements {
@@ -25,8 +60,7 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 				generalizedType := types.DeeplyWidenType(arrayType.ElementType)
 				generalizedElementTypes = append(generalizedElementTypes, generalizedType)
 			} else if c.isSpreadableIterableType(elemType) {
-				// Iterator protocol values are spreadable; element type is not inferred yet.
-				generalizedElementTypes = append(generalizedElementTypes, types.Any)
+				generalizedElementTypes = append(generalizedElementTypes, types.DeeplyWidenType(c.getSpreadElementType(elemType)))
 			} else if elemType == types.Any {
 				// Spread of 'any' contributes 'any' element type
 				generalizedElementTypes = append(generalizedElementTypes, types.Any)
@@ -171,6 +205,12 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 					if !types.IsAssignable(spreadArrayType.ElementType, arrayType.ElementType) {
 						c.addError(elemNode, fmt.Sprintf("Type '%s' is not assignable to type '%s'",
 							spreadArrayType.ElementType.String(), arrayType.ElementType.String()))
+					}
+				} else if c.isSpreadableIterableType(spreadType) {
+					spreadElementType := c.getSpreadElementType(spreadType)
+					if !types.IsAssignable(spreadElementType, arrayType.ElementType) {
+						c.addError(elemNode, fmt.Sprintf("Type '%s' is not assignable to type '%s'",
+							spreadElementType.String(), arrayType.ElementType.String()))
 					}
 				} else if spreadType != types.Any {
 					// Spread of non-array type (error should be caught elsewhere)
@@ -402,8 +442,9 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		case *parser.ComputedPropertyName:
 			// Handle computed properties: [expression]
 			c.visit(key.Expr)
-			// TS2464: computed property name must be string, number, symbol, or any
-			// Only flag types that are clearly invalid (boolean, null, undefined, void, never)
+			// TS2464: computed property name must be string, number, symbol, or any.
+			// Keep object literal checks conservative because JavaScript object literal
+			// keys support runtime ToPropertyKey coercion and the smoke suite covers it.
 			if keyExprType := key.Expr.GetComputedType(); keyExprType != nil {
 				widenedKeyType := types.GetWidenedType(keyExprType)
 				switch widenedKeyType {
@@ -838,18 +879,16 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	c.inObjectMethod = outerInObjectMethod
 	debugPrintf("// [Checker ObjectLit] Restored this context to: %v\n", outerThisType)
 
-	// Handle computed properties by creating index signatures
-	var hasComputedProperties bool
-	var computedValueTypes []types.Type
+	// Handle dynamic computed properties by creating index signatures.
+	computedValueTypes := collectDynamicComputedObjectValueTypes(node)
+	hasComputedProperties := len(computedValueTypes) > 0
 	finalFields := make(map[string]types.Type)
 
 	for key, valueType := range fields {
 		if key == "__COMPUTED_PROPERTY__" {
-			hasComputedProperties = true
-			computedValueTypes = append(computedValueTypes, valueType)
 			// Special-case: if the computed key expression was Symbol.iterator, record an explicit property marker
 			// so iterable detection can succeed.
-			finalFields["__COMPUTED_PROPERTY__"] = valueType
+			finalFields["__COMPUTED_PROPERTY__"] = unionTypesOrAny(computedValueTypes, valueType)
 		} else {
 			finalFields[key] = valueType
 		}
@@ -883,6 +922,50 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	node.SetComputedType(objType)
 	debugPrintf("// [Checker ObjectLit] Computed type: %s\n", objType.String())
 	debugPrintf("// [Checker ObjectLit] Has computed properties: %v, final fields: %v\n", hasComputedProperties, finalFields)
+}
+
+func collectDynamicComputedObjectValueTypes(node *parser.ObjectLiteral) []types.Type {
+	var valueTypes []types.Type
+	for _, prop := range node.Properties {
+		if prop == nil || prop.Value == nil {
+			continue
+		}
+		key, ok := prop.Key.(*parser.ComputedPropertyName)
+		if !ok || !isDynamicComputedObjectKey(key) {
+			continue
+		}
+		valueType := prop.Value.GetComputedType()
+		if valueType == nil {
+			valueType = types.Any
+		}
+		valueTypes = append(valueTypes, valueType)
+	}
+	return valueTypes
+}
+
+func isDynamicComputedObjectKey(key *parser.ComputedPropertyName) bool {
+	switch expr := key.Expr.(type) {
+	case *parser.StringLiteral, *parser.NumberLiteral, *parser.BigIntLiteral:
+		return false
+	case *parser.MemberExpression:
+		if objectIdent, ok := expr.Object.(*parser.Identifier); ok && objectIdent.Value == "Symbol" {
+			return true
+		}
+	}
+	return true
+}
+
+func unionTypesOrAny(typeList []types.Type, fallback types.Type) types.Type {
+	if len(typeList) == 0 {
+		if fallback != nil {
+			return fallback
+		}
+		return types.Any
+	}
+	if len(typeList) == 1 {
+		return typeList[0]
+	}
+	return types.NewUnionType(typeList...)
 }
 
 // --- NEW: Template Literal Check ---
@@ -1506,6 +1589,13 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 	// Expand MappedType (e.g., Record<string, string>) to ObjectType with index signatures
 	leftType = c.expandIfMappedType(leftType)
 
+	isIndexStringLiteral := false
+	var indexStringValue string
+	if litIndex, ok := indexType.(*types.LiteralType); ok && litIndex.Value.Type() == vm.TypeString {
+		isIndexStringLiteral = true
+		indexStringValue = vm.AsString(litIndex.Value)
+	}
+
 	// 3. Check base type (allow Array for now)
 	// First handle the special case of 'any'
 	if leftType == types.Any {
@@ -1566,13 +1656,6 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 		case *types.ObjectType:
 			// Base is ObjectType
 			// Index must be string or number (or any)
-			isIndexStringLiteral := false
-			var indexStringValue string
-			if litIndex, ok := indexType.(*types.LiteralType); ok && litIndex.Value.Type() == vm.TypeString {
-				isIndexStringLiteral = true
-				indexStringValue = vm.AsString(litIndex.Value)
-			}
-
 			widenedIndexType := types.GetWidenedType(indexType)
 
 			if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Symbol || widenedIndexType == types.Any {
@@ -1689,6 +1772,11 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				if types.IsAssignable(indexType, types.Number) {
 					// Numeric index - accessing string characters
 					resultType = types.String
+				} else if isIndexStringLiteral {
+					resultType = c.getPropertyTypeFromType(base, indexStringValue, false)
+					if resultType == types.Never {
+						c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type 'string'", indexStringValue))
+					}
 				} else if types.IsAssignable(indexType, types.String) || types.IsAssignable(indexType, types.Symbol) {
 					// String or Symbol index - accessing string properties (like Symbol.iterator)
 					resultType = types.Any // String properties can have arbitrary types
@@ -1696,6 +1784,30 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					c.addError(node.Index, fmt.Sprintf("string index must be of type number, string, or symbol, got %s", indexType.String()))
 					resultType = types.Any
 				}
+			} else if isIndexStringLiteral {
+				resultType = c.getPropertyTypeFromType(base, indexStringValue, false)
+				if resultType == types.Never {
+					c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type %s", indexStringValue, leftType.String()))
+				}
+			} else {
+				c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+			}
+
+		case *types.TypeParameterType:
+			if isIndexStringLiteral {
+				if base.Parameter != nil && base.Parameter.Constraint != nil {
+					resultType = c.getPropertyTypeFromType(base.Parameter.Constraint, indexStringValue, false)
+				} else {
+					resultType = c.getPropertyTypeFromType(types.NewObjectType(), indexStringValue, false)
+					if resultType == types.Never {
+						resultType = types.Any
+					}
+				}
+				if resultType == types.Never {
+					c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type %s", indexStringValue, leftType.String()))
+				}
+			} else if base.Parameter == nil || base.Parameter.Constraint == nil {
+				resultType = types.Any
 			} else {
 				c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
 			}
@@ -2196,6 +2308,13 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 											continue
 										}
 
+										if c.isSpreadableIterableType(argType) {
+											spreadElementType := c.getSpreadElementType(argType)
+											if !types.IsAssignable(spreadElementType, variadicElementType) {
+												c.addError(spreadElement, fmt.Sprintf("spread element: cannot assign type '%s' to parameter element type '%s'", spreadElementType.String(), variadicElementType.String()))
+											}
+											continue
+										}
 										if !types.IsAssignable(argType, constructorSig.RestParameterType) {
 											c.addError(spreadElement, fmt.Sprintf("spread argument: cannot assign type '%s' to rest parameter type '%s'", argType.String(), constructorSig.RestParameterType.String()))
 										}
@@ -2879,6 +2998,38 @@ func (c *Checker) isSpreadableIterableType(t types.Type) bool {
 func (c *Checker) hasIteratorNext(t types.Type) bool {
 	nextType := c.getPropertyTypeFromType(t, "next", false)
 	return nextType != nil && nextType != types.Never
+}
+
+func (c *Checker) getSpreadElementType(t types.Type) types.Type {
+	if t == nil {
+		return types.Any
+	}
+	if arrayType, ok := t.(*types.ArrayType); ok {
+		if arrayType.ElementType != nil {
+			return arrayType.ElementType
+		}
+		return types.Any
+	}
+	if tupleType, ok := t.(*types.TupleType); ok {
+		return getTupleElementUnion(tupleType)
+	}
+	if instantiatedType, ok := t.(*types.InstantiatedType); ok {
+		if instantiatedType.Generic != nil && len(instantiatedType.TypeArguments) > 0 &&
+			(instantiatedType.Generic.Name == "Iterable" || instantiatedType.Generic.Name == "Iterator") {
+			return instantiatedType.TypeArguments[0]
+		}
+	}
+
+	nextType := c.getPropertyTypeFromType(t, "next", false)
+	nextReturnType := callableReturnType(nextType)
+	if nextReturnType == nil || nextReturnType == types.Any || nextReturnType == types.Never {
+		return types.Any
+	}
+	valueType := c.getPropertyTypeFromType(nextReturnType, "value", false)
+	if valueType == nil || valueType == types.Never {
+		return types.Any
+	}
+	return valueType
 }
 
 func callableReturnType(t types.Type) types.Type {

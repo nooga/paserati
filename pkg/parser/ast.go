@@ -3164,12 +3164,14 @@ func (opp *ObjectParameterPattern) String() string {
 
 // FunctionSignature represents a function signature without a body (used in overloads)
 type FunctionSignature struct {
-	BaseExpression                      // Embed base for ComputedType (so it can be an Expression too)
-	Token                *lexer.Token   // The 'function' token
-	Name                 *Identifier    // Function name (must match other overloads)
+	BaseExpression                    // Embed base for ComputedType (so it can be an Expression too)
+	Token                *lexer.Token // The 'function' token
+	Name                 *Identifier  // Function name (must match other overloads)
+	TypeParameters       []*TypeParameter
 	Parameters           []*Parameter   // Regular function parameters with type annotations
 	RestParameter        *RestParameter // Optional rest parameter (...args)
 	ReturnTypeAnnotation Expression     // Return type annotation (required for overloads)
+	Declare              bool           // True for ambient `declare function` signatures
 }
 
 func (fs *FunctionSignature) statementNode()       {}

@@ -17,53 +17,26 @@ func (c *Checker) processFunctionSignature(node *parser.FunctionSignature) {
 	}
 
 	functionName := node.Name.Value
-
-	// Validate parameter types
-	for _, param := range node.Parameters {
-		if param.TypeAnnotation != nil {
-			paramType := c.resolveTypeAnnotation(param.TypeAnnotation)
-			param.ComputedType = paramType
-		} else {
-			c.addError(param.Name, fmt.Sprintf("function overload parameter '%s' must have type annotation", param.Name.Value))
-		}
+	ctx := &FunctionCheckContext{
+		FunctionName:         functionName,
+		TypeParameters:       node.TypeParameters,
+		Parameters:           node.Parameters,
+		RestParameter:        node.RestParameter,
+		ReturnTypeAnnotation: node.ReturnTypeAnnotation,
+		Body:                 nil,
+		IsArrow:              false,
+		AllowSelfReference:   false,
 	}
-
-	// Parse return type annotation (optional — defaults to void if not specified)
-	var returnType types.Type
-	if node.ReturnTypeAnnotation != nil {
-		returnType = c.resolveTypeAnnotation(node.ReturnTypeAnnotation)
-		if returnType == nil {
-			c.addError(node.ReturnTypeAnnotation, "invalid return type annotation")
-			return
-		}
-	} else {
-		returnType = types.Void
+	sig, _, _, _, _, _ := c.resolveFunctionParameters(ctx)
+	if sig == nil {
+		c.addError(node, "invalid function signature")
+		return
 	}
-
-	// Add the signature to pending overloads in the environment
-	c.env.AddOverloadSignature(functionName, node)
-	debugPrintf("// [Checker processFunctionSignature] Added to env %p\n", c.env)
+	if sig.ReturnType == nil {
+		sig.ReturnType = types.Void
+	}
 
 	// Create the function type for this signature
-	var paramTypes []types.Type
-	var optionalParams []bool
-	for _, param := range node.Parameters {
-		if param.ComputedType != nil {
-			paramTypes = append(paramTypes, param.ComputedType)
-		} else {
-			paramTypes = append(paramTypes, types.Any) // Fallback for error cases
-		}
-		optionalParams = append(optionalParams, param.Optional || (param.DefaultValue != nil))
-	}
-
-	// Create a signature for the function type
-	sig := &types.Signature{
-		ParameterTypes: paramTypes,
-		ReturnType:     returnType,
-		OptionalParams: optionalParams,
-	}
-
-	// Create a unified ObjectType with call signature
 	funcType := types.NewFunctionType(sig)
 
 	// For backward compatibility, create legacy FunctionType
@@ -76,6 +49,15 @@ func (c *Checker) processFunctionSignature(node *parser.FunctionSignature) {
 	// Set the computed type on the signature node
 	// For now, continue using FunctionType for overloads until we update the entire overload system
 	node.SetComputedType(funcType)
+	if node.Declare {
+		c.env.Define(functionName, funcType, false)
+		debugPrintf("// [Checker] Added ambient function signature for '%s': %s\n", functionName, funcType.String())
+		return
+	}
+
+	// Add the signature to pending overloads in the environment
+	c.env.AddOverloadSignature(functionName, node)
+	debugPrintf("// [Checker processFunctionSignature] Added to env %p\n", c.env)
 	debugPrintf("// [Checker] Added overload signature for '%s': %s\n", functionName, funcType.String())
 }
 

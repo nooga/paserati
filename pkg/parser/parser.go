@@ -891,14 +891,12 @@ func (p *Parser) parseDeclareStatement() Statement {
 	case lexer.VAR:
 		return p.parseDeclareVarStatement()
 	case lexer.FUNCTION:
-		// Parse the function to consume tokens; emit TS1183 if it has a body
-		exprStmt := p.parseFunctionDeclarationStatement()
-		if exprStmt != nil {
-			if fl, ok := exprStmt.Expression.(*FunctionLiteral); ok && fl.Body != nil {
-				p.addError(fl.Body.Token, "An implementation cannot be declared in ambient contexts.")
-			}
+		sig := p.parseFunctionSignature()
+		if sig == nil {
+			return nil
 		}
-		return nil
+		sig.Declare = true
+		return sig
 	case lexer.CLASS:
 		return p.parseDeclareClassStatement()
 	}
@@ -2917,8 +2915,9 @@ func (p *Parser) parseFunctionSignature() *FunctionSignature {
 	}
 	sig.Name = nameIdent
 
-	// Don't expectPeek here - parseFunctionParameters expects to see LPAREN in peek
-	if !p.peekTokenIs(lexer.LPAREN) {
+	sig.TypeParameters = p.tryParseTypeParameters()
+
+	if !p.expectPeek(lexer.LPAREN) {
 		msg := fmt.Sprintf("expected '(' after function name, got %s", p.peekToken.Type)
 		p.addError(p.peekToken, msg)
 		return nil
@@ -9977,6 +9976,12 @@ func (p *Parser) parseTypeParameters() ([]*TypeParameter, error) {
 
 // parseTypeParameter parses a single type parameter: T or T extends string or T = DefaultType or T extends string = DefaultType
 func (p *Parser) parseTypeParameter() *TypeParameter {
+	// TypeScript 5.0 supports `const` type parameters. The modifier affects
+	// inference precision, but the runtime type model can parse and ignore it.
+	if p.curTokenIs(lexer.CONST) {
+		p.nextToken()
+	}
+
 	if !p.curTokenIs(lexer.IDENT) {
 		p.addError(p.curToken, "expected type parameter name")
 		return nil
@@ -10101,11 +10106,6 @@ func (p *Parser) parseGenericArrowFunction() Expression {
 	}
 
 	if !p.expectPeekGT() {
-		return nil
-	}
-
-	if !p.peekTokenIs(lexer.TEMPLATE_START) && !p.peekTokenIs(lexer.LPAREN) {
-		p.addError(p.peekToken, "expected '(' for generic arrow function")
 		return nil
 	}
 

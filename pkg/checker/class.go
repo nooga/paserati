@@ -17,28 +17,27 @@ type deferredMethodBodyCheck struct {
 	env          *Environment // The environment that was active during class processing
 }
 
-// getMethodKeyString returns a normalized string key for a class member name expression.
-// Handles Identifier, StringLiteral, NumberLiteral, and ComputedPropertyName.
-func getMethodKeyString(key parser.Expression) string {
+// getMethodKeyString returns a normalized string key for a statically known class member name.
+// Dynamic computed names return false so overload validation does not collapse unrelated
+// members onto the same placeholder key.
+func getMethodKeyString(key parser.Expression) (string, bool) {
 	switch k := key.(type) {
 	case *parser.Identifier:
-		return k.Value
+		return k.Value, true
 	case *parser.StringLiteral:
-		return k.Value
+		return k.Value, true
 	case *parser.NumberLiteral:
-		return fmt.Sprintf("%v", k.Value)
+		return fmt.Sprintf("%v", k.Value), true
 	case *parser.ComputedPropertyName:
 		switch e := k.Expr.(type) {
-		case *parser.Identifier:
-			return e.Value
 		case *parser.StringLiteral:
-			return e.Value
+			return e.Value, true
 		case *parser.NumberLiteral:
-			return fmt.Sprintf("%v", e.Value)
+			return fmt.Sprintf("%v", e.Value), true
 		}
-		return "__computed"
+		return "", false
 	}
-	return "__unknown"
+	return "", false
 }
 
 // countRequiredParams returns the number of required (non-optional, non-default) parameters.
@@ -99,7 +98,10 @@ func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
 	seenNames := make(map[string]bool) // for duplicate detection
 	for _, method := range body.Methods {
 		if method.Kind != "constructor" && method.Key != nil {
-			name := getMethodKeyString(method.Key)
+			name, isKnownName := getMethodKeyString(method.Key)
+			if !isKnownName {
+				continue
+			}
 			implNames[name] = true
 			staticPrefix := "i:"
 			if method.IsStatic {
@@ -117,7 +119,10 @@ func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
 		if sig.IsAbstract || sig.Key == nil {
 			continue
 		}
-		name := getMethodKeyString(sig.Key)
+		name, isKnownName := getMethodKeyString(sig.Key)
+		if !isKnownName {
+			continue
+		}
 		if !implNames[name] {
 			c.addError(sig.Key, "Function implementation is missing or not immediately following the declaration.")
 		}
@@ -1139,6 +1144,11 @@ func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
 	// Extract parameter types and return type from the function
 	paramTypes := c.extractParameterTypes(method.Value)
 	returnType := c.inferReturnType(method.Value)
+	if returnType == types.Any && method.Value.ReturnTypeAnnotation == nil {
+		if simpleReturnType := c.inferSimpleMethodReturnType(method.Value); simpleReturnType != nil {
+			returnType = simpleReturnType
+		}
+	}
 	optionalParams := c.extractOptionalParams(method.Value)
 	isVariadic := method.Value.RestParameter != nil
 	restParameterType := c.extractRestParameterType(method.Value)
@@ -1152,6 +1162,25 @@ func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
 	}
 
 	return types.NewFunctionType(signature)
+}
+
+func (c *Checker) inferSimpleMethodReturnType(fn *parser.FunctionLiteral) types.Type {
+	if fn == nil || fn.Body == nil || len(fn.Parameters) > 0 || fn.RestParameter != nil || len(fn.Body.Statements) != 1 {
+		return nil
+	}
+	ret, ok := fn.Body.Statements[0].(*parser.ReturnStatement)
+	if !ok || ret.ReturnValue == nil {
+		return nil
+	}
+	if _, ok := ret.ReturnValue.(*parser.ObjectLiteral); !ok {
+		return nil
+	}
+	c.visit(ret.ReturnValue)
+	returnType := ret.ReturnValue.GetComputedType()
+	if returnType == nil {
+		return types.Any
+	}
+	return types.GetWidenedType(returnType)
 }
 
 // inferPropertyType determines the type of a class property

@@ -59,6 +59,34 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 			}
 			return Never
 		}
+	} else if widenedObjectType == Number {
+		if prototypeMethodResolver != nil {
+			if methodType := prototypeMethodResolver("number", propertyName); methodType != nil {
+				return methodType
+			}
+		}
+		return Never
+	} else if widenedObjectType == Boolean {
+		if prototypeMethodResolver != nil {
+			if methodType := prototypeMethodResolver("boolean", propertyName); methodType != nil {
+				return methodType
+			}
+		}
+		return Never
+	} else if widenedObjectType == Symbol {
+		if prototypeMethodResolver != nil {
+			if methodType := prototypeMethodResolver("symbol", propertyName); methodType != nil {
+				return methodType
+			}
+		}
+		return Never
+	} else if widenedObjectType == BigInt {
+		if prototypeMethodResolver != nil {
+			if methodType := prototypeMethodResolver("bigint", propertyName); methodType != nil {
+				return methodType
+			}
+		}
+		return Never
 	} else {
 		// Use a type switch for struct-based types
 		switch obj := widenedObjectType.(type) {
@@ -91,7 +119,7 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 						return prototypeMethodType
 					}
 				}
-				
+
 				// Property not found
 				if isOptionalChaining {
 					return Undefined
