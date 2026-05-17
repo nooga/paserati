@@ -5,6 +5,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 )
@@ -14,31 +15,31 @@ type FileSystemResolver struct {
 	name     string   // Human-readable name
 	fs       ModuleFS // File system to resolve from
 	priority int      // Resolution priority
-	
+
 	// Configuration
-	extensions  []string // File extensions to try (e.g., ".ts", ".js", ".d.ts")
-	indexFiles  []string // Index file names to try (e.g., "index.ts", "index.js")
-	baseDir     string   // Base directory for resolution
+	extensions []string // File extensions to try (e.g., ".ts", ".js", ".d.ts")
+	indexFiles []string // Index file names to try (e.g., "index.ts", "index.js")
+	baseDir    string   // Base directory for resolution
 }
 
 // NewFileSystemResolver creates a new file system resolver
 func NewFileSystemResolver(filesystem fs.FS, baseDir string) *FileSystemResolver {
 	var moduleFS ModuleFS
-	
+
 	// Wrap the fs.FS to implement ModuleFS if needed
 	if mfs, ok := filesystem.(ModuleFS); ok {
 		moduleFS = mfs
 	} else {
 		moduleFS = &fsWrapper{filesystem}
 	}
-	
+
 	return &FileSystemResolver{
-		name:        "FileSystem",
-		fs:          moduleFS,
-		priority:    100, // Lower priority than specialized resolvers
-		extensions:  []string{".ts", ".tsx", ".js", ".jsx", ".d.ts", ".json"},
-		indexFiles:  []string{"index.ts", "index.tsx", "index.js", "index.jsx"},
-		baseDir:     baseDir,
+		name:       "FileSystem",
+		fs:         moduleFS,
+		priority:   100, // Lower priority than specialized resolvers
+		extensions: []string{".ts", ".tsx", ".js", ".jsx", ".d.ts", ".json"},
+		indexFiles: []string{"index.ts", "index.tsx", "index.js", "index.jsx"},
+		baseDir:    baseDir,
 	}
 }
 
@@ -48,14 +49,14 @@ func NewOSFileSystemResolver(baseDir string) *FileSystemResolver {
 	if err != nil {
 		absBaseDir = baseDir
 	}
-	
+
 	return &FileSystemResolver{
-		name:        "OSFileSystem",
-		fs:          &osFS{baseDir: absBaseDir},
-		priority:    100,
-		extensions:  []string{".ts", ".tsx", ".js", ".jsx", ".d.ts", ".json"},
-		indexFiles:  []string{"index.ts", "index.tsx", "index.js", "index.jsx"},
-		baseDir:     absBaseDir,
+		name:       "OSFileSystem",
+		fs:         &osFS{baseDir: absBaseDir},
+		priority:   100,
+		extensions: []string{".ts", ".tsx", ".js", ".jsx", ".d.ts", ".json"},
+		indexFiles: []string{"index.ts", "index.tsx", "index.js", "index.jsx"},
+		baseDir:    absBaseDir,
 	}
 }
 
@@ -67,10 +68,10 @@ func (r *FileSystemResolver) Name() string {
 // CanResolve returns true if this resolver can handle the specifier
 func (r *FileSystemResolver) CanResolve(specifier string) bool {
 	// Handle relative and absolute paths
-	return strings.HasPrefix(specifier, "./") || 
-		   strings.HasPrefix(specifier, "../") ||
-		   strings.HasPrefix(specifier, "/") ||
-		   filepath.IsAbs(specifier)
+	return strings.HasPrefix(specifier, "./") ||
+		strings.HasPrefix(specifier, "../") ||
+		strings.HasPrefix(specifier, "/") ||
+		filepath.IsAbs(specifier)
 }
 
 // Priority returns the resolver priority
@@ -85,19 +86,19 @@ func (r *FileSystemResolver) Resolve(specifier string, fromPath string) (*Resolv
 	if err != nil {
 		return nil, fmt.Errorf("failed to calculate target path: %w", err)
 	}
-	
+
 	// Try to resolve the exact path
 	resolvedPath, err := r.tryResolve(targetPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve %s: %w", specifier, err)
 	}
-	
+
 	// Open the resolved file
 	source, err := r.openFile(resolvedPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", resolvedPath, err)
 	}
-	
+
 	return &ResolvedModule{
 		Specifier:    specifier,
 		ResolvedPath: resolvedPath,
@@ -119,11 +120,11 @@ func (r *FileSystemResolver) calculateTargetPath(specifier string, fromPath stri
 			}
 			return "", fmt.Errorf("relative import %s requires fromPath", specifier)
 		}
-		
-		fromDir := filepath.Dir(fromPath)
-		return filepath.Join(fromDir, specifier), nil
+
+		fromDir := pathpkg.Dir(fromPath)
+		return pathpkg.Join(fromDir, specifier), nil
 	}
-	
+
 	if strings.HasPrefix(specifier, "/") || filepath.IsAbs(specifier) {
 		// Absolute path
 		if strings.HasPrefix(specifier, "/") && r.baseDir != "" {
@@ -132,20 +133,20 @@ func (r *FileSystemResolver) calculateTargetPath(specifier string, fromPath stri
 		}
 		return specifier, nil
 	}
-	
+
 	return "", fmt.Errorf("unsupported specifier format: %s", specifier)
 }
 
 // tryResolve attempts to resolve a path with various strategies
 func (r *FileSystemResolver) tryResolve(targetPath string) (string, error) {
 	// Clean the path
-	targetPath = filepath.Clean(targetPath)
-	
+	targetPath = pathpkg.Clean(targetPath)
+
 	// Strategy 1: Try exact path (must be a file, not directory)
 	if r.isFile(targetPath) {
 		return targetPath, nil
 	}
-	
+
 	// Strategy 1.5: Handle .js → .ts mapping for TypeScript projects
 	// If the requested file ends with .js but doesn't exist, try .ts
 	if strings.HasSuffix(targetPath, ".js") {
@@ -159,7 +160,7 @@ func (r *FileSystemResolver) tryResolve(targetPath string) (string, error) {
 			return tsxPath, nil
 		}
 	}
-	
+
 	// Strategy 2: Try with extensions
 	for _, ext := range r.extensions {
 		pathWithExt := targetPath + ext
@@ -167,15 +168,15 @@ func (r *FileSystemResolver) tryResolve(targetPath string) (string, error) {
 			return pathWithExt, nil
 		}
 	}
-	
+
 	// Strategy 3: Try as directory with index files
 	for _, indexFile := range r.indexFiles {
-		indexPath := filepath.Join(targetPath, indexFile)
+		indexPath := pathpkg.Join(targetPath, indexFile)
 		if r.isFile(indexPath) {
 			return indexPath, nil
 		}
 	}
-	
+
 	return "", fmt.Errorf("module not found: %s", targetPath)
 }
 
@@ -223,14 +224,14 @@ func (w *fsWrapper) ReadFile(name string) ([]byte, error) {
 	if rfs, ok := w.FS.(fs.ReadFileFS); ok {
 		return rfs.ReadFile(name)
 	}
-	
+
 	// Fallback implementation
 	file, err := w.FS.Open(name)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	
+
 	return io.ReadAll(file)
 }
 
@@ -266,7 +267,7 @@ func (osfs *osFS) Glob(pattern string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Remove base directory prefix from results
 	result := make([]string, len(matches))
 	for i, match := range matches {
@@ -277,7 +278,7 @@ func (osfs *osFS) Glob(pattern string) ([]string, error) {
 			result[i] = rel
 		}
 	}
-	
+
 	return result, nil
 }
 

@@ -235,6 +235,9 @@ func (w *parseWorker) run(ctx context.Context) {
 			// Process the job
 
 			result := w.processJob(job)
+			if result.ParseDuration <= 0 {
+				result.ParseDuration = time.Nanosecond
+			}
 
 			// Update statistics
 			w.pool.statsMutex.Lock()
