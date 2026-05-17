@@ -1,0 +1,19 @@
+#!/bin/bash
+# Refresh compliance docs before pushing.
+
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+TS_PATH="${TS_REPO_PATH:-../TypeScript}"
+
+echo "Refreshing compliance chart..."
+tools/refresh_compliance_chart.py --run-ts --ts-path "$TS_PATH"
+
+if ! git diff --quiet -- README.md docs/compliance.svg docs/compliance.json; then
+    echo "Compliance docs changed. Commit README.md, docs/compliance.svg, and docs/compliance.json before pushing."
+    exit 1
+fi
+
+echo "Compliance docs are up to date."

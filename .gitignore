@@ -34,6 +34,8 @@ qjs
 
 # Python virtual environment
 venv/
+__pycache__/
+*.pyc
 
 timing.py
 timing.json

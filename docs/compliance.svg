@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="320" viewBox="0 0 900 320" role="img" aria-labelledby="title desc">
+  <title id="title">Paserati compliance snapshot</title>
+  <desc id="desc">Three pie charts for Test262 language, Test262 built-ins, and TypeScript conformance pass rates.</desc>
+  <style>
+    .bg { fill: #fbfcfe; }
+    .group { font: 600 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #304050; }
+    .title { font: 600 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #18212b; }
+    .percent { font: 700 22px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #18212b; }
+    .caption { font: 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #66717f; }
+    .legend { font: 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #3a4653; }
+  </style>
+  <rect class="bg" x="0" y="0" width="900" height="320" rx="8" />
+  <text x="250" y="42" text-anchor="middle" class="group">Test262 compliance</text>
+  <text x="690" y="42" text-anchor="middle" class="group">TypeScript conformance</text>
+  <line x1="470" y1="28" x2="470" y2="250" stroke="#d9e0e8" stroke-width="1" />
+  <g aria-label="Test262 language">
+<path d="M 165.00 135.00 L 158.92 73.30 A 62.00 62.00 0 1 0 165.00 73.00 Z" fill="#20a060" />
+<path d="M 165.00 135.00 L 165.00 73.00 A 62.00 62.00 0 0 0 158.92 73.30 Z" fill="#d64b4b" />
+<circle cx="165" cy="135" r="38" fill="#ffffff" />
+<text x="165" y="131" text-anchor="middle" class="percent">98.4%</text>
+<text x="165" y="153" text-anchor="middle" class="caption">pass</text>
+<text x="165" y="233" text-anchor="middle" class="title">Test262 language</text>
+<text x="165" y="255" text-anchor="middle" class="caption">23,155/23,523</text>
+</g>
+  <g aria-label="Test262 built-ins">
+<path d="M 340.00 135.00 L 278.67 144.09 A 62.00 62.00 0 1 0 340.00 73.00 Z" fill="#20a060" />
+<path d="M 340.00 135.00 L 340.00 73.00 A 62.00 62.00 0 0 0 278.67 144.09 Z" fill="#d64b4b" />
+<circle cx="340" cy="135" r="38" fill="#ffffff" />
+<text x="340" y="131" text-anchor="middle" class="percent">72.7%</text>
+<text x="340" y="153" text-anchor="middle" class="caption">pass</text>
+<text x="340" y="233" text-anchor="middle" class="title">Test262 built-ins</text>
+<text x="340" y="255" text-anchor="middle" class="caption">16,925/23,294</text>
+</g>
+  <g aria-label="TypeScript 6.0.0">
+<path d="M 690.00 135.00 L 639.71 171.26 A 62.00 62.00 0 1 0 690.00 73.00 Z" fill="#20a060" />
+<path d="M 690.00 135.00 L 654.84 83.94 A 62.00 62.00 0 0 0 639.71 171.26 Z" fill="#d64b4b" />
+<path d="M 690.00 135.00 L 690.00 73.00 A 62.00 62.00 0 0 0 654.84 83.94 Z" fill="#aeb7c2" />
+<circle cx="690" cy="135" r="38" fill="#ffffff" />
+<text x="690" y="131" text-anchor="middle" class="percent">65.1%</text>
+<text x="690" y="153" text-anchor="middle" class="caption">pass</text>
+<text x="690" y="233" text-anchor="middle" class="title">TypeScript 6.0.0</text>
+<text x="690" y="255" text-anchor="middle" class="caption">3,206/4,928</text>
+</g>
+  <g transform="translate(575 278)">
+    <rect x="0" y="-10" width="12" height="12" fill="#20a060" rx="2" /><text x="18" y="1" class="legend">Pass</text>
+    <rect x="84" y="-10" width="12" height="12" fill="#d64b4b" rx="2" /><text x="102" y="1" class="legend">Fail</text>
+    <rect x="162" y="-10" width="12" height="12" fill="#aeb7c2" rx="2" /><text x="180" y="1" class="legend">Skip</text>
+    <rect x="240" y="-10" width="12" height="12" fill="#f4a340" rx="2" /><text x="258" y="1" class="legend">Timeout</text>
+  </g>
+</svg>

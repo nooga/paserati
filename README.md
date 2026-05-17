@@ -8,17 +8,17 @@
 
 Paserati is an **experimental (mad scientist kind of experimental) TypeScript runtime**: it parses + type-checks TypeScript and compiles it **directly to bytecode** for a register VM. And then it executes the bytecode.
 
-TypeScript is a superset of JavaScript, so if you can execute TypeScript, you’re building an **ES2025 runtime** too (by definition, plus a lot of pain).
+TypeScript is a superset of JavaScript, so if you can execute TypeScript, you’re building an **ECMAScript 2025** runtime too.
 
 ### What’s under the hood
 
-Under the hood: **TS/JS → bytecode → register VM**, with **inline caches**, **shape-based objects** (a.k.a. “hidden classes”-style), and a pluggable async executor with **microtask scheduling**.
+Under the hood: **TS/JS → bytecode → register VM**, with **inline caches**, **shape-based objects** (a.k.a. "hidden classes"), and a pluggable async executor with **microtask scheduling**.
 
 Right now it prioritizes **correctness** over raw speed, but the architecture is designed for type-driven optimization later (specialization, monomorphization, unchecked fast paths).
 
 ### Wins
 
-- **Test262 language suite: 98.4%** (see details below)
+- **Test262 language suite: 98.4%**, **built-ins: 72.7%**, **TypeScript 6.0.0 conformance: 65.1%** (see details below)
 - **Native TS execution**: no `tsc`, no TS→JS transpilation
 - **TCO**: tail call optimization (elite feature)
 - **Shapes + ICs**: fast-ish property access without a JIT
@@ -79,26 +79,23 @@ go build -o paserati ./cmd/paserati/
 go test ./tests/...
 ```
 
-### Test262 results (language suite)
+### Compliance snapshot
 
-From a recent run:
+<!-- compliance:begin -->
+![Compliance snapshot](docs/compliance.svg)
 
-```
-language (TOTAL)             23523    23155      365        0        3    98.4%
-```
+| Suite | Passed | Failed | Skipped | Timeouts | Pass rate |
+| :-- | --: | --: | --: | --: | --: |
+| Test262 language | 23,155/23,523 | 368 | 0 | 0 | 98.4% |
+| Test262 built-ins | 16,925/23,294 | 6,369 | 0 | 0 | 72.7% |
+| TypeScript 6.0.0 conformance | 3,206/4,928 | 1,249 | 473 | 0 | 65.1% |
+<!-- compliance:end -->
 
-Weak spots:
-
-- `language/module-code/namespace`: 52.8% (36)
-- `language/eval-code/indirect`: 77.0% (61)
-- `language/statements/using`: 72.2% (36)
-- `language/statements/await-using`: 85.7% (35)
-- `language/module-code/top-level-await`: 87.6% (251)
-- `language/literals/regexp`: 94.1% (238)
+The Test262 language and built-ins figures come from the local baseline snapshots for the checked-out ECMA-262 conformance tests. The TypeScript figure comes from the single-file conformance runner against the TypeScript 6.0.0 test suite.
 
 ### Current status
 
-At **98.4% Test262 language compliance**, Paserati handles the vast majority of modern JavaScript/TypeScript semantics correctly. It's still evolving, but it's past the "toy project" phase.
+At **98.4% Test262 language compliance** and **65.1% TypeScript 6.0.0 conformance**, Paserati handles a large chunk of modern JavaScript/TypeScript semantics correctly. It's still evolving, but it's past the "toy project" phase.
 
 Core language features that work well:
 
@@ -133,7 +130,7 @@ This project is licensed under the MIT License.
 
 This is a **one-person** project developed in my **free time** with the help of **AI**. It is also an experiment in large scale software engineering with AI, aimed at speedrunning a production-quality open source project.
 
-Google Gemini 2.5/3.0 Pro and Claude Sonnet/Opus 4/4.5 wrote almost all the code so far under more or less careful direction and scrutiny - also known as "vibe coding but when you know what you're doing".
+Google Gemini 2.5/3.0 Pro and Claude Sonnet/Opus 4/4.5/4.7 and GPT 5.5 wrote almost all the code so far under more or less careful direction and scrutiny - also known as "vibe coding but when you know what you're doing".
 
 That fun sticker at the top of the README? It's made with GPT-4o's image generation.
 
