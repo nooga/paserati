@@ -290,7 +290,6 @@ func TestParseGenericArrowFunctionErrors(t *testing.T) {
 		"<>",   // Empty type parameters
 		"<T",   // Missing closing >
 		"<T>(", // Missing parameter list end
-		"<T>x", // Missing parentheses
 	}
 
 	for _, input := range errorTests {
@@ -306,5 +305,26 @@ func TestParseGenericArrowFunctionErrors(t *testing.T) {
 		if program == nil {
 			t.Errorf("Expected program to be parsed even with errors for input '%s'", input)
 		}
+	}
+}
+
+func TestParseAngleBracketTypeAssertion(t *testing.T) {
+	l := lexer.NewLexer("<T>x")
+	p := NewParser(l)
+	program, parseErrs := p.ParseProgram()
+
+	if len(parseErrs) > 0 {
+		t.Fatalf("Expected '<T>x' to parse as a type assertion, got errors: %v", parseErrs)
+	}
+	if program == nil || len(program.Statements) != 1 {
+		t.Fatalf("Expected one parsed statement, got %#v", program)
+	}
+
+	stmt, ok := program.Statements[0].(*ExpressionStatement)
+	if !ok {
+		t.Fatalf("Expected expression statement, got %T", program.Statements[0])
+	}
+	if _, ok := stmt.Expression.(*TypeAssertionExpression); !ok {
+		t.Fatalf("Expected type assertion expression, got %T", stmt.Expression)
 	}
 }

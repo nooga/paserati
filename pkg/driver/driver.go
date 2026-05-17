@@ -78,6 +78,12 @@ func (p *Paserati) SetSkipTypeCheck(skip bool) {
 	}
 }
 
+// SetAllowTopLevelReturn controls whether script/eval style top-level returns
+// are accepted by the type checker.
+func (p *Paserati) SetAllowTopLevelReturn(allow bool) {
+	p.checker.SetAllowTopLevelReturn(allow)
+}
+
 // EnableModuleMode enables module mode for the checker and compiler
 func (p *Paserati) EnableModuleMode(modulePath string) {
 	p.checker.EnableModuleMode(modulePath, p.moduleLoader)
@@ -1507,4 +1513,3 @@ func installBuiltinModules(p *Paserati) {
 	// p.DeclareModule("paserati/fs", fsModule)
 	// p.DeclareModule("paserati/crypto", cryptoModule)
 }
-

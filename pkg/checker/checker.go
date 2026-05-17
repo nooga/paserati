@@ -293,6 +293,7 @@ type Checker struct {
 	inAsyncFunction      bool
 	inGeneratorFunction  bool
 	functionNestingDepth int // 0 = top level, >0 = inside function(s)
+	allowTopLevelReturn  bool
 
 	// --- Loop/switch/label context (reset when entering a new function scope) ---
 	loopDepth    int             // depth of enclosing iteration statements in current function
@@ -350,6 +351,7 @@ func NewCheckerWithInitializers(initializers []builtins.BuiltinInitializer) *Che
 		currentInferredReturnTypes: nil,
 		currentThisType:            nil, // Initialize this type context
 		currentClassContext:        nil, // No class context initially
+		allowTopLevelReturn:        true,
 		abstractClasses:            make(map[string]bool),
 		abstractMethods:            make(map[string]map[string]bool),
 		generatorFunctions:         make(map[string]bool),
@@ -366,6 +368,12 @@ func (c *Checker) GetEnvironment() *Environment {
 // This is used when compiling direct eval code that was called from a method context
 func (c *Checker) SetAllowSuperInEval(allow bool) {
 	c.allowSuperInEval = allow
+}
+
+// SetAllowTopLevelReturn controls whether script/eval style top-level returns
+// are accepted by the checker.
+func (c *Checker) SetAllowTopLevelReturn(allow bool) {
+	c.allowTopLevelReturn = allow
 }
 
 // --- Access Control Helper Methods ---
@@ -1987,7 +1995,7 @@ func (c *Checker) visit(node parser.Node) {
 		c.checkObjectDestructuringDeclaration(node)
 
 	case *parser.ReturnStatement:
-		if c.functionNestingDepth == 0 {
+		if c.functionNestingDepth == 0 && !c.allowTopLevelReturn {
 			c.addError(node, "A 'return' statement can only be used within a function body.")
 		}
 		var actualReturnType types.Type = types.Undefined // Default if no return value

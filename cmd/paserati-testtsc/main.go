@@ -24,12 +24,12 @@ type panicError struct {
 	msg string
 }
 
-func (e *panicError) Error() string                        { return e.msg }
-func (e *panicError) Pos() errorsPkg.Position              { return errorsPkg.Position{} }
-func (e *panicError) Kind() string                         { return "Panic" }
-func (e *panicError) Code() string                         { return "" }
-func (e *panicError) Message() string                      { return e.msg }
-func (e *panicError) Unwrap() error                        { return nil }
+func (e *panicError) Error() string           { return e.msg }
+func (e *panicError) Pos() errorsPkg.Position { return errorsPkg.Position{} }
+func (e *panicError) Kind() string            { return "Panic" }
+func (e *panicError) Code() string            { return "" }
+func (e *panicError) Message() string         { return e.msg }
+func (e *panicError) Unwrap() error           { return nil }
 
 // directiveRegex parses // @key: value directives from TypeScript test files
 var directiveRegex = regexp.MustCompile(`^/{2}\s*@(\w+)\s*:\s*([^\r\n]*)`)
@@ -78,16 +78,16 @@ type TestResult struct {
 
 // TestStats tracks aggregate statistics
 type TestStats struct {
-	Total       int
-	Passed      int
-	Failed      int
-	Skipped     int
-	Timeouts    int
-	CleanPass   int // expected clean, got clean
-	CleanFail   int // expected clean, got errors
-	ErrorMatch  int // expected errors, got matching errors
-	ErrorMiss   int // expected errors, got wrong/missing errors
-	Duration    time.Duration
+	Total      int
+	Passed     int
+	Failed     int
+	Skipped    int
+	Timeouts   int
+	CleanPass  int // expected clean, got clean
+	CleanFail  int // expected clean, got errors
+	ErrorMatch int // expected errors, got matching errors
+	ErrorMiss  int // expected errors, got wrong/missing errors
+	Duration   time.Duration
 }
 
 func main() {
@@ -534,6 +534,7 @@ func classifyResult(result TestResult, actualErrs []errorsPkg.PaseratiError, exp
 func createTscPaserati(directives TestDirectives) *driver.Paserati {
 	initializers := builtins.GetStandardInitializers()
 	pas := driver.NewPaseratiWithInitializers(initializers)
+	pas.SetAllowTopLevelReturn(false)
 	// Type checking is ON - that's what we're testing
 	// Don't skip type check, don't ignore type errors
 	return pas

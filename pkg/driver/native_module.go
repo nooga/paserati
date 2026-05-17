@@ -590,8 +590,7 @@ func goTypeToTSType(t reflect.Type) types.Type {
 	case reflect.Bool:
 		return types.Boolean
 	case reflect.Map:
-		// For now, return a generic object type
-		return types.NewObjectType()
+		return mapTypeToObjectType(t, goTypeToTSType(t.Elem()))
 	case reflect.Slice:
 		// Handle slices, particularly []byte -> Uint8Array
 		if t.Elem().Kind() == reflect.Uint8 {
@@ -604,6 +603,21 @@ func goTypeToTSType(t reflect.Type) types.Type {
 		return &types.ArrayType{ElementType: elemType}
 	default:
 		return types.Any
+	}
+}
+
+func mapTypeToObjectType(t reflect.Type, valueType types.Type) types.Type {
+	if t.Key().Kind() != reflect.String {
+		return types.Any
+	}
+	if valueType == nil {
+		valueType = types.Any
+	}
+	return &types.ObjectType{
+		Properties: make(map[string]types.Type),
+		IndexSignatures: []*types.IndexSignature{
+			{KeyType: types.String, ValueType: valueType},
+		},
 	}
 }
 
@@ -1002,8 +1016,7 @@ func (tg *TypeGenerator) GenerateType(goValue interface{}) types.Type {
 	case reflect.Func:
 		result = tg.generateFunctionType(t)
 	case reflect.Map:
-		// For now, treat maps as objects with string keys and any values
-		result = types.NewObjectType() // TODO: improve map type generation
+		result = mapTypeToObjectType(t, tg.mapGoTypeToTS(t.Elem()))
 	default:
 		result = types.Any
 	}
@@ -1040,8 +1053,7 @@ func (tg *TypeGenerator) mapGoTypeToTS(t reflect.Type) types.Type {
 	case reflect.Bool:
 		return types.Boolean
 	case reflect.Map:
-		// For now, return a generic object type
-		return types.NewObjectType()
+		return mapTypeToObjectType(t, goTypeToTSType(t.Elem()))
 	default:
 		return types.Any
 	}

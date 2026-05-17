@@ -120,6 +120,15 @@ func GetPropertyType(objectType Type, propertyName string, isOptionalChaining bo
 					}
 				}
 
+				for _, indexSig := range obj.IndexSignatures {
+					if indexSig.KeyType == String || indexSig.KeyType == Any {
+						if indexSig.ValueType == nil {
+							return Any
+						}
+						return indexSig.ValueType
+					}
+				}
+
 				// Property not found
 				if isOptionalChaining {
 					return Undefined
