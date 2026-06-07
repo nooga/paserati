@@ -275,8 +275,10 @@ func getBaselineName(testPath string) string {
 }
 
 // loadExpectedErrors reads a .errors.txt baseline file and returns whether
-// the test is expected to produce errors
-func loadExpectedErrors(baselinesDir, baselineName string) (bool, []ExpectedError) {
+// the test is expected to produce errors. `directives` is the parsed // @
+// directives from the test source; used to pick the right parameterized
+// baseline variant when several exist.
+func loadExpectedErrors(baselinesDir, baselineName string, directives TestDirectives) (bool, []ExpectedError) {
 	errFile := filepath.Join(baselinesDir, baselineName+".errors.txt")
 	content, err := os.ReadFile(errFile)
 	if err != nil {
@@ -290,13 +292,30 @@ func loadExpectedErrors(baselinesDir, baselineName string) (bool, []ExpectedErro
 			// No baseline of any kind means the test should compile clean
 			return false, nil
 		}
-		// Paserati is target-independent and always supports modern features,
-		// so prefer the most-modern target baseline. ES5-target baselines may
-		// contain syntax errors for features Paserati happily parses.
-		sort.Slice(matches, func(i, j int) bool {
-			return baselineTargetScore(matches[i]) < baselineTargetScore(matches[j])
+		// Drop baselines whose parameters directly contradict a directive
+		// (e.g. baseline (strict=false) when the test sets // @strict: true).
+		// Then sort: prefer the highest directive-match score, break ties by
+		// most-modern target (Paserati is target-independent).
+		var compatible []string
+		for _, m := range matches {
+			if directiveMatchScore(m, directives) >= 0 {
+				compatible = append(compatible, m)
+			}
+		}
+		if len(compatible) == 0 {
+			// All baselines contradict; TS has no baseline for this config,
+			// treat as clean.
+			return false, nil
+		}
+		sort.Slice(compatible, func(i, j int) bool {
+			si := directiveMatchScore(compatible[i], directives)
+			sj := directiveMatchScore(compatible[j], directives)
+			if si != sj {
+				return si > sj
+			}
+			return baselineTargetScore(compatible[i]) < baselineTargetScore(compatible[j])
 		})
-		content, err = os.ReadFile(matches[0])
+		content, err = os.ReadFile(compatible[0])
 		if err != nil {
 			return false, nil
 		}
@@ -333,6 +352,63 @@ func loadExpectedErrors(baselinesDir, baselineName string) (bool, []ExpectedErro
 		}
 	}
 	return true, errors
+}
+
+// baselineParamsRegex extracts the parameter list from a parameterized
+// baseline filename, e.g. "foo(target=es2015,strict=true).errors.txt".
+var baselineParamsRegex = regexp.MustCompile(`\(([^)]+)\)\.errors\.txt$`)
+
+// extractBaselineParams parses the parameter list from a parameterized baseline
+// filename into a lowercase key→value map. Returns nil for plain baselines.
+func extractBaselineParams(path string) map[string]string {
+	m := baselineParamsRegex.FindStringSubmatch(filepath.Base(path))
+	if m == nil {
+		return nil
+	}
+	params := make(map[string]string)
+	for _, kv := range strings.Split(m[1], ",") {
+		kv = strings.TrimSpace(kv)
+		eq := strings.Index(kv, "=")
+		if eq < 0 {
+			continue
+		}
+		params[strings.ToLower(kv[:eq])] = strings.ToLower(kv[eq+1:])
+	}
+	return params
+}
+
+// directiveMatchScore scores how well a parameterized baseline's parameters
+// match the test's // @ directives. Returns -1 if any parameter directly
+// contradicts a directive value; otherwise returns +1 per parameter that
+// matches. Parameters the directives don't mention are neutral (no impact).
+//
+// Multi-value directives like `// @target: ES5, ES2015` generate one baseline
+// per value; any of the listed values is treated as a match.
+func directiveMatchScore(baselinePath string, directives TestDirectives) int {
+	params := extractBaselineParams(baselinePath)
+	if len(params) == 0 {
+		return 0
+	}
+	score := 0
+	for key, baselineVal := range params {
+		directiveVal, ok := directives.Raw[key]
+		if !ok {
+			continue
+		}
+		matched := false
+		for _, v := range strings.Split(directiveVal, ",") {
+			if strings.EqualFold(strings.TrimSpace(v), baselineVal) {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			score++
+		} else {
+			return -1
+		}
+	}
+	return score
 }
 
 // baselineSourceErrorRegex captures the source error count from a baseline
@@ -517,7 +593,7 @@ func runSingleTest(testFile, conformanceDir, baselinesDir string, timeout time.D
 	// type checking purposes.
 
 	// Load expected errors from baseline
-	expectErrors, expectedErrs := loadExpectedErrors(baselinesDir, baselineName)
+	expectErrors, expectedErrs := loadExpectedErrors(baselinesDir, baselineName, directives)
 	result.ExpectClean = !expectErrors
 
 	// Run synchronously - no goroutines to avoid stack overflow crashes from leaked goroutines.
