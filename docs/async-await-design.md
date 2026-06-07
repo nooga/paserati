@@ -1451,4 +1451,4 @@ runtime.onAsyncAfter(callback);
 - [ECMAScript 2022 (ES13) - Top-Level Await](https://tc39.es/ecma262/#sec-modules)
 - [Promises/A+ Specification](https://promisesaplus.com/)
 - [V8 Blog: Fast Async Functions](https://v8.dev/blog/fast-async)
-- [Generator Implementation (Paserati)](./generators-implementation-plan.md)
+- [Generator Implementation (Paserati)](./archived/generators-implementation-plan.md)
