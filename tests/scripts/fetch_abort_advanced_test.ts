@@ -1,3 +1,4 @@
+// skip: network
 // Test advanced abort features: in-flight abort, AbortSignal.timeout(), AbortSignal.any()
 
 async function runTests() {

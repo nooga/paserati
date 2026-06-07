@@ -1,3 +1,4 @@
+// skip: network
 // Test extended fetch API features: AbortController, Headers iterators, Response clone, etc.
 
 async function runTests() {

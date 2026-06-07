@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -71,6 +72,50 @@ func parseExpectation(scriptContent string) (*Expectation, error) {
 	return nil, fmt.Errorf("no expectation comment found (e.g., // expect: value)")
 }
 
+// parseSkipTags collects `// skip: tag1, tag2` directives from a script.
+// Tags are an open set — the harness just compares strings. Used by
+// TestScripts to default-skip non-deterministic tests (network, slow, flaky)
+// unless the caller opts in via PASERATI_TEST_TAGS.
+func parseSkipTags(scriptContent string) []string {
+	scanner := bufio.NewScanner(strings.NewReader(scriptContent))
+	skipRegex := regexp.MustCompile(`^//\s*skip:\s*(.*)`)
+	var tags []string
+	for scanner.Scan() {
+		m := skipRegex.FindStringSubmatch(scanner.Text())
+		if m == nil {
+			continue
+		}
+		for _, t := range strings.Split(m[1], ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tags = append(tags, t)
+			}
+		}
+	}
+	return tags
+}
+
+// shouldRunWithTags returns true iff every tag is present in PASERATI_TEST_TAGS.
+// An empty tag list always runs. A test tagged `network, slow` requires BOTH
+// to be enabled — narrower than "any overlap" so opting into `network` doesn't
+// also drag in flaky tests.
+func shouldRunWithTags(tags []string) bool {
+	if len(tags) == 0 {
+		return true
+	}
+	enabled := map[string]bool{}
+	for _, t := range strings.Split(os.Getenv("PASERATI_TEST_TAGS"), ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			enabled[t] = true
+		}
+	}
+	for _, t := range tags {
+		if !enabled[t] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestScripts(t *testing.T) {
 	scriptDir := "scripts"
 	files, err := ioutil.ReadDir(scriptDir)
@@ -95,6 +140,12 @@ func TestScripts(t *testing.T) {
 			expectation, err := parseExpectation(scriptContent)
 			if err != nil {
 				t.Skipf("Failed to parse expectation in %q: %v", scriptPath, err)
+				return
+			}
+
+			if tags := parseSkipTags(scriptContent); !shouldRunWithTags(tags) {
+				joined := strings.Join(tags, ",")
+				t.Skipf("skipped by tag(s) %s — set PASERATI_TEST_TAGS=%s to run", joined, joined)
 				return
 			}
 
