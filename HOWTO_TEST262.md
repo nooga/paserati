@@ -31,8 +31,7 @@ The goal is to iteratively reduce the "delta" between the baseline (last commit)
 Don't try to fix everything at once. Pick a specific language feature or directory.
 
 - Focus on `test262/test/language/...`
-- Use `analyze_failures.sh` to find common error patterns.
-- Look at `docs/test262_fix_opportunities.md` for low-hanging fruit.
+- Cluster failures by error pattern with `paserati-analyze` (see the [`paserati-analyze` section](#finding-opportunities-with-paserati-analyze) below) — replaces the older `analyze_failures.sh` / `docs/test262_fix_opportunities.md` workflow.
 
 ### 2. Reproduce Locally
 
