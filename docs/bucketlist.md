@@ -1,25 +1,8 @@
 # Paserati Feature Bucket List
 
-This document tracks implemented and planned features for the Paserati TypeScript/JavaScript runtime, based on ES2025 and TypeScript specifications.
+This document tracks implemented and planned features for the Paserati TypeScript/JavaScript runtime, based on ES2025 and TypeScript specifications. Headline conformance numbers live in [README.md](../README.md); this is the per-feature surface.
 
-**Test262 Language Suite: 98.4%** (23,155/23,523 tests passing)
-
-## Test262 Weak Spots
-
-Areas with lower pass rates that need attention:
-
-| Subsuite | Pass Rate | Tests |
-|----------|-----------|-------|
-| `import/import-defer` | 14.5% | 69 |
-| `module-code/namespace` | 52.8% | 36 |
-| `statements/with` | 56.4% | 181 |
-| `eval-code/indirect` | 63.9% | 61 |
-| `statements/for-in` | 72.2% | 115 |
-| `expressions/yield` | 74.6% | 63 |
-| `expressions/super` | 75.5% | 94 |
-| `types/reference` | 79.3% | 29 |
-| `expressions/call` | 79.3% | 92 |
-| `eval-code/direct` | 79.7% | 286 |
+A `[x]` here means "the syntax/API is wired up and basic cases work." Full spec coverage may still vary suite-by-suite — for live weak-spot data, run `./paserati-test262 -subpath "language" -timeout 0.2s -suite` (and see [`builtin_opportunities.md`](builtin_opportunities.md) for the built-ins side).
 
 ## Core Syntax & Basics
 
@@ -127,7 +110,7 @@ Areas with lower pass rates that need attention:
 - [x] **performance** - now, mark, measure
 - [x] **eval()** - direct and indirect
 - [x] **Dynamic import()** - with pluggable resolution
-- [ ] **WeakMap / WeakSet** - planned
+- [x] **WeakMap / WeakSet** - constructors and core methods
 - [ ] **Timer functions** (`setTimeout`, `setInterval`) - planned
 
 ## TypeScript Types
@@ -194,8 +177,7 @@ Areas with lower pass rates that need attention:
 - [ ] Triple-slash directives
 - [ ] Path mapping
 - [ ] Project references
-- [ ] WeakMap/WeakSet
-- [ ] Timer functions
+- [ ] Timer functions (`setTimeout`, `setInterval`)
 - [ ] Strict null checks option
 - [ ] Sparse arrays (large index optimization)
 
