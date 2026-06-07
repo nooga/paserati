@@ -17,6 +17,9 @@ import (
 // Per-property abstract is not tracked by the parser today, so abstract classes
 // are treated permissively rather than risk false positives.
 func (c *Checker) checkStrictPropertyInit(node *parser.ClassDeclaration) {
+	if c.skipStrictPropertyInit {
+		return
+	}
 	if node == nil || node.Body == nil {
 		return
 	}

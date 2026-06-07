@@ -78,6 +78,12 @@ func (p *Paserati) SetSkipTypeCheck(skip bool) {
 	}
 }
 
+// SetSkipStrictPropertyInit controls whether TS2564 is emitted. Default false
+// (emit). Used by paserati-testtsc to opt out per-file based on TS directives.
+func (p *Paserati) SetSkipStrictPropertyInit(skip bool) {
+	p.checker.SetSkipStrictPropertyInit(skip)
+}
+
 // SetAllowTopLevelReturn controls whether script/eval style top-level returns
 // are accepted by the type checker.
 func (p *Paserati) SetAllowTopLevelReturn(allow bool) {
