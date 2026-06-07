@@ -1,624 +1,166 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance to Codex (and any other coding agent) when working in this repository.
 
 ## Project Overview
 
-Paserati is a production-quality TypeScript/JavaScript runtime written in Go that compiles TypeScript directly to bytecode for a register-based virtual machine, bypassing JavaScript transpilation entirely.
+Paserati is a TypeScript/JavaScript runtime in pure Go. It parses + type-checks TypeScript and compiles **directly to bytecode** for a register VM — no JS transpilation step. Two deps (`regexp2`, `golang.org/x/text`), no CGO.
 
-**Core Goals**:
+**Priorities**: correctness first (full ECMAScript 262 + TypeScript conformance), performance second (inline caches, shape-based objects, register allocation). The type checker can be disabled (`--no-typecheck`) to test pure JS semantics — this is how the Test262 driver runs.
 
-1. **Correctness**: Full ECMAScript 262 compliance and TypeScript compatibility
-2. **Performance**: Optimized execution with inline caching, shape-based objects, and register allocation
+## Commands
 
-The runtime executes TypeScript directly without lowering to JavaScript, using compile-time type information for optimizations while maintaining full JavaScript semantics for runtime behavior.
-
-## Development Commands
-
-### Build and Run
+### Build and run
 
 ```bash
-# Build the main binary
-go build -o paserati cmd/paserati/main.go
-
-# Run the REPL
-./paserati
-
-# Execute a TypeScript file
-./paserati path/to/script.ts
-
-# Run expression directly
-./paserati -e "let x = 42; x * 2"
-
-# Show bytecode output
-./paserati -bytecode script.ts
-
-# Show inline cache statistics
-./paserati -cache-stats script.ts
-
-# Disable type checking (for testing JavaScript semantics)
-./paserati --no-typecheck script.js
+go build -o paserati ./cmd/paserati/
+./paserati                                 # REPL
+./paserati path/to/script.ts               # run file
+./paserati -e 'expr'                       # eval expression
+./paserati -bytecode script.ts             # dump bytecode
+./paserati -cache-stats script.ts          # IC stats
+./paserati --no-typecheck file.js          # pure-JS mode (Test262 repros)
 ```
 
-**Note**: Test262 runs without type checking enabled (using `SetIgnoreTypeErrors(true)` in the driver).
+Always rebuild before testing. `go build ./...` verifies every package compiles.
 
-### Testing
+### Tests
 
 ```bash
-# Run all tests
-go test ./tests/...
-
-# Run script-based tests (most comprehensive) - THIS IS OUR SMOKE TEST
-# This test suite MUST always be green - fix issues or mark as FIXME
-go test ./tests -run TestScripts
-
-# Run a specific script test
-go test ./tests -run "TestScripts/filename.ts"
-
-# Run with verbose output to see individual test names
-go test ./tests -v
+go test ./tests/...                        # all tests
+go test ./tests -run TestScripts           # smoke test — MUST stay green
+go test ./tests -run "TestScripts/foo.ts"  # single script test
+go test ./tests -v                         # verbose
 ```
 
-**Important**: The `TestScripts` suite in `tests/scripts_test.go` is our smoke test and should always pass. When something doesn't work, either fix it immediately or mark it as FIXME - never sweep issues under the rug.
-
-**Smoke Test Expectation Format**: Tests in `tests/scripts/` use special comments to define expected outcomes:
-
-```typescript
-// expect: value                    // Compare against LAST STATEMENT value
-// expect_runtime_error: message    // Expected runtime error
-// expect_compile_error: message    // Expected compile error
-```
-
-**Critical**: The `// expect: value` comment compares against the **value of the last statement** in the script, NOT against printed output. For example:
-
-```typescript
-// expect: 42
-let x = 40;
-let y = x + 2;
-y;  // <-- This expression's value (42) is compared against "expect"
-```
-
-The test runner evaluates the script and compares the result of the final expression to the expected value. `console.log()` output is ignored for test comparison purposes.
-
-**Temporary Test Files**: Use the `scratch/` directory (gitignored) for temporary test files, debug scripts, and experimental code. This keeps the repository clean while you debug issues.
-
-### Test262 Compliance Testing
-
-Paserati uses the official ECMAScript Test262 suite to verify language compliance. The `paserati-test262` binary runs these tests with our runtime.
+### Test262
 
 ```bash
-# Build the test262 runner
 go build -o paserati-test262 ./cmd/paserati-test262
 
-# Run all Test262 tests (takes a while)
-./paserati-test262 -path ./test262
-
-# Run specific test suite with filtering
-./paserati-test262 -path ./test262 -subpath "language/expressions" -filter -timeout 0.5s
-
-# Show suite breakdown with pass rates
+# Overview by subsuite with pass rates
 ./paserati-test262 -path ./test262 -subpath "language/expressions" -suite -filter -timeout 0.5s
 
-# Run a specific test for debugging
+# Single test for debugging
 ./paserati-test262 -path ./test262 -subpath "language/expressions/addition" -pattern "S11.6.1_A3.1_T1.1.js"
+
+# Diff current run against committed baseline (post-commit hook regenerates baseline.txt)
+./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline.txt
 ```
 
-**Key Flags**:
+Key flags: `-suite` (per-subsuite pass rates), `-filter` (skips legacy patterns like `with`), `-timeout` (per-test), `-subpath` (scope), `-pattern` (single file), `-diff <file>` (compare to baseline), `-dump <file>` (write current state).
 
-- `-suite`: Shows pass rates broken down by test suite and subsuite
-- `-filter`: Filters out legacy JavaScript patterns (e.g., `with` statements, old ES5 patterns) not relevant for modern TS runtime
-- `-timeout`: Set timeout per test (default 5s, use shorter like 0.5s for faster iteration)
-- `-subpath`: Limit tests to a specific subdirectory (e.g., "language/expressions", "built-ins/Array")
-- `-pattern`: File pattern for test files (default "\*.js")
-
-**Workflow for Fixing Test262 Failures**:
-
-1. **Identify target area**: Run with `-suite -filter` to see pass rates by category
-
-   ```bash
-   ./paserati-test262 -path ./test262 -subpath "language/expressions" -suite -filter -timeout 0.5s
-   ```
-
-2. **Analyze failure patterns**: Look for common error messages
-
-   ```bash
-   ./paserati-test262 -path ./test262 -subpath "language/expressions/addition" -filter | grep "^FAIL" | head -20
-   ```
-
-3. **Debug specific failures**: Run individual tests with verbose output
-
-   ```bash
-   # Test a specific file
-   go run ./cmd/paserati path/to/failing-test.js
-
-   # Or with the test runner
-   ./paserati-test262 -path ./test262 -subpath "path/to" -pattern "specific-test.js"
-   ```
-
-4. **Create smoke tests**: Add simplified versions to `tests/scripts/` for regression testing
-
-   ```typescript
-   // tests/scripts/feature_test.ts
-   // expect: value
-   console.log("test output");
-   ```
-
-5. **Fix the issue**: Make changes following the architecture (lexer → parser → checker → compiler → VM)
-
-6. **Verify improvement**: Re-run the suite to confirm increased pass rate
-   ```bash
-   ./paserati-test262 -path ./test262 -subpath "language/expressions" -suite -filter
-   ```
-
-**Common Test262 Fix Patterns**:
-
-- **Type coercion issues**: JavaScript allows loose type conversions - ensure the type checker permits them and the VM implements correct semantics (e.g., `true + 1` should be `2`)
-- **Built-in prototype issues**: Objects must properly inherit from their prototype (e.g., `[] instanceof Array` must be `true`)
-- **Property access**: Any value can be used as an object property key (converts to string)
-- **Error messages**: Ensure runtime errors match expected ECMAScript behavior
-- **ToPrimitive conversions**: Objects in operators should call `valueOf()` or `toString()` methods
-
-**Priority for Fixing**:
-
-1. Focus on categories with lower pass rates but high test counts
-2. Look for patterns - fixing one issue often fixes many tests
-3. Prioritize correctness over edge cases
-4. Keep the smoke test (`TestScripts`) always green
-
-### Practical Test262 Workflow
-
-**Step-by-Step Example Session**:
+### Failure clustering
 
 ```bash
-# 1. Build the test262 runner
-go build -o paserati-test262 ./cmd/paserati-test262
-
-# 2. Get overview of all test categories with pass rates
-./paserati-test262 -path ./test262 -subpath "language" -suite -filter -timeout 0.5s
-
-# Example output interpretation:
-# language/expressions    11093    3159     6056     1873       16    28.5%
-#          ^^^category     ^^^total ^^^pass  ^^^fail  ^^^skip   ^^^timeout ^^^pass%
-# This shows expressions has 28.5% pass rate - good target for improvement
-
-# 3. Drill down into a specific category to see subcategories
-./paserati-test262 -path ./test262 -subpath "language/expressions" -suite -filter -timeout 0.5s | grep "language/expressions"
-
-# Example output:
-# language/expressions/addition         48      29       18        1        0    60.4%
-# language/expressions/instanceof       43      19       23        1        0    44.2%
-# language/expressions/object         1170     407      703       60        0    34.8%
-# Pick the one with high test count and lower pass rate
-
-# 4. Look at actual failures in that category
-./paserati-test262 -path ./test262 -subpath "language/expressions/object" -filter -timeout 0.5s | grep "^FAIL" | head -20
-
-# Example output analysis:
-# FAIL 14/1170 test262/.../S11.1.5_A1.1.js - test failed: ... object instanceof Object === true
-# FAIL 15/1170 test262/.../S11.1.5_A1.2.js - test failed: ... object instanceof Object === true
-# Pattern detected: instanceof Object is failing - this is systemic!
-
-# 5. Test the issue manually to understand it
-go run ./cmd/paserati -e 'const obj = {}; console.log(obj instanceof Object);'
-# Output: false
-# Expected: true
-# Now we know what to fix!
-
-# 6. Look at a specific failing test to understand requirements
-cat test262/test/language/expressions/object/S11.1.5_A1.1.js | head -30
-
-# 7. After implementing a fix, verify it works manually
-go run ./cmd/paserati -e 'const obj = {}; console.log(obj instanceof Object);'
-# Output: true
-# Good! Now test it didn't break smoke tests
-
-# 8. Run smoke tests to ensure no regressions
-go test ./tests -run TestScripts
-# All tests should pass
-
-# 9. Measure improvement in Test262
-./paserati-test262 -path ./test262 -subpath "language/expressions/object" -filter -timeout 0.5s | tail -10
-# Before: Passed: 407 (34.8%)
-# After:  Passed: 418 (35.7%)  <- 11 more tests passing!
-
-# 10. Check overall improvement
-./paserati-test262 -path ./test262 -subpath "language/expressions" -suite -filter -timeout 0.5s | tail -10
-# Track the overall pass rate increase
-```
-
-**Interpreting Test Results**:
-
-When you see a failure like:
-
-```
-FAIL 14/1170 test262/test/language/expressions/object/S11.1.5_A1.1.js - test failed: Runtime Error at 1:1: Uncaught exception: Test262Error: #2: var object = {}; object instanceof Object === true
-```
-
-Break it down:
-
-- `FAIL 14/1170`: Test #14 out of 1,170 total tests
-- `test262/.../S11.1.5_A1.1.js`: The specific test file
-- `Runtime Error at 1:1`: Error occurred at line 1, column 1
-- `Uncaught exception: Test262Error`: The test threw an error (test assertion failed)
-- `#2: var object = {}; object instanceof Object === true`: The assertion message tells you what should be true
-
-**Common Patterns to Look For**:
-
-1. **Multiple similar failures** = Systemic issue worth fixing
-
-   ```bash
-   # Count failures by error message
-   ./paserati-test262 -path ./test262 -subpath "language/expressions" -filter 2>&1 | \
-     grep "test failed:" | sed 's/.*test failed: //' | sort | uniq -c | sort -rn | head -10
-   ```
-
-2. **High failure count in one subcategory** = Missing feature or broken implementation
-
-   ```bash
-   # See which subcategories have most failures
-   ./paserati-test262 -path ./test262 -subpath "language/expressions" -suite -filter -timeout 0.5s | \
-     grep "language/expressions/" | sort -k3 -rn | head -10
-   ```
-
-3. **Timeout issues** = Infinite loop or performance problem
-   ```bash
-   # Find tests that timeout
-   ./paserati-test262 -path ./test262 -subpath "language/expressions" -filter -timeout 0.5s 2>&1 | \
-     grep "TIMEOUT"
-   ```
-
-**Quick Commands Reference**:
-
-```bash
-# Get overall pass rate for expressions
-./paserati-test262 -path ./test262 -subpath "language/expressions" -suite -filter -timeout 0.5s | grep "GRAND TOTAL"
-
-# Test a single file for debugging
-./paserati-test262 -path ./test262 -subpath "language/expressions/addition" -pattern "S11.6.1_A3.1_T1.1.js" -timeout 0.5s
-
-# Find tests by error keyword
-./paserati-test262 -path ./test262 -subpath "language/expressions" -filter 2>&1 | grep "instanceof"
-```
-
-### Finding High-Impact Fixes with paserati-analyze
-
-The `paserati-analyze` tool clusters Test262 failures by error pattern, making it easy to find fixes that pass many tests at once.
-
-```bash
-# Build the analyzer
 go build -o paserati-analyze ./cmd/paserati-analyze/
-
-# Analyze failures in a specific subsuite
-./paserati-test262 -subpath language/expressions/object -json | ./paserati-analyze
-
-# Analyze a broader area
 ./paserati-test262 -subpath language/expressions -json | ./paserati-analyze
 ```
 
-**Output Interpretation**:
+Output groups failures by normalized error pattern. `[42] undefined is not an object` means 42 tests share that root cause — high-yield target.
 
-```
-[42] undefined is not an object
-  - test262/test/language/expressions/object/foo.js
-  - test262/test/language/expressions/object/bar.js
-  ... and 40 more
-```
+## Smoke test format
 
-The `[42]` means 42 tests fail with this normalized error pattern. These are **high-yield targets** - fixing the root cause could pass many tests at once.
-
-**Strategy**:
-1. Pick a subsuite with moderate pass rate (70-90%) - these often have easy wins
-2. Run the analyzer to find the largest error clusters
-3. Fix the root cause of the largest cluster first
-4. Avoid scattered errors - if each test fails differently, foundational work may be needed
-
-### Debugging Test262 Failures
-
-**Critical**: Test262 tests JavaScript semantics, not TypeScript types. Always use `--no-typecheck` when debugging:
-
-```bash
-# Create a minimal reproduction in scratch/
-./paserati --no-typecheck scratch/repro.js
-
-# Or run Test262 test directly
-./paserati --no-typecheck test262/test/language/expressions/some-test.js
-```
-
-Fixes to the type checker usually do NOT help with Test262 compliance. Focus on the Compiler and VM when fixing Test262 failures.
-
-### Baseline-Driven Development Workflow
-
-Paserati uses an automated baseline system to track Test262 compliance progress. A post-commit hook automatically generates `baseline.txt` after each commit, capturing a snapshot of all test results.
-
-**How It Works**:
-
-- **baseline.txt format**: Each line is `+test-path` (passing) or `-test-path` (failing)
-- **Post-commit hook**: Automatically runs after `git commit` and generates fresh `baseline.txt`
-- **Diff tool**: Compare current work against committed baseline to see impact of changes
-
-**Development Workflow**:
-
-```bash
-# 1. Make your changes to the codebase
-# ... edit files ...
-
-# 2. Run smoke tests to ensure no regressions
-go test ./tests -run TestScripts
-
-# 3. Compare your changes against the committed baseline
-./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline.txt
-
-# Example output:
-# +language/expressions/super/method-call.js        <- Now passing! (was failing)
-# -language/statements/class/name-binding.js        <- Now failing (was passing)
-#
-# === Diff Summary ===
-# New passes:   5
-# New failures: 1
-# Net change:   +4
-
-# 4. Communicate success to the user, allow them to review and approve the commit
-git add <files>
-git commit -m "Fix super method calls in expressions"
-# Hook automatically generates new baseline.txt for next iteration
-
-# 5. Continue development against new baseline
-# ... make more changes ...
-./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline.txt
-```
-
-**Key Flags**:
-
-- `-diff <file>`: Compare current results against baseline file
-
-  - Shows `+path` for tests that started passing
-  - Shows `-path` for tests that started failing
-  - Prints summary statistics (net change, new passes, new failures)
-
-- `-dump <file>`: Save current test results to file
-
-  - Format: `+path` (passing) or `-path` (failing)
-  - Useful for manual baseline creation or debugging
-
-- Combine them: `-diff baseline.txt -dump current.txt`
-  - Compare against baseline AND save current state
-
-**Benefits**:
-
-- **Fast feedback**: See exactly which tests your changes affected
-- **No regressions**: Quickly catch when fixes break other tests
-- **Progress tracking**: Each commit captures test state for historical comparison
-- **Focused debugging**: Diff output highlights specific test paths to investigate
-
-**Example Session**:
-
-```bash
-# Working on instanceof operator fix
-./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline.txt
-# Net change: -3 (broke some tests)
-# Fix the regression...
-
-./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline.txt
-# Net change: +5 (fixed instanceof AND no regressions!)
-
-# Communicate success to the user, allow them to review and approve the commit
-git commit -m "Fix instanceof for built-in types"
-# Hook generates new baseline.txt automatically
-```
-
-### Adding New Language Features
-
-When implementing new operators, statements, or language constructs, follow this pipeline:
-
-1. **Lexer** (`pkg/lexer/lexer.go`): Add token types and keyword mappings
-2. **Parser** (`pkg/parser/`): Add AST nodes (`ast.go`) and parsing logic (`parser.go`)
-   - For complex features, create dedicated `parse_*.go` files (e.g., `parse_class.go`)
-3. **Type Checker** (`pkg/checker/`): Add type checking logic in appropriate files
-   - Create dedicated checker files for complex features (e.g., `class.go`, `narrowing.go`)
-4. **Compiler** (`pkg/compiler/`): Add bytecode generation in `compile_*.go` files
-   - Create dedicated compilation files for major features (e.g., `compile_class.go`)
-5. **VM** (`pkg/vm/`): Add bytecode execution logic and any new opcodes
-6. **Tests**: Create test scripts in `tests/scripts/` with expectation comments
-
-## Architecture Overview
-
-### Code Structure
-
-The codebase is organized into distinct packages:
-
-- `pkg/lexer/` - Lexical analysis and tokenization
-- `pkg/parser/` - AST construction and syntax analysis
-- `pkg/checker/` - Type checking and semantic analysis
-- `pkg/compiler/` - Bytecode generation and optimization
-- `pkg/vm/` - Virtual machine and runtime execution
-- `pkg/types/` - Type system definitions and operations
-- `pkg/builtins/` - Built-in objects and functions
-- `pkg/driver/` - Main compilation pipeline orchestration
-- `pkg/errors/` - Error types and handling
-- `pkg/source/` - Source code management
-
-**Important**: When implementing major features, create new files in the appropriate package rather than editing long existing files. For example:
-
-- Parser features: Create `parse_feature.go` in `pkg/parser/`
-- Type checking: Create `feature.go` in `pkg/checker/`
-- Compilation: Create `compile_feature.go` in `pkg/compiler/`
-
-### Compilation Pipeline
-
-The codebase follows a traditional compiler pipeline:
-
-- **Lexer**: Tokenizes TypeScript source code
-- **Parser**: Builds AST using Pratt parser for expressions
-- **Type Checker**: Performs TypeScript-compliant type checking with type narrowing
-- **Compiler**: Generates bytecode for register-based VM with register allocation
-- **VM**: Executes bytecode with inline caching and optimized object representations
-
-### Core Components
-
-**Driver Package** (`pkg/driver/`): Entry point that orchestrates the compilation pipeline. The `Paserati` struct maintains persistent state between evaluations for REPL functionality.
-
-**Virtual Machine** (`pkg/vm/`): Register-based VM with two object representations:
-
-- `PlainObject`: Shape-based optimization similar to V8's hidden classes
-- `DictObject`: Simple hash-map based storage for dynamic objects
-- `ArrayObject`: Specialized array representation with `length` property
-
-**Type System** (`pkg/types/`): Comprehensive TypeScript type system supporting:
-
-- Primitive types, literal types, union/intersection types
-- Object types, interfaces with inheritance
-- Function types with overloads, optional/default parameters
-- Tuple types with contextual typing integration
-- **Generic types** with constraints and type inference
-- **Class types** represented as constructor function types
-- Type narrowing and control flow analysis
-
-**Built-ins** (`pkg/builtins/`): Modern architecture with prototype registry system. Each built-in type (Array, String, Math, etc.) has consolidated implementation with both runtime methods and type information.
-
-### Testing Framework
-
-**Script-Based Testing**: The primary testing mechanism uses TypeScript files in `tests/scripts/` with special comment annotations:
+`tests/scripts/*.ts` use these comments — parsed by `tests/scripts_test.go`:
 
 ```typescript
-// expect: value                    // Compare against last statement's VALUE (not printed output)
-// expect_runtime_error: message    // Expected runtime error substring
-// expect_compile_error: message    // Expected compile error substring
+// expect: value                    // value of LAST STATEMENT, not console output
+// expect_runtime_error: message    // substring match
+// expect_compile_error: message    // substring match
 ```
 
-**Important**: The `// expect:` comment compares against the **value of the last statement**, not console output. The final expression in the script is evaluated and its result is compared to the expected value.
+The `// expect:` value is the result of the final expression. `console.log` output is **ignored** for comparison. Use `scratch/` (gitignored) for throwaway repros.
 
-Test files are automatically discovered and executed by `tests/scripts_test.go`.
+`TestScripts` is the smoke test: it must stay green. Fix the issue or mark `FIXME` — don't sweep.
 
-## Key Implementation Patterns
+## Development workflow
 
-### Adding New Operators
+1. Make changes
+2. `go test ./tests -run TestScripts` — verify smoke test stays green
+3. `./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline.txt` — see Test262 impact
+4. Commit (post-commit hook regenerates `baseline.txt` for next iteration)
 
-1. Add token type to lexer with appropriate precedence
-2. Register infix/prefix parser function
-3. Add type checking case in checker's operator switch
-4. Add compilation case in compiler's operator switch
-5. Add VM execution case with proper bytecode
-6. Create test files covering success and error cases
+### Debugging Test262 failures
 
-### Object Property Operations
+- Test262 tests JS semantics, **not TS types**. Always use `--no-typecheck` for repros.
+- Type-checker fixes almost never move Test262 numbers. Focus on **compiler + VM**.
+- Cluster errors with `paserati-analyze` before diving in — one root cause often unblocks dozens.
 
-The VM supports three object types with different property access patterns:
+Common categories of fix:
+- **Type coercion** — `ToFloat`/`ToString`/`ToBoolean` on `Value`; `vm.toPrimitive()` for `valueOf`/`toString`
+- **Prototype chain** — built-ins must inherit from their prototype (e.g. `[] instanceof Array`)
+- **Property access** — any value is a valid key (converts to string)
+- **Error messages** — use `ValueType.String()` for human-readable type names
 
-- Use `HasOwn()` method for property existence
-- Use `GetOwn()`/`SetOwn()` for property access
-- Arrays handle numeric indices specially
+## Architecture
 
-### Type Checking Integration
+### Pipeline
 
-The type checker uses widened types for compatibility checking and maintains separate environments for type narrowing in control flow branches.
+```
+lexer → parser → checker → compiler → vm
+                     ↑
+                  types
+```
 
-### Bytecode Generation
+- `pkg/lexer/` — tokenization
+- `pkg/parser/` — Pratt parser; AST in `ast.go`, per-feature files like `parse_class.go`
+- `pkg/checker/` — TS type checking + narrowing; per-feature files like `class.go`, `narrowing.go`
+- `pkg/compiler/` — bytecode gen + register allocation; per-feature `compile_*.go`
+- `pkg/vm/` — register VM, inline caches, shape-based objects
+- `pkg/types/` — type system (generics, conditional/mapped/template-literal types, `infer`)
+- `pkg/builtins/` — prototype-registry built-ins (Array, String, Math, Proxy, Reflect, TypedArrays, …)
+- `pkg/modules/` — ESM resolver and loader
+- `pkg/driver/` — orchestrates pipeline; `Paserati` struct holds persistent REPL state
+- `pkg/runtime/`, `pkg/source/`, `pkg/errors/` — supporting infra
 
-The compiler uses register allocation with automatic cleanup via defer patterns. Each compilation function manages its temporary registers and frees them on completion.
+### Adding a language feature
 
-**Key VM Implementation Details**:
+Touch the stages in order: lexer → parser → checker → compiler → vm → tests. **Create new `parse_*.go` / `compile_*.go` / feature-named checker files** instead of growing existing megafiles.
 
-- **Type Coercion**: The VM implements JavaScript's type coercion via `ToFloat()`, `ToString()`, `ToBoolean()` methods on `Value`
-- **ToPrimitive**: For objects in operators, the VM calls `valueOf()` or `toString()` methods via the `vm.toPrimitive()` function
-- **instanceof**: Walks the prototype chain comparing to constructor's `.prototype` property
-- **Property Access**: Any value can be used as an object key (gets converted to string)
-- **Error Messages**: Use `ValueType.String()` method to get human-readable type names in error messages
+For a new operator:
+1. Add token + precedence in lexer
+2. Register infix/prefix parser
+3. Add type-check case in checker's operator switch
+4. Add compile case in compiler's operator switch
+5. Add VM execution case (new opcode if needed)
+6. Add test scripts in `tests/scripts/`
 
-## Feature Status
+### VM essentials
 
-See `docs/bucketlist.md` for comprehensive implementation status.
+Three object representations:
+- `PlainObject` — shape-based, V8-style hidden classes (fast path)
+- `DictObject` — hash-map for dynamic / many-key objects
+- `ArrayObject` — specialized with `length` property
 
-**Recently Completed (Latest ECMAScript Compliance Work)**:
+Property API: `HasOwn` / `GetOwn` / `SetOwn`. Arrays handle numeric indices specially.
 
-- ✅ Destructuring variable hoisting for closures (var destructuring now properly captured)
-- ✅ `continue` inside switch inside loop (proper jump target handling)
-- ✅ Type coercion for arithmetic operators (boolean, null, undefined to number)
-- ✅ ToPrimitive implementation with valueOf()/toString() calling
-- ✅ instanceof operator for all built-in types (Object, Array, RegExp, etc.)
-- ✅ Property access with any value as key (converts to string)
-- ✅ Proper error messages with human-readable type names
-- ✅ Super expressions with spread arguments
-- ✅ Object addition via valueOf() methods
+Compiler uses register allocation with `defer`-based cleanup — each compile function frees its temps.
 
-**Core Language Features**:
+### Type system
 
-- **Classes** - Declarations, constructors, methods, inheritance, super
-- **Generics** - Complete generic type system with constraints and inference
-- **Regular expressions** - Full RegExp support with literal syntax and methods
-- Type assertions (`as` operator)
-- Property existence checking (`in` operator)
-- Spread syntax in function calls and array/object literals
-- Comprehensive type narrowing and control flow analysis
-- Interface inheritance
-- Optional/default parameters
-- Rest parameters
+Type checker uses widened types for compatibility and maintains separate environments for narrowing across control flow branches. Class types are represented as constructor function types.
 
-**Current Test262 Compliance** (as of recent fixes):
+### Debug flags
 
-- Expressions: ~28.5% pass rate (3,159/11,093 tests)
-- Object expressions: ~34.8% pass rate
-- instanceof tests: ~44.2% pass rate
-- Addition tests: ~60.4% pass rate
+Each stage has a `const debug<Stage> = false` at the top of its main file (`pkg/{lexer,parser,checker,compiler}/<stage>.go`). Flip to `true` for tracing.
 
-**Known Flaky Tests**:
+## Known gotchas
 
-The following Test262 tests show non-deterministic behavior (sometimes pass, sometimes fail) when run in batch mode. They typically pass when run individually. These can be ignored in diff summaries:
-
+**Flaky in batch / green individually** — ignore in diff summaries:
 - `language/statements/for-of/map.js`
 - `language/statements/for-of/map-contract-expand.js`
 - `language/statements/for-of/set-contract-expand.js`
 
-The flakiness appears related to iteration order or timing in batch test runs.
+**TS class properties** must be explicitly declared in the class body (TypeScript requirement, enforced by the checker).
 
-## Development Notes
+**Object key coercion** — `undefined` as a property key becomes `"undefined"`, etc.
 
-### Build and Debug
+## Conventions
 
-- **Always rebuild the binary before testing**: `go build -o paserati cmd/paserati/main.go`
-- Use `go build ./...` to verify all packages compile
-- Main components have debug flags in their `.go` files:
-  - `pkg/lexer/lexer.go`: `const debugLexer = false`
-  - `pkg/parser/parser.go`: `const debugParser = false`
-  - `pkg/checker/checker.go`: `const debugChecker = false`
-  - `pkg/compiler/compiler.go`: `const debugCompiler = false`
-  - Enable these flags (set to `true`) to see detailed debug information when troubleshooting
+- Smoke test (`TestScripts`) must stay green. Fix it or mark `FIXME`.
+- No `git -i` flags (no interactive rebase / `add -i` — agent tooling can't handle them).
+- Don't prefix branches with `codex/` unless explicitly asked.
+- Match TypeScript compiler output for type-error wording; match ECMAScript spec for runtime-error wording.
+- Never sweep failures under the rug. Either fix or `FIXME`.
 
-### Quality Standards
-
-**Core Principles**:
-
-- **Goal**: Production-quality runtime with full ECMAScript 262 compliance
-- **Correctness First**: Get the semantics right before optimizing
-- **Performance Matters**: Use profiling to guide optimizations, not premature optimization
-- **No Shortcuts**: Either implement features correctly or don't implement them
-
-**Language Compliance**:
-
-- This is a **TypeScript-first runtime** that executes TS directly without transpiling to JS
-- We target **latest ECMAScript** specification for JavaScript compatibility
-- Type checker can be disabled (for Test262) to ensure pure JavaScript compliance
-- When type checking is enabled, we use type information for optimizations (number representation, monomorphization, etc.)
-
-**Code Quality**:
-
-- Error messages should match TypeScript compiler output for familiarity (for type errors) or ECMAScript spec (for runtime errors)
-- **When something doesn't work**: Either fix it immediately or mark it as FIXME - never sweep issues under the rug
-- **Test quality**: Our smoke test (`TestScripts`) must always be green
-- Use Test262 to verify correctness against the ECMAScript specification
-- Performance optimizations: inline caching, shape-based objects, register allocation, specialized bytecode operations
-
-**JavaScript Semantics**:
-
-- Implement proper type coercion (ToPrimitive, ToNumber, ToString, ToBoolean)
-- Respect prototype chains for all built-in types
-- Handle edge cases correctly (e.g., `undefined` as object key becomes `"undefined"`)
-- Follow ECMAScript abstract operations exactly
-
-### Implementation Guidelines
-
-- **Important**: When implementing classes, properties must be explicitly declared in the class body (TypeScript requirement)
-- **Important**: Never use git commands with the -i flag (like git rebase -i or git add -i) since they require interactive input which is not supported
-- **Important**: When creating branches in this repository, do not use the `codex/` prefix unless the user explicitly asks for it.
-- NEVER create files unless they're absolutely necessary for achieving your goal
-- ALWAYS prefer editing an existing file to creating a new one, unless implementing a major feature
-- NEVER proactively create documentation files (\*.md) or README files. Only create documentation files if explicitly requested by the User
+For implementation status by feature, see `docs/bucketlist.md`. For current Test262 pass rates, see `README.md` (auto-updated) or run with `-suite -filter`.
