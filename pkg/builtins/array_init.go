@@ -47,7 +47,7 @@ func (a *ArrayInitializer) Name() string {
 }
 
 func (a *ArrayInitializer) Priority() int {
-	return PriorityArray // 2 - After Object (0) and Function (1)
+	return PriorityArray // 3 - After Object (0), Function (1), Iterator (2)
 }
 
 func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
