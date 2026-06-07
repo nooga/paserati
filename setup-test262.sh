@@ -37,8 +37,10 @@ if [ "$CURRENT_REV" != "$PINNED_REV" ]; then
     git -C "$TEST262_DIR" checkout --quiet --detach "$PINNED_REV"
 fi
 
-# Add test262 to .gitignore if not already present
-if ! grep -q "^test262/$" .gitignore 2>/dev/null; then
+# Add test262 to .gitignore if not already present (recognizes both anchored
+# `/test262/` and bare `test262/` forms — without this dual check the bare form
+# gets re-appended every run).
+if ! grep -Eq "^/?test262/$" .gitignore 2>/dev/null; then
     {
         echo ""
         echo "# Test262 test suite (cloned by setup-test262.sh)"
