@@ -302,7 +302,7 @@ It does NOT specify which registers contain the arguments - it assumes `funcReg+
 ### Related Documents
 
 - `docs/objects.txt` - Object implementation patterns
-- `docs/generators-implementation-plan.md` - Generator implementation
+- `docs/archived/generators-implementation-plan.md` - Generator implementation
 - `README.md` - Project ethos and architecture philosophy
 
 ## Debug Flags

@@ -265,7 +265,7 @@ type SuspendedFrame struct {
 type GeneratorFrame = SuspendedFrame
 
 // GeneratorObject represents a JavaScript generator instance
-// Based on the design from generators-implementation-plan.md
+// Based on the design from docs/archived/generators-implementation-plan.md
 type GeneratorObject struct {
 	Object
 	Function          Value           // The generator function
