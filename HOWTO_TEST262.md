@@ -135,17 +135,13 @@ The `[42]` means 42 tests fail with this normalized error. These are your **high
 ### Example Workflow
 
 ```bash
-# Find opportunities in expressions/object (91.1% pass rate)
+# Find opportunities in a specific subsuite — pipe into the analyzer
 ./paserati-test262 -timeout 0.2s -subpath language/expressions/object -json | ./paserati-analyze
-
-# Find opportunities in expressions/class (90.1% pass rate)
-./paserati-test262 -timeout 0.2s -subpath language/expressions/class -json | ./paserati-analyze
-
-# Find opportunities in expressions/array (86.5% pass rate)
-./paserati-test262 -timeout 0.2s -subpath language/expressions/array -json | ./paserati-analyze
+./paserati-test262 -timeout 0.2s -subpath language/expressions/class  -json | ./paserati-analyze
+./paserati-test262 -timeout 0.2s -subpath language/expressions/array  -json | ./paserati-analyze
 ```
 
-Suites at 85-92% pass rate often have clusters of related bugs. Suites below 70% may require more fundamental fixes.
+For current per-subsuite pass rates, run `./paserati-test262 -subpath "language" -timeout 0.2s -suite`. Mid-tier suites (roughly 70–90%) tend to cluster around a few root causes; below 70% usually means a more foundational gap.
 
 ## Tooling Wishlist (Current Limitations)
 
