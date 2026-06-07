@@ -12,12 +12,12 @@ function arrayIncludes(arr: any, value: string): boolean {
 
 // === Test class inheritance ===
 class Animal {
-    name: string;
+    name!: string;
     age?: number;
 }
 
 class Dog extends Animal {
-    breed: string;
+    breed!: string;
     bark(): void {}
 }
 

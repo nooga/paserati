@@ -5,7 +5,7 @@ class TypedFields {
   // Basic typed fields
   name: string;
   age: number;
-  isActive: boolean;
+  isActive!: boolean;
 
   // Fields with initializers
   score: number = 100;

@@ -355,6 +355,9 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	if !node.IsAbstract && node.SuperClass != nil {
 		c.checkAbstractMembersImplemented(node, instanceType)
 	}
+
+	// TS2564: Strict property initialization.
+	c.checkStrictPropertyInit(node)
 }
 
 // checkAbstractMembersImplemented emits TS2515 if a concrete class fails to implement
@@ -529,6 +532,10 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	} else {
 		debugPrintf("// [Checker Class] Final updated generic environment for '%s' with real constructor type\n", node.Name.Value)
 	}
+
+	// TS2564: Strict property initialization. Must run inside genericEnv so that
+	// property types referencing type parameters (e.g. `value: T`) can resolve.
+	c.checkStrictPropertyInit(node)
 
 	// Restore environment and current state
 	c.env = savedEnv
