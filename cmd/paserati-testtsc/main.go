@@ -300,6 +300,14 @@ func loadExpectedErrors(baselinesDir, baselineName string) (bool, []ExpectedErro
 		if err != nil {
 			return false, nil
 		}
+		// Parameterized baselines may contain only compiler-option diagnostics
+		// (e.g. TS5107 for deprecated `target=ES5`) with zero source-level
+		// errors. The body header `==== <file>.ts (N errors) ====` reports the
+		// source error count. If N is zero, treat as clean — Paserati doesn't
+		// emit option diagnostics.
+		if baselineSourceErrorCount(content) == 0 {
+			return false, nil
+		}
 	}
 
 	var errors []ExpectedError
@@ -325,6 +333,30 @@ func loadExpectedErrors(baselinesDir, baselineName string) (bool, []ExpectedErro
 		}
 	}
 	return true, errors
+}
+
+// baselineSourceErrorRegex captures the source error count from a baseline
+// body header line: "==== somefile.ts (N errors) ===="
+var baselineSourceErrorRegex = regexp.MustCompile(`(?m)^==== [^\n]+\.ts \((\d+) errors\) ====`)
+
+// baselineSourceErrorCount returns the maximum source-error count across all
+// "==== <file>.ts (N errors) ====" headers in a baseline. Returns -1 if no
+// header matches (legacy or malformed baselines — treat as expecting errors
+// to preserve prior behavior).
+func baselineSourceErrorCount(content []byte) int {
+	matches := baselineSourceErrorRegex.FindAllSubmatch(content, -1)
+	if len(matches) == 0 {
+		return -1
+	}
+	max := 0
+	for _, m := range matches {
+		n := 0
+		_, _ = fmt.Sscanf(string(m[1]), "%d", &n)
+		if n > max {
+			max = n
+		}
+	}
+	return max
 }
 
 // baselineTargetScore ranks parameterized baseline filenames so the most-modern
