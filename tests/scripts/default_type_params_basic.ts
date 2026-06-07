@@ -11,7 +11,7 @@ interface Container<T = number> {
 type Alias<T = boolean> = T;
 
 class MyClass<T = string> {
-    value: T;
+    value!: T;
 }
 
 const arrow = <T = number>() => {

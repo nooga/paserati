@@ -3608,13 +3608,14 @@ type PropertyDefinition struct {
 	Key            Expression   // Property name (Identifier or ComputedPropertyName)
 	TypeAnnotation Expression   // Type annotation (can be nil)
 	Value          Expression   // Initializer expression (can be nil)
-	IsStatic       bool         // For static property support
-	Optional       bool         // Whether the property is optional (prop?)
-	Readonly       bool         // Whether the property is readonly
-	IsPublic       bool         // For public access modifier
-	IsPrivate      bool         // For private access modifier
-	IsProtected    bool         // For protected access modifier
-	Decorators     []*Decorator // Decorators applied to this property
+	IsStatic           bool         // For static property support
+	Optional           bool         // Whether the property is optional (prop?)
+	Readonly           bool         // Whether the property is readonly
+	DefiniteAssignment bool         // Whether the property has a `!` definite-assignment assertion (prop!: T)
+	IsPublic           bool         // For public access modifier
+	IsPrivate          bool         // For private access modifier
+	IsProtected        bool         // For private access modifier
+	Decorators         []*Decorator // Decorators applied to this property
 }
 
 func (pd *PropertyDefinition) TokenLiteral() string { return pd.Token.Literal }
@@ -3641,6 +3642,9 @@ func (pd *PropertyDefinition) String() string {
 	}
 	if pd.Optional {
 		out.WriteString("?")
+	}
+	if pd.DefiniteAssignment {
+		out.WriteString("!")
 	}
 	if pd.TypeAnnotation != nil {
 		out.WriteString(": ")

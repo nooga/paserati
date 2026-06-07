@@ -923,14 +923,19 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 	// At this point: cur=fieldName, peek=next token
 	// We need to check what comes after the field name
 
-	// Check for optional marker '?' in peek position
+	// Check for optional marker '?' or definite-assignment '!' in peek position
+	// (mutually exclusive — TS rejects `name?!:` and `name!?:`).
 	var isOptional bool
+	var hasDefiniteAssignment bool
 	if p.peekTokenIs(lexer.QUESTION) {
 		p.nextToken() // Move to '?'
 		isOptional = true
+	} else if p.peekTokenIs(lexer.BANG) {
+		p.nextToken() // Move to '!'
+		hasDefiniteAssignment = true
 	}
 
-	// Now we're either still at fieldName or at '?'
+	// Now we're either still at fieldName or at '?'/'!'
 	// Advance past it
 	p.nextToken()
 
@@ -979,16 +984,17 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 	}
 
 	return &PropertyDefinition{
-		Token:          propertyToken,
-		Key:            propertyName,
-		TypeAnnotation: typeAnnotation,
-		Value:          initializer,
-		IsStatic:       isStatic,
-		Optional:       isOptional,
-		Readonly:       isReadonly,
-		IsPublic:       isPublic,
-		IsPrivate:      isPrivate,
-		IsProtected:    isProtected,
+		Token:              propertyToken,
+		Key:                propertyName,
+		TypeAnnotation:     typeAnnotation,
+		Value:              initializer,
+		IsStatic:           isStatic,
+		Optional:           isOptional,
+		Readonly:           isReadonly,
+		DefiniteAssignment: hasDefiniteAssignment,
+		IsPublic:           isPublic,
+		IsPrivate:          isPrivate,
+		IsProtected:        isProtected,
 	}
 }
 
@@ -999,14 +1005,18 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 	// Create identifier from PRIVATE_IDENT token (includes the '#')
 	propertyName := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
-	// Check for optional marker '?' in peek position
+	// Check for optional marker '?' or definite-assignment '!' in peek position
 	var isOptional bool
+	var hasDefiniteAssignment bool
 	if p.peekTokenIs(lexer.QUESTION) {
 		p.nextToken() // Move to '?'
 		isOptional = true
+	} else if p.peekTokenIs(lexer.BANG) {
+		p.nextToken() // Move to '!'
+		hasDefiniteAssignment = true
 	}
 
-	// Advance past field name or '?'
+	// Advance past field name or '?'/'!'
 	p.nextToken()
 
 	// Parse optional type annotation
@@ -1054,16 +1064,17 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 	}
 
 	return &PropertyDefinition{
-		Token:          propertyToken,
-		Key:            propertyName,
-		TypeAnnotation: typeAnnotation,
-		Value:          initializer,
-		IsStatic:       isStatic,
-		Optional:       isOptional,
-		Readonly:       isReadonly,
-		IsPublic:       false, // Private fields are never public
-		IsPrivate:      true,  // Private fields are always private
-		IsProtected:    false, // Private fields are never protected
+		Token:              propertyToken,
+		Key:                propertyName,
+		TypeAnnotation:     typeAnnotation,
+		Value:              initializer,
+		IsStatic:           isStatic,
+		Optional:           isOptional,
+		Readonly:           isReadonly,
+		DefiniteAssignment: hasDefiniteAssignment,
+		IsPublic:           false, // Private fields are never public
+		IsPrivate:          true,  // Private fields are always private
+		IsProtected:        false, // Private fields are never protected
 	}
 }
 
@@ -1476,11 +1487,15 @@ func (p *Parser) parseComputedMethod(bracketToken *lexer.Token, keyExpr Expressi
 
 // parseComputedProperty parses a computed property in a class
 func (p *Parser) parseComputedProperty(bracketToken *lexer.Token, keyExpr Expression, isStatic, isReadonly, isPublic, isPrivate, isProtected bool) *PropertyDefinition {
-	// Check for optional marker '?' first
+	// Check for optional marker '?' or definite-assignment '!' (mutually exclusive)
 	var isOptional bool
+	var hasDefiniteAssignment bool
 	if p.peekTokenIs(lexer.QUESTION) {
 		p.nextToken() // Consume '?'
 		isOptional = true
+	} else if p.peekTokenIs(lexer.BANG) {
+		p.nextToken() // Consume '!'
+		hasDefiniteAssignment = true
 	}
 
 	// Parse optional type annotation using interface pattern
@@ -1527,16 +1542,17 @@ func (p *Parser) parseComputedProperty(bracketToken *lexer.Token, keyExpr Expres
 	}
 
 	return &PropertyDefinition{
-		Token:          bracketToken,
-		Key:            &ComputedPropertyName{Expr: keyExpr}, // Use computed property name
-		TypeAnnotation: typeAnnotation,
-		Value:          initializer,
-		IsStatic:       isStatic,
-		Optional:       isOptional,
-		Readonly:       isReadonly,
-		IsPublic:       isPublic,
-		IsPrivate:      isPrivate,
-		IsProtected:    isProtected,
+		Token:              bracketToken,
+		Key:                &ComputedPropertyName{Expr: keyExpr}, // Use computed property name
+		TypeAnnotation:     typeAnnotation,
+		Value:              initializer,
+		IsStatic:           isStatic,
+		Optional:           isOptional,
+		Readonly:           isReadonly,
+		DefiniteAssignment: hasDefiniteAssignment,
+		IsPublic:           isPublic,
+		IsPrivate:          isPrivate,
+		IsProtected:        isProtected,
 	}
 }
 
