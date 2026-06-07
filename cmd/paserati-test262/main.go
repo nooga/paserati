@@ -173,7 +173,7 @@ func main() {
 	if *allowFile != "" {
 		os.Exit(allowFailuresExitCode(fileResults, testDir, *allowFile))
 	}
-	if stats.Failed > 0 {
+	if stats.Failed > 0 || stats.Timeouts > 0 {
 		os.Exit(1)
 	}
 }

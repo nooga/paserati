@@ -6,15 +6,18 @@ This guide documents the practical workflow for fixing Test262 failures in Paser
 
 The goal is to iteratively reduce the "delta" between the baseline (last commit) and your current working copy.
 
-1.  **Establish Baseline**: The `baseline.txt` file is regenerated on every commit. It represents the "known state" of the project.
+1.  **Establish Baseline**: Two baseline files are regenerated on every commit by the post-commit hook and represent the "known state" of the project:
+    - `baseline_language.txt` — failures in the `language/` subpath
+    - `baseline.txt` — failures in the `built-ins/` subpath
 2.  **Run Tests & Check Delta**:
 
     ```bash
     # Rebuild runner first!
     go build -o paserati-test262 ./cmd/paserati-test262/
 
-    # Run tests and compare with baseline
-    ./paserati-test262 -diff baseline.txt
+    # Run tests and compare with baselines
+    ./paserati-test262 -subpath "language"  -diff baseline_language.txt
+    ./paserati-test262 -subpath "built-ins" -diff baseline.txt
     ```
 
     - **Green (+)**: You fixed a test!
@@ -77,7 +80,8 @@ When you have a minimal repro, turn on the lights.
 3.  Run the specific Test262 test: `./paserati-test262 -pattern 'test-name.js'`
 4.  **Check for Regressions**:
     ```bash
-    ./paserati-test262 ... -timeout 0.2s -diff baseline.txt
+    ./paserati-test262 -subpath "language"  -timeout 0.2s -diff baseline_language.txt
+    ./paserati-test262 -subpath "built-ins" -timeout 0.2s -diff baseline.txt
     ```
     Ensure you haven't broken other things.
 
