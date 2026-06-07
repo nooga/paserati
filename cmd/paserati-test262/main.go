@@ -21,6 +21,7 @@ import (
 	errorsPkg "github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/test262"
 	"github.com/nooga/paserati/pkg/vm"
 )
 
@@ -44,6 +45,7 @@ func main() {
 		diffFile    = flag.String("diff", "", "Compare current results against baseline file and show differences")
 		strictOnly  = flag.Bool("strict-only", false, "Skip tests with 'noStrict' flag (only run strict mode tests)")
 		jsonFlag    = flag.Bool("json", false, "Output results in JSON format")
+		allowFile   = flag.String("allow-failures", "", "Allow-list baseline file: exit 0 iff current failures are a subset of the failures listed there (paths prefixed '-')")
 	)
 
 	flag.Parse()
@@ -102,8 +104,21 @@ func main() {
 		fmt.Printf("Found %d test files\n", len(testFiles))
 	}
 
+	// In -json mode, swap os.Stdout to stderr during test execution so that
+	// anything a test prints via console.log (which lands on os.Stdout via the
+	// console builtin) can't pollute the JSON stream paserati-analyze decodes.
+	// Restored before the final json.Encoder write.
+	realStdout := os.Stdout
+	if *jsonFlag {
+		os.Stdout = os.Stderr
+	}
+
 	// Run tests
 	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode, *suiteMode, *disasm, *strictOnly, *jsonFlag)
+
+	if *jsonFlag {
+		os.Stdout = realStdout
+	}
 
 	// Handle diff/dump modes
 	if *diffFile != "" {
@@ -111,14 +126,8 @@ func main() {
 	} else if *dumpFile != "" {
 		handleDumpMode(fileResults, testDir, *dumpFile)
 	} else if *jsonFlag {
-		// JSON output mode
-		output := struct {
-			Stats   TestStats    `json:"stats"`
-			Results []TestResult `json:"results"`
-		}{
-			Stats:   stats,
-			Results: fileResults,
-		}
+		// JSON output mode — stdout is now guaranteed clean.
+		output := test262.Output{Stats: stats, Results: fileResults}
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(output); err != nil {
@@ -159,31 +168,62 @@ func main() {
 		pprof.StopCPUProfile()
 	}
 
-	// Exit with appropriate code
+	// Exit code: -allow-failures, when set, overrides the default
+	// "any failure is fatal" behavior with subset-of-baseline semantics.
+	if *allowFile != "" {
+		os.Exit(allowFailuresExitCode(fileResults, testDir, *allowFile))
+	}
 	if stats.Failed > 0 {
 		os.Exit(1)
 	}
 }
 
-// TestStats tracks test statistics
-type TestStats struct {
-	Total    int
-	Passed   int
-	Failed   int
-	Timeouts int
-	Skipped  int
-	Duration time.Duration
-}
+// allowFailuresExitCode loads a baseline file (same `+path` / `-path` format
+// produced by -dump) and returns 0 if every currently-failing test appears
+// as an allowed failure (`-path`) in the baseline. New failures cause exit 1;
+// new passes are reported on stderr as info but don't change the exit code.
+func allowFailuresExitCode(results []test262.Result, testDir, baselinePath string) int {
+	data, err := os.ReadFile(baselinePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "allow-failures: cannot read %s: %v\n", baselinePath, err)
+		return 2
+	}
+	allowed := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		if len(line) < 2 || line[0] != '-' {
+			continue
+		}
+		allowed[strings.TrimSpace(line[1:])] = true
+	}
 
-// TestResult represents the result of a single test
-type TestResult struct {
-	Path     string        `json:"path"`
-	Passed   bool          `json:"passed"`
-	Failed   bool          `json:"failed"`
-	TimedOut bool          `json:"timedOut"`
-	Skipped  bool          `json:"skipped"`
-	Duration time.Duration `json:"duration"`
-	Error    string        `json:"error,omitempty"` // Added for JSON output
+	var newFailures, newPasses []string
+	for _, r := range results {
+		relPath, _ := filepath.Rel(testDir, r.Path)
+		if relPath == "" {
+			relPath = r.Path
+		}
+		switch {
+		case (r.Failed || r.TimedOut) && !allowed[relPath]:
+			newFailures = append(newFailures, relPath)
+		case r.Passed && allowed[relPath]:
+			newPasses = append(newPasses, relPath)
+		}
+	}
+
+	if len(newPasses) > 0 {
+		fmt.Fprintf(os.Stderr, "allow-failures: %d test(s) newly passing (consider bumping baseline):\n", len(newPasses))
+		for _, p := range newPasses {
+			fmt.Fprintf(os.Stderr, "  + %s\n", p)
+		}
+	}
+	if len(newFailures) > 0 {
+		fmt.Fprintf(os.Stderr, "allow-failures: %d new failure(s) not in %s:\n", len(newFailures), baselinePath)
+		for _, p := range newFailures {
+			fmt.Fprintf(os.Stderr, "  - %s\n", p)
+		}
+		return 1
+	}
+	return 0
 }
 
 // TreeNode represents a directory in the test tree with aggregated stats
@@ -192,7 +232,7 @@ type TreeNode struct {
 	Path     string
 	IsDir    bool
 	Children map[string]*TreeNode
-	Stats    TestStats
+	Stats    test262.Stats
 }
 
 // findTestFiles discovers test files matching the pattern
@@ -250,9 +290,9 @@ func findTestFiles(testDir, pattern, subPath, skipPattern string, jsonMode bool)
 }
 
 // runTests executes all test files
-func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool, suiteMode bool, disasm bool, strictOnly bool, jsonMode bool) (TestStats, []TestResult) {
-	var stats TestStats
-	var fileResults []TestResult
+func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool, suiteMode bool, disasm bool, strictOnly bool, jsonMode bool) (test262.Stats, []test262.Result) {
+	var stats test262.Stats
+	var fileResults []test262.Result
 	stats.Total = len(testFiles)
 
 	startTime := time.Now()
@@ -325,7 +365,7 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 		passed, err := runSingleTest(testFile, verbose, timeout, testDir, testRoot, disasm, strictOnly, jsonMode)
 		testDuration := time.Since(testStart)
 
-		result := TestResult{
+		result := test262.Result{
 			Path:     testFile,
 			Duration: testDuration,
 		}
@@ -927,7 +967,7 @@ func isNegativeTest(content string) bool {
 }
 
 // printSummary prints the final test summary
-func printSummary(stats *TestStats) {
+func printSummary(stats *test262.Stats) {
 	fmt.Printf("\n=== Test262 Summary ===\n")
 	fmt.Printf("Total:    %d\n", stats.Total)
 	fmt.Printf("Passed:   %d (%.1f%%)\n", stats.Passed, float64(stats.Passed)/float64(stats.Total)*100)
@@ -966,7 +1006,7 @@ func printGCStats() {
 }
 
 // buildTree constructs a tree from test results
-func buildTree(results []TestResult, testDir string) *TreeNode {
+func buildTree(results []test262.Result, testDir string) *TreeNode {
 	root := &TreeNode{
 		Name:     "test",
 		Path:     testDir,
@@ -1011,7 +1051,7 @@ func buildTree(results []TestResult, testDir string) *TreeNode {
 }
 
 // updateNodeStats updates statistics for a node and all its parents
-func updateNodeStats(root *TreeNode, relPath string, result TestResult) {
+func updateNodeStats(root *TreeNode, relPath string, result test262.Result) {
 	parts := strings.Split(relPath, string(filepath.Separator))
 	current := root
 
@@ -1040,7 +1080,7 @@ func updateNodeStats(root *TreeNode, relPath string, result TestResult) {
 }
 
 // printTreeSummary prints the test results as a directory tree
-func printTreeSummary(results []TestResult, testDir string) {
+func printTreeSummary(results []test262.Result, testDir string) {
 	tree := buildTree(results, testDir)
 
 	// Final display - clear screen first
@@ -1062,18 +1102,18 @@ func printTreeSummary(results []TestResult, testDir string) {
 }
 
 // printSuiteSummary prints pass rates for each test suite with hierarchical subdivision
-func printSuiteSummary(results []TestResult, testDir string, testPath *string) {
+func printSuiteSummary(results []test262.Result, testDir string, testPath *string) {
 	// Build a hierarchical map of suite stats (suite -> subsuite -> stats)
-	suiteStats := make(map[string]map[string]*TestStats)
+	suiteStats := make(map[string]map[string]*test262.Stats)
 
 	// Define the main test suites
 	mainSuites := []string{"annexB", "built-ins", "intl402", "language", "staging"}
 
 	// Initialize the hierarchical structure
 	for _, suite := range mainSuites {
-		suiteStats[suite] = make(map[string]*TestStats)
+		suiteStats[suite] = make(map[string]*test262.Stats)
 	}
-	suiteStats["other"] = make(map[string]*TestStats)
+	suiteStats["other"] = make(map[string]*test262.Stats)
 
 	// Categorize results by hierarchical suite structure
 	for _, result := range results {
@@ -1116,10 +1156,10 @@ func printSuiteSummary(results []TestResult, testDir string, testPath *string) {
 
 		// Initialize subsuite stats if needed
 		if suiteStats[mainSuite] == nil {
-			suiteStats[mainSuite] = make(map[string]*TestStats)
+			suiteStats[mainSuite] = make(map[string]*test262.Stats)
 		}
 		if suiteStats[mainSuite][subsuite] == nil {
-			suiteStats[mainSuite][subsuite] = &TestStats{}
+			suiteStats[mainSuite][subsuite] = &test262.Stats{}
 		}
 
 		stats := suiteStats[mainSuite][subsuite]
@@ -1150,11 +1190,11 @@ func printSuiteSummary(results []TestResult, testDir string, testPath *string) {
 	sort.Strings(sortedMainSuites)
 
 	// Calculate overall totals and collect all subsuite stats for recommendations
-	var overallStats TestStats
+	var overallStats test262.Stats
 	var allSubsuiteStats []struct {
 		mainSuite string
 		subSuite  string
-		stats     *TestStats
+		stats     *test262.Stats
 	}
 
 	// Print each main suite and its subsuites
@@ -1165,7 +1205,7 @@ func printSuiteSummary(results []TestResult, testDir string, testPath *string) {
 		}
 
 		// Calculate totals for this main suite
-		var mainSuiteStats TestStats
+		var mainSuiteStats test262.Stats
 		var sortedSubsuites []string
 
 		for subsuite := range subsuiteMap {
@@ -1200,7 +1240,7 @@ func printSuiteSummary(results []TestResult, testDir string, testPath *string) {
 			allSubsuiteStats = append(allSubsuiteStats, struct {
 				mainSuite string
 				subSuite  string
-				stats     *TestStats
+				stats     *test262.Stats
 			}{mainSuite, subsuite, stats})
 
 			// Print subsuite
@@ -1368,7 +1408,7 @@ func printColoredTreeNode(node *TreeNode, indent string, isLast bool, showDurati
 }
 
 // handleDumpMode writes all test results to a file in +/- format
-func handleDumpMode(results []TestResult, testDir string, dumpFile string) {
+func handleDumpMode(results []test262.Result, testDir string, dumpFile string) {
 	f, err := os.Create(dumpFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating dump file: %v\n", err)
@@ -1404,7 +1444,7 @@ func handleDumpMode(results []TestResult, testDir string, dumpFile string) {
 }
 
 // handleDiffMode compares current results against a baseline file
-func handleDiffMode(results []TestResult, testDir string, diffFile string, dumpFile string) {
+func handleDiffMode(results []test262.Result, testDir string, diffFile string, dumpFile string) {
 	// Load baseline
 	baseline, err := loadBaseline(diffFile)
 	if err != nil {

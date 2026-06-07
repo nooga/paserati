@@ -41,8 +41,9 @@ timing.py
 timing.json
 .tally.py
 scratch/
-# Test262 test suite (cloned by setup-test262.sh)
-test262/
+# Test262 test suite (cloned by setup-test262.sh) — anchored so it
+# doesn't also swallow pkg/test262/ (the shared result-types package).
+/test262/
 /paserati-test262
 *.prof
 baseline.txt

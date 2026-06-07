@@ -1,97 +1,58 @@
+// paserati-analyze clusters Test262 failures by normalized error message.
+// Reads a paserati-test262 -json envelope from stdin.
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
-	"time"
+
+	"github.com/nooga/paserati/pkg/test262"
 )
 
-// Duplicate structs from paserati-test262
-type TestStats struct {
-	Total    int
-	Passed   int
-	Failed   int
-	Timeouts int
-	Skipped  int
-	Duration time.Duration
-}
-
-type TestResult struct {
-	Path     string        `json:"path"`
-	Passed   bool          `json:"passed"`
-	Failed   bool          `json:"failed"`
-	TimedOut bool          `json:"timedOut"`
-	Skipped  bool          `json:"skipped"`
-	Duration time.Duration `json:"duration"`
-	Error    string        `json:"error,omitempty"`
-}
-
-type Output struct {
-	Stats   TestStats    `json:"stats"`
-	Results []TestResult `json:"results"`
-}
-
 func main() {
-	// Read all input and find JSON start (tests may print to stdout)
-	input, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+	var output test262.Output
+	if err := json.NewDecoder(os.Stdin).Decode(&output); err != nil {
+		fmt.Fprintf(os.Stderr, "Error decoding JSON from stdin: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Usage: paserati-test262 ... -json | paserati-analyze\n")
 		os.Exit(1)
 	}
 
-	// Find the start of JSON (first '{')
-	jsonStart := bytes.IndexByte(input, '{')
-	if jsonStart == -1 {
-		fmt.Fprintf(os.Stderr, "Error: no JSON object found in input\n")
-		os.Exit(1)
-	}
-	input = input[jsonStart:]
-
-	var output Output
-	if err := json.Unmarshal(input, &output); err != nil {
-		fmt.Fprintf(os.Stderr, "Error decoding JSON input: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Group failures
-	groups := make(map[string][]string) // pattern -> list of paths
-
+	// Group failures by normalized error pattern.
+	groups := make(map[string][]string)
 	for _, result := range output.Results {
-		if result.Failed || result.TimedOut {
-			msg := result.Error
-			if msg == "" && result.TimedOut {
-				msg = "Timeout"
-			}
-			pattern := normalizeError(msg)
-			groups[pattern] = append(groups[pattern], result.Path)
+		if !result.Failed && !result.TimedOut {
+			continue
 		}
+		msg := result.Error
+		if msg == "" && result.TimedOut {
+			msg = "Timeout"
+		}
+		pattern := normalizeError(msg)
+		groups[pattern] = append(groups[pattern], result.Path)
 	}
 
-	// Sort patterns by count
-	type Group struct {
+	type group struct {
 		Pattern string
 		Paths   []string
 	}
-	var sortedGroups []Group
+	sorted := make([]group, 0, len(groups))
 	for pattern, paths := range groups {
-		sortedGroups = append(sortedGroups, Group{Pattern: pattern, Paths: paths})
+		sorted = append(sorted, group{Pattern: pattern, Paths: paths})
 	}
-	sort.Slice(sortedGroups, func(i, j int) bool {
-		return len(sortedGroups[i].Paths) > len(sortedGroups[j].Paths)
+	sort.Slice(sorted, func(i, j int) bool {
+		return len(sorted[i].Paths) > len(sorted[j].Paths)
 	})
 
-	fmt.Printf("Analysis of %d failures:\n", len(output.Results)-output.Stats.Passed-output.Stats.Skipped)
+	failures := len(output.Results) - output.Stats.Passed - output.Stats.Skipped
+	fmt.Printf("Analysis of %d failures:\n", failures)
 	fmt.Println("================================================================================")
 
-	for _, g := range sortedGroups {
+	for _, g := range sorted {
 		fmt.Printf("[%d] %s\n", len(g.Paths), g.Pattern)
-		// Print first 3 examples
 		for i := 0; i < 3 && i < len(g.Paths); i++ {
 			fmt.Printf("  - %s\n", g.Paths[i])
 		}
