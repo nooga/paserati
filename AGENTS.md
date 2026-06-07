@@ -44,11 +44,14 @@ go build -o paserati-test262 ./cmd/paserati-test262
 # Single test for debugging
 ./paserati-test262 -path ./test262 -subpath "language/expressions/addition" -pattern "S11.6.1_A3.1_T1.1.js"
 
-# Diff current run against committed baseline (post-commit hook regenerates baseline.txt)
-./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline.txt
+# Diff current run against committed baselines (post-commit hook regenerates both)
+./paserati-test262 -path ./test262 -subpath "language"  -timeout 0.2s -diff baseline_language.txt
+./paserati-test262 -path ./test262 -subpath "built-ins" -timeout 0.2s -diff baseline.txt
 ```
 
 Key flags: `-suite` (per-subsuite pass rates), `-filter` (skips legacy patterns like `with`), `-timeout` (per-test), `-subpath` (scope), `-pattern` (single file), `-diff <file>` (compare to baseline), `-dump <file>` (write current state).
+
+Test262 itself is pinned to the SHA in `.test262-rev`; `./setup-test262.sh` clones / checks out that revision non-interactively.
 
 ### Failure clustering
 
@@ -77,8 +80,8 @@ The `// expect:` value is the result of the final expression. `console.log` outp
 
 1. Make changes
 2. `go test ./tests -run TestScripts` — verify smoke test stays green
-3. `./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline.txt` — see Test262 impact
-4. Commit (post-commit hook regenerates `baseline.txt` for next iteration)
+3. `./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -diff baseline_language.txt` — see Test262 impact
+4. Commit (post-commit hook regenerates `baseline_language.txt` + `baseline.txt` for next iteration)
 
 ### Debugging Test262 failures
 
