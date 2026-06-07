@@ -62,6 +62,16 @@ go build -o paserati-analyze ./cmd/paserati-analyze/
 
 Output groups failures by normalized error pattern. `[42] undefined is not an object` means 42 tests share that root cause — high-yield target.
 
+`-json` mode writes only the JSON envelope to stdout (anything a test prints via `console.log` is routed to stderr), and `paserati-analyze` decodes stdin directly — both ends share `pkg/test262` for the result types.
+
+### Allow-list / CI mode
+
+```bash
+./paserati-test262 -path ./test262 -subpath "language" -timeout 0.2s -allow-failures baseline_language.txt
+```
+
+Exits 0 iff the current failing set is a subset of the failures recorded in the baseline (`-path` lines). Useful when a checkout has known failures you don't want to fix yet but want to gate against regressions. Newly-passing tests are reported on stderr but don't change the exit code — they're a *good* surprise worth bumping the baseline for.
+
 ## Smoke test format
 
 `tests/scripts/*.ts` use these comments — parsed by `tests/scripts_test.go`:
