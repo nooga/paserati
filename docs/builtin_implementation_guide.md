@@ -409,10 +409,12 @@ proto.SetOwnNonEnumerable("forEach", vm.NewNativeFunction(...))
 ## Example: Well-Implemented Builtin
 
 See these files for reference implementations:
-- `array_init.go` - Array with callback methods (91.9% pass rate)
-- `boolean_init.go` - Simple wrapper type (100% pass rate)
-- `math_init.go` - Namespace object with static methods (100% pass rate)
-- `string_init.go` - String with prototype methods (91.4% pass rate)
+- `array_init.go` - Array with callback methods
+- `boolean_init.go` - Simple wrapper type
+- `math_init.go` - Namespace object with static methods
+- `string_init.go` - String with prototype methods
+
+(Live per-builtin pass rates: `./paserati-test262 -subpath "built-ins/<Name>" -timeout 0.2s -suite`.)
 
 For each failing builtin, compare against these patterns and look for:
 1. Missing error propagation
