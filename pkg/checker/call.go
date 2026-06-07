@@ -219,8 +219,11 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 					ExpectedType: paramType,
 					IsContextual: true,
 				})
-			} else {
-				// No corresponding parameter type, use regular visit
+			} else if !isVariadicFunction {
+				// No corresponding parameter type and function is not variadic.
+				// Visit so the excess argument still gets type info / errors.
+				// For variadic functions, the caller's variadic loop owns these
+				// arguments — visiting here would double-emit checker errors.
 				c.visit(argNode)
 			}
 
@@ -688,10 +691,15 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 			// Don't check args if minimum count isn't met.
 		} else {
 			// Check fixed arguments with spread expansion support
-			fixedArgsOk := c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic, funcSignature.OptionalParams)
+			c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic, funcSignature.OptionalParams)
 
-			// Check variadic arguments
-			if fixedArgsOk { // Only check variadic part if fixed part was okay
+			// Check variadic arguments — always, even when the fixed-args
+			// check reported errors. Variadic args own their own visit (since
+			// checkFixedArgumentsWithSpread skips visiting beyond fixed params
+			// for variadic functions to avoid double-emission); if we skipped
+			// this branch on fixed-args failure, errors in variadic args would
+			// be silently dropped.
+			{
 				variadicParamType := funcSignature.RestParameterType
 				arrayType, isArray := variadicParamType.(*types.ArrayType)
 				if !isArray {
