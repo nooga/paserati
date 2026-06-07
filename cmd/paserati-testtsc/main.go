@@ -280,8 +280,26 @@ func loadExpectedErrors(baselinesDir, baselineName string) (bool, []ExpectedErro
 	errFile := filepath.Join(baselinesDir, baselineName+".errors.txt")
 	content, err := os.ReadFile(errFile)
 	if err != nil {
-		// No .errors.txt means the test should compile clean
-		return false, nil
+		// Fallback: TS generates parameterized baselines like
+		// foo(target=es2015).errors.txt when the source uses // @target,
+		// // @strict, // @module etc. Without this fallback, ~2,800 tests
+		// are wrongly classified as "expected clean" and fail when Paserati
+		// correctly reports the same errors as TypeScript.
+		matches, _ := filepath.Glob(filepath.Join(baselinesDir, baselineName+"(*).errors.txt"))
+		if len(matches) == 0 {
+			// No baseline of any kind means the test should compile clean
+			return false, nil
+		}
+		// Paserati is target-independent and always supports modern features,
+		// so prefer the most-modern target baseline. ES5-target baselines may
+		// contain syntax errors for features Paserati happily parses.
+		sort.Slice(matches, func(i, j int) bool {
+			return baselineTargetScore(matches[i]) < baselineTargetScore(matches[j])
+		})
+		content, err = os.ReadFile(matches[0])
+		if err != nil {
+			return false, nil
+		}
 	}
 
 	var errors []ExpectedError
@@ -307,6 +325,42 @@ func loadExpectedErrors(baselinesDir, baselineName string) (bool, []ExpectedErro
 		}
 	}
 	return true, errors
+}
+
+// baselineTargetScore ranks parameterized baseline filenames so the most-modern
+// target sorts first. Lower is better. Used to pick a representative baseline
+// when several variants exist (target=es5, target=es2015, etc.).
+func baselineTargetScore(path string) int {
+	switch {
+	case strings.Contains(path, "target=esnext"):
+		return 0
+	case strings.Contains(path, "target=es2024"):
+		return 1
+	case strings.Contains(path, "target=es2023"):
+		return 2
+	case strings.Contains(path, "target=es2022"):
+		return 3
+	case strings.Contains(path, "target=es2021"):
+		return 4
+	case strings.Contains(path, "target=es2020"):
+		return 5
+	case strings.Contains(path, "target=es2019"):
+		return 6
+	case strings.Contains(path, "target=es2018"):
+		return 7
+	case strings.Contains(path, "target=es2017"):
+		return 8
+	case strings.Contains(path, "target=es2016"):
+		return 9
+	case strings.Contains(path, "target=es2015"):
+		return 10
+	case strings.Contains(path, "target=es5"):
+		return 100
+	case strings.Contains(path, "target=es3"):
+		return 200
+	default:
+		return 50
+	}
 }
 
 // runTests executes all test files and returns stats + results
