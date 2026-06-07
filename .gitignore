@@ -49,12 +49,9 @@ scratch/
 baseline.txt
 mcp-go-debugger.log
 dome.js
-paserati-analyze
-paserati-test262
-paserati-v8bench
-paserati-analyze/
-paserati-test262/
-paserati-v8bench/
+# Built binaries — anchored so they don't also swallow cmd/paserati-*/ source dirs.
+/paserati-analyze
+/paserati-v8bench
 bench/out/
 quickjs-bench/
 benchmarks/
