@@ -1,3 +1,4 @@
+// skip: network
 // Test complete fetch API: Blob, FormData, Request, Response constructors, iterators
 
 async function runTests() {

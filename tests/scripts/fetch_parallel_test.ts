@@ -1,3 +1,4 @@
+// skip: network
 // Test that fetch runs truly in parallel
 // Three 1-second delays should complete in ~1-2s if parallel, ~3s+ if sequential
 

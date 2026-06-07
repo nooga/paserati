@@ -1,3 +1,4 @@
+// skip: network
 // Test the global fetch API with real HTTP requests
 // Uses httpbin.org as a reliable test API service
 // Note: fetch is now a global async function (no import needed)
