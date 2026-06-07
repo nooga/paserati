@@ -294,10 +294,11 @@ type Checker struct {
 
 	// --- NEW: Current function context ---
 	// Track if we're currently inside an async or generator function
-	inAsyncFunction      bool
-	inGeneratorFunction  bool
-	functionNestingDepth int // 0 = top level, >0 = inside function(s)
-	allowTopLevelReturn  bool
+	inAsyncFunction        bool
+	inGeneratorFunction    bool
+	functionNestingDepth   int // 0 = top level, >0 = inside function(s)
+	allowTopLevelReturn    bool
+	skipStrictPropertyInit bool // When true, TS2564 is not emitted (strict-init opt-out)
 
 	// --- Loop/switch/label context (reset when entering a new function scope) ---
 	loopDepth    int             // depth of enclosing iteration statements in current function
@@ -378,6 +379,14 @@ func (c *Checker) SetAllowSuperInEval(allow bool) {
 // are accepted by the checker.
 func (c *Checker) SetAllowTopLevelReturn(allow bool) {
 	c.allowTopLevelReturn = allow
+}
+
+// SetSkipStrictPropertyInit controls whether TS2564 (strict property
+// initialization) is emitted. Default false (emit). Set true to opt out,
+// e.g. when a conformance test sets `// @strict: false` without enabling
+// `--strictPropertyInitialization` explicitly.
+func (c *Checker) SetSkipStrictPropertyInit(skip bool) {
+	c.skipStrictPropertyInit = skip
 }
 
 // --- Access Control Helper Methods ---

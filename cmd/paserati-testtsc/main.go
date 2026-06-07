@@ -699,7 +699,27 @@ func createTscPaserati(directives TestDirectives) *driver.Paserati {
 	pas.SetAllowTopLevelReturn(false)
 	// Type checking is ON - that's what we're testing
 	// Don't skip type check, don't ignore type errors
+	if !strictPropertyInitEnabled(directives) {
+		pas.SetSkipStrictPropertyInit(true)
+	}
 	return pas
+}
+
+// strictPropertyInitEnabled mirrors TypeScript's gating: TS2564 fires when
+// --strictPropertyInitialization is on (which --strict implies). The explicit
+// `// @strictPropertyInitialization` directive overrides `// @strict`. We only
+// opt OUT when a directive plainly disables it — absent any directive Paserati
+// stays strict, matching its baseline behavior.
+func strictPropertyInitEnabled(d TestDirectives) bool {
+	if v, ok := d.Raw["strictpropertyinitialization"]; ok {
+		return v == "true"
+	}
+	if v, ok := d.Raw["strict"]; ok {
+		return v == "true"
+	}
+	// No directive: keep Paserati's strict-by-default behavior so tests that
+	// don't opt out continue to be checked.
+	return true
 }
 
 // printSummary prints the final test summary
