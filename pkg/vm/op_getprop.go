@@ -713,6 +713,39 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		return true, InterpretOK, *dest
 	}
 
+	// 10b'. WeakRef objects - consult the instance's stored prototype (set by
+	// the constructor via GetPrototypeFromConstructor for cross-realm support),
+	// falling back to vm.WeakRefPrototype if absent.
+	if objVal.Type() == TypeWeakRef {
+		wr := objVal.AsWeakRef()
+		proto := wr.GetPrototype()
+		if !proto.IsObject() {
+			proto = vm.WeakRefPrototype
+		}
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwn(propName); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					cpo := current.AsPlainObject()
+					if v, ok := cpo.GetOwn(propName); ok {
+						*dest = v
+						return true, InterpretOK, *dest
+					}
+					current = cpo.prototype
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
 	// 10c. SharedArrayBuffer objects - check own properties first, then prototype chain
 	if objVal.Type() == TypeSharedArrayBuffer {
 		sab := objVal.AsSharedArrayBuffer()
@@ -1682,6 +1715,42 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 	// WeakSet: consult WeakSet.prototype for symbol properties
 	if base.Type() == TypeWeakSet {
 		proto := vm.WeakSetPrototype
+		if proto.IsObject() {
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+			current := po.prototype
+			for current.typ != TypeNull && current.typ != TypeUndefined {
+				if current.IsObject() {
+					if proto2 := current.AsPlainObject(); proto2 != nil {
+						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
+							*dest = v
+							return true, InterpretOK, *dest
+						}
+						current = proto2.prototype
+					} else if dict := current.AsDictObject(); dict != nil {
+						current = dict.prototype
+					} else {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// WeakRef: consult the instance's stored prototype for symbol properties
+	if base.Type() == TypeWeakRef {
+		wr := base.AsWeakRef()
+		proto := wr.GetPrototype()
+		if !proto.IsObject() {
+			proto = vm.WeakRefPrototype
+		}
 		if proto.IsObject() {
 			po := proto.AsPlainObject()
 			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
