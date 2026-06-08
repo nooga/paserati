@@ -10038,14 +10038,25 @@ startExecution:
 					}
 				}
 
-				// Execute builtin constructor
-				// For builtins, we let them handle instance creation
-				// Set constructor call flag so native functions can differentiate
-				// Sync frame.ip so exception handlers can find the correct range
+				// Execute builtin constructor.
+				// Set currentNewTarget so vmInstance.GetNewTarget() returns the
+				// constructor — required for native ctors that strictly check
+				// newTarget (e.g. WeakRef). Limited to direct `new <native>()`
+				// (not super()); subclass-of-native paths route through native
+				// ctors that don't currently consult newTarget to pick their
+				// instance prototype, so threading the inherited subclass through
+				// here exposes a pre-existing prototype-threading gap. Save and
+				// restore prevNewTarget so we never leak constructorVal into a
+				// later call site that wasn't a `new`.
 				frame.ip = callerIP
+				prevNewTarget := vm.currentNewTarget
+				if !inheritNewTarget {
+					vm.currentNewTarget = constructorVal
+				}
 				vm.inConstructorCall = true
 				result, err := builtin.Fn(args)
 				vm.inConstructorCall = false
+				vm.currentNewTarget = prevNewTarget
 				if err != nil {
 					// Check if this is an ExceptionError (already has an exception value)
 					if ee, ok := err.(ExceptionError); ok {
@@ -10150,14 +10161,17 @@ startExecution:
 					}
 				}
 
-				// Execute builtin constructor
-				// For builtins, we let them handle instance creation
-				// Set constructor call flag so native functions can differentiate
-				// Sync frame.ip so exception handlers can find the correct range
+				// Execute builtin constructor — see TypeNativeFunction branch above
+				// for the rationale on the inheritNewTarget guard and save/restore.
 				frame.ip = callerIP
+				prevNewTarget := vm.currentNewTarget
+				if !inheritNewTarget {
+					vm.currentNewTarget = constructorVal
+				}
 				vm.inConstructorCall = true
 				result, err := builtinWithProps.Fn(args)
 				vm.inConstructorCall = false
+				vm.currentNewTarget = prevNewTarget
 				if err != nil {
 					// Check if this is an ExceptionError (already has an exception value)
 					if ee, ok := err.(ExceptionError); ok {
@@ -10396,9 +10410,14 @@ startExecution:
 						continue
 					}
 					frame.ip = callerIP
+					prevNewTarget := vm.currentNewTarget
+					if !inheritNewTarget {
+						vm.currentNewTarget = originalConstructor
+					}
 					vm.inConstructorCall = true
 					result, err := nf.Fn(finalArgs)
 					vm.inConstructorCall = false
+					vm.currentNewTarget = prevNewTarget
 					if err != nil {
 						// Check if this is an ExceptionError (already has an exception value)
 						if ee, ok := err.(ExceptionError); ok {
@@ -10467,9 +10486,14 @@ startExecution:
 						continue
 					}
 					frame.ip = callerIP
+					prevNewTarget := vm.currentNewTarget
+					if !inheritNewTarget {
+						vm.currentNewTarget = originalConstructor
+					}
 					vm.inConstructorCall = true
 					result, err := nfp.Fn(finalArgs)
 					vm.inConstructorCall = false
+					vm.currentNewTarget = prevNewTarget
 					if err != nil {
 						if ee, ok := err.(ExceptionError); ok {
 							vm.throwException(ee.GetExceptionValue())

@@ -262,9 +262,15 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		return InterpretOK, Undefined
 
 	case TypeNativeFunction, TypeNativeFunctionWithProps:
+		// Native constructors handle their own instance creation.
+		// NOTE: this path is broken for TypeNativeFunctionWithProps (panics on
+		// the cast — different struct layout). The straightforward fix
+		// (type-switch the cast and set newTarget) exposes a deeper
+		// prototype-threading gap in subclass-of-native paths. Tracked as
+		// docs/project_incoming/bug_spreadnew_native_with_props_panic.md.
+		// Pre-fix `new WeakRef(...args)` would also fall into this hole;
+		// callers must use `new WeakRef(target)` until that ticket lands.
 		nativeFunc := AsNativeFunction(constructorVal)
-
-		// Native constructors handle their own instance creation
 		result, nativeErr := nativeFunc.Fn(spreadArgs)
 		if nativeErr != nil {
 			frame.ip = callerIP
