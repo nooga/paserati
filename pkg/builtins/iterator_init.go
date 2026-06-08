@@ -1609,9 +1609,17 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create Iterator constructor
 	// ============================================
 	iteratorCtor := vm.NewConstructorWithProps(0, true, "Iterator", func(args []vm.Value) (vm.Value, error) {
-		// Iterator is abstract - per ECMAScript spec, calling Iterator() directly
-		// returns a new object with Iterator.prototype. Subclasses extend this.
-		obj := vm.NewObject(vmInstance.IteratorPrototype).AsPlainObject()
+		// Iterator is abstract — `new Iterator()` returns a fresh object with
+		// Iterator.prototype. For `class S extends Iterator {} new S()` we need
+		// the instance to chain through S.prototype so subclass-added methods
+		// (next, return, custom helpers) are reachable from instances.
+		proto := vmInstance.IteratorPrototype
+		if nt := vmInstance.GetNewTarget(); nt.Type() != vm.TypeUndefined {
+			if p, gpErr := vmInstance.GetProperty(nt, "prototype"); gpErr == nil && p.IsObject() {
+				proto = p
+			}
+		}
+		obj := vm.NewObject(proto).AsPlainObject()
 		return vm.NewValueFromPlainObject(obj), nil
 	})
 
