@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/nooga/paserati/pkg/errors"
@@ -168,8 +169,9 @@ type VM struct {
 	propCache      map[int]*PropInlineCache
 	propCacheMutex sync.RWMutex // Protects propCache from concurrent access
 
-	// Cancellation support
-	cancelled bool // Set to true when VM should stop execution
+	// Cancellation support — written by Cancel() from any goroutine and read by
+	// the interpreter loop, so it must be atomic to satisfy the Go memory model.
+	cancelled atomic.Bool
 
 	// Cache statistics for debugging/profiling
 	cacheStats ICacheStats
@@ -1034,14 +1036,15 @@ func (vm *VM) Reset() {
 	vm.pendingValue = Undefined
 	vm.finallyDepth = 0
 	// Reset cancellation flag
-	vm.cancelled = false
+	vm.cancelled.Store(false)
 	// Clear regex cache to free memory from compiled regexes
 	vm.regexCache = nil
 }
 
-// Cancel signals the VM to stop execution at the next safe point
+// Cancel signals the VM to stop execution at the next safe point. Safe to call
+// from any goroutine.
 func (vm *VM) Cancel() {
-	vm.cancelled = true
+	vm.cancelled.Store(true)
 }
 
 // Interpret starts executing the given chunk of bytecode.
@@ -1321,7 +1324,7 @@ startExecution:
 		}
 
 		// Check for cancellation request
-		if vm.cancelled {
+		if vm.cancelled.Load() {
 			frame.ip = ip
 			status := vm.runtimeError("VM execution cancelled")
 			return status, Undefined
