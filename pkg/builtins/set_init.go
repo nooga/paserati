@@ -752,6 +752,16 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 		newSet := vm.NewSet()
 		setObj := newSet.AsSet()
 
+		// Subclass prototype threading: `class S extends Set {} new S()` should
+		// give an instance with S.prototype, not Set.prototype.
+		if nt := vmInstance.GetNewTarget(); nt.Type() != vm.TypeUndefined {
+			if p, gpErr := vmInstance.GetPrototypeFromConstructor(nt, "%SetPrototype%"); gpErr == nil && p.IsObject() {
+				if !p.StrictlyEquals(vmInstance.SetPrototype) {
+					setObj.SetPrototype(p)
+				}
+			}
+		}
+
 		// If an iterable argument is provided, add all its elements
 		if len(args) > 0 && !args[0].IsUndefined() && args[0].Type() != vm.TypeNull {
 			iterable := args[0]

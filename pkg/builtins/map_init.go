@@ -412,6 +412,16 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		newMap := vm.NewMap()
 		mapObj := newMap.AsMap()
 
+		// Subclass prototype threading: `class S extends Map {} new S()` should
+		// give an instance with S.prototype, not Map.prototype.
+		if nt := vmInstance.GetNewTarget(); nt.Type() != vm.TypeUndefined {
+			if p, gpErr := vmInstance.GetPrototypeFromConstructor(nt, "%MapPrototype%"); gpErr == nil && p.IsObject() {
+				if !p.StrictlyEquals(vmInstance.MapPrototype) {
+					mapObj.SetPrototype(p)
+				}
+			}
+		}
+
 		// If an iterable argument is provided, add all its [key, value] pairs
 		if len(args) > 0 && !args[0].IsUndefined() && args[0].Type() != vm.TypeNull {
 			iterable := args[0]

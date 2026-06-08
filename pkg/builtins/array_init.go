@@ -2165,27 +2165,42 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create Array constructor (length=1 per spec, variadic for multiple args)
 	ctorWithProps := vm.NewConstructorWithProps(1, true, "Array", func(args []vm.Value) (vm.Value, error) {
-		if len(args) == 0 {
-			return vm.NewArray(), nil
-		}
-		if len(args) == 1 {
-			// If single argument is a number, create array with that length
-			if args[0].IsNumber() {
-				length := int(args[0].ToFloat())
-				if length < 0 {
-					return vm.NewArray(), nil // Should throw RangeError in real JS
+		// Per ECMAScript spec, the instance's [[Prototype]] is derived from
+		// newTarget so that `class S extends Array {} new S()` produces an
+		// instance with S.prototype rather than Array.prototype. For direct
+		// `new Array()` newTarget IS the Array constructor, GetPrototypeFromConstructor
+		// resolves to Array.prototype, and we leave the per-instance override
+		// unset (default behavior). For subclass calls newTarget is the
+		// subclass and we apply the override.
+		var subclassProto vm.Value
+		if nt := vmInstance.GetNewTarget(); nt.Type() != vm.TypeUndefined {
+			if p, gpfcErr := vmInstance.GetPrototypeFromConstructor(nt, "%ArrayPrototype%"); gpfcErr == nil && p.IsObject() {
+				if !p.StrictlyEquals(vmInstance.ArrayPrototype) {
+					subclassProto = p
 				}
-				result := vm.NewArray()
-				// Set length without allocating elements - JavaScript arrays are sparse
-				arr := result.AsArray()
-				arr.SetLength(length)
-				// DEBUG: verify length was set
-				// fmt.Printf("[DEBUG Array constructor] Set length to %d, arr.Length() = %d, result.Type() = %d (TypeArray=%d)\n", length, arr.Length(), result.Type(), vm.TypeArray)
-				return result, nil
 			}
 		}
-		// Multiple arguments or single non-number argument - create array with those elements
-		return vm.NewArrayWithArgs(args), nil
+
+		var result vm.Value
+		switch {
+		case len(args) == 0:
+			result = vm.NewArray()
+		case len(args) == 1 && args[0].IsNumber():
+			length := int(args[0].ToFloat())
+			if length < 0 {
+				result = vm.NewArray() // Should throw RangeError in real JS
+			} else {
+				result = vm.NewArray()
+				result.AsArray().SetLength(length)
+			}
+		default:
+			result = vm.NewArrayWithArgs(args)
+		}
+
+		if subclassProto.IsObject() {
+			result.AsArray().SetPrototype(subclassProto)
+		}
+		return result, nil
 	})
 
 	// Add prototype property
