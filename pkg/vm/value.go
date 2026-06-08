@@ -195,6 +195,10 @@ type ArrayObject struct {
 	extensible   bool                       // When false, no new properties can be added (for Object.freeze/seal)
 	frozen       bool                       // When true, elements are also non-writable and non-configurable
 	execMeta     *execResultMeta            // Lazy exec result properties (nil for normal arrays)
+	// Subclass prototype override: for `class S extends Array {} new S()` instances,
+	// this points at S.prototype (whose own [[Prototype]] chains through Array.prototype).
+	// Zero value (TypeUndefined) means use the realm's intrinsic ArrayPrototype.
+	prototype    Value
 }
 
 // PropertyDesc stores property descriptor attributes
@@ -569,6 +573,30 @@ func NewArrayWithLength(length int) Value {
 	return arr
 }
 
+// NewArrayWithPrototype creates an empty array whose [[Prototype]] override is
+// `prototype`. Used by `new Subclass()` where Subclass extends Array, so that
+// instance property lookups walk Subclass.prototype before falling through to
+// Array.prototype. Pass Undefined to get the default intrinsic-prototype
+// behavior of NewArray().
+func NewArrayWithPrototype(prototype Value) Value {
+	arr := &ArrayObject{extensible: true}
+	if prototype.IsObject() {
+		arr.prototype = prototype
+	}
+	return Value{typ: TypeArray, obj: unsafe.Pointer(arr)}
+}
+
+// SetPrototype overrides the per-instance [[Prototype]] (for subclassing).
+func (a *ArrayObject) SetPrototype(prototype Value) {
+	a.prototype = prototype
+}
+
+// GetPrototype returns the per-instance prototype override, or Undefined if
+// none is set (callers should fall back to the realm's ArrayPrototype).
+func (a *ArrayObject) GetPrototype() Value {
+	return a.prototype
+}
+
 func NewMap() Value {
 	mapObj := &MapObject{
 		size:    0,
@@ -578,6 +606,12 @@ func NewMap() Value {
 	return Value{typ: TypeMap, obj: unsafe.Pointer(mapObj)}
 }
 
+// SetPrototype overrides the per-instance [[Prototype]] (for subclassing).
+func (m *MapObject) SetPrototype(prototype Value) { m.prototype = prototype }
+
+// GetPrototype returns the per-instance prototype, or Undefined if unset.
+func (m *MapObject) GetPrototype() Value { return m.prototype }
+
 func NewSet() Value {
 	setObj := &SetObject{
 		size:   0,
@@ -585,6 +619,12 @@ func NewSet() Value {
 	}
 	return Value{typ: TypeSet, obj: unsafe.Pointer(setObj)}
 }
+
+// SetPrototype overrides the per-instance [[Prototype]] (for subclassing).
+func (s *SetObject) SetPrototype(prototype Value) { s.prototype = prototype }
+
+// GetPrototype returns the per-instance prototype, or Undefined if unset.
+func (s *SetObject) GetPrototype() Value { return s.prototype }
 
 func NewProxy(target Value, handler Value) Value {
 	proxyObj := &ProxyObject{

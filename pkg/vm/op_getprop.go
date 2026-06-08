@@ -552,16 +552,22 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			*dest = v
 			return true, InterpretOK, *dest
 		}
-		// Walk the prototype chain: Array.prototype -> Object.prototype
-		// This enables inherited methods like hasOwnProperty, valueOf, etc.
-		proto := vm.ArrayPrototype
+		// Walk the prototype chain. For instances of subclasses (`class S
+		// extends Array {}`), arr.prototype points at S.prototype, whose
+		// [[Prototype]] chains through Array.prototype → Object.prototype.
+		// For plain arrays the per-instance override is unset and we fall
+		// through to the realm's intrinsic Array.prototype.
+		proto := arr.prototype
+		if !proto.IsObject() {
+			proto = vm.ArrayPrototype
+		}
 		if proto.IsObject() {
 			po := proto.AsPlainObject()
 			if v, ok := po.GetOwn(propName); ok {
 				*dest = v
 				return true, InterpretOK, *dest
 			}
-			// Walk up to Object.prototype
+			// Walk up the chain
 			current := po.GetPrototype()
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
@@ -593,8 +599,13 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				return true, InterpretOK, *dest
 			}
 		}
-		// Then consult Map.prototype chain for built-in methods
-		proto := vm.MapPrototype
+		// Consult the per-instance prototype (set by subclass ctor for
+		// `class S extends Map {}`) before falling back to the realm
+		// intrinsic Map.prototype.
+		proto := mapObj.prototype
+		if !proto.IsObject() {
+			proto = vm.MapPrototype
+		}
 		if proto.IsObject() {
 			po := proto.AsPlainObject()
 			if v, ok := po.GetOwn(propName); ok {
@@ -630,8 +641,12 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				return true, InterpretOK, *dest
 			}
 		}
-		// Then consult Set.prototype chain for built-in methods
-		proto := vm.SetPrototype
+		// Consult the per-instance prototype (set by subclass ctor for
+		// `class S extends Set {}`) before falling back to the intrinsic.
+		proto := setObj.prototype
+		if !proto.IsObject() {
+			proto = vm.SetPrototype
+		}
 		if proto.IsObject() {
 			po := proto.AsPlainObject()
 			if v, ok := po.GetOwn(propName); ok {
@@ -1273,8 +1288,12 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	case TypeArray:
-		// Arrays: consult Array.prototype chain for symbol properties
-		proto := vm.ArrayPrototype
+		// Arrays: consult the per-instance prototype override (subclassing)
+		// before falling back to the realm's intrinsic Array.prototype.
+		proto := base.AsArray().prototype
+		if !proto.IsObject() {
+			proto = vm.ArrayPrototype
+		}
 		if proto.IsObject() {
 			po := proto.AsPlainObject()
 			if debugVM {
