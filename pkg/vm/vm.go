@@ -2877,13 +2877,25 @@ startExecution:
 				case TypeDictObject:
 					current = objVal.AsDictObject().GetPrototype()
 				case TypeArray:
-					current = vm.ArrayPrototype
+					if p := objVal.AsArray().prototype; p.IsObject() {
+						current = p
+					} else {
+						current = vm.ArrayPrototype
+					}
 				case TypeRegExp:
 					current = vm.RegExpPrototype
 				case TypeMap:
-					current = vm.MapPrototype
+					if p := objVal.AsMap().prototype; p.IsObject() {
+						current = p
+					} else {
+						current = vm.MapPrototype
+					}
 				case TypeSet:
-					current = vm.SetPrototype
+					if p := objVal.AsSet().prototype; p.IsObject() {
+						current = p
+					} else {
+						current = vm.SetPrototype
+					}
 				case TypeArguments:
 					current = vm.ObjectPrototype // Arguments objects inherit from Object.prototype
 				case TypePromise:
@@ -10040,19 +10052,18 @@ startExecution:
 
 				// Execute builtin constructor.
 				// Set currentNewTarget so vmInstance.GetNewTarget() returns the
-				// constructor — required for native ctors that strictly check
-				// newTarget (e.g. WeakRef). Limited to direct `new <native>()`
-				// (not super()); subclass-of-native paths route through native
-				// ctors that don't currently consult newTarget to pick their
-				// instance prototype, so threading the inherited subclass through
-				// here exposes a pre-existing prototype-threading gap. Save and
-				// restore prevNewTarget so we never leak constructorVal into a
-				// later call site that wasn't a `new`.
+				// correct value. For direct `new <native>()` the newTarget is
+				// the constructor; for super() from a subclass (inheritNewTarget),
+				// it's the caller's newTarget so the native ctor can pick the
+				// subclass prototype via GetPrototypeFromConstructor. Save and
+				// restore prevNewTarget so we never leak into a later call site.
+				newTargetForNative := constructorVal
+				if inheritNewTarget && frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+					newTargetForNative = frame.newTargetValue
+				}
 				frame.ip = callerIP
 				prevNewTarget := vm.currentNewTarget
-				if !inheritNewTarget {
-					vm.currentNewTarget = constructorVal
-				}
+				vm.currentNewTarget = newTargetForNative
 				vm.inConstructorCall = true
 				result, err := builtin.Fn(args)
 				vm.inConstructorCall = false
@@ -10162,12 +10173,14 @@ startExecution:
 				}
 
 				// Execute builtin constructor — see TypeNativeFunction branch above
-				// for the rationale on the inheritNewTarget guard and save/restore.
+				// for the rationale on newTargetForNative.
+				newTargetForNative := constructorVal
+				if inheritNewTarget && frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+					newTargetForNative = frame.newTargetValue
+				}
 				frame.ip = callerIP
 				prevNewTarget := vm.currentNewTarget
-				if !inheritNewTarget {
-					vm.currentNewTarget = constructorVal
-				}
+				vm.currentNewTarget = newTargetForNative
 				vm.inConstructorCall = true
 				result, err := builtinWithProps.Fn(args)
 				vm.inConstructorCall = false
@@ -10409,11 +10422,13 @@ startExecution:
 						ip = frame.ip
 						continue
 					}
+					newTargetForNative := originalConstructor
+					if inheritNewTarget && frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+						newTargetForNative = frame.newTargetValue
+					}
 					frame.ip = callerIP
 					prevNewTarget := vm.currentNewTarget
-					if !inheritNewTarget {
-						vm.currentNewTarget = originalConstructor
-					}
+					vm.currentNewTarget = newTargetForNative
 					vm.inConstructorCall = true
 					result, err := nf.Fn(finalArgs)
 					vm.inConstructorCall = false
@@ -10485,11 +10500,13 @@ startExecution:
 						ip = frame.ip
 						continue
 					}
+					newTargetForNative := originalConstructor
+					if inheritNewTarget && frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+						newTargetForNative = frame.newTargetValue
+					}
 					frame.ip = callerIP
 					prevNewTarget := vm.currentNewTarget
-					if !inheritNewTarget {
-						vm.currentNewTarget = originalConstructor
-					}
+					vm.currentNewTarget = newTargetForNative
 					vm.inConstructorCall = true
 					result, err := nfp.Fn(finalArgs)
 					vm.inConstructorCall = false

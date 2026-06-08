@@ -262,18 +262,44 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		return InterpretOK, Undefined
 
 	case TypeNativeFunction, TypeNativeFunctionWithProps:
-		// Native constructors handle their own instance creation.
-		// NOTE: this path is broken for TypeNativeFunctionWithProps (panics on
-		// the cast — different struct layout). The straightforward fix
-		// (type-switch the cast and set newTarget) exposes a deeper
-		// prototype-threading gap in subclass-of-native paths. Tracked as
-		// docs/project_incoming/bug_spreadnew_native_with_props_panic.md.
-		// Pre-fix `new WeakRef(...args)` would also fall into this hole;
-		// callers must use `new WeakRef(target)` until that ticket lands.
-		nativeFunc := AsNativeFunction(constructorVal)
-		result, nativeErr := nativeFunc.Fn(spreadArgs)
-		if nativeErr != nil {
+		// Native constructors handle their own instance creation. Resolve
+		// the function pointer per type — TypeNativeFunctionWithProps has a
+		// different struct layout than TypeNativeFunction, so a single
+		// AsNativeFunction cast would panic on the with-props case.
+		var fn func(args []Value) (Value, error)
+		var isCtor bool
+		var name string
+		switch constructorVal.Type() {
+		case TypeNativeFunction:
+			nf := constructorVal.AsNativeFunction()
+			fn, isCtor, name = nf.Fn, nf.IsConstructor, nf.Name
+		case TypeNativeFunctionWithProps:
+			nfp := constructorVal.AsNativeFunctionWithProps()
+			fn, isCtor, name = nfp.Fn, nfp.IsConstructor, nfp.Name
+		}
+		if !isCtor {
 			frame.ip = callerIP
+			vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", name))
+			return InterpretRuntimeError, Undefined
+		}
+
+		// Pick newTarget: caller-inherited for super(), constructor for direct new.
+		newTargetForNative := constructorVal
+		if inheritNewTarget && frame.isConstructorCall && frame.newTargetValue.Type() != TypeUndefined {
+			newTargetForNative = frame.newTargetValue
+		}
+		frame.ip = callerIP
+		prevNewTarget := vm.currentNewTarget
+		vm.currentNewTarget = newTargetForNative
+		vm.inConstructorCall = true
+		result, nativeErr := fn(spreadArgs)
+		vm.inConstructorCall = false
+		vm.currentNewTarget = prevNewTarget
+		if nativeErr != nil {
+			if ee, ok := nativeErr.(ExceptionError); ok {
+				vm.throwException(ee.GetExceptionValue())
+				return InterpretRuntimeError, Undefined
+			}
 			status := vm.runtimeError("Native constructor error: %s", nativeErr.Error())
 			return status, Undefined
 		}
