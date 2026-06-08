@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -78,6 +79,12 @@ type Field struct {
 	isAccessor   bool
 }
 
+// shapeIndexThreshold is the field-count above which a Shape lazily builds a
+// name → fields index for O(1) slow-path lookups. Below this, a linear scan is
+// faster than a map probe; see object_bench_test.go for the measurements that
+// anchor this number.
+const shapeIndexThreshold = 8
+
 type Shape struct {
 	parent            *Shape
 	fields            []Field
@@ -85,6 +92,14 @@ type Shape struct {
 	transitions       map[string]*Shape // Slow path: keyed by PropertyKey.hash() (symbols, etc.)
 	mu                sync.RWMutex      // Protects transitions maps, childExtended, fields mutation
 	version           uint32            // Bumped on any layout/flags change
+
+	// Lazily-built string-key name → fields slice index. nil until the first
+	// slow-path lookup against a shape with len(fields) > shapeIndexThreshold.
+	// Loads are atomic; building happens at most once (idempotent under race),
+	// gated by indexBuilt. Once built, fields are append-only via extendFields
+	// (new Shape), so this index never goes stale for its owning Shape.
+	nameIndex   atomic.Pointer[map[string]int]
+	indexBuilt  atomic.Bool
 
 	// Shared-backing invariant (protected by mu):
 	//   - When a new shape is created by appending a single field to `parent`,
@@ -182,17 +197,93 @@ type PlainObject struct {
 	immutablePrototype bool
 }
 
+// lookupStringField returns the index of the string-keyed field with the given
+// name, or -1 if not present. Uses the lazy per-shape name index for large
+// shapes; scans for small ones.
+func (s *Shape) lookupStringField(name string) int {
+	if len(s.fields) <= shapeIndexThreshold {
+		for i := range s.fields {
+			f := &s.fields[i]
+			if f.keyKind == KeyKindString && f.name == name {
+				return i
+			}
+		}
+		return -1
+	}
+	idx := s.nameIndex.Load()
+	if idx == nil {
+		idx = s.buildNameIndex()
+	}
+	if i, ok := (*idx)[name]; ok {
+		return i
+	}
+	return -1
+}
+
+// buildNameIndex constructs the name → field-index map for slow-path lookups.
+// Safe under concurrent callers: only the first builder wins via indexBuilt,
+// later ones drop their map. Returns the published index.
+func (s *Shape) buildNameIndex() *map[string]int {
+	if !s.indexBuilt.CompareAndSwap(false, true) {
+		// Another goroutine is building (or has built) — spin briefly until
+		// nameIndex is published. The window is one map allocation wide.
+		for {
+			if p := s.nameIndex.Load(); p != nil {
+				return p
+			}
+		}
+	}
+	m := make(map[string]int, len(s.fields))
+	for i := range s.fields {
+		f := &s.fields[i]
+		if f.keyKind == KeyKindString {
+			m[f.name] = i
+		}
+	}
+	s.nameIndex.Store(&m)
+	return &m
+}
+
 // GetOwn looks up a direct (own) property by name. Returns (value, true) if present.
 func (o *PlainObject) GetOwn(name string) (Value, bool) {
-	return o.GetOwnByKey(keyFromString(name))
+	s := o.shape
+	// Inlined small-shape scan: avoids the function-call hop into
+	// lookupStringField for the (very common) tiny-object case.
+	if len(s.fields) <= shapeIndexThreshold {
+		for i := range s.fields {
+			f := &s.fields[i]
+			if f.keyKind == KeyKindString && f.name == name {
+				if f.offset < len(o.properties) {
+					return o.properties[f.offset], true
+				}
+				return Undefined, true
+			}
+		}
+		return Undefined, false
+	}
+	idx := s.nameIndex.Load()
+	if idx == nil {
+		idx = s.buildNameIndex()
+	}
+	i, ok := (*idx)[name]
+	if !ok {
+		return Undefined, false
+	}
+	f := &s.fields[i]
+	if f.offset < len(o.properties) {
+		return o.properties[f.offset], true
+	}
+	return Undefined, true
 }
 
 // GetOwnByKey looks up a direct (own) property by key. Returns (value, true) if present.
 func (o *PlainObject) GetOwnByKey(key PropertyKey) (Value, bool) {
-	// Scan shape for the field
+	if key.isString() {
+		return o.GetOwn(key.name)
+	}
+	// Symbol path: linear scan (index covers string keys only).
 	for _, f := range o.shape.fields {
-		if (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
-			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj) {
+		if f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj {
 			if f.offset < len(o.properties) {
 				return o.properties[f.offset], true
 			}
