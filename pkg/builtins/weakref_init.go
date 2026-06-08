@@ -117,8 +117,10 @@ func (w *WeakRefInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		target := args[0]
 
-		// Target must be an object
-		if !target.IsObject() {
+		// Target must be an object. Per ECMAScript, functions are objects (Type
+		// of a function value is "object"), so callables are valid WeakRef
+		// targets — IsObject alone excludes them.
+		if !target.IsObject() && !target.IsCallable() {
 			return vm.Undefined, vmInstance.NewTypeError("WeakRef constructor argument must be an object")
 		}
 
