@@ -1318,3 +1318,41 @@ func TestDictObjectValue(t *testing.T) {
 	expectPanic(t, func() { v.AsPlainObject() }, "not an object")
 	expectPanic(t, func() { v.AsArray() }, "not an array")
 }
+
+// TestWeakRefDerefPreservesType pins the contract that WeakRef.Deref() returns
+// a Value whose ValueType matches what was passed to NewWeakRef. Prior to the
+// fix, Deref always returned a TypeObject-tagged Value with an underlying
+// non-PlainObject pointer, which silently breaks downstream type checks.
+func TestWeakRefDerefPreservesType(t *testing.T) {
+	cases := []struct {
+		name string
+		want ValueType
+		make func() Value
+	}{
+		{"array", TypeArray, func() Value { return NewArray() }},
+		{"plain object", TypeObject, func() Value { return NewObject(DefaultObjectPrototype) }},
+		{"dict object", TypeDictObject, func() Value { return NewDictObject(DefaultObjectPrototype) }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			target := tc.make() // hold strong ref so the weak.Pointer stays alive
+			wr := NewWeakRef(target)
+			if wr.Type() != TypeWeakRef {
+				t.Fatalf("NewWeakRef returned %v, want TypeWeakRef", wr.Type())
+			}
+
+			derefed := wr.AsWeakRef().Deref()
+			if derefed.Type() != tc.want {
+				t.Errorf("Deref type = %v, want %v", derefed.Type(), tc.want)
+			}
+			if derefed.obj != target.obj {
+				t.Errorf("Deref obj pointer differs from target")
+			}
+
+			// Keep target observable so the weak reference cannot have been
+			// collected between NewWeakRef and Deref.
+			_ = target
+		})
+	}
+}
