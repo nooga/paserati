@@ -336,7 +336,7 @@ type WeakSetObject struct {
 type WeakRefObject struct {
 	Object
 	targetWeak weak.Pointer[byte] // Weak reference to the target object
-	targetPtr  uintptr            // Pointer address of the target (for checking liveness)
+	targetType ValueType          // Original ValueType of the target, restored on Deref
 	prototype  Value              // [[Prototype]] for cross-realm support
 }
 
@@ -627,22 +627,18 @@ func NewWeakSet() Value {
 
 // NewWeakRef creates a new WeakRef object holding a weak reference to target
 func NewWeakRef(target Value) Value {
-	// Get the raw pointer to the target object
-	ptr := target.obj
 	wrObj := &WeakRefObject{
-		targetWeak: weak.Make((*byte)(ptr)),
-		targetPtr:  uintptr(ptr),
+		targetWeak: weak.Make((*byte)(target.obj)),
+		targetType: target.typ,
 	}
 	return Value{typ: TypeWeakRef, obj: unsafe.Pointer(wrObj)}
 }
 
 // NewWeakRefWithPrototype creates a new WeakRef object with a specific prototype
 func NewWeakRefWithPrototype(target Value, prototype Value) Value {
-	// Get the raw pointer to the target object
-	ptr := target.obj
 	wrObj := &WeakRefObject{
-		targetWeak: weak.Make((*byte)(ptr)),
-		targetPtr:  uintptr(ptr),
+		targetWeak: weak.Make((*byte)(target.obj)),
+		targetType: target.typ,
 		prototype:  prototype,
 	}
 	return Value{typ: TypeWeakRef, obj: unsafe.Pointer(wrObj)}
@@ -653,16 +649,16 @@ func (wr *WeakRefObject) GetPrototype() Value {
 	return wr.prototype
 }
 
-// Deref returns the target object if it's still alive, or undefined if collected
+// Deref returns the target object if it's still alive, or undefined if collected.
+// The returned Value preserves the target's original ValueType (array, function,
+// etc.) — load .Value() exactly once so a concurrent GC between the nil-check
+// and the read can't hand us a dangling pointer.
 func (wr *WeakRefObject) Deref() Value {
-	// Check if the weak reference is still valid
-	if wr.targetWeak.Value() == nil {
+	p := wr.targetWeak.Value()
+	if p == nil {
 		return Undefined
 	}
-	// Return a Value referencing the still-alive object
-	// We reconstruct the Value using the stored pointer
-	// The type is inferred from context (it must be an object for WeakRef)
-	return Value{typ: TypeObject, obj: unsafe.Pointer(wr.targetWeak.Value())}
+	return Value{typ: wr.targetType, obj: unsafe.Pointer(p)}
 }
 
 // hashKey creates a unique string key for any JavaScript value
