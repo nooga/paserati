@@ -3527,6 +3527,7 @@ type MethodSignature struct {
 	RestParameter        *RestParameter   // Rest parameter (if any)
 	ReturnTypeAnnotation Expression       // Optional return type
 	Kind                 string           // "method", "getter", "setter"
+	Optional             bool             // Optional method marker (name?(): T)
 	IsStatic             bool             // Access modifiers
 	IsPublic             bool
 	IsPrivate            bool
@@ -3566,6 +3567,9 @@ func (ms *MethodSignature) String() string {
 
 	if ms.Key != nil {
 		out.WriteString(ms.Key.String())
+	}
+	if ms.Optional {
+		out.WriteString("?")
 	}
 
 	out.WriteString("(")

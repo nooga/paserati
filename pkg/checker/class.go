@@ -116,7 +116,7 @@ func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
 	}
 
 	for _, sig := range body.MethodSigs {
-		if sig.IsAbstract || sig.Key == nil {
+		if sig.IsAbstract || sig.Optional || sig.Key == nil {
 			continue
 		}
 		name, isKnownName := getMethodKeyString(sig.Key)
@@ -748,19 +748,25 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			// Validate the signature types
 			c.validateMethodSignature(methodSig)
 
-			// For abstract methods, add them to the instance type and track for TS2515.
-			if methodSig.IsAbstract {
+			// Abstract and optional method signatures contribute members without
+			// requiring an implementation in the declaring class.
+			if methodSig.IsAbstract || methodSig.Optional {
 				methodType := c.inferMethodTypeFromSignature(methodSig)
+				if methodSig.Optional {
+					methodType = types.NewUnionType(methodType, types.Undefined)
+				}
 				accessLevel := c.getAccessLevel(methodSig.IsPublic, methodSig.IsPrivate, methodSig.IsProtected)
 
 				instanceType.WithClassMember(methodName, methodType, accessLevel, false, false)
-				debugPrintf("// [Checker Class] Added abstract method '%s' to instance type: %s\n", methodName, methodType.String())
+				debugPrintf("// [Checker Class] Added method signature '%s' to instance type: %s\n", methodName, methodType.String())
 
 				// Track abstract method for subclass implementation checking
-				if c.abstractMethods[className] == nil {
+				if methodSig.IsAbstract && c.abstractMethods[className] == nil {
 					c.abstractMethods[className] = make(map[string]bool)
 				}
-				c.abstractMethods[className][methodName] = true
+				if methodSig.IsAbstract {
+					c.abstractMethods[className][methodName] = true
+				}
 			}
 
 			debugPrintf("// [Checker Class] Processed method signature '%s'\n", methodName)

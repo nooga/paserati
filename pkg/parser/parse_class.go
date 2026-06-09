@@ -763,10 +763,12 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 		methodName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
 
+	isOptional := false
 	// Optional method marker: name?() — consume the '?' if present.
 	if p.peekTokenIs(lexer.QUESTION) &&
 		(p.peekTokenIs2(lexer.LPAREN) || p.peekTokenIs2(lexer.LT)) {
 		p.nextToken() // consume '?'
+		isOptional = true
 	}
 
 	// Try to parse type parameters: methodName<T, U>()
@@ -816,6 +818,7 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 			RestParameter:        restParameter,
 			ReturnTypeAnnotation: returnTypeAnnotation,
 			Kind:                 "method",
+			Optional:             isOptional,
 			IsStatic:             isStatic,
 			IsPublic:             isPublic,
 			IsPrivate:            isPrivate,

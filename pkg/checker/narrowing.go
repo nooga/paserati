@@ -10,12 +10,12 @@ import (
 
 // TypeGuard represents a detected type guard pattern
 type TypeGuard struct {
-	VariableName             string              // The variable being narrowed (e.g., "x" or "this.value" or "obj.prop")
-	NarrowedType             types.Type          // The type it's narrowed to (e.g., types.String)
-	IsNegated                bool                // true for !== checks, false for === checks
-	DiscriminantProp         string              // For discriminated unions: the property being checked (e.g., "kind")
-	DiscriminantValue        types.Type          // For discriminated unions: the value being compared (e.g., literal "num")
-	OptionalChainingBaseExpr parser.Expression   // For optional chaining guards: the base object expression (e.g., "opts" in "opts?.prop")
+	VariableName             string            // The variable being narrowed (e.g., "x" or "this.value" or "obj.prop")
+	NarrowedType             types.Type        // The type it's narrowed to (e.g., types.String)
+	IsNegated                bool              // true for !== checks, false for === checks
+	DiscriminantProp         string            // For discriminated unions: the property being checked (e.g., "kind")
+	DiscriminantValue        types.Type        // For discriminated unions: the value being compared (e.g., literal "num")
+	OptionalChainingBaseExpr parser.Expression // For optional chaining guards: the base object expression (e.g., "opts" in "opts?.prop")
 }
 
 // extractTypePredicateFromType checks if a type has call signatures with a type predicate return type.
@@ -58,6 +58,8 @@ func expressionToNarrowingKey(expr parser.Expression) string {
 		return e.Value
 	case *parser.ThisExpression:
 		return "this"
+	case *parser.SuperExpression:
+		return "super"
 	case *parser.MemberExpression:
 		// Recursively build the key for nested member expressions
 		objectKey := expressionToNarrowingKey(e.Object)
@@ -1453,8 +1455,10 @@ func (c *Checker) applyInvertedOrNarrowing(condition parser.Expression) {
 
 // applyInvertedTruthinessNarrowing handles control flow narrowing for truthiness conditions
 // that guard a terminating block. For example:
-//   if (!x) { return } => after return, x is truthy (non-null/undefined)
-//   if (x) { return }  => after return, x is falsy (null/undefined) - less useful
+//
+//	if (!x) { return } => after return, x is truthy (non-null/undefined)
+//	if (x) { return }  => after return, x is falsy (null/undefined) - less useful
+//
 // Returns a narrowed environment or nil if no narrowing was applied.
 func (c *Checker) applyInvertedTruthinessNarrowing(condition parser.Expression) *Environment {
 	// Handle !x pattern: if (!x) { return } => x is truthy after
