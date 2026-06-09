@@ -8284,13 +8284,13 @@ func (p *Parser) parseConstructorTypeExpression() Expression {
 	}
 
 	// Parse parameter types (similar to function type parameters)
-	params, _, err := p.parseFunctionTypeParameterList()
+	params, restParam, err := p.parseFunctionTypeParameterList()
 	if err != nil {
 		p.addError(p.curToken, err.Error())
 		return nil
 	}
 	cte.Parameters = params
-	// Note: Constructor types don't typically use rest parameters, but we parse them anyway
+	cte.RestParameter = restParam
 
 	// Expect '=>' for return type (constructor types use arrow syntax)
 	if !p.expectPeek(lexer.ARROW) {
@@ -8339,13 +8339,13 @@ func (p *Parser) parseInterfaceConstructorSignature() Expression {
 	}
 
 	// Parse parameter types (similar to function type parameters)
-	params, _, err := p.parseFunctionTypeParameterList()
+	params, restParam, err := p.parseFunctionTypeParameterList()
 	if err != nil {
 		p.addError(p.curToken, err.Error())
 		return nil
 	}
 	cte.Parameters = params
-	// Note: Constructor types don't typically use rest parameters, but we parse them anyway
+	cte.RestParameter = restParam
 
 	// Return type is optional: `new (params): T` or just `new (params)`.
 	if p.peekTokenIs(lexer.COLON) {

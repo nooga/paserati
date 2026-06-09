@@ -905,6 +905,20 @@ func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeEx
 		paramTypes = append(paramTypes, paramType)
 	}
 
+	var restParameterType types.Type
+	if node.RestParameter != nil {
+		resolvedRestType := c.resolveTypeAnnotation(node.RestParameter)
+		if resolvedRestType != nil {
+			if !isValidRestParameterType(resolvedRestType) {
+				c.addError(node.RestParameter, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
+				resolvedRestType = &types.ArrayType{ElementType: types.Any}
+			}
+		} else {
+			resolvedRestType = &types.ArrayType{ElementType: types.Any}
+		}
+		restParameterType = resolvedRestType
+	}
+
 	var constructedType types.Type = types.Any
 	if node.ReturnType != nil {
 		resolvedReturnType := c.resolveTypeAnnotation(node.ReturnType)
@@ -917,8 +931,10 @@ func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeEx
 
 	// Create signature
 	sig := &types.Signature{
-		ParameterTypes: paramTypes,
-		ReturnType:     constructedType,
+		ParameterTypes:    paramTypes,
+		ReturnType:        constructedType,
+		IsVariadic:        node.RestParameter != nil,
+		RestParameterType: restParameterType,
 		// Note: Constructor type expressions don't track optional parameters
 	}
 

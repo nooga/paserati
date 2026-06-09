@@ -2872,6 +2872,7 @@ type ConstructorTypeExpression struct {
 	Token          *lexer.Token     // The 'new' token
 	TypeParameters []*TypeParameter // Optional type parameters: new<T>(...)
 	Parameters     []Expression     // Parameter types for the constructor
+	RestParameter  Expression       // Rest parameter type for variadic constructors
 	ReturnType     Expression       // The constructed type (T in `new (): T`)
 }
 
@@ -2882,6 +2883,9 @@ func (cte *ConstructorTypeExpression) String() string {
 	params := []string{}
 	for _, p := range cte.Parameters {
 		params = append(params, p.String())
+	}
+	if cte.RestParameter != nil {
+		params = append(params, "..."+cte.RestParameter.String())
 	}
 
 	out.WriteString("new (")
