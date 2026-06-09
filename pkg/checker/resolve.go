@@ -696,11 +696,26 @@ func (c *Checker) extractCallSignaturesFromType(typ types.Type) []*types.Signatu
 	return nil
 }
 
+func (c *Checker) extractConstructSignaturesFromType(typ types.Type) []*types.Signature {
+	switch t := typ.(type) {
+	case *types.ObjectType:
+		if len(t.ConstructSignatures) > 0 {
+			return t.ConstructSignatures
+		}
+	case *types.GenericType:
+		if bodyObj, ok := t.Body.(*types.ObjectType); ok && len(bodyObj.ConstructSignatures) > 0 {
+			return bodyObj.ConstructSignatures
+		}
+	}
+	return nil
+}
+
 // --- NEW: Helper to resolve ObjectTypeExpression nodes ---
 func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) types.Type {
 	properties := make(map[string]types.Type)
 	optionalProperties := make(map[string]bool)
 	var callSignatures []*types.Signature
+	var constructSignatures []*types.Signature
 	var indexSignatures []*types.IndexSignature
 
 	for _, prop := range node.Properties {
@@ -736,6 +751,13 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			}
 
 			callSignatures = append(callSignatures, sig)
+		} else if prop.IsConstructSignature {
+			if prop.Type != nil {
+				propType := c.resolveTypeAnnotation(prop.Type)
+				if sigs := c.extractConstructSignaturesFromType(propType); len(sigs) > 0 {
+					constructSignatures = append(constructSignatures, sigs...)
+				}
+			}
 		} else if prop.IsIndexSignature {
 			// Handle index signature like [key: string]: Type
 			// For now, we'll add them to IndexSignatures field of ObjectType
@@ -821,10 +843,11 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 
 	// Create a unified ObjectType
 	objectType := &types.ObjectType{
-		Properties:         properties,
-		OptionalProperties: optionalProperties,
-		CallSignatures:     callSignatures,
-		IndexSignatures:    indexSignatures,
+		Properties:          properties,
+		OptionalProperties:  optionalProperties,
+		CallSignatures:      callSignatures,
+		ConstructSignatures: constructSignatures,
+		IndexSignatures:     indexSignatures,
 	}
 
 	// If it's a pure callable object with no properties and exactly one signature,
@@ -840,6 +863,38 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 
 // --- NEW: Helper to resolve ConstructorTypeExpression nodes ---
 func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeExpression) types.Type {
+	originalEnv := c.env
+	if len(node.TypeParameters) > 0 {
+		typeParamEnv := NewEnclosedEnvironment(c.env)
+		typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
+		for i, paramNode := range node.TypeParameters {
+			typeParam := &types.TypeParameter{
+				Name:       paramNode.Name.Value,
+				Constraint: types.Any,
+				Index:      i,
+			}
+			typeParams[i] = typeParam
+			typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam)
+			paramNode.SetComputedType(&types.TypeParameterType{Parameter: typeParam})
+		}
+
+		c.env = typeParamEnv
+		for i, paramNode := range node.TypeParameters {
+			if paramNode.Constraint != nil {
+				c.checkTypeRefDefined(paramNode.Constraint)
+				if constraint := c.resolveTypeAnnotation(paramNode.Constraint); constraint != nil {
+					typeParams[i].Constraint = constraint
+				}
+			}
+			if paramNode.DefaultType != nil {
+				if defaultType := c.resolveTypeAnnotation(paramNode.DefaultType); defaultType != nil {
+					typeParams[i].Default = defaultType
+				}
+			}
+		}
+		defer func() { c.env = originalEnv }()
+	}
+
 	paramTypes := []types.Type{}
 	for _, paramNode := range node.Parameters {
 		paramType := c.resolveTypeAnnotation(paramNode)
@@ -850,10 +905,14 @@ func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeEx
 		paramTypes = append(paramTypes, paramType)
 	}
 
-	constructedType := c.resolveTypeAnnotation(node.ReturnType)
-	if constructedType == nil {
-		// Error should have been added by resolveTypeAnnotation
-		return nil // Indicate error by returning nil
+	var constructedType types.Type = types.Any
+	if node.ReturnType != nil {
+		resolvedReturnType := c.resolveTypeAnnotation(node.ReturnType)
+		if resolvedReturnType == nil {
+			// Error should have been added by resolveTypeAnnotation
+			return nil // Indicate error by returning nil
+		}
+		constructedType = resolvedReturnType
 	}
 
 	// Create signature

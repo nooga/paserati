@@ -33,7 +33,11 @@ func (c *Checker) processFunctionSignature(node *parser.FunctionSignature) {
 		return
 	}
 	if sig.ReturnType == nil {
-		sig.ReturnType = types.Void
+		if node.Declare {
+			sig.ReturnType = types.Any
+		} else {
+			sig.ReturnType = types.Void
+		}
 	}
 
 	// Create the function type for this signature

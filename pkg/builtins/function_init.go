@@ -28,7 +28,7 @@ func (f *FunctionInitializer) InitTypes(ctx *TypeContext) error {
 	functionProtoType := types.NewObjectType().
 		WithProperty("length", types.Number). // Number of parameters (excluding rest and defaults after first optional)
 		WithProperty("call", types.NewVariadicFunction([]types.Type{}, types.Any, &types.ArrayType{ElementType: types.Any})).
-		WithProperty("apply", types.NewSimpleFunction([]types.Type{types.Any, &types.ArrayType{ElementType: types.Any}}, types.Any)).
+		WithProperty("apply", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any)).
 		WithProperty("bind", types.NewVariadicFunction([]types.Type{types.Any}, types.Any, &types.ArrayType{ElementType: types.Any})).
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String))
 

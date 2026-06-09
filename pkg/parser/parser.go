@@ -891,9 +891,13 @@ func (p *Parser) parseDeclareStatement() Statement {
 	case lexer.VAR:
 		return p.parseDeclareVarStatement()
 	case lexer.FUNCTION:
-		sig := p.parseFunctionSignature()
+		sig := p.parseFunctionSignatureAllowOmittedReturn()
 		if sig == nil {
 			return nil
+		}
+		if p.peekTokenIs(lexer.LBRACE) {
+			p.addError(p.peekToken, "An implementation cannot be declared in ambient contexts.")
+			return sig
 		}
 		sig.Declare = true
 		return sig
@@ -2899,6 +2903,14 @@ func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 
 // --- NEW: Parse function signature (overload declaration without body) ---
 func (p *Parser) parseFunctionSignature() *FunctionSignature {
+	return p.parseFunctionSignatureInternal(false)
+}
+
+func (p *Parser) parseFunctionSignatureAllowOmittedReturn() *FunctionSignature {
+	return p.parseFunctionSignatureInternal(true)
+}
+
+func (p *Parser) parseFunctionSignatureInternal(allowOmittedReturn bool) *FunctionSignature {
 	sig := &FunctionSignature{Token: p.curToken} // 'function' token
 
 	// Function name is required for overloads
@@ -2931,9 +2943,18 @@ func (p *Parser) parseFunctionSignature() *FunctionSignature {
 
 	// Return type annotation is required for overload signatures
 	if !p.peekTokenIs(lexer.COLON) {
-		msg := "function overload signatures must have return type annotations"
-		p.addError(p.curToken, msg)
-		return nil
+		if !allowOmittedReturn {
+			msg := "function overload signatures must have return type annotations"
+			p.addError(p.curToken, msg)
+			return nil
+		}
+
+		// Ambient declarations may omit return annotations. The checker treats
+		// nil return annotations on declare signatures as any.
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken()
+		}
+		return sig
 	}
 
 	p.nextToken() // Consume ':'
@@ -7597,10 +7618,10 @@ func (p *Parser) parseObjectLiteral() Expression {
 				// Create an ObjectProperty with the bigint literal as key and the function literal as value
 				objLit.Properties = append(objLit.Properties, &ObjectProperty{Key: bigintKey, Value: funcLit})
 			} else {
-				// --- NEW: Check for shorthand method syntax (identifier/keyword followed by '(') ---
+				// --- NEW: Check for shorthand method syntax (identifier/keyword followed by '(' or '<') ---
 				propName := p.parsePropertyName()
-				if propName != nil && p.peekTokenIs(lexer.LPAREN) {
-					// This is a shorthand method like methodName() { ... }
+				if propName != nil && (p.peekTokenIs(lexer.LPAREN) || p.peekTokenIs(lexer.LT)) {
+					// This is a shorthand method like methodName() { ... } or methodName<T>() { ... }
 					methodDef := p.parseShorthandMethod()
 					if methodDef == nil {
 						return nil // Error parsing shorthand method
@@ -7725,6 +7746,17 @@ func (p *Parser) parseShorthandMethod() *MethodDefinition {
 	// Create a function literal for the method implementation
 	funcLit := &FunctionLiteral{
 		Token: methodToken,
+	}
+
+	// Optional type parameters for generic object literal methods: method<T>(...)
+	if p.peekTokenIs(lexer.LT) {
+		p.nextToken() // Move to '<'
+		typeParams, err := p.parseTypeParameters()
+		if err != nil {
+			p.addError(p.curToken, fmt.Sprintf("failed to parse type parameters: %v", err))
+			return nil
+		}
+		funcLit.TypeParameters = typeParams
 	}
 
 	// Expect '(' for parameters

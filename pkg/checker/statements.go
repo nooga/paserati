@@ -367,36 +367,16 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	debugPrintf("// [Checker Interface P1] Processing generic interface '%s' with %d type parameters\n",
 		node.Name.Value, len(node.TypeParameters))
 
-	// 1. Validate type parameters
+	// 1. Create and register type parameters before resolving constraints.
+	// TypeScript permits later parameters in earlier constraints, e.g. <T extends U, U>.
 	typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
 	for i, param := range node.TypeParameters {
-		// Create TypeParameter type
-		typeParam := &types.TypeParameter{
-			Name: param.Name.Value,
+		typeParams[i] = &types.TypeParameter{
+			Name:       param.Name.Value,
+			Constraint: types.Any,
+			Index:      i,
 		}
-
-		// Handle constraint if present
-		if param.Constraint != nil {
-			constraintType := c.resolveTypeAnnotation(param.Constraint)
-			if constraintType != nil {
-				typeParam.Constraint = constraintType
-			}
-		}
-
-		// Handle default type if present
-		if param.DefaultType != nil {
-			defaultType := c.resolveTypeAnnotation(param.DefaultType)
-			if defaultType != nil {
-				typeParam.Default = defaultType
-
-				// Validate that default type satisfies constraint if both are present
-				if typeParam.Constraint != nil && !types.IsAssignable(defaultType, typeParam.Constraint) {
-					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
-				}
-			}
-		}
-
-		typeParams[i] = typeParam
+		param.SetComputedType(&types.TypeParameterType{Parameter: typeParams[i]})
 	}
 
 	// 2. Create the body ObjectType with TypeParameterType references
@@ -405,14 +385,38 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	// Create a new environment with type parameters available as TypeParameterType
 	genericEnv := NewEnclosedEnvironment(c.env)
 	for _, typeParam := range typeParams {
+		genericEnv.DefineTypeParameter(typeParam.Name, typeParam)
 		paramType := &types.TypeParameterType{
 			Parameter: typeParam,
 		}
 		genericEnv.DefineTypeAlias(typeParam.Name, paramType)
 	}
 
-	// Save current environment and switch to generic environment
 	savedEnv := c.env
+	c.env = genericEnv
+	for i, param := range node.TypeParameters {
+		typeParam := typeParams[i]
+
+		if param.Constraint != nil {
+			c.checkTypeRefDefined(param.Constraint)
+			if constraintType := c.resolveTypeAnnotation(param.Constraint); constraintType != nil {
+				typeParam.Constraint = constraintType
+			}
+		}
+
+		if param.DefaultType != nil {
+			if defaultType := c.resolveTypeAnnotation(param.DefaultType); defaultType != nil {
+				typeParam.Default = defaultType
+
+				if typeParam.Constraint != nil && !types.IsAssignable(defaultType, typeParam.Constraint) {
+					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
+				}
+			}
+		}
+	}
+	c.env = savedEnv
+
+	// Save current environment and switch to generic environment
 	savedThisType := c.currentThisType
 	c.env = genericEnv
 
