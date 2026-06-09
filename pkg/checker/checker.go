@@ -82,6 +82,10 @@ func (c *Checker) isStringConcatenatable(t types.Type) bool {
 // extractTypeParametersFromSignature extracts type parameter instances from a function signature
 // This helps maintain consistency between hoisting and body checking phases
 func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*types.TypeParameter {
+	if len(sig.TypeParameters) > 0 {
+		return sig.TypeParameters
+	}
+
 	var typeParams []*types.TypeParameter
 	seen := make(map[*types.TypeParameter]bool)
 	visited := make(map[types.Type]bool)

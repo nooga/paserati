@@ -973,53 +973,20 @@ func (c *Checker) validateOverrideMethod(method *parser.MethodDefinition, superC
 
 // inferMethodTypeFromSignature creates a function type from a method signature (for abstract methods)
 func (c *Checker) inferMethodTypeFromSignature(methodSig *parser.MethodSignature) types.Type {
-	// Extract parameter types
-	var paramTypes []types.Type
-	for _, param := range methodSig.Parameters {
-		if param.TypeAnnotation != nil {
-			paramType := c.resolveTypeAnnotation(param.TypeAnnotation)
-			if paramType != nil {
-				paramTypes = append(paramTypes, paramType)
-			} else {
-				paramTypes = append(paramTypes, types.Any)
-			}
-		} else {
-			paramTypes = append(paramTypes, types.Any)
-		}
+	ctx := &FunctionCheckContext{
+		FunctionName:         c.extractPropertyName(methodSig.Key),
+		TypeParameters:       methodSig.TypeParameters,
+		Parameters:           methodSig.Parameters,
+		RestParameter:        methodSig.RestParameter,
+		ReturnTypeAnnotation: methodSig.ReturnTypeAnnotation,
+		Body:                 nil,
 	}
-
-	// Extract return type
-	var returnType types.Type = types.Void
-	if methodSig.ReturnTypeAnnotation != nil {
-		resolvedReturnType := c.resolveTypeAnnotation(methodSig.ReturnTypeAnnotation)
-		if resolvedReturnType != nil {
-			returnType = resolvedReturnType
-		}
+	signature, _, _, _, _, _ := c.resolveFunctionParameters(ctx)
+	if signature == nil {
+		return types.Any
 	}
-
-	// Extract optional parameters
-	optionalParams := make([]bool, len(methodSig.Parameters))
-	for i, param := range methodSig.Parameters {
-		optionalParams[i] = param.Optional
-	}
-
-	// Extract rest parameter type
-	var restParameterType types.Type
-	if methodSig.RestParameter != nil && methodSig.RestParameter.TypeAnnotation != nil {
-		restType := c.resolveTypeAnnotation(methodSig.RestParameter.TypeAnnotation)
-		if restType != nil {
-			restParameterType = restType
-		} else {
-			restParameterType = &types.ArrayType{ElementType: types.Any}
-		}
-	}
-
-	signature := &types.Signature{
-		ParameterTypes:    paramTypes,
-		ReturnType:        returnType,
-		OptionalParams:    optionalParams,
-		IsVariadic:        methodSig.RestParameter != nil,
-		RestParameterType: restParameterType,
+	if signature.ReturnType == nil {
+		signature.ReturnType = types.Void
 	}
 
 	return types.NewFunctionType(signature)
@@ -1967,31 +1934,17 @@ func (c *Checker) extractRestParameterTypeFromSignature(sig *parser.ConstructorS
 
 // validateMethodSignature validates a method signature's types
 func (c *Checker) validateMethodSignature(sig *parser.MethodSignature) {
-	// Validate parameter types
-	for _, param := range sig.Parameters {
-		if param.TypeAnnotation != nil {
-			paramType := c.resolveTypeAnnotation(param.TypeAnnotation)
-			if paramType == nil {
-				c.addError(param.Name, fmt.Sprintf("invalid type annotation for parameter '%s'", param.Name.Value))
-			}
-		}
+	ctx := &FunctionCheckContext{
+		FunctionName:         c.extractPropertyName(sig.Key),
+		TypeParameters:       sig.TypeParameters,
+		Parameters:           sig.Parameters,
+		RestParameter:        sig.RestParameter,
+		ReturnTypeAnnotation: sig.ReturnTypeAnnotation,
+		Body:                 nil,
 	}
-
-	// Validate rest parameter type if present
-	if sig.RestParameter != nil && sig.RestParameter.TypeAnnotation != nil {
-		restType := c.resolveTypeAnnotation(sig.RestParameter.TypeAnnotation)
-		if restType == nil {
-			c.addError(sig.RestParameter.Name, fmt.Sprintf("invalid type annotation for rest parameter '%s'", sig.RestParameter.Name.Value))
-		}
-	}
-
-	// Validate return type if present
-	if sig.ReturnTypeAnnotation != nil {
-		returnType := c.resolveTypeAnnotation(sig.ReturnTypeAnnotation)
-		if returnType == nil {
-			methodName := c.extractPropertyName(sig.Key)
-			c.addError(sig.Key, fmt.Sprintf("invalid return type annotation for method '%s'", methodName))
-		}
+	resolvedSig, _, _, _, _, _ := c.resolveFunctionParameters(ctx)
+	if resolvedSig == nil {
+		c.addError(sig.Key, fmt.Sprintf("invalid method signature '%s'", c.extractPropertyName(sig.Key)))
 	}
 }
 

@@ -227,6 +227,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 	}
 
 	signature := &types.Signature{
+		TypeParameters:    c.signatureTypeParameters(ctx.TypeParameters),
 		ParameterTypes:    paramTypes,
 		ReturnType:        expectedReturnType,
 		OptionalParams:    optionalParams,
@@ -548,6 +549,7 @@ func (c *Checker) createFinalFunctionType(ctx *FunctionCheckContext, paramTypes 
 
 	// Create final signature
 	sig := &types.Signature{
+		TypeParameters:    c.signatureTypeParameters(ctx.TypeParameters),
 		ParameterTypes:    paramTypes,
 		ReturnType:        finalReturnType,
 		OptionalParams:    optionalParams,
@@ -557,4 +559,17 @@ func (c *Checker) createFinalFunctionType(ctx *FunctionCheckContext, paramTypes 
 
 	// Create unified ObjectType with call signature
 	return types.NewFunctionType(sig)
+}
+
+func (c *Checker) signatureTypeParameters(typeParamNodes []*parser.TypeParameter) []*types.TypeParameter {
+	if len(typeParamNodes) == 0 {
+		return nil
+	}
+	typeParams := make([]*types.TypeParameter, 0, len(typeParamNodes))
+	for _, typeParamNode := range typeParamNodes {
+		if computed, ok := typeParamNode.GetComputedType().(*types.TypeParameterType); ok && computed.Parameter != nil {
+			typeParams = append(typeParams, computed.Parameter)
+		}
+	}
+	return typeParams
 }

@@ -65,21 +65,35 @@ func (c *Checker) processFunctionSignature(node *parser.FunctionSignature) {
 	debugPrintf("// [Checker] Added overload signature for '%s': %s\n", functionName, funcType.String())
 }
 
+func (c *Checker) hasPendingOverloads(functionName string) bool {
+	for env := c.env; env != nil; env = env.outer {
+		if len(env.GetPendingOverloads(functionName)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // completeOverloadedFunction creates an ObjectType with multiple call signatures when we encounter
 // a function implementation that has pending overload signatures.
 func (c *Checker) completeOverloadedFunction(functionName string, implementation *types.ObjectType) {
 	debugPrintf("// [Checker completeOverloadedFunction] Starting completion for '%s'\n", functionName)
 	debugPrintf("// [Checker completeOverloadedFunction] Checking env %p\n", c.env)
 
-	// Get pending overload signatures from the GLOBAL environment (not current env)
-	// because overload signatures are added during Pass 2 in the global scope
-	globalEnv := c.env
-	for globalEnv.outer != nil {
-		globalEnv = globalEnv.outer
+	// Complete overloads in the scope where their signatures were collected.
+	// Top-level overloads live in the global environment; nested overloads live
+	// in their block/function environment and must be cleared there.
+	overloadEnv := c.env
+	for overloadEnv != nil && len(overloadEnv.GetPendingOverloads(functionName)) == 0 {
+		overloadEnv = overloadEnv.outer
 	}
-	debugPrintf("// [Checker completeOverloadedFunction] Using global env %p\n", globalEnv)
+	if overloadEnv == nil {
+		debugPrintf("// [Checker completeOverloadedFunction] No pending overload scope for '%s'\n", functionName)
+		return
+	}
+	debugPrintf("// [Checker completeOverloadedFunction] Using overload env %p\n", overloadEnv)
 
-	pendingSignatures := globalEnv.GetPendingOverloads(functionName)
+	pendingSignatures := overloadEnv.GetPendingOverloads(functionName)
 	if len(pendingSignatures) == 0 {
 		debugPrintf("// [Checker completeOverloadedFunction] No pending overloads for '%s'\n", functionName)
 		return // No pending overloads
@@ -120,7 +134,7 @@ func (c *Checker) completeOverloadedFunction(functionName string, implementation
 	}
 
 	// Complete the overloaded function in the environment using unified approach
-	if globalEnv.CompleteOverloadedFunctionUTS(functionName, overloadSignatures, implementationSig) {
+	if overloadEnv.CompleteOverloadedFunctionUTS(functionName, overloadSignatures, implementationSig) {
 		debugPrintf("// [Checker] Completed unified overloaded function '%s' with %d overloads\n",
 			functionName, len(overloadSignatures))
 	} else {

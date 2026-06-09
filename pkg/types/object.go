@@ -15,6 +15,7 @@ var objectEqualsVisited sync.Map
 
 // Signature represents a function or constructor signature
 type Signature struct {
+	TypeParameters    []*TypeParameter
 	ParameterTypes    []Type
 	ReturnType        Type
 	OptionalParams    []bool // Tracks which parameters are optional

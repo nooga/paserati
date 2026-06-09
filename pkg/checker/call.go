@@ -945,6 +945,10 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 
 // isGenericSignature checks if a function signature contains unresolved type parameters
 func (c *Checker) isGenericSignature(sig *types.Signature) bool {
+	if len(sig.TypeParameters) > 0 {
+		return true
+	}
+
 	// Track visited types to prevent infinite recursion in self-referencing types
 	visited := make(map[types.Type]bool)
 
@@ -1722,6 +1726,7 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 	}
 
 	return &types.Signature{
+		TypeParameters:    sig.TypeParameters,
 		ParameterTypes:    newParamTypes,
 		ReturnType:        newReturnType,
 		OptionalParams:    sig.OptionalParams, // Copy as-is
@@ -1751,6 +1756,7 @@ func (c *Checker) substituteInSignature(sig *types.Signature, solution map[*type
 	}
 
 	return &types.Signature{
+		TypeParameters:    sig.TypeParameters,
 		ParameterTypes:    newParamTypes,
 		ReturnType:        newReturnType,
 		OptionalParams:    sig.OptionalParams, // Copy as-is

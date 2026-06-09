@@ -2841,6 +2841,7 @@ func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 		sig := &FunctionSignature{
 			Token:                lit.Token,
 			Name:                 lit.Name,
+			TypeParameters:       lit.TypeParameters,
 			Parameters:           lit.Parameters,
 			RestParameter:        lit.RestParameter,
 			ReturnTypeAnnotation: lit.ReturnTypeAnnotation,

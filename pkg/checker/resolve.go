@@ -1280,6 +1280,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 				newRestParamType := c.substituteTypesWithVisited(sig.RestParameterType, substitution, visited)
 
 				result.CallSignatures[i] = &types.Signature{
+					TypeParameters:    sig.TypeParameters,
 					ParameterTypes:    newParamTypes,
 					ReturnType:        newReturnType,
 					OptionalParams:    sig.OptionalParams, // Copy optional flags
@@ -1302,6 +1303,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 				newRestParamType := c.substituteTypesWithVisited(sig.RestParameterType, substitution, visited)
 
 				result.ConstructSignatures[i] = &types.Signature{
+					TypeParameters:    sig.TypeParameters,
 					ParameterTypes:    newParamTypes,
 					ReturnType:        newReturnType,
 					OptionalParams:    sig.OptionalParams,
@@ -2625,6 +2627,7 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 				newReturnType := c.substituteTypesPreservingInfer(sig.ReturnType, substitution)
 
 				newSigs[i] = &types.Signature{
+					TypeParameters:    sig.TypeParameters,
 					ParameterTypes:    newParamTypes,
 					ReturnType:        newReturnType,
 					OptionalParams:    sig.OptionalParams,

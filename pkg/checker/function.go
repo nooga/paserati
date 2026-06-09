@@ -106,7 +106,7 @@ func (c *Checker) checkFunctionLiteral(node *parser.FunctionLiteral) {
 	node.SetComputedType(finalFuncType)
 
 	// 6. Check for overload completion if this is a named function
-	if ctx.AllowOverloadCompletion && len(c.env.GetPendingOverloads(funcName)) > 0 {
+	if ctx.AllowOverloadCompletion && c.hasPendingOverloads(funcName) {
 		c.completeOverloadedFunction(funcName, finalFuncType)
 	}
 
