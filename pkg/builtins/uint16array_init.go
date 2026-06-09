@@ -17,15 +17,7 @@ func (u *Uint16ArrayInitializer) Priority() int {
 
 func (u *Uint16ArrayInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Uint16Array.prototype type
-	uint16ArrayProtoType := types.NewObjectType().
-		WithProperty("buffer", types.Any). // Reference to underlying ArrayBuffer
-		WithProperty("byteLength", types.Number).
-		WithProperty("byteOffset", types.Number).
-		WithProperty("length", types.Number).
-		WithProperty("BYTES_PER_ELEMENT", types.Number).
-		WithProperty("set", types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Undefined)).
-		WithProperty("subarray", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true}))
+	uint16ArrayProtoType := typedArrayInstanceType(types.Number)
 
 	// Create Uint16Array constructor type with multiple overloads
 	uint16ArrayCtorType := types.NewObjectType().

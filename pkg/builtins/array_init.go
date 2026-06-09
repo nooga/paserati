@@ -208,6 +208,11 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 	// Register array primitive prototype
 	ctx.SetPrimitivePrototype("array", arrayProtoType)
 
+	fromAsyncReturnType := &types.InstantiatedType{
+		Generic:       types.PromiseGeneric,
+		TypeArguments: []types.Type{&types.ArrayType{ElementType: types.Any}},
+	}
+
 	// Create Array constructor type
 	arrayCtorType := types.NewObjectType().
 		WithSimpleCallSignature([]types.Type{}, &types.ArrayType{ElementType: types.Any}).                                             // Array() -> array
@@ -215,6 +220,7 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 		WithVariadicCallSignature([]types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}). // Array(...elements) -> array
 		WithProperty("isArray", types.NewSimpleFunction([]types.Type{types.Any}, &types.TypePredicateType{ParameterName: "arg", Type: &types.ArrayType{ElementType: types.Any}})).
 		WithProperty("from", types.NewOptionalFunction([]types.Type{types.Any, types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Any)}, &types.ArrayType{ElementType: types.Any}, []bool{false, true})).
+		WithProperty("fromAsync", types.NewOptionalFunction([]types.Type{types.Any, types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Any), types.Any}, fromAsyncReturnType, []bool{false, true, true})).
 		WithVariadicProperty("of", []types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}).
 		WithProperty("prototype", arrayProtoType)
 

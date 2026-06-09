@@ -30,15 +30,18 @@ func (m *MapInitializer) InitTypes(ctx *TypeContext) error {
 	}
 
 	// Create Map instance type with methods (using type parameters directly)
+	computeValueType := types.NewSimpleFunction([]types.Type{kType}, vType)
 	mapInstanceType := types.NewObjectType().
 		WithProperty("set", types.NewSimpleFunction([]types.Type{kType, vType}, mapType)). // Return this for chaining
 		WithProperty("get", types.NewSimpleFunction([]types.Type{kType}, types.NewUnionType(vType, types.Undefined))).
+		WithProperty("getOrInsert", types.NewSimpleFunction([]types.Type{kType, vType}, vType)).
+		WithProperty("getOrInsertComputed", types.NewSimpleFunction([]types.Type{kType, computeValueType}, vType)).
 		WithProperty("has", types.NewSimpleFunction([]types.Type{kType}, types.Boolean)).
 		WithProperty("delete", types.NewSimpleFunction([]types.Type{kType}, types.Boolean)).
 		WithProperty("clear", types.NewSimpleFunction([]types.Type{}, types.Void)).
 		WithProperty("forEach", types.NewOptionalFunction(
 			[]types.Type{types.NewSimpleFunction([]types.Type{vType, kType, mapType}, types.Void), types.Any},
-			types.Void, []bool{false, true})).
+												types.Void, []bool{false, true})).
 		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).    // IterableIterator<K>
 		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any)).  // IterableIterator<V>
 		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)). // IterableIterator<[K, V]>
@@ -51,6 +54,8 @@ func (m *MapInitializer) InitTypes(ctx *TypeContext) error {
 	mapProtoType := types.NewObjectType().
 		WithProperty("set", types.NewSimpleFunction([]types.Type{kType, vType}, mapType)). // Return this for chaining
 		WithProperty("get", types.NewSimpleFunction([]types.Type{kType}, types.NewUnionType(vType, types.Undefined))).
+		WithProperty("getOrInsert", types.NewSimpleFunction([]types.Type{kType, vType}, vType)).
+		WithProperty("getOrInsertComputed", types.NewSimpleFunction([]types.Type{kType, computeValueType}, vType)).
 		WithProperty("has", types.NewSimpleFunction([]types.Type{kType}, types.Boolean)).
 		WithProperty("delete", types.NewSimpleFunction([]types.Type{kType}, types.Boolean)).
 		WithProperty("clear", types.NewSimpleFunction([]types.Type{}, types.Void)).

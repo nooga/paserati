@@ -3,8 +3,62 @@ package builtins
 import (
 	"fmt"
 
+	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
+
+func typedArrayInstanceType(elementType types.Type) *types.ObjectType {
+	self := types.NewObjectType()
+	elementOrUndefined := types.NewUnionType(elementType, types.Undefined)
+	predicateType := types.NewOptionalFunction(
+		[]types.Type{elementType, types.Number, self},
+		types.Boolean,
+		[]bool{false, true, true},
+	)
+	mapperType := types.NewOptionalFunction(
+		[]types.Type{elementType, types.Number, self},
+		types.Any,
+		[]bool{false, true, true},
+	)
+
+	return self.
+		WithProperty("buffer", types.Any).
+		WithProperty("byteLength", types.Number).
+		WithProperty("byteOffset", types.Number).
+		WithProperty("length", types.Number).
+		WithProperty("BYTES_PER_ELEMENT", types.Number).
+		WithProperty("set", types.NewOptionalFunction([]types.Type{types.Any, types.Number}, types.Undefined, []bool{false, true})).
+		WithProperty("subarray", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, self, []bool{true, true})).
+		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, self, []bool{true, true})).
+		WithProperty("at", types.NewSimpleFunction([]types.Type{types.Number}, elementOrUndefined)).
+		WithProperty("includes", types.NewOptionalFunction([]types.Type{elementType, types.Number}, types.Boolean, []bool{false, true})).
+		WithProperty("indexOf", types.NewOptionalFunction([]types.Type{elementType, types.Number}, types.Number, []bool{false, true})).
+		WithProperty("lastIndexOf", types.NewOptionalFunction([]types.Type{elementType, types.Number}, types.Number, []bool{false, true})).
+		WithProperty("find", types.NewSimpleFunction([]types.Type{predicateType}, elementOrUndefined)).
+		WithProperty("findIndex", types.NewSimpleFunction([]types.Type{predicateType}, types.Number)).
+		WithProperty("findLast", types.NewSimpleFunction([]types.Type{predicateType}, elementOrUndefined)).
+		WithProperty("findLastIndex", types.NewSimpleFunction([]types.Type{predicateType}, types.Number)).
+		WithProperty("forEach", types.NewSimpleFunction([]types.Type{mapperType}, types.Undefined)).
+		WithProperty("map", types.NewSimpleFunction([]types.Type{mapperType}, self)).
+		WithProperty("filter", types.NewSimpleFunction([]types.Type{predicateType}, self)).
+		WithProperty("every", types.NewSimpleFunction([]types.Type{predicateType}, types.Boolean)).
+		WithProperty("some", types.NewSimpleFunction([]types.Type{predicateType}, types.Boolean)).
+		WithProperty("reduce", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, types.Any, []bool{false, true})).
+		WithProperty("reduceRight", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, types.Any, []bool{false, true})).
+		WithProperty("copyWithin", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Number}, self, []bool{false, false, true})).
+		WithProperty("fill", types.NewOptionalFunction([]types.Type{elementType, types.Number, types.Number}, self, []bool{false, true, true})).
+		WithProperty("reverse", types.NewSimpleFunction([]types.Type{}, self)).
+		WithProperty("sort", types.NewOptionalFunction([]types.Type{types.Any}, self, []bool{true})).
+		WithProperty("toReversed", types.NewSimpleFunction([]types.Type{}, self)).
+		WithProperty("toSorted", types.NewOptionalFunction([]types.Type{types.Any}, self, []bool{true})).
+		WithProperty("with", types.NewSimpleFunction([]types.Type{types.Number, elementType}, self)).
+		WithProperty("join", types.NewOptionalFunction([]types.Type{types.String}, types.String, []bool{true})).
+		WithProperty("toLocaleString", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).
+		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any))
+}
 
 // ValidateTypedArrayByteOffset converts byteOffset to integer (calling valueOf if needed)
 // and validates that it's aligned to the element size.

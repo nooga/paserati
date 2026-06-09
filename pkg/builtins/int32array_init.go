@@ -17,15 +17,7 @@ func (i *Int32ArrayInitializer) Priority() int {
 
 func (i *Int32ArrayInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Int32Array.prototype type
-	int32ArrayProtoType := types.NewObjectType().
-		WithProperty("buffer", types.Any). // Reference to underlying ArrayBuffer
-		WithProperty("byteLength", types.Number).
-		WithProperty("byteOffset", types.Number).
-		WithProperty("length", types.Number).
-		WithProperty("BYTES_PER_ELEMENT", types.Number).
-		WithProperty("set", types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Undefined)).
-		WithProperty("subarray", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true}))
+	int32ArrayProtoType := typedArrayInstanceType(types.Number)
 
 	// Create Int32Array constructor type with multiple overloads
 	int32ArrayCtorType := types.NewObjectType().

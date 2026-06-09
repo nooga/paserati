@@ -17,15 +17,7 @@ func (u *Uint8ClampedArrayInitializer) Priority() int {
 
 func (u *Uint8ClampedArrayInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Uint8ClampedArray.prototype type
-	uint8ClampedArrayProtoType := types.NewObjectType().
-		WithProperty("buffer", types.Any). // Reference to underlying ArrayBuffer
-		WithProperty("byteLength", types.Number).
-		WithProperty("byteOffset", types.Number).
-		WithProperty("length", types.Number).
-		WithProperty("BYTES_PER_ELEMENT", types.Number).
-		WithProperty("set", types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Undefined)).
-		WithProperty("subarray", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true}))
+	uint8ClampedArrayProtoType := typedArrayInstanceType(types.Number)
 
 	// Create Uint8ClampedArray constructor type with multiple overloads
 	uint8ClampedArrayCtorType := types.NewObjectType().

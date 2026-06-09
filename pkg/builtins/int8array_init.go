@@ -11,16 +11,7 @@ func (i *Int8ArrayInitializer) Name() string  { return "Int8Array" }
 func (i *Int8ArrayInitializer) Priority() int { return 421 }
 
 func (i *Int8ArrayInitializer) InitTypes(ctx *TypeContext) error {
-	int8ArrayProtoType := types.NewObjectType().
-		WithProperty("buffer", types.Any).
-		WithProperty("byteLength", types.Number).
-		WithProperty("byteOffset", types.Number).
-		WithProperty("length", types.Number).
-		WithProperty("BYTES_PER_ELEMENT", types.Number).
-		WithProperty("set", types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Undefined)).
-		WithProperty("subarray", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("fill", types.NewOptionalFunction([]types.Type{types.Any, types.Number, types.Number}, types.Any, []bool{true, true, true}))
+	int8ArrayProtoType := typedArrayInstanceType(types.Number)
 
 	ctorType := types.NewObjectType().
 		WithSimpleCallSignature([]types.Type{types.Number}, int8ArrayProtoType).

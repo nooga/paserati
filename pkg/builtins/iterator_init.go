@@ -40,6 +40,10 @@ func (i *IteratorInitializer) InitTypes(ctx *TypeContext) error {
 		TypeParameters: []*types.TypeParameter{tParam},
 		Body:           nil, // Will be set below
 	}
+	iteratorResultOfT := &types.InstantiatedType{
+		Generic:       iteratorResultGeneric,
+		TypeArguments: []types.Type{tType},
+	}
 
 	// Create type parameter U for methods like map and flatMap
 	uParam := &types.TypeParameter{Name: "U", Constraint: nil, Index: 1}
@@ -56,11 +60,9 @@ func (i *IteratorInitializer) InitTypes(ctx *TypeContext) error {
 	// Create the iterator type with all methods
 	iteratorType := types.NewObjectType().
 		// next(): IteratorResult<T>
-		WithProperty("next", types.NewSimpleFunction([]types.Type{},
-			&types.InstantiatedType{
-				Generic:       iteratorResultGeneric,
-				TypeArguments: []types.Type{tType},
-			})).
+		WithProperty("next", types.NewSimpleFunction([]types.Type{}, iteratorResultOfT)).
+		// return(value?: any): IteratorResult<T>
+		WithProperty("return", types.NewOptionalFunction([]types.Type{types.Any}, iteratorResultOfT, []bool{true})).
 		// [Symbol.iterator](): Iterator<T> (self-referential)
 		WithProperty("__COMPUTED_PROPERTY__", types.NewSimpleFunction([]types.Type{},
 			&types.InstantiatedType{

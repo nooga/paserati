@@ -11,16 +11,7 @@ func (i *Int16ArrayInitializer) Name() string  { return "Int16Array" }
 func (i *Int16ArrayInitializer) Priority() int { return 422 }
 
 func (i *Int16ArrayInitializer) InitTypes(ctx *TypeContext) error {
-	proto := types.NewObjectType().
-		WithProperty("buffer", types.Any).
-		WithProperty("byteLength", types.Number).
-		WithProperty("byteOffset", types.Number).
-		WithProperty("length", types.Number).
-		WithProperty("BYTES_PER_ELEMENT", types.Number).
-		WithProperty("set", types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Undefined)).
-		WithProperty("subarray", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("fill", types.NewOptionalFunction([]types.Type{types.Any, types.Number, types.Number}, types.Any, []bool{true, true, true}))
+	proto := typedArrayInstanceType(types.Number)
 
 	ctor := types.NewObjectType().
 		WithSimpleCallSignature([]types.Type{types.Number}, proto).

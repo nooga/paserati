@@ -19,15 +19,7 @@ func (i *BigInt64ArrayInitializer) Priority() int {
 
 func (i *BigInt64ArrayInitializer) InitTypes(ctx *TypeContext) error {
 	// Create BigInt64Array.prototype type
-	bigInt64ArrayProtoType := types.NewObjectType().
-		WithProperty("buffer", types.Any). // Reference to underlying ArrayBuffer
-		WithProperty("byteLength", types.Number).
-		WithProperty("byteOffset", types.Number).
-		WithProperty("length", types.Number).
-		WithProperty("BYTES_PER_ELEMENT", types.Number).
-		WithProperty("set", types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Undefined)).
-		WithProperty("subarray", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true}))
+	bigInt64ArrayProtoType := typedArrayInstanceType(types.BigInt)
 
 	// Create BigInt64Array constructor type with multiple overloads
 	bigInt64ArrayCtorType := types.NewObjectType().

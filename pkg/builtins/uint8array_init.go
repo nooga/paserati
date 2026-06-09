@@ -21,31 +21,11 @@ func (u *Uint8ArrayInitializer) Priority() int {
 
 func (u *Uint8ArrayInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Uint8Array.prototype type
-	uint8ArrayProtoType := types.NewObjectType().
-		WithProperty("buffer", types.Any). // Reference to underlying ArrayBuffer
-		WithProperty("byteLength", types.Number).
-		WithProperty("byteOffset", types.Number).
-		WithProperty("length", types.Number).
-		WithProperty("BYTES_PER_ELEMENT", types.Number).
-		WithProperty("set", types.NewSimpleFunction([]types.Type{types.Any, types.Number}, types.Undefined)).
-		WithProperty("subarray", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("includes", types.NewSimpleFunction([]types.Type{types.Number}, types.Boolean)).
-		WithProperty("indexOf", types.NewSimpleFunction([]types.Type{types.Number}, types.Number)).
-		WithProperty("find", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
-		WithProperty("findIndex", types.NewSimpleFunction([]types.Type{types.Any}, types.Number)).
-		WithProperty("forEach", types.NewSimpleFunction([]types.Type{types.Any}, types.Undefined)).
-		WithProperty("map", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
-		WithProperty("filter", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
-		WithProperty("every", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
-		WithProperty("some", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
-		WithProperty("reduce", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
-		WithProperty("join", types.NewSimpleFunction([]types.Type{types.String}, types.String)).
-		WithProperty("fill", types.NewSimpleFunction([]types.Type{types.Number}, types.Any)).
-		WithProperty("reverse", types.NewSimpleFunction([]types.Type{}, types.Any)).
-		WithProperty("sort", types.NewSimpleFunction([]types.Type{}, types.Any)).
-		WithProperty("at", types.NewSimpleFunction([]types.Type{types.Number}, types.Any)).
-		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String))
+	uint8ArrayProtoType := typedArrayInstanceType(types.Number).
+		WithProperty("toBase64", types.NewOptionalFunction([]types.Type{types.Any}, types.String, []bool{true})).
+		WithProperty("toHex", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("setFromBase64", types.NewOptionalFunction([]types.Type{types.String, types.Any}, types.Any, []bool{false, true})).
+		WithProperty("setFromHex", types.NewSimpleFunction([]types.Type{types.String}, types.Any))
 
 	// Create Uint8Array constructor type with multiple overloads
 	uint8ArrayCtorType := types.NewObjectType().
@@ -54,6 +34,8 @@ func (u *Uint8ArrayInitializer) InitTypes(ctx *TypeContext) error {
 		WithSimpleCallSignature([]types.Type{&types.ArrayType{ElementType: types.Number}}, uint8ArrayProtoType). // Uint8Array(array)
 		WithProperty("BYTES_PER_ELEMENT", types.Number).
 		WithProperty("from", types.NewSimpleFunction([]types.Type{types.Any}, uint8ArrayProtoType)).
+		WithProperty("fromBase64", types.NewOptionalFunction([]types.Type{types.String, types.Any}, uint8ArrayProtoType, []bool{false, true})).
+		WithProperty("fromHex", types.NewSimpleFunction([]types.Type{types.String}, uint8ArrayProtoType)).
 		WithProperty("of", types.NewSimpleFunction([]types.Type{}, uint8ArrayProtoType)).
 		WithProperty("prototype", uint8ArrayProtoType)
 

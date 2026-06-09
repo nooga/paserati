@@ -33,9 +33,12 @@ func (w *WeakMapInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Create WeakMap instance type with methods
 	// Note: WeakMap has no size, forEach, keys, values, entries (by ECMAScript design)
+	computeValueType := types.NewSimpleFunction([]types.Type{kType}, vType)
 	weakMapInstanceType := types.NewObjectType().
 		WithProperty("set", types.NewSimpleFunction([]types.Type{kType, vType}, weakMapType)).
 		WithProperty("get", types.NewSimpleFunction([]types.Type{kType}, types.NewUnionType(vType, types.Undefined))).
+		WithProperty("getOrInsert", types.NewSimpleFunction([]types.Type{kType, vType}, vType)).
+		WithProperty("getOrInsertComputed", types.NewSimpleFunction([]types.Type{kType, computeValueType}, vType)).
 		WithProperty("has", types.NewSimpleFunction([]types.Type{kType}, types.Boolean)).
 		WithProperty("delete", types.NewSimpleFunction([]types.Type{kType}, types.Boolean))
 
@@ -46,6 +49,8 @@ func (w *WeakMapInitializer) InitTypes(ctx *TypeContext) error {
 	weakMapProtoType := types.NewObjectType().
 		WithProperty("set", types.NewSimpleFunction([]types.Type{kType, vType}, weakMapType)).
 		WithProperty("get", types.NewSimpleFunction([]types.Type{kType}, types.NewUnionType(vType, types.Undefined))).
+		WithProperty("getOrInsert", types.NewSimpleFunction([]types.Type{kType, vType}, vType)).
+		WithProperty("getOrInsertComputed", types.NewSimpleFunction([]types.Type{kType, computeValueType}, vType)).
 		WithProperty("has", types.NewSimpleFunction([]types.Type{kType}, types.Boolean)).
 		WithProperty("delete", types.NewSimpleFunction([]types.Type{kType}, types.Boolean))
 

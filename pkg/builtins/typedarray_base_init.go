@@ -22,38 +22,7 @@ func (i *TypedArrayInitializer) Priority() int {
 
 func (i *TypedArrayInitializer) InitTypes(ctx *TypeContext) error {
 	// Create TypedArray.prototype type with all common methods
-	typedArrayProtoType := types.NewObjectType().
-		WithProperty("buffer", types.Any).
-		WithProperty("byteLength", types.Number).
-		WithProperty("byteOffset", types.Number).
-		WithProperty("length", types.Number).
-		WithProperty("BYTES_PER_ELEMENT", types.Number).
-		WithProperty("at", types.NewOptionalFunction([]types.Type{types.Number}, types.Any, []bool{false})).
-		WithProperty("copyWithin", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Number}, types.Any, []bool{false, false, true})).
-		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)).
-		WithProperty("every", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
-		WithProperty("fill", types.NewOptionalFunction([]types.Type{types.Any, types.Number, types.Number}, types.Any, []bool{false, true, true})).
-		WithProperty("filter", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
-		WithProperty("find", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
-		WithProperty("findIndex", types.NewSimpleFunction([]types.Type{types.Any}, types.Number)).
-		WithProperty("forEach", types.NewSimpleFunction([]types.Type{types.Any}, types.Undefined)).
-		WithProperty("includes", types.NewOptionalFunction([]types.Type{types.Any, types.Number}, types.Boolean, []bool{false, true})).
-		WithProperty("indexOf", types.NewOptionalFunction([]types.Type{types.Any, types.Number}, types.Number, []bool{false, true})).
-		WithProperty("join", types.NewOptionalFunction([]types.Type{types.String}, types.String, []bool{true})).
-		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).
-		WithProperty("lastIndexOf", types.NewOptionalFunction([]types.Type{types.Any, types.Number}, types.Number, []bool{false, true})).
-		WithProperty("map", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)).
-		WithProperty("reduce", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, types.Any, []bool{false, true})).
-		WithProperty("reduceRight", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, types.Any, []bool{false, true})).
-		WithProperty("reverse", types.NewSimpleFunction([]types.Type{}, types.Any)).
-		WithProperty("set", types.NewOptionalFunction([]types.Type{types.Any, types.Number}, types.Undefined, []bool{false, true})).
-		WithProperty("slice", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("some", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
-		WithProperty("sort", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true})).
-		WithProperty("subarray", types.NewOptionalFunction([]types.Type{types.Number, types.Number}, types.Any, []bool{true, true})).
-		WithProperty("toLocaleString", types.NewSimpleFunction([]types.Type{}, types.String)).
-		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
-		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any))
+	typedArrayProtoType := typedArrayInstanceType(types.Any)
 
 	// Create TypedArray constructor type (abstract - cannot be called directly)
 	typedArrayCtorType := types.NewObjectType().
