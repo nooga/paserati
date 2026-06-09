@@ -1,2 +1,5 @@
 [mcp_servers.go-debugger]
 command = "mcp-go-debugger"
+
+[mcp_servers.wavescope]
+command = "wavescope-mcp"
