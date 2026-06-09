@@ -779,6 +779,12 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 
 		switch node := stmt.(type) {
+		case *parser.FunctionSignature:
+			debugPrintf("// [Checker Pass 2] Processing Function Signature: %s\n", node.Name.Value)
+			c.processFunctionSignature(node)
+			nodesProcessedPass2[stmt] = true
+			continue
+
 		case *parser.ExpressionStatement:
 			// --- NEW: Handle FunctionSignature expressions during Pass 2 ---
 			if sigExpr, ok := node.Expression.(*parser.FunctionSignature); ok {
@@ -2006,11 +2012,7 @@ func (c *Checker) visit(node parser.Node) {
 				contextType := c.currentExpectedReturnType
 				// For async functions, unwrap Promise<T> so contextual typing uses T
 				if c.inAsyncFunction {
-					if instType, ok := contextType.(*types.InstantiatedType); ok {
-						if instType.Generic != nil && instType.Generic.Name == "Promise" && len(instType.TypeArguments) > 0 {
-							contextType = instType.TypeArguments[0]
-						}
-					}
+					contextType = c.getAwaitedType(contextType)
 				}
 				c.visitWithContext(node.ReturnValue, &ContextualType{
 					ExpectedType: contextType,
@@ -2049,15 +2051,13 @@ func (c *Checker) visit(node parser.Node) {
 				}
 			} else {
 				expectedType := c.currentExpectedReturnType
-				// For async functions, unwrap Promise<T> to T before comparing
+				actualType := actualReturnType
+				// Async returns are checked against the awaited annotation type.
 				if c.inAsyncFunction {
-					if instType, ok := expectedType.(*types.InstantiatedType); ok {
-						if instType.Generic != nil && instType.Generic.Name == "Promise" && len(instType.TypeArguments) > 0 {
-							expectedType = instType.TypeArguments[0]
-						}
-					}
+					expectedType = c.getAwaitedType(expectedType)
+					actualType = c.getAwaitedType(actualType)
 				}
-				if !c.isAssignableWithExpansion(actualReturnType, expectedType) {
+				if !c.isAssignableWithExpansion(actualType, expectedType) {
 					msg := fmt.Sprintf("cannot return value of type %s from function expecting %s",
 						actualReturnType, expectedType)
 					c.addError(node.ReturnValue, msg)

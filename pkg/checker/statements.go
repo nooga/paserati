@@ -142,6 +142,23 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 
 // --- NEW: Interface Declaration Check ---
 
+func (c *Checker) resolveExtendedInterfaceObjectType(t types.Type) (*types.ObjectType, bool) {
+	t = types.GetEffectiveType(t)
+
+	if objType, ok := t.(*types.ObjectType); ok {
+		return objType, true
+	}
+
+	if instType, ok := t.(*types.InstantiatedType); ok {
+		substituted := types.GetEffectiveType(instType.Substitute())
+		if objType, ok := substituted.(*types.ObjectType); ok {
+			return objType, true
+		}
+	}
+
+	return nil, false
+}
+
 func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	// Called during Pass 1 for interface declarations
 
@@ -203,8 +220,9 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			continue
 		}
 
-		// The extended type should be an ObjectType (interface is stored as ObjectType)
-		if extendedObjectType, ok := extendedType.(*types.ObjectType); ok {
+		// The extended type should resolve to an ObjectType. Instantiated object
+		// types such as Promise<string> are valid interface bases in TypeScript.
+		if extendedObjectType, ok := c.resolveExtendedInterfaceObjectType(extendedType); ok {
 			// Copy all properties from the extended interface
 			for propName, propType := range extendedObjectType.Properties {
 				properties[propName] = c.rebindThisType(propType, extendedObjectType, interfaceType)
@@ -426,7 +444,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			continue // Skip unresolved extended interfaces
 		}
 
-		if extendedObjectType, ok := extendedType.(*types.ObjectType); ok {
+		if extendedObjectType, ok := c.resolveExtendedInterfaceObjectType(extendedType); ok {
 			for propName, propType := range extendedObjectType.Properties {
 				properties[propName] = c.rebindThisType(propType, extendedObjectType, bodyType)
 				if extendedObjectType.OptionalProperties != nil && extendedObjectType.OptionalProperties[propName] {

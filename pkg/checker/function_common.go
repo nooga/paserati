@@ -24,6 +24,46 @@ func isValidRestParameterType(t types.Type) bool {
 	return false
 }
 
+// getAwaitedType implements the checker-side part of TypeScript's async return
+// comparison: Promise<T> and promise-like objects contribute their fulfillment
+// type, while non-promise values are used as-is.
+func (c *Checker) getAwaitedType(t types.Type) types.Type {
+	if t == nil {
+		return types.Any
+	}
+
+	t = types.GetEffectiveType(t)
+
+	if instType, ok := t.(*types.InstantiatedType); ok {
+		if instType.Generic != nil && instType.Generic.Name == "Promise" && len(instType.TypeArguments) > 0 {
+			return c.getAwaitedType(instType.TypeArguments[0])
+		}
+
+		substituted := instType.Substitute()
+		if substituted != nil && substituted != t {
+			return c.getAwaitedType(substituted)
+		}
+	}
+
+	if objType, ok := t.(*types.ObjectType); ok {
+		if thenProp, hasThen := objType.Properties["then"]; hasThen {
+			if thenFuncType, ok := thenProp.(*types.ObjectType); ok && len(thenFuncType.CallSignatures) > 0 {
+				sig := thenFuncType.CallSignatures[0]
+				if len(sig.ParameterTypes) > 0 {
+					if callbackFuncType, ok := sig.ParameterTypes[0].(*types.ObjectType); ok && len(callbackFuncType.CallSignatures) > 0 {
+						callbackSig := callbackFuncType.CallSignatures[0]
+						if len(callbackSig.ParameterTypes) > 0 {
+							return callbackSig.ParameterTypes[0]
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return t
+}
+
 // FunctionCheckContext holds the common context for function checking
 type FunctionCheckContext struct {
 	FunctionName             string                  // For logging and recursion
@@ -445,7 +485,13 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 
 			// Check expression body type against annotation
 			if expectedReturnType != nil {
-				if !types.IsAssignable(bodyType, expectedReturnType) {
+				sourceType := bodyType
+				targetType := expectedReturnType
+				if ctx.IsAsync {
+					sourceType = c.getAwaitedType(sourceType)
+					targetType = c.getAwaitedType(targetType)
+				}
+				if !c.isAssignableWithExpansion(sourceType, targetType) {
 					c.addError(exprBody, fmt.Sprintf("cannot return expression of type '%s' from arrow function with return type annotation '%s'", bodyType.String(), expectedReturnType.String()))
 				}
 				finalReturnType = expectedReturnType
