@@ -1033,10 +1033,21 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			if objectType != nil {
 				propertyName := c.extractPropertyName(node.Property)
 				if objType, ok := types.GetWidenedType(objectType).(*types.ObjectType); ok {
-					if propType, found := objType.Properties[propertyName]; found {
+					propType, found := objType.Properties[propertyName]
+					directProperty := found
+					if !found {
+						for _, sig := range objType.IndexSignatures {
+							if sig.KeyType == types.String || sig.KeyType == types.Any {
+								propType = sig.ValueType
+								found = true
+								break
+							}
+						}
+					}
+					if found {
 						// For optional properties, add undefined to the type
 						effectivePropType := propType
-						if objType.IsPropertyOptional(propertyName) {
+						if directProperty && objType.IsPropertyOptional(propertyName) {
 							effectivePropType = types.NewUnionType(propType, types.Undefined)
 						}
 						if unionType, ok := effectivePropType.(*types.UnionType); ok {
@@ -1075,10 +1086,21 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					if objectType != nil {
 						propertyName := c.extractPropertyName(node.Property)
 						if objType, ok := types.GetWidenedType(objectType).(*types.ObjectType); ok {
-							if propType, found := objType.Properties[propertyName]; found {
+							propType, found := objType.Properties[propertyName]
+							directProperty := found
+							if !found {
+								for _, sig := range objType.IndexSignatures {
+									if sig.KeyType == types.String || sig.KeyType == types.Any {
+										propType = sig.ValueType
+										found = true
+										break
+									}
+								}
+							}
+							if found {
 								// For optional properties, add undefined to the type
 								effectivePropType := propType
-								if objType.IsPropertyOptional(propertyName) {
+								if directProperty && objType.IsPropertyOptional(propertyName) {
 									effectivePropType = types.NewUnionType(propType, types.Undefined)
 								}
 								if unionType, ok := effectivePropType.(*types.UnionType); ok {
@@ -1863,6 +1885,34 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 
 		default:
 			c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+		}
+	}
+
+	if indexKey := expressionToNarrowingKey(node); indexKey != "" {
+		for env := c.env; env != nil; env = env.outer {
+			if env.narrowings == nil {
+				continue
+			}
+			if narrowedType, exists := env.narrowings[indexKey]; exists {
+				debugPrintf("// [Checker IndexExpr] Using narrowed type for %s: %s\n", indexKey, narrowedType.String())
+				resultType = narrowedType
+				break
+			}
+			if complementType, exists := env.narrowings[indexKey+"__complement"]; exists {
+				if unionType, ok := resultType.(*types.UnionType); ok {
+					if complementUnion, ok := complementType.(*types.UnionType); ok {
+						for _, ct := range complementUnion.Types {
+							if ut, ok := resultType.(*types.UnionType); ok {
+								resultType = ut.RemoveType(ct)
+							}
+						}
+					} else {
+						resultType = unionType.RemoveType(complementType)
+					}
+					debugPrintf("// [Checker IndexExpr] Using complement narrowing for %s: %s\n", indexKey, resultType.String())
+				}
+				break
+			}
 		}
 	}
 

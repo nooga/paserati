@@ -34,7 +34,7 @@ func extractTypePredicateFromType(functionType types.Type) *types.TypePredicateT
 // isMemberOrOptionalChaining checks if an expression is a MemberExpression or OptionalChainingExpression
 func isMemberOrOptionalChaining(expr parser.Expression) bool {
 	switch expr.(type) {
-	case *parser.MemberExpression, *parser.OptionalChainingExpression:
+	case *parser.MemberExpression, *parser.IndexExpression, *parser.OptionalChainingExpression:
 		return true
 	}
 	return false
@@ -70,6 +70,15 @@ func expressionToNarrowingKey(expr parser.Expression) string {
 		// Only handle simple property access (not computed properties like obj[expr])
 		if propIdent, ok := e.Property.(*parser.Identifier); ok {
 			return objectKey + "." + propIdent.Value
+		}
+		return ""
+	case *parser.IndexExpression:
+		objectKey := expressionToNarrowingKey(e.Left)
+		if objectKey == "" {
+			return ""
+		}
+		if stringIndex, ok := e.Index.(*parser.StringLiteral); ok {
+			return objectKey + "." + stringIndex.Value
 		}
 		return ""
 	case *parser.OptionalChainingExpression:
