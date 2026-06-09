@@ -1141,11 +1141,19 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	debugPrintf("// [Checker] Instantiating generic type '%s' with args [%s]\n",
 		genericType.Name, strings.Join(typeStrs, ", "))
 
+	// Create substitution map from type parameters to concrete types. Use it for
+	// constraint validation too, since constraints may reference sibling type
+	// parameters, e.g. <T extends U, U extends Array<number>>.
+	substitution := make(map[string]types.Type)
+	for i, typeParam := range genericType.TypeParameters {
+		substitution[typeParam.Name] = finalTypeArgs[i]
+	}
+
 	// Validate constraints before instantiation
 	for i, typeParam := range genericType.TypeParameters {
 		if typeParam.Constraint != nil {
 			argType := finalTypeArgs[i]
-			constraintType := typeParam.Constraint
+			constraintType := c.substituteTypes(typeParam.Constraint, substitution)
 
 			debugPrintf("// [Checker] Checking constraint: %s extends %s\n",
 				argType.String(), constraintType.String())
@@ -1166,12 +1174,6 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 				return types.Any // Return any type to allow compilation to continue
 			}
 		}
-	}
-
-	// Create substitution map from type parameters to concrete types
-	substitution := make(map[string]types.Type)
-	for i, typeParam := range genericType.TypeParameters {
-		substitution[typeParam.Name] = finalTypeArgs[i]
 	}
 
 	// Perform type substitution on the body type
