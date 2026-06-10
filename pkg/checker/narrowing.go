@@ -384,7 +384,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 					case "Object":
 						return &TypeGuard{
 							VariableName: ident.Value,
-							NarrowedType: types.NewObjectType(),
+							NarrowedType: &types.ObjectTypeMarker{},
 							IsNegated:    false,
 						}
 					default:
@@ -1015,6 +1015,27 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 					narrowedEnv := NewEnclosedEnvironment(c.env)
 					narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
 					debugPrintf("// [InvertedTypeNarrowing] Array.isArray false: '%s' narrowed to non-array: %s\n",
+						guard.VariableName, narrowedType.String())
+					return narrowedEnv
+				}
+			}
+			if _, isObjectMarker := guard.NarrowedType.(*types.ObjectTypeMarker); isObjectMarker {
+				var nonObjectMembers []types.Type
+				for _, memberType := range unionType.Types {
+					if !c.isObjectLikeType(memberType) {
+						nonObjectMembers = append(nonObjectMembers, memberType)
+					}
+				}
+				if len(nonObjectMembers) < len(unionType.Types) && len(nonObjectMembers) > 0 {
+					var narrowedType types.Type
+					if len(nonObjectMembers) == 1 {
+						narrowedType = nonObjectMembers[0]
+					} else {
+						narrowedType = types.NewUnionType(nonObjectMembers...)
+					}
+					narrowedEnv := NewEnclosedEnvironment(c.env)
+					narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
+					debugPrintf("// [InvertedTypeNarrowing] object-like false: '%s' narrowed to non-object: %s\n",
 						guard.VariableName, narrowedType.String())
 					return narrowedEnv
 				}
