@@ -2749,9 +2749,7 @@ func (c *Checker) checkInstanceofOperator(leftType, rightType types.Type, node *
 // isConstructorType checks if a type represents a constructor function
 func (c *Checker) isConstructorType(t types.Type) bool {
 	if objType, ok := t.(*types.ObjectType); ok {
-		// In TypeScript, any callable type can be used as a constructor with 'new'
-		// unless it explicitly has no construct signatures
-		return objType.IsCallable()
+		return objType.IsCallable() || len(objType.ConstructSignatures) > 0
 	}
 	return false
 }

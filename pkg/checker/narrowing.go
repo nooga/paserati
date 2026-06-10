@@ -348,10 +348,10 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 		// Pattern 4: "property" in identifier (e.g., "foo" in obj)
 		if infix.Operator == "in" {
 			if propName, ok := staticStringLiteralValue(infix.Left); ok {
-				if ident, ok := infix.Right.(*parser.Identifier); ok {
+				if narrowingKey := expressionToNarrowingKey(infix.Right); narrowingKey != "" {
 					// Create a property existence marker
 					return &TypeGuard{
-						VariableName: ident.Value,
+						VariableName: narrowingKey,
 						NarrowedType: &types.PropertyExistenceMarker{PropertyName: propName},
 						IsNegated:    false,
 					}
@@ -523,7 +523,20 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		var narrowedType types.Type
 
 		// Check if this is a discriminant guard on a member expression
-		if guard.DiscriminantProp != "" && guard.DiscriminantValue != nil {
+		if propMarker, ok := guard.NarrowedType.(*types.PropertyExistenceMarker); ok {
+			originalType := c.resolveMemberExpressionOriginalType(guard.VariableName)
+			if originalType == nil {
+				debugPrintf("// [TypeNarrowing] Property-existence guard on member expression %s, but cannot resolve original type\n",
+					guard.VariableName)
+				return nil
+			}
+			var narrowed bool
+			narrowedType, narrowed = c.filterUnionByProperty(originalType, propMarker.PropertyName, true)
+			if !narrowed {
+				debugPrintf("// [TypeNarrowing] Property-existence member narrowing failed for %s\n", guard.VariableName)
+				return nil
+			}
+		} else if guard.DiscriminantProp != "" && guard.DiscriminantValue != nil {
 			// For discriminant guards, we need to compute the narrowed type
 			// First, get the original type of the member expression from the narrowings or by resolving
 			var originalType types.Type
@@ -915,6 +928,33 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 			debugPrintf("// [InvertedTypeNarrowing] Member expression complement narrowing has nil type for %s\n", guard.VariableName)
 			return nil
 		}
+		if propMarker, ok := guard.NarrowedType.(*types.PropertyExistenceMarker); ok {
+			originalType := c.resolveMemberExpressionOriginalType(guard.VariableName)
+			if originalType == nil {
+				debugPrintf("// [InvertedTypeNarrowing] Property-existence guard on member expression %s, but cannot resolve original type\n",
+					guard.VariableName)
+				return nil
+			}
+			if narrowedType, narrowed := c.filterUnionByProperty(originalType, propMarker.PropertyName, false); narrowed {
+				newEnv := NewEnclosedEnvironment(c.env)
+				for k, v := range c.env.narrowings {
+					newEnv.narrowings[k] = v
+				}
+				if c.env.outer != nil && c.env.outer.narrowings != nil {
+					for k, v := range c.env.outer.narrowings {
+						if _, exists := newEnv.narrowings[k]; !exists {
+							newEnv.narrowings[k] = v
+						}
+					}
+				}
+				newEnv.narrowings[guard.VariableName] = narrowedType
+				debugPrintf("// [InvertedTypeNarrowing] Member expr property-existence else narrowing: %s -> %s\n",
+					guard.VariableName, narrowedType.String())
+				return newEnv
+			}
+			debugPrintf("// [InvertedTypeNarrowing] Member expr property-existence else narrowing failed for %s\n", guard.VariableName)
+			return nil
+		}
 
 		debugPrintf("// [InvertedTypeNarrowing] Member expression complement narrowing: %s\n", guard.VariableName)
 
@@ -1036,6 +1076,15 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 					narrowedEnv := NewEnclosedEnvironment(c.env)
 					narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
 					debugPrintf("// [InvertedTypeNarrowing] object-like false: '%s' narrowed to non-object: %s\n",
+						guard.VariableName, narrowedType.String())
+					return narrowedEnv
+				}
+			}
+			if propMarker, ok := guard.NarrowedType.(*types.PropertyExistenceMarker); ok {
+				if narrowedType, narrowed := c.filterUnionByProperty(unionType, propMarker.PropertyName, false); narrowed {
+					narrowedEnv := NewEnclosedEnvironment(c.env)
+					narrowedEnv.Define(guard.VariableName, narrowedType, isConst)
+					debugPrintf("// [InvertedTypeNarrowing] property-existence false: '%s' narrowed to property absence: %s\n",
 						guard.VariableName, narrowedType.String())
 					return narrowedEnv
 				}
@@ -1837,6 +1886,31 @@ func (c *Checker) resolveObjectTypeForNarrowing(t types.Type) (*types.ObjectType
 		}
 	}
 	return nil, false
+}
+
+func (c *Checker) filterUnionByProperty(t types.Type, propertyName string, wantPresent bool) (types.Type, bool) {
+	unionType, ok := t.(*types.UnionType)
+	if !ok {
+		if c.typeHasProperty(t, propertyName) == wantPresent {
+			return t, true
+		}
+		return nil, false
+	}
+
+	var matchingMembers []types.Type
+	for _, memberType := range unionType.Types {
+		if c.typeHasProperty(memberType, propertyName) == wantPresent {
+			matchingMembers = append(matchingMembers, memberType)
+		}
+	}
+
+	if len(matchingMembers) == 0 || len(matchingMembers) == len(unionType.Types) {
+		return nil, false
+	}
+	if len(matchingMembers) == 1 {
+		return matchingMembers[0], true
+	}
+	return types.NewUnionType(matchingMembers...), true
 }
 
 // typeHasProperty checks if a type has a specific property
