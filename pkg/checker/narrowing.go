@@ -81,6 +81,11 @@ func expressionToNarrowingKey(expr parser.Expression) string {
 			return objectKey + "." + stringIndex.Value
 		}
 		return ""
+	case *parser.AssignmentExpression:
+		if e.Operator == "=" {
+			return expressionToNarrowingKey(e.Left)
+		}
+		return ""
 	case *parser.OptionalChainingExpression:
 		// Treat opts?.prop the same as opts.prop for narrowing key purposes
 		objectKey := expressionToNarrowingKey(e.Object)
@@ -179,10 +184,10 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 				narrowingKey := expressionToNarrowingKey(typeofExpr.Operand)
 				debugPrintf("// [detectTypeGuard] typeof check detected, operand type: %T, key: %s\n", typeofExpr.Operand, narrowingKey)
 				if narrowingKey != "" {
-					if stringLit, ok := infix.Right.(*parser.StringLiteral); ok {
+					if typeString, ok := staticStringLiteralValue(infix.Right); ok {
 						// Map string literal to corresponding type
 						var narrowedType types.Type
-						switch stringLit.Value {
+						switch typeString {
 						case "string":
 							narrowedType = types.String
 						case "number":
@@ -342,12 +347,12 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 
 		// Pattern 4: "property" in identifier (e.g., "foo" in obj)
 		if infix.Operator == "in" {
-			if propLit, ok := infix.Left.(*parser.StringLiteral); ok {
+			if propName, ok := staticStringLiteralValue(infix.Left); ok {
 				if ident, ok := infix.Right.(*parser.Identifier); ok {
 					// Create a property existence marker
 					return &TypeGuard{
 						VariableName: ident.Value,
-						NarrowedType: &types.PropertyExistenceMarker{PropertyName: propLit.Value},
+						NarrowedType: &types.PropertyExistenceMarker{PropertyName: propName},
 						IsNegated:    false,
 					}
 				}
@@ -424,6 +429,11 @@ func (c *Checker) literalToType(expr parser.Expression) types.Type {
 	switch lit := expr.(type) {
 	case *parser.StringLiteral:
 		return &types.LiteralType{Value: vm.NewString(lit.Value)}
+	case *parser.TemplateLiteral:
+		if value, ok := staticStringLiteralValue(lit); ok {
+			return &types.LiteralType{Value: vm.NewString(value)}
+		}
+		return nil
 	case *parser.NumberLiteral:
 		return &types.LiteralType{Value: vm.NumberValue(lit.Value)}
 	case *parser.BooleanLiteral:
@@ -434,6 +444,25 @@ func (c *Checker) literalToType(expr parser.Expression) types.Type {
 		return types.Undefined
 	default:
 		return nil // Not a literal we can narrow to
+	}
+}
+
+func staticStringLiteralValue(expr parser.Expression) (string, bool) {
+	switch lit := expr.(type) {
+	case *parser.StringLiteral:
+		return lit.Value, true
+	case *parser.TemplateLiteral:
+		var value string
+		for _, part := range lit.Parts {
+			stringPart, ok := part.(*parser.TemplateStringPart)
+			if !ok {
+				return "", false
+			}
+			value += stringPart.Value
+		}
+		return value, true
+	default:
+		return "", false
 	}
 }
 
@@ -1592,6 +1621,46 @@ func (c *Checker) narrowBaseObjectFromOptionalChaining(baseExpr parser.Expressio
 // applyMemberTruthinessNarrowing handles truthiness checks on member expressions like "if (this.next)"
 // This eliminates null and undefined from the member expression's type
 func (c *Checker) applyMemberTruthinessNarrowing(memberExpr *parser.MemberExpression) *Environment {
+	if propIdent, ok := memberExpr.Property.(*parser.Identifier); ok {
+		baseKey := expressionToNarrowingKey(memberExpr.Object)
+		if baseKey != "" {
+			if originalType, isConst, found := c.env.Resolve(baseKey); found && originalType != nil {
+				if unionType, ok := originalType.(*types.UnionType); ok {
+					var matchingMembers []types.Type
+					for _, memberType := range unionType.Types {
+						objType, ok := c.resolveObjectTypeForNarrowing(memberType)
+						if !ok {
+							continue
+						}
+						propType, exists := objType.Properties[propIdent.Value]
+						if !exists {
+							continue
+						}
+						if propLit, ok := propType.(*types.LiteralType); ok && propLit.Value.IsTruthy() {
+							matchingMembers = append(matchingMembers, memberType)
+						}
+					}
+
+					if len(matchingMembers) > 0 && len(matchingMembers) < len(unionType.Types) {
+						var narrowedType types.Type
+						if len(matchingMembers) == 1 {
+							narrowedType = matchingMembers[0]
+						} else {
+							narrowedType = types.NewUnionType(matchingMembers...)
+						}
+
+						newEnv := NewEnclosedEnvironment(c.env)
+						if newEnv.Define(baseKey, narrowedType, isConst) {
+							debugPrintf("// [TypeNarrowing] Member truthiness discriminant narrowed '%s' from '%s' to '%s'\n",
+								baseKey, originalType.String(), narrowedType.String())
+							return newEnv
+						}
+					}
+				}
+			}
+		}
+	}
+
 	memberKey := expressionToNarrowingKey(memberExpr)
 	if memberKey == "" {
 		return nil
@@ -1711,24 +1780,8 @@ func (c *Checker) isTypeCompatibleForInstanceof(memberType, targetType types.Typ
 // with a value that matches the expected literal type.
 // Used for discriminated union narrowing like: if (expr.kind === "num")
 func (c *Checker) memberMatchesDiscriminant(memberType types.Type, propName string, expectedValue types.Type) bool {
-	// Get the object type (resolve forward references if needed)
-	var objType *types.ObjectType
-
-	switch t := memberType.(type) {
-	case *types.ObjectType:
-		objType = t
-	case *types.TypeAliasForwardReference:
-		// Resolve forward reference
-		if resolved, found := c.env.ResolveType(t.AliasName); found {
-			if obj, ok := resolved.(*types.ObjectType); ok {
-				objType = obj
-			}
-		}
-	default:
-		return false
-	}
-
-	if objType == nil {
+	objType, ok := c.resolveObjectTypeForNarrowing(memberType)
+	if !ok {
 		return false
 	}
 
@@ -1749,6 +1802,20 @@ func (c *Checker) memberMatchesDiscriminant(memberType types.Type, propName stri
 
 	// For general type comparison
 	return types.IsAssignable(expectedValue, propType)
+}
+
+func (c *Checker) resolveObjectTypeForNarrowing(t types.Type) (*types.ObjectType, bool) {
+	switch typ := t.(type) {
+	case *types.ObjectType:
+		return typ, true
+	case *types.TypeAliasForwardReference:
+		if resolved, found := c.env.ResolveType(typ.AliasName); found {
+			if obj, ok := resolved.(*types.ObjectType); ok {
+				return obj, true
+			}
+		}
+	}
+	return nil, false
 }
 
 // typeHasProperty checks if a type has a specific property
