@@ -484,13 +484,25 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 			prototype = vm.BooleanPrototype.AsPlainObject()
 		}
 	case TypeArray:
-		prototype = vm.ArrayPrototype.AsPlainObject()
+		// Subclass instances (`class S extends Array {}`) carry a per-instance
+		// prototype whose chain runs S.prototype -> Array.prototype, so a method
+		// override on the subclass resolves before the intrinsic builtin. Normal
+		// arrays leave it unset and fall back to the realm's Array.prototype.
+		if arr := objVal.AsArray(); arr != nil && arr.prototype.Type() == TypeObject {
+			prototype = arr.prototype.AsPlainObject()
+		} else {
+			prototype = vm.ArrayPrototype.AsPlainObject()
+		}
 	case TypeMap:
-		if vm.MapPrototype.Type() == TypeObject {
+		if mp := objVal.AsMap(); mp != nil && mp.prototype.Type() == TypeObject {
+			prototype = mp.prototype.AsPlainObject()
+		} else if vm.MapPrototype.Type() == TypeObject {
 			prototype = vm.MapPrototype.AsPlainObject()
 		}
 	case TypeSet:
-		if vm.SetPrototype.Type() == TypeObject {
+		if st := objVal.AsSet(); st != nil && st.prototype.Type() == TypeObject {
+			prototype = st.prototype.AsPlainObject()
+		} else if vm.SetPrototype.Type() == TypeObject {
 			prototype = vm.SetPrototype.AsPlainObject()
 		}
 	case TypeRegExp:
