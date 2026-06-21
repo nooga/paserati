@@ -1,14 +1,14 @@
 // expect: 1
 class A {
-    a: string;
+    a!: string;
 }
 
 class B {
-    b: number;
+    b!: number;
 }
 
 class Box {
-    value: A | B;
+    value!: A | B;
 }
 
 let box = new Box();
