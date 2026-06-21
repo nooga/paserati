@@ -2397,52 +2397,25 @@ startExecution:
 					// DictObject currently ignores symbols
 					hasProperty = false
 				case TypeArray:
-					// Walk Array prototype chain for symbol properties
-					proto := vm.ArrayPrototype
-					if proto.IsObject() {
-						for cur := proto.AsPlainObject(); cur != nil; {
-							if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
-								hasProperty = true
-								break
-							}
-							pv := cur.GetPrototype()
-							if !pv.IsObject() {
-								break
-							}
-							cur = pv.AsPlainObject()
-						}
+					arrayObj := objVal.AsArray()
+					if arrayObj.HasOwnSymbolProp(propVal.AsSymbolObject()) {
+						hasProperty = true
+					} else {
+						hasProperty = vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(objVal), NewSymbolKey(propVal))
 					}
 				case TypeSet:
-					// Walk Set prototype chain for symbol properties
-					proto := vm.SetPrototype
-					if proto.IsObject() {
-						for cur := proto.AsPlainObject(); cur != nil; {
-							if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
-								hasProperty = true
-								break
-							}
-							pv := cur.GetPrototype()
-							if !pv.IsObject() {
-								break
-							}
-							cur = pv.AsPlainObject()
-						}
+					setObj := objVal.AsSet()
+					if setObj.Properties != nil && setObj.Properties.HasOwnByKey(NewSymbolKey(propVal)) {
+						hasProperty = true
+					} else {
+						hasProperty = vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(objVal), NewSymbolKey(propVal))
 					}
 				case TypeMap:
-					// Walk Map prototype chain for symbol properties
-					proto := vm.MapPrototype
-					if proto.IsObject() {
-						for cur := proto.AsPlainObject(); cur != nil; {
-							if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
-								hasProperty = true
-								break
-							}
-							pv := cur.GetPrototype()
-							if !pv.IsObject() {
-								break
-							}
-							cur = pv.AsPlainObject()
-						}
+					mapObj := objVal.AsMap()
+					if mapObj.Properties != nil && mapObj.Properties.HasOwnByKey(NewSymbolKey(propVal)) {
+						hasProperty = true
+					} else {
+						hasProperty = vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(objVal), NewSymbolKey(propVal))
 					}
 				case TypeArguments:
 					// Arguments objects have Symbol.iterator from Array.prototype
@@ -2627,8 +2600,12 @@ startExecution:
 					if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
 						// Check if index is within bounds
 						hasProperty = index < arrayObj.Length()
+					} else if _, ok := arrayObj.GetOwn(propKey); ok {
+						hasProperty = true
+					} else if propKey == "length" {
+						hasProperty = true
 					} else {
-						hasProperty = propKey == "length"
+						hasProperty = vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(objVal), keyFromString(propKey))
 					}
 				case TypeFunction:
 					// Functions are objects and can have properties
@@ -2669,21 +2646,19 @@ startExecution:
 					// Set: check own property "size", then prototype chain
 					if propKey == "size" {
 						hasProperty = true
+					} else if setObj := objVal.AsSet(); setObj.Properties != nil && setObj.Properties.HasOwn(propKey) {
+						hasProperty = true
 					} else {
-						proto := vm.SetPrototype
-						if proto.IsObject() {
-							hasProperty = proto.AsPlainObject().Has(propKey)
-						}
+						hasProperty = vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(objVal), keyFromString(propKey))
 					}
 				case TypeMap:
 					// Map: check own property "size", then prototype chain
 					if propKey == "size" {
 						hasProperty = true
+					} else if mapObj := objVal.AsMap(); mapObj.Properties != nil && mapObj.Properties.HasOwn(propKey) {
+						hasProperty = true
 					} else {
-						proto := vm.MapPrototype
-						if proto.IsObject() {
-							hasProperty = proto.AsPlainObject().Has(propKey)
-						}
+						hasProperty = vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(objVal), keyFromString(propKey))
 					}
 				case TypeArguments:
 					// Arguments object: check indices, length, callee, and Object.prototype
@@ -2895,6 +2870,12 @@ startExecution:
 						current = p
 					} else {
 						current = vm.SetPrototype
+					}
+				case TypeWeakRef:
+					if p := objVal.AsWeakRef().GetPrototype(); p.IsObject() {
+						current = p
+					} else {
+						current = vm.WeakRefPrototype
 					}
 				case TypeArguments:
 					current = vm.ObjectPrototype // Arguments objects inherit from Object.prototype

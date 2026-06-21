@@ -1635,65 +1635,22 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 		return true, InterpretOK, *dest
 	}
 
-	// Map: consult Map.prototype for symbol properties (e.g., [Symbol.iterator])
+	// Map: consult the per-instance prototype for symbol properties (e.g.,
+	// subclass overrides of [Symbol.iterator]) before the intrinsic prototype.
 	if base.Type() == TypeMap {
-		proto := vm.MapPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
+		if v, ok := vm.getPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(base), NewSymbolKey(symKey)); ok {
+			*dest = v
+			return true, InterpretOK, *dest
 		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	}
 
-	// Set: consult Set.prototype for symbol properties
+	// Set: consult the per-instance prototype for symbol properties.
 	if base.Type() == TypeSet {
-		proto := vm.SetPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
+		if v, ok := vm.getPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(base), NewSymbolKey(symKey)); ok {
+			*dest = v
+			return true, InterpretOK, *dest
 		}
 		*dest = Undefined
 		return true, InterpretOK, *dest

@@ -689,6 +689,70 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 	return Undefined, false
 }
 
+func (vm *VM) effectiveBuiltinPrototype(objVal Value) Value {
+	switch objVal.Type() {
+	case TypeArray:
+		if arr := objVal.AsArray(); arr != nil {
+			if proto := arr.GetPrototype(); proto.IsObject() {
+				return proto
+			}
+		}
+		return vm.ArrayPrototype
+	case TypeMap:
+		if mp := objVal.AsMap(); mp != nil {
+			if proto := mp.GetPrototype(); proto.IsObject() {
+				return proto
+			}
+		}
+		return vm.MapPrototype
+	case TypeSet:
+		if st := objVal.AsSet(); st != nil {
+			if proto := st.GetPrototype(); proto.IsObject() {
+				return proto
+			}
+		}
+		return vm.SetPrototype
+	case TypeWeakRef:
+		if wr := objVal.AsWeakRef(); wr != nil {
+			if proto := wr.GetPrototype(); proto.IsObject() {
+				return proto
+			}
+		}
+		return vm.WeakRefPrototype
+	}
+	return Undefined
+}
+
+func (vm *VM) getPropertyByKeyFromPrototypeChain(proto Value, key PropertyKey) (Value, bool) {
+	for proto.Type() != TypeNull && proto.Type() != TypeUndefined {
+		switch proto.Type() {
+		case TypeObject:
+			po := proto.AsPlainObject()
+			if v, ok := po.GetOwnByKey(key); ok {
+				return v, true
+			}
+			proto = po.GetPrototype()
+		case TypeDictObject:
+			if !key.isString() {
+				return Undefined, false
+			}
+			dict := proto.AsDictObject()
+			if v, ok := dict.GetOwn(key.name); ok {
+				return v, true
+			}
+			proto = dict.GetPrototype()
+		default:
+			return Undefined, false
+		}
+	}
+	return Undefined, false
+}
+
+func (vm *VM) hasPropertyByKeyFromPrototypeChain(proto Value, key PropertyKey) bool {
+	_, ok := vm.getPropertyByKeyFromPrototypeChain(proto, key)
+	return ok
+}
+
 // handleSpecialProperties handles special properties like .length
 func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, bool) {
 	// Handle undefined/null objects

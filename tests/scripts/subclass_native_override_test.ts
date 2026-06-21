@@ -29,6 +29,34 @@ let setOk = st.add(1) === "added"
 
 let plainOk = [1, 2, 3].push(4) === 4; // normal array: push returns new length
 
-arrOk && mapOk && setOk && plainOk;
+class IterMap extends Map {
+    [Symbol.iterator]() { return "map-iter"; }
+}
+let iterMap = new IterMap();
+let mapSymbolOk = iterMap[Symbol.iterator]() === "map-iter";
+
+class IterSet extends Set {
+    [Symbol.iterator]() { return "set-iter"; }
+}
+let iterSet = new IterSet();
+let setSymbolOk = iterSet[Symbol.iterator]() === "set-iter";
+
+class WeakSub extends WeakRef {}
+let target = {};
+let weak = new WeakSub(target);
+let weakRefOk = (weak instanceof WeakSub) && (weak instanceof WeakRef);
+
+class InArr extends Array {
+    foo() { return 1; }
+}
+class InMap extends Map {
+    foo() { return 1; }
+}
+class InSet extends Set {
+    foo() { return 1; }
+}
+let inOk = ("foo" in new InArr()) && ("foo" in new InMap()) && ("foo" in new InSet());
+
+arrOk && mapOk && setOk && plainOk && mapSymbolOk && setSymbolOk && weakRefOk && inOk;
 
 // expect: true
