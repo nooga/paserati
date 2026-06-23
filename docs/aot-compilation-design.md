@@ -60,6 +60,7 @@ The compiler produces `*vm.Chunk` -- this is the artifact we need to serialize.
 | `ScopeDesc`            | `*ScopeDescriptor`      | Easy         | Only present when module uses `eval()`           |
 | `VarGlobalIndices`     | `[]uint16`              | Trivial      | Non-configurable global slots                    |
 | `propInlineCaches`     | `[]*PropInlineCache`    | **Skip**     | Runtime-only; lazily rebuilt on first access      |
+| `stringConstCache` / `intConstCache` / `floatConstCache` | `map[...]uint16` | **Skip** | Compile-time dedup caches; rebuildable from `Constants`, never needed at load |
 
 ### What Lives in the Constant Pool
 
@@ -379,8 +380,18 @@ builds a shared transition tree. Under concurrent load:
 - Cross-isolate memory coupling (one isolate's object shapes affect another's cache behavior)
 
 **Fix**: Per-realm `RootShape`. The `Realm` struct already exists -- add a `RootShape *Shape`
-field and thread it through `NewObject()`, `NewObjectWithProto()`, etc. This is a medium-sized
-refactor because `NewObject()` is called from many places, but it's straightforward.
+field. The catch: `RootShape` is **not a parameter** anywhere -- it's hard-wired into the
+free function `NewObject()` (`plainObj := &PlainObject{... shape: RootShape}`) and into ~18
+inline `&PlainObject{... shape: RootShape}` literals for function/closure backing objects
+(scattered across `vm.go`, `op_setprop.go`, `op_definemethodcomputed.go`). Making the root
+shape per-realm therefore forces an **ownership decision on `NewObject`**, which is a free
+function with no receiver called from ~530 sites: either it gains a realm/shape parameter
+(ripples to all call sites), or object creation becomes a `*VM`/`*Realm` method, or we keep
+an ambient default and override only where isolates actually diverge. The inline literals
+are the easy half (they sit inside `VM` methods, so `vm.realm.RootShape` is in scope); the
+`NewObject` ownership question is the real design work and should be settled before any code
+is written. This is the largest single piece of the isolate-safety work, not a mechanical
+thread-through.
 
 **Severity**: **Blocker** for concurrent VMs (data race on Shape.mu).
 
