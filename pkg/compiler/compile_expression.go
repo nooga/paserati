@@ -989,6 +989,52 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression, hint
 	return hint, nil
 }
 
+// simpleLocalRegister returns the register holding a plain, already-materialized
+// local/param variable read, so a consumer can use it directly as an operand
+// instead of allocating a temp and emitting OpMove. It deliberately fires ONLY
+// for the safe subset (no TDZ check needed, no with-block, no spill/global/upvalue/
+// namespace/caller-local/eval complications) — every other case falls back to the
+// normal compileNode path. Part of the destination-driven codegen prototype.
+func (c *Compiler) simpleLocalRegister(node parser.Expression) (Register, bool) {
+	id, ok := node.(*parser.Identifier)
+	if !ok || id.Value == "arguments" {
+		return 0, false
+	}
+	if c.currentFuncWithDepth > 0 || c.withBlockDepth > 0 || c.inDefaultParamScope || c.callerScopeDesc != nil {
+		return 0, false
+	}
+	sym, definingTable, found := c.currentSymbolTable.Resolve(id.Value)
+	if !found {
+		return 0, false
+	}
+	if sym.IsGlobal || sym.IsSpilled || sym.IsCallerLocal || sym.IsNamespaceProperty || sym.IsTDZ {
+		return 0, false
+	}
+	if sym.Register == nilRegister {
+		return 0, false
+	}
+	// If it lives in an enclosing *function* it's an upvalue (needs OpLoadFree),
+	// not a directly-addressable register. Outer block scopes of the same function
+	// are fine (direct register access).
+	if definingTable != c.currentSymbolTable && c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+		return 0, false
+	}
+	return sym.Register, true
+}
+
+// isSideEffectFreeOperand reports whether evaluating node cannot mutate any
+// variable. Used to decide when reading the LEFT operand directly is safe: the
+// left value must not change between its (logical) evaluation and the operator.
+func isSideEffectFreeOperand(node parser.Expression) bool {
+	switch node.(type) {
+	case *parser.Identifier, *parser.NumberLiteral, *parser.StringLiteral,
+		*parser.BooleanLiteral, *parser.NullLiteral, *parser.UndefinedLiteral,
+		*parser.BigIntLiteral:
+		return true
+	}
+	return false
+}
+
 func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line // Use operator token line number
 
@@ -1098,18 +1144,35 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			return hint, nil
 		}
 
-		leftReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, leftReg)
-		_, err := c.compileNode(node.Left, leftReg)
-		if err != nil {
-			return BadRegister, err
+		// Destination-driven operand reads: when an operand is a plain local
+		// variable already in a register, feed that register straight to the
+		// operator instead of copying it into a fresh temp (eliminates OpMove).
+		//
+		// Ordering: the left operand is logically evaluated before the right.
+		// Reading left directly defers its read to operator-emit time (after the
+		// right operand is compiled), so it is only safe when the right operand
+		// cannot mutate left — i.e. when right is side-effect-free. The right
+		// operand is evaluated last, so reading it directly is always safe.
+		var leftReg Register
+		if reg, ok := c.simpleLocalRegister(node.Left); ok && isSideEffectFreeOperand(node.Right) {
+			leftReg = reg
+		} else {
+			leftReg = c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, leftReg)
+			if _, err := c.compileNode(node.Left, leftReg); err != nil {
+				return BadRegister, err
+			}
 		}
 
-		rightReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, rightReg)
-		_, err = c.compileNode(node.Right, rightReg)
-		if err != nil {
-			return BadRegister, err
+		var rightReg Register
+		if reg, ok := c.simpleLocalRegister(node.Right); ok {
+			rightReg = reg
+		} else {
+			rightReg = c.regAlloc.Alloc()
+			tempRegs = append(tempRegs, rightReg)
+			if _, err := c.compileNode(node.Right, rightReg); err != nil {
+				return BadRegister, err
+			}
 		}
 
 		switch node.Operator {
