@@ -1,6 +1,9 @@
 package compiler
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // Debug flag for register allocation tracing
 const debugRegAlloc = false
@@ -30,6 +33,10 @@ type RegisterAllocator struct {
 	freeRegs []Register // Stack of available registers to reuse
 	// Pinning mechanism to prevent important registers from being freed
 	pinnedRegs map[Register]bool // Set of pinned registers
+	// Registers captured by reference as closure upvalues. Unlike the blanket
+	// pin applied to every block local, these must remain reserved for the whole
+	// lifetime of the enclosing function and must NOT be reclaimed at scope exit.
+	capturedRegs map[Register]bool
 	// Debug context for tracing
 	functionName string
 }
@@ -42,8 +49,9 @@ func NewRegisterAllocator() *RegisterAllocator {
 		allocatorID: id,
 		nextReg:     0,
 		maxReg:      0,
-		freeRegs:    make([]Register, 0, 16), // Initialize with some capacity
-		pinnedRegs:  make(map[Register]bool), // Initialize pinned registers map
+		freeRegs:     make([]Register, 0, 16), // Initialize with some capacity
+		pinnedRegs:   make(map[Register]bool), // Initialize pinned registers map
+		capturedRegs: make(map[Register]bool), // Initialize captured registers set
 	}
 }
 
@@ -226,14 +234,7 @@ func (ra *RegisterAllocator) TryAllocContiguous(count int) (Register, bool) {
 	if len(ra.freeRegs) >= count {
 		sortedFree := make([]Register, len(ra.freeRegs))
 		copy(sortedFree, ra.freeRegs)
-		// Bubble sort is fine for small lists
-		for i := 0; i < len(sortedFree)-1; i++ {
-			for j := 0; j < len(sortedFree)-i-1; j++ {
-				if sortedFree[j] > sortedFree[j+1] {
-					sortedFree[j], sortedFree[j+1] = sortedFree[j+1], sortedFree[j]
-				}
-			}
-		}
+		sort.Slice(sortedFree, func(i, j int) bool { return sortedFree[i] < sortedFree[j] })
 		for i := 0; i <= len(sortedFree)-count; i++ {
 			firstReg := sortedFree[i]
 			isContiguous := true
@@ -309,13 +310,7 @@ func (ra *RegisterAllocator) MaxContiguousAvailable() int {
 	// Analyze free list runs
 	sorted := make([]Register, len(ra.freeRegs))
 	copy(sorted, ra.freeRegs)
-	for i := 0; i < len(sorted)-1; i++ {
-		for j := 0; j < len(sorted)-i-1; j++ {
-			if sorted[j] > sorted[j+1] {
-				sorted[j], sorted[j+1] = sorted[j+1], sorted[j]
-			}
-		}
-	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 	runLen := 1
 	for i := 1; i < len(sorted); i++ {
 		if sorted[i] == sorted[i-1]+1 {
@@ -405,8 +400,9 @@ func (ra *RegisterAllocator) MaxRegs() Register {
 func (ra *RegisterAllocator) Reset() {
 	ra.nextReg = 0
 	ra.maxReg = 0
-	ra.freeRegs = ra.freeRegs[:0]           // Clear free list (keeps allocated capacity)
-	ra.pinnedRegs = make(map[Register]bool) // Clear pinned registers
+	ra.freeRegs = ra.freeRegs[:0]             // Clear free list (keeps allocated capacity)
+	ra.pinnedRegs = make(map[Register]bool)   // Clear pinned registers
+	ra.capturedRegs = make(map[Register]bool) // Clear captured registers
 }
 
 // Free marks a register as available for reuse, unless it's pinned.
@@ -419,8 +415,16 @@ func (ra *RegisterAllocator) Free(reg Register) {
 		return
 	}
 
-	// Optional: Could check if reg is already free or out of bounds
-	// For simplicity, we assume valid usage for now.
+	// Guard against double-free: appending a register that is already in the
+	// free list would let it be handed out twice and corrupt allocation. This
+	// matters now that scope exit reclaims block locals (freeScopeRegisters) in
+	// addition to the explicit per-temp frees scattered through the compiler.
+	if ra.IsInFreeList(reg) {
+		if debugRegAlloc {
+			fmt.Printf("[REGALLOC] SKIP FREE R%d (already in free list)\n", reg)
+		}
+		return
+	}
 	if debugRegAlloc {
 		fmt.Printf("[REGALLOC] FREE R%d (free list will have %d registers)\n", reg, len(ra.freeRegs)+1)
 	}
@@ -434,6 +438,23 @@ func (ra *RegisterAllocator) Pin(reg Register) {
 	if debugRegAlloc {
 		fmt.Printf("[REGALLOC] PIN R%d (now %d pinned registers)\n", reg, len(ra.pinnedRegs))
 	}
+}
+
+// PinCapture marks a register as captured-by-reference by a closure upvalue.
+// Such registers are pinned AND recorded as captured so that scope-exit register
+// reclamation never reclaims them: the upvalue references the slot for the whole
+// lifetime of the enclosing function.
+func (ra *RegisterAllocator) PinCapture(reg Register) {
+	ra.pinnedRegs[reg] = true
+	ra.capturedRegs[reg] = true
+	if debugRegAlloc {
+		fmt.Printf("[REGALLOC] PIN-CAPTURE R%d (now %d captured registers)\n", reg, len(ra.capturedRegs))
+	}
+}
+
+// IsCaptured reports whether a register has been captured by a closure upvalue.
+func (ra *RegisterAllocator) IsCaptured(reg Register) bool {
+	return ra.capturedRegs[reg]
 }
 
 // Unpin removes the pin from a register, allowing it to be freed again.

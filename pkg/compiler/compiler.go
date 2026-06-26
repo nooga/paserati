@@ -1107,6 +1107,37 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	return c.chunk, c.errors
 }
 
+// freeScopeRegisters reclaims the registers held by locals defined directly in
+// the given (about-to-be-discarded) scope, so that sibling and subsequent blocks
+// can reuse them instead of growing the function's register frame monotonically.
+//
+// Only symbols backed by a real register are freed: globals, spilled vars,
+// caller-locals, namespace properties and unbacked entries (nilRegister) have no
+// register to return. RegisterAllocator.Free already skips pinned registers, so
+// variables captured by closures (pinned at capture time) remain reserved for the
+// lifetime of the enclosing function and are not disturbed here.
+func (c *Compiler) freeScopeRegisters(st *SymbolTable) {
+	if st == nil {
+		return
+	}
+	for _, sym := range st.store {
+		if sym.IsGlobal || sym.IsSpilled || sym.IsCallerLocal || sym.IsNamespaceProperty {
+			continue
+		}
+		if sym.Register == nilRegister {
+			continue
+		}
+		// Captured-by-reference registers must outlive the scope: an upvalue
+		// references the slot for the rest of the enclosing function.
+		if c.regAlloc.IsCaptured(sym.Register) {
+			continue
+		}
+		// Drop the blanket pin applied at declaration, then reclaim the register.
+		c.regAlloc.Unpin(sym.Register)
+		c.regAlloc.Free(sym.Register)
+	}
+}
+
 // compileNode dispatches compilation to the appropriate method based on node type.
 func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, errors.PaseratiError) {
 	// Safety check for nil checker, although it should be set by Compile()
@@ -1594,6 +1625,10 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 		// Restore previous scope if we created an enclosed one
 		if needsEnclosedScope {
+			// Reclaim registers held by this block's locals so sibling/subsequent
+			// blocks can reuse them. Free() skips pinned registers, so variables
+			// captured by closures (which are pinned at capture time) stay reserved.
+			c.freeScopeRegisters(c.currentSymbolTable)
 			c.currentSymbolTable = prevSymbolTable
 			debugPrintf("// [BlockStatement] Restored previous scope\n")
 		}
@@ -3296,7 +3331,7 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 				}
 			} else {
 				debugPrintf("// [emitClosure] Free '%s' is Local in same function, will capture from R%d\n", freeSym.Name, enclosingSymbol.Register)
-				c.regAlloc.Pin(enclosingSymbol.Register)
+				c.regAlloc.PinCapture(enclosingSymbol.Register)
 				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: uint16(enclosingSymbol.Register)}
 			}
 		} else {
