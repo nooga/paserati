@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paserati — Are we fast yet?</title>
+<!-- Trend page. The hand-drawn dashboard sticker is the hero; the palette is
+     drawn from it (dashboard brown-black, the 42km/h badge amber, the tach
+     redline, the exhaust-puff teal) so colour carries meaning: amber = the
+     baseline bar, teal = faster, red = slower. Each line is a benchmark's
+     ratio_to_anchor over time, normalized to its baseline. Pure client-side
+     render over baseline.json + timeline/*.json; runs no benchmarks. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:      #16120c;   /* warm near-black, the dashboard's brown-black */
+    --bg-elev: #1f1810;   /* raised panel */
+    --line:    #322817;   /* warm grid / hairlines */
+    --ink:     #ece0c8;   /* cream paper border → primary text */
+    --ink-dim: #a3906c;   /* muted tan */
+    --amber:   #f2b40a;   /* the "42 km/h" badge → baseline / primary accent */
+    --red:     #d8402a;   /* tach redline → slower */
+    --teal:    #6fb7c4;   /* exhaust puff → faster */
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 24px 40px; }
+
+  /* ── hero ─────────────────────────────────────────────── */
+  .hero { display: flex; align-items: center; gap: 28px; flex-wrap: wrap;
+          padding: 8px 0 22px; border-bottom: 1px solid var(--line); }
+  .hero img { width: min(300px, 64vw); height: auto; flex: 0 0 auto;
+              filter: drop-shadow(0 6px 16px rgba(0,0,0,.45)); }
+  .hero-copy { flex: 1 1 320px; min-width: 280px; }
+  .eyebrow { font: 600 12px/1 ui-monospace, monospace; letter-spacing: .22em;
+             text-transform: uppercase; color: var(--amber); margin: 0 0 10px; }
+  h1 { font-family: "Saira Condensed", system-ui, sans-serif; font-weight: 700;
+       font-size: clamp(40px, 8vw, 68px); line-height: .92; letter-spacing: .01em;
+       text-transform: uppercase; margin: 0 0 12px; }
+  .tagline { color: var(--ink-dim); font-size: 14.5px; max-width: 46ch; margin: 0; }
+  .tagline b.up   { color: var(--teal); font-weight: 600; }
+  .tagline b.down { color: var(--red);  font-weight: 600; }
+  .tagline b.bar  { color: var(--amber); font-weight: 600; }
+
+  /* gauge-readout chips for machine / anchor / baseline */
+  .readout { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 6px; }
+  .chip { font: 600 11px/1 ui-monospace, monospace; letter-spacing: .04em;
+          color: var(--ink-dim); background: var(--bg-elev);
+          border: 1px solid var(--line); border-radius: 999px; padding: 7px 12px; }
+  .chip b { color: var(--ink); font-weight: 700; }
+
+  /* ── controls ─────────────────────────────────────────── */
+  .controls { display: flex; align-items: center; gap: 12px; margin: 22px 0 12px; }
+  .toggle { display: inline-flex; background: var(--bg-elev); border: 1px solid var(--line);
+            border-radius: 9px; padding: 3px; gap: 3px; }
+  .seg { font: 600 12px/1 "Saira Condensed", system-ui, sans-serif; letter-spacing: .08em;
+         text-transform: uppercase; color: var(--ink-dim); background: transparent; border: 0;
+         border-radius: 6px; padding: 8px 14px; cursor: pointer;
+         transition: background .15s, color .15s; }
+  .seg:hover { color: var(--ink); }
+  .seg.on { background: var(--amber); color: #1a1206; }
+  .seg:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  .controls .count { margin-left: auto; font: 11px/1 ui-monospace, monospace;
+                     color: var(--ink-dim); }
+
+  .card { background: var(--bg-elev); border: 1px solid var(--line);
+          border-radius: 14px; padding: 18px; }
+  .card canvas { height: 380px !important; }
+  .empty { color: var(--ink-dim); padding: 48px 20px; text-align: center; }
+  footer { color: #6f5f44; font-size: 11px; margin-top: 22px;
+           font-family: ui-monospace, monospace; }
+  a { color: var(--amber); }
+
+  @media (max-width: 560px) {
+    .hero { gap: 18px; }
+    .hero img { width: min(240px, 70vw); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <img src="sticker.png" alt="Hand-drawn car dashboard: a speedometer and a tachometer redlining at 7000 rpm with a puff of exhaust.">
+    <div class="hero-copy">
+      <p class="eyebrow">Paserati · benchmark trend</p>
+      <h1>Are we<br>fast yet?</h1>
+      <p class="tagline">Each benchmark's speed over time, normalized to its
+        committed baseline. <b class="bar">1.0× is the bar</b> —
+        <b class="up">below is faster</b>, <b class="down">above is slower</b>.
+        Anchor-normalized, so the trend holds across CI runners.</p>
+      <div id="readout" class="readout"></div>
+    </div>
+  </header>
+
+  <div class="controls">
+    <div class="toggle" role="group" aria-label="View mode">
+      <button id="m-overall" class="seg" aria-pressed="true">Overall</button>
+      <button id="m-all" class="seg" aria-pressed="false">Breakdown</button>
+    </div>
+    <span id="count" class="count"></span>
+  </div>
+
+  <div class="card"><canvas id="chart" height="118"></canvas></div>
+  <div id="empty" class="empty" hidden>No snapshots yet. Once the Perf Timeline
+    workflow runs on a commit, its point appears here.</div>
+
+  <footer>Source: <code>baseline.json</code> + <code>timeline/*.json</code>.
+    Rendered client-side; runs no benchmarks.</footer>
+</div>
+
+<script>
+const BASE = "baseline.json";
+const MANIFEST = "timeline/index.json";
+// Series colours drawn from the sticker, kept quiet so the amber baseline line
+// and the hero carry the identity.
+const SERIES = ["#6fb7c4", "#c98a3a", "#9bbf6f", "#d8402a", "#e0cba0", "#cf6f8a", "#8ab0d8"];
+
+async function getJSON(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error(url + " → " + r.status);
+  return r.json();
+}
+function labelFor(s) {
+  return s.captured_at_sha ? s.captured_at_sha.slice(0, 8) : (s.captured_at || "").slice(0, 10);
+}
+
+(async function main() {
+  let baseline, files;
+  try { baseline = await getJSON(BASE); } catch { baseline = { benchmarks: {}, machine: {}, anchor: {} }; }
+  try { files = await getJSON(MANIFEST); } catch { files = []; }
+
+  if (!files.length) { document.getElementById("empty").hidden = false; renderReadout(baseline, []); return; }
+
+  const snaps = (await Promise.all(files.map(f => getJSON("timeline/" + f).catch(() => null))))
+    .filter(Boolean)
+    .sort((a, b) => (a.captured_at || "").localeCompare(b.captured_at || ""));
+
+  renderReadout(baseline, snaps);
+  const labels = snaps.map(labelFor);
+
+  const allNames = new Set();
+  for (const s of snaps) for (const n of Object.keys(s.benchmarks || {})) allNames.add(n);
+
+  // Reference ratio per benchmark: the baseline's, else the first snapshot's.
+  const ref = {};
+  for (const n of allNames) {
+    const b = baseline.benchmarks?.[n]?.ratio_to_anchor;
+    if (b > 0) { ref[n] = b; continue; }
+    const first = snaps.find(s => s.benchmarks?.[n]?.ratio_to_anchor > 0);
+    ref[n] = first ? first.benchmarks[n].ratio_to_anchor : 0;
+  }
+
+  const names = [...allNames].sort();
+  const series = names.map((n, i) => ({
+    label: n.replace(/^.*?\.Benchmark/, ""),  // drop "<pkg>.Benchmark" noise
+    data: snaps.map(s => {
+      const r = s.benchmarks?.[n]?.ratio_to_anchor;
+      return (r && ref[n]) ? r / ref[n] : null;
+    }),
+    borderColor: SERIES[i % SERIES.length],
+    backgroundColor: SERIES[i % SERIES.length],
+    borderWidth: 1.5, pointRadius: 2, pointHoverRadius: 4, spanGaps: true, tension: .25,
+  }));
+
+  // The baseline bar: a dashed amber guide at 1.0× — the "redline" of this gauge.
+  const baselineLine = {
+    label: "baseline (1.0×)", data: labels.map(() => 1),
+    borderColor: "#f2b40a", borderDash: [5, 4], borderWidth: 1.5,
+    pointRadius: 0, pointHoverRadius: 0, fill: false, tension: 0,
+  };
+
+  // Overall view: mean across all benchmarks per snapshot, with a ±1σ band.
+  const mean = [], lo = [], hi = [];
+  for (let j = 0; j < snaps.length; j++) {
+    const vals = series.map(d => d.data[j]).filter(v => v != null);
+    if (!vals.length) { mean.push(null); lo.push(null); hi.push(null); continue; }
+    const m = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const sd = Math.sqrt(vals.reduce((a, b) => a + (b - m) ** 2, 0) / vals.length);
+    mean.push(m); lo.push(m - sd); hi.push(m + sd);
+  }
+  const bandLo = { label: "_band", data: lo, borderColor: "transparent", pointRadius: 0, fill: false };
+  const bandHi = { label: "± std dev", data: hi, borderColor: "transparent", pointRadius: 0,
+                   backgroundColor: "rgba(236,224,200,0.10)", fill: "-1" };
+  const meanLine = { label: "mean", data: mean, borderColor: "#ece0c8", backgroundColor: "#ece0c8",
+                     borderWidth: 2.5, pointRadius: 2.5, pointHoverRadius: 4, tension: .25 };
+
+  const ink = "#a3906c", grid = "#2a2114";
+  const chart = new Chart(document.getElementById("chart"), {
+    type: "line",
+    data: { labels, datasets: [] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "nearest", intersect: false },
+      animation: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? false : { duration: 500 },
+      plugins: {
+        legend: { position: "bottom", labels: { color: ink, boxWidth: 8, boxHeight: 8, padding: 8,
+                  font: { size: 9.5 }, usePointStyle: true, filter: it => !it.text.startsWith("_") } },
+        tooltip: {
+          backgroundColor: "#1f1810", borderColor: "#322817", borderWidth: 1,
+          titleColor: "#ece0c8", bodyColor: "#ece0c8",
+          filter: it => !it.dataset.label.startsWith("_"),
+          callbacks: { label: c => c.parsed.y == null ? null : `${c.dataset.label}: ${c.parsed.y.toFixed(3)}×` },
+        },
+      },
+      scales: {
+        x: { ticks: { color: ink, maxRotation: 60, font: { size: 10 } }, grid: { color: grid } },
+        y: { title: { display: true, text: "× baseline", color: ink, font: { size: 11 } },
+             ticks: { color: ink }, grid: { color: grid },
+             suggestedMin: 0.85, suggestedMax: 1.15 },
+      },
+    },
+  });
+
+  const countEl = document.getElementById("count");
+  const bOverall = document.getElementById("m-overall"), bAll = document.getElementById("m-all");
+  function setMode(mode) {
+    const overall = mode === "overall";
+    chart.data.datasets = overall ? [baselineLine, bandLo, bandHi, meanLine] : [baselineLine, ...series];
+    chart.update();
+    bOverall.setAttribute("aria-pressed", overall); bOverall.classList.toggle("on", overall);
+    bAll.setAttribute("aria-pressed", !overall);     bAll.classList.toggle("on", !overall);
+    countEl.textContent = `${overall ? "mean of " : ""}${names.length} benchmarks · ${snaps.length} snapshots`;
+  }
+  bOverall.onclick = () => setMode("overall");
+  bAll.onclick = () => setMode("all");
+  setMode(new URLSearchParams(location.search).get("mode") === "all" ? "all" : "overall");
+})();
+
+function renderReadout(baseline, snaps) {
+  const m = baseline.machine || {}, latest = snaps[snaps.length - 1];
+  const chips = [];
+  if (m.cpu_model)            chips.push(`machine <b>${m.cpu_model}</b>`);
+  if (baseline.anchor?.ns_per_op) chips.push(`anchor <b>${baseline.anchor.ns_per_op.toFixed(2)} ns</b>`);
+  if (latest?.anchor?.ns_per_op)  chips.push(`latest anchor <b>${latest.anchor.ns_per_op.toFixed(2)} ns</b>`);
+  if (baseline.captured_at_sha)   chips.push(`baseline <b>${baseline.captured_at_sha.slice(0, 8)}</b>`);
+  document.getElementById("readout").innerHTML = chips.map(c => `<span class="chip">${c}</span>`).join("");
+}
+</script>
+</body>
+</html>
