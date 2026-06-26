@@ -120,19 +120,20 @@ func (r Result) FullName() string {
 
 func main() {
 	var (
-		baselinePath = flag.String("baseline", defaultBaselinePath, "baseline JSON path")
-		budget       = flag.Float64("budget", defaultBudget, "fractional regression tolerated before flagging (0.05 = 5%)")
-		packages     = flag.String("packages", "", "space-separated go packages to bench (default: discover)")
-		count        = flag.Int("count", defaultCount, "go test -count")
-		benchtime    = flag.String("benchtime", defaultBenchtime, "go test -benchtime")
-		filter       = flag.String("filter", "", "regexp filter on benchmark names (default: all)")
-		timeout      = flag.String("timeout", defaultTimeout, "go test -timeout per package")
-		outPath      = flag.String("out", "", "capture .jsonl output path (default: docs/perf/.runs/<sha>-<ts>.jsonl)")
-		inPath       = flag.String("in", "", "aggregate .jsonl input path (default: most recent under docs/perf/.runs/)")
-		force        = flag.Bool("force", false, "with update: bypass the ratchet — write current numbers even where they'd loosen the bar. Use sparingly for accepted regressions.")
-		shaOverride  = flag.String("sha", "", "override the SHA recorded for this run (default: git rev-parse HEAD of cwd). Use when aggregating a capture from a worktree that differs from cwd.")
-		tags         = flag.String("tags", "", "go test -tags (default none)")
-		format       = flag.String("format", "text", "report format: text (default, ANSI terminal), markdown (GitHub/Slack-friendly table), json (the raw baseline)")
+		baselinePath    = flag.String("baseline", defaultBaselinePath, "baseline JSON path")
+		budget          = flag.Float64("budget", defaultBudget, "fractional regression tolerated before flagging (0.05 = 5%)")
+		packages        = flag.String("packages", "", "space-separated go packages to bench (default: discover)")
+		count           = flag.Int("count", defaultCount, "go test -count")
+		benchtime       = flag.String("benchtime", defaultBenchtime, "go test -benchtime")
+		filter          = flag.String("filter", "", "regexp filter on benchmark names (default: all)")
+		timeout         = flag.String("timeout", defaultTimeout, "go test -timeout per package")
+		outPath         = flag.String("out", "", "capture .jsonl output path (default: docs/perf/.runs/<sha>-<ts>.jsonl)")
+		inPath          = flag.String("in", "", "aggregate .jsonl input path (default: most recent under docs/perf/.runs/)")
+		force           = flag.Bool("force", false, "with update: bypass the ratchet — write current numbers even where they'd loosen the bar. Use sparingly for accepted regressions.")
+		shaOverride     = flag.String("sha", "", "override the SHA recorded for this run (default: git rev-parse HEAD of cwd). Use when aggregating a capture from a worktree that differs from cwd.")
+		tags            = flag.String("tags", "", "go test -tags (default none)")
+		format          = flag.String("format", "text", "report format: text (default, ANSI terminal), markdown (GitHub/Slack-friendly table), json (the raw baseline)")
+		allowIncomplete = flag.Bool("allow-incomplete", false, "with check: tolerate package capture errors and missing baseline entries instead of failing (they shrink coverage, so the default is to fail)")
 	)
 	flag.Parse()
 
@@ -167,7 +168,7 @@ func main() {
 		if mode == "snapshot" {
 			writeSnapshot(*baselinePath, current)
 		} else {
-			writeOrCheck(*baselinePath, current, "update", *budget, *force, *format)
+			writeOrCheck(*baselinePath, current, "update", *budget, *force, *format, 0, *allowIncomplete)
 		}
 		return
 	}
@@ -202,7 +203,8 @@ func main() {
 	}
 	fmt.Printf("  raw .jsonl: %s\n", *outPath)
 
-	if err := captureJobs(jobs, *count, *benchtime, *timeout, *outPath); err != nil {
+	captureFailed, err := captureJobs(jobs, *count, *benchtime, *timeout, *outPath)
+	if err != nil {
 		die("capture: %v", err)
 	}
 
@@ -222,7 +224,7 @@ func main() {
 	if mode == "snapshot" {
 		writeSnapshot(*baselinePath, current)
 	} else {
-		writeOrCheck(*baselinePath, current, mode, *budget, *force, *format)
+		writeOrCheck(*baselinePath, current, mode, *budget, *force, *format, captureFailed, *allowIncomplete)
 	}
 }
 
@@ -243,7 +245,7 @@ func writeSnapshot(path string, current Baseline) {
 }
 
 // writeOrCheck dispatches the post-aggregate action.
-func writeOrCheck(baselinePath string, current Baseline, mode string, budget float64, force bool, format string) {
+func writeOrCheck(baselinePath string, current Baseline, mode string, budget float64, force bool, format string, captureFailed int, allowIncomplete bool) {
 	switch mode {
 	case "show":
 		switch format {
@@ -292,8 +294,19 @@ func writeOrCheck(baselinePath string, current Baseline, mode string, budget flo
 			die("read baseline (%s): %v\n  hint: run `bench-ratchet update` to seed it",
 				baselinePath, err)
 		}
-		if exit := compareAndReport(baseline, current, budget, format); exit != 0 {
-			os.Exit(exit)
+		res := compareAndReport(baseline, current, budget, format)
+		fail := res.regressions > 0
+		// A capture error or a missing baseline entry means we measured less
+		// than the bar covers — fail unless explicitly tolerated, so the gate
+		// can't pass green on shrunken coverage.
+		if !allowIncomplete && (captureFailed > 0 || res.missing > 0) {
+			fmt.Fprintf(os.Stderr,
+				"\ncheck: failing on incomplete coverage — %d capture error(s), %d missing benchmark(s); pass -allow-incomplete to override\n",
+				captureFailed, res.missing)
+			fail = true
+		}
+		if fail {
+			os.Exit(1)
 		}
 	}
 }
@@ -503,14 +516,18 @@ func buildJobs(packages, tags string, manual bool, filterRE *regexp.Regexp) ([]c
 	return jobs, scope, nil
 }
 
-func captureJobs(jobs []captureJob, count int, benchtime, timeout, outPath string) error {
+// captureJobs returns the number of jobs whose `go test` invocation failed
+// (build error, timeout, panic). A non-zero count means reduced benchmark
+// coverage, which `check` treats as a failure unless -allow-incomplete is set.
+func captureJobs(jobs []captureJob, count int, benchtime, timeout, outPath string) (int, error) {
 	out, err := os.OpenFile(outPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", outPath, err)
+		return 0, fmt.Errorf("open %s: %w", outPath, err)
 	}
 	defer out.Close()
 	enc := json.NewEncoder(out)
 
+	failed := 0
 	for i, j := range jobs {
 		label := j.pkg
 		if j.tags != "" {
@@ -520,11 +537,12 @@ func captureJobs(jobs []captureJob, count int, benchtime, timeout, outPath strin
 		n, err := captureOnePackage(j.pkg, count, benchtime, timeout, j.tags, j.filter, enc, out)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warn: %v (%d records captured)\n", err, n)
+			failed++
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "%d records\n", n)
 	}
-	return nil
+	return failed, nil
 }
 
 // captureOnePackage runs `go test -bench` on one package, reads its
@@ -829,11 +847,14 @@ func printBaseline(b Baseline) {
 	fmt.Println(string(body))
 }
 
-// compareAndReport prints a per-benchmark drift report, returning a
-// non-zero exit code when any benchmark exceeded the regression budget.
+// checkResult tallies what the compare found, so the caller can decide the
+// exit code: regressions always fail; missing entries fail unless tolerated.
+type checkResult struct{ regressions, missing, newCount int }
+
+// compareAndReport prints a per-benchmark drift report and returns the tally.
 // format is "text" (default ANSI terminal) or "markdown" (a single
 // GitHub/Slack-friendly table).
-func compareAndReport(baseline, current Baseline, budget float64, format string) int {
+func compareAndReport(baseline, current Baseline, budget float64, format string) checkResult {
 	if format == "markdown" {
 		return compareAndReportMarkdown(baseline, current, budget)
 	}
@@ -919,10 +940,7 @@ func compareAndReport(baseline, current Baseline, budget float64, format string)
 	fmt.Println()
 	fmt.Printf("summary: %d regression(s) > %.1f%% budget, %d missing, %d new\n",
 		regressions, budget*100, missing, newCount)
-	if regressions > 0 {
-		return 1
-	}
-	return 0
+	return checkResult{regressions: regressions, missing: missing, newCount: newCount}
 }
 
 func short(s string, n int) string {
@@ -985,7 +1003,7 @@ func formatWall(ns float64) string {
 //
 // The output is also Slack-friendly when wrapped in a code block, since
 // Slack renders the pipes monospace.
-func compareAndReportMarkdown(baseline, current Baseline, budget float64) int {
+func compareAndReportMarkdown(baseline, current Baseline, budget float64) checkResult {
 	type row struct {
 		name          string
 		baseR, curR   float64
@@ -1072,10 +1090,7 @@ func compareAndReportMarkdown(baseline, current Baseline, budget float64) int {
 		}
 	}
 
-	if regressions > 0 {
-		return 1
-	}
-	return 0
+	return checkResult{regressions: regressions, missing: missing, newCount: newCount}
 }
 
 // printBaselineMarkdown emits the entire baseline as a GFM table — one
