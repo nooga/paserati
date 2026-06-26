@@ -25,11 +25,10 @@ permissions:
 
 concurrency:
   group: perf-timeline-main
+  # Serialize snapshot runs — they push to the perf-data branch, which can't take
+  # concurrent writers. Forward-only (one snapshot per push) means no backfill
+  # bursts to queue, so cancel-in-progress: false is enough.
   cancel-in-progress: false
-  # Queue pending runs instead of superseding them, so a burst of backfill
-  # dispatches all run (sequentially) rather than all-but-the-last being
-  # canceled. Valid only with cancel-in-progress: false.
-  queue: max
 
 jobs:
   snapshot:
