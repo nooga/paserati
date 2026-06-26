@@ -946,9 +946,19 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		needsStore = false // Skip the store logic below (we already handled both paths)
 
 	} else { // --- Non-Logical Assignment ---
-		// Compile RHS with potential function name inference for simple assignments
-		rhsValueReg := c.regAlloc.Alloc()
-		operationTempRegs = append(operationTempRegs, rhsValueReg)
+		// Compile RHS with potential function name inference for simple assignments.
+		// For a simple `=`, target the RHS directly at the result register (hint) so
+		// the later "move RHS into hint" step is a no-op and the store reads hint
+		// directly -- eliminating a redundant OpMove per assignment. Compound ops
+		// need a temp distinct from currentValueReg, so keep allocating one there.
+		// (hint must NOT be added to operationTempRegs: it belongs to the caller.)
+		var rhsValueReg Register
+		if node.Operator == "=" {
+			rhsValueReg = hint
+		} else {
+			rhsValueReg = c.regAlloc.Alloc()
+			operationTempRegs = append(operationTempRegs, rhsValueReg)
+		}
 
 		// Function name inference: for simple "=" assignment to identifier,
 		// anonymous functions should inherit the variable name per ECMAScript spec
