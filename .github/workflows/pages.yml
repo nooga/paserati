@@ -48,7 +48,7 @@ jobs:
             if git checkout FETCH_HEAD -- timeline 2>/dev/null; then
               rm -rf docs/perf/timeline
               mv timeline docs/perf/timeline
-              echo "Loaded $(ls docs/perf/timeline | wc -l) snapshot(s)."
+              echo "Loaded $(find docs/perf/timeline -maxdepth 1 -name '*.json' | wc -l) snapshot(s)."
             else
               echo "perf-data has no timeline/ yet; page will be empty."
             fi
