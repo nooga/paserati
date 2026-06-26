@@ -1,0 +1,80 @@
+name: Perf Page
+
+# Deploys the "Are we fast yet?" trend page to GitHub Pages. The per-commit
+# snapshots live on the `perf-data` branch (written by perf-timeline.yml); we pull
+# them in, generate a filename manifest (static JS can't glob a directory), and
+# serve docs/perf/ as the site. Requires Pages enabled: Settings → Pages → Source
+# = GitHub Actions.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/perf/index.html'
+      - '.github/workflows/pages.yml'
+  # Redeploy after each snapshot so the page reflects new timeline points.
+  workflow_run:
+    workflows: ["Perf Timeline"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  # Don't cancel an in-progress deploy: during a burst of snapshots the last
+  # trigger's run survives as pending and runs after the final snapshot's push,
+  # so the deployed manifest reflects all of them. Cancelling mid-flight let an
+  # earlier deploy win with stale perf-data (the backfill-burst race).
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # push/dispatch always build; a Perf Timeline completion only redeploys if it
+    # actually produced a snapshot (succeeded).
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull timeline snapshots from perf-data
+        run: |
+          set -euo pipefail
+          mkdir -p docs/perf/timeline
+          if git ls-remote --exit-code --heads origin perf-data >/dev/null 2>&1; then
+            git fetch --depth 1 origin perf-data
+            if git checkout FETCH_HEAD -- timeline 2>/dev/null; then
+              rm -rf docs/perf/timeline
+              mv timeline docs/perf/timeline
+              echo "Loaded $(ls docs/perf/timeline | wc -l) snapshot(s)."
+            else
+              echo "perf-data has no timeline/ yet; page will be empty."
+            fi
+          else
+            echo "perf-data branch does not exist yet; page will be empty."
+          fi
+
+      - name: Generate timeline manifest
+        run: |
+          set -euo pipefail
+          # Static JS can't list a directory over HTTP, so emit the filenames.
+          find docs/perf/timeline -maxdepth 1 -name '*.json' ! -name index.json -printf '%f\n' \
+            | jq -R . | jq -s . > docs/perf/timeline/index.json
+          [ -s docs/perf/timeline/index.json ] || echo "[]" > docs/perf/timeline/index.json
+          echo "manifest: $(cat docs/perf/timeline/index.json)"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/perf
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

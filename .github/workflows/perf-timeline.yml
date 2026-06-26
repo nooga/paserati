@@ -1,0 +1,116 @@
+name: Perf Timeline
+
+# Records one immutable benchmark snapshot per commit on the dedicated, unprotected
+# `perf-data` branch (NOT main — keeps main clean and dodges branch protection).
+# The "Are we fast yet?" page (pages.yml) reads these at deploy time. Each snapshot
+# is anchor-normalized, so the trend is meaningful across varying CI runners.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/perf/index.html'
+      - 'docs/perf/timeline/**'
+  # Manual backfill: dispatch once per historical commit to fill the timeline.
+  # Snapshot identity is derived from the checked-out HEAD (sha + commit time),
+  # so the rest of the job is commit-agnostic.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit SHA/ref to snapshot (backfill)'
+        required: true
+        default: 'main'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: perf-timeline-main
+  cancel-in-progress: false
+  # Queue pending runs instead of superseding them, so a burst of backfill
+  # dispatches all run (sequentially) rather than all-but-the-last being
+  # canceled. Valid only with cancel-in-progress: false.
+  queue: max
+
+jobs:
+  snapshot:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out target ref
+        env:
+          TARGET_REF: ${{ github.event.inputs.ref || github.sha }}
+        run: |
+          # A short SHA is read by actions/checkout as a branch name and fails;
+          # fetch-depth:0 pulled everything, so resolve any committish locally.
+          git checkout --force "$TARGET_REF"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Capture snapshot
+        id: snap
+        run: |
+          set -euo pipefail
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          commit_epoch="$(git show -s --format=%ct HEAD)"
+          stamp="$(date -u -d "@${commit_epoch}" +%Y%m%dT%H%M%SZ)"
+          name="${stamp}-${short_sha}.json"
+          out="${RUNNER_TEMP}/${name}"
+
+          go run ./cmd/bench-ratchet \
+            -count 3 -benchtime 1s -timeout 20m \
+            -baseline "${out}" \
+            snapshot
+
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "out=${out}" >> "$GITHUB_OUTPUT"
+
+      - name: Render run summary
+        run: |
+          src="${{ steps.snap.outputs.out }}"
+          {
+            echo "## Snapshot ${{ steps.snap.outputs.name }}"
+            echo
+            echo "anchor \`$(jq -r '.anchor.ns_per_op' "$src")\` ns/op · machine \`$(jq -r '.machine.cpu_model' "$src")\` · go \`$(jq -r '.machine.go_version' "$src")\`"
+            echo
+            echo "| Benchmark | Anchor× | Wall (ns/op) | Allocs/op |"
+            echo "|---|---:|---:|---:|"
+            jq -r '.benchmarks | to_entries | sort_by(-.value.ratio_to_anchor)[]
+                   | "| \(.key | sub("github.com/nooga/paserati/";"")) | \((.value.ratio_to_anchor*1000|round)/1000) | \(.value.ns_per_op|round) | \(.value.allocs_per_op) |"' "$src"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish to perf-data branch
+        run: |
+          set -euo pipefail
+          name="${{ steps.snap.outputs.name }}"
+          src="${{ steps.snap.outputs.out }}"
+          remote="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          wt="${RUNNER_TEMP}/perf-data"
+
+          if git ls-remote --exit-code --heads "$remote" perf-data >/dev/null 2>&1; then
+            git clone --depth 1 --branch perf-data "$remote" "$wt"
+          else
+            # First run: orphan branch with no history/files.
+            git clone --depth 1 "$remote" "$wt"
+            git -C "$wt" checkout --orphan perf-data
+            git -C "$wt" rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          mkdir -p "$wt/timeline"
+          cp "$src" "$wt/timeline/$name"
+
+          git -C "$wt" config user.name "github-actions[bot]"
+          git -C "$wt" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$wt" add timeline
+          if git -C "$wt" diff --cached --quiet; then
+            echo "snapshot already present — nothing to publish"
+            exit 0
+          fi
+          git -C "$wt" commit -m "perf: snapshot ${name}"
+          git -C "$wt" push "$remote" HEAD:perf-data
