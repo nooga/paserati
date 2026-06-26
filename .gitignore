@@ -55,6 +55,8 @@ dome.js
 bench/out/
 quickjs-bench/
 benchmarks/
+# bench-ratchet raw captures (the committed artifact is docs/perf/baseline.json only)
+docs/perf/.runs/
 stvm*.js
 paserati-v8bench-prof
 /paserati-testtsc
