@@ -184,6 +184,16 @@ const (
 	// --- END Decorator Support ---
 	// --- END NEW ---
 
+	// --- Fused increment/decrement (++/--) for register lvalues ---
+	// Dst ValReg: n = ToNumeric(ValReg); ValReg = n+1; Dst = n+1 (prefix new value)
+	OpIncPre OpCode = 168
+	// Dst ValReg: n = ToNumeric(ValReg); Dst = n; ValReg = n+1 (postfix old value)
+	OpIncPost OpCode = 169
+	// Dst ValReg: n = ToNumeric(ValReg); ValReg = n-1; Dst = n-1 (prefix new value)
+	OpDecPre OpCode = 170
+	// Dst ValReg: n = ToNumeric(ValReg); Dst = n; ValReg = n-1 (postfix old value)
+	OpDecPost OpCode = 171
+
 	// --- NEW: Global Variable Operations ---
 	OpGetGlobal     OpCode = 46 // Rx GlobalIdx(16bit): Rx = Globals[GlobalIdx] (direct indexed access)
 	OpSetGlobal     OpCode = 47 // GlobalIdx(16bit) Ry: Globals[GlobalIdx] = Ry (direct indexed access)
@@ -333,6 +343,14 @@ func (op OpCode) String() string {
 		return "OpToNumeric"
 	case OpLoadNumericOne:
 		return "OpLoadNumericOne"
+	case OpIncPre:
+		return "OpIncPre"
+	case OpIncPost:
+		return "OpIncPost"
+	case OpDecPre:
+		return "OpDecPre"
+	case OpDecPost:
+		return "OpDecPost"
 	case OpEqual:
 		return "OpEqual"
 	case OpNotEqual:
@@ -963,7 +981,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerInstruction(builder, instruction.String(), offset) // Rx
 	case OpMakeAddInitializer, OpRunInitializers:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx Ry
-	case OpNegate, OpNot, OpTypeof, OpToNumber, OpToNumeric, OpLoadNumericOne, OpBitwiseNot, OpGetLength, OpIsNull, OpIsUndefined, OpIsNullish, OpIteratorCleanupAbruptIfNotDone:
+	case OpNegate, OpNot, OpTypeof, OpToNumber, OpToNumeric, OpLoadNumericOne, OpBitwiseNot, OpGetLength, OpIsNull, OpIsUndefined, OpIsNullish, OpIteratorCleanupAbruptIfNotDone,
+		OpIncPre, OpIncPost, OpDecPre, OpDecPost:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
 	case OpMove:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry

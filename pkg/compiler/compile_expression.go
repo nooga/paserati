@@ -862,6 +862,28 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 		return BadRegister, NewCompileError(node, fmt.Sprintf("invalid target for %s: expected identifier, member expression, or index expression, got %T", node.Operator, node.Argument))
 	}
 
+	// Fast path: a local variable lvalue lives directly in a register, so the
+	// whole ToNumeric + LoadNumericOne + Add + store-back + result-move sequence
+	// collapses into a single fused opcode. The opcode performs ToNumeric
+	// internally (handling BigInt and coercion), so no compile-time type info is
+	// required. dest (hint) differs from targetReg for any result-used context,
+	// which is what postfix correctness needs.
+	if lvalueKind == lvalueIdentifier && !identInfo.isUpvalue && !identInfo.isGlobal {
+		var op vm.OpCode
+		switch {
+		case node.Operator == "++" && node.Prefix:
+			op = vm.OpIncPre
+		case node.Operator == "++" && !node.Prefix:
+			op = vm.OpIncPost
+		case node.Operator == "--" && node.Prefix:
+			op = vm.OpDecPre
+		default: // "--" && postfix
+			op = vm.OpDecPost
+		}
+		c.emitFusedUpdate(op, hint, identInfo.targetReg, line)
+		return hint, nil
+	}
+
 	// 2. Check if operand is BigInt (needs special handling)
 	// For BigInt, we don't convert to number - we use BigInt arithmetic
 	// For other types, convert to number via ToNumeric (preserves BigInt at runtime)

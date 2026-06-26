@@ -1792,6 +1792,65 @@ startExecution:
 				registers[destReg] = Number(1)
 			}
 
+		case OpIncPre, OpIncPost, OpDecPre, OpDecPost:
+			// Fused ++/-- for register lvalues. Mirrors OpToNumeric followed by
+			// adding/subtracting 1 (with BigInt preserved), collapsing the
+			// ToNumeric + LoadNumericOne + Add + Move + store-back sequence into
+			// one instruction. After ToNumeric the value is guaranteed Number or
+			// BigInt, so no string/concat path is possible here.
+			destReg := code[ip]
+			valReg := code[ip+1]
+			ip += 2
+			srcVal := registers[valReg]
+			primVal := srcVal
+			if srcVal.IsObject() || srcVal.IsCallable() {
+				frame.ip = ip
+				vm.helperCallDepth++
+				primVal = vm.toPrimitive(srcVal, "number")
+				vm.helperCallDepth--
+				if vm.unwinding {
+					return InterpretRuntimeError, Undefined
+				}
+				if vm.handlerFound {
+					vm.handlerFound = false
+					goto reloadFrame
+				}
+			}
+			if primVal.Type() == TypeSymbol {
+				frame.ip = ip
+				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+				return InterpretRuntimeError, Undefined
+			}
+			isDec := opcode == OpDecPre || opcode == OpDecPost
+			isPre := opcode == OpIncPre || opcode == OpDecPre
+			var oldNumeric, newNumeric Value
+			if primVal.IsBigInt() {
+				oldNumeric = primVal
+				one := big.NewInt(1)
+				if isDec {
+					newNumeric = NewBigInt(new(big.Int).Sub(primVal.AsBigInt(), one))
+				} else {
+					newNumeric = NewBigInt(new(big.Int).Add(primVal.AsBigInt(), one))
+				}
+			} else {
+				f := primVal.ToFloat()
+				oldNumeric = Number(f)
+				if isDec {
+					newNumeric = Number(f - 1)
+				} else {
+					newNumeric = Number(f + 1)
+				}
+			}
+			// Write the result register first, then the lvalue register, so the
+			// lvalue always ends up holding the incremented value even if the
+			// compiler ever aliases dest==val (it does not for result-used cases).
+			if isPre {
+				registers[destReg] = newNumeric
+			} else {
+				registers[destReg] = oldNumeric
+			}
+			registers[valReg] = newNumeric
+
 		case OpStringConcat:
 			destReg := code[ip]
 			leftReg := code[ip+1]
