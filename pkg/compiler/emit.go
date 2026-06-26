@@ -723,6 +723,14 @@ func (c *Compiler) emitLoadNumericOne(dest, src Register, line int) {
 	c.emitByte(byte(src))
 }
 
+// emitFusedUpdate emits a fused ++/-- opcode operating on register lvalue valReg,
+// placing the expression result (old value for postfix, new for prefix) in dest.
+func (c *Compiler) emitFusedUpdate(op vm.OpCode, dest, valReg Register, line int) {
+	c.emitOpCode(op, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(valReg))
+}
+
 // --- NEW: Efficient Nullish Check Emitters ---
 
 // emitIsNull emits OpIsNull instruction: dest = (src === null)
