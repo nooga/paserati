@@ -1198,6 +1198,14 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					// resultType remains types.Never
 				}
 			}
+		case *types.TupleType:
+			if propertyName == "length" {
+				resultType = types.Number
+			} else if methodType := c.env.GetPrimitivePrototypeMethodType("array", propertyName); methodType != nil {
+				resultType = c.instantiateGenericMethod(methodType, getTupleElementUnion(obj))
+			} else {
+				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+			}
 		case *types.ObjectType: // <<< MODIFIED CASE
 			// Check if this is a function and we're accessing 'prototype'
 			if propertyName == "prototype" && obj != nil && obj.IsCallable() {
