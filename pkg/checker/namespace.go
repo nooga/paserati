@@ -29,7 +29,7 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 	// 1. Get-or-create the NamespaceType in the current scope. We look in the
 	//    type env: a NamespaceType always lives there.
 	var nsType *types.NamespaceType
-	if existing, found := c.env.ResolveType(name); found {
+	if existing, found := c.env.ResolveTypeLocal(name); found {
 		if ns, ok := existing.(*types.NamespaceType); ok {
 			nsType = ns
 		}

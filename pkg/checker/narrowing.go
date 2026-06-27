@@ -18,17 +18,40 @@ type TypeGuard struct {
 	OptionalChainingBaseExpr parser.Expression // For optional chaining guards: the base object expression (e.g., "opts" in "opts?.prop")
 }
 
+type typePredicateSignature struct {
+	predicate *types.TypePredicateType
+	signature *types.Signature
+}
+
 // extractTypePredicateFromType checks if a type has call signatures with a type predicate return type.
-// Returns the TypePredicateType if found, nil otherwise.
-func extractTypePredicateFromType(functionType types.Type) *types.TypePredicateType {
+// Returns the TypePredicateType and its signature if found, nil otherwise.
+func extractTypePredicateFromType(functionType types.Type) *typePredicateSignature {
 	if objType, ok := functionType.(*types.ObjectType); ok {
 		for _, sig := range objType.CallSignatures {
 			if predType, ok := sig.ReturnType.(*types.TypePredicateType); ok {
-				return predType
+				return &typePredicateSignature{predicate: predType, signature: sig}
 			}
 		}
 	}
 	return nil
+}
+
+func predicateArgumentIndex(predSig *typePredicateSignature, argCount int) int {
+	if predSig == nil || predSig.predicate == nil || predSig.signature == nil {
+		return -1
+	}
+	for i, name := range predSig.signature.ParameterNames {
+		if i >= argCount {
+			break
+		}
+		if name == predSig.predicate.ParameterName {
+			return i
+		}
+	}
+	if predSig.predicate.ParameterName != "" && argCount == 1 {
+		return 0
+	}
+	return -1
 }
 
 // isMemberOrOptionalChaining checks if an expression is a MemberExpression or OptionalChainingExpression
@@ -121,50 +144,49 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 
 	// Pattern 0: Type predicate function calls like isString(x) or Array.isArray(x)
 	if callExpr, ok := condition.(*parser.CallExpression); ok {
-		// Check if this is a single-argument call to a function with type predicate return
-		if len(callExpr.Arguments) == 1 {
-			// Get narrowing key for the argument — supports identifiers, member expressions,
-			// and optional chaining expressions
-			argKey := expressionToNarrowingKey(callExpr.Arguments[0])
-			if argKey != "" {
-				// Resolve the function's type — try computed type, then environment
-				functionType := callExpr.Function.GetComputedType()
+		if len(callExpr.Arguments) > 0 {
+			// Resolve the function's type — try computed type, then environment
+			functionType := callExpr.Function.GetComputedType()
 
-				// For simple identifier calls like isString(x)
-				if funcIdent, ok := callExpr.Function.(*parser.Identifier); ok {
-					if envType, _, found := c.env.Resolve(funcIdent.Value); found {
-						if envType != functionType {
-							functionType = envType
+			// For simple identifier calls like isString(x)
+			if funcIdent, ok := callExpr.Function.(*parser.Identifier); ok {
+				if envType, _, found := c.env.Resolve(funcIdent.Value); found {
+					if envType != functionType {
+						functionType = envType
+					}
+				}
+			}
+
+			// For member expression calls like Array.isArray(x) — resolve the
+			// property type from the object (e.g., Array's "isArray" property)
+			if memberFunc, ok := callExpr.Function.(*parser.MemberExpression); ok {
+				c.visit(memberFunc.Object)
+				objType := memberFunc.Object.GetComputedType()
+				if objType != nil {
+					propName := c.extractPropertyName(memberFunc.Property)
+					if widened, ok := types.GetWidenedType(objType).(*types.ObjectType); ok {
+						if propType, exists := widened.Properties[propName]; exists {
+							functionType = propType
 						}
 					}
 				}
+			}
 
-				// For member expression calls like Array.isArray(x) — resolve the
-				// property type from the object (e.g., Array's "isArray" property)
-				if memberFunc, ok := callExpr.Function.(*parser.MemberExpression); ok {
-					c.visit(memberFunc.Object)
-					objType := memberFunc.Object.GetComputedType()
-					if objType != nil {
-						propName := c.extractPropertyName(memberFunc.Property)
-						if widened, ok := types.GetWidenedType(objType).(*types.ObjectType); ok {
-							if propType, exists := widened.Properties[propName]; exists {
-								functionType = propType
+			if functionType != nil {
+				if predSig := extractTypePredicateFromType(functionType); predSig != nil {
+					argIndex := predicateArgumentIndex(predSig, len(callExpr.Arguments))
+					if argIndex >= 0 {
+						arg := callExpr.Arguments[argIndex]
+						argKey := expressionToNarrowingKey(arg)
+						if argKey != "" {
+							guard := &TypeGuard{
+								VariableName: argKey,
+								NarrowedType: predSig.predicate.Type,
+								IsNegated:    false,
 							}
+							guard.OptionalChainingBaseExpr = extractOptionalChainingBase(arg)
+							return guard
 						}
-					}
-				}
-
-				if functionType != nil {
-					// Extract type predicate from call signatures
-					if predType := extractTypePredicateFromType(functionType); predType != nil {
-						guard := &TypeGuard{
-							VariableName: argKey,
-							NarrowedType: predType.Type,
-							IsNegated:    false,
-						}
-						// If the argument is optional chaining, also record the base for back-propagation
-						guard.OptionalChainingBaseExpr = extractOptionalChainingBase(callExpr.Arguments[0])
-						return guard
 					}
 				}
 			}
@@ -185,37 +207,28 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 				debugPrintf("// [detectTypeGuard] typeof check detected, operand type: %T, key: %s\n", typeofExpr.Operand, narrowingKey)
 				if narrowingKey != "" {
 					if typeString, ok := staticStringLiteralValue(infix.Right); ok {
-						// Map string literal to corresponding type
-						var narrowedType types.Type
-						switch typeString {
-						case "string":
-							narrowedType = types.String
-						case "number":
-							narrowedType = types.Number
-						case "boolean":
-							narrowedType = types.Boolean
-						case "object":
-							// For typeof === "object", we need a special marker
-							// We'll handle this in the narrowing logic to filter to object types only
-							narrowedType = &types.ObjectTypeMarker{}
-						case "function":
-							// Create a generic function type for typeof narrowing
-							narrowedType = &types.ObjectType{
-								CallSignatures: []*types.Signature{
-									{
-										ParameterTypes: []types.Type{},
-										ReturnType:     types.Any,
-										OptionalParams: []bool{},
-										IsVariadic:     false,
-									},
-								},
-							}
-						case "undefined":
-							narrowedType = types.Undefined
-						default:
-							return nil // Unknown type string
+						narrowedType := typeFromTypeofString(typeString)
+						if narrowedType == nil {
+							return nil
 						}
 
+						return &TypeGuard{
+							VariableName: narrowingKey,
+							NarrowedType: narrowedType,
+							IsNegated:    isNegative,
+						}
+					}
+				}
+			}
+			// Reversed typeof check: "string" === typeof x
+			if typeofExpr, ok := infix.Right.(*parser.TypeofExpression); ok {
+				narrowingKey := expressionToNarrowingKey(typeofExpr.Operand)
+				if narrowingKey != "" {
+					if typeString, ok := staticStringLiteralValue(infix.Left); ok {
+						narrowedType := typeFromTypeofString(typeString)
+						if narrowedType == nil {
+							return nil
+						}
 						return &TypeGuard{
 							VariableName: narrowingKey,
 							NarrowedType: narrowedType,
@@ -422,6 +435,34 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 		}
 	}
 	return nil
+}
+
+func typeFromTypeofString(typeString string) types.Type {
+	switch typeString {
+	case "string":
+		return types.String
+	case "number":
+		return types.Number
+	case "boolean":
+		return types.Boolean
+	case "object":
+		return &types.ObjectTypeMarker{}
+	case "function":
+		return &types.ObjectType{
+			CallSignatures: []*types.Signature{
+				{
+					ParameterTypes: []types.Type{},
+					ReturnType:     types.Any,
+					OptionalParams: []bool{},
+					IsVariadic:     false,
+				},
+			},
+		}
+	case "undefined":
+		return types.Undefined
+	default:
+		return nil
+	}
 }
 
 // literalToType converts a literal expression to its corresponding literal type

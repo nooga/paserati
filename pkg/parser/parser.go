@@ -1647,6 +1647,10 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 		if p.curTokenIs(lexer.SPREAD) {
 			// Parse rest element: '...T[]'
 			p.nextToken() // Move past '...' to the type
+			if p.isTupleElementLabelStart() && p.peekTokenIs(lexer.COLON) {
+				p.nextToken() // Move to ':'
+				p.nextToken() // Move to the rest element type
+			}
 
 			restType := p.parseTypeExpression()
 			if restType == nil {
@@ -1675,7 +1679,21 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 			break
 		}
 
-		// Parse regular element type
+		// Parse regular element type. Named tuple elements are type metadata only
+		// for our checker, so discard the label and keep the element type.
+		labelIsOptional := false
+		if p.isTupleElementLabelStart() {
+			if p.peekTokenIs(lexer.COLON) {
+				p.nextToken() // Move to ':'
+				p.nextToken() // Move to the element type
+			} else if p.peekTokenIs(lexer.QUESTION) && p.peekTokenIs2(lexer.COLON) {
+				labelIsOptional = true
+				p.nextToken() // Move to '?'
+				p.nextToken() // Move to ':'
+				p.nextToken() // Move to the element type
+			}
+		}
+
 		elemType := p.parseTypeExpression()
 		if elemType == nil {
 			return nil
@@ -1684,7 +1702,7 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 		tupleTypeExp.ElementTypes = append(tupleTypeExp.ElementTypes, elemType)
 
 		// Check for optional marker '?'
-		isOptional := false
+		isOptional := labelIsOptional
 		if p.peekTokenIs(lexer.QUESTION) {
 			isOptional = true
 			p.nextToken() // Consume '?'
@@ -1719,6 +1737,16 @@ func (p *Parser) parseTupleTypeExpression() Expression {
 		len(tupleTypeExp.ElementTypes), tupleTypeExp.RestElement != nil)
 
 	return tupleTypeExp
+}
+
+func (p *Parser) isTupleElementLabelStart() bool {
+	switch p.curToken.Type {
+	case lexer.IDENT, lexer.SET, lexer.GET, lexer.FROM, lexer.OF, lexer.AS,
+		lexer.ASYNC, lexer.STATIC, lexer.TYPE, lexer.READONLY,
+		lexer.OVERRIDE, lexer.ABSTRACT:
+		return true
+	}
+	return false
 }
 
 func (p *Parser) parseLetStatement() Statement {
@@ -7886,7 +7914,8 @@ func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
 func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
 	// Check for invalid access modifiers on interface type members (TS1070)
 	if (p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) ||
-		p.curTokenIs(lexer.PROTECTED) || p.curTokenIs(lexer.STATIC)) &&
+		p.curTokenIs(lexer.PROTECTED) || p.curTokenIs(lexer.STATIC) ||
+		p.curTokenIs(lexer.OVERRIDE)) &&
 		!p.peekTokenIs(lexer.LPAREN) && !p.peekTokenIs(lexer.QUESTION) &&
 		!p.peekTokenIs(lexer.COLON) && !p.peekTokenIs(lexer.SEMICOLON) &&
 		!p.peekTokenIs(lexer.RBRACE) && p.peekToken.Line == p.curToken.Line {
@@ -10935,6 +10964,10 @@ func (p *Parser) parseMappedTypeExpression(startToken *lexer.Token) Expression {
 		return nil
 	}
 	debugPrint("Parsed value type, cur: %s, peek: %s", p.curToken.Literal, p.peekToken.Literal)
+
+	if p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.COMMA) {
+		p.nextToken()
+	}
 
 	// Expect '}'
 	if !p.expectPeek(lexer.RBRACE) {

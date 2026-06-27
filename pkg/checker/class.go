@@ -623,10 +623,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 		if getter != nil {
 			c.setClassContext(className, types.AccessContextInstanceMethod)
 
-			// Validate override keyword usage for getter
-			if getter.IsOverride {
-				c.validateOverrideMethod(getter, superClass, className)
-			}
+			c.validateOverrideMethod(getter, superClass, className)
 
 			// TS2378: A 'get' accessor must return a value.
 			if getter.Value != nil && getter.Value.Body != nil && !bodyContainsReturn(getter.Value.Body) {
@@ -645,10 +642,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 		if setter != nil {
 			c.setClassContext(className, types.AccessContextInstanceMethod)
 
-			// Validate override keyword usage for setter
-			if setter.IsOverride {
-				c.validateOverrideMethod(setter, superClass, className)
-			}
+			c.validateOverrideMethod(setter, superClass, className)
 
 			methodType := c.inferMethodType(setter)
 			if objType, ok := methodType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
@@ -702,10 +696,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			// Set method context for access control checking
 			c.setClassContext(className, types.AccessContextInstanceMethod)
 
-			// Validate override keyword usage
-			if method.IsOverride {
-				c.validateOverrideMethod(method, superClass, className)
-			}
+			c.validateOverrideMethod(method, superClass, className)
 
 			methodType := c.inferMethodType(method)
 
@@ -747,10 +738,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			methodName := c.extractPropertyName(methodSig.Key)
 			c.setClassContext(className, types.AccessContextInstanceMethod)
 
-			// Validate override keyword usage for method signature
-			if methodSig.IsOverride {
-				c.validateOverrideMethodSignature(methodSig, superClass, className)
-			}
+			c.validateOverrideMethodSignature(methodSig, superClass, className)
 
 			// Validate the signature types
 			c.validateMethodSignature(methodSig)
@@ -786,6 +774,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	// Add properties to instance type (excluding static properties)
 	for _, prop := range body.Properties {
 		if !prop.IsStatic {
+			c.validateOverrideProperty(prop, className, instanceType)
 			propType := c.inferPropertyType(prop)
 
 			// Determine access level
@@ -967,21 +956,9 @@ func (c *Checker) checkMethodBodyWithContext(fn *parser.FunctionLiteral) {
 
 // validateOverrideMethod validates the usage of the override keyword
 func (c *Checker) validateOverrideMethod(method *parser.MethodDefinition, superClass parser.Expression, className string) {
-	// Basic validation: if there's no superclass, override doesn't make sense
 	methodName := c.extractPropertyName(method.Key)
-	if superClass == nil {
-		c.addError(method.Key, fmt.Sprintf("method '%s' uses 'override' but class '%s' does not extend any class", methodName, className))
-		return
-	}
-
-	// TODO: When inheritance is implemented, add:
-	// 1. Check if the method exists in the superclass
-	// 2. Check if the method signatures are compatible
-	// 3. Check if the method is not final/sealed
-	// 4. Check access modifier compatibility
-
-	debugPrintf("// [Checker Class] Override validation for method '%s' in class '%s' (inheritance not yet implemented)\n",
-		methodName, className)
+	c.validateClassMemberOverride(method.Key, methodName, method.IsStatic, method.IsOverride, false, className, c.currentClassInstanceType)
+	debugPrintf("// [Checker Class] Override validation for method '%s' in class '%s'\n", methodName, className)
 }
 
 // inferMethodTypeFromSignature creates a function type from a method signature (for abstract methods)
@@ -1007,17 +984,140 @@ func (c *Checker) inferMethodTypeFromSignature(methodSig *parser.MethodSignature
 
 // validateOverrideMethodSignature validates the usage of the override keyword for method signatures
 func (c *Checker) validateOverrideMethodSignature(methodSig *parser.MethodSignature, superClass parser.Expression, className string) {
-	// Basic validation: if there's no superclass, override doesn't make sense
 	methodName := c.extractPropertyName(methodSig.Key)
-	if superClass == nil {
-		c.addError(methodSig.Key, fmt.Sprintf("method signature '%s' uses 'override' but class '%s' does not extend any class", methodName, className))
+	c.validateClassMemberOverride(methodSig.Key, methodName, methodSig.IsStatic, methodSig.IsOverride, methodSig.IsAbstract, className, c.currentClassInstanceType)
+	debugPrintf("// [Checker Class] Override validation for method signature '%s' in class '%s'\n", methodName, className)
+}
+
+func (c *Checker) validateOverrideProperty(prop *parser.PropertyDefinition, className string, instanceType *types.ObjectType) {
+	if prop.IsDeclare && !prop.IsOverride {
+		return
+	}
+	propName := c.extractPropertyName(prop.Key)
+	c.validateClassMemberOverride(prop.Key, propName, prop.IsStatic, prop.IsOverride, false, className, instanceType)
+	debugPrintf("// [Checker Class] Override validation for property '%s' in class '%s'\n", propName, className)
+}
+
+func (c *Checker) validateClassMemberOverride(node parser.Node, memberName string, isStatic, hasOverride, currentIsAbstract bool, className string, instanceType *types.ObjectType) {
+	if memberName == "" || instanceType == nil || instanceType.ClassMeta == nil {
 		return
 	}
 
-	// TODO: When inheritance is implemented, add similar validation as for method definitions
+	if instanceType.ClassMeta.SuperClassName == "" {
+		if hasOverride {
+			c.addError(node, fmt.Sprintf("This member cannot have an 'override' modifier because class '%s' does not extend another class.", className))
+		}
+		return
+	}
 
-	debugPrintf("// [Checker Class] Override validation for method signature '%s' in class '%s' (inheritance not yet implemented)\n",
-		methodName, className)
+	baseName, inherited := c.hasInheritedClassMember(instanceType, memberName, isStatic)
+	if hasOverride {
+		if !inherited {
+			c.addError(node, fmt.Sprintf("This member cannot have an 'override' modifier because it is not declared in the base class '%s'.", baseName))
+		}
+		return
+	}
+
+	if c.noImplicitOverride && inherited {
+		if !currentIsAbstract && c.inheritedAbstractClassMember(instanceType, memberName, isStatic) {
+			return
+		}
+		c.addError(node, fmt.Sprintf("This member must have an 'override' modifier because it overrides a member in the base class '%s'.", baseName))
+	}
+}
+
+func (c *Checker) inheritedAbstractClassMember(instanceType *types.ObjectType, memberName string, isStatic bool) bool {
+	if isStatic || instanceType == nil {
+		return false
+	}
+
+	visited := make(map[*types.ObjectType]bool)
+	var visit func(*types.ObjectType) bool
+	visit = func(obj *types.ObjectType) bool {
+		if obj == nil || visited[obj] {
+			return false
+		}
+		visited[obj] = true
+
+		if obj.ClassMeta != nil {
+			if methods := c.abstractMethods[obj.ClassMeta.ClassName]; methods != nil && methods[memberName] {
+				return true
+			}
+		}
+		for _, baseType := range obj.BaseTypes {
+			if baseObj, ok := baseType.(*types.ObjectType); ok && visit(baseObj) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, baseType := range instanceType.BaseTypes {
+		if baseObj, ok := baseType.(*types.ObjectType); ok && visit(baseObj) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Checker) hasInheritedClassMember(instanceType *types.ObjectType, memberName string, isStatic bool) (string, bool) {
+	if instanceType == nil || instanceType.ClassMeta == nil || instanceType.ClassMeta.SuperClassName == "" {
+		return "", false
+	}
+	baseName := instanceType.ClassMeta.SuperClassName
+	visited := make(map[*types.ObjectType]bool)
+
+	if isStatic {
+		if baseCtor, ok := instanceType.ClassMeta.SuperConstructorType.(*types.ObjectType); ok {
+			return baseName, c.objectTypeHasClassMember(baseCtor, memberName, true, visited)
+		}
+		return baseName, false
+	}
+
+	for _, baseType := range instanceType.BaseTypes {
+		if baseObj, ok := baseType.(*types.ObjectType); ok {
+			if c.objectTypeHasClassMember(baseObj, memberName, false, visited) {
+				return baseName, true
+			}
+		}
+	}
+	return baseName, false
+}
+
+func (c *Checker) objectTypeHasClassMember(obj *types.ObjectType, memberName string, isStatic bool, visited map[*types.ObjectType]bool) bool {
+	if obj == nil || visited[obj] {
+		return false
+	}
+	visited[obj] = true
+
+	if _, ok := obj.Properties[memberName]; ok {
+		return true
+	}
+	if obj.ClassMeta != nil {
+		if info := obj.ClassMeta.GetMemberAccess(memberName); info != nil && info.IsStatic == isStatic {
+			return true
+		}
+	}
+
+	if isStatic {
+		if obj.ClassMeta != nil {
+			if baseCtor, ok := obj.ClassMeta.SuperConstructorType.(*types.ObjectType); ok {
+				if c.objectTypeHasClassMember(baseCtor, memberName, true, visited) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	for _, baseType := range obj.BaseTypes {
+		if baseObj, ok := baseType.(*types.ObjectType); ok {
+			if c.objectTypeHasClassMember(baseObj, memberName, false, visited) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // createConstructorSignatures creates the externally visible signatures for the class constructor.
@@ -1028,6 +1128,7 @@ func (c *Checker) createConstructorSignatures(body *parser.ClassBody, instanceTy
 		signatures := make([]*types.Signature, 0, len(body.ConstructorSigs))
 		for _, sig := range body.ConstructorSigs {
 			signatures = append(signatures, &types.Signature{
+				ParameterNames:    parameterNameStrings(sig.Parameters),
 				ParameterTypes:    c.extractParameterTypesFromSignature(sig),
 				ReturnType:        instanceType,
 				OptionalParams:    c.extractOptionalParamsFromSignature(sig),
@@ -1135,6 +1236,7 @@ func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
 	restParameterType := c.extractRestParameterType(method.Value)
 
 	signature := &types.Signature{
+		ParameterNames:    parameterNameStrings(method.Value.Parameters),
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
 		OptionalParams:    optionalParams,
@@ -1214,12 +1316,17 @@ func (c *Checker) getAccessLevel(isPublic, isPrivate, isProtected bool) types.Ac
 func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *types.ObjectType, instanceType ...*types.ObjectType) *types.ObjectType {
 	// Get the class name from constructor metadata
 	className := constructorType.GetClassName()
+	var classInstanceType *types.ObjectType
+	if len(instanceType) > 0 {
+		classInstanceType = instanceType[0]
+	}
 
 	// Add static methods
 	for _, method := range body.Methods {
 		if method.IsStatic && method.Kind != "constructor" {
 			// Set static method context for access control checking
 			c.setClassContext(className, types.AccessContextStaticMethod)
+			c.validateClassMemberOverride(method.Key, c.extractPropertyName(method.Key), true, method.IsOverride, false, className, classInstanceType)
 
 			methodType := c.inferMethodType(method)
 
@@ -1244,12 +1351,13 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 	c.setClassContext(className, types.AccessContextStaticMethod)
 	// Set currentClassInstanceType so super expression check can find the class.
 	prevStaticInstanceType := c.currentClassInstanceType
-	if len(instanceType) > 0 && instanceType[0] != nil {
-		c.currentClassInstanceType = instanceType[0]
+	if classInstanceType != nil {
+		c.currentClassInstanceType = classInstanceType
 	}
 	defer func() { c.currentClassInstanceType = prevStaticInstanceType }()
 	for _, prop := range body.Properties {
 		if prop.IsStatic {
+			c.validateOverrideProperty(prop, className, classInstanceType)
 			propType := c.inferPropertyType(prop)
 
 			// Determine access level

@@ -413,9 +413,10 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 			case *types.ObjectType:
 				if foundPropType, exists := rhsType.Properties[propName]; exists {
 					propType = foundPropType
+				} else if prop.Default == nil {
+					c.addError(prop.Key, fmt.Sprintf("property '%s' does not exist on type %s", propName, rhsType.String()))
 				} else {
 					// Property doesn't exist on object - will be undefined at runtime
-					// In TypeScript, this is allowed but results in undefined
 					propType = types.Undefined
 				}
 			}

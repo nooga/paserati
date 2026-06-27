@@ -3604,10 +3604,10 @@ func (cpn *ComputedPropertyName) String() string       { return "[" + cpn.Expr.S
 // PropertyDefinition represents a property declaration in a class
 type PropertyDefinition struct {
 	BaseExpression
-	Token          *lexer.Token // The property name token
-	Key            Expression   // Property name (Identifier or ComputedPropertyName)
-	TypeAnnotation Expression   // Type annotation (can be nil)
-	Value          Expression   // Initializer expression (can be nil)
+	Token              *lexer.Token // The property name token
+	Key                Expression   // Property name (Identifier or ComputedPropertyName)
+	TypeAnnotation     Expression   // Type annotation (can be nil)
+	Value              Expression   // Initializer expression (can be nil)
 	IsStatic           bool         // For static property support
 	Optional           bool         // Whether the property is optional (prop?)
 	Readonly           bool         // Whether the property is readonly
@@ -3615,6 +3615,8 @@ type PropertyDefinition struct {
 	IsPublic           bool         // For public access modifier
 	IsPrivate          bool         // For private access modifier
 	IsProtected        bool         // For private access modifier
+	IsOverride         bool         // For override keyword
+	IsDeclare          bool         // For declare keyword
 	Decorators         []*Decorator // Decorators applied to this property
 }
 
@@ -3633,6 +3635,9 @@ func (pd *PropertyDefinition) String() string {
 
 	if pd.Readonly {
 		out.WriteString("readonly ")
+	}
+	if pd.IsOverride {
+		out.WriteString("override ")
 	}
 	if pd.IsStatic {
 		out.WriteString("static ")

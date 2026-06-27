@@ -579,6 +579,7 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 
 	// Create signature
 	sig := &types.Signature{
+		ParameterNames:    functionTypeParameterNameStrings(node.Parameters),
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
 		OptionalParams:    node.OptionalParams,
@@ -662,6 +663,8 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 
 	// Create the function signature
 	sig := &types.Signature{
+		TypeParameters:    typeParams,
+		ParameterNames:    functionTypeParameterNameStrings(node.Parameters),
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
 		OptionalParams:    node.OptionalParams,
@@ -1112,12 +1115,17 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 
 	// Return a unified Signature
 	return &types.Signature{
+		ParameterNames:    parameterNameStrings(node.Parameters),
 		ParameterTypes:    paramTypes,
 		ReturnType:        resolvedReturnType, // Use the value assigned outside the if
 		OptionalParams:    optionalParams,
 		IsVariadic:        node.RestParameter != nil,
 		RestParameterType: restParameterType,
 	}
+}
+
+func functionTypeParameterNameStrings(params []parser.Expression) []string {
+	return nil
 }
 
 // instantiateGenericType creates a concrete type by substituting type arguments
@@ -1297,6 +1305,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 
 				result.CallSignatures[i] = &types.Signature{
 					TypeParameters:    sig.TypeParameters,
+					ParameterNames:    sig.ParameterNames,
 					ParameterTypes:    newParamTypes,
 					ReturnType:        newReturnType,
 					OptionalParams:    sig.OptionalParams, // Copy optional flags
@@ -1320,6 +1329,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 
 				result.ConstructSignatures[i] = &types.Signature{
 					TypeParameters:    sig.TypeParameters,
+					ParameterNames:    sig.ParameterNames,
 					ParameterTypes:    newParamTypes,
 					ReturnType:        newReturnType,
 					OptionalParams:    sig.OptionalParams,
@@ -2644,6 +2654,7 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 
 				newSigs[i] = &types.Signature{
 					TypeParameters:    sig.TypeParameters,
+					ParameterNames:    sig.ParameterNames,
 					ParameterTypes:    newParamTypes,
 					ReturnType:        newReturnType,
 					OptionalParams:    sig.OptionalParams,

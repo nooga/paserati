@@ -17,7 +17,7 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 	// Note: We use c.env which IS the globalEnv during Pass 1
 	// If the type exists but is a forward reference placeholder from Pass 0, we should continue
 	// to resolve the actual type
-	if existingType, exists := c.env.ResolveType(node.Name.Value); exists {
+	if existingType, exists := c.env.ResolveTypeLocal(node.Name.Value); exists {
 		if _, isForwardRef := existingType.(*types.TypeAliasForwardReference); !isForwardRef {
 			debugPrintf("// [Checker TypeAlias P1] Alias '%s' already defined? Skipping.\n", node.Name.Value)
 			return // Should not happen if parser prevents duplicates
@@ -178,7 +178,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	// same name are merged (TypeScript declaration merging). Each new declaration adds its
 	// members to the same ObjectType.
 	var interfaceType *types.ObjectType
-	if existingType, exists := c.env.ResolveType(node.Name.Value); exists {
+	if existingType, exists := c.env.ResolveTypeLocal(node.Name.Value); exists {
 		if objType, ok := existingType.(*types.ObjectType); ok {
 			// Merge into the existing interface type (declaration merging).
 			interfaceType = objType
@@ -334,10 +334,11 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 
 			// Check if we're overriding an inherited property
 			if existingType, exists := properties[prop.Name.Value]; exists {
-				// Verify that the override is compatible (for now, just log a debug message)
+				if mergedType, merged := mergeInterfaceFunctionMemberTypes(existingType, propType); merged {
+					propType = mergedType
+				}
 				debugPrintf("// [Checker Interface P1] Interface '%s' overrides property '%s' (was: %s, now: %s)\n",
 					node.Name.Value, prop.Name.Value, existingType.String(), propType.String())
-				// TODO: Add stricter type compatibility checking for overrides if needed
 			}
 
 			properties[prop.Name.Value] = propType
@@ -367,20 +368,46 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	debugPrintf("// [Checker Interface P1] Processing generic interface '%s' with %d type parameters\n",
 		node.Name.Value, len(node.TypeParameters))
 
-	// 1. Create and register type parameters before resolving constraints.
-	// TypeScript permits later parameters in earlier constraints, e.g. <T extends U, U>.
-	typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
-	for i, param := range node.TypeParameters {
-		typeParams[i] = &types.TypeParameter{
-			Name:       param.Name.Value,
-			Constraint: types.Any,
-			Index:      i,
+	var existingGeneric *types.GenericType
+	var bodyType *types.ObjectType
+	if existingType, exists := c.env.ResolveTypeLocal(node.Name.Value); exists {
+		switch existing := existingType.(type) {
+		case *types.GenericType:
+			existingGeneric = existing
+			if len(existing.TypeParameters) != len(node.TypeParameters) {
+				c.addError(node.Name, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
+				return
+			}
+			if existingBody, ok := existing.Body.(*types.ObjectType); ok {
+				bodyType = existingBody
+			}
+		case *types.ObjectType:
+			c.addError(node.Name, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
+			return
 		}
-		param.SetComputedType(&types.TypeParameterType{Parameter: typeParams[i]})
 	}
 
-	// 2. Create the body ObjectType with TypeParameterType references
-	// This is a template that will be instantiated with concrete types later
+	// 1. Create or reuse type parameters before resolving constraints.
+	// TypeScript permits later parameters in earlier constraints, e.g. <T extends U, U>.
+	typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
+	if existingGeneric != nil {
+		typeParams = existingGeneric.TypeParameters
+		for i, param := range node.TypeParameters {
+			if param.Name.Value != typeParams[i].Name {
+				c.addError(param.Name, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
+			}
+			param.SetComputedType(&types.TypeParameterType{Parameter: typeParams[i]})
+		}
+	} else {
+		for i, param := range node.TypeParameters {
+			typeParams[i] = &types.TypeParameter{
+				Name:       param.Name.Value,
+				Constraint: types.Any,
+				Index:      i,
+			}
+			param.SetComputedType(&types.TypeParameterType{Parameter: typeParams[i]})
+		}
+	}
 
 	// Create a new environment with type parameters available as TypeParameterType
 	genericEnv := NewEnclosedEnvironment(c.env)
@@ -400,12 +427,18 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		if param.Constraint != nil {
 			c.checkTypeRefDefined(param.Constraint)
 			if constraintType := c.resolveTypeAnnotation(param.Constraint); constraintType != nil {
+				if existingGeneric != nil && typeParam.Constraint != nil && !typeParam.Constraint.Equals(constraintType) {
+					c.addError(param.Constraint, fmt.Sprintf("All declarations of '%s' must have identical type parameter constraints.", node.Name.Value))
+				}
 				typeParam.Constraint = constraintType
 			}
 		}
 
 		if param.DefaultType != nil {
 			if defaultType := c.resolveTypeAnnotation(param.DefaultType); defaultType != nil {
+				if existingGeneric != nil && typeParam.Default != nil && !typeParam.Default.Equals(defaultType) {
+					c.addError(param.DefaultType, fmt.Sprintf("All declarations of '%s' must have identical type parameter defaults.", node.Name.Value))
+				}
 				typeParam.Default = defaultType
 
 				if typeParam.Constraint != nil && !types.IsAssignable(defaultType, typeParam.Constraint) {
@@ -421,16 +454,22 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	c.env = genericEnv
 
 	// Build the ObjectType body with TypeParameterType references
-	properties := make(map[string]types.Type)
-	optionalProperties := make(map[string]bool)
-	var indexSignatures []*types.IndexSignature
-	var callSignatures []*types.Signature
-	bodyType := &types.ObjectType{
-		Properties:         properties,
-		OptionalProperties: optionalProperties,
-		IndexSignatures:    indexSignatures,
-		CallSignatures:     callSignatures,
+	if bodyType == nil {
+		bodyType = &types.ObjectType{
+			Properties:         make(map[string]types.Type),
+			OptionalProperties: make(map[string]bool),
+		}
 	}
+	if bodyType.Properties == nil {
+		bodyType.Properties = make(map[string]types.Type)
+	}
+	if bodyType.OptionalProperties == nil {
+		bodyType.OptionalProperties = make(map[string]bool)
+	}
+	properties := bodyType.Properties
+	optionalProperties := bodyType.OptionalProperties
+	indexSignatures := bodyType.IndexSignatures
+	callSignatures := bodyType.CallSignatures
 	c.currentThisType = bodyType
 
 	// Handle extends clause with generic environment
@@ -499,6 +538,11 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			if propType == nil {
 				propType = types.Any
 			}
+			if existingType, exists := properties[prop.Name.Value]; exists {
+				if mergedType, merged := mergeInterfaceFunctionMemberTypes(existingType, propType); merged {
+					propType = mergedType
+				}
+			}
 			properties[prop.Name.Value] = propType
 			if prop.Optional {
 				optionalProperties[prop.Name.Value] = true
@@ -512,6 +556,13 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	// Restore environment
 	c.env = savedEnv
 	c.currentThisType = savedThisType
+
+	if existingGeneric != nil {
+		existingGeneric.Body = bodyType
+		debugPrintf("// [Checker Interface P1] Merged generic interface '%s' with %d type parameters in env %p\n",
+			node.Name.Value, len(typeParams), c.env)
+		return
+	}
 
 	// 3. Create the GenericType
 	genericType := &types.GenericType{
@@ -527,6 +578,34 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		debugPrintf("// [Checker Interface P1] Defined generic interface '%s' with %d type parameters in env %p\n",
 			node.Name.Value, len(typeParams), c.env)
 	}
+}
+
+func mergeInterfaceFunctionMemberTypes(existingType, incomingType types.Type) (types.Type, bool) {
+	existingSigs, existingOK := interfaceMemberCallSignatures(existingType)
+	incomingSigs, incomingOK := interfaceMemberCallSignatures(incomingType)
+	if !existingOK || !incomingOK {
+		return nil, false
+	}
+
+	merged := types.NewObjectType()
+	merged.CallSignatures = append(merged.CallSignatures, existingSigs...)
+	merged.CallSignatures = append(merged.CallSignatures, incomingSigs...)
+	return merged, true
+}
+
+func interfaceMemberCallSignatures(t types.Type) ([]*types.Signature, bool) {
+	switch typ := t.(type) {
+	case *types.ObjectType:
+		if len(typ.CallSignatures) == 0 {
+			return nil, false
+		}
+		return typ.CallSignatures, true
+	case *types.GenericType:
+		if body, ok := typ.Body.(*types.ObjectType); ok && len(body.CallSignatures) > 0 {
+			return body.CallSignatures, true
+		}
+	}
+	return nil, false
 }
 
 func (c *Checker) rebindThisType(t types.Type, from *types.ObjectType, to *types.ObjectType) types.Type {
@@ -632,6 +711,8 @@ func (c *Checker) rebindSignaturesThisType(signatures []*types.Signature, from *
 			newParamTypes[j] = c.rebindThisTypeWithVisited(paramType, from, to, visited)
 		}
 		result[i] = &types.Signature{
+			TypeParameters:    sig.TypeParameters,
+			ParameterNames:    sig.ParameterNames,
 			ParameterTypes:    newParamTypes,
 			ReturnType:        c.rebindThisTypeWithVisited(sig.ReturnType, from, to, visited),
 			OptionalParams:    sig.OptionalParams,

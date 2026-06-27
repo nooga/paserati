@@ -215,7 +215,7 @@ func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, ex
 }
 
 // checkDestructuringTargetForDeclaration handles type checking and environment definition for destructuring targets in declarations
-func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expression, expectedType types.Type, isConst bool) {
+func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expression, expectedType types.Type, isConst bool, allowRedeclare bool) {
 	switch targetNode := target.(type) {
 	case *parser.Identifier:
 		// Simple identifier target - define in environment with refined type
@@ -233,21 +233,25 @@ func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expressio
 		}
 
 		if !c.env.Define(targetNode.Value, finalType, isConst) {
-			c.addError(targetNode, fmt.Sprintf("identifier '%s' already declared", targetNode.Value))
+			if allowRedeclare {
+				c.env.Update(targetNode.Value, finalType)
+			} else {
+				c.addError(targetNode, fmt.Sprintf("identifier '%s' already declared", targetNode.Value))
+			}
 		}
 		targetNode.SetComputedType(finalType)
 	case *parser.ArrayLiteral:
 		// Nested array destructuring declaration
-		c.checkNestedArrayTargetForDeclaration(targetNode, expectedType, isConst)
+		c.checkNestedArrayTargetForDeclaration(targetNode, expectedType, isConst, allowRedeclare)
 	case *parser.ObjectLiteral:
 		// Nested object destructuring declaration
-		c.checkNestedObjectTargetForDeclaration(targetNode, expectedType, isConst)
+		c.checkNestedObjectTargetForDeclaration(targetNode, expectedType, isConst, allowRedeclare)
 	case *parser.ArrayParameterPattern:
 		// Parameter patterns in declarations (shouldn't happen normally, but handle for consistency)
-		c.checkNestedArrayParameterPatternForDeclaration(targetNode, expectedType, isConst)
+		c.checkNestedArrayParameterPatternForDeclaration(targetNode, expectedType, isConst, allowRedeclare)
 	case *parser.ObjectParameterPattern:
 		// Parameter patterns in declarations (shouldn't happen normally, but handle for consistency)
-		c.checkNestedObjectParameterPatternForDeclaration(targetNode, expectedType, isConst)
+		c.checkNestedObjectParameterPatternForDeclaration(targetNode, expectedType, isConst, allowRedeclare)
 	case *parser.UndefinedLiteral:
 		// Elision in destructuring - no type checking needed, just skip this element
 		return
@@ -265,7 +269,7 @@ func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expressio
 }
 
 // checkNestedArrayTargetForDeclaration handles type checking for nested array destructuring in declarations
-func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.ArrayLiteral, expectedType types.Type, isConst bool) {
+func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.ArrayLiteral, expectedType types.Type, isConst bool, allowRedeclare bool) {
 	// Validate that expectedType is array-like
 	widenedType := types.GetWidenedType(expectedType)
 	var elementType types.Type
@@ -281,7 +285,7 @@ func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.Array
 			} else {
 				elemType = types.Undefined
 			}
-			c.checkDestructuringTargetForDeclaration(element, elemType, isConst)
+			c.checkDestructuringTargetForDeclaration(element, elemType, isConst, allowRedeclare)
 		}
 		return
 	} else if unionType, ok := expectedType.(*types.UnionType); ok {
@@ -299,7 +303,7 @@ func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.Array
 
 		if arrayLikeType != nil {
 			// Recursively check with the array-like type from the union
-			c.checkNestedArrayTargetForDeclaration(arrayTarget, arrayLikeType, isConst)
+			c.checkNestedArrayTargetForDeclaration(arrayTarget, arrayLikeType, isConst, allowRedeclare)
 			return
 		}
 
@@ -314,12 +318,12 @@ func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.Array
 
 	// For regular array types, check each element with the same element type
 	for _, element := range arrayTarget.Elements {
-		c.checkDestructuringTargetForDeclaration(element, elementType, isConst)
+		c.checkDestructuringTargetForDeclaration(element, elementType, isConst, allowRedeclare)
 	}
 }
 
 // checkNestedObjectTargetForDeclaration handles type checking for nested object destructuring in declarations
-func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.ObjectLiteral, expectedType types.Type, isConst bool) {
+func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.ObjectLiteral, expectedType types.Type, isConst bool, allowRedeclare bool) {
 	// Validate that expectedType is object-like
 	widenedType := types.GetWidenedType(expectedType)
 
@@ -380,12 +384,12 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 				}
 			}
 
-			c.checkDestructuringTargetForDeclaration(prop.Value, propType, isConst)
+			c.checkDestructuringTargetForDeclaration(prop.Value, propType, isConst, allowRedeclare)
 		}
 	} else {
 		// For Any type, all nested targets get Any type
 		for _, prop := range objectTarget.Properties {
-			c.checkDestructuringTargetForDeclaration(prop.Value, types.Any, isConst)
+			c.checkDestructuringTargetForDeclaration(prop.Value, types.Any, isConst, allowRedeclare)
 		}
 	}
 }
@@ -466,7 +470,7 @@ func (c *Checker) checkNestedObjectParameterPattern(pattern *parser.ObjectParame
 }
 
 // checkNestedArrayParameterPatternForDeclaration handles type checking for nested array parameter patterns in declarations
-func (c *Checker) checkNestedArrayParameterPatternForDeclaration(pattern *parser.ArrayParameterPattern, expectedType types.Type, isConst bool) {
+func (c *Checker) checkNestedArrayParameterPatternForDeclaration(pattern *parser.ArrayParameterPattern, expectedType types.Type, isConst bool, allowRedeclare bool) {
 	widenedType := types.GetWidenedType(expectedType)
 	var elementType types.Type
 
@@ -480,12 +484,12 @@ func (c *Checker) checkNestedArrayParameterPatternForDeclaration(pattern *parser
 		if elem == nil || elem.Target == nil {
 			continue
 		}
-		c.checkDestructuringTargetForDeclaration(elem.Target, elementType, isConst)
+		c.checkDestructuringTargetForDeclaration(elem.Target, elementType, isConst, allowRedeclare)
 	}
 }
 
 // checkNestedObjectParameterPatternForDeclaration handles type checking for nested object parameter patterns in declarations
-func (c *Checker) checkNestedObjectParameterPatternForDeclaration(pattern *parser.ObjectParameterPattern, expectedType types.Type, isConst bool) {
+func (c *Checker) checkNestedObjectParameterPatternForDeclaration(pattern *parser.ObjectParameterPattern, expectedType types.Type, isConst bool, allowRedeclare bool) {
 	widenedType := types.GetWidenedType(expectedType)
 
 	if widenedType != types.Any {
@@ -497,9 +501,9 @@ func (c *Checker) checkNestedObjectParameterPatternForDeclaration(pattern *parse
 					continue
 				}
 				if prop.Target != nil {
-					c.checkDestructuringTargetForDeclaration(prop.Target, types.Any, isConst)
+					c.checkDestructuringTargetForDeclaration(prop.Target, types.Any, isConst, allowRedeclare)
 				} else {
-					c.checkDestructuringTargetForDeclaration(prop.Key, types.Any, isConst)
+					c.checkDestructuringTargetForDeclaration(prop.Key, types.Any, isConst, allowRedeclare)
 				}
 			}
 			return
@@ -521,9 +525,9 @@ func (c *Checker) checkNestedObjectParameterPatternForDeclaration(pattern *parse
 			}
 
 			if prop.Target != nil {
-				c.checkDestructuringTargetForDeclaration(prop.Target, propType, isConst)
+				c.checkDestructuringTargetForDeclaration(prop.Target, propType, isConst, allowRedeclare)
 			} else {
-				c.checkDestructuringTargetForDeclaration(prop.Key, propType, isConst)
+				c.checkDestructuringTargetForDeclaration(prop.Key, propType, isConst, allowRedeclare)
 			}
 		}
 	} else {
@@ -533,9 +537,9 @@ func (c *Checker) checkNestedObjectParameterPatternForDeclaration(pattern *parse
 				continue
 			}
 			if prop.Target != nil {
-				c.checkDestructuringTargetForDeclaration(prop.Target, types.Any, isConst)
+				c.checkDestructuringTargetForDeclaration(prop.Target, types.Any, isConst, allowRedeclare)
 			} else {
-				c.checkDestructuringTargetForDeclaration(prop.Key, types.Any, isConst)
+				c.checkDestructuringTargetForDeclaration(prop.Key, types.Any, isConst, allowRedeclare)
 			}
 		}
 	}

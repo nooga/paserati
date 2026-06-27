@@ -382,6 +382,17 @@ func (e *Environment) ResolveType(name string) (types.Type, bool) {
 	return nil, false
 }
 
+// ResolveTypeLocal looks up a type alias only in the current scope. Declaration
+// merging uses this so a nested namespace/interface does not accidentally merge
+// with an outer declaration of the same name.
+func (e *Environment) ResolveTypeLocal(name string) (types.Type, bool) {
+	if e == nil || e.typeAliases == nil {
+		return nil, false
+	}
+	typ, ok := e.typeAliases[name]
+	return typ, ok
+}
+
 // GetAllTypeAliases returns all type aliases in the current environment (not including outer scopes)
 func (e *Environment) GetAllTypeAliases() map[string]types.Type {
 	if e.typeAliases == nil {

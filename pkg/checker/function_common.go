@@ -228,6 +228,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 
 	signature := &types.Signature{
 		TypeParameters:    c.signatureTypeParameters(ctx.TypeParameters),
+		ParameterNames:    parameterNameStrings(ctx.Parameters),
 		ParameterTypes:    paramTypes,
 		ReturnType:        expectedReturnType,
 		OptionalParams:    optionalParams,
@@ -362,6 +363,7 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 
 	// 5. Create preliminary signature
 	signature := &types.Signature{
+		ParameterNames:    parameterNameStrings(ctx.Parameters),
 		ParameterTypes:    paramTypes,
 		ReturnType:        returnType,
 		OptionalParams:    optionalParams,
@@ -492,6 +494,9 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 					sourceType = c.getAwaitedType(sourceType)
 					targetType = c.getAwaitedType(targetType)
 				}
+				if _, ok := targetType.(*types.TypePredicateType); ok {
+					targetType = types.Boolean
+				}
 				if !c.isAssignableWithExpansion(sourceType, targetType) {
 					c.addError(exprBody, fmt.Sprintf("cannot return expression of type '%s' from arrow function with return type annotation '%s'", bodyType.String(), expectedReturnType.String()))
 				}
@@ -550,6 +555,7 @@ func (c *Checker) createFinalFunctionType(ctx *FunctionCheckContext, paramTypes 
 	// Create final signature
 	sig := &types.Signature{
 		TypeParameters:    c.signatureTypeParameters(ctx.TypeParameters),
+		ParameterNames:    parameterNameStrings(ctx.Parameters),
 		ParameterTypes:    paramTypes,
 		ReturnType:        finalReturnType,
 		OptionalParams:    optionalParams,
@@ -559,6 +565,19 @@ func (c *Checker) createFinalFunctionType(ctx *FunctionCheckContext, paramTypes 
 
 	// Create unified ObjectType with call signature
 	return types.NewFunctionType(sig)
+}
+
+func parameterNameStrings(params []*parser.Parameter) []string {
+	if len(params) == 0 {
+		return nil
+	}
+	names := make([]string, len(params))
+	for i, param := range params {
+		if param != nil && param.Name != nil {
+			names[i] = param.Name.Value
+		}
+	}
+	return names
 }
 
 func (c *Checker) signatureTypeParameters(typeParamNodes []*parser.TypeParameter) []*types.TypeParameter {

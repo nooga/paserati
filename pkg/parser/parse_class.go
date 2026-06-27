@@ -395,11 +395,19 @@ func (p *Parser) parseClassBody() *ClassBody {
 		// Parse all modifiers until we hit something that's not a modifier
 		hasAccessibility := false
 		isDeclare := false
+		seenAsync := false
+		seenOverride := false
 		for {
 			if p.curTokenIs(lexer.READONLY) && !isReadonly && !isFieldName() {
+				if seenOverride {
+					p.addError(p.curToken, "'override' modifier must precede 'readonly' modifier.")
+				}
 				isReadonly = true
 				p.nextToken()
 			} else if p.curTokenIs(lexer.STATIC) && !isStatic && !isFieldName() {
+				if seenOverride {
+					p.addError(p.curToken, "'static' modifier must precede 'override' modifier.")
+				}
 				isStatic = true
 				p.nextToken()
 			} else if p.curTokenIs(lexer.STATIC) && isStatic && !isFieldName() {
@@ -421,6 +429,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 				if isStatic {
 					p.addError(p.curToken, fmt.Sprintf("'%s' modifier must precede 'static' modifier.", p.curToken.Literal))
 				}
+				if seenOverride {
+					p.addError(p.curToken, fmt.Sprintf("'%s' modifier must precede 'override' modifier.", p.curToken.Literal))
+				}
 				hasAccessibility = true
 				if p.curTokenIs(lexer.PUBLIC) {
 					isPublic = true
@@ -431,13 +442,21 @@ func (p *Parser) parseClassBody() *ClassBody {
 				}
 				p.nextToken()
 			} else if p.curTokenIs(lexer.ABSTRACT) && !isAbstract && !isFieldName() {
+				if seenOverride {
+					p.addError(p.curToken, "'abstract' modifier must precede 'override' modifier.")
+				}
 				isAbstract = true
 				p.nextToken()
 			} else if p.curTokenIs(lexer.OVERRIDE) && !isOverride && !isFieldName() {
+				if seenAsync {
+					p.addError(p.curToken, "'override' modifier must precede 'async' modifier.")
+				}
 				isOverride = true
+				seenOverride = true
 				p.nextToken()
 			} else if p.curTokenIs(lexer.ASYNC) && !isAsync && !isFieldName() {
 				isAsync = true
+				seenAsync = true
 				p.nextToken()
 			} else {
 				break // No more modifiers
@@ -620,7 +639,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 					}
 				} else {
 					// It's a property
-					property := p.parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProtected)
+					property := p.parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProtected, isOverride, isDeclare)
 					if property != nil {
 						attachDecorators(property)
 						properties = append(properties, property)
@@ -909,7 +928,7 @@ func (p *Parser) parseAsyncMethod(isStatic, isPublic, isPrivate, isProtected, is
 }
 
 // parseProperty parses a property declaration
-func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProtected bool) *PropertyDefinition {
+func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProtected, isOverride, isDeclare bool) *PropertyDefinition {
 	propertyToken := p.curToken
 	var propertyName Expression
 	if p.curToken.Type == lexer.STRING {
@@ -995,6 +1014,8 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 		IsPublic:           isPublic,
 		IsPrivate:          isPrivate,
 		IsProtected:        isProtected,
+		IsOverride:         isOverride,
+		IsDeclare:          isDeclare,
 	}
 }
 
@@ -1338,7 +1359,7 @@ func (p *Parser) parseComputedClassMember(isStatic, isReadonly, isPublic, isPriv
 		return p.parseComputedMethod(bracketToken, keyExpr, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, false)
 	} else {
 		// It's a computed property: [expr]: type = value or [expr] = value
-		return p.parseComputedProperty(bracketToken, keyExpr, isStatic, isReadonly, isPublic, isPrivate, isProtected)
+		return p.parseComputedProperty(bracketToken, keyExpr, isStatic, isReadonly, isPublic, isPrivate, isProtected, isOverride)
 	}
 }
 
@@ -1366,7 +1387,7 @@ func (p *Parser) parseComputedClassMemberAsync(isStatic, isReadonly, isPublic, i
 		return p.parseComputedMethod(bracketToken, keyExpr, isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, isAsync)
 	}
 	// Computed property (not method) — fall back to non-async handling
-	return p.parseComputedProperty(bracketToken, keyExpr, isStatic, isReadonly, isPublic, isPrivate, isProtected)
+	return p.parseComputedProperty(bracketToken, keyExpr, isStatic, isReadonly, isPublic, isPrivate, isProtected, isOverride)
 }
 
 // parseComputedMethod parses a computed method in a class
@@ -1486,7 +1507,7 @@ func (p *Parser) parseComputedMethod(bracketToken *lexer.Token, keyExpr Expressi
 }
 
 // parseComputedProperty parses a computed property in a class
-func (p *Parser) parseComputedProperty(bracketToken *lexer.Token, keyExpr Expression, isStatic, isReadonly, isPublic, isPrivate, isProtected bool) *PropertyDefinition {
+func (p *Parser) parseComputedProperty(bracketToken *lexer.Token, keyExpr Expression, isStatic, isReadonly, isPublic, isPrivate, isProtected, isOverride bool) *PropertyDefinition {
 	// Check for optional marker '?' or definite-assignment '!' (mutually exclusive)
 	var isOptional bool
 	var hasDefiniteAssignment bool
@@ -1553,6 +1574,7 @@ func (p *Parser) parseComputedProperty(bracketToken *lexer.Token, keyExpr Expres
 		IsPublic:           isPublic,
 		IsPrivate:          isPrivate,
 		IsProtected:        isProtected,
+		IsOverride:         isOverride,
 	}
 }
 

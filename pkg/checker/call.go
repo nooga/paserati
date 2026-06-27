@@ -1706,6 +1706,9 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			}
 			// After substitution, expand the mapped type to a concrete ObjectType
 			expanded := c.expandMappedType(substitutedMapped)
+			if expanded == nil {
+				return substitutedMapped
+			}
 			debugPrintf("// [Checker Substitute] Expanded mapped type: %s -> %s\n",
 				substitutedMapped.String(), expanded.String())
 			return expanded
@@ -1735,6 +1738,7 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 
 	return &types.Signature{
 		TypeParameters:    sig.TypeParameters,
+		ParameterNames:    sig.ParameterNames,
 		ParameterTypes:    newParamTypes,
 		ReturnType:        newReturnType,
 		OptionalParams:    sig.OptionalParams, // Copy as-is
@@ -1765,6 +1769,7 @@ func (c *Checker) substituteInSignature(sig *types.Signature, solution map[*type
 
 	return &types.Signature{
 		TypeParameters:    sig.TypeParameters,
+		ParameterNames:    sig.ParameterNames,
 		ParameterTypes:    newParamTypes,
 		ReturnType:        newReturnType,
 		OptionalParams:    sig.OptionalParams, // Copy as-is
