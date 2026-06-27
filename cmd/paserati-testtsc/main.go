@@ -328,6 +328,12 @@ func loadExpectedErrors(baselinesDir, baselineName string, directives TestDirect
 			return false, nil
 		}
 	}
+	// Some .errors.txt baselines contain only compiler-option or lib diagnostics
+	// while the test source itself has zero errors. Paserati only checks the
+	// source file here, so treat those as clean.
+	if baselineSourceErrorCount(content) == 0 {
+		return false, nil
+	}
 
 	var errors []ExpectedError
 	for _, line := range strings.Split(string(content), "\n") {
@@ -706,14 +712,9 @@ func createTscPaserati(directives TestDirectives) *driver.Paserati {
 }
 
 // strictPropertyInitEnabled gates TS2564. An explicit
-// `// @strictPropertyInitialization` directive wins, then `// @strict`. With NO
-// directive we default ON — which is deliberately *not* a bare `tsc`'s default
-// (off). TypeScript's conformance baselines for the class-property tests are
-// generated with strict effectively enabled, so defaulting on matches more of
-// them: measured, flipping the no-directive default to off regresses
-// conformance/classes 66.0% -> 58.8% (~34 expected-error tests stop matching)
-// while fixing only ~1 spurious over-report. Strict-by-default is the
-// empirically better gate for this corpus.
+// `// @strictPropertyInitialization` directive wins, then `// @strict`.
+// Without either directive, match TypeScript's default: strict property
+// initialization is off.
 func strictPropertyInitEnabled(d TestDirectives) bool {
 	if v, ok := d.Raw["strictpropertyinitialization"]; ok {
 		return v == "true"
@@ -721,7 +722,7 @@ func strictPropertyInitEnabled(d TestDirectives) bool {
 	if v, ok := d.Raw["strict"]; ok {
 		return v == "true"
 	}
-	return true
+	return false
 }
 
 // printSummary prints the final test summary
