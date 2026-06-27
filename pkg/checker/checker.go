@@ -3616,7 +3616,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
 			propName = keyIdent.Value
 			if objType != nil {
-				if pt, exists := objType.Properties[propName]; exists {
+				if pt, exists := c.resolveObjectMemberForDestructuring(objType, propName); exists {
 					propType = pt
 				} else if prop.Default == nil {
 					c.addError(prop.Key, fmt.Sprintf("property '%s' does not exist on type %s", propName, objType.String()))
