@@ -332,8 +332,12 @@ type WeakSetEntry struct {
 // Values must be objects and are held weakly, allowing GC.
 type WeakSetObject struct {
 	Object
-	entries map[uintptr]*WeakSetEntry // pointer address -> entry
+	entries   map[uintptr]*WeakSetEntry // pointer address -> entry
+	prototype Value                     // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
+
+func (ws *WeakSetObject) SetPrototype(p Value) { ws.prototype = p }
+func (ws *WeakSetObject) GetPrototype() Value  { return ws.prototype }
 
 // WeakRefObject implements ECMAScript WeakRef using Go's weak package.
 // A WeakRef holds a weak reference to a target object.
@@ -656,6 +660,9 @@ func NewWeakMapWithPrototype(prototype Value) Value {
 func (wm *WeakMapObject) GetPrototype() Value {
 	return wm.prototype
 }
+
+// SetPrototype overrides the per-instance [[Prototype]] (for subclassing).
+func (wm *WeakMapObject) SetPrototype(p Value) { wm.prototype = p }
 
 // NewWeakSet creates a new WeakSet object
 func NewWeakSet() Value {

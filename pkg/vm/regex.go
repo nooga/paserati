@@ -36,7 +36,11 @@ type RegExpObject struct {
 	lastIndex      int             // For global regex stateful matching
 	Properties     *PlainObject    // Storage for user-defined properties
 	compileError   string          // If non-empty, regex couldn't be compiled by either engine
+	prototype      Value           // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
+
+func (re *RegExpObject) GetPrototype() Value  { return re.prototype }
+func (re *RegExpObject) SetPrototype(p Value) { re.prototype = p }
 
 // NewRegExp creates a new RegExp object from pattern and flags
 func NewRegExp(pattern, flags string) (Value, error) {

@@ -38,7 +38,12 @@ type PromiseObject struct {
 	Frame            *SuspendedFrame // Execution frame (nil if not an async function promise)
 	Function         Value           // The async function (for resumption)
 	ThisValue        Value           // The 'this' value when async function was called
+
+	prototype Value // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
+
+func (p *PromiseObject) GetPrototype() Value  { return p.prototype }
+func (p *PromiseObject) SetPrototype(v Value) { p.prototype = v }
 
 // GetState returns the promise state
 func (p *PromiseObject) GetState() PromiseState {

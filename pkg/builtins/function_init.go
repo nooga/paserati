@@ -722,6 +722,11 @@ func functionHasInstanceImpl(vmInstance *vm.VM, thisFunc vm.Value, arg vm.Value)
 // getPrototypeOfValue returns the [[Prototype]] of a value, similar to OpInstanceof's logic.
 // For Proxy objects, it calls the getPrototypeOf trap which may throw.
 func getPrototypeOfValue(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
+	// Subclass-of-native instances carry a per-instance [[Prototype]] override
+	// (e.g. `class S extends Int8Array {}`); honor it before the intrinsic.
+	if override, ok := vmInstance.InstancePrototypeOverride(val); ok {
+		return override, nil
+	}
 	switch val.Type() {
 	case vm.TypeObject:
 		return val.AsPlainObject().GetPrototype(), nil
