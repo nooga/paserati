@@ -14,32 +14,32 @@
   <text x="690" y="42" text-anchor="middle" class="group">TypeScript conformance</text>
   <line x1="470" y1="28" x2="470" y2="250" stroke="#d9e0e8" stroke-width="1" />
   <g aria-label="Test262 language">
-<path d="M 165.00 135.00 L 158.31 73.36 A 62.00 62.00 0 1 0 165.00 73.00 Z" fill="#20a060" />
-<path d="M 165.00 135.00 L 165.00 73.00 A 62.00 62.00 0 0 0 158.31 73.36 Z" fill="#d64b4b" />
+<path d="M 165.00 135.00 L 157.89 73.41 A 62.00 62.00 0 1 0 165.00 73.00 Z" fill="#20a060" />
+<path d="M 165.00 135.00 L 165.00 73.00 A 62.00 62.00 0 0 0 157.89 73.41 Z" fill="#d64b4b" />
 <circle cx="165" cy="135" r="38" fill="#ffffff" />
-<text x="165" y="131" text-anchor="middle" class="percent">98.3%</text>
+<text x="165" y="131" text-anchor="middle" class="percent">98.2%</text>
 <text x="165" y="153" text-anchor="middle" class="caption">pass</text>
 <text x="165" y="233" text-anchor="middle" class="title">Test262 language</text>
-<text x="165" y="255" text-anchor="middle" class="caption">23,118/23,523</text>
+<text x="165" y="255" text-anchor="middle" class="caption">23,093/23,523</text>
 </g>
   <g aria-label="Test262 built-ins">
-<path d="M 340.00 135.00 L 278.82 145.05 A 62.00 62.00 0 1 0 340.00 73.00 Z" fill="#20a060" />
-<path d="M 340.00 135.00 L 340.00 73.00 A 62.00 62.00 0 0 0 278.82 145.05 Z" fill="#d64b4b" />
+<path d="M 340.00 135.00 L 278.85 145.21 A 62.00 62.00 0 1 0 340.00 73.00 Z" fill="#20a060" />
+<path d="M 340.00 135.00 L 340.00 73.00 A 62.00 62.00 0 0 0 278.85 145.21 Z" fill="#d64b4b" />
 <circle cx="340" cy="135" r="38" fill="#ffffff" />
 <text x="340" y="131" text-anchor="middle" class="percent">72.4%</text>
 <text x="340" y="153" text-anchor="middle" class="caption">pass</text>
 <text x="340" y="233" text-anchor="middle" class="title">Test262 built-ins</text>
-<text x="340" y="255" text-anchor="middle" class="caption">16,867/23,294</text>
+<text x="340" y="255" text-anchor="middle" class="caption">16,857/23,294</text>
 </g>
   <g aria-label="TypeScript 6.0.0">
-<path d="M 690.00 135.00 L 635.10 163.81 A 62.00 62.00 0 1 0 690.00 73.00 Z" fill="#20a060" />
-<path d="M 690.00 135.00 L 654.84 83.94 A 62.00 62.00 0 0 0 635.10 163.81 Z" fill="#d64b4b" />
+<path d="M 690.00 135.00 L 635.66 164.85 A 62.00 62.00 0 1 0 690.00 73.00 Z" fill="#20a060" />
+<path d="M 690.00 135.00 L 654.84 83.94 A 62.00 62.00 0 0 0 635.66 164.85 Z" fill="#d64b4b" />
 <path d="M 690.00 135.00 L 690.00 73.00 A 62.00 62.00 0 0 0 654.84 83.94 Z" fill="#aeb7c2" />
 <circle cx="690" cy="135" r="38" fill="#ffffff" />
-<text x="690" y="131" text-anchor="middle" class="percent">67.3%</text>
+<text x="690" y="131" text-anchor="middle" class="percent">67.0%</text>
 <text x="690" y="153" text-anchor="middle" class="caption">pass</text>
 <text x="690" y="233" text-anchor="middle" class="title">TypeScript 6.0.0</text>
-<text x="690" y="255" text-anchor="middle" class="caption">3,317/4,928</text>
+<text x="690" y="255" text-anchor="middle" class="caption">3,302/4,928</text>
 </g>
   <g transform="translate(575 278)">
     <rect x="0" y="-10" width="12" height="12" fill="#20a060" rx="2" /><text x="18" y="1" class="legend">Pass</text>
