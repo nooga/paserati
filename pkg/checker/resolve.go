@@ -717,6 +717,7 @@ func (c *Checker) extractConstructSignaturesFromType(typ types.Type) []*types.Si
 func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) types.Type {
 	properties := make(map[string]types.Type)
 	optionalProperties := make(map[string]bool)
+	readOnlyProperties := make(map[string]bool)
 	var callSignatures []*types.Signature
 	var constructSignatures []*types.Signature
 	var indexSignatures []*types.IndexSignature
@@ -830,6 +831,9 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			if prop.Optional {
 				optionalProperties[prop.Name.Value] = true
 			}
+			if prop.Readonly {
+				readOnlyProperties[prop.Name.Value] = true
+			}
 			debugPrintf("// [Checker ObjectType] Property '%s'%s: %s\n",
 				prop.Name.Value,
 				func() string {
@@ -848,6 +852,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 	objectType := &types.ObjectType{
 		Properties:          properties,
 		OptionalProperties:  optionalProperties,
+		ReadOnlyProperties:  readOnlyProperties,
 		CallSignatures:      callSignatures,
 		ConstructSignatures: constructSignatures,
 		IndexSignatures:     indexSignatures,

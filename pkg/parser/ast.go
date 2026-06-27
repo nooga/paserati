@@ -2694,6 +2694,7 @@ type ObjectTypeProperty struct {
 	Name                 *Identifier  // Property name (nil for call signatures and index signatures)
 	Type                 Expression   // Property type annotation or function type for call signatures
 	Optional             bool         // Whether the property is optional (for future use)
+	Readonly             bool         // Whether the property is readonly
 	IsCallSignature      bool         // Whether this is a call signature like (param: type): returnType
 	IsConstructSignature bool         // Whether this is a construct signature like new (param: type): T
 	Parameters           []Expression // Parameters for call/construct signatures
@@ -2741,6 +2742,9 @@ func (otp *ObjectTypeProperty) String() string {
 		}
 	} else {
 		// Regular property: name?: type
+		if otp.Readonly {
+			out.WriteString("readonly ")
+		}
 		if otp.Name != nil {
 			out.WriteString(otp.Name.String())
 		}

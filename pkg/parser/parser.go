@@ -8486,12 +8486,21 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 			objType.Properties = append(objType.Properties, prop)
 		} else {
 			// Regular property or method signature - try to parse property name (allowing keywords and string literals)
+			isReadonly := false
+			if p.curTokenIs(lexer.READONLY) && !p.peekTokenIs(lexer.COLON) && !p.peekTokenIs(lexer.QUESTION) &&
+				!p.peekTokenIs(lexer.LPAREN) && !p.peekTokenIs(lexer.LT) &&
+				!p.peekTokenIs(lexer.SEMICOLON) && !p.peekTokenIs(lexer.COMMA) && !p.peekTokenIs(lexer.RBRACE) {
+				isReadonly = true
+				p.nextToken()
+			}
+
 			propName := p.parsePropertyName()
 			var prop *ObjectTypeProperty
 
 			if propName != nil {
 				prop = &ObjectTypeProperty{
-					Name: propName,
+					Name:     propName,
+					Readonly: isReadonly,
 				}
 			} else if p.curTokenIs(lexer.STRING) {
 				// Handle string literal property names by creating an identifier with the string value
@@ -8499,13 +8508,15 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 				// Create an identifier from the string literal for compatibility
 				identFromString := &Identifier{Token: p.curToken, Value: stringLit.Value}
 				prop = &ObjectTypeProperty{
-					Name: identFromString,
+					Name:     identFromString,
+					Readonly: isReadonly,
 				}
 			} else if p.curTokenIs(lexer.NUMBER) {
 				// Handle numeric literal property names
 				numIdent := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 				prop = &ObjectTypeProperty{
-					Name: numIdent,
+					Name:     numIdent,
+					Readonly: isReadonly,
 				}
 			} else {
 				p.addError(p.curToken, "expected property name (identifier or string literal), call signature '(', or index signature '[' in object type")
