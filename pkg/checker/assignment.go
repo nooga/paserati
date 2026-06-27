@@ -411,7 +411,7 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 		if widenedRhsType != types.Any {
 			switch rhsType := rhsType.(type) {
 			case *types.ObjectType:
-				if foundPropType, exists := rhsType.Properties[propName]; exists {
+				if foundPropType, exists := c.resolveObjectMemberForDestructuring(rhsType, propName); exists {
 					propType = foundPropType
 				} else if prop.Default == nil {
 					c.addError(prop.Key, fmt.Sprintf("property '%s' does not exist on type %s", propName, rhsType.String()))

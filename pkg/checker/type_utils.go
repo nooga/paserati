@@ -34,6 +34,49 @@ func (c *Checker) getPropertyTypeFromType(objectType types.Type, propertyName st
 	return types.GetPropertyType(objectType, propertyName, isOptionalChaining)
 }
 
+// resolveObjectMemberForDestructuring resolves a property access on an object
+// type for destructuring. It mirrors member-access resolution (see
+// checkMemberExpression): inherited properties, then index signatures, then the
+// object/function prototype. Returns the resolved property type and whether the
+// property exists. Destructuring must use this rather than a bare Properties
+// lookup, otherwise inherited or index-signature properties are wrongly reported
+// as missing.
+func (c *Checker) resolveObjectMemberForDestructuring(obj *types.ObjectType, propName string) (types.Type, bool) {
+	if obj == nil {
+		return types.Undefined, false
+	}
+
+	// Return the bare property type (no `| undefined` for optional members):
+	// the destructuring callers fold in defaults and undefined themselves, and
+	// widening optional props here defeats their default-collapsing logic.
+	if propType, exists := obj.GetEffectiveProperties()[propName]; exists {
+		if propType == nil {
+			return types.Undefined, false
+		}
+		return propType, true
+	}
+
+	for _, indexSig := range obj.IndexSignatures {
+		if indexSig.KeyType == types.String || indexSig.KeyType == types.Any {
+			if indexSig.ValueType == nil {
+				return types.Any, true
+			}
+			return indexSig.ValueType, true
+		}
+	}
+
+	if obj.IsCallable() {
+		if methodType := c.env.GetPrimitivePrototypeMethodType("function", propName); methodType != nil {
+			return methodType, true
+		}
+	}
+	if methodType := c.env.GetPrimitivePrototypeMethodType("object", propName); methodType != nil {
+		return methodType, true
+	}
+
+	return types.Undefined, false
+}
+
 // validateIndexSignatures checks if a source object type satisfies the index signature constraints of a target type
 // This is used when assigning object literals to types with index signatures
 func (c *Checker) validateIndexSignatures(sourceType, targetType types.Type) []IndexSignatureError {
