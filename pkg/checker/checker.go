@@ -299,6 +299,7 @@ type Checker struct {
 	functionNestingDepth   int // 0 = top level, >0 = inside function(s)
 	allowTopLevelReturn    bool
 	skipStrictPropertyInit bool // When true, TS2564 is not emitted (strict-init opt-out)
+	noImplicitOverride     bool // When true, overriding class members require explicit override
 
 	// --- Loop/switch/label context (reset when entering a new function scope) ---
 	loopDepth    int             // depth of enclosing iteration statements in current function
@@ -387,6 +388,12 @@ func (c *Checker) SetAllowTopLevelReturn(allow bool) {
 // `--strictPropertyInitialization` explicitly.
 func (c *Checker) SetSkipStrictPropertyInit(skip bool) {
 	c.skipStrictPropertyInit = skip
+}
+
+// SetNoImplicitOverride controls whether overriding class members require an
+// explicit `override` modifier. Default false.
+func (c *Checker) SetNoImplicitOverride(enabled bool) {
+	c.noImplicitOverride = enabled
 }
 
 // --- Access Control Helper Methods ---
@@ -3523,7 +3530,7 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 		}
 
 		// Define the variable(s) with inferred type - support both identifiers and nested patterns
-		c.checkDestructuringTargetForDeclaration(element.Target, elemType, node.IsConst)
+		c.checkDestructuringTargetForDeclaration(element.Target, elemType, node.IsConst, node.Token != nil && node.Token.Literal == "var")
 	}
 }
 
@@ -3611,6 +3618,8 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 			if objType != nil {
 				if pt, exists := objType.Properties[propName]; exists {
 					propType = pt
+				} else if prop.Default == nil {
+					c.addError(prop.Key, fmt.Sprintf("property '%s' does not exist on type %s", propName, objType.String()))
 				}
 			} else if isArray {
 				// For arrays, numeric keys access array elements
@@ -3641,7 +3650,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 		}
 
 		// Define the variable(s) with inferred type - support both identifiers and nested patterns
-		c.checkDestructuringTargetForDeclaration(prop.Target, propType, node.IsConst)
+		c.checkDestructuringTargetForDeclaration(prop.Target, propType, node.IsConst, node.Token != nil && node.Token.Literal == "var")
 	}
 
 	// Handle rest property if present

@@ -124,6 +124,17 @@ func isAssignable(source, target Type) bool {
 		return true
 	}
 
+	// Type predicate results are boolean values at runtime, but carry extra
+	// metadata in function return types for control-flow narrowing.
+	if _, ok := source.(*TypePredicateType); ok && target == Boolean {
+		return true
+	}
+	if sourcePred, ok := source.(*TypePredicateType); ok {
+		if targetPred, ok := target.(*TypePredicateType); ok {
+			return isAssignable(sourcePred.Type, targetPred.Type)
+		}
+	}
+
 	// TypeScript compatibility: undefined is assignable to void
 	if target == Void && source == Undefined {
 		return true

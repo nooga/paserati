@@ -18,7 +18,7 @@ Right now it prioritizes **correctness** over raw speed, but the architecture is
 
 ### Wins
 
-- **Test262 language suite: 98.4%**, **built-ins: 72.4%**, **TypeScript 6.0.0 conformance: 67.0%** (see details below)
+- **Test262 language suite: 98.4%**, **built-ins: 72.4%**, **TypeScript 6.0.0 conformance: 67.6%** (see details below)
 - **Native TS execution**: no `tsc`, no TS→JS transpilation
 - **TCO**: tail call optimization (elite feature)
 - **Shapes + ICs**: fast-ish property access without a JIT
@@ -88,14 +88,14 @@ go test ./tests/...
 | :-- | --: | --: | --: | --: | --: |
 | Test262 language | 23,141/23,523 | 382 | 0 | 0 | 98.4% |
 | Test262 built-ins | 16,862/23,294 | 6,432 | 0 | 0 | 72.4% |
-| TypeScript 6.0.0 conformance | 3,303/4,928 | 1,152 | 473 | 0 | 67.0% |
+| TypeScript 6.0.0 conformance | 3,329/4,928 | 1,126 | 473 | 0 | 67.6% |
 <!-- compliance:end -->
 
 The Test262 language and built-ins figures come from the local baseline snapshots for the checked-out ECMA-262 conformance tests. The TypeScript figure comes from the single-file conformance runner against the TypeScript 6.0.0 test suite.
 
 ### Current status
 
-At **98.4% Test262 language compliance** and **67.0% TypeScript 6.0.0 conformance**, Paserati handles a large chunk of modern JavaScript/TypeScript semantics correctly. It's still evolving, but it's past the "toy project" phase.
+At **98.4% Test262 language compliance** and **67.6% TypeScript 6.0.0 conformance**, Paserati handles a large chunk of modern JavaScript/TypeScript semantics correctly. It's still evolving, but it's past the "toy project" phase.
 
 Core language features that work well:
 

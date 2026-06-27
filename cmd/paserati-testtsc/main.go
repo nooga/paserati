@@ -708,6 +708,7 @@ func createTscPaserati(directives TestDirectives) *driver.Paserati {
 	if !strictPropertyInitEnabled(directives) {
 		pas.SetSkipStrictPropertyInit(true)
 	}
+	pas.SetNoImplicitOverride(noImplicitOverrideEnabled(directives))
 	return pas
 }
 
@@ -721,6 +722,17 @@ func strictPropertyInitEnabled(d TestDirectives) bool {
 	}
 	if v, ok := d.Raw["strict"]; ok {
 		return v == "true"
+	}
+	return false
+}
+
+func noImplicitOverrideEnabled(d TestDirectives) bool {
+	if v, ok := d.Raw["noimplicitoverride"]; ok {
+		for _, part := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), "true") {
+				return true
+			}
+		}
 	}
 	return false
 }

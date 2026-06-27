@@ -84,6 +84,12 @@ func (p *Paserati) SetSkipStrictPropertyInit(skip bool) {
 	p.checker.SetSkipStrictPropertyInit(skip)
 }
 
+// SetNoImplicitOverride controls whether overriding class members require an
+// explicit `override` modifier.
+func (p *Paserati) SetNoImplicitOverride(enabled bool) {
+	p.checker.SetNoImplicitOverride(enabled)
+}
+
 // SetAllowTopLevelReturn controls whether script/eval style top-level returns
 // are accepted by the type checker.
 func (p *Paserati) SetAllowTopLevelReturn(allow bool) {
