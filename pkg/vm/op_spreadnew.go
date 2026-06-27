@@ -304,6 +304,14 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 			return status, Undefined
 		}
 
+		// Subclass-of-native: when super(...args) reaches a native ctor that built
+		// its instance with the intrinsic prototype, retarget the instance's
+		// [[Prototype]] to the subclass (newTarget.prototype). Skip direct
+		// `new Native(...)` where newTarget is the base ctor itself.
+		if inheritNewTarget && !newTargetForNative.Is(constructorVal) {
+			vm.applySubclassPrototype(result, newTargetForNative)
+		}
+
 		callerRegisters[destReg] = result
 		return InterpretOK, Undefined
 

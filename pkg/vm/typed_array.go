@@ -30,7 +30,11 @@ type ArrayBufferObject struct {
 	data       []byte
 	detached   bool
 	properties map[string]Value // Own properties (e.g., constructor override)
+	prototype  Value            // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
+
+func (ab *ArrayBufferObject) GetPrototype() Value     { return ab.prototype }
+func (ab *ArrayBufferObject) SetPrototype(p Value)    { ab.prototype = p }
 
 // GetData returns the underlying byte slice
 func (ab *ArrayBufferObject) GetData() []byte {
@@ -89,7 +93,11 @@ type SharedArrayBufferObject struct {
 	Object
 	data       []byte
 	properties map[string]Value // Own properties (e.g., constructor override)
+	prototype  Value            // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
+
+func (sab *SharedArrayBufferObject) GetPrototype() Value  { return sab.prototype }
+func (sab *SharedArrayBufferObject) SetPrototype(p Value) { sab.prototype = p }
 
 // IsDetached always returns false for SharedArrayBuffer (cannot be detached)
 func (sab *SharedArrayBufferObject) IsDetached() bool {
@@ -141,7 +149,11 @@ type TypedArrayObject struct {
 	length      int // number of elements
 	elementType TypedArrayKind
 	properties  map[string]Value // Own properties (e.g., constructor override)
+	prototype   Value            // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
+
+func (ta *TypedArrayObject) GetPrototype() Value  { return ta.prototype }
+func (ta *TypedArrayObject) SetPrototype(p Value) { ta.prototype = p }
 
 // GetOwnProperty returns an own property value (non-index properties)
 func (ta *TypedArrayObject) GetOwnProperty(name string) (Value, bool) {

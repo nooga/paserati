@@ -21,6 +21,7 @@ type FunctionObject struct {
 	IsClassConstructor   bool         // True for class constructors (calling without 'new' throws TypeError)
 	Properties           *PlainObject // For properties like .prototype (created lazily)
 	Prototype            Value        // [[Prototype]] - the function's prototype (usually Function.prototype)
+	subclassPrototype    Value        // Per-instance [[Prototype]] override when this function is a `new Sub()` instance of a Function subclass; Undefined = use the flag-based intrinsic
 	HomeObject           Value        // [[HomeObject]] - object where method is defined (for super property access)
 	HomeRealm            *Realm       // [[Realm]] - the realm where this function was created
 	NameBindingRegister  int          // For named function expressions: register to initialize with closure (-1 if not used)

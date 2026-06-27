@@ -14,7 +14,11 @@ type DataViewObject struct {
 	buffer     BufferData // Can be ArrayBuffer or SharedArrayBuffer
 	byteOffset int
 	byteLength int
+	prototype  Value // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
+
+func (dv *DataViewObject) GetPrototype() Value  { return dv.prototype }
+func (dv *DataViewObject) SetPrototype(p Value) { dv.prototype = p }
 
 // GetBuffer returns the underlying buffer as an ArrayBufferObject
 func (dv *DataViewObject) GetBuffer() *ArrayBufferObject {

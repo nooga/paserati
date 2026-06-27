@@ -2962,6 +2962,13 @@ startExecution:
 					current = Undefined
 				}
 
+				// Subclass-of-native instances carry a per-instance [[Prototype]]
+				// override (e.g. `class S extends Int8Array {}`); honor it over the
+				// type-based intrinsic default chosen above.
+				if ov, ok := vm.InstancePrototypeOverride(objVal); ok {
+					current = ov
+				}
+
 				// Walk the prototype chain
 				for current.typ != TypeNull && current.typ != TypeUndefined {
 					if current.Equals(constructorPrototype) {
@@ -10167,6 +10174,12 @@ startExecution:
 					continue // Let exception handling take over
 				}
 
+				// Subclass-of-native: retarget the instance's [[Prototype]] to
+				// the subclass when super() reached this native ctor.
+				if inheritNewTarget && !newTargetForNative.Is(constructorVal) {
+					vm.applySubclassPrototype(result, newTargetForNative)
+				}
+
 				// Store result in caller's target register
 				if int(destReg) < len(callerRegisters) {
 					callerRegisters[destReg] = result
@@ -10307,6 +10320,12 @@ startExecution:
 				// (e.g., ToPrimitive threw an exception but returned nil error)
 				if vm.unwinding {
 					continue // Let exception handling take over
+				}
+
+				// Subclass-of-native: retarget the instance's [[Prototype]] to
+				// the subclass when super() reached this native ctor.
+				if inheritNewTarget && !newTargetForNative.Is(constructorVal) {
+					vm.applySubclassPrototype(result, newTargetForNative)
 				}
 
 				// Store result in caller's target register
@@ -10521,6 +10540,9 @@ startExecution:
 					if vm.unwinding {
 						continue
 					}
+					if inheritNewTarget && !newTargetForNative.Is(originalConstructor) {
+						vm.applySubclassPrototype(result, newTargetForNative)
+					}
 					callerRegisters[destReg] = result
 
 				case TypeNativeFunctionWithProps:
@@ -10597,6 +10619,9 @@ startExecution:
 					}
 					if vm.unwinding {
 						continue
+					}
+					if inheritNewTarget && !newTargetForNative.Is(originalConstructor) {
+						vm.applySubclassPrototype(result, newTargetForNative)
 					}
 					callerRegisters[destReg] = result
 
