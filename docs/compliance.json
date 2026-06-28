@@ -20,8 +20,8 @@
   "typescript": {
     "name": "TypeScript 6.0.0",
     "total": 4928,
-    "passed": 3332,
-    "failed": 1123,
+    "passed": 3341,
+    "failed": 1114,
     "skipped": 473,
     "timeout": 0,
     "version": "6.0.0"

@@ -273,10 +273,18 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	// --- NEW: Handle TupleTypeExpression ---
 	case *parser.TupleTypeExpression:
 		elementTypes := []types.Type{}
-		for _, elemNode := range node.ElementTypes {
+		seenOptionalElement := false
+		for i, elemNode := range node.ElementTypes {
 			elemType := c.resolveTypeAnnotation(elemNode)
 			if elemType == nil {
 				return nil // Error resolving element type
+			}
+			isOptional := i < len(node.OptionalFlags) && node.OptionalFlags[i]
+			if !isOptional && seenOptionalElement {
+				c.addError(elemNode, "A required element cannot follow an optional element.")
+			}
+			if isOptional {
+				seenOptionalElement = true
 			}
 			elementTypes = append(elementTypes, elemType)
 		}
@@ -1609,6 +1617,15 @@ func (c *Checker) computeKeyofType(operandType types.Type) types.Type {
 			// keyof any should be string | number | symbol (simplified to string for now)
 			return types.String
 		}
+		switch operandType.(type) {
+		case *types.TypeParameterType, *types.ForwardReferenceType,
+			*types.TypeAliasForwardReference, *types.GenericTypeAliasForwardReference,
+			*types.ParameterizedForwardReferenceType, *types.InstantiatedType:
+			// Generic or unresolved operands may gain concrete properties during
+			// substitution. Preserve keyof so mapped types like
+			// { [P in keyof T]: T[P] } can expand after T is instantiated.
+			return &types.KeyofType{OperandType: operandType}
+		}
 		// For non-object types, keyof typically resolves to never
 		// TODO: Handle other types like arrays (which should include numeric indices)
 		return types.Never
@@ -2134,6 +2151,27 @@ func (c *Checker) substituteTypeParameterInType(targetType types.Type, paramName
 		}
 		return targetType
 
+	case *types.ArrayType:
+		return &types.ArrayType{
+			ElementType: c.substituteTypeParameterInType(typ.ElementType, paramName, replacement),
+		}
+
+	case *types.TupleType:
+		elementTypes := make([]types.Type, len(typ.ElementTypes))
+		for i, elementType := range typ.ElementTypes {
+			elementTypes[i] = c.substituteTypeParameterInType(elementType, paramName, replacement)
+		}
+		return &types.TupleType{
+			ElementTypes:     elementTypes,
+			OptionalElements: append([]bool(nil), typ.OptionalElements...),
+			RestElementType:  c.substituteTypeParameterInType(typ.RestElementType, paramName, replacement),
+		}
+
+	case *types.ObjectType:
+		return cloneObjectTypeWithTypes(typ, func(t types.Type) types.Type {
+			return c.substituteTypeParameterInType(t, paramName, replacement)
+		})
+
 	case *types.IndexedAccessType:
 		// Handle T[P] where P is the type parameter being substituted
 		objectType := c.substituteTypeParameterInType(typ.ObjectType, paramName, replacement)
@@ -2172,6 +2210,83 @@ func (c *Checker) substituteTypeParameterInType(targetType types.Type, paramName
 		// For other types (primitives, objects, etc.), no substitution needed
 		return targetType
 	}
+}
+
+func cloneObjectTypeWithTypes(obj *types.ObjectType, rewrite func(types.Type) types.Type) *types.ObjectType {
+	if obj == nil {
+		return nil
+	}
+
+	result := &types.ObjectType{
+		Properties:          make(map[string]types.Type, len(obj.Properties)),
+		OptionalProperties:  make(map[string]bool, len(obj.OptionalProperties)),
+		ReadOnlyProperties:  make(map[string]bool, len(obj.ReadOnlyProperties)),
+		BaseTypes:           append([]types.Type(nil), obj.BaseTypes...),
+		IsReflectIntrinsic:  obj.IsReflectIntrinsic,
+		CallSignatures:      cloneSignaturesWithTypes(obj.CallSignatures, rewrite),
+		ConstructSignatures: cloneSignaturesWithTypes(obj.ConstructSignatures, rewrite),
+	}
+
+	for name, propType := range obj.Properties {
+		result.Properties[name] = rewrite(propType)
+	}
+	for name, optional := range obj.OptionalProperties {
+		result.OptionalProperties[name] = optional
+	}
+	for name, readonly := range obj.ReadOnlyProperties {
+		result.ReadOnlyProperties[name] = readonly
+	}
+	if obj.IndexSignatures != nil {
+		result.IndexSignatures = make([]*types.IndexSignature, len(obj.IndexSignatures))
+		for i, sig := range obj.IndexSignatures {
+			if sig == nil {
+				continue
+			}
+			result.IndexSignatures[i] = &types.IndexSignature{
+				KeyType:        rewrite(sig.KeyType),
+				ValueType:      rewrite(sig.ValueType),
+				IsMapped:       sig.IsMapped,
+				TypeParameter:  sig.TypeParameter,
+				ConstraintType: rewrite(sig.ConstraintType),
+			}
+		}
+	}
+	if obj.ClassMeta != nil {
+		result.ClassMeta = &types.ClassMetadata{
+			ClassName:          obj.ClassMeta.ClassName,
+			IsClassInstance:    obj.ClassMeta.IsClassInstance,
+			IsClassConstructor: obj.ClassMeta.IsClassConstructor,
+			MemberAccess:       obj.ClassMeta.MemberAccess,
+		}
+	}
+
+	return result
+}
+
+func cloneSignaturesWithTypes(signatures []*types.Signature, rewrite func(types.Type) types.Type) []*types.Signature {
+	if signatures == nil {
+		return nil
+	}
+	result := make([]*types.Signature, len(signatures))
+	for i, sig := range signatures {
+		if sig == nil {
+			continue
+		}
+		paramTypes := make([]types.Type, len(sig.ParameterTypes))
+		for j, paramType := range sig.ParameterTypes {
+			paramTypes[j] = rewrite(paramType)
+		}
+		result[i] = &types.Signature{
+			TypeParameters:    sig.TypeParameters,
+			ParameterNames:    append([]string(nil), sig.ParameterNames...),
+			ParameterTypes:    paramTypes,
+			ReturnType:        rewrite(sig.ReturnType),
+			OptionalParams:    append([]bool(nil), sig.OptionalParams...),
+			IsVariadic:        sig.IsVariadic,
+			RestParameterType: rewrite(sig.RestParameterType),
+		}
+	}
+	return result
 }
 
 // isAssignableWithExpansion checks if source can be assigned to target,
@@ -2524,6 +2639,27 @@ func (c *Checker) substituteInType(typ types.Type, substitutions map[string]type
 			}
 		}
 		return typ
+
+	case *types.ArrayType:
+		return &types.ArrayType{
+			ElementType: c.substituteInType(t.ElementType, substitutions),
+		}
+
+	case *types.TupleType:
+		elementTypes := make([]types.Type, len(t.ElementTypes))
+		for i, elementType := range t.ElementTypes {
+			elementTypes[i] = c.substituteInType(elementType, substitutions)
+		}
+		return &types.TupleType{
+			ElementTypes:     elementTypes,
+			OptionalElements: append([]bool(nil), t.OptionalElements...),
+			RestElementType:  c.substituteInType(t.RestElementType, substitutions),
+		}
+
+	case *types.ObjectType:
+		return cloneObjectTypeWithTypes(t, func(member types.Type) types.Type {
+			return c.substituteInType(member, substitutions)
+		})
 
 	case *types.KeyofType:
 		substitutedOperand := c.substituteInType(t.OperandType, substitutions)
