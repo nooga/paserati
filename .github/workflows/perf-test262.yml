@@ -1,0 +1,213 @@
+name: Perf Test262
+
+# Same-runner A/B macro-benchmark: how long paserati takes to execute the whole
+# Test262 corpus. Benches the PR's merge-base and its head back to back on ONE
+# runner, then reports the delta. Like perf-pr.yml, running both halves on the
+# same machine cancels cross-runner CPU-tier noise.
+#
+# The metric is the SUM of per-test execution time over the tests that pass and
+# don't time out, divided by the calibration anchor (anchor-normalized, machine-
+# portable). Summing per-test durations (not wall-clock) keeps it parallelism-
+# invariant; restricting to the passing, non-timed-out set decouples speed from
+# correctness. Pass/fail/timeout counts are reported separately, so a correctness
+# change moves those numbers, not the timing.
+#
+# Heavy and opt-in: a two-pass full-suite run costs real runner minutes, so it
+# runs only on PRs carrying the `perf-test262` label (distinct from the cheap
+# `perf` micro check — adding `perf` must never trigger this multi-minute job).
+# Informational only: it never fails the PR.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - 'pkg/**'
+      - 'cmd/**'
+      - '.test262-rev'
+      - '.github/workflows/perf-test262.yml'
+  # Manual escape hatch: run against any PR by number without touching labels.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number for a real base-vs-head A/B'
+        required: false
+      ref:
+        description: 'Single ref to self-A/B (smoke test: runs the macro twice, expect ~0% — measures wall-time + noise floor)'
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-test262-${{ github.event.pull_request.number || github.event.inputs.pr || github.event.inputs.ref }}
+  cancel-in-progress: true
+
+env:
+  # Per-test timeout is a SAFETY BOUND, not part of the metric: timed-out tests
+  # are excluded from the sum (and from the intersection both sides share). 5s made
+  # the suite timeout-dominated (40+ min). 0.2s was too tight — it mislabeled
+  # slow-but-correct tests (e.g. RegExp backtracking) as timeouts and dropped them.
+  # 1.2s: every measured slow-correct test resolves under it; what still times out
+  # is a genuine hang. The intersection compare makes the exact value low-stakes.
+  PER_TEST_TIMEOUT: 1.2s
+
+jobs:
+  bench:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'perf-test262')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      pr: ${{ steps.refs.outputs.pr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The Test262 corpus is pinned by .test262-rev and is large; cache the clone
+      # across runs. setup-test262.sh re-pins to the current tree's rev after each
+      # checkout, so a cache hit just needs a checkout, not a re-clone.
+      - name: Cache Test262 corpus
+        uses: actions/cache@v4
+        with:
+          path: test262
+          key: test262-${{ hashFiles('.test262-rev') }}
+          restore-keys: test262-
+
+      - name: Resolve base and head
+        id: refs
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_FROM_EVENT: ${{ github.event.pull_request.number }}
+          PR_FROM_INPUT: ${{ github.event.inputs.pr }}
+          REF_FROM_INPUT: ${{ github.event.inputs.ref }}
+          BASE_FROM_EVENT: ${{ github.event.pull_request.base.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Self-A/B smoke test: dispatch with a `ref` and no `pr`. base == head,
+          # so the run measures full-suite wall-time and the run-to-run noise
+          # floor (expected ~0% delta). It also sidesteps the bootstrap problem
+          # that a real A/B can't bench a merge-base predating this tooling.
+          if [ "$EVENT" = "workflow_dispatch" ] && [ -n "$REF_FROM_INPUT" ]; then
+            git fetch --no-tags origin "$REF_FROM_INPUT"
+            sha="$(git rev-parse FETCH_HEAD)"
+            pr=""; base_sha="$sha"; head_sha="$sha"
+            echo "Self-A/B on ${REF_FROM_INPUT} (${sha})"
+          else
+            if [ "$EVENT" = "workflow_dispatch" ]; then
+              pr="$PR_FROM_INPUT"
+              [[ "$pr" =~ ^[0-9]+$ ]] || { echo "provide pr=<number> or ref=<branch>" >&2; exit 1; }
+              base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" --jq .base.ref)"
+            else
+              pr="$PR_FROM_EVENT"
+              base_ref="$BASE_FROM_EVENT"
+            fi
+            # refs/pull/<n>/head lives on the base repo for fork PRs too.
+            git fetch --no-tags origin "$base_ref" "refs/pull/${pr}/head:pr-head"
+            head_sha="$(git rev-parse pr-head)"
+            # Merge-base = the PR's own fork point, so we measure the PR's delta,
+            # not unrelated drift on the base branch since.
+            base_sha="$(git merge-base "origin/${base_ref}" pr-head)"
+          fi
+          {
+            echo "pr=${pr}"
+            echo "head=${head_sha}"
+            echo "base=${base_sha}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Base: ${base_sha}"
+          echo "Head: ${head_sha}"
+
+      - name: Bench merge-base
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+        run: |
+          set -euo pipefail
+          git checkout --force "$BASE"
+          ./setup-test262.sh
+          ./scripts/macro-test262.sh "${RUNNER_TEMP}/base.jsonl" "${RUNNER_TEMP}/base.stats.json"
+
+      - name: Bench head and compare
+        id: bench
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+          HEAD: ${{ steps.refs.outputs.head }}
+        run: |
+          set -euo pipefail
+          git checkout --force "$HEAD"
+          ./setup-test262.sh
+          ./scripts/macro-test262.sh "${RUNNER_TEMP}/head.jsonl" "${RUNNER_TEMP}/head.stats.json"
+
+          # Same-runner A/B: intersection compare over the per-test results both
+          # passes produced (the .merged.json macro-test262.sh writes alongside).
+          ./scripts/macro-test262-compare.sh \
+            "${RUNNER_TEMP}/base.merged.json" "${RUNNER_TEMP}/head.merged.json" > "${RUNNER_TEMP}/timing.md"
+
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          counts() { # $1=stats.json  -> "passed / failed / timeouts (total)"
+            jq -r '"\(.Passed) / \(.Failed) / \(.Timeouts)  (\(.Total) total)"' "$1"
+          }
+          report() {
+            echo "## Test262 macro — base vs head, same runner"
+            echo
+            echo "Base \`${BASE:0:12}\` vs head \`${HEAD:0:12}\`. Same runner, raw sums; informational, not a gate."
+            echo
+            echo "**Correctness (passed / failed / timeouts):**"
+            echo "- base: $(counts "${RUNNER_TEMP}/base.stats.json")"
+            echo "- head: $(counts "${RUNNER_TEMP}/head.stats.json")"
+            echo
+            echo "**Execution time (summed over tests passing on both sides):**"
+            echo
+            cat "${RUNNER_TEMP}/timing.md"
+          }
+          report >> "$GITHUB_STEP_SUMMARY"
+          { report; echo; echo "_[Run details →](${run_url})_"; } > "${RUNNER_TEMP}/comment.md"
+
+      - name: Upload PR comment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-test262-comment
+          path: ${{ runner.temp }}/comment.md
+          if-no-files-found: error
+
+  comment:
+    needs: bench
+    # Skip in self-test mode (no PR to comment on); the job summary still has the report.
+    if: needs.bench.result == 'success' && needs.bench.outputs.pr != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: perf-test262-comment
+          path: ${{ runner.temp }}/perf-test262-comment
+
+      # Sticky PR comment (upsert by marker). Fork PRs get a read-only token, so
+      # continue-on-error keeps the run green — the job summary still carries the report.
+      - name: Upsert PR comment
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          PR: ${{ needs.bench.outputs.pr }}
+          COMMENT_PATH: ${{ runner.temp }}/perf-test262-comment/comment.md
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- perf-test262-report -->';
+            const body = marker + '\n' + fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR);
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
