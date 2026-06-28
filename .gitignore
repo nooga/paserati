@@ -52,6 +52,8 @@ dome.js
 # Built binaries — anchored so they don't also swallow cmd/paserati-*/ source dirs.
 /paserati-analyze
 /paserati-v8bench
+/bench-ratchet
+/bench-test262
 bench/out/
 quickjs-bench/
 benchmarks/
