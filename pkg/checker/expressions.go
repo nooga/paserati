@@ -1656,7 +1656,8 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 			if types.IsAssignable(indexType, types.Number) {
 				// Check if the index is a numeric literal - if so, we can get the exact element type
 				if litIndex, ok := indexType.(*types.LiteralType); ok && litIndex.Value.IsNumber() {
-					idx := int(vm.AsNumber(litIndex.Value))
+					indexValue := vm.AsNumber(litIndex.Value)
+					idx := int(indexValue)
 					if idx >= 0 && idx < len(base.ElementTypes) {
 						// Valid index into fixed elements
 						resultType = base.ElementTypes[idx]
@@ -1666,7 +1667,11 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 						resultType = base.RestElementType
 						debugPrintf("// [Checker IndexExpr] Tuple rest index %d -> %s\n", idx, resultType.String())
 					} else {
-						// Index out of bounds - return undefined (TypeScript allows this but warns)
+						if indexValue < 0 {
+							c.addError(node.Index, "A tuple type cannot be indexed with a negative value.")
+						} else {
+							c.addError(node.Index, fmt.Sprintf("Tuple type '%s' of length '%d' has no element at index '%d'.", base.String(), len(base.ElementTypes), idx))
+						}
 						resultType = types.Undefined
 						debugPrintf("// [Checker IndexExpr] Tuple index %d out of bounds\n", idx)
 					}
