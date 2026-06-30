@@ -48,6 +48,16 @@ jobs:
           # fetch-depth:0 pulled everything, so resolve any committish locally.
           git checkout --force "$TARGET_REF"
 
+      # Corpus for the opt-in Test262 macro series (see "Add Test262 macro" below).
+      # Gated on the same condition so non-opted-in commits skip the restore.
+      - name: Cache Test262 corpus
+        if: contains(github.event.head_commit.message, '[perf-test262]') || github.event_name == 'workflow_dispatch'
+        uses: actions/cache@v4
+        with:
+          path: test262
+          key: test262-${{ hashFiles('.test262-rev') }}
+          restore-keys: test262-
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -69,6 +79,40 @@ jobs:
 
           echo "name=${name}" >> "$GITHUB_OUTPUT"
           echo "out=${out}" >> "$GITHUB_OUTPUT"
+
+      # Opt-in: fold the Test262 macro-benchmark into the snapshot as a
+      # `test262.total` series. Runs only on commits whose message carries
+      # `[perf-test262]` (or a manual dispatch), since the macro adds ~4 min.
+      # Non-fatal: a macro hiccup must never drop the micro snapshot above.
+      - name: Add Test262 macro to snapshot
+        if: contains(github.event.head_commit.message, '[perf-test262]') || github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        env:
+          PER_TEST_TIMEOUT: 1.2s
+        run: |
+          set -euo pipefail
+          out="${{ steps.snap.outputs.out }}"
+          ./setup-test262.sh
+          ./scripts/macro-test262.sh "${RUNNER_TEMP}/t262.jsonl" "${RUNNER_TEMP}/t262.stats.json"
+
+          total_ns="$(jq -s '.[] | select(.name=="total") | .ns_per_op' "${RUNNER_TEMP}/t262.jsonl")"
+          passed="$(jq -s  '.[] | select(.name=="total") | .iterations' "${RUNNER_TEMP}/t262.jsonl")"
+          anchor_ns="$(jq -r '.anchor.ns_per_op' "$out")"
+
+          # Anchor-normalize the same way bench-ratchet does (ratio = summed_ns /
+          # anchor_ns) and fold it into the snapshot as a benchmark series. The page
+          # plots each series self-relative, so the large absolute ratio doesn't
+          # affect the chart scale. Passing-set size goes in a sample for provenance.
+          jq --argjson ns "$total_ns" --argjson a "$anchor_ns" --argjson p "$passed" '
+            .benchmarks["test262.total"] = {
+              ns_per_op: $ns, allocs_per_op: 0, bytes_per_op: 0,
+              ratio_to_anchor: ($ns / $a),
+              samples: [{ iterations: $p, ns_per_op: $ns, ratio_to_anchor: ($ns / $a) }]
+            }' "$out" > "${out}.tmp"
+          mv "${out}.tmp" "$out"
+
+          echo "test262.total: ${total_ns} ns over ${passed} passing tests" \
+               "(ratio $(jq -r '.benchmarks["test262.total"].ratio_to_anchor' "$out"))"
 
       - name: Render run summary
         run: |
