@@ -111,7 +111,7 @@
     workflow runs on a commit, its point appears here.</div>
 
   <footer>Source: <code>baseline.json</code> + <code>timeline/*.json</code>.
-    Rendered client-side; runs no benchmarks.</footer>
+    Rendered client-side; runs no benchmarks.<span id="cpunote"></span></footer>
 </div>
 
 <script>
@@ -137,9 +137,26 @@ function labelFor(s) {
 
   if (!files.length) { document.getElementById("empty").hidden = false; renderReadout(baseline, []); return; }
 
-  const snaps = (await Promise.all(files.map(f => getJSON("timeline/" + f).catch(() => null))))
+  let snaps = (await Promise.all(files.map(f => getJSON("timeline/" + f).catch(() => null))))
     .filter(Boolean)
     .sort((a, b) => (a.captured_at || "").localeCompare(b.captured_at || ""));
+
+  // The calibration anchor is a pure-ALU loop; across CPU tiers it drifts vs the
+  // mixed/memory workloads it normalizes (e.g. EPYC 9V74 reads the anchor ~12%
+  // slow but not the suite, collapsing that snapshot's ratios). So a point on a
+  // minority CPU is unreliable, not signal — keep only the modal CPU and say how
+  // many were hidden (the data stays on perf-data; this is a display filter).
+  const cpuOf = s => s.machine?.cpu_model || "?";
+  const cpuCounts = {};
+  for (const s of snaps) cpuCounts[cpuOf(s)] = (cpuCounts[cpuOf(s)] || 0) + 1;
+  const modalCpu = Object.entries(cpuCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+  const hidden = snaps.filter(s => cpuOf(s) !== modalCpu);
+  if (modalCpu && hidden.length) snaps = snaps.filter(s => cpuOf(s) === modalCpu);
+
+  const note = document.getElementById("cpunote");
+  if (note && hidden.length) {
+    note.textContent = ` · ${hidden.length} off-reference-CPU point${hidden.length === 1 ? "" : "s"} hidden (anchor unreliable off ${modalCpu.replace(/ \d+-Core.*/, "")})`;
+  }
 
   renderReadout(baseline, snaps);
   const labels = snaps.map(labelFor);
