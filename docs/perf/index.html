@@ -102,10 +102,7 @@
   </header>
 
   <div class="controls">
-    <div class="toggle" role="group" aria-label="View mode">
-      <button id="m-overall" class="seg" aria-pressed="true">Overall</button>
-      <button id="m-all" class="seg" aria-pressed="false">Breakdown</button>
-    </div>
+    <div id="modes" class="toggle" role="group" aria-label="View mode"></div>
     <span id="count" class="count"></span>
   </div>
 
@@ -172,26 +169,55 @@ function labelFor(s) {
   }));
 
   // The baseline bar: a dashed amber guide at 1.0× — the "redline" of this gauge.
-  const baselineLine = {
-    label: "baseline (1.0×)", data: labels.map(() => 1),
+  const baseDS = () => ({ label: "baseline (1.0×)", data: labels.map(() => 1),
     borderColor: "#f2b40a", borderDash: [5, 4], borderWidth: 1.5,
-    pointRadius: 0, pointHoverRadius: 0, fill: false, tension: 0,
-  };
+    pointRadius: 0, pointHoverRadius: 0, fill: false, tension: 0 });
 
-  // Overall view: mean across all benchmarks per snapshot, with a ±1σ band.
-  const mean = [], lo = [], hi = [];
-  for (let j = 0; j < snaps.length; j++) {
-    const vals = series.map(d => d.data[j]).filter(v => v != null);
-    if (!vals.length) { mean.push(null); lo.push(null); hi.push(null); continue; }
-    const m = vals.reduce((a, b) => a + b, 0) / vals.length;
-    const sd = Math.sqrt(vals.reduce((a, b) => a + (b - m) ** 2, 0) / vals.length);
-    mean.push(m); lo.push(m - sd); hi.push(m + sd);
+  // ---- Grouping: collapse the long breakdown into benchmark families ----
+  // Derived from the key, no hardcoded list: package.Benchmark<Family>/...
+  function groupOf(name) {
+    if (name.startsWith("test262")) return "Test262";
+    const fam = (name.split(".Benchmark")[1] || "").split("/")[0];
+    if (fam === "GetOwn") return "GetOwn";
+    if (fam.startsWith("Prototype")) return "Prototype";   // MethodAccess + CacheHitRate
+    return "Workloads";                                    // Fib, Matrix
   }
-  const bandLo = { label: "_band", data: lo, borderColor: "transparent", pointRadius: 0, fill: false };
-  const bandHi = { label: "± std dev", data: hi, borderColor: "transparent", pointRadius: 0,
-                   backgroundColor: "rgba(236,224,200,0.10)", fill: "-1" };
-  const meanLine = { label: "mean", data: mean, borderColor: "#ece0c8", backgroundColor: "#ece0c8",
-                     borderWidth: 2.5, pointRadius: 2.5, pointHoverRadius: 4, tension: .25 };
+  const GROUPS = ["GetOwn", "Prototype", "Workloads", "Test262"];
+  const members = {};                                      // group -> [series]
+  names.forEach((n, i) => (members[groupOf(n)] ||= []).push(series[i]));
+
+  // mean + ±1σ band across an arbitrary subset of series, per snapshot.
+  function meanBand(sub) {
+    const mean = [], lo = [], hi = [];
+    for (let j = 0; j < snaps.length; j++) {
+      const vals = sub.map(d => d.data[j]).filter(v => v != null);
+      if (!vals.length) { mean.push(null); lo.push(null); hi.push(null); continue; }
+      const m = vals.reduce((a, b) => a + b, 0) / vals.length;
+      const sd = Math.sqrt(vals.reduce((a, b) => a + (b - m) ** 2, 0) / vals.length);
+      mean.push(m); lo.push(m - sd); hi.push(m + sd);
+    }
+    return { mean, lo, hi };
+  }
+
+  // Datasets for a mode: "Overall" (mean of all) · a group (that family's faint
+  // members behind a bold mean + ±σ band) · "All" (every raw line).
+  function datasetsFor(mode) {
+    if (mode === "All") return [baseDS(), ...series];
+    const sub = mode === "Overall" ? series : (members[mode] || []);
+    const { mean, lo, hi } = meanBand(sub);
+    const faint = mode === "Overall" ? [] : sub.map(d => ({ ...d,
+      label: "_" + d.label,   // hidden from legend/tooltip — visual context only
+      borderColor: "rgba(150,170,190,0.22)", backgroundColor: "transparent",
+      borderWidth: 0.8, pointRadius: 0, pointHoverRadius: 0 }));
+    return [ baseDS(), ...faint,
+      { label: "_band", data: lo, borderColor: "transparent", pointRadius: 0, fill: false },
+      { label: "± std dev", data: hi, borderColor: "transparent", pointRadius: 0,
+        backgroundColor: "rgba(236,224,200,0.12)", fill: "-1" },
+      { label: mode === "Overall" ? "mean" : mode + " mean", data: mean,
+        borderColor: "#ece0c8", backgroundColor: "#ece0c8", borderWidth: 2.5,
+        pointRadius: 2.5, pointHoverRadius: 4, tension: .25 } ];
+  }
+  const groupCount = m => m === "All" || m === "Overall" ? names.length : (members[m] || []).length;
 
   const ink = "#a3906c", grid = "#2a2114";
   const chart = new Chart(document.getElementById("chart"), {
@@ -221,18 +247,29 @@ function labelFor(s) {
   });
 
   const countEl = document.getElementById("count");
-  const bOverall = document.getElementById("m-overall"), bAll = document.getElementById("m-all");
+  const modesEl = document.getElementById("modes");
+  const MODES = ["Overall", ...GROUPS, "All"];
+  const btns = {};
   function setMode(mode) {
-    const overall = mode === "overall";
-    chart.data.datasets = overall ? [baselineLine, bandLo, bandHi, meanLine] : [baselineLine, ...series];
+    if (!MODES.includes(mode)) mode = "Overall";
+    chart.data.datasets = datasetsFor(mode);
     chart.update();
-    bOverall.setAttribute("aria-pressed", overall); bOverall.classList.toggle("on", overall);
-    bAll.setAttribute("aria-pressed", !overall);     bAll.classList.toggle("on", !overall);
-    countEl.textContent = `${overall ? "mean of " : ""}${names.length} benchmarks · ${snaps.length} snapshots`;
+    for (const m of MODES) {
+      const on = m === mode;
+      btns[m].setAttribute("aria-pressed", on);
+      btns[m].classList.toggle("on", on);
+    }
+    const c = groupCount(mode), lead = mode === "All" ? "" : "mean of ";
+    countEl.textContent = `${lead}${c} benchmark${c === 1 ? "" : "s"} · ${snaps.length} snapshots`;
   }
-  bOverall.onclick = () => setMode("overall");
-  bAll.onclick = () => setMode("all");
-  setMode(new URLSearchParams(location.search).get("mode") === "all" ? "all" : "overall");
+  for (const m of MODES) {
+    const b = document.createElement("button");
+    b.className = "seg"; b.textContent = m;
+    b.onclick = () => setMode(m);
+    modesEl.appendChild(b); btns[m] = b;
+  }
+  const want = new URLSearchParams(location.search).get("mode");
+  setMode(MODES.includes(want) ? want : "Overall");
 })();
 
 function renderReadout(baseline, snaps) {
