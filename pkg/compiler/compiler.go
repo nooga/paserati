@@ -2986,14 +2986,25 @@ func (c *Compiler) patchJump(placeholderPos int) {
 	}
 
 	if offset > math.MaxInt16 || offset < math.MinInt16 { // Use math constants
-		// Handle error: jump offset too large
-		// TODO: Add proper error handling instead of panic
-		panic(fmt.Sprintf("Compiler error: jump offset %d exceeds 16-bit limit", offset))
+		c.recordJumpOverflow(placeholderPos, offset)
+		return
 	}
 
 	// Write the 16-bit offset back into the placeholder bytes (Big Endian)
 	c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)     // High byte
 	c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF) // Low byte
+}
+
+// recordJumpOverflow reports a jump whose distance exceeds the 16-bit branch
+// offset — i.e. a function too large for the bytecode format — as a graceful
+// compile error instead of panicking. The unpatched placeholder is harmless: a
+// non-empty error list aborts the compile before the chunk can run.
+func (c *Compiler) recordJumpOverflow(placeholderPos, offset int) {
+	c.errors = append(c.errors, &errors.CompileError{
+		Position: errors.Position{Line: c.chunk.GetLine(placeholderPos)},
+		Msg: fmt.Sprintf("function too large: a jump offset of %d bytes exceeds the 16-bit "+
+			"branch limit (±32767); split this function into smaller ones", offset),
+	})
 }
 
 // patchJumpToTarget patches a jump to a specific target PC
@@ -3014,7 +3025,8 @@ func (c *Compiler) patchJumpToTarget(placeholderPos int, targetPC int) {
 	}
 
 	if offset > math.MaxInt16 || offset < math.MinInt16 {
-		panic(fmt.Sprintf("Compiler error: jump offset %d exceeds 16-bit limit", offset))
+		c.recordJumpOverflow(placeholderPos, offset)
+		return
 	}
 
 	// Write the 16-bit offset back into the placeholder bytes (Big Endian)

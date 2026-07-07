@@ -1130,3 +1130,38 @@ func TestBasicFunctionalCorrectness(t *testing.T) {
 		})
 	}
 }
+
+// TestJumpOffsetOverflowIsGracefulError verifies that a function too large for
+// the 16-bit branch offset fails with a compile error instead of panicking the
+// compiler. Regression for the old
+// `panic("jump offset ... exceeds 16-bit limit")` in patchJump/patchJumpToTarget.
+func TestJumpOffsetOverflowIsGracefulError(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("function big(x) {\n  let s = 0;\n  if (x > 0) {\n")
+	// ~6000 statements between the `if` test and its merge point pushes the
+	// OpJumpIfFalse offset well past 32767 bytes.
+	for i := 0; i < 6000; i++ {
+		fmt.Fprintf(&b, "    s = s + %d;\n", i)
+	}
+	b.WriteString("  }\n  return s;\n}\nbig(1);\n")
+
+	program, parseErrs := compileSource(b.String())
+	if len(parseErrs) > 0 {
+		t.Fatalf("unexpected parse errors: %v", parseErrs)
+	}
+	// The call itself must not panic (that is the core of the regression).
+	_, compileErrs := NewCompiler().Compile(program)
+	if len(compileErrs) == 0 {
+		t.Fatal("expected a compile error for the oversized function, got none")
+	}
+	found := false
+	for _, e := range compileErrs {
+		if strings.Contains(e.Error(), "too large") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected a 'function too large' error, got: %v", compileErrs)
+	}
+}
