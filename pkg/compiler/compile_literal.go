@@ -230,11 +230,22 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// 8. Emit OpClosure in the *enclosing* compiler (c) - result goes to hint register
+	// (OpClosure16 for >255 upvalues — byte(count) would truncate and leave the
+	// extra descriptors to be decoded as opcodes; mirrors emitClosure.)
 	debugPrintf("// [Closure %s] Using hint register: R%d\n", funcCompiler.compilingFuncName, hint)
-	c.emitOpCode(vm.OpClosure, node.Token.Line)
-	c.emitByte(byte(hint))
-	c.emitUint16(constIdx)             // Operand 1: Constant index of the function blueprint
-	c.emitByte(byte(len(freeSymbols))) // Operand 2: Number of upvalues to capture
+	upvalueCount := len(freeSymbols)
+	if upvalueCount > 255 {
+		c.emitOpCode(vm.OpClosure16, node.Token.Line)
+		c.emitByte(byte(hint))
+		c.emitUint16(constIdx)                // Operand 1: Constant index of the function blueprint
+		c.emitByte(byte(upvalueCount >> 8))   // Operand 2: upvalue count, high byte
+		c.emitByte(byte(upvalueCount & 0xFF)) // Operand 2: upvalue count, low byte
+	} else {
+		c.emitOpCode(vm.OpClosure, node.Token.Line)
+		c.emitByte(byte(hint))
+		c.emitUint16(constIdx)         // Operand 1: Constant index of the function blueprint
+		c.emitByte(byte(upvalueCount)) // Operand 2: Number of upvalues to capture
+	}
 
 	// Emit operands for each upvalue
 	for i, freeSym := range freeSymbols {
@@ -293,8 +304,14 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			// We need to capture it from the enclosing scope's upvalues.
 			enclosingFreeIndex := c.addFreeSymbol(node, &enclosingSymbol)
 			debugPrintf("// [Closure Loop %s] Free '%s' is in outer function scope. Emitting isLocal=0, index=%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingFreeIndex)
-			c.emitByte(0)                        // isLocal = false
-			c.emitByte(byte(enclosingFreeIndex)) // Index = upvalue index in enclosing scope
+			if enclosingFreeIndex > 255 {
+				c.emitByte(byte(CaptureFromUpvalue16)) // 16-bit upvalue index (mirrors emitClosure)
+				c.emitByte(byte(enclosingFreeIndex >> 8))
+				c.emitByte(byte(enclosingFreeIndex & 0xFF))
+			} else {
+				c.emitByte(0)                        // isLocal = false
+				c.emitByte(byte(enclosingFreeIndex)) // Index = upvalue index in enclosing scope
+			}
 		}
 	}
 
