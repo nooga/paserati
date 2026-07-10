@@ -302,7 +302,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 		// debug disabled
 		var valueReg Register = nilRegister
 		var err errors.PaseratiError
-		isValueFunc := false       // Flag to track if value is a function literal
+		isValueFunc := false        // Flag to track if value is a function literal
 		handledInWithBlock := false // Flag to track if handled by with-block special path
 
 		if funcLit, ok := declarator.Value.(*parser.FunctionLiteral); ok {
