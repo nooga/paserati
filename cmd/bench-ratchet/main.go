@@ -641,7 +641,17 @@ func captureOnePackage(pkg string, count int, benchtime, timeout, tags string, f
 
 // aggregateFromFile reads a .jsonl of StreamRecord lines and returns
 // a Baseline computed from them. Same-named records (e.g. multiple
-// -count repetitions) are averaged.
+// -count repetitions) are reduced by MINIMUM, not mean.
+//
+// Benchmark noise is one-directional: interference (GC pauses, CPU migration,
+// a co-scheduled runner tenant, thermal throttling) only ever makes a run
+// slower, never faster. The fastest of N repetitions is therefore the least
+// contaminated estimate of the true cost, and min is far more stable across
+// captures than mean — a single slow sample drags the mean up and manufactures
+// a phantom regression, which is exactly what small (<20ns) benches did on
+// shared CI runners. All raw samples are retained in Samples for provenance.
+// alloc/bytes are deterministic per op, so min == mean for them; taking min
+// keeps the reduction uniform.
 func aggregateFromFile(path string) (Baseline, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -653,7 +663,7 @@ func aggregateFromFile(path string) (Baseline, error) {
 		pkg                       string
 		name                      string
 		count                     int
-		nsSum, bytesSum, allocSum float64
+		nsMin, bytesMin, allocMin float64
 		iters                     int64
 		setHash                   string // shared set identity across this key's records
 		setHashConflict           bool   // records disagreed → no coherent identity
@@ -673,9 +683,15 @@ func aggregateFromFile(path string) (Baseline, error) {
 			byName[key] = a
 		}
 		a.count++
-		a.nsSum += rec.NSPerOp
-		a.bytesSum += float64(rec.BytesPerOp)
-		a.allocSum += float64(rec.AllocsPerOp)
+		if a.count == 1 || rec.NSPerOp < a.nsMin {
+			a.nsMin = rec.NSPerOp
+		}
+		if a.count == 1 || float64(rec.BytesPerOp) < a.bytesMin {
+			a.bytesMin = float64(rec.BytesPerOp)
+		}
+		if a.count == 1 || float64(rec.AllocsPerOp) < a.allocMin {
+			a.allocMin = float64(rec.AllocsPerOp)
+		}
 		if rec.Iterations > a.iters {
 			a.iters = rec.Iterations
 		}
@@ -695,9 +711,9 @@ func aggregateFromFile(path string) (Baseline, error) {
 			Package:     a.pkg,
 			Name:        a.name,
 			Iterations:  a.iters,
-			NSPerOp:     a.nsSum / float64(a.count),
-			BytesPerOp:  int64(a.bytesSum / float64(a.count)),
-			AllocsPerOp: int64(a.allocSum / float64(a.count)),
+			NSPerOp:     a.nsMin,
+			BytesPerOp:  int64(a.bytesMin),
+			AllocsPerOp: int64(a.allocMin),
 			SetHash:     a.setHash,
 			Samples:     append([]BenchmarkSample(nil), a.samples...),
 		})
