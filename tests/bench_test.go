@@ -71,7 +71,81 @@ func BenchmarkFibPlaceholderRun(b *testing.B) {
 	// No need to restore stdout here due to defer
 }
 
+// BenchmarkAdd isolates the OpAdd numeric fast path (add-heavy loop on numbers).
+func BenchmarkAdd(b *testing.B) {
+	chunk := compileFile(b, "scripts/bench_add.ts")
+	paserati := driver.NewPaserati()
+
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0644)
+	if err != nil {
+		b.Fatalf("Failed to open os.DevNull: %v", err)
+	}
+	defer devNull.Close()
+	oldStdout := os.Stdout
+	os.Stdout = devNull
+	defer func() { os.Stdout = oldStdout }()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, runtimeErrs := paserati.InterpretChunk(chunk)
+		if len(runtimeErrs) > 0 {
+			b.Fatalf("Runtime error during benchmark iteration %d: %v", i, runtimeErrs)
+		}
+	}
+	b.StopTimer()
+}
+
+// BenchmarkArith isolates the OpSubtract/Multiply/Divide/Remainder numeric fast paths.
+func BenchmarkArith(b *testing.B) {
+	chunk := compileFile(b, "scripts/bench_arith.ts")
+	paserati := driver.NewPaserati()
+
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0644)
+	if err != nil {
+		b.Fatalf("Failed to open os.DevNull: %v", err)
+	}
+	defer devNull.Close()
+	oldStdout := os.Stdout
+	os.Stdout = devNull
+	defer func() { os.Stdout = oldStdout }()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, runtimeErrs := paserati.InterpretChunk(chunk)
+		if len(runtimeErrs) > 0 {
+			b.Fatalf("Runtime error during benchmark iteration %d: %v", i, runtimeErrs)
+		}
+	}
+	b.StopTimer()
+}
+
 // BenchmarkMatrixMult runs the matrix_mult.ts script.
+// BenchmarkSetIndex isolates the OpSetIndex (arr[i] = v) hot path — the setter
+// walk / allocation guard optimization is measured here.
+func BenchmarkSetIndex(b *testing.B) {
+	chunk := compileFile(b, "scripts/bench_setindex.ts")
+	paserati := driver.NewPaserati()
+
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0644)
+	if err != nil {
+		b.Fatalf("Failed to open os.DevNull: %v", err)
+	}
+	defer devNull.Close()
+	oldStdout := os.Stdout
+	os.Stdout = devNull
+	defer func() { os.Stdout = oldStdout }()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, runtimeErrs := paserati.InterpretChunk(chunk)
+		if len(runtimeErrs) > 0 {
+			b.Fatalf("Runtime error during benchmark iteration %d: %v", i, runtimeErrs)
+		}
+	}
+	b.StopTimer()
+}
+
 func BenchmarkMatrixMult(b *testing.B) {
 	// Compile once outside the loop.
 	chunk := compileFile(b, "scripts/matrix_mult.ts")
