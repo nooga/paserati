@@ -23,6 +23,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -57,10 +59,15 @@ func main() {
 // buildRecords sums per-test durations over the passing, non-timed-out set,
 // emitting a total plus per-top-level-suite breakdown. NSPerOp carries the
 // summed nanoseconds; aggregate divides it by the anchor to normalize.
+//
+// Each record also carries a SetHash over the exact set of tests it summed, so
+// a downstream consumer can tell whether two totals cover the same workload:
+// equal counts alone don't guarantee it (a test flipping pass->timeout while
+// another flips the other way keeps the count but changes the set and the sum).
 func buildRecords(out test262.Output, capturedAt string) []perfdata.StreamRecord {
 	type acc struct {
 		sumNS float64
-		count int64
+		paths []string // contributing test paths — hashed into the record's SetHash
 	}
 	bySuite := map[string]*acc{}
 	total := &acc{}
@@ -71,7 +78,7 @@ func buildRecords(out test262.Output, capturedAt string) []perfdata.StreamRecord
 		}
 		ns := float64(r.Duration) // time.Duration marshals as int64 nanoseconds
 		total.sumNS += ns
-		total.count++
+		total.paths = append(total.paths, r.Path)
 
 		suite := topLevelSuite(r.Path)
 		a := bySuite[suite]
@@ -80,15 +87,16 @@ func buildRecords(out test262.Output, capturedAt string) []perfdata.StreamRecord
 			bySuite[suite] = a
 		}
 		a.sumNS += ns
-		a.count++
+		a.paths = append(a.paths, r.Path)
 	}
 
 	rec := func(name string, a *acc) perfdata.StreamRecord {
 		return perfdata.StreamRecord{
 			Package:    "test262",
 			Name:       name,
-			Iterations: a.count, // tests contributing to the sum
-			NSPerOp:    a.sumNS, // summed execution time; anchor-normalized downstream
+			Iterations: int64(len(a.paths)), // tests contributing to the sum
+			NSPerOp:    a.sumNS,             // summed execution time; anchor-normalized downstream
+			SetHash:    setHash(a.paths),    // identity of that contributing set
 			CapturedAt: capturedAt,
 		}
 	}
@@ -103,6 +111,23 @@ func buildRecords(out test262.Output, capturedAt string) []perfdata.StreamRecord
 		records = append(records, rec(s, bySuite[s]))
 	}
 	return records
+}
+
+// setHash fingerprints a contributing set by its member test paths, order-
+// independent. Truncated SHA-256 (64 bits) — collision odds are negligible for
+// set sizes here, and it stays short in the JSON. Empty set -> empty hash.
+func setHash(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	sorted := append([]string(nil), paths...)
+	sort.Strings(sorted)
+	h := sha256.New()
+	for _, p := range sorted {
+		h.Write([]byte(p))
+		h.Write([]byte{'\n'}) // delimiter: no path joins with the next to forge the same digest
+	}
+	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
 // topLevelSuite extracts the chapter from a path like
