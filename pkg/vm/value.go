@@ -767,7 +767,12 @@ func (v Value) IsBoolean() bool {
 }
 
 func (v Value) IsObject() bool {
-	return v.typ == TypeObject || v.typ == TypeDictObject || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeGenerator || v.typ == TypeAsyncGenerator || v.typ == TypePromise || v.typ == TypeRegExp || v.typ == TypeTypedArray || v.typ == TypeDataView || v.typ == TypeArrayBuffer || v.typ == TypeSharedArrayBuffer || v.typ == TypeProxy || v.typ == TypeMap || v.typ == TypeSet || v.typ == TypeWeakMap || v.typ == TypeWeakSet || v.typ == TypeWeakRef
+	// The object ValueTypes form a contiguous span [TypeObject, TypeProxy], so this
+	// range check is equivalent to (and much faster than) an 18-way OR-chain — it
+	// rejects the common non-object case (numbers) in one comparison instead of 18.
+	// TestIsObjectExhaustive locks in the equivalence; if a type is ever inserted
+	// mid-enum and breaks contiguity, that test fails.
+	return v.typ >= TypeObject && v.typ <= TypeProxy
 }
 
 func (v Value) IsDictObject() bool {
