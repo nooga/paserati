@@ -209,6 +209,12 @@ function labelFor(s) {
   const members = {};                                      // group -> [series]
   names.forEach((n, i) => (members[groupOf(n)] ||= []).push(series[i]));
 
+  // Overall is the CONTINUOUS micro suite only — Test262 is opt-in and sparse
+  // (present on a subset of snapshots), so folding it into Overall's mean would
+  // change the composition at exactly the snapshots where it appears, moving the
+  // line for a reason unrelated to the engine. Test262 keeps its own tab.
+  const micro = GROUPS.filter(g => g !== "Test262").flatMap(g => members[g] || []);
+
   // mean + ±1σ band across an arbitrary subset of series, per snapshot.
   function meanBand(sub) {
     const mean = [], lo = [], hi = [];
@@ -226,7 +232,7 @@ function labelFor(s) {
   // members behind a bold mean + ±σ band) · "All" (every raw line).
   function datasetsFor(mode) {
     if (mode === "All") return [baseDS(), ...series];
-    const sub = mode === "Overall" ? series : (members[mode] || []);
+    const sub = mode === "Overall" ? micro : (members[mode] || []);
     const { mean, lo, hi } = meanBand(sub);
     const faint = mode === "Overall" ? [] : sub.map(d => ({ ...d,
       label: "_" + d.label,   // hidden from legend/tooltip — visual context only
@@ -240,7 +246,7 @@ function labelFor(s) {
         borderColor: "#ece0c8", backgroundColor: "#ece0c8", borderWidth: 2.5,
         pointRadius: 2.5, pointHoverRadius: 4, tension: .25 } ];
   }
-  const groupCount = m => m === "All" || m === "Overall" ? names.length : (members[m] || []).length;
+  const groupCount = m => m === "All" ? names.length : m === "Overall" ? micro.length : (members[m] || []).length;
 
   const ink = "#a3906c", grid = "#2a2114";
   const chart = new Chart(document.getElementById("chart"), {
