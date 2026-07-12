@@ -18,12 +18,12 @@ name: Perf Test262
 # Informational only: it never fails the PR.
 on:
   pull_request:
+    # No `paths` filter: GitHub applies paths BEFORE the job's label `if`, so a
+    # paths filter would silently swallow a labeled PR that only touches the
+    # harness (scripts/macro-test262*.sh, setup-test262.sh). The `perf-test262`
+    # label is already the explicit heavy-run opt-in and the job `if` is the gate;
+    # unlabeled PRs just evaluate to a skipped job, which is ~free.
     types: [opened, synchronize, reopened, labeled, unlabeled]
-    paths:
-      - 'pkg/**'
-      - 'cmd/**'
-      - '.test262-rev'
-      - '.github/workflows/perf-test262.yml'
   # Manual escape hatch: run against any PR by number without touching labels.
   workflow_dispatch:
     inputs:
@@ -124,9 +124,17 @@ jobs:
       - name: Bench merge-base
         env:
           BASE: ${{ steps.refs.outputs.base }}
+          HEAD: ${{ steps.refs.outputs.head }}
         run: |
           set -euo pipefail
           git checkout --force "$BASE"
+          # Pin the corpus to HEAD's .test262-rev for BOTH halves. setup-test262.sh
+          # re-pins from the working tree's .test262-rev, so without this a PR that
+          # bumps the pin would bench BASE against a different corpus than HEAD and
+          # the intersection compare would book a corpus change as an engine delta.
+          # Resolve to HEAD's rev (the corpus the PR proposes); HEAD's own checkout
+          # already carries it, so only the base half needs the override.
+          git show "${HEAD}:.test262-rev" > .test262-rev
           ./setup-test262.sh
           ./scripts/macro-test262.sh "${RUNNER_TEMP}/base.jsonl" "${RUNNER_TEMP}/base.stats.json"
 
