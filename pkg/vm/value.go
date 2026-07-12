@@ -1326,6 +1326,21 @@ func (v Value) ToPrimitive(hint string) Value {
 }
 
 func (v Value) ToInteger() int32 {
+	// Fast path: already a number — the overwhelmingly common operand for ToInt32
+	// coercions (bitwise & | ^ << >> >>> ~, asm.js-style `x | 0`). A number is
+	// never an object, so this takes the identical path the switch below would;
+	// short-circuiting here skips the object/ToPrimitive guard entirely.
+	switch v.typ {
+	case TypeIntegerNumber:
+		return v.AsInteger()
+	case TypeFloatNumber:
+		f := v.AsFloat()
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0
+		}
+		return int32(uint32(int64(f)))
+	}
+
 	// First apply ToPrimitive if it's an object
 	if v.IsObject() || v.typ == TypeArray || v.typ == TypeArguments || v.typ == TypeRegExp || v.typ == TypeMap || v.typ == TypeSet || v.typ == TypeProxy {
 		v = v.ToPrimitive("number")

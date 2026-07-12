@@ -1901,6 +1901,18 @@ startExecution:
 			// Type checking specific to operation groups
 			switch opcode {
 			case OpAdd:
+				// Fast path: both operands already numbers. Skips two non-inlinable
+				// vm.toPrimitive calls (each with helperCallDepth/unwinding/handler
+				// bookkeeping) plus the string/BigInt/Symbol branches. Semantically
+				// identical to the slow path: toPrimitive is the identity for
+				// numbers, and the numeric branch computes
+				// Number(lhs.ToFloat() + rhs.ToFloat()).
+				if lt, rt := leftVal.typ, rightVal.typ; (lt == TypeIntegerNumber || lt == TypeFloatNumber) &&
+					(rt == TypeIntegerNumber || rt == TypeFloatNumber) {
+					registers[destReg] = Number(leftVal.ToFloat() + rightVal.ToFloat())
+					continue
+				}
+
 				// JS semantics: ToPrimitive on both first (for string check),
 				// then if either is String → concatenate ToString(lhs)+ToString(rhs);
 				// else ToNumeric on both; if both BigInt → BigInt add; else Number add.
@@ -2017,6 +2029,24 @@ startExecution:
 					registers[destReg] = Number(leftNum + rightNum)
 				}
 			case OpSubtract, OpMultiply, OpDivide:
+				// Fast path: both operands already numbers. Skips two non-inlinable
+				// vm.toPrimitive calls plus the Symbol/BigInt branches. Identical to
+				// the slow path's numeric case (toPrimitive is the identity for
+				// numbers, neither is Symbol/BigInt).
+				if lt, rt := leftVal.typ, rightVal.typ; (lt == TypeIntegerNumber || lt == TypeFloatNumber) &&
+					(rt == TypeIntegerNumber || rt == TypeFloatNumber) {
+					ln, rn := leftVal.ToFloat(), rightVal.ToFloat()
+					switch opcode {
+					case OpSubtract:
+						registers[destReg] = Number(ln - rn)
+					case OpMultiply:
+						registers[destReg] = Number(ln * rn)
+					case OpDivide:
+						registers[destReg] = Number(ln / rn)
+					}
+					continue
+				}
+
 				// Apply ToPrimitive and type coercion like JavaScript
 				// ECMAScript order: ToNumeric(lhs) then ToNumeric(rhs)
 				// ToNumeric calls ToPrimitive internally, and ToNumber(Symbol) throws
@@ -2145,6 +2175,13 @@ startExecution:
 					}
 				}
 			case OpRemainder:
+				// Fast path: both operands already numbers (see OpSubtract above).
+				if lt, rt := leftVal.typ, rightVal.typ; (lt == TypeIntegerNumber || lt == TypeFloatNumber) &&
+					(rt == TypeIntegerNumber || rt == TypeFloatNumber) {
+					registers[destReg] = Number(math.Mod(leftVal.ToFloat(), rightVal.ToFloat()))
+					continue
+				}
+
 				// Apply ToPrimitive and type coercion
 				// ECMAScript order: ToNumeric(lhs) then ToNumeric(rhs)
 				frame.ip = ip
