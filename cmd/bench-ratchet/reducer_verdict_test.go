@@ -8,26 +8,30 @@ import (
 	"testing"
 )
 
-// TestMinVsMeanFlipsRegressionVerdict proves the point of the min reducer on
-// real captured data: the reducer choice flips the actual pass/fail verdict,
-// not just the reported number.
+// TestReducerChoiceChangesRegressionVerdict shows that the choice of reducer
+// changes the pass/fail verdict of the informational A/B, not just the number.
 //
-// Samples below were captured 2026-07-12 on an Apple M2 via
+// The 15 samples below are a real capture (2026-07-12, Apple M2):
 //
 //	go test ./pkg/vm -bench 'BenchmarkGetOwn/n=16/last|BenchmarkRatchetAnchor' -count=15
 //
-// BenchmarkGetOwn/n=16/last is memory-bound (a deep own-property walk); under
-// interference its runs pick up upward-only noise — here a clean cluster (~9.5)
-// and a contention-slowed tail (~12–13.4). The register-only calibration anchor
-// is far steadier. Feeding the SAME 15 samples through the two reducers:
+// and are deliberately a REGIME TRANSITION: five fast runs (~9.8) then ten slow
+// ones (~12.7) — min 9.536, mean 11.759, median 12.370. That is *not* tidy iid
+// noise, which is exactly the point. The minimum selects the fast-regime lower
+// envelope; the mean is dragged into the slow regime by the tail. Fed through
+// the real compareAndReport at perf-pr's 10% budget, against a baseline pinned
+// at the lower envelope:
 //
-//	min-reduced  ratio_to_anchor: 9.536 / 1.172 = 8.14   (true cost)  -> 0 regressions
-//	mean-reduced ratio_to_anchor: 11.759 / 1.243 = 9.46  (+16%)       -> 1 regression
+//	min-reduced  ratio 9.536 / 1.172 = 8.14  -> 0 regressions
+//	mean-reduced ratio 11.759 / 1.243 = 9.46 -> 1 regression (+16%)
 //
-// against a baseline pinned at the true (min) cost and perf-pr's 10% budget. The
-// mean reducer manufactures a phantom regression on code the run never touched;
-// the min reducer does not. This is the verdict flip #22 removes.
-func TestMinVsMeanFlipsRegressionVerdict(t *testing.T) {
+// So the reducer alone flips the verdict. What this does and does NOT show: it
+// demonstrates verdict SUPPRESSION under an upward-contamination assumption — it
+// does not prove the suppressed result was phantom. A sustained slow regime can
+// be real; telling environmental drift from a code change needs interleaved runs
+// (the median-of-N repeat gate), not this reducer. min-of-N here is a pragmatic
+// lower-envelope heuristic for the informational report, never a gate.
+func TestReducerChoiceChangesRegressionVerdict(t *testing.T) {
 	anchor := []float64{1.172, 1.217, 1.208, 1.199, 1.215, 1.196, 1.199, 1.199, 1.196, 1.187, 1.190, 1.192, 1.478, 1.430, 1.373}
 	family := []float64{9.751, 9.743, 9.536, 9.922, 10.14, 13.38, 12.38, 12.74, 12.51, 12.17, 12.82, 13.45, 13.39, 12.37, 12.08}
 	const (
@@ -49,9 +53,10 @@ func TestMinVsMeanFlipsRegressionVerdict(t *testing.T) {
 		t.Fatalf("aggregated ratio_to_anchor = %.4f, want %.4f (min-reduced)", got, wantMinRatio)
 	}
 
-	// 2. Accepted baseline = the true cost (min). Same machine so no fingerprint warning.
+	// 2. Accepted baseline = the lower envelope (min). Same machine => no fingerprint warning.
 	baseline := Baseline{
 		Machine:    curMin.Machine,
+		Reducer:    curMin.Reducer,
 		Anchor:     AnchorRecord{NSPerOp: minOf(anchor)},
 		Benchmarks: map[string]BenchmarkEntry{famKey: {RatioToAnchor: wantMinRatio}},
 	}
@@ -59,16 +64,17 @@ func TestMinVsMeanFlipsRegressionVerdict(t *testing.T) {
 	// 3. Same samples, mean reducer: the ratio inflates past budget.
 	curMean := Baseline{
 		Machine:    curMin.Machine,
+		Reducer:    curMin.Reducer,
 		Anchor:     AnchorRecord{NSPerOp: meanOf(anchor)},
 		Benchmarks: map[string]BenchmarkEntry{famKey: {RatioToAnchor: meanOf(family) / meanOf(anchor)}},
 	}
 
-	// 4. Drive the real regression check. min -> clean, mean -> phantom.
+	// 4. Drive the real regression check. Reducer choice alone flips the verdict.
 	if got := quietRegressions(baseline, curMin, budget); got != 0 {
-		t.Errorf("min reducer: %d regression(s), want 0 — the samples ARE the accepted baseline", got)
+		t.Errorf("min reducer: %d regression(s), want 0 — baseline is pinned at this lower envelope", got)
 	}
 	if got := quietRegressions(baseline, curMean, budget); got != 1 {
-		t.Errorf("mean reducer: %d regression(s), want 1 — the phantom #22 removes", got)
+		t.Errorf("mean reducer: %d regression(s), want 1 — the verdict min suppresses", got)
 	}
 }
 

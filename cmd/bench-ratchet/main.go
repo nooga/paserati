@@ -78,7 +78,7 @@ const (
 	defaultTimeout      = "10m"
 	anchorName          = "BenchmarkRatchetAnchor"
 	anchorPackage       = "github.com/nooga/paserati/pkg/vm"
-	schemaVersion       = 1
+	schemaVersion       = 2 // v2 records Reducer + SampleCount; v1 (mean-era, no provenance) is intentionally incompatible
 )
 
 // defaultPackages is the scope when no -packages flag is given.
@@ -264,9 +264,16 @@ func writeOrCheck(baselinePath string, current Baseline, mode string, budget flo
 		// ratchet and writes current as-is.
 		existing, err := readBaseline(baselinePath)
 		if err != nil {
-			// No prior baseline — first run. Stamp every entry with
-			// current's commit/time and write.
-			fmt.Printf("  no existing baseline at %s — writing current as the initial bar.\n", baselinePath)
+			// No usable prior baseline — either a first run, or one that is
+			// schema-incompatible (e.g. the mean-era v1 → min-era v2 provenance
+			// transition). Re-seed either way: a min-era bar is a different
+			// statistic than a mean-era one and must not be ratcheted onto it.
+			if _, statErr := os.Stat(baselinePath); statErr == nil {
+				fmt.Printf("  baseline at %s is not schema-compatible (%v)\n", baselinePath, err)
+				fmt.Printf("  — re-seeding as an INTENTIONAL timeline discontinuity (reducer/version change), not a regression.\n")
+			} else {
+				fmt.Printf("  no existing baseline at %s — writing current as the initial bar.\n", baselinePath)
+			}
 			stampAll(&current)
 			if err := writeBaseline(baselinePath, current); err != nil {
 				die("write baseline: %v", err)
@@ -643,15 +650,21 @@ func captureOnePackage(pkg string, count int, benchtime, timeout, tags string, f
 // a Baseline computed from them. Same-named records (e.g. multiple
 // -count repetitions) are reduced by MINIMUM, not mean.
 //
-// Benchmark noise is one-directional: interference (GC pauses, CPU migration,
-// a co-scheduled runner tenant, thermal throttling) only ever makes a run
-// slower, never faster. The fastest of N repetitions is therefore the least
-// contaminated estimate of the true cost, and min is far more stable across
-// captures than mean — a single slow sample drags the mean up and manufactures
-// a phantom regression, which is exactly what small (<20ns) benches did on
-// shared CI runners. All raw samples are retained in Samples for provenance.
-// alloc/bytes are deterministic per op, so min == mean for them; taking min
-// keeps the reduction uniform.
+// Rationale, and its limits: on shared runners most interference is upward (GC
+// pauses, CPU migration, a co-scheduled tenant, thermal throttling), so the
+// minimum of N repetitions selects the LOWER PERFORMANCE ENVELOPE — the least-
+// contaminated sample under that assumption — and is far more stable run-to-run
+// than the mean, which a single slow sample drags up. This is a pragmatic
+// heuristic for the informational same-runner A/B report, NOT a statistical
+// estimate of "true cost": favorable samples exist too (frequency scaling, warm
+// caches), and a minimum is sample-count dependent (more -count = more chances
+// to observe a lower value). A defensible GATE needs interleaved runs and a
+// distribution comparison — that is the median-of-N repeat-A/B, not this
+// reducer. Reducer + SampleCount are recorded on the Baseline so a min-era
+// snapshot is never silently compared against a mean-era one.
+//
+// All raw samples are retained in Samples for provenance. alloc/bytes are
+// deterministic per op, so min == mean for them; taking min keeps it uniform.
 func aggregateFromFile(path string) (Baseline, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -761,6 +774,8 @@ func buildCurrentBaseline(results []Result, anchor Result) Baseline {
 	}
 	return Baseline{
 		Version:       schemaVersion,
+		Reducer:       "min",
+		SampleCount:   len(anchor.Samples),
 		CapturedAt:    time.Now().UTC().Format(time.RFC3339),
 		CapturedAtSHA: gitShortSHA(),
 		Machine:       m,
@@ -895,6 +910,16 @@ func compareAndReport(baseline, current Baseline, budget float64, format string)
 		fmt.Printf("  current:  %s / %s / %s\n",
 			current.Machine.CPUModel, current.Machine.GoVersion, current.Machine.OS+"-"+current.Machine.Arch)
 		fmt.Printf("  comparing on anchor-relative ratios — absolute ns/op deltas are not meaningful.\n\n")
+	}
+	// Provenance guard: a minimum is sample-count dependent and a mean-era number
+	// is a different statistic entirely, so deltas across a reducer/count change
+	// are not comparable. (The version check already rejects pre-provenance v1
+	// baselines outright; this catches same-version mismatches, e.g. min vs a
+	// future median reducer, or n=3 vs n=7.)
+	if baseline.Reducer != current.Reducer || (baseline.SampleCount != 0 && current.SampleCount != 0 && baseline.SampleCount != current.SampleCount) {
+		fmt.Printf("warning: baseline provenance differs — reducer %q/n=%d vs current %q/n=%d\n",
+			baseline.Reducer, baseline.SampleCount, current.Reducer, current.SampleCount)
+		fmt.Printf("  a minimum is sample-count dependent — deltas across this boundary are not comparable.\n\n")
 	}
 	if baseline.Anchor.NSPerOp > 0 {
 		anchorDrift := (current.Anchor.NSPerOp - baseline.Anchor.NSPerOp) / baseline.Anchor.NSPerOp
