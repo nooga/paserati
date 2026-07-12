@@ -2,8 +2,16 @@
 package perfdata
 
 // Baseline is the on-disk format. Keep field tags stable.
+//
+// Reducer and SampleCount record how the per-op numbers were derived from the
+// raw -count repetitions ("min" over N samples). A minimum is sample-count
+// dependent, so baselines produced with a different reducer or count are NOT
+// directly comparable; readers reject a version/provenance mismatch rather than
+// silently diff a min-era snapshot against a mean-era one.
 type Baseline struct {
 	Version       int                       `json:"version"`
+	Reducer       string                    `json:"reducer,omitempty"`
+	SampleCount   int                       `json:"sample_count,omitempty"`
 	CapturedAt    string                    `json:"captured_at"`
 	CapturedAtSHA string                    `json:"captured_at_sha"`
 	Machine       Machine                   `json:"machine"`
