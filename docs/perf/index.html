@@ -165,9 +165,15 @@ function labelFor(s) {
   for (const s of snaps) for (const n of Object.keys(s.benchmarks || {})) allNames.add(n);
 
   // Reference ratio per benchmark: the baseline's, else the first snapshot's.
+  // But only trust the baseline when it was captured on the modal CPU. The
+  // baseline anchor carries the same cross-tier drift we filter snapshots for
+  // (its ratio_to_anchor is off by the anchor's error), so an off-tier baseline
+  // would rebase every series by that artifact — the very thing this page hides.
+  // When off-tier, fall through to the first (modal) snapshot as the reference.
+  const baselineOnTier = (baseline.machine?.cpu_model || "?") === modalCpu;
   const ref = {};
   for (const n of allNames) {
-    const b = baseline.benchmarks?.[n]?.ratio_to_anchor;
+    const b = baselineOnTier ? baseline.benchmarks?.[n]?.ratio_to_anchor : 0;
     if (b > 0) { ref[n] = b; continue; }
     const first = snaps.find(s => s.benchmarks?.[n]?.ratio_to_anchor > 0);
     ref[n] = first ? first.benchmarks[n].ratio_to_anchor : 0;
