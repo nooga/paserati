@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -639,8 +640,52 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 	o.properties = append(o.properties, value)
 }
 
+// arrayIndexAccessorSeen latches to true the first time any accessor property is
+// defined under a canonical array-index key (e.g. Object.defineProperty(proto,
+// "5", {get})). OpSetIndex's inherited-index-setter walk — a strconv.Itoa + string
+// concat + Array.prototype chain scan on *every* `arr[i] = v` — is skipped while
+// this is false, which is the overwhelmingly common case (integer-indexed
+// accessors on the prototype chain essentially never occur). It only ever latches
+// true and never resets; that is safe because the walk is a pure correctness guard,
+// so a stale-true merely restores the original (slow) behavior. Process-global
+// rather than per-realm to keep the accessor-definition choke points VM-free; the
+// only cost of the coarser scope is that one realm defining such an accessor also
+// disables the fast path for others, which is negligible in practice.
+var arrayIndexAccessorSeen bool
+
+// isCanonicalArrayIndexKey reports whether name is a canonical array-index string
+// ("0", or a digit-string with no leading zero, within the 0..2^32-2 index range) —
+// the only keys the OpSetIndex setter walk can ever match.
+func isCanonicalArrayIndexKey(name string) bool {
+	if len(name) == 0 || len(name) > 10 {
+		return false
+	}
+	if name == "0" {
+		return true
+	}
+	if name[0] < '1' || name[0] > '9' { // reject leading zero and non-digits
+		return false
+	}
+	for i := 1; i < len(name); i++ {
+		if name[i] < '0' || name[i] > '9' {
+			return false
+		}
+	}
+	n, err := strconv.ParseUint(name, 10, 64)
+	return err == nil && n <= 0xFFFFFFFE
+}
+
+// noteAccessorKey latches arrayIndexAccessorSeen when a string key is a canonical
+// array index. Called from every accessor-definition choke point.
+func noteAccessorKey(name string) {
+	if !arrayIndexAccessorSeen && isCanonicalArrayIndexKey(name) {
+		arrayIndexAccessorSeen = true
+	}
+}
+
 // DefineAccessorProperty defines or updates an accessor own property.
 func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) {
+	noteAccessorKey(name)
 	// Wrapper using string name
 	// Find existing field
 	for i, f := range o.shape.fields {
@@ -780,6 +825,9 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 
 // DefineAccessorPropertyByKey defines or updates an accessor property for arbitrary key kinds.
 func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) {
+	if key.isString() {
+		noteAccessorKey(key.name)
+	}
 	// Find existing field
 	for i, f := range o.shape.fields {
 		match := (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
