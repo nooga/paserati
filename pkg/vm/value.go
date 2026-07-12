@@ -2290,6 +2290,7 @@ func (a *ArrayObject) HasOwnSymbolProp(sym *SymbolObject) bool {
 
 // DefineAccessorProperty defines an accessor property on the array object
 func (a *ArrayObject) DefineAccessorProperty(name string, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) {
+	noteAccessorKey(name)
 	// Initialize maps if needed
 	if a.getters == nil {
 		a.getters = make(map[string]Value)

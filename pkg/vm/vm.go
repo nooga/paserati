@@ -7478,7 +7478,7 @@ startExecution:
 				if !isValidArrayIndex {
 					// Handle Symbol keys directly
 					if indexVal.Type() == TypeSymbol {
-						if ok, status, res := vm.opSetPropSymbol(ip, &baseVal, indexVal, &valueVal); !ok {
+						if ok, status, res := vm.opSetPropSymbol(ip, &registers[baseReg], indexVal, &valueVal); !ok {
 							return status, res
 						}
 						continue
@@ -7499,7 +7499,7 @@ startExecution:
 						}
 						// Per ECMAScript ToPropertyKey: if ToPrimitive returns a Symbol, use it directly
 						if primitiveVal.Type() == TypeSymbol {
-							if ok, status, res := vm.opSetPropSymbol(ip, &baseVal, primitiveVal, &valueVal); !ok {
+							if ok, status, res := vm.opSetPropSymbol(ip, &registers[baseReg], primitiveVal, &valueVal); !ok {
 								return status, res
 							}
 							continue
@@ -7508,7 +7508,7 @@ startExecution:
 					} else {
 						key = indexVal.ToString()
 					}
-					if ok, status, res := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+					if ok, status, res := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
 						if status != InterpretOK {
 							return status, res
 						}
@@ -7520,12 +7520,17 @@ startExecution:
 				// idx is now set from either number or string path
 				// and we've verified it's a valid array index (non-negative integer)
 
-				// Check for setter on Array.prototype chain before direct write
-				// ECMAScript requires invoking inherited setters for array indices
-				idxKey := strconv.Itoa(idx)
-				setterKey := "s:" + idxKey // PropertyKey hash format for string keys
+				// Check for setter on Array.prototype chain before direct write.
+				// ECMAScript requires invoking inherited setters for array indices,
+				// but integer-indexed accessors on the prototype chain essentially
+				// never exist, so guard the whole walk (a strconv.Itoa + string
+				// concat + chain scan, on every element write) behind a latch that is
+				// only set once such an accessor is actually defined. See
+				// arrayIndexAccessorSeen in object.go.
 				setterFound := false
-				if vm.ArrayPrototype.IsObject() {
+				if arrayIndexAccessorSeen && vm.ArrayPrototype.IsObject() {
+					idxKey := strconv.Itoa(idx)
+					setterKey := "s:" + idxKey // PropertyKey hash format for string keys
 					for cur := vm.ArrayPrototype.AsPlainObject(); cur != nil; {
 						// Check directly in the setters map (keyed by PropertyKey.hash())
 						if cur.setters != nil {
@@ -7585,7 +7590,7 @@ startExecution:
 						// Convert index to string for property key
 						key := fmt.Sprintf("%d", idx)
 						// Use opSetProp to handle property setting with accessor awareness
-						if ok, status, res := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+						if ok, status, res := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
 							if status != InterpretOK {
 								return status, res
 							}
@@ -7623,7 +7628,7 @@ startExecution:
 						// Skip setting silently (spec-incomplete structure)
 						continue
 					}
-					if ok, status, res := vm.opSetPropSymbol(ip, &baseVal, indexVal, &valueVal); !ok {
+					if ok, status, res := vm.opSetPropSymbol(ip, &registers[baseReg], indexVal, &valueVal); !ok {
 						return status, res
 					}
 					continue
@@ -7646,7 +7651,7 @@ startExecution:
 						}
 						// Per ECMAScript ToPropertyKey: if ToPrimitive returns a Symbol, use it directly
 						if primitiveVal.Type() == TypeSymbol {
-							if ok, status, res := vm.opSetPropSymbol(ip, &baseVal, primitiveVal, &valueVal); !ok {
+							if ok, status, res := vm.opSetPropSymbol(ip, &registers[baseReg], primitiveVal, &valueVal); !ok {
 								return status, res
 							}
 							continue
@@ -7718,7 +7723,7 @@ startExecution:
 				} else {
 					// Route through opSetProp which handles extensibility, writable,
 					// prototype chain accessors, and global object sync
-					if ok, status, res := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+					if ok, status, res := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
 						if status != InterpretOK {
 							return status, res
 						}
@@ -7736,18 +7741,18 @@ startExecution:
 					// Non-numeric index (Symbol, string, etc.) - set property via prototype chain
 					switch indexVal.Type() {
 					case TypeSymbol:
-						if ok, status, value := vm.opSetPropSymbol(ip, &baseVal, indexVal, &valueVal); !ok {
+						if ok, status, value := vm.opSetPropSymbol(ip, &registers[baseReg], indexVal, &valueVal); !ok {
 							return status, value
 						}
 					case TypeString:
 						key := AsString(indexVal)
-						if ok, status, value := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+						if ok, status, value := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
 							return status, value
 						}
 					default:
 						// Convert to string for property access
 						key := indexVal.ToString()
-						if ok, status, value := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+						if ok, status, value := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
 							return status, value
 						}
 					}
@@ -7757,17 +7762,17 @@ startExecution:
 				// Proxy objects: route all property setting through the proxy protocol via opSetProp
 				switch indexVal.Type() {
 				case TypeSymbol:
-					if ok, status, value := vm.opSetPropSymbol(ip, &baseVal, indexVal, &valueVal); !ok {
+					if ok, status, value := vm.opSetPropSymbol(ip, &registers[baseReg], indexVal, &valueVal); !ok {
 						return status, value
 					}
 				case TypeString:
 					key := AsString(indexVal)
-					if ok, status, value := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+					if ok, status, value := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
 						return status, value
 					}
 				default:
 					key := indexVal.ToString()
-					if ok, status, value := vm.opSetProp(ip, &baseVal, key, &valueVal); !ok {
+					if ok, status, value := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
 						return status, value
 					}
 				}
