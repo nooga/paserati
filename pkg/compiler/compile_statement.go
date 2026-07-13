@@ -135,8 +135,14 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 					Value: "__Inferred__" + node.Name.Value,
 				}
 			}
-			// Now compile normally - reuse predefined TDZ register if present (but not for globals)
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal && !sym.IsSpilled {
+			// Now compile normally - reuse predefined TDZ register if present (but not
+			// for globals/spilled). A spilled binding compiles into a temp and is then
+			// written back to its slot: reusing the symbol's zero-valued Register (0 !=
+			// nilRegister) would move the class into R0 and leave the slot holding the
+			// TDZ sentinel, so later reads see an uninitialized value.
+			sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
+			classSpilled := found && sym.IsSpilled
+			if found && sym.Register != nilRegister && !sym.IsGlobal && !sym.IsSpilled {
 				valueReg = sym.Register
 			} else {
 				valueReg = c.regAlloc.Alloc()
@@ -144,6 +150,12 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			_, err = c.compileNode(classExpr, valueReg)
 			if err != nil {
 				return BadRegister, err
+			}
+			if classSpilled {
+				c.emitStoreSpill(sym.SpillIndex, valueReg, node.Name.Token.Line)
+				c.regAlloc.Free(valueReg)
+				c.currentSymbolTable.InitializeTDZ(node.Name.Value)
+				continue
 			}
 
 		} else if node.Value != nil {
@@ -209,7 +221,16 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 				c.regAlloc.Free(undefReg)
 			} else {
 				// Local scope: try to allocate register, fall back to spilling
-				if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
+				if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsSpilled {
+					// Predefined as spilled: the slot holds the TDZ sentinel, so store
+					// undefined into it. Reusing the zero-valued Register (0 != nilRegister)
+					// would target R0 and leave the slot uninitialized, so a later
+					// `typeof x` / `x === undefined` reads a stale value.
+					tempReg := c.regAlloc.Alloc()
+					c.emitLoadUndefined(tempReg, node.Name.Token.Line)
+					c.emitStoreSpill(sym.SpillIndex, tempReg, node.Name.Token.Line)
+					c.regAlloc.Free(tempReg)
+				} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
 					c.emitLoadUndefined(sym.Register, node.Name.Token.Line)
 				} else {
 					undefReg, ok := c.regAlloc.TryAllocForVariable()
@@ -347,7 +368,16 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			// (this happens when nested functions capture this variable as an upvalue)
 			var closureReg Register
 			preDefinedReg := nilRegister
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal {
+			closureSpilled := false
+			var closureSpillIdx uint16
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsSpilled {
+				// Pre-defined as spilled: build the closure in a temp and write it back to
+				// the slot below. Reusing the zero-valued Register (0 != nilRegister) would
+				// target R0 and leave the slot holding undefined, so `f()` later fails.
+				closureSpilled = true
+				closureSpillIdx = sym.SpillIndex
+				closureReg = c.regAlloc.Alloc()
+			} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal {
 				// Variable was pre-defined, reuse its register for the closure
 				preDefinedReg = sym.Register
 				closureReg = preDefinedReg
@@ -371,9 +401,12 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			// 3. Create the closure object in the appropriate register
 			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
-			// 4. Update the symbol table entry for the *variable name (f)* with the closure register.
-			//    (only needed if we didn't pre-define with a register)
-			if preDefinedReg == nilRegister {
+			// 4. Store the closure back into its spill slot, or update the symbol table
+			//    entry with the closure register (only if we didn't pre-define with one).
+			if closureSpilled {
+				c.emitStoreSpill(closureSpillIdx, closureReg, node.Name.Token.Line)
+				c.regAlloc.Free(closureReg)
+			} else if preDefinedReg == nilRegister {
 				c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 			}
 
@@ -389,7 +422,14 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			// Check if variable was already pre-defined during block var hoisting
 			var closureReg Register
 			preDefinedReg := nilRegister
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal {
+			closureSpilled := false
+			var closureSpillIdx uint16
+			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsSpilled {
+				// Pre-defined as spilled: build in a temp, write back to the slot below.
+				closureSpilled = true
+				closureSpillIdx = sym.SpillIndex
+				closureReg = c.regAlloc.Alloc()
+			} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal {
 				preDefinedReg = sym.Register
 				closureReg = preDefinedReg
 			} else {
@@ -412,7 +452,10 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 			c.emitClosure(closureReg, funcConstIndex, minimalFuncLit, freeSymbols)
 
-			if preDefinedReg == nilRegister {
+			if closureSpilled {
+				c.emitStoreSpill(closureSpillIdx, closureReg, node.Name.Token.Line)
+				c.regAlloc.Free(closureReg)
+			} else if preDefinedReg == nilRegister {
 				c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
 			}
 
@@ -495,10 +538,13 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			if c.parameterNames != nil && c.parameterNames[node.Name.Value] {
 				// Variable is a function parameter - preserve its value
 				debugPrintf("// [VarStmt] '%s' is a parameter, skipping undefined init\n", node.Name.Value)
-			} else if sym, funcTable := c.findVarInFunctionScope(node.Name.Value); funcTable != nil && sym.Register != nilRegister && !sym.IsGlobal && !sym.IsImmutable {
+			} else if sym, funcTable := c.findVarInFunctionScope(node.Name.Value); funcTable != nil && sym.Register != nilRegister && !sym.IsGlobal && !sym.IsImmutable && !sym.IsSpilled {
 				// Variable was already pre-defined during block var hoisting IN THE CURRENT FUNCTION
 				// The register already has undefined loaded, so nothing to do
 				// NOTE: Immutable bindings (NFE names) don't count - var shadows them with new binding
+				// NOTE: spilled bindings are handled by the IsSpilled branch below (their slot
+				// is already undefined from block-predefine); excluded here so R0 isn't mistaken
+				// for a real register.
 				debugPrintf("// [VarStmt] '%s' was pre-defined in R%d, skipping (already initialized to undefined)\n", node.Name.Value, sym.Register)
 			} else if sym, funcTable := c.findVarInFunctionScope(node.Name.Value); funcTable != nil && sym.IsSpilled && !sym.IsImmutable {
 				// Variable was pre-defined as spilled IN THE CURRENT FUNCTION, already initialized to undefined
@@ -705,15 +751,26 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 					Value: "__Inferred__" + node.Name.Value,
 				}
 			}
-			// Now compile normally - reuse predefined TDZ register if present (but not for globals)
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal && !sym.IsSpilled {
-				valueReg = sym.Register
+			// Now compile normally - reuse predefined TDZ register if present (but not for
+			// globals/spilled). A spilled binding compiles into a temp and is written back
+			// to its slot (mirrors the const other-values path below); reusing the zero-
+			// valued Register would target R0 and leave the slot holding the TDZ sentinel.
+			csym, _, cfound := c.currentSymbolTable.Resolve(node.Name.Value)
+			classSpilled := cfound && csym.IsSpilled
+			if cfound && csym.Register != nilRegister && !csym.IsGlobal && !csym.IsSpilled {
+				valueReg = csym.Register
 			} else {
 				valueReg = c.regAlloc.Alloc()
 			}
 			_, err = c.compileNode(classExpr, valueReg)
 			if err != nil {
 				return BadRegister, err
+			}
+			if classSpilled {
+				c.emitStoreSpill(csym.SpillIndex, valueReg, node.Name.Token.Line)
+				c.regAlloc.Free(valueReg)
+				c.currentSymbolTable.InitializeTDZ(node.Name.Value)
+				continue
 			}
 
 		} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsSpilled {
