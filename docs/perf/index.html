@@ -191,6 +191,15 @@ function labelFor(s) {
     borderWidth: 1.5, pointRadius: 2, pointHoverRadius: 4, spanGaps: true, tension: .25,
   }));
 
+  // test262.total is a MEAN over the passing set, whose membership drifts as
+  // conformance changes. The perf-timeline job stamps each snapshot's entry with a
+  // set_hash; where it differs between two consecutive points the mean isn't over
+  // the same workload, so the slope across that gap isn't a pure engine delta.
+  // Surface those boundaries so the line isn't read as one continuous series.
+  const t262Hash = snaps.map(s => s.benchmarks?.["test262.total"]?.set_hash || null);
+  const setChangedAt = j => j > 0 && !!t262Hash[j] && !!t262Hash[j - 1] && t262Hash[j] !== t262Hash[j - 1];
+  const anySetChange = labels.some((_, j) => setChangedAt(j));
+
   // The baseline bar: a dashed amber guide at 1.0× — the "redline" of this gauge.
   const baseDS = () => ({ label: "baseline (1.0×)", data: labels.map(() => 1),
     borderColor: "#f2b40a", borderDash: [5, 4], borderWidth: 1.5,
@@ -238,13 +247,28 @@ function labelFor(s) {
       label: "_" + d.label,   // hidden from legend/tooltip — visual context only
       borderColor: "rgba(150,170,190,0.22)", backgroundColor: "transparent",
       borderWidth: 0.8, pointRadius: 0, pointHoverRadius: 0 }));
+    const meanDS = { label: mode === "Overall" ? "mean" : mode + " mean", data: mean,
+      borderColor: "#ece0c8", backgroundColor: "#ece0c8", borderWidth: 2.5,
+      pointRadius: 2.5, pointHoverRadius: 4, tension: .25 };
+    // On the Test262 tab, dash the span into a set-changed point and flag it with a
+    // triangle, so a jump caused by the workload changing reads differently from a
+    // real engine move. (Amber, matching the baseline guide's "watch this" hue.)
+    if (mode === "Test262" && anySetChange) {
+      const amber = "#d08a3c";
+      meanDS.segment = {
+        borderColor: c => setChangedAt(c.p1DataIndex) ? amber : undefined,
+        borderDash:  c => setChangedAt(c.p1DataIndex) ? [4, 3] : undefined,
+      };
+      meanDS.pointStyle           = labels.map((_, j) => setChangedAt(j) ? "triangle" : "circle");
+      meanDS.pointRadius          = labels.map((_, j) => setChangedAt(j) ? 5 : 2.5);
+      meanDS.pointBackgroundColor = labels.map((_, j) => setChangedAt(j) ? amber : "#ece0c8");
+      meanDS.pointBorderColor     = labels.map((_, j) => setChangedAt(j) ? amber : "#ece0c8");
+    }
     return [ baseDS(), ...faint,
       { label: "_band", data: lo, borderColor: "transparent", pointRadius: 0, fill: false },
       { label: "± std dev", data: hi, borderColor: "transparent", pointRadius: 0,
         backgroundColor: "rgba(236,224,200,0.12)", fill: "-1" },
-      { label: mode === "Overall" ? "mean" : mode + " mean", data: mean,
-        borderColor: "#ece0c8", backgroundColor: "#ece0c8", borderWidth: 2.5,
-        pointRadius: 2.5, pointHoverRadius: 4, tension: .25 } ];
+      meanDS ];
   }
   const groupCount = m => m === "All" ? names.length : m === "Overall" ? micro.length : (members[m] || []).length;
 
@@ -263,7 +287,11 @@ function labelFor(s) {
           backgroundColor: "#1f1810", borderColor: "#322817", borderWidth: 1,
           titleColor: "#ece0c8", bodyColor: "#ece0c8",
           filter: it => !it.dataset.label.startsWith("_"),
-          callbacks: { label: c => c.parsed.y == null ? null : `${c.dataset.label}: ${c.parsed.y.toFixed(3)}×` },
+          callbacks: {
+            label: c => c.parsed.y == null ? null : `${c.dataset.label}: ${c.parsed.y.toFixed(3)}×`,
+            afterLabel: c => (c.dataset.label === "Test262 mean" && setChangedAt(c.dataIndex))
+              ? "△ test set changed here — slope isn't a pure engine delta" : "",
+          },
         },
       },
       scales: {
@@ -290,6 +318,7 @@ function labelFor(s) {
     }
     const c = groupCount(mode), lead = mode === "All" ? "" : "mean of ";
     countEl.textContent = `${lead}${c} benchmark${c === 1 ? "" : "s"} · ${snaps.length} snapshots`;
+    if (mode === "Test262" && anySetChange) countEl.textContent += " · △ = contributing test set changed";
   }
   for (const m of MODES) {
     const b = document.createElement("button");
@@ -297,8 +326,10 @@ function labelFor(s) {
     b.onclick = () => setMode(m);
     modesEl.appendChild(b); btns[m] = b;
   }
-  const want = new URLSearchParams(location.search).get("mode");
-  setMode(MODES.includes(want) ? want : "Overall");
+  // Match the ?mode= param case-insensitively: the tab names are capitalized now,
+  // but old links used lowercase (?mode=all / ?mode=overall) — honor those.
+  const want = (new URLSearchParams(location.search).get("mode") || "").toLowerCase();
+  setMode(MODES.find(m => m.toLowerCase() === want) || "Overall");
 })();
 
 function renderReadout(baseline, snaps) {
