@@ -44,7 +44,7 @@ func TestReducerChoiceChangesRegressionVerdict(t *testing.T) {
 	if err := os.WriteFile(path, []byte(buildRunsJSONL(anchor, family)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	curMin, err := aggregateFromFile(path)
+	curMin, err := aggregateFromFile(path, "min")
 	if err != nil {
 		t.Fatalf("aggregateFromFile: %v", err)
 	}
@@ -75,6 +75,45 @@ func TestReducerChoiceChangesRegressionVerdict(t *testing.T) {
 	}
 	if got := quietRegressions(baseline, curMean, budget); got != 1 {
 		t.Errorf("mean reducer: %d regression(s), want 1 — the verdict min suppresses", got)
+	}
+}
+
+// TestMinReducerRobustAtProductionCount3 addresses the N-mismatch: the verdict
+// proof above uses N=15, but perf-pr.yml / perf-timeline.yml ship `-count 3`.
+// At the shipped count, min-of-3 must reject a single upward-contaminated sample
+// (a lone GC pause / CPU migration in one of three runs), so it stays pinned to
+// the fast-regime floor whether or not an outlier is present — that is what makes
+// min-of-3 stable rather than a different flavor of outlier-chasing. mean-of-3, by
+// contrast, moves with the outlier (the control assertion).
+func TestMinReducerRobustAtProductionCount3(t *testing.T) {
+	const famKey = "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=16/last"
+	anchor := []float64{1.172, 1.217, 1.208} // three fast anchor runs
+	clean := []float64{9.751, 9.536, 9.922}  // three fast family runs
+	contam := []float64{9.751, 9.536, 13.38} // same first two + one slow outlier
+
+	ratioMin := func(anchor, family []float64) float64 {
+		path := filepath.Join(t.TempDir(), "runs.jsonl")
+		if err := os.WriteFile(path, []byte(buildRunsJSONL(anchor, family)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		b, err := aggregateFromFile(path, "min")
+		if err != nil {
+			t.Fatalf("aggregateFromFile: %v", err)
+		}
+		return b.Benchmarks[famKey].RatioToAnchor
+	}
+
+	// min-of-3 is invariant to the single slow outlier: the reduced ratio is the
+	// same clean-run floor with or without it.
+	if a, b := ratioMin(anchor, clean), ratioMin(anchor, contam); !approxEq(a, b) {
+		t.Errorf("min-of-3 moved with a single outlier: %.4f -> %.4f (want stable)", a, b)
+	}
+	// Control: the mean-of-3 ratio DOES move, confirming the outlier is real and
+	// min's stability isn't just because the sample is inert.
+	meanClean := meanOf(clean) / meanOf(anchor)
+	meanContam := meanOf(contam) / meanOf(anchor)
+	if approxEq(meanClean, meanContam) {
+		t.Fatalf("test setup: expected mean-of-3 to move with the outlier, got %.4f == %.4f", meanClean, meanContam)
 	}
 }
 
