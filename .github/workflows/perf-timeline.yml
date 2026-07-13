@@ -19,6 +19,10 @@ on:
         description: 'Commit SHA/ref to snapshot (backfill)'
         required: true
         default: 'main'
+      test262:
+        description: 'Also run the ~4-min Test262 macro benchmark'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -51,7 +55,7 @@ jobs:
       # Corpus for the opt-in Test262 macro series (see "Add Test262 macro" below).
       # Gated on the same condition so non-opted-in commits skip the restore.
       - name: Cache Test262 corpus
-        if: contains(github.event.head_commit.message, '[perf-test262]') || github.event_name == 'workflow_dispatch'
+        if: contains(github.event.head_commit.message, '[perf-test262]') || github.event.inputs.test262 == 'true'
         uses: actions/cache@v4
         with:
           path: test262
@@ -82,10 +86,11 @@ jobs:
 
       # Opt-in: fold the Test262 macro-benchmark into the snapshot as a
       # `test262.total` series. Runs only on commits whose message carries
-      # `[perf-test262]` (or a manual dispatch), since the macro adds ~4 min.
-      # Non-fatal: a macro hiccup must never drop the micro snapshot above.
+      # `[perf-test262]`, or a manual dispatch with the `test262` input checked,
+      # since the macro adds ~4 min. Non-fatal: a macro hiccup must never drop
+      # the micro snapshot above.
       - name: Add Test262 macro to snapshot
-        if: contains(github.event.head_commit.message, '[perf-test262]') || github.event_name == 'workflow_dispatch'
+        if: contains(github.event.head_commit.message, '[perf-test262]') || github.event.inputs.test262 == 'true'
         continue-on-error: true
         env:
           PER_TEST_TIMEOUT: 1.2s
@@ -95,24 +100,36 @@ jobs:
           ./setup-test262.sh
           ./scripts/macro-test262.sh "${RUNNER_TEMP}/t262.jsonl" "${RUNNER_TEMP}/t262.stats.json"
 
-          total_ns="$(jq -s '.[] | select(.name=="total") | .ns_per_op' "${RUNNER_TEMP}/t262.jsonl")"
-          passed="$(jq -s  '.[] | select(.name=="total") | .iterations' "${RUNNER_TEMP}/t262.jsonl")"
+          # JSONL: one record per line, so filter per-line — no -s slurp needed.
+          total_ns="$(jq 'select(.name=="total") | .ns_per_op' "${RUNNER_TEMP}/t262.jsonl")"
+          passed="$(jq  'select(.name=="total") | .iterations' "${RUNNER_TEMP}/t262.jsonl")"
+          set_hash="$(jq -r 'select(.name=="total") | .set_hash // ""' "${RUNNER_TEMP}/t262.jsonl")"
           anchor_ns="$(jq -r '.anchor.ns_per_op' "$out")"
 
-          # Anchor-normalize the same way bench-ratchet does (ratio = summed_ns /
-          # anchor_ns) and fold it into the snapshot as a benchmark series. The page
-          # plots each series self-relative, so the large absolute ratio doesn't
-          # affect the chart scale. Passing-set size goes in a sample for provenance.
-          jq --argjson ns "$total_ns" --argjson a "$anchor_ns" --argjson p "$passed" '
-            .benchmarks["test262.total"] = {
-              ns_per_op: $ns, allocs_per_op: 0, bytes_per_op: 0,
-              ratio_to_anchor: ($ns / $a),
-              samples: [{ iterations: $p, ns_per_op: $ns, ratio_to_anchor: ($ns / $a) }]
-            }' "$out" > "${out}.tmp"
+          # Skip the fold if nothing passed — mean over an empty set is undefined
+          # (and the series would carry no signal anyway).
+          if [ "${passed:-0}" -gt 0 ]; then
+          # Metric is the MEAN per-test ns (summed_ns / passing_count), not the sum:
+          # the sum conflates per-test speed with how many tests pass, so a
+          # conformance win (more passing tests add their durations) reads as a perf
+          # regression. The mean removes that count-inflation. set_hash fingerprints
+          # the exact contributing set (from bench-test262, #24), so the consumer can
+          # still see a residual composition shift the mean can't cancel. Anchor-
+          # normalized like every other series; the page plots each self-relative, so
+          # the absolute ratio doesn't affect chart scale.
+          jq --argjson ns "$total_ns" --argjson a "$anchor_ns" --argjson p "$passed" --arg h "$set_hash" '
+            ($ns / $p) as $mean
+            | .benchmarks["test262.total"] = ({
+                ns_per_op: $mean, allocs_per_op: 0, bytes_per_op: 0,
+                ratio_to_anchor: ($mean / $a),
+                samples: [{ iterations: $p, ns_per_op: $mean, ratio_to_anchor: ($mean / $a) }]
+              } + (if $h == "" then {} else { set_hash: $h } end))' "$out" > "${out}.tmp"
           mv "${out}.tmp" "$out"
 
-          echo "test262.total: ${total_ns} ns over ${passed} passing tests" \
-               "(ratio $(jq -r '.benchmarks["test262.total"].ratio_to_anchor' "$out"))"
+          echo "test262.total: mean $(jq -r '.benchmarks["test262.total"].ns_per_op' "$out") ns/test" \
+               "over ${passed} passing tests (set ${set_hash:-none}," \
+               "ratio $(jq -r '.benchmarks["test262.total"].ratio_to_anchor' "$out"))"
+          fi
 
       - name: Render run summary
         run: |
