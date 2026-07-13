@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "captured_at": "2026-06-25T15:33:11Z",
   "captured_at_sha": "bdf4e14ddef9",
   "machine": {
@@ -565,5 +565,7 @@
         }
       ]
     }
-  }
+  },
+  "reducer": "mean",
+  "sample_count": 1
 }

@@ -94,9 +94,12 @@ jobs:
         run: |
           set -euo pipefail
           git checkout --force "$BASE"
+          # -reducer min: this is the throwaway per-run A/B baseline (RUNNER_TEMP),
+          # not the durable ratchet, so the lower-envelope reducer is safe here.
           go run ./cmd/bench-ratchet \
             -baseline "${RUNNER_TEMP}/base.json" \
             -count 3 -benchtime 500ms -timeout 15m \
+            -reducer min \
             update
 
       - name: Bench head and compare
@@ -109,9 +112,11 @@ jobs:
           git checkout --force "$HEAD"
           # Inform-only: never fail the job on a regression (|| true). The
           # markdown report is the product; the exit code is ignored.
+          # -reducer min must match the base half so head is compared like-for-like.
           go run ./cmd/bench-ratchet \
             -baseline "${RUNNER_TEMP}/base.json" \
             -count 3 -benchtime 500ms -timeout 15m \
+            -reducer min \
             -budget 0.10 -allow-incomplete \
             -format markdown \
             check > "${RUNNER_TEMP}/report.md" || true
