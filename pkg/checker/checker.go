@@ -3456,22 +3456,29 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 		}
 	}
 
-	// Extract element types based on value type
+	// An explicit annotation governs the binding types, matching the object
+	// destructuring case, regardless of whether the initializer is a literal.
+	destructureType := valueType
+	if expectedType != nil {
+		destructureType = expectedType
+	}
+
+	// Extract element types based on the destructure type
 	var elementTypes []types.Type
-	if arrayType, ok := valueType.(*types.ArrayType); ok {
+	if arrayType, ok := destructureType.(*types.ArrayType); ok {
 		// For arrays, all elements have the same type
 		for range node.Elements {
 			elementTypes = append(elementTypes, arrayType.ElementType)
 		}
-	} else if tupleType, ok := valueType.(*types.TupleType); ok {
+	} else if tupleType, ok := destructureType.(*types.TupleType); ok {
 		// For tuples, use specific element types
 		elementTypes = tupleType.ElementTypes
-	} else if valueType == types.Any {
+	} else if destructureType == types.Any {
 		// For any type, all elements are any
 		for range node.Elements {
 			elementTypes = append(elementTypes, types.Any)
 		}
-	} else if _, ok := valueType.(*types.ObjectType); ok {
+	} else if _, ok := destructureType.(*types.ObjectType); ok {
 		// Object types might implement Symbol.iterator (iterable protocol)
 		// At runtime, we'll check and use iterator protocol
 		// For type checking, assume elements are Any since we can't statically determine iterator element type
@@ -3480,7 +3487,7 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 		}
 	} else {
 		// Not an array-like or iterable type
-		c.addError(node.Value, fmt.Sprintf("cannot destructure non-array type '%s'", valueType.String()))
+		c.addError(node.Value, fmt.Sprintf("cannot destructure non-array type '%s'", destructureType.String()))
 		// Continue with Any types to avoid cascading errors
 		for range node.Elements {
 			elementTypes = append(elementTypes, types.Any)
@@ -3497,10 +3504,10 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 		var elemType types.Type
 		if element.IsRest {
 			// Rest element gets an array of remaining elements
-			if arrayType, ok := valueType.(*types.ArrayType); ok {
+			if arrayType, ok := destructureType.(*types.ArrayType); ok {
 				// For arrays, rest gets the same element type
 				elemType = &types.ArrayType{ElementType: arrayType.ElementType}
-			} else if tupleType, ok := valueType.(*types.TupleType); ok {
+			} else if tupleType, ok := destructureType.(*types.TupleType); ok {
 				// For tuples, rest gets array of remaining element types
 				if i < len(tupleType.ElementTypes) {
 					remainingTypes := tupleType.ElementTypes[i:]
