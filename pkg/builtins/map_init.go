@@ -338,10 +338,10 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Create iterator object with internal slots, inheriting from MapIteratorPrototype
 		// The prototype's next() method uses these slots for iteration
 		it := vm.NewObject(vmInstance.MapIteratorPrototype).AsPlainObject()
-		it.SetOwn("[[IteratedMap]]", thisMap)
-		it.SetOwn("[[MapNextIndex]]", vm.NumberValue(0))
-		it.SetOwn("[[MapIterationKind]]", vm.NewString("entries"))
-		it.SetOwn("[[Exhausted]]", vm.BooleanValue(false))
+		// Internal slots live in a Go struct (invisible to user code, like
+		// real spec internal slots) shared by the prototype next and the
+		// VM's for-of fast path.
+		it.SetInternalIterState(&vm.BuiltinIterState{Kind: vm.IterKindMapEntries, M: thisMap.AsMap()})
 
 		// [Symbol.iterator]() { return this }
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
@@ -368,10 +368,10 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create iterator object with internal slots, inheriting from MapIteratorPrototype
 		it := vm.NewObject(vmInstance.MapIteratorPrototype).AsPlainObject()
-		it.SetOwn("[[IteratedMap]]", thisMap)
-		it.SetOwn("[[MapNextIndex]]", vm.NumberValue(0))
-		it.SetOwn("[[MapIterationKind]]", vm.NewString("values"))
-		it.SetOwn("[[Exhausted]]", vm.BooleanValue(false))
+		// Internal slots live in a Go struct (invisible to user code, like
+		// real spec internal slots) shared by the prototype next and the
+		// VM's for-of fast path.
+		it.SetInternalIterState(&vm.BuiltinIterState{Kind: vm.IterKindMapValues, M: thisMap.AsMap()})
 
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
 			return vm.NewValueFromPlainObject(it), nil
@@ -391,10 +391,10 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create iterator object with internal slots, inheriting from MapIteratorPrototype
 		it := vm.NewObject(vmInstance.MapIteratorPrototype).AsPlainObject()
-		it.SetOwn("[[IteratedMap]]", thisMap)
-		it.SetOwn("[[MapNextIndex]]", vm.NumberValue(0))
-		it.SetOwn("[[MapIterationKind]]", vm.NewString("keys"))
-		it.SetOwn("[[Exhausted]]", vm.BooleanValue(false))
+		// Internal slots live in a Go struct (invisible to user code, like
+		// real spec internal slots) shared by the prototype next and the
+		// VM's for-of fast path.
+		it.SetInternalIterState(&vm.BuiltinIterState{Kind: vm.IterKindMapKeys, M: thisMap.AsMap()})
 
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
 			return vm.NewValueFromPlainObject(it), nil

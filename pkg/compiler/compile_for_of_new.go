@@ -154,6 +154,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		tempRegs = append(tempRegs, fastFlagReg)
 		c.emitOpCode(vm.OpIterFastCheck, node.Token.Line)
 		c.emitByte(byte(fastFlagReg))
+		c.emitByte(byte(iteratorObjReg))
 		c.emitByte(byte(nextMethodReg))
 	}
 
@@ -196,6 +197,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		c.emitOpCode(vm.OpFastIterNext, node.Token.Line)
 		c.emitByte(byte(valueReg))
 		c.emitByte(byte(doneReg))
+		c.emitByte(byte(iteratorObjReg))
 		c.emitByte(byte(nextMethodReg))
 		c.emitOpCode(vm.OpNot, node.Token.Line)
 		c.emitByte(byte(notDoneReg))
