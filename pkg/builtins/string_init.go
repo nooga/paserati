@@ -2371,57 +2371,11 @@ func createStringIterator(vmInstance *vm.VM, str string) vm.Value {
 	// Create iterator object inheriting from StringIteratorPrototype
 	iterator := vm.NewObject(vmInstance.StringIteratorPrototype).AsPlainObject()
 
-	// Convert string to UTF-16 code units for proper JavaScript semantics
-	// JavaScript strings are UTF-16 encoded, so we need to iterate by code points,
-	// which may span two UTF-16 code units (surrogate pairs)
-	utf16Units := vm.StringToUTF16(str)
-
-	// Iterator state: current index into UTF-16 code units
-	currentIndex := 0
-
-	// Add next() method to iterator
-	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
-		// Create iterator result object {value, done}
-		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-
-		if currentIndex >= len(utf16Units) {
-			// Iterator is exhausted
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-		} else {
-			// Return current code point as a string and advance
-			// ECMAScript string iteration yields code points, not UTF-16 code units
-			// Check for surrogate pairs and combine them into a single code point
-			c := utf16Units[currentIndex]
-			var codeUnits []uint16
-
-			// Check if this is a high surrogate (0xD800-0xDBFF)
-			if c >= 0xD800 && c <= 0xDBFF && currentIndex+1 < len(utf16Units) {
-				// Check if next is a low surrogate (0xDC00-0xDFFF)
-				low := utf16Units[currentIndex+1]
-				if low >= 0xDC00 && low <= 0xDFFF {
-					// Valid surrogate pair - yield both as a single code point
-					codeUnits = []uint16{c, low}
-					currentIndex += 2 // Advance past both surrogates
-				} else {
-					// Lone high surrogate - yield as-is (use WTF-8 encoding)
-					codeUnits = []uint16{c}
-					currentIndex++
-				}
-			} else {
-				// Regular BMP character or lone low surrogate
-				// Use WTF-8 encoding to preserve lone surrogates
-				codeUnits = []uint16{c}
-				currentIndex++
-			}
-
-			// Convert UTF-16 code units back to a Go string (preserves surrogates via WTF-8)
-			result.SetOwnNonEnumerable("value", vm.NewString(vm.UTF16ToString(codeUnits)))
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-		}
-
-		return vm.NewValueFromPlainObject(result), nil
-	}))
+	// Iterate by UTF-16 code units, yielding code points (surrogate-pair
+	// aware, lone surrogates preserved via WTF-8). The step logic lives in
+	// BuiltinIterState.Step, shared with the VM's for-of fast path.
+	state := &vm.BuiltinIterState{Kind: vm.IterKindString, Str: vm.StringToUTF16(str)}
+	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
 	return vm.NewValueFromPlainObject(iterator)
 }
