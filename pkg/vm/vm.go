@@ -1898,6 +1898,57 @@ startExecution:
 			leftVal := registers[leftReg]
 			rightVal := registers[rightReg]
 
+			// Fast path: skip ToPrimitive/BigInt/Symbol bookkeeping entirely when
+			// both operands are already plain numbers - the overwhelmingly common
+			// case for arithmetic and loop comparisons. ToPrimitive(number) is a
+			// no-op per spec, so this computes exactly what the general path below
+			// would, just without the frame.ip/helperCallDepth bookkeeping and the
+			// unwinding/handlerFound checks that only matter when ToPrimitive can
+			// invoke user code (valueOf/toString/Symbol.toPrimitive on an object).
+			// The tags are read directly rather than via ToFloat(), which is too
+			// large to inline. JS NaN semantics need no special casing: Go float
+			// comparisons yield false when either operand is NaN (so the != case
+			// correctly makes NaN !== NaN true), and division by zero yields
+			// ±Inf/NaN per IEEE 754, matching ECMAScript.
+			if lt, rt := leftVal.typ, rightVal.typ; (lt == TypeFloatNumber || lt == TypeIntegerNumber) && (rt == TypeFloatNumber || rt == TypeIntegerNumber) {
+				var l, r float64
+				if lt == TypeFloatNumber {
+					l = leftVal.AsFloat()
+				} else {
+					l = float64(leftVal.AsInteger())
+				}
+				if rt == TypeFloatNumber {
+					r = rightVal.AsFloat()
+				} else {
+					r = float64(rightVal.AsInteger())
+				}
+				switch opcode {
+				case OpAdd:
+					registers[destReg] = Number(l + r)
+				case OpSubtract:
+					registers[destReg] = Number(l - r)
+				case OpMultiply:
+					registers[destReg] = Number(l * r)
+				case OpDivide:
+					registers[destReg] = Number(l / r)
+				case OpRemainder:
+					registers[destReg] = Number(math.Mod(l, r))
+				case OpEqual, OpStrictEqual:
+					registers[destReg] = BooleanValue(l == r)
+				case OpNotEqual, OpStrictNotEqual:
+					registers[destReg] = BooleanValue(l != r)
+				case OpLess:
+					registers[destReg] = BooleanValue(l < r)
+				case OpGreater:
+					registers[destReg] = BooleanValue(l > r)
+				case OpLessEqual:
+					registers[destReg] = BooleanValue(l <= r)
+				case OpGreaterEqual:
+					registers[destReg] = BooleanValue(l >= r)
+				}
+				continue
+			}
+
 			// Type checking specific to operation groups
 			switch opcode {
 			case OpAdd:
