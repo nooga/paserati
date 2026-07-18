@@ -1654,6 +1654,58 @@ startExecution:
 			// In many languages, ! evaluates truthiness
 			registers[destReg] = BooleanValue(isFalsey(srcVal)) // Use local Bool
 
+		case OpIterFastCheck:
+			// Emitted once per for-of loop, after the compiler has cached the
+			// iterator's next method in a register (matching the spec's
+			// IteratorRecord.[[NextMethod]] caching). True only for the
+			// built-in array iterator's next closure, which carries its
+			// shared ArrayIterState; anything else (user iterators,
+			// generators, replaced next) takes the generic call path.
+			destReg := code[ip]
+			nextReg := code[ip+1]
+			ip += 2
+			fast := false
+			if nv := registers[nextReg]; nv.typ == TypeNativeFunction {
+				if nf := nv.AsNativeFunction(); nf != nil && nf.ArrayIterState != nil && nf.ArrayIterState.Arr != nil {
+					fast = true
+				}
+			}
+			registers[destReg] = BooleanValue(fast)
+
+		case OpArrayIterNext:
+			// Fast for-of step: read the next array element directly from the
+			// iterator state hung off the cached next method - no method call,
+			// no {value, done} result object. Length is re-read every step so
+			// growth/truncation during iteration behaves exactly like the
+			// native next closure it bypasses (both use Arr.Length()/Get,
+			// including hole normalization to undefined).
+			valueReg := code[ip]
+			doneReg := code[ip+1]
+			nextReg := code[ip+2]
+			ip += 3
+			nv := registers[nextReg]
+			var st *ArrayIterState
+			if nv.typ == TypeNativeFunction {
+				if nf := nv.AsNativeFunction(); nf != nil {
+					st = nf.ArrayIterState
+				}
+			}
+			if st == nil {
+				// Unreachable when emitted behind OpIterFastCheck; fail loudly
+				// rather than silently terminating the loop.
+				frame.ip = ip
+				status := vm.runtimeError("OpArrayIterNext on non-array-iterator next method")
+				return status, Undefined
+			}
+			if st.Index >= st.Arr.Length() {
+				registers[valueReg] = Undefined
+				registers[doneReg] = BooleanValue(true)
+			} else {
+				registers[valueReg] = st.Arr.Get(st.Index)
+				st.Index++
+				registers[doneReg] = BooleanValue(false)
+			}
+
 		case OpTypeof:
 			destReg := code[ip]
 			srcReg := code[ip+1]

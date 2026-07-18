@@ -142,6 +142,21 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	nextConstIdx := c.chunk.AddConstant(vm.String("next"))
 	c.emitGetProp(nextMethodReg, iteratorObjReg, nextConstIdx, node.Token.Line)
 
+	// 6a. Fast-path probe (sync loops only): if the cached next method is the
+	// built-in array iterator's, each iteration can step the array directly
+	// (OpArrayIterNext) with no call and no {value, done} allocation. Checked
+	// once per loop - next is cached in a register above, matching the spec's
+	// IteratorRecord.[[NextMethod]], so a mid-loop replacement of next is
+	// unobservable on the generic path too.
+	fastFlagReg := BadRegister
+	if !node.IsAsync {
+		fastFlagReg = c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, fastFlagReg)
+		c.emitOpCode(vm.OpIterFastCheck, node.Token.Line)
+		c.emitByte(byte(fastFlagReg))
+		c.emitByte(byte(nextMethodReg))
+	}
+
 	// Per ECMAScript spec, initialize completion value V = undefined
 	c.emitLoadUndefined(hint, node.Token.Line)
 
@@ -160,9 +175,38 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	}
 	c.loopContextStack = append(c.loopContextStack, loopContext)
 
-	// 8. Call iterator.next() to get {value, done} (or Promise<{value, done}> for async)
+	// 8. Produce {value, done} for this iteration. The fast path steps the
+	// array iterator in place (no call, no result object); the generic path
+	// calls next() and reads .done/.value exactly as before. Both paths
+	// converge with doneReg and valueReg populated. Registers are allocated
+	// up front so the two emission paths share them.
 	resultReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, resultReg)
+	doneReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, doneReg)
+	notDoneReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, notDoneReg)
+	valueReg := c.regAlloc.Alloc()
+	tempRegs = append(tempRegs, valueReg)
+
+	fastExitJump := -1
+	fastToBodyJump := -1
+	if fastFlagReg != BadRegister {
+		toGenericJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, fastFlagReg, node.Token.Line)
+		c.emitOpCode(vm.OpArrayIterNext, node.Token.Line)
+		c.emitByte(byte(valueReg))
+		c.emitByte(byte(doneReg))
+		c.emitByte(byte(nextMethodReg))
+		c.emitOpCode(vm.OpNot, node.Token.Line)
+		c.emitByte(byte(notDoneReg))
+		c.emitByte(byte(doneReg))
+		fastExitJump = c.emitPlaceholderJump(vm.OpJumpIfFalse, notDoneReg, node.Token.Line)
+		fastToBodyJump = c.emitPlaceholderJump(vm.OpJump, 0, node.Token.Line)
+		c.patchJump(toGenericJump) // generic next-step starts here
+	}
+
+	// Generic path: call iterator.next() to get {value, done} (or
+	// Promise<{value, done}> for async)
 	c.emitCallMethod(resultReg, nextMethodReg, iteratorObjReg, 0, node.Token.Line)
 
 	// 8a. For async iterators, await the promise
@@ -181,14 +225,10 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	c.emitByte(byte(resultReg))
 
 	// 9. Get result.done
-	doneReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, doneReg)
 	doneConstIdx := c.chunk.AddConstant(vm.String("done"))
 	c.emitGetProp(doneReg, resultReg, doneConstIdx, node.Token.Line)
 
 	// 10. Negate done to check if NOT done (continue looping)
-	notDoneReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, notDoneReg)
 	c.emitOpCode(vm.OpNot, node.Token.Line)
 	c.emitByte(byte(notDoneReg))
 	c.emitByte(byte(doneReg))
@@ -197,10 +237,13 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	exitJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notDoneReg, node.Token.Line)
 
 	// 12. Get result.value
-	valueReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, valueReg)
 	valueConstIdx := c.chunk.AddConstant(vm.String("value"))
 	c.emitGetProp(valueReg, resultReg, valueConstIdx, node.Token.Line)
+
+	// Fast path re-enters here with valueReg/doneReg already set
+	if fastToBodyJump >= 0 {
+		c.patchJump(fastToBodyJump)
+	}
 
 	// 13. Assign value to loop variable
 	// Track per-iteration binding registers for let/const loop variables (not var - var is function-scoped)
@@ -401,8 +444,12 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	c.emitOpCode(vm.OpJump, node.Token.Line)
 	c.emitUint16(uint16(int16(backOffset)))
 
-	// 17. Patch exit jump - this is where loop exits normally when done=true
+	// 17. Patch exit jumps - this is where the loop exits normally when
+	// done=true (the fast path has its own exit jump to the same target)
 	c.patchJump(exitJump)
+	if fastExitJump >= 0 {
+		c.patchJump(fastExitJump)
+	}
 
 	// 18. Add exception handler for iterator cleanup when exception propagates out
 	// Per ECMAScript spec, when an exception propagates out of a for-of loop,

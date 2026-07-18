@@ -194,6 +194,12 @@ const (
 	// Dst ValReg: n = ToNumeric(ValReg); Dst = n; ValReg = n-1 (postfix old value)
 	OpDecPost OpCode = 171
 
+	// --- Iterator fast path (for-of over plain arrays) ---
+	// Rx Ry: Rx = true if Ry is the built-in array-iterator next method (carries ArrayIterState)
+	OpIterFastCheck OpCode = 172
+	// Rx Ry Rz: step the array iterator behind next-method Rz: Rx = value, Ry = done. No call, no result object.
+	OpArrayIterNext OpCode = 173
+
 	// --- NEW: Global Variable Operations ---
 	OpGetGlobal     OpCode = 46 // Rx GlobalIdx(16bit): Rx = Globals[GlobalIdx] (direct indexed access)
 	OpSetGlobal     OpCode = 47 // GlobalIdx(16bit) Ry: Globals[GlobalIdx] = Ry (direct indexed access)
@@ -351,6 +357,10 @@ func (op OpCode) String() string {
 		return "OpDecPre"
 	case OpDecPost:
 		return "OpDecPost"
+	case OpIterFastCheck:
+		return "OpIterFastCheck"
+	case OpArrayIterNext:
+		return "OpArrayIterNext"
 	case OpEqual:
 		return "OpEqual"
 	case OpNotEqual:
@@ -982,7 +992,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpMakeAddInitializer, OpRunInitializers:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx Ry
 	case OpNegate, OpNot, OpTypeof, OpToNumber, OpToNumeric, OpLoadNumericOne, OpBitwiseNot, OpGetLength, OpIsNull, OpIsUndefined, OpIsNullish, OpIteratorCleanupAbruptIfNotDone,
-		OpIncPre, OpIncPost, OpDecPre, OpDecPost:
+		OpIncPre, OpIncPost, OpDecPre, OpDecPost, OpIterFastCheck:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
 	case OpMove:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
@@ -990,7 +1000,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		OpRemainder, OpExponent,
 		OpIn, OpInstanceof,
 		OpBitwiseAnd, OpBitwiseOr, OpBitwiseXor,
-		OpShiftLeft, OpShiftRight, OpUnsignedShiftRight:
+		OpShiftLeft, OpShiftRight, OpUnsignedShiftRight,
+		OpArrayIterNext:
 		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry, Rz
 
 	case OpCall, OpTailCall:
