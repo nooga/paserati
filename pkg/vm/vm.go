@@ -5194,7 +5194,9 @@ startExecution:
 
 			// If returning from the top-level script frame (and it's truly top-level), terminate immediately
 			// Don't do this for nested script frames (e.g., from eval()) which should continue normally
-			if function != nil && function.Name == "<script>" && vm.frameCount == 1 {
+			// (frameCount check first: it's a plain load, while the Name check is a
+			// string compare that would otherwise run on every function return)
+			if vm.frameCount == 1 && function != nil && function.Name == "<script>" {
 				// If currently unwinding, this is an uncaught exception at top level
 				if vm.unwinding {
 					vm.handleUncaughtException()
@@ -5210,28 +5212,13 @@ startExecution:
 			// fmt.Printf("// [VM DEBUG] OpReturn: Hit in module '%s', frameCount=%d, result=%s\n", vm.currentModulePath, vm.frameCount, result.ToString())
 
 			// Check if there are finally handlers that should execute
-			handlers := vm.findAllExceptionHandlers(frame.ip)
-			hasFinallyHandler := false
-			for _, handler := range handlers {
-				if handler.IsFinally {
-					hasFinallyHandler = true
-					break
-				}
-			}
-
-			if hasFinallyHandler {
+			if handler := vm.findPendingHandler(frame.ip, false); handler != nil {
 				// Set pending return action and let finally blocks execute
 				vm.pendingAction = ActionReturn
 				vm.pendingValue = result
 
-				// Find the finally handler and jump to it
-				for _, handler := range handlers {
-					if handler.IsFinally {
-						ip = handler.HandlerPC
-						break
-					}
-				}
-				// Continue executing from the finally handler
+				// Jump to the finally handler and continue executing from it
+				ip = handler.HandlerPC
 				continue
 			}
 
@@ -5464,7 +5451,7 @@ startExecution:
 
 			// If returning from the top-level script frame (and it's truly top-level), terminate immediately
 			// Don't do this for nested script frames (e.g., from eval()) which should continue normally
-			if function != nil && function.Name == "<script>" && vm.frameCount == 1 {
+			if vm.frameCount == 1 && function != nil && function.Name == "<script>" {
 				if vm.unwinding {
 					vm.handleUncaughtException()
 					return InterpretRuntimeError, vm.currentException
@@ -5490,16 +5477,7 @@ startExecution:
 			}
 
 			// Check if there are finally handlers that should execute
-			handlers := vm.findAllExceptionHandlers(frame.ip)
-			hasFinallyHandler := false
-			for _, handler := range handlers {
-				if handler.IsFinally {
-					hasFinallyHandler = true
-					break
-				}
-			}
-
-			if hasFinallyHandler {
+			if vm.findPendingHandler(frame.ip, false) != nil {
 				// Set pending return action and let finally blocks execute
 				vm.pendingAction = ActionReturn
 				vm.pendingValue = Undefined
@@ -13073,14 +13051,7 @@ startExecution:
 			}
 
 			// Check if we have more finally or iterator cleanup handlers that need to run
-			handlers := vm.findAllExceptionHandlers(frame.ip)
-			var nextHandler *ExceptionHandler
-			for _, handler := range handlers {
-				if handler.IsFinally || handler.IsIteratorCleanup {
-					nextHandler = handler
-					break
-				}
-			}
+			nextHandler := vm.findPendingHandler(frame.ip, true)
 
 			if nextHandler != nil {
 				// There are more handlers to execute - chain to them
@@ -13247,14 +13218,7 @@ startExecution:
 			case ActionReturn:
 				// Check if we have more finally or iterator cleanup handlers that need to run
 				// BEFORE completing the return
-				handlers := vm.findAllExceptionHandlers(frame.ip)
-				var nextHandler *ExceptionHandler
-				for _, handler := range handlers {
-					if handler.IsFinally || handler.IsIteratorCleanup {
-						nextHandler = handler
-						break
-					}
-				}
+				nextHandler := vm.findPendingHandler(frame.ip, true)
 
 				if nextHandler != nil {
 					// There are more handlers to execute - chain to them
