@@ -12193,21 +12193,6 @@ startExecution:
 				goto reloadFrame
 			}
 
-			// NUCLEAR DEBUG for fnGlobalObject
-			if value.IsFunction() {
-				name := ""
-				switch value.Type() {
-				case TypeFunction:
-					name = value.AsFunction().Name
-				case TypeClosure:
-					name = value.AsClosure().Fn.Name
-				case TypeNativeFunction:
-					name = value.AsNativeFunction().Name
-				}
-				if name == "fnGlobalObject" || name == "Test262Error" {
-				}
-			}
-
 			// TDZ check: throw ReferenceError if accessing an uninitialized let/const variable
 			if value.typ == TypeUninitialized {
 				frame.ip = ip
@@ -12306,21 +12291,6 @@ startExecution:
 						return InterpretRuntimeError, Undefined
 					}
 					continue // Don't also set in heap
-				}
-			}
-
-			// NUCLEAR DEBUG for fnGlobalObject
-			if value.IsFunction() {
-				name := ""
-				switch value.Type() {
-				case TypeFunction:
-					name = value.AsFunction().Name
-				case TypeClosure:
-					name = value.AsClosure().Fn.Name
-				case TypeNativeFunction:
-					name = value.AsNativeFunction().Name
-				}
-				if name == "fnGlobalObject" || name == "Test262Error" {
 				}
 			}
 
