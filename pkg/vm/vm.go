@@ -1926,6 +1926,26 @@ startExecution:
 				case OpDivide:
 					registers[destReg] = Number(l / r)
 				case OpRemainder:
+					// Integer fast path: math.Mod is a software frexp/ldexp
+					// loop (~7% of the recursion benchmark's profile via
+					// `i % k` patterns). Go's truncated int64 remainder has
+					// the dividend's sign, exactly matching JS %, so it is
+					// safe when: both operands are integral and within ±2^53
+					// (float64<->int64 round-trips exactly; beyond that the
+					// conversion can saturate), the divisor is nonzero
+					// (0 divisor => NaN), and the result is not a signed
+					// zero (JS requires -0 for a negative or -0 dividend
+					// with zero remainder; the int path would lose the sign).
+					const maxExactInt = float64(1 << 53)
+					if l >= -maxExactInt && l <= maxExactInt && r >= -maxExactInt && r <= maxExactInt {
+						li, ri := int64(l), int64(r)
+						if float64(li) == l && float64(ri) == r && ri != 0 {
+							if rem := li % ri; rem != 0 || !math.Signbit(l) {
+								registers[destReg] = Number(float64(rem))
+								continue
+							}
+						}
+					}
 					registers[destReg] = Number(math.Mod(l, r))
 				case OpEqual, OpStrictEqual:
 					registers[destReg] = BooleanValue(l == r)
