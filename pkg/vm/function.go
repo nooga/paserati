@@ -87,6 +87,12 @@ type NativeFunctionObject struct {
 	HomeRealm     *Realm       // [[Realm]] - the realm where this function was created
 	DeletedName   bool         // True if the 'name' property has been deleted
 	DeletedLength bool         // True if the 'length' property has been deleted
+
+	// ArrayIterState is non-nil only on the built-in array iterator's `next`
+	// closure. It lets the for-of fast path (OpIterFastCheck/OpArrayIterNext)
+	// recognize the intrinsic iterator and step it without a call or result
+	// object, while sharing the same index state with manual next() calls.
+	ArrayIterState *ArrayIterState
 }
 
 // BoundNativeFunctionObject represents a native function bound to a 'this' value

@@ -2992,28 +2992,33 @@ func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
 	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
-	// Iterator state: current index
-	currentIndex := 0
+	// Iterator state, shared between the next closure below and the VM's
+	// for-of fast path (OpArrayIterNext reaches it through the next method's
+	// NativeFunctionObject), so manual next() calls and a for-of over the
+	// same iterator advance one index.
+	state := &vm.ArrayIterState{Arr: array}
 
 	// Add next() method to iterator
-	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+	nextFn := vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
 		// Create iterator result object {value, done}
 		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 
-		if currentIndex >= array.Length() {
+		if state.Index >= state.Arr.Length() {
 			// Iterator is exhausted
 			result.SetOwnNonEnumerable("value", vm.Undefined)
 			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 		} else {
 			// Return current element and advance
-			val := array.Get(currentIndex)
+			val := state.Arr.Get(state.Index)
 			result.SetOwnNonEnumerable("value", val)
 			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			currentIndex++
+			state.Index++
 		}
 
 		return vm.NewValueFromPlainObject(result), nil
-	}))
+	})
+	nextFn.AsNativeFunction().ArrayIterState = state
+	iterator.SetOwnNonEnumerable("next", nextFn)
 
 	// Add [Symbol.iterator] that returns the iterator itself (required for for-of)
 	iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
