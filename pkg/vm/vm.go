@@ -1658,42 +1658,34 @@ startExecution:
 			// Emitted once per for-of loop, after the compiler has cached the
 			// iterator's next method in a register (matching the spec's
 			// IteratorRecord.[[NextMethod]] caching). True only for built-in
-			// closure-based iterators' next methods, which carry a shared
-			// BuiltinIterState; anything else (user iterators, generators,
-			// replaced next) takes the generic call path.
+			// iterators the VM can step directly: closure-based ones carry
+			// state on the next method itself; Map/Set iterators carry it on
+			// the iterator object behind the shared prototype next. Anything
+			// else (user iterators, generators, replaced next) takes the
+			// generic call path.
 			destReg := code[ip]
-			nextReg := code[ip+1]
-			ip += 2
-			fast := false
-			if nv := registers[nextReg]; nv.typ == TypeNativeFunction {
-				if nf := nv.AsNativeFunction(); nf != nil && nf.IterState != nil {
-					fast = true
-				}
-			}
-			registers[destReg] = BooleanValue(fast)
-
-		case OpFastIterNext:
-			// Fast for-of step: advance the built-in iterator state hung off
-			// the cached next method - no method call, no {value, done}
-			// result object. Step re-reads source length/content each
-			// iteration, so mutation during iteration behaves exactly like
-			// the native next closure it bypasses (both call the same Step).
-			valueReg := code[ip]
-			doneReg := code[ip+1]
+			iterReg := code[ip+1]
 			nextReg := code[ip+2]
 			ip += 3
-			nv := registers[nextReg]
-			var st *BuiltinIterState
-			if nv.typ == TypeNativeFunction {
-				if nf := nv.AsNativeFunction(); nf != nil {
-					st = nf.IterState
-				}
-			}
+			registers[destReg] = BooleanValue(resolveFastIterState(registers[iterReg], registers[nextReg]) != nil)
+
+		case OpFastIterNext:
+			// Fast for-of step: advance the built-in iterator state - no
+			// method call, no {value, done} result object. Step re-reads
+			// source length/content each iteration, so mutation during
+			// iteration behaves exactly like the native next it bypasses
+			// (both call the same Step).
+			valueReg := code[ip]
+			doneReg := code[ip+1]
+			iterReg := code[ip+2]
+			nextReg := code[ip+3]
+			ip += 4
+			st := resolveFastIterState(registers[iterReg], registers[nextReg])
 			if st == nil {
 				// Unreachable when emitted behind OpIterFastCheck; fail loudly
 				// rather than silently terminating the loop.
 				frame.ip = ip
-				status := vm.runtimeError("OpFastIterNext on a next method without iterator state")
+				status := vm.runtimeError("OpFastIterNext without steppable iterator state")
 				return status, Undefined
 			}
 			v, done := st.Step()

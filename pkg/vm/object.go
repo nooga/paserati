@@ -195,6 +195,25 @@ type PlainObject struct {
 	// Immutable prototype flag - when true, [[SetPrototypeOf]] only succeeds if
 	// the new value is SameValue as current prototype (ECMAScript 9.4.7)
 	immutablePrototype bool
+	// Internal iterator state for Map/Set iterator objects (spec internal
+	// slots [[IteratedMap]]/[[MapNextIndex]]/etc.). Nil for ordinary objects.
+	// Kept off the property storage so it is invisible to user code (matching
+	// spec internal slots) and reachable in O(1) by both the shared
+	// %MapIteratorPrototype%/%SetIteratorPrototype% next natives and the
+	// VM's for-of fast path.
+	internalIterState *BuiltinIterState
+}
+
+// InternalIterState returns the Map/Set iterator internal state, or nil for
+// ordinary objects. Non-nil doubles as the spec's internal-slot brand check.
+func (o *PlainObject) InternalIterState() *BuiltinIterState {
+	return o.internalIterState
+}
+
+// SetInternalIterState attaches Map/Set iterator internal state; called by
+// the builtins when constructing iterator objects.
+func (o *PlainObject) SetInternalIterState(st *BuiltinIterState) {
+	o.internalIterState = st
 }
 
 // lookupStringField returns the index of the string-keyed field with the given

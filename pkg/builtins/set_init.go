@@ -684,10 +684,10 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create iterator object with internal slots, inheriting from SetIteratorPrototype
 		it := vm.NewObject(vmInstance.SetIteratorPrototype).AsPlainObject()
-		it.SetOwn("[[IteratedSet]]", thisSet)
-		it.SetOwn("[[SetNextIndex]]", vm.NumberValue(0))
-		it.SetOwn("[[SetIterationKind]]", vm.NewString("values"))
-		it.SetOwn("[[Exhausted]]", vm.BooleanValue(false))
+		// Internal slots live in a Go struct (invisible to user code, like
+		// real spec internal slots) shared by the prototype next and the
+		// VM's for-of fast path.
+		it.SetInternalIterState(&vm.BuiltinIterState{Kind: vm.IterKindSetValues, S: thisSet.AsSet()})
 
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
 			return vm.NewValueFromPlainObject(it), nil
@@ -719,10 +719,10 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create iterator object with internal slots, inheriting from SetIteratorPrototype
 		it := vm.NewObject(vmInstance.SetIteratorPrototype).AsPlainObject()
-		it.SetOwn("[[IteratedSet]]", thisSet)
-		it.SetOwn("[[SetNextIndex]]", vm.NumberValue(0))
-		it.SetOwn("[[SetIterationKind]]", vm.NewString("entries"))
-		it.SetOwn("[[Exhausted]]", vm.BooleanValue(false))
+		// Internal slots live in a Go struct (invisible to user code, like
+		// real spec internal slots) shared by the prototype next and the
+		// VM's for-of fast path.
+		it.SetInternalIterState(&vm.BuiltinIterState{Kind: vm.IterKindSetEntries, S: thisSet.AsSet()})
 
 		it.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(a []vm.Value) (vm.Value, error) {
 			return vm.NewValueFromPlainObject(it), nil
