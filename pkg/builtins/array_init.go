@@ -2986,39 +2986,31 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	return ctx.DefineGlobal("Array", arrayCtor)
 }
 
+// makeBuiltinIterNext builds the standard next() closure over shared iterator
+// state and tags its NativeFunctionObject so the VM's for-of fast path
+// (OpIterFastCheck/OpFastIterNext) can step the same state without a call or
+// {value, done} allocation. Manual next() calls and the fast path advance one
+// shared index.
+func makeBuiltinIterNext(vmInstance *vm.VM, state *vm.BuiltinIterState) vm.Value {
+	nextFn := vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+		v, done := state.Step()
+		result.SetOwnNonEnumerable("value", v)
+		result.SetOwnNonEnumerable("done", vm.BooleanValue(done))
+		return vm.NewValueFromPlainObject(result), nil
+	})
+	nextFn.AsNativeFunction().IterState = state
+	return nextFn
+}
+
 // createArrayIterator creates an iterator object for array iteration
 func createArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
 	// Create iterator object inheriting from ArrayIteratorPrototype
 	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
-	// Iterator state, shared between the next closure below and the VM's
-	// for-of fast path (OpArrayIterNext reaches it through the next method's
-	// NativeFunctionObject), so manual next() calls and a for-of over the
-	// same iterator advance one index.
-	state := &vm.ArrayIterState{Arr: array}
-
-	// Add next() method to iterator
-	nextFn := vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
-		// Create iterator result object {value, done}
-		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-
-		if state.Index >= state.Arr.Length() {
-			// Iterator is exhausted
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-		} else {
-			// Return current element and advance
-			val := state.Arr.Get(state.Index)
-			result.SetOwnNonEnumerable("value", val)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			state.Index++
-		}
-
-		return vm.NewValueFromPlainObject(result), nil
-	})
-	nextFn.AsNativeFunction().ArrayIterState = state
-	iterator.SetOwnNonEnumerable("next", nextFn)
+	state := &vm.BuiltinIterState{Kind: vm.IterKindArrayValues, Arr: array}
+	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
 	// Add [Symbol.iterator] that returns the iterator itself (required for for-of)
 	iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(args []vm.Value) (vm.Value, error) {
@@ -3036,28 +3028,8 @@ func createArgumentsIterator(vmInstance *vm.VM, args *vm.ArgumentsObject) vm.Val
 	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
-	// Iterator state: current index
-	currentIndex := 0
-
-	// Add next() method to iterator
-	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(innerArgs []vm.Value) (vm.Value, error) {
-		// Create iterator result object {value, done}
-		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-
-		if currentIndex >= args.Length() {
-			// Iterator is exhausted
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-		} else {
-			// Return current element and advance
-			val := args.Get(currentIndex)
-			result.SetOwnNonEnumerable("value", val)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			currentIndex++
-		}
-
-		return vm.NewValueFromPlainObject(result), nil
-	}))
+	state := &vm.BuiltinIterState{Kind: vm.IterKindArguments, Args: args}
+	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
 	// Add [Symbol.iterator] that returns the iterator itself
 	iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(fnArgs []vm.Value) (vm.Value, error) {
@@ -3075,42 +3047,8 @@ func createArrayLikeIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
-	// Iterator state: current index
-	currentIndex := 0
-
-	// Add next() method to iterator
-	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(innerArgs []vm.Value) (vm.Value, error) {
-		// Create iterator result object {value, done}
-		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-
-		// Get length from the array-like object
-		var length int
-		if obj := arrayLike.AsPlainObject(); obj != nil {
-			if lenVal, ok := obj.GetOwn("length"); ok && lenVal.IsNumber() {
-				length = int(lenVal.ToFloat())
-			}
-		}
-
-		if currentIndex >= length {
-			// Iterator is exhausted
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-		} else {
-			// Get value at current index
-			var val vm.Value = vm.Undefined
-			if obj := arrayLike.AsPlainObject(); obj != nil {
-				indexStr := fmt.Sprintf("%d", currentIndex)
-				if v, ok := obj.GetOwn(indexStr); ok {
-					val = v
-				}
-			}
-			result.SetOwnNonEnumerable("value", val)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			currentIndex++
-		}
-
-		return vm.NewValueFromPlainObject(result), nil
-	}))
+	state := &vm.BuiltinIterState{Kind: vm.IterKindLikeValues, Like: arrayLike.AsPlainObject()}
+	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
 	// Add [Symbol.iterator] that returns the iterator itself
 	iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(fnArgs []vm.Value) (vm.Value, error) {
@@ -3126,32 +3064,14 @@ func createArrayLikeIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 func createArrayKeysIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
-	currentIndex := 0
 
-	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
-		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-
-		// Get length from the array or array-like object
-		var length int
-		if arrayLike.Type() == vm.TypeArray {
-			length = arrayLike.AsArray().Length()
-		} else if obj := arrayLike.AsPlainObject(); obj != nil {
-			if lenVal, ok := obj.GetOwn("length"); ok && lenVal.IsNumber() {
-				length = int(lenVal.ToFloat())
-			}
-		}
-
-		if currentIndex >= length {
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-		} else {
-			result.SetOwnNonEnumerable("value", vm.Number(float64(currentIndex)))
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			currentIndex++
-		}
-
-		return vm.NewValueFromPlainObject(result), nil
-	}))
+	state := &vm.BuiltinIterState{Kind: vm.IterKindArrayKeys}
+	if arrayLike.Type() == vm.TypeArray {
+		state.Arr = arrayLike.AsArray()
+	} else {
+		state.Like = arrayLike.AsPlainObject() // nil-safe: nil source iterates as length 0
+	}
+	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
 	// Add [Symbol.iterator] that returns the iterator itself
 	iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(fnArgs []vm.Value) (vm.Value, error) {
@@ -3167,50 +3087,14 @@ func createArrayKeysIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 func createArrayEntriesIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
-	currentIndex := 0
 
-	iterator.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
-		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-
-		// Get length and value from the array or array-like object
-		var length int
-		var getValue func(int) vm.Value
-
-		if arrayLike.Type() == vm.TypeArray {
-			arr := arrayLike.AsArray()
-			length = arr.Length()
-			getValue = func(i int) vm.Value { return arr.Get(i) }
-		} else if obj := arrayLike.AsPlainObject(); obj != nil {
-			if lenVal, ok := obj.GetOwn("length"); ok && lenVal.IsNumber() {
-				length = int(lenVal.ToFloat())
-			}
-			getValue = func(i int) vm.Value {
-				if v, ok := obj.GetOwn(fmt.Sprintf("%d", i)); ok {
-					return v
-				}
-				return vm.Undefined
-			}
-		} else {
-			length = 0
-			getValue = func(i int) vm.Value { return vm.Undefined }
-		}
-
-		if currentIndex >= length {
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-		} else {
-			// Create [index, value] pair array
-			pair := vm.NewArray()
-			pairArr := pair.AsArray()
-			pairArr.Append(vm.Number(float64(currentIndex)))
-			pairArr.Append(getValue(currentIndex))
-			result.SetOwnNonEnumerable("value", pair)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
-			currentIndex++
-		}
-
-		return vm.NewValueFromPlainObject(result), nil
-	}))
+	state := &vm.BuiltinIterState{Kind: vm.IterKindArrayEntries}
+	if arrayLike.Type() == vm.TypeArray {
+		state.Arr = arrayLike.AsArray()
+	} else {
+		state.Like = arrayLike.AsPlainObject() // nil-safe: nil source iterates as length 0
+	}
+	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
 	// Add [Symbol.iterator] that returns the iterator itself
 	iterSelfFn := vm.NewNativeFunction(0, false, "[Symbol.iterator]", func(fnArgs []vm.Value) (vm.Value, error) {

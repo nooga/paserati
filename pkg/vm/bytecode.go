@@ -197,8 +197,8 @@ const (
 	// --- Iterator fast path (for-of over plain arrays) ---
 	// Rx Ry: Rx = true if Ry is the built-in array-iterator next method (carries ArrayIterState)
 	OpIterFastCheck OpCode = 172
-	// Rx Ry Rz: step the array iterator behind next-method Rz: Rx = value, Ry = done. No call, no result object.
-	OpArrayIterNext OpCode = 173
+	// Rx Ry Rz: step the built-in iterator behind next-method Rz: Rx = value, Ry = done. No call, no result object.
+	OpFastIterNext OpCode = 173
 
 	// --- NEW: Global Variable Operations ---
 	OpGetGlobal     OpCode = 46 // Rx GlobalIdx(16bit): Rx = Globals[GlobalIdx] (direct indexed access)
@@ -359,8 +359,8 @@ func (op OpCode) String() string {
 		return "OpDecPost"
 	case OpIterFastCheck:
 		return "OpIterFastCheck"
-	case OpArrayIterNext:
-		return "OpArrayIterNext"
+	case OpFastIterNext:
+		return "OpFastIterNext"
 	case OpEqual:
 		return "OpEqual"
 	case OpNotEqual:
@@ -1001,7 +1001,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		OpIn, OpInstanceof,
 		OpBitwiseAnd, OpBitwiseOr, OpBitwiseXor,
 		OpShiftLeft, OpShiftRight, OpUnsignedShiftRight,
-		OpArrayIterNext:
+		OpFastIterNext:
 		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry, Rz
 
 	case OpCall, OpTailCall:

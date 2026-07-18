@@ -1657,54 +1657,48 @@ startExecution:
 		case OpIterFastCheck:
 			// Emitted once per for-of loop, after the compiler has cached the
 			// iterator's next method in a register (matching the spec's
-			// IteratorRecord.[[NextMethod]] caching). True only for the
-			// built-in array iterator's next closure, which carries its
-			// shared ArrayIterState; anything else (user iterators,
-			// generators, replaced next) takes the generic call path.
+			// IteratorRecord.[[NextMethod]] caching). True only for built-in
+			// closure-based iterators' next methods, which carry a shared
+			// BuiltinIterState; anything else (user iterators, generators,
+			// replaced next) takes the generic call path.
 			destReg := code[ip]
 			nextReg := code[ip+1]
 			ip += 2
 			fast := false
 			if nv := registers[nextReg]; nv.typ == TypeNativeFunction {
-				if nf := nv.AsNativeFunction(); nf != nil && nf.ArrayIterState != nil && nf.ArrayIterState.Arr != nil {
+				if nf := nv.AsNativeFunction(); nf != nil && nf.IterState != nil {
 					fast = true
 				}
 			}
 			registers[destReg] = BooleanValue(fast)
 
-		case OpArrayIterNext:
-			// Fast for-of step: read the next array element directly from the
-			// iterator state hung off the cached next method - no method call,
-			// no {value, done} result object. Length is re-read every step so
-			// growth/truncation during iteration behaves exactly like the
-			// native next closure it bypasses (both use Arr.Length()/Get,
-			// including hole normalization to undefined).
+		case OpFastIterNext:
+			// Fast for-of step: advance the built-in iterator state hung off
+			// the cached next method - no method call, no {value, done}
+			// result object. Step re-reads source length/content each
+			// iteration, so mutation during iteration behaves exactly like
+			// the native next closure it bypasses (both call the same Step).
 			valueReg := code[ip]
 			doneReg := code[ip+1]
 			nextReg := code[ip+2]
 			ip += 3
 			nv := registers[nextReg]
-			var st *ArrayIterState
+			var st *BuiltinIterState
 			if nv.typ == TypeNativeFunction {
 				if nf := nv.AsNativeFunction(); nf != nil {
-					st = nf.ArrayIterState
+					st = nf.IterState
 				}
 			}
 			if st == nil {
 				// Unreachable when emitted behind OpIterFastCheck; fail loudly
 				// rather than silently terminating the loop.
 				frame.ip = ip
-				status := vm.runtimeError("OpArrayIterNext on non-array-iterator next method")
+				status := vm.runtimeError("OpFastIterNext on a next method without iterator state")
 				return status, Undefined
 			}
-			if st.Index >= st.Arr.Length() {
-				registers[valueReg] = Undefined
-				registers[doneReg] = BooleanValue(true)
-			} else {
-				registers[valueReg] = st.Arr.Get(st.Index)
-				st.Index++
-				registers[doneReg] = BooleanValue(false)
-			}
+			v, done := st.Step()
+			registers[valueReg] = v
+			registers[doneReg] = BooleanValue(done)
 
 		case OpTypeof:
 			destReg := code[ip]

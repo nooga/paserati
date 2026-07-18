@@ -144,7 +144,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 
 	// 6a. Fast-path probe (sync loops only): if the cached next method is the
 	// built-in array iterator's, each iteration can step the array directly
-	// (OpArrayIterNext) with no call and no {value, done} allocation. Checked
+	// (OpFastIterNext) with no call and no {value, done} allocation. Checked
 	// once per loop - next is cached in a register above, matching the spec's
 	// IteratorRecord.[[NextMethod]], so a mid-loop replacement of next is
 	// unobservable on the generic path too.
@@ -193,7 +193,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	fastToBodyJump := -1
 	if fastFlagReg != BadRegister {
 		toGenericJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, fastFlagReg, node.Token.Line)
-		c.emitOpCode(vm.OpArrayIterNext, node.Token.Line)
+		c.emitOpCode(vm.OpFastIterNext, node.Token.Line)
 		c.emitByte(byte(valueReg))
 		c.emitByte(byte(doneReg))
 		c.emitByte(byte(nextMethodReg))

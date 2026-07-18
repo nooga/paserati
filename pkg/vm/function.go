@@ -88,11 +88,12 @@ type NativeFunctionObject struct {
 	DeletedName   bool         // True if the 'name' property has been deleted
 	DeletedLength bool         // True if the 'length' property has been deleted
 
-	// ArrayIterState is non-nil only on the built-in array iterator's `next`
-	// closure. It lets the for-of fast path (OpIterFastCheck/OpArrayIterNext)
+	// IterState is non-nil only on the built-in closure-based iterators'
+	// `next` methods (array values/keys/entries, array-likes, arguments,
+	// string). It lets the for-of fast path (OpIterFastCheck/OpFastIterNext)
 	// recognize the intrinsic iterator and step it without a call or result
 	// object, while sharing the same index state with manual next() calls.
-	ArrayIterState *ArrayIterState
+	IterState *BuiltinIterState
 }
 
 // BoundNativeFunctionObject represents a native function bound to a 'this' value
