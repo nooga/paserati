@@ -264,7 +264,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		if thenMethod.IsCallable() {
-			return vmInstance.Call(thenMethod, obj, []vm.Value{onFulfilled, onRejected})
+			return vmInstance.CallArgs2(thenMethod, obj, onFulfilled, onRejected)
 		}
 		// If no .then() method, wrap in a resolved promise and chain
 		return vmInstance.PromiseThen(vmInstance.NewResolvedPromise(obj), onFulfilled, onRejected)

@@ -220,7 +220,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 			key, value, exists := mapObj.GetEntryAt(i)
 			if exists {
 				// Call callback(value, key, map) with thisArg as 'this'
-				_, err := vmInstance.Call(callback, thisArg, []vm.Value{value, key, thisMap})
+				_, err := vmInstance.CallArgs3(callback, thisArg, value, key, thisMap)
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -540,7 +540,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 			value, _ := vmInstance.GetProperty(iterResult, "value")
 
 			// Call callback with (value, k)
-			keyResult, err := vmInstance.Call(callbackfn, vm.Undefined, []vm.Value{value, vm.NumberValue(float64(k))})
+			keyResult, err := vmInstance.CallArgs2(callbackfn, vm.Undefined, value, vm.NumberValue(float64(k)))
 			if err != nil {
 				return vm.Undefined, err
 			}

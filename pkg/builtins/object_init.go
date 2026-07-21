@@ -678,7 +678,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				setProtoTrap, hasTrap = po.GetOwn("setPrototypeOf")
 			}
 			if hasTrap && setProtoTrap.IsCallable() {
-				result, err := vmInstance.Call(setProtoTrap, handler, []vm.Value{proxy.Target(), protoArg})
+				result, err := vmInstance.CallArgs2(setProtoTrap, handler, proxy.Target(), protoArg)
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1142,7 +1142,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				value, _ := vmInstance.GetProperty(iterResult, "value")
 
 				// Call callback with (value, k)
-				keyResult, err := vmInstance.Call(callbackfn, vm.Undefined, []vm.Value{value, vm.NumberValue(float64(k))})
+				keyResult, err := vmInstance.CallArgs2(callbackfn, vm.Undefined, value, vm.NumberValue(float64(k)))
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1284,7 +1284,7 @@ func lookupSymbolProp(vmInstance *vm.VM, val vm.Value, symKey vm.PropertyKey, sy
 			getTrap, hasGetTrap = handler.AsDictObject().GetOwn("get")
 		}
 		if hasGetTrap && getTrap.IsCallable() {
-			return vmInstance.Call(getTrap, handler, []vm.Value{proxy.Target(), vmInstance.SymbolToStringTag, val})
+			return vmInstance.CallArgs3(getTrap, handler, proxy.Target(), vmInstance.SymbolToStringTag, val)
 		}
 		// No get trap — check target
 		return lookupSymbolProp(vmInstance, proxy.Target(), symKey, symObj, depth+1)
@@ -1879,7 +1879,7 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			}
 
 			if !getOwnPropDescTrap.IsUndefined() && getOwnPropDescTrap.IsCallable() {
-				descResult, derr := vmInstance.Call(getOwnPropDescTrap, handler, []vm.Value{target, key})
+				descResult, derr := vmInstance.CallArgs2(getOwnPropDescTrap, handler, target, key)
 				if derr != nil {
 					return vm.Undefined, derr
 				}

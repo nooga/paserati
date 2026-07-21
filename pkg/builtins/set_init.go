@@ -659,7 +659,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 			val, exists := setObj.GetValueAt(i)
 			if exists {
 				// forEach callback receives (value, value, set) - value is passed twice for consistency with Map
-				_, err := vmInstance.Call(callback, thisArg, []vm.Value{val, val, thisSet})
+				_, err := vmInstance.CallArgs3(callback, thisArg, val, val, thisSet)
 				if err != nil {
 					return vm.Undefined, err
 				}
