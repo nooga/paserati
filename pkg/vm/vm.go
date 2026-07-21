@@ -2652,7 +2652,7 @@ startExecution:
 					if !hasProperty && plainObj == vm.GlobalObject {
 						if idx, exists := vm.heap.nameToIndex[propKey]; exists {
 							// Only consider user-defined globals (not builtins) that are initialized
-							if idx >= vm.heap.builtinCount && vm.heap.initialized[idx] {
+							if idx >= vm.heap.builtinCount && vm.heap.IsInitialized(idx) {
 								hasProperty = true
 							}
 						}
@@ -12515,7 +12515,7 @@ startExecution:
 						// Global var declarations are enumerable
 						// Builtins are typically non-enumerable, but we include user-defined globals
 						// Check if the variable is user-defined (index >= builtinCount) AND initialized
-						if idx >= vm.heap.builtinCount && vm.heap.initialized[idx] {
+						if idx >= vm.heap.builtinCount && vm.heap.IsInitialized(idx) {
 							keys = append(keys, name)
 							seen[name] = true
 						}
