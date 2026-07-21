@@ -2633,59 +2633,23 @@ func (c *Compiler) compileArrayDestructuringFastPath(node *parser.ArrayDestructu
 func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestructuringDeclaration, iterableReg Register, line int) errors.PaseratiError {
 	// fmt.Printf("// [COMPILE-ITER] Starting iterator path compilation, iterableReg=R%d\n", iterableReg)
 
-	// Get Symbol.iterator via computed index
-	iteratorMethodReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(iteratorMethodReg)
+	// Set up the destructuring source. When the pattern has no rest element and
+	// the source is a pristine array at runtime, the fast path reads elements by
+	// index and skips the iterator protocol entirely (see beginArrayDestruct).
+	enableFast := arrayDeclPatternFastEligible(node.Elements)
+	st := c.beginArrayDestruct(iterableReg, enableFast, line)
+	defer c.endArrayDestruct(st)
+	iteratorObjReg := st.iterObjReg
+	doneReg := st.doneReg
 
-	// Load global Symbol
-	symbolObjReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(symbolObjReg)
-	symIdx := c.GetOrAssignGlobalIndex("Symbol")
-	// fmt.Printf("// [COMPILE-ITER] Getting global Symbol (idx=%d) into R%d\n", symIdx, symbolObjReg)
-	c.emitGetGlobal(symbolObjReg, symIdx, line)
-
-	// Get Symbol.iterator
-	propNameReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(propNameReg)
-	c.emitLoadNewConstant(propNameReg, vm.String("iterator"), line)
-	// fmt.Printf("// [COMPILE-ITER] Loading 'iterator' string into R%d\n", propNameReg)
-
-	iteratorKeyReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(iteratorKeyReg)
-	// fmt.Printf("// [COMPILE-ITER] Getting Symbol.iterator (Symbol[R%d]) into R%d\n", propNameReg, iteratorKeyReg)
-	c.emitOpCode(vm.OpGetIndex, line)
-	c.emitByte(byte(iteratorKeyReg))
-	c.emitByte(byte(symbolObjReg))
-	c.emitByte(byte(propNameReg))
-
-	// Get iterable[Symbol.iterator]
-	// fmt.Printf("// [COMPILE-ITER] Getting iterable[Symbol.iterator] (R%d[R%d]) into R%d\n", iterableReg, iteratorKeyReg, iteratorMethodReg)
-	c.emitOpCode(vm.OpGetIndex, line)
-	c.emitByte(byte(iteratorMethodReg))
-	c.emitByte(byte(iterableReg))
-	c.emitByte(byte(iteratorKeyReg))
-
-	// Call the iterator method to get iterator object
-	iteratorObjReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(iteratorObjReg)
-	// fmt.Printf("// [COMPILE-ITER] Calling iterator method R%d on R%d, result in R%d\n", iteratorMethodReg, iterableReg, iteratorObjReg)
-	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, iterableReg, 0, line)
-
-	// Allocate register to track iterator.done state
-	// We update this each time we call next(), then check it before calling iterator.return()
-	doneReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(doneReg)
-	// Initialize to false
-	c.emitLoadFalse(doneReg, line)
-
-	// Track how many elements we've consumed for rest elements
+	// Track how many elements we've consumed (position in the pattern)
 	elementIndex := 0
 
-	// For each element, call iterator.next()
+	// For each element, produce the next value (fast index read or iterator.next())
 	for _, element := range node.Elements {
 		if element.Target == nil {
 			// Elision: consume iterator value but don't bind
-			c.compileIteratorNext(iteratorObjReg, BadRegister, doneReg, line, true)
+			c.compileDestructNext(st, iterableReg, elementIndex, BadRegister, true, line)
 			elementIndex++
 			continue
 		}
@@ -2720,9 +2684,9 @@ func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestr
 			break
 		}
 
-		// Regular element: get next value from iterator
+		// Regular element: get next value (fast index read or iterator.next())
 		valueReg := c.regAlloc.Alloc()
-		c.compileIteratorNext(iteratorObjReg, valueReg, doneReg, line, false)
+		c.compileDestructNext(st, iterableReg, elementIndex, valueReg, false, line)
 
 		// Handle assignment based on target type
 		if ident, ok := element.Target.(*parser.Identifier); ok {
