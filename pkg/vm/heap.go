@@ -4,20 +4,37 @@ import (
 	"fmt"
 )
 
+// heapEmptySlot marks a global slot that has never been explicitly Set (or was
+// deleted). It shares TypeUninitialized with the public TDZ marker but carries a
+// distinct payload, so a single read of the value slot distinguishes three
+// states without a parallel initialized[] array: a real value (any other type),
+// a declared-but-uninitialized let/const in its TDZ (Uninitialized, payload 0),
+// and a never-set slot (this marker, payload 1). The empty marker never escapes
+// Get - it is reported as (Undefined, false) - so no code outside the heap
+// observes its payload.
+var heapEmptySlot = Value{typ: TypeUninitialized, payload: 1}
+
 // Heap represents a unified global variable storage for the VM.
 // This replaces the module-specific global tables with a single shared heap
 // that all modules and the main program can access consistently.
 type Heap struct {
-	values       []Value        // The actual global values
+	values       []Value        // The actual global values; unset slots hold heapEmptySlot
 	configurable []bool         // Whether each global can be deleted (defaults to true for user vars)
 	writable     []bool         // Whether each global can be assigned to (defaults to true for user vars)
-	initialized  []bool         // Whether each slot has been explicitly set (for ReferenceError detection)
 	size         int            // Current size of the heap
 	// optional name -> index map to enable VM.GetGlobal(name)
 	nameToIndex map[string]int
 	// builtinCount tracks how many globals are builtins (indices 0 to builtinCount-1)
 	// Used to preserve builtins during Reset() while clearing user-defined globals
 	builtinCount int
+}
+
+// fillEmpty sets every slot in s to the empty-slot marker. Called when a values
+// backing array is allocated or grown so any slot not yet Set reads as absent.
+func fillEmpty(s []Value) {
+	for i := range s {
+		s[i] = heapEmptySlot
+	}
 }
 
 // NewHeap creates a new heap with the specified initial capacity
@@ -29,11 +46,12 @@ func NewHeap(initialCapacity int) *Heap {
 		configurable[i] = true
 		writable[i] = true
 	}
+	values := make([]Value, initialCapacity)
+	fillEmpty(values)
 	return &Heap{
-		values:       make([]Value, initialCapacity),
+		values:       values,
 		configurable: configurable,
 		writable:     writable,
-		initialized:  make([]bool, initialCapacity),
 		size:         0,
 	}
 }
@@ -44,10 +62,8 @@ func (h *Heap) Resize(newSize int) {
 		// Grow the values slice, preserving existing values
 		newValues := make([]Value, newSize)
 		copy(newValues, h.values)
-		// Initialize new slots with Undefined
-		for i := len(h.values); i < newSize; i++ {
-			newValues[i] = Undefined
-		}
+		// New slots start empty (never Set)
+		fillEmpty(newValues[len(h.values):])
 		h.values = newValues
 
 		// Grow the configurable slice, preserving existing flags
@@ -67,12 +83,6 @@ func (h *Heap) Resize(newSize int) {
 			newWritable[i] = true
 		}
 		h.writable = newWritable
-
-		// Grow the initialized slice, preserving existing flags
-		newInitialized := make([]bool, newSize)
-		copy(newInitialized, h.initialized)
-		// New slots default to false (not initialized)
-		h.initialized = newInitialized
 	}
 	if newSize > h.size {
 		h.size = newSize
@@ -86,11 +96,23 @@ func (h *Heap) Get(index int) (Value, bool) {
 	if index < 0 || index >= h.size {
 		return Undefined, false
 	}
-	// Check if this slot has been explicitly initialized
-	if !h.initialized[index] {
+	// One read: an empty slot (never Set / deleted) reports as absent; anything
+	// else - including the TDZ marker - is a live value the caller inspects.
+	v := h.values[index]
+	if v.typ == TypeUninitialized && v.payload == heapEmptySlot.payload {
 		return Undefined, false
 	}
-	return h.values[index], true
+	return v, true
+}
+
+// IsInitialized reports whether the slot has been explicitly Set (to any value,
+// including the TDZ marker). Equivalent to the old initialized[] flag.
+func (h *Heap) IsInitialized(index int) bool {
+	if index < 0 || index >= h.size {
+		return false
+	}
+	v := h.values[index]
+	return !(v.typ == TypeUninitialized && v.payload == heapEmptySlot.payload)
 }
 
 // Set stores a value in the heap at the specified index
@@ -104,8 +126,7 @@ func (h *Heap) Set(index int, value Value) error {
 		h.Resize(index + 1)
 	}
 
-	h.values[index] = value
-	h.initialized[index] = true // Mark as initialized
+	h.values[index] = value // any non-empty value marks the slot as set
 	if index >= h.size {
 		h.size = index + 1
 	}
@@ -173,9 +194,8 @@ func (h *Heap) Delete(index int) bool {
 		// Cannot delete non-configurable global
 		return false
 	}
-	// Set to undefined and mark as uninitialized (we don't actually remove it from the array to preserve indices)
-	h.values[index] = Undefined
-	h.initialized[index] = false
+	// Mark the slot empty (we keep the array entry to preserve indices)
+	h.values[index] = heapEmptySlot
 	return true
 }
 
@@ -183,6 +203,13 @@ func (h *Heap) Delete(index int) bool {
 func (h *Heap) Values() []Value {
 	result := make([]Value, h.size)
 	copy(result, h.values[:h.size])
+	// Present empty (never-Set) slots as Undefined rather than leaking the
+	// internal marker to debug consumers.
+	for i, v := range result {
+		if v.typ == TypeUninitialized && v.payload == heapEmptySlot.payload {
+			result[i] = Undefined
+		}
+	}
 	return result
 }
 
@@ -302,11 +329,12 @@ func (h *Heap) CloneLayout() *Heap {
 		nameToIndex[name] = idx
 	}
 
+	values := make([]Value, newSize)
+	fillEmpty(values)
 	return &Heap{
-		values:       make([]Value, newSize),
+		values:       values,
 		configurable: configurable,
 		writable:     writable,
-		initialized:  make([]bool, newSize),
 		size:         h.size,
 		nameToIndex:  nameToIndex,
 		builtinCount: h.builtinCount,
@@ -316,10 +344,9 @@ func (h *Heap) CloneLayout() *Heap {
 // ClearUserGlobals resets user-defined globals while preserving builtin globals
 // This is used by VM.Reset() to prevent memory leaks without destroying builtins
 func (h *Heap) ClearUserGlobals() {
-	// Clear all values beyond the builtin range
+	// Clear all values beyond the builtin range back to empty
 	for i := h.builtinCount; i < h.size; i++ {
-		h.values[i] = Undefined
-		h.initialized[i] = false
+		h.values[i] = heapEmptySlot
 	}
 	// Reset size to just the builtins
 	h.size = h.builtinCount
