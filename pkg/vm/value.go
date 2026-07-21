@@ -151,11 +151,6 @@ func (vt ValueType) String() string {
 	}
 }
 
-type StringObject struct {
-	Object
-	value string
-}
-
 type SymbolObject struct {
 	Object
 	value          string
@@ -484,8 +479,21 @@ func NewBigInt(value *big.Int) Value {
 	return Value{typ: TypeBigInt, obj: unsafe.Pointer(&BigIntObject{value: value})}
 }
 
+// NewString stores the string's header (data pointer + length) directly in the
+// Value's obj/payload fields instead of boxing it in a heap-allocated
+// StringObject. The Go GC scans the unsafe.Pointer field, so the backing bytes
+// stay alive as long as the Value is reachable; AsString reconstructs the
+// string without copying via unsafe.String. The empty string stores a nil
+// pointer (unsafe.StringData("") is not guaranteed dereferenceable).
 func NewString(value string) Value {
-	return Value{typ: TypeString, obj: unsafe.Pointer(&StringObject{value: value})}
+	if len(value) == 0 {
+		return Value{typ: TypeString}
+	}
+	return Value{
+		typ:     TypeString,
+		payload: uint64(len(value)),
+		obj:     unsafe.Pointer(unsafe.StringData(value)),
+	}
 }
 
 func NewSymbol(value string) Value {
@@ -876,7 +884,10 @@ func (v Value) AsString() string {
 	if v.typ != TypeString {
 		panic("value is not a string")
 	}
-	return (*StringObject)(v.obj).value
+	if v.payload == 0 {
+		return ""
+	}
+	return unsafe.String((*byte)(v.obj), int(v.payload))
 }
 
 func (v Value) AsSymbol() string {
@@ -1044,7 +1055,7 @@ func (v Value) AsBoolean() bool {
 func (v Value) ToString() string {
 	switch v.typ {
 	case TypeString:
-		return (*StringObject)(v.obj).value
+		return v.AsString()
 	case TypeSymbol:
 		return fmt.Sprintf("Symbol(%s)", (*SymbolObject)(v.obj).value)
 	case TypeFloatNumber:
