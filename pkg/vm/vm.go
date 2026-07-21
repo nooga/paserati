@@ -160,6 +160,14 @@ type VM struct {
 	registerStack [RegFileSize * MaxFrames]Value
 	nextRegSlot   int // Points to the next available slot in registerStack
 
+	// sentinelRegPool is a LIFO free-list of 1-element register slices reused as
+	// the sentinel frame's result holder on native->JS reentry
+	// (executeUserFunctionSafe / ...WithNewTarget). Reentries nest strictly, so
+	// the pool grows to the max nesting depth and then recycles - eliminating a
+	// per-callback heap allocation (every Array.map/forEach/sort element,
+	// Promise executor, etc.).
+	sentinelRegPool [][]Value
+
 	// List of upvalues pointing to variables still on the registerStack
 	openUpvalues []*Upvalue
 	// Map for O(1) lookup of existing upvalues by location pointer

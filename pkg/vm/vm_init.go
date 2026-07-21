@@ -1537,6 +1537,25 @@ func (vm *VM) ConstructWithNewTarget(constructor Value, args []Value, newTarget 
 }
 
 // executeUserFunctionWithNewTarget executes a user function with constructor semantics and custom new.target
+// getSentinelReg returns a 1-element register slice to serve as a native->JS
+// reentry's sentinel-frame result holder, reusing a pooled buffer when one is
+// free (reentries nest strictly LIFO, so the pool recycles).
+func (vm *VM) getSentinelReg() []Value {
+	if n := len(vm.sentinelRegPool); n > 0 {
+		r := vm.sentinelRegPool[n-1]
+		vm.sentinelRegPool = vm.sentinelRegPool[:n-1]
+		return r
+	}
+	return make([]Value, 1)
+}
+
+// putSentinelReg returns a sentinel register slice to the pool, clearing the
+// slot so the pooled buffer doesn't keep the last result value alive.
+func (vm *VM) putSentinelReg(r []Value) {
+	r[0] = Undefined
+	vm.sentinelRegPool = append(vm.sentinelRegPool, r)
+}
+
 func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args []Value, newTarget Value, isDerivedConstructor bool) (Value, error) {
 	// Clear stale unwinding state
 	if vm.unwinding && vm.currentException == Null {
@@ -1544,8 +1563,9 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 		vm.unwindingCrossedNative = false
 	}
 
-	// Set up the caller context
-	callerRegisters := make([]Value, 1)
+	// Set up the caller context (pooled 1-element result holder, not a per-call alloc)
+	callerRegisters := vm.getSentinelReg()
+	defer vm.putSentinelReg(callerRegisters)
 	destReg := byte(0)
 	callerIP := 0
 
@@ -1631,8 +1651,9 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 		vm.unwindingCrossedNative = false
 	}
 
-	// Set up the caller context first
-	callerRegisters := make([]Value, 1)
+	// Set up the caller context first (pooled 1-element result holder)
+	callerRegisters := vm.getSentinelReg()
+	defer vm.putSentinelReg(callerRegisters)
 	destReg := byte(0)
 	callerIP := 0
 
