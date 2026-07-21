@@ -534,7 +534,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		length := ta.GetLength()
 		for i := 0; i < length; i++ {
 			elem := ta.GetElement(i)
-			_, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			_, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.Number(float64(i)), thisArray)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -566,7 +566,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		length := ta.GetLength()
 		for i := 0; i < length; i++ {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.Number(float64(i)), thisArray)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -601,7 +601,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		length := ta.GetLength()
 		for i := 0; i < length; i++ {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.Number(float64(i)), thisArray)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -636,7 +636,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		length := ta.GetLength()
 		for i := 0; i < length; i++ {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.Number(float64(i)), thisArray)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -671,7 +671,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		length := ta.GetLength()
 		for i := 0; i < length; i++ {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.Number(float64(i)), thisArray)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -708,7 +708,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 
 		for i := 0; i < length; i++ {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.Number(float64(i)), thisArray)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -746,7 +746,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 
 		for i := 0; i < length; i++ {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.Number(float64(i)), thisArray)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -786,7 +786,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 
 		for i := startIndex; i < length; i++ {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.CallArgs4(callback, vm.Undefined, accumulator, elem, vm.Number(float64(i)), thisArray)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -825,7 +825,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 
 		for i := startIndex; i >= 0; i-- {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.CallArgs4(callback, vm.Undefined, accumulator, elem, vm.Number(float64(i)), thisArray)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -1130,7 +1130,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			for j := 0; j < length-i-1; j++ {
 				var shouldSwap bool
 				if callback.IsCallable() {
-					result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elements[j], elements[j+1]})
+					result, err := vmInstance.CallArgs2(callback, vm.Undefined, elements[j], elements[j+1])
 					if err != nil {
 						return vm.Undefined, err
 					}
@@ -1446,7 +1446,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		length := ta.GetLength()
 		for i := length - 1; i >= 0; i-- {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.Number(float64(i)), thisArray)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -1481,7 +1481,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		length := ta.GetLength()
 		for i := length - 1; i >= 0; i-- {
 			elem := ta.GetElement(i)
-			result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.Number(float64(i)), thisArray})
+			result, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.Number(float64(i)), thisArray)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -1541,7 +1541,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			for j := 0; j < length-i-1; j++ {
 				var shouldSwap bool
 				if callback.IsCallable() {
-					result, err := vmInstance.Call(callback, vm.Undefined, []vm.Value{elements[j], elements[j+1]})
+					result, err := vmInstance.CallArgs2(callback, vm.Undefined, elements[j], elements[j+1])
 					if err != nil {
 						return vm.Undefined, err
 					}

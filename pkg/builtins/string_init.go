@@ -1371,7 +1371,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if splitter.IsCallable() {
 					// Call splitter with separator as 'this' and (O, limit) as arguments
 					vmInstance.EnterHelperCall()
-					result, err := vmInstance.Call(splitter, separatorArg, []vm.Value{thisVal, limitArg})
+					result, err := vmInstance.CallArgs2(splitter, separatorArg, thisVal, limitArg)
 					vmInstance.ExitHelperCall()
 					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
 						return vm.Undefined, nil
@@ -1539,7 +1539,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if ok && replacer.Type() != vm.TypeUndefined && replacer.Type() != vm.TypeNull {
 				if replacer.IsCallable() {
 					vmInstance.EnterHelperCall()
-					result, err := vmInstance.Call(replacer, searchArg, []vm.Value{thisVal, replaceArg})
+					result, err := vmInstance.CallArgs2(replacer, searchArg, thisVal, replaceArg)
 					vmInstance.ExitHelperCall()
 					if err != nil {
 						return vm.Undefined, err
@@ -1643,7 +1643,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if ok && replacer.Type() != vm.TypeUndefined && replacer.Type() != vm.TypeNull {
 				if replacer.IsCallable() {
 					vmInstance.EnterHelperCall()
-					result, err := vmInstance.Call(replacer, searchArg, []vm.Value{thisVal, replaceArg})
+					result, err := vmInstance.CallArgs2(replacer, searchArg, thisVal, replaceArg)
 					vmInstance.ExitHelperCall()
 					if err != nil {
 						return vm.Undefined, err

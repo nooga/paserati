@@ -811,7 +811,7 @@ func internalizeJSONProperty(vmInstance *vm.VM, holder vm.Value, name string, re
 	}
 
 	// Call the reviver function with (holder, name, val, context)
-	return vmInstance.Call(reviver, holder, []vm.Value{vm.NewString(name), val, vm.NewValueFromPlainObject(context)})
+	return vmInstance.CallArgs3(reviver, holder, vm.NewString(name), val, vm.NewValueFromPlainObject(context))
 }
 
 // parseJSONValueFromDecoder reads a JSON value from a decoder, preserving object key order
@@ -1290,7 +1290,7 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 
 	// Step 2: Apply replacer function if present
 	if replacerFunc != vm.Undefined && replacerFunc.IsCallable() && vmInstance != nil {
-		result, err := vmInstance.Call(replacerFunc, holder, []vm.Value{vm.NewString(key), value})
+		result, err := vmInstance.CallArgs2(replacerFunc, holder, vm.NewString(key), value)
 		if err != nil {
 			return "", err
 		}

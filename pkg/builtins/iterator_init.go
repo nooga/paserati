@@ -513,7 +513,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 			// Get value and apply mapper
 			valueVal, _ := vmInstance.GetProperty(result, "value")
-			mapped, err := vmInstance.Call(mapperFn, vm.Undefined, []vm.Value{valueVal, vm.NumberValue(float64(counter))})
+			mapped, err := vmInstance.CallArgs2(mapperFn, vm.Undefined, valueVal, vm.NumberValue(float64(counter)))
 			if err != nil {
 				closeIterator(underlyingIter)
 				helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
@@ -619,7 +619,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 				// Get value and test predicate
 				valueVal, _ := vmInstance.GetProperty(result, "value")
-				passed, err := vmInstance.Call(predicateFn, vm.Undefined, []vm.Value{valueVal, vm.NumberValue(float64(counter))})
+				passed, err := vmInstance.CallArgs2(predicateFn, vm.Undefined, valueVal, vm.NumberValue(float64(counter)))
 				counter++
 				helperObj.SetOwn("[[Counter]]", vm.NumberValue(float64(counter)))
 
@@ -977,7 +977,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			valueVal, _ := vmInstance.GetProperty(next, "value")
-			_, err = vmInstance.Call(fn, vm.Undefined, []vm.Value{valueVal, vm.NumberValue(float64(counter))})
+			_, err = vmInstance.CallArgs2(fn, vm.Undefined, valueVal, vm.NumberValue(float64(counter)))
 			if err != nil {
 				closeIterator(thisValue)
 				return vm.Undefined, err
@@ -1038,7 +1038,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				continue
 			}
 
-			accumulator, err = vmInstance.Call(reducer, vm.Undefined, []vm.Value{accumulator, valueVal, vm.NumberValue(float64(counter))})
+			accumulator, err = vmInstance.CallArgs3(reducer, vm.Undefined, accumulator, valueVal, vm.NumberValue(float64(counter)))
 			if err != nil {
 				closeIterator(thisValue)
 				return vm.Undefined, err
@@ -1089,7 +1089,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			valueVal, _ := vmInstance.GetProperty(next, "value")
-			result, err := vmInstance.Call(predicate, vm.Undefined, []vm.Value{valueVal, vm.NumberValue(float64(counter))})
+			result, err := vmInstance.CallArgs2(predicate, vm.Undefined, valueVal, vm.NumberValue(float64(counter)))
 			if err != nil {
 				closeIterator(thisValue)
 				return vm.Undefined, err
@@ -1141,7 +1141,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			valueVal, _ := vmInstance.GetProperty(next, "value")
-			result, err := vmInstance.Call(predicate, vm.Undefined, []vm.Value{valueVal, vm.NumberValue(float64(counter))})
+			result, err := vmInstance.CallArgs2(predicate, vm.Undefined, valueVal, vm.NumberValue(float64(counter)))
 			if err != nil {
 				closeIterator(thisValue)
 				return vm.Undefined, err
@@ -1193,7 +1193,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			valueVal, _ := vmInstance.GetProperty(next, "value")
-			result, err := vmInstance.Call(predicate, vm.Undefined, []vm.Value{valueVal, vm.NumberValue(float64(counter))})
+			result, err := vmInstance.CallArgs2(predicate, vm.Undefined, valueVal, vm.NumberValue(float64(counter)))
 			if err != nil {
 				closeIterator(thisValue)
 				return vm.Undefined, err
@@ -1344,7 +1344,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 				// Apply mapper
 				valueVal, _ := vmInstance.GetProperty(result, "value")
-				mapped, err := vmInstance.Call(mapperFn, vm.Undefined, []vm.Value{valueVal, vm.NumberValue(float64(counter))})
+				mapped, err := vmInstance.CallArgs2(mapperFn, vm.Undefined, valueVal, vm.NumberValue(float64(counter)))
 				if err != nil {
 					closeIterator(underlyingIter)
 					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
