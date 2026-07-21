@@ -2296,7 +2296,7 @@ startExecution:
 					// String comparison (lexicographic by UTF-16 code units per ECMAScript)
 					leftStr := leftVal.ToString()
 					rightStr := rightVal.ToString()
-					cmp := compareStringsUTF16(leftStr, rightStr)
+					cmp := compareStrings(leftStr, rightStr)
 					switch opcode {
 					case OpGreater:
 						result = cmp > 0
@@ -2368,7 +2368,7 @@ startExecution:
 					if leftPrim.Type() == TypeString && rightPrim.Type() == TypeString {
 						leftStr := leftPrim.AsString()
 						rightStr := rightPrim.AsString()
-						cmp := compareStringsUTF16(leftStr, rightStr)
+						cmp := compareStrings(leftStr, rightStr)
 						switch opcode {
 						case OpGreater:
 							result = cmp > 0
@@ -15953,6 +15953,25 @@ func compareStringsUTF16(a, b string) int {
 		return 1
 	}
 	return 0
+}
+
+// compareStrings returns the UTF-16 code-unit ordering of a and b (-1/0/1).
+// Allocation-free in the common case: when neither string contains an astral
+// character or lone surrogate - the only cases where UTF-8 byte order diverges
+// from UTF-16 code-unit order - Go's native byte comparison yields the same
+// ordering without materializing the two []uint16 slices. Falls back to the
+// full UTF-16 comparison only for astral/surrogate content.
+func compareStrings(a, b string) int {
+	if !stringNeedsUTF16Comparison(a) && !stringNeedsUTF16Comparison(b) {
+		if a < b {
+			return -1
+		}
+		if a > b {
+			return 1
+		}
+		return 0
+	}
+	return compareStringsUTF16(a, b)
 }
 
 // UTF16Length returns the number of UTF-16 code units in a string
