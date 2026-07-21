@@ -229,6 +229,7 @@ type VM struct {
 	IteratorHelperPrototype  Value // %IteratorHelperPrototype% - for iterator helper objects (map, filter, etc.)
 	WrapForValidIteratorPrototype Value // For Iterator.from() wrapped iterators
 	ArrayIteratorPrototype   Value // %ArrayIteratorPrototype% - for array iterators
+	ArrayValuesIterator      Value // canonical Array.prototype.values / [Symbol.iterator]; identity-checked by OpArrayDestructFastCheck
 	MapIteratorPrototype     Value // %MapIteratorPrototype% - for map iterators
 	SetIteratorPrototype     Value // %SetIteratorPrototype% - for set iterators
 	StringIteratorPrototype        Value // %StringIteratorPrototype% - for string iterators
@@ -1706,6 +1707,40 @@ startExecution:
 			v, done := st.Step()
 			registers[valueReg] = v
 			registers[doneReg] = BooleanValue(done)
+
+		case OpArrayDestructFastCheck:
+			// Emitted once per array-destructuring site, on the source value.
+			// True only when the source is a plain array whose Symbol.iterator is
+			// still the canonical array iterator: then default iteration is exactly
+			// an index walk (Arr.Get(0..len-1)), so the elements can be read
+			// directly with OpArrayRawGetInt - no iterator object, no next() calls,
+			// no {value, done} result allocations. Any override (instance or on
+			// Array.prototype) fails the identity check and takes the generic path.
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+			registers[destReg] = BooleanValue(vm.isFastDestructureArray(registers[srcReg]))
+
+		case OpArrayRawGetInt:
+			// Fast destructuring element read: the i-th element of the source
+			// array, or undefined when i is past the end (matching the iterator,
+			// which yields done with value undefined). Guarded by a preceding
+			// OpArrayDestructFastCheck, so the source is known to be a plain array.
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			idx := int(uint16(code[ip+2])<<8 | uint16(code[ip+3]))
+			ip += 4
+			src := registers[srcReg]
+			if src.typ == TypeArray {
+				arr := src.AsArray()
+				if idx < arr.Length() {
+					registers[destReg] = arr.Get(idx)
+				} else {
+					registers[destReg] = Undefined
+				}
+			} else {
+				registers[destReg] = Undefined
+			}
 
 		case OpTypeof:
 			destReg := code[ip]

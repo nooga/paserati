@@ -2911,6 +2911,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	w, e, c := true, false, true // writable, not enumerable, configurable
 	arrayProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), valuesFn, &w, &e, &c)
 
+	// Record the canonical values/[Symbol.iterator] so the compiler's
+	// array-destructuring fast path (OpArrayDestructFastCheck) can identity-check
+	// against it and skip the iterator protocol for pristine arrays.
+	vmInstance.ArrayValuesIterator = valuesFn
+
 	// Array.prototype.keys() - returns iterator yielding indices
 	keysFn := vm.NewNativeFunction(0, false, "keys", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()

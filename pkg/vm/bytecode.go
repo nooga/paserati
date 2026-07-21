@@ -200,6 +200,16 @@ const (
 	// Rx Ry Rz: step the built-in iterator behind next-method Rz: Rx = value, Ry = done. No call, no result object.
 	OpFastIterNext OpCode = 173
 
+	// --- Array-destructuring fast path (const [a,b] = arr, for-of element patterns) ---
+	// Rx Ry: Rx = true if Ry is a plain array whose Symbol.iterator is still the
+	// canonical array iterator - so destructuring can read elements by index
+	// directly instead of building an iterator object and calling next() per element.
+	OpArrayDestructFastCheck OpCode = 174
+	// Rx Ry Idx(16bit): Rx = Ry.AsArray().Get(Idx), or undefined if out of range /
+	// Ry is not an array. Bit-identical to what the built-in array iterator's Step
+	// yields, so it stands in for one next() on the fast destructuring path.
+	OpArrayRawGetInt OpCode = 175
+
 	// --- NEW: Global Variable Operations ---
 	OpGetGlobal     OpCode = 46 // Rx GlobalIdx(16bit): Rx = Globals[GlobalIdx] (direct indexed access)
 	OpSetGlobal     OpCode = 47 // GlobalIdx(16bit) Ry: Globals[GlobalIdx] = Ry (direct indexed access)
@@ -361,6 +371,10 @@ func (op OpCode) String() string {
 		return "OpIterFastCheck"
 	case OpFastIterNext:
 		return "OpFastIterNext"
+	case OpArrayDestructFastCheck:
+		return "OpArrayDestructFastCheck"
+	case OpArrayRawGetInt:
+		return "OpArrayRawGetInt"
 	case OpEqual:
 		return "OpEqual"
 	case OpNotEqual:
@@ -1006,6 +1020,11 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 
 	case OpFastIterNext:
 		return c.registerRegisterRegisterRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry, Rz, Rw
+
+	case OpArrayDestructFastCheck:
+		return c.registerRegisterInstruction(builder, instruction.String(), offset) // Rx, Ry
+	case OpArrayRawGetInt:
+		return c.registerRegisterUint16Instruction(builder, instruction.String(), offset, "Idx") // Rx, Ry, Idx(16bit)
 
 	case OpCall, OpTailCall:
 		return c.callInstruction(builder, instruction.String(), offset)
@@ -1873,6 +1892,20 @@ func (c *Chunk) registerRegisterConstantInstruction(builder *strings.Builder, na
 
 	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, %s %d (%s)\n", name, regX, regY, constName, constIdx, constValue))
 	return offset + 5 // Opcode + Rx + Ry + ConstIdx(2 bytes)
+}
+
+// registerRegisterUint16Instruction handles OpCode Rx Ry Imm(16bit) where the
+// 16-bit operand is a raw immediate (not a constant-pool index).
+func (c *Chunk) registerRegisterUint16Instruction(builder *strings.Builder, name string, offset int, immName string) int {
+	if offset+4 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		return offset + 5
+	}
+	regX := c.Code[offset+1]
+	regY := c.Code[offset+2]
+	imm := uint16(c.Code[offset+3])<<8 | uint16(c.Code[offset+4])
+	builder.WriteString(fmt.Sprintf("%-16s R%d, R%d, %s %d\n", name, regX, regY, immName, imm))
+	return offset + 5 // Opcode + Rx + Ry + Imm(2 bytes)
 }
 
 // registerRegisterRegisterConstantInstruction handles OpCode Rx Ry Rz ConstIdx(16bit)

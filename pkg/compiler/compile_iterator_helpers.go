@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/vm"
 )
 
@@ -44,6 +45,121 @@ func (c *Compiler) compileIteratorNext(iteratorReg Register, destReg Register, d
 		doneConstIdx := c.chunk.AddConstant(vm.String("done"))
 		c.emitGetProp(doneReg, resultReg, doneConstIdx, line)
 	}
+}
+
+// arrayDestructState threads the registers used by an array-destructuring site.
+// When fastEnabled is true, a runtime check (fastFlagReg) selects per element
+// between reading the source array by index (no iterator, no next() call, no
+// {value, done} allocation) and the generic iterator protocol. When false, only
+// the generic protocol is emitted - byte-for-byte the pre-fast-path behaviour.
+type arrayDestructState struct {
+	fastEnabled bool
+	fastFlagReg Register // BadRegister when !fastEnabled
+	iterObjReg  Register // the iterator object (generic arm only; undefined on the fast arm)
+	doneReg     Register // iterator done flag; forced true on the fast arm so cleanup is a no-op
+}
+
+// emitBuildArrayIterator resolves src[Symbol.iterator], calls it, and leaves the
+// iterator object in iterObjReg. Factored out of the destructuring paths, which
+// each open-coded this identical sequence.
+func (c *Compiler) emitBuildArrayIterator(iterObjReg Register, src Register, line int) {
+	symbolObjReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(symbolObjReg)
+	symIdx := c.GetOrAssignGlobalIndex("Symbol")
+	c.emitGetGlobal(symbolObjReg, symIdx, line)
+
+	propNameReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(propNameReg)
+	c.emitLoadNewConstant(propNameReg, vm.String("iterator"), line)
+
+	iteratorKeyReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorKeyReg)
+	c.emitOpCode(vm.OpGetIndex, line)
+	c.emitByte(byte(iteratorKeyReg))
+	c.emitByte(byte(symbolObjReg))
+	c.emitByte(byte(propNameReg))
+
+	iteratorMethodReg := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(iteratorMethodReg)
+	c.emitOpCode(vm.OpGetIndex, line)
+	c.emitByte(byte(iteratorMethodReg))
+	c.emitByte(byte(src))
+	c.emitByte(byte(iteratorKeyReg))
+
+	c.emitCallMethod(iterObjReg, iteratorMethodReg, src, 0, line)
+}
+
+// beginArrayDestruct sets up an array-destructuring site over srcReg. It
+// allocates iterObjReg and doneReg (and, when enableFast, fastFlagReg) and emits
+// the branched setup: the fast arm skips iterator creation and marks done=true;
+// the generic arm builds the iterator and sets done=false. The caller must pair
+// this with endArrayDestruct to free the registers.
+func (c *Compiler) beginArrayDestruct(srcReg Register, enableFast bool, line int) arrayDestructState {
+	st := arrayDestructState{fastEnabled: enableFast, fastFlagReg: BadRegister}
+	st.iterObjReg = c.regAlloc.Alloc()
+	st.doneReg = c.regAlloc.Alloc()
+
+	if !enableFast {
+		c.emitBuildArrayIterator(st.iterObjReg, srcReg, line)
+		c.emitLoadFalse(st.doneReg, line)
+		return st
+	}
+
+	st.fastFlagReg = c.regAlloc.Alloc()
+	c.emitArrayDestructFastCheck(st.fastFlagReg, srcReg, line)
+	// The fast arm never dereferences iterObjReg (done=true skips cleanup), but
+	// give it a defined value so the register is never read while uninitialized.
+	c.emitLoadUndefined(st.iterObjReg, line)
+
+	toGeneric := c.emitPlaceholderJump(vm.OpJumpIfFalse, st.fastFlagReg, line)
+	c.emitLoadTrue(st.doneReg, line) // fast arm: no iterator to close
+	pastSetup := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+	c.patchJump(toGeneric)
+	c.emitBuildArrayIterator(st.iterObjReg, srcReg, line)
+	c.emitLoadFalse(st.doneReg, line)
+	c.patchJump(pastSetup)
+	return st
+}
+
+func (c *Compiler) endArrayDestruct(st arrayDestructState) {
+	if st.fastFlagReg != BadRegister {
+		c.regAlloc.Free(st.fastFlagReg)
+	}
+	c.regAlloc.Free(st.doneReg)
+	c.regAlloc.Free(st.iterObjReg)
+}
+
+// compileDestructNext produces the idx-th destructured value into destReg,
+// advancing the iterator by one. idx is the element's position in the pattern
+// (counting elisions). On the fast arm the value is read directly from the
+// source array; on the generic arm it comes from iterator.next(). When discard
+// is true (elision), the fast arm does nothing and the generic arm still steps
+// the iterator to stay in sync.
+func (c *Compiler) compileDestructNext(st arrayDestructState, srcReg Register, idx int, destReg Register, discard bool, line int) {
+	if !st.fastEnabled {
+		c.compileIteratorNext(st.iterObjReg, destReg, st.doneReg, line, discard)
+		return
+	}
+	toGeneric := c.emitPlaceholderJump(vm.OpJumpIfFalse, st.fastFlagReg, line)
+	if !discard && destReg != BadRegister {
+		c.emitArrayRawGetInt(destReg, srcReg, idx, line)
+	}
+	pastGeneric := c.emitPlaceholderJump(vm.OpJump, 0, line)
+	c.patchJump(toGeneric)
+	c.compileIteratorNext(st.iterObjReg, destReg, st.doneReg, line, discard)
+	c.patchJump(pastGeneric)
+}
+
+// arrayDeclPatternFastEligible reports whether an array pattern can use the fast
+// path: no rest element (rest still exhausts the iterator via the generic path).
+func arrayDeclPatternFastEligible(elements []*parser.DestructuringElement) bool {
+	for _, el := range elements {
+		if el.IsRest {
+			return false
+		}
+	}
+	return true
 }
 
 // compileIteratorToArray collects all remaining values from iterator into an array

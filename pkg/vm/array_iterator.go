@@ -85,6 +85,24 @@ func resolveFastIterState(iterVal, nextVal Value) *BuiltinIterState {
 	return nil
 }
 
+// isFastDestructureArray reports whether v can be destructured by direct index
+// reads instead of the iterator protocol: v must be a plain array whose
+// Symbol.iterator is still the canonical Array.prototype iterator. When true,
+// default iteration is exactly Arr.Get(0..len-1) (what BuiltinIterState.Step
+// yields), so OpArrayRawGetInt reproduces it bit-for-bit. Any instance- or
+// prototype-level override of Symbol.iterator fails the identity check and the
+// caller falls back to the generic protocol.
+func (vm *VM) isFastDestructureArray(v Value) bool {
+	if v.typ != TypeArray || vm.ArrayValuesIterator.typ != TypeNativeFunction {
+		return false
+	}
+	it, ok := vm.GetSymbolProperty(v, vm.SymbolIterator)
+	if !ok || it.typ != TypeNativeFunction {
+		return false
+	}
+	return it.AsNativeFunction() == vm.ArrayValuesIterator.AsNativeFunction()
+}
+
 // likeLength reads the array-like's current length the same way the original
 // closures did: GetOwn("length") if numeric, else 0.
 func (st *BuiltinIterState) likeLength() int {

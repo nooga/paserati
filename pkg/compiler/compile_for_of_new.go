@@ -497,40 +497,19 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 // This handles: for ([x, y] of items) where x, y are already declared
 // Per ECMAScript spec 13.7.5.13, array assignment patterns MUST use iterator protocol
 func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.ArrayLiteral, valueReg Register, line int) errors.PaseratiError {
-	// Get Symbol.iterator from the value
-	symbolObjReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(symbolObjReg)
-	symIdx := c.GetOrAssignGlobalIndex("Symbol")
-	c.emitGetGlobal(symbolObjReg, symIdx, line)
-
-	propNameReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(propNameReg)
-	c.emitLoadNewConstant(propNameReg, vm.String("iterator"), line)
-
-	iteratorKeyReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(iteratorKeyReg)
-	c.emitOpCode(vm.OpGetIndex, line)
-	c.emitByte(byte(iteratorKeyReg))
-	c.emitByte(byte(symbolObjReg))
-	c.emitByte(byte(propNameReg))
-
-	// Get iterable[Symbol.iterator]
-	iteratorMethodReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(iteratorMethodReg)
-	c.emitOpCode(vm.OpGetIndex, line)
-	c.emitByte(byte(iteratorMethodReg))
-	c.emitByte(byte(valueReg))
-	c.emitByte(byte(iteratorKeyReg))
-
-	// Call the iterator method
-	iteratorObjReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(iteratorObjReg)
-	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, valueReg, 0, line)
-
-	// Track done state
-	doneReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(doneReg)
-	c.emitLoadFalse(doneReg, line)
+	// Fast path is eligible only without a rest (spread) element; rest still
+	// exhausts the iterator via the generic protocol.
+	enableFast := true
+	for _, element := range arrayLit.Elements {
+		if _, ok := element.(*parser.SpreadElement); ok {
+			enableFast = false
+			break
+		}
+	}
+	st := c.beginArrayDestruct(valueReg, enableFast, line)
+	defer c.endArrayDestruct(st)
+	iteratorObjReg := st.iterObjReg
+	doneReg := st.doneReg
 
 	// Mark the start of the "try" region for exception-triggered iterator cleanup
 	// This covers the element iteration where default expressions may throw or yield
@@ -540,7 +519,7 @@ func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.Arra
 	for i, element := range arrayLit.Elements {
 		if element == nil {
 			// Elision - consume but don't assign
-			c.compileIteratorNext(iteratorObjReg, BadRegister, doneReg, line, true)
+			c.compileDestructNext(st, valueReg, i, BadRegister, true, line)
 			continue
 		}
 
@@ -600,9 +579,9 @@ func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.Arra
 			return err
 		}
 
-		// Step 2: NOW call iterator.next() to get the value
+		// Step 2: NOW get the value (fast index read or iterator.next())
 		extractedReg := c.regAlloc.Alloc()
-		c.compileIteratorNext(iteratorObjReg, extractedReg, doneReg, line, false)
+		c.compileDestructNext(st, valueReg, i, extractedReg, false, line)
 
 		// Step 3: Complete assignment using the pre-evaluated reference
 		if defaultExpr != nil {
@@ -667,55 +646,24 @@ func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.Arra
 
 // compileForOfArrayDestructuring uses iterator protocol to destructure array patterns in for-of loops
 func (c *Compiler) compileForOfArrayDestructuring(arrayDestr *parser.ArrayDestructuringDeclaration, valueReg Register, isConst bool, line int) errors.PaseratiError {
-	// Get Symbol.iterator from the value using the same pattern as compileArrayDestructuringIteratorPath
-
-	// Get Symbol.iterator via computed index
-	iteratorMethodReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(iteratorMethodReg)
-
-	// Load global Symbol
-	symbolObjReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(symbolObjReg)
-	symIdx := c.GetOrAssignGlobalIndex("Symbol")
-	c.emitGetGlobal(symbolObjReg, symIdx, line)
-
-	// Get Symbol.iterator
-	propNameReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(propNameReg)
-	c.emitLoadNewConstant(propNameReg, vm.String("iterator"), line)
-
-	iteratorKeyReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(iteratorKeyReg)
-	c.emitOpCode(vm.OpGetIndex, line)
-	c.emitByte(byte(iteratorKeyReg))
-	c.emitByte(byte(symbolObjReg))
-	c.emitByte(byte(propNameReg))
-
-	// Get value[Symbol.iterator]
-	c.emitOpCode(vm.OpGetIndex, line)
-	c.emitByte(byte(iteratorMethodReg))
-	c.emitByte(byte(valueReg))
-	c.emitByte(byte(iteratorKeyReg))
-
-	// Call the iterator method to get iterator object
-	iteratorObjReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(iteratorObjReg)
-	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, valueReg, 0, line)
-
-	// Allocate register to track iterator.done state
-	doneReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(doneReg)
-	c.emitLoadFalse(doneReg, line)
+	// Set up the destructuring source. Without a rest element and over a pristine
+	// array at runtime, elements are read by index and the iterator protocol is
+	// skipped (see beginArrayDestruct).
+	enableFast := arrayDeclPatternFastEligible(arrayDestr.Elements)
+	st := c.beginArrayDestruct(valueReg, enableFast, line)
+	defer c.endArrayDestruct(st)
+	iteratorObjReg := st.iterObjReg
+	doneReg := st.doneReg
 
 	// Mark the start of the "try" region for exception-triggered iterator cleanup
 	// This covers the element iteration where default expressions may throw or yield
 	iteratorCleanupTryStart := len(c.chunk.Code)
 
-	// For each element, call iterator.next()
-	for _, element := range arrayDestr.Elements {
+	// For each element, produce the next value (fast index read or iterator.next())
+	for idx, element := range arrayDestr.Elements {
 		if element.Target == nil {
 			// Elision: consume iterator value but don't bind
-			c.compileIteratorNext(iteratorObjReg, BadRegister, doneReg, line, true)
+			c.compileDestructNext(st, valueReg, idx, BadRegister, true, line)
 			continue
 		}
 
@@ -749,9 +697,9 @@ func (c *Compiler) compileForOfArrayDestructuring(arrayDestr *parser.ArrayDestru
 			break
 		}
 
-		// Regular element: get next value from iterator
+		// Regular element: get next value (fast index read or iterator.next())
 		extractedReg := c.regAlloc.Alloc()
-		c.compileIteratorNext(iteratorObjReg, extractedReg, doneReg, line, false)
+		c.compileDestructNext(st, valueReg, idx, extractedReg, false, line)
 
 		// Handle assignment based on target type
 		if ident, ok := element.Target.(*parser.Identifier); ok {
