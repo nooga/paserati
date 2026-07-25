@@ -9,7 +9,7 @@
 // property access on a bigint receiver at all ("property access is not
 // supported on type bigint"), and it rejects unary '-' on bigint. Both are
 // pre-existing checker gaps, separate from the runtime bug covered here.
-// expect: 10|a|-ff|bigint|10|10|bigint|10|10|10|10n|10n|str|num
+// expect: 10|a|-ff|bigint|10|10|bigint|10|10|10|10n|10n|str|num|range|10
 let out: string[] = [];
 const b: any = 10n;
 const neg: any = BigInt("-255");
@@ -48,5 +48,15 @@ try {
 } catch (e) {
   out.push("num");
 }
+
+// An out-of-range radix is a RangeError, not a silent clamp to 10, and an
+// explicit undefined radix still means 10.
+try {
+  b.toString(1);
+  out.push("no-throw");
+} catch (e) {
+  out.push("range");
+}
+out.push(b.toString(undefined));
 
 out.join("|");
