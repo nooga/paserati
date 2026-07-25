@@ -1968,27 +1968,35 @@ startExecution:
 				} else {
 					r = float64(rightVal.AsInteger())
 				}
-				fastPathHandled := true
+				// Each arm continues the dispatch loop directly; the default
+				// falls out of the switch into the general path below.
 				switch opcode {
 				case OpAdd:
 					registers[destReg] = Number(l + r)
+					continue
 				case OpSubtract:
 					registers[destReg] = Number(l - r)
+					continue
 				case OpMultiply:
 					registers[destReg] = Number(l * r)
+					continue
 				case OpDivide:
 					registers[destReg] = Number(l / r)
+					continue
 				case OpRemainder:
 					// Integer fast path: math.Mod is a software frexp/ldexp
 					// loop (~7% of the recursion benchmark's profile via
 					// `i % k` patterns). Go's truncated int64 remainder has
 					// the dividend's sign, exactly matching JS %, so it is
-					// safe when: both operands are integral and within ±2^53
-					// (float64<->int64 round-trips exactly; beyond that the
-					// conversion can saturate), the divisor is nonzero
-					// (0 divisor => NaN), and the result is not a signed
-					// zero (JS requires -0 for a negative or -0 dividend
-					// with zero remainder; the int path would lose the sign).
+					// safe when: both operands are integral (the float64(li)==l
+					// round-trip below proves that), the divisor is nonzero
+					// (0 divisor => NaN), and the result is not a signed zero
+					// (JS requires -0 for a negative or -0 dividend with zero
+					// remainder; the int path would lose the sign). The ±2^53
+					// range test guards the conversion itself: Go leaves an
+					// out-of-range float64->int64 result implementation-defined
+					// (arm64 saturates, amd64 yields MinInt64), so the operands
+					// must be in range before int64(l) is even evaluated.
 					const maxExactInt = float64(1 << 53)
 					if l >= -maxExactInt && l <= maxExactInt && r >= -maxExactInt && r <= maxExactInt {
 						li, ri := int64(l), int64(r)
@@ -2000,29 +2008,32 @@ startExecution:
 						}
 					}
 					registers[destReg] = Number(math.Mod(l, r))
+					continue
 				case OpEqual, OpStrictEqual:
 					registers[destReg] = BooleanValue(l == r)
+					continue
 				case OpNotEqual, OpStrictNotEqual:
 					registers[destReg] = BooleanValue(l != r)
+					continue
 				case OpLess:
 					registers[destReg] = BooleanValue(l < r)
+					continue
 				case OpGreater:
 					registers[destReg] = BooleanValue(l > r)
+					continue
 				case OpLessEqual:
 					registers[destReg] = BooleanValue(l <= r)
+					continue
 				case OpGreaterEqual:
 					registers[destReg] = BooleanValue(l >= r)
+					continue
 				default:
 					// Every opcode in the enclosing case list has an arm above,
 					// so this is unreachable today. It exists so that adding an
 					// opcode to that list without a fast-path arm degrades to the
-					// general path below instead of falling out of the switch and
-					// continuing with destReg never written — a silently stale
-					// register is a far worse failure than the slower path.
-					fastPathHandled = false
-				}
-				if fastPathHandled {
-					continue
+					// general path below instead of continuing with destReg never
+					// written — a silently stale register is a far worse failure
+					// than the slower path.
 				}
 			}
 
