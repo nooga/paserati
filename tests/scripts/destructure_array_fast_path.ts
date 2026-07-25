@@ -4,8 +4,8 @@
 // Covers the behaviors it must preserve: short source -> undefined tail,
 // holes -> undefined, defaults, elisions, nested patterns, rest (which stays on
 // the generic path), for-of element patterns, and deopt to the generic protocol
-// when Symbol.iterator is customized on the prototype.
-// expect: 1,2|10,undefined,undefined|5,20|1,undefined,3|2,4|7,8,9|1;2,3,4|a=1,b=2|100,200
+// when Symbol.iterator is customized on the prototype or on an Array subclass.
+// expect: 1,2|10,undefined,undefined|5,20|1,undefined,3|2,4|7,8,9|1;2,3,4|a=1,b=2|100,200|1000,2000,3000/1000,2000,3000
 let out: string[] = [];
 
 // basic + fewer-than-pattern tail
@@ -50,5 +50,29 @@ const origIt = Array.prototype[Symbol.iterator];
 const [q, r] = [1, 2];
 (Array.prototype as any)[Symbol.iterator] = origIt;
 out.push([q, r].join(","));
+
+// A subclass whose Symbol.iterator lives on its own prototype must also deopt.
+// Regression: the fast-path gate resolved Symbol.iterator through a helper that
+// fell back straight to Array.prototype, never consulting the per-instance
+// prototype, so it approved the fast path and destructuring silently skipped the
+// override that for-of still honored. Both forms must agree.
+class MyArray extends Array {
+  [Symbol.iterator](): any {
+    let i = 0;
+    const self: any = this;
+    return {
+      next: () =>
+        i < self.length
+          ? { value: self[i++] * 1000, done: false }
+          : { value: undefined, done: true },
+    };
+  }
+}
+const sub: any = new MyArray();
+sub.push(1, 2, 3);
+const [s1, s2, s3] = sub;
+let subForOf: number[] = [];
+for (const sv of sub) subForOf.push(sv);
+out.push([s1, s2, s3].join(",") + "/" + subForOf.join(","));
 
 out.join("|");
