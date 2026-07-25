@@ -7611,7 +7611,7 @@ startExecution:
 				// only set once such an accessor is actually defined. See
 				// arrayIndexAccessorSeen in object.go.
 				setterFound := false
-				if arrayIndexAccessorSeen && vm.ArrayPrototype.IsObject() {
+				if arrayIndexAccessorSeen.Load() && vm.ArrayPrototype.IsObject() {
 					idxKey := strconv.Itoa(idx)
 					setterKey := "s:" + idxKey // PropertyKey hash format for string keys
 					for cur := vm.ArrayPrototype.AsPlainObject(); cur != nil; {

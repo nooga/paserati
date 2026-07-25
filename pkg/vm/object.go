@@ -670,7 +670,14 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 // rather than per-realm to keep the accessor-definition choke points VM-free; the
 // only cost of the coarser scope is that one realm defining such an accessor also
 // disables the fast path for others, which is negligible in practice.
-var arrayIndexAccessorSeen bool
+//
+// atomic.Bool so concurrent VMs / -race builds don't data-race the latch. A
+// plain bool can't tear, and a racing read was already fail-safe (it sees false
+// and restores the slow path) — but it is a data race regardless: -race flags
+// it, and nothing stops the compiler caching the load across an `arr[i] = v`
+// loop. Load/Store order the flag only; the accessor maps it guards stay
+// unsynchronized, which is moot because Array.prototype is per-realm.
+var arrayIndexAccessorSeen atomic.Bool
 
 // isCanonicalArrayIndexKey reports whether name is a canonical array-index string
 // ("0", or a digit-string with no leading zero, within the 0..2^32-2 index range) —
@@ -697,8 +704,8 @@ func isCanonicalArrayIndexKey(name string) bool {
 // noteAccessorKey latches arrayIndexAccessorSeen when a string key is a canonical
 // array index. Called from every accessor-definition choke point.
 func noteAccessorKey(name string) {
-	if !arrayIndexAccessorSeen && isCanonicalArrayIndexKey(name) {
-		arrayIndexAccessorSeen = true
+	if !arrayIndexAccessorSeen.Load() && isCanonicalArrayIndexKey(name) {
+		arrayIndexAccessorSeen.Store(true)
 	}
 }
 
