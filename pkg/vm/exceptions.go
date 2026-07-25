@@ -42,6 +42,35 @@ func (vm *VM) findAllExceptionHandlers(pc int) []*ExceptionHandler {
 	return handlers
 }
 
+// findPendingHandler returns the first handler in exception-table order that
+// covers pc and is a finally block (or, when includeIterCleanup is set, an
+// iterator-cleanup block). It selects the same handler the
+// OpReturn/OpReturnUndefined/OpReturnFinally/OpHandlePending sites used to
+// pick, but without allocating a slice — this runs on every return, where the
+// common case is an empty table.
+//
+// Not a drop-in for every findAllExceptionHandlers caller: the generator-resume
+// path keeps the LAST covering finally and prefers a finally over an earlier
+// iterator-cleanup handler, which is not "first match". That site stays on
+// findAllExceptionHandlers deliberately.
+func (vm *VM) findPendingHandler(pc int, includeIterCleanup bool) *ExceptionHandler {
+	if vm.frameCount == 0 {
+		return nil
+	}
+	frame := &vm.frames[vm.frameCount-1]
+	if frame.closure == nil {
+		return nil
+	}
+	table := frame.closure.Fn.Chunk.ExceptionTable
+	for i := range table {
+		h := &table[i]
+		if pc >= h.TryStart && pc < h.TryEnd && (h.IsFinally || (includeIterCleanup && h.IsIteratorCleanup)) {
+			return h
+		}
+	}
+	return nil
+}
+
 // throwException initiates exception unwinding with the given value
 func (vm *VM) throwException(value Value) {
 	if debugExceptions {
