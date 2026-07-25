@@ -78,7 +78,7 @@ const (
 	defaultTimeout      = "10m"
 	anchorName          = "BenchmarkRatchetAnchor"
 	anchorPackage       = "github.com/nooga/paserati/pkg/vm"
-	schemaVersion       = 1
+	schemaVersion       = 2 // v2 records Reducer + SampleCount; v1 (mean-era, no provenance) is intentionally incompatible
 )
 
 // defaultPackages is the scope when no -packages flag is given.
@@ -125,6 +125,7 @@ func main() {
 		budget          = flag.Float64("budget", defaultBudget, "fractional regression tolerated before flagging (0.05 = 5%)")
 		packages        = flag.String("packages", "", "space-separated go packages to bench (default: discover)")
 		count           = flag.Int("count", defaultCount, "go test -count")
+		reducer         = flag.String("reducer", "mean", "collapse -count repetitions by: mean (default — safe for the persistent ratchet) or min (lower-envelope; informational A/B only, never the durable baseline)")
 		benchtime       = flag.String("benchtime", defaultBenchtime, "go test -benchtime")
 		filter          = flag.String("filter", "", "regexp filter on benchmark names (default: all)")
 		timeout         = flag.String("timeout", defaultTimeout, "go test -timeout per package")
@@ -137,6 +138,10 @@ func main() {
 		allowIncomplete = flag.Bool("allow-incomplete", false, "with check: tolerate package capture errors and missing baseline entries instead of failing (they shrink coverage, so the default is to fail)")
 	)
 	flag.Parse()
+
+	if *reducer != "min" && *reducer != "mean" {
+		die("invalid -reducer %q (want min or mean)", *reducer)
+	}
 
 	mode := "check"
 	if flag.NArg() > 0 {
@@ -159,7 +164,7 @@ func main() {
 			}
 		}
 		fmt.Printf("bench-ratchet: aggregate from %s\n", path)
-		current, err := aggregateFromFile(path)
+		current, err := aggregateFromFile(path, *reducer)
 		if err != nil {
 			die("aggregate: %v", err)
 		}
@@ -214,7 +219,7 @@ func main() {
 		return
 	}
 
-	current, err := aggregateFromFile(*outPath)
+	current, err := aggregateFromFile(*outPath, *reducer)
 	if err != nil {
 		die("aggregate: %v", err)
 	}
@@ -264,9 +269,16 @@ func writeOrCheck(baselinePath string, current Baseline, mode string, budget flo
 		// ratchet and writes current as-is.
 		existing, err := readBaseline(baselinePath)
 		if err != nil {
-			// No prior baseline — first run. Stamp every entry with
-			// current's commit/time and write.
-			fmt.Printf("  no existing baseline at %s — writing current as the initial bar.\n", baselinePath)
+			// No usable prior baseline — either a first run, or one that is
+			// schema-incompatible (e.g. the mean-era v1 → min-era v2 provenance
+			// transition). Re-seed either way: a min-era bar is a different
+			// statistic than a mean-era one and must not be ratcheted onto it.
+			if _, statErr := os.Stat(baselinePath); statErr == nil {
+				fmt.Printf("  baseline at %s is not schema-compatible (%v)\n", baselinePath, err)
+				fmt.Printf("  — re-seeding as an INTENTIONAL timeline discontinuity (reducer/version change), not a regression.\n")
+			} else {
+				fmt.Printf("  no existing baseline at %s — writing current as the initial bar.\n", baselinePath)
+			}
 			stampAll(&current)
 			if err := writeBaseline(baselinePath, current); err != nil {
 				die("write baseline: %v", err)
@@ -639,10 +651,33 @@ func captureOnePackage(pkg string, count int, benchtime, timeout, tags string, f
 	return written, nil
 }
 
-// aggregateFromFile reads a .jsonl of StreamRecord lines and returns
-// a Baseline computed from them. Same-named records (e.g. multiple
-// -count repetitions) are averaged.
-func aggregateFromFile(path string) (Baseline, error) {
+// aggregateFromFile reads a .jsonl of StreamRecord lines and returns a Baseline
+// computed from them. Same-named records (e.g. multiple -count repetitions) are
+// collapsed by the caller-selected reducer (see the `reducer` param below):
+// "mean" for the persistent ratchet, "min" for the informational A/B.
+//
+// Rationale for min, and its limits: on shared runners most interference is upward (GC
+// pauses, CPU migration, a co-scheduled tenant, thermal throttling), so the
+// minimum of N repetitions selects the LOWER PERFORMANCE ENVELOPE — the least-
+// contaminated sample under that assumption — and is far more stable run-to-run
+// than the mean, which a single slow sample drags up. This is a pragmatic
+// heuristic for the informational same-runner A/B report, NOT a statistical
+// estimate of "true cost": favorable samples exist too (frequency scaling, warm
+// caches), and a minimum is sample-count dependent (more -count = more chances
+// to observe a lower value). A defensible GATE needs interleaved runs and a
+// distribution comparison — that is the median-of-N repeat-A/B, not this
+// reducer. Reducer + SampleCount are recorded on the Baseline so a min-era
+// snapshot is never silently compared against a mean-era one.
+//
+// All raw samples are retained in Samples for provenance. alloc/bytes are
+// deterministic per op, so min == mean for them; taking min keeps it uniform.
+// reducer selects how the N `-count` repetitions of each benchmark collapse to
+// one number. "min" is the lower-envelope heuristic (see the doc comment above),
+// appropriate only for the non-persistent informational A/B. "mean" is the safe
+// default for anything that feeds the persistent ratchet (`ratchetMerge` already
+// takes min over all history, so a min-of-N input would compound into an
+// unclearable floor from a single lucky sample).
+func aggregateFromFile(path, reducer string) (Baseline, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return Baseline{}, fmt.Errorf("open %s: %w", path, err)
@@ -653,6 +688,7 @@ func aggregateFromFile(path string) (Baseline, error) {
 		pkg                       string
 		name                      string
 		count                     int
+		nsMin, bytesMin, allocMin float64
 		nsSum, bytesSum, allocSum float64
 		iters                     int64
 		setHash                   string // shared set identity across this key's records
@@ -673,6 +709,15 @@ func aggregateFromFile(path string) (Baseline, error) {
 			byName[key] = a
 		}
 		a.count++
+		if a.count == 1 || rec.NSPerOp < a.nsMin {
+			a.nsMin = rec.NSPerOp
+		}
+		if a.count == 1 || float64(rec.BytesPerOp) < a.bytesMin {
+			a.bytesMin = float64(rec.BytesPerOp)
+		}
+		if a.count == 1 || float64(rec.AllocsPerOp) < a.allocMin {
+			a.allocMin = float64(rec.AllocsPerOp)
+		}
 		a.nsSum += rec.NSPerOp
 		a.bytesSum += float64(rec.BytesPerOp)
 		a.allocSum += float64(rec.AllocsPerOp)
@@ -689,15 +734,24 @@ func aggregateFromFile(path string) (Baseline, error) {
 		a.samples = append(a.samples, rec.Sample())
 	}
 
+	// reduce collapses the N repetitions. alloc/bytes are deterministic per op,
+	// so min == mean for them; the reducer only really moves ns/op.
+	reduce := func(min, sum float64, count int) float64 {
+		if reducer == "mean" {
+			return sum / float64(count)
+		}
+		return min
+	}
+
 	var results []Result
 	for _, a := range byName {
 		results = append(results, Result{
 			Package:     a.pkg,
 			Name:        a.name,
 			Iterations:  a.iters,
-			NSPerOp:     a.nsSum / float64(a.count),
-			BytesPerOp:  int64(a.bytesSum / float64(a.count)),
-			AllocsPerOp: int64(a.allocSum / float64(a.count)),
+			NSPerOp:     reduce(a.nsMin, a.nsSum, a.count),
+			BytesPerOp:  int64(reduce(a.bytesMin, a.bytesSum, a.count)),
+			AllocsPerOp: int64(reduce(a.allocMin, a.allocSum, a.count)),
 			SetHash:     a.setHash,
 			Samples:     append([]BenchmarkSample(nil), a.samples...),
 		})
@@ -711,7 +765,7 @@ func aggregateFromFile(path string) (Baseline, error) {
 	if anchor.NSPerOp <= 0 {
 		return Baseline{}, fmt.Errorf("anchor ns/op is %.3f — divide-by-zero protection", anchor.NSPerOp)
 	}
-	return buildCurrentBaseline(results, anchor), nil
+	return buildCurrentBaseline(results, anchor, reducer), nil
 }
 
 func findAnchor(results []Result) (Result, bool) {
@@ -723,7 +777,7 @@ func findAnchor(results []Result) (Result, bool) {
 	return Result{}, false
 }
 
-func buildCurrentBaseline(results []Result, anchor Result) Baseline {
+func buildCurrentBaseline(results []Result, anchor Result, reducer string) Baseline {
 	m := detectMachine()
 	bm := map[string]BenchmarkEntry{}
 	for _, r := range results {
@@ -745,6 +799,8 @@ func buildCurrentBaseline(results []Result, anchor Result) Baseline {
 	}
 	return Baseline{
 		Version:       schemaVersion,
+		Reducer:       reducer,
+		SampleCount:   len(anchor.Samples),
 		CapturedAt:    time.Now().UTC().Format(time.RFC3339),
 		CapturedAtSHA: gitShortSHA(),
 		Machine:       m,
@@ -879,6 +935,16 @@ func compareAndReport(baseline, current Baseline, budget float64, format string)
 		fmt.Printf("  current:  %s / %s / %s\n",
 			current.Machine.CPUModel, current.Machine.GoVersion, current.Machine.OS+"-"+current.Machine.Arch)
 		fmt.Printf("  comparing on anchor-relative ratios — absolute ns/op deltas are not meaningful.\n\n")
+	}
+	// Provenance guard: a minimum is sample-count dependent and a mean-era number
+	// is a different statistic entirely, so deltas across a reducer/count change
+	// are not comparable. (The version check already rejects pre-provenance v1
+	// baselines outright; this catches same-version mismatches, e.g. min vs a
+	// future median reducer, or n=3 vs n=7.)
+	if baseline.Reducer != current.Reducer || (baseline.SampleCount != 0 && current.SampleCount != 0 && baseline.SampleCount != current.SampleCount) {
+		fmt.Printf("warning: baseline provenance differs — reducer %q/n=%d vs current %q/n=%d\n",
+			baseline.Reducer, baseline.SampleCount, current.Reducer, current.SampleCount)
+		fmt.Printf("  a minimum is sample-count dependent — deltas across this boundary are not comparable.\n\n")
 	}
 	if baseline.Anchor.NSPerOp > 0 {
 		anchorDrift := (current.Anchor.NSPerOp - baseline.Anchor.NSPerOp) / baseline.Anchor.NSPerOp

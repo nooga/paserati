@@ -94,9 +94,24 @@ jobs:
         run: |
           set -euo pipefail
           git checkout --force "$BASE"
+          # Use the lower-envelope reducer for this throwaway per-run A/B baseline
+          # (RUNNER_TEMP, not the durable ratchet). But the merge-base binary is built
+          # from an OLD commit that may predate the -reducer flag, so feature-detect it
+          # here and reuse the same decision for the head half (via GITHUB_ENV) — that
+          # keeps both halves on the SAME reducer. A base too old for the flag falls
+          # back to its default (mean), and head then omits the flag too (also mean),
+          # so the informational compare stays like-for-like across the transition.
+          # Capture then match (not a pipe): -h exits non-zero, which under
+          # `set -o pipefail` would poison an `if ... | grep` and misreport support.
+          RFLAG=""
+          help="$(go run ./cmd/bench-ratchet -h 2>&1 || true)"
+          case "$help" in *-reducer*) RFLAG="-reducer min" ;; esac
+          echo "RFLAG=${RFLAG}" >> "$GITHUB_ENV"
+          # shellcheck disable=SC2086  # RFLAG is intentionally split: "-reducer min" or empty
           go run ./cmd/bench-ratchet \
             -baseline "${RUNNER_TEMP}/base.json" \
             -count 3 -benchtime 500ms -timeout 15m \
+            ${RFLAG} \
             update
 
       - name: Bench head and compare
@@ -109,9 +124,13 @@ jobs:
           git checkout --force "$HEAD"
           # Inform-only: never fail the job on a regression (|| true). The
           # markdown report is the product; the exit code is ignored.
+          # $RFLAG comes from the base half (via GITHUB_ENV) so both halves use the
+          # same reducer — like-for-like even when the base was too old for the flag.
+          # shellcheck disable=SC2086  # RFLAG is intentionally split: "-reducer min" or empty
           go run ./cmd/bench-ratchet \
             -baseline "${RUNNER_TEMP}/base.json" \
             -count 3 -benchtime 500ms -timeout 15m \
+            ${RFLAG:-} \
             -budget 0.10 -allow-incomplete \
             -format markdown \
             check > "${RUNNER_TEMP}/report.md" || true
