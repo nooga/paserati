@@ -172,8 +172,6 @@ func (fn *FunctionObject) GetOrCreatePrototype() Value {
 // GetOrCreatePrototypeWithVM lazily creates and returns the function's prototype property,
 // using the VM's prototypes for proper inheritance chain setup.
 func (fn *FunctionObject) GetOrCreatePrototypeWithVM(vm *VM) Value {
-	// NUCLEAR DEBUG
-
 	// Ensure Properties object exists
 	if fn.Properties == nil {
 		fn.Properties = NewObject(Undefined).AsPlainObject()
@@ -183,7 +181,6 @@ func (fn *FunctionObject) GetOrCreatePrototypeWithVM(vm *VM) Value {
 	if proto, exists := fn.Properties.GetOwn("prototype"); exists {
 		return proto
 	}
-
 
 	// Determine the correct prototype parent based on function type
 	var prototypeParent Value = DefaultObjectPrototype

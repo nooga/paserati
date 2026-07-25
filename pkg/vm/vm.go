@@ -1325,6 +1325,13 @@ startExecution:
 			}
 		}
 
+		// Defensive backstop, unreachable today: the fall-off-end handler
+		// directly above absorbs every ip >= len(code), either popping the
+		// frame or returning, and nothing between the two touches ip or code.
+		// Kept so that if that handler's coverage ever narrows, an out-of-range
+		// ip fails loudly here instead of indexing code[ip]. Note it does not
+		// currently convert a compiler bug into a graceful error — such a bug
+		// would be swallowed above as an implicit `return undefined`.
 		if ip >= len(code) {
 			frame.ip = ip
 			status := vm.runtimeError("IP %d beyond code length %d", ip, len(code))
@@ -2466,20 +2473,18 @@ startExecution:
 						l := leftPrim.ToFloat()
 						r := rightPrim.ToFloat()
 
-						// Per ECMAScript spec, if either operand is NaN, comparison returns false
-						if math.IsNaN(l) || math.IsNaN(r) {
-							result = false
-						} else {
-							switch opcode {
-							case OpGreater:
-								result = l > r
-							case OpLess:
-								result = l < r
-							case OpLessEqual:
-								result = l <= r
-							case OpGreaterEqual:
-								result = l >= r
-							}
+						// Per ECMAScript, a NaN operand makes every relational
+						// comparison false - which is exactly Go's float semantics,
+						// so no explicit IsNaN guard is needed.
+						switch opcode {
+						case OpGreater:
+							result = l > r
+						case OpLess:
+							result = l < r
+						case OpLessEqual:
+							result = l <= r
+						case OpGreaterEqual:
+							result = l >= r
 						}
 					}
 				}
@@ -12193,21 +12198,6 @@ startExecution:
 				goto reloadFrame
 			}
 
-			// NUCLEAR DEBUG for fnGlobalObject
-			if value.IsFunction() {
-				name := ""
-				switch value.Type() {
-				case TypeFunction:
-					name = value.AsFunction().Name
-				case TypeClosure:
-					name = value.AsClosure().Fn.Name
-				case TypeNativeFunction:
-					name = value.AsNativeFunction().Name
-				}
-				if name == "fnGlobalObject" || name == "Test262Error" {
-				}
-			}
-
 			// TDZ check: throw ReferenceError if accessing an uninitialized let/const variable
 			if value.typ == TypeUninitialized {
 				frame.ip = ip
@@ -12306,21 +12296,6 @@ startExecution:
 						return InterpretRuntimeError, Undefined
 					}
 					continue // Don't also set in heap
-				}
-			}
-
-			// NUCLEAR DEBUG for fnGlobalObject
-			if value.IsFunction() {
-				name := ""
-				switch value.Type() {
-				case TypeFunction:
-					name = value.AsFunction().Name
-				case TypeClosure:
-					name = value.AsClosure().Fn.Name
-				case TypeNativeFunction:
-					name = value.AsNativeFunction().Name
-				}
-				if name == "fnGlobalObject" || name == "Test262Error" {
 				}
 			}
 
