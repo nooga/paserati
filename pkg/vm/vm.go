@@ -1944,21 +1944,102 @@ startExecution:
 			leftVal := registers[leftReg]
 			rightVal := registers[rightReg]
 
+			// Fast path: skip ToPrimitive/BigInt/Symbol bookkeeping entirely when
+			// both operands are already plain numbers - the overwhelmingly common
+			// case for arithmetic and loop comparisons. ToPrimitive(number) is a
+			// no-op per spec, so this computes exactly what the general path below
+			// would, just without the frame.ip/helperCallDepth bookkeeping and the
+			// unwinding/handlerFound checks that only matter when ToPrimitive can
+			// invoke user code (valueOf/toString/Symbol.toPrimitive on an object).
+			// The tags are read directly rather than via ToFloat(), which is too
+			// large to inline. JS NaN semantics need no special casing: Go float
+			// comparisons yield false when either operand is NaN (so the != case
+			// correctly makes NaN !== NaN true), and division by zero yields
+			// ±Inf/NaN per IEEE 754, matching ECMAScript.
+			if lt, rt := leftVal.typ, rightVal.typ; (lt == TypeFloatNumber || lt == TypeIntegerNumber) && (rt == TypeFloatNumber || rt == TypeIntegerNumber) {
+				var l, r float64
+				if lt == TypeFloatNumber {
+					l = leftVal.AsFloat()
+				} else {
+					l = float64(leftVal.AsInteger())
+				}
+				if rt == TypeFloatNumber {
+					r = rightVal.AsFloat()
+				} else {
+					r = float64(rightVal.AsInteger())
+				}
+				// Each arm continues the dispatch loop directly; the default
+				// falls out of the switch into the general path below.
+				switch opcode {
+				case OpAdd:
+					registers[destReg] = Number(l + r)
+					continue
+				case OpSubtract:
+					registers[destReg] = Number(l - r)
+					continue
+				case OpMultiply:
+					registers[destReg] = Number(l * r)
+					continue
+				case OpDivide:
+					registers[destReg] = Number(l / r)
+					continue
+				case OpRemainder:
+					// Integer fast path: math.Mod is a software frexp/ldexp
+					// loop (~7% of the recursion benchmark's profile via
+					// `i % k` patterns). Go's truncated int64 remainder has
+					// the dividend's sign, exactly matching JS %, so it is
+					// safe when: both operands are integral (the float64(li)==l
+					// round-trip below proves that), the divisor is nonzero
+					// (0 divisor => NaN), and the result is not a signed zero
+					// (JS requires -0 for a negative or -0 dividend with zero
+					// remainder; the int path would lose the sign). The ±2^53
+					// range test guards the conversion itself: Go leaves an
+					// out-of-range float64->int64 result implementation-defined
+					// (arm64 saturates, amd64 yields MinInt64), so the operands
+					// must be in range before int64(l) is even evaluated.
+					const maxExactInt = float64(1 << 53)
+					if l >= -maxExactInt && l <= maxExactInt && r >= -maxExactInt && r <= maxExactInt {
+						li, ri := int64(l), int64(r)
+						if float64(li) == l && float64(ri) == r && ri != 0 {
+							if rem := li % ri; rem != 0 || !math.Signbit(l) {
+								registers[destReg] = Number(float64(rem))
+								continue
+							}
+						}
+					}
+					registers[destReg] = Number(math.Mod(l, r))
+					continue
+				case OpEqual, OpStrictEqual:
+					registers[destReg] = BooleanValue(l == r)
+					continue
+				case OpNotEqual, OpStrictNotEqual:
+					registers[destReg] = BooleanValue(l != r)
+					continue
+				case OpLess:
+					registers[destReg] = BooleanValue(l < r)
+					continue
+				case OpGreater:
+					registers[destReg] = BooleanValue(l > r)
+					continue
+				case OpLessEqual:
+					registers[destReg] = BooleanValue(l <= r)
+					continue
+				case OpGreaterEqual:
+					registers[destReg] = BooleanValue(l >= r)
+					continue
+				default:
+					// Every opcode in the enclosing case list has an arm above,
+					// so this is unreachable today. It exists so that adding an
+					// opcode to that list without a fast-path arm degrades to the
+					// general path below instead of continuing with destReg never
+					// written — a silently stale register is a far worse failure
+					// than the slower path.
+				}
+			}
+
 			// Type checking specific to operation groups
 			switch opcode {
 			case OpAdd:
-				// Fast path: both operands already numbers. Skips two non-inlinable
-				// vm.toPrimitive calls (each with helperCallDepth/unwinding/handler
-				// bookkeeping) plus the string/BigInt/Symbol branches. Semantically
-				// identical to the slow path: toPrimitive is the identity for
-				// numbers, and the numeric branch computes
-				// Number(lhs.ToFloat() + rhs.ToFloat()).
-				if lt, rt := leftVal.typ, rightVal.typ; (lt == TypeIntegerNumber || lt == TypeFloatNumber) &&
-					(rt == TypeIntegerNumber || rt == TypeFloatNumber) {
-					registers[destReg] = Number(leftVal.ToFloat() + rightVal.ToFloat())
-					continue
-				}
-
 				// JS semantics: ToPrimitive on both first (for string check),
 				// then if either is String → concatenate ToString(lhs)+ToString(rhs);
 				// else ToNumeric on both; if both BigInt → BigInt add; else Number add.
@@ -2075,24 +2156,6 @@ startExecution:
 					registers[destReg] = Number(leftNum + rightNum)
 				}
 			case OpSubtract, OpMultiply, OpDivide:
-				// Fast path: both operands already numbers. Skips two non-inlinable
-				// vm.toPrimitive calls plus the Symbol/BigInt branches. Identical to
-				// the slow path's numeric case (toPrimitive is the identity for
-				// numbers, neither is Symbol/BigInt).
-				if lt, rt := leftVal.typ, rightVal.typ; (lt == TypeIntegerNumber || lt == TypeFloatNumber) &&
-					(rt == TypeIntegerNumber || rt == TypeFloatNumber) {
-					ln, rn := leftVal.ToFloat(), rightVal.ToFloat()
-					switch opcode {
-					case OpSubtract:
-						registers[destReg] = Number(ln - rn)
-					case OpMultiply:
-						registers[destReg] = Number(ln * rn)
-					case OpDivide:
-						registers[destReg] = Number(ln / rn)
-					}
-					continue
-				}
-
 				// Apply ToPrimitive and type coercion like JavaScript
 				// ECMAScript order: ToNumeric(lhs) then ToNumeric(rhs)
 				// ToNumeric calls ToPrimitive internally, and ToNumber(Symbol) throws
@@ -2221,13 +2284,6 @@ startExecution:
 					}
 				}
 			case OpRemainder:
-				// Fast path: both operands already numbers (see OpSubtract above).
-				if lt, rt := leftVal.typ, rightVal.typ; (lt == TypeIntegerNumber || lt == TypeFloatNumber) &&
-					(rt == TypeIntegerNumber || rt == TypeFloatNumber) {
-					registers[destReg] = Number(math.Mod(leftVal.ToFloat(), rightVal.ToFloat()))
-					continue
-				}
-
 				// Apply ToPrimitive and type coercion
 				// ECMAScript order: ToNumeric(lhs) then ToNumeric(rhs)
 				frame.ip = ip
