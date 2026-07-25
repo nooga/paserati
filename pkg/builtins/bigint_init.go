@@ -42,6 +42,35 @@ func (b *BigIntInitializer) InitTypes(ctx *TypeContext) error {
 	return ctx.DefineGlobal("BigInt", bigintCtorType)
 }
 
+// thisBigIntValue implements the spec's ThisBigIntValue: a primitive BigInt is
+// its own value, and a BigInt object wrapper yields its wrapped primitive.
+// Any other receiver reports false.
+//
+// The slot is spelled "[[PrimitiveValue]]" because that is what actually
+// creates BigInt wrappers here (object_init.go's Object(bigint) case); the
+// spec's name for it is [[BigIntData]]. Number/String/Boolean/Symbol wrappers
+// share the same slot name, so the TypeBigInt check on the stored value is
+// what keeps this from unwrapping one of those.
+//
+// This lives in one place on purpose. Each call site previously inlined the
+// unwrap guarded by `Type() == TypeBigInt` and then called AsPlainObject() on
+// it — but AsPlainObject panics unless the value is TypeObject, and a wrapper
+// is TypeObject, never TypeBigInt. So the wrapper branch was unreachable and
+// every primitive receiver panicked.
+func thisBigIntValue(v vm.Value) (vm.Value, bool) {
+	switch v.Type() {
+	case vm.TypeBigInt:
+		return v, true
+	case vm.TypeObject:
+		if po := v.AsPlainObject(); po != nil {
+			if data, exists := po.GetOwn("[[PrimitiveValue]]"); exists && data.Type() == vm.TypeBigInt {
+				return data, true
+			}
+		}
+	}
+	return vm.Undefined, false
+}
+
 func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
@@ -56,19 +85,8 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisBigInt := vmInstance.GetThis()
 
 		// Get the primitive BigInt value
-		var primitiveBigInt vm.Value
-		if thisBigInt.Type() == vm.TypeBigInt {
-			// For BigInt object wrappers, extract the primitive value from [[BigIntData]]
-			if po := thisBigInt.AsPlainObject(); po != nil {
-				if dataVal, exists := po.GetOwn("[[BigIntData]]"); exists {
-					primitiveBigInt = dataVal
-				} else {
-					primitiveBigInt = thisBigInt
-				}
-			} else {
-				primitiveBigInt = thisBigInt
-			}
-		} else {
+		primitiveBigInt, ok := thisBigIntValue(thisBigInt)
+		if !ok {
 			// For non-BigInts, try to convert or throw error
 			return vm.NewString(thisBigInt.ToString()), nil
 		}
@@ -95,19 +113,8 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisBigInt := vmInstance.GetThis()
 
 		// Get the primitive BigInt value
-		var primitiveBigInt vm.Value
-		if thisBigInt.Type() == vm.TypeBigInt {
-			// For BigInt object wrappers, extract the primitive value from [[BigIntData]]
-			if po := thisBigInt.AsPlainObject(); po != nil {
-				if dataVal, exists := po.GetOwn("[[BigIntData]]"); exists {
-					primitiveBigInt = dataVal
-				} else {
-					primitiveBigInt = thisBigInt
-				}
-			} else {
-				primitiveBigInt = thisBigInt
-			}
-		} else {
+		primitiveBigInt, ok := thisBigIntValue(thisBigInt)
+		if !ok {
 			// For non-BigInts, try to convert or throw error
 			return vm.NewString(thisBigInt.ToString()), nil
 		}
@@ -121,14 +128,8 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisBigInt := vmInstance.GetThis()
 
 		// Return the primitive BigInt value
-		if thisBigInt.Type() == vm.TypeBigInt {
-			// For BigInt object wrappers, extract the primitive value from [[BigIntData]]
-			if po := thisBigInt.AsPlainObject(); po != nil {
-				if dataVal, exists := po.GetOwn("[[BigIntData]]"); exists {
-					return dataVal, nil
-				}
-			}
-			return thisBigInt, nil
+		if primitiveBigInt, ok := thisBigIntValue(thisBigInt); ok {
+			return primitiveBigInt, nil
 		}
 
 		// Cannot convert other types to BigInt
@@ -157,17 +158,10 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		arg := args[0]
 
-		// If argument is already a BigInt, return it (handles both primitive and object wrapper cases)
-		if arg.Type() == vm.TypeBigInt {
-			// Check if it's already an object wrapper
-			if po := arg.AsPlainObject(); po != nil {
-				if _, exists := po.GetOwn("[[BigIntData]]"); exists {
-					// Already an object wrapper, return as-is
-					return arg, nil
-				}
-			}
-			// It's a primitive BigInt, return as-is
-			return arg, nil
+		// If argument is already a BigInt, return its primitive value. This
+		// covers both a primitive and an object wrapper, per ToBigInt.
+		if primitive, ok := thisBigIntValue(arg); ok {
+			return primitive, nil
 		}
 
 		// Convert argument to primitive BigInt
