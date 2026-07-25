@@ -1325,12 +1325,6 @@ startExecution:
 			}
 		}
 
-		if ip >= len(code) {
-			frame.ip = ip
-			status := vm.runtimeError("IP %d beyond code length %d", ip, len(code))
-			return status, Undefined
-		}
-
 		// Check for cancellation request
 		if vm.cancelled.Load() {
 			frame.ip = ip
@@ -1944,6 +1938,77 @@ startExecution:
 			leftVal := registers[leftReg]
 			rightVal := registers[rightReg]
 
+			// Fast path: skip ToPrimitive/BigInt/Symbol bookkeeping entirely when
+			// both operands are already plain numbers - the overwhelmingly common
+			// case for arithmetic and loop comparisons. ToPrimitive(number) is a
+			// no-op per spec, so this computes exactly what the general path below
+			// would, just without the frame.ip/helperCallDepth bookkeeping and the
+			// unwinding/handlerFound checks that only matter when ToPrimitive can
+			// invoke user code (valueOf/toString/Symbol.toPrimitive on an object).
+			// The tags are read directly rather than via ToFloat(), which is too
+			// large to inline. JS NaN semantics need no special casing: Go float
+			// comparisons yield false when either operand is NaN (so the != case
+			// correctly makes NaN !== NaN true), and division by zero yields
+			// ±Inf/NaN per IEEE 754, matching ECMAScript.
+			if lt, rt := leftVal.typ, rightVal.typ; (lt == TypeFloatNumber || lt == TypeIntegerNumber) && (rt == TypeFloatNumber || rt == TypeIntegerNumber) {
+				var l, r float64
+				if lt == TypeFloatNumber {
+					l = leftVal.AsFloat()
+				} else {
+					l = float64(leftVal.AsInteger())
+				}
+				if rt == TypeFloatNumber {
+					r = rightVal.AsFloat()
+				} else {
+					r = float64(rightVal.AsInteger())
+				}
+				switch opcode {
+				case OpAdd:
+					registers[destReg] = Number(l + r)
+				case OpSubtract:
+					registers[destReg] = Number(l - r)
+				case OpMultiply:
+					registers[destReg] = Number(l * r)
+				case OpDivide:
+					registers[destReg] = Number(l / r)
+				case OpRemainder:
+					// Integer fast path: math.Mod is a software frexp/ldexp
+					// loop (~7% of the recursion benchmark's profile via
+					// `i % k` patterns). Go's truncated int64 remainder has
+					// the dividend's sign, exactly matching JS %, so it is
+					// safe when: both operands are integral and within ±2^53
+					// (float64<->int64 round-trips exactly; beyond that the
+					// conversion can saturate), the divisor is nonzero
+					// (0 divisor => NaN), and the result is not a signed
+					// zero (JS requires -0 for a negative or -0 dividend
+					// with zero remainder; the int path would lose the sign).
+					const maxExactInt = float64(1 << 53)
+					if l >= -maxExactInt && l <= maxExactInt && r >= -maxExactInt && r <= maxExactInt {
+						li, ri := int64(l), int64(r)
+						if float64(li) == l && float64(ri) == r && ri != 0 {
+							if rem := li % ri; rem != 0 || !math.Signbit(l) {
+								registers[destReg] = Number(float64(rem))
+								continue
+							}
+						}
+					}
+					registers[destReg] = Number(math.Mod(l, r))
+				case OpEqual, OpStrictEqual:
+					registers[destReg] = BooleanValue(l == r)
+				case OpNotEqual, OpStrictNotEqual:
+					registers[destReg] = BooleanValue(l != r)
+				case OpLess:
+					registers[destReg] = BooleanValue(l < r)
+				case OpGreater:
+					registers[destReg] = BooleanValue(l > r)
+				case OpLessEqual:
+					registers[destReg] = BooleanValue(l <= r)
+				case OpGreaterEqual:
+					registers[destReg] = BooleanValue(l >= r)
+				}
+				continue
+			}
+
 			// Type checking specific to operation groups
 			switch opcode {
 			case OpAdd:
@@ -2466,20 +2531,18 @@ startExecution:
 						l := leftPrim.ToFloat()
 						r := rightPrim.ToFloat()
 
-						// Per ECMAScript spec, if either operand is NaN, comparison returns false
-						if math.IsNaN(l) || math.IsNaN(r) {
-							result = false
-						} else {
-							switch opcode {
-							case OpGreater:
-								result = l > r
-							case OpLess:
-								result = l < r
-							case OpLessEqual:
-								result = l <= r
-							case OpGreaterEqual:
-								result = l >= r
-							}
+						// Per ECMAScript, a NaN operand makes every relational
+						// comparison false - which is exactly Go's float semantics,
+						// so no explicit IsNaN guard is needed.
+						switch opcode {
+						case OpGreater:
+							result = l > r
+						case OpLess:
+							result = l < r
+						case OpLessEqual:
+							result = l <= r
+						case OpGreaterEqual:
+							result = l >= r
 						}
 					}
 				}
@@ -5138,7 +5201,9 @@ startExecution:
 
 			// If returning from the top-level script frame (and it's truly top-level), terminate immediately
 			// Don't do this for nested script frames (e.g., from eval()) which should continue normally
-			if function != nil && function.Name == "<script>" && vm.frameCount == 1 {
+			// (frameCount check first: it's a plain load, while the Name check is a
+			// string compare that would otherwise run on every function return)
+			if vm.frameCount == 1 && function != nil && function.Name == "<script>" {
 				// If currently unwinding, this is an uncaught exception at top level
 				if vm.unwinding {
 					vm.handleUncaughtException()
@@ -5154,28 +5219,13 @@ startExecution:
 			// fmt.Printf("// [VM DEBUG] OpReturn: Hit in module '%s', frameCount=%d, result=%s\n", vm.currentModulePath, vm.frameCount, result.ToString())
 
 			// Check if there are finally handlers that should execute
-			handlers := vm.findAllExceptionHandlers(frame.ip)
-			hasFinallyHandler := false
-			for _, handler := range handlers {
-				if handler.IsFinally {
-					hasFinallyHandler = true
-					break
-				}
-			}
-
-			if hasFinallyHandler {
+			if handler := vm.findPendingHandler(frame.ip, false); handler != nil {
 				// Set pending return action and let finally blocks execute
 				vm.pendingAction = ActionReturn
 				vm.pendingValue = result
 
-				// Find the finally handler and jump to it
-				for _, handler := range handlers {
-					if handler.IsFinally {
-						ip = handler.HandlerPC
-						break
-					}
-				}
-				// Continue executing from the finally handler
+				// Jump to the finally handler and continue executing from it
+				ip = handler.HandlerPC
 				continue
 			}
 
@@ -5408,7 +5458,7 @@ startExecution:
 
 			// If returning from the top-level script frame (and it's truly top-level), terminate immediately
 			// Don't do this for nested script frames (e.g., from eval()) which should continue normally
-			if function != nil && function.Name == "<script>" && vm.frameCount == 1 {
+			if vm.frameCount == 1 && function != nil && function.Name == "<script>" {
 				if vm.unwinding {
 					vm.handleUncaughtException()
 					return InterpretRuntimeError, vm.currentException
@@ -5434,16 +5484,7 @@ startExecution:
 			}
 
 			// Check if there are finally handlers that should execute
-			handlers := vm.findAllExceptionHandlers(frame.ip)
-			hasFinallyHandler := false
-			for _, handler := range handlers {
-				if handler.IsFinally {
-					hasFinallyHandler = true
-					break
-				}
-			}
-
-			if hasFinallyHandler {
+			if vm.findPendingHandler(frame.ip, false) != nil {
 				// Set pending return action and let finally blocks execute
 				vm.pendingAction = ActionReturn
 				vm.pendingValue = Undefined
@@ -12193,21 +12234,6 @@ startExecution:
 				goto reloadFrame
 			}
 
-			// NUCLEAR DEBUG for fnGlobalObject
-			if value.IsFunction() {
-				name := ""
-				switch value.Type() {
-				case TypeFunction:
-					name = value.AsFunction().Name
-				case TypeClosure:
-					name = value.AsClosure().Fn.Name
-				case TypeNativeFunction:
-					name = value.AsNativeFunction().Name
-				}
-				if name == "fnGlobalObject" || name == "Test262Error" {
-				}
-			}
-
 			// TDZ check: throw ReferenceError if accessing an uninitialized let/const variable
 			if value.typ == TypeUninitialized {
 				frame.ip = ip
@@ -12306,21 +12332,6 @@ startExecution:
 						return InterpretRuntimeError, Undefined
 					}
 					continue // Don't also set in heap
-				}
-			}
-
-			// NUCLEAR DEBUG for fnGlobalObject
-			if value.IsFunction() {
-				name := ""
-				switch value.Type() {
-				case TypeFunction:
-					name = value.AsFunction().Name
-				case TypeClosure:
-					name = value.AsClosure().Fn.Name
-				case TypeNativeFunction:
-					name = value.AsNativeFunction().Name
-				}
-				if name == "fnGlobalObject" || name == "Test262Error" {
 				}
 			}
 
@@ -13017,14 +13028,7 @@ startExecution:
 			}
 
 			// Check if we have more finally or iterator cleanup handlers that need to run
-			handlers := vm.findAllExceptionHandlers(frame.ip)
-			var nextHandler *ExceptionHandler
-			for _, handler := range handlers {
-				if handler.IsFinally || handler.IsIteratorCleanup {
-					nextHandler = handler
-					break
-				}
-			}
+			nextHandler := vm.findPendingHandler(frame.ip, true)
 
 			if nextHandler != nil {
 				// There are more handlers to execute - chain to them
@@ -13191,14 +13195,7 @@ startExecution:
 			case ActionReturn:
 				// Check if we have more finally or iterator cleanup handlers that need to run
 				// BEFORE completing the return
-				handlers := vm.findAllExceptionHandlers(frame.ip)
-				var nextHandler *ExceptionHandler
-				for _, handler := range handlers {
-					if handler.IsFinally || handler.IsIteratorCleanup {
-						nextHandler = handler
-						break
-					}
-				}
+				nextHandler := vm.findPendingHandler(frame.ip, true)
 
 				if nextHandler != nil {
 					// There are more handlers to execute - chain to them
