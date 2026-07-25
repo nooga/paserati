@@ -672,8 +672,11 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 // disables the fast path for others, which is negligible in practice.
 //
 // atomic.Bool so concurrent VMs / -race builds don't data-race the latch. A
-// torn false→true under a plain bool would be fail-safe (restore slow path) but
-// still races; Store/Load make the publication well-defined.
+// plain bool can't tear, and a racing read was already fail-safe (it sees false
+// and restores the slow path) — but it is a data race regardless: -race flags
+// it, and nothing stops the compiler caching the load across an `arr[i] = v`
+// loop. Load/Store order the flag only; the accessor maps it guards stay
+// unsynchronized, which is moot because Array.prototype is per-realm.
 var arrayIndexAccessorSeen atomic.Bool
 
 // isCanonicalArrayIndexKey reports whether name is a canonical array-index string
