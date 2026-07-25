@@ -1325,6 +1325,10 @@ startExecution:
 			}
 		}
 
+		// Defensive: unreachable after the fall-off-end handler above (which
+		// already covers ip >= len(code) with continue/return). Kept as a
+		// cheap belt-and-suspenders check so a future compiler bug surfaces
+		// as a graceful runtimeError rather than a Go panic on code[ip].
 		if ip >= len(code) {
 			frame.ip = ip
 			status := vm.runtimeError("IP %d beyond code length %d", ip, len(code))
@@ -2522,20 +2526,18 @@ startExecution:
 						l := leftPrim.ToFloat()
 						r := rightPrim.ToFloat()
 
-						// Per ECMAScript spec, if either operand is NaN, comparison returns false
-						if math.IsNaN(l) || math.IsNaN(r) {
-							result = false
-						} else {
-							switch opcode {
-							case OpGreater:
-								result = l > r
-							case OpLess:
-								result = l < r
-							case OpLessEqual:
-								result = l <= r
-							case OpGreaterEqual:
-								result = l >= r
-							}
+						// Per ECMAScript, a NaN operand makes every relational
+						// comparison false - which is exactly Go's float semantics,
+						// so no explicit IsNaN guard is needed.
+						switch opcode {
+						case OpGreater:
+							result = l > r
+						case OpLess:
+							result = l < r
+						case OpLessEqual:
+							result = l <= r
+						case OpGreaterEqual:
+							result = l >= r
 						}
 					}
 				}
