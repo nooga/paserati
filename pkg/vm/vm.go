@@ -1968,6 +1968,7 @@ startExecution:
 				} else {
 					r = float64(rightVal.AsInteger())
 				}
+				fastPathHandled := true
 				switch opcode {
 				case OpAdd:
 					registers[destReg] = Number(l + r)
@@ -2011,8 +2012,18 @@ startExecution:
 					registers[destReg] = BooleanValue(l <= r)
 				case OpGreaterEqual:
 					registers[destReg] = BooleanValue(l >= r)
+				default:
+					// Every opcode in the enclosing case list has an arm above,
+					// so this is unreachable today. It exists so that adding an
+					// opcode to that list without a fast-path arm degrades to the
+					// general path below instead of falling out of the switch and
+					// continuing with destReg never written — a silently stale
+					// register is a far worse failure than the slower path.
+					fastPathHandled = false
 				}
-				continue
+				if fastPathHandled {
+					continue
+				}
 			}
 
 			// Type checking specific to operation groups
