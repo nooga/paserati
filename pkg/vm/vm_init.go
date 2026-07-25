@@ -1288,6 +1288,57 @@ func (vm *VM) GetSymbolProperty(obj Value, symbol Value) (Value, bool) {
 
 // Call is a unified function calling interface that handles all function types properly
 // This replaces the complex web of CallFunctionDirectly, CallUserFunction, etc.
+// getArgsBuf returns a reusable []Value of length n (n <= 4) for callback
+// arguments, popping from the pool or allocating a cap-4 buffer. Reentries nest
+// strictly LIFO, so an in-use buffer is never handed out twice.
+func (vm *VM) getArgsBuf(n int) []Value {
+	if k := len(vm.argsBufPool); k > 0 {
+		b := vm.argsBufPool[k-1]
+		vm.argsBufPool = vm.argsBufPool[:k-1]
+		return b[:n]
+	}
+	return make([]Value, n, 4)
+}
+
+// putArgsBuf returns a buffer to the pool, clearing it so pooled buffers don't
+// retain argument values.
+func (vm *VM) putArgsBuf(b []Value) {
+	b = b[:cap(b)]
+	for i := range b {
+		b[i] = Undefined
+	}
+	vm.argsBufPool = append(vm.argsBufPool, b)
+}
+
+// CallArgs2/3/4 invoke fn with the given arguments through a pooled buffer,
+// avoiding the per-call []Value allocation that every array callback site paid.
+// Safe because Call copies the arguments out before returning (into the callee's
+// registers and, if accessed, a copied arguments object) - nothing retains the
+// slice past the call.
+func (vm *VM) CallArgs2(fn, thisValue, a0, a1 Value) (Value, error) {
+	b := vm.getArgsBuf(2)
+	b[0], b[1] = a0, a1
+	r, err := vm.Call(fn, thisValue, b)
+	vm.putArgsBuf(b)
+	return r, err
+}
+
+func (vm *VM) CallArgs3(fn, thisValue, a0, a1, a2 Value) (Value, error) {
+	b := vm.getArgsBuf(3)
+	b[0], b[1], b[2] = a0, a1, a2
+	r, err := vm.Call(fn, thisValue, b)
+	vm.putArgsBuf(b)
+	return r, err
+}
+
+func (vm *VM) CallArgs4(fn, thisValue, a0, a1, a2, a3 Value) (Value, error) {
+	b := vm.getArgsBuf(4)
+	b[0], b[1], b[2], b[3] = a0, a1, a2, a3
+	r, err := vm.Call(fn, thisValue, b)
+	vm.putArgsBuf(b)
+	return r, err
+}
+
 func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {
 	switch fn.Type() {
 	case TypeNativeFunction:

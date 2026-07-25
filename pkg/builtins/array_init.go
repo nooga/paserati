@@ -568,7 +568,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				var shouldSwap bool
 				if compareFn.IsCallable() {
 					// Use the comparator function
-					result, err := vmInstance.Call(compareFn, vm.Undefined, []vm.Value{elements[j], elements[j+1]})
+					result, err := vmInstance.CallArgs2(compareFn, vm.Undefined, elements[j], elements[j+1])
 					if err != nil {
 						return vm.Undefined, err
 					}
@@ -758,7 +758,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			result, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			result, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), vmInstance.GetThis())
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -791,7 +791,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		for i := 0; i < thisArray.Length(); i++ {
 			element := thisArray.Get(i)
-			result, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), vmInstance.GetThis()})
+			result, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), vmInstance.GetThis())
 			if err != nil {
 				return vm.NumberValue(-1), err
 			}
@@ -853,7 +853,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Only call callback for indices that actually exist (sparse array support)
 				if arr.HasIndex(i) {
 					element := arr.Get(i)
-					test, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+					test, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
 					if err != nil {
 						return vm.NewArray(), err
 					}
@@ -868,7 +868,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Only call callback for indices that actually exist
 				if _, ok := po.GetOwn(key); ok {
 					elem, _ := po.Get(key)
-					test, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+					test, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
 					if err != nil {
 						return vm.NewArray(), err
 					}
@@ -934,7 +934,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Only call callback for indices that actually exist (sparse array support)
 				if arr.HasIndex(i) {
 					element := arr.Get(i)
-					mappedValue, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+					mappedValue, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
 					if err != nil {
 						return vm.Undefined, err
 					}
@@ -951,7 +951,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Only call callback for indices that actually exist
 				if _, ok := po.GetOwn(key); ok {
 					elem, _ := po.Get(key)
-					mappedValue, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+					mappedValue, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
 					if err != nil {
 						return vm.Undefined, err
 					}
@@ -1014,7 +1014,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Only call callback for indices that actually exist (sparse array support)
 				if arr.HasIndex(i) {
 					element := arr.Get(i)
-					_, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+					_, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
 					if err != nil {
 						return vm.Undefined, err
 					}
@@ -1026,7 +1026,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Only call callback for indices that actually exist
 				if _, ok := po.GetOwn(key); ok {
 					elem, _ := po.Get(key)
-					_, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+					_, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
 					if err != nil {
 						return vm.Undefined, err
 					}
@@ -1085,7 +1085,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Only call callback for indices that actually exist (sparse array support)
 				if arr.HasIndex(i) {
 					element := arr.Get(i)
-					result, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+					result, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
 					if err != nil {
 						return vm.BooleanValue(false), err
 					}
@@ -1100,7 +1100,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Only call callback for indices that actually exist
 				if _, ok := po.GetOwn(key); ok {
 					elem, _ := po.Get(key)
-					result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+					result, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
 					if err != nil {
 						return vm.BooleanValue(false), err
 					}
@@ -1162,7 +1162,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Only call callback for indices that actually exist (sparse array support)
 				if arr.HasIndex(i) {
 					element := arr.Get(i)
-					result, err := vmInstance.Call(callback, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+					result, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
 					if err != nil {
 						return vm.BooleanValue(false), err
 					}
@@ -1177,7 +1177,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Only call callback for indices that actually exist
 				if _, ok := po.GetOwn(key); ok {
 					elem, _ := po.Get(key)
-					result, err := vmInstance.Call(callback, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+					result, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
 					if err != nil {
 						return vm.BooleanValue(false), err
 					}
@@ -1249,7 +1249,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			for i := startIndex; i < length; i++ {
 				element := arr.Get(i)
 				var err error
-				accumulator, err = vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), thisVal})
+				accumulator, err = vmInstance.CallArgs4(callback, vm.Undefined, accumulator, element, vm.NumberValue(float64(i)), thisVal)
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1262,7 +1262,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 					elem = v
 				}
 				var err error
-				accumulator, err = vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, elem, vm.NumberValue(float64(i)), thisVal})
+				accumulator, err = vmInstance.CallArgs4(callback, vm.Undefined, accumulator, elem, vm.NumberValue(float64(i)), thisVal)
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1331,7 +1331,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			for i := startIndex; i >= 0; i-- {
 				element := arr.Get(i)
 				var err error
-				accumulator, err = vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, element, vm.NumberValue(float64(i)), thisVal})
+				accumulator, err = vmInstance.CallArgs4(callback, vm.Undefined, accumulator, element, vm.NumberValue(float64(i)), thisVal)
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1344,7 +1344,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 					elem = v
 				}
 				var err error
-				accumulator, err = vmInstance.Call(callback, vm.Undefined, []vm.Value{accumulator, elem, vm.NumberValue(float64(i)), thisVal})
+				accumulator, err = vmInstance.CallArgs4(callback, vm.Undefined, accumulator, elem, vm.NumberValue(float64(i)), thisVal)
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1440,7 +1440,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if arr := thisVal.AsArray(); arr != nil {
 			for i := arr.Length() - 1; i >= 0; i-- {
 				element := arr.Get(i)
-				result, err := vmInstance.Call(predicate, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				result, err := vmInstance.CallArgs3(predicate, thisArg, element, vm.NumberValue(float64(i)), thisVal)
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1459,7 +1459,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if v, ok := po.Get(key); ok {
 					elem = v
 				}
-				result, err := vmInstance.Call(predicate, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				result, err := vmInstance.CallArgs3(predicate, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1502,7 +1502,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if arr := thisVal.AsArray(); arr != nil {
 			for i := arr.Length() - 1; i >= 0; i-- {
 				element := arr.Get(i)
-				result, err := vmInstance.Call(predicate, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				result, err := vmInstance.CallArgs3(predicate, thisArg, element, vm.NumberValue(float64(i)), thisVal)
 				if err != nil {
 					return vm.NumberValue(-1), err
 				}
@@ -1521,7 +1521,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if v, ok := po.Get(key); ok {
 					elem = v
 				}
-				result, err := vmInstance.Call(predicate, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				result, err := vmInstance.CallArgs3(predicate, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
 				if err != nil {
 					return vm.NumberValue(-1), err
 				}
@@ -1821,7 +1821,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if arr := thisVal.AsArray(); arr != nil {
 			for i := 0; i < arr.Length(); i++ {
 				element := arr.Get(i)
-				mapped, err := vmInstance.Call(mapper, thisArg, []vm.Value{element, vm.NumberValue(float64(i)), thisVal})
+				mapped, err := vmInstance.CallArgs3(mapper, thisArg, element, vm.NumberValue(float64(i)), thisVal)
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1845,7 +1845,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if v, ok := po.Get(key); ok {
 					elem = v
 				}
-				mapped, err := vmInstance.Call(mapper, thisArg, []vm.Value{elem, vm.NumberValue(float64(i)), thisVal})
+				mapped, err := vmInstance.CallArgs3(mapper, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
 				if err != nil {
 					return vm.Undefined, err
 				}
@@ -1915,7 +1915,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			for j >= 0 {
 				cmp := 0
 				if comparator.IsCallable() {
-					res, err := vmInstance.Call(comparator, vm.Undefined, []vm.Value{resultArr.Get(j), key})
+					res, err := vmInstance.CallArgs2(comparator, vm.Undefined, resultArr.Get(j), key)
 					if err != nil {
 						return vm.Undefined, err
 					}
@@ -2262,7 +2262,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Apply mapping function if provided
 				if mapFn.Type() != vm.TypeUndefined {
 					vmInstance.EnterHelperCall()
-					mapped, err := vmInstance.Call(mapFn, thisArg, []vm.Value{element, vm.NumberValue(float64(i))})
+					mapped, err := vmInstance.CallArgs2(mapFn, thisArg, element, vm.NumberValue(float64(i)))
 					vmInstance.ExitHelperCall()
 					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
 						return vm.NewArray(), nil
@@ -2355,7 +2355,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Apply mapping function if provided
 				if mapFn.Type() != vm.TypeUndefined {
 					vmInstance.EnterHelperCall()
-					mapped, mapErr := vmInstance.Call(mapFn, thisArg, []vm.Value{value, vm.NumberValue(float64(index))})
+					mapped, mapErr := vmInstance.CallArgs2(mapFn, thisArg, value, vm.NumberValue(float64(index)))
 					vmInstance.ExitHelperCall()
 					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
 						return vm.NewArray(), nil
@@ -2383,7 +2383,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 					// Apply mapping function if provided
 					if mapFn.Type() != vm.TypeUndefined {
 						vmInstance.EnterHelperCall()
-						mapped, mapErr := vmInstance.Call(mapFn, thisArg, []vm.Value{element, vm.NumberValue(float64(i))})
+						mapped, mapErr := vmInstance.CallArgs2(mapFn, thisArg, element, vm.NumberValue(float64(i)))
 						vmInstance.ExitHelperCall()
 						if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
 							return vm.NewArray(), nil
@@ -2662,7 +2662,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 							// Apply mapfn if present
 							var mappedValue vm.Value = val
 							if mapfn.IsCallable() {
-								result, err := vmInstance.Call(mapfn, thisArg, []vm.Value{val, vm.NumberValue(float64(k))})
+								result, err := vmInstance.CallArgs2(mapfn, thisArg, val, vm.NumberValue(float64(k)))
 								if err != nil {
 									rejectWithError(err)
 									return
@@ -2803,7 +2803,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 						// Apply mapfn if present
 						var mappedValue vm.Value = val
 						if mapfn.IsCallable() {
-							result, err := vmInstance.Call(mapfn, thisArg, []vm.Value{val, vm.NumberValue(float64(k))})
+							result, err := vmInstance.CallArgs2(mapfn, thisArg, val, vm.NumberValue(float64(k)))
 							if err != nil {
 								rejectWithError(err)
 								return

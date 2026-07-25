@@ -168,6 +168,11 @@ type VM struct {
 	// Promise executor, etc.).
 	sentinelRegPool [][]Value
 
+	// argsBufPool is a LIFO free-list of small (cap 4) []Value buffers reused by
+	// CallArgs2/3/4 to pass callback arguments without a per-invocation slice
+	// allocation. Same nesting invariant as sentinelRegPool.
+	argsBufPool [][]Value
+
 	// List of upvalues pointing to variables still on the registerStack
 	openUpvalues []*Upvalue
 	// Map for O(1) lookup of existing upvalues by location pointer
