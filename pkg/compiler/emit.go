@@ -687,6 +687,23 @@ func (c *Compiler) emitGetGlobal(dest Register, globalIdx uint16, line int) {
 	c.emitUint16(globalIdx)
 }
 
+// emitArrayDestructFastCheck emits OpArrayDestructFastCheck: dest = true if src
+// is a plain array with the canonical Symbol.iterator (destructurable by index).
+func (c *Compiler) emitArrayDestructFastCheck(dest Register, src Register, line int) {
+	c.emitOpCode(vm.OpArrayDestructFastCheck, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(src))
+}
+
+// emitArrayRawGetInt emits OpArrayRawGetInt: dest = src[idx] by direct array
+// read (undefined if out of range). Only valid after a passing fast check.
+func (c *Compiler) emitArrayRawGetInt(dest Register, src Register, idx int, line int) {
+	c.emitOpCode(vm.OpArrayRawGetInt, line)
+	c.emitByte(byte(dest))
+	c.emitByte(byte(src))
+	c.emitUint16(uint16(idx))
+}
+
 // emitSetGlobal emits OpSetGlobal instruction with direct global index
 func (c *Compiler) emitSetGlobal(globalIdx uint16, src Register, line int) {
 	c.emitOpCode(vm.OpSetGlobal, line)

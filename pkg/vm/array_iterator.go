@@ -85,6 +85,64 @@ func resolveFastIterState(iterVal, nextVal Value) *BuiltinIterState {
 	return nil
 }
 
+// isFastDestructureArray reports whether v can be destructured by direct index
+// reads instead of the iterator protocol: v must be a plain array whose
+// Symbol.iterator is still the canonical Array.prototype iterator. When true,
+// default iteration is exactly Arr.Get(0..len-1) (what BuiltinIterState.Step
+// yields), so OpArrayRawGetInt reproduces it bit-for-bit. Any instance- or
+// prototype-level override of Symbol.iterator fails the identity check and the
+// caller falls back to the generic protocol.
+//
+// Symbol.iterator is resolved the way opGetPropSymbol resolves it — own symbol
+// properties, then the per-instance prototype override (`class X extends Array`),
+// then the realm's intrinsic Array.prototype and its chain. vm.GetSymbolProperty
+// is deliberately not used: its array branch falls back to vm.ArrayPrototype
+// unconditionally, so a subclass whose Symbol.iterator lives on X.prototype
+// would be missed and this fast path wrongly approved — destructuring would
+// silently skip the custom iterator that for-of still honors.
+func (vm *VM) isFastDestructureArray(v Value) bool {
+	if v.typ != TypeArray || vm.ArrayValuesIterator.typ != TypeNativeFunction {
+		return false
+	}
+	arr := v.AsArray()
+	if arr == nil {
+		return false
+	}
+
+	// An own symbol property shadows everything on the chain.
+	if sym := vm.SymbolIterator.AsSymbolObject(); sym != nil {
+		if it, ok := arr.GetSymbolProp(sym); ok {
+			return vm.isCanonicalArrayValuesIterator(it)
+		}
+	}
+
+	proto := arr.prototype
+	if !proto.IsObject() {
+		proto = vm.ArrayPrototype
+	}
+	symKey := NewSymbolKey(vm.SymbolIterator)
+	for cur := proto; cur.IsObject(); {
+		po := cur.AsPlainObject()
+		if po == nil {
+			// A non-plain link (dictionary-mode object) may still carry an
+			// override we can't inspect here — take the generic path rather
+			// than assume the array is pristine.
+			return false
+		}
+		if it, ok := po.GetOwnByKey(symKey); ok {
+			return vm.isCanonicalArrayValuesIterator(it)
+		}
+		cur = po.prototype
+	}
+	// No Symbol.iterator anywhere on the chain: not canonical array iteration.
+	return false
+}
+
+func (vm *VM) isCanonicalArrayValuesIterator(it Value) bool {
+	return it.typ == TypeNativeFunction &&
+		it.AsNativeFunction() == vm.ArrayValuesIterator.AsNativeFunction()
+}
+
 // likeLength reads the array-like's current length the same way the original
 // closures did: GetOwn("length") if numeric, else 0.
 func (st *BuiltinIterState) likeLength() int {
