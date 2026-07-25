@@ -91,13 +91,19 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewString(thisBigInt.ToString()), nil
 		}
 
+		// Radix per BigInt.prototype.toString: undefined means 10, otherwise
+		// ToIntegerOrInfinity (which throws on a Symbol or a BigInt-returning
+		// ToPrimitive), then RangeError outside 2..36.
 		var radix int = 10
-		if len(args) > 0 {
-			radix = int(args[0].ToFloat())
-			if radix < 2 || radix > 36 {
-				// In real JS this would throw RangeError, for now use default
-				radix = 10
+		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
+			r, err := toIntegerOrInfinityWithVM(vmInstance, args[0])
+			if err != nil {
+				return vm.Undefined, err
 			}
+			if r < 2 || r > 36 {
+				return vm.Undefined, vmInstance.NewRangeError("toString() radix must be between 2 and 36")
+			}
+			radix = r
 		}
 
 		bigIntVal := primitiveBigInt.AsBigInt()
