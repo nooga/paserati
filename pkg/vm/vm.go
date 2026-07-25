@@ -1325,10 +1325,13 @@ startExecution:
 			}
 		}
 
-		// Defensive: unreachable after the fall-off-end handler above (which
-		// already covers ip >= len(code) with continue/return). Kept as a
-		// cheap belt-and-suspenders check so a future compiler bug surfaces
-		// as a graceful runtimeError rather than a Go panic on code[ip].
+		// Defensive backstop, unreachable today: the fall-off-end handler
+		// directly above absorbs every ip >= len(code), either popping the
+		// frame or returning, and nothing between the two touches ip or code.
+		// Kept so that if that handler's coverage ever narrows, an out-of-range
+		// ip fails loudly here instead of indexing code[ip]. Note it does not
+		// currently convert a compiler bug into a graceful error — such a bug
+		// would be swallowed above as an implicit `return undefined`.
 		if ip >= len(code) {
 			frame.ip = ip
 			status := vm.runtimeError("IP %d beyond code length %d", ip, len(code))
