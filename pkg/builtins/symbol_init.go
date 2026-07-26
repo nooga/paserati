@@ -29,6 +29,7 @@ var (
 	SymbolUnscopables        vm.Value
 	SymbolAsyncIterator      vm.Value
 	SymbolDispose            vm.Value
+	SymbolAsyncDispose       vm.Value
 )
 
 type SymbolInitializer struct{}
@@ -61,6 +62,7 @@ func (s *SymbolInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("unscopables", types.Symbol).
 		WithProperty("asyncIterator", types.Symbol).
 		WithProperty("dispose", types.Symbol).
+		WithProperty("asyncDispose", types.Symbol).
 		// Symbol constructor signature - returns symbol
 		WithSimpleCallSignature([]types.Type{}, types.Symbol). // Symbol()
 		WithSimpleCallSignature(
@@ -213,6 +215,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		SymbolUnscopables = vm.NewSymbol("Symbol.unscopables")
 		SymbolAsyncIterator = vm.NewSymbol("Symbol.asyncIterator")
 		SymbolDispose = vm.NewSymbol("Symbol.dispose")
+		SymbolAsyncDispose = vm.NewSymbol("Symbol.asyncDispose")
 	} else {
 		// Reuse ALL existing symbols from VM (all are now stored as singletons)
 		SymbolIterator = vmInstance.SymbolIterator
@@ -229,6 +232,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		SymbolUnscopables = vmInstance.SymbolUnscopables
 		SymbolAsyncIterator = vmInstance.SymbolAsyncIterator
 		SymbolDispose = vmInstance.SymbolDispose
+		SymbolAsyncDispose = vmInstance.SymbolAsyncDispose
 	}
 
 	// Add static methods
@@ -295,6 +299,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		props.DefineOwnProperty("unscopables", SymbolUnscopables, &wFalse, &eFalse, &cFalse)
 		props.DefineOwnProperty("asyncIterator", SymbolAsyncIterator, &wFalse, &eFalse, &cFalse)
 		props.DefineOwnProperty("dispose", SymbolDispose, &wFalse, &eFalse, &cFalse)
+		props.DefineOwnProperty("asyncDispose", SymbolAsyncDispose, &wFalse, &eFalse, &cFalse)
 	}
 
 	symbolCtor := ctorWithProps
@@ -314,6 +319,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.SymbolUnscopables = SymbolUnscopables
 	vmInstance.SymbolAsyncIterator = SymbolAsyncIterator
 	vmInstance.SymbolDispose = SymbolDispose
+	vmInstance.SymbolAsyncDispose = SymbolAsyncDispose
 
 	// Symbol.prototype[Symbol.toPrimitive] - per 20.4.3.5
 	// Must be defined after well-known symbols are initialized
