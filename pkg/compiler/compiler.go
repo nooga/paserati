@@ -768,6 +768,10 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// No need to re-assign c.typeChecker here, it was already set or created.
 	// --- End Type Checking Step ---
 
+	// Rewrite `using` declarations into try/finally dispose blocks. Runs after
+	// type checking so the checker sees the original declarations.
+	lowerUsingDeclarations(program)
+
 	// --- Bytecode Compilation Step ---
 	c.chunk = vm.NewChunk()
 	c.regAlloc = NewRegisterAllocator()
