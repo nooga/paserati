@@ -4580,9 +4580,31 @@ func (p *Parser) parseAsyncExpression() Expression {
 		}
 	}
 
-	// If we get here, it's an invalid async expression
-	p.addError(asyncToken, fmt.Sprintf("unexpected token after 'async': %s", p.curToken.Type))
+	// If we get here, it's an invalid async expression. When `async` precedes a
+	// declaration that has no asynchronous form — a class, enum, interface or
+	// module — TypeScript reads it as a misplaced modifier rather than a broken
+	// expression, and says so at the `async` itself.
+	if p.startsDeclarationWithNoAsyncForm() {
+		p.addErrorWithCode(asyncToken, errors.TS1042, "'async' modifier cannot be used here.")
+	} else {
+		p.addError(asyncToken, fmt.Sprintf("unexpected token after 'async': %s", p.curToken.Type))
+	}
 	return &Identifier{Token: asyncToken, Value: "async"}
+}
+
+// startsDeclarationWithNoAsyncForm reports whether the current token begins a
+// declaration that can never be asynchronous. `async` in front of one of these
+// is a misplaced modifier (TS1042) rather than a malformed expression.
+// `namespace` and `module` are contextual keywords, so they arrive as
+// identifiers.
+func (p *Parser) startsDeclarationWithNoAsyncForm() bool {
+	switch p.curToken.Type {
+	case lexer.CLASS, lexer.ENUM, lexer.INTERFACE:
+		return true
+	case lexer.IDENT:
+		return p.curToken.Literal == "namespace" || p.curToken.Literal == "module"
+	}
+	return false
 }
 
 // parseAwaitExpression handles await expressions

@@ -12,6 +12,7 @@ const (
 	TS1005  = "TS1005"  // '<token>' expected
 	TS1100  = "TS1100"  // Invalid use of 'X' in strict mode
 	TS1109  = "TS1109"  // Expression expected
+	TS1042  = "TS1042"  // 'X' modifier cannot be used here
 	TS1127  = "TS1127"  // Invalid character
 	TS1212  = "TS1212"  // Identifier expected. 'X' is a reserved word in strict mode
 	TS1213  = "TS1213"  // ... Class definitions are automatically in strict mode
