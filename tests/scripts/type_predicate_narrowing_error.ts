@@ -1,4 +1,4 @@
-// expect_compile_error: cannot assign type 'string' to variable 'num' of type 'number'
+// expect_compile_error: Type 'string' is not assignable to type 'number'.
 
 // Test that type predicate narrowing correctly detects type errors
 

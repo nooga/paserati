@@ -4319,9 +4319,13 @@ func (p *Parser) peekError(t lexer.TokenType) {
 	if len(p.errors) >= 1000 {
 		return
 	}
-	msg := fmt.Sprintf("expected next token to be %s, got %s instead",
-		t, p.peekToken.Type)
-	p.addError(p.peekToken, msg)
+	// Punctuation token types are their own source text, which is what TS1005
+	// names; a missing identifier is TS1003 instead.
+	if t == lexer.IDENT {
+		p.addErrorWithCode(p.peekToken, errors.TS1003, "Identifier expected.")
+		return
+	}
+	p.addErrorWithCode(p.peekToken, errors.TS1005, fmt.Sprintf("'%s' expected.", t))
 }
 
 func (p *Parser) noPrefixParseFnError(t lexer.TokenType) {
@@ -4329,8 +4333,7 @@ func (p *Parser) noPrefixParseFnError(t lexer.TokenType) {
 	if len(p.errors) >= 1000 {
 		return
 	}
-	msg := fmt.Sprintf("no prefix parse function for %s found", t)
-	p.addError(p.curToken, msg)
+	p.addErrorWithCode(p.curToken, errors.TS1109, "Expression expected.")
 }
 
 // --- Precedence Helper ---
@@ -6693,6 +6696,19 @@ func (p *Parser) parseMemberExpression(left Expression) Expression {
 
 // addError creates a SyntaxError and appends it to the parser's error list.
 // Limits the number of errors to prevent memory exhaustion from infinite parsing loops.
+// addErrorWithCode reports a syntax error tagged with the TypeScript error
+// code it corresponds to. Messages on coded diagnostics must match
+// TypeScript's wording exactly — see checker.addErrorWithCode.
+func (p *Parser) addErrorWithCode(tok *lexer.Token, code string, msg string) {
+	before := len(p.errors)
+	p.addError(tok, msg)
+	if len(p.errors) > before {
+		if syntaxErr, ok := p.errors[len(p.errors)-1].(*errors.SyntaxError); ok {
+			syntaxErr.ErrorCode = code
+		}
+	}
+}
+
 func (p *Parser) addError(tok *lexer.Token, msg string) {
 	// Prevent memory exhaustion from infinite error generation
 	const maxErrors = 1000

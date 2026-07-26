@@ -1,4 +1,4 @@
-// expect_compile_error: cannot assign type 'Color.Green' to variable of type 'Color.Red'
+// expect_compile_error: Type 'Color.Green' is not assignable to type 'Color.Red'.
 
 // Test that specific enum member literal types are enforced
 
