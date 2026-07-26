@@ -317,6 +317,11 @@ type Checker struct {
 	// check can spare the `(0, eval)(...)` indirect-call idiom.
 	indirectCallCallees map[*parser.InfixExpression]bool
 
+	// Flow-sensitive narrowing of a variable's own last-assigned type,
+	// consulted by identifier reads on top of the declared type in c.env.
+	// See flow_narrowing.go.
+	flowNarrowOverlay map[string]types.Type
+
 	// --- Loop/switch/label context (reset when entering a new function scope) ---
 	loopDepth    int             // depth of enclosing iteration statements in current function
 	switchDepth  int             // depth of enclosing switch statements in current function
@@ -1323,6 +1328,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// --- Pass 5: Final Check of Remaining Statements & Initializers ---
 	debugPrintf("\n// --- Checker - Pass 5: Final Checks & Remaining Statements ---\n")
 	c.env = globalEnv // Ensure global scope
+	flow := c.newFlowNarrowState()
 	for _, stmt := range program.Statements {
 		// Skip nodes processed in initial passes OR function literals visited in Pass 3
 		if nodesProcessedPass1[stmt] || nodesProcessedPass2[stmt] {
@@ -1346,6 +1352,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 			if !needsInitializerCheck {
 				debugPrintf("// [Checker Pass 5] Skipping already processed/visited node: %T\n", stmt)
+				flow.invalidateAll()
 				continue
 			} else {
 				debugPrintf("// [Checker Pass 5] Re-visiting Let/Const/Var for initializer check: %T\n", stmt)
@@ -1470,12 +1477,16 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					} else {
 						debugPrintf("// [Checker Pass 5] Type for '%s' already refined to %s. No update needed.\n", varName.Value, variableType.String())
 					}
+
+					// See flow_narrowing.go: a widened literal keeps its
+					// exact narrow type for straight-line reads that follow.
+					flow.observeLetOrVar(varName.Value, variableType, computedInitializerType, finalInferredType != computedInitializerType)
 				}
 				// --- END FIX ---
 			}
 
 		case *parser.ExpressionStatement:
-			c.visit(node.Expression)
+			flow.observeExpressionStatement(c, node)
 
 			// Special handling for FunctionSignature expressions
 			if sigExpr, ok := node.Expression.(*parser.FunctionSignature); ok {
@@ -1484,6 +1495,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		// TODO: Handle other top-level statement types if necessary
 		default:
+			flow.invalidateAll()
 			debugPrintf("// [Checker Pass 5] Visiting unhandled statement type %T\n", node)
 			c.visit(node) // Fallback visit? Might be unnecessary
 		}
@@ -2226,6 +2238,7 @@ func (c *Checker) visit(node parser.Node) {
 
 		// 3. Visit statements within the new scope
 		c.blockDepth++
+		flow := c.newFlowNarrowState()
 		for i, stmt := range node.Statements { // Add index 'i' for logging
 			// --- DEBUG ---
 			debugPrintf("// [Checker Visit Block Loop] Index: %d, Stmt Type: %T, Stmt Ptr: %p\n", i, stmt, stmt)
@@ -2234,8 +2247,26 @@ func (c *Checker) visit(node parser.Node) {
 				continue // Skip visiting nil statement
 			}
 			// --- END DEBUG ---
-			c.visit(stmt)
+			// See flow_narrowing.go for why declarations/plain reassignment
+			// are special-cased and everything else invalidates tracking.
+			switch s := stmt.(type) {
+			case *parser.LetStatement:
+				c.visit(stmt)
+				flow.trackVarDeclarationNarrowing(c, s.Declarations)
+			case *parser.VarStatement:
+				c.visit(stmt)
+				flow.trackVarDeclarationNarrowing(c, s.Declarations)
+			case *parser.ConstStatement:
+				c.visit(stmt)
+				flow.trackVarDeclarationNarrowing(c, s.Declarations)
+			case *parser.ExpressionStatement:
+				flow.observeExpressionStatement(c, s)
+			default:
+				flow.invalidateAll()
+				c.visit(stmt)
+			}
 		}
+		flow.invalidateAll()
 
 		// --- DEBUG ---
 		debugPrintf("// [Checker Visit Block] Exiting Block. Restoring Env: %p (from current %p)\n", originalEnv, c.env)
@@ -2441,6 +2472,12 @@ func (c *Checker) visit(node parser.Node) {
 				debugPrintf("// [Checker Debug] visit(Identifier): '%s' found in env %p, type: %s\n", node.Value, c.env, typ.String()) // DEBUG - Uncommented
 			} else {
 				debugPrintf("// [Checker Debug] visit(Identifier): '%s' found in env %p, type: <nil>\n", node.Value, c.env) // DEBUG - Nil type
+			}
+
+			// A live flow-narrowed type (see flow_narrowing.go) takes
+			// priority over the declared type from a straight-line read.
+			if narrowType, ok := c.flowNarrowOverlay[node.Value]; ok {
+				typ = narrowType
 			}
 
 			// node is guaranteed non-nil here
