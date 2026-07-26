@@ -2,8 +2,8 @@
   "test262_language": {
     "name": "Test262 language",
     "total": 23523,
-    "passed": 23139,
-    "failed": 384,
+    "passed": 23151,
+    "failed": 372,
     "skipped": 0,
     "timeout": 0,
     "version": ""
