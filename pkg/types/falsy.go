@@ -96,6 +96,63 @@ func RemoveFalsyTypes(t Type) Type {
 	return t
 }
 
+// UnionWithSubtypeReduction builds a union and then drops any member already
+// covered by another, so `number | 2` reduces to `number`.
+//
+// TypeScript applies this reduction to `||` and `??` but not to `&&`. The
+// asymmetry is deliberate on its part: `a || 2` is usually a defaulting
+// idiom where the literal is incidental, whereas `a && b` is usually a guard
+// whose literal result the caller cares about.
+func UnionWithSubtypeReduction(ts ...Type) Type {
+	union := NewUnionType(ts...)
+	members, ok := union.(*UnionType)
+	if !ok {
+		return union
+	}
+	kept := make([]Type, 0, len(members.Types))
+	for i, candidate := range members.Types {
+		covered := false
+		for j, other := range members.Types {
+			if i == j || candidate.Equals(other) {
+				continue
+			}
+			if IsAssignable(candidate, other) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			kept = append(kept, candidate)
+		}
+	}
+	if len(kept) == 0 {
+		return union
+	}
+	return NewUnionType(kept...)
+}
+
+// ExtractNullishTypes returns the null and undefined part of a type, or Never
+// if it has none. Never means `??` can never take its right branch.
+func ExtractNullishTypes(t Type) Type {
+	if t == nil {
+		return Never
+	}
+	if union, ok := t.(*UnionType); ok {
+		parts := make([]Type, 0, len(union.Types))
+		for _, member := range union.Types {
+			parts = append(parts, ExtractNullishTypes(member))
+		}
+		return NewUnionType(parts...)
+	}
+	switch t {
+	case Null, Undefined, Void:
+		return t
+	case Any, Unknown:
+		return t
+	}
+	return Never
+}
+
 // RemoveNullishTypes returns the part of a type that is neither null nor
 // undefined — the left half of `a ?? b`. Unlike `||`, this keeps falsy values
 // such as `0` and `""`, which is the whole point of the operator.
