@@ -746,6 +746,7 @@ func createTscPaserati(directives TestDirectives) *driver.Paserati {
 	if !strictNullChecksEnabled(directives) {
 		pas.SetSkipDefiniteAssignment(true)
 	}
+	pas.SetStrictNullChecks(strictNullChecksEnabled(directives))
 	pas.SetNoImplicitOverride(noImplicitOverrideEnabled(directives))
 	pas.SetAllowUnreachableCode(allowUnreachableCodeEnabled(directives))
 	pas.SetAlwaysStrict(alwaysStrictEnabled(directives))

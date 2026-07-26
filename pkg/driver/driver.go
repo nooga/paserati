@@ -97,6 +97,12 @@ func (p *Paserati) SetAllowUnreachableCode(allow bool) {
 	p.checker.SetAllowUnreachableCode(allow)
 }
 
+// SetStrictNullChecks mirrors --strictNullChecks, which gates TS18050.
+// Default true, matching TypeScript 6.0.
+func (p *Paserati) SetStrictNullChecks(strict bool) {
+	p.checker.SetStrictNullChecks(strict)
+}
+
 // SetAlwaysStrict mirrors --alwaysStrict, which gates TS1212. Part of the
 // strict family, so on by default as of TypeScript 6.0.
 func (p *Paserati) SetAlwaysStrict(strict bool) {

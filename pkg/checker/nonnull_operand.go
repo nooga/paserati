@@ -50,6 +50,12 @@ func (c *Checker) checkNullishOperand(operand parser.Expression) bool {
 // It returns true if either operand was reported, meaning the caller should
 // suppress its own operator-level diagnostic.
 func (c *Checker) checkNullishOperandsForOperator(node *parser.InfixExpression, leftType, rightType types.Type) bool {
+	// Without strictNullChecks, `null` and `undefined` are assignable to
+	// everything, so TypeScript never singles out a nullish operand — it falls
+	// through to TS2365 about the operand pair instead.
+	if !c.strictNullChecks {
+		return false
+	}
 	switch node.Operator {
 	case "-", "*", "/", "%", "**", "<<", ">>", ">>>", "&", "|", "^", "<", ">", "<=", ">=":
 		// Both operands are always checked.
