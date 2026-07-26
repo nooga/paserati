@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"github.com/nooga/paserati/pkg/errors"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/parser"
@@ -237,7 +238,7 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 					paramType = types.NewUnionType(paramType, types.Undefined)
 				}
 				if argType != nil && !c.isAssignableWithExpansion(argType, paramType) {
-					c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", effectiveArgIndex+1, argType.String(), paramType.String()))
+					c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), paramType.String()))
 					allOk = false
 				}
 			}
@@ -424,7 +425,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 									}
 
 									if !types.IsAssignable(argType, variadicElementType) {
-										c.addError(argNode, fmt.Sprintf("variadic argument %d: cannot assign type '%s' to parameter element type '%s'", i+1, argType.String(), variadicElementType.String()))
+										c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicElementType.String()))
 									}
 								}
 							}
@@ -751,7 +752,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 							}
 
 							if !types.IsAssignable(argType, variadicElementType) {
-								c.addError(argNode, fmt.Sprintf("variadic argument %d: cannot assign type '%s' to parameter element type '%s'", i+1, argType.String(), variadicElementType.String()))
+								c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicElementType.String()))
 							}
 						}
 					}

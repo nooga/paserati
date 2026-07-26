@@ -1,4 +1,4 @@
-// expect_compile_error: cannot assign type '42' to variable 'personName' of type 'string'
+// expect_compile_error: Type '42' is not assignable to type 'string'.
 
 // Test indexed access types with invalid assignment
 

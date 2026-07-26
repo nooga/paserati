@@ -9,4 +9,4 @@ let converter: Converter<string, number> = {
     convert: (s: string) => s
 };
 
-// expect_compile_error: cannot assign type '{ convert: (string) => string }' to variable 'converter' of type '{ convert: (string) => number }'
+// expect_compile_error: Type '{ convert: (string) => string }' is not assignable to type '{ convert: (string) => number }'.
