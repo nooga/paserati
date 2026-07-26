@@ -16,14 +16,8 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		lhsType = types.Any
 	} // Handle nil from error
 
-	// Visit RHS value with contextual typing if applicable
-	if arrayLit, isArrayLit := node.Value.(*parser.ArrayLiteral); isArrayLit {
-		// For array literals, provide contextual typing from the LHS
-		contextualType := &ContextualType{ExpectedType: lhsType}
-		c.checkArrayLiteralWithContext(arrayLit, contextualType)
-	} else {
-		c.visit(node.Value)
-	}
+	// Visit RHS value with contextual typing from the LHS.
+	c.visitWithContext(node.Value, &ContextualType{ExpectedType: lhsType})
 	rhsType := node.Value.GetComputedType()
 	if rhsType == nil {
 		rhsType = types.Any
