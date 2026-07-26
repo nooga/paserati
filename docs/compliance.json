@@ -2,8 +2,8 @@
   "test262_language": {
     "name": "Test262 language",
     "total": 23523,
-    "passed": 23141,
-    "failed": 382,
+    "passed": 23139,
+    "failed": 384,
     "skipped": 0,
     "timeout": 0,
     "version": ""
@@ -11,19 +11,19 @@
   "test262_builtins": {
     "name": "Test262 built-ins",
     "total": 23294,
-    "passed": 16862,
-    "failed": 6432,
+    "passed": 16863,
+    "failed": 6431,
     "skipped": 0,
     "timeout": 0,
     "version": ""
   },
   "typescript": {
-    "name": "TypeScript 6.0.0",
-    "total": 4928,
-    "passed": 3341,
-    "failed": 1114,
+    "name": "TypeScript 6.0.3",
+    "total": 4933,
+    "passed": 3469,
+    "failed": 991,
     "skipped": 473,
     "timeout": 0,
-    "version": "6.0.0"
+    "version": "6.0.3"
   }
 }
