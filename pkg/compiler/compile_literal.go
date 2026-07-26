@@ -51,7 +51,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	for _, p := range node.Parameters {
 		// Strict mode validation: cannot use 'eval' or 'arguments' as parameter names
 		if funcCompiler.chunk.IsStrict && (p.Name.Value == "eval" || p.Name.Value == "arguments") {
-			funcCompiler.addError(p.Name, fmt.Sprintf("SyntaxError: Strict mode function may not have parameter named '%s'", p.Name.Value))
+			funcCompiler.addErrorWithCode(p.Name, errors.TS1100, fmt.Sprintf("Invalid use of '%s' in strict mode.", p.Name.Value))
 			// Continue defining it to avoid cascading errors
 		}
 
@@ -224,8 +224,8 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			seenDefault = true
 		}
 	}
-	arrowName := "" // Arrow functions have empty name by default (per ECMAScript spec)
-	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot)                                                                                           // Set spill slots needed
+	arrowName := ""                                                                                                                                                                           // Arrow functions have empty name by default (per ECMAScript spec)
+	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot)                                                                                                                             // Set spill slots needed
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, arrowName, functionChunk, false, node.IsAsync, true, funcCompiler.hasLocalCaptures) // isArrowFunction = true
 	constIdx := c.chunk.AddConstant(funcValue)
 
@@ -1261,7 +1261,7 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 
 		// Strict mode validation: cannot use 'eval' or 'arguments' as parameter names
 		if functionCompiler.chunk.IsStrict && (param.Name.Value == "eval" || param.Name.Value == "arguments") {
-			functionCompiler.addError(param.Name, fmt.Sprintf("SyntaxError: Strict mode function may not have parameter named '%s'", param.Name.Value))
+			functionCompiler.addErrorWithCode(param.Name, errors.TS1100, fmt.Sprintf("Invalid use of '%s' in strict mode.", param.Name.Value))
 			// Continue defining it to avoid cascading errors
 		}
 

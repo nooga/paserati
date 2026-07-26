@@ -10,7 +10,9 @@ package errors
 const (
 	TS1003  = "TS1003"  // Identifier expected
 	TS1005  = "TS1005"  // '<token>' expected
+	TS1100  = "TS1100"  // Invalid use of 'X' in strict mode
 	TS1109  = "TS1109"  // Expression expected
+	TS1127  = "TS1127"  // Invalid character
 	TS2300  = "TS2300"  // Duplicate identifier 'X'
 	TS2304  = "TS2304"  // Cannot find name 'X'
 	TS2322  = "TS2322"  // Type 'X' is not assignable to type 'Y'

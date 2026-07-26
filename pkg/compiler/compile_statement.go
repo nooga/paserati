@@ -309,7 +309,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 		// This applies to all code, not just direct eval
 		if c.chunk.IsStrict && declarator.Name != nil {
 			if declarator.Name.Value == "arguments" || declarator.Name.Value == "eval" {
-				c.addError(declarator.Name, fmt.Sprintf("SyntaxError: Unexpected eval or arguments in strict mode"))
+				c.addErrorWithCode(declarator.Name, errors.TS1100, fmt.Sprintf("Invalid use of '%s' in strict mode.", declarator.Name.Value))
 				return BadRegister, nil
 			}
 		}

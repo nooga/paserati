@@ -765,7 +765,7 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseExpressionStatement()
 	case lexer.ILLEGAL:
 		// Handle ILLEGAL tokens by adding error and advancing
-		p.addError(p.curToken, fmt.Sprintf("illegal token: %s", p.curToken.Literal))
+		p.addErrorWithCode(p.curToken, errors.TS1127, "Invalid character.")
 		p.nextToken() // Advance past the ILLEGAL token to avoid infinite loop
 		return nil
 	default:
