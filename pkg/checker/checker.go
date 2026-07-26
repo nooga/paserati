@@ -302,6 +302,7 @@ type Checker struct {
 	skipDefiniteAssignment bool // When true, TS2454 is not emitted (definite-assignment opt-out)
 	allowUnreachableCode   bool // Mirrors --allowUnreachableCode; when true, TS2695 is not emitted
 	alwaysStrict           bool // Mirrors --alwaysStrict; when true, TS1212 and its variants are emitted
+	strictNullChecks       bool // Mirrors --strictNullChecks; when false, TS18050 is not emitted
 	isModule               bool // Source is a module, so strict mode comes from the module (TS1214)
 	// Identifiers already reported as strict-mode reserved words, so narrowing
 	// re-visits do not report them twice.
@@ -372,6 +373,7 @@ func NewCheckerWithInitializers(initializers []builtins.BuiltinInitializer) *Che
 		currentThisType:            nil, // Initialize this type context
 		currentClassContext:        nil, // No class context initially
 		allowTopLevelReturn:        true,
+		strictNullChecks:           true,
 		abstractClasses:            make(map[string]bool),
 		abstractMethods:            make(map[string]map[string]bool),
 		generatorFunctions:         make(map[string]bool),
@@ -416,6 +418,14 @@ func (c *Checker) SetSkipDefiniteAssignment(skip bool) {
 // expressions around has opted out of being told that they do nothing.
 func (c *Checker) SetAllowUnreachableCode(allow bool) {
 	c.allowUnreachableCode = allow
+}
+
+// SetStrictNullChecks mirrors the `--strictNullChecks` compiler option, which
+// gates TS18050. Without it `null` and `undefined` are assignable everywhere,
+// so a nullish operand is not singled out — TypeScript falls through to
+// TS2365 about the operand pair instead. On by default, as in TypeScript 6.0.
+func (c *Checker) SetStrictNullChecks(strict bool) {
+	c.strictNullChecks = strict
 }
 
 // SetAlwaysStrict mirrors the `--alwaysStrict` compiler option, which gates
@@ -2638,7 +2648,7 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.BigInt
 				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
 					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s' (cannot mix BigInt and other types)", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					c.reportOperatorNotApplicable(node, widenedLeftType, widenedRightType)
 					// Keep resultType = types.Any (default)
 				} else if widenedLeftType == types.String && widenedRightType == types.String {
 					resultType = types.String
@@ -2672,7 +2682,7 @@ func (c *Checker) visit(node parser.Node) {
 					// Conservative: assume string since that's most common for objects
 					resultType = types.String
 				} else {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					c.reportOperatorNotApplicable(node, widenedLeftType, widenedRightType)
 					// Keep resultType = types.Any (default)
 				}
 			case "-", "*", "/":
@@ -2686,7 +2696,7 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.BigInt
 				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
 					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s' (cannot mix BigInt and other types)", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					c.reportOperatorNotApplicable(node, widenedLeftType, widenedRightType)
 				} else if (widenedLeftType == types.String && widenedRightType == types.Number) ||
 					(widenedLeftType == types.Number && widenedRightType == types.String) {
 					resultType = types.Number
@@ -2694,7 +2704,7 @@ func (c *Checker) visit(node parser.Node) {
 					(widenedLeftType == types.BigInt && widenedRightType == types.String) {
 					resultType = types.BigInt
 				} else {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					c.reportArithmeticOperandType(node, widenedLeftType)
 					// Keep resultType = types.Any (default)
 				}
 			// --- Handle % and ** type checking ---
@@ -2709,9 +2719,9 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.BigInt
 				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
 					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s' (cannot mix BigInt and other types)", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					c.reportOperatorNotApplicable(node, widenedLeftType, widenedRightType)
 				} else {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					c.reportArithmeticOperandType(node, widenedLeftType)
 				}
 
 			// --- Handle Bitwise/Shift Operators ---
@@ -2728,7 +2738,7 @@ func (c *Checker) visit(node parser.Node) {
 				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
 					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
 					// Mixing BigInt and Number is not allowed for bitwise/shift operations
-					c.addError(node, fmt.Sprintf("operator '%s' cannot mix BigInt and Number types", node.Operator))
+					c.reportOperatorNotApplicable(node, widenedLeftType, widenedRightType)
 					// Keep resultType = types.Any (default)
 				} else {
 					// Check if either operand is an object type (can be converted via valueOf/toString)
@@ -2756,7 +2766,7 @@ func (c *Checker) visit(node parser.Node) {
 						resultType = types.Number
 					} else {
 						// Operands are not compatible types for bitwise/shift operations.
-						c.addError(node, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+						c.reportArithmeticOperandType(node, widenedLeftType)
 						// Keep resultType = types.Any (default)
 					}
 				}
@@ -2772,7 +2782,7 @@ func (c *Checker) visit(node parser.Node) {
 				} else if widenedLeftType == types.String && widenedRightType == types.String {
 					resultType = types.Boolean
 				} else {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
+					c.reportOperatorNotApplicable(node, widenedLeftType, widenedRightType)
 					resultType = types.Boolean
 				}
 			case "==", "!=", "===", "!==":
