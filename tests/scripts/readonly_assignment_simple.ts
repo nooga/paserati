@@ -13,4 +13,4 @@ console.log(obj.y);
 
 obj.x = 40; // Should fail - writing to readonly property
 
-// expect_compile_error: cannot assign to readonly property
+// expect_compile_error: because it is a read-only property

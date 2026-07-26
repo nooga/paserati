@@ -6,4 +6,4 @@ class Test {
 // This should fail
 Test.version = "2.0";
 
-// expect_compile_error: cannot assign to readonly property
+// expect_compile_error: because it is a read-only property

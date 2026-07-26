@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
@@ -1247,7 +1248,7 @@ func (c *Checker) checkImpossibleComparison(leftType, rightType types.Type, oper
 
 	// Check if the types have any overlap
 	if !c.typesHaveOverlap(leftType, rightType) {
-		c.addError(node, fmt.Sprintf("This comparison appears to be unintentional because the types '%s' and '%s' have no overlap.", leftType.String(), rightType.String()))
+		c.addErrorWithCode(node, errors.TS2367, fmt.Sprintf("This comparison appears to be unintentional because the types '%s' and '%s' have no overlap.", leftType.String(), rightType.String()))
 	}
 }
 

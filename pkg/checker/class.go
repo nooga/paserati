@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -627,7 +628,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 			// TS2378: A 'get' accessor must return a value.
 			if getter.Value != nil && getter.Value.Body != nil && !bodyContainsReturn(getter.Value.Body) {
-				c.addError(getter.Key, "A 'get' accessor must return a value.")
+				c.addErrorWithCode(getter.Key, errors.TS2378, "A 'get' accessor must return a value.")
 			}
 
 			methodType := c.inferMethodType(getter)

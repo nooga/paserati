@@ -15,7 +15,7 @@ func (c *Checker) validateComputedPropertyNameType(expr parser.Expression, error
 		return
 	}
 	if !c.isValidComputedPropertyNameType(keyExprType) {
-		c.addError(errorNode, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.")
+		c.addErrorWithCode(errorNode, errors.TS2464, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.")
 	}
 }
 
@@ -450,7 +450,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				widenedKeyType := types.GetWidenedType(keyExprType)
 				switch widenedKeyType {
 				case types.Boolean, types.Null, types.Undefined, types.Void, types.Never:
-					c.addError(key, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.")
+					c.addErrorWithCode(key, errors.TS2464, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.")
 				}
 			}
 
@@ -842,7 +842,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			if methodDef.Kind == "getter" {
 				// Check that getter has a return statement (TS2378)
 				if methodDef.Value != nil && methodDef.Value.Body != nil && !bodyContainsReturn(methodDef.Value.Body) {
-					c.addError(methodDef.Key, "A 'get' accessor must return a value.")
+					c.addErrorWithCode(methodDef.Key, errors.TS2378, "A 'get' accessor must return a value.")
 				}
 				// For getters, store both the implementation and the property type
 				getterName := "__get__" + keyName
@@ -2417,11 +2417,11 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 					}
 
 					if !skipArityCheck && actualArgCount < minRequiredArgs {
-						c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minRequiredArgs, actualArgCount))
+						c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 					} else if !skipArityCheck && actualArgCount > expectedArgCount && expectedArgCount > 0 {
 						// Only enforce max args if constructor has declared parameters
 						// (allow extra args for constructors with no params - they may use 'arguments')
-						c.addError(node, fmt.Sprintf("Constructor expected at most %d arguments but got %d.", expectedArgCount, actualArgCount))
+						c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 					} else {
 						c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)
 					}
@@ -2567,6 +2567,8 @@ func (c *Checker) checkDuplicateTypeAssertionProperties(targetType parser.Expres
 	}
 
 	seen := make(map[string]parser.Expression)
+	seenName := make(map[string]*parser.Identifier)
+	reported := make(map[string]bool)
 	for _, prop := range objectType.Properties {
 		if prop.Name == nil || prop.IsCallSignature || prop.IsConstructSignature || prop.IsIndexSignature || prop.IsComputedProperty {
 			continue
@@ -2578,12 +2580,18 @@ func (c *Checker) checkDuplicateTypeAssertionProperties(targetType parser.Expres
 					continue
 				}
 			}
-			c.addError(prop.Name, fmt.Sprintf("Duplicate identifier '%s'.", prop.Name.Value))
-			c.addError(prop.Name, fmt.Sprintf("Duplicate identifier '%s'.", prop.Name.Value))
+			// TypeScript flags every occurrence of the duplicated identifier,
+			// including the first one (only once).
+			if !reported[prop.Name.Value] {
+				c.addErrorWithCode(seenName[prop.Name.Value], errors.TS2300, fmt.Sprintf("Duplicate identifier '%s'.", prop.Name.Value))
+				reported[prop.Name.Value] = true
+			}
+			c.addErrorWithCode(prop.Name, errors.TS2300, fmt.Sprintf("Duplicate identifier '%s'.", prop.Name.Value))
 			continue
 		}
 
 		seen[prop.Name.Value] = prop.Type
+		seenName[prop.Name.Value] = prop.Name
 	}
 }
 
