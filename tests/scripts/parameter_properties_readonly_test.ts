@@ -1,4 +1,4 @@
-// expect_compile_error: cannot assign to readonly property
+// expect_compile_error: because it is a read-only property
 
 // Test parameter property readonly enforcement
 

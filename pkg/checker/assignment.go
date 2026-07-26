@@ -223,7 +223,7 @@ func (c *Checker) checkReadonlyPropertyAssignment(memberExpr *parser.MemberExpre
 					return
 				}
 
-				c.addError(memberExpr, fmt.Sprintf("cannot assign to readonly property '%s'", propertyName))
+				c.addErrorWithCode(memberExpr, errors.TS2540, fmt.Sprintf("Cannot assign to '%s' because it is a read-only property.", propertyName))
 			}
 		}
 	}
