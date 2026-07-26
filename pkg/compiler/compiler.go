@@ -420,19 +420,19 @@ type Compiler struct {
 	inTailPosition bool // True when compiling tail-positioned expression
 
 	// --- Function Context Tracking ---
-	isAsync              bool // True when compiling async function
-	isGenerator          bool // True when compiling generator function
-	isArrowFunction      bool // True when compiling arrow function (no own arguments binding)
-	isFunctionBody       bool // True when compiling a function body (has implicit 'arguments' binding, not module-level)
-	isMethodCompilation      bool // True when compiling a method that will have [[HomeObject]] (class/object method)
-	isClassFieldInitializer  bool // True when compiling a class field initializer (eval shouldn't access 'arguments')
+	isAsync                 bool // True when compiling async function
+	isGenerator             bool // True when compiling generator function
+	isArrowFunction         bool // True when compiling arrow function (no own arguments binding)
+	isFunctionBody          bool // True when compiling a function body (has implicit 'arguments' binding, not module-level)
+	isMethodCompilation     bool // True when compiling a method that will have [[HomeObject]] (class/object method)
+	isClassFieldInitializer bool // True when compiling a class field initializer (eval shouldn't access 'arguments')
 
 	// --- Direct Eval Tracking ---
-	hasDirectEval            bool // True when function contains direct eval call (needs scope descriptor)
-	inDefaultParamScope      bool // True when compiling a default parameter expression
-	hasEvalInDefaultParam    bool // True when direct eval was found in a default parameter expression
-	hasEvalInFieldInitializer bool // True when direct eval was found in a class field initializer
-	allLocalNames            map[Register]string // Tracks all local variable allocations for ScopeDescriptor
+	hasDirectEval             bool                // True when function contains direct eval call (needs scope descriptor)
+	inDefaultParamScope       bool                // True when compiling a default parameter expression
+	hasEvalInDefaultParam     bool                // True when direct eval was found in a default parameter expression
+	hasEvalInFieldInitializer bool                // True when direct eval was found in a class field initializer
+	allLocalNames             map[Register]string // Tracks all local variable allocations for ScopeDescriptor
 
 	// --- Parameter TDZ Tracking ---
 	currentDefaultParamIndex int      // Index of parameter whose default we're compiling (-1 if not in default scope)
@@ -442,8 +442,8 @@ type Compiler struct {
 	callerScopeDesc *vm.ScopeDescriptor // Scope descriptor from caller (for direct eval compilation)
 
 	// --- Indirect Eval Mode ---
-	isIndirectEval      bool // True when compiling indirect eval code (let/const should be local, not global)
-	newTargetAvailable  bool // True if new.target is available in current context (false for indirect eval at global scope)
+	isIndirectEval     bool // True when compiling indirect eval code (let/const should be local, not global)
+	newTargetAvailable bool // True if new.target is available in current context (false for indirect eval at global scope)
 
 	// --- Script Mode for Function Constructor ---
 	forceScriptMode bool // True when compiling code from Function() constructor (import.meta not allowed)
@@ -463,10 +463,10 @@ type Compiler struct {
 	// --- Private Field Brand Tracking ---
 	// Each class gets a unique brand ID to distinguish private fields with the same name
 	// across different classes (e.g., Parent.#field vs Child.#field)
-	privateBrandCounter      int                // Global counter for brand IDs (at top-level compiler)
-	currentPrivateBrand      int                // Current class brand ID (0 if not in a class)
-	currentPrivateBrandInfo  PrivateBrandInfo   // Current class brand info including declared fields
-	privateBrandStack        []PrivateBrandInfo // Stack for nested classes (with declared field tracking)
+	privateBrandCounter     int                // Global counter for brand IDs (at top-level compiler)
+	currentPrivateBrand     int                // Current class brand ID (0 if not in a class)
+	currentPrivateBrandInfo PrivateBrandInfo   // Current class brand info including declared fields
+	privateBrandStack       []PrivateBrandInfo // Stack for nested classes (with declared field tracking)
 
 	// --- Computed Field Key Pre-evaluation ---
 	// Maps property index to synthetic variable name for pre-computed field keys
@@ -696,14 +696,14 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		parameterList:            nil,                                       // Will be set when compiling function parameters
 		scopeBoundary:            enclosingCompiler.currentSymbolTable,      // Mark where parent's scope starts
 		allLocalNames:            make(map[Register]string),                 // Track all local names for ScopeDescriptor
-		isClassFieldInitializer: enclosingCompiler.isClassFieldInitializer, // Inherit field initializer context for nested functions
+		isClassFieldInitializer:  enclosingCompiler.isClassFieldInitializer, // Inherit field initializer context for nested functions
 		// Inherit private field brand context - methods need to use the class's brand ID
 		// and also need the brand stack to look up fields from enclosing classes
 		currentPrivateBrand:     enclosingCompiler.currentPrivateBrand,
 		currentPrivateBrandInfo: enclosingCompiler.currentPrivateBrandInfo,
 		privateBrandStack:       enclosingCompiler.privateBrandStack, // Inherited so nested can access outer class fields
 		// Inherit script mode from Function() constructor - import.meta not allowed in nested functions
-		forceScriptMode:         enclosingCompiler.forceScriptMode,
+		forceScriptMode: enclosingCompiler.forceScriptMode,
 	}
 }
 
@@ -782,8 +782,8 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// This must be done after resetting the symbol table but before compilation
 	// We also need to track which registers need to be populated from caller scope
 	var callerLocalRegs []struct {
-		reg        Register
-		callerIdx  int
+		reg       Register
+		callerIdx int
 	}
 	if c.callerScopeDesc != nil {
 		for i, name := range c.callerScopeDesc.LocalNames {
@@ -796,8 +796,8 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 					c.currentSymbolTable.store[name] = sym
 					debugPrintf("// [Compile] Re-populated caller local '%s' at index %d with register R%d\n", name, i, reg)
 					callerLocalRegs = append(callerLocalRegs, struct {
-						reg        Register
-						callerIdx  int
+						reg       Register
+						callerIdx int
 					}{reg, i})
 				}
 			}
@@ -1514,39 +1514,39 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; alreadyInCurrentScope {
 					continue
 				}
-			// Allocate register and define the variable, initialize to undefined
-			reg, ok := c.regAlloc.TryAllocForVariable()
-			if ok {
-				c.currentSymbolTable.Define(name, reg)
-				// Special case: in non-strict mode, `var arguments` is initialized to the Arguments object
-				// Per ECMAScript spec, the arguments binding is initialized to the arguments object
-				if name == "arguments" && c.isFunctionBody && !c.isArrowFunction && !c.chunk.IsStrict {
-					c.emitGetArguments(reg, node.Token.Line)
-					debugPrintf("// [VarHoist] Hoisted var 'arguments' in R%d (initialized to Arguments object)\n", reg)
+				// Allocate register and define the variable, initialize to undefined
+				reg, ok := c.regAlloc.TryAllocForVariable()
+				if ok {
+					c.currentSymbolTable.Define(name, reg)
+					// Special case: in non-strict mode, `var arguments` is initialized to the Arguments object
+					// Per ECMAScript spec, the arguments binding is initialized to the arguments object
+					if name == "arguments" && c.isFunctionBody && !c.isArrowFunction && !c.chunk.IsStrict {
+						c.emitGetArguments(reg, node.Token.Line)
+						debugPrintf("// [VarHoist] Hoisted var 'arguments' in R%d (initialized to Arguments object)\n", reg)
+					} else {
+						// Initialize the register to undefined (hoisted vars start as undefined)
+						c.emitLoadUndefined(reg, node.Token.Line)
+						debugPrintf("// [VarHoist] Hoisted var '%s' in R%d (initialized to undefined)\n", name, reg)
+					}
+					// Don't pin - let smart pinning handle it when/if captured
 				} else {
-					// Initialize the register to undefined (hoisted vars start as undefined)
-					c.emitLoadUndefined(reg, node.Token.Line)
-					debugPrintf("// [VarHoist] Hoisted var '%s' in R%d (initialized to undefined)\n", name, reg)
+					// Variable threshold reached, use spilling
+					spillIdx := c.AllocSpillSlot()
+					c.currentSymbolTable.DefineSpilled(name, spillIdx)
+					// Special case: in non-strict mode, `var arguments` is initialized to the Arguments object
+					tempReg := c.regAlloc.Alloc()
+					if name == "arguments" && c.isFunctionBody && !c.isArrowFunction && !c.chunk.IsStrict {
+						c.emitGetArguments(tempReg, node.Token.Line)
+						debugPrintf("// [VarHoist] Hoisted var 'arguments' in SPILL SLOT %d (initialized to Arguments object)\n", spillIdx)
+					} else {
+						// Initialize spill slot to undefined
+						c.emitLoadUndefined(tempReg, node.Token.Line)
+						debugPrintf("// [VarHoist] Hoisted var '%s' in SPILL SLOT %d (initialized to undefined)\n", name, spillIdx)
+					}
+					c.emitStoreSpill(spillIdx, tempReg, node.Token.Line)
+					c.regAlloc.Free(tempReg)
 				}
-				// Don't pin - let smart pinning handle it when/if captured
-			} else {
-				// Variable threshold reached, use spilling
-				spillIdx := c.AllocSpillSlot()
-				c.currentSymbolTable.DefineSpilled(name, spillIdx)
-				// Special case: in non-strict mode, `var arguments` is initialized to the Arguments object
-				tempReg := c.regAlloc.Alloc()
-				if name == "arguments" && c.isFunctionBody && !c.isArrowFunction && !c.chunk.IsStrict {
-					c.emitGetArguments(tempReg, node.Token.Line)
-					debugPrintf("// [VarHoist] Hoisted var 'arguments' in SPILL SLOT %d (initialized to Arguments object)\n", spillIdx)
-				} else {
-					// Initialize spill slot to undefined
-					c.emitLoadUndefined(tempReg, node.Token.Line)
-					debugPrintf("// [VarHoist] Hoisted var '%s' in SPILL SLOT %d (initialized to undefined)\n", name, spillIdx)
-				}
-				c.emitStoreSpill(spillIdx, tempReg, node.Token.Line)
-				c.regAlloc.Free(tempReg)
 			}
-		}
 		} // end if !needsEnclosedScope (function body var hoisting)
 
 		// 1) Hoist function declarations within this block (function-scoped hoisting)
@@ -2800,10 +2800,10 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 			LocalNames:              []string{},
 			HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
 			InDefaultParameterScope: c.hasEvalInDefaultParam,
-			HasSuperBinding:         c.isMethodCompilation,                  // Methods have [[HomeObject]] for super
-			InClassFieldInitializer: c.hasEvalInFieldInitializer,            // Class field initializers forbid 'arguments' in eval
-			PrivateBrandStack:       c.convertBrandStackToVM(),              // Private field brand context
-			CurrentPrivateBrand:     c.currentPrivateBrand,                  // Current brand ID
+			HasSuperBinding:         c.isMethodCompilation,       // Methods have [[HomeObject]] for super
+			InClassFieldInitializer: c.hasEvalInFieldInitializer, // Class field initializers forbid 'arguments' in eval
+			PrivateBrandStack:       c.convertBrandStackToVM(),   // Private field brand context
+			CurrentPrivateBrand:     c.currentPrivateBrand,       // Current brand ID
 			CurrentPrivateBrandInfo: c.convertBrandInfoToVM(&c.currentPrivateBrandInfo),
 		}
 	}
@@ -2827,10 +2827,10 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 		LocalNames:              localNames,
 		HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
 		InDefaultParameterScope: c.hasEvalInDefaultParam,
-		HasSuperBinding:         c.isMethodCompilation,                  // Methods have [[HomeObject]] for super
-		InClassFieldInitializer: c.hasEvalInFieldInitializer,            // Class field initializers forbid 'arguments' in eval
-		PrivateBrandStack:       c.convertBrandStackToVM(),              // Private field brand context
-		CurrentPrivateBrand:     c.currentPrivateBrand,                  // Current brand ID
+		HasSuperBinding:         c.isMethodCompilation,       // Methods have [[HomeObject]] for super
+		InClassFieldInitializer: c.hasEvalInFieldInitializer, // Class field initializers forbid 'arguments' in eval
+		PrivateBrandStack:       c.convertBrandStackToVM(),   // Private field brand context
+		CurrentPrivateBrand:     c.currentPrivateBrand,       // Current brand ID
 		CurrentPrivateBrandInfo: c.convertBrandInfoToVM(&c.currentPrivateBrandInfo),
 	}
 }
@@ -3090,6 +3090,19 @@ func (c *Compiler) storeToLvalue(lvalueKind int, identInfo, memberInfo, indexInf
 }
 
 // addError creates a CompileError and appends it to the compiler's error list.
+// addErrorWithCode reports a compile error tagged with the TypeScript error
+// code it corresponds to. Messages on coded diagnostics must match
+// TypeScript's wording exactly — see checker.addErrorWithCode.
+func (c *Compiler) addErrorWithCode(node parser.Node, code string, msg string) {
+	before := len(c.errors)
+	c.addError(node, msg)
+	if len(c.errors) > before {
+		if compileErr, ok := c.errors[len(c.errors)-1].(*errors.CompileError); ok {
+			compileErr.ErrorCode = code
+		}
+	}
+}
+
 func (c *Compiler) addError(node parser.Node, msg string) {
 	token := parser.GetTokenFromNode(node)
 	compileErr := &errors.CompileError{
