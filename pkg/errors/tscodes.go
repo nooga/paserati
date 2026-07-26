@@ -31,6 +31,7 @@ const (
 	TS2454  = "TS2454"  // Variable 'X' is used before being assigned
 	TS2464  = "TS2464"  // A computed property name must be of type 'string', 'number', 'symbol', or 'any'
 	TS2540  = "TS2540"  // Cannot assign to 'X' because it is a read-only property
+	TS2552  = "TS2552"  // Cannot find name 'X'. Did you mean 'Y'?
 	TS2554  = "TS2554"  // Expected N arguments, but got M
 	TS2564  = "TS2564"  // Property 'X' has no initializer and is not definitely assigned in the constructor
 	TS2695  = "TS2695"  // Left side of comma operator is unused and has no side effects

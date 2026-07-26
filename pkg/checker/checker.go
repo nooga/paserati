@@ -1474,10 +1474,10 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	}
 	debugPrintf("// --- Checker - Pass 5: Complete ---\n")
 
-	// Emit TS2304 for typeof expressions with identifiers that were never resolved
+	// Emit TS2304/TS2552 for typeof expressions with identifiers that were never resolved
 	for _, node := range c.unresolvedTypeofNodes {
 		if _, _, found := globalEnv.Resolve(node.Identifier); !found {
-			c.addErrorWithCode(node, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", node.Identifier))
+			c.addCannotFindNameError(node, globalEnv, node.Identifier)
 		}
 	}
 	c.unresolvedTypeofNodes = nil
@@ -2412,7 +2412,7 @@ func (c *Checker) visit(node parser.Node) {
 				node.SetComputedType(types.Any)
 			} else {
 				debugPrintf("// [Checker Debug] visit(Identifier): '%s' not found in env %p\n", node.Value, c.env) // DEBUG
-				c.addErrorWithCode(node, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", node.Value))
+				c.addCannotFindNameError(node, c.env, node.Value)
 				// Set computed type if node itself is not nil (already checked)
 				node.SetComputedType(types.Any) // Set to Any on error?
 			}
