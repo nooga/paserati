@@ -792,11 +792,11 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		if !skipArityCheck && actualArgCount < minRequiredArgs {
 			c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 			// Continue checking assignable args anyway? Let's stop if arity wrong.
+		} else if !skipArityCheck && actualArgCount > expectedArgCount {
+			// Too many arguments for a non-variadic signature. Mirrors the
+			// too-many check already done for super() and `new` calls above.
+			c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 		} else {
-			// Note: We don't check for too many arguments (actualArgCount > expectedArgCount) because:
-			// 1. JavaScript functions can always accept extra arguments (accessible via arguments object)
-			// 2. Generators often use this pattern with zero declared parameters
-			// 3. TypeScript only warns about this in strict mode, it's not a hard error
 			// Check argument types with spread expansion support
 			c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic, funcSignature.OptionalParams)
 		}
