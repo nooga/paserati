@@ -300,11 +300,15 @@ type Checker struct {
 	allowTopLevelReturn    bool
 	skipStrictPropertyInit bool // When true, TS2564 is not emitted (strict-init opt-out)
 	skipDefiniteAssignment bool // When true, TS2454 is not emitted (definite-assignment opt-out)
+	allowUnreachableCode   bool // Mirrors --allowUnreachableCode; when true, TS2695 is not emitted
 	// Global names that existed before this program was checked — builtins and,
 	// in the REPL, bindings from earlier evaluations. A `var` redeclaring one of
 	// these merges with it, so definite assignment analysis leaves them alone.
 	preexistingGlobals map[string]bool
 	noImplicitOverride bool // When true, overriding class members require explicit override
+	// Comma expressions sitting in callee position, recorded so the TS2695
+	// check can spare the `(0, eval)(...)` indirect-call idiom.
+	indirectCallCallees map[*parser.InfixExpression]bool
 
 	// --- Loop/switch/label context (reset when entering a new function scope) ---
 	loopDepth    int             // depth of enclosing iteration statements in current function
@@ -400,6 +404,13 @@ func (c *Checker) SetSkipStrictPropertyInit(skip bool) {
 // when a conformance test disables `--strictNullChecks`.
 func (c *Checker) SetSkipDefiniteAssignment(skip bool) {
 	c.skipDefiniteAssignment = skip
+}
+
+// SetAllowUnreachableCode mirrors the `--allowUnreachableCode` compiler option.
+// It suppresses TS2695: code that deliberately keeps unreachable or inert
+// expressions around has opted out of being told that they do nothing.
+func (c *Checker) SetAllowUnreachableCode(allow bool) {
+	c.allowUnreachableCode = allow
 }
 
 // SetNoImplicitOverride controls whether overriding class members require an
@@ -2574,6 +2585,15 @@ func (c *Checker) visit(node parser.Node) {
 		var resultType types.Type = types.Any // Default to Any on error
 		isAnyOperand := widenedLeftType == types.Any || widenedRightType == types.Any
 
+		// A `null` or `undefined` written directly as an operand of an
+		// arithmetic, bitwise or relational operator is TS18050. TypeScript
+		// reports it at the operand and then treats the operand as
+		// non-nullable, so none of the operator-level diagnostics below fire.
+		if c.checkNullishOperandsForOperator(node, leftType, rightType) {
+			node.SetComputedType(nullishOperatorResultType(node.Operator))
+			return
+		}
+
 		if widenedLeftType != nil && widenedRightType != nil {
 			debugPrintf("// [Checker Infix Pre-Check] Proceeding with operator: %s\n", node.Operator)
 			switch node.Operator {
@@ -2761,6 +2781,7 @@ func (c *Checker) visit(node parser.Node) {
 			case ",":
 				// Comma operator: evaluates both expressions but returns the type of the right expression
 				// (left, right) -> right_type
+				c.checkCommaOperator(node)
 				resultType = rightType
 				debugPrintf("// [Checker Comma] Left evaluated but discarded, result type: %s\n", rightType.String())
 			default:

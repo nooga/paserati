@@ -485,6 +485,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		return
 	}
 
+	c.noteIndirectCallCallee(node.Function)
 	c.visit(node.Function)
 	funcNodeType := node.Function.GetComputedType()
 	debugPrintf("// [Checker CallExpr] Function type resolved to: %T (%v)\n", funcNodeType, funcNodeType)
