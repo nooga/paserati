@@ -382,6 +382,53 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 	debugPrintf("// [Checker ObjectLitContext] Result type: %s\n", resultType.String())
 }
 
+// mergeSpreadOperand merges a spread operand's properties into fields,
+// returning false if the type can't be spread at all. A union (typically
+// the result of `cond && {...}`) distributes: each object member merges its
+// properties, and a falsy/nullish member — the short-circuit branch of the
+// `&&`/`||`/`??` that produced the union — contributes nothing, exactly as
+// it would at runtime.
+func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, t types.Type) bool {
+	switch spreadType := t.(type) {
+	case *types.ObjectType:
+		debugPrintf("// [Checker ObjectLit Spread] Merging properties from spread object: %s\n", spreadType.String())
+		for propName, propType := range spreadType.Properties {
+			fields[propName] = propType // Later properties override earlier ones
+			debugPrintf("// [Checker ObjectLit Spread] Added property '%s': %s\n", propName, propType.String())
+		}
+		return true
+	case *types.ArrayType:
+		// Arrays can be spread but only add numeric indices and length.
+		// For simplicity, we'll allow this but not add specific properties.
+		debugPrintf("// [Checker ObjectLit Spread] Spreading array type (no properties added)\n")
+		return true
+	case *types.UnionType:
+		for _, member := range spreadType.Types {
+			if !c.mergeSpreadOperand(fields, member) {
+				return false
+			}
+		}
+		return true
+	case *types.LiteralType:
+		// A literal member of a union only ever shows up here as the falsy
+		// branch a logical operator retained (e.g. `false` from `cnd && {}`);
+		// it contributes no properties, same as spreading `undefined`.
+		if !spreadType.Value.IsTruthy() {
+			return true
+		}
+		return false
+	default:
+		// Allow undefined (from yield without argument), any (can't verify
+		// statically), null and boolean (the other short-circuit results
+		// `&&`/`||`/`??` can retain).
+		if t == types.Any || t == types.Undefined || t == types.Null || t == types.Boolean {
+			debugPrintf("// [Checker ObjectLit Spread] Spreading any/undefined/null/boolean type (no properties added)\n")
+			return true
+		}
+		return false
+	}
+}
+
 // checkObjectLiteral checks the type of an object literal expression.
 func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	fields := make(map[string]types.Type)
@@ -418,25 +465,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 			// Check if the type can be spread (is an object type)
 			widenedType := types.GetWidenedType(argType)
-			switch spreadObjType := widenedType.(type) {
-			case *types.ObjectType:
-				// Valid object type for spreading - merge its properties
-				debugPrintf("// [Checker ObjectLit Spread] Merging properties from spread object: %s\n", spreadObjType.String())
-				for propName, propType := range spreadObjType.Properties {
-					fields[propName] = propType // Later properties override earlier ones
-					debugPrintf("// [Checker ObjectLit Spread] Added property '%s': %s\n", propName, propType.String())
-				}
-			case *types.ArrayType:
-				// Arrays can be spread but only add numeric indices and length
-				// For simplicity, we'll allow this but not add specific properties
-				debugPrintf("// [Checker ObjectLit Spread] Spreading array type (no properties added)\n")
-			default:
-				// Allow undefined (from yield without argument) and any (can't verify statically)
-				if widenedType != types.Any && widenedType != types.Undefined {
-					c.addError(key.Argument, fmt.Sprintf("spread syntax requires an object, got %s", argType.String()))
-				} else {
-					debugPrintf("// [Checker ObjectLit Spread] Spreading any/undefined type (no properties added)\n")
-				}
+			if !c.mergeSpreadOperand(fields, widenedType) {
+				c.addError(key.Argument, fmt.Sprintf("spread syntax requires an object, got %s", argType.String()))
 			}
 			// Skip the rest of the property processing for spread elements
 			continue
