@@ -1,6 +1,6 @@
 // Debug for...in with existing variable
 let obj = { a: 1 };
-let key: string;
+let key!: string;
 
 console.log("Before loop, key:", key);
 

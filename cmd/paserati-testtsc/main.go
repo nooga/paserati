@@ -708,30 +708,56 @@ func createTscPaserati(directives TestDirectives) *driver.Paserati {
 	if !strictPropertyInitEnabled(directives) {
 		pas.SetSkipStrictPropertyInit(true)
 	}
+	if !strictNullChecksEnabled(directives) {
+		pas.SetSkipDefiniteAssignment(true)
+	}
 	pas.SetNoImplicitOverride(noImplicitOverrideEnabled(directives))
 	return pas
 }
 
 // strictPropertyInitEnabled gates TS2564. An explicit
 // `// @strictPropertyInitialization` directive wins, then `// @strict`.
-// Without either directive, match TypeScript's default: strict property
-// initialization is off.
+// Without either directive, match TypeScript's default — which as of TS 6.0 is
+// `strict: true`. The conformance baselines were regenerated to match, so
+// directive-less tests now expect TS2564; defaulting this off costs ~146 tests.
 func strictPropertyInitEnabled(d TestDirectives) bool {
 	if v, ok := d.Raw["strictpropertyinitialization"]; ok {
-		return v == "true"
+		return anyDirectiveValueTrue(v)
 	}
 	if v, ok := d.Raw["strict"]; ok {
-		return v == "true"
+		return anyDirectiveValueTrue(v)
 	}
-	return false
+	return true
+}
+
+// strictNullChecksEnabled gates TS2454. An explicit `// @strictNullChecks`
+// directive wins, then `// @strict`. Like strict property initialization, the
+// TS 6.0 default is on.
+func strictNullChecksEnabled(d TestDirectives) bool {
+	if v, ok := d.Raw["strictnullchecks"]; ok {
+		return anyDirectiveValueTrue(v)
+	}
+	if v, ok := d.Raw["strict"]; ok {
+		return anyDirectiveValueTrue(v)
+	}
+	return true
 }
 
 func noImplicitOverrideEnabled(d TestDirectives) bool {
 	if v, ok := d.Raw["noimplicitoverride"]; ok {
-		for _, part := range strings.Split(v, ",") {
-			if strings.EqualFold(strings.TrimSpace(part), "true") {
-				return true
-			}
+		return anyDirectiveValueTrue(v)
+	}
+	return false
+}
+
+// anyDirectiveValueTrue reports whether a directive lists `true` among its
+// values. Multi-value directives (`// @strict: true, false`) generate one
+// baseline per value, and loadExpectedErrors picks the variant that has
+// errors — so any listed `true` should enable the corresponding check.
+func anyDirectiveValueTrue(v string) bool {
+	for _, part := range strings.Split(v, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), "true") {
+			return true
 		}
 	}
 	return false

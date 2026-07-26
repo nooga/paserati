@@ -84,6 +84,12 @@ func (p *Paserati) SetSkipStrictPropertyInit(skip bool) {
 	p.checker.SetSkipStrictPropertyInit(skip)
 }
 
+// SetSkipDefiniteAssignment controls whether TS2454 is emitted. Default false
+// (emit). Used by paserati-testtsc to opt out per-file based on TS directives.
+func (p *Paserati) SetSkipDefiniteAssignment(skip bool) {
+	p.checker.SetSkipDefiniteAssignment(skip)
+}
+
 // SetNoImplicitOverride controls whether overriding class members require an
 // explicit `override` modifier.
 func (p *Paserati) SetNoImplicitOverride(enabled bool) {
