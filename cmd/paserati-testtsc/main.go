@@ -747,6 +747,7 @@ func createTscPaserati(directives TestDirectives) *driver.Paserati {
 		pas.SetSkipDefiniteAssignment(true)
 	}
 	pas.SetNoImplicitOverride(noImplicitOverrideEnabled(directives))
+	pas.SetAllowUnreachableCode(allowUnreachableCodeEnabled(directives))
 	return pas
 }
 
@@ -780,6 +781,15 @@ func strictNullChecksEnabled(d TestDirectives) bool {
 
 func noImplicitOverrideEnabled(d TestDirectives) bool {
 	if v, ok := d.Raw["noimplicitoverride"]; ok {
+		return anyDirectiveValueTrue(v)
+	}
+	return false
+}
+
+// allowUnreachableCodeEnabled gates TS2695. TypeScript defaults it off, and
+// comma-operator tests set it when they want inert operands left alone.
+func allowUnreachableCodeEnabled(d TestDirectives) bool {
+	if v, ok := d.Raw["allowunreachablecode"]; ok {
 		return anyDirectiveValueTrue(v)
 	}
 	return false

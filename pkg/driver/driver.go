@@ -90,6 +90,13 @@ func (p *Paserati) SetSkipDefiniteAssignment(skip bool) {
 	p.checker.SetSkipDefiniteAssignment(skip)
 }
 
+// SetAllowUnreachableCode mirrors --allowUnreachableCode, which suppresses
+// TS2695. Default false (emit). Used by paserati-testtsc to opt out per-file
+// based on TS directives.
+func (p *Paserati) SetAllowUnreachableCode(allow bool) {
+	p.checker.SetAllowUnreachableCode(allow)
+}
+
 // SetNoImplicitOverride controls whether overriding class members require an
 // explicit `override` modifier.
 func (p *Paserati) SetNoImplicitOverride(enabled bool) {
