@@ -23,13 +23,13 @@
 <text x="165" y="255" text-anchor="middle" class="caption">23,151/23,523</text>
 </g>
   <g aria-label="Test262 built-ins">
-<path d="M 340.00 135.00 L 278.83 145.08 A 62.00 62.00 0 1 0 340.00 73.00 Z" fill="#20a060" />
-<path d="M 340.00 135.00 L 340.00 73.00 A 62.00 62.00 0 0 0 278.83 145.08 Z" fill="#d64b4b" />
+<path d="M 340.00 135.00 L 278.83 145.11 A 62.00 62.00 0 1 0 340.00 73.00 Z" fill="#20a060" />
+<path d="M 340.00 135.00 L 340.00 73.00 A 62.00 62.00 0 0 0 278.83 145.11 Z" fill="#d64b4b" />
 <circle cx="340" cy="135" r="38" fill="#ffffff" />
 <text x="340" y="131" text-anchor="middle" class="percent">72.4%</text>
 <text x="340" y="153" text-anchor="middle" class="caption">pass</text>
 <text x="340" y="233" text-anchor="middle" class="title">Test262 built-ins</text>
-<text x="340" y="255" text-anchor="middle" class="caption">16,865/23,294</text>
+<text x="340" y="255" text-anchor="middle" class="caption">16,863/23,294</text>
 </g>
   <g aria-label="TypeScript 6.0.3">
 <path d="M 690.00 135.00 L 630.30 151.75 A 62.00 62.00 0 1 0 690.00 73.00 Z" fill="#20a060" />
