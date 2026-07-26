@@ -301,6 +301,11 @@ type Checker struct {
 	skipStrictPropertyInit bool // When true, TS2564 is not emitted (strict-init opt-out)
 	skipDefiniteAssignment bool // When true, TS2454 is not emitted (definite-assignment opt-out)
 	allowUnreachableCode   bool // Mirrors --allowUnreachableCode; when true, TS2695 is not emitted
+	alwaysStrict           bool // Mirrors --alwaysStrict; when true, TS1212 and its variants are emitted
+	isModule               bool // Source is a module, so strict mode comes from the module (TS1214)
+	// Identifiers already reported as strict-mode reserved words, so narrowing
+	// re-visits do not report them twice.
+	reportedStrictReserved map[*parser.Identifier]bool
 	// Global names that existed before this program was checked — builtins and,
 	// in the REPL, bindings from earlier evaluations. A `var` redeclaring one of
 	// these merges with it, so definite assignment analysis leaves them alone.
@@ -411,6 +416,26 @@ func (c *Checker) SetSkipDefiniteAssignment(skip bool) {
 // expressions around has opted out of being told that they do nothing.
 func (c *Checker) SetAllowUnreachableCode(allow bool) {
 	c.allowUnreachableCode = allow
+}
+
+// SetAlwaysStrict mirrors the `--alwaysStrict` compiler option, which gates
+// TS1212 and its class and module variants.
+//
+// It defaults to off, unlike the rest of the strict family, because Paserati
+// executes sloppy-mode JavaScript faithfully: `var yield = 1` and friends run
+// with the semantics the spec gives them outside strict mode, so rejecting
+// them at check time would refuse code we then happily run. paserati-testtsc
+// turns it on, since TypeScript 6.0 has the whole strict family on by default
+// and every conformance baseline is generated that way.
+func (c *Checker) SetAlwaysStrict(strict bool) {
+	c.alwaysStrict = strict
+}
+
+// SetIsModule tells the checker the source is a module. Modules are strict
+// regardless of `--alwaysStrict`, and TypeScript says so in the diagnostic, so
+// this selects TS1214 over TS1212.
+func (c *Checker) SetIsModule(isModule bool) {
+	c.isModule = isModule
 }
 
 // SetNoImplicitOverride controls whether overriding class members require an
@@ -2321,6 +2346,11 @@ func (c *Checker) visit(node parser.Node) {
 		// --- UPDATED: Handle Identifier (Value Context Only) ---
 		// Assume this is visited in a value context.
 		// Type context identifiers are handled by resolveTypeAnnotation.
+
+		// Value context is exactly where a strict-mode reserved word is
+		// illegal; as a property name it would be fine, and those do not
+		// reach here.
+		c.checkStrictModeIdentifier(node)
 
 		// Safety check for incomplete nodes from parser errors - *REMOVED* (covered by check above)
 		// if node == nil {
