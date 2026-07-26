@@ -32,14 +32,14 @@
 <text x="340" y="255" text-anchor="middle" class="caption">16,864/23,294</text>
 </g>
   <g aria-label="TypeScript 6.0.3">
-<path d="M 690.00 135.00 L 630.24 151.52 A 62.00 62.00 0 1 0 690.00 73.00 Z" fill="#20a060" />
-<path d="M 690.00 135.00 L 654.87 83.92 A 62.00 62.00 0 0 0 630.24 151.52 Z" fill="#d64b4b" />
+<path d="M 690.00 135.00 L 630.22 151.44 A 62.00 62.00 0 1 0 690.00 73.00 Z" fill="#20a060" />
+<path d="M 690.00 135.00 L 654.87 83.92 A 62.00 62.00 0 0 0 630.22 151.44 Z" fill="#d64b4b" />
 <path d="M 690.00 135.00 L 690.00 73.00 A 62.00 62.00 0 0 0 654.87 83.92 Z" fill="#aeb7c2" />
 <circle cx="690" cy="135" r="38" fill="#ffffff" />
 <text x="690" y="131" text-anchor="middle" class="percent">70.7%</text>
 <text x="690" y="153" text-anchor="middle" class="caption">pass</text>
 <text x="690" y="233" text-anchor="middle" class="title">TypeScript 6.0.3</text>
-<text x="690" y="255" text-anchor="middle" class="caption">3,488/4,933</text>
+<text x="690" y="255" text-anchor="middle" class="caption">3,489/4,933</text>
 </g>
   <g transform="translate(575 278)">
     <rect x="0" y="-10" width="12" height="12" fill="#20a060" rx="2" /><text x="18" y="1" class="legend">Pass</text>
