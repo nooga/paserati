@@ -7,6 +7,16 @@ import (
 
 // Helper to add type errors (consider adding token/node info later)
 func (c *Checker) addError(node parser.Node, message string) {
+	c.addErrorWithCode(node, "", message)
+}
+
+// addErrorWithCode reports a diagnostic tagged with the TypeScript error code
+// it corresponds to. Messages on coded diagnostics must match TypeScript's
+// wording exactly — `paserati-testtsc -strict-errors` compares codes against
+// the TypeScript baselines, and the codes are only meaningful if the diagnostic
+// really is the same one. Pass "" for diagnostics with no TypeScript
+// equivalent, or ones not mapped yet.
+func (c *Checker) addErrorWithCode(node parser.Node, code string, message string) {
 	token := parser.GetTokenFromNode(node)
 	err := &errors.TypeError{
 		Position: errors.Position{
@@ -16,7 +26,8 @@ func (c *Checker) addError(node parser.Node, message string) {
 			EndPos:   token.EndPos,
 			Source:   c.source, // Use cached source from checker
 		},
-		Msg: message,
+		Msg:       message,
+		ErrorCode: code,
 	}
 	c.errors = append(c.errors, err)
 }
