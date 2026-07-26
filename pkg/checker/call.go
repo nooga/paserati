@@ -10,6 +10,18 @@ import (
 	"github.com/nooga/paserati/pkg/vm"
 )
 
+// formatArityError renders a TypeScript-style TS2554 "Expected N arguments,
+// but got M." message. When min < max (some trailing parameters are
+// optional), the expected count is rendered as a "min-max" range, matching
+// how TypeScript reports arity errors for signatures with optional
+// parameters (e.g. "Expected 1-2 arguments, but got 0.").
+func formatArityError(min, max, actual int) string {
+	if min < max {
+		return fmt.Sprintf("Expected %d-%d arguments, but got %d.", min, max, actual)
+	}
+	return fmt.Sprintf("Expected %d arguments, but got %d.", min, actual)
+}
+
 // calculateEffectiveArgCount calculates the effective number of arguments,
 // expanding spread elements based on tuple types (following TypeScript behavior)
 func (c *Checker) calculateEffectiveArgCount(arguments []parser.Expression) int {
@@ -447,11 +459,11 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 				}
 
 				if !skipArityCheck && actualArgCount < minRequiredArgs {
-					c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minRequiredArgs, actualArgCount))
+					c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 				} else if !skipArityCheck && actualArgCount > expectedArgCount && expectedArgCount > 0 {
 					// Only enforce max args if constructor has declared parameters
 					// (allow extra args for constructors with no params - they may use 'arguments')
-					c.addError(node, fmt.Sprintf("Constructor expected at most %d arguments but got %d.", expectedArgCount, actualArgCount))
+					c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 				} else {
 					c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)
 				}
@@ -778,7 +790,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		}
 
 		if !skipArityCheck && actualArgCount < minRequiredArgs {
-			c.addError(node, fmt.Sprintf("expected at least %d arguments, but got %d", minRequiredArgs, actualArgCount))
+			c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 			// Continue checking assignable args anyway? Let's stop if arity wrong.
 		} else {
 			// Note: We don't check for too many arguments (actualArgCount > expectedArgCount) because:
