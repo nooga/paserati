@@ -12,7 +12,7 @@ function nameRef(name: string, greeting: string = "Hello " + name): string {
 }
 
 // ❌ LIMITATION: Default parameters CANNOT reference later parameters (forward references)
-// This should cause a type error: "undefined variable: b"
+// This should cause a type error: "Cannot find name 'b'."
 // function forwardRef(a: number = b + 1, b: number): number {
 //   return a + b;
 // }

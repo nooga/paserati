@@ -1,5 +1,5 @@
 // Test normal field type checking
-// expect_compile_error: type '42' is not assignable to property of type 'string'
+// expect_compile_error: Type '42' is not assignable to type 'string'.
 
 class NormalFieldTest {
     normalField: string = "hello";

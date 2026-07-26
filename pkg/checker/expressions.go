@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"github.com/nooga/paserati/pkg/errors"
 
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
@@ -1154,7 +1155,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			if methodType := c.env.GetPrimitivePrototypeMethodType("string", propertyName); methodType != nil {
 				resultType = methodType
 			} else {
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'string'", propertyName))
+				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'string'.", propertyName))
 				// resultType remains types.Never
 			}
 		}
@@ -1163,7 +1164,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		if methodType := c.env.GetPrimitivePrototypeMethodType("number", propertyName); methodType != nil {
 			resultType = methodType
 		} else {
-			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'number'", propertyName))
+			c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'number'.", propertyName))
 			// resultType remains types.Never
 		}
 	} else if widenedObjectType == types.RegExp {
@@ -1171,7 +1172,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		if methodType := c.env.GetPrimitivePrototypeMethodType("RegExp", propertyName); methodType != nil {
 			resultType = methodType
 		} else {
-			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'RegExp'", propertyName))
+			c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'RegExp'.", propertyName))
 			// resultType remains types.Never
 		}
 	} else if widenedObjectType == types.Symbol {
@@ -1179,7 +1180,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		if methodType := c.env.GetPrimitivePrototypeMethodType("symbol", propertyName); methodType != nil {
 			resultType = methodType
 		} else {
-			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'symbol'", propertyName))
+			c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'symbol'.", propertyName))
 			// resultType remains types.Never
 		}
 	} else {
@@ -1194,7 +1195,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					// If the method is generic, instantiate it with the array's element type
 					resultType = c.instantiateGenericMethod(methodType, obj.ElementType)
 				} else {
-					c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+					c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 					// resultType remains types.Never
 				}
 			}
@@ -1204,7 +1205,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			} else if methodType := c.env.GetPrimitivePrototypeMethodType("array", propertyName); methodType != nil {
 				resultType = c.instantiateGenericMethod(methodType, getTupleElementUnion(obj))
 			} else {
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 			}
 		case *types.ObjectType: // <<< MODIFIED CASE
 			// Check if this is a function and we're accessing 'prototype'
@@ -1258,7 +1259,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 									debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
 								} else {
 									// Property not found
-									c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+									c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 									// resultType remains types.Never
 								}
 							}
@@ -1269,7 +1270,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 								debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
 							} else {
 								// Property not found
-								c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+								c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 								// resultType remains types.Never
 							}
 						}
@@ -1337,7 +1338,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						// Check if property is optional
 						isOptional := expandedObj.OptionalProperties != nil && expandedObj.OptionalProperties[propertyName]
 						if !isOptional {
-							c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+							c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 							resultType = types.Never
 						} else {
 							resultType = types.Undefined
@@ -1366,7 +1367,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					if exists {
 						resultType = fieldType
 					} else {
-						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", obj.String(), subst.String()))
+						c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", obj.String(), subst.String()))
 						// resultType remains types.Never
 					}
 				default:
@@ -1502,7 +1503,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						resultType = propType
 						debugPrintf("// [Checker MemberExpr] Found property '%s' on resolved type: %s\n", propertyName, propType.String())
 					} else {
-						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, resolvedType.String()))
+						c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, resolvedType.String()))
 						resultType = types.Never
 					}
 				} else {
@@ -1810,7 +1811,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				} else if isIndexStringLiteral {
 					resultType = c.getPropertyTypeFromType(base, indexStringValue, false)
 					if resultType == types.Never {
-						c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type 'string'", indexStringValue))
+						c.addErrorWithCode(node.Index, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'string'.", indexStringValue))
 					}
 				} else if types.IsAssignable(indexType, types.String) || types.IsAssignable(indexType, types.Symbol) {
 					// String or Symbol index - accessing string properties (like Symbol.iterator)
@@ -1822,7 +1823,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 			} else if isIndexStringLiteral {
 				resultType = c.getPropertyTypeFromType(base, indexStringValue, false)
 				if resultType == types.Never {
-					c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type %s", indexStringValue, leftType.String()))
+					c.addErrorWithCode(node.Index, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", indexStringValue, leftType.String()))
 				}
 			} else {
 				c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
@@ -1839,7 +1840,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					}
 				}
 				if resultType == types.Never {
-					c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type %s", indexStringValue, leftType.String()))
+					c.addErrorWithCode(node.Index, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", indexStringValue, leftType.String()))
 				}
 			} else if base.Parameter == nil || base.Parameter.Constraint == nil {
 				resultType = types.Any
@@ -2015,7 +2016,7 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 				baseResultType = types.Number // Array.length is number
 			} else {
 				// Array methods should be resolved through the builtins system
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 				// baseResultType remains types.Never
 			}
 		case *types.ObjectType:
