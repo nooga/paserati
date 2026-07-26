@@ -29,6 +29,25 @@ func (p *Parser) startsUsingDeclaration() bool {
 	return p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)
 }
 
+// startsUsingDeclarationAt reports whether a `using` declaration begins at
+// lookahead position `at`, where 0 is the peek token. Used from a for-loop head,
+// where the decision must be made before advancing into the parenthesis.
+//
+// Requires `using` followed by a binding name, so `for (using of xs)` (a for-of
+// over a variable named `using`) and `for (await foo; ...)` (an await
+// expression) are both correctly left alone.
+func (p *Parser) startsUsingDeclarationAt(at int) bool {
+	tok := p.lookAhead(at)
+	if tok.Type != lexer.IDENT || tok.Literal != "using" {
+		return false
+	}
+	name := p.lookAhead(at + 1)
+	if name.Line != tok.Line || name.Type == lexer.OF {
+		return false
+	}
+	return name.Type == lexer.IDENT || p.isKeywordThatCanBeIdentifier(name.Type)
+}
+
 // startsAwaitUsingDeclaration reports whether the current token begins an
 // `await using` declaration, i.e. `await` immediately followed by a `using`
 // declaration on the same line.

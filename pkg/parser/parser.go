@@ -6281,14 +6281,15 @@ func (p *Parser) parseForStatement() Statement {
 		p.nextToken()
 		return p.parseForStatementOrForOf(forToken, isAsync)
 	}
-	// `for (using d of xs)` / `for (using d = e;;)`. `using` is contextual, and
-	// `for (using of xs)` is a for-of over a variable named `using`, so exclude
-	// that shape here — parseForStatementOrForOf makes the final call.
-	if p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "using" && !p.peekTokenIs2(lexer.OF) {
+	// `for (using d of xs)` / `for (using d = e;;)`, and the `await using`
+	// forms. `using` is contextual, so require an actual binding name after it:
+	// `for (using of xs)` is a for-of over a variable named `using`, and
+	// `for (await foo; ...)` is an await expression, not a declaration.
+	if p.startsUsingDeclarationAt(0) {
 		p.nextToken() // Advance to 'using'
 		return p.parseForStatementOrForOf(forToken, isAsync)
 	}
-	if p.peekTokenIs(lexer.AWAIT) {
+	if p.peekTokenIs(lexer.AWAIT) && p.startsUsingDeclarationAt(1) {
 		p.nextToken() // Advance to 'await'
 		return p.parseForStatementOrForOf(forToken, isAsync)
 	}
