@@ -299,6 +299,11 @@ type Checker struct {
 	functionNestingDepth   int // 0 = top level, >0 = inside function(s)
 	allowTopLevelReturn    bool
 	skipStrictPropertyInit bool // When true, TS2564 is not emitted (strict-init opt-out)
+	skipDefiniteAssignment bool // When true, TS2454 is not emitted (definite-assignment opt-out)
+	// Global names that existed before this program was checked — builtins and,
+	// in the REPL, bindings from earlier evaluations. A `var` redeclaring one of
+	// these merges with it, so definite assignment analysis leaves them alone.
+	preexistingGlobals map[string]bool
 	noImplicitOverride     bool // When true, overriding class members require explicit override
 
 	// --- Loop/switch/label context (reset when entering a new function scope) ---
@@ -388,6 +393,13 @@ func (c *Checker) SetAllowTopLevelReturn(allow bool) {
 // `--strictPropertyInitialization` explicitly.
 func (c *Checker) SetSkipStrictPropertyInit(skip bool) {
 	c.skipStrictPropertyInit = skip
+}
+
+// SetSkipDefiniteAssignment controls whether TS2454 (variable used before
+// being assigned) is emitted. Default false (emit). Set true to opt out, e.g.
+// when a conformance test disables `--strictNullChecks`.
+func (c *Checker) SetSkipDefiniteAssignment(skip bool) {
+	c.skipDefiniteAssignment = skip
 }
 
 // SetNoImplicitOverride controls whether overriding class members require an
@@ -527,6 +539,13 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// DON'T reset the environment - keep it persistent for REPL sessions
 	// c.env = NewGlobalEnvironment()      // Start with a fresh global environment for this check
 	globalEnv := c.env
+
+	// Snapshot the globals that exist before any of this program's declarations
+	// are processed, for definite assignment analysis (see Pass 6).
+	c.preexistingGlobals = make(map[string]bool, len(globalEnv.GetAllVariables()))
+	for name := range globalEnv.GetAllVariables() {
+		c.preexistingGlobals[name] = true
+	}
 
 	// --- Data Structures for Passes ---
 	nodesProcessedPass1 := make(map[parser.Node]bool)   // Nodes handled in Pass 1 (Type Aliases)
@@ -1426,6 +1445,10 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			}
 		}
 	}
+
+	// TS2454: definite assignment analysis. Runs last so every declarator's
+	// ComputedType has been resolved by the passes above.
+	c.checkDefiniteAssignment(program)
 
 	return c.errors
 }
