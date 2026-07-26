@@ -87,7 +87,7 @@ go test ./tests/...
 | Suite | Passed | Failed | Skipped | Timeouts | Pass rate |
 | :-- | --: | --: | --: | --: | --: |
 | Test262 language | 23,151/23,523 | 372 | 0 | 0 | 98.4% |
-| Test262 built-ins | 16,864/23,294 | 6,430 | 0 | 0 | 72.4% |
+| Test262 built-ins | 16,865/23,294 | 6,429 | 0 | 0 | 72.4% |
 | TypeScript 6.0.3 conformance | 3,471/4,933 | 989 | 473 | 0 | 70.4% |
 <!-- compliance:end -->
 
