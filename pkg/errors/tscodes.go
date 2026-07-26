@@ -29,7 +29,9 @@ const (
 	TS2540  = "TS2540"  // Cannot assign to 'X' because it is a read-only property
 	TS2554  = "TS2554"  // Expected N arguments, but got M
 	TS2564  = "TS2564"  // Property 'X' has no initializer and is not definitely assigned in the constructor
+	TS2695  = "TS2695"  // Left side of comma operator is unused and has no side effects
 	TS18013 = "TS18013" // Property 'X' is not accessible outside class 'Y'
+	TS18050 = "TS18050" // The value 'null'/'undefined' cannot be used here
 )
 
 // IsTSCode reports whether an error code is a TypeScript diagnostic code rather
