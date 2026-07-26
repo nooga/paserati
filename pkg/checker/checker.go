@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/builtins"
 	"github.com/nooga/paserati/pkg/errors"  // Added import
@@ -559,14 +560,24 @@ func (c *Checker) createAccessError(objType *types.ObjectType, memberName string
 	className := objType.GetClassName()
 
 	var errorMsg string
+	var code string
 	if memberInfo != nil {
-		errorMsg = fmt.Sprintf("Property '%s' is %s and only accessible within class '%s'",
-			memberName, memberInfo.AccessLevel.String(), className)
+		if strings.HasPrefix(memberName, "#") {
+			// TS18013: access to a JS private-identifier (#field) member from
+			// outside the declaring class. Distinct from the `private`/
+			// `protected` keyword modifiers (TS2341/TS2445), which keep their
+			// existing generic wording below.
+			code = errors.TS18013
+			errorMsg = fmt.Sprintf("Property '%s' is not accessible outside class '%s' because it has a private identifier.", memberName, className)
+		} else {
+			errorMsg = fmt.Sprintf("Property '%s' is %s and only accessible within class '%s'",
+				memberName, memberInfo.AccessLevel.String(), className)
+		}
 	} else {
 		errorMsg = fmt.Sprintf("Property '%s' does not exist on type '%s'", memberName, className)
 	}
 
-	c.addError(node, errorMsg)
+	c.addErrorWithCode(node, code, errorMsg)
 }
 
 // getCurrentClassName returns the current class name being checked, or empty string
