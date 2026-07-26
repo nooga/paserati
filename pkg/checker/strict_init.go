@@ -82,7 +82,7 @@ func strictInitTypePermits(t types.Type) bool {
 	if t == nil {
 		return true
 	}
-	if t == types.Any || t == types.Undefined {
+	if t == types.Any || t == types.Undefined || t == types.Void {
 		return true
 	}
 	if u, ok := t.(*types.UnionType); ok {

@@ -1,6 +1,6 @@
 // Test for...of with existing variable
 let arr = ["x", "y"];
-let item: string;
+let item!: string;
 
 console.log("Before loop, item:", item);
 

@@ -9,5 +9,5 @@ interface SimpleConstructor {
 }
 
 // Just return the interface type to show it parsed correctly
-let constructorType: SimpleConstructor;
+let constructorType!: SimpleConstructor;
 constructorType;

@@ -9,7 +9,7 @@ interface Container<T> extends Readable {
     // Inherits read(): string
 }
 
-let stringContainer: Container<string>;
+let stringContainer!: Container<string>;
 stringContainer;
 
 // expect: undefined
