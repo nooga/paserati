@@ -88,7 +88,7 @@ go test ./tests/...
 | :-- | --: | --: | --: | --: | --: |
 | Test262 language | 23,151/23,523 | 372 | 0 | 0 | 98.4% |
 | Test262 built-ins | 16,864/23,294 | 6,430 | 0 | 0 | 72.4% |
-| TypeScript 6.0.3 conformance | 3,489/4,933 | 971 | 473 | 0 | 70.7% |
+| TypeScript 6.0.3 conformance | 3,490/4,933 | 970 | 473 | 0 | 70.7% |
 <!-- compliance:end -->
 
 The Test262 language and built-ins figures come from the local baseline snapshots for the checked-out ECMA-262 conformance tests. The TypeScript figure comes from the single-file conformance runner against the TypeScript 6.0.0 test suite.
