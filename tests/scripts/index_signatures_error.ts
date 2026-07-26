@@ -1,4 +1,4 @@
-// expect_compile_error: cannot assign type
+// expect_compile_error: is not assignable to type '{ [key: string]: string }'.
 
 // Test index signature type checking with invalid assignments
 

@@ -5,4 +5,4 @@
 }
 // Trying to access blockVar should fail
 blockVar;
-// expect_compile_error: undefined variable: blockVar
+// expect_compile_error: Cannot find name 'blockVar'.

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/nooga/paserati/pkg/errors"
+
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -451,7 +453,7 @@ func (a *definiteAssignment) reportIfUnassigned(id *parser.Identifier, assigned 
 		return
 	}
 	a.reported[id] = true
-	a.c.addError(id, fmt.Sprintf("Variable '%s' is used before being assigned.", id.Value))
+	a.c.addErrorWithCode(id, errors.TS2454, fmt.Sprintf("Variable '%s' is used before being assigned.", id.Value))
 }
 
 // branchTerminates reports whether a conditional arm always exits (return,

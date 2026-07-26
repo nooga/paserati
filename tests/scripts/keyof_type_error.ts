@@ -1,4 +1,4 @@
-// expect_compile_error: cannot assign type 'invalid' to variable 'invalidKey' of type
+// expect_compile_error: Type 'invalid' is not assignable to type
 
 // Test keyof type checking with invalid assignments
 

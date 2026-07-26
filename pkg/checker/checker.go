@@ -304,7 +304,7 @@ type Checker struct {
 	// in the REPL, bindings from earlier evaluations. A `var` redeclaring one of
 	// these merges with it, so definite assignment analysis leaves them alone.
 	preexistingGlobals map[string]bool
-	noImplicitOverride     bool // When true, overriding class members require explicit override
+	noImplicitOverride bool // When true, overriding class members require explicit override
 
 	// --- Loop/switch/label context (reset when entering a new function scope) ---
 	loopDepth    int             // depth of enclosing iteration statements in current function
@@ -1379,12 +1379,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					if c.isEnumType(variableType) {
 						// For enum assignments, use widened source type and no variable name
 						sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, variableType)
-						c.addError(initializer, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
+						c.addErrorWithCode(initializer, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 					} else {
 						// For regular variable assignments, use literal types and include variable name
 						sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, variableType)
-						variableName := varName.Value
-						c.addError(initializer, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", sourceTypeStr, variableName, targetTypeStr))
+						c.addErrorWithCode(initializer, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 					}
 				}
 
@@ -1432,7 +1431,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// Emit TS2304 for typeof expressions with identifiers that were never resolved
 	for _, node := range c.unresolvedTypeofNodes {
 		if _, _, found := globalEnv.Resolve(node.Identifier); !found {
-			c.addError(node, fmt.Sprintf("Cannot find name '%s'.", node.Identifier))
+			c.addErrorWithCode(node, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", node.Identifier))
 		}
 	}
 	c.unresolvedTypeofNodes = nil
@@ -1863,7 +1862,7 @@ func (c *Checker) visit(node parser.Node) {
 				}
 
 				if !assignable && !isEmptyArrayAssignment {
-					c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to constant '%s' of type '%s'", computedInitializerType.String(), declarator.Name.Value, finalType.String()))
+					c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", computedInitializerType.String(), finalType.String()))
 				}
 			} else {
 				// --- No annotation: Infer type ---
@@ -2364,7 +2363,7 @@ func (c *Checker) visit(node parser.Node) {
 				node.SetComputedType(types.Any)
 			} else {
 				debugPrintf("// [Checker Debug] visit(Identifier): '%s' not found in env %p\n", node.Value, c.env) // DEBUG
-				c.addError(node, fmt.Sprintf("undefined variable: %s", node.Value))
+				c.addErrorWithCode(node, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", node.Value))
 				// Set computed type if node itself is not nil (already checked)
 				node.SetComputedType(types.Any) // Set to Any on error?
 			}
@@ -3168,7 +3167,7 @@ func (c *Checker) visit(node parser.Node) {
 
 				defaultValueType := param.DefaultValue.GetComputedType()
 				if defaultValueType != nil && !types.IsAssignable(defaultValueType, resolvedParamType) {
-					c.addError(param.DefaultValue, fmt.Sprintf("default value type '%s' is not assignable to parameter type '%s'", defaultValueType.String(), resolvedParamType.String()))
+					c.addErrorWithCode(param.DefaultValue, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", defaultValueType.String(), resolvedParamType.String()))
 				}
 			}
 
@@ -3464,7 +3463,7 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 		expectedType = c.resolveTypeAnnotation(node.TypeAnnotation)
 		// Verify that the value is assignable to the expected type
 		if !types.IsAssignable(valueType, expectedType) {
-			c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to type '%s'", valueType.String(), expectedType.String()))
+			c.addErrorWithCode(node.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", valueType.String(), expectedType.String()))
 		}
 	}
 
@@ -3610,7 +3609,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 		expectedType = c.resolveTypeAnnotation(node.TypeAnnotation)
 		// Verify that the value is assignable to the expected type
 		if node.Value != nil && expectedType != nil && valueType != nil && !types.IsAssignable(valueType, expectedType) {
-			c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to type '%s'", valueType.String(), expectedType.String()))
+			c.addErrorWithCode(node.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", valueType.String(), expectedType.String()))
 		}
 	}
 
@@ -3642,7 +3641,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 				if pt, exists := c.resolveObjectMemberForDestructuring(objType, propName); exists {
 					propType = pt
 				} else if prop.Default == nil {
-					c.addError(prop.Key, fmt.Sprintf("property '%s' does not exist on type %s", propName, objType.String()))
+					c.addErrorWithCode(prop.Key, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propName, objType.String()))
 				}
 			} else if isArray {
 				// For arrays, numeric keys access array elements
