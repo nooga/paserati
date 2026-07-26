@@ -748,6 +748,7 @@ func createTscPaserati(directives TestDirectives) *driver.Paserati {
 	}
 	pas.SetNoImplicitOverride(noImplicitOverrideEnabled(directives))
 	pas.SetAllowUnreachableCode(allowUnreachableCodeEnabled(directives))
+	pas.SetAlwaysStrict(alwaysStrictEnabled(directives))
 	return pas
 }
 
@@ -793,6 +794,18 @@ func allowUnreachableCodeEnabled(d TestDirectives) bool {
 		return anyDirectiveValueTrue(v)
 	}
 	return false
+}
+
+// alwaysStrictEnabled gates TS1212. An explicit `// @alwaysStrict` directive
+// wins, then `// @strict`; the TS 6.0 default is on.
+func alwaysStrictEnabled(d TestDirectives) bool {
+	if v, ok := d.Raw["alwaysstrict"]; ok {
+		return anyDirectiveValueTrue(v)
+	}
+	if v, ok := d.Raw["strict"]; ok {
+		return anyDirectiveValueTrue(v)
+	}
+	return true
 }
 
 // anyDirectiveValueTrue reports whether a directive lists `true` among its
