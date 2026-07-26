@@ -1,8 +1,32 @@
 package checker
 
 import (
+	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
+
+// isFreshLiteralExpression reports whether node is literal syntax written
+// directly in source (`"foo"`, `42`, `true`, `1n`, or a unary-minus number
+// literal). Only a type computed straight from one of these is a "fresh"
+// literal type that a `let`/`var` declaration without a type annotation
+// should widen to its base primitive.
+//
+// A literal type can also arise as the *result* of an expression — e.g.
+// `a || "foo"` collapsing to the literal type "foo" via subtype reduction —
+// without the expression being literal syntax itself. TypeScript does not
+// widen those: freshness is a property of the literal token, not of
+// whatever type happens to describe the expression's value.
+func isFreshLiteralExpression(node parser.Node) bool {
+	switch n := node.(type) {
+	case *parser.StringLiteral, *parser.NumberLiteral, *parser.BooleanLiteral, *parser.BigIntLiteral:
+		return true
+	case *parser.PrefixExpression:
+		if n.Operator == "-" || n.Operator == "+" {
+			return isFreshLiteralExpression(n.Right)
+		}
+	}
+	return false
+}
 
 // Initialize the prototype method resolver
 func init() {
@@ -75,6 +99,55 @@ func (c *Checker) resolveObjectMemberForDestructuring(obj *types.ObjectType, pro
 	}
 
 	return types.Undefined, false
+}
+
+// objectLikeUnionMembers returns the ObjectType constituents of a union when
+// every member is itself object-like, or ok=false if any member isn't (e.g.
+// a primitive or array), in which case the union can't be treated as a
+// single destructurable/spreadable shape.
+func objectLikeUnionMembers(union *types.UnionType) (members []*types.ObjectType, ok bool) {
+	for _, member := range union.Types {
+		if nested, isUnion := member.(*types.UnionType); isUnion {
+			nestedMembers, nestedOk := objectLikeUnionMembers(nested)
+			if !nestedOk {
+				return nil, false
+			}
+			members = append(members, nestedMembers...)
+			continue
+		}
+		obj, isObj := member.(*types.ObjectType)
+		if !isObj {
+			return nil, false
+		}
+		members = append(members, obj)
+	}
+	return members, true
+}
+
+// resolveObjectMemberForDestructuringUnion resolves a property across the
+// object-like constituents of a union type. A JavaScript destructuring
+// pattern never fails at runtime just because a key is absent — it simply
+// yields `undefined` for that key — so unlike a direct property access on a
+// union (which TypeScript requires to exist on every member), a property
+// found on at least one constituent resolves here, with `undefined` folded
+// in whenever some constituent lacks it.
+func (c *Checker) resolveObjectMemberForDestructuringUnion(members []*types.ObjectType, propName string) (types.Type, bool) {
+	var found []types.Type
+	missingOnSome := false
+	for _, obj := range members {
+		if pt, exists := c.resolveObjectMemberForDestructuring(obj, propName); exists {
+			found = append(found, pt)
+		} else {
+			missingOnSome = true
+		}
+	}
+	if len(found) == 0 {
+		return types.Undefined, false
+	}
+	if missingOnSome {
+		found = append(found, types.Undefined)
+	}
+	return types.NewUnionType(found...), true
 }
 
 // validateIndexSignatures checks if a source object type satisfies the index signature constraints of a target type
