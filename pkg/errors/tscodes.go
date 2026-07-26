@@ -8,7 +8,9 @@ package errors
 // we reported something. Diagnostics with no TypeScript equivalent — and those
 // not yet mapped — keep their PS code and are reported as unmapped.
 const (
+	TS1003  = "TS1003"  // Identifier expected
 	TS1005  = "TS1005"  // '<token>' expected
+	TS1109  = "TS1109"  // Expression expected
 	TS2300  = "TS2300"  // Duplicate identifier 'X'
 	TS2304  = "TS2304"  // Cannot find name 'X'
 	TS2322  = "TS2322"  // Type 'X' is not assignable to type 'Y'
