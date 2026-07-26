@@ -14,6 +14,7 @@ const (
 	TS1109  = "TS1109"  // Expression expected
 	TS1042  = "TS1042"  // 'X' modifier cannot be used here
 	TS1127  = "TS1127"  // Invalid character
+	TS1206  = "TS1206"  // Decorators are not valid here
 	TS1212  = "TS1212"  // Identifier expected. 'X' is a reserved word in strict mode
 	TS1213  = "TS1213"  // ... Class definitions are automatically in strict mode
 	TS1214  = "TS1214"  // ... Modules are automatically in strict mode

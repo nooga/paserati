@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
 )
 
@@ -34,7 +35,7 @@ func (p *Parser) parseDecoratedStatement() Statement {
 		return p.parseDecoratedExport(decorators)
 
 	default:
-		p.addError(p.curToken, "decorators are only valid on class declarations and class elements")
+		p.addErrorWithCode(p.curToken, errors.TS1206, "Decorators are not valid here.")
 		return nil
 	}
 }
@@ -48,7 +49,7 @@ func (p *Parser) parseDecoratedExport(decorators []*Decorator) Statement {
 		p.nextToken() // consume 'default'
 
 		if !p.curTokenIs(lexer.CLASS) && !(p.curTokenIs(lexer.ABSTRACT) && p.peekTokenIs(lexer.CLASS)) {
-			p.addError(p.curToken, "decorators are only valid on class declarations")
+			p.addErrorWithCode(p.curToken, errors.TS1206, "Decorators are not valid here.")
 			return nil
 		}
 
@@ -82,7 +83,7 @@ func (p *Parser) parseDecoratedExport(decorators []*Decorator) Statement {
 	}
 
 	if !p.curTokenIs(lexer.CLASS) {
-		p.addError(p.curToken, "decorators are only valid on class declarations")
+		p.addErrorWithCode(p.curToken, errors.TS1206, "Decorators are not valid here.")
 		return nil
 	}
 
