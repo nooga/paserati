@@ -174,7 +174,7 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 					if effectiveArgIndex+j < len(paramTypes) {
 						paramType := paramTypes[effectiveArgIndex+j]
 						if !types.IsAssignable(elemType, paramType) {
-							c.addError(spreadElement, fmt.Sprintf("spread element %d: cannot assign type '%s' to parameter of type '%s'", j+1, elemType.String(), paramType.String()))
+							c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", elemType.String(), paramType.String()))
 							allOk = false
 						}
 					}
@@ -411,7 +411,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 									}
 
 									if !types.IsAssignable(argType, constructorSig.RestParameterType) {
-										c.addError(spreadElement, fmt.Sprintf("spread argument: cannot assign type '%s' to rest parameter type '%s'", argType.String(), constructorSig.RestParameterType.String()))
+										c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), constructorSig.RestParameterType.String()))
 									}
 								} else {
 									c.visitWithContext(argNode, &ContextualType{
@@ -731,12 +731,12 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 							if c.isSpreadableIterableType(argType) {
 								spreadElementType := c.getSpreadElementType(argType)
 								if !types.IsAssignable(spreadElementType, variadicElementType) {
-									c.addError(spreadElement, fmt.Sprintf("spread element: cannot assign type '%s' to parameter element type '%s'", spreadElementType.String(), variadicElementType.String()))
+									c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", spreadElementType.String(), variadicElementType.String()))
 								}
 								continue
 							}
 							if !types.IsAssignable(argType, variadicParamType) {
-								c.addError(spreadElement, fmt.Sprintf("spread argument: cannot assign type '%s' to rest parameter type '%s'", argType.String(), variadicParamType.String()))
+								c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicParamType.String()))
 							}
 						} else {
 							// Regular arguments in variadic part

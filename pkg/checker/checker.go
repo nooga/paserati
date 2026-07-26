@@ -1750,12 +1750,11 @@ func (c *Checker) visit(node parser.Node) {
 						if c.isEnumType(finalVariableType) {
 							// For enum assignments, use widened source type and no variable name
 							sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, finalVariableType)
-							c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
+							c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 						} else {
-							// For regular variable assignments, use literal types and include variable name
+							// For regular variable assignments, use literal types
 							sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, finalVariableType)
-							variableName := nameValueStr
-							c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", sourceTypeStr, variableName, targetTypeStr))
+							c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 						}
 					}
 				}
@@ -1996,12 +1995,11 @@ func (c *Checker) visit(node parser.Node) {
 						if c.isEnumType(finalVariableType) {
 							// For enum assignments, use widened source type and no variable name
 							sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, finalVariableType)
-							c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
+							c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 						} else {
-							// For regular variable assignments, use literal types and include variable name
+							// For regular variable assignments, use literal types
 							sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, finalVariableType)
-							variableName := nameValueStr
-							c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", sourceTypeStr, variableName, targetTypeStr))
+							c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 						}
 					}
 				}

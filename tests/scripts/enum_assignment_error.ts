@@ -1,4 +1,4 @@
-// expect_compile_error: cannot assign type 'number' to variable of type
+// expect_compile_error: Type 'number' is not assignable to type 'Color'.
 
 // Test that raw numbers cannot be assigned to enum types in strict mode
 
