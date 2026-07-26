@@ -71,7 +71,7 @@ type TestResult struct {
 	TimedOut    bool
 	Duration    time.Duration
 	Error       string
-	Category    string // "clean-pass", "clean-fail", "error-match", "error-mismatch", "skip"
+	Category    string // "clean-pass", "clean-fail", "error-match", "error-mismatch", "error-code-mismatch", "skip"
 	ExpectClean bool   // true if no .errors.txt baseline exists
 	Details     string // extra info about what went wrong
 }
@@ -87,7 +87,10 @@ type TestStats struct {
 	CleanFail  int // expected clean, got errors
 	ErrorMatch int // expected errors, got matching errors
 	ErrorMiss  int // expected errors, got wrong/missing errors
-	Duration   time.Duration
+	// ErrorCodeMiss counts the subset of ErrorMiss where we did report errors,
+	// but not the TypeScript diagnostics the baseline expects (-strict-errors).
+	ErrorCodeMiss int
+	Duration      time.Duration
 }
 
 func main() {
@@ -104,7 +107,7 @@ func main() {
 		pattern     = flag.String("pattern", "*.ts", "File pattern (default *.ts)")
 		skipPattern = flag.String("skip", "", "Skip files matching this substring")
 		skipFile    = flag.String("skipfile", "", "File containing test paths to skip (one per line, relative to conformance dir)")
-		strictCheck = flag.Bool("strict-errors", false, "Also verify error codes match (not just clean/error)")
+		strictCheck = flag.Bool("strict-errors", false, "Require our diagnostics to carry the same TypeScript error codes the baseline expects, not merely that we errored")
 	)
 
 	flag.Parse()
@@ -515,9 +518,12 @@ func runTests(testFiles []string, conformanceDir, baselinesDir string, timeout t
 		case "clean-fail":
 			stats.Failed++
 			stats.CleanFail++
-		case "error-mismatch":
+		case "error-mismatch", "error-code-mismatch":
 			stats.Failed++
 			stats.ErrorMiss++
+			if result.Category == "error-code-mismatch" {
+				stats.ErrorCodeMiss++
+			}
 		case "skip":
 			stats.Skipped++
 		case "timeout":
@@ -679,23 +685,52 @@ func classifyResult(result TestResult, actualErrs []errorsPkg.PaseratiError, exp
 			// Loose mode: just check that we produce SOME errors (not necessarily the right ones)
 			result.Passed = true
 			result.Category = "error-match"
+		} else if missing, unmapped := compareErrorCodes(actualErrs, expectedErrs); len(missing) == 0 {
+			// Strict mode: every TypeScript diagnostic the baseline expects has
+			// to be reported by us under the same code.
+			result.Passed = true
+			result.Category = "error-match"
 		} else {
-			// Strict mode: verify error codes match
-			// For now, just check error count is roughly similar
-			expectedCount := len(expectedErrs)
-			actualCount := len(actualErrs)
-			ratio := float64(actualCount) / float64(expectedCount)
-			if ratio >= 0.5 && ratio <= 2.0 {
-				result.Passed = true
-				result.Category = "error-match"
-			} else {
-				result.Failed = true
-				result.Category = "error-mismatch"
-				result.Details = fmt.Sprintf("expected ~%d errors, got %d", expectedCount, actualCount)
+			result.Failed = true
+			result.Category = "error-code-mismatch"
+			detail := fmt.Sprintf("missing %s", strings.Join(missing, ","))
+			if unmapped > 0 {
+				detail += fmt.Sprintf("; %d of our errors carry no TS code", unmapped)
 			}
+			result.Details = detail
 		}
 	}
 	return result
+}
+
+// compareErrorCodes checks our diagnostics against the TypeScript codes a
+// baseline expects. It returns the distinct expected codes we failed to report,
+// and how many of our diagnostics carry no TypeScript code at all — the latter
+// is not a failure by itself, but explains most of the misses while the mapping
+// is still being filled in.
+//
+// Codes are compared as sets: TypeScript often reports the same diagnostic at
+// several positions, and matching counts as well would mostly measure how
+// aggressively each compiler deduplicates.
+func compareErrorCodes(actualErrs []errorsPkg.PaseratiError, expectedErrs []ExpectedError) (missing []string, unmapped int) {
+	ours := make(map[string]bool)
+	for _, e := range actualErrs {
+		if code := errorsPkg.TSCode(e); code != "" {
+			ours[code] = true
+		} else {
+			unmapped++
+		}
+	}
+	seen := make(map[string]bool)
+	for _, want := range expectedErrs {
+		if want.Code == "" || seen[want.Code] || ours[want.Code] {
+			continue
+		}
+		seen[want.Code] = true
+		missing = append(missing, want.Code)
+	}
+	sort.Strings(missing)
+	return missing, unmapped
 }
 
 // createTscPaserati creates a Paserati instance configured for TSC test running
@@ -778,6 +813,9 @@ func printSummary(stats *TestStats) {
 	fmt.Printf("  Clean fail (expected clean, got errors):         %d\n", stats.CleanFail)
 	fmt.Printf("  Error match (expected errors, got errors):       %d\n", stats.ErrorMatch)
 	fmt.Printf("  Error mismatch (expected errors, wrong result):  %d\n", stats.ErrorMiss)
+	if stats.ErrorCodeMiss > 0 {
+		fmt.Printf("    of which wrong TS diagnostic code:            %d\n", stats.ErrorCodeMiss)
+	}
 	fmt.Printf("\nDuration: %v\n", stats.Duration.Round(time.Millisecond))
 }
 
