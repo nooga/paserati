@@ -1,4 +1,4 @@
-// expect_compile_error: property 'b' does not exist on type { a: number }
+// expect_compile_error: Property 'b' does not exist on type '{ a: number }'.
 
 // Test basic Object.setPrototypeOf
 let obj = { a: 1 };

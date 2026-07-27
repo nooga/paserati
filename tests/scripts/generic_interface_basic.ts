@@ -10,8 +10,8 @@ interface Pair<T, U> {
     second: U;
 }
 
-let stringContainer: Container<string>;
-let numberPair: Pair<number, string>;
+let stringContainer!: Container<string>;
+let numberPair!: Pair<number, string>;
 
 stringContainer;
 numberPair;

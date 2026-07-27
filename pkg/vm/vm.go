@@ -267,6 +267,7 @@ type VM struct {
 	SymbolUnscopables        Value
 	SymbolAsyncIterator      Value
 	SymbolDispose            Value
+	SymbolAsyncDispose       Value
 
 	// %ThrowTypeError% intrinsic - singleton function used for strict mode arguments callee/caller
 	// Per ECMAScript spec, this function is NOT extensible (unlike normal functions)
@@ -761,6 +762,7 @@ func (vm *VM) syncPrototypesFromRealm() {
 	vm.SymbolUnscopables = r.SymbolUnscopables
 	vm.SymbolAsyncIterator = r.SymbolAsyncIterator
 	vm.SymbolDispose = r.SymbolDispose
+	vm.SymbolAsyncDispose = r.SymbolAsyncDispose
 
 	// Constructors
 	vm.ErrorConstructor = r.ErrorConstructor
@@ -855,6 +857,7 @@ func (vm *VM) SyncPrototypesToRealm() {
 	r.SymbolUnscopables = vm.SymbolUnscopables
 	r.SymbolAsyncIterator = vm.SymbolAsyncIterator
 	r.SymbolDispose = vm.SymbolDispose
+	r.SymbolAsyncDispose = vm.SymbolAsyncDispose
 
 	// Constructors
 	r.ErrorConstructor = vm.ErrorConstructor

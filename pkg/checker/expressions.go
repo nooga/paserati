@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"github.com/nooga/paserati/pkg/errors"
 
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
@@ -14,7 +15,7 @@ func (c *Checker) validateComputedPropertyNameType(expr parser.Expression, error
 		return
 	}
 	if !c.isValidComputedPropertyNameType(keyExprType) {
-		c.addError(errorNode, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.")
+		c.addErrorWithCode(errorNode, errors.TS2464, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.")
 	}
 }
 
@@ -381,6 +382,53 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 	debugPrintf("// [Checker ObjectLitContext] Result type: %s\n", resultType.String())
 }
 
+// mergeSpreadOperand merges a spread operand's properties into fields,
+// returning false if the type can't be spread at all. A union (typically
+// the result of `cond && {...}`) distributes: each object member merges its
+// properties, and a falsy/nullish member — the short-circuit branch of the
+// `&&`/`||`/`??` that produced the union — contributes nothing, exactly as
+// it would at runtime.
+func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, t types.Type) bool {
+	switch spreadType := t.(type) {
+	case *types.ObjectType:
+		debugPrintf("// [Checker ObjectLit Spread] Merging properties from spread object: %s\n", spreadType.String())
+		for propName, propType := range spreadType.Properties {
+			fields[propName] = propType // Later properties override earlier ones
+			debugPrintf("// [Checker ObjectLit Spread] Added property '%s': %s\n", propName, propType.String())
+		}
+		return true
+	case *types.ArrayType:
+		// Arrays can be spread but only add numeric indices and length.
+		// For simplicity, we'll allow this but not add specific properties.
+		debugPrintf("// [Checker ObjectLit Spread] Spreading array type (no properties added)\n")
+		return true
+	case *types.UnionType:
+		for _, member := range spreadType.Types {
+			if !c.mergeSpreadOperand(fields, member) {
+				return false
+			}
+		}
+		return true
+	case *types.LiteralType:
+		// A literal member of a union only ever shows up here as the falsy
+		// branch a logical operator retained (e.g. `false` from `cnd && {}`);
+		// it contributes no properties, same as spreading `undefined`.
+		if !spreadType.Value.IsTruthy() {
+			return true
+		}
+		return false
+	default:
+		// Allow undefined (from yield without argument), any (can't verify
+		// statically), null and boolean (the other short-circuit results
+		// `&&`/`||`/`??` can retain).
+		if t == types.Any || t == types.Undefined || t == types.Null || t == types.Boolean {
+			debugPrintf("// [Checker ObjectLit Spread] Spreading any/undefined/null/boolean type (no properties added)\n")
+			return true
+		}
+		return false
+	}
+}
+
 // checkObjectLiteral checks the type of an object literal expression.
 func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 	fields := make(map[string]types.Type)
@@ -417,25 +465,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 			// Check if the type can be spread (is an object type)
 			widenedType := types.GetWidenedType(argType)
-			switch spreadObjType := widenedType.(type) {
-			case *types.ObjectType:
-				// Valid object type for spreading - merge its properties
-				debugPrintf("// [Checker ObjectLit Spread] Merging properties from spread object: %s\n", spreadObjType.String())
-				for propName, propType := range spreadObjType.Properties {
-					fields[propName] = propType // Later properties override earlier ones
-					debugPrintf("// [Checker ObjectLit Spread] Added property '%s': %s\n", propName, propType.String())
-				}
-			case *types.ArrayType:
-				// Arrays can be spread but only add numeric indices and length
-				// For simplicity, we'll allow this but not add specific properties
-				debugPrintf("// [Checker ObjectLit Spread] Spreading array type (no properties added)\n")
-			default:
-				// Allow undefined (from yield without argument) and any (can't verify statically)
-				if widenedType != types.Any && widenedType != types.Undefined {
-					c.addError(key.Argument, fmt.Sprintf("spread syntax requires an object, got %s", argType.String()))
-				} else {
-					debugPrintf("// [Checker ObjectLit Spread] Spreading any/undefined type (no properties added)\n")
-				}
+			if !c.mergeSpreadOperand(fields, widenedType) {
+				c.addError(key.Argument, fmt.Sprintf("spread syntax requires an object, got %s", argType.String()))
 			}
 			// Skip the rest of the property processing for spread elements
 			continue
@@ -449,7 +480,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				widenedKeyType := types.GetWidenedType(keyExprType)
 				switch widenedKeyType {
 				case types.Boolean, types.Null, types.Undefined, types.Void, types.Never:
-					c.addError(key, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.")
+					c.addErrorWithCode(key, errors.TS2464, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.")
 				}
 			}
 
@@ -841,7 +872,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			if methodDef.Kind == "getter" {
 				// Check that getter has a return statement (TS2378)
 				if methodDef.Value != nil && methodDef.Value.Body != nil && !bodyContainsReturn(methodDef.Value.Body) {
-					c.addError(methodDef.Key, "A 'get' accessor must return a value.")
+					c.addErrorWithCode(methodDef.Key, errors.TS2378, "A 'get' accessor must return a value.")
 				}
 				// For getters, store both the implementation and the property type
 				getterName := "__get__" + keyName
@@ -1154,7 +1185,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			if methodType := c.env.GetPrimitivePrototypeMethodType("string", propertyName); methodType != nil {
 				resultType = methodType
 			} else {
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'string'", propertyName))
+				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'string'.", propertyName))
 				// resultType remains types.Never
 			}
 		}
@@ -1163,7 +1194,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		if methodType := c.env.GetPrimitivePrototypeMethodType("number", propertyName); methodType != nil {
 			resultType = methodType
 		} else {
-			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'number'", propertyName))
+			c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'number'.", propertyName))
 			// resultType remains types.Never
 		}
 	} else if widenedObjectType == types.RegExp {
@@ -1171,7 +1202,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		if methodType := c.env.GetPrimitivePrototypeMethodType("RegExp", propertyName); methodType != nil {
 			resultType = methodType
 		} else {
-			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'RegExp'", propertyName))
+			c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'RegExp'.", propertyName))
 			// resultType remains types.Never
 		}
 	} else if widenedObjectType == types.Symbol {
@@ -1179,7 +1210,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		if methodType := c.env.GetPrimitivePrototypeMethodType("symbol", propertyName); methodType != nil {
 			resultType = methodType
 		} else {
-			c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type 'symbol'", propertyName))
+			c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'symbol'.", propertyName))
 			// resultType remains types.Never
 		}
 	} else {
@@ -1194,7 +1225,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					// If the method is generic, instantiate it with the array's element type
 					resultType = c.instantiateGenericMethod(methodType, obj.ElementType)
 				} else {
-					c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+					c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 					// resultType remains types.Never
 				}
 			}
@@ -1204,7 +1235,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			} else if methodType := c.env.GetPrimitivePrototypeMethodType("array", propertyName); methodType != nil {
 				resultType = c.instantiateGenericMethod(methodType, getTupleElementUnion(obj))
 			} else {
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 			}
 		case *types.ObjectType: // <<< MODIFIED CASE
 			// Check if this is a function and we're accessing 'prototype'
@@ -1258,7 +1289,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 									debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
 								} else {
 									// Property not found
-									c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+									c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 									// resultType remains types.Never
 								}
 							}
@@ -1269,7 +1300,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 								debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
 							} else {
 								// Property not found
-								c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+								c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 								// resultType remains types.Never
 							}
 						}
@@ -1337,7 +1368,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						// Check if property is optional
 						isOptional := expandedObj.OptionalProperties != nil && expandedObj.OptionalProperties[propertyName]
 						if !isOptional {
-							c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+							c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 							resultType = types.Never
 						} else {
 							resultType = types.Undefined
@@ -1366,7 +1397,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					if exists {
 						resultType = fieldType
 					} else {
-						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", obj.String(), subst.String()))
+						c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", obj.String(), subst.String()))
 						// resultType remains types.Never
 					}
 				default:
@@ -1502,7 +1533,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						resultType = propType
 						debugPrintf("// [Checker MemberExpr] Found property '%s' on resolved type: %s\n", propertyName, propType.String())
 					} else {
-						c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, resolvedType.String()))
+						c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, resolvedType.String()))
 						resultType = types.Never
 					}
 				} else {
@@ -1810,7 +1841,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				} else if isIndexStringLiteral {
 					resultType = c.getPropertyTypeFromType(base, indexStringValue, false)
 					if resultType == types.Never {
-						c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type 'string'", indexStringValue))
+						c.addErrorWithCode(node.Index, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'string'.", indexStringValue))
 					}
 				} else if types.IsAssignable(indexType, types.String) || types.IsAssignable(indexType, types.Symbol) {
 					// String or Symbol index - accessing string properties (like Symbol.iterator)
@@ -1822,7 +1853,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 			} else if isIndexStringLiteral {
 				resultType = c.getPropertyTypeFromType(base, indexStringValue, false)
 				if resultType == types.Never {
-					c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type %s", indexStringValue, leftType.String()))
+					c.addErrorWithCode(node.Index, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", indexStringValue, leftType.String()))
 				}
 			} else {
 				c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
@@ -1839,7 +1870,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					}
 				}
 				if resultType == types.Never {
-					c.addError(node.Index, fmt.Sprintf("property '%s' does not exist on type %s", indexStringValue, leftType.String()))
+					c.addErrorWithCode(node.Index, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", indexStringValue, leftType.String()))
 				}
 			} else if base.Parameter == nil || base.Parameter.Constraint == nil {
 				resultType = types.Any
@@ -2015,7 +2046,7 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 				baseResultType = types.Number // Array.length is number
 			} else {
 				// Array methods should be resolved through the builtins system
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on type %s", propertyName, obj.String()))
+				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
 				// baseResultType remains types.Never
 			}
 		case *types.ObjectType:
@@ -2416,11 +2447,11 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 					}
 
 					if !skipArityCheck && actualArgCount < minRequiredArgs {
-						c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minRequiredArgs, actualArgCount))
+						c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 					} else if !skipArityCheck && actualArgCount > expectedArgCount && expectedArgCount > 0 {
 						// Only enforce max args if constructor has declared parameters
 						// (allow extra args for constructors with no params - they may use 'arguments')
-						c.addError(node, fmt.Sprintf("Constructor expected at most %d arguments but got %d.", expectedArgCount, actualArgCount))
+						c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 					} else {
 						c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)
 					}
@@ -2566,6 +2597,8 @@ func (c *Checker) checkDuplicateTypeAssertionProperties(targetType parser.Expres
 	}
 
 	seen := make(map[string]parser.Expression)
+	seenName := make(map[string]*parser.Identifier)
+	reported := make(map[string]bool)
 	for _, prop := range objectType.Properties {
 		if prop.Name == nil || prop.IsCallSignature || prop.IsConstructSignature || prop.IsIndexSignature || prop.IsComputedProperty {
 			continue
@@ -2577,12 +2610,18 @@ func (c *Checker) checkDuplicateTypeAssertionProperties(targetType parser.Expres
 					continue
 				}
 			}
-			c.addError(prop.Name, fmt.Sprintf("Duplicate identifier '%s'.", prop.Name.Value))
-			c.addError(prop.Name, fmt.Sprintf("Duplicate identifier '%s'.", prop.Name.Value))
+			// TypeScript flags every occurrence of the duplicated identifier,
+			// including the first one (only once).
+			if !reported[prop.Name.Value] {
+				c.addErrorWithCode(seenName[prop.Name.Value], errors.TS2300, fmt.Sprintf("Duplicate identifier '%s'.", prop.Name.Value))
+				reported[prop.Name.Value] = true
+			}
+			c.addErrorWithCode(prop.Name, errors.TS2300, fmt.Sprintf("Duplicate identifier '%s'.", prop.Name.Value))
 			continue
 		}
 
 		seen[prop.Name.Value] = prop.Type
+		seenName[prop.Name.Value] = prop.Name
 	}
 }
 

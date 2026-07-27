@@ -12,7 +12,7 @@ interface Container<T extends Lengthable> {
 
 // Use object types that satisfy the constraint
 // Note: Built-in types like string/Array don't work due to structural typing limitations
-let objContainer: Container<{length: number; value: string}>;
+let objContainer!: Container<{length: number; value: string}>;
 
 objContainer;
 

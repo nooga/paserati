@@ -93,6 +93,7 @@ type Realm struct {
 	SymbolUnscopables        Value
 	SymbolAsyncIterator      Value
 	SymbolDispose            Value
+	SymbolAsyncDispose       Value
 
 	// Symbol registry for Symbol.for()
 	SymbolRegistry map[string]Value
@@ -222,6 +223,7 @@ func (r *Realm) InitializeSymbols() {
 	r.SymbolUnscopables = NewSymbol("Symbol.unscopables")
 	r.SymbolAsyncIterator = NewSymbol("Symbol.asyncIterator")
 	r.SymbolDispose = NewSymbol("Symbol.dispose")
+	r.SymbolAsyncDispose = NewSymbol("Symbol.asyncDispose")
 }
 
 // GetGlobal retrieves a global variable by name from this realm.

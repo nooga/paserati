@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"github.com/nooga/paserati/pkg/errors"
 
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
@@ -15,14 +16,8 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		lhsType = types.Any
 	} // Handle nil from error
 
-	// Visit RHS value with contextual typing if applicable
-	if arrayLit, isArrayLit := node.Value.(*parser.ArrayLiteral); isArrayLit {
-		// For array literals, provide contextual typing from the LHS
-		contextualType := &ContextualType{ExpectedType: lhsType}
-		c.checkArrayLiteralWithContext(arrayLit, contextualType)
-	} else {
-		c.visit(node.Value)
-	}
+	// Visit RHS value with contextual typing from the LHS.
+	c.visitWithContext(node.Value, &ContextualType{ExpectedType: lhsType})
 	rhsType := node.Value.GetComputedType()
 	if rhsType == nil {
 		rhsType = types.Any
@@ -153,16 +148,8 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			}
 
 			if !allowAssignment {
-				leftDesc := "location"
-				if ident, ok := node.Left.(*parser.Identifier); ok {
-					leftDesc = fmt.Sprintf("variable '%s'", ident.Value)
-				} else if _, ok := node.Left.(*parser.MemberExpression); ok {
-					leftDesc = "property"
-				} else if _, ok := node.Left.(*parser.IndexExpression); ok {
-					leftDesc = "element"
-				}
 				// Report error comparing RHS to the potentially stricter targetType
-				c.addError(node.Value, fmt.Sprintf("type '%s' is not assignable to %s of type '%s'", rhsType.String(), leftDesc, targetType.String()))
+				c.addErrorWithCode(node.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", rhsType.String(), targetType.String()))
 			}
 		}
 	}
@@ -230,7 +217,7 @@ func (c *Checker) checkReadonlyPropertyAssignment(memberExpr *parser.MemberExpre
 					return
 				}
 
-				c.addError(memberExpr, fmt.Sprintf("cannot assign to readonly property '%s'", propertyName))
+				c.addErrorWithCode(memberExpr, errors.TS2540, fmt.Sprintf("Cannot assign to '%s' because it is a read-only property.", propertyName))
 			}
 		}
 	}
@@ -344,7 +331,7 @@ func (c *Checker) checkArrayDestructuringWithTuple(node *parser.ArrayDestructuri
 			// Check that default value is assignable to expected element type
 			if targetType != types.Undefined && targetType != types.Any {
 				if !types.IsAssignable(defaultType, targetType) {
-					c.addError(element.Default, fmt.Sprintf("default value type '%s' is not assignable to expected element type '%s'", defaultType.String(), targetType.String()))
+					c.addErrorWithCode(element.Default, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", defaultType.String(), targetType.String()))
 				}
 			}
 
@@ -414,7 +401,7 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 				if foundPropType, exists := c.resolveObjectMemberForDestructuring(rhsType, propName); exists {
 					propType = foundPropType
 				} else if prop.Default == nil {
-					c.addError(prop.Key, fmt.Sprintf("property '%s' does not exist on type %s", propName, rhsType.String()))
+					c.addErrorWithCode(prop.Key, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propName, rhsType.String()))
 				} else {
 					// Property doesn't exist on object - will be undefined at runtime
 					propType = types.Undefined
@@ -435,7 +422,7 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 			// Check that default value is assignable to expected property type
 			if propType != types.Undefined && propType != types.Any {
 				if !types.IsAssignable(defaultType, propType) {
-					c.addError(prop.Default, fmt.Sprintf("default value type '%s' is not assignable to expected property type '%s'", defaultType.String(), propType.String()))
+					c.addErrorWithCode(prop.Default, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", defaultType.String(), propType.String()))
 				}
 			}
 

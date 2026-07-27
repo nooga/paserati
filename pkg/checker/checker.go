@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/builtins"
 	"github.com/nooga/paserati/pkg/errors"  // Added import
@@ -299,7 +300,27 @@ type Checker struct {
 	functionNestingDepth   int // 0 = top level, >0 = inside function(s)
 	allowTopLevelReturn    bool
 	skipStrictPropertyInit bool // When true, TS2564 is not emitted (strict-init opt-out)
-	noImplicitOverride     bool // When true, overriding class members require explicit override
+	skipDefiniteAssignment bool // When true, TS2454 is not emitted (definite-assignment opt-out)
+	allowUnreachableCode   bool // Mirrors --allowUnreachableCode; when true, TS2695 is not emitted
+	alwaysStrict           bool // Mirrors --alwaysStrict; when true, TS1212 and its variants are emitted
+	strictNullChecks       bool // Mirrors --strictNullChecks; when false, TS18050 is not emitted
+	isModule               bool // Source is a module, so strict mode comes from the module (TS1214)
+	// Identifiers already reported as strict-mode reserved words, so narrowing
+	// re-visits do not report them twice.
+	reportedStrictReserved map[*parser.Identifier]bool
+	// Global names that existed before this program was checked — builtins and,
+	// in the REPL, bindings from earlier evaluations. A `var` redeclaring one of
+	// these merges with it, so definite assignment analysis leaves them alone.
+	preexistingGlobals map[string]bool
+	noImplicitOverride bool // When true, overriding class members require explicit override
+	// Comma expressions sitting in callee position, recorded so the TS2695
+	// check can spare the `(0, eval)(...)` indirect-call idiom.
+	indirectCallCallees map[*parser.InfixExpression]bool
+
+	// Flow-sensitive narrowing of a variable's own last-assigned type,
+	// consulted by identifier reads on top of the declared type in c.env.
+	// See flow_narrowing.go.
+	flowNarrowOverlay map[string]types.Type
 
 	// --- Loop/switch/label context (reset when entering a new function scope) ---
 	loopDepth    int             // depth of enclosing iteration statements in current function
@@ -358,6 +379,7 @@ func NewCheckerWithInitializers(initializers []builtins.BuiltinInitializer) *Che
 		currentThisType:            nil, // Initialize this type context
 		currentClassContext:        nil, // No class context initially
 		allowTopLevelReturn:        true,
+		strictNullChecks:           true,
 		abstractClasses:            make(map[string]bool),
 		abstractMethods:            make(map[string]map[string]bool),
 		generatorFunctions:         make(map[string]bool),
@@ -388,6 +410,48 @@ func (c *Checker) SetAllowTopLevelReturn(allow bool) {
 // `--strictPropertyInitialization` explicitly.
 func (c *Checker) SetSkipStrictPropertyInit(skip bool) {
 	c.skipStrictPropertyInit = skip
+}
+
+// SetSkipDefiniteAssignment controls whether TS2454 (variable used before
+// being assigned) is emitted. Default false (emit). Set true to opt out, e.g.
+// when a conformance test disables `--strictNullChecks`.
+func (c *Checker) SetSkipDefiniteAssignment(skip bool) {
+	c.skipDefiniteAssignment = skip
+}
+
+// SetAllowUnreachableCode mirrors the `--allowUnreachableCode` compiler option.
+// It suppresses TS2695: code that deliberately keeps unreachable or inert
+// expressions around has opted out of being told that they do nothing.
+func (c *Checker) SetAllowUnreachableCode(allow bool) {
+	c.allowUnreachableCode = allow
+}
+
+// SetStrictNullChecks mirrors the `--strictNullChecks` compiler option, which
+// gates TS18050. Without it `null` and `undefined` are assignable everywhere,
+// so a nullish operand is not singled out — TypeScript falls through to
+// TS2365 about the operand pair instead. On by default, as in TypeScript 6.0.
+func (c *Checker) SetStrictNullChecks(strict bool) {
+	c.strictNullChecks = strict
+}
+
+// SetAlwaysStrict mirrors the `--alwaysStrict` compiler option, which gates
+// TS1212 and its class and module variants.
+//
+// It defaults to off, unlike the rest of the strict family, because Paserati
+// executes sloppy-mode JavaScript faithfully: `var yield = 1` and friends run
+// with the semantics the spec gives them outside strict mode, so rejecting
+// them at check time would refuse code we then happily run. paserati-testtsc
+// turns it on, since TypeScript 6.0 has the whole strict family on by default
+// and every conformance baseline is generated that way.
+func (c *Checker) SetAlwaysStrict(strict bool) {
+	c.alwaysStrict = strict
+}
+
+// SetIsModule tells the checker the source is a module. Modules are strict
+// regardless of `--alwaysStrict`, and TypeScript says so in the diagnostic, so
+// this selects TS1214 over TS1212.
+func (c *Checker) SetIsModule(isModule bool) {
+	c.isModule = isModule
 }
 
 // SetNoImplicitOverride controls whether overriding class members require an
@@ -501,14 +565,24 @@ func (c *Checker) createAccessError(objType *types.ObjectType, memberName string
 	className := objType.GetClassName()
 
 	var errorMsg string
+	var code string
 	if memberInfo != nil {
-		errorMsg = fmt.Sprintf("Property '%s' is %s and only accessible within class '%s'",
-			memberName, memberInfo.AccessLevel.String(), className)
+		if strings.HasPrefix(memberName, "#") {
+			// TS18013: access to a JS private-identifier (#field) member from
+			// outside the declaring class. Distinct from the `private`/
+			// `protected` keyword modifiers (TS2341/TS2445), which keep their
+			// existing generic wording below.
+			code = errors.TS18013
+			errorMsg = fmt.Sprintf("Property '%s' is not accessible outside class '%s' because it has a private identifier.", memberName, className)
+		} else {
+			errorMsg = fmt.Sprintf("Property '%s' is %s and only accessible within class '%s'",
+				memberName, memberInfo.AccessLevel.String(), className)
+		}
 	} else {
 		errorMsg = fmt.Sprintf("Property '%s' does not exist on type '%s'", memberName, className)
 	}
 
-	c.addError(node, errorMsg)
+	c.addErrorWithCode(node, code, errorMsg)
 }
 
 // getCurrentClassName returns the current class name being checked, or empty string
@@ -527,6 +601,13 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// DON'T reset the environment - keep it persistent for REPL sessions
 	// c.env = NewGlobalEnvironment()      // Start with a fresh global environment for this check
 	globalEnv := c.env
+
+	// Snapshot the globals that exist before any of this program's declarations
+	// are processed, for definite assignment analysis (see Pass 6).
+	c.preexistingGlobals = make(map[string]bool, len(globalEnv.GetAllVariables()))
+	for name := range globalEnv.GetAllVariables() {
+		c.preexistingGlobals[name] = true
+	}
 
 	// --- Data Structures for Passes ---
 	nodesProcessedPass1 := make(map[parser.Node]bool)   // Nodes handled in Pass 1 (Type Aliases)
@@ -1247,6 +1328,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// --- Pass 5: Final Check of Remaining Statements & Initializers ---
 	debugPrintf("\n// --- Checker - Pass 5: Final Checks & Remaining Statements ---\n")
 	c.env = globalEnv // Ensure global scope
+	flow := c.newFlowNarrowState()
 	for _, stmt := range program.Statements {
 		// Skip nodes processed in initial passes OR function literals visited in Pass 3
 		if nodesProcessedPass1[stmt] || nodesProcessedPass2[stmt] {
@@ -1270,6 +1352,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 			if !needsInitializerCheck {
 				debugPrintf("// [Checker Pass 5] Skipping already processed/visited node: %T\n", stmt)
+				flow.invalidateAll()
 				continue
 			} else {
 				debugPrintf("// [Checker Pass 5] Re-visiting Let/Const/Var for initializer check: %T\n", stmt)
@@ -1360,12 +1443,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					if c.isEnumType(variableType) {
 						// For enum assignments, use widened source type and no variable name
 						sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, variableType)
-						c.addError(initializer, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
+						c.addErrorWithCode(initializer, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 					} else {
 						// For regular variable assignments, use literal types and include variable name
 						sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, variableType)
-						variableName := varName.Value
-						c.addError(initializer, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", sourceTypeStr, variableName, targetTypeStr))
+						c.addErrorWithCode(initializer, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 					}
 				}
 
@@ -1375,6 +1457,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					var finalInferredType types.Type
 					if isEmptyArrayAssignment {
 						finalInferredType = computedInitializerType // Keep unknown[] type
+					} else if _, isBareLiteral := computedInitializerType.(*types.LiteralType); isBareLiteral && !isFreshLiteralExpression(initializer) {
+						// A bare literal type computed from something other than literal
+						// syntax (e.g. `a || "foo"` collapsing via subtype reduction) isn't
+						// fresh, so it doesn't widen — see isFreshLiteralExpression.
+						finalInferredType = computedInitializerType
 					} else {
 						finalInferredType = types.DeeplyWidenType(computedInitializerType) // Use the deep widen helper
 					}
@@ -1390,12 +1477,16 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					} else {
 						debugPrintf("// [Checker Pass 5] Type for '%s' already refined to %s. No update needed.\n", varName.Value, variableType.String())
 					}
+
+					// See flow_narrowing.go: a widened literal keeps its
+					// exact narrow type for straight-line reads that follow.
+					flow.observeLetOrVar(varName.Value, variableType, computedInitializerType, finalInferredType != computedInitializerType)
 				}
 				// --- END FIX ---
 			}
 
 		case *parser.ExpressionStatement:
-			c.visit(node.Expression)
+			flow.observeExpressionStatement(c, node)
 
 			// Special handling for FunctionSignature expressions
 			if sigExpr, ok := node.Expression.(*parser.FunctionSignature); ok {
@@ -1404,16 +1495,17 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		// TODO: Handle other top-level statement types if necessary
 		default:
+			flow.invalidateAll()
 			debugPrintf("// [Checker Pass 5] Visiting unhandled statement type %T\n", node)
 			c.visit(node) // Fallback visit? Might be unnecessary
 		}
 	}
 	debugPrintf("// --- Checker - Pass 5: Complete ---\n")
 
-	// Emit TS2304 for typeof expressions with identifiers that were never resolved
+	// Emit TS2304/TS2552 for typeof expressions with identifiers that were never resolved
 	for _, node := range c.unresolvedTypeofNodes {
 		if _, _, found := globalEnv.Resolve(node.Identifier); !found {
-			c.addError(node, fmt.Sprintf("Cannot find name '%s'.", node.Identifier))
+			c.addCannotFindNameError(node, globalEnv, node.Identifier)
 		}
 	}
 	c.unresolvedTypeofNodes = nil
@@ -1426,6 +1518,10 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			}
 		}
 	}
+
+	// TS2454: definite assignment analysis. Runs last so every declarator's
+	// ComputedType has been resolved by the passes above.
+	c.checkDefiniteAssignment(program)
 
 	return c.errors
 }
@@ -1728,19 +1824,18 @@ func (c *Checker) visit(node parser.Node) {
 						if c.isEnumType(finalVariableType) {
 							// For enum assignments, use widened source type and no variable name
 							sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, finalVariableType)
-							c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
+							c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 						} else {
-							// For regular variable assignments, use literal types and include variable name
+							// For regular variable assignments, use literal types
 							sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, finalVariableType)
-							variableName := nameValueStr
-							c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", sourceTypeStr, variableName, targetTypeStr))
+							c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 						}
 					}
 				}
 			} else {
 				// --- No annotation: Infer type ---
 				if computedInitializerType != nil {
-					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral {
+					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral && isFreshLiteralExpression(declarator.Value) {
 						finalVariableType = types.GetWidenedType(computedInitializerType)
 						debugPrintf("// [Checker LetStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					} else {
@@ -1840,7 +1935,7 @@ func (c *Checker) visit(node parser.Node) {
 				}
 
 				if !assignable && !isEmptyArrayAssignment {
-					c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to constant '%s' of type '%s'", computedInitializerType.String(), declarator.Name.Value, finalType.String()))
+					c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", computedInitializerType.String(), finalType.String()))
 				}
 			} else {
 				// --- No annotation: Infer type ---
@@ -1974,19 +2069,18 @@ func (c *Checker) visit(node parser.Node) {
 						if c.isEnumType(finalVariableType) {
 							// For enum assignments, use widened source type and no variable name
 							sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, finalVariableType)
-							c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to variable of type '%s'", sourceTypeStr, targetTypeStr))
+							c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 						} else {
-							// For regular variable assignments, use literal types and include variable name
+							// For regular variable assignments, use literal types
 							sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, finalVariableType)
-							variableName := nameValueStr
-							c.addError(declarator.Value, fmt.Sprintf("cannot assign type '%s' to variable '%s' of type '%s'", sourceTypeStr, variableName, targetTypeStr))
+							c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 						}
 					}
 				}
 			} else {
 				// --- No annotation: Infer type ---
 				if computedInitializerType != nil {
-					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral {
+					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral && isFreshLiteralExpression(declarator.Value) {
 						finalVariableType = types.GetWidenedType(computedInitializerType)
 						debugPrintf("// [Checker VarStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					} else {
@@ -2144,6 +2238,7 @@ func (c *Checker) visit(node parser.Node) {
 
 		// 3. Visit statements within the new scope
 		c.blockDepth++
+		flow := c.newFlowNarrowState()
 		for i, stmt := range node.Statements { // Add index 'i' for logging
 			// --- DEBUG ---
 			debugPrintf("// [Checker Visit Block Loop] Index: %d, Stmt Type: %T, Stmt Ptr: %p\n", i, stmt, stmt)
@@ -2152,8 +2247,26 @@ func (c *Checker) visit(node parser.Node) {
 				continue // Skip visiting nil statement
 			}
 			// --- END DEBUG ---
-			c.visit(stmt)
+			// See flow_narrowing.go for why declarations/plain reassignment
+			// are special-cased and everything else invalidates tracking.
+			switch s := stmt.(type) {
+			case *parser.LetStatement:
+				c.visit(stmt)
+				flow.trackVarDeclarationNarrowing(c, s.Declarations)
+			case *parser.VarStatement:
+				c.visit(stmt)
+				flow.trackVarDeclarationNarrowing(c, s.Declarations)
+			case *parser.ConstStatement:
+				c.visit(stmt)
+				flow.trackVarDeclarationNarrowing(c, s.Declarations)
+			case *parser.ExpressionStatement:
+				flow.observeExpressionStatement(c, s)
+			default:
+				flow.invalidateAll()
+				c.visit(stmt)
+			}
 		}
+		flow.invalidateAll()
 
 		// --- DEBUG ---
 		debugPrintf("// [Checker Visit Block] Exiting Block. Restoring Env: %p (from current %p)\n", originalEnv, c.env)
@@ -2291,6 +2404,11 @@ func (c *Checker) visit(node parser.Node) {
 		// Assume this is visited in a value context.
 		// Type context identifiers are handled by resolveTypeAnnotation.
 
+		// Value context is exactly where a strict-mode reserved word is
+		// illegal; as a property name it would be fine, and those do not
+		// reach here.
+		c.checkStrictModeIdentifier(node)
+
 		// Safety check for incomplete nodes from parser errors - *REMOVED* (covered by check above)
 		// if node == nil {
 		// 	return
@@ -2341,7 +2459,7 @@ func (c *Checker) visit(node parser.Node) {
 				node.SetComputedType(types.Any)
 			} else {
 				debugPrintf("// [Checker Debug] visit(Identifier): '%s' not found in env %p\n", node.Value, c.env) // DEBUG
-				c.addError(node, fmt.Sprintf("undefined variable: %s", node.Value))
+				c.addCannotFindNameError(node, c.env, node.Value)
 				// Set computed type if node itself is not nil (already checked)
 				node.SetComputedType(types.Any) // Set to Any on error?
 			}
@@ -2354,6 +2472,12 @@ func (c *Checker) visit(node parser.Node) {
 				debugPrintf("// [Checker Debug] visit(Identifier): '%s' found in env %p, type: %s\n", node.Value, c.env, typ.String()) // DEBUG - Uncommented
 			} else {
 				debugPrintf("// [Checker Debug] visit(Identifier): '%s' found in env %p, type: <nil>\n", node.Value, c.env) // DEBUG - Nil type
+			}
+
+			// A live flow-narrowed type (see flow_narrowing.go) takes
+			// priority over the declared type from a straight-line read.
+			if narrowType, ok := c.flowNarrowOverlay[node.Value]; ok {
+				typ = narrowType
 			}
 
 			// node is guaranteed non-nil here
@@ -2500,257 +2624,7 @@ func (c *Checker) visit(node parser.Node) {
 		c.checkNonNullExpression(node)
 
 	case *parser.InfixExpression:
-		// --- UPDATED: Handle InfixExpression ---
-		c.visit(node.Left)
-
-		// For && expressions, apply narrowing from left operand before checking right
-		// This ensures that in `isObjectRecord(node) && node["fn"]`, the right side
-		// sees `node` narrowed by the type predicate on the left side.
-		// For || expressions, apply inverted narrowing (left is falsy, so right sees negation)
-		// This ensures that in `!c.items || c.items.length === 0`, the right side
-		// sees `c.items` narrowed to non-null/non-undefined.
-		var savedEnvForLogical *Environment
-		if node.Operator == "&&" {
-			savedEnvForLogical = c.env
-			narrowedEnv := c.applyTypeNarrowingFromCondition(node.Left)
-			if narrowedEnv != nil {
-				c.env = narrowedEnv
-			}
-		} else if node.Operator == "||" {
-			savedEnvForLogical = c.env
-			invertedEnv := c.applyInvertedTruthinessNarrowing(node.Left)
-			if invertedEnv != nil {
-				c.env = invertedEnv
-			}
-		}
-
-		c.visit(node.Right)
-
-		// Restore environment after && narrowing
-		if savedEnvForLogical != nil {
-			c.env = savedEnvForLogical
-		}
-
-		leftType := node.Left.GetComputedType()
-
-		if leftType == nil {
-			leftType = types.Any
-		}
-		rightType := node.Right.GetComputedType()
-
-		if rightType == nil {
-			rightType = types.Any
-		}
-
-		widenedLeftType := types.GetWidenedType(leftType)
-		widenedRightType := types.GetWidenedType(rightType)
-
-		debugPrintf("// [Checker Infix Pre-Check] Left : %T (%v)\n", leftType, leftType)
-		debugPrintf("// [Checker Infix Pre-Check] Right: %T (%v)\n", rightType, rightType)
-		debugPrintf("// [Checker Infix Pre-Check] Widened Left : %T (%v)\n", widenedLeftType, widenedLeftType)
-		debugPrintf("// [Checker Infix Pre-Check] Widened Right: %T (%v)\n", widenedRightType, widenedRightType)
-		debugPrintf("// [Checker Infix Pre-Check] Check Condition: %v\n", widenedLeftType != nil && widenedRightType != nil)
-
-		var resultType types.Type = types.Any // Default to Any on error
-		isAnyOperand := widenedLeftType == types.Any || widenedRightType == types.Any
-
-		if widenedLeftType != nil && widenedRightType != nil {
-			debugPrintf("// [Checker Infix Pre-Check] Proceeding with operator: %s\n", node.Operator)
-			switch node.Operator {
-			case "+":
-				leftIsNumeric := widenedLeftType == types.Number || types.IsNumericEnumLikeType(leftType)
-				rightIsNumeric := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
-				if isAnyOperand {
-					resultType = types.Any
-				} else if leftIsNumeric && rightIsNumeric {
-					resultType = types.Number
-				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
-					resultType = types.BigInt
-				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
-					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s' (cannot mix BigInt and other types)", node.Operator, widenedLeftType.String(), widenedRightType.String()))
-					// Keep resultType = types.Any (default)
-				} else if widenedLeftType == types.String && widenedRightType == types.String {
-					resultType = types.String
-					// <<< NEW: Handle String + Number/BigInt Coercion >>>
-				} else if (widenedLeftType == types.String && widenedRightType == types.Number) ||
-					(widenedLeftType == types.Number && widenedRightType == types.String) {
-					resultType = types.String
-				} else if (widenedLeftType == types.String && widenedRightType == types.BigInt) ||
-					(widenedLeftType == types.BigInt && widenedRightType == types.String) {
-					resultType = types.String
-				} else if (widenedLeftType == types.String && widenedRightType == types.Boolean) ||
-					(widenedLeftType == types.Boolean && widenedRightType == types.String) {
-					resultType = types.String
-				} else if (widenedLeftType == types.String && c.isStringConcatenatable(rightType)) ||
-					(c.isStringConcatenatable(leftType) && widenedRightType == types.String) {
-					// TypeScript allows string concatenation with most types (including unions)
-					resultType = types.String
-				} else if (widenedLeftType == types.Boolean || widenedLeftType == types.Null || widenedLeftType == types.Undefined) &&
-					(widenedRightType == types.Boolean || widenedRightType == types.Null || widenedRightType == types.Undefined || widenedRightType == types.Number) {
-					// JavaScript allows boolean/null/undefined in addition, they're coerced to numbers
-					// true → 1, false → 0, null → 0, undefined → NaN
-					resultType = types.Number
-				} else if (widenedRightType == types.Boolean || widenedRightType == types.Null || widenedRightType == types.Undefined) &&
-					(widenedLeftType == types.Number) {
-					// Number + boolean/null/undefined → number
-					resultType = types.Number
-				} else if c.isObjectType(widenedLeftType) || c.isObjectType(widenedRightType) {
-					// JavaScript allows objects in addition via ToPrimitive conversion
-					// Object + anything or anything + Object → depends on ToPrimitive result
-					// If ToPrimitive returns string, result is string; otherwise number
-					// Conservative: assume string since that's most common for objects
-					resultType = types.String
-				} else {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
-					// Keep resultType = types.Any (default)
-				}
-			case "-", "*", "/":
-				leftIsNumeric := widenedLeftType == types.Number || types.IsNumericEnumLikeType(leftType)
-				rightIsNumeric := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
-				if isAnyOperand {
-					resultType = types.Any
-				} else if leftIsNumeric && rightIsNumeric {
-					resultType = types.Number
-				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
-					resultType = types.BigInt
-				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
-					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s' (cannot mix BigInt and other types)", node.Operator, widenedLeftType.String(), widenedRightType.String()))
-				} else if (widenedLeftType == types.String && widenedRightType == types.Number) ||
-					(widenedLeftType == types.Number && widenedRightType == types.String) {
-					resultType = types.Number
-				} else if (widenedLeftType == types.String && widenedRightType == types.BigInt) ||
-					(widenedLeftType == types.BigInt && widenedRightType == types.String) {
-					resultType = types.BigInt
-				} else {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
-					// Keep resultType = types.Any (default)
-				}
-			// --- Handle % and ** type checking ---
-			case "%", "**":
-				leftIsNumeric := widenedLeftType == types.Number || types.IsNumericEnumLikeType(leftType)
-				rightIsNumeric := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
-				if isAnyOperand {
-					resultType = types.Any
-				} else if leftIsNumeric && rightIsNumeric {
-					resultType = types.Number
-				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
-					resultType = types.BigInt
-				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
-					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s' (cannot mix BigInt and other types)", node.Operator, widenedLeftType.String(), widenedRightType.String()))
-				} else {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
-				}
-
-			// --- Handle Bitwise/Shift Operators ---
-			case "&", "|", "^", "<<", ">>", ">>>":
-				leftIsNumericBit := widenedLeftType == types.Number || types.IsNumericEnumLikeType(leftType)
-				rightIsNumericBit := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
-				if isAnyOperand {
-					resultType = types.Number
-				} else if leftIsNumericBit && rightIsNumericBit {
-					resultType = types.Number
-				} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {
-					// Both operands are BigInt, result is BigInt.
-					resultType = types.BigInt
-				} else if (widenedLeftType == types.BigInt && widenedRightType == types.Number) ||
-					(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
-					// Mixing BigInt and Number is not allowed for bitwise/shift operations
-					c.addError(node, fmt.Sprintf("operator '%s' cannot mix BigInt and Number types", node.Operator))
-					// Keep resultType = types.Any (default)
-				} else {
-					// Check if either operand is an object type (can be converted via valueOf/toString)
-					leftIsObject := false
-					rightIsObject := false
-
-					switch widenedLeftType.(type) {
-					case *types.ObjectType:
-						leftIsObject = true
-					}
-
-					switch widenedRightType.(type) {
-					case *types.ObjectType:
-						rightIsObject = true
-					}
-
-					if leftIsObject && rightIsObject {
-						// Both operands are objects (can be converted via valueOf/toString)
-						resultType = types.Number
-					} else if leftIsObject && widenedRightType == types.Number {
-						// Left operand is object, right is number
-						resultType = types.Number
-					} else if widenedLeftType == types.Number && rightIsObject {
-						// Left operand is number, right is object
-						resultType = types.Number
-					} else {
-						// Operands are not compatible types for bitwise/shift operations.
-						c.addError(node, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
-						// Keep resultType = types.Any (default)
-					}
-				}
-			// --- END NEW ---
-
-			case "<", ">", "<=", ">=":
-				leftIsNumericCmp := widenedLeftType == types.Number || types.IsNumericEnumLikeType(leftType)
-				rightIsNumericCmp := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
-				if isAnyOperand {
-					resultType = types.Boolean
-				} else if leftIsNumericCmp && rightIsNumericCmp {
-					resultType = types.Boolean
-				} else if widenedLeftType == types.String && widenedRightType == types.String {
-					resultType = types.Boolean
-				} else {
-					c.addError(node.Right, fmt.Sprintf("operator '%s' cannot be applied to types '%s' and '%s'", node.Operator, widenedLeftType.String(), widenedRightType.String()))
-					resultType = types.Boolean
-				}
-			case "==", "!=", "===", "!==":
-				// Check for impossible comparisons before setting result type
-				c.checkImpossibleComparison(leftType, rightType, node.Operator, node)
-				// Comparison always results in boolean, even with 'any'
-				resultType = types.Boolean
-			case "in":
-				// Property existence check: "prop" in obj
-				c.checkInOperator(leftType, rightType, node)
-				resultType = types.Boolean
-			case "instanceof":
-				// Instance check: obj instanceof Constructor
-				c.checkInstanceofOperator(leftType, rightType, node)
-				resultType = types.Boolean
-			case "&&", "||":
-				// TODO: Implement Union types. For now, default to Any.
-				// If one operand is any, result is any.
-				if isAnyOperand {
-					resultType = types.Any
-				} else {
-					// Need proper type analysis here based on logic.
-					// For now, fallback to Any if not involving Any.
-					resultType = types.Any
-				}
-			case "??":
-				// TODO: Implement Union types. For now, default to Any.
-				// If left is any, result is any. If right is any and left is null/undef, result is any.
-				if isAnyOperand { // Simplified check for now
-					resultType = types.Any
-				} else {
-					// Need proper type analysis here based on null/undefined checks.
-					// For now, fallback to Any if not involving Any.
-					resultType = types.Any
-				}
-			case ",":
-				// Comma operator: evaluates both expressions but returns the type of the right expression
-				// (left, right) -> right_type
-				resultType = rightType
-				debugPrintf("// [Checker Comma] Left evaluated but discarded, result type: %s\n", rightType.String())
-			default:
-				debugPrintf("// [Checker Infix Pre-Check] Proceeding with operator: %s\n", node.Operator)
-				c.addError(node.Right, fmt.Sprintf("unsupported infix operator: %s", node.Operator))
-			}
-		} // else: Error already reported during operand check or types were nil
-
-		debugPrintf("// [Checker Infix] Node: %p (%s), Determined ResultType: %T (%v)\n", node, node.Operator, resultType, resultType)
-		node.SetComputedType(resultType)
+		c.checkInfixExpression(node, nil)
 
 	case *parser.IfExpression:
 		// --- UPDATED: Handle IfExpression with Type Narrowing ---
@@ -3145,7 +3019,7 @@ func (c *Checker) visit(node parser.Node) {
 
 				defaultValueType := param.DefaultValue.GetComputedType()
 				if defaultValueType != nil && !types.IsAssignable(defaultValueType, resolvedParamType) {
-					c.addError(param.DefaultValue, fmt.Sprintf("default value type '%s' is not assignable to parameter type '%s'", defaultValueType.String(), resolvedParamType.String()))
+					c.addErrorWithCode(param.DefaultValue, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", defaultValueType.String(), resolvedParamType.String()))
 				}
 			}
 
@@ -3441,7 +3315,7 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 		expectedType = c.resolveTypeAnnotation(node.TypeAnnotation)
 		// Verify that the value is assignable to the expected type
 		if !types.IsAssignable(valueType, expectedType) {
-			c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to type '%s'", valueType.String(), expectedType.String()))
+			c.addErrorWithCode(node.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", valueType.String(), expectedType.String()))
 		}
 	}
 
@@ -3587,18 +3461,25 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 		expectedType = c.resolveTypeAnnotation(node.TypeAnnotation)
 		// Verify that the value is assignable to the expected type
 		if node.Value != nil && expectedType != nil && valueType != nil && !types.IsAssignable(valueType, expectedType) {
-			c.addError(node.Value, fmt.Sprintf("cannot assign type '%s' to type '%s'", valueType.String(), expectedType.String()))
+			c.addErrorWithCode(node.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", valueType.String(), expectedType.String()))
 		}
 	}
 
 	// Check if the value is an object-like type (arrays are also objects in JavaScript)
 	var objType *types.ObjectType
 	var isArray bool
+	var unionObjMembers []*types.ObjectType
 	if ot, ok := valueType.(*types.ObjectType); ok {
 		objType = ot
 	} else if _, ok := valueType.(*types.ArrayType); ok {
 		// Arrays can be destructured as objects (e.g., {0: x, 1: y} from [10, 20])
 		isArray = true
+	} else if unionType, ok := valueType.(*types.UnionType); ok {
+		if members, allObjects := objectLikeUnionMembers(unionType); allObjects {
+			unionObjMembers = members
+		} else {
+			c.addError(node.Value, fmt.Sprintf("cannot destructure non-object type '%s'", valueType.String()))
+		}
 	} else if valueType != types.Any {
 		// Not an object-like type
 		c.addError(node.Value, fmt.Sprintf("cannot destructure non-object type '%s'", valueType.String()))
@@ -3619,7 +3500,13 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 				if pt, exists := c.resolveObjectMemberForDestructuring(objType, propName); exists {
 					propType = pt
 				} else if prop.Default == nil {
-					c.addError(prop.Key, fmt.Sprintf("property '%s' does not exist on type %s", propName, objType.String()))
+					c.addErrorWithCode(prop.Key, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propName, objType.String()))
+				}
+			} else if unionObjMembers != nil {
+				if pt, exists := c.resolveObjectMemberForDestructuringUnion(unionObjMembers, propName); exists {
+					propType = pt
+				} else if prop.Default == nil {
+					c.addErrorWithCode(prop.Key, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propName, valueType.String()))
 				}
 			} else if isArray {
 				// For arrays, numeric keys access array elements
@@ -3719,6 +3606,17 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		c.checkObjectLiteralWithContext(node, context)
 	case *parser.ArrowFunctionLiteral:
 		c.checkArrowFunctionLiteralWithContext(node, context)
+	case *parser.InfixExpression:
+		// The expected type only ever reaches the operand that decides the
+		// expression's value in context: for `&&`/`||`/`??` that is the right
+		// operand, since the left operand's type is fixed by its own
+		// expression and is never a hole the context could fill.
+		switch node.Operator {
+		case "&&", "||", "??":
+			c.checkInfixExpression(node, context)
+		default:
+			c.visit(node)
+		}
 	default:
 		// For other node types, use regular visit for now
 		c.visit(node)

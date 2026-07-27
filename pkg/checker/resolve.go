@@ -36,7 +36,7 @@ func (c *Checker) checkTypeRefDefined(node parser.Expression) {
 			"null", "undefined", "object", "symbol", "bigint":
 			return
 		}
-		c.addError(n, fmt.Sprintf("Cannot find name '%s'.", n.Value))
+		c.addCannotFindNameError(n, c.env, n.Value)
 	case *parser.GenericTypeRef:
 		// Check the base name
 		c.checkTypeRefDefined(n.Name)
@@ -1516,7 +1516,7 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 			c.unresolvedTypeofNodes = append(c.unresolvedTypeofNodes, node)
 			return &types.TypeofType{Identifier: node.Identifier}
 		}
-		c.addError(node, fmt.Sprintf("Cannot find name '%s'", path[0]))
+		c.addCannotFindNameError(node, c.env, path[0])
 		return nil
 	}
 
@@ -2881,7 +2881,7 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 			if t, _, found := c.env.Resolve(obj.Value); found {
 				containerType = t
 			} else {
-				c.addError(node.Object, fmt.Sprintf("Cannot find name '%s'", obj.Value))
+				c.addCannotFindNameError(node.Object, c.env, obj.Value)
 				return nil
 			}
 		}

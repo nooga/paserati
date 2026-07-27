@@ -13,9 +13,11 @@ func TestStrictPropertyInitEnabled(t *testing.T) {
 		want       bool
 	}{
 		{
-			name:       "default off",
+			// TS 6.0 turned `strict` on by default and regenerated the
+			// conformance baselines to match.
+			name:       "default on",
 			directives: TestDirectives{Raw: map[string]string{}},
-			want:       false,
+			want:       true,
 		},
 		{
 			name:       "strict enables",
@@ -36,6 +38,13 @@ func TestStrictPropertyInitEnabled(t *testing.T) {
 			name:       "explicit strict property init overrides strict",
 			directives: TestDirectives{Raw: map[string]string{"strict": "true", "strictpropertyinitialization": "false"}},
 			want:       false,
+		},
+		{
+			// Multi-value directives generate one baseline per value; the
+			// selected baseline is the one carrying errors, so `true` wins.
+			name:       "multi-value strict enables",
+			directives: TestDirectives{Raw: map[string]string{"strict": "true, false"}},
+			want:       true,
 		},
 	}
 

@@ -88,7 +88,11 @@ func (t *TextDecoderInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("encoding", types.String).
 		WithProperty("fatal", types.Boolean).
 		WithProperty("ignoreBOM", types.Boolean).
-		WithProperty("decode", types.NewSimpleFunction([]types.Type{}, types.String))
+		WithProperty("decode", types.NewFunctionType(&types.Signature{
+			ParameterTypes: []types.Type{types.Any},
+			ReturnType:     types.String,
+			OptionalParams: []bool{true},
+		}))
 
 	// TextDecoder constructor type - takes optional encoding string
 	ctorType := types.NewObjectType().

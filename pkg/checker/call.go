@@ -2,12 +2,25 @@ package checker
 
 import (
 	"fmt"
+	"github.com/nooga/paserati/pkg/errors"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
+
+// formatArityError renders a TypeScript-style TS2554 "Expected N arguments,
+// but got M." message. When min < max (some trailing parameters are
+// optional), the expected count is rendered as a "min-max" range, matching
+// how TypeScript reports arity errors for signatures with optional
+// parameters (e.g. "Expected 1-2 arguments, but got 0.").
+func formatArityError(min, max, actual int) string {
+	if min < max {
+		return fmt.Sprintf("Expected %d-%d arguments, but got %d.", min, max, actual)
+	}
+	return fmt.Sprintf("Expected %d arguments, but got %d.", min, actual)
+}
 
 // calculateEffectiveArgCount calculates the effective number of arguments,
 // expanding spread elements based on tuple types (following TypeScript behavior)
@@ -173,7 +186,7 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 					if effectiveArgIndex+j < len(paramTypes) {
 						paramType := paramTypes[effectiveArgIndex+j]
 						if !types.IsAssignable(elemType, paramType) {
-							c.addError(spreadElement, fmt.Sprintf("spread element %d: cannot assign type '%s' to parameter of type '%s'", j+1, elemType.String(), paramType.String()))
+							c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", elemType.String(), paramType.String()))
 							allOk = false
 						}
 					}
@@ -237,7 +250,7 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 					paramType = types.NewUnionType(paramType, types.Undefined)
 				}
 				if argType != nil && !c.isAssignableWithExpansion(argType, paramType) {
-					c.addError(argNode, fmt.Sprintf("argument %d: cannot assign type '%s' to parameter of type '%s'", effectiveArgIndex+1, argType.String(), paramType.String()))
+					c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), paramType.String()))
 					allOk = false
 				}
 			}
@@ -410,7 +423,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 									}
 
 									if !types.IsAssignable(argType, constructorSig.RestParameterType) {
-										c.addError(spreadElement, fmt.Sprintf("spread argument: cannot assign type '%s' to rest parameter type '%s'", argType.String(), constructorSig.RestParameterType.String()))
+										c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), constructorSig.RestParameterType.String()))
 									}
 								} else {
 									c.visitWithContext(argNode, &ContextualType{
@@ -424,7 +437,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 									}
 
 									if !types.IsAssignable(argType, variadicElementType) {
-										c.addError(argNode, fmt.Sprintf("variadic argument %d: cannot assign type '%s' to parameter element type '%s'", i+1, argType.String(), variadicElementType.String()))
+										c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicElementType.String()))
 									}
 								}
 							}
@@ -446,11 +459,11 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 				}
 
 				if !skipArityCheck && actualArgCount < minRequiredArgs {
-					c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minRequiredArgs, actualArgCount))
+					c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 				} else if !skipArityCheck && actualArgCount > expectedArgCount && expectedArgCount > 0 {
 					// Only enforce max args if constructor has declared parameters
 					// (allow extra args for constructors with no params - they may use 'arguments')
-					c.addError(node, fmt.Sprintf("Constructor expected at most %d arguments but got %d.", expectedArgCount, actualArgCount))
+					c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 				} else {
 					c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)
 				}
@@ -484,6 +497,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		return
 	}
 
+	c.noteIndirectCallCallee(node.Function)
 	c.visit(node.Function)
 	funcNodeType := node.Function.GetComputedType()
 	debugPrintf("// [Checker CallExpr] Function type resolved to: %T (%v)\n", funcNodeType, funcNodeType)
@@ -730,12 +744,12 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 							if c.isSpreadableIterableType(argType) {
 								spreadElementType := c.getSpreadElementType(argType)
 								if !types.IsAssignable(spreadElementType, variadicElementType) {
-									c.addError(spreadElement, fmt.Sprintf("spread element: cannot assign type '%s' to parameter element type '%s'", spreadElementType.String(), variadicElementType.String()))
+									c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", spreadElementType.String(), variadicElementType.String()))
 								}
 								continue
 							}
 							if !types.IsAssignable(argType, variadicParamType) {
-								c.addError(spreadElement, fmt.Sprintf("spread argument: cannot assign type '%s' to rest parameter type '%s'", argType.String(), variadicParamType.String()))
+								c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicParamType.String()))
 							}
 						} else {
 							// Regular arguments in variadic part
@@ -751,7 +765,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 							}
 
 							if !types.IsAssignable(argType, variadicElementType) {
-								c.addError(argNode, fmt.Sprintf("variadic argument %d: cannot assign type '%s' to parameter element type '%s'", i+1, argType.String(), variadicElementType.String()))
+								c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicElementType.String()))
 							}
 						}
 					}
@@ -776,13 +790,13 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		}
 
 		if !skipArityCheck && actualArgCount < minRequiredArgs {
-			c.addError(node, fmt.Sprintf("expected at least %d arguments, but got %d", minRequiredArgs, actualArgCount))
+			c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 			// Continue checking assignable args anyway? Let's stop if arity wrong.
+		} else if !skipArityCheck && actualArgCount > expectedArgCount {
+			// Too many arguments for a non-variadic signature. Mirrors the
+			// too-many check already done for super() and `new` calls above.
+			c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 		} else {
-			// Note: We don't check for too many arguments (actualArgCount > expectedArgCount) because:
-			// 1. JavaScript functions can always accept extra arguments (accessible via arguments object)
-			// 2. Generators often use this pattern with zero declared parameters
-			// 3. TypeScript only warns about this in strict mode, it's not a hard error
 			// Check argument types with spread expansion support
 			c.checkFixedArgumentsWithSpread(node.Arguments, funcSignature.ParameterTypes, funcSignature.IsVariadic, funcSignature.OptionalParams)
 		}

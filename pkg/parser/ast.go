@@ -80,6 +80,11 @@ type LetStatement struct {
 	Token        *lexer.Token     // The lexer.LET token
 	Declarations []*VarDeclarator // List of variable declarations
 	Declare      bool             // True for ambient declarations (declare let)
+	// Explicit resource management (ES2026). `using x = expr` and
+	// `await using x = expr` reuse this node with a const-like binding; the
+	// compiler lowers blocks containing them into try/finally dispose calls.
+	IsUsing      bool // True for `using x = expr`
+	IsAwaitUsing bool // True for `await using x = expr` (implies IsUsing)
 	// Legacy fields for backward compatibility (first declaration)
 	Name           *Identifier // The variable name
 	TypeAnnotation Expression  // Parsed type node (e.g., *Identifier)
@@ -115,10 +120,11 @@ func (ls *LetStatement) String() string {
 
 // VarDeclarator represents a single variable declaration within a var statement
 type VarDeclarator struct {
-	Name           *Identifier // The variable name
-	TypeAnnotation Expression  // Parsed type node (e.g., *Identifier)
-	Value          Expression  // The expression being assigned
-	ComputedType   types.Type  // Stores the resolved type from TypeAnnotation or Value
+	Name               *Identifier // The variable name
+	TypeAnnotation     Expression  // Parsed type node (e.g., *Identifier)
+	Value              Expression  // The expression being assigned
+	ComputedType       types.Type  // Stores the resolved type from TypeAnnotation or Value
+	DefiniteAssignment bool        // Whether the declarator has a `!` assertion (let x!: T)
 }
 
 // VarStatement represents a `var` variable declaration.

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/nooga/paserati/pkg/errors"
+
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -44,7 +46,7 @@ func (c *Checker) checkStrictPropertyInit(node *parser.ClassDeclaration) {
 		if propType == nil || strictInitTypePermits(propType) {
 			continue
 		}
-		c.addError(prop.Key, fmt.Sprintf(
+		c.addErrorWithCode(prop.Key, errors.TS2564, fmt.Sprintf(
 			"Property '%s' has no initializer and is not definitely assigned in the constructor.",
 			name,
 		))
@@ -82,7 +84,7 @@ func strictInitTypePermits(t types.Type) bool {
 	if t == nil {
 		return true
 	}
-	if t == types.Any || t == types.Undefined {
+	if t == types.Any || t == types.Undefined || t == types.Void {
 		return true
 	}
 	if u, ok := t.(*types.UnionType); ok {

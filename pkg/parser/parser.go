@@ -731,6 +731,10 @@ func (p *Parser) parseStatement() Statement {
 			(p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
 			return p.parseNamespaceDeclaration(false)
 		}
+		// `using x = expr` — explicit resource management (contextual keyword).
+		if p.startsUsingDeclaration() {
+			return p.parseUsingStatement(p.curToken, false)
+		}
 		// Check if this is a labeled statement (identifier followed by colon)
 		if p.peekTokenIs(lexer.COLON) {
 			return p.parseLabeledStatement()
@@ -747,10 +751,21 @@ func (p *Parser) parseStatement() Statement {
 		if p.peekTokenIs(lexer.COLON) && p.inAsyncFunction == 0 {
 			return p.parseLabeledStatement()
 		}
+		// `await using x = expr` — async explicit resource management.
+		if p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "using" && p.peekToken.Line == p.curToken.Line {
+			awaitToken := p.curToken
+			p.nextToken() // Move to 'using'
+			if p.startsUsingDeclaration() {
+				return p.parseUsingStatement(awaitToken, true)
+			}
+			// Not a declaration after all (e.g. `await using` as an expression);
+			// fall through with 'using' as the current token.
+			return p.parseExpressionStatement()
+		}
 		return p.parseExpressionStatement()
 	case lexer.ILLEGAL:
 		// Handle ILLEGAL tokens by adding error and advancing
-		p.addError(p.curToken, fmt.Sprintf("illegal token: %s", p.curToken.Literal))
+		p.addErrorWithCode(p.curToken, errors.TS1127, "Invalid character.")
 		p.nextToken() // Advance past the ILLEGAL token to avoid infinite loop
 		return nil
 	default:
@@ -1770,14 +1785,9 @@ func (p *Parser) parseLetStatement() Statement {
 		firstDeclarator := &VarDeclarator{}
 		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
-		// Optional Type Annotation
-		if p.peekTokenIs(lexer.COLON) {
-			p.nextToken() // Consume ':'
-			p.nextToken() // Consume token starting the type expression
-			firstDeclarator.TypeAnnotation = p.parseTypeExpression()
-			if firstDeclarator.TypeAnnotation == nil {
-				return nil
-			}
+		// Optional definite-assignment assertion and type annotation
+		if !p.parseDeclaratorAnnotation(firstDeclarator) {
+			return nil
 		}
 
 		// Allow omitting = value, defaulting to undefined
@@ -1812,14 +1822,9 @@ func (p *Parser) parseLetStatement() Statement {
 			declarator := &VarDeclarator{}
 			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
-			// Optional Type Annotation
-			if p.peekTokenIs(lexer.COLON) {
-				p.nextToken() // Consume ':'
-				p.nextToken() // Consume token starting the type expression
-				declarator.TypeAnnotation = p.parseTypeExpression()
-				if declarator.TypeAnnotation == nil {
-					return nil
-				}
+			// Optional definite-assignment assertion and type annotation
+			if !p.parseDeclaratorAnnotation(declarator) {
+				return nil
 			}
 
 			// Allow omitting = value, defaulting to undefined
@@ -1877,14 +1882,9 @@ func (p *Parser) parseConstStatement() Statement {
 		firstDeclarator := &VarDeclarator{}
 		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
-		// Optional Type Annotation
-		if p.peekTokenIs(lexer.COLON) {
-			p.nextToken() // Consume ':'
-			p.nextToken() // Consume the token starting the type expression
-			firstDeclarator.TypeAnnotation = p.parseTypeExpression()
-			if firstDeclarator.TypeAnnotation == nil {
-				return nil
-			}
+		// Optional definite-assignment assertion and type annotation
+		if !p.parseDeclaratorAnnotation(firstDeclarator) {
+			return nil
 		}
 
 		// const requires initializer
@@ -1908,14 +1908,9 @@ func (p *Parser) parseConstStatement() Statement {
 			declarator := &VarDeclarator{}
 			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
-			// Optional Type Annotation
-			if p.peekTokenIs(lexer.COLON) {
-				p.nextToken() // Consume ':'
-				p.nextToken() // Consume token starting the type expression
-				declarator.TypeAnnotation = p.parseTypeExpression()
-				if declarator.TypeAnnotation == nil {
-					return nil
-				}
+			// Optional definite-assignment assertion and type annotation
+			if !p.parseDeclaratorAnnotation(declarator) {
+				return nil
 			}
 
 			// const requires initializer for each declarator
@@ -1973,14 +1968,9 @@ func (p *Parser) parseVarStatement() Statement {
 		firstDeclarator := &VarDeclarator{}
 		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
-		// Optional Type Annotation
-		if p.peekTokenIs(lexer.COLON) {
-			p.nextToken() // Consume ':'
-			p.nextToken() // Consume token starting the type expression
-			firstDeclarator.TypeAnnotation = p.parseTypeExpression()
-			if firstDeclarator.TypeAnnotation == nil {
-				return nil
-			}
+		// Optional definite-assignment assertion and type annotation
+		if !p.parseDeclaratorAnnotation(firstDeclarator) {
+			return nil
 		}
 
 		// Allow omitting = value, defaulting to undefined
@@ -2015,14 +2005,9 @@ func (p *Parser) parseVarStatement() Statement {
 			declarator := &VarDeclarator{}
 			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
-			// Optional Type Annotation
-			if p.peekTokenIs(lexer.COLON) {
-				p.nextToken() // Consume ':'
-				p.nextToken() // Consume token starting the type expression
-				declarator.TypeAnnotation = p.parseTypeExpression()
-				if declarator.TypeAnnotation == nil {
-					return nil
-				}
+			// Optional definite-assignment assertion and type annotation
+			if !p.parseDeclaratorAnnotation(declarator) {
+				return nil
 			}
 
 			// Allow omitting = value, defaulting to undefined
@@ -4191,6 +4176,30 @@ func (p *Parser) peekIsIdentifierLike() bool {
 	return false
 }
 
+// parseDeclaratorAnnotation parses a declarator's optional definite-assignment
+// assertion (`let x!: T`) followed by its optional `: T` type annotation.
+// Current token is the declarator name on entry.
+//
+// The `!` only counts as an assertion when a type annotation follows it;
+// otherwise it is left for the expression parser so ASI can treat it as the
+// start of the next statement (`let x` newline `!foo()`).
+// Returns false if a type annotation was present but failed to parse.
+func (p *Parser) parseDeclaratorAnnotation(d *VarDeclarator) bool {
+	if p.peekTokenIs(lexer.BANG) && p.peekTokenIs2(lexer.COLON) {
+		d.DefiniteAssignment = true
+		p.nextToken() // Consume '!'
+	}
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken() // Consume ':'
+		p.nextToken() // Consume token starting the type expression
+		d.TypeAnnotation = p.parseTypeExpression()
+		if d.TypeAnnotation == nil {
+			return false
+		}
+	}
+	return true
+}
+
 // peekTokenIs2 checks if the token after peekToken matches the given type
 // This requires looking ahead 2 tokens from current position
 func (p *Parser) peekTokenIs2(t lexer.TokenType) bool {
@@ -4310,9 +4319,13 @@ func (p *Parser) peekError(t lexer.TokenType) {
 	if len(p.errors) >= 1000 {
 		return
 	}
-	msg := fmt.Sprintf("expected next token to be %s, got %s instead",
-		t, p.peekToken.Type)
-	p.addError(p.peekToken, msg)
+	// Punctuation token types are their own source text, which is what TS1005
+	// names; a missing identifier is TS1003 instead.
+	if t == lexer.IDENT {
+		p.addErrorWithCode(p.peekToken, errors.TS1003, "Identifier expected.")
+		return
+	}
+	p.addErrorWithCode(p.peekToken, errors.TS1005, fmt.Sprintf("'%s' expected.", t))
 }
 
 func (p *Parser) noPrefixParseFnError(t lexer.TokenType) {
@@ -4320,8 +4333,7 @@ func (p *Parser) noPrefixParseFnError(t lexer.TokenType) {
 	if len(p.errors) >= 1000 {
 		return
 	}
-	msg := fmt.Sprintf("no prefix parse function for %s found", t)
-	p.addError(p.curToken, msg)
+	p.addErrorWithCode(p.curToken, errors.TS1109, "Expression expected.")
 }
 
 // --- Precedence Helper ---
@@ -4568,9 +4580,31 @@ func (p *Parser) parseAsyncExpression() Expression {
 		}
 	}
 
-	// If we get here, it's an invalid async expression
-	p.addError(asyncToken, fmt.Sprintf("unexpected token after 'async': %s", p.curToken.Type))
+	// If we get here, it's an invalid async expression. When `async` precedes a
+	// declaration that has no asynchronous form — a class, enum, interface or
+	// module — TypeScript reads it as a misplaced modifier rather than a broken
+	// expression, and says so at the `async` itself.
+	if p.startsDeclarationWithNoAsyncForm() {
+		p.addErrorWithCode(asyncToken, errors.TS1042, "'async' modifier cannot be used here.")
+	} else {
+		p.addError(asyncToken, fmt.Sprintf("unexpected token after 'async': %s", p.curToken.Type))
+	}
 	return &Identifier{Token: asyncToken, Value: "async"}
+}
+
+// startsDeclarationWithNoAsyncForm reports whether the current token begins a
+// declaration that can never be asynchronous. `async` in front of one of these
+// is a misplaced modifier (TS1042) rather than a malformed expression.
+// `namespace` and `module` are contextual keywords, so they arrive as
+// identifiers.
+func (p *Parser) startsDeclarationWithNoAsyncForm() bool {
+	switch p.curToken.Type {
+	case lexer.CLASS, lexer.ENUM, lexer.INTERFACE:
+		return true
+	case lexer.IDENT:
+		return p.curToken.Literal == "namespace" || p.curToken.Literal == "module"
+	}
+	return false
 }
 
 // parseAwaitExpression handles await expressions
@@ -6272,6 +6306,18 @@ func (p *Parser) parseForStatement() Statement {
 		p.nextToken()
 		return p.parseForStatementOrForOf(forToken, isAsync)
 	}
+	// `for (using d of xs)` / `for (using d = e;;)`, and the `await using`
+	// forms. `using` is contextual, so require an actual binding name after it:
+	// `for (using of xs)` is a for-of over a variable named `using`, and
+	// `for (await foo; ...)` is an await expression, not a declaration.
+	if p.startsUsingDeclarationAt(0) {
+		p.nextToken() // Advance to 'using'
+		return p.parseForStatementOrForOf(forToken, isAsync)
+	}
+	if p.peekTokenIs(lexer.AWAIT) && p.startsUsingDeclarationAt(1) {
+		p.nextToken() // Advance to 'await'
+		return p.parseForStatementOrForOf(forToken, isAsync)
+	}
 
 	// For destructuring patterns or parenthesized expressions, check if followed by OF/IN
 	if p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) || p.peekTokenIs(lexer.LPAREN) {
@@ -6672,6 +6718,19 @@ func (p *Parser) parseMemberExpression(left Expression) Expression {
 
 // addError creates a SyntaxError and appends it to the parser's error list.
 // Limits the number of errors to prevent memory exhaustion from infinite parsing loops.
+// addErrorWithCode reports a syntax error tagged with the TypeScript error
+// code it corresponds to. Messages on coded diagnostics must match
+// TypeScript's wording exactly — see checker.addErrorWithCode.
+func (p *Parser) addErrorWithCode(tok *lexer.Token, code string, msg string) {
+	before := len(p.errors)
+	p.addError(tok, msg)
+	if len(p.errors) > before {
+		if syntaxErr, ok := p.errors[len(p.errors)-1].(*errors.SyntaxError); ok {
+			syntaxErr.ErrorCode = code
+		}
+	}
+}
+
 func (p *Parser) addError(tok *lexer.Token, msg string) {
 	// Prevent memory exhaustion from infinite error generation
 	const maxErrors = 1000
@@ -9159,6 +9218,43 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 				return nil
 			}
 		}
+	} else if p.startsUsingDeclarationForLoop() || p.startsAwaitUsingDeclaration() {
+		// `for (using d of xs)` disposes each iteration; `for (using d = e;;)`
+		// disposes when the loop completes. Only a plain binding name is
+		// allowed — no destructuring patterns.
+		usingToken := p.curToken
+		isAwaitUsing := p.startsAwaitUsingDeclaration()
+		if isAwaitUsing {
+			p.nextToken() // Move to 'using'
+		}
+		p.nextToken() // Move past 'using' to the binding name
+
+		usingStmt := &LetStatement{Token: usingToken, IsUsing: true, IsAwaitUsing: isAwaitUsing}
+		declarator := &VarDeclarator{}
+		if p.curTokenIs(lexer.LBRACKET) || p.curTokenIs(lexer.LBRACE) {
+			// See parseUsingStatement in parse_using.go: a binding pattern
+			// isn't a valid `using` target, but is parsed anyway (as a
+			// throwaway pattern) so the loop head still parses.
+			patternToken := p.curToken
+			kind := "'using'"
+			if isAwaitUsing {
+				kind = "'await using'"
+			}
+			p.addErrorWithCode(patternToken, errors.TS1492, fmt.Sprintf("%s declarations may not have binding patterns.", kind))
+			if patternToken.Type == lexer.LBRACKET {
+				p.parseArrayParameterPattern()
+			} else {
+				p.parseObjectParameterPattern()
+			}
+			declarator.Name = &Identifier{Token: patternToken, Value: "<pattern>"}
+			varName = ""
+		} else {
+			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			varName = p.curToken.Literal
+		}
+		usingStmt.Declarations = []*VarDeclarator{declarator}
+		usingStmt.Name = declarator.Name
+		varStmt = usingStmt
 	} else if p.curTokenIs(lexer.CONST) {
 		constToken := p.curToken
 		p.nextToken() // Move past CONST

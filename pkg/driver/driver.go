@@ -84,6 +84,37 @@ func (p *Paserati) SetSkipStrictPropertyInit(skip bool) {
 	p.checker.SetSkipStrictPropertyInit(skip)
 }
 
+// SetSkipDefiniteAssignment controls whether TS2454 is emitted. Default false
+// (emit). Used by paserati-testtsc to opt out per-file based on TS directives.
+func (p *Paserati) SetSkipDefiniteAssignment(skip bool) {
+	p.checker.SetSkipDefiniteAssignment(skip)
+}
+
+// SetAllowUnreachableCode mirrors --allowUnreachableCode, which suppresses
+// TS2695. Default false (emit). Used by paserati-testtsc to opt out per-file
+// based on TS directives.
+func (p *Paserati) SetAllowUnreachableCode(allow bool) {
+	p.checker.SetAllowUnreachableCode(allow)
+}
+
+// SetStrictNullChecks mirrors --strictNullChecks, which gates TS18050.
+// Default true, matching TypeScript 6.0.
+func (p *Paserati) SetStrictNullChecks(strict bool) {
+	p.checker.SetStrictNullChecks(strict)
+}
+
+// SetAlwaysStrict mirrors --alwaysStrict, which gates TS1212. Part of the
+// strict family, so on by default as of TypeScript 6.0.
+func (p *Paserati) SetAlwaysStrict(strict bool) {
+	p.checker.SetAlwaysStrict(strict)
+}
+
+// SetIsModule tells the checker the source is a module, which selects TS1214
+// over TS1212 when reporting a strict-mode reserved word.
+func (p *Paserati) SetIsModule(isModule bool) {
+	p.checker.SetIsModule(isModule)
+}
+
 // SetNoImplicitOverride controls whether overriding class members require an
 // explicit `override` modifier.
 func (p *Paserati) SetNoImplicitOverride(enabled bool) {
