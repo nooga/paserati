@@ -1,6 +1,9 @@
 package parser
 
 import (
+	"fmt"
+
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
 )
 
@@ -16,6 +19,12 @@ import (
 // declaration. Requires the literal `using` followed by a binding identifier on
 // the same line — a LineTerminator makes ASI treat `using` as an expression,
 // and `using of` is excluded so `for (using of xs)` still parses as for-of.
+//
+// Unlike startsUsingDeclarationForLoop, this requires an actual identifier:
+// at statement level `using [a] = null;` is not a using declaration with an
+// invalid pattern at all — real TypeScript parses it as the member
+// expression `using[a] = null`, since nothing here forces `using` to be a
+// declaration keyword the way a for-loop head does.
 func (p *Parser) startsUsingDeclaration() bool {
 	if p.curToken.Type != lexer.IDENT || p.curToken.Literal != "using" {
 		return false
@@ -27,6 +36,26 @@ func (p *Parser) startsUsingDeclaration() bool {
 		return false
 	}
 	return p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)
+}
+
+// startsUsingDeclarationForLoop is startsUsingDeclaration's for-loop-head
+// counterpart: a for-of/for-in head unambiguously expects a binding target,
+// so `for (using {} of xs)` does commit to a using declaration even though
+// `{}` isn't a valid one — TypeScript reports TS1492 for it rather than
+// treating `using` as a plain identifier. Called only after the caller has
+// already advanced onto the `using` token itself.
+func (p *Parser) startsUsingDeclarationForLoop() bool {
+	if p.curToken.Type != lexer.IDENT || p.curToken.Literal != "using" {
+		return false
+	}
+	if p.peekToken.Line != p.curToken.Line {
+		return false
+	}
+	if p.peekTokenIs(lexer.OF) {
+		return false
+	}
+	return p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type) ||
+		p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE)
 }
 
 // startsUsingDeclarationAt reports whether a `using` declaration begins at
@@ -45,7 +74,8 @@ func (p *Parser) startsUsingDeclarationAt(at int) bool {
 	if name.Line != tok.Line || name.Type == lexer.OF {
 		return false
 	}
-	return name.Type == lexer.IDENT || p.isKeywordThatCanBeIdentifier(name.Type)
+	return name.Type == lexer.IDENT || p.isKeywordThatCanBeIdentifier(name.Type) ||
+		name.Type == lexer.LBRACKET || name.Type == lexer.LBRACE
 }
 
 // startsAwaitUsingDeclaration reports whether the current token begins an
@@ -77,12 +107,33 @@ func (p *Parser) parseUsingStatement(startToken *lexer.Token, isAwait bool) Stat
 	}
 
 	for {
-		if !p.expectPeekIdentifierOrKeyword() {
-			return nil
+		var declarator *VarDeclarator
+		if p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) {
+			// A binding pattern isn't a valid `using` target — there is no
+			// single resource to dispose. Report it, then parse the pattern
+			// anyway (reusing the parameter-pattern parser purely to consume
+			// it correctly) so the rest of the declaration, and any
+			// statements after it, still parse.
+			p.nextToken() // Move onto '[' or '{'
+			patternToken := p.curToken
+			kind := "'using'"
+			if isAwait {
+				kind = "'await using'"
+			}
+			p.addErrorWithCode(patternToken, errors.TS1492, fmt.Sprintf("%s declarations may not have binding patterns.", kind))
+			if patternToken.Type == lexer.LBRACKET {
+				p.parseArrayParameterPattern()
+			} else {
+				p.parseObjectParameterPattern()
+			}
+			declarator = &VarDeclarator{Name: &Identifier{Token: patternToken, Value: "<pattern>"}}
+		} else {
+			if !p.expectPeekIdentifierOrKeyword() {
+				return nil
+			}
+			declarator = &VarDeclarator{}
+			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 		}
-
-		declarator := &VarDeclarator{}
-		declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
 		if !p.parseDeclaratorAnnotation(declarator) {
 			return nil

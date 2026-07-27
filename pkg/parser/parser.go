@@ -9218,7 +9218,7 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 				return nil
 			}
 		}
-	} else if p.startsUsingDeclaration() || p.startsAwaitUsingDeclaration() {
+	} else if p.startsUsingDeclarationForLoop() || p.startsAwaitUsingDeclaration() {
 		// `for (using d of xs)` disposes each iteration; `for (using d = e;;)`
 		// disposes when the loop completes. Only a plain binding name is
 		// allowed — no destructuring patterns.
@@ -9231,11 +9231,30 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 
 		usingStmt := &LetStatement{Token: usingToken, IsUsing: true, IsAwaitUsing: isAwaitUsing}
 		declarator := &VarDeclarator{}
-		declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		if p.curTokenIs(lexer.LBRACKET) || p.curTokenIs(lexer.LBRACE) {
+			// See parseUsingStatement in parse_using.go: a binding pattern
+			// isn't a valid `using` target, but is parsed anyway (as a
+			// throwaway pattern) so the loop head still parses.
+			patternToken := p.curToken
+			kind := "'using'"
+			if isAwaitUsing {
+				kind = "'await using'"
+			}
+			p.addErrorWithCode(patternToken, errors.TS1492, fmt.Sprintf("%s declarations may not have binding patterns.", kind))
+			if patternToken.Type == lexer.LBRACKET {
+				p.parseArrayParameterPattern()
+			} else {
+				p.parseObjectParameterPattern()
+			}
+			declarator.Name = &Identifier{Token: patternToken, Value: "<pattern>"}
+			varName = ""
+		} else {
+			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+			varName = p.curToken.Literal
+		}
 		usingStmt.Declarations = []*VarDeclarator{declarator}
 		usingStmt.Name = declarator.Name
 		varStmt = usingStmt
-		varName = p.curToken.Literal
 	} else if p.curTokenIs(lexer.CONST) {
 		constToken := p.curToken
 		p.nextToken() // Move past CONST
