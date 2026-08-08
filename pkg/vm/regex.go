@@ -64,7 +64,12 @@ func NewRegExp(pattern, flags string) (Value, error) {
 		return Undefined, err
 	}
 
-	// Compile the Go regex
+	// Deliberately NO regexp2 fallback here. RE2 rejecting a pattern is how
+	// this path reports the SyntaxError that ECMAScript requires for the
+	// modifier and named-group early errors; routing those to regexp2, which
+	// accepts them, silently loses 27 test262 cases. Constructs RE2 cannot
+	// express (lookahead, backreferences) therefore still throw from the
+	// constructor while working in a literal — see the ticket.
 	compiledRegex, err := regexp.Compile(goPattern)
 	if err != nil {
 		return Undefined, err
@@ -602,6 +607,107 @@ func parseHex(s string) int {
 }
 
 // translateJSFlagsToGo converts JavaScript regex flags to Go inline flag syntax
+// ECMAScript WhiteSpace ∪ LineTerminator, spelled as RE2 character-class
+// members. \p{Zs} carries SP, U+00A0 and the rest of the Unicode space
+// separators; the explicit codepoints are the members outside that category.
+const ecmaSpaceMembers = `\t\n\v\f\r\x{2028}\x{2029}\x{feff}\p{Zs}`
+
+// The complement of ecmaSpaceMembers, written out as ranges. RE2 has no set
+// complement INSIDE a character class, so `[a\S]` cannot be spelled with a
+// negation and needs the ranges enumerated instead. Kept adjacent to the set
+// above: the two must be edited together.
+const ecmaNonSpaceMembers = `\x{0}-\x{8}\x{e}-\x{1f}\x{21}-\x{9f}\x{a1}-\x{167f}` +
+	`\x{1681}-\x{1fff}\x{200b}-\x{2027}\x{202a}-\x{202e}\x{2030}-\x{205e}` +
+	`\x{2060}-\x{2fff}\x{3001}-\x{fefe}\x{ff00}-\x{10ffff}`
+
+// LineTerminator — the set `.` must never match unless the s flag is set.
+const ecmaLineTerminators = `\n\r\x{2028}\x{2029}`
+
+// hasInlineDotAll reports whether the pattern turns dotAll on for part of
+// itself with an inline modifier group — `(?s:...)`, `(?ims:...)`, `(?s-i:...)`.
+//
+// The `.` rewrite is scope-blind, so on these patterns it would clamp a `.`
+// that the modifier had just widened. Rewriting is skipped wholesale rather
+// than tracked per group: the modifiers nest, and getting the scope subtly
+// wrong is worse than leaving Go's semantics in place for a rare construct.
+func hasInlineDotAll(pattern string) bool {
+	for i := 0; i+2 < len(pattern); i++ {
+		if pattern[i] != '(' || pattern[i+1] != '?' {
+			continue
+		}
+		for j := i + 2; j < len(pattern); j++ {
+			c := pattern[j]
+			if c == 's' {
+				return true
+			}
+			// The modifier run is letters and one optional '-'; anything else
+			// ends it, and this was some other (?...) construct.
+			if !(c >= 'a' && c <= 'z') && c != '-' {
+				break
+			}
+		}
+	}
+	return false
+}
+
+// rewriteECMAClasses gives \s, \S and . their ECMAScript meanings under RE2.
+//
+// Go's \s is [\t\n\f\r ] and Go's . is "anything but \n". ECMAScript's \s also
+// carries U+00A0, U+FEFF and every Zs, and its . additionally excludes U+2028
+// and U+2029. The danger is that RE2 ACCEPTS such a pattern and compiles it to
+// the wrong language silently, so this rewrites rather than rejects.
+//
+// The rewrite is total — it never rejects — because this path has no fallback
+// engine: RE2 refusing a pattern is how the caller reports a SyntaxError, so a
+// rewrite that gave up here would turn a valid regex into a thrown error.
+//
+// Operates on bytes: every construct it inspects is ASCII, and UTF-8
+// continuation bytes are >= 0x80, so multi-byte runes copy through untouched.
+func rewriteECMAClasses(pattern string, dotAll bool) string {
+	var b strings.Builder
+	b.Grow(len(pattern))
+	inClass := false
+	for i := 0; i < len(pattern); i++ {
+		c := pattern[i]
+		if c == '\\' && i+1 < len(pattern) {
+			switch pattern[i+1] {
+			case 's':
+				if inClass {
+					b.WriteString(ecmaSpaceMembers)
+				} else {
+					b.WriteString("[" + ecmaSpaceMembers + "]")
+				}
+			case 'S':
+				if inClass {
+					b.WriteString(ecmaNonSpaceMembers)
+				} else {
+					b.WriteString("[^" + ecmaSpaceMembers + "]")
+				}
+			default:
+				// Any other escape passes through with its operand, which is
+				// also what keeps \\ from being read as an escaping backslash.
+				b.WriteByte(c)
+				b.WriteByte(pattern[i+1])
+			}
+			i++
+			continue
+		}
+		switch {
+		case c == '[' && !inClass:
+			inClass = true
+			b.WriteByte(c)
+		case c == ']' && inClass:
+			inClass = false
+			b.WriteByte(c)
+		case c == '.' && !inClass && !dotAll:
+			b.WriteString("[^" + ecmaLineTerminators + "]")
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
 func translateJSFlagsToGo(pattern, flags string) (string, error) {
 	// Preprocess Unicode escapes (\uXXXX, \xXX) that Go's regexp doesn't support
 	pattern = preprocessUnicodeEscapes(pattern)
@@ -615,7 +721,10 @@ func translateJSFlagsToGo(pattern, flags string) (string, error) {
 		}
 	}
 
-	goPattern := pattern
+	// Give \s, \S and . ECMAScript semantics before RE2 sees them. Under the s
+	// flag `.` already matches every character, so it needs no rewrite.
+	dotAll := strings.Contains(flags, "s") || hasInlineDotAll(pattern)
+	goPattern := rewriteECMAClasses(pattern, dotAll)
 
 	// Apply flags as Go inline flags (prepended to pattern)
 	var flagPrefixes []string
