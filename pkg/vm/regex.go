@@ -23,8 +23,8 @@ type cachedCompiledRegex struct {
 // Uses Go's standard regexp (RE2) for simple patterns, falls back to regexp2 for
 // advanced features like lookahead and backreferences.
 type RegExpObject struct {
-	Object                        // Embed the base Object for properties and prototype
-	compiledRegex  *regexp.Regexp // Go's compiled regex engine (fast, RE2)
+	Object                         // Embed the base Object for properties and prototype
+	compiledRegex  *regexp.Regexp  // Go's compiled regex engine (fast, RE2)
 	compiledRegex2 *regexp2.Regexp // Fallback regex engine (slower, full ECMAScript support)
 	source         string          // Original pattern string (without slashes)
 	flags          string          // JavaScript flags (g, i, m, s, u, y)
@@ -623,31 +623,46 @@ const ecmaNonSpaceMembers = `\x{0}-\x{8}\x{e}-\x{1f}\x{21}-\x{9f}\x{a1}-\x{167f}
 // LineTerminator — the set `.` must never match unless the s flag is set.
 const ecmaLineTerminators = `\n\r\x{2028}\x{2029}`
 
-// hasInlineDotAll reports whether the pattern turns dotAll on for part of
-// itself with an inline modifier group — `(?s:...)`, `(?ims:...)`, `(?s-i:...)`.
+// modifierRun reads an inline modifier run starting at the '(' of a `(?...`
+// construct: `(?s:`, `(?ims:`, `(?s-i:`, `(?-s)`. It returns the run's letters,
+// whether the construct opens a group (the `:` form rather than the `)` form),
+// and the run's length, or ok=false when this is some other `(?` construct —
+// `(?:`, `(?=`, `(?!`, `(?<name>`.
 //
-// The `.` rewrite is scope-blind, so on these patterns it would clamp a `.`
-// that the modifier had just widened. Rewriting is skipped wholesale rather
-// than tracked per group: the modifiers nest, and getting the scope subtly
-// wrong is worse than leaving Go's semantics in place for a rare construct.
-func hasInlineDotAll(pattern string) bool {
-	for i := 0; i+2 < len(pattern); i++ {
-		if pattern[i] != '(' || pattern[i+1] != '?' {
+// `(?:` reads as an empty run that opens a group, which is exactly right: a
+// plain non-capturing group changes no modifiers and still scopes the ones
+// inside it.
+func modifierRun(pattern string, i int) (run string, opensGroup bool, n int, ok bool) {
+	if i+1 >= len(pattern) || pattern[i] != '(' || pattern[i+1] != '?' {
+		return "", false, 0, false
+	}
+	j := i + 2
+	for j < len(pattern) {
+		c := pattern[j]
+		if c >= 'a' && c <= 'z' || c == '-' {
+			j++
 			continue
 		}
-		for j := i + 2; j < len(pattern); j++ {
-			c := pattern[j]
-			if c == 's' {
-				return true
-			}
-			// The modifier run is letters and one optional '-'; anything else
-			// ends it, and this was some other (?...) construct.
-			if !(c >= 'a' && c <= 'z') && c != '-' {
-				break
-			}
+		if c == ':' || c == ')' {
+			return pattern[i+2 : j], c == ':', j - i + 1, true
 		}
+		return "", false, 0, false
 	}
-	return false
+	return "", false, 0, false
+}
+
+// applyModifiers folds one `add-remove` run into the current dotAll state.
+// Only `s` is read: `i` and `m` reach RE2 unchanged and mean the same thing
+// there, while `s` is the one whose meaning this file has to correct.
+func applyModifiers(run string, dotAll bool) bool {
+	add, remove, _ := strings.Cut(run, "-")
+	if strings.ContainsRune(add, 's') {
+		dotAll = true
+	}
+	if strings.ContainsRune(remove, 's') {
+		dotAll = false
+	}
+	return dotAll
 }
 
 // rewriteECMAClasses gives \s, \S and . their ECMAScript meanings under RE2.
@@ -663,10 +678,25 @@ func hasInlineDotAll(pattern string) bool {
 //
 // Operates on bytes: every construct it inspects is ASCII, and UTF-8
 // continuation bytes are >= 0x80, so multi-byte runes copy through untouched.
+// dotAll is the state the `s` FLAG establishes; inline `(?s:...)` and
+// `(?-s:...)` groups move it per scope from there.
+//
+// Scope tracking is what makes `.` correct in the presence of a modifier, and it
+// used to be skipped: any inline `s` anywhere disabled the rewrite for the whole
+// pattern, so a `.` outside the group fell back to Go's meaning and matched \r,
+// U+2028 and U+2029 — the exact characters this function exists to exclude.
+//
+// The rewrite is what makes the tracking safe. A `.` in a dotAll-OFF scope
+// becomes an explicit class, and a class cannot be widened by a surrounding
+// `(?s)`; only a bare `.` can. So the two states end up independent, which is
+// why the caller can set `(?s)` globally without reaching the dots that must
+// stay narrow.
 func rewriteECMAClasses(pattern string, dotAll bool) string {
 	var b strings.Builder
 	b.Grow(len(pattern))
 	inClass := false
+	// One entry per open group, holding the state to restore when it closes.
+	var scopes []bool
 	for i := 0; i < len(pattern); i++ {
 		c := pattern[i]
 		if c == '\\' && i+1 < len(pattern) {
@@ -699,6 +729,31 @@ func rewriteECMAClasses(pattern string, dotAll bool) string {
 		case c == ']' && inClass:
 			inClass = false
 			b.WriteByte(c)
+		case c == '(' && !inClass:
+			// Parens inside a class are literal, which is why this is gated on
+			// !inClass: `[(]` must not open a scope that never closes.
+			if run, opensGroup, n, ok := modifierRun(pattern, i); ok {
+				if opensGroup {
+					scopes = append(scopes, dotAll)
+					dotAll = applyModifiers(run, dotAll)
+				} else {
+					// The `(?flags)` form sets modifiers for the REST of the
+					// enclosing group rather than opening one, so it changes the
+					// state without pushing. The enclosing `)` restores it.
+					dotAll = applyModifiers(run, dotAll)
+				}
+				b.WriteString(pattern[i : i+n])
+				i += n - 1
+				continue
+			}
+			scopes = append(scopes, dotAll)
+			b.WriteByte(c)
+		case c == ')' && !inClass:
+			if len(scopes) > 0 {
+				dotAll = scopes[len(scopes)-1]
+				scopes = scopes[:len(scopes)-1]
+			}
+			b.WriteByte(c)
 		case c == '.' && !inClass && !dotAll:
 			b.WriteString("[^" + ecmaLineTerminators + "]")
 		default:
@@ -721,10 +776,10 @@ func translateJSFlagsToGo(pattern, flags string) (string, error) {
 		}
 	}
 
-	// Give \s, \S and . ECMAScript semantics before RE2 sees them. Under the s
-	// flag `.` already matches every character, so it needs no rewrite.
-	dotAll := strings.Contains(flags, "s") || hasInlineDotAll(pattern)
-	goPattern := rewriteECMAClasses(pattern, dotAll)
+	// Give \s, \S and . ECMAScript semantics before RE2 sees them. The rewrite
+	// tracks inline `(?s:)` / `(?-s:)` scopes itself, so it takes the s FLAG as
+	// the starting state rather than a pattern-wide verdict.
+	goPattern := rewriteECMAClasses(pattern, strings.Contains(flags, "s"))
 
 	// Apply flags as Go inline flags (prepended to pattern)
 	var flagPrefixes []string
@@ -735,9 +790,11 @@ func translateJSFlagsToGo(pattern, flags string) (string, error) {
 	if strings.Contains(flags, "m") {
 		flagPrefixes = append(flagPrefixes, "(?m)")
 	}
-	if strings.Contains(flags, "s") {
-		flagPrefixes = append(flagPrefixes, "(?s)")
-	}
+	// Unconditional, where this used to follow the s flag. Every `.` that must
+	// stay narrow is now an explicit class, which `(?s)` cannot widen, so the
+	// only dots left for it to reach are the ones a modifier group turned on —
+	// including inside `(?s:...)` in a pattern carrying no s flag at all.
+	flagPrefixes = append(flagPrefixes, "(?s)")
 
 	// Note: 'g' (global) and 'y' (sticky) are handled at the JavaScript level,
 	// not in Go's regex engine. 'u' (unicode) is default in Go.
