@@ -20,6 +20,65 @@ var ErrVMUnwinding = errors.New("VM unwinding")
 
 // requireObjectCoercible checks if a value can be converted to an object (not null or undefined).
 // Returns an error if the value is null or undefined, nil otherwise.
+// ECMAScript indexes a string by UTF-16 code unit. Go indexes it by byte. The
+// two agree for ASCII and nowhere else, so every method below that reached for
+// len(s) or s[i:j] was returning byte offsets into a UTF-8 buffer: one `é` was
+// enough for "abcédef".substring(4) to start mid-character and hand back the
+// continuation byte 0xA9, and for indexOf to report 5 where the spec says 4.
+//
+// The engine already had the right primitive — String.prototype.length and
+// charAt go through vm.StringToUTF16 — so this is about routing the rest of the
+// surface through the same coordinate system rather than inventing one.
+//
+// Offsets are converted rather than working in []uint16 throughout: conversion
+// is a linear scan, where materializing every string as UTF-16 to slice it would
+// allocate on every call for the ASCII case that dominates.
+
+// utf16Len is the string's length in UTF-16 code units — what .length reports.
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n++
+		if r > 0xFFFF {
+			n++ // astral characters occupy a surrogate pair
+		}
+	}
+	return n
+}
+
+// utf16ToByteOffset maps a UTF-16 code unit offset to a byte offset, clamped to
+// the string. An offset landing between the halves of a surrogate pair rounds
+// up to the end of that character: a UTF-8 buffer cannot hold half of one, and
+// rounding up keeps the result a valid string rather than a broken sequence.
+func utf16ToByteOffset(s string, u16 int) int {
+	if u16 <= 0 {
+		return 0
+	}
+	n := 0
+	for i, r := range s {
+		if n >= u16 {
+			return i
+		}
+		n++
+		if r > 0xFFFF {
+			n++
+		}
+	}
+	return len(s)
+}
+
+// byteToUTF16Offset is the inverse, for reporting an index found by a byte-wise
+// search back to the caller in the units the caller thinks in.
+func byteToUTF16Offset(s string, b int) int {
+	if b <= 0 {
+		return 0
+	}
+	if b > len(s) {
+		b = len(s)
+	}
+	return utf16Len(s[:b])
+}
+
 func requireObjectCoercible(vmInstance *vm.VM, val vm.Value, methodName string) error {
 	if val.Type() == vm.TypeNull {
 		return vmInstance.NewTypeError(fmt.Sprintf("String.prototype.%s called on null or undefined", methodName))
@@ -573,7 +632,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		length := len(thisStr)
+		length := utf16Len(thisStr)
 
 		// Convert start argument via ToInteger (which calls ToPrimitive for objects)
 		// ToInteger(undefined) = 0
@@ -632,7 +691,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if start >= end {
 			return vm.NewString(""), nil
 		}
-		return vm.NewString(thisStr[start:end]), nil
+		return vm.NewString(thisStr[utf16ToByteOffset(thisStr, start):utf16ToByteOffset(thisStr, end)]), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("substring", vm.NewNativeFunction(2, false, "substring", func(args []vm.Value) (vm.Value, error) {
@@ -645,7 +704,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		length := len(thisStr)
+		length := utf16Len(thisStr)
 		if len(args) < 1 || args[0].Type() == vm.TypeUndefined {
 			return vm.NewString(thisStr), nil
 		}
@@ -668,7 +727,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if start > end {
 			start, end = end, start
 		}
-		return vm.NewString(thisStr[start:end]), nil
+		return vm.NewString(thisStr[utf16ToByteOffset(thisStr, start):utf16ToByteOffset(thisStr, end)]), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("substr", vm.NewNativeFunction(2, false, "substr", func(args []vm.Value) (vm.Value, error) {
@@ -681,7 +740,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		length := len(thisStr)
+		length := utf16Len(thisStr)
 		if len(args) < 1 || args[0].Type() == vm.TypeUndefined {
 			return vm.NewString(thisStr), nil
 		}
@@ -705,7 +764,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if end > length {
 			end = length
 		}
-		return vm.NewString(thisStr[start:end]), nil
+		return vm.NewString(thisStr[utf16ToByteOffset(thisStr, start):utf16ToByteOffset(thisStr, end)]), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("indexOf", vm.NewNativeFunction(1, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
@@ -748,14 +807,17 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				position = 0
 			}
 		}
-		if position >= len(thisStr) {
+		if position >= utf16Len(thisStr) {
 			return vm.NumberValue(-1), nil
 		}
-		index := strings.Index(thisStr[position:], searchStr)
+		// Search over bytes, report in code units: strings.Index is the fast path
+		// and the offsets it speaks are not the ones the caller asked in.
+		startByte := utf16ToByteOffset(thisStr, position)
+		index := strings.Index(thisStr[startByte:], searchStr)
 		if index == -1 {
 			return vm.NumberValue(-1), nil
 		}
-		return vm.NumberValue(float64(position + index)), nil
+		return vm.NumberValue(float64(byteToUTF16Offset(thisStr, startByte+index))), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("lastIndexOf", vm.NewNativeFunction(1, false, "lastIndexOf", func(args []vm.Value) (vm.Value, error) {
@@ -777,7 +839,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, err
 			}
 		}
-		position := len(thisStr)
+		// position is a code unit index; endPos below is a BYTE cut into the
+		// haystack, so the two are kept in their own units and converted once.
+		position := utf16Len(thisStr)
 		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			// Convert position - throws TypeError for Symbols
 			positionF, err := toNumberWithVM(vmInstance, args[1])
@@ -787,17 +851,20 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			position = int(positionF)
 			if position < 0 {
 				position = 0
-			} else if position > len(thisStr) {
-				position = len(thisStr)
+			} else if position > utf16Len(thisStr) {
+				position = utf16Len(thisStr)
 			}
 		}
 		// Ensure we don't go past the end of the string
-		endPos := position + len(searchStr)
+		endPos := utf16ToByteOffset(thisStr, position) + len(searchStr)
 		if endPos > len(thisStr) {
 			endPos = len(thisStr)
 		}
 		index := strings.LastIndex(thisStr[:endPos], searchStr)
-		return vm.NumberValue(float64(index)), nil
+		if index == -1 {
+			return vm.NumberValue(-1), nil
+		}
+		return vm.NumberValue(float64(byteToUTF16Offset(thisStr, index))), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("includes", vm.NewNativeFunction(1, false, "includes", func(args []vm.Value) (vm.Value, error) {
@@ -839,10 +906,10 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if searchStr == "" {
 			return vm.BooleanValue(true), nil
 		}
-		if position >= len(thisStr) {
+		if position >= utf16Len(thisStr) {
 			return vm.BooleanValue(false), nil
 		}
-		return vm.BooleanValue(strings.Contains(thisStr[position:], searchStr)), nil
+		return vm.BooleanValue(strings.Contains(thisStr[utf16ToByteOffset(thisStr, position):], searchStr)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("startsWith", vm.NewNativeFunction(1, false, "startsWith", func(args []vm.Value) (vm.Value, error) {
@@ -880,10 +947,10 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				position = 0
 			}
 		}
-		if position >= len(thisStr) {
+		if position >= utf16Len(thisStr) {
 			return vm.BooleanValue(false), nil
 		}
-		return vm.BooleanValue(strings.HasPrefix(thisStr[position:], searchStr)), nil
+		return vm.BooleanValue(strings.HasPrefix(thisStr[utf16ToByteOffset(thisStr, position):], searchStr)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("endsWith", vm.NewNativeFunction(1, false, "endsWith", func(args []vm.Value) (vm.Value, error) {
@@ -909,7 +976,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		length := len(thisStr)
+		length := utf16Len(thisStr)
 		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 			// Convert position - throws TypeError for Symbols
 			lengthF, err := toNumberWithVM(vmInstance, args[1])
@@ -919,14 +986,17 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			length = int(lengthF)
 			if length < 0 {
 				length = 0
-			} else if length > len(thisStr) {
-				length = len(thisStr)
+			} else if length > utf16Len(thisStr) {
+				length = utf16Len(thisStr)
 			}
 		}
-		if length < len(searchStr) {
+		// endPos is where the caller's `length` lands in bytes; the comparison
+		// below is byte-wise because searchStr is measured the same way.
+		endPos := utf16ToByteOffset(thisStr, length)
+		if endPos < len(searchStr) {
 			return vm.BooleanValue(false), nil
 		}
-		return vm.BooleanValue(strings.HasSuffix(thisStr[:length], searchStr)), nil
+		return vm.BooleanValue(strings.HasSuffix(thisStr[:endPos], searchStr)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("toLowerCase", vm.NewNativeFunction(0, false, "toLowerCase", func(args []vm.Value) (vm.Value, error) {
