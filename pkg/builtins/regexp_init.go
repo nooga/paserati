@@ -339,17 +339,21 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		isSticky := regex.IsSticky()
 
 		if isGlobal || isSticky {
-			// Use lastIndex for stateful matching
+			// lastIndex is JS-visible, so it is held in UTF-16 code units and
+			// converted to a byte offset only to cut the string. Storing the byte
+			// offset instead made `re.lastIndex` report a number the caller could
+			// not use — 6 where the spec says 5 on a string holding one `é`.
 			baseIndex := regex.GetLastIndex()
 			if baseIndex < 0 {
 				baseIndex = 0
 			}
-			if baseIndex > len(str) {
+			if baseIndex > utf16Len(str) {
 				// lastIndex beyond string length - no match possible
 				regex.SetLastIndex(0)
 				return vm.BooleanValue(false), nil
 			}
-			searchStr := str[baseIndex:]
+			baseByte := utf16ToByteOffset(str, baseIndex)
+			searchStr := str[baseByte:]
 			loc := regex.FindStringIndex(searchStr)
 
 			// For sticky flag, match must occur at exactly position 0 of searchStr
@@ -359,7 +363,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 			if loc != nil {
 				// Update lastIndex
-				regex.SetLastIndex(baseIndex + loc[1])
+				regex.SetLastIndex(byteToUTF16Offset(str, baseByte+loc[1]))
 				return vm.BooleanValue(true), nil
 			} else {
 				// No match - reset lastIndex
@@ -409,23 +413,26 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if baseIndex < 0 {
 				baseIndex = 0
 			}
-			if baseIndex > len(str) {
+			if baseIndex > utf16Len(str) {
 				// lastIndex beyond string length - no match possible
 				regex.SetLastIndex(0)
 				return vm.Null, nil
 			}
 
+			// lastIndex is in code units; the finder wants a byte offset.
+			baseByte := utf16ToByteOffset(str, baseIndex)
+
 			// Search from baseIndex position (preserves lookbehind context for regexp2)
-			loc = regex.FindStringSubmatchIndexAt(str, baseIndex)
+			loc = regex.FindStringSubmatchIndexAt(str, baseByte)
 
 			// For sticky, match must occur exactly at baseIndex
-			if isSticky && loc != nil && loc[0] != baseIndex {
+			if isSticky && loc != nil && loc[0] != baseByte {
 				loc = nil
 			}
 
 			if loc != nil {
 				// Update lastIndex
-				regex.SetLastIndex(loc[1])
+				regex.SetLastIndex(byteToUTF16Offset(str, loc[1]))
 			} else {
 				// No match - reset lastIndex
 				regex.SetLastIndex(0)
@@ -454,8 +461,9 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				arr.Append(vm.NewString(str[start:end]))
 			}
 		}
-		// Set required properties: index, input, groups
-		arr.SetExecMeta(loc[0], str)
+		// Set required properties: index, input, groups. The index is JS-visible,
+		// so it is reported in code units even though loc speaks bytes.
+		arr.SetExecMeta(byteToUTF16Offset(str, loc[0]), str)
 		return result, nil
 	}))
 
@@ -623,18 +631,20 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// If lastIndex > string length, fail
-		if searchStart > len(str) {
+		// If lastIndex > string length, fail. searchStart came from lastIndex and
+		// is therefore in code units; everything below it speaks bytes.
+		if searchStart > utf16Len(str) {
 			if isSticky || isGlobal {
 				regex.SetLastIndex(0)
 			}
 			return vm.Null, nil
 		}
+		searchStartByte := utf16ToByteOffset(str, searchStart)
 
 		// Execute match - search from searchStart position (preserves lookbehind context)
 		var loc []int
-		if searchStart > 0 {
-			loc = regex.FindStringSubmatchIndexAt(str, searchStart)
+		if searchStartByte > 0 {
+			loc = regex.FindStringSubmatchIndexAt(str, searchStartByte)
 		} else {
 			loc = regex.FindStringSubmatchIndex(str)
 		}
@@ -647,14 +657,14 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// For sticky, match must start exactly at lastIndex
-		if isSticky && loc[0] != searchStart {
+		if isSticky && loc[0] != searchStartByte {
 			regex.SetLastIndex(0)
 			return vm.Null, nil
 		}
 
 		// Update lastIndex for global/sticky
 		if isSticky || isGlobal {
-			regex.SetLastIndex(loc[1])
+			regex.SetLastIndex(byteToUTF16Offset(str, loc[1]))
 		}
 
 		// Build result array
@@ -668,7 +678,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				arr.Append(vm.NewString(str[start:end]))
 			}
 		}
-		arr.SetExecMeta(loc[0], str)
+		arr.SetExecMeta(byteToUTF16Offset(str, loc[0]), str)
 
 		return result, nil
 	}
@@ -693,7 +703,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if rx.IsRegExp() {
 			regex := rx.AsRegExpObject()
 			if regex != nil && !regex.HasCompileError() {
-					if regex.IsGlobal() {
+				if regex.IsGlobal() {
 					// Global match: find all matches, return array of matched strings
 					regex.SetLastIndex(0)
 					matches := regex.FindAllString(str, -1)
@@ -722,7 +732,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 						arr.Append(vm.NewString(str[start:end]))
 					}
 				}
-				arr.SetOwn("index", vm.NumberValue(float64(loc[0])))
+				arr.SetOwn("index", vm.NumberValue(float64(byteToUTF16Offset(str, loc[0]))))
 				arr.SetOwn("input", vm.NewString(str))
 				arr.SetOwn("groups", vm.Undefined)
 				return result, nil
@@ -929,7 +939,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 									callArgs = append(callArgs, vm.Undefined)
 								}
 							}
-							callArgs = append(callArgs, vm.NumberValue(float64(match[0])))
+							callArgs = append(callArgs, vm.NumberValue(float64(byteToUTF16Offset(str, match[0]))))
 							callArgs = append(callArgs, vm.NewString(str))
 							vmInstance.EnterHelperCall()
 							res, err := vmInstance.Call(replaceValue, vm.Undefined, callArgs)
@@ -959,7 +969,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 									callArgs = append(callArgs, vm.Undefined)
 								}
 							}
-							callArgs = append(callArgs, vm.NumberValue(float64(match[0])))
+							callArgs = append(callArgs, vm.NumberValue(float64(byteToUTF16Offset(str, match[0]))))
 							callArgs = append(callArgs, vm.NewString(str))
 							vmInstance.EnterHelperCall()
 							res, err := vmInstance.Call(replaceValue, vm.Undefined, callArgs)
@@ -1055,13 +1065,16 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 			// Step 13c: Get position
 			positionVal, _ := vmInstance.GetProperty(result, "index")
+			// `index` is JS-visible and therefore in code units, while every
+			// slice of str below is in bytes. Keep both, and never mix them.
 			position := int(positionVal.ToFloat())
 			if position < 0 {
 				position = 0
 			}
-			if position > len(str) {
-				position = len(str)
+			if position > utf16Len(str) {
+				position = utf16Len(str)
 			}
+			positionByte := utf16ToByteOffset(str, position)
 
 			// Step 13d-e: Get capture groups
 			captures := make([]vm.Value, nCaptures)
@@ -1098,13 +1111,13 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 				replacement = replResult.ToString()
 			} else {
-				replacement = processReplacementPatternEx(str, matched, position, captures, namedCaptures, replaceValue.ToString())
+				replacement = processReplacementPatternEx(str, matched, positionByte, captures, namedCaptures, replaceValue.ToString())
 			}
 
 			// Step 13l-m: Update accumulated result
-			if position >= nextSourcePosition {
-				accumulatedResult += str[nextSourcePosition:position] + replacement
-				nextSourcePosition = position + len(matched)
+			if positionByte >= nextSourcePosition {
+				accumulatedResult += str[nextSourcePosition:positionByte] + replacement
+				nextSourcePosition = positionByte + len(matched)
 			}
 		}
 

@@ -1646,7 +1646,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			vmInstance.EnterHelperCall()
 			res, err := vmInstance.Call(replaceArg, vm.Undefined, []vm.Value{
 				vm.NewString(searchValue),
-				vm.NumberValue(float64(idx)),
+				vm.NumberValue(float64(byteToUTF16Offset(thisStr, idx))),
 				vm.NewString(thisStr),
 			})
 			vmInstance.ExitHelperCall()
@@ -1787,7 +1787,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				vmInstance.EnterHelperCall()
 				res, err := vmInstance.Call(replaceArg, vm.Undefined, []vm.Value{
 					vm.NewString(searchValue),
-					vm.NumberValue(float64(idx)),
+					vm.NumberValue(float64(byteToUTF16Offset(thisStr, idx))),
 					vm.NewString(thisStr),
 				})
 				vmInstance.ExitHelperCall()
@@ -2420,8 +2420,8 @@ func createMatchAllIterator(vmInstance *vm.VM, str string, allMatches [][]int) v
 				}
 			}
 
-			// Add index property
-			arr.SetOwn("index", vm.NumberValue(float64(matchIndices[0])))
+			// Add index property, in code units — matchIndices speaks bytes.
+			arr.SetOwn("index", vm.NumberValue(float64(byteToUTF16Offset(str, matchIndices[0]))))
 			// Add input property
 			arr.SetOwn("input", vm.NewString(str))
 
