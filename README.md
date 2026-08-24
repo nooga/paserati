@@ -2,6 +2,8 @@
 
 ## PASERATI
 
+> 💬 Come talk about Paserati in `#paserati` on [The Fixpoint](https://discord.gg/Ky535CQ9pj) Discord.
+
 ![Paserati](paserati.png)
 
 ### _"Sir, it's no V8 but we're doing what we can"_
