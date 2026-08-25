@@ -123,20 +123,20 @@ func (a *AtomicsInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		switch elemType {
 		case vm.TypedArrayInt8, vm.TypedArrayUint8:
-			data[0] = byte(int8(vmInstance.ToNumber(value)))
+			data[0] = byte(vm.JSWrapInt(vmInstance.ToNumber(value), 8))
 		case vm.TypedArrayInt16, vm.TypedArrayUint16:
-			binary.LittleEndian.PutUint16(data, uint16(int16(vmInstance.ToNumber(value))))
+			binary.LittleEndian.PutUint16(data, uint16(vm.JSWrapInt(vmInstance.ToNumber(value), 16)))
 		case vm.TypedArrayInt32, vm.TypedArrayUint32:
-			binary.LittleEndian.PutUint32(data, uint32(int32(vmInstance.ToNumber(value))))
+			binary.LittleEndian.PutUint32(data, uint32(vm.JSWrapInt(vmInstance.ToNumber(value), 32)))
 		case vm.TypedArrayBigInt64:
 			if value.IsBigInt() {
-				binary.LittleEndian.PutUint64(data, uint64(value.AsBigInt().Int64()))
+				binary.LittleEndian.PutUint64(data, uint64(vm.BigToInt64Wrapped(value.AsBigInt())))
 			} else {
 				binary.LittleEndian.PutUint64(data, uint64(int64(vmInstance.ToNumber(value))))
 			}
 		case vm.TypedArrayBigUint64:
 			if value.IsBigInt() {
-				binary.LittleEndian.PutUint64(data, value.AsBigInt().Uint64())
+				binary.LittleEndian.PutUint64(data, vm.BigToUint64Wrapped(value.AsBigInt()))
 			} else {
 				binary.LittleEndian.PutUint64(data, uint64(vmInstance.ToNumber(value)))
 			}
@@ -192,10 +192,38 @@ func (a *AtomicsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		elemType := ta.GetElementType()
 		if elemType == vm.TypedArrayBigInt64 || elemType == vm.TypedArrayBigUint64 {
 			if value.IsBigInt() {
-				return value.AsBigInt().Int64()
+				// atomicReadInt64 returns the raw 64-bit pattern reinterpreted as
+				// int64 for both BigInt64 and BigUint64 (see its BigUint64 case),
+				// so the comparison value needs the same bit pattern - not
+				// AsBigInt().Int64(), which is undefined for values that don't
+				// already fit in an int64 (e.g. the wrapped result of a negative
+				// BigUint64 store).
+				return vm.BigToInt64Wrapped(value.AsBigInt())
 			}
 		}
-		return int64(vmInstance.ToNumber(value))
+		raw := int64(vmInstance.ToNumber(value))
+		// Truncate to the view's element width so comparisons against the raw
+		// stored bytes (read via atomicReadInt64, which is itself
+		// sign/zero-extended per element type) are apples-to-apples. Without
+		// this, e.g. Atomics.compareExchange(int16View, i, 12345, 0) would
+		// compare the untruncated 12345 against a stored/sign-extended 12345
+		// truncated-to-int16 value and spuriously mismatch.
+		switch elemType {
+		case vm.TypedArrayInt8:
+			return int64(int8(raw))
+		case vm.TypedArrayUint8:
+			return int64(uint8(raw))
+		case vm.TypedArrayInt16:
+			return int64(int16(raw))
+		case vm.TypedArrayUint16:
+			return int64(uint16(raw))
+		case vm.TypedArrayInt32:
+			return int64(int32(raw))
+		case vm.TypedArrayUint32:
+			return int64(uint32(raw))
+		default:
+			return raw
+		}
 	}
 
 	// Convert int64 back to appropriate Value

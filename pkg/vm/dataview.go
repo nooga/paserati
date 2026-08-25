@@ -376,7 +376,7 @@ func (dv *DataViewObject) SetBigInt64(byteOffset int, value *big.Int, littleEndi
 		return false
 	}
 	data := dv.buffer.GetData()[dv.byteOffset+byteOffset:]
-	val := uint64(value.Int64())
+	val := uint64(BigToInt64Wrapped(value))
 	if littleEndian {
 		binary.LittleEndian.PutUint64(data, val)
 	} else {
@@ -394,7 +394,9 @@ func (dv *DataViewObject) SetBigUint64(byteOffset int, value *big.Int, littleEnd
 		return false
 	}
 	data := dv.buffer.GetData()[dv.byteOffset+byteOffset:]
-	val := value.Uint64()
+	// big.Int.Uint64() discards the sign for a negative value (e.g. -5 -> 5)
+	// instead of the two's-complement wraparound (2^64-5) ToBigUint64 requires.
+	val := BigToUint64Wrapped(value)
 	if littleEndian {
 		binary.LittleEndian.PutUint64(data, val)
 	} else {
