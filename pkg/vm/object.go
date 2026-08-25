@@ -203,12 +203,30 @@ type PlainObject struct {
 	// %MapIteratorPrototype%/%SetIteratorPrototype% next natives and the
 	// VM's for-of fast path.
 	internalIterState *BuiltinIterState
+	// Internal disposal state for DisposableStack/AsyncDisposableStack
+	// instances (spec internal slots [[DisposableState]]/[[DisposeCapability]]).
+	// Nil for ordinary objects; non-nil doubles as the brand check that
+	// RequireInternalSlot performs on every DisposableStack.prototype method.
+	disposableState *DisposableStackState
 }
 
 // InternalIterState returns the Map/Set iterator internal state, or nil for
 // ordinary objects. Non-nil doubles as the spec's internal-slot brand check.
 func (o *PlainObject) InternalIterState() *BuiltinIterState {
 	return o.internalIterState
+}
+
+// DisposableState returns the DisposableStack/AsyncDisposableStack internal
+// state, or nil for ordinary objects. Non-nil doubles as the spec's
+// internal-slot brand check ([[DisposableState]]).
+func (o *PlainObject) DisposableState() *DisposableStackState {
+	return o.disposableState
+}
+
+// SetDisposableState attaches DisposableStack/AsyncDisposableStack internal
+// state; called once when the builtin constructs a new instance.
+func (o *PlainObject) SetDisposableState(st *DisposableStackState) {
+	o.disposableState = st
 }
 
 // SetInternalIterState attaches Map/Set iterator internal state; called by

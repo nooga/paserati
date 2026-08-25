@@ -45,6 +45,9 @@ type Realm struct {
 	URIErrorPrototype             Value
 	EvalErrorPrototype            Value
 	AggregateErrorPrototype       Value
+	SuppressedErrorPrototype      Value
+	DisposableStackPrototype      Value
+	AsyncDisposableStackPrototype Value
 	SymbolPrototype               Value
 	DatePrototype                 Value
 
@@ -169,6 +172,9 @@ func (r *Realm) InitializePrototypes() {
 	r.URIErrorPrototype = NewObject(r.ErrorPrototype)
 	r.EvalErrorPrototype = NewObject(r.ErrorPrototype)
 	r.AggregateErrorPrototype = NewObject(r.ErrorPrototype)
+	r.SuppressedErrorPrototype = NewObject(r.ErrorPrototype)
+	r.DisposableStackPrototype = NewObject(r.ObjectPrototype)
+	r.AsyncDisposableStackPrototype = NewObject(r.ObjectPrototype)
 
 	// TypedArray prototypes - inherit from Object.prototype
 	// (TypedArrayPrototype is set up later by initializers)
