@@ -6,4 +6,4 @@ let source: any = [1, "s"];
 let [a, b]: [number, string] = source;
 let s: string = a; // 'a' must be typed 'number', not 'any' -- this should fail
 s;
-// expect_compile_error: cannot assign type
+// expect_compile_error: is not assignable to type
