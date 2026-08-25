@@ -843,12 +843,24 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 		if ta != nil {
 			switch propName {
 			case "length":
+				if ta.IsOutOfBounds() {
+					return IntegerValue(0), true
+				}
 				return Number(float64(ta.GetLength())), true
 			case "byteLength":
+				if ta.IsOutOfBounds() {
+					return IntegerValue(0), true
+				}
 				return Number(float64(ta.GetByteLength())), true
 			case "byteOffset":
+				if ta.IsOutOfBounds() {
+					return IntegerValue(0), true
+				}
 				return Number(float64(ta.GetByteOffset())), true
 			case "buffer":
+				if ta.IsSharedBuffer() {
+					return Value{typ: TypeSharedArrayBuffer, obj: unsafe.Pointer(ta.GetSharedBuffer())}, true
+				}
 				return Value{typ: TypeArrayBuffer, obj: unsafe.Pointer(ta.GetBuffer())}, true
 			case "BYTES_PER_ELEMENT":
 				return Number(float64(ta.GetBytesPerElement())), true

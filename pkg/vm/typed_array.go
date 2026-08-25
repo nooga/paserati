@@ -33,8 +33,8 @@ type ArrayBufferObject struct {
 	prototype  Value            // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
 
-func (ab *ArrayBufferObject) GetPrototype() Value     { return ab.prototype }
-func (ab *ArrayBufferObject) SetPrototype(p Value)    { ab.prototype = p }
+func (ab *ArrayBufferObject) GetPrototype() Value  { return ab.prototype }
+func (ab *ArrayBufferObject) SetPrototype(p Value) { ab.prototype = p }
 
 // GetData returns the underlying byte slice
 func (ab *ArrayBufferObject) GetData() []byte {
@@ -231,6 +231,18 @@ func (ta *TypedArrayObject) GetElementType() TypedArrayKind {
 	return ta.elementType
 }
 
+// IsOutOfBounds reports whether ta's view is no longer valid over its
+// backing buffer. Today that's exactly detachment - checked through the
+// BufferData interface so it's correct for both ArrayBuffer and
+// SharedArrayBuffer (unlike GetBuffer().IsDetached(), which nil-derefs for a
+// SharedArrayBuffer-backed view since GetBuffer only returns *ArrayBufferObject).
+// Extend this once resizable ArrayBuffers exist: a fixed-length view whose
+// buffer has shrunk below [[ByteOffset]]+[[ByteLength]] is out of bounds too,
+// per the spec's IsTypedArrayOutOfBounds.
+func (ta *TypedArrayObject) IsOutOfBounds() bool {
+	return ta.buffer.IsDetached()
+}
+
 // Helper to get bytes per element for each typed array kind
 func (kind TypedArrayKind) BytesPerElement() int {
 	switch kind {
@@ -324,6 +336,50 @@ func (ta *TypedArrayObject) GetElement(index int) Value {
 	}
 }
 
+// twoTo64 is 2^64, used to compute BigInt wraparound the same way the spec's
+// ToBigInt64/ToBigUint64 abstract operations do (arbitrary-precision modulo,
+// not a range-limited Int64()/Uint64() call).
+var twoTo64 = new(big.Int).Lsh(big.NewInt(1), 64)
+
+// BigToUint64Wrapped reduces an arbitrary-precision BigInt modulo 2^64,
+// matching ToBigUint64. big.Int.Uint64() is not suitable here: for a negative
+// value it returns the magnitude's low bits with the sign discarded (e.g.
+// -5 -> 5) rather than the two's-complement wraparound (2^64-5) the spec
+// requires. Exported so callers writing raw BigInt64/BigUint64 array bytes
+// outside this package (e.g. pkg/builtins/atomics_init.go, pkg/vm/dataview.go)
+// share the same conversion instead of re-deriving it.
+func BigToUint64Wrapped(bi *big.Int) uint64 {
+	m := new(big.Int).Mod(bi, twoTo64) // Mod result is always in [0, 2^64) for a positive modulus
+	return m.Uint64()
+}
+
+// BigToInt64Wrapped reduces an arbitrary-precision BigInt modulo 2^64 and
+// reinterprets the top bit as sign, matching ToBigInt64.
+func BigToInt64Wrapped(bi *big.Int) int64 {
+	return int64(BigToUint64Wrapped(bi))
+}
+
+// JSWrapInt performs ECMAScript-style modular wraparound of a float64 into an
+// unsigned integer of the given bit width (8/16/32), matching the ToInt8/
+// ToUint8/ToInt16/ToUint16/ToInt32/ToUint32 abstract operations. A direct Go
+// cast like int16(num) is only well-defined when num already fits; for
+// out-of-range floats (e.g. writing 0xF7F7F7F7 into a Uint16Array element)
+// float-to-int conversion in Go is implementation-specific, so this computes
+// the wraparound explicitly via math.Mod instead of relying on the cast.
+// Exported so other packages writing raw typed-array bytes (e.g.
+// pkg/builtins/atomics_init.go's atomicStore) share this instead of the same
+// unsafe cast this function exists to replace.
+func JSWrapInt(num float64, bits uint) uint64 {
+	if math.IsNaN(num) || math.IsInf(num, 0) {
+		return 0
+	}
+	mod := math.Mod(math.Trunc(num), math.Pow(2, float64(bits)))
+	if mod < 0 {
+		mod += math.Pow(2, float64(bits))
+	}
+	return uint64(mod)
+}
+
 // SetTypedArrayElement sets an element at the given index
 func (ta *TypedArrayObject) SetElement(index int, value Value) {
 	if index < 0 || index >= ta.length {
@@ -341,10 +397,8 @@ func (ta *TypedArrayObject) SetElement(index int, value Value) {
 	data := ta.buffer.GetData()[offset:]
 
 	switch ta.elementType {
-	case TypedArrayInt8:
-		data[0] = byte(int8(num))
-	case TypedArrayUint8:
-		data[0] = byte(uint8(num))
+	case TypedArrayInt8, TypedArrayUint8:
+		data[0] = byte(JSWrapInt(num, 8))
 	case TypedArrayUint8Clamped:
 		// Clamp between 0 and 255
 		if num < 0 {
@@ -354,17 +408,10 @@ func (ta *TypedArrayObject) SetElement(index int, value Value) {
 		} else {
 			data[0] = byte(num)
 		}
-	case TypedArrayInt16:
-		binary.LittleEndian.PutUint16(data, uint16(int16(num)))
-	case TypedArrayUint16:
-		binary.LittleEndian.PutUint16(data, uint16(num))
-	case TypedArrayInt32:
-		// JavaScript-style int32 conversion with proper wrapping
-		val := int64(num) // Convert to int64 first to handle large numbers
-		wrapped := int32(val) // This will wrap correctly
-		binary.LittleEndian.PutUint32(data, uint32(wrapped))
-	case TypedArrayUint32:
-		binary.LittleEndian.PutUint32(data, uint32(num))
+	case TypedArrayInt16, TypedArrayUint16:
+		binary.LittleEndian.PutUint16(data, uint16(JSWrapInt(num, 16)))
+	case TypedArrayInt32, TypedArrayUint32:
+		binary.LittleEndian.PutUint32(data, uint32(JSWrapInt(num, 32)))
 	case TypedArrayFloat32:
 		binary.LittleEndian.PutUint32(data, math.Float32bits(float32(num)))
 	case TypedArrayFloat64:
@@ -372,8 +419,7 @@ func (ta *TypedArrayObject) SetElement(index int, value Value) {
 	case TypedArrayBigInt64:
 		// For BigInt64Array, value should be a BigInt
 		if value.IsBigInt() {
-			bi := value.AsBigInt()
-			binary.LittleEndian.PutUint64(data, uint64(bi.Int64()))
+			binary.LittleEndian.PutUint64(data, uint64(BigToInt64Wrapped(value.AsBigInt())))
 		} else {
 			// Convert number to int64
 			binary.LittleEndian.PutUint64(data, uint64(int64(num)))
@@ -381,8 +427,7 @@ func (ta *TypedArrayObject) SetElement(index int, value Value) {
 	case TypedArrayBigUint64:
 		// For BigUint64Array, value should be a BigInt
 		if value.IsBigInt() {
-			bi := value.AsBigInt()
-			binary.LittleEndian.PutUint64(data, bi.Uint64())
+			binary.LittleEndian.PutUint64(data, BigToUint64Wrapped(value.AsBigInt()))
 		} else {
 			// Convert number to uint64
 			binary.LittleEndian.PutUint64(data, uint64(num))

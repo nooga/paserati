@@ -75,6 +75,9 @@ func (i *TypedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if ta == nil {
 				return vm.Undefined, vmInstance.NewTypeError("get TypedArray.prototype.byteLength called on incompatible receiver")
 			}
+			if ta.IsOutOfBounds() {
+				return vm.IntegerValue(0), nil
+			}
 			return vm.Number(float64(ta.GetByteLength())), nil
 		})
 		typedArrayProto.DefineAccessorProperty("byteLength", byteLengthGetter, true, vm.Undefined, false, &eFalse, &cTrue)
@@ -86,6 +89,9 @@ func (i *TypedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if ta == nil {
 				return vm.Undefined, vmInstance.NewTypeError("get TypedArray.prototype.byteOffset called on incompatible receiver")
 			}
+			if ta.IsOutOfBounds() {
+				return vm.IntegerValue(0), nil
+			}
 			return vm.Number(float64(ta.GetByteOffset())), nil
 		})
 		typedArrayProto.DefineAccessorProperty("byteOffset", byteOffsetGetter, true, vm.Undefined, false, &eFalse, &cTrue)
@@ -96,6 +102,9 @@ func (i *TypedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			ta := thisArray.AsTypedArray()
 			if ta == nil {
 				return vm.Undefined, vmInstance.NewTypeError("get TypedArray.prototype.length called on incompatible receiver")
+			}
+			if ta.IsOutOfBounds() {
+				return vm.IntegerValue(0), nil
 			}
 			return vm.Number(float64(ta.GetLength())), nil
 		})
@@ -158,21 +167,31 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if ta == nil {
 			return nil, vmInstance.NewTypeError(methodName + " called on non-TypedArray object")
 		}
-		if ta.GetBuffer().IsDetached() {
+		if ta.IsOutOfBounds() {
 			return nil, vmInstance.NewTypeError("Cannot perform " + methodName + " on a detached ArrayBuffer")
 		}
 		return ta, nil
 	}
 
 	// Helper function for ToIntegerOrInfinity - throws TypeError for Symbol
-	// Uses VM's ToInteger to properly call user-defined valueOf methods
+	// Uses VM's ToInteger to properly call user-defined valueOf methods.
+	// EnterHelperCall/ExitHelperCall bracket the call so that a thrown
+	// exception unwinding through a try/catch further up the JS call stack
+	// is recorded via IsHandlerFound() instead of being resolved (and
+	// vm.unwinding cleared) before this native call even returns - without
+	// it, a later argument's valueOf() would still run after an earlier
+	// one threw (see e.g. copyWithin's "ToInteger(start) runs before
+	// ToInteger(end)" ordering tests).
 	toIntegerOrInfinity := func(val vm.Value) (int, error) {
 		if val.Type() == vm.TypeSymbol {
 			return 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
 		}
+		vmInstance.EnterHelperCall()
 		result := vmInstance.ToInteger(val)
-		// Check if valueOf threw an error (vm is unwinding)
-		if vmInstance.IsUnwinding() {
+		vmInstance.ExitHelperCall()
+		// Check if valueOf threw an error (vm is unwinding, or a handler for
+		// it was already found further up the call stack)
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
 			return 0, ErrVMUnwinding
 		}
 		return result, nil
@@ -237,6 +256,13 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			return vm.Undefined, vmInstance.NewTypeError("@@species constructor did not return a TypedArray")
 		}
 
+		// TypedArrayCreate's ValidateTypedArray(newTypedArray) step: the
+		// constructor may have returned an array over an already-detached
+		// buffer (e.g. by detaching it itself before returning).
+		if newTA.IsOutOfBounds() {
+			return vm.Undefined, vmInstance.NewTypeError("TypedArray species constructor returned a detached TypedArray")
+		}
+
 		// Step 3a of TypedArrayCreate: If the new array's length < requested length, throw TypeError
 		if newTA.GetLength() < len(elements) {
 			return vm.Undefined, vmInstance.NewTypeError("TypedArray species constructor returned array with insufficient length")
@@ -252,7 +278,10 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 
 	// Helper function for ToBigInt - throws TypeError for null, undefined, Number, Symbol
 	// ECMAScript 7.1.13 ToBigInt
-	toBigInt := func(val vm.Value) (vm.Value, error) {
+	// Declared as a var (not :=) so its own body can recurse into it after
+	// ToPrimitive reduces an object to a primitive.
+	var toBigInt func(val vm.Value) (vm.Value, error)
+	toBigInt = func(val vm.Value) (vm.Value, error) {
 		// Check for Number first (before type switch since IsNumber covers multiple internal types)
 		if val.IsNumber() {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Number to a BigInt")
@@ -276,8 +305,21 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			// TODO: Implement proper BigInt parsing from string
 			return vm.NewBigInt(big.NewInt(0)), nil
 		default:
-			// For objects, should call ToPrimitive first
-			return vm.NewBigInt(big.NewInt(0)), nil
+			// Objects: call ToPrimitive("number") first, which may run a
+			// user-defined valueOf()/toString() - bracketed so a thrown
+			// exception (or one detected further up the call stack) is
+			// reported via ErrVMUnwinding instead of silently coercing to 0.
+			vmInstance.EnterHelperCall()
+			prim := vmInstance.ToPrimitive(val, "number")
+			vmInstance.ExitHelperCall()
+			if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+				return vm.Undefined, ErrVMUnwinding
+			}
+			if prim.IsObject() || prim.IsCallable() {
+				// ToPrimitive didn't actually reduce it; avoid infinite recursion.
+				return vm.NewBigInt(big.NewInt(0)), nil
+			}
+			return toBigInt(prim)
 		}
 	}
 
@@ -285,6 +327,37 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	isBigIntArray := func(ta *vm.TypedArrayObject) bool {
 		kind := ta.GetElementType()
 		return kind == vm.TypedArrayBigInt64 || kind == vm.TypedArrayBigUint64
+	}
+
+	// toNumberChecked converts to a number the way fill()/set() need: it runs
+	// a user-defined valueOf()/toString() via ToPrimitive (which may detach
+	// the buffer, throw, or be caught by a handler further up the call
+	// stack), bracketed the same way toIntegerOrInfinity is.
+	toNumberChecked := func(val vm.Value) (float64, error) {
+		if val.Type() == vm.TypeSymbol {
+			return 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+		}
+		vmInstance.EnterHelperCall()
+		n := vmInstance.ToNumber(val)
+		vmInstance.ExitHelperCall()
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+			return 0, ErrVMUnwinding
+		}
+		return n, nil
+	}
+
+	// convertFillValue implements the ToBigInt/ToNumber(value) step shared by
+	// fill() (and, in spirit, set()): which conversion applies depends on the
+	// target TypedArray's content type.
+	convertFillValue := func(ta *vm.TypedArrayObject, val vm.Value) (vm.Value, error) {
+		if isBigIntArray(ta) {
+			return toBigInt(val)
+		}
+		n, err := toNumberChecked(val)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		return vm.Number(n), nil
 	}
 
 	// at(index) - returns element at index (supports negative indices)
@@ -302,6 +375,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 
 		index, err := toIntegerOrInfinity(args[0])
 		if err != nil {
+			if err == ErrVMUnwinding {
+				return vm.Undefined, nil
+			}
 			return vm.Undefined, err
 		}
 		if index < 0 {
@@ -331,6 +407,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if len(args) > 1 {
 			fromIndex, err = toIntegerOrInfinity(args[1])
 			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
 				return vm.Undefined, err
 			}
 		}
@@ -341,6 +420,15 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			if fromIndex < 0 {
 				fromIndex = 0
 			}
+		}
+
+		// fromIndex's valueOf() may have detached the buffer; per spec every
+		// index's HasProperty is then false, so no comparison ever runs
+		// (crucially, this must NOT fall through to comparing GetElement's
+		// undefined-for-detached reads against searchElement, which would
+		// wrongly "find" undefined at index 0 when searching for undefined).
+		if ta.IsOutOfBounds() {
+			return vm.Number(-1), nil
 		}
 
 		for i := fromIndex; i < length; i++ {
@@ -371,6 +459,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if len(args) > 1 {
 			fromIndex, err = toIntegerOrInfinity(args[1])
 			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
 				return vm.Undefined, err
 			}
 		}
@@ -379,6 +470,12 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		}
 		if fromIndex >= length {
 			fromIndex = length - 1
+		}
+
+		// See indexOf's comment: a detached buffer means no index is
+		// present, full stop - not "every element reads as undefined".
+		if ta.IsOutOfBounds() {
+			return vm.Number(-1), nil
 		}
 
 		for i := fromIndex; i >= 0; i-- {
@@ -408,6 +505,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if len(args) > 1 {
 			fromIndex, err = toIntegerOrInfinity(args[1])
 			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
 				return vm.Undefined, err
 			}
 		}
@@ -440,10 +540,19 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 
 		separator := ","
 		if len(args) > 0 && !args[0].IsUndefined() {
-			if args[0].Type() == vm.TypeSymbol {
-				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a string")
+			// ToString(separator) via the VM so a user-defined toString()/
+			// valueOf() actually runs (it may detach the buffer, per
+			// detached-buffer-during-fromIndex-returns-single-comma.js -
+			// element reads below already return undefined for a detached
+			// buffer, which join treats as the empty string per spec).
+			s, serr := getStringValueWithVM(vmInstance, args[0])
+			if serr != nil {
+				if serr == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, serr
 			}
-			separator = args[0].ToString()
+			separator = s
 		}
 
 		length := ta.GetLength()
@@ -852,6 +961,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		// This ensures Symbol arguments throw before any early returns
 		target, err := toIntegerOrInfinity(args[0])
 		if err != nil {
+			if err == ErrVMUnwinding {
+				return vm.Undefined, nil
+			}
 			return vm.Undefined, err
 		}
 
@@ -859,6 +971,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if len(args) > 1 {
 			start, err = toIntegerOrInfinity(args[1])
 			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
 				return vm.Undefined, err
 			}
 		}
@@ -867,6 +982,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if len(args) > 2 && !args[2].IsUndefined() {
 			end, err = toIntegerOrInfinity(args[2])
 			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
 				return vm.Undefined, err
 			}
 		}
@@ -902,7 +1020,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 
 		// Step 11.c: If count > 0 and buffer is detached, throw TypeError
 		// (Buffer might have been detached during argument coercion via valueOf)
-		if count > 0 && ta.GetBuffer().IsDetached() {
+		if count > 0 && ta.IsOutOfBounds() {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot perform %TypedArray%.prototype.copyWithin on a detached ArrayBuffer")
 		}
 
@@ -927,22 +1045,30 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			return vm.Undefined, err
 		}
 
-		value := vm.Undefined
+		// Per spec, value is converted (ToBigInt or ToNumber, per O's content
+		// type) before start/end - unconditionally, even when the argument
+		// is omitted (ToBigInt(undefined) throws) - and that conversion can
+		// run a user-defined valueOf()/toString() that detaches the buffer,
+		// which the out-of-bounds check below must then catch.
+		var rawValue vm.Value = vm.Undefined
 		if len(args) > 0 {
-			// For BigInt typed arrays, Symbol value should throw TypeError
-			elementType := ta.GetElementType()
-			if elementType == vm.TypedArrayBigInt64 || elementType == vm.TypedArrayBigUint64 {
-				if args[0].Type() == vm.TypeSymbol {
-					return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a BigInt")
-				}
+			rawValue = args[0]
+		}
+		value, err := convertFillValue(ta, rawValue)
+		if err != nil {
+			if err == ErrVMUnwinding {
+				return vm.Undefined, nil
 			}
-			value = args[0]
+			return vm.Undefined, err
 		}
 		start := 0
 		end := ta.GetLength()
 		if len(args) > 1 && !args[1].IsUndefined() {
 			start, err = toIntegerOrInfinity(args[1])
 			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
 				return vm.Undefined, err
 			}
 			if start < 0 {
@@ -955,6 +1081,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if len(args) > 2 && !args[2].IsUndefined() {
 			end, err = toIntegerOrInfinity(args[2])
 			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
 				return vm.Undefined, err
 			}
 			if end < 0 {
@@ -967,6 +1096,12 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 				end = ta.GetLength()
 			}
 		}
+		// Step 9: buffer may have been detached by value/start/end's
+		// valueOf(); re-check before writing anything.
+		if ta.IsOutOfBounds() {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot perform %TypedArray%.prototype.fill on a detached ArrayBuffer")
+		}
+
 		for i := start; i < end; i++ {
 			ta.SetElement(i, value)
 		}
@@ -1180,6 +1315,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if len(args) > 1 && !args[1].IsUndefined() {
 			offset, err = toIntegerOrInfinity(args[1])
 			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
 				return vm.Undefined, err
 			}
 		}
@@ -1188,16 +1326,46 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			return vm.Undefined, vmInstance.NewRangeError("offset is out of bounds")
 		}
 
+		// offset's valueOf() may have detached target's buffer.
+		if ta.IsOutOfBounds() {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer")
+		}
+
 		// Check if target is a BigInt array
 		isBigInt := isBigIntArray(ta)
 
 		// Handle TypedArray source
 		if sourceTypedArray := source.AsTypedArray(); sourceTypedArray != nil {
-			if offset+sourceTypedArray.GetLength() > ta.GetLength() {
+			// offset's valueOf() may equally have detached the *source's*
+			// buffer rather than target's.
+			if sourceTypedArray.IsOutOfBounds() {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot perform %TypedArray%.prototype.set with a detached source ArrayBuffer")
+			}
+			srcLen := sourceTypedArray.GetLength()
+			if offset+srcLen > ta.GetLength() {
 				return vm.Undefined, vmInstance.NewRangeError("source is too large")
 			}
-			for i := 0; i < sourceTypedArray.GetLength(); i++ {
-				val := sourceTypedArray.GetElement(i)
+			// Per spec (SetTypedArrayFromTypedArray): when source and target
+			// view the same underlying buffer, the source must be snapshotted
+			// before any writes happen - otherwise an overlapping copy (e.g.
+			// sample.set(new TA(sample.buffer, 0, 2), 1)) corrupts source
+			// elements the loop hasn't read yet, since SetElement's write and
+			// the next iteration's GetElement can land on the same byte.
+			sameBuffer := sourceTypedArray.GetBufferData() == ta.GetBufferData()
+			var snapshot []vm.Value
+			if sameBuffer {
+				snapshot = make([]vm.Value, srcLen)
+				for i := 0; i < srcLen; i++ {
+					snapshot[i] = sourceTypedArray.GetElement(i)
+				}
+			}
+			for i := 0; i < srcLen; i++ {
+				var val vm.Value
+				if sameBuffer {
+					val = snapshot[i]
+				} else {
+					val = sourceTypedArray.GetElement(i)
+				}
 				if isBigInt && !isBigIntArray(sourceTypedArray) {
 					// Converting from non-BigInt to BigInt array
 					val, err = toBigInt(val)
@@ -1215,12 +1383,12 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if source.Type() == vm.TypeArray {
 			srcLength = source.AsArray().Length()
 		} else if obj := source.AsPlainObject(); obj != nil {
-			// Get length property from object
-			lengthVal, exists := obj.GetOwn("length")
-			if !exists {
-				lengthVal = vm.Undefined
+			// Step 16: Let srcLength be ? ToLength(? Get(src, "length")) -
+			// through the VM so a "length" accessor property actually runs.
+			lengthVal, gerr := vmInstance.GetProperty(source, "length")
+			if gerr != nil {
+				return vm.Undefined, gerr
 			}
-			// Step 16: Let srcLength be ? ToLength(? Get(src, "length"))
 			// ToLength calls ToNumber which throws for Symbol
 			if lengthVal.Type() == vm.TypeSymbol {
 				return vm.Undefined, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
@@ -1235,18 +1403,23 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			return vm.Undefined, vmInstance.NewRangeError("source is too large")
 		}
 
-		// Copy elements
+		// Copy elements. Per spec this reads each element via [[Get]] (so a
+		// plain object source's accessor properties run - including ones
+		// that detach target's buffer mid-loop, e.g.
+		// array-arg-targetbuffer-detached-on-get-src-value-no-throw.js,
+		// which must keep calling later getters rather than stopping) and
+		// writes via [[Set]] (which SetElement already no-ops silently on a
+		// detached/out-of-bounds target, matching IntegerIndexedElementSet).
 		for i := 0; i < srcLength; i++ {
 			var val vm.Value
 			if source.Type() == vm.TypeArray {
 				val = source.AsArray().Get(i)
-			} else if obj := source.AsPlainObject(); obj != nil {
-				propVal, exists := obj.GetOwn(strconv.Itoa(i))
-				if exists {
-					val = propVal
-				} else {
-					val = vm.Undefined
+			} else if source.AsPlainObject() != nil {
+				propVal, gerr := vmInstance.GetProperty(source, strconv.Itoa(i))
+				if gerr != nil {
+					return vm.Undefined, gerr
 				}
+				val = propVal
 			} else {
 				val = vm.Undefined
 			}
@@ -1267,10 +1440,17 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 	// subarray(begin?, end?) - returns a new view into the same buffer
 	proto.SetOwnNonEnumerable("subarray", vm.NewNativeFunction(2, false, "subarray", func(args []vm.Value) (vm.Value, error) {
 		thisArray := vmInstance.GetThis()
-		ta, err := validateTypedArray(thisArray, "%TypedArray%.prototype.subarray")
-		if err != nil {
-			return vm.Undefined, err
+		// Unlike most %TypedArray%.prototype methods, subarray does NOT
+		// validate that the buffer is attached - per spec it only requires
+		// O to be a TypedArray. begin/end are still coerced (and their
+		// valueOf() still runs) even on an already-detached buffer;
+		// detachment is only an error once TypedArraySpeciesCreate actually
+		// constructs the new view.
+		ta := thisArray.AsTypedArray()
+		if ta == nil {
+			return vm.Undefined, vmInstance.NewTypeError("%TypedArray%.prototype.subarray called on non-TypedArray object")
 		}
+		var err error
 
 		start := 0
 		end := ta.GetLength()
@@ -1278,6 +1458,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if len(args) > 0 && !args[0].IsUndefined() {
 			start, err = toIntegerOrInfinity(args[0])
 			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
 				return vm.Undefined, err
 			}
 			if start < 0 {
@@ -1294,6 +1477,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if len(args) > 1 && !args[1].IsUndefined() {
 			end, err = toIntegerOrInfinity(args[1])
 			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
 				return vm.Undefined, err
 			}
 			if end < 0 {
@@ -1322,7 +1508,13 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		}
 
 		if ctorVal.IsUndefined() {
-			// Use default: create view directly
+			// Use default: create view directly. Per spec this still goes
+			// through the abstract TypedArray constructor, which throws on
+			// a detached buffer (step 11) - begin/end coercion above may be
+			// exactly what detached it.
+			if ta.IsOutOfBounds() {
+				return vm.Undefined, vmInstance.NewTypeError("%TypedArray%.prototype.subarray called on a detached ArrayBuffer")
+			}
 			return vm.NewTypedArray(ta.GetElementType(), ta.GetBuffer(), byteStart, length), nil
 		}
 
@@ -1340,8 +1532,12 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			species = speciesVal
 		}
 
-		// If species is undefined or null, use default constructor
+		// If species is undefined or null, use default constructor - same
+		// detached-buffer check as the ctorVal.IsUndefined() case above.
 		if species.Type() == 0 || species.IsUndefined() || species.Type() == vm.TypeNull {
+			if ta.IsOutOfBounds() {
+				return vm.Undefined, vmInstance.NewTypeError("%TypedArray%.prototype.subarray called on a detached ArrayBuffer")
+			}
 			return vm.NewTypedArray(ta.GetElementType(), ta.GetBuffer(), byteStart, length), nil
 		}
 
@@ -1380,6 +1576,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if len(args) > 0 && !args[0].IsUndefined() {
 			start, err = toIntegerOrInfinity(args[0])
 			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
 				return vm.Undefined, err
 			}
 			if start < 0 {
@@ -1396,6 +1595,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if len(args) > 1 && !args[1].IsUndefined() {
 			end, err = toIntegerOrInfinity(args[1])
 			if err != nil {
+				if err == ErrVMUnwinding {
+					return vm.Undefined, nil
+				}
 				return vm.Undefined, err
 			}
 			if end < 0 {
@@ -1413,14 +1615,29 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			start = end
 		}
 
-		// Step 12: Collect elements and use TypedArraySpeciesCreate
+		// Steps 12-16: create the result via the species constructor with
+		// just a length, THEN check for detachment, THEN copy - not the
+		// other way around. The species constructor is user-overridable and
+		// may itself detach O's buffer (e.g. by calling $DETACHBUFFER), so
+		// elements must be read from O only after that call returns and the
+		// check has passed; reading them first (as typedArraySpeciesCreate's
+		// other callers do, safely, since they don't hand user code a
+		// window to detach O first) would silently copy stale values
+		// instead of throwing.
 		length := end - start
-		elements := make([]vm.Value, length)
-		for i := 0; i < length; i++ {
-			elements[i] = ta.GetElement(start + i)
+		newArrVal, err := typedArraySpeciesCreate(thisArray, ta.GetElementType(), make([]vm.Value, length))
+		if err != nil {
+			return vm.Undefined, err
 		}
-
-		return typedArraySpeciesCreate(thisArray, ta.GetElementType(), elements)
+		if length > 0 && ta.IsOutOfBounds() {
+			return vm.Undefined, vmInstance.NewTypeError("%TypedArray%.prototype.slice called on a detached ArrayBuffer")
+		}
+		if newTA := newArrVal.AsTypedArray(); newTA != nil {
+			for i := 0; i < length; i++ {
+				newTA.SetElement(i, ta.GetElement(start+i))
+			}
+		}
+		return newArrVal, nil
 	}))
 
 	// findLast(callback, thisArg?) - returns last element where callback returns true
