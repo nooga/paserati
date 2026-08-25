@@ -4298,14 +4298,19 @@ func (p *Parser) curTokenIsIdentLike() bool {
 	return false
 }
 
-// expectPeekIdentifierOrKeyword accepts IDENT or contextual keywords that can be used as identifiers.
-// Returns true if peek is IDENT, YIELD, GET, THROW, or RETURN and advances.
+// expectPeekIdentifierOrKeyword accepts IDENT or a contextual keyword usable as
+// an identifier (the same set curTokenIsIdentLike recognizes for binding
+// position - not isKeywordThatCanBeIdentifier's broader property-name set,
+// which includes reserved words like `true`/`this`/`super` that are never
+// valid binding names). Returns true if peek qualifies and advances.
 func (p *Parser) expectPeekIdentifierOrKeyword() bool {
-	if p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.YIELD) ||
-		p.peekTokenIs(lexer.GET) || p.peekTokenIs(lexer.THROW) || p.peekTokenIs(lexer.RETURN) {
+	switch p.peekToken.Type {
+	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
+		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF, lexer.FROM,
+		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT:
 		p.nextToken()
 		return true
-	} else {
+	default:
 		msg := fmt.Sprintf("expected identifier or destructuring pattern after '%s', got %s", p.curToken.Literal, p.peekToken.Type)
 		p.addError(p.peekToken, msg)
 		return false
