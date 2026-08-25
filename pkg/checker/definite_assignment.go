@@ -320,13 +320,25 @@ func (a *definiteAssignment) walk(node parser.Node, assigned map[string]bool) {
 		a.walk(n.FinallyBlock, assigned)
 	case *parser.SwitchStatement:
 		a.walk(n.Expression, assigned)
+		// Each case can be reached either by its own match or by falling
+		// through from the case immediately before it in source order (JS
+		// fallthrough runs cases top-to-bottom once entered, regardless of
+		// which one matched). Threading the branch forward - rather than
+		// restarting every case from the pre-switch state - models that: a
+		// write earlier in the list stays visible to a later case that falls
+		// into it. This doesn't try to detect an intervening `break`; that
+		// only widens what's considered assigned on fallthrough, which stays
+		// within the analysis's existing bias toward silence rather than
+		// inventing a diagnostic.
+		fallthroughState := assigned
 		for _, sc := range n.Cases {
 			if sc == nil {
 				continue
 			}
-			branch := copyAssigned(assigned)
+			branch := copyAssigned(fallthroughState)
 			a.walk(sc.Condition, branch)
 			a.walk(sc.Body, branch)
+			fallthroughState = branch
 		}
 		for _, sc := range n.Cases {
 			if sc == nil {
