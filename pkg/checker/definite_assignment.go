@@ -25,6 +25,19 @@ import (
 // ever suppress a diagnostic — never invent one. Candidates touched from a
 // nested function are dropped entirely, since their flow is unknowable here.
 
+// checkDefiniteAssignmentAssertionInitializer reports TS1263 when a declarator
+// combines a `!` definite-assignment assertion with an initializer - the two
+// are mutually exclusive (the assertion promises a later, out-of-band write;
+// an initializer means there's nothing to promise). This is a syntactic-shape
+// rule, not a dataflow one, so unlike checkDefiniteAssignment it is not gated
+// by skipDefiniteAssignment and runs for every let/const/var declarator.
+func (c *Checker) checkDefiniteAssignmentAssertionInitializer(d *parser.VarDeclarator) {
+	if d.DefiniteAssignment && d.Value != nil {
+		target := d.Value
+		c.addErrorWithCode(target, errors.TS1263, "Declarations with initializers cannot also have definite assignment assertions.")
+	}
+}
+
 // checkDefiniteAssignment runs the analysis over a whole program.
 func (c *Checker) checkDefiniteAssignment(program *parser.Program) {
 	if c.skipDefiniteAssignment || program == nil {

@@ -922,6 +922,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				initializer := declarator.Value
 
 				debugPrintf("// [Checker Pass 2] Processing %s: %s\n", stmtType, varName.Value)
+				c.checkDefiniteAssignmentAssertionInitializer(declarator)
 
 				var declaredType types.Type
 				if typeAnnotation != nil {
@@ -1747,6 +1748,7 @@ func (c *Checker) visit(node parser.Node) {
 			} else {
 				declaredType = nil // Indicates type inference is needed
 			}
+			c.checkDefiniteAssignmentAssertionInitializer(declarator)
 
 			// --- FIX V2 for recursive functions assigned to variables ---
 			// Determine a preliminary type for the initializer if it's a function literal.
@@ -1887,6 +1889,7 @@ func (c *Checker) visit(node parser.Node) {
 			} else {
 				declaredType = nil // Indicates type inference is needed
 			}
+			c.checkDefiniteAssignmentAssertionInitializer(declarator)
 
 			// 2. Handle Initializer (Must be present for const)
 			var computedInitializerType types.Type
@@ -1983,6 +1986,7 @@ func (c *Checker) visit(node parser.Node) {
 			} else {
 				declaredType = nil // Indicates type inference is needed
 			}
+			c.checkDefiniteAssignmentAssertionInitializer(declarator)
 
 			// --- FIX V2 for recursive functions assigned to variables ---
 			// Determine a preliminary type for the initializer if it's a function literal.
