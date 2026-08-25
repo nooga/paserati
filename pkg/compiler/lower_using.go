@@ -158,8 +158,15 @@ func lowerUsingInLoopVariable(variable parser.Statement, body *parser.BlockState
 	if d == nil || d.Name == nil {
 		return
 	}
+	// Per spec the dispose method is looked up when the declaration is
+	// evaluated, not when disposal runs, so a non-disposable resource must
+	// throw before the body runs - and before the try/finally is even
+	// entered, so a failed guard never attempts to dispose what it just
+	// rejected.
+	guard := buildDisposableGuard(ls, d.Name)
 	inner := &parser.BlockStatement{Token: body.Token, Statements: body.Statements}
 	body.Statements = []parser.Statement{
+		guard,
 		&parser.TryStatement{
 			Token: ls.Token,
 			Body:  inner,
