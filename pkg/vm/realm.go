@@ -13,40 +13,40 @@ type Realm struct {
 	globalsFromGlobalObject map[uint16]bool // Track globals read from GlobalObject
 
 	// Built-in prototypes
-	ObjectPrototype                   Value
-	FunctionPrototype                 Value
-	ArrayPrototype                    Value
-	StringPrototype                   Value
-	NumberPrototype                   Value
-	BigIntPrototype                   Value
-	BooleanPrototype                  Value
-	RegExpPrototype                   Value
-	MapPrototype                      Value
-	SetPrototype                      Value
-	WeakMapPrototype                  Value
-	WeakSetPrototype                  Value
-	WeakRefPrototype                  Value
-	GeneratorPrototype                Value
-	AsyncGeneratorPrototype           Value
-	IteratorPrototype                 Value // %Iterator.prototype% - base for all iterators
-	IteratorHelperPrototype           Value // %IteratorHelperPrototype% - for iterator helper objects
-	WrapForValidIteratorPrototype     Value // For Iterator.from() wrapped iterators
-	ArrayIteratorPrototype            Value
-	MapIteratorPrototype              Value
-	SetIteratorPrototype              Value
-	StringIteratorPrototype           Value
-	RegExpStringIteratorPrototype     Value
-	PromisePrototype                  Value
-	ErrorPrototype                    Value
-	TypeErrorPrototype                Value
-	ReferenceErrorPrototype           Value
-	SyntaxErrorPrototype              Value
-	RangeErrorPrototype               Value
-	URIErrorPrototype                 Value
-	EvalErrorPrototype                Value
-	AggregateErrorPrototype           Value
-	SymbolPrototype                   Value
-	DatePrototype                     Value
+	ObjectPrototype               Value
+	FunctionPrototype             Value
+	ArrayPrototype                Value
+	StringPrototype               Value
+	NumberPrototype               Value
+	BigIntPrototype               Value
+	BooleanPrototype              Value
+	RegExpPrototype               Value
+	MapPrototype                  Value
+	SetPrototype                  Value
+	WeakMapPrototype              Value
+	WeakSetPrototype              Value
+	WeakRefPrototype              Value
+	GeneratorPrototype            Value
+	AsyncGeneratorPrototype       Value
+	IteratorPrototype             Value // %Iterator.prototype% - base for all iterators
+	IteratorHelperPrototype       Value // %IteratorHelperPrototype% - for iterator helper objects
+	WrapForValidIteratorPrototype Value // For Iterator.from() wrapped iterators
+	ArrayIteratorPrototype        Value
+	MapIteratorPrototype          Value
+	SetIteratorPrototype          Value
+	StringIteratorPrototype       Value
+	RegExpStringIteratorPrototype Value
+	PromisePrototype              Value
+	ErrorPrototype                Value
+	TypeErrorPrototype            Value
+	ReferenceErrorPrototype       Value
+	SyntaxErrorPrototype          Value
+	RangeErrorPrototype           Value
+	URIErrorPrototype             Value
+	EvalErrorPrototype            Value
+	AggregateErrorPrototype       Value
+	SymbolPrototype               Value
+	DatePrototype                 Value
 
 	// TypedArray prototypes
 	TypedArrayPrototype        Value // Abstract %TypedArray%.prototype
@@ -71,12 +71,12 @@ type Realm struct {
 	AsyncGeneratorFunctionPrototype Value // %AsyncGeneratorFunction.prototype%
 
 	// Constructors (cached for instanceof checks and error creation)
-	ErrorConstructor            Value
-	TypedArrayConstructor       Value // Abstract %TypedArray% constructor
-	AsyncFunctionConstructor    Value
-	ArrayConstructor            Value
-	ObjectConstructor           Value
-	FunctionConstructor         Value
+	ErrorConstructor         Value
+	TypedArrayConstructor    Value // Abstract %TypedArray% constructor
+	AsyncFunctionConstructor Value
+	ArrayConstructor         Value
+	ObjectConstructor        Value
+	FunctionConstructor      Value
 
 	// Well-known symbols
 	SymbolIterator           Value

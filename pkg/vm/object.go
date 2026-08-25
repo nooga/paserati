@@ -99,8 +99,8 @@ type Shape struct {
 	// Loads are atomic; building happens at most once (idempotent under race),
 	// gated by indexBuilt. Once built, fields are append-only via extendFields
 	// (new Shape), so this index never goes stale for its owning Shape.
-	nameIndex   atomic.Pointer[map[string]int]
-	indexBuilt  atomic.Bool
+	nameIndex  atomic.Pointer[map[string]int]
+	indexBuilt atomic.Bool
 
 	// Shared-backing invariant (protected by mu):
 	//   - When a new shape is created by appending a single field to `parent`,

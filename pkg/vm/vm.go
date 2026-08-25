@@ -215,42 +215,42 @@ type VM struct {
 	emptyRestArray Value
 
 	// Built-in prototypes owned by this VM
-	ObjectPrototype         Value
-	FunctionPrototype       Value
-	ArrayPrototype          Value
-	StringPrototype         Value
-	NumberPrototype         Value
-	BigIntPrototype         Value
-	BooleanPrototype        Value
-	RegExpPrototype         Value
-	MapPrototype            Value
-	SetPrototype            Value
-	WeakMapPrototype        Value
-	WeakSetPrototype        Value
-	WeakRefPrototype        Value
-	GeneratorPrototype       Value
-	AsyncGeneratorPrototype  Value
-	IteratorPrototype        Value // %Iterator.prototype% - base for all iterators
-	IteratorHelperPrototype  Value // %IteratorHelperPrototype% - for iterator helper objects (map, filter, etc.)
+	ObjectPrototype               Value
+	FunctionPrototype             Value
+	ArrayPrototype                Value
+	StringPrototype               Value
+	NumberPrototype               Value
+	BigIntPrototype               Value
+	BooleanPrototype              Value
+	RegExpPrototype               Value
+	MapPrototype                  Value
+	SetPrototype                  Value
+	WeakMapPrototype              Value
+	WeakSetPrototype              Value
+	WeakRefPrototype              Value
+	GeneratorPrototype            Value
+	AsyncGeneratorPrototype       Value
+	IteratorPrototype             Value // %Iterator.prototype% - base for all iterators
+	IteratorHelperPrototype       Value // %IteratorHelperPrototype% - for iterator helper objects (map, filter, etc.)
 	WrapForValidIteratorPrototype Value // For Iterator.from() wrapped iterators
-	ArrayIteratorPrototype   Value // %ArrayIteratorPrototype% - for array iterators
-	ArrayValuesIterator      Value // canonical Array.prototype.values / [Symbol.iterator]; identity-checked by OpArrayDestructFastCheck
-	MapIteratorPrototype     Value // %MapIteratorPrototype% - for map iterators
-	SetIteratorPrototype     Value // %SetIteratorPrototype% - for set iterators
-	StringIteratorPrototype        Value // %StringIteratorPrototype% - for string iterators
-	RegExpStringIteratorPrototype  Value // %RegExpStringIteratorPrototype% - for RegExp matchAll iterators
-	PromisePrototype               Value
-	DatePrototype                  Value
-	ErrorPrototype          Value
-	ErrorConstructor        Value // For NativeError constructors to inherit from
-	TypeErrorPrototype      Value
-	ReferenceErrorPrototype Value
-	SymbolPrototype         Value
+	ArrayIteratorPrototype        Value // %ArrayIteratorPrototype% - for array iterators
+	ArrayValuesIterator           Value // canonical Array.prototype.values / [Symbol.iterator]; identity-checked by OpArrayDestructFastCheck
+	MapIteratorPrototype          Value // %MapIteratorPrototype% - for map iterators
+	SetIteratorPrototype          Value // %SetIteratorPrototype% - for set iterators
+	StringIteratorPrototype       Value // %StringIteratorPrototype% - for string iterators
+	RegExpStringIteratorPrototype Value // %RegExpStringIteratorPrototype% - for RegExp matchAll iterators
+	PromisePrototype              Value
+	DatePrototype                 Value
+	ErrorPrototype                Value
+	ErrorConstructor              Value // For NativeError constructors to inherit from
+	TypeErrorPrototype            Value
+	ReferenceErrorPrototype       Value
+	SymbolPrototype               Value
 
 	// Constructors and prototypes for non-global built-in types
-	AsyncFunctionConstructor       Value
-	AsyncFunctionPrototype         Value
-	GeneratorFunctionPrototype     Value // %GeneratorFunction.prototype% - prototype of generator functions
+	AsyncFunctionConstructor        Value
+	AsyncFunctionPrototype          Value
+	GeneratorFunctionPrototype      Value // %GeneratorFunction.prototype% - prototype of generator functions
 	AsyncGeneratorFunctionPrototype Value // %AsyncGeneratorFunction.prototype% - prototype of async generator functions
 
 	// Cached constructors for instanceof checks
@@ -291,22 +291,22 @@ type VM struct {
 	lastThrowFuncName         string // function name where exception was thrown
 
 	// TypedArray prototypes
-	TypedArrayConstructor   Value // Abstract %TypedArray% constructor - all typed arrays inherit from this
-	TypedArrayPrototype     Value // Abstract %TypedArray%.prototype - all typed arrays inherit from this
+	TypedArrayConstructor      Value // Abstract %TypedArray% constructor - all typed arrays inherit from this
+	TypedArrayPrototype        Value // Abstract %TypedArray%.prototype - all typed arrays inherit from this
 	Uint8ArrayPrototype        Value
 	Uint8ClampedArrayPrototype Value
 	Int8ArrayPrototype         Value
-	Int16ArrayPrototype     Value
-	Uint16ArrayPrototype    Value
-	Uint32ArrayPrototype    Value
-	Int32ArrayPrototype     Value
-	Float32ArrayPrototype   Value
-	Float64ArrayPrototype   Value
-	BigInt64ArrayPrototype      Value
-	BigUint64ArrayPrototype     Value
-	ArrayBufferPrototype        Value
-	SharedArrayBufferPrototype  Value
-	DataViewPrototype           Value
+	Int16ArrayPrototype        Value
+	Uint16ArrayPrototype       Value
+	Uint32ArrayPrototype       Value
+	Int32ArrayPrototype        Value
+	Float32ArrayPrototype      Value
+	Float64ArrayPrototype      Value
+	BigInt64ArrayPrototype     Value
+	BigUint64ArrayPrototype    Value
+	ArrayBufferPrototype       Value
+	SharedArrayBufferPrototype Value
+	DataViewPrototype          Value
 
 	// Flag to disable method binding during Function.prototype.call to prevent infinite recursion
 	disableMethodBinding bool
@@ -342,7 +342,7 @@ type VM struct {
 	// Caller's 'this' value for direct eval (Phase 3)
 	// Set during InterpretWithCallerScope, Undefined otherwise
 	evalCallerThis       Value
-	hasEvalCallerThis    bool // True when evalCallerThis is valid (allows passing Undefined as 'this')
+	hasEvalCallerThis    bool  // True when evalCallerThis is valid (allows passing Undefined as 'this')
 	evalCallerHomeObject Value // Caller's [[HomeObject]] for super property access in eval
 
 	// Globals, open upvalues, etc. would go here later
@@ -1034,7 +1034,7 @@ func (vm *VM) Reset() {
 		delete(vm.openUpvalueMap, k)
 	}
 	vm.errors = vm.errors[:0] // Clear errors slice
-	vm.callDepth = 0                      // Reset call depth counter
+	vm.callDepth = 0          // Reset call depth counter
 	// Clear inline cache (with lock to prevent concurrent access)
 	vm.propCacheMutex.Lock()
 	for k := range vm.propCache {
@@ -1136,7 +1136,7 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 		}
 	}
 
-	frame.targetRegister = 0               // Result of script isn't stored in caller's reg
+	frame.targetRegister = 0 // Result of script isn't stored in caller's reg
 	// Check if we have a caller's 'this' value from direct eval
 	if vm.hasEvalCallerThis {
 		// Direct eval: inherit 'this' from caller
@@ -3285,18 +3285,18 @@ startExecution:
 					frame.ip = 0
 					// Keep targetRegister unchanged (return to same caller location)
 					// Arrow functions use their captured 'this' (lexical this binding)
-				if calleeFunc.IsArrowFunction {
-					frame.thisValue = calleeClosure.CapturedThis
-				} else {
-					// Per ECMAScript spec (OrdinaryCallBindThis):
-					// - In strict mode, 'this' is undefined for regular calls
-					// - In sloppy mode, undefined/null 'this' is coerced to the global object
-					if !calleeFunc.Chunk.IsStrict {
-						frame.thisValue = NewValueFromPlainObject(vm.GlobalObject)
+					if calleeFunc.IsArrowFunction {
+						frame.thisValue = calleeClosure.CapturedThis
 					} else {
-						frame.thisValue = Undefined
+						// Per ECMAScript spec (OrdinaryCallBindThis):
+						// - In strict mode, 'this' is undefined for regular calls
+						// - In sloppy mode, undefined/null 'this' is coerced to the global object
+						if !calleeFunc.Chunk.IsStrict {
+							frame.thisValue = NewValueFromPlainObject(vm.GlobalObject)
+						} else {
+							frame.thisValue = Undefined
+						}
 					}
-				}
 					frame.isConstructorCall = false
 					frame.isDirectCall = false
 					frame.isSentinelFrame = false
@@ -3510,11 +3510,11 @@ startExecution:
 					frame.ip = 0
 					// Keep targetRegister unchanged (return to same caller location)
 					// Arrow functions use their captured 'this' (lexical this binding)
-				if calleeFunc.IsArrowFunction {
-					frame.thisValue = calleeClosure.CapturedThis
-				} else {
-					frame.thisValue = thisVal // Method call: preserve 'this'
-				}
+					if calleeFunc.IsArrowFunction {
+						frame.thisValue = calleeClosure.CapturedThis
+					} else {
+						frame.thisValue = thisVal // Method call: preserve 'this'
+					}
 					frame.isConstructorCall = false
 					frame.isDirectCall = false
 					frame.isSentinelFrame = false
@@ -17535,15 +17535,15 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	// Manually set up the async function frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.allocatedRegSize = regSize             // Track actual allocation for proper cleanup
-	frame.ip = promiseObj.Frame.pc               // Resume from saved PC
-	frame.targetRegister = destReg               // Target in sentinel frame
-	frame.thisValue = promiseObj.ThisValue       // Restore original this value
+	frame.allocatedRegSize = regSize               // Track actual allocation for proper cleanup
+	frame.ip = promiseObj.Frame.pc                 // Resume from saved PC
+	frame.targetRegister = destReg                 // Target in sentinel frame
+	frame.thisValue = promiseObj.ThisValue         // Restore original this value
 	frame.homeObject = promiseObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
-	frame.isDirectCall = true // Mark as direct call for proper return handling
-	frame.isSentinelFrame = false  // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
-	frame.generatorObj = nil       // Clear generator object when reusing frame
+	frame.isDirectCall = true     // Mark as direct call for proper return handling
+	frame.isSentinelFrame = false // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
+	frame.generatorObj = nil      // Clear generator object when reusing frame
 	frame.argCount = 0
 	frame.promiseObj = promiseObj // Link frame to promise object
 
@@ -17659,15 +17659,15 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	// Manually set up the async function frame for resumption
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.allocatedRegSize = regSize             // Track actual allocation for proper cleanup
-	frame.ip = promiseObj.Frame.pc               // Resume from saved PC
-	frame.targetRegister = destReg               // Target in sentinel frame
-	frame.thisValue = promiseObj.ThisValue       // Restore original this value
+	frame.allocatedRegSize = regSize               // Track actual allocation for proper cleanup
+	frame.ip = promiseObj.Frame.pc                 // Resume from saved PC
+	frame.targetRegister = destReg                 // Target in sentinel frame
+	frame.thisValue = promiseObj.ThisValue         // Restore original this value
 	frame.homeObject = promiseObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
-	frame.isDirectCall = true // Mark as direct call for proper return handling
-	frame.isSentinelFrame = false  // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
-	frame.generatorObj = nil       // Clear generator object when reusing frame
+	frame.isDirectCall = true     // Mark as direct call for proper return handling
+	frame.isSentinelFrame = false // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
+	frame.generatorObj = nil      // Clear generator object when reusing frame
 	frame.argCount = 0
 	frame.promiseObj = promiseObj // Link frame to promise object
 
