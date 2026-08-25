@@ -19,6 +19,7 @@ const (
 	TS1212  = "TS1212"  // Identifier expected. 'X' is a reserved word in strict mode
 	TS1213  = "TS1213"  // ... Class definitions are automatically in strict mode
 	TS1214  = "TS1214"  // ... Modules are automatically in strict mode
+	TS1263  = "TS1263"  // Declarations with initializers cannot also have definite assignment assertions
 	TS2300  = "TS2300"  // Duplicate identifier 'X'
 	TS2304  = "TS2304"  // Cannot find name 'X'
 	TS2322  = "TS2322"  // Type 'X' is not assignable to type 'Y'
