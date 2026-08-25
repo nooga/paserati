@@ -45,6 +45,9 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &RangeErrorInitializer{})
 	initializers = append(initializers, &URIErrorInitializer{})
 	initializers = append(initializers, &AggregateErrorInitializer{})
+	initializers = append(initializers, &SuppressedErrorInitializer{})
+	initializers = append(initializers, &DisposableStackInitializer{})
+	initializers = append(initializers, &AsyncDisposableStackInitializer{})
 	initializers = append(initializers, &MathInitializer{})
 	initializers = append(initializers, &JSONInitializer{})
 	// Install Reflect after Object so it can delegate to Object.__ownKeys

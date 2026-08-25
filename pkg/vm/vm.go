@@ -676,6 +676,12 @@ func (vm *VM) GetPrototypeFromConstructor(constructor Value, intrinsicDefault st
 		return realm.URIErrorPrototype, nil
 	case "%AggregateErrorPrototype%":
 		return realm.AggregateErrorPrototype, nil
+	case "%SuppressedErrorPrototype%":
+		return realm.SuppressedErrorPrototype, nil
+	case "%DisposableStackPrototype%":
+		return realm.DisposableStackPrototype, nil
+	case "%AsyncDisposableStackPrototype%":
+		return realm.AsyncDisposableStackPrototype, nil
 	case "%RegExpPrototype%":
 		return realm.RegExpPrototype, nil
 	case "%PromisePrototype%":

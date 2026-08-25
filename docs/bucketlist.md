@@ -2,7 +2,7 @@
 
 This document tracks implemented and planned features for the Paserati TypeScript/JavaScript runtime, based on ES2025 and TypeScript specifications. Headline conformance numbers live in [README.md](../README.md); this is the per-feature surface.
 
-A `[x]` here means "the syntax/API is wired up and basic cases work." Full spec coverage may still vary suite-by-suite — for live weak-spot data, run `./paserati-test262 -subpath "language" -timeout 0.2s -suite` (and see [`builtin_opportunities.md`](builtin_opportunities.md) for the built-ins side).
+A `[x]` here means "the syntax/API is wired up and basic cases work." Full spec coverage may still vary suite-by-suite — for live weak-spot data, run `./paserati-test262 -subpath "language" -timeout 0.2s -suite` (swap `language` for `built-ins` for the built-ins side; there's no separate opportunities doc, this command is the source of truth).
 
 ## Core Syntax & Basics
 
@@ -111,6 +111,8 @@ A `[x]` here means "the syntax/API is wired up and basic cases work." Full spec 
 - [x] **eval()** - direct and indirect
 - [x] **Dynamic import()** - with pluggable resolution
 - [x] **WeakMap / WeakSet** - constructors and core methods
+- [x] **DisposableStack / AsyncDisposableStack** - explicit resource management (`use`, `adopt`, `defer`, `move`, `dispose`/`disposeAsync`)
+- [x] **SuppressedError** - chained errors from multi-resource disposal failures
 - [ ] **Timer functions** (`setTimeout`, `setInterval`) - planned
 
 ## TypeScript Types

@@ -348,6 +348,100 @@ func (e *AggregateErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	return ctx.DefineGlobal("AggregateError", ctor)
 }
 
+// SuppressedError - thrown by DisposableStack/AsyncDisposableStack (and the
+// `using` statement) when disposing one resource throws while an earlier
+// disposal's error is still pending; chains the two via "error"/"suppressed".
+type SuppressedErrorInitializer struct{}
+
+func (e *SuppressedErrorInitializer) Name() string  { return "SuppressedError" }
+func (e *SuppressedErrorInitializer) Priority() int { return 23 }
+func (e *SuppressedErrorInitializer) InitTypes(ctx *TypeContext) error {
+	// SuppressedError(error, suppressed, message?)
+	t := types.NewObjectType().
+		WithSimpleCallSignature([]types.Type{types.Any, types.Any}, types.Any).
+		WithSimpleCallSignature([]types.Type{types.Any, types.Any, types.String}, types.Any).
+		WithSimpleConstructSignature([]types.Type{types.Any, types.Any}, types.Any).
+		WithSimpleConstructSignature([]types.Type{types.Any, types.Any, types.String}, types.Any)
+	return ctx.DefineGlobal("SuppressedError", t)
+}
+func (e *SuppressedErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
+	vmInstance := ctx.VM
+
+	proto := vm.NewObject(vmInstance.ErrorPrototype).AsPlainObject()
+	proto.SetOwnNonEnumerable("name", vm.NewString("SuppressedError"))
+	proto.SetOwnNonEnumerable("message", vm.NewString(""))
+
+	// SuppressedError(error, suppressed, message?) - length 3
+	ctor := vm.NewNativeFunction(3, true, "SuppressedError", func(args []vm.Value) (vm.Value, error) {
+		var errorArg, suppressedArg vm.Value = vm.Undefined, vm.Undefined
+		if len(args) > 0 {
+			errorArg = args[0]
+		}
+		if len(args) > 1 {
+			suppressedArg = args[1]
+		}
+
+		// Per spec: OrdinaryCreateFromConstructor(newTarget, "%SuppressedError.prototype%")
+		instProto := vm.NewValueFromPlainObject(proto)
+		if newTarget := vmInstance.GetNewTarget(); !newTarget.IsUndefined() {
+			candidate, gpfcErr := vmInstance.GetPrototypeFromConstructor(newTarget, "%SuppressedErrorPrototype%")
+			if gpfcErr != nil {
+				return vm.Undefined, gpfcErr
+			}
+			if candidate.IsObject() {
+				instProto = candidate
+			}
+		}
+		inst := vm.NewObject(instProto).AsPlainObject()
+		inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
+		inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))
+
+		// Per spec: message is installed before error/suppressed, and only
+		// when not undefined. Uses ToPrimitive("string") (via ToString) so a
+		// custom toString()/valueOf() runs and any exception it throws
+		// propagates instead of being silently stringified.
+		if len(args) > 2 && args[2].Type() != vm.TypeUndefined {
+			msgStr, msgErr := getStringValueWithVM(vmInstance, args[2])
+			if msgErr != nil {
+				if msgErr == ErrVMUnwinding {
+					// The VM already has a pending exception from the thrown
+					// toString()/valueOf(); returning nil here (instead of
+					// the sentinel) lets that propagate instead of being
+					// wrapped as a new "VM unwinding" error.
+					return vm.Undefined, nil
+				}
+				return vm.Undefined, msgErr
+			}
+			inst.SetOwnNonEnumerable("message", vm.NewString(msgStr))
+		}
+		inst.SetOwnNonEnumerable("error", errorArg)
+		inst.SetOwnNonEnumerable("suppressed", suppressedArg)
+
+		return vm.NewValueFromPlainObject(inst), nil
+	})
+
+	if nf := ctor.AsNativeFunction(); nf != nil {
+		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
+		ctorProps := withProps.AsNativeFunctionWithProps()
+		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+
+		if !vmInstance.ErrorConstructor.IsUndefined() {
+			ctorProps.Properties.SetPrototype(vmInstance.ErrorConstructor)
+		}
+
+		proto.SetOwnNonEnumerable("constructor", withProps)
+
+		if realm := vmInstance.CurrentRealm(); realm != nil {
+			realm.SuppressedErrorPrototype = vm.NewValueFromPlainObject(proto)
+		}
+
+		return ctx.DefineGlobal("SuppressedError", withProps)
+	}
+
+	proto.SetOwnNonEnumerable("constructor", ctor)
+	return ctx.DefineGlobal("SuppressedError", ctor)
+}
+
 // helper to initialize simple Error subclasses inheriting Error.prototype
 func initErrorSubclass(ctx *RuntimeContext, name string) error {
 	vmInstance := ctx.VM
