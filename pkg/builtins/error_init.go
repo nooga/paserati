@@ -35,9 +35,9 @@ func (e *ErrorInitializer) InitTypes(ctx *TypeContext) error {
 		// Constructor is callable with optional message parameter
 		WithSimpleCallSignature([]types.Type{}, errorProtoType).
 		WithSimpleCallSignature([]types.Type{types.String}, errorProtoType).
-		WithSimpleCallSignature([]types.Type{types.String, types.Any}, errorProtoType). // Error(msg, options)
-		WithSimpleConstructSignature([]types.Type{}, errorProtoType).                     // new Error()
-		WithSimpleConstructSignature([]types.Type{types.String}, errorProtoType).          // new Error(msg)
+		WithSimpleCallSignature([]types.Type{types.String, types.Any}, errorProtoType).      // Error(msg, options)
+		WithSimpleConstructSignature([]types.Type{}, errorProtoType).                        // new Error()
+		WithSimpleConstructSignature([]types.Type{types.String}, errorProtoType).            // new Error(msg)
 		WithSimpleConstructSignature([]types.Type{types.String, types.Any}, errorProtoType). // new Error(msg, options)
 		WithProperty("isError", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
 		WithProperty("prototype", errorProtoType)
