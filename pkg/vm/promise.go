@@ -92,7 +92,26 @@ func (vm *VM) NewPromiseFromExecutor(executor Value) (Value, error) {
 	if executor.IsCallable() {
 		_, err := vm.Call(executor, Undefined, []Value{resolve, reject})
 		if err != nil {
-			vm.rejectPromise(promise, NewString(err.Error()))
+			// Per ECMAScript 25.4.3.1 step 10: reject with the executor's own
+			// thrown value, not a stringified Go error.
+			reason := Value{}
+			if ee, ok := err.(ExceptionError); ok {
+				reason = ee.GetExceptionValue()
+			} else {
+				reason = NewString(err.Error())
+			}
+			vm.rejectPromise(promise, reason)
+			// vm.Call leaves vm.unwinding/unwindingCrossedNative set on error
+			// (deliberately - a caller that re-throws via bytecode injection
+			// needs that state to know it already crossed a boundary). We're
+			// not re-throwing: the executor's exception has been fully
+			// absorbed into a rejected promise, a normal (non-erroring)
+			// return value from this function. Leaving the flags set would
+			// leak into whatever bytecode dispatch called `new Promise(...)`,
+			// which would see unwinding=true after this native call "returns
+			// successfully" and treat it as an uncaught exception still in
+			// flight.
+			vm.ClearUnwindingState()
 		}
 	}
 
