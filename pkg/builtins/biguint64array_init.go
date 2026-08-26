@@ -1,8 +1,6 @@
 package builtins
 
 import (
-	"math/big"
-
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
@@ -45,150 +43,18 @@ func (i *BigUint64ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Note: set, fill, subarray, slice, and Symbol.toStringTag are inherited from %TypedArray%.prototype
 
 	// constructor (length is 3 per ECMAScript spec)
-	ctorWithProps := vm.NewConstructorWithProps(3, true, "BigUint64Array", func(args []vm.Value) (vm.Value, error) {
-		if len(args) == 0 {
-			if err := TypedArrayGPFC(vmInstance); err != nil {
-				return vm.Undefined, err
-			}
-			return vm.NewTypedArray(vm.TypedArrayBigUint64, 0, 0, 0), nil
-		}
-		arg := args[0]
-		if arg.IsNumber() {
-			l, err := TypedArrayToIndex(vmInstance, arg)
-			if err != nil {
-				return vm.Undefined, err
-			}
-			if err := TypedArrayGPFC(vmInstance); err != nil {
-				return vm.Undefined, err
-			}
-			return vm.NewTypedArray(vm.TypedArrayBigUint64, l, 0, 0), nil
-		}
-		if buf := arg.AsArrayBuffer(); buf != nil {
-			if err := TypedArrayGPFC(vmInstance); err != nil {
-				return vm.Undefined, err
-			}
-			off := 0
-			if len(args) > 1 {
-				var err error
-				off, err = ValidateTypedArrayByteOffset(vmInstance, args[1], 8)
-				if err != nil {
-					if err == ErrVMUnwinding {
-						return vm.Undefined, nil
-					}
-					return vm.Undefined, err
-				}
-			}
-			ln := -1
-			if len(args) > 2 && !args[2].IsUndefined() {
-				ln = int(args[2].ToFloat())
-			}
-			// If length is auto-calculated, validate buffer alignment
-			if ln == -1 {
-				if err := ValidateTypedArrayBufferAlignment(vmInstance, buf, off, 8); err != nil {
-					if err == ErrVMUnwinding {
-						return vm.Undefined, nil
-					}
-					return vm.Undefined, err
-				}
-			}
-			return vm.NewTypedArray(vm.TypedArrayBigUint64, buf, off, ln), nil
-		}
-		if sab := arg.AsSharedArrayBuffer(); sab != nil {
-			if err := TypedArrayGPFC(vmInstance); err != nil {
-				return vm.Undefined, err
-			}
-			off := 0
-			if len(args) > 1 {
-				var err error
-				off, err = ValidateTypedArrayByteOffsetShared(vmInstance, args[1], 8)
-				if err != nil {
-					if err == ErrVMUnwinding {
-						return vm.Undefined, nil
-					}
-					return vm.Undefined, err
-				}
-			}
-			ln := -1
-			if len(args) > 2 && !args[2].IsUndefined() {
-				ln = int(args[2].ToFloat())
-			}
-			if ln == -1 {
-				if err := ValidateTypedArrayBufferAlignmentShared(vmInstance, sab, off, 8); err != nil {
-					if err == ErrVMUnwinding {
-						return vm.Undefined, nil
-					}
-					return vm.Undefined, err
-				}
-			}
-			return vm.NewTypedArray(vm.TypedArrayBigUint64, sab, off, ln), nil
-		}
-		if arr := arg.AsArray(); arr != nil {
-			if err := TypedArrayGPFC(vmInstance); err != nil {
-				return vm.Undefined, err
-			}
-			vals := make([]vm.Value, arr.Length())
-			for i := 0; i < arr.Length(); i++ {
-				v := arr.Get(i)
-				// Convert to BigInt if not already
-				if !v.IsBigInt() {
-					v = vm.NewBigInt(new(big.Int).SetUint64(uint64(v.ToFloat())))
-				}
-				vals[i] = v
-			}
-			return vm.NewTypedArray(vm.TypedArrayBigUint64, vals, 0, 0), nil
-		}
-		if arg.IsObject() {
-			if err := TypedArrayGPFC(vmInstance); err != nil {
-				return vm.Undefined, err
-			}
-			return vm.NewTypedArray(vm.TypedArrayBigUint64, 0, 0, 0), nil
-		}
-		// Non-number, non-object (e.g. string, Symbol, BigInt): ToIndex first, then GPFC
-		l, err := TypedArrayToIndex(vmInstance, arg)
-		if err != nil {
-			return vm.Undefined, err
-		}
-		if err := TypedArrayGPFC(vmInstance); err != nil {
-			return vm.Undefined, err
-		}
-		return vm.NewTypedArray(vm.TypedArrayBigUint64, l, 0, 0), nil
-	})
+	bigUint64EK := TypedArrayElementKind{Kind: vm.TypedArrayBigUint64, ElementSize: 8, IsBigInt: true, Unsigned: true}
+	ctorWithProps := vm.NewConstructorWithProps(3, true, "BigUint64Array", NumericTypedArrayCtorBody(vmInstance, bigUint64EK))
 
 	// Set up constructor properties with correct descriptors (BYTES_PER_ELEMENT, prototype)
 	SetupTypedArrayConstructorProperties(ctorWithProps, bigUint64ArrayProto, 8)
 
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
-		if len(args) == 0 {
-			return vm.NewTypedArray(vm.TypedArrayBigUint64, 0, 0, 0), nil
-		}
-
-		source := args[0]
-		if sourceArray := source.AsArray(); sourceArray != nil {
-			values := make([]vm.Value, sourceArray.Length())
-			for i := 0; i < sourceArray.Length(); i++ {
-				v := sourceArray.Get(i)
-				// Convert to BigInt if not already
-				if !v.IsBigInt() {
-					v = vm.NewBigInt(new(big.Int).SetUint64(uint64(v.ToFloat())))
-				}
-				values[i] = v
-			}
-			return vm.NewTypedArray(vm.TypedArrayBigUint64, values, 0, 0), nil
-		}
-
-		return vm.NewTypedArray(vm.TypedArrayBigUint64, 0, 0, 0), nil
+		return TypedArrayFromArrayLike(bigUint64EK, args), nil
 	}))
 
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
-		values := make([]vm.Value, len(args))
-		for i, v := range args {
-			// Convert to BigInt if not already
-			if !v.IsBigInt() {
-				v = vm.NewBigInt(new(big.Int).SetUint64(uint64(v.ToFloat())))
-			}
-			values[i] = v
-		}
-		return vm.NewTypedArray(vm.TypedArrayBigUint64, values, 0, 0), nil
+		return TypedArrayOfValues(bigUint64EK, args), nil
 	}))
 
 	// Set constructor property on prototype

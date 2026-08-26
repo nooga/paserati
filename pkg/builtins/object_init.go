@@ -1968,6 +1968,15 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	if obj.Type() == vm.TypeNull || obj.Type() == vm.TypeUndefined {
 		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 	}
+
+	// Exotic-type instances (subclassing a native constructor, or a custom
+	// newTarget.prototype via Reflect.construct/GetPrototypeFromConstructor)
+	// carry a per-instance [[Prototype]] override that takes precedence over
+	// the type-switch below's intrinsic defaults; see InstancePrototypeOverride.
+	if override, ok := vmInstance.InstancePrototypeOverride(obj); ok {
+		return override, nil
+	}
+
 	// Handle primitive types by returning their prototype directly
 	if obj.IsNumber() {
 		return vmInstance.NumberPrototype, nil

@@ -545,6 +545,14 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 			if val, ok := ta.GetOwnProperty(propName); ok {
 				return val, true
 			}
+			// A per-instance [[Prototype]] override (subclassing a native
+			// TypedArray constructor, or a custom newTarget.prototype via
+			// Reflect.construct/GetPrototypeFromConstructor) takes precedence
+			// over the intrinsic default resolved below.
+			if ta.GetPrototype().Type() == TypeObject {
+				prototype = ta.GetPrototype().AsPlainObject()
+				break
+			}
 			// Resolve prototype dynamically via global constructors to avoid missing VM fields
 			switch ta.GetElementType() {
 			case TypedArrayUint8:

@@ -34,129 +34,17 @@ func (i *Int16ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Note: set, fill, subarray, slice, and Symbol.toStringTag are inherited from %TypedArray%.prototype
 
 	// constructor (length is 3 per ECMAScript spec)
-	ctor := vm.NewConstructorWithProps(3, true, "Int16Array", func(args []vm.Value) (vm.Value, error) {
-		if len(args) == 0 {
-			if err := TypedArrayGPFC(vmx); err != nil {
-				return vm.Undefined, err
-			}
-			return vm.NewTypedArray(vm.TypedArrayInt16, 0, 0, 0), nil
-		}
-		arg := args[0]
-		if arg.IsNumber() {
-			l, err := TypedArrayToIndex(vmx, arg)
-			if err != nil {
-				return vm.Undefined, err
-			}
-			if err := TypedArrayGPFC(vmx); err != nil {
-				return vm.Undefined, err
-			}
-			return vm.NewTypedArray(vm.TypedArrayInt16, l, 0, 0), nil
-		}
-		if buf := arg.AsArrayBuffer(); buf != nil {
-			if err := TypedArrayGPFC(vmx); err != nil {
-				return vm.Undefined, err
-			}
-			off := 0
-			if len(args) > 1 {
-				var err error
-				off, err = ValidateTypedArrayByteOffset(vmx, args[1], 2)
-				if err != nil {
-					if err == ErrVMUnwinding {
-						return vm.Undefined, nil
-					}
-					return vm.Undefined, err
-				}
-			}
-			ln := -1
-			if len(args) > 2 && !args[2].IsUndefined() {
-				ln = int(args[2].ToFloat())
-			}
-			// If length is auto-calculated, validate buffer alignment
-			if ln == -1 {
-				if err := ValidateTypedArrayBufferAlignment(vmx, buf, off, 2); err != nil {
-					if err == ErrVMUnwinding {
-						return vm.Undefined, nil
-					}
-					return vm.Undefined, err
-				}
-			}
-			return vm.NewTypedArray(vm.TypedArrayInt16, buf, off, ln), nil
-		}
-		if sab := arg.AsSharedArrayBuffer(); sab != nil {
-			if err := TypedArrayGPFC(vmx); err != nil {
-				return vm.Undefined, err
-			}
-			off := 0
-			if len(args) > 1 {
-				var err error
-				off, err = ValidateTypedArrayByteOffsetShared(vmx, args[1], 2)
-				if err != nil {
-					if err == ErrVMUnwinding {
-						return vm.Undefined, nil
-					}
-					return vm.Undefined, err
-				}
-			}
-			ln := -1
-			if len(args) > 2 && !args[2].IsUndefined() {
-				ln = int(args[2].ToFloat())
-			}
-			if ln == -1 {
-				if err := ValidateTypedArrayBufferAlignmentShared(vmx, sab, off, 2); err != nil {
-					if err == ErrVMUnwinding {
-						return vm.Undefined, nil
-					}
-					return vm.Undefined, err
-				}
-			}
-			return vm.NewTypedArray(vm.TypedArrayInt16, sab, off, ln), nil
-		}
-		if arr := arg.AsArray(); arr != nil {
-			if err := TypedArrayGPFC(vmx); err != nil {
-				return vm.Undefined, err
-			}
-			vals := make([]vm.Value, arr.Length())
-			for i := 0; i < arr.Length(); i++ {
-				vals[i] = arr.Get(i)
-			}
-			return vm.NewTypedArray(vm.TypedArrayInt16, vals, 0, 0), nil
-		}
-		if arg.IsObject() {
-			if err := TypedArrayGPFC(vmx); err != nil {
-				return vm.Undefined, err
-			}
-			return vm.NewTypedArray(vm.TypedArrayInt16, 0, 0, 0), nil
-		}
-		// Non-number, non-object (e.g. string, Symbol, BigInt): ToIndex first, then GPFC
-		l, err := TypedArrayToIndex(vmx, arg)
-		if err != nil {
-			return vm.Undefined, err
-		}
-		if err := TypedArrayGPFC(vmx); err != nil {
-			return vm.Undefined, err
-		}
-		return vm.NewTypedArray(vm.TypedArrayInt16, l, 0, 0), nil
-	})
+	int16EK := TypedArrayElementKind{Kind: vm.TypedArrayInt16, ElementSize: 2}
+	ctor := vm.NewConstructorWithProps(3, true, "Int16Array", NumericTypedArrayCtorBody(vmx, int16EK))
 	// Set up constructor properties with correct descriptors (BYTES_PER_ELEMENT, prototype)
 	SetupTypedArrayConstructorProperties(ctor, proto, 2)
 
 	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
-		if len(args) == 0 {
-			return vm.NewTypedArray(vm.TypedArrayInt16, 0, 0, 0), nil
-		}
-		src := args[0]
-		if a := src.AsArray(); a != nil {
-			vals := make([]vm.Value, a.Length())
-			for i := 0; i < a.Length(); i++ {
-				vals[i] = a.Get(i)
-			}
-			return vm.NewTypedArray(vm.TypedArrayInt16, vals, 0, 0), nil
-		}
-		return vm.NewTypedArray(vm.TypedArrayInt16, 0, 0, 0), nil
+		return TypedArrayFromArrayLike(int16EK, args), nil
 	}))
 
 	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
-		return vm.NewTypedArray(vm.TypedArrayInt16, args, 0, 0), nil
+		return TypedArrayOfValues(int16EK, args), nil
 	}))
 
 	// Set constructor property on prototype
