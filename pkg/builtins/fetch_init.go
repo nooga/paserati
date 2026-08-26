@@ -859,7 +859,7 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 		arrayBufferValue := vm.NewArrayBuffer(len(r.body))
 		buffer := arrayBufferValue.AsArrayBuffer()
 		copy(buffer.GetData(), r.body)
-		uint8Array := vm.NewTypedArray(vm.TypedArrayUint8, buffer, 0, 0)
+		uint8Array := vm.NewTypedArray(vm.TypedArrayUint8, buffer, 0, -1)
 		return vmInstance.NewResolvedPromise(uint8Array), nil
 	}))
 
@@ -890,7 +890,7 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 		arrayBufferValue := vm.NewArrayBuffer(len(r.body))
 		buffer := arrayBufferValue.AsArrayBuffer()
 		copy(buffer.GetData(), r.body)
-		uint8Array := vm.NewTypedArray(vm.TypedArrayUint8, buffer, 0, 0)
+		uint8Array := vm.NewTypedArray(vm.TypedArrayUint8, buffer, 0, -1)
 		return vmInstance.NewResolvedPromise(uint8Array), nil
 	}))
 
@@ -1311,7 +1311,7 @@ func createRequestObject(vmInstance *vm.VM, req *FetchRequest, _ *vm.PlainObject
 		arrayBuffer := vm.NewArrayBuffer(len(req.body))
 		buf := arrayBuffer.AsArrayBuffer()
 		copy(buf.GetData(), req.body)
-		uint8Array := vm.NewTypedArray(vm.TypedArrayUint8, buf, 0, 0)
+		uint8Array := vm.NewTypedArray(vm.TypedArrayUint8, buf, 0, -1)
 		return vmInstance.NewResolvedPromise(uint8Array), nil
 	}))
 

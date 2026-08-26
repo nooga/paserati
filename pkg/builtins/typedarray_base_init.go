@@ -496,6 +496,11 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			return vm.Undefined, err
 		}
 
+		// Per spec, len is captured before ToIntegerOrInfinity(fromIndex),
+		// which may run user code (valueOf) that detaches/shrinks the
+		// buffer - see detached-buffer-during-fromIndex-returns-true-for-undefined.js.
+		length := ta.GetLength()
+
 		if len(args) == 0 {
 			return vm.False, nil
 		}
@@ -512,7 +517,6 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			}
 		}
 
-		length := ta.GetLength()
 		if fromIndex < 0 {
 			fromIndex = length + fromIndex
 			if fromIndex < 0 {
@@ -538,13 +542,17 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			return vm.Undefined, err
 		}
 
+		// Per spec, len is captured before ToString(separator), which may
+		// run user code (toString/valueOf) that detaches/shrinks the buffer
+		// - see detached-buffer-during-fromIndex-returns-single-comma.js.
+		length := ta.GetLength()
+
 		separator := ","
 		if len(args) > 0 && !args[0].IsUndefined() {
 			// ToString(separator) via the VM so a user-defined toString()/
-			// valueOf() actually runs (it may detach the buffer, per
-			// detached-buffer-during-fromIndex-returns-single-comma.js -
-			// element reads below already return undefined for a detached
-			// buffer, which join treats as the empty string per spec).
+			// valueOf() actually runs (it may detach the buffer - element
+			// reads below already return undefined for a detached buffer,
+			// which join treats as the empty string per spec).
 			s, serr := getStringValueWithVM(vmInstance, args[0])
 			if serr != nil {
 				if serr == ErrVMUnwinding {
@@ -555,7 +563,6 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			separator = s
 		}
 
-		length := ta.GetLength()
 		if length == 0 {
 			return vm.NewString(""), nil
 		}

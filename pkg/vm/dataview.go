@@ -11,10 +11,11 @@ import (
 // for reading and writing multiple number types in an ArrayBuffer
 type DataViewObject struct {
 	Object
-	buffer     BufferData // Can be ArrayBuffer or SharedArrayBuffer
-	byteOffset int
-	byteLength int
-	prototype  Value // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	buffer      BufferData // Can be ArrayBuffer or SharedArrayBuffer
+	byteOffset  int
+	byteLength  int   // fixed byte length; ignored (recomputed live) when trackLength is true
+	trackLength bool  // auto length-tracking view: constructed over a resizable/growable buffer with no explicit byteLength
+	prototype   Value // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
 
 func (dv *DataViewObject) GetPrototype() Value  { return dv.prototype }
@@ -52,17 +53,54 @@ func (dv *DataViewObject) GetByteOffset() int {
 	return dv.byteOffset
 }
 
-// GetByteLength returns the byte length of the view
+// GetByteLength returns the view's current byte length: 0 if out of bounds,
+// live-recomputed from the buffer's current size for a length-tracking view,
+// or the fixed byte length otherwise.
 func (dv *DataViewObject) GetByteLength() int {
+	return dv.effectiveByteLength()
+}
+
+// IsLengthTracking reports whether this view auto-tracks its buffer's live
+// byteLength (constructed over a resizable/growable buffer with no explicit
+// byteLength argument).
+func (dv *DataViewObject) IsLengthTracking() bool {
+	return dv.trackLength
+}
+
+// IsOutOfBounds reports whether dv's view is no longer valid over its
+// backing buffer: detached outright, a length-tracking view whose byteOffset
+// now exceeds the (possibly shrunk) buffer, or a fixed-length view whose
+// byteOffset+byteLength now exceeds the buffer's current size.
+func (dv *DataViewObject) IsOutOfBounds() bool {
+	if dv.buffer.IsDetached() {
+		return true
+	}
+	bufLen := len(dv.buffer.GetData())
+	if dv.trackLength {
+		return dv.byteOffset > bufLen
+	}
+	return dv.byteOffset+dv.byteLength > bufLen
+}
+
+func (dv *DataViewObject) effectiveByteLength() int {
+	if dv.IsOutOfBounds() {
+		return 0
+	}
+	if dv.trackLength {
+		return len(dv.buffer.GetData()) - dv.byteOffset
+	}
 	return dv.byteLength
 }
 
-// NewDataView creates a new DataView value
-func NewDataView(buffer BufferData, byteOffset, byteLength int) Value {
+// NewDataView creates a new DataView value. If trackLength is true, the
+// view's byteLength auto-tracks its (resizable/growable) buffer's live size
+// and byteLength is ignored.
+func NewDataView(buffer BufferData, byteOffset, byteLength int, trackLength bool) Value {
 	dv := &DataViewObject{
-		buffer:     buffer,
-		byteOffset: byteOffset,
-		byteLength: byteLength,
+		buffer:      buffer,
+		byteOffset:  byteOffset,
+		byteLength:  byteLength,
+		trackLength: trackLength,
 	}
 	return Value{typ: TypeDataView, obj: unsafe.Pointer(dv)}
 }
@@ -77,7 +115,7 @@ func (v Value) AsDataView() *DataViewObject {
 
 // GetInt8 reads a signed 8-bit integer at the specified byte offset
 func (dv *DataViewObject) GetInt8(byteOffset int) (int8, bool) {
-	if byteOffset < 0 || byteOffset >= dv.byteLength {
+	if byteOffset < 0 || byteOffset >= dv.effectiveByteLength() {
 		return 0, false
 	}
 	if dv.buffer.IsDetached() {
@@ -89,7 +127,7 @@ func (dv *DataViewObject) GetInt8(byteOffset int) (int8, bool) {
 
 // GetUint8 reads an unsigned 8-bit integer at the specified byte offset
 func (dv *DataViewObject) GetUint8(byteOffset int) (uint8, bool) {
-	if byteOffset < 0 || byteOffset >= dv.byteLength {
+	if byteOffset < 0 || byteOffset >= dv.effectiveByteLength() {
 		return 0, false
 	}
 	if dv.buffer.IsDetached() {
@@ -101,7 +139,7 @@ func (dv *DataViewObject) GetUint8(byteOffset int) (uint8, bool) {
 
 // GetInt16 reads a signed 16-bit integer at the specified byte offset
 func (dv *DataViewObject) GetInt16(byteOffset int, littleEndian bool) (int16, bool) {
-	if byteOffset < 0 || byteOffset+2 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+2 > dv.effectiveByteLength() {
 		return 0, false
 	}
 	if dv.buffer.IsDetached() {
@@ -119,7 +157,7 @@ func (dv *DataViewObject) GetInt16(byteOffset int, littleEndian bool) (int16, bo
 
 // GetUint16 reads an unsigned 16-bit integer at the specified byte offset
 func (dv *DataViewObject) GetUint16(byteOffset int, littleEndian bool) (uint16, bool) {
-	if byteOffset < 0 || byteOffset+2 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+2 > dv.effectiveByteLength() {
 		return 0, false
 	}
 	if dv.buffer.IsDetached() {
@@ -134,7 +172,7 @@ func (dv *DataViewObject) GetUint16(byteOffset int, littleEndian bool) (uint16, 
 
 // GetInt32 reads a signed 32-bit integer at the specified byte offset
 func (dv *DataViewObject) GetInt32(byteOffset int, littleEndian bool) (int32, bool) {
-	if byteOffset < 0 || byteOffset+4 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+4 > dv.effectiveByteLength() {
 		return 0, false
 	}
 	if dv.buffer.IsDetached() {
@@ -152,7 +190,7 @@ func (dv *DataViewObject) GetInt32(byteOffset int, littleEndian bool) (int32, bo
 
 // GetUint32 reads an unsigned 32-bit integer at the specified byte offset
 func (dv *DataViewObject) GetUint32(byteOffset int, littleEndian bool) (uint32, bool) {
-	if byteOffset < 0 || byteOffset+4 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+4 > dv.effectiveByteLength() {
 		return 0, false
 	}
 	if dv.buffer.IsDetached() {
@@ -167,7 +205,7 @@ func (dv *DataViewObject) GetUint32(byteOffset int, littleEndian bool) (uint32, 
 
 // GetFloat32 reads a 32-bit float at the specified byte offset
 func (dv *DataViewObject) GetFloat32(byteOffset int, littleEndian bool) (float32, bool) {
-	if byteOffset < 0 || byteOffset+4 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+4 > dv.effectiveByteLength() {
 		return 0, false
 	}
 	if dv.buffer.IsDetached() {
@@ -185,7 +223,7 @@ func (dv *DataViewObject) GetFloat32(byteOffset int, littleEndian bool) (float32
 
 // GetFloat64 reads a 64-bit float at the specified byte offset
 func (dv *DataViewObject) GetFloat64(byteOffset int, littleEndian bool) (float64, bool) {
-	if byteOffset < 0 || byteOffset+8 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+8 > dv.effectiveByteLength() {
 		return 0, false
 	}
 	if dv.buffer.IsDetached() {
@@ -203,7 +241,7 @@ func (dv *DataViewObject) GetFloat64(byteOffset int, littleEndian bool) (float64
 
 // GetBigInt64 reads a signed 64-bit integer at the specified byte offset
 func (dv *DataViewObject) GetBigInt64(byteOffset int, littleEndian bool) (*big.Int, bool) {
-	if byteOffset < 0 || byteOffset+8 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+8 > dv.effectiveByteLength() {
 		return nil, false
 	}
 	if dv.buffer.IsDetached() {
@@ -221,7 +259,7 @@ func (dv *DataViewObject) GetBigInt64(byteOffset int, littleEndian bool) (*big.I
 
 // GetBigUint64 reads an unsigned 64-bit integer at the specified byte offset
 func (dv *DataViewObject) GetBigUint64(byteOffset int, littleEndian bool) (*big.Int, bool) {
-	if byteOffset < 0 || byteOffset+8 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+8 > dv.effectiveByteLength() {
 		return nil, false
 	}
 	if dv.buffer.IsDetached() {
@@ -239,7 +277,7 @@ func (dv *DataViewObject) GetBigUint64(byteOffset int, littleEndian bool) (*big.
 
 // SetInt8 writes a signed 8-bit integer at the specified byte offset
 func (dv *DataViewObject) SetInt8(byteOffset int, value int8) bool {
-	if byteOffset < 0 || byteOffset >= dv.byteLength {
+	if byteOffset < 0 || byteOffset >= dv.effectiveByteLength() {
 		return false
 	}
 	if dv.buffer.IsDetached() {
@@ -252,7 +290,7 @@ func (dv *DataViewObject) SetInt8(byteOffset int, value int8) bool {
 
 // SetUint8 writes an unsigned 8-bit integer at the specified byte offset
 func (dv *DataViewObject) SetUint8(byteOffset int, value uint8) bool {
-	if byteOffset < 0 || byteOffset >= dv.byteLength {
+	if byteOffset < 0 || byteOffset >= dv.effectiveByteLength() {
 		return false
 	}
 	if dv.buffer.IsDetached() {
@@ -265,7 +303,7 @@ func (dv *DataViewObject) SetUint8(byteOffset int, value uint8) bool {
 
 // SetInt16 writes a signed 16-bit integer at the specified byte offset
 func (dv *DataViewObject) SetInt16(byteOffset int, value int16, littleEndian bool) bool {
-	if byteOffset < 0 || byteOffset+2 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+2 > dv.effectiveByteLength() {
 		return false
 	}
 	if dv.buffer.IsDetached() {
@@ -282,7 +320,7 @@ func (dv *DataViewObject) SetInt16(byteOffset int, value int16, littleEndian boo
 
 // SetUint16 writes an unsigned 16-bit integer at the specified byte offset
 func (dv *DataViewObject) SetUint16(byteOffset int, value uint16, littleEndian bool) bool {
-	if byteOffset < 0 || byteOffset+2 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+2 > dv.effectiveByteLength() {
 		return false
 	}
 	if dv.buffer.IsDetached() {
@@ -299,7 +337,7 @@ func (dv *DataViewObject) SetUint16(byteOffset int, value uint16, littleEndian b
 
 // SetInt32 writes a signed 32-bit integer at the specified byte offset
 func (dv *DataViewObject) SetInt32(byteOffset int, value int32, littleEndian bool) bool {
-	if byteOffset < 0 || byteOffset+4 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+4 > dv.effectiveByteLength() {
 		return false
 	}
 	if dv.buffer.IsDetached() {
@@ -316,7 +354,7 @@ func (dv *DataViewObject) SetInt32(byteOffset int, value int32, littleEndian boo
 
 // SetUint32 writes an unsigned 32-bit integer at the specified byte offset
 func (dv *DataViewObject) SetUint32(byteOffset int, value uint32, littleEndian bool) bool {
-	if byteOffset < 0 || byteOffset+4 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+4 > dv.effectiveByteLength() {
 		return false
 	}
 	if dv.buffer.IsDetached() {
@@ -333,7 +371,7 @@ func (dv *DataViewObject) SetUint32(byteOffset int, value uint32, littleEndian b
 
 // SetFloat32 writes a 32-bit float at the specified byte offset
 func (dv *DataViewObject) SetFloat32(byteOffset int, value float32, littleEndian bool) bool {
-	if byteOffset < 0 || byteOffset+4 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+4 > dv.effectiveByteLength() {
 		return false
 	}
 	if dv.buffer.IsDetached() {
@@ -351,7 +389,7 @@ func (dv *DataViewObject) SetFloat32(byteOffset int, value float32, littleEndian
 
 // SetFloat64 writes a 64-bit float at the specified byte offset
 func (dv *DataViewObject) SetFloat64(byteOffset int, value float64, littleEndian bool) bool {
-	if byteOffset < 0 || byteOffset+8 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+8 > dv.effectiveByteLength() {
 		return false
 	}
 	if dv.buffer.IsDetached() {
@@ -369,7 +407,7 @@ func (dv *DataViewObject) SetFloat64(byteOffset int, value float64, littleEndian
 
 // SetBigInt64 writes a signed 64-bit integer at the specified byte offset
 func (dv *DataViewObject) SetBigInt64(byteOffset int, value *big.Int, littleEndian bool) bool {
-	if byteOffset < 0 || byteOffset+8 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+8 > dv.effectiveByteLength() {
 		return false
 	}
 	if dv.buffer.IsDetached() {
@@ -387,7 +425,7 @@ func (dv *DataViewObject) SetBigInt64(byteOffset int, value *big.Int, littleEndi
 
 // SetBigUint64 writes an unsigned 64-bit integer at the specified byte offset
 func (dv *DataViewObject) SetBigUint64(byteOffset int, value *big.Int, littleEndian bool) bool {
-	if byteOffset < 0 || byteOffset+8 > dv.byteLength {
+	if byteOffset < 0 || byteOffset+8 > dv.effectiveByteLength() {
 		return false
 	}
 	if dv.buffer.IsDetached() {

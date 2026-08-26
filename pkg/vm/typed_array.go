@@ -2,9 +2,20 @@ package vm
 
 import (
 	"encoding/binary"
+	"errors"
 	"math"
 	"math/big"
 	"unsafe"
+)
+
+// Sentinel errors for resizable/growable/transferable ArrayBuffer operations.
+// Callers (pkg/builtins) map these to the appropriate TypeError/RangeError.
+var (
+	errArrayBufferNotResizable      = errors.New("ArrayBuffer is not resizable")
+	errArrayBufferDetached          = errors.New("Cannot perform operation on a detached ArrayBuffer")
+	errArrayBufferInvalidLength     = errors.New("Invalid array buffer length")
+	errSharedArrayBufferNotGrowable = errors.New("SharedArrayBuffer is not growable")
+	errSharedArrayBufferShrink      = errors.New("SharedArrayBuffer.prototype.grow: new length must not be smaller than the current length")
 )
 
 // TypedArrayKind represents the different typed array types
@@ -27,10 +38,11 @@ const (
 // ArrayBufferObject represents a raw binary data buffer
 type ArrayBufferObject struct {
 	Object
-	data       []byte
-	detached   bool
-	properties map[string]Value // Own properties (e.g., constructor override)
-	prototype  Value            // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	data          []byte
+	detached      bool
+	maxByteLength int              // -1 if the buffer is not resizable, else the max byteLength given at construction
+	properties    map[string]Value // Own properties (e.g., constructor override)
+	prototype     Value            // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
 
 func (ab *ArrayBufferObject) GetPrototype() Value  { return ab.prototype }
@@ -50,6 +62,84 @@ func (ab *ArrayBufferObject) IsDetached() bool {
 func (ab *ArrayBufferObject) Detach() {
 	ab.detached = true
 	ab.data = nil
+}
+
+// IsResizable reports whether this ArrayBuffer was constructed with a
+// maxByteLength option (ES2024 resizable ArrayBuffer).
+func (ab *ArrayBufferObject) IsResizable() bool {
+	return ab.maxByteLength >= 0
+}
+
+// MaxByteLength returns the buffer's [[ArrayBufferMaxByteLength]], or -1 if
+// the buffer is not resizable.
+func (ab *ArrayBufferObject) MaxByteLength() int {
+	return ab.maxByteLength
+}
+
+// Resize implements ArrayBuffer.prototype.resize's [[ArrayBufferByteLength]]
+// update: it must be resizable, not detached, and newLen must be within
+// [0, maxByteLength]. Bytes exposed by growth are zero-filled; bytes beyond
+// a shrink are dropped (and zero-filled again if later re-exposed by growth).
+func (ab *ArrayBufferObject) Resize(newLen int) error {
+	if !ab.IsResizable() {
+		return errArrayBufferNotResizable
+	}
+	if ab.detached {
+		return errArrayBufferDetached
+	}
+	if newLen < 0 || newLen > ab.maxByteLength {
+		return errArrayBufferInvalidLength
+	}
+	oldLen := len(ab.data)
+	if newLen <= cap(ab.data) {
+		ab.data = ab.data[:newLen]
+		for i := oldLen; i < newLen; i++ {
+			ab.data[i] = 0
+		}
+	} else {
+		newData := make([]byte, newLen)
+		copy(newData, ab.data)
+		ab.data = newData
+	}
+	return nil
+}
+
+// Transfer implements ArrayBufferCopyAndDetach: it detaches ab and returns a
+// new ArrayBufferObject holding ab's data, resized to newLen (zero-padded if
+// growing, truncated if shrinking). newLen < 0 means "use ab's current
+// byteLength". When preserveResizability is true and ab is itself resizable,
+// the new buffer keeps ab's maxByteLength (and newLen must not exceed it);
+// otherwise the new buffer is fixed-length.
+func (ab *ArrayBufferObject) Transfer(newLen int, preserveResizability bool) (*ArrayBufferObject, error) {
+	if ab.detached {
+		return nil, errArrayBufferDetached
+	}
+	if newLen < 0 {
+		newLen = len(ab.data)
+	}
+	newMax := -1
+	if preserveResizability && ab.IsResizable() {
+		newMax = ab.maxByteLength
+		if newLen > newMax {
+			return nil, errArrayBufferInvalidLength
+		}
+	}
+
+	var newData []byte
+	if newMax >= 0 {
+		newData = make([]byte, newLen, newMax)
+	} else {
+		newData = make([]byte, newLen)
+	}
+	copy(newData, ab.data)
+
+	newBuffer := &ArrayBufferObject{data: newData, maxByteLength: newMax}
+
+	// Detach the source per spec, regardless of destination resizability.
+	ab.detached = true
+	ab.data = nil
+
+	return newBuffer, nil
 }
 
 // GetOwnProperty returns an own property value
@@ -91,9 +181,10 @@ type BufferData interface {
 // have multi-threading support yet)
 type SharedArrayBufferObject struct {
 	Object
-	data       []byte
-	properties map[string]Value // Own properties (e.g., constructor override)
-	prototype  Value            // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	data          []byte
+	maxByteLength int              // -1 if not growable, else [[ArrayBufferMaxByteLength]]
+	properties    map[string]Value // Own properties (e.g., constructor override)
+	prototype     Value            // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
 
 func (sab *SharedArrayBufferObject) GetPrototype() Value  { return sab.prototype }
@@ -112,6 +203,47 @@ func (sab *SharedArrayBufferObject) GetData() []byte {
 // ByteLength returns the length in bytes
 func (sab *SharedArrayBufferObject) ByteLength() int {
 	return len(sab.data)
+}
+
+// IsGrowable reports whether this SharedArrayBuffer was constructed with a
+// maxByteLength option (ES2024 growable SharedArrayBuffer).
+func (sab *SharedArrayBufferObject) IsGrowable() bool {
+	return sab.maxByteLength >= 0
+}
+
+// MaxByteLength returns the buffer's [[ArrayBufferMaxByteLength]], or -1 if
+// the buffer is not growable.
+func (sab *SharedArrayBufferObject) MaxByteLength() int {
+	return sab.maxByteLength
+}
+
+// Grow implements SharedArrayBuffer.prototype.grow: it must be growable and
+// newLen must be within [current length, maxByteLength]. Growable SABs
+// preallocate capacity up to maxByteLength at construction time, so growth
+// never reallocates (matching the spec's requirement that growth be
+// observable in-place by other views/agents).
+func (sab *SharedArrayBufferObject) Grow(newLen int) error {
+	if !sab.IsGrowable() {
+		return errSharedArrayBufferNotGrowable
+	}
+	if newLen > sab.maxByteLength {
+		return errArrayBufferInvalidLength
+	}
+	oldLen := len(sab.data)
+	if newLen < oldLen {
+		return errSharedArrayBufferShrink
+	}
+	if newLen <= cap(sab.data) {
+		sab.data = sab.data[:newLen]
+	} else {
+		newData := make([]byte, newLen)
+		copy(newData, sab.data)
+		sab.data = newData
+	}
+	for i := oldLen; i < newLen; i++ {
+		sab.data[i] = 0
+	}
+	return nil
 }
 
 // GetOwnProperty returns an own property value
@@ -145,8 +277,9 @@ type TypedArrayObject struct {
 	Object
 	buffer      BufferData
 	byteOffset  int
-	byteLength  int
-	length      int // number of elements
+	byteLength  int  // fixed byte length; ignored (recomputed live) when trackLength is true
+	length      int  // fixed number of elements; ignored (recomputed live) when trackLength is true
+	trackLength bool // auto length-tracking view: constructed over a resizable/growable buffer with no explicit length, so length/byteLength follow the buffer's live size
 	elementType TypedArrayKind
 	properties  map[string]Value // Own properties (e.g., constructor override)
 	prototype   Value            // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
@@ -215,12 +348,48 @@ func (ta *TypedArrayObject) GetByteOffset() int {
 	return ta.byteOffset
 }
 
+// GetByteLength returns the view's current byte length: 0 if out of bounds,
+// live-recomputed from the buffer's current size for a length-tracking view,
+// or the fixed [[ByteLength]] otherwise.
 func (ta *TypedArrayObject) GetByteLength() int {
+	if ta.IsOutOfBounds() {
+		return 0
+	}
+	if ta.trackLength {
+		return ta.trackingLength() * ta.elementType.BytesPerElement()
+	}
 	return ta.byteLength
 }
 
+// GetLength returns the view's current element count: 0 if out of bounds,
+// live-recomputed from the buffer's current size for a length-tracking view,
+// or the fixed element count otherwise.
 func (ta *TypedArrayObject) GetLength() int {
+	if ta.IsOutOfBounds() {
+		return 0
+	}
+	if ta.trackLength {
+		return ta.trackingLength()
+	}
 	return ta.length
+}
+
+// trackingLength computes the live element count of a length-tracking view
+// from the buffer's current byte length. Callers must ensure the view isn't
+// out of bounds first.
+func (ta *TypedArrayObject) trackingLength() int {
+	bufLen := len(ta.buffer.GetData())
+	if ta.byteOffset > bufLen {
+		return 0
+	}
+	return (bufLen - ta.byteOffset) / ta.elementType.BytesPerElement()
+}
+
+// IsLengthTracking reports whether this view auto-tracks its buffer's live
+// byteLength (constructed over a resizable/growable buffer with no explicit
+// length argument).
+func (ta *TypedArrayObject) IsLengthTracking() bool {
+	return ta.trackLength
 }
 
 func (ta *TypedArrayObject) GetBytesPerElement() int {
@@ -232,15 +401,19 @@ func (ta *TypedArrayObject) GetElementType() TypedArrayKind {
 }
 
 // IsOutOfBounds reports whether ta's view is no longer valid over its
-// backing buffer. Today that's exactly detachment - checked through the
-// BufferData interface so it's correct for both ArrayBuffer and
-// SharedArrayBuffer (unlike GetBuffer().IsDetached(), which nil-derefs for a
-// SharedArrayBuffer-backed view since GetBuffer only returns *ArrayBufferObject).
-// Extend this once resizable ArrayBuffers exist: a fixed-length view whose
-// buffer has shrunk below [[ByteOffset]]+[[ByteLength]] is out of bounds too,
+// backing buffer: detached outright, a length-tracking view whose byteOffset
+// now exceeds the (possibly shrunk) buffer, or a fixed-length view whose
+// [[ByteOffset]]+[[ByteLength]] now exceeds the buffer's current size -
 // per the spec's IsTypedArrayOutOfBounds.
 func (ta *TypedArrayObject) IsOutOfBounds() bool {
-	return ta.buffer.IsDetached()
+	if ta.buffer.IsDetached() {
+		return true
+	}
+	bufLen := len(ta.buffer.GetData())
+	if ta.trackLength {
+		return ta.byteOffset > bufLen
+	}
+	return ta.byteOffset+ta.byteLength > bufLen
 }
 
 // Helper to get bytes per element for each typed array kind
@@ -291,13 +464,10 @@ func (kind TypedArrayKind) Name() string {
 
 // GetTypedArrayElement gets an element at the given index
 func (ta *TypedArrayObject) GetElement(index int) Value {
-	if index < 0 || index >= ta.length {
+	// GetLength() returns 0 when out of bounds (detached, or shrunk past this
+	// view's range), so the bounds check below also covers that case.
+	if index < 0 || index >= ta.GetLength() {
 		return Undefined
-	}
-
-	// Check if buffer is detached
-	if ta.buffer.IsDetached() {
-		return Undefined // In strict mode this should throw, but returning undefined for now
 	}
 
 	offset := ta.byteOffset + index*ta.elementType.BytesPerElement()
@@ -382,13 +552,10 @@ func JSWrapInt(num float64, bits uint) uint64 {
 
 // SetTypedArrayElement sets an element at the given index
 func (ta *TypedArrayObject) SetElement(index int, value Value) {
-	if index < 0 || index >= ta.length {
+	// GetLength() returns 0 when out of bounds (detached, or shrunk past this
+	// view's range), so the bounds check below also covers that case.
+	if index < 0 || index >= ta.GetLength() {
 		return
-	}
-
-	// Check if buffer is detached
-	if ta.buffer.IsDetached() {
-		return // In strict mode this should throw, but silently failing for now
 	}
 
 	// Convert value to number
@@ -442,7 +609,22 @@ func NewArrayBuffer(size int) Value {
 		return Undefined // Should be an error
 	}
 	buffer := &ArrayBufferObject{
-		data: make([]byte, size),
+		data:          make([]byte, size),
+		maxByteLength: -1,
+	}
+	return Value{typ: TypeArrayBuffer, obj: unsafe.Pointer(buffer)}
+}
+
+// NewResizableArrayBuffer creates a new resizable ArrayBuffer (ES2024) with
+// the given initial byteLength and maxByteLength. Capacity is preallocated
+// up to maxByteLength so later Resize calls within that cap don't reallocate.
+func NewResizableArrayBuffer(size, maxByteLength int) Value {
+	if size < 0 || maxByteLength < size {
+		return Undefined // Should be an error
+	}
+	buffer := &ArrayBufferObject{
+		data:          make([]byte, size, maxByteLength),
+		maxByteLength: maxByteLength,
 	}
 	return Value{typ: TypeArrayBuffer, obj: unsafe.Pointer(buffer)}
 }
@@ -461,7 +643,22 @@ func NewSharedArrayBuffer(size int) Value {
 		return Undefined // Should be an error
 	}
 	buffer := &SharedArrayBufferObject{
-		data: make([]byte, size),
+		data:          make([]byte, size),
+		maxByteLength: -1,
+	}
+	return Value{typ: TypeSharedArrayBuffer, obj: unsafe.Pointer(buffer)}
+}
+
+// NewGrowableSharedArrayBuffer creates a new growable SharedArrayBuffer
+// (ES2024) with the given initial byteLength and maxByteLength. Capacity is
+// preallocated up to maxByteLength so Grow never reallocates in place.
+func NewGrowableSharedArrayBuffer(size, maxByteLength int) Value {
+	if size < 0 || maxByteLength < size {
+		return Undefined // Should be an error
+	}
+	buffer := &SharedArrayBufferObject{
+		data:          make([]byte, size, maxByteLength),
+		maxByteLength: maxByteLength,
 	}
 	return Value{typ: TypeSharedArrayBuffer, obj: unsafe.Pointer(buffer)}
 }
@@ -474,24 +671,32 @@ func NewSharedArrayBufferFromObject(buffer *SharedArrayBufferObject) Value {
 	return Value{typ: TypeSharedArrayBuffer, obj: unsafe.Pointer(buffer)}
 }
 
+// NewTypedArray creates a TypedArray view. length < 0 means "not specified"
+// (auto-computed from the buffer's remaining bytes, and length-tracking if
+// the buffer is resizable/growable); length >= 0, including 0, is an
+// explicit fixed length.
 func NewTypedArray(kind TypedArrayKind, lengthOrBuffer interface{}, byteOffset, length int) Value {
 	var buffer BufferData
 	var arrayLength int
 	var arrayByteOffset int
+	var trackLength bool
 
 	switch arg := lengthOrBuffer.(type) {
 	case int:
 		// Creating with just a length
 		arrayLength = arg
 		bytesNeeded := arrayLength * kind.BytesPerElement()
-		buffer = &ArrayBufferObject{data: make([]byte, bytesNeeded)}
+		buffer = &ArrayBufferObject{data: make([]byte, bytesNeeded), maxByteLength: -1}
 		arrayByteOffset = 0
 	case *ArrayBufferObject:
 		// Creating from existing ArrayBuffer
 		buffer = arg
 		arrayByteOffset = byteOffset
-		if length > 0 {
+		if length >= 0 {
 			arrayLength = length
+		} else if arg.IsResizable() {
+			// No explicit length over a resizable buffer: auto length-track.
+			trackLength = true
 		} else {
 			// Calculate length from buffer size
 			remainingBytes := len(buffer.GetData()) - arrayByteOffset
@@ -501,8 +706,11 @@ func NewTypedArray(kind TypedArrayKind, lengthOrBuffer interface{}, byteOffset, 
 		// Creating from existing SharedArrayBuffer
 		buffer = arg
 		arrayByteOffset = byteOffset
-		if length > 0 {
+		if length >= 0 {
 			arrayLength = length
+		} else if arg.IsGrowable() {
+			// No explicit length over a growable buffer: auto length-track.
+			trackLength = true
 		} else {
 			// Calculate length from buffer size
 			remainingBytes := len(buffer.GetData()) - arrayByteOffset
@@ -512,7 +720,7 @@ func NewTypedArray(kind TypedArrayKind, lengthOrBuffer interface{}, byteOffset, 
 		// Creating from array of values
 		arrayLength = len(arg)
 		bytesNeeded := arrayLength * kind.BytesPerElement()
-		newBuffer := &ArrayBufferObject{data: make([]byte, bytesNeeded)}
+		newBuffer := &ArrayBufferObject{data: make([]byte, bytesNeeded), maxByteLength: -1}
 
 		// Initialize with values
 		ta := &TypedArrayObject{
@@ -535,6 +743,7 @@ func NewTypedArray(kind TypedArrayKind, lengthOrBuffer interface{}, byteOffset, 
 		byteOffset:  arrayByteOffset,
 		byteLength:  arrayLength * kind.BytesPerElement(),
 		length:      arrayLength,
+		trackLength: trackLength,
 		elementType: kind,
 	}
 
