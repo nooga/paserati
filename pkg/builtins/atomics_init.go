@@ -73,11 +73,23 @@ func (a *AtomicsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return nil, 0, vmInstance.NewTypeError("Atomics operations are not allowed on Float32Array, Float64Array, or Uint8ClampedArray")
 		}
 
+		// ValidateIntegerTypedArray: an already out-of-bounds view (detached,
+		// or shrunk past this view's range) throws TypeError up front, before
+		// any argument coercion runs user code.
+		if ta.IsOutOfBounds() {
+			return nil, 0, vmInstance.NewTypeError("Atomics operation called on a detached ArrayBuffer")
+		}
+
+		// Per spec (ValidateAtomicAccess), length is captured before index
+		// coercion, which may run user code (valueOf) that detaches/shrinks
+		// the buffer - see retrieve-length-before-index-coercion-*.js.
+		length := ta.GetLength()
+
 		// Get the index
 		index := int(vmInstance.ToNumber(indexArg))
 
 		// Validate index bounds
-		if index < 0 || index >= ta.GetLength() {
+		if index < 0 || index >= length {
 			return nil, 0, vmInstance.NewRangeError("Invalid atomic access index")
 		}
 
@@ -89,6 +101,9 @@ func (a *AtomicsInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// atomicLoad reads a value atomically from the TypedArray
 	atomicLoad := func(ta *vm.TypedArrayObject, byteOffset int) vm.Value {
+		if ta.IsOutOfBounds() || byteOffset+ta.GetBytesPerElement() > len(ta.GetBufferData().GetData()) {
+			return vm.Undefined
+		}
 		data := ta.GetBufferData().GetData()[byteOffset:]
 		elemType := ta.GetElementType()
 
@@ -118,6 +133,9 @@ func (a *AtomicsInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// atomicStore writes a value atomically to the TypedArray
 	atomicStore := func(ta *vm.TypedArrayObject, byteOffset int, value vm.Value) {
+		if ta.IsOutOfBounds() || byteOffset+ta.GetBytesPerElement() > len(ta.GetBufferData().GetData()) {
+			return
+		}
 		data := ta.GetBufferData().GetData()[byteOffset:]
 		elemType := ta.GetElementType()
 
@@ -143,8 +161,15 @@ func (a *AtomicsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 	}
 
-	// atomicReadInt64 reads raw 64-bit value (for atomic operations)
+	// atomicReadInt64 reads raw 64-bit value (for atomic operations). Guards
+	// against a detach/resize that happens during index/value coercion
+	// after validateAtomicAccess already computed byteOffset from a
+	// (now stale) pre-coercion length - without this, slicing past the
+	// buffer's current (possibly nil) data would panic.
 	atomicReadInt64 := func(ta *vm.TypedArrayObject, byteOffset int) int64 {
+		if ta.IsOutOfBounds() || byteOffset+ta.GetBytesPerElement() > len(ta.GetBufferData().GetData()) {
+			return 0
+		}
 		data := ta.GetBufferData().GetData()[byteOffset:]
 		elemType := ta.GetElementType()
 
@@ -170,8 +195,12 @@ func (a *AtomicsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 	}
 
-	// atomicWriteInt64 writes raw 64-bit value (for atomic operations)
+	// atomicWriteInt64 writes raw 64-bit value (for atomic operations). See
+	// atomicReadInt64 for why the bounds re-check is needed.
 	atomicWriteInt64 := func(ta *vm.TypedArrayObject, byteOffset int, val int64) {
+		if ta.IsOutOfBounds() || byteOffset+ta.GetBytesPerElement() > len(ta.GetBufferData().GetData()) {
+			return
+		}
 		data := ta.GetBufferData().GetData()[byteOffset:]
 		elemType := ta.GetElementType()
 
@@ -387,9 +416,12 @@ func (a *AtomicsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Atomics.notify requires an Int32Array or BigInt64Array")
 		}
 
-		// Step 2: ValidateAtomicAccess (validate index)
+		// Step 2: ValidateAtomicAccess (validate index). Per spec, length is
+		// captured before index coercion, which may run user code (valueOf)
+		// that detaches/shrinks the buffer.
+		accessLength := ta.GetLength()
 		index := int(vmInstance.ToNumber(args[1]))
-		if index < 0 || index >= ta.GetLength() {
+		if index < 0 || index >= accessLength {
 			return vm.Undefined, vmInstance.NewRangeError("Invalid atomic access index")
 		}
 
@@ -529,9 +561,19 @@ func (a *AtomicsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Atomics.wait requires an Int32Array or BigInt64Array")
 		}
 
-		// Step 2: ValidateAtomicAccess (validate index)
+		// ValidateIntegerTypedArray: an already out-of-bounds view throws
+		// TypeError up front, before index/value/timeout coercion runs user
+		// code - see waitAsync/null-bufferdata-throws.js.
+		if ta.IsOutOfBounds() {
+			return vm.Undefined, vmInstance.NewTypeError("Atomics.wait called on a detached ArrayBuffer")
+		}
+
+		// Step 2: ValidateAtomicAccess (validate index). Per spec, length is
+		// captured before index coercion, which may run user code (valueOf)
+		// that detaches/shrinks the buffer.
+		accessLength := ta.GetLength()
 		index := int(vmInstance.ToNumber(args[1]))
-		if index < 0 || index >= ta.GetLength() {
+		if index < 0 || index >= accessLength {
 			return vm.Undefined, vmInstance.NewRangeError("Invalid atomic access index")
 		}
 
@@ -566,6 +608,13 @@ func (a *AtomicsInitializer) InitRuntime(ctx *RuntimeContext) error {
 		elemType := ta.GetElementType()
 		if elemType != vm.TypedArrayInt32 && elemType != vm.TypedArrayBigInt64 {
 			return vm.Undefined, vmInstance.NewTypeError("Atomics.waitAsync requires an Int32Array or BigInt64Array")
+		}
+
+		// ValidateIntegerTypedArray: an already out-of-bounds view throws
+		// TypeError up front, before index/value/timeout coercion runs user
+		// code - see waitAsync/null-bufferdata-throws.js.
+		if ta.IsOutOfBounds() {
+			return vm.Undefined, vmInstance.NewTypeError("Atomics.waitAsync called on a detached ArrayBuffer")
 		}
 
 		// Validate index

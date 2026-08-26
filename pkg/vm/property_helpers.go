@@ -822,6 +822,16 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 			switch propName {
 			case "byteLength":
 				return Number(float64(len(buffer.GetData()))), true
+			case "maxByteLength":
+				if buffer.IsDetached() {
+					return Number(0), true
+				}
+				if buffer.IsResizable() {
+					return Number(float64(buffer.MaxByteLength())), true
+				}
+				return Number(float64(len(buffer.GetData()))), true
+			case "resizable":
+				return BooleanValue(buffer.IsResizable()), true
 			}
 		}
 	}
@@ -833,6 +843,13 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 			switch propName {
 			case "byteLength":
 				return Number(float64(buffer.ByteLength())), true
+			case "maxByteLength":
+				if buffer.IsGrowable() {
+					return Number(float64(buffer.MaxByteLength())), true
+				}
+				return Number(float64(buffer.ByteLength())), true
+			case "growable":
+				return BooleanValue(buffer.IsGrowable()), true
 			}
 		}
 	}
@@ -864,6 +881,38 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 				return Value{typ: TypeArrayBuffer, obj: unsafe.Pointer(ta.GetBuffer())}, true
 			case "BYTES_PER_ELEMENT":
 				return Number(float64(ta.GetBytesPerElement())), true
+			}
+		}
+	}
+
+	// Handle DataView properties. These are declared as accessors on
+	// DataView.prototype (see dataview_init.go) for the sake of
+	// Object.getOwnPropertyDescriptor and similar reflection, but ordinary
+	// `dv.byteLength` property reads go through the generic DataView
+	// prototype-chain walk in op_getprop.go, which - like the other exotic
+	// object kinds here - doesn't invoke accessor getters. Short-circuit
+	// those three here instead, matching the other buffer/view kinds above.
+	// Note: unlike the real getters in dataview_init.go, an out-of-bounds
+	// view here returns 0 rather than throwing TypeError.
+	if objVal.Type() == TypeDataView {
+		dv := objVal.AsDataView()
+		if dv != nil {
+			switch propName {
+			case "byteLength":
+				if dv.IsOutOfBounds() {
+					return IntegerValue(0), true
+				}
+				return Number(float64(dv.GetByteLength())), true
+			case "byteOffset":
+				if dv.IsOutOfBounds() {
+					return IntegerValue(0), true
+				}
+				return Number(float64(dv.GetByteOffset())), true
+			case "buffer":
+				if dv.IsSharedBuffer() {
+					return Value{typ: TypeSharedArrayBuffer, obj: unsafe.Pointer(dv.GetSharedBuffer())}, true
+				}
+				return Value{typ: TypeArrayBuffer, obj: unsafe.Pointer(dv.GetBuffer())}, true
 			}
 		}
 	}

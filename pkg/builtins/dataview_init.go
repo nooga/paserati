@@ -119,8 +119,10 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return nil, 0, vmInstance.NewRangeError("Offset is outside the bounds of the DataView")
 		}
 
-		// Check if buffer is detached (AFTER ToNumber per spec)
-		if dv.GetBufferData().IsDetached() {
+		// Check if buffer is detached or the view is out of bounds (a
+		// fixed-length view whose resizable buffer has shrunk past it) -
+		// AFTER ToNumber per spec.
+		if dv.IsOutOfBounds() {
 			return nil, 0, vmInstance.NewTypeError("Cannot perform operation on a detached ArrayBuffer")
 		}
 
@@ -153,7 +155,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if dv == nil {
 			return vm.Undefined, vmInstance.NewTypeError("get DataView.prototype.byteLength called on incompatible receiver")
 		}
-		if dv.GetBufferData().IsDetached() {
+		if dv.IsOutOfBounds() {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot get byteLength on a detached ArrayBuffer")
 		}
 		return vm.Number(float64(dv.GetByteLength())), nil
@@ -166,7 +168,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if dv == nil {
 			return vm.Undefined, vmInstance.NewTypeError("get DataView.prototype.byteOffset called on incompatible receiver")
 		}
-		if dv.GetBufferData().IsDetached() {
+		if dv.IsOutOfBounds() {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot get byteOffset on a detached ArrayBuffer")
 		}
 		return vm.Number(float64(dv.GetByteOffset())), nil
@@ -509,8 +511,10 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// Parse byteLength
+		// Parse byteLength. If omitted (or undefined), and the buffer is
+		// resizable/growable, the view auto-tracks the buffer's live length.
 		byteLength := bufferByteLength - byteOffset
+		trackLength := false
 		if len(args) > 2 && !args[2].IsUndefined() {
 			length := vmInstance.ToNumber(args[2])
 			if math.IsNaN(length) || math.IsInf(length, 0) {
@@ -523,6 +527,10 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if byteOffset+byteLength > bufferByteLength {
 				return vm.Undefined, vmInstance.NewRangeError("Start offset plus length is outside the bounds of the buffer")
 			}
+		} else if ab := bufferArg.AsArrayBuffer(); ab != nil && ab.IsResizable() {
+			trackLength = true
+		} else if sab := bufferArg.AsSharedArrayBuffer(); sab != nil && sab.IsGrowable() {
+			trackLength = true
 		}
 
 		// Per ECMAScript 24.3.2.1 step 12: OrdinaryCreateFromConstructor(NewTarget, "%DataView.prototype%")
@@ -533,7 +541,7 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		return vm.NewDataView(buffer, byteOffset, byteLength), nil
+		return vm.NewDataView(buffer, byteOffset, byteLength, trackLength), nil
 	})
 
 	// Add prototype property
