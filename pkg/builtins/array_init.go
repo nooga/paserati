@@ -246,14 +246,27 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil {
-			return vm.NumberValue(0), nil
+		if thisVal.Type() == vm.TypeArray {
+			thisArray := thisVal.AsArray()
+			for i := 0; i < len(args); i++ {
+				thisArray.Append(args[i])
+			}
+			return vm.NumberValue(float64(thisArray.Length())), nil
 		}
-		for i := 0; i < len(args); i++ {
-			thisArray.Append(args[i])
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.NumberValue(float64(thisArray.Length())), nil
+		for _, arg := range args {
+			if err := arrayLikeSet(vmInstance, thisVal, length, arg); err != nil {
+				return vm.Undefined, err
+			}
+			length++
+		}
+		if err := arrayLikeSetLength(vmInstance, thisVal, length); err != nil {
+			return vm.Undefined, err
+		}
+		return vm.NumberValue(float64(length)), nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("pop", vm.NewNativeFunction(0, false, "pop", func(args []vm.Value) (vm.Value, error) {
@@ -261,14 +274,35 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil || thisArray.Length() == 0 {
-			return vm.Undefined, nil
+		if thisVal.Type() == vm.TypeArray {
+			thisArray := thisVal.AsArray()
+			if thisArray.Length() == 0 {
+				return vm.Undefined, nil
+			}
+			lastIndex := thisArray.Length() - 1
+			lastElement := thisArray.Get(lastIndex)
+			thisArray.SetLength(lastIndex)
+			return lastElement, nil
 		}
-		lastIndex := thisArray.Length() - 1
-		lastElement := thisArray.Get(lastIndex)
-		thisArray.SetLength(lastIndex)
-		return lastElement, nil
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if length == 0 {
+			return vm.Undefined, arrayLikeSetLength(vmInstance, thisVal, 0)
+		}
+		newLen := length - 1
+		element, _, err := arrayLikeGet(vmInstance, thisVal, newLen)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if err := arrayLikeDelete(vmInstance, thisVal, newLen); err != nil {
+			return vm.Undefined, err
+		}
+		if err := arrayLikeSetLength(vmInstance, thisVal, newLen); err != nil {
+			return vm.Undefined, err
+		}
+		return element, nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("shift", vm.NewNativeFunction(0, false, "shift", func(args []vm.Value) (vm.Value, error) {
@@ -276,18 +310,52 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil || thisArray.Length() == 0 {
-			return vm.Undefined, nil
+		if thisVal.Type() == vm.TypeArray {
+			thisArray := thisVal.AsArray()
+			if thisArray.Length() == 0 {
+				return vm.Undefined, nil
+			}
+			firstElement := thisArray.Get(0)
+			// Shift all elements left
+			newElements := make([]vm.Value, thisArray.Length()-1)
+			for i := 1; i < thisArray.Length(); i++ {
+				newElements[i-1] = thisArray.Get(i)
+			}
+			thisArray.SetElements(newElements)
+			return firstElement, nil
 		}
-		firstElement := thisArray.Get(0)
-		// Shift all elements left
-		newElements := make([]vm.Value, thisArray.Length()-1)
-		for i := 1; i < thisArray.Length(); i++ {
-			newElements[i-1] = thisArray.Get(i)
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
-		thisArray.SetElements(newElements)
-		return firstElement, nil
+		if length == 0 {
+			return vm.Undefined, arrayLikeSetLength(vmInstance, thisVal, 0)
+		}
+		first, _, err := arrayLikeGet(vmInstance, thisVal, 0)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		for k := 1; k < length; k++ {
+			from, to := k, k-1
+			v, exists, err := arrayLikeGet(vmInstance, thisVal, from)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if exists {
+				if err := arrayLikeSet(vmInstance, thisVal, to, v); err != nil {
+					return vm.Undefined, err
+				}
+			} else if err := arrayLikeDelete(vmInstance, thisVal, to); err != nil {
+				return vm.Undefined, err
+			}
+		}
+		if err := arrayLikeDelete(vmInstance, thisVal, length-1); err != nil {
+			return vm.Undefined, err
+		}
+		if err := arrayLikeSetLength(vmInstance, thisVal, length-1); err != nil {
+			return vm.Undefined, err
+		}
+		return first, nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("unshift", vm.NewNativeFunction(1, true, "unshift", func(args []vm.Value) (vm.Value, error) {
@@ -295,22 +363,62 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil {
-			return vm.NumberValue(0), nil
+		if thisVal.Type() == vm.TypeArray {
+			thisArray := thisVal.AsArray()
+			// Create new array with unshifted elements
+			newElements := make([]vm.Value, 0, thisArray.Length()+len(args))
+			// Add new elements first
+			for i := 0; i < len(args); i++ {
+				newElements = append(newElements, args[i])
+			}
+			// Add existing elements
+			for i := 0; i < thisArray.Length(); i++ {
+				newElements = append(newElements, thisArray.Get(i))
+			}
+			thisArray.SetElements(newElements)
+			return vm.NumberValue(float64(thisArray.Length())), nil
 		}
-		// Create new array with unshifted elements
-		newElements := make([]vm.Value, 0, thisArray.Length()+len(args))
-		// Add new elements first
-		for i := 0; i < len(args); i++ {
-			newElements = append(newElements, args[i])
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
-		// Add existing elements
-		for i := 0; i < thisArray.Length(); i++ {
-			newElements = append(newElements, thisArray.Get(i))
+		argCount := len(args)
+		if argCount > 0 {
+			// Per spec step 4a: throw TypeError before shifting anything if
+			// the new length would exceed 2^53-1 - length is already
+			// clamped to that bound by ToLength, but adding argCount on top
+			// of an already-maxed length can legitimately push past it, and
+			// without this check the shift loop below would attempt on the
+			// order of 2^53 iterations even when (as here) every access is
+			// individually cheap.
+			if length+argCount > maxSafeInteger {
+				return vm.Undefined, vmInstance.NewTypeError("Invalid array length")
+			}
+			for k := length; k > 0; k-- {
+				from, to := k-1, k+argCount-1
+				v, exists, err := arrayLikeGet(vmInstance, thisVal, from)
+				if err != nil {
+					return vm.Undefined, err
+				}
+				if exists {
+					if err := arrayLikeSet(vmInstance, thisVal, to, v); err != nil {
+						return vm.Undefined, err
+					}
+				} else if err := arrayLikeDelete(vmInstance, thisVal, to); err != nil {
+					return vm.Undefined, err
+				}
+			}
+			for j, arg := range args {
+				if err := arrayLikeSet(vmInstance, thisVal, j, arg); err != nil {
+					return vm.Undefined, err
+				}
+			}
 		}
-		thisArray.SetElements(newElements)
-		return vm.NumberValue(float64(thisArray.Length())), nil
+		newLen := length + argCount
+		if err := arrayLikeSetLength(vmInstance, thisVal, newLen); err != nil {
+			return vm.Undefined, err
+		}
+		return vm.NumberValue(float64(newLen)), nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {
@@ -318,11 +426,10 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil {
-			return vm.NewArray(), nil
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
-		length := thisArray.Length()
 		start := 0
 		if len(args) >= 1 && !args[0].IsUndefined() {
 			var err error
@@ -364,9 +471,21 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if start >= end {
 			return vm.NewArray(), nil
 		}
-		elements := make([]vm.Value, end-start)
+		// ArraySpeciesCreate(O, count) throws before any copying if count
+		// exceeds the max valid Array length - critically before the make()
+		// below, which would otherwise try to allocate count elements (up
+		// to 2^53-1 for an arbitrary array-like's declared length).
+		count := end - start
+		if err := checkArrayCreateLength(vmInstance, count); err != nil {
+			return vm.Undefined, err
+		}
+		elements := make([]vm.Value, count)
 		for i := start; i < end; i++ {
-			elements[i-start] = thisArray.Get(i)
+			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			elements[i-start] = v
 		}
 		return vm.NewArrayWithArgs(elements), nil
 	}))
@@ -376,11 +495,10 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil {
-			return vm.NewArray(), nil
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
-		length := thisArray.Length()
 		start := 0
 		if len(args) >= 1 {
 			var err error
@@ -416,56 +534,145 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				deleteCount = length - start
 			}
 		}
+		var itemsToInsert []vm.Value
+		if len(args) >= 2 {
+			itemsToInsert = args[2:]
+		}
+		itemCount := len(itemsToInsert)
+
+		// ArraySpeciesCreate(O, actualDeleteCount) throws before any copying
+		// if actualDeleteCount exceeds the max valid Array length (see
+		// checkArrayCreateLength) - actualDeleteCount is bounded by
+		// length-start, which can itself be huge for an arbitrary
+		// array-like's declared length.
+		if err := checkArrayCreateLength(vmInstance, deleteCount); err != nil {
+			return vm.Undefined, err
+		}
+
+		// Per spec step 8: if the resulting length would exceed 2^53-1,
+		// throw a TypeError before doing any shifting - length is already
+		// clamped to that bound by ToLength, but adding itemCount on top of
+		// an already-maxed length can legitimately push newLength one past
+		// it. Without this check, the shift loops below would attempt on
+		// the order of 2^53 iterations.
+		newLength := length - deleteCount + itemCount
+		if newLength > maxSafeInteger {
+			return vm.Undefined, vmInstance.NewTypeError("Invalid array length")
+		}
+
 		// Create array with deleted elements
 		deleted := vm.NewArray()
+		deletedArr := deleted.AsArray()
 		for i := 0; i < deleteCount; i++ {
-			deleted.AsArray().Append(thisArray.Get(start + i))
+			v, _, err := arrayLikeGet(vmInstance, thisVal, start+i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			deletedArr.Append(v)
 		}
-		// Remove elements and insert new ones
-		// First collect items to insert
-		itemsToInsert := make([]vm.Value, 0)
-		for i := 2; i < len(args); i++ {
-			itemsToInsert = append(itemsToInsert, args[i])
+
+		if itemCount < deleteCount {
+			// Shift the tail left to close the gap
+			for i := start; i < length-deleteCount; i++ {
+				from, to := i+deleteCount, i+itemCount
+				v, exists, err := arrayLikeGet(vmInstance, thisVal, from)
+				if err != nil {
+					return vm.Undefined, err
+				}
+				if exists {
+					if err := arrayLikeSet(vmInstance, thisVal, to, v); err != nil {
+						return vm.Undefined, err
+					}
+				} else if err := arrayLikeDelete(vmInstance, thisVal, to); err != nil {
+					return vm.Undefined, err
+				}
+			}
+			for i := length; i > newLength; i-- {
+				if err := arrayLikeDelete(vmInstance, thisVal, i-1); err != nil {
+					return vm.Undefined, err
+				}
+			}
+		} else if itemCount > deleteCount {
+			// Shift the tail right to make room
+			for i := length - deleteCount; i > start; i-- {
+				from, to := i+deleteCount-1, i+itemCount-1
+				v, exists, err := arrayLikeGet(vmInstance, thisVal, from)
+				if err != nil {
+					return vm.Undefined, err
+				}
+				if exists {
+					if err := arrayLikeSet(vmInstance, thisVal, to, v); err != nil {
+						return vm.Undefined, err
+					}
+				} else if err := arrayLikeDelete(vmInstance, thisVal, to); err != nil {
+					return vm.Undefined, err
+				}
+			}
 		}
-		// Perform splice operation manually
-		// Create new elements array
-		newElements := make([]vm.Value, 0)
-		// Add elements before start
-		for i := 0; i < start; i++ {
-			newElements = append(newElements, thisArray.Get(i))
+		for i, item := range itemsToInsert {
+			if err := arrayLikeSet(vmInstance, thisVal, start+i, item); err != nil {
+				return vm.Undefined, err
+			}
 		}
-		// Add items to insert
-		for _, item := range itemsToInsert {
-			newElements = append(newElements, item)
+		if err := arrayLikeSetLength(vmInstance, thisVal, newLength); err != nil {
+			return vm.Undefined, err
 		}
-		// Add elements after deleted section
-		for i := start + deleteCount; i < length; i++ {
-			newElements = append(newElements, thisArray.Get(i))
-		}
-		thisArray.SetElements(newElements)
 		return deleted, nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("concat", vm.NewNativeFunction(1, true, "concat", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil {
-			return vm.NewArray(), nil
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
 		result := vm.NewArray()
-		// Add elements from this array
-		for i := 0; i < thisArray.Length(); i++ {
-			result.AsArray().Append(thisArray.Get(i))
-		}
-		// Add elements from arguments
-		for i := 0; i < len(args); i++ {
-			if otherArray := args[i].AsArray(); otherArray != nil {
-				// If it's an array, add each element
-				for j := 0; j < otherArray.Length(); j++ {
-					result.AsArray().Append(otherArray.Get(j))
+		resultArr := result.AsArray()
+
+		// n tracks the total element count appended so far across every
+		// item, so the "would exceed 2^53-1" check below applies to the
+		// combined result, not just one item - per spec step 5.c.iii, this
+		// must be checked (and throw TypeError) *before* spreading a given
+		// item's elements, since a spreadable array-like can freely declare
+		// any "length" up to 2^53-1 and a bare loop over it would otherwise
+		// take on the order of 2^53 iterations.
+		n := 0
+		appendItem := func(item vm.Value) error {
+			spreadable, err := isConcatSpreadable(vmInstance, item)
+			if err != nil {
+				return err
+			}
+			if !spreadable {
+				if n+1 > maxSafeInteger {
+					return vmInstance.NewTypeError("Invalid array length")
 				}
-			} else {
-				// If it's not an array, add the element itself
-				result.AsArray().Append(args[i])
+				resultArr.Append(item)
+				n++
+				return nil
+			}
+			length, err := arrayLikeLength(vmInstance, item)
+			if err != nil {
+				return err
+			}
+			if n+length > maxSafeInteger {
+				return vmInstance.NewTypeError("Invalid array length")
+			}
+			for i := 0; i < length; i++ {
+				v, _, err := arrayLikeGet(vmInstance, item, i)
+				if err != nil {
+					return err
+				}
+				resultArr.Append(v)
+			}
+			n += length
+			return nil
+		}
+
+		if err := appendItem(thisVal); err != nil {
+			return vm.Undefined, err
+		}
+		for _, arg := range args {
+			if err := appendItem(arg); err != nil {
+				return vm.Undefined, err
 			}
 		}
 		return result, nil
@@ -476,21 +683,28 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil {
-			return vm.NewString(""), nil
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 		separator := ","
 		if len(args) >= 1 {
 			separator = args[0].ToString()
 		}
-		// Build joined string
-		if thisArray.Length() == 0 {
+		if length == 0 {
 			return vm.NewString(""), nil
 		}
-		result := thisArray.Get(0).ToString()
-		for i := 1; i < thisArray.Length(); i++ {
-			result += separator + thisArray.Get(i).ToString()
+		first, _, err := arrayLikeGet(vmInstance, thisVal, 0)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		result := first.ToString()
+		for i := 1; i < length; i++ {
+			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			result += separator + v.ToString()
 		}
 		return vm.NewString(result), nil
 	}))
@@ -501,17 +715,24 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil {
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if length == 0 {
 			return vm.NewString(""), nil
 		}
-		// Build comma-separated string (same as join with default separator)
-		if thisArray.Length() == 0 {
-			return vm.NewString(""), nil
+		first, _, err := arrayLikeGet(vmInstance, thisVal, 0)
+		if err != nil {
+			return vm.Undefined, err
 		}
-		result := thisArray.Get(0).ToString()
-		for i := 1; i < thisArray.Length(); i++ {
-			result += "," + thisArray.Get(i).ToString()
+		result := first.ToString()
+		for i := 1; i < length; i++ {
+			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			result += "," + v.ToString()
 		}
 		return vm.NewString(result), nil
 	}))
@@ -521,20 +742,48 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil {
+		if thisVal.Type() == vm.TypeArray {
+			thisArray := thisVal.AsArray()
+			length := thisArray.Length()
+			for i := 0; i < length/2; i++ {
+				j := length - 1 - i
+				left := thisArray.Get(i)
+				right := thisArray.Get(j)
+				thisArray.Set(i, right)
+				thisArray.Set(j, left)
+			}
 			return thisVal, nil
 		}
-		length := thisArray.Length()
-		// Reverse elements in place
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		for i := 0; i < length/2; i++ {
 			j := length - 1 - i
-			left := thisArray.Get(i)
-			right := thisArray.Get(j)
-			thisArray.Set(i, right)
-			thisArray.Set(j, left)
+			left, leftExists, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			right, rightExists, err := arrayLikeGet(vmInstance, thisVal, j)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if rightExists {
+				if err := arrayLikeSet(vmInstance, thisVal, i, right); err != nil {
+					return vm.Undefined, err
+				}
+			} else if err := arrayLikeDelete(vmInstance, thisVal, i); err != nil {
+				return vm.Undefined, err
+			}
+			if leftExists {
+				if err := arrayLikeSet(vmInstance, thisVal, j, left); err != nil {
+					return vm.Undefined, err
+				}
+			} else if err := arrayLikeDelete(vmInstance, thisVal, j); err != nil {
+				return vm.Undefined, err
+			}
 		}
-		return vmInstance.GetThis(), nil // Return the same array
+		return thisVal, nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("sort", vm.NewNativeFunction(1, false, "sort", func(args []vm.Value) (vm.Value, error) {
@@ -542,18 +791,21 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil {
-			return thisVal, nil
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
-		length := thisArray.Length()
 		if length <= 1 {
-			return vmInstance.GetThis(), nil
+			return thisVal, nil
 		}
 		// Extract elements to slice
 		elements := make([]vm.Value, length)
 		for i := 0; i < length; i++ {
-			elements[i] = thisArray.Get(i)
+			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			elements[i] = v
 		}
 
 		// Get comparator function if provided
@@ -584,8 +836,16 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		// Set sorted elements back
-		thisArray.SetElements(elements)
-		return vmInstance.GetThis(), nil // Return the same array
+		if thisVal.Type() == vm.TypeArray {
+			thisVal.AsArray().SetElements(elements)
+		} else {
+			for i, v := range elements {
+				if err := arrayLikeSet(vmInstance, thisVal, i, v); err != nil {
+					return vm.Undefined, err
+				}
+			}
+		}
+		return thisVal, nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("indexOf", vm.NewNativeFunction(1, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
@@ -593,9 +853,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil {
-			return vm.NumberValue(-1), nil
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 		// If no argument, search for undefined
 		var searchElement vm.Value
@@ -604,7 +864,6 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		} else {
 			searchElement = vm.Undefined
 		}
-		length := thisArray.Length()
 		if length == 0 {
 			return vm.NumberValue(-1), nil
 		}
@@ -628,11 +887,15 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// ECMAScript spec: indexOf uses Strict Equality (===), not SameValueZero
 		// This means NaN !== NaN, so indexOf(NaN) should return -1
 		for i := fromIndex; i < length; i++ {
-			// Skip holes in sparse arrays
-			if !thisArray.HasIndex(i) {
+			v, exists, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			// Skip holes in sparse arrays/array-likes
+			if !exists {
 				continue
 			}
-			if thisArray.Get(i).StrictlyEquals(searchElement) {
+			if v.StrictlyEquals(searchElement) {
 				return vm.NumberValue(float64(i)), nil
 			}
 		}
@@ -644,9 +907,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil {
-			return vm.NumberValue(-1), nil
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 		// If no argument, search for undefined
 		var searchElement vm.Value
@@ -655,7 +918,6 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		} else {
 			searchElement = vm.Undefined
 		}
-		length := thisArray.Length()
 		if length == 0 {
 			return vm.NumberValue(-1), nil
 		}
@@ -678,11 +940,15 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// ECMAScript spec: lastIndexOf uses Strict Equality (===), not SameValueZero
 		// This means NaN !== NaN, so lastIndexOf(NaN) should return -1
 		for i := fromIndex; i >= 0; i-- {
-			// Skip holes in sparse arrays
-			if !thisArray.HasIndex(i) {
+			v, exists, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			// Skip holes in sparse arrays/array-likes
+			if !exists {
 				continue
 			}
-			if thisArray.Get(i).StrictlyEquals(searchElement) {
+			if v.StrictlyEquals(searchElement) {
 				return vm.NumberValue(float64(i)), nil
 			}
 		}
@@ -694,9 +960,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil {
-			return vm.BooleanValue(false), nil
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 		// If no argument, search for undefined
 		var searchElement vm.Value
@@ -705,7 +971,6 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		} else {
 			searchElement = vm.Undefined
 		}
-		length := thisArray.Length()
 		if length == 0 {
 			return vm.BooleanValue(false), nil
 		}
@@ -729,7 +994,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// ECMAScript spec: includes uses SameValueZero, so NaN === NaN (Is() is correct)
 		// Note: includes DOES check holes and finds undefined in them (unlike indexOf)
 		for i := fromIndex; i < length; i++ {
-			if thisArray.Get(i).Is(searchElement) {
+			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if v.Is(searchElement) {
 				return vm.BooleanValue(true), nil
 			}
 		}
@@ -741,9 +1010,12 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.find called on null or undefined")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil || len(args) < 1 {
+		if len(args) < 1 {
 			return vm.Undefined, nil
+		}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 		callback := args[0]
 		if !callback.IsCallable() {
@@ -756,9 +1028,12 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		} else {
 			thisArg = vm.Undefined
 		}
-		for i := 0; i < thisArray.Length(); i++ {
-			element := thisArray.Get(i)
-			result, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), vmInstance.GetThis())
+		for i := 0; i < length; i++ {
+			element, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			result, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -774,9 +1049,12 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.findIndex called on null or undefined")
 		}
-		thisArray := thisVal.AsArray()
-		if thisArray == nil || len(args) < 1 {
+		if len(args) < 1 {
 			return vm.NumberValue(-1), nil
+		}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 		callback := args[0]
 		if !callback.IsCallable() {
@@ -789,9 +1067,12 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		} else {
 			thisArg = vm.Undefined
 		}
-		for i := 0; i < thisArray.Length(); i++ {
-			element := thisArray.Get(i)
-			result, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), vmInstance.GetThis())
+		for i := 0; i < length; i++ {
+			element, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			result, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
 			if err != nil {
 				return vm.NumberValue(-1), err
 			}
@@ -810,16 +1091,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
-		var length int
-		if arr := thisVal.AsArray(); arr != nil {
-			length = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
@@ -846,36 +1120,23 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		result := vm.NewArray()
+		resultArr := result.AsArray()
 
-		// Support both arrays and array-like objects (with sparse array support)
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < length; i++ {
-				// Only call callback for indices that actually exist (sparse array support)
-				if arr.HasIndex(i) {
-					element := arr.Get(i)
-					test, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
-					if err != nil {
-						return vm.NewArray(), err
-					}
-					if test.IsTruthy() {
-						result.AsArray().Append(element)
-					}
-				}
+		for i := 0; i < length; i++ {
+			// Only call callback for indices that actually exist (sparse array support)
+			element, exists, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.NewArray(), err
 			}
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			for i := 0; i < length; i++ {
-				key := fmt.Sprintf("%d", i)
-				// Only call callback for indices that actually exist
-				if _, ok := po.GetOwn(key); ok {
-					elem, _ := po.Get(key)
-					test, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
-					if err != nil {
-						return vm.NewArray(), err
-					}
-					if test.IsTruthy() {
-						result.AsArray().Append(elem)
-					}
-				}
+			if !exists {
+				continue
+			}
+			test, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
+			if err != nil {
+				return vm.NewArray(), err
+			}
+			if test.IsTruthy() {
+				resultArr.Append(element)
 			}
 		}
 		return result, nil
@@ -889,16 +1150,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
-		var length int
-		if arr := thisVal.AsArray(); arr != nil {
-			length = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
@@ -924,44 +1178,35 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			thisArg = vm.Undefined
 		}
 
+		// ArraySpeciesCreate/ArrayCreate(len) throws before any iteration if
+		// len exceeds the max valid Array length - critically, this must
+		// happen before the loop below, not after: len can be up to 2^53-1
+		// (ToLength) for an arbitrary array-like receiver, and a bare loop
+		// over a multi-billion length would otherwise hang the process.
+		if err := checkArrayCreateLength(vmInstance, length); err != nil {
+			return vm.Undefined, err
+		}
+
 		// Create result array with same length (for sparse array support)
 		result := vm.NewArray()
 		resultArr := result.AsArray()
 		resultArr.SetLength(length)
 
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < length; i++ {
-				// Only call callback for indices that actually exist (sparse array support)
-				if arr.HasIndex(i) {
-					element := arr.Get(i)
-					mappedValue, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
-					if err != nil {
-						return vm.Undefined, err
-					}
-					resultArr.Set(i, mappedValue)
-				}
+		for i := 0; i < length; i++ {
+			// Only call callback for indices that actually exist (sparse array support)
+			element, exists, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
 			}
-			return result, nil
-		}
-
-		// Array-like: { length: N, 0: ..., 1: ..., ... }
-		if po := thisVal.AsPlainObject(); po != nil {
-			for i := 0; i < length; i++ {
-				key := fmt.Sprintf("%d", i)
-				// Only call callback for indices that actually exist
-				if _, ok := po.GetOwn(key); ok {
-					elem, _ := po.Get(key)
-					mappedValue, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
-					if err != nil {
-						return vm.Undefined, err
-					}
-					resultArr.Set(i, mappedValue)
-				}
+			if !exists {
+				continue
 			}
-			return result, nil
+			mappedValue, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			resultArr.Set(i, mappedValue)
 		}
-
-		// Non-array-like: return empty array
 		return result, nil
 	}))
 
@@ -973,16 +1218,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
-		var length int
-		if arr := thisVal.AsArray(); arr != nil {
-			length = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
@@ -1008,29 +1246,17 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			thisArg = vm.Undefined
 		}
 
-		// Support both arrays and array-like objects (with sparse array support)
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < length; i++ {
-				// Only call callback for indices that actually exist (sparse array support)
-				if arr.HasIndex(i) {
-					element := arr.Get(i)
-					_, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
-					if err != nil {
-						return vm.Undefined, err
-					}
-				}
+		for i := 0; i < length; i++ {
+			// Only call callback for indices that actually exist (sparse array support)
+			element, exists, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
 			}
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			for i := 0; i < length; i++ {
-				key := fmt.Sprintf("%d", i)
-				// Only call callback for indices that actually exist
-				if _, ok := po.GetOwn(key); ok {
-					elem, _ := po.Get(key)
-					_, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
-					if err != nil {
-						return vm.Undefined, err
-					}
-				}
+			if !exists {
+				continue
+			}
+			if _, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal); err != nil {
+				return vm.Undefined, err
 			}
 		}
 		return vm.Undefined, nil
@@ -1044,16 +1270,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
-		var length int
-		if arr := thisVal.AsArray(); arr != nil {
-			length = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
@@ -1079,35 +1298,21 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			thisArg = vm.Undefined
 		}
 
-		// Support both arrays and array-like objects (with sparse array support)
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < length; i++ {
-				// Only call callback for indices that actually exist (sparse array support)
-				if arr.HasIndex(i) {
-					element := arr.Get(i)
-					result, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
-					if err != nil {
-						return vm.BooleanValue(false), err
-					}
-					if !result.IsTruthy() {
-						return vm.BooleanValue(false), nil
-					}
-				}
+		for i := 0; i < length; i++ {
+			// Only call callback for indices that actually exist (sparse array support)
+			element, exists, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.BooleanValue(false), err
 			}
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			for i := 0; i < length; i++ {
-				key := fmt.Sprintf("%d", i)
-				// Only call callback for indices that actually exist
-				if _, ok := po.GetOwn(key); ok {
-					elem, _ := po.Get(key)
-					result, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
-					if err != nil {
-						return vm.BooleanValue(false), err
-					}
-					if !result.IsTruthy() {
-						return vm.BooleanValue(false), nil
-					}
-				}
+			if !exists {
+				continue
+			}
+			result, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
+			if err != nil {
+				return vm.BooleanValue(false), err
+			}
+			if !result.IsTruthy() {
+				return vm.BooleanValue(false), nil
 			}
 		}
 		return vm.BooleanValue(true), nil
@@ -1121,16 +1326,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
-		var length int
-		if arr := thisVal.AsArray(); arr != nil {
-			length = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
@@ -1156,35 +1354,21 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			thisArg = vm.Undefined
 		}
 
-		// Support both arrays and array-like objects (with sparse array support)
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < length; i++ {
-				// Only call callback for indices that actually exist (sparse array support)
-				if arr.HasIndex(i) {
-					element := arr.Get(i)
-					result, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
-					if err != nil {
-						return vm.BooleanValue(false), err
-					}
-					if result.IsTruthy() {
-						return vm.BooleanValue(true), nil
-					}
-				}
+		for i := 0; i < length; i++ {
+			// Only call callback for indices that actually exist (sparse array support)
+			element, exists, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.BooleanValue(false), err
 			}
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			for i := 0; i < length; i++ {
-				key := fmt.Sprintf("%d", i)
-				// Only call callback for indices that actually exist
-				if _, ok := po.GetOwn(key); ok {
-					elem, _ := po.Get(key)
-					result, err := vmInstance.CallArgs3(callback, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
-					if err != nil {
-						return vm.BooleanValue(false), err
-					}
-					if result.IsTruthy() {
-						return vm.BooleanValue(true), nil
-					}
-				}
+			if !exists {
+				continue
+			}
+			result, err := vmInstance.CallArgs3(callback, thisArg, element, vm.NumberValue(float64(i)), thisVal)
+			if err != nil {
+				return vm.BooleanValue(false), err
+			}
+			if result.IsTruthy() {
+				return vm.BooleanValue(true), nil
 			}
 		}
 		return vm.BooleanValue(false), nil
@@ -1198,16 +1382,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
-		var length int
-		if arr := thisVal.AsArray(); arr != nil {
-			length = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
@@ -1230,42 +1407,30 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Reduce of empty array with no initial value")
 		}
 
-		accumulator := vm.Undefined
+		var accumulator vm.Value
 		startIndex := 0
 		if len(args) >= 2 {
 			accumulator = args[1]
-		} else if arr := thisVal.AsArray(); arr != nil {
-			accumulator = arr.Get(0)
-			startIndex = 1
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if v, ok := po.Get("0"); ok {
-				accumulator = v
+		} else {
+			v, _, err := arrayLikeGet(vmInstance, thisVal, 0)
+			if err != nil {
+				return vm.Undefined, err
 			}
+			accumulator = v
 			startIndex = 1
 		}
 
-		// Iterate
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := startIndex; i < length; i++ {
-				element := arr.Get(i)
-				var err error
-				accumulator, err = vmInstance.CallArgs4(callback, vm.Undefined, accumulator, element, vm.NumberValue(float64(i)), thisVal)
-				if err != nil {
-					return vm.Undefined, err
-				}
+		for i := startIndex; i < length; i++ {
+			element, exists, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
 			}
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			for i := startIndex; i < length; i++ {
-				key := fmt.Sprintf("%d", i)
-				var elem vm.Value = vm.Undefined
-				if v, ok := po.Get(key); ok {
-					elem = v
-				}
-				var err error
-				accumulator, err = vmInstance.CallArgs4(callback, vm.Undefined, accumulator, elem, vm.NumberValue(float64(i)), thisVal)
-				if err != nil {
-					return vm.Undefined, err
-				}
+			if !exists {
+				continue
+			}
+			accumulator, err = vmInstance.CallArgs4(callback, vm.Undefined, accumulator, element, vm.NumberValue(float64(i)), thisVal)
+			if err != nil {
+				return vm.Undefined, err
 			}
 		}
 		return accumulator, nil
@@ -1279,16 +1444,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// 2. Let len be ? LengthOfArrayLike(O). - MUST access length BEFORE checking callback
-		var length int
-		if arr := thisVal.AsArray(); arr != nil {
-			length = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-				if length < 0 {
-					length = 0
-				}
-			}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 
 		// 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
@@ -1311,43 +1469,30 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Reduce of empty array with no initial value")
 		}
 
-		accumulator := vm.Undefined
+		var accumulator vm.Value
 		startIndex := length - 1
 		if len(args) >= 2 {
 			accumulator = args[1]
-		} else if arr := thisVal.AsArray(); arr != nil {
-			accumulator = arr.Get(length - 1)
-			startIndex = length - 2
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			key := fmt.Sprintf("%d", length-1)
-			if v, ok := po.Get(key); ok {
-				accumulator = v
+		} else {
+			v, _, err := arrayLikeGet(vmInstance, thisVal, length-1)
+			if err != nil {
+				return vm.Undefined, err
 			}
+			accumulator = v
 			startIndex = length - 2
 		}
 
-		// Iterate backwards
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := startIndex; i >= 0; i-- {
-				element := arr.Get(i)
-				var err error
-				accumulator, err = vmInstance.CallArgs4(callback, vm.Undefined, accumulator, element, vm.NumberValue(float64(i)), thisVal)
-				if err != nil {
-					return vm.Undefined, err
-				}
+		for i := startIndex; i >= 0; i-- {
+			element, exists, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
 			}
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			for i := startIndex; i >= 0; i-- {
-				key := fmt.Sprintf("%d", i)
-				var elem vm.Value = vm.Undefined
-				if v, ok := po.Get(key); ok {
-					elem = v
-				}
-				var err error
-				accumulator, err = vmInstance.CallArgs4(callback, vm.Undefined, accumulator, elem, vm.NumberValue(float64(i)), thisVal)
-				if err != nil {
-					return vm.Undefined, err
-				}
+			if !exists {
+				continue
+			}
+			accumulator, err = vmInstance.CallArgs4(callback, vm.Undefined, accumulator, element, vm.NumberValue(float64(i)), thisVal)
+			if err != nil {
+				return vm.Undefined, err
 			}
 		}
 		return accumulator, nil
@@ -1362,13 +1507,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Get length
-		var length int
-		if arr := thisVal.AsArray(); arr != nil {
-			length = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-			}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
 
 		// 3. Let relativeIndex be ? ToIntegerOrInfinity(index).
@@ -1398,15 +1539,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// 6. Return ? Get(O, ! ToString(k)).
-		if arr := thisVal.AsArray(); arr != nil {
-			return arr.Get(k), nil
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			key := fmt.Sprintf("%d", k)
-			if v, ok := po.Get(key); ok {
-				return v, nil
-			}
+		v, _, err := arrayLikeGet(vmInstance, thisVal, k)
+		if err != nil {
+			return vm.Undefined, err
 		}
-		return vm.Undefined, nil
+		return v, nil
 	}))
 
 	// Array.prototype.findLast - find from end
@@ -1437,35 +1574,21 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Get length and iterate backwards
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := arr.Length() - 1; i >= 0; i-- {
-				element := arr.Get(i)
-				result, err := vmInstance.CallArgs3(predicate, thisArg, element, vm.NumberValue(float64(i)), thisVal)
-				if err != nil {
-					return vm.Undefined, err
-				}
-				if result.IsTruthy() {
-					return element, nil
-				}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		for i := length - 1; i >= 0; i-- {
+			element, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
 			}
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			length := 0
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
+			result, err := vmInstance.CallArgs3(predicate, thisArg, element, vm.NumberValue(float64(i)), thisVal)
+			if err != nil {
+				return vm.Undefined, err
 			}
-			for i := length - 1; i >= 0; i-- {
-				key := fmt.Sprintf("%d", i)
-				var elem vm.Value = vm.Undefined
-				if v, ok := po.Get(key); ok {
-					elem = v
-				}
-				result, err := vmInstance.CallArgs3(predicate, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
-				if err != nil {
-					return vm.Undefined, err
-				}
-				if result.IsTruthy() {
-					return elem, nil
-				}
+			if result.IsTruthy() {
+				return element, nil
 			}
 		}
 		return vm.Undefined, nil
@@ -1499,35 +1622,21 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Get length and iterate backwards
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := arr.Length() - 1; i >= 0; i-- {
-				element := arr.Get(i)
-				result, err := vmInstance.CallArgs3(predicate, thisArg, element, vm.NumberValue(float64(i)), thisVal)
-				if err != nil {
-					return vm.NumberValue(-1), err
-				}
-				if result.IsTruthy() {
-					return vm.NumberValue(float64(i)), nil
-				}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		for i := length - 1; i >= 0; i-- {
+			element, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
 			}
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			length := 0
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
+			result, err := vmInstance.CallArgs3(predicate, thisArg, element, vm.NumberValue(float64(i)), thisVal)
+			if err != nil {
+				return vm.NumberValue(-1), err
 			}
-			for i := length - 1; i >= 0; i-- {
-				key := fmt.Sprintf("%d", i)
-				var elem vm.Value = vm.Undefined
-				if v, ok := po.Get(key); ok {
-					elem = v
-				}
-				result, err := vmInstance.CallArgs3(predicate, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
-				if err != nil {
-					return vm.NumberValue(-1), err
-				}
-				if result.IsTruthy() {
-					return vm.NumberValue(float64(i)), nil
-				}
+			if result.IsTruthy() {
+				return vm.NumberValue(float64(i)), nil
 			}
 		}
 		return vm.NumberValue(-1), nil
@@ -1541,13 +1650,10 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.copyWithin called on null or undefined")
 		}
 
-		arr := thisVal.AsArray()
-		if arr == nil {
-			// For array-like objects, return unchanged
-			return thisVal, nil
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
-
-		length := arr.Length()
 
 		// 3. Let relativeTarget be ? ToIntegerOrInfinity(target).
 		// Note: Must process arguments before any early returns, as they may throw
@@ -1638,16 +1744,30 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Copy the elements
 		if count > 0 {
+			copyOne := func(i int) error {
+				v, exists, err := arrayLikeGet(vmInstance, thisVal, from+i)
+				if err != nil {
+					return err
+				}
+				if exists {
+					return arrayLikeSet(vmInstance, thisVal, to+i, v)
+				}
+				return arrayLikeDelete(vmInstance, thisVal, to+i)
+			}
 			// Need to handle overlapping regions
 			if from < to && to < from+count {
 				// Copy backwards to avoid overwriting source
 				for i := count - 1; i >= 0; i-- {
-					arr.Set(to+i, arr.Get(from+i))
+					if err := copyOne(i); err != nil {
+						return vm.Undefined, err
+					}
 				}
 			} else {
 				// Copy forwards
 				for i := 0; i < count; i++ {
-					arr.Set(to+i, arr.Get(from+i))
+					if err := copyOne(i); err != nil {
+						return vm.Undefined, err
+					}
 				}
 			}
 		}
@@ -1663,12 +1783,10 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Array.prototype.fill called on null or undefined")
 		}
 
-		arr := thisVal.AsArray()
-		if arr == nil {
-			return thisVal, nil
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
 		}
-
-		length := arr.Length()
 
 		// Get value to fill
 		value := vm.Undefined
@@ -1720,7 +1838,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Fill the array
 		for i := start; i < end; i++ {
-			arr.Set(i, value)
+			if err := arrayLikeSet(vmInstance, thisVal, i, value); err != nil {
+				return vm.Undefined, err
+			}
 		}
 
 		return thisVal, nil
@@ -1751,39 +1871,34 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		resultArr := result.AsArray()
 
 		// Helper function to flatten recursively
-		var flattenInto func(source vm.Value, currentDepth int)
-		flattenInto = func(source vm.Value, currentDepth int) {
-			var length int
-			var getElement func(i int) vm.Value
-
-			if arr := source.AsArray(); arr != nil {
-				length = arr.Length()
-				getElement = func(i int) vm.Value { return arr.Get(i) }
-			} else if po := source.AsPlainObject(); po != nil {
-				if lv, ok := po.Get("length"); ok {
-					length = int(lv.ToFloat())
-				}
-				getElement = func(i int) vm.Value {
-					if v, ok := po.Get(fmt.Sprintf("%d", i)); ok {
-						return v
-					}
-					return vm.Undefined
-				}
-			} else {
-				return
+		var flattenInto func(source vm.Value, currentDepth int) error
+		flattenInto = func(source vm.Value, currentDepth int) error {
+			length, err := arrayLikeLength(vmInstance, source)
+			if err != nil {
+				return err
 			}
-
 			for i := 0; i < length; i++ {
-				element := getElement(i)
-				if currentDepth > 0 && element.IsArray() {
-					flattenInto(element, currentDepth-1)
+				element, exists, err := arrayLikeGet(vmInstance, source, i)
+				if err != nil {
+					return err
+				}
+				if !exists {
+					continue
+				}
+				if currentDepth > 0 && element.Type() == vm.TypeArray {
+					if err := flattenInto(element, currentDepth-1); err != nil {
+						return err
+					}
 				} else {
 					resultArr.Append(element)
 				}
 			}
+			return nil
 		}
 
-		flattenInto(thisVal, depth)
+		if err := flattenInto(thisVal, depth); err != nil {
+			return vm.Undefined, err
+		}
 		return result, nil
 	}))
 
@@ -1818,44 +1933,30 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		resultArr := result.AsArray()
 
 		// Get length and iterate
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < arr.Length(); i++ {
-				element := arr.Get(i)
-				mapped, err := vmInstance.CallArgs3(mapper, thisArg, element, vm.NumberValue(float64(i)), thisVal)
-				if err != nil {
-					return vm.Undefined, err
-				}
-				// Flatten by one level
-				if mappedArr := mapped.AsArray(); mappedArr != nil {
-					for j := 0; j < mappedArr.Length(); j++ {
-						resultArr.Append(mappedArr.Get(j))
-					}
-				} else {
-					resultArr.Append(mapped)
-				}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		for i := 0; i < length; i++ {
+			element, exists, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
 			}
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			length := 0
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
+			if !exists {
+				continue
 			}
-			for i := 0; i < length; i++ {
-				key := fmt.Sprintf("%d", i)
-				var elem vm.Value = vm.Undefined
-				if v, ok := po.Get(key); ok {
-					elem = v
+			mapped, err := vmInstance.CallArgs3(mapper, thisArg, element, vm.NumberValue(float64(i)), thisVal)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			// Flatten by one level
+			if mapped.Type() == vm.TypeArray {
+				mappedArr := mapped.AsArray()
+				for j := 0; j < mappedArr.Length(); j++ {
+					resultArr.Append(mappedArr.Get(j))
 				}
-				mapped, err := vmInstance.CallArgs3(mapper, thisArg, elem, vm.NumberValue(float64(i)), thisVal)
-				if err != nil {
-					return vm.Undefined, err
-				}
-				if mappedArr := mapped.AsArray(); mappedArr != nil {
-					for j := 0; j < mappedArr.Length(); j++ {
-						resultArr.Append(mappedArr.Get(j))
-					}
-				} else {
-					resultArr.Append(mapped)
-				}
+			} else {
+				resultArr.Append(mapped)
 			}
 		}
 
@@ -1879,27 +1980,26 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// ArrayCreate(len) throws before any iteration if len exceeds the
+		// max valid Array length (see checkArrayCreateLength).
+		if err := checkArrayCreateLength(vmInstance, length); err != nil {
+			return vm.Undefined, err
+		}
+
 		// Create a copy
 		result := vm.NewArray()
 		resultArr := result.AsArray()
 
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < arr.Length(); i++ {
-				resultArr.Append(arr.Get(i))
+		for i := 0; i < length; i++ {
+			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
 			}
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			length := 0
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-			}
-			for i := 0; i < length; i++ {
-				key := fmt.Sprintf("%d", i)
-				if v, ok := po.Get(key); ok {
-					resultArr.Append(v)
-				} else {
-					resultArr.Append(vm.Undefined)
-				}
-			}
+			resultArr.Append(v)
 		}
 
 		// Sort the copy using the same logic as sort
@@ -1951,13 +2051,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Get source length
-		var sourceLength int
-		if arr := thisVal.AsArray(); arr != nil {
-			sourceLength = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				sourceLength = int(lv.ToFloat())
-			}
+		sourceLength, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// ArrayCreate(len) throws before any iteration if len exceeds the
+		// max valid Array length (see checkArrayCreateLength).
+		if err := checkArrayCreateLength(vmInstance, sourceLength); err != nil {
+			return vm.Undefined, err
 		}
 
 		// Parse start argument (? ToIntegerOrInfinity)
@@ -2015,21 +2116,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		result := vm.NewArray()
 		resultArr := result.AsArray()
 
-		// Helper to get element
-		getElement := func(i int) vm.Value {
-			if arr := thisVal.AsArray(); arr != nil {
-				return arr.Get(i)
-			} else if po := thisVal.AsPlainObject(); po != nil {
-				if v, ok := po.Get(fmt.Sprintf("%d", i)); ok {
-					return v
-				}
-			}
-			return vm.Undefined
-		}
-
 		// Copy elements before start
 		for i := 0; i < actualStart; i++ {
-			resultArr.Append(getElement(i))
+			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			resultArr.Append(v)
 		}
 
 		// Insert new elements
@@ -2039,7 +2132,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Copy remaining elements after deleted section
 		for i := actualStart + actualDeleteCount; i < sourceLength; i++ {
-			resultArr.Append(getElement(i))
+			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			resultArr.Append(v)
 		}
 
 		return result, nil
@@ -2054,13 +2151,14 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Get length
-		var length int
-		if arr := thisVal.AsArray(); arr != nil {
-			length = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-			}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// ArrayCreate(len) throws before any iteration if len exceeds the
+		// max valid Array length (see checkArrayCreateLength).
+		if err := checkArrayCreateLength(vmInstance, length); err != nil {
+			return vm.Undefined, err
 		}
 
 		// 3. Let relativeIndex be ? ToIntegerOrInfinity(index).
@@ -2097,27 +2195,16 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		result := vm.NewArray()
 		resultArr := result.AsArray()
 
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := 0; i < length; i++ {
-				if i == actualIndex {
-					resultArr.Append(value)
-				} else {
-					resultArr.Append(arr.Get(i))
-				}
+		for i := 0; i < length; i++ {
+			if i == actualIndex {
+				resultArr.Append(value)
+				continue
 			}
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			for i := 0; i < length; i++ {
-				if i == actualIndex {
-					resultArr.Append(value)
-				} else {
-					key := fmt.Sprintf("%d", i)
-					if v, ok := po.Get(key); ok {
-						resultArr.Append(v)
-					} else {
-						resultArr.Append(vm.Undefined)
-					}
-				}
+			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
 			}
+			resultArr.Append(v)
 		}
 
 		return result, nil
@@ -2132,32 +2219,26 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Get length
-		var length int
-		if arr := thisVal.AsArray(); arr != nil {
-			length = arr.Length()
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			if lv, ok := po.Get("length"); ok {
-				length = int(lv.ToFloat())
-			}
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// ArrayCreate(len) throws before any iteration if len exceeds the
+		// max valid Array length (see checkArrayCreateLength).
+		if err := checkArrayCreateLength(vmInstance, length); err != nil {
+			return vm.Undefined, err
 		}
 
 		// Create reversed copy
 		result := vm.NewArray()
 		resultArr := result.AsArray()
 
-		if arr := thisVal.AsArray(); arr != nil {
-			for i := length - 1; i >= 0; i-- {
-				resultArr.Append(arr.Get(i))
+		for i := length - 1; i >= 0; i-- {
+			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			if err != nil {
+				return vm.Undefined, err
 			}
-		} else if po := thisVal.AsPlainObject(); po != nil {
-			for i := length - 1; i >= 0; i-- {
-				key := fmt.Sprintf("%d", i)
-				if v, ok := po.Get(key); ok {
-					resultArr.Append(v)
-				} else {
-					resultArr.Append(vm.Undefined)
-				}
-			}
+			resultArr.Append(v)
 		}
 
 		return result, nil
@@ -2186,13 +2267,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		case len(args) == 0:
 			result = vm.NewArray()
 		case len(args) == 1 && args[0].IsNumber():
-			length := int(args[0].ToFloat())
-			if length < 0 {
-				result = vm.NewArray() // Should throw RangeError in real JS
-			} else {
-				result = vm.NewArray()
-				result.AsArray().SetLength(length)
+			// Per spec (23.1.1.1), the single-number-argument form requires
+			// an exact array index: a non-negative integer that fits in the
+			// ArrayCreate bound. Anything else - negative, fractional, or
+			// >= 2^32 - throws RangeError rather than silently truncating
+			// or (for a huge length) hanging the process on the eventual
+			// element loop some other method would run over it.
+			lengthFloat := args[0].ToFloat()
+			length := int(lengthFloat)
+			if lengthFloat < 0 || float64(length) != lengthFloat || length > maxArrayLength {
+				return vm.Undefined, vmInstance.NewRangeError("Invalid array length")
 			}
+			result = vm.NewArray()
+			result.AsArray().SetLength(length)
 		default:
 			result = vm.NewArrayWithArgs(args)
 		}
@@ -2211,19 +2298,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.BooleanValue(false), nil
 		}
-		arg := args[0]
-		// Check if it's an Array type
-		if arg.Type() == vm.TypeArray {
-			return vm.BooleanValue(true), nil
+		isArr, err := isArraySpec(vmInstance, args[0])
+		if err != nil {
+			return vm.Undefined, err
 		}
-		// Per ECMAScript, Array.prototype is an Array exotic object and isArray should return true
-		// Check if arg is the Array.prototype object
-		if arg.IsObject() && vmInstance.ArrayPrototype.IsObject() {
-			if arg.AsPlainObject() == vmInstance.ArrayPrototype.AsPlainObject() {
-				return vm.BooleanValue(true), nil
-			}
-		}
-		return vm.BooleanValue(false), nil
+		return vm.BooleanValue(isArr), nil
 	}))
 
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
@@ -2440,7 +2519,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if A.IsArray() {
 				arr := A.AsArray()
 				arr.Set(k, kValue)
-			} else if A.IsObject() {
+			} else if A.Type() == vm.TypeObject {
 				po := A.AsPlainObject()
 				// Check if we can create/update this property
 				// CreateDataPropertyOrThrow fails if:
@@ -2462,7 +2541,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// 8. Perform ? Set(A, "length", len, true).
 		if A.IsArray() {
 			// Already set by Set
-		} else if A.IsObject() {
+		} else if A.Type() == vm.TypeObject {
 			po := A.AsPlainObject()
 			lengthVal := vm.NumberValue(float64(len))
 			// Check if there's a setter for "length" and call it
@@ -2633,7 +2712,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 						var done bool = false
 						var value vm.Value = vm.Undefined
 
-						if result.IsObject() {
+						if result.Type() == vm.TypeObject {
 							obj := result.AsPlainObject()
 							if obj != nil {
 								if doneVal, ok := obj.GetOwn("done"); ok {
@@ -2649,7 +2728,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 							// Set length and resolve
 							if A.IsArray() {
 								// Length is automatically updated for arrays
-							} else if A.IsObject() {
+							} else if A.Type() == vm.TypeObject {
 								A.AsPlainObject().SetOwn("length", vm.NumberValue(float64(k)))
 							}
 							resolveWithArray(A)
@@ -2678,7 +2757,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 										// Add to result array
 										if A.IsArray() {
 											A.AsArray().Set(k, v)
-										} else if A.IsObject() {
+										} else if A.Type() == vm.TypeObject {
 											A.AsPlainObject().SetOwn(fmt.Sprintf("%d", k), v)
 										}
 										k++
@@ -2699,7 +2778,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 							// Add to result array
 							if A.IsArray() {
 								A.AsArray().Set(k, mappedValue)
-							} else if A.IsObject() {
+							} else if A.Type() == vm.TypeObject {
 								A.AsPlainObject().SetOwn(fmt.Sprintf("%d", k), mappedValue)
 							}
 							k++
@@ -2746,21 +2825,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 				iterateNext()
 			} else {
-				// Array-like: use length property
-				var length int = 0
-
-				if asyncItems.IsArray() {
-					length = asyncItems.AsArray().Length()
-				} else if asyncItems.IsObject() {
-					obj := asyncItems.AsPlainObject()
-					if obj != nil {
-						if lenVal, ok := obj.GetOwn("length"); ok {
-							length = int(lenVal.ToFloat())
-						}
-					}
-				} else {
-					// For primitives, treat as empty
+				// Array-like: use length property. Covers real Arrays,
+				// PlainObjects, and everything else with a "length" (Arguments,
+				// TypedArray, Proxy, ...) via the same generic accessor the
+				// synchronous Array.prototype methods use.
+				if !asyncItems.IsObject() && !asyncItems.IsCallable() {
+					// Primitives with no [Symbol.asyncIterator]/[Symbol.iterator]
+					// and nothing shaped like an array-like: treat as empty.
 					resolveWithArray(A)
+					return
+				}
+				length, lenErr := arrayLikeLength(vmInstance, asyncItems)
+				if lenErr != nil {
+					rejectWithError(lenErr)
 					return
 				}
 
@@ -2777,7 +2854,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 						// Set length and resolve
 						if A.IsArray() {
 							// Length is auto-updated
-						} else if A.IsObject() {
+						} else if A.Type() == vm.TypeObject {
 							A.AsPlainObject().SetOwn("length", vm.NumberValue(float64(k)))
 						}
 						resolveWithArray(A)
@@ -2785,16 +2862,10 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 					}
 
 					// Get element at k
-					var kValue vm.Value = vm.Undefined
-					if asyncItems.IsArray() {
-						kValue = asyncItems.AsArray().Get(k)
-					} else if asyncItems.IsObject() {
-						obj := asyncItems.AsPlainObject()
-						if obj != nil {
-							if v, ok := obj.GetOwn(fmt.Sprintf("%d", k)); ok {
-								kValue = v
-							}
-						}
+					kValue, _, elemErr := arrayLikeGet(vmInstance, asyncItems, k)
+					if elemErr != nil {
+						rejectWithError(elemErr)
+						return
 					}
 
 					// Handle the value (might be a promise)
@@ -2819,7 +2890,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 									// Add to result array
 									if A.IsArray() {
 										A.AsArray().Set(k, v)
-									} else if A.IsObject() {
+									} else if A.Type() == vm.TypeObject {
 										A.AsPlainObject().SetOwn(fmt.Sprintf("%d", k), v)
 									}
 									k++
@@ -2840,7 +2911,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 						// Add to result array
 						if A.IsArray() {
 							A.AsArray().Set(k, mappedValue)
-						} else if A.IsObject() {
+						} else if A.Type() == vm.TypeObject {
 							A.AsPlainObject().SetOwn(fmt.Sprintf("%d", k), mappedValue)
 						}
 						k++
@@ -2892,13 +2963,15 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return createArgumentsIterator(vmInstance, argsObj), nil
 		}
 
-		// Handle generic array-like objects with length property
+		// Handle generic array-like objects with length property (Map/Set,
+		// TypedArray, Proxy, boxed primitives, ...) - arrayLikeLength returns
+		// 0 for anything with no "length" property rather than erroring, so
+		// this covers exactly the same "has a length property" test the old
+		// PlainObject-only check did, without panicking on anything that
+		// isn't a plain Object.
 		if thisVal.IsObject() {
-			obj := thisVal.AsPlainObject()
-			if obj != nil {
-				if lenVal, ok := obj.GetOwn("length"); ok && lenVal.IsNumber() {
-					return createArrayLikeIterator(vmInstance, thisVal), nil
-				}
+			if _, err := arrayLikeLength(vmInstance, thisVal); err == nil {
+				return createArrayLikeIterator(vmInstance, thisVal), nil
 			}
 		}
 
@@ -2939,13 +3012,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Add Symbol.asyncIterator implementation for arrays (for await...of support)
 	// This wraps the sync iterator in an async iterator (returns promises)
 	asyncIterFn := vm.NewNativeFunction(0, false, "[Symbol.asyncIterator]", func(args []vm.Value) (vm.Value, error) {
-		thisArray := vmInstance.GetThis().AsArray()
-		if thisArray == nil {
-			return vm.Undefined, nil
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
 
-		// Create an async array iterator object (wraps sync iterator)
-		return createAsyncArrayIterator(vmInstance, thisArray), nil
+		// Create an async array iterator object (wraps sync iteration)
+		return createAsyncArrayIterator(vmInstance, thisVal), nil
 	})
 	// Make it writable and configurable like standard JavaScript
 	w2, e2, c2 := true, false, true
@@ -3052,7 +3125,7 @@ func createArrayLikeIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
-	state := &vm.BuiltinIterState{Kind: vm.IterKindLikeValues, Like: arrayLike.AsPlainObject()}
+	state := &vm.BuiltinIterState{Kind: vm.IterKindLikeValues, Like: asPlainObjectOrNil(arrayLike)}
 	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
 	// Add [Symbol.iterator] that returns the iterator itself
@@ -3074,7 +3147,7 @@ func createArrayKeysIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 	if arrayLike.Type() == vm.TypeArray {
 		state.Arr = arrayLike.AsArray()
 	} else {
-		state.Like = arrayLike.AsPlainObject() // nil-safe: nil source iterates as length 0
+		state.Like = asPlainObjectOrNil(arrayLike) // nil source (or non-PlainObject array-like) iterates as length 0
 	}
 	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
@@ -3097,7 +3170,7 @@ func createArrayEntriesIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value 
 	if arrayLike.Type() == vm.TypeArray {
 		state.Arr = arrayLike.AsArray()
 	} else {
-		state.Like = arrayLike.AsPlainObject() // nil-safe: nil source iterates as length 0
+		state.Like = asPlainObjectOrNil(arrayLike) // nil source (or non-PlainObject array-like) iterates as length 0
 	}
 	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
@@ -3113,7 +3186,13 @@ func createArrayEntriesIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value 
 
 // createAsyncArrayIterator creates an async iterator object for array iteration
 // This wraps array iteration to return promises (for await...of support)
-func createAsyncArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value {
+// createAsyncArrayIterator wraps thisVal's synchronous iteration (via the
+// same arrayLikeLength/arrayLikeGet generic accessors every other
+// Array.prototype method uses) in an async iterator whose next() resolves a
+// Promise<{value, done}> - not just for real Arrays, but for anything
+// [Symbol.asyncIterator] can legally be called on via .call()/.apply()
+// (Arguments, TypedArray, Proxy, array-likes, ...).
+func createAsyncArrayIterator(vmInstance *vm.VM, thisVal vm.Value) vm.Value {
 	// Create iterator object inheriting from Object.prototype
 	iterator := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 
@@ -3125,13 +3204,20 @@ func createAsyncArrayIterator(vmInstance *vm.VM, array *vm.ArrayObject) vm.Value
 		// Create iterator result object {value, done}
 		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 
-		if currentIndex >= array.Length() {
+		length, err := arrayLikeLength(vmInstance, thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if currentIndex >= length {
 			// Iterator is exhausted
 			result.SetOwnNonEnumerable("value", vm.Undefined)
 			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
 		} else {
 			// Return current element and advance
-			val := array.Get(currentIndex)
+			val, _, err := arrayLikeGet(vmInstance, thisVal, currentIndex)
+			if err != nil {
+				return vm.Undefined, err
+			}
 			result.SetOwnNonEnumerable("value", val)
 			result.SetOwnNonEnumerable("done", vm.BooleanValue(false))
 			currentIndex++
