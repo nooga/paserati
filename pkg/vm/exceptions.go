@@ -75,7 +75,7 @@ func (vm *VM) findPendingHandler(pc int, includeIterCleanup bool) *ExceptionHand
 func (vm *VM) throwException(value Value) {
 	if debugExceptions {
 		fmt.Printf("[DEBUG exceptions.go] throwException called, exception=%s, frameCount=%d, unwinding=%v, crossedNative=%v\n",
-			value.ToString(), vm.frameCount, vm.unwinding, vm.unwindingCrossedNative)
+			value.Inspect(), vm.frameCount, vm.unwinding, vm.unwindingCrossedNative)
 	}
 	// Avoid double-throwing the same value in a single unwinding sequence
 	// EXCEPT when crossing native boundaries (unwindingCrossedNative=true)
@@ -228,9 +228,26 @@ func (vm *VM) unwindException() bool {
 				return true // Stop here, let native code handle it
 			} else {
 				if debugExceptions {
-					fmt.Printf("[DEBUG unwindException] Hit native boundary at frame %d on RE-THROW PASS; continuing unwinding\n", vm.frameCount-1)
+					fmt.Printf("[DEBUG unwindException] Hit native boundary at frame %d on RE-THROW PASS; popping past it\n", vm.frameCount-1)
 				}
-				// On RE-THROW (already crossed native), don't stop - continue unwinding
+				// On RE-THROW (already crossed native once), pop past this boundary
+				// without stopping again. A native call is represented by either one
+				// frame (isDirectCall only - e.g. a generator prologue frame set up by
+				// executeGeneratorPrologue) or two (a sentinel frame plus the real
+				// closure frame marked isDirectCall right below it - e.g. every call
+				// made through executeUserFunctionSafe/executeUserFunctionWithNewTarget/
+				// the generator- and async-resume entry points). Only a sentinel frame
+				// unambiguously marks the true outer edge of its call region, so only
+				// popping past ONE resets the flag - giving the NEXT native boundary up
+				// the stack (a different, unrelated native caller) its own independent
+				// first chance to stop. Resetting on every isDirectCall frame instead
+				// would also reset while still inside a sentinel+isDirectCall pair
+				// (after popping the inner one but before reaching its own sentinel),
+				// wrongly granting a second "first chance" to a boundary that was
+				// already accounted for.
+				if frame.isSentinelFrame {
+					vm.unwindingCrossedNative = false
+				}
 			}
 		}
 

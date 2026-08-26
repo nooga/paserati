@@ -1679,12 +1679,53 @@ func (vm *VM) putSentinelReg(r []Value) {
 	vm.sentinelRegPool = append(vm.sentinelRegPool, r)
 }
 
+// truncateFramesTo drops every frame from entryCount up to the current
+// vm.frameCount and resets vm.unwindingCrossedNative. Used by
+// executeUserFunctionSafe/executeUserFunctionWithNewTarget's error paths to
+// fully undo a call once its exception has been taken over as a Go error:
+// unwindException deliberately leaves the frame(s) it stopped at (a
+// sentinel, or the isDirectCall closure frame one level in) unpopped, so
+// without this the frame slot could be mistaken for a still-live boundary by
+// a later, unrelated throw (see the callers' comments).
+//
+// Resetting the flag here matters just as much as dropping the frame: this
+// call's boundary has now been fully closed out (converted to a Go error,
+// its frame gone), so whatever throws next - a sibling call made by the
+// same native caller, or a re-throw of this very error one level further
+// out - is a *different* boundary and deserves its own first chance to
+// stop, not to inherit "already crossed" from a boundary that no longer
+// exists. Without this reset, a re-throw from an outer native caller (e.g.
+// executeGeneratorPrologue re-injecting this error into the calling
+// frame's bytecode) would find crossedNative already true and blow
+// straight through its own boundary too.
+//
+// This does NOT reclaim vm.nextRegSlot for the dropped frame(s)' register
+// windows. That's a real leaked-registers gap (unwindException's own
+// frame-popping loop has the same gap: it decrements vm.frameCount without
+// touching vm.nextRegSlot for every frame it walks past), but register
+// space is only reclaimed in bulk relative to the frame the dispatch loop
+// eventually resumes at, not frame-by-frame during unwinding - subtracting
+// an additional, independently-computed delta here corrupted that
+// accounting and broke a previously-working reproducer (nextRegSlot went
+// negative). Left as a documented pre-existing gap rather than a local fix
+// that isn't provably correct; see issue #61.
+func (vm *VM) truncateFramesTo(entryCount int) {
+	vm.frameCount = entryCount
+	vm.unwindingCrossedNative = false
+}
+
 func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args []Value, newTarget Value, isDerivedConstructor bool) (Value, error) {
 	// Clear stale unwinding state
 	if vm.unwinding && vm.currentException == Null {
 		vm.unwinding = false
 		vm.unwindingCrossedNative = false
 	}
+
+	// See the matching comment in executeUserFunctionSafe: remember our entry
+	// depth so the error paths below can drop any frame(s) unwinding stopped
+	// at without popping, once we've taken ownership of the exception as a
+	// Go error.
+	frameCountAtEntry := vm.frameCount
 
 	// Set up the caller context (pooled 1-element result holder, not a per-call alloc)
 	callerRegisters := vm.getSentinelReg()
@@ -1744,6 +1785,7 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 		if vm.unwinding && vm.currentException != Null {
 			ex := vm.currentException
 			vm.currentException = Null
+			vm.truncateFramesTo(frameCountAtEntry)
 			return Undefined, exceptionError{exception: ex}
 		}
 		return Undefined, fmt.Errorf("runtime error during constructor execution")
@@ -1752,6 +1794,7 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 	if vm.unwinding && vm.currentException != Null {
 		ex := vm.currentException
 		vm.currentException = Null
+		vm.truncateFramesTo(frameCountAtEntry)
 		return Undefined, exceptionError{exception: ex}
 	}
 
@@ -1773,6 +1816,21 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 		vm.unwinding = false
 		vm.unwindingCrossedNative = false
 	}
+
+	// Remember the frame depth this call started at so the error paths below
+	// can fully unwind back to it. When unwindException stops at our own
+	// isDirectCall boundary (or, one level further out via a nested native
+	// call, at our sentinel), it deliberately leaves that frame on the stack
+	// instead of popping it. We hand the exception to our native caller as a
+	// Go error here, taking ownership of it - so from the VM's perspective
+	// this call is over and every frame it pushed (the sentinel, and the
+	// direct-call frame if unwinding stopped there without popping it) must
+	// go with it. Left in place, a stale frame would sit on vm.frames and
+	// get mistaken for a fresh, still-live native boundary by a *later*,
+	// unrelated throw during a subsequent call made by the same native
+	// caller (e.g. DisposableStack running several dispose() callbacks in
+	// sequence, each via its own executeUserFunctionSafe call).
+	frameCountAtEntry := vm.frameCount
 
 	// Set up the caller context first (pooled 1-element result holder)
 	callerRegisters := vm.getSentinelReg()
@@ -1821,6 +1879,11 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 			vm.currentException = Null
 			// vm.unwinding = false         // OLD: Don't clear this!
 			// vm.unwindingCrossedNative... // OLD: Don't clear this either!
+			// We're taking ownership of the exception as a Go error - drop any
+			// frame(s) unwinding stopped at without popping (see comment above
+			// frameCountAtEntry) so they can't be mistaken for a live boundary
+			// by a later, unrelated throw.
+			vm.truncateFramesTo(frameCountAtEntry)
 			return Undefined, exceptionError{exception: ex}
 		}
 		return Undefined, fmt.Errorf("runtime error during user function execution")
@@ -1832,6 +1895,7 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 		vm.currentException = Null
 		// vm.unwinding = false         // OLD: Don't clear this!
 		// vm.unwindingCrossedNative... // OLD: Don't clear this either!
+		vm.truncateFramesTo(frameCountAtEntry)
 		return Undefined, exceptionError{exception: ex}
 	}
 

@@ -4537,6 +4537,18 @@ func (c *Compiler) emitIteratorCleanupWithDone(iteratorReg Register, doneReg Reg
 	// Skip calling return if it's nullish
 	skipCallJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, notNullishReg, line)
 
+	// Mark the iterator as done *before* calling return(), not after: this
+	// whole normal-path close sits inside the surrounding destructuring
+	// pattern's own abrupt-completion try region (see compileArrayPattern's
+	// iteratorCleanupTryStart/TryEnd - it has to, so that a yield mid-pattern
+	// still resumes correctly). If this return() call itself throws, that
+	// throw is still "inside" the try region, and the pattern's own
+	// IsIteratorCleanup handler (emitIteratorCleanupAbruptIfNotDone) would
+	// otherwise see doneReg still false and call return() on the same
+	// iterator a second time - which is exactly what already happened here:
+	// return() shouldn't be re-entered once we've committed to closing.
+	c.emitLoadTrue(doneReg, line)
+
 	// Call iterator.return()
 	resultReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(resultReg)
