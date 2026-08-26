@@ -618,6 +618,15 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 						}
 					}
 				}
+			case TypedArrayFloat16:
+				if ctor, ok := vm.GetGlobal("Float16Array"); ok {
+					if ctor.Type() == TypeNativeFunctionWithProps {
+						fn := ctor.AsNativeFunctionWithProps()
+						if p, hit := fn.Properties.GetOwn("prototype"); hit {
+							prototype = p.AsPlainObject()
+						}
+					}
+				}
 			case TypedArrayFloat32:
 				if ctor, ok := vm.GetGlobal("Float32Array"); ok {
 					if ctor.Type() == TypeNativeFunctionWithProps {

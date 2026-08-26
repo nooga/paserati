@@ -29,6 +29,7 @@ const (
 	TypedArrayUint16
 	TypedArrayInt32
 	TypedArrayUint32
+	TypedArrayFloat16
 	TypedArrayFloat32
 	TypedArrayFloat64
 	TypedArrayBigInt64
@@ -423,6 +424,8 @@ func (kind TypedArrayKind) BytesPerElement() int {
 		return 1
 	case TypedArrayInt16, TypedArrayUint16:
 		return 2
+	case TypedArrayFloat16:
+		return 2
 	case TypedArrayInt32, TypedArrayUint32, TypedArrayFloat32:
 		return 4
 	case TypedArrayFloat64, TypedArrayBigInt64, TypedArrayBigUint64:
@@ -449,6 +452,8 @@ func (kind TypedArrayKind) Name() string {
 		return "Int32Array"
 	case TypedArrayUint32:
 		return "Uint32Array"
+	case TypedArrayFloat16:
+		return "Float16Array"
 	case TypedArrayFloat32:
 		return "Float32Array"
 	case TypedArrayFloat64:
@@ -488,6 +493,9 @@ func (ta *TypedArrayObject) GetElement(index int) Value {
 		return Number(float64(int32(binary.LittleEndian.Uint32(data))))
 	case TypedArrayUint32:
 		return Number(float64(binary.LittleEndian.Uint32(data)))
+	case TypedArrayFloat16:
+		bits := binary.LittleEndian.Uint16(data)
+		return Number(Float16BitsToFloat64(bits))
 	case TypedArrayFloat32:
 		bits := binary.LittleEndian.Uint32(data)
 		return Number(float64(math.Float32frombits(bits)))
@@ -550,6 +558,102 @@ func JSWrapInt(num float64, bits uint) uint64 {
 	return uint64(mod)
 }
 
+// Float64ToFloat16Bits converts x to the bit pattern of the nearest IEEE 754
+// binary16 (half-precision) value, round-to-nearest-even. Shared by
+// Math.f16round, Float16Array element storage, and
+// DataView.prototype.setFloat16 so the rounding behavior (and its edge
+// cases: subnormals, overflow to infinity, NaN payload) lives in one place.
+func Float64ToFloat16Bits(x float64) uint16 {
+	bits := math.Float64bits(x)
+	sign := bits >> 63
+	exp := int((bits >> 52) & 0x7FF)
+	frac := bits & 0xFFFFFFFFFFFFF
+
+	const f16ExpBias = 15
+	const f64ExpBias = 1023
+
+	unbiasedExp := exp - f64ExpBias
+
+	if exp == 0x7FF {
+		// Infinity or NaN
+		if frac == 0 {
+			return uint16(sign<<15) | 0x7C00
+		}
+		return uint16(sign<<15) | 0x7E00
+	}
+	if exp == 0 {
+		// Denormal or zero in float64 - becomes zero in float16
+		return uint16(sign << 15)
+	}
+	if unbiasedExp > 15 {
+		// Overflow to infinity
+		return uint16(sign<<15) | 0x7C00
+	}
+	if unbiasedExp < -24 {
+		// Underflow to zero
+		return uint16(sign << 15)
+	}
+	if unbiasedExp < -14 {
+		// Denormal in float16: shift the mantissa right to create a denormal
+		shift := uint(-14 - unbiasedExp)
+		frac16 := (frac >> 42) | 0x400 // top 10 bits + implicit 1
+		frac16 = frac16 >> shift
+		// Round to nearest even
+		if (frac>>(42+shift-1))&1 == 1 {
+			frac16++
+		}
+		return uint16(sign<<15) | uint16(frac16&0x3FF)
+	}
+
+	// Normal number: take the top 10 bits of the mantissa, round to nearest even
+	f16Exp := uint16(unbiasedExp + f16ExpBias)
+	frac16 := frac >> 42
+	if (frac>>41)&1 == 1 { // 11th bit: round?
+		lowerBits := frac & 0x1FFFFFFFFFF // bits 0-40
+		if lowerBits != 0 || (frac16&1) == 1 {
+			frac16++
+			if frac16 > 0x3FF {
+				frac16 = 0
+				f16Exp++
+				if f16Exp > 30 {
+					return uint16(sign<<15) | 0x7C00 // overflow to infinity
+				}
+			}
+		}
+	}
+	return uint16(sign<<15) | (f16Exp << 10) | uint16(frac16&0x3FF)
+}
+
+// Float16BitsToFloat64 converts an IEEE 754 binary16 bit pattern to float64.
+func Float16BitsToFloat64(bits uint16) float64 {
+	sign := (bits >> 15) & 1
+	exp := (bits >> 10) & 0x1F
+	frac := bits & 0x3FF
+
+	var result float64
+	switch {
+	case exp == 0x1F:
+		if frac == 0 {
+			result = math.Inf(1)
+		} else {
+			result = math.NaN()
+		}
+	case exp == 0:
+		if frac == 0 {
+			result = 0
+		} else {
+			result = float64(frac) / 1024.0 * math.Pow(2, -14) // denormal
+		}
+	default:
+		result = (1.0 + float64(frac)/1024.0) * math.Pow(2, float64(exp)-15)
+	}
+
+	if sign == 1 {
+		result = -result
+	}
+	return result
+}
+
 // SetTypedArrayElement sets an element at the given index
 func (ta *TypedArrayObject) SetElement(index int, value Value) {
 	// GetLength() returns 0 when out of bounds (detached, or shrunk past this
@@ -579,6 +683,8 @@ func (ta *TypedArrayObject) SetElement(index int, value Value) {
 		binary.LittleEndian.PutUint16(data, uint16(JSWrapInt(num, 16)))
 	case TypedArrayInt32, TypedArrayUint32:
 		binary.LittleEndian.PutUint32(data, uint32(JSWrapInt(num, 32)))
+	case TypedArrayFloat16:
+		binary.LittleEndian.PutUint16(data, Float64ToFloat16Bits(num))
 	case TypedArrayFloat32:
 		binary.LittleEndian.PutUint32(data, math.Float32bits(float32(num)))
 	case TypedArrayFloat64:

@@ -75,6 +75,7 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &Int32ArrayInitializer{})
 	initializers = append(initializers, &Float32ArrayInitializer{})
 	initializers = append(initializers, &Float64ArrayInitializer{})
+	initializers = append(initializers, &Float16ArrayInitializer{})
 	initializers = append(initializers, &BigInt64ArrayInitializer{})
 	initializers = append(initializers, &BigUint64ArrayInitializer{})
 	initializers = append(initializers, &AtomicsInitializer{})

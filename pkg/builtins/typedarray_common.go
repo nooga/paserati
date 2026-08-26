@@ -183,6 +183,48 @@ func TypedArrayGPFC(vmInstance *vm.VM, defaultProtoIntrinsic string) (vm.Value, 
 	return vmInstance.GetPrototypeFromConstructor(newTarget, defaultProtoIntrinsic)
 }
 
+// typedArrayEffectivePrototype resolves the prototype a TypedArray instance
+// actually uses: its per-instance override if one was set (subclassing, or a
+// custom newTarget via Reflect.construct), else the intrinsic prototype for
+// its element kind. Returns vm.Undefined if val isn't a TypedArray.
+func typedArrayEffectivePrototype(vmInstance *vm.VM, val vm.Value) vm.Value {
+	ta := val.AsTypedArray()
+	if ta == nil {
+		return vm.Undefined
+	}
+	if p := ta.GetPrototype(); p.IsObject() {
+		return p
+	}
+	switch ta.GetElementType() {
+	case vm.TypedArrayInt8:
+		return vmInstance.Int8ArrayPrototype
+	case vm.TypedArrayUint8:
+		return vmInstance.Uint8ArrayPrototype
+	case vm.TypedArrayUint8Clamped:
+		return vmInstance.Uint8ClampedArrayPrototype
+	case vm.TypedArrayInt16:
+		return vmInstance.Int16ArrayPrototype
+	case vm.TypedArrayUint16:
+		return vmInstance.Uint16ArrayPrototype
+	case vm.TypedArrayInt32:
+		return vmInstance.Int32ArrayPrototype
+	case vm.TypedArrayUint32:
+		return vmInstance.Uint32ArrayPrototype
+	case vm.TypedArrayFloat16:
+		return vmInstance.Float16ArrayPrototype
+	case vm.TypedArrayFloat32:
+		return vmInstance.Float32ArrayPrototype
+	case vm.TypedArrayFloat64:
+		return vmInstance.Float64ArrayPrototype
+	case vm.TypedArrayBigInt64:
+		return vmInstance.BigInt64ArrayPrototype
+	case vm.TypedArrayBigUint64:
+		return vmInstance.BigUint64ArrayPrototype
+	default:
+		return vmInstance.TypedArrayPrototype
+	}
+}
+
 // typedArrayIntrinsicProtoName maps a TypedArrayKind to its %Foo.prototype%
 // intrinsic name, for GetPrototypeFromConstructor's cross-realm default.
 func typedArrayIntrinsicProtoName(kind vm.TypedArrayKind) string {
@@ -201,6 +243,8 @@ func typedArrayIntrinsicProtoName(kind vm.TypedArrayKind) string {
 		return "%Uint32Array.prototype%"
 	case vm.TypedArrayInt32:
 		return "%Int32Array.prototype%"
+	case vm.TypedArrayFloat16:
+		return "%Float16Array.prototype%"
 	case vm.TypedArrayFloat32:
 		return "%Float32Array.prototype%"
 	case vm.TypedArrayFloat64:

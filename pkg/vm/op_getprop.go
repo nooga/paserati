@@ -1382,6 +1382,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			proto = vm.Int32ArrayPrototype
 		case TypedArrayUint32:
 			proto = vm.Uint32ArrayPrototype
+		case TypedArrayFloat16:
+			proto = vm.Float16ArrayPrototype
 		case TypedArrayFloat32:
 			proto = vm.Float32ArrayPrototype
 		case TypedArrayFloat64:

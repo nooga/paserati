@@ -61,6 +61,7 @@ type Realm struct {
 	Uint16ArrayPrototype       Value
 	Uint32ArrayPrototype       Value
 	Int32ArrayPrototype        Value
+	Float16ArrayPrototype      Value
 	Float32ArrayPrototype      Value
 	Float64ArrayPrototype      Value
 	BigInt64ArrayPrototype     Value
@@ -188,6 +189,7 @@ func (r *Realm) InitializePrototypes() {
 	r.Uint16ArrayPrototype = NewObject(r.TypedArrayPrototype)
 	r.Uint32ArrayPrototype = NewObject(r.TypedArrayPrototype)
 	r.Int32ArrayPrototype = NewObject(r.TypedArrayPrototype)
+	r.Float16ArrayPrototype = NewObject(r.TypedArrayPrototype)
 	r.Float32ArrayPrototype = NewObject(r.TypedArrayPrototype)
 	r.Float64ArrayPrototype = NewObject(r.TypedArrayPrototype)
 	r.BigInt64ArrayPrototype = NewObject(r.TypedArrayPrototype)
