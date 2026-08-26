@@ -449,8 +449,12 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			if err != nil {
 				return Undefined, err
 			}
-			// ECMAScript 10.5.8 invariant validation
-			if targetObj := proxy.target.AsPlainObject(); targetObj != nil {
+			// ECMAScript 10.5.8 invariant validation. Only PlainObject targets
+			// go through this check - proxy.target can legally be any object
+			// type (Array, TypedArray, another Proxy, ...), and AsPlainObject()
+			// panics on anything that isn't exactly TypeObject.
+			if proxy.target.Type() == TypeObject {
+				targetObj := proxy.target.AsPlainObject()
 				// Check for non-configurable accessor with get=undefined
 				if g, _, _, c, isAccessor := targetObj.GetOwnAccessor(propName); isAccessor && !c {
 					if g.Type() == TypeUndefined && !result.IsUndefined() {
@@ -888,16 +892,32 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		// Arguments objects: check length, numeric indices, and named properties
 		args := obj.AsArguments()
 		if args != nil {
-			// Check for 'length' property
+			// 'length'/'callee' can be overridden by an explicit assignment
+			// (stored in the overflow named-property map, since the real
+			// a.length/a.callee fields back the live argument count/callee
+			// instead) - an override must win over the live value. See
+			// op_setprop.go's TypeArguments case, which is the write side
+			// of this same convention.
 			if propName == "length" {
+				if v, ok := args.GetNamedProp("length"); ok {
+					return v, nil
+				}
 				return NumberValue(float64(args.Length())), nil
 			}
 			// Check for 'callee' property (only in non-strict mode)
 			if propName == "callee" && !args.IsStrict() {
+				if v, ok := args.GetNamedProp("callee"); ok {
+					return v, nil
+				}
 				return args.Callee(), nil
 			}
-			// Check for numeric index access
-			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < args.Length() {
+			// Check for numeric index access. Bounds-check via Get() itself
+			// (which checks the live args slice, then namedProps) rather
+			// than args.Length() here - Length() is the *original* argument
+			// count and doesn't grow when SetIndexed() extends the backing
+			// slice past it (e.g. after `arguments[10] = x` or a generic
+			// Array.prototype method writing past the end via .call()).
+			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 {
 				return args.Get(idx), nil
 			}
 			// Check for named properties (like value, writable, get, set, etc.)
@@ -1024,10 +1044,60 @@ func (vm *VM) SetProperty(obj Value, propName string, value Value) error {
 		regexObj.Properties.SetOwn(propName, value)
 		return nil
 
+	case TypeArray:
+		arr := obj.AsArray()
+		if propName == "length" {
+			arr.SetLength(toLengthIntForSetProperty(value))
+			return nil
+		}
+		if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 {
+			arr.Set(idx, value)
+			return nil
+		}
+		// Non-index properties on an Array (e.g. an ad-hoc named property)
+		// aren't represented on ArrayObject in this engine; silently
+		// dropping matches this function's pre-existing "no-op for
+		// anything it doesn't model" convention rather than panicking.
+		return nil
+
+	case TypeArguments:
+		// Mirrors op_setprop.go's TypeArguments case (the bytecode
+		// OpSetProp handler) so native Go callers of SetProperty see the
+		// same semantics as compiled `arguments.x = v` / `arguments[i] = v`.
+		args := obj.AsArguments()
+		switch propName {
+		case "callee":
+			args.SetNamedProp("callee", value)
+		case "length":
+			args.SetNamedProp("length", value)
+		default:
+			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 {
+				args.SetIndexed(idx, value)
+			} else {
+				args.SetNamedProp(propName, value)
+			}
+		}
+		return nil
+
 	default:
 		// For non-objects, this is a no-op (or could throw in strict mode)
 		return nil
 	}
+}
+
+// toLengthIntForSetProperty mirrors builtins.toLengthInt (ToLength clamping)
+// without creating an import cycle - SetProperty needs the same clamping
+// when a caller writes an Array's "length" property to an arbitrary value.
+func toLengthIntForSetProperty(v Value) int {
+	n := v.ToFloat()
+	if n != n || n <= 0 {
+		return 0
+	}
+	const maxSafeInteger = 9007199254740991
+	if n > maxSafeInteger {
+		n = maxSafeInteger
+	}
+	return int(n)
 }
 
 // GetSymbolPropertyWithGetter gets a symbol property from an object value, handling getters and prototype chain

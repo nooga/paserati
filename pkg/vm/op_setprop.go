@@ -806,16 +806,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		default:
 			// Check for numeric string index
 			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 {
-				// For mapped arguments, write directly to the register
-				if idx < argObj.numMapped && argObj.mappedRegs != nil {
-					argObj.mappedRegs[idx] = *valueToSet
-				} else {
-					// Expand args array if needed
-					for len(argObj.args) <= idx {
-						argObj.args = append(argObj.args, Undefined)
-					}
-					argObj.args[idx] = *valueToSet
-				}
+				argObj.SetIndexed(idx, *valueToSet)
 			} else {
 				// Store in overflow named properties
 				argObj.SetNamedProp(propName, *valueToSet)
