@@ -315,11 +315,9 @@ func TypedArrayLengthToIndex(vmInstance *vm.VM, arg vm.Value) (int, error) {
 // alignment (length omitted) or a bounds check (length given). Returns
 // length == -1 when the resulting view should auto/length-track the buffer.
 func computeBufferViewOffsetLength(vmInstance *vm.VM, buf *vm.ArrayBufferObject, args []vm.Value, elementSize int) (off int, length int, err error) {
-	byteOffsetArg := vm.Value{}
+	byteOffsetArg := vm.Undefined
 	if len(args) > 1 {
 		byteOffsetArg = args[1]
-	} else {
-		byteOffsetArg = vm.Undefined
 	}
 	off, err = ValidateTypedArrayByteOffset(vmInstance, byteOffsetArg, elementSize)
 	if err != nil {
@@ -351,11 +349,9 @@ func computeBufferViewOffsetLength(vmInstance *vm.VM, buf *vm.ArrayBufferObject,
 // computeBufferViewOffsetLength. SharedArrayBuffers cannot be detached, so
 // there is no post-coercion detach recheck.
 func computeSharedBufferViewOffsetLength(vmInstance *vm.VM, sab *vm.SharedArrayBufferObject, args []vm.Value, elementSize int) (off int, length int, err error) {
-	byteOffsetArg := vm.Value{}
+	byteOffsetArg := vm.Undefined
 	if len(args) > 1 {
 		byteOffsetArg = args[1]
-	} else {
-		byteOffsetArg = vm.Undefined
 	}
 	off, err = ValidateTypedArrayByteOffsetShared(vmInstance, byteOffsetArg, elementSize)
 	if err != nil {
