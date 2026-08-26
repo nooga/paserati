@@ -2599,6 +2599,27 @@ func (a *ArgumentsObject) Set(index int, value Value) {
 	a.args[index] = value
 }
 
+// SetIndexed writes value at index, expanding the backing args slice as
+// needed - unlike Set (which is a no-op past the current length), this
+// mirrors how an arguments object behaves as a plain object with numeric
+// keys: `arguments[10] = x` on a 2-argument call creates the property.
+// Mapped (sloppy-mode) arguments still write through to the live parameter
+// register. Shared by op_setprop.go's OpSetProp handling and VM.SetProperty
+// so both stay in sync.
+func (a *ArgumentsObject) SetIndexed(index int, value Value) {
+	if index < 0 {
+		return
+	}
+	if index < a.numMapped && a.mappedRegs != nil {
+		a.mappedRegs[index] = value
+		return
+	}
+	for len(a.args) <= index {
+		a.args = append(a.args, Undefined)
+	}
+	a.args[index] = value
+}
+
 // Callee returns the function that created this arguments object
 func (a *ArgumentsObject) Callee() Value {
 	return a.callee
