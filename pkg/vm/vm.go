@@ -1296,14 +1296,42 @@ func (vm *VM) InterpretWithCallerScope(chunk *Chunk, callerRegs []Value, callerT
 
 // run is the main execution loop.
 // It now returns the InterpretResult status AND the final script Value.
-func (vm *VM) run() (InterpretResult, Value) {
-	// Panic recovery - log panics when debugging
+func (vm *VM) run() (status InterpretResult, resultValue Value) {
+	// Panic recovery: convert a panic anywhere in the interpreter loop into
+	// a normal runtime error instead of silently reporting InterpretOK.
+	// Named returns matter here - InterpretOK is the zero value of
+	// InterpretResult, so a bare `defer func() { recover() }()` with
+	// unnamed returns used to make a crashing script indistinguishable
+	// from one that ran to completion (see paserati#44): no error, no
+	// stack, exit 0. debugVM only gates the *tracing* dump below; the
+	// panic itself is always surfaced on stderr and turned into a
+	// collected runtime error so callers (and exit codes, and test
+	// harnesses) see it.
 	defer func() {
 		if r := recover(); r != nil {
 			if debugVM {
 				fmt.Printf("[PANIC] Recovered panic in VM.run(): %v\n", r)
 				debug.PrintStack()
 			}
+			stack := debug.Stack()
+			fmt.Fprintf(os.Stderr, "[VM PANIC] recovered: %v\n%s", r, stack)
+			// vm.runtimeError() reads current frame/chunk state to attach a
+			// source position; if the panic itself corrupted that state,
+			// runtimeError could panic in turn. Guard against that so a
+			// crash reporting a crash can never escape as a second panic.
+			func() {
+				defer func() {
+					if r2 := recover(); r2 != nil {
+						fmt.Fprintf(os.Stderr, "[VM PANIC] runtimeError itself panicked while reporting the above: %v\n", r2)
+						vm.errors = append(vm.errors, &errors.RuntimeError{
+							Msg: fmt.Sprintf("Internal VM Error: panic during execution: %v", r),
+						})
+						status = InterpretRuntimeError
+					}
+				}()
+				status = vm.runtimeError("Internal VM Error: panic during execution: %v", r)
+			}()
+			resultValue = Undefined
 		}
 	}()
 
