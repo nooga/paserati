@@ -2232,12 +2232,14 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	// Module Namespace Exotic Object [[SetPrototypeOf]] behavior (ECMAScript 10.4.6.3)
 	// Uses SetImmutablePrototype which returns true if V is same as [[Prototype]], false otherwise
 	// For namespace objects, [[Prototype]] is always null
-	if plainObj := obj.AsPlainObject(); plainObj != nil && plainObj.IsModuleNamespace() {
-		// Namespace prototype is always null
-		if proto.Type() == vm.TypeNull {
-			return obj, nil // Success - proto matches
+	if obj.Type() == vm.TypeObject {
+		if plainObj := obj.AsPlainObject(); plainObj != nil && plainObj.IsModuleNamespace() {
+			// Namespace prototype is always null
+			if proto.Type() == vm.TypeNull {
+				return obj, nil // Success - proto matches
+			}
+			return vm.Undefined, vmInstance.NewTypeError("Cannot set prototype of immutable prototype exotic object")
 		}
-		return vm.Undefined, vmInstance.NewTypeError("Cannot set prototype of immutable prototype exotic object")
 	}
 
 	// Set the prototype based on object type
@@ -3350,6 +3352,7 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	}
 
 	// Define the property with attributes (on plain objects only for now)
+	if obj.Type() == vm.TypeObject {
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
 		// Check if property already exists and get existing attributes
 		var exists bool
@@ -3461,10 +3464,11 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 				plainObj.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
 			}
 		}
-	} else if dictObj := obj.AsDictObject(); dictObj != nil {
+	}
+	} else if obj.Type() == vm.TypeDictObject {
 		// DictObject has no attributes; set value only for string keys; symbols unsupported
 		if !keyIsSymbol {
-			dictObj.SetOwn(propName, value)
+			obj.AsDictObject().SetOwn(propName, value)
 		}
 	} else if obj.Type() == vm.TypeNativeFunctionWithProps {
 		// NativeFunctionWithProps (like Function.prototype) stores properties in Properties
@@ -3506,23 +3510,25 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			}
 		}
 	} else if obj.Type() == vm.TypeClosure {
-		// Closures store additional properties in their function's Properties field
+		// Closures store additional properties in their own Properties field
+		// (not the shared FunctionObject's) so distinct closures over the same
+		// function body don't leak properties into each other.
 		cl := obj.AsClosure()
-		if cl != nil && cl.Fn != nil {
-			if cl.Fn.Properties == nil {
-				cl.Fn.Properties = vm.NewObject(vm.Undefined).AsPlainObject()
+		if cl != nil {
+			if cl.Properties == nil {
+				cl.Properties = vm.NewObject(vm.Undefined).AsPlainObject()
 			}
 			if hasGetter || hasSetter {
 				if keyIsSymbol {
-					cl.Fn.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+					cl.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
 				} else {
-					cl.Fn.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+					cl.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
 				}
 			} else {
 				if keyIsSymbol {
-					cl.Fn.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+					cl.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
 				} else {
-					cl.Fn.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+					cl.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
 				}
 			}
 		}
@@ -4361,8 +4367,10 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 			// ECMAScript 10.5.3: trap result must match target's IsExtensible
 			trapResult := result.IsTruthy()
 			targetExtensible := true
-			if targetObj := proxy.Target().AsPlainObject(); targetObj != nil {
-				targetExtensible = targetObj.IsExtensible()
+			if proxy.Target().Type() == vm.TypeObject {
+				if targetObj := proxy.Target().AsPlainObject(); targetObj != nil {
+					targetExtensible = targetObj.IsExtensible()
+				}
 			} else if proxy.Target().Type() == vm.TypeArray {
 				targetExtensible = proxy.Target().AsArray().IsExtensible()
 			}
@@ -4444,8 +4452,10 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 
 			// ECMAScript 10.5.4: if trap returns true, target must be non-extensible
 			targetExtensible := true
-			if targetObj := proxy.Target().AsPlainObject(); targetObj != nil {
-				targetExtensible = targetObj.IsExtensible()
+			if proxy.Target().Type() == vm.TypeObject {
+				if targetObj := proxy.Target().AsPlainObject(); targetObj != nil {
+					targetExtensible = targetObj.IsExtensible()
+				}
 			} else if proxy.Target().Type() == vm.TypeArray {
 				targetExtensible = proxy.Target().AsArray().IsExtensible()
 			}
@@ -4473,10 +4483,12 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 	}
 
 	// Mark the object as non-extensible
-	if plainObj := obj.AsPlainObject(); plainObj != nil {
-		plainObj.SetExtensible(false)
-	} else if dictObj := obj.AsDictObject(); dictObj != nil {
-		dictObj.SetExtensible(false)
+	if obj.Type() == vm.TypeObject {
+		if plainObj := obj.AsPlainObject(); plainObj != nil {
+			plainObj.SetExtensible(false)
+		}
+	} else if obj.Type() == vm.TypeDictObject {
+		obj.AsDictObject().SetExtensible(false)
 	}
 
 	return obj, nil
