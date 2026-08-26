@@ -76,6 +76,7 @@ const (
 	TypeWeakMap
 	TypeWeakSet
 	TypeWeakRef
+	TypeFinalizationRegistry
 	TypeArrayBuffer
 	TypeSharedArrayBuffer
 	TypeTypedArray
@@ -136,6 +137,8 @@ func (vt ValueType) String() string {
 		return "weakset"
 	case TypeWeakRef:
 		return "weakref"
+	case TypeFinalizationRegistry:
+		return "finalizationregistry"
 	case TypeArrayBuffer:
 		return "arraybuffer"
 	case TypeSharedArrayBuffer:
@@ -158,10 +161,13 @@ type SymbolObject struct {
 	HasDescription bool // true when Symbol was created with an explicit description argument
 }
 
-// CanBeHeldWeakly returns true if this value can be used as a WeakMap/WeakSet key.
-// Per ECMAScript spec: objects and non-registered symbols can be held weakly.
+// CanBeHeldWeakly returns true if this value can be used as a WeakMap/WeakSet
+// key or a WeakRef/FinalizationRegistry target. Per ECMAScript spec: objects
+// (which functions are too - v.IsObject()'s [TypeObject,TypeProxy] range
+// predates the function ValueTypes in the enum, so check IsCallable()
+// alongside it) and non-registered symbols can be held weakly.
 func (v Value) CanBeHeldWeakly() bool {
-	if v.IsObject() {
+	if v.IsObject() || v.IsCallable() {
 		return true
 	}
 	if v.typ == TypeSymbol {
@@ -341,6 +347,77 @@ type WeakRefObject struct {
 	targetWeak weak.Pointer[byte] // Weak reference to the target object
 	targetType ValueType          // Original ValueType of the target, restored on Deref
 	prototype  Value              // [[Prototype]] for cross-realm support
+}
+
+// finalizationRegistryCell mirrors the spec's per-registration Record:
+// { [[WeakRefTarget]], [[HeldValue]], [[UnregisterToken]] }. The target is
+// held weakly (via Go's weak package, matching WeakRef/WeakMap/WeakSet)
+// though nothing currently dereferences it: this runtime has no host GC
+// hook, so cleanupCallback is never invoked - register()/unregister() are a
+// pure bookkeeping API per Test262 (no test depends on actual reclamation).
+type finalizationRegistryCell struct {
+	targetWeak weak.Pointer[byte]
+	heldValue  Value
+	hasToken   bool
+	tokenPtr   uintptr // pointer identity of [[UnregisterToken]], for unregister() matching
+}
+
+// FinalizationRegistryObject implements ECMAScript FinalizationRegistry.
+type FinalizationRegistryObject struct {
+	Object
+	cleanupCallback Value
+	cells           []*finalizationRegistryCell
+	prototype       Value
+}
+
+func (fr *FinalizationRegistryObject) GetPrototype() Value  { return fr.prototype }
+func (fr *FinalizationRegistryObject) SetPrototype(p Value) { fr.prototype = p }
+
+// Register appends a new cell. hasToken/token mirror the optional third
+// "unregisterToken" argument (empty when hasToken is false).
+func (fr *FinalizationRegistryObject) Register(target, heldValue Value, hasToken bool, token Value) {
+	cell := &finalizationRegistryCell{
+		targetWeak: weak.Make((*byte)(target.obj)),
+		heldValue:  heldValue,
+		hasToken:   hasToken,
+	}
+	if hasToken {
+		cell.tokenPtr = uintptr(token.obj)
+	}
+	fr.cells = append(fr.cells, cell)
+}
+
+// Unregister removes every cell whose [[UnregisterToken]] matches token
+// (SameValue, via pointer identity), returning true if any were removed.
+func (fr *FinalizationRegistryObject) Unregister(token Value) bool {
+	tokenPtr := uintptr(token.obj)
+	removed := false
+	kept := fr.cells[:0]
+	for _, cell := range fr.cells {
+		if cell.hasToken && cell.tokenPtr == tokenPtr {
+			removed = true
+			continue
+		}
+		kept = append(kept, cell)
+	}
+	fr.cells = kept
+	return removed
+}
+
+// NewFinalizationRegistry creates a new FinalizationRegistry with the given
+// cleanup callback and prototype (never Undefined - callers pass the
+// resolved GetPrototypeFromConstructor result, defaulting to the realm's
+// FinalizationRegistryPrototype).
+func NewFinalizationRegistry(cleanupCallback Value, prototype Value) Value {
+	frObj := &FinalizationRegistryObject{cleanupCallback: cleanupCallback, prototype: prototype}
+	return Value{typ: TypeFinalizationRegistry, obj: unsafe.Pointer(frObj)}
+}
+
+func (v Value) AsFinalizationRegistry() *FinalizationRegistryObject {
+	if v.typ != TypeFinalizationRegistry {
+		return nil
+	}
+	return (*FinalizationRegistryObject)(v.obj)
 }
 
 type ProxyObject struct {
@@ -704,6 +781,9 @@ func (wr *WeakRefObject) GetPrototype() Value {
 	return wr.prototype
 }
 
+// SetPrototype overrides the per-instance [[Prototype]] (for subclassing).
+func (wr *WeakRefObject) SetPrototype(p Value) { wr.prototype = p }
+
 // Deref returns the target object if it's still alive, or undefined if collected.
 // The returned Value preserves the target's original ValueType (array, function,
 // etc.) — load .Value() exactly once so a concurrent GC between the nil-check
@@ -891,7 +971,8 @@ func (v Value) TypeName() string {
 		return "object"
 	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeTypedArray,
 		TypeDataView, TypeGenerator, TypeAsyncGenerator, TypePromise, TypeMap, TypeSet,
-		TypeArrayBuffer, TypeSharedArrayBuffer, TypeWeakMap, TypeWeakSet, TypeWeakRef:
+		TypeArrayBuffer, TypeSharedArrayBuffer, TypeWeakMap, TypeWeakSet, TypeWeakRef,
+		TypeFinalizationRegistry:
 		return "object"
 	default:
 		return fmt.Sprintf("<unknown type: %d>", v.typ)

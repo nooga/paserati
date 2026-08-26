@@ -727,6 +727,13 @@ func (vm *VM) effectiveBuiltinPrototype(objVal Value) Value {
 			}
 		}
 		return vm.WeakRefPrototype
+	case TypeFinalizationRegistry:
+		if fr := objVal.AsFinalizationRegistry(); fr != nil {
+			if proto := fr.GetPrototype(); proto.IsObject() {
+				return proto
+			}
+		}
+		return vm.FinalizationRegistryPrototype
 	}
 	return Undefined
 }
