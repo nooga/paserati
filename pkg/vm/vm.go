@@ -688,6 +688,30 @@ func (vm *VM) GetPrototypeFromConstructor(constructor Value, intrinsicDefault st
 		return realm.PromisePrototype, nil
 	case "%DatePrototype%":
 		return realm.DatePrototype, nil
+	case "%TypedArrayPrototype%":
+		return realm.TypedArrayPrototype, nil
+	case "%Uint8Array.prototype%":
+		return realm.Uint8ArrayPrototype, nil
+	case "%Uint8ClampedArray.prototype%":
+		return realm.Uint8ClampedArrayPrototype, nil
+	case "%Int8Array.prototype%":
+		return realm.Int8ArrayPrototype, nil
+	case "%Int16Array.prototype%":
+		return realm.Int16ArrayPrototype, nil
+	case "%Uint16Array.prototype%":
+		return realm.Uint16ArrayPrototype, nil
+	case "%Uint32Array.prototype%":
+		return realm.Uint32ArrayPrototype, nil
+	case "%Int32Array.prototype%":
+		return realm.Int32ArrayPrototype, nil
+	case "%Float32Array.prototype%":
+		return realm.Float32ArrayPrototype, nil
+	case "%Float64Array.prototype%":
+		return realm.Float64ArrayPrototype, nil
+	case "%BigInt64Array.prototype%":
+		return realm.BigInt64ArrayPrototype, nil
+	case "%BigUint64Array.prototype%":
+		return realm.BigUint64ArrayPrototype, nil
 	default:
 		// Fallback to ObjectPrototype
 		return realm.ObjectPrototype, nil

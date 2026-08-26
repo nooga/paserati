@@ -255,132 +255,18 @@ func (u *Uint8ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Create Uint8Array constructor (length is 3 per ECMAScript spec)
-	ctorWithProps := vm.NewConstructorWithProps(3, true, "Uint8Array", func(args []vm.Value) (vm.Value, error) {
-		if len(args) == 0 {
-			if err := TypedArrayGPFC(vmInstance); err != nil {
-				return vm.Undefined, err
-			}
-			return vm.NewTypedArray(vm.TypedArrayUint8, 0, 0, 0), nil
-		}
-		arg := args[0]
-		if arg.IsNumber() {
-			l, err := TypedArrayToIndex(vmInstance, arg)
-			if err != nil {
-				return vm.Undefined, err
-			}
-			if err := TypedArrayGPFC(vmInstance); err != nil {
-				return vm.Undefined, err
-			}
-			return vm.NewTypedArray(vm.TypedArrayUint8, l, 0, 0), nil
-		}
-		if buf := arg.AsArrayBuffer(); buf != nil {
-			if err := TypedArrayGPFC(vmInstance); err != nil {
-				return vm.Undefined, err
-			}
-			off := 0
-			if len(args) > 1 {
-				var err error
-				off, err = ValidateTypedArrayByteOffset(vmInstance, args[1], 1)
-				if err != nil {
-					if err == ErrVMUnwinding {
-						return vm.Undefined, nil
-					}
-					return vm.Undefined, err
-				}
-			}
-			ln := -1
-			if len(args) > 2 && !args[2].IsUndefined() {
-				ln = int(args[2].ToFloat())
-			}
-			// If length is auto-calculated, validate buffer alignment
-			if ln == -1 {
-				if err := ValidateTypedArrayBufferAlignment(vmInstance, buf, off, 1); err != nil {
-					if err == ErrVMUnwinding {
-						return vm.Undefined, nil
-					}
-					return vm.Undefined, err
-				}
-			}
-			return vm.NewTypedArray(vm.TypedArrayUint8, buf, off, ln), nil
-		}
-		if sab := arg.AsSharedArrayBuffer(); sab != nil {
-			if err := TypedArrayGPFC(vmInstance); err != nil {
-				return vm.Undefined, err
-			}
-			off := 0
-			if len(args) > 1 {
-				var err error
-				off, err = ValidateTypedArrayByteOffsetShared(vmInstance, args[1], 1)
-				if err != nil {
-					if err == ErrVMUnwinding {
-						return vm.Undefined, nil
-					}
-					return vm.Undefined, err
-				}
-			}
-			ln := -1
-			if len(args) > 2 && !args[2].IsUndefined() {
-				ln = int(args[2].ToFloat())
-			}
-			if ln == -1 {
-				if err := ValidateTypedArrayBufferAlignmentShared(vmInstance, sab, off, 1); err != nil {
-					if err == ErrVMUnwinding {
-						return vm.Undefined, nil
-					}
-					return vm.Undefined, err
-				}
-			}
-			return vm.NewTypedArray(vm.TypedArrayUint8, sab, off, ln), nil
-		}
-		if arr := arg.AsArray(); arr != nil {
-			if err := TypedArrayGPFC(vmInstance); err != nil {
-				return vm.Undefined, err
-			}
-			vals := make([]vm.Value, arr.Length())
-			for i := 0; i < arr.Length(); i++ {
-				vals[i] = arr.Get(i)
-			}
-			return vm.NewTypedArray(vm.TypedArrayUint8, vals, 0, 0), nil
-		}
-		if arg.IsObject() {
-			if err := TypedArrayGPFC(vmInstance); err != nil {
-				return vm.Undefined, err
-			}
-			return vm.NewTypedArray(vm.TypedArrayUint8, 0, 0, 0), nil
-		}
-		// Non-number, non-object (e.g. string, Symbol, BigInt): ToIndex first, then GPFC
-		l, err := TypedArrayToIndex(vmInstance, arg)
-		if err != nil {
-			return vm.Undefined, err
-		}
-		if err := TypedArrayGPFC(vmInstance); err != nil {
-			return vm.Undefined, err
-		}
-		return vm.NewTypedArray(vm.TypedArrayUint8, l, 0, 0), nil
-	})
+	uint8EK := TypedArrayElementKind{Kind: vm.TypedArrayUint8, ElementSize: 1}
+	ctorWithProps := vm.NewConstructorWithProps(3, true, "Uint8Array", NumericTypedArrayCtorBody(vmInstance, uint8EK))
 
 	// Set up constructor properties with correct descriptors (BYTES_PER_ELEMENT, prototype)
 	SetupTypedArrayConstructorProperties(ctorWithProps, uint8ArrayProto, 1)
 
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {
-		if len(args) == 0 {
-			return vm.NewTypedArray(vm.TypedArrayUint8, 0, 0, 0), nil
-		}
-
-		source := args[0]
-		if sourceArray := source.AsArray(); sourceArray != nil {
-			values := make([]vm.Value, sourceArray.Length())
-			for i := 0; i < sourceArray.Length(); i++ {
-				values[i] = sourceArray.Get(i)
-			}
-			return vm.NewTypedArray(vm.TypedArrayUint8, values, 0, 0), nil
-		}
-
-		return vm.NewTypedArray(vm.TypedArrayUint8, 0, 0, 0), nil
+		return TypedArrayFromArrayLike(uint8EK, args), nil
 	}))
 
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("of", vm.NewNativeFunction(0, true, "of", func(args []vm.Value) (vm.Value, error) {
-		return vm.NewTypedArray(vm.TypedArrayUint8, args, 0, 0), nil
+		return TypedArrayOfValues(uint8EK, args), nil
 	}))
 
 	// ES2024: Uint8Array.fromBase64(string, options?)
