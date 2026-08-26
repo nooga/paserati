@@ -53,6 +53,10 @@ func (vm *VM) applySubclassPrototype(instance Value, newTarget Value) {
 		instance.AsTypedArray().SetPrototype(proto)
 	case TypePromise:
 		instance.AsPromise().SetPrototype(proto)
+	case TypeWeakRef:
+		instance.AsWeakRef().SetPrototype(proto)
+	case TypeFinalizationRegistry:
+		instance.AsFinalizationRegistry().SetPrototype(proto)
 	case TypeFunction:
 		instance.AsFunction().subclassPrototype = proto
 	}
@@ -77,6 +81,8 @@ func (vm *VM) InstancePrototypeOverride(v Value) (Value, bool) {
 		p = v.AsWeakSet().GetPrototype()
 	case TypeWeakRef:
 		p = v.AsWeakRef().GetPrototype()
+	case TypeFinalizationRegistry:
+		p = v.AsFinalizationRegistry().GetPrototype()
 	case TypeRegExp:
 		p = v.AsRegExpObject().GetPrototype()
 	case TypeArrayBuffer:

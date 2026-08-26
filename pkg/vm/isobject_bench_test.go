@@ -45,7 +45,7 @@ func TestIsObjectExhaustive(t *testing.T) {
 		TypeGenerator: true, TypeAsyncGenerator: true, TypePromise: true, TypeRegExp: true,
 		TypeTypedArray: true, TypeDataView: true, TypeArrayBuffer: true, TypeSharedArrayBuffer: true,
 		TypeProxy: true, TypeMap: true, TypeSet: true, TypeWeakMap: true, TypeWeakSet: true,
-		TypeWeakRef: true,
+		TypeWeakRef: true, TypeFinalizationRegistry: true,
 	}
 	for typ := TypeUndefined; typ <= TypeUninitialized; typ++ {
 		got := (Value{typ: typ}).IsObject()

@@ -228,6 +228,7 @@ type VM struct {
 	WeakMapPrototype              Value
 	WeakSetPrototype              Value
 	WeakRefPrototype              Value
+	FinalizationRegistryPrototype Value
 	GeneratorPrototype            Value
 	AsyncGeneratorPrototype       Value
 	IteratorPrototype             Value // %Iterator.prototype% - base for all iterators
@@ -660,6 +661,8 @@ func (vm *VM) GetPrototypeFromConstructor(constructor Value, intrinsicDefault st
 		return realm.WeakSetPrototype, nil
 	case "%WeakRefPrototype%":
 		return realm.WeakRefPrototype, nil
+	case "%FinalizationRegistryPrototype%":
+		return realm.FinalizationRegistryPrototype, nil
 	case "%ErrorPrototype%":
 		return realm.ErrorPrototype, nil
 	case "%TypeErrorPrototype%":
@@ -740,6 +743,7 @@ func (vm *VM) syncPrototypesFromRealm() {
 	vm.WeakMapPrototype = r.WeakMapPrototype
 	vm.WeakSetPrototype = r.WeakSetPrototype
 	vm.WeakRefPrototype = r.WeakRefPrototype
+	vm.FinalizationRegistryPrototype = r.FinalizationRegistryPrototype
 	vm.PromisePrototype = r.PromisePrototype
 	vm.SymbolPrototype = r.SymbolPrototype
 	vm.DatePrototype = r.DatePrototype
@@ -835,6 +839,7 @@ func (vm *VM) SyncPrototypesToRealm() {
 	r.WeakMapPrototype = vm.WeakMapPrototype
 	r.WeakSetPrototype = vm.WeakSetPrototype
 	r.WeakRefPrototype = vm.WeakRefPrototype
+	r.FinalizationRegistryPrototype = vm.FinalizationRegistryPrototype
 	r.PromisePrototype = vm.PromisePrototype
 	r.SymbolPrototype = vm.SymbolPrototype
 	r.DatePrototype = vm.DatePrototype
@@ -3152,6 +3157,12 @@ startExecution:
 						current = p
 					} else {
 						current = vm.WeakRefPrototype
+					}
+				case TypeFinalizationRegistry:
+					if p := objVal.AsFinalizationRegistry().GetPrototype(); p.IsObject() {
+						current = p
+					} else {
+						current = vm.FinalizationRegistryPrototype
 					}
 				case TypeArguments:
 					current = vm.ObjectPrototype // Arguments objects inherit from Object.prototype
