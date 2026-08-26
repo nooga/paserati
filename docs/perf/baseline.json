@@ -349,7 +349,7 @@
         }
       ]
     },
-    "github.com/nooga/paserati/tests.BenchmarkFibPlaceholderRun": {
+    "github.com/nooga/paserati/tests.BenchmarkFactorial": {
       "ns_per_op": 1194928877.0000002,
       "allocs_per_op": 3,
       "bytes_per_op": 544,

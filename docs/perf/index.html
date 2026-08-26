@@ -212,7 +212,7 @@ function labelFor(s) {
     const fam = (name.split(".Benchmark")[1] || "").split("/")[0];
     if (fam === "GetOwn") return "GetOwn";
     if (fam.startsWith("Prototype")) return "Prototype";   // MethodAccess + CacheHitRate
-    return "Workloads";                                    // Fib, Matrix
+    return "Workloads";                                    // Factorial, Matrix
   }
   const GROUPS = ["GetOwn", "Prototype", "Workloads", "Test262"];
   const members = {};                                      // group -> [series]
