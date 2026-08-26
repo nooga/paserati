@@ -11,8 +11,8 @@
   "test262_builtins": {
     "name": "Test262 built-ins",
     "total": 23294,
-    "passed": 14395,
-    "failed": 8899,
+    "passed": 15334,
+    "failed": 7960,
     "skipped": 0,
     "timeout": 0,
     "version": ""
