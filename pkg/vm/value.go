@@ -1912,10 +1912,28 @@ func (v Value) StrictlyEquals(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp, TypeMap, TypeSet, TypeProxy:
-		// Objects (including arrays, functions, regex, maps, sets, proxies, etc.) are equal only by reference
+	case TypeFunction, TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction, TypeClosure, TypeBoundFunction:
+		// Functions (of every internal representation) are Objects per
+		// spec, and SameValueNonNumeric on an Object is reference
+		// identity, never structural comparison.
 		return v.obj == other.obj
 	default:
+		if v.IsObject() {
+			// Every type in the contiguous [TypeObject, TypeProxy] "is
+			// object" range (plain/dict objects, Array, Arguments,
+			// generators, Promise, RegExp, Map/Set, WeakMap/WeakSet/
+			// WeakRef, FinalizationRegistry, ArrayBuffer/
+			// SharedArrayBuffer, TypedArray, DataView, Proxy, ...)
+			// compares by reference identity - SameValueNonNumeric never
+			// does structural comparison on Objects. Using the IsObject()
+			// range check instead of enumerating each case keeps this
+			// exhaustive by construction as new object subtypes are added
+			// to the enum (TestIsObjectExhaustive locks in the range's
+			// contiguity, so a type inserted outside it would fail that
+			// test rather than silently falling through to the panic
+			// below).
+			return v.obj == other.obj
+		}
 		panic(fmt.Sprintf("Unhandled type in StrictlyEquals comparison: %v", v.typ))
 	}
 }
