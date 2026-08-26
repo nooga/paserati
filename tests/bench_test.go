@@ -29,9 +29,11 @@ func compileFile(tb testing.TB, filename string) *vm.Chunk {
 	return chunk
 }
 
-// BenchmarkFib runs the (currently placeholder) fib.ts script.
-// Renamed to match BenchmarkXxx pattern.
-func BenchmarkFibPlaceholderRun(b *testing.B) {
+// BenchmarkFactorial runs scripts/factorial.ts: recursive calls plus a fused
+// `--` on a parameter. Previously named BenchmarkFibPlaceholderRun, which
+// described neither the workload (it compiles factorial.ts, not fib.ts) nor
+// its status (it's a real, live benchmark, not a placeholder) - see #53.
+func BenchmarkFactorial(b *testing.B) {
 	// Compile once outside the loop.
 	// Use the correct filename provided by the user.
 	chunk := compileFile(b, "scripts/factorial.ts")
