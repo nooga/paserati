@@ -69,8 +69,8 @@ func (a *AtomicsInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Check for valid TypedArray types (not Float32, Float64, or Uint8Clamped)
 		elemType := ta.GetElementType()
-		if elemType == vm.TypedArrayFloat32 || elemType == vm.TypedArrayFloat64 || elemType == vm.TypedArrayUint8Clamped {
-			return nil, 0, vmInstance.NewTypeError("Atomics operations are not allowed on Float32Array, Float64Array, or Uint8ClampedArray")
+		if elemType == vm.TypedArrayFloat16 || elemType == vm.TypedArrayFloat32 || elemType == vm.TypedArrayFloat64 || elemType == vm.TypedArrayUint8Clamped {
+			return nil, 0, vmInstance.NewTypeError("Atomics operations are not allowed on Float16Array, Float32Array, Float64Array, or Uint8ClampedArray")
 		}
 
 		// ValidateIntegerTypedArray: an already out-of-bounds view (detached,

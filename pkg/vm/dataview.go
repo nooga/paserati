@@ -203,6 +203,24 @@ func (dv *DataViewObject) GetUint32(byteOffset int, littleEndian bool) (uint32, 
 	return binary.BigEndian.Uint32(data), true
 }
 
+// GetFloat16 reads a 16-bit half-precision float at the specified byte offset
+func (dv *DataViewObject) GetFloat16(byteOffset int, littleEndian bool) (float64, bool) {
+	if byteOffset < 0 || byteOffset+2 > dv.effectiveByteLength() {
+		return 0, false
+	}
+	if dv.buffer.IsDetached() {
+		return 0, false
+	}
+	data := dv.buffer.GetData()[dv.byteOffset+byteOffset:]
+	var bits uint16
+	if littleEndian {
+		bits = binary.LittleEndian.Uint16(data)
+	} else {
+		bits = binary.BigEndian.Uint16(data)
+	}
+	return Float16BitsToFloat64(bits), true
+}
+
 // GetFloat32 reads a 32-bit float at the specified byte offset
 func (dv *DataViewObject) GetFloat32(byteOffset int, littleEndian bool) (float32, bool) {
 	if byteOffset < 0 || byteOffset+4 > dv.effectiveByteLength() {
@@ -370,6 +388,24 @@ func (dv *DataViewObject) SetUint32(byteOffset int, value uint32, littleEndian b
 }
 
 // SetFloat32 writes a 32-bit float at the specified byte offset
+// SetFloat16 writes a 16-bit half-precision float at the specified byte offset
+func (dv *DataViewObject) SetFloat16(byteOffset int, value float64, littleEndian bool) bool {
+	if byteOffset < 0 || byteOffset+2 > dv.effectiveByteLength() {
+		return false
+	}
+	if dv.buffer.IsDetached() {
+		return false
+	}
+	data := dv.buffer.GetData()[dv.byteOffset+byteOffset:]
+	bits := Float64ToFloat16Bits(value)
+	if littleEndian {
+		binary.LittleEndian.PutUint16(data, bits)
+	} else {
+		binary.BigEndian.PutUint16(data, bits)
+	}
+	return true
+}
+
 func (dv *DataViewObject) SetFloat32(byteOffset int, value float32, littleEndian bool) bool {
 	if byteOffset < 0 || byteOffset+4 > dv.effectiveByteLength() {
 		return false

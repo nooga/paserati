@@ -301,6 +301,7 @@ type VM struct {
 	Uint16ArrayPrototype       Value
 	Uint32ArrayPrototype       Value
 	Int32ArrayPrototype        Value
+	Float16ArrayPrototype      Value
 	Float32ArrayPrototype      Value
 	Float64ArrayPrototype      Value
 	BigInt64ArrayPrototype     Value
@@ -707,6 +708,8 @@ func (vm *VM) GetPrototypeFromConstructor(constructor Value, intrinsicDefault st
 		return realm.Uint32ArrayPrototype, nil
 	case "%Int32Array.prototype%":
 		return realm.Int32ArrayPrototype, nil
+	case "%Float16Array.prototype%":
+		return realm.Float16ArrayPrototype, nil
 	case "%Float32Array.prototype%":
 		return realm.Float32ArrayPrototype, nil
 	case "%Float64Array.prototype%":
@@ -779,6 +782,7 @@ func (vm *VM) syncPrototypesFromRealm() {
 	vm.Uint16ArrayPrototype = r.Uint16ArrayPrototype
 	vm.Uint32ArrayPrototype = r.Uint32ArrayPrototype
 	vm.Int32ArrayPrototype = r.Int32ArrayPrototype
+	vm.Float16ArrayPrototype = r.Float16ArrayPrototype
 	vm.Float32ArrayPrototype = r.Float32ArrayPrototype
 	vm.Float64ArrayPrototype = r.Float64ArrayPrototype
 	vm.BigInt64ArrayPrototype = r.BigInt64ArrayPrototype
@@ -875,6 +879,7 @@ func (vm *VM) SyncPrototypesToRealm() {
 	r.Uint16ArrayPrototype = vm.Uint16ArrayPrototype
 	r.Uint32ArrayPrototype = vm.Uint32ArrayPrototype
 	r.Int32ArrayPrototype = vm.Int32ArrayPrototype
+	r.Float16ArrayPrototype = vm.Float16ArrayPrototype
 	r.Float32ArrayPrototype = vm.Float32ArrayPrototype
 	r.Float64ArrayPrototype = vm.Float64ArrayPrototype
 	r.BigInt64ArrayPrototype = vm.BigInt64ArrayPrototype

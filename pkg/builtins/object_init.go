@@ -1397,7 +1397,21 @@ func lookupSymbolProp(vmInstance *vm.VM, val vm.Value, symKey vm.PropertyKey, sy
 	case vm.TypeSharedArrayBuffer:
 		return lookupSymbolPropFromProto(vmInstance, vmInstance.SharedArrayBufferPrototype, symKey, symObj, depth)
 	case vm.TypeTypedArray:
-		return lookupSymbolPropFromProto(vmInstance, vmInstance.ObjectPrototype, symKey, symObj, depth)
+		// Resolve the concrete per-kind prototype (or a per-instance override,
+		// e.g. from subclassing) rather than ObjectPrototype: well-known symbol
+		// properties like @@toStringTag live on the specific XxxArray.prototype
+		// (via %TypedArray%.prototype) as an ACCESSOR (its getter reads
+		// ta.GetElementType(), varying per concrete subtype). Call
+		// lookupSymbolPropInPlainObj directly (rather than going through
+		// lookupSymbolPropFromProto -> lookupSymbolProp, which would re-dispatch
+		// on the *prototype's* type and lose the original TypedArray as
+		// receiver) so the getter is invoked with the TypedArray instance as
+		// `this`, not the prototype object.
+		proto := typedArrayEffectivePrototype(vmInstance, val)
+		if proto.Type() != vm.TypeObject {
+			return vm.Undefined, nil
+		}
+		return lookupSymbolPropInPlainObj(vmInstance, val, proto.AsPlainObject(), symKey, symObj, depth)
 	case vm.TypeArguments:
 		// Check own symbol properties first
 		argObj := val.AsArguments()
@@ -2122,6 +2136,8 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return vmInstance.Uint32ArrayPrototype, nil
 		case vm.TypedArrayInt32:
 			return vmInstance.Int32ArrayPrototype, nil
+		case vm.TypedArrayFloat16:
+			return vmInstance.Float16ArrayPrototype, nil
 		case vm.TypedArrayFloat32:
 			return vmInstance.Float32ArrayPrototype, nil
 		case vm.TypedArrayFloat64:

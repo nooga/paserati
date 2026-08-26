@@ -30,6 +30,7 @@ func (d *DataViewInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("getUint16", types.NewOptionalFunction([]types.Type{types.Number, types.Boolean}, types.Number, []bool{false, true})).
 		WithProperty("getInt32", types.NewOptionalFunction([]types.Type{types.Number, types.Boolean}, types.Number, []bool{false, true})).
 		WithProperty("getUint32", types.NewOptionalFunction([]types.Type{types.Number, types.Boolean}, types.Number, []bool{false, true})).
+		WithProperty("getFloat16", types.NewOptionalFunction([]types.Type{types.Number, types.Boolean}, types.Number, []bool{false, true})).
 		WithProperty("getFloat32", types.NewOptionalFunction([]types.Type{types.Number, types.Boolean}, types.Number, []bool{false, true})).
 		WithProperty("getFloat64", types.NewOptionalFunction([]types.Type{types.Number, types.Boolean}, types.Number, []bool{false, true})).
 		WithProperty("getBigInt64", types.NewOptionalFunction([]types.Type{types.Number, types.Boolean}, types.BigInt, []bool{false, true})).
@@ -40,6 +41,7 @@ func (d *DataViewInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("setUint16", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Boolean}, types.Undefined, []bool{false, false, true})).
 		WithProperty("setInt32", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Boolean}, types.Undefined, []bool{false, false, true})).
 		WithProperty("setUint32", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Boolean}, types.Undefined, []bool{false, false, true})).
+		WithProperty("setFloat16", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Boolean}, types.Undefined, []bool{false, false, true})).
 		WithProperty("setFloat32", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Boolean}, types.Undefined, []bool{false, false, true})).
 		WithProperty("setFloat64", types.NewOptionalFunction([]types.Type{types.Number, types.Number, types.Boolean}, types.Undefined, []bool{false, false, true})).
 		WithProperty("setBigInt64", types.NewOptionalFunction([]types.Type{types.Number, types.BigInt, types.Boolean}, types.Undefined, []bool{false, false, true})).
@@ -257,6 +259,20 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.Number(float64(val)), nil
 	}))
 
+	// getFloat16
+	dataViewProto.SetOwnNonEnumerable("getFloat16", vm.NewNativeFunction(1, false, "getFloat16", func(args []vm.Value) (vm.Value, error) {
+		if len(args) < 1 {
+			return vm.Undefined, vmInstance.NewTypeError("getFloat16 requires 1 argument")
+		}
+		dv, byteOffset, err := validateDataViewAccess(vmInstance.GetThis(), args[0], 2)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		littleEndian := len(args) > 1 && args[1].IsTruthy()
+		val, _ := dv.GetFloat16(byteOffset, littleEndian)
+		return vm.Number(val), nil
+	}))
+
 	// getFloat32
 	dataViewProto.SetOwnNonEnumerable("getFloat32", vm.NewNativeFunction(1, false, "getFloat32", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
@@ -398,6 +414,21 @@ func (d *DataViewInitializer) InitRuntime(ctx *RuntimeContext) error {
 		value := uint32(vmInstance.ToNumber(args[1]))
 		littleEndian := len(args) > 2 && args[2].IsTruthy()
 		dv.SetUint32(byteOffset, value, littleEndian)
+		return vm.Undefined, nil
+	}))
+
+	// setFloat16
+	dataViewProto.SetOwnNonEnumerable("setFloat16", vm.NewNativeFunction(2, false, "setFloat16", func(args []vm.Value) (vm.Value, error) {
+		if len(args) < 2 {
+			return vm.Undefined, vmInstance.NewTypeError("setFloat16 requires 2 arguments")
+		}
+		dv, byteOffset, err := validateDataViewAccess(vmInstance.GetThis(), args[0], 2)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		value := vmInstance.ToNumber(args[1])
+		littleEndian := len(args) > 2 && args[2].IsTruthy()
+		dv.SetFloat16(byteOffset, value, littleEndian)
 		return vm.Undefined, nil
 	}))
 

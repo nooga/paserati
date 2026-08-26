@@ -34,115 +34,13 @@ func toInt32(n float64) int32 {
 	return int32(u)
 }
 
-// float64ToFloat16ToFloat64 converts a float64 to half-precision (float16) and back
-// This implements the rounding behavior specified for Math.f16round
+// float64ToFloat16ToFloat64 converts a float64 to half-precision (float16) and
+// back, implementing the rounding behavior specified for Math.f16round. The
+// actual bit-level conversion lives in pkg/vm (vm.Float64ToFloat16Bits /
+// vm.Float16BitsToFloat64) since Float16Array and DataView.prototype.
+// {get,set}Float16 need the same round-trip.
 func float64ToFloat16ToFloat64(x float64) float64 {
-	// Get the bits of the float64
-	bits := math.Float64bits(x)
-	sign := bits >> 63
-	exp := int((bits >> 52) & 0x7FF)
-	frac := bits & 0xFFFFFFFFFFFFF
-
-	// float16 parameters
-	const f16ExpBias = 15
-	const f64ExpBias = 1023
-	const f16MaxExp = 30   // Biased max exponent (31 is for inf/nan)
-	const f16MinExp = 1    // Biased min normal exponent
-	const f16FracBits = 10 // Mantissa bits in float16
-
-	// Compute unbiased exponent
-	unbiasedExp := exp - f64ExpBias
-
-	var f16Bits uint16
-
-	if exp == 0x7FF {
-		// Infinity or NaN - already handled before calling this function
-		if frac == 0 {
-			// Infinity
-			f16Bits = uint16(sign<<15) | 0x7C00
-		} else {
-			// NaN - preserve sign, set NaN pattern
-			f16Bits = uint16(sign<<15) | 0x7E00
-		}
-	} else if exp == 0 {
-		// Denormal or zero in float64 - becomes zero in float16
-		f16Bits = uint16(sign << 15)
-	} else if unbiasedExp > 15 {
-		// Overflow to infinity
-		f16Bits = uint16(sign<<15) | 0x7C00
-	} else if unbiasedExp < -24 {
-		// Underflow to zero
-		f16Bits = uint16(sign << 15)
-	} else if unbiasedExp < -14 {
-		// Denormal in float16
-		// Shift the mantissa right to create a denormal
-		shift := uint(-14 - unbiasedExp)
-		// Add implicit 1 bit
-		frac16 := (frac >> 42) | 0x400 // 10 bits + implicit 1
-		frac16 = frac16 >> shift
-		// Round to nearest even
-		roundBit := (frac >> (42 + shift - 1)) & 1
-		if roundBit == 1 {
-			frac16++
-		}
-		f16Bits = uint16(sign<<15) | uint16(frac16&0x3FF)
-	} else {
-		// Normal number
-		f16Exp := uint16(unbiasedExp + f16ExpBias)
-		// Take top 10 bits of mantissa, round to nearest even
-		frac16 := frac >> 42 // Top 10 bits
-		// Check for rounding
-		roundBits := (frac >> 41) & 1 // 11th bit
-		if roundBits == 1 {
-			// Round up, but check for tie (round to even)
-			lowerBits := frac & 0x1FFFFFFFFFF // bits 0-40
-			if lowerBits != 0 || (frac16&1) == 1 {
-				frac16++
-				if frac16 > 0x3FF {
-					// Overflow to next exponent
-					frac16 = 0
-					f16Exp++
-					if f16Exp > 30 {
-						// Overflow to infinity
-						f16Bits = uint16(sign<<15) | 0x7C00
-						goto convert
-					}
-				}
-			}
-		}
-		f16Bits = uint16(sign<<15) | (f16Exp << 10) | uint16(frac16&0x3FF)
-	}
-
-convert:
-	// Convert float16 bits back to float64
-	f16Sign := (f16Bits >> 15) & 1
-	f16Exp := (f16Bits >> 10) & 0x1F
-	f16Frac := f16Bits & 0x3FF
-
-	var result float64
-	if f16Exp == 0x1F {
-		// Infinity or NaN
-		if f16Frac == 0 {
-			result = math.Inf(1)
-		} else {
-			result = math.NaN()
-		}
-	} else if f16Exp == 0 {
-		if f16Frac == 0 {
-			result = 0
-		} else {
-			// Denormal
-			result = float64(f16Frac) / 1024.0 * math.Pow(2, -14)
-		}
-	} else {
-		// Normal
-		result = (1.0 + float64(f16Frac)/1024.0) * math.Pow(2, float64(f16Exp)-15)
-	}
-
-	if f16Sign == 1 {
-		result = -result
-	}
-	return result
+	return vm.Float16BitsToFloat64(vm.Float64ToFloat16Bits(x))
 }
 
 type MathInitializer struct{}

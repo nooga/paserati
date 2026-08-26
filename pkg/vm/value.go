@@ -1308,6 +1308,8 @@ func (v Value) ToString() string {
 				return "[object Int32Array]"
 			case TypedArrayUint32:
 				return "[object Uint32Array]"
+			case TypedArrayFloat16:
+				return "[object Float16Array]"
 			case TypedArrayFloat32:
 				return "[object Float32Array]"
 			case TypedArrayFloat64:
@@ -1708,6 +1710,8 @@ func (v Value) inspectWithDepth(nested bool, depth int, maxDepth int) string {
 				typeName = "Int32Array"
 			case TypedArrayUint32:
 				typeName = "Uint32Array"
+			case TypedArrayFloat16:
+				typeName = "Float16Array"
 			case TypedArrayFloat32:
 				typeName = "Float32Array"
 			case TypedArrayFloat64:
