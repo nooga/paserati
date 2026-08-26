@@ -343,7 +343,22 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 
 				// Attach fulfillment handler (not a constructor per spec)
+				// Per ECMAScript 25.4.4.1.2 (Promise.all Resolve Element
+				// Functions) step 1-3: each element function has its own
+				// [[AlreadyCalled]] flag and must no-op on a second call. This
+				// is separate from (and needed in addition to) a real Promise
+				// capability's own idempotent resolve/reject: nextPromise here
+				// can be an arbitrary thenable that calls onFulfilled more
+				// than once, and without this guard doing so double-decrements
+				// `remaining` and can invoke `resolve` (or overwrite settled
+				// results) more times than the spec allows.
+				alreadyCalled := false
 				onFulfilled := vm.NewNativeFunction(1, false, "onFulfilled", func(valueArgs []vm.Value) (vm.Value, error) {
+					if alreadyCalled {
+						return vm.Undefined, nil
+					}
+					alreadyCalled = true
+
 					value := vm.Undefined
 					if len(valueArgs) > 0 {
 						value = valueArgs[0]
@@ -374,7 +389,22 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 				})
 
 				// Attach handlers via .then()
-				_, _ = invokeThen(nextPromise, onFulfilled, onRejected)
+				if _, thenErr := invokeThen(nextPromise, onFulfilled, onRejected); thenErr != nil {
+					// Calling .then() itself threw (e.g. a thenable resolving to
+					// itself). Per spec this should reject the result promise
+					// (IfAbruptRejectPromise), not vanish - vm.Call leaves
+					// vm.unwinding set on error for legitimate re-throw callers;
+					// we're absorbing it into a rejection instead, so it must be
+					// cleared or it leaks into whatever bytecode called this
+					// static method.
+					errVal := vm.NewString(thenErr.Error())
+					if ee, ok := thenErr.(vm.ExceptionError); ok {
+						errVal = ee.GetExceptionValue()
+					}
+					vmInstance.ClearUnwindingState()
+					_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+					return vm.Undefined, nil
+				}
 			}
 
 			return vm.Undefined, nil
@@ -477,7 +507,22 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 				})
 
 				// Attach handlers via .then()
-				_, _ = invokeThen(nextPromise, onFulfilled, onRejected)
+				if _, thenErr := invokeThen(nextPromise, onFulfilled, onRejected); thenErr != nil {
+					// Calling .then() itself threw (e.g. a thenable resolving to
+					// itself). Per spec this should reject the result promise
+					// (IfAbruptRejectPromise), not vanish - vm.Call leaves
+					// vm.unwinding set on error for legitimate re-throw callers;
+					// we're absorbing it into a rejection instead, so it must be
+					// cleared or it leaks into whatever bytecode called this
+					// static method.
+					errVal := vm.NewString(thenErr.Error())
+					if ee, ok := thenErr.(vm.ExceptionError); ok {
+						errVal = ee.GetExceptionValue()
+					}
+					vmInstance.ClearUnwindingState()
+					_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+					return vm.Undefined, nil
+				}
 			}
 
 			return vm.Undefined, nil
@@ -574,7 +619,17 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 				})
 
 				// Attach rejection handler
+				// See the matching comment on Promise.all's onFulfilled: nextPromise
+				// can be an arbitrary thenable calling onRejected more than once,
+				// and without a per-element AlreadyCalled guard that would
+				// double-decrement `remaining` and overwrite/duplicate errors[idx].
+				alreadyCalled := false
 				onRejected := vm.NewNativeFunction(1, false, "onRejected", func(reasonArgs []vm.Value) (vm.Value, error) {
+					if alreadyCalled {
+						return vm.Undefined, nil
+					}
+					alreadyCalled = true
+
 					reason := vm.Undefined
 					if len(reasonArgs) > 0 {
 						reason = reasonArgs[0]
@@ -596,7 +651,22 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 				})
 
 				// Attach handlers via .then()
-				_, _ = invokeThen(nextPromise, onFulfilled, onRejected)
+				if _, thenErr := invokeThen(nextPromise, onFulfilled, onRejected); thenErr != nil {
+					// Calling .then() itself threw (e.g. a thenable resolving to
+					// itself). Per spec this should reject the result promise
+					// (IfAbruptRejectPromise), not vanish - vm.Call leaves
+					// vm.unwinding set on error for legitimate re-throw callers;
+					// we're absorbing it into a rejection instead, so it must be
+					// cleared or it leaks into whatever bytecode called this
+					// static method.
+					errVal := vm.NewString(thenErr.Error())
+					if ee, ok := thenErr.(vm.ExceptionError); ok {
+						errVal = ee.GetExceptionValue()
+					}
+					vmInstance.ClearUnwindingState()
+					_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+					return vm.Undefined, nil
+				}
 			}
 
 			return vm.Undefined, nil
@@ -678,8 +748,21 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vm.Undefined, nil
 				}
 
-				// Attach fulfillment handler
+				// Attach fulfillment/rejection handlers. Per ECMAScript
+				// 27.2.4.2.1 (Promise.allSettled Resolve/Reject Element
+				// Functions), the pair for one element shares a single
+				// [[AlreadyCalled]] flag: nextPromise can be an arbitrary
+				// thenable calling either handler more than once (or both),
+				// and without this guard that would double-decrement
+				// `remaining` and let results[idx] be overwritten after
+				// settling.
+				alreadyCalled := false
 				onFulfilled := vm.NewNativeFunction(1, false, "onFulfilled", func(valueArgs []vm.Value) (vm.Value, error) {
+					if alreadyCalled {
+						return vm.Undefined, nil
+					}
+					alreadyCalled = true
+
 					value := vm.Undefined
 					if len(valueArgs) > 0 {
 						value = valueArgs[0]
@@ -704,6 +787,11 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 				// Attach rejection handler
 				onRejected := vm.NewNativeFunction(1, false, "onRejected", func(reasonArgs []vm.Value) (vm.Value, error) {
+					if alreadyCalled {
+						return vm.Undefined, nil
+					}
+					alreadyCalled = true
+
 					reason := vm.Undefined
 					if len(reasonArgs) > 0 {
 						reason = reasonArgs[0]
@@ -727,7 +815,22 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 				})
 
 				// Attach handlers via .then()
-				_, _ = invokeThen(nextPromise, onFulfilled, onRejected)
+				if _, thenErr := invokeThen(nextPromise, onFulfilled, onRejected); thenErr != nil {
+					// Calling .then() itself threw (e.g. a thenable resolving to
+					// itself). Per spec this should reject the result promise
+					// (IfAbruptRejectPromise), not vanish - vm.Call leaves
+					// vm.unwinding set on error for legitimate re-throw callers;
+					// we're absorbing it into a rejection instead, so it must be
+					// cleared or it leaks into whatever bytecode called this
+					// static method.
+					errVal := vm.NewString(thenErr.Error())
+					if ee, ok := thenErr.(vm.ExceptionError); ok {
+						errVal = ee.GetExceptionValue()
+					}
+					vmInstance.ClearUnwindingState()
+					_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errVal})
+					return vm.Undefined, nil
+				}
 			}
 
 			return vm.Undefined, nil
