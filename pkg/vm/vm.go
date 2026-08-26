@@ -1336,7 +1336,7 @@ func (vm *VM) run() (status InterpretResult, resultValue Value) {
 	}()
 
 	// --- Caching frame variables ---
-	if vm.frameCount == 0 {
+	if vm.frameCount == 0 || vm.unwindingCrossedNative {
 		return InterpretOK, Undefined // Nothing to run
 	}
 	frame := &vm.frames[vm.frameCount-1]
@@ -1587,12 +1587,54 @@ startExecution:
 			ip++
 			iterator := registers[iteratorReg]
 			if iterator.IsObject() {
+				// vm.pendingAction/pendingValue record *our own* completion type
+				// (why we're closing this iterator) - captured before doing
+				// anything else, because both the property read below (a
+				// throwing "return" accessor runs GetMethod's own bytecode) and
+				// the vm.Call further down run arbitrary nested bytecode. If
+				// that nested bytecode throws while vm.finallyDepth is still
+				// elevated from *our* caller's dynamic nesting (a single
+				// global counter, unaware it doesn't apply to this unrelated
+				// nested call), throwException's own "a throw inside a
+				// finally block supersedes the pending one" logic wrongly
+				// wipes vm.pendingAction/pendingValue out from under us.
+				// Restoring from this snapshot whenever that happens keeps a
+				// corrupted-away ActionThrow from being silently downgraded
+				// to ActionNone, which would let an inner error through
+				// instead of suppressing it per spec.
+				savedPendingAction := vm.pendingAction
+				savedPendingValue := vm.pendingValue
+
 				// Try to get the "return" method using GetProperty (prototype chain lookup)
 				// This is necessary because generator's return method is on GeneratorPrototype
 				returnMethod, getErr := vm.GetProperty(iterator, "return")
-				// If return method exists and is callable, call it
-				if getErr == nil && returnMethod.IsCallable() {
+				if savedPendingAction == ActionThrow && vm.pendingAction != ActionThrow {
+					vm.pendingAction = ActionThrow
+					vm.pendingValue = savedPendingValue
+				}
+				if getErr != nil {
+					// GetMethod (7.3.10) itself threw - e.g. a throwing "return" accessor.
+					// Per IteratorClose steps 6-7: suppress this if our own completion is
+					// already a throw, otherwise propagate GetMethod's error as the new one.
+					if vm.pendingAction == ActionThrow {
+						vm.currentException = Null
+						vm.unwinding = false
+					} else {
+						vm.pendingAction = ActionThrow
+						if excErr, ok := getErr.(exceptionError); ok {
+							vm.pendingValue = excErr.exception
+						} else {
+							vm.pendingValue = vm.currentException
+						}
+						vm.currentException = Null
+						vm.unwinding = false
+					}
+				} else if returnMethod.IsCallable() {
 					innerResult, callErr := vm.Call(returnMethod, iterator, nil)
+					if savedPendingAction == ActionThrow && vm.pendingAction != ActionThrow {
+						vm.pendingAction = ActionThrow
+						vm.pendingValue = savedPendingValue
+					}
 
 					// Check pending action to determine how to handle errors
 					if vm.pendingAction == ActionThrow {
@@ -1642,9 +1684,43 @@ startExecution:
 			if !done.IsTruthy() {
 				iterator := registers[iteratorReg]
 				if iterator.IsObject() {
+					// See the matching comment in OpIteratorCleanupAbrupt: snapshot our
+					// own completion type before touching the iterator at all, since
+					// both the property read (a throwing "return" accessor) and the
+					// vm.Call below run arbitrary nested bytecode that can wipe out
+					// vm.pendingAction/pendingValue via the unrelated finallyDepth
+					// interaction described there.
+					savedPendingAction := vm.pendingAction
+					savedPendingValue := vm.pendingValue
+
 					returnMethod, getErr := vm.GetProperty(iterator, "return")
-					if getErr == nil && returnMethod.IsCallable() {
+					if savedPendingAction == ActionThrow && vm.pendingAction != ActionThrow {
+						vm.pendingAction = ActionThrow
+						vm.pendingValue = savedPendingValue
+					}
+					if getErr != nil {
+						// See the matching comment in OpIteratorCleanupAbrupt: GetMethod
+						// itself threw - suppress it if our own completion is already a
+						// throw, otherwise propagate it as the new completion.
+						if vm.pendingAction == ActionThrow {
+							vm.currentException = Null
+							vm.unwinding = false
+						} else {
+							vm.pendingAction = ActionThrow
+							if excErr, ok := getErr.(exceptionError); ok {
+								vm.pendingValue = excErr.exception
+							} else {
+								vm.pendingValue = vm.currentException
+							}
+							vm.currentException = Null
+							vm.unwinding = false
+						}
+					} else if returnMethod.IsCallable() {
 						innerResult, callErr := vm.Call(returnMethod, iterator, nil)
+						if savedPendingAction == ActionThrow && vm.pendingAction != ActionThrow {
+							vm.pendingAction = ActionThrow
+							vm.pendingValue = savedPendingValue
+						}
 
 						// Check pending action to determine how to handle errors
 						if vm.pendingAction == ActionThrow {
@@ -2193,7 +2269,7 @@ startExecution:
 					// Check for Symbol - cannot convert Symbol to string
 					if leftPrim.IsSymbol() {
 						vm.ThrowTypeError("Cannot convert a Symbol value to a string")
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						frame = &vm.frames[vm.frameCount-1]
@@ -2207,7 +2283,7 @@ startExecution:
 					}
 					if rightPrim.IsSymbol() {
 						vm.ThrowTypeError("Cannot convert a Symbol value to a string")
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						frame = &vm.frames[vm.frameCount-1]
@@ -2227,7 +2303,7 @@ startExecution:
 				} else if leftPrim.IsBigInt() || rightPrim.IsBigInt() {
 					// One is BigInt, the other is not: error (cannot mix BigInt with non-BigInt)
 					vm.ThrowTypeError("Cannot mix BigInt and other types, use explicit conversions")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -2243,7 +2319,7 @@ startExecution:
 					// ToNumeric(Symbol) throws TypeError - check left first, then right
 					if leftPrim.IsSymbol() {
 						vm.ThrowTypeError("Cannot convert a Symbol value to a number")
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						frame = &vm.frames[vm.frameCount-1]
@@ -2257,7 +2333,7 @@ startExecution:
 					}
 					if rightPrim.IsSymbol() {
 						vm.ThrowTypeError("Cannot convert a Symbol value to a number")
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						frame = &vm.frames[vm.frameCount-1]
@@ -2295,7 +2371,7 @@ startExecution:
 				// This must happen BEFORE we call ToPrimitive on right operand
 				if leftPrim.IsSymbol() {
 					vm.ThrowTypeError("Cannot convert a Symbol value to a number")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -2323,7 +2399,7 @@ startExecution:
 				// Check if right is Symbol - ToNumeric(Symbol) throws TypeError
 				if rightPrim.IsSymbol() {
 					vm.ThrowTypeError("Cannot convert a Symbol value to a number")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -2356,7 +2432,7 @@ startExecution:
 					case OpDivide:
 						if rightBig.Sign() == 0 {
 							vm.ThrowRangeError("Division by zero")
-							if vm.frameCount == 0 {
+							if vm.frameCount == 0 || vm.unwindingCrossedNative {
 								return InterpretRuntimeError, vm.currentException
 							}
 							frame = &vm.frames[vm.frameCount-1]
@@ -2376,7 +2452,7 @@ startExecution:
 				} else if leftIsBigInt || rightIsBigInt {
 					// Cannot mix BigInt and non-BigInt
 					vm.ThrowTypeError("Cannot mix BigInt and other types, use explicit conversions")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -2421,7 +2497,7 @@ startExecution:
 				// Check if left is Symbol - ToNumeric(Symbol) throws TypeError
 				if leftPrim.IsSymbol() {
 					vm.ThrowTypeError("Cannot convert a Symbol value to a number")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -2449,7 +2525,7 @@ startExecution:
 				// Check if right is Symbol - ToNumeric(Symbol) throws TypeError
 				if rightPrim.IsSymbol() {
 					vm.ThrowTypeError("Cannot convert a Symbol value to a number")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -2473,7 +2549,7 @@ startExecution:
 					rightBig := rightPrim.AsBigInt()
 					if rightBig.Sign() == 0 {
 						vm.ThrowRangeError("Division by zero")
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						frame = &vm.frames[vm.frameCount-1]
@@ -2491,7 +2567,7 @@ startExecution:
 				} else if leftIsBigInt || rightIsBigInt {
 					// Cannot mix BigInt and non-BigInt
 					vm.ThrowTypeError("Cannot mix BigInt and other types, use explicit conversions")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -2676,7 +2752,7 @@ startExecution:
 				objType != TypeSet && objType != TypeMap && objType != TypeArguments && objType != TypePromise {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot use 'in' operator to search for '%s' in %s", propVal.ToString(), objVal.Type().String()))
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -3014,7 +3090,7 @@ startExecution:
 			if !constructorVal.IsObject() && !constructorVal.IsCallable() {
 				frame.ip = ip
 				vm.ThrowTypeError("Right-hand side of 'instanceof' is not an object")
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -3038,7 +3114,7 @@ startExecution:
 				vm.helperCallDepth--
 				if status == InterpretRuntimeError {
 					// The getter threw an error - propagate it
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -3070,7 +3146,7 @@ startExecution:
 							if ee, ok := err.(ExceptionError); ok {
 								vm.throwException(ee.GetExceptionValue())
 							}
-							if vm.frameCount == 0 {
+							if vm.frameCount == 0 || vm.unwindingCrossedNative {
 								return InterpretRuntimeError, vm.currentException
 							}
 							frame = &vm.frames[vm.frameCount-1]
@@ -3093,7 +3169,7 @@ startExecution:
 			if !constructorVal.IsCallable() {
 				frame.ip = ip
 				vm.ThrowTypeError("Right-hand side of 'instanceof' is not callable")
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -3144,7 +3220,7 @@ startExecution:
 				if !constructorPrototype.IsObject() && !constructorPrototype.IsCallable() {
 					frame.ip = ip
 					vm.ThrowTypeError("Function has non-object prototype in instanceof check")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -3475,16 +3551,20 @@ startExecution:
 					}
 					vm.throwException(excVal)
 					// After exception unwinding, we need to reload frame state
-					// because frames may have been popped
-					if vm.frameCount > 0 {
-						frame = &vm.frames[vm.frameCount-1]
-						registers = frame.registers
-						closure = frame.closure
-						function = closure.Fn
-						code = function.Chunk.Code
-						constants = function.Chunk.Constants
-						ip = frame.ip
+					// because frames may have been popped. If we've fully unwound
+					// (frameCount==0) or stopped at a native/direct-call boundary
+					// (unwindingCrossedNative), let the native caller handle it
+					// instead of resuming dispatch on stale/boundary frame state.
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
+						return InterpretRuntimeError, vm.currentException
 					}
+					frame = &vm.frames[vm.frameCount-1]
+					registers = frame.registers
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					ip = frame.ip
 					continue
 				}
 
@@ -3695,16 +3775,20 @@ startExecution:
 					}
 					vm.throwException(excVal)
 					// After exception unwinding, we need to reload frame state
-					// because frames may have been popped
-					if vm.frameCount > 0 {
-						frame = &vm.frames[vm.frameCount-1]
-						registers = frame.registers
-						closure = frame.closure
-						function = closure.Fn
-						code = function.Chunk.Code
-						constants = function.Chunk.Constants
-						ip = frame.ip
+					// because frames may have been popped. If we've fully unwound
+					// (frameCount==0) or stopped at a native/direct-call boundary
+					// (unwindingCrossedNative), let the native caller handle it
+					// instead of resuming dispatch on stale/boundary frame state.
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
+						return InterpretRuntimeError, vm.currentException
 					}
+					frame = &vm.frames[vm.frameCount-1]
+					registers = frame.registers
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					ip = frame.ip
 					continue
 				}
 
@@ -3897,7 +3981,7 @@ startExecution:
 					}
 				}
 				vm.throwException(excVal)
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -3965,7 +4049,7 @@ startExecution:
 				}
 				// Follow the OpThrow pattern: check unwinding state and continue
 				if vm.unwinding {
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					// Reload frame state and continue unwinding
@@ -6660,7 +6744,7 @@ startExecution:
 				// Per ECMAScript spec 15.7.14 step 5.f: "if IsConstructor(superclass) is false, throw TypeError"
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Class extends value %s is not a constructor or null", superclassVal.TypeName()))
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -6723,7 +6807,7 @@ startExecution:
 					// No prototype property - that's an error for extends
 					frame.ip = ip
 					vm.ThrowTypeError("Class extends value does not have valid prototype property")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -6741,7 +6825,7 @@ startExecution:
 				if protoVal.Type() != TypeNull && !protoVal.IsObject() && !protoVal.IsCallable() {
 					frame.ip = ip
 					vm.ThrowTypeError("Class extends value has non-object prototype property")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -8450,7 +8534,7 @@ startExecution:
 			// This must happen BEFORE we call ToPrimitive on right operand
 			if leftPrim.IsSymbol() {
 				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -8478,7 +8562,7 @@ startExecution:
 			// Check if right is Symbol - ToNumeric(Symbol) throws TypeError
 			if rightPrim.IsSymbol() {
 				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -8500,7 +8584,7 @@ startExecution:
 				// Both operands must be BigInt for bitwise operations
 				if (leftIsBigInt && !rightIsBigInt) || (!leftIsBigInt && rightIsBigInt) {
 					vm.ThrowTypeError("Cannot mix BigInt and other types")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -8516,7 +8600,7 @@ startExecution:
 				// Unsigned right shift (>>>) with BigInt is not allowed
 				if opcode == OpUnsignedShiftRight {
 					vm.ThrowTypeError("BigInt does not support unsigned right shift")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -8624,7 +8708,7 @@ startExecution:
 			// This must happen BEFORE we call ToPrimitive on right operand
 			if leftPrim.IsSymbol() {
 				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -8652,7 +8736,7 @@ startExecution:
 			// Check if right is Symbol - ToNumeric(Symbol) throws TypeError
 			if rightPrim.IsSymbol() {
 				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -8676,7 +8760,7 @@ startExecution:
 				// BigInt exponentiation requires non-negative exponent
 				if rightBig.Sign() < 0 {
 					vm.ThrowRangeError("Exponent must be positive")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -8691,7 +8775,7 @@ startExecution:
 				// Check if exponent is too large to fit in int
 				if !rightBig.IsInt64() {
 					vm.ThrowRangeError("BigInt exponent too large")
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -8709,7 +8793,7 @@ startExecution:
 			} else if leftIsBigInt || rightIsBigInt {
 				// Cannot mix BigInt and non-BigInt
 				vm.ThrowTypeError("Cannot mix BigInt and other types, use explicit conversions")
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -8843,7 +8927,7 @@ startExecution:
 				if fn.Properties == nil {
 					frame.ip = ip
 					vm.ThrowTypeError(fmt.Sprintf("Cannot read private member #%s from an object whose class did not declare it", fieldName))
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -8866,7 +8950,7 @@ startExecution:
 				} else {
 					frame.ip = ip
 					vm.ThrowTypeError(fmt.Sprintf("Cannot read private member #%s from an object whose class did not declare it", fieldName))
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -8881,7 +8965,7 @@ startExecution:
 			} else {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot read private member #%s from an object whose class did not declare it", fieldName))
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -8903,7 +8987,7 @@ startExecution:
 				if !exists || getter.IsUndefined() {
 					frame.ip = ip
 					vm.ThrowTypeError(fmt.Sprintf("Cannot read private member #%s from an object whose class did not declare it", fieldName))
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -8928,7 +9012,7 @@ startExecution:
 				if !exists {
 					frame.ip = ip
 					vm.ThrowTypeError(fmt.Sprintf("Cannot read private member #%s from an object whose class did not declare it", fieldName))
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -8956,7 +9040,7 @@ startExecution:
 				// Similar to OpThrow: check if unwinding or if handler was found
 				if vm.unwinding {
 					// No handler found or hit direct call boundary, continue unwinding
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					continue
@@ -8987,7 +9071,7 @@ startExecution:
 				// Similar to OpThrow: check if unwinding or if handler was found
 				if vm.unwinding {
 					// No handler found or hit direct call boundary, continue unwinding
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					continue
@@ -9059,7 +9143,7 @@ startExecution:
 			if obj.IsPrivateMethod(fieldName) {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot assign to private method '#%s'", fieldName))
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -9077,7 +9161,7 @@ startExecution:
 				if !exists || setter.IsUndefined() {
 					frame.ip = ip
 					vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read-only private accessor '#%s'", fieldName))
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -9108,7 +9192,7 @@ startExecution:
 					}
 					frame.ip = ip
 					vm.ThrowTypeError(fmt.Sprintf("Cannot add private field #%s to a non-extensible object", displayName))
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -9173,7 +9257,7 @@ startExecution:
 			} else {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot write private member #%s from an object whose class did not declare it", displayName))
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -9192,7 +9276,7 @@ startExecution:
 				if !exists || setter.IsUndefined() {
 					frame.ip = ip
 					vm.ThrowTypeError(fmt.Sprintf("Cannot write private member #%s from an object whose class did not declare it", displayName))
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -9215,7 +9299,7 @@ startExecution:
 				// Object doesn't have this setter - throw TypeError
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot write private member #%s from an object whose class did not declare it", displayName))
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -9287,7 +9371,7 @@ startExecution:
 				}
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot add private method #%s to a non-extensible object", displayName))
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -9332,7 +9416,7 @@ startExecution:
 			if objVal.Type() != TypeObject && objVal.Type() != TypeFunction {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot use 'in' operator to search for '#%s' in %s", fieldName, objVal.TypeName()))
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -9443,7 +9527,7 @@ startExecution:
 				}
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot add private accessor #%s to a non-extensible object", displayName))
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -9636,7 +9720,7 @@ startExecution:
 					}
 				}
 				vm.throwException(excVal)
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -9687,7 +9771,7 @@ startExecution:
 					fmt.Printf("[DEBUG vm.go] OpCallMethod: Frame was popped (was %d, now %d), exception handled in outer frame\n",
 						frameCountBeforeCall, vm.frameCount)
 				}
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -10313,7 +10397,7 @@ startExecution:
 				if !builtin.IsConstructor {
 					frame.ip = callerIP
 					vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", builtin.Name))
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -10363,7 +10447,7 @@ startExecution:
 					// Check if this is an ExceptionError (already has an exception value)
 					if ee, ok := err.(ExceptionError); ok {
 						vm.throwException(ee.GetExceptionValue())
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						frame = &vm.frames[vm.frameCount-1]
@@ -10393,7 +10477,7 @@ startExecution:
 						errValue = NewValueFromPlainObject(eo)
 					}
 					vm.throwException(errValue)
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -10441,7 +10525,7 @@ startExecution:
 				if !builtinWithProps.IsConstructor {
 					frame.ip = callerIP
 					vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", builtinWithProps.Name))
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -10486,7 +10570,7 @@ startExecution:
 					// Check if this is an ExceptionError (already has an exception value)
 					if ee, ok := err.(ExceptionError); ok {
 						vm.throwException(ee.GetExceptionValue())
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						frame = &vm.frames[vm.frameCount-1]
@@ -10541,7 +10625,7 @@ startExecution:
 						errValue = NewValueFromPlainObject(eo)
 					}
 					vm.throwException(errValue)
-					if vm.frameCount == 0 {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
 					frame = &vm.frames[vm.frameCount-1]
@@ -10713,7 +10797,7 @@ startExecution:
 					if !nf.IsConstructor {
 						frame.ip = callerIP
 						vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", nf.Name))
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						frame = &vm.frames[vm.frameCount-1]
@@ -10740,7 +10824,7 @@ startExecution:
 						// Check if this is an ExceptionError (already has an exception value)
 						if ee, ok := err.(ExceptionError); ok {
 							vm.throwException(ee.GetExceptionValue())
-							if vm.frameCount == 0 {
+							if vm.frameCount == 0 || vm.unwindingCrossedNative {
 								return InterpretRuntimeError, vm.currentException
 							}
 							frame = &vm.frames[vm.frameCount-1]
@@ -10769,7 +10853,7 @@ startExecution:
 							errValue = NewValueFromPlainObject(eo)
 						}
 						vm.throwException(errValue)
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						frame = &vm.frames[vm.frameCount-1]
@@ -10794,7 +10878,7 @@ startExecution:
 					if !nfp.IsConstructor {
 						frame.ip = callerIP
 						vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", nfp.Name))
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						frame = &vm.frames[vm.frameCount-1]
@@ -10820,7 +10904,7 @@ startExecution:
 					if err != nil {
 						if ee, ok := err.(ExceptionError); ok {
 							vm.throwException(ee.GetExceptionValue())
-							if vm.frameCount == 0 {
+							if vm.frameCount == 0 || vm.unwindingCrossedNative {
 								return InterpretRuntimeError, vm.currentException
 							}
 							frame = &vm.frames[vm.frameCount-1]
@@ -10849,7 +10933,7 @@ startExecution:
 							errValue = NewValueFromPlainObject(eo)
 						}
 						vm.throwException(errValue)
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						frame = &vm.frames[vm.frameCount-1]
@@ -10887,7 +10971,7 @@ startExecution:
 						} else {
 							vm.runtimeError("%s", err.Error())
 						}
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						frame = &vm.frames[vm.frameCount-1]
@@ -11489,7 +11573,7 @@ startExecution:
 								if isStrict {
 									frame.ip = ip
 									vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
-									if vm.frameCount == 0 {
+									if vm.frameCount == 0 || vm.unwindingCrossedNative {
 										return InterpretRuntimeError, vm.currentException
 									}
 									frame = &vm.frames[vm.frameCount-1]
@@ -11514,7 +11598,7 @@ startExecution:
 						if isStrict {
 							frame.ip = ip
 							vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
-							if vm.frameCount == 0 {
+							if vm.frameCount == 0 || vm.unwindingCrossedNative {
 								return InterpretRuntimeError, vm.currentException
 							}
 							frame = &vm.frames[vm.frameCount-1]
@@ -11638,7 +11722,7 @@ startExecution:
 					primitiveVal := vm.toPrimitive(keyValue, "string")
 					// Check if toPrimitive threw an exception
 					if vm.currentException.Type() != TypeUndefined {
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						// Exception handler will handle it
@@ -11818,7 +11902,7 @@ startExecution:
 					primitiveVal := vm.toPrimitive(keyValue, "string")
 					// Check if toPrimitive threw an exception
 					if vm.currentException.Type() != TypeUndefined {
-						if vm.frameCount == 0 {
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
 							return InterpretRuntimeError, vm.currentException
 						}
 						// Exception handler will handle it
@@ -11898,7 +11982,7 @@ startExecution:
 									if isStrict {
 										frame.ip = ip
 										vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
-										if vm.frameCount == 0 {
+										if vm.frameCount == 0 || vm.unwindingCrossedNative {
 											return InterpretRuntimeError, vm.currentException
 										}
 										frame = &vm.frames[vm.frameCount-1]
@@ -11923,7 +12007,7 @@ startExecution:
 							if isStrict {
 								frame.ip = ip
 								vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
-								if vm.frameCount == 0 {
+								if vm.frameCount == 0 || vm.unwindingCrossedNative {
 									return InterpretRuntimeError, vm.currentException
 								}
 								frame = &vm.frames[vm.frameCount-1]
@@ -12062,7 +12146,7 @@ startExecution:
 									if isStrict {
 										frame.ip = ip
 										vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
-										if vm.frameCount == 0 {
+										if vm.frameCount == 0 || vm.unwindingCrossedNative {
 											return InterpretRuntimeError, vm.currentException
 										}
 										frame = &vm.frames[vm.frameCount-1]
@@ -12087,7 +12171,7 @@ startExecution:
 							if isStrict {
 								frame.ip = ip
 								vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
-								if vm.frameCount == 0 {
+								if vm.frameCount == 0 || vm.unwindingCrossedNative {
 									return InterpretRuntimeError, vm.currentException
 								}
 								frame = &vm.frames[vm.frameCount-1]
@@ -13093,7 +13177,7 @@ startExecution:
 			if vm.unwinding {
 				// Exception was thrown and we're unwinding
 				// The unwinding logic will either find a handler or terminate
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					// All frames unwound, uncaught exception
 					return InterpretRuntimeError, vm.currentException
 				}
@@ -13757,7 +13841,7 @@ startExecution:
 				vm.throwException(vm.lastThrownException)
 
 				// Reload frame state after exception handling (handler may have been found)
-				if vm.frameCount == 0 {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				frame = &vm.frames[vm.frameCount-1]
@@ -15202,7 +15286,7 @@ startExecution:
 	// 2. Completed exception handling (vm.unwinding == false) - resume execution at handler
 
 	// CAUTION: this is commented out because apparently it's unreachable according to Go compiler
-	// if vm.frameCount == 0 {
+	// if vm.frameCount == 0 || vm.unwindingCrossedNative {
 	// 	// No frames left - either uncaught exception or completed execution
 	// 	if vm.unwinding {
 	// 		return InterpretRuntimeError, vm.currentException
