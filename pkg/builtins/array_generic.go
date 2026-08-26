@@ -1,0 +1,293 @@
+package builtins
+
+import (
+	"strconv"
+
+	"github.com/nooga/paserati/pkg/vm"
+)
+
+// This file holds the shared "array-like" accessors used by Array.prototype's
+// generic methods (every, some, filter, map, forEach, indexOf, push, splice,
+// ...). Per ECMA-262, these methods are intentionally generic: their `this`
+// value only needs a "length" property and integer-indexed properties, not
+// an actual Array object (22.1.3: "the definition of these methods does not
+// require that its this value be an Array object").
+//
+// The methods used to implement that with a two-branch dance:
+//
+//	if arr := thisVal.AsArray(); arr != nil {
+//	    ... fast path ...
+//	} else if po := thisVal.AsPlainObject(); po != nil {
+//	    ... array-like fallback ...
+//	}
+//
+// but vm.Value.AsArray()/AsPlainObject() panic on a type mismatch instead of
+// returning nil - so the `!= nil` checks were dead code, and the panic fired
+// on the very first receiver that was neither a real Array nor a plain
+// Object (Arguments, TypedArray, Proxy, boxed primitives, Map/Set/...,
+// anything). See issue #46. Fixed for good by centralizing the three
+// operations these methods actually need - length, indexed get, indexed set
+// - into helpers that dispatch on the concrete type once, in one place, and
+// fall back to the VM's ordinary (correct-for-every-type) property-access
+// path for anything that isn't a real Array or PlainObject.
+
+// maxSafeInteger is ToLength's cap (2^53 - 1).
+const maxSafeInteger = 9007199254740991
+
+// maxArrayLength is the largest valid Array length (2^32 - 1, ECMA-262
+// 23.1.4.1's array index bound). ArrayCreate(len) and ArraySetLength both
+// throw a RangeError above this - critically, *before* doing any per-element
+// work. Array.prototype methods that build a result sized to an array-like's
+// declared length (map, toReversed, toSorted, toSpliced, with, the Array(len)
+// constructor) MUST check this up front: LengthOfArrayLike/ToLength allows
+// lengths up to 2^53-1 for an arbitrary array-like receiver (nothing stops
+// `{length: 2**32}.length` from being read), and a bare `for i := 0; i <
+// length; i++` loop over a multi-billion length hangs the process long
+// before finishing - the RangeError is the spec's mechanism for cutting
+// that off immediately rather than requiring a fast per-iteration no-op.
+const maxArrayLength = 4294967295
+
+// checkArrayCreateLength returns a RangeError if length exceeds the largest
+// valid Array length, matching ArrayCreate's own bounds check. Call this
+// immediately after computing a result array's target length and before any
+// loop over it - see maxArrayLength's comment for why this can't wait.
+func checkArrayCreateLength(vmInstance *vm.VM, length int) error {
+	if length > maxArrayLength {
+		return vmInstance.NewRangeError("Invalid array length")
+	}
+	return nil
+}
+
+// toLengthInt clamps a raw "length" value the way ToLength does: NaN or <= 0
+// becomes 0, anything above 2^53-1 is capped, otherwise truncated to an
+// integer. Returned as a plain int since no array-like this codebase deals
+// with can plausibly hold more than MaxInt elements anyway.
+func toLengthInt(v vm.Value) int {
+	n := v.ToFloat()
+	if n != n || n <= 0 { // NaN or <= 0
+		return 0
+	}
+	if n > maxSafeInteger {
+		n = maxSafeInteger
+	}
+	return int(n)
+}
+
+// arrayLikeLength returns LengthOfArrayLike(thisVal) (ECMA-262 7.3.20): the
+// real Length() for an Array, otherwise ToLength(Get(thisVal, "length")).
+// The PlainObject case goes through getOwnPlainObjectProperty so a "length"
+// defined as an accessor is invoked correctly rather than silently treated
+// as absent (see that helper's comment - this matters for real Test262
+// cases, not just theoretical ones). Everything else goes through the VM's
+// generic property get, which correctly handles TypedArray/Arguments/Proxy/
+// getters/etc.
+func arrayLikeLength(vmInstance *vm.VM, thisVal vm.Value) (int, error) {
+	switch thisVal.Type() {
+	case vm.TypeArray:
+		return thisVal.AsArray().Length(), nil
+	case vm.TypeObject:
+		lv, exists, err := getOwnPlainObjectProperty(vmInstance, thisVal.AsPlainObject(), thisVal, "length")
+		if err != nil {
+			return 0, err
+		}
+		if !exists {
+			return 0, nil
+		}
+		return toLengthInt(lv), nil
+	default:
+		lv, err := vmInstance.GetProperty(thisVal, "length")
+		if err != nil {
+			return 0, err
+		}
+		return toLengthInt(lv), nil
+	}
+}
+
+// getOwnPlainObjectProperty reads own property `key` of po (whose Value form
+// is `receiver`, used as `this` for an accessor getter), returning
+// (value, exists, error). This exists because PlainObject.GetOwn/Get have no
+// VM to invoke a getter with, so they silently can't distinguish "own
+// accessor property present" from "absent" - which several array-like
+// generic methods actually depend on. Test262 exploits this directly: more
+// than one near-integer-length test (Array.prototype.{unshift,reverse}, and
+// implicitly anything using arrayLikeGet's exists flag) places a *throwing
+// getter* at a specific index specifically to stop what would otherwise be
+// an iteration up near 2^53-1 after only a handful of steps. Treating that
+// accessor as "doesn't exist" (the bug this replaces) skips the getter
+// entirely and lets the loop run its full, computationally impossible
+// length instead of throwing - which manifested as an actual multi-gigabyte,
+// unbounded-runtime hang, not just a wrong answer.
+func getOwnPlainObjectProperty(vmInstance *vm.VM, po *vm.PlainObject, receiver vm.Value, key string) (vm.Value, bool, error) {
+	if g, _, _, _, ok := po.GetOwnAccessor(key); ok {
+		if g.Type() == vm.TypeUndefined {
+			return vm.Undefined, true, nil
+		}
+		v, err := vmInstance.Call(g, receiver, nil)
+		if err != nil {
+			return vm.Undefined, false, err
+		}
+		return v, true, nil
+	}
+	if v, ok := po.GetOwn(key); ok {
+		return v, true, nil
+	}
+	return vm.Undefined, false, nil
+}
+
+// arrayLikeGet returns (value, exists, error) for index i of an array-like
+// `this`. "exists" mirrors HasProperty so callers can skip holes in a sparse
+// Array or a PlainObject missing that key, matching spec semantics for
+// every/filter/forEach/etc. Real Arrays preserve the exact hole-checking the
+// previous fast path did; PlainObjects go through getOwnPlainObjectProperty
+// for correct accessor handling (see its comment); every other type
+// (TypedArray, Arguments, Proxy, boxed primitives, Map/Set/...) has no holes
+// to speak of, so a plain Get is both correct and simpler.
+func arrayLikeGet(vmInstance *vm.VM, thisVal vm.Value, i int) (vm.Value, bool, error) {
+	switch thisVal.Type() {
+	case vm.TypeArray:
+		arr := thisVal.AsArray()
+		if !arr.HasIndex(i) {
+			return vm.Undefined, false, nil
+		}
+		return arr.Get(i), true, nil
+	case vm.TypeObject:
+		return getOwnPlainObjectProperty(vmInstance, thisVal.AsPlainObject(), thisVal, strconv.Itoa(i))
+	default:
+		key := strconv.Itoa(i)
+		v, err := vmInstance.GetProperty(thisVal, key)
+		if err != nil {
+			return vm.Undefined, false, err
+		}
+		return v, true, nil
+	}
+}
+
+// arrayLikeSet writes index i of an array-like `this` to val - used by the
+// mutating generic methods (push, splice, copyWithin, fill, reverse, sort,
+// ...). Real Arrays write directly; PlainObjects invoke an own accessor
+// setter if present (mirroring arrayLikeGet's getter handling) before
+// falling back to a plain data-property write; anything else goes through
+// the VM's generic property set (correct for TypedArray element coercion,
+// Proxy set traps, setters, etc.).
+func arrayLikeSet(vmInstance *vm.VM, thisVal vm.Value, i int, val vm.Value) error {
+	switch thisVal.Type() {
+	case vm.TypeArray:
+		thisVal.AsArray().Set(i, val)
+		return nil
+	case vm.TypeObject:
+		po := thisVal.AsPlainObject()
+		key := strconv.Itoa(i)
+		if _, s, _, _, ok := po.GetOwnAccessor(key); ok && s.Type() != vm.TypeUndefined {
+			_, err := vmInstance.Call(s, thisVal, []vm.Value{val})
+			return err
+		}
+		po.SetOwn(key, val)
+		return nil
+	default:
+		return vmInstance.SetProperty(thisVal, strconv.Itoa(i), val)
+	}
+}
+
+// arrayLikeSetLength writes a new "length" onto an array-like `this` -
+// needed by push/splice/etc. when the receiver isn't a real Array (whose
+// length is derived, not stored).
+func arrayLikeSetLength(vmInstance *vm.VM, thisVal vm.Value, length int) error {
+	switch thisVal.Type() {
+	case vm.TypeArray:
+		// A real Array's length is spec-capped at 2^32-1 (ArraySetLength);
+		// an arbitrary object's "length" property has no such limit, so
+		// this check only applies to the TypeArray branch.
+		if err := checkArrayCreateLength(vmInstance, length); err != nil {
+			return err
+		}
+		thisVal.AsArray().SetLength(length)
+		return nil
+	case vm.TypeObject:
+		thisVal.AsPlainObject().SetOwn("length", vm.NumberValue(float64(length)))
+		return nil
+	default:
+		return vmInstance.SetProperty(thisVal, "length", vm.NumberValue(float64(length)))
+	}
+}
+
+// asPlainObjectOrNil is vm.Value.AsPlainObject() without the panic: nil for
+// anything that isn't exactly TypeObject, so it's safe to use in the
+// `if po := asPlainObjectOrNil(v); po != nil` idiom several call sites in
+// this file rely on (unlike AsPlainObject() itself, which panics on a type
+// mismatch before that nil check ever runs - see issue #46).
+func asPlainObjectOrNil(v vm.Value) *vm.PlainObject {
+	if v.Type() != vm.TypeObject {
+		return nil
+	}
+	return v.AsPlainObject()
+}
+
+// isArraySpec implements the IsArray abstract operation (ECMA-262 7.2.2)
+// backing Array.isArray: true for a real Array, recursing through a Proxy's
+// target (throwing if the proxy has been revoked), false for everything
+// else - except this engine's Array.prototype itself, which is represented
+// as a PlainObject rather than a real ArrayObject (see InitRuntime above),
+// so it needs an explicit identity check to satisfy "Array.prototype is an
+// Array exotic object" per spec.
+func isArraySpec(vmInstance *vm.VM, v vm.Value) (bool, error) {
+	switch v.Type() {
+	case vm.TypeArray:
+		return true, nil
+	case vm.TypeProxy:
+		proxy := v.AsProxy()
+		if proxy.Revoked {
+			return false, vmInstance.NewTypeError("Cannot perform 'IsArray' on a proxy that has been revoked")
+		}
+		return isArraySpec(vmInstance, proxy.Target())
+	case vm.TypeObject:
+		if vmInstance.ArrayPrototype.Type() == vm.TypeObject && v.AsPlainObject() == vmInstance.ArrayPrototype.AsPlainObject() {
+			return true, nil
+		}
+		return false, nil
+	default:
+		return false, nil
+	}
+}
+
+// isConcatSpreadable implements IsConcatSpreadable (ECMA-262 23.1.3.1.1):
+// non-objects are never spreadable; an object's own/inherited
+// @@isConcatSpreadable overrides everything if defined; otherwise an object
+// spreads iff it's a real Array. Used by Array.prototype.concat to decide
+// whether an argument (or the receiver itself) contributes its elements or
+// is appended as a single value.
+func isConcatSpreadable(vmInstance *vm.VM, v vm.Value) (bool, error) {
+	if !v.IsObject() && !v.IsCallable() {
+		return false, nil
+	}
+	spreadable, found, err := vmInstance.GetSymbolPropertyWithGetter(v, vmInstance.SymbolIsConcatSpreadable)
+	if err != nil {
+		return false, err
+	}
+	if found && !spreadable.IsUndefined() {
+		return spreadable.IsTruthy(), nil
+	}
+	// Fallback is IsArray(v), not a bare Type() check - a Proxy wrapping a
+	// real Array must still be recognized as spreadable (isArraySpec
+	// recurses through the proxy's target, per spec).
+	return isArraySpec(vmInstance, v)
+}
+
+// arrayLikeDelete removes index i from an array-like `this`, leaving a hole
+// - used by splice/pop/shift-style methods on a non-Array receiver where
+// spec semantics call for DeletePropertyOrThrow rather than writing
+// undefined (so a subsequent HasProperty/`in` check on that index is false).
+func arrayLikeDelete(vmInstance *vm.VM, thisVal vm.Value, i int) error {
+	switch thisVal.Type() {
+	case vm.TypeArray:
+		// Arrays don't track holes below their length via delete in this
+		// engine's element storage; writing Undefined matches this file's
+		// pre-existing behavior for Array receivers in these code paths.
+		thisVal.AsArray().Set(i, vm.Undefined)
+		return nil
+	case vm.TypeObject:
+		thisVal.AsPlainObject().DeleteOwn(strconv.Itoa(i))
+		return nil
+	default:
+		return vmInstance.SetProperty(thisVal, strconv.Itoa(i), vm.Undefined)
+	}
+}
