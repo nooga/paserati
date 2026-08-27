@@ -13,6 +13,21 @@ import (
 // --- Debug Flag ---
 const debugParser = false
 
+// isIdentifierNameToken reports whether tok can serve as an IdentifierName
+// (per ECMAScript grammar, IdentifierName = IDENT or any reserved word - e.g.
+// 'class', 'default', 'if'). Used for contexts that accept IdentifierName
+// rather than plain BindingIdentifier, such as ModuleExportName positions
+// ('export * as class from ...') and property/member names after '.'.
+// A keyword token's Type always equals lexer.LookupIdent(tok.Literal), since
+// that's how the lexer assigns it in the first place - reusing that lookup
+// here avoids hand-maintaining a duplicate keyword list.
+func (p *Parser) isIdentifierNameToken(tok *lexer.Token) bool {
+	if tok.Type == lexer.IDENT {
+		return true
+	}
+	return lexer.LookupIdent(tok.Literal) == tok.Type
+}
+
 func debugPrint(format string, args ...interface{}) {
 	if debugParser {
 		fmt.Printf("[Parser Debug] "+format+"\n", args...)
@@ -11540,15 +11555,15 @@ func (p *Parser) parseExportAllDeclaration(exportToken *lexer.Token, isTypeOnly 
 		p.nextToken() // consume '*'
 		p.nextToken() // consume 'as'
 
-		// Accept identifier, string literal, or 'default' keyword
-		if p.curToken.Type == lexer.IDENT {
-			stmt.Exported = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-		} else if p.curToken.Type == lexer.STRING {
+		// Accept identifier, string literal, or any reserved word: per spec a
+		// ModuleExportName binding is either a StringLiteral or an
+		// IdentifierName, and IdentifierName explicitly includes reserved
+		// words (e.g. 'export * as class from ...' is valid).
+		if p.curToken.Type == lexer.STRING {
 			// Arbitrary module namespace names: export * as "name" from "module"
 			stmt.Exported = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
-		} else if p.curToken.Type == lexer.DEFAULT {
-			// export * as default from "module"
-			stmt.Exported = &Identifier{Token: p.curToken, Value: "default"}
+		} else if p.isIdentifierNameToken(p.curToken) {
+			stmt.Exported = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 		} else {
 			p.addError(p.curToken, "expected identifier, string literal, or 'default' after 'as' in export declaration")
 			return nil
