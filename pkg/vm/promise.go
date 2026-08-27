@@ -21,9 +21,9 @@ const (
 
 // PromiseReaction represents a callback registered via .then()
 type PromiseReaction struct {
-	Handler Value          // Function to call (onFulfilled or onRejected)
-	Resolve func(Value)    // Resolve the chained promise
-	Reject  func(Value)    // Reject the chained promise
+	Handler Value       // Function to call (onFulfilled or onRejected)
+	Resolve func(Value) // Resolve the chained promise
+	Reject  func(Value) // Reject the chained promise
 }
 
 // PromiseObject represents a JavaScript Promise
@@ -35,9 +35,9 @@ type PromiseObject struct {
 	RejectReactions  []PromiseReaction
 
 	// For async functions: suspended execution state
-	Frame            *SuspendedFrame // Execution frame (nil if not an async function promise)
-	Function         Value           // The async function (for resumption)
-	ThisValue        Value           // The 'this' value when async function was called
+	Frame     *SuspendedFrame // Execution frame (nil if not an async function promise)
+	Function  Value           // The async function (for resumption)
+	ThisValue Value           // The 'this' value when async function was called
 
 	prototype Value // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
@@ -368,7 +368,8 @@ func (vm *VM) IterableToArray(value Value) (Value, error) {
 			if next, exists := obj.GetOwn("next"); exists {
 				nextMethod = next
 			}
-		} else if dictObj := iteratorObj.AsDictObject(); dictObj != nil {
+		} else if iteratorObj.Type() == TypeDictObject {
+			dictObj := iteratorObj.AsDictObject()
 			if next, exists := dictObj.GetOwn("next"); exists {
 				nextMethod = next
 			}
@@ -397,7 +398,8 @@ func (vm *VM) IterableToArray(value Value) (Value, error) {
 				if d, exists := obj.GetOwn("done"); exists {
 					done = d
 				}
-			} else if dictObj := result.AsDictObject(); dictObj != nil {
+			} else if result.Type() == TypeDictObject {
+				dictObj := result.AsDictObject()
 				if d, exists := dictObj.GetOwn("done"); exists {
 					done = d
 				}
@@ -433,7 +435,8 @@ func (vm *VM) IterableToArray(value Value) (Value, error) {
 				if v, exists := obj.GetOwn("value"); exists {
 					itemValue = v
 				}
-			} else if dictObj := result.AsDictObject(); dictObj != nil {
+			} else if result.Type() == TypeDictObject {
+				dictObj := result.AsDictObject()
 				if v, exists := dictObj.GetOwn("value"); exists {
 					itemValue = v
 				}

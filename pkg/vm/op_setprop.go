@@ -85,7 +85,8 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			// ECMAScript 10.5.9 invariant validation
 			if !result.IsFalsey() {
 				target := proxy.target
-				if targetObj := target.AsPlainObject(); targetObj != nil {
+				if target.Type() == TypeObject {
+					targetObj := target.AsPlainObject()
 					// Check for non-configurable target properties
 					if g, s, _, c, isAccessor := targetObj.GetOwnAccessor(propName); isAccessor {
 						// Accessor property invariant
@@ -603,7 +604,9 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 
 			// Move up the prototype chain
 			protoVal := current.GetPrototype()
-			if !protoVal.IsObject() {
+			// Non-PlainObject prototypes (Array, Function, DictObject, ...) can't hold
+			// accessors via this shape-based lookup; stop walking rather than panic.
+			if protoVal.Type() != TypeObject {
 				break
 			}
 			current = protoVal.AsPlainObject()
@@ -639,7 +642,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		// Per ECMAScript spec, you cannot shadow a non-writable property from prototype
 		if !propertyExists {
 			protoChain := po.GetPrototype()
-			for protoChain.IsObject() {
+			for protoChain.Type() == TypeObject {
 				protoObj := protoChain.AsPlainObject()
 				if protoObj == nil {
 					break
