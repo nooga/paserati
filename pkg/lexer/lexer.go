@@ -72,6 +72,7 @@ type Token struct {
 	Literal           string // The actual text of the token (lexeme)
 	RawLiteral        string // For template strings: the unprocessed escape sequences (TRV)
 	CookedIsUndefined bool   // For template strings: true if cooked value should be undefined (invalid escape)
+	HasEscape         bool   // For string literals: true if the source contained an escape sequence or line continuation (Literal is cooked either way)
 	Line              int    // 1-based line number where the token starts
 	Column            int    // 1-based column number (rune index) where the token starts
 	StartPos          int    // 0-based byte offset where the token starts
@@ -1443,22 +1444,22 @@ func (l *Lexer) NextToken() Token {
 		l.readChar()
 		tok = Token{Type: RBRACKET, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 	case '"': // Double quoted string
-		literal, ok := l.readString('"')
+		literal, hasEscape, ok := l.readString('"')
 		endPos := l.position // readString advances past the closing quote if successful
 		if !ok {
 			// Determine if it was unterminated or invalid escape
 			// For now, use a generic message. l.position is where the error occurred.
 			tok = Token{Type: ILLEGAL, Literal: "Invalid string literal", Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
 		} else {
-			tok = Token{Type: STRING, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
+			tok = Token{Type: STRING, Literal: literal, HasEscape: hasEscape, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
 		}
 	case '\'': // Single quoted string
-		literal, ok := l.readString('\'')
+		literal, hasEscape, ok := l.readString('\'')
 		endPos := l.position // readString advances past the closing quote if successful
 		if !ok {
 			tok = Token{Type: ILLEGAL, Literal: "Invalid string literal", Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
 		} else {
-			tok = Token{Type: STRING, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
+			tok = Token{Type: STRING, Literal: literal, HasEscape: hasEscape, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
 		}
 	case '?':
 		peek := l.peekChar()
@@ -1974,8 +1975,16 @@ func (l *Lexer) readNumber() string {
 // Returns the unescaped string content and a boolean indicating success.
 // Success is false if the string is unterminated or contains an invalid escape sequence.
 // Advances the lexer's position to *after* the closing quote if successful.
-func (l *Lexer) readString(quote byte) (string, bool) {
+// readString scans a single/double-quoted string literal and returns its
+// cooked value. The second return value is true iff the source contained any
+// escape sequence or line continuation - callers that need to distinguish a
+// literal exactly matching some raw text (e.g. Directive Prologue detection
+// of "use strict", which must NOT recognize "use strict" or a
+// backslash-newline line continuation per spec) need this alongside the
+// cooked value, since the cooked value alone loses that distinction.
+func (l *Lexer) readString(quote byte) (string, bool, bool) {
 	var builder strings.Builder
+	hasEscape := false
 	// Consume the opening quote
 	l.readChar()
 
@@ -1983,14 +1992,15 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 		// Check for termination conditions *before* processing the character
 		if l.ch == quote {
 			l.readChar() // Consume the closing quote
-			return builder.String(), true
+			return builder.String(), hasEscape, true
 		}
 		if l.isEOF() { // EOF - use isEOF() to distinguish from literal null bytes
 			// Unterminated string
-			return "", false
+			return "", hasEscape, false
 		}
 
 		if l.ch == '\\' { // Handle escape sequence
+			hasEscape = true
 			l.readChar() // Consume the backslash
 
 			// Check for Unicode line terminators (U+2028, U+2029) for line continuation
@@ -2066,7 +2076,7 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 						if isHexDigit(l.ch) {
 							hexStr += charString(l.ch)
 						} else {
-							return "", false // Invalid hex digit
+							return "", hasEscape, false // Invalid hex digit
 						}
 					}
 					if l.peekChar() == '}' {
@@ -2085,10 +2095,10 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 								builder.WriteRune(rune(codePoint))
 							}
 						} else {
-							return "", false // Invalid code point
+							return "", hasEscape, false // Invalid code point
 						}
 					} else {
-						return "", false // Unterminated \u{...}
+						return "", hasEscape, false // Unterminated \u{...}
 					}
 				} else {
 					// \uXXXX format
@@ -2098,7 +2108,7 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 							l.readChar()
 							hexStr += charString(l.ch)
 						} else {
-							return "", false // Invalid or incomplete \uXXXX
+							return "", hasEscape, false // Invalid or incomplete \uXXXX
 						}
 					}
 					if codePoint, err := strconv.ParseInt(hexStr, 16, 32); err == nil {
@@ -2115,7 +2125,7 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 							builder.WriteRune(rune(codePoint))
 						}
 					} else {
-						return "", false // Invalid code point
+						return "", hasEscape, false // Invalid code point
 					}
 				}
 			case 'x':
@@ -2126,17 +2136,17 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 						l.readChar()
 						hexStr += charString(l.ch)
 					} else {
-						return "", false // Invalid or incomplete \xXX
+						return "", hasEscape, false // Invalid or incomplete \xXX
 					}
 				}
 				// Use ParseUint with 32 bits to handle full byte range (0x00-0xFF)
 				if codePoint, err := strconv.ParseUint(hexStr, 16, 32); err == nil && codePoint <= 255 {
 					builder.WriteByte(byte(codePoint))
 				} else {
-					return "", false // Invalid code point
+					return "", hasEscape, false // Invalid code point
 				}
 			case 0: // EOF after backslash
-				return "", false // Invalid escape sequence due to EOF
+				return "", hasEscape, false // Invalid escape sequence due to EOF
 			default:
 				// Identity escape sequence: In JavaScript (non-strict mode), unknown escape
 				// sequences like \A, \z, etc. are treated as the character itself.
@@ -2148,7 +2158,7 @@ func (l *Lexer) readString(quote byte) (string, bool) {
 			// Check for unescaped newline within the string, which is often illegal
 			if l.ch == '\n' || l.ch == '\r' {
 				// Treat unescaped newline as termination error
-				return "", false
+				return "", hasEscape, false
 			}
 			builder.WriteByte(l.ch)
 		}

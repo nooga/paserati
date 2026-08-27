@@ -509,7 +509,11 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 			if inDirectivePrologue {
 				if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt != nil {
 					if strLit, isStrLit := exprStmt.Expression.(*StringLiteral); isStrLit && strLit != nil {
-						if strLit.Value == "use strict" {
+						// Directive Prologue matching is on the raw source text, not the
+						// cooked value - a literal with an escape sequence or line
+						// continuation (e.g. 'use str\ict' or 'use strict') must NOT
+						// be recognized as the "use strict" directive.
+						if strLit.Value == "use strict" && !strLit.HasEscape {
 							p.strictMode = true
 						}
 						// Continue in directive prologue - more directives may follow
@@ -2434,6 +2438,7 @@ func (p *Parser) parseStringLiteral() Expression {
 	lit := p.arena.NewStringLiteral()
 	lit.Token = p.curToken
 	lit.Value = p.curToken.Literal
+	lit.HasEscape = p.curToken.HasEscape
 	return lit
 }
 
@@ -4091,7 +4096,10 @@ func (p *Parser) parseFunctionBodyWithDirectives() *BlockStatement {
 			if inDirectivePrologue {
 				if exprStmt, ok := stmt.(*ExpressionStatement); ok {
 					if strLit, ok := exprStmt.Expression.(*StringLiteral); ok {
-						if strLit.Value == "use strict" {
+						// See the matching comment in parseProgram: Directive Prologue
+						// matching is on raw source text, so an escaped/line-continued
+						// literal must not be recognized as "use strict".
+						if strLit.Value == "use strict" && !strLit.HasEscape {
 							p.strictMode = true
 						}
 						// Continue checking - multiple directives are allowed
