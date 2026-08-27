@@ -409,7 +409,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// SetterThatIgnoresPrototypeProperties(%Iterator.prototype%, %Symbol.toStringTag%, v)
 		thisVal := vmInstance.GetThis()
 		// 1. If this is not an Object, throw TypeError
-		if !thisVal.IsObject() {
+		if thisVal.Type() != vm.TypeObject {
 			return vm.Undefined, vmInstance.NewTypeError("setter called on non-object")
 		}
 		// 2. If this is home, throw TypeError
@@ -1421,13 +1421,10 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	mapIterNextFn := vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// Check for internal slots (branding)
-		if !thisVal.IsObject() {
+		if thisVal.Type() != vm.TypeObject {
 			return vm.Undefined, vmInstance.NewTypeError("%MapIteratorPrototype%.next requires that 'this' be an Object")
 		}
 		thisObj := thisVal.AsPlainObject()
-		if thisObj == nil {
-			return vm.Undefined, vmInstance.NewTypeError("%MapIteratorPrototype%.next requires that 'this' be an Object")
-		}
 		// Brand check: the internal iterator state doubles as the spec's
 		// [[IteratedMap]] internal slot (a Set iterator has Set-kind state
 		// and must be rejected here).
@@ -1465,13 +1462,10 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	setIterNextFn := vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// Check for internal slots (branding)
-		if !thisVal.IsObject() {
+		if thisVal.Type() != vm.TypeObject {
 			return vm.Undefined, vmInstance.NewTypeError("%SetIteratorPrototype%.next requires that 'this' be an Object")
 		}
 		thisObj := thisVal.AsPlainObject()
-		if thisObj == nil {
-			return vm.Undefined, vmInstance.NewTypeError("%SetIteratorPrototype%.next requires that 'this' be an Object")
-		}
 		// Brand check: the internal iterator state doubles as the spec's
 		// [[IteratedSet]] internal slot (a Map iterator has Map-kind state
 		// and must be rejected here).
@@ -2224,7 +2218,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// SetterThatIgnoresPrototypeProperties(%Iterator.prototype%, "constructor", v)
 		thisVal := vmInstance.GetThis()
 		// 1. If this is not an Object, throw TypeError
-		if !thisVal.IsObject() {
+		if thisVal.Type() != vm.TypeObject {
 			return vm.Undefined, vmInstance.NewTypeError("setter called on non-object")
 		}
 		// 2. If this is home, throw TypeError

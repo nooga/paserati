@@ -1385,11 +1385,13 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 				// Per spec: RegExp.prototype itself returns undefined for flag getters
 				if thisVal.IsObject() && !thisVal.IsRegExp() {
-					protoObj := thisVal.AsPlainObject()
-					if protoObj != nil {
-						rpObj := vmInstance.RegExpPrototype.AsPlainObject()
-						if rpObj != nil && protoObj == rpObj {
-							return vm.Undefined, nil
+					if thisVal.Type() == vm.TypeObject {
+						protoObj := thisVal.AsPlainObject()
+						if vmInstance.RegExpPrototype.Type() == vm.TypeObject {
+							rpObj := vmInstance.RegExpPrototype.AsPlainObject()
+							if protoObj == rpObj {
+								return vm.Undefined, nil
+							}
 						}
 					}
 					return vm.Undefined, vmInstance.NewTypeError("RegExp.prototype." + name + " getter called on incompatible receiver")
@@ -1414,10 +1416,10 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		sourceGetter := vm.NewNativeFunction(0, false, "get source", func(args []vm.Value) (vm.Value, error) {
 			thisVal := vmInstance.GetThis()
 			if !thisVal.IsRegExp() {
-				if thisVal.IsObject() {
+				if thisVal.Type() == vm.TypeObject && vmInstance.RegExpPrototype.Type() == vm.TypeObject {
 					protoObj := thisVal.AsPlainObject()
 					rpObj := vmInstance.RegExpPrototype.AsPlainObject()
-					if protoObj != nil && rpObj != nil && protoObj == rpObj {
+					if protoObj == rpObj {
 						return vm.NewString("(?:)"), nil
 					}
 				}

@@ -437,7 +437,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// If this is a String wrapper object, extract [[PrimitiveValue]]
-		if thisStr.IsObject() {
+		if thisStr.Type() == vm.TypeObject {
 			if primitiveVal, exists := thisStr.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
 				return primitiveVal, nil
 			}
@@ -456,7 +456,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// If this is a String wrapper object, extract [[PrimitiveValue]]
-		if thisStr.IsObject() {
+		if thisStr.Type() == vm.TypeObject {
 			if primitiveVal, exists := thisStr.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
 				if primitiveVal.Type() == vm.TypeString {
 					return primitiveVal, nil
@@ -746,25 +746,52 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 || args[0].Type() == vm.TypeUndefined {
 			return vm.NewString(thisStr), nil
 		}
-		start := int(args[0].ToFloat())
-		if start < 0 {
-			start = length + start
+		// ToIntegerOrInfinity (7.1.5): NaN -> 0, otherwise Math.trunc first,
+		// *then* classify the truncated value - +/-Infinity must stay
+		// representable through the clamps below rather than going through
+		// Go's undefined float->int conversion for out-of-range values
+		// (that previously fed a garbage negative length into a byte-offset
+		// slice expression and panicked). Truncating before the sign check
+		// also matters for correctness: -0.5 truncates to 0, not "negative".
+		toIntegerOrInfinity := func(f float64) float64 {
+			if math.IsNaN(f) {
+				return 0
+			}
+			return math.Trunc(f)
+		}
+		startFloat := toIntegerOrInfinity(args[0].ToFloat())
+		var start int
+		switch {
+		case math.IsInf(startFloat, -1):
+			start = 0
+		case startFloat < 0:
+			start = length + int(startFloat)
 			if start < 0 {
 				start = 0
 			}
-		} else if start >= length {
+		case math.IsInf(startFloat, 1) || int(startFloat) >= length:
 			return vm.NewString(""), nil
+		default:
+			start = int(startFloat)
 		}
 		substrLength := length - start
 		if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
-			substrLength = int(args[1].ToFloat())
-			if substrLength < 0 {
+			lengthFloat := toIntegerOrInfinity(args[1].ToFloat())
+			switch {
+			case lengthFloat < 0:
 				return vm.NewString(""), nil
+			case math.IsInf(lengthFloat, 1):
+				substrLength = length - start
+			default:
+				substrLength = int(lengthFloat)
 			}
 		}
 		end := start + substrLength
 		if end > length {
 			end = length
+		}
+		if end < start {
+			end = start
 		}
 		return vm.NewString(thisStr[utf16ToByteOffset(thisStr, start):utf16ToByteOffset(thisStr, end)]), nil
 	}))

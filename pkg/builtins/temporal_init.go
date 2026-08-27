@@ -90,13 +90,13 @@ func (t *TemporalInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Any))
 
 	temporalPlainTimeCtorType := types.NewObjectType().
-		WithSimpleConstructSignature([]types.Type{}, temporalPlainTimeProtoType).                                                                                                                          // PlainTime()
-		WithSimpleConstructSignature([]types.Type{types.Number}, temporalPlainTimeProtoType).                                                                                                              // PlainTime(hour)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number}, temporalPlainTimeProtoType).                                                                                                // PlainTime(hour, minute)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number}, temporalPlainTimeProtoType).                                                                                  // PlainTime(h,m,s)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number}, temporalPlainTimeProtoType).                                                                    // PlainTime(h,m,s,ms)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainTimeProtoType).                                                      // PlainTime(h,m,s,ms,us)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainTimeProtoType).                                        // PlainTime(h,m,s,ms,us,ns)
+		WithSimpleConstructSignature([]types.Type{}, temporalPlainTimeProtoType).                                                                                   // PlainTime()
+		WithSimpleConstructSignature([]types.Type{types.Number}, temporalPlainTimeProtoType).                                                                       // PlainTime(hour)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number}, temporalPlainTimeProtoType).                                                         // PlainTime(hour, minute)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number}, temporalPlainTimeProtoType).                                           // PlainTime(h,m,s)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number}, temporalPlainTimeProtoType).                             // PlainTime(h,m,s,ms)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainTimeProtoType).               // PlainTime(h,m,s,ms,us)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainTimeProtoType). // PlainTime(h,m,s,ms,us,ns)
 		WithProperty("from", types.NewSimpleFunction([]types.Type{types.Any}, temporalPlainTimeProtoType)).
 		WithProperty("compare", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Number)).
 		WithProperty("prototype", temporalPlainTimeProtoType)
@@ -124,13 +124,13 @@ func (t *TemporalInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("subtract", types.NewSimpleFunction([]types.Type{types.Any}, types.Any))
 
 	temporalPlainDateTimeCtorType := types.NewObjectType().
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).                                                                                                              // (y,m,d)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).                                                                                                // (y,m,d,h)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).                                                                                  // (y,m,d,h,min)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).                                                                    // (y,m,d,h,min,s)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).                                                      // (y,m,d,h,min,s,ms)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).                                        // (y,m,d,h,min,s,ms,us)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).                          // (y,m,d,h,min,s,ms,us,ns)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).                                                                                     // (y,m,d)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).                                                                       // (y,m,d,h)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).                                                         // (y,m,d,h,min)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).                                           // (y,m,d,h,min,s)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).                             // (y,m,d,h,min,s,ms)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType).               // (y,m,d,h,min,s,ms,us)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalPlainDateTimeProtoType). // (y,m,d,h,min,s,ms,us,ns)
 		WithProperty("from", types.NewSimpleFunction([]types.Type{types.Any}, temporalPlainDateTimeProtoType)).
 		WithProperty("compare", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Number)).
 		WithProperty("prototype", temporalPlainDateTimeProtoType)
@@ -151,9 +151,9 @@ func (t *TemporalInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Any))
 
 	temporalPlainYearMonthCtorType := types.NewObjectType().
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number}, temporalPlainYearMonthProtoType).                                  // PlainYearMonth(year, month)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.String}, temporalPlainYearMonthProtoType).                    // PlainYearMonth(year, month, calendar)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.String, types.Number}, temporalPlainYearMonthProtoType).      // PlainYearMonth(year, month, calendar, referenceDay)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number}, temporalPlainYearMonthProtoType).                             // PlainYearMonth(year, month)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.String}, temporalPlainYearMonthProtoType).               // PlainYearMonth(year, month, calendar)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.String, types.Number}, temporalPlainYearMonthProtoType). // PlainYearMonth(year, month, calendar, referenceDay)
 		WithProperty("from", types.NewSimpleFunction([]types.Type{types.Any}, temporalPlainYearMonthProtoType)).
 		WithProperty("compare", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Number)).
 		WithProperty("prototype", temporalPlainYearMonthProtoType)
@@ -170,9 +170,9 @@ func (t *TemporalInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Any))
 
 	temporalPlainMonthDayCtorType := types.NewObjectType().
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number}, temporalPlainMonthDayProtoType).                                  // PlainMonthDay(month, day)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.String}, temporalPlainMonthDayProtoType).                    // PlainMonthDay(month, day, calendar)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.String, types.Number}, temporalPlainMonthDayProtoType).      // PlainMonthDay(month, day, calendar, referenceYear)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number}, temporalPlainMonthDayProtoType).                             // PlainMonthDay(month, day)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.String}, temporalPlainMonthDayProtoType).               // PlainMonthDay(month, day, calendar)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.String, types.Number}, temporalPlainMonthDayProtoType). // PlainMonthDay(month, day, calendar, referenceYear)
 		WithProperty("from", types.NewSimpleFunction([]types.Type{types.Any}, temporalPlainMonthDayProtoType)).
 		WithProperty("prototype", temporalPlainMonthDayProtoType)
 
@@ -199,17 +199,17 @@ func (t *TemporalInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("abs", types.NewSimpleFunction([]types.Type{}, types.Any))
 
 	temporalDurationCtorType := types.NewObjectType().
-		WithSimpleConstructSignature([]types.Type{}, temporalDurationProtoType).                                                                                                                                                                                                    // Duration()
-		WithSimpleConstructSignature([]types.Type{types.Number}, temporalDurationProtoType).                                                                                                                                                                                        // Duration(years)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number}, temporalDurationProtoType).                                                                                                                                                                          // Duration(y,mo)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number}, temporalDurationProtoType).                                                                                                                                                            // Duration(y,mo,w)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).                                                                                                                                              // Duration(y,mo,w,d)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).                                                                                                                                // Duration(y,mo,w,d,h)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).                                                                                                                  // Duration(y,mo,w,d,h,min)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).                                                                                                    // Duration(y,mo,w,d,h,min,s)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).                                                                                      // Duration(y,mo,w,d,h,min,s,ms)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).                                                                        // Duration(y,mo,w,d,h,min,s,ms,us)
-		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).                                                          // Duration(y,mo,w,d,h,min,s,ms,us,ns)
+		WithSimpleConstructSignature([]types.Type{}, temporalDurationProtoType).                                                                                                                                           // Duration()
+		WithSimpleConstructSignature([]types.Type{types.Number}, temporalDurationProtoType).                                                                                                                               // Duration(years)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number}, temporalDurationProtoType).                                                                                                                 // Duration(y,mo)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number}, temporalDurationProtoType).                                                                                                   // Duration(y,mo,w)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).                                                                                     // Duration(y,mo,w,d)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).                                                                       // Duration(y,mo,w,d,h)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).                                                         // Duration(y,mo,w,d,h,min)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).                                           // Duration(y,mo,w,d,h,min,s)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).                             // Duration(y,mo,w,d,h,min,s,ms)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType).               // Duration(y,mo,w,d,h,min,s,ms,us)
+		WithSimpleConstructSignature([]types.Type{types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number, types.Number}, temporalDurationProtoType). // Duration(y,mo,w,d,h,min,s,ms,us,ns)
 		WithProperty("from", types.NewSimpleFunction([]types.Type{types.Any}, temporalDurationProtoType)).
 		WithProperty("compare", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Number)).
 		WithProperty("prototype", temporalDurationProtoType)
@@ -237,8 +237,8 @@ func (t *TemporalInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("until", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, types.Any, []bool{false, true}))
 
 	temporalZonedDateTimeCtorType := types.NewObjectType().
-		WithSimpleConstructSignature([]types.Type{types.Any, types.String}, temporalZonedDateTimeProtoType).                  // ZonedDateTime(epochNs, timeZone)
-		WithSimpleConstructSignature([]types.Type{types.Any, types.String, types.String}, temporalZonedDateTimeProtoType).    // ZonedDateTime(epochNs, timeZone, calendar)
+		WithSimpleConstructSignature([]types.Type{types.Any, types.String}, temporalZonedDateTimeProtoType).               // ZonedDateTime(epochNs, timeZone)
+		WithSimpleConstructSignature([]types.Type{types.Any, types.String, types.String}, temporalZonedDateTimeProtoType). // ZonedDateTime(epochNs, timeZone, calendar)
 		WithProperty("from", types.NewSimpleFunction([]types.Type{types.Any}, temporalZonedDateTimeProtoType)).
 		WithProperty("compare", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Number)).
 		WithProperty("prototype", temporalZonedDateTimeProtoType)
@@ -307,13 +307,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Helper to get nanoseconds from a Temporal.Instant object
 	getInstantNanos := func(val vm.Value) (*big.Int, error) {
-		if !val.IsObject() {
+		if val.Type() != vm.TypeObject {
 			return nil, vmInstance.NewTypeError("Value is not a Temporal.Instant")
 		}
 		obj := val.AsPlainObject()
-		if obj == nil {
-			return nil, vmInstance.NewTypeError("Value is not a Temporal.Instant")
-		}
 		nanosVal, exists := obj.GetOwn("[[EpochNanoseconds]]")
 		if !exists {
 			return nil, vmInstance.NewTypeError("Value is not a Temporal.Instant")
@@ -453,13 +450,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Helper to get duration fields from a value (Duration or duration-like object)
 	getDurationFromArg := func(arg vm.Value) (years, months, weeks, days, hours, minutes, seconds, ms, us, ns int, err error) {
-		if !arg.IsObject() {
+		if arg.Type() != vm.TypeObject {
 			return 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Invalid duration")
 		}
 		obj := arg.AsPlainObject()
-		if obj == nil {
-			return 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Invalid duration")
-		}
 		// Try internal slots first (for Temporal.Duration objects)
 		if yVal, ok := obj.GetOwn("[[Years]]"); ok {
 			yearsVal, _ := obj.GetOwn("[[Years]]")
@@ -785,13 +779,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Helper to get date components from PlainDate
 	getPlainDateFields := func(val vm.Value) (year, month, day int, err error) {
-		if !val.IsObject() {
+		if val.Type() != vm.TypeObject {
 			return 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainDate")
 		}
 		obj := val.AsPlainObject()
-		if obj == nil {
-			return 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainDate")
-		}
 		yVal, yOk := obj.GetOwn("[[ISOYear]]")
 		mVal, mOk := obj.GetOwn("[[ISOMonth]]")
 		dVal, dOk := obj.GetOwn("[[ISODay]]")
@@ -1070,13 +1061,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	getPlainTimeFields := func(val vm.Value) (hour, minute, second, ms, us, ns int, err error) {
-		if !val.IsObject() {
+		if val.Type() != vm.TypeObject {
 			return 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainTime")
 		}
 		obj := val.AsPlainObject()
-		if obj == nil {
-			return 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainTime")
-		}
 		hVal, hOk := obj.GetOwn("[[ISOHour]]")
 		minVal, minOk := obj.GetOwn("[[ISOMinute]]")
 		sVal, sOk := obj.GetOwn("[[ISOSecond]]")
@@ -1277,13 +1265,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	getPlainDateTimeFields := func(val vm.Value) (year, month, day, hour, minute, second, ms, us, ns int, err error) {
-		if !val.IsObject() {
+		if val.Type() != vm.TypeObject {
 			return 0, 0, 0, 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainDateTime")
 		}
 		obj := val.AsPlainObject()
-		if obj == nil {
-			return 0, 0, 0, 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainDateTime")
-		}
 		yVal, yOk := obj.GetOwn("[[ISOYear]]")
 		moVal, moOk := obj.GetOwn("[[ISOMonth]]")
 		dVal, dOk := obj.GetOwn("[[ISODay]]")
@@ -1645,13 +1630,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	getPlainYearMonthFields := func(val vm.Value) (year, month int, err error) {
-		if !val.IsObject() {
+		if val.Type() != vm.TypeObject {
 			return 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainYearMonth")
 		}
 		obj := val.AsPlainObject()
-		if obj == nil {
-			return 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainYearMonth")
-		}
 		yVal, yOk := obj.GetOwn("[[ISOYear]]")
 		mVal, mOk := obj.GetOwn("[[ISOMonth]]")
 		if !yOk || !mOk {
@@ -1859,13 +1841,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	getPlainMonthDayFields := func(val vm.Value) (month, day int, err error) {
-		if !val.IsObject() {
+		if val.Type() != vm.TypeObject {
 			return 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainMonthDay")
 		}
 		obj := val.AsPlainObject()
-		if obj == nil {
-			return 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainMonthDay")
-		}
 		mVal, mOk := obj.GetOwn("[[ISOMonth]]")
 		dVal, dOk := obj.GetOwn("[[ISODay]]")
 		if !mOk || !dOk {
@@ -2011,13 +1990,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	getDurationFields := func(val vm.Value) (years, months, weeks, days, hours, minutes, seconds, ms, us, ns int, err error) {
-		if !val.IsObject() {
+		if val.Type() != vm.TypeObject {
 			return 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.Duration")
 		}
 		obj := val.AsPlainObject()
-		if obj == nil {
-			return 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.Duration")
-		}
 		// Check for internal slots to verify this is a Temporal.Duration
 		yearsVal, hasYears := obj.GetOwn("[[Years]]")
 		if !hasYears {
@@ -2447,13 +2423,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	getZonedDateTimeFields := func(val vm.Value) (nanos *big.Int, tzId string, err error) {
-		if !val.IsObject() {
+		if val.Type() != vm.TypeObject {
 			return nil, "", vmInstance.NewTypeError("Value is not a Temporal.ZonedDateTime")
 		}
 		obj := val.AsPlainObject()
-		if obj == nil {
-			return nil, "", vmInstance.NewTypeError("Value is not a Temporal.ZonedDateTime")
-		}
 		nanosVal, nanosOk := obj.GetOwn("[[EpochNanoseconds]]")
 		tzVal, tzOk := obj.GetOwn("[[TimeZone]]")
 		if !nanosOk || !tzOk {
@@ -2601,12 +2574,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Check for options
 		timeZoneName := "auto" // default
-		if len(args) > 0 && args[0].IsObject() {
+		if len(args) > 0 && args[0].Type() == vm.TypeObject {
 			opts := args[0].AsPlainObject()
-			if opts != nil {
-				if tzNameVal, ok := opts.Get("timeZoneName"); ok && tzNameVal.Type() == vm.TypeString {
-					timeZoneName = tzNameVal.ToString()
-				}
+			if tzNameVal, ok := opts.Get("timeZoneName"); ok && tzNameVal.Type() == vm.TypeString {
+				timeZoneName = tzNameVal.ToString()
 			}
 		}
 
@@ -3138,11 +3109,11 @@ func parseYearMonthString(str string) (year, month int, ok bool) {
 
 // Duration range limits per ECMAScript Temporal spec
 const (
-	maxYearsMonthsWeeks = 4294967295           // 2^32 - 1
-	maxDays             = 104249991374         // ceil(maxSafeInteger / 86400) - 1
-	maxHours            = 2501999792983        // ceil(maxSafeInteger / 3600) - 1
-	maxMinutes          = 150119987579016      // ceil(maxSafeInteger / 60) - 1
-	maxSeconds          = 9007199254740991     // max safe integer
+	maxYearsMonthsWeeks = 4294967295       // 2^32 - 1
+	maxDays             = 104249991374     // ceil(maxSafeInteger / 86400) - 1
+	maxHours            = 2501999792983    // ceil(maxSafeInteger / 3600) - 1
+	maxMinutes          = 150119987579016  // ceil(maxSafeInteger / 60) - 1
+	maxSeconds          = 9007199254740991 // max safe integer
 )
 
 // validateDurationRange checks if duration values are within valid range

@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 
 	"github.com/nooga/paserati/pkg/types"
@@ -168,13 +169,31 @@ func ValidateTypedArrayBufferAlignmentShared(vmInstance *vm.VM, buffer *vm.Share
 	return nil
 }
 
-// TypedArrayGPFC implements the shared first steps of every %TypedArray%
-// subclass constructor overload (22.2.5.1 step 1: "If NewTarget is undefined,
-// throw a TypeError exception", then AllocateTypedArray's
-// GetPrototypeFromConstructor(newTarget, defaultProto) step). The caller must
-// apply the returned prototype to the newly created typed array itself
-// (GetPrototypeFromConstructor only computes [[Prototype]]; it doesn't know
-// where to install it).
+// TypedArrayRequireNewTarget implements 22.2.5.1 step 1: "If NewTarget is
+// undefined, throw a TypeError exception." This check has no observable side
+// effects and per spec must run before any argument-specific processing
+// (ToIndex on a Symbol/BigInt argument throws TypeError too, buffer
+// validation can throw RangeError, etc.) - unlike the prototype lookup in
+// TypedArrayGPFC below, which runs a user-observable "prototype" getter on
+// NewTarget and per spec (AllocateTypedArray) must happen *last*, after
+// that argument processing, not before it.
+func TypedArrayRequireNewTarget(vmInstance *vm.VM) error {
+	if vmInstance.GetNewTarget().IsUndefined() {
+		return vmInstance.NewTypeError("Constructor TypedArray requires 'new'")
+	}
+	return nil
+}
+
+// TypedArrayGPFC implements AllocateTypedArray's
+// GetPrototypeFromConstructor(newTarget, defaultProto) step. Callers must
+// have already checked TypedArrayRequireNewTarget and finished any
+// argument-specific processing that can throw (ToIndex, buffer bounds,
+// etc.) before calling this, since GetPrototypeFromConstructor can run
+// user-observable code (a custom "prototype" getter on NewTarget) and per
+// spec that must happen after argument validation, not before it. The
+// caller must apply the returned prototype to the newly created typed array
+// itself (GetPrototypeFromConstructor only computes [[Prototype]]; it
+// doesn't know where to install it).
 func TypedArrayGPFC(vmInstance *vm.VM, defaultProtoIntrinsic string) (vm.Value, error) {
 	newTarget := vmInstance.GetNewTarget()
 	if newTarget.IsUndefined() {
@@ -278,6 +297,21 @@ func TypedArrayToIndex(vmInstance *vm.VM, arg vm.Value) (int, error) {
 		return 0, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
 	}
 	n := arg.ToFloat()
+	// ToIndex (7.1.22): first ToIntegerOrInfinity - NaN -> 0, otherwise
+	// Math.trunc (this must happen *before* the sign/range check below: a
+	// value like -0.1 truncates to 0, which is in range, not "negative").
+	// +Infinity (and anything beyond the safe-integer range) must also be
+	// rejected here - converting an out-of-range float straight to int is
+	// undefined territory in Go and previously fed a garbage length into
+	// make([]Value, l), panicking instead of throwing the spec'd RangeError.
+	if math.IsNaN(n) {
+		n = 0
+	} else {
+		n = math.Trunc(n)
+	}
+	if math.IsInf(n, 0) || n < 0 || n > maxSafeInteger {
+		return 0, vmInstance.NewRangeError("Invalid typed array length")
+	}
 	l := int(n)
 	if l < 0 {
 		return 0, vmInstance.NewRangeError("Invalid typed array length")
@@ -411,6 +445,10 @@ func NumericTypedArrayCtorBody(vmInstance *vm.VM, ek TypedArrayElementKind) func
 	elementSize := ek.ElementSize
 	protoName := typedArrayIntrinsicProtoName(kind)
 	return func(args []vm.Value) (vm.Value, error) {
+		// Step 1: NewTarget undefined check, before any argument processing.
+		if err := TypedArrayRequireNewTarget(vmInstance); err != nil {
+			return vm.Undefined, err
+		}
 		if len(args) == 0 {
 			proto, err := TypedArrayGPFC(vmInstance, protoName)
 			if err != nil {
@@ -420,6 +458,10 @@ func NumericTypedArrayCtorBody(vmInstance *vm.VM, ek TypedArrayElementKind) func
 		}
 		arg := args[0]
 		if arg.IsNumber() {
+			// ToIndex(length) (step 3) before GPFC's prototype lookup: that
+			// lookup can run a user-observable getter and per spec
+			// (AllocateTypedArray) happens after argument processing, not
+			// before it. NewTarget-undefined was already checked above.
 			l, err := TypedArrayToIndex(vmInstance, arg)
 			if err != nil {
 				return vm.Undefined, err
@@ -477,7 +519,8 @@ func NumericTypedArrayCtorBody(vmInstance *vm.VM, ek TypedArrayElementKind) func
 			}
 			return applyGPFCPrototype(vm.NewTypedArray(kind, 0, 0, 0), proto), nil
 		}
-		// Non-number, non-object (e.g. string, Symbol, BigInt): ToIndex first, then GPFC
+		// Non-number, non-object (e.g. string, Symbol, BigInt): ToIndex
+		// before GPFC's prototype lookup, matching the number branch above.
 		l, err := TypedArrayToIndex(vmInstance, arg)
 		if err != nil {
 			return vm.Undefined, err

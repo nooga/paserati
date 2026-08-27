@@ -101,12 +101,10 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return thisVal, nil
 		}
 		// Check for Symbol wrapper object
-		if thisVal.IsObject() {
+		if thisVal.Type() == vm.TypeObject {
 			po := thisVal.AsPlainObject()
-			if po != nil {
-				if pv, ok := po.GetOwn("[[PrimitiveValue]]"); ok && pv.IsSymbol() {
-					return pv, nil
-				}
+			if pv, ok := po.GetOwn("[[PrimitiveValue]]"); ok && pv.IsSymbol() {
+				return pv, nil
 			}
 		}
 		return vm.Undefined, vmInstance.NewTypeError("Symbol.prototype.valueOf requires that 'this' be a Symbol")
