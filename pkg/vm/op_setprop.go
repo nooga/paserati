@@ -34,7 +34,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		}
 
 		// Check if handler has a set trap (per spec: GetMethod returns undefined for null/undefined)
-		setTrap, ok := proxy.handler.AsPlainObject().GetOwn("set")
+		setTrap, ok := vm.getOwnGeneric(proxy.handler, "set")
 		if ok && setTrap.Type() != TypeUndefined && setTrap.Type() != TypeNull {
 			// Validate trap is callable
 			if !setTrap.IsCallable() {
@@ -449,7 +449,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				// Found a proxy in the chain - invoke its set trap
 				proxy := current.AsProxy()
 				if !proxy.Revoked {
-					if setTrap, ok := proxy.handler.AsPlainObject().GetOwn("set"); ok && setTrap.IsCallable() {
+					if setTrap, ok := vm.getOwnGeneric(proxy.handler, "set"); ok && setTrap.IsCallable() {
 						// Call the set trap: trap(target, property, value, receiver)
 						// receiver is the original primitive coerced to object
 						trapArgs := []Value{proxy.Target(), NewString(propName), *valueToSet, *objVal}
@@ -459,7 +459,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 					}
 				}
 			}
-			if current.IsObject() {
+			if current.Type() == TypeObject {
 				po := current.AsPlainObject()
 				// Check for setter in the setters map
 				if po.setters != nil {
@@ -471,6 +471,15 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 					}
 				}
 				current = po.prototype
+			} else if current.Type() == TypeProxy {
+				// Already handled above (set trap checked); continue walking
+				// past it via the generic [[Prototype]] step.
+				current = vm.prototypeOf(current)
+			} else if current.IsObject() {
+				// Non-PlainObject link (Array, DictObject, ...): this VM's
+				// model doesn't attach setters to those directly, so just
+				// keep walking the chain instead of stopping here.
+				current = vm.prototypeOf(current)
 			} else {
 				break
 			}
@@ -969,7 +978,7 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 		}
 
 		// Check if handler has a set trap
-		setTrap, ok := proxy.handler.AsPlainObject().GetOwn("set")
+		setTrap, ok := vm.getOwnGeneric(proxy.handler, "set")
 		if ok && setTrap.IsCallable() {
 			// Call the set trap: handler.set(target, propertyKey, value, receiver)
 			trapArgs := []Value{proxy.target, symKey, *valueToSet, *objVal}

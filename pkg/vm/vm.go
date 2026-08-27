@@ -6917,8 +6917,8 @@ startExecution:
 						continue
 					}
 
-					if idx >= len(arr.elements) {
-						registers[destReg] = Undefined // Out of bounds -> undefined
+					if idx >= len(arr.elements) || arr.elements[idx].typ == TypeHole {
+						registers[destReg] = Undefined // Out of bounds or hole -> undefined
 					} else {
 						registers[destReg] = arr.elements[idx]
 					}
@@ -6932,7 +6932,7 @@ startExecution:
 						// In JavaScript, obj["0"] should access obj[0] for arrays
 						if idx, isNumeric := vm.parseArrayIndex(key); isNumeric {
 							// Convert string index to numeric and access array element
-							if idx < 0 || idx >= len(arr.elements) {
+							if idx < 0 || idx >= len(arr.elements) || arr.elements[idx].typ == TypeHole {
 								registers[destReg] = Undefined
 							} else {
 								registers[destReg] = arr.elements[idx]
@@ -7464,7 +7464,7 @@ startExecution:
 						arr := targetBase.AsArray()
 						if IsNumber(indexVal) {
 							idx := int(AsNumber(indexVal))
-							if idx < 0 || idx >= len(arr.elements) {
+							if idx < 0 || idx >= len(arr.elements) || arr.elements[idx].typ == TypeHole {
 								registers[destReg] = Undefined
 							} else {
 								registers[destReg] = arr.elements[idx]
@@ -13446,6 +13446,20 @@ startExecution:
 				frame.hasOwnUpvalues = false
 			}
 
+			// Check if this is a generator function returning (same as OpReturn's
+			// pending-action completion path): wrap the value as an iterator
+			// result and mark the generator completed before popping its frame.
+			if frame.generatorObj != nil {
+				frame.generatorObj.State = GeneratorCompleted
+				frame.generatorObj.Done = true
+				frame.generatorObj.ReturnValue = result
+				frame.generatorObj.Frame = nil
+				iterResult := NewObject(vm.ObjectPrototype).AsPlainObject()
+				iterResult.SetOwn("value", result)
+				iterResult.SetOwn("done", BooleanValue(true))
+				result = NewValueFromPlainObject(iterResult)
+			}
+
 			// Pop the current frame (same logic as OpReturn)
 			returningFrameRegSize := function.RegisterSize
 			callerTargetRegister := frame.targetRegister
@@ -13457,6 +13471,23 @@ startExecution:
 
 			if vm.frameCount == 0 {
 				// Returned from the top-level script frame.
+				return InterpretOK, result
+			}
+
+			// Check if we hit a sentinel frame (e.g. resumeGeneratorWithReturn's
+			// caller context) - it has no closure to resume into, so return
+			// immediately with the result instead of falling through to the
+			// caller-frame restoration below, which would nil-deref
+			// sentinelFrame.closure.
+			if vm.frames[vm.frameCount-1].isSentinelFrame {
+				sentinelFrame := &vm.frames[vm.frameCount-1]
+				if sentinelFrame.registers != nil && int(callerTargetRegister) < len(sentinelFrame.registers) {
+					sentinelFrame.registers[callerTargetRegister] = result
+				}
+				vm.frameCount--
+				if vm.finallyDepth > 0 {
+					vm.finallyDepth--
+				}
 				return InterpretOK, result
 			}
 
