@@ -1016,25 +1016,84 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// --- Hoist let/const declarations with TDZ (Temporal Dead Zone) marker ---
 	// Let/const declarations are initialized with the Uninitialized marker at script start.
 	// This ensures that accessing them before their declaration line throws a ReferenceError.
-	// Skip TDZ hoisting for eval code - eval has different scoping rules.
-	if c.enclosing == nil && !c.isIndirectEval && c.callerScopeDesc == nil {
-		letConstNames := collectLetConstDeclarations(program.Statements)
-		debugPrintf("[Compile] TDZ hoisting %d top-level let/const declarations\n", len(letConstNames))
-		for _, name := range letConstNames {
-			// Skip if already defined (e.g., by a hoisted function with the same name - error in strict mode but allowed in sloppy)
-			if _, _, found := c.currentSymbolTable.Resolve(name); found {
-				debugPrintf("[Compile TDZHoist] Skipping '%s' - already defined\n", name)
-				continue
+	if c.enclosing == nil {
+		isEvalTopLevel := c.isIndirectEval || c.callerScopeDesc != nil
+		if !isEvalTopLevel {
+			letConstNames := collectLetConstDeclarations(program.Statements)
+			debugPrintf("[Compile] TDZ hoisting %d top-level let/const declarations\n", len(letConstNames))
+			for _, name := range letConstNames {
+				// Skip if already defined (e.g., by a hoisted function with the same name - error in strict mode but allowed in sloppy)
+				if _, _, found := c.currentSymbolTable.Resolve(name); found {
+					debugPrintf("[Compile TDZHoist] Skipping '%s' - already defined\n", name)
+					continue
+				}
+				// Define as global with Uninitialized value (TDZ)
+				globalIdx := c.GetOrAssignGlobalIndex(name)
+				c.currentSymbolTable.DefineGlobal(name, globalIdx)
+				// Emit code to initialize to Uninitialized (TDZ marker)
+				tempReg := c.regAlloc.Alloc()
+				c.emitLoadUninitialized(tempReg, 0)
+				c.emitSetGlobal(globalIdx, tempReg, 0)
+				c.regAlloc.Free(tempReg)
+				debugPrintf("[Compile TDZHoist] TDZ hoisted let/const '%s' at global index %d\n", name, globalIdx)
 			}
-			// Define as global with Uninitialized value (TDZ)
-			globalIdx := c.GetOrAssignGlobalIndex(name)
-			c.currentSymbolTable.DefineGlobal(name, globalIdx)
-			// Emit code to initialize to Uninitialized (TDZ marker)
-			tempReg := c.regAlloc.Alloc()
-			c.emitLoadUninitialized(tempReg, 0)
-			c.emitSetGlobal(globalIdx, tempReg, 0)
-			c.regAlloc.Free(tempReg)
-			debugPrintf("[Compile TDZHoist] TDZ hoisted let/const '%s' at global index %d\n", name, globalIdx)
+		} else {
+			// Eval code creates its own fresh lexical Environment Record for let/const
+			// (ECMAScript EvalDeclarationInstantiation) - distinct from, and discarded
+			// after, the calling context's environment. It must never leak into the
+			// caller's or global scope, but still needs local TDZ: referencing one of
+			// these names before its declaration line - even from within the eval
+			// string itself - must throw a ReferenceError rather than silently falling
+			// through to an outer/global binding of the same name.
+			for _, stmt := range program.Statements {
+				switch s := stmt.(type) {
+				case *parser.LetStatement:
+					if s.Name == nil {
+						continue
+					}
+					// A caller-local of the same name must be *shadowed*, not
+					// deferred to: the eval's own let/const always introduces a
+					// fresh binding in its own lexical environment. Only skip
+					// when this scope already has a real (non-caller-local)
+					// definition for the name (e.g. already hoisted above).
+					if existing, ok := c.currentSymbolTable.store[s.Name.Value]; ok && !existing.IsCallerLocal {
+						continue
+					}
+					if reg, ok := c.regAlloc.TryAllocForVariable(); ok {
+						c.currentSymbolTable.DefineTDZ(s.Name.Value, reg)
+						c.regAlloc.Pin(reg)
+						c.emitLoadUninitialized(reg, s.Token.Line)
+					} else {
+						spillIdx := c.AllocSpillSlot()
+						c.currentSymbolTable.DefineTDZSpilled(s.Name.Value, spillIdx)
+						tempReg := c.regAlloc.Alloc()
+						c.emitLoadUninitialized(tempReg, s.Token.Line)
+						c.emitStoreSpill(spillIdx, tempReg, s.Token.Line)
+						c.regAlloc.Free(tempReg)
+					}
+				case *parser.ConstStatement:
+					if s.Name == nil {
+						continue
+					}
+					// See the LetStatement case above: shadow caller-locals,
+					// only skip a real existing definition in this scope.
+					if existing, ok := c.currentSymbolTable.store[s.Name.Value]; ok && !existing.IsCallerLocal {
+						continue
+					}
+					if reg, ok := c.regAlloc.TryAllocForVariable(); ok {
+						c.currentSymbolTable.DefineConstTDZ(s.Name.Value, reg)
+						c.regAlloc.Pin(reg)
+						c.emitLoadUninitialized(reg, s.Token.Line)
+					} else {
+						spillIdx := c.AllocSpillSlot()
+						c.currentSymbolTable.DefineConstTDZSpilled(s.Name.Value, spillIdx)
+						tempReg := c.regAlloc.Alloc()
+						c.emitLoadUninitialized(tempReg, s.Token.Line)
+						c.emitStoreSpill(spillIdx, tempReg, s.Token.Line)
+						c.regAlloc.Free(tempReg)
+					}
+				}
+			}
 		}
 	}
 	// --- END let/const TDZ hoisting ---
