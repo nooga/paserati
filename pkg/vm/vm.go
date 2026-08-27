@@ -17236,9 +17236,22 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 			vm.frameCount--
 		}
 
+		// See the matching comment in resumeGenerator: we just manually popped
+		// past our own native boundary (the generator frame was isDirectCall=true
+		// and unwindException stopped there without popping it) and are handing
+		// the exception off to native Go code as a plain error. Fully clear the
+		// VM's unwinding state rather than leaving unwinding=true dangling - our
+		// caller may swallow this error entirely, and a stale unwinding=true
+		// would corrupt the next unrelated dispatch's view of VM state.
 		if vm.unwinding && vm.currentException != Null {
-			return Undefined, exceptionError{exception: vm.currentException}
+			ex := vm.currentException
+			vm.currentException = Null
+			vm.unwinding = false
+			vm.unwindingCrossedNative = false
+			return Undefined, exceptionError{exception: ex}
 		}
+		vm.unwinding = false
+		vm.unwindingCrossedNative = false
 		return Undefined, fmt.Errorf("runtime error during generator execution")
 	}
 
@@ -17444,9 +17457,27 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 			vm.frameCount--
 		}
 
+		// We've fully unwound past our own native boundary (the generator frame
+		// above was isDirectCall=true, so unwindException stopped there without
+		// popping it - we just popped it manually) and are handing the exception
+		// off to native Go code as a plain error. Fully clear the VM's unwinding
+		// state (unwinding, unwindingCrossedNative, currentException) rather than
+		// leaving `unwinding=true` dangling: our caller may swallow this error
+		// entirely (e.g. AsyncGenerator.prototype.next converts it into a
+		// rejected promise and returns success), and a stale unwinding=true would
+		// then make the next unrelated VM dispatch check misread "still
+		// unwinding" and misbehave. If our caller does re-throw via
+		// vm.throwException(ex), that call starts a fresh, honest unwind from
+		// scratch (see the !vm.unwinding branch there), which is what we want.
 		if vm.unwinding && vm.currentException != Null {
-			return Undefined, exceptionError{exception: vm.currentException}
+			ex := vm.currentException
+			vm.currentException = Null
+			vm.unwinding = false
+			vm.unwindingCrossedNative = false
+			return Undefined, exceptionError{exception: ex}
 		}
+		vm.unwinding = false
+		vm.unwindingCrossedNative = false
 		return Undefined, exceptionError{exception: NewString("runtime error during generator resumption")}
 	}
 
