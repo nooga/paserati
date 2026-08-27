@@ -368,19 +368,25 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			keyVal = resolved
 		}
 		if keyVal.Type() == vm.TypeSymbol {
+			// Guard on Type() before AsX() - AsPlainObject()/AsDictObject()/
+			// AsArray() panic instead of returning nil for a mismatched type,
+			// so calling AsPlainObject() unconditionally here (as this used
+			// to) panicked for every non-plain-object `this`, including
+			// arguments objects (which do have own symbol properties, e.g.
+			// Symbol.iterator - see language/arguments-object/mapped/
+			// Symbol.iterator.js).
 			key := vm.NewSymbolKey(keyVal)
-			if po := thisValue.AsPlainObject(); po != nil {
-				if _, _, en, _, ok := po.GetOwnDescriptorByKey(key); ok {
+			switch thisValue.Type() {
+			case vm.TypeObject:
+				if _, _, en, _, ok := thisValue.AsPlainObject().GetOwnDescriptorByKey(key); ok {
 					return vm.BooleanValue(en), nil
 				}
-				return vm.BooleanValue(false), nil
-			}
-			if dict := thisValue.AsDictObject(); dict != nil {
-				// DictObject doesn’t support symbol keys
-				return vm.BooleanValue(false), nil
-			}
-			if arr := thisValue.AsArray(); arr != nil {
-				return vm.BooleanValue(false), nil
+			case vm.TypeArguments:
+				// Symbol.iterator is the only own symbol property arguments
+				// objects have, and it's non-enumerable per spec.
+				if thisValue.AsArguments().HasOwnSymbolProp(keyVal.AsSymbolObject()) {
+					return vm.BooleanValue(false), nil
+				}
 			}
 			return vm.BooleanValue(false), nil
 		}
@@ -443,14 +449,14 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.BooleanValue(false), nil
 		case vm.TypeArguments:
 			argsObj := thisValue.AsArguments()
-			// Per spec: length and callee are non-enumerable, numeric indices are enumerable
+			// Per spec: length and callee are non-enumerable
 			if propName == "length" || propName == "callee" {
 				return vm.BooleanValue(false), nil
 			}
-			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < argsObj.Length() {
-				return vm.BooleanValue(true), nil
-			}
-			return vm.BooleanValue(false), nil
+			// Numeric indices: consult any defineProperty override instead of
+			// assuming the CreateMappedArgumentsObject default of true.
+			own := argsObj.ArgumentsOwnProperty(propName)
+			return vm.BooleanValue(own.Exists && own.Enumerable), nil
 		case vm.TypeProxy:
 			// Per spec, propertyIsEnumerable uses [[GetOwnProperty]] which goes through the proxy protocol
 			desc, err := objectGetOwnPropertyDescriptorWithVM(vmInstance, []vm.Value{thisValue, keyVal})
@@ -3351,6 +3357,20 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		return obj, nil
 	}
 
+	// Arguments objects: implement ES 10.4.4.7 for numeric-index keys (the
+	// mapped-argument write-through/severance semantics). "length"/"callee"
+	// and symbol keys aren't covered yet - falls through to the no-op below,
+	// same pre-existing behavior as before this case existed.
+	if obj.Type() == vm.TypeArguments && !keyIsSymbol {
+		if _, isIndex := vm.ParseArgumentsIndex(propName); isIndex {
+			argsObj := obj.AsArguments()
+			if err := vmInstance.ArgumentsDefineOwnProperty(argsObj, propName, hasValue, value, writablePtr, enumerablePtr, configurablePtr, hasGetter, getter, hasSetter, setter); err != nil {
+				return vm.Undefined, err
+			}
+			return obj, nil
+		}
+	}
+
 	// Define the property with attributes (on plain objects only for now)
 	if obj.Type() == vm.TypeObject {
 	if plainObj := obj.AsPlainObject(); plainObj != nil {
@@ -4027,13 +4047,33 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			descriptor.SetOwn("configurable", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
-		// Check for numeric index
-		if index, err := strconv.Atoi(propName); err == nil && index >= 0 && index < argsObj.Length() {
+		// Check for numeric index - consult any Object.defineProperty
+		// override (attributes and, once the mapping's been severed, the
+		// stored value) instead of always synthesizing the
+		// CreateMappedArgumentsObject default. See arguments_props.go.
+		if _, isIndex := vm.ParseArgumentsIndex(propName); isIndex {
+			own := argsObj.ArgumentsOwnProperty(propName)
+			if !own.Exists {
+				return vm.Undefined, nil
+			}
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			descriptor.SetOwn("value", argsObj.Get(index))
-			descriptor.SetOwn("writable", vm.BooleanValue(true))
-			descriptor.SetOwn("enumerable", vm.BooleanValue(true))
-			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			if own.IsAccessor {
+				if own.HasGetter {
+					descriptor.SetOwn("get", own.Getter)
+				} else {
+					descriptor.SetOwn("get", vm.Undefined)
+				}
+				if own.HasSetter {
+					descriptor.SetOwn("set", own.Setter)
+				} else {
+					descriptor.SetOwn("set", vm.Undefined)
+				}
+			} else {
+				descriptor.SetOwn("value", own.Value)
+				descriptor.SetOwn("writable", vm.BooleanValue(own.Writable))
+			}
+			descriptor.SetOwn("enumerable", vm.BooleanValue(own.Enumerable))
+			descriptor.SetOwn("configurable", vm.BooleanValue(own.Configurable))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
 		// Handle callee property
