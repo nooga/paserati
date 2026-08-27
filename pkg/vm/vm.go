@@ -17896,12 +17896,12 @@ func (vm *VM) setGlobalInTable(globalIdx uint16, value Value) {
 // executeModule executes a module idempotently with context switching
 // parseJSONString parses a JSON string and converts it to a VM Value
 func (vm *VM) parseJSONString(jsonText string) (Value, error) {
-	var jsonData interface{}
-	err := json.Unmarshal([]byte(jsonText), &jsonData)
+	var result Value
+	err := json.Unmarshal([]byte(jsonText), &result)
 	if err != nil {
 		return Undefined, err
 	}
-	return vm.convertJSONToValue(jsonData), nil
+	return result, nil
 }
 
 // convertJSONToValue converts a Go interface{} from json.Unmarshal to a VM Value
