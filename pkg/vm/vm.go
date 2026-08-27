@@ -12493,28 +12493,38 @@ startExecution:
 
 			// Execute the module using the standard module loading infrastructure
 			// This goes through the resolver chain (fs, virtual, data URLs, native modules)
-			status, _ := vm.executeModule(specifier)
+			status, moduleErrVal := vm.executeModule(specifier)
 			if status != InterpretOK {
-				// Module load failed - reject the promise with the error
-				// Get error from vm.errors if available
-				var errorMsg string
-				if len(vm.errors) > 0 {
-					// Use the last error message from vm.errors
-					lastErr := vm.errors[len(vm.errors)-1]
-					errorMsg = lastErr.Error()
-					// Clear the error since we're handling it
-					vm.errors = vm.errors[:len(vm.errors)-1]
-				} else if vm.currentException != Null {
-					errorMsg = vm.currentException.ToString()
-					vm.currentException = Null
-					vm.unwinding = false
+				// Module load failed - reject the promise with the error.
+				// Prefer the actual thrown value (moduleErrVal) as the rejection
+				// reason: per spec, ImportCall must reject with the module's own
+				// abrupt completion value (e.g. a real TypeError instance), not
+				// a generic Error synthesized from a flattened message string.
+				// executeModule clears vm.currentException internally for
+				// isolation before returning, so it must hand the original
+				// thrown value back through its own return value instead.
+				if moduleErrVal != Null && moduleErrVal != Undefined {
+					reason := moduleErrVal
+					// Drop the diagnostic-only entry vm.errors accumulated for
+					// this now-handled (rejected-as-a-promise) exception.
+					if len(vm.errors) > 0 {
+						vm.errors = vm.errors[:len(vm.errors)-1]
+					}
+					vm.rejectPromise(promiseObj, reason)
 				} else {
-					errorMsg = fmt.Sprintf("Failed to load module '%s'", specifier)
+					var errorMsg string
+					if len(vm.errors) > 0 {
+						lastErr := vm.errors[len(vm.errors)-1]
+						errorMsg = lastErr.Error()
+						vm.errors = vm.errors[:len(vm.errors)-1]
+					} else {
+						errorMsg = fmt.Sprintf("Failed to load module '%s'", specifier)
+					}
+					errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+					errObj.SetOwn("name", NewString("Error"))
+					errObj.SetOwn("message", NewString(errorMsg))
+					vm.rejectPromise(promiseObj, NewValueFromPlainObject(errObj))
 				}
-				errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
-				errObj.SetOwn("name", NewString("Error"))
-				errObj.SetOwn("message", NewString(errorMsg))
-				vm.rejectPromise(promiseObj, NewValueFromPlainObject(errObj))
 				registers[destReg] = promiseVal
 				continue
 			}
@@ -18503,8 +18513,13 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 
 		return InterpretOK, result
 	} else {
-		// Module execution truly failed
-		return InterpretRuntimeError, Undefined
+		// Module execution truly failed. Return the actual thrown value (if the
+		// module's abrupt completion was a JS exception) rather than Undefined -
+		// vm.currentException was already cleared above for isolation, so this
+		// is the only place a caller (e.g. OpDynamicImport, which must reject
+		// its promise with the module's own exception value per spec) can still
+		// get at it.
+		return InterpretRuntimeError, moduleException
 	}
 }
 
