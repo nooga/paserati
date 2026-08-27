@@ -136,7 +136,8 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Make it a proper constructor with static methods
-	if ctorObj := functionCtor.AsNativeFunction(); ctorObj != nil {
+	if functionCtor.Type() == vm.TypeNativeFunction {
+		ctorObj := functionCtor.AsNativeFunction()
 		// Convert to object with properties
 		ctorWithProps := vm.NewConstructorWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
@@ -165,7 +166,8 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	asyncFunctionProto := vm.NewObject(functionProtoFn)
 	asyncFunctionProtoObj := asyncFunctionProto.AsPlainObject()
 
-	if ctorObj := asyncFunctionCtor.AsNativeFunction(); ctorObj != nil {
+	if asyncFunctionCtor.Type() == vm.TypeNativeFunction {
+		ctorObj := asyncFunctionCtor.AsNativeFunction()
 		ctorWithProps := vm.NewConstructorWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", asyncFunctionProto)
@@ -304,15 +306,18 @@ func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, er
 	functionName := "bound"
 	switch originalFunc.Type() {
 	case vm.TypeNativeFunction:
-		if nativeFunc := originalFunc.AsNativeFunction(); nativeFunc != nil {
+		if originalFunc.Type() == vm.TypeNativeFunction {
+			nativeFunc := originalFunc.AsNativeFunction()
 			functionName = "bound " + nativeFunc.Name
 		}
 	case vm.TypeNativeFunctionWithProps:
-		if nativeFuncWithProps := originalFunc.AsNativeFunctionWithProps(); nativeFuncWithProps != nil {
+		if originalFunc.Type() == vm.TypeNativeFunctionWithProps {
+			nativeFuncWithProps := originalFunc.AsNativeFunctionWithProps()
 			functionName = "bound " + nativeFuncWithProps.Name
 		}
 	case vm.TypeFunction:
-		if fn := originalFunc.AsFunction(); fn != nil {
+		if originalFunc.Type() == vm.TypeFunction {
+			fn := originalFunc.AsFunction()
 			functionName = "bound " + fn.Name
 		}
 	case vm.TypeClosure:
@@ -320,7 +325,8 @@ func functionPrototypeBindImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value, er
 			functionName = "bound " + closure.Fn.Name
 		}
 	case vm.TypeBoundFunction:
-		if boundFn := originalFunc.AsBoundFunction(); boundFn != nil {
+		if originalFunc.Type() == vm.TypeBoundFunction {
+			boundFn := originalFunc.AsBoundFunction()
 			functionName = "bound " + boundFn.Name
 		}
 	}
@@ -546,7 +552,8 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 	// Set the function's HomeRealm to the realm where the Function constructor was defined
 	// This is critical for cross-realm behavior (GetFunctionRealm spec)
 	// If homeRealm was captured at constructor init time, use it; otherwise fall back to current realm
-	if fnObj := functionValue.AsFunction(); fnObj != nil {
+	if functionValue.Type() == vm.TypeFunction {
+		fnObj := functionValue.AsFunction()
 		if homeRealm != nil {
 			fnObj.HomeRealm = homeRealm
 		} else {
@@ -647,7 +654,8 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 
 	// Set the function's HomeRealm to the realm where the AsyncFunction constructor was defined
 	// This is critical for cross-realm behavior (GetFunctionRealm spec)
-	if fnObj := functionValue.AsFunction(); fnObj != nil {
+	if functionValue.Type() == vm.TypeFunction {
+		fnObj := functionValue.AsFunction()
 		if homeRealm != nil {
 			fnObj.HomeRealm = homeRealm
 		} else {

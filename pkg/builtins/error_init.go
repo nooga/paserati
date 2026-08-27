@@ -74,7 +74,8 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		message := ""
 
 		// Get name and message properties
-		if plainObj := thisValue.AsPlainObject(); plainObj != nil {
+		if thisValue.Type() == vm.TypeObject {
+			plainObj := thisValue.AsPlainObject()
 			// Step 3-4: Get name property, default to "Error"
 			if nameValue, exists := plainObj.GetOwn("name"); exists {
 				if nameValue.Type() == vm.TypeUndefined {
@@ -91,7 +92,8 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 					message = messageValue.ToString()
 				}
 			}
-		} else if dictObj := thisValue.AsDictObject(); dictObj != nil {
+		} else if thisValue.Type() == vm.TypeDictObject {
+			dictObj := thisValue.AsDictObject()
 			if nameValue, exists := dictObj.GetOwn("name"); exists {
 				if nameValue.Type() == vm.TypeUndefined {
 					name = "Error"
@@ -170,7 +172,8 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Make it a proper constructor with prototype property
-	if ctorObj := errorConstructor.AsNativeFunction(); ctorObj != nil {
+	if errorConstructor.Type() == vm.TypeNativeFunction {
+		ctorObj := errorConstructor.AsNativeFunction()
 		// Convert to object with properties
 		ctorWithProps := vm.NewConstructorWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
@@ -317,7 +320,8 @@ func (e *AggregateErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Handle options.cause if provided
 		if len(args) > 2 && args[2].IsObject() {
-			if optObj := args[2].AsPlainObject(); optObj != nil {
+			if args[2].Type() == vm.TypeObject {
+				optObj := args[2].AsPlainObject()
 				if cause, hasCause := optObj.Get("cause"); hasCause {
 					inst.SetOwnNonEnumerable("cause", cause)
 				}
@@ -327,7 +331,8 @@ func (e *AggregateErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewValueFromPlainObject(inst), nil
 	})
 
-	if nf := ctor.AsNativeFunction(); nf != nil {
+	if ctor.Type() == vm.TypeNativeFunction {
+		nf := ctor.AsNativeFunction()
 		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
 		ctorProps := withProps.AsNativeFunctionWithProps()
 		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
@@ -420,7 +425,8 @@ func (e *SuppressedErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewValueFromPlainObject(inst), nil
 	})
 
-	if nf := ctor.AsNativeFunction(); nf != nil {
+	if ctor.Type() == vm.TypeNativeFunction {
+		nf := ctor.AsNativeFunction()
 		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
 		ctorProps := withProps.AsNativeFunctionWithProps()
 		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
@@ -478,7 +484,8 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 		// If options is an Object and HasProperty(options, "cause") is true,
 		// install the cause property
 		if len(args) > 1 && args[1].IsObject() {
-			if optObj := args[1].AsPlainObject(); optObj != nil {
+			if args[1].Type() == vm.TypeObject {
+				optObj := args[1].AsPlainObject()
 				if cause, hasCause := optObj.Get("cause"); hasCause {
 					inst.SetOwnNonEnumerable("cause", cause)
 				}
@@ -487,7 +494,8 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 
 		return vm.NewValueFromPlainObject(inst), nil
 	})
-	if nf := ctor.AsNativeFunction(); nf != nil {
+	if ctor.Type() == vm.TypeNativeFunction {
+		nf := ctor.AsNativeFunction()
 		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
 		ctorProps := withProps.AsNativeFunctionWithProps()
 		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
@@ -529,11 +537,13 @@ func isErrorValue(vmInstance *vm.VM, val vm.Value) bool {
 	}
 
 	// Check for [[ErrorData]] internal slot on the object itself
-	if po := val.AsPlainObject(); po != nil {
+	if val.Type() == vm.TypeObject {
+		po := val.AsPlainObject()
 		_, hasErrorData := po.GetOwn("[[ErrorData]]")
 		return hasErrorData
 	}
-	if d := val.AsDictObject(); d != nil {
+	if val.Type() == vm.TypeDictObject {
+		d := val.AsDictObject()
 		_, hasErrorData := d.GetOwn("[[ErrorData]]")
 		return hasErrorData
 	}

@@ -94,7 +94,8 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) > 1 && args[1].IsObject() {
 			options := args[1]
 			// Check if options has "cause" property (via prototype chain)
-			if optObj := options.AsPlainObject(); optObj != nil {
+			if options.Type() == vm.TypeObject {
+				optObj := options.AsPlainObject()
 				if cause, hasCause := optObj.Get("cause"); hasCause {
 					typeErrorInstancePtr.SetOwnNonEnumerable("cause", cause)
 				}
@@ -105,7 +106,8 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Make it a proper constructor with prototype property
-	if ctorObj := typeErrorConstructor.AsNativeFunction(); ctorObj != nil {
+	if typeErrorConstructor.Type() == vm.TypeNativeFunction {
+		ctorObj := typeErrorConstructor.AsNativeFunction()
 		// Convert to object with properties
 		ctorWithProps := vm.NewConstructorWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()

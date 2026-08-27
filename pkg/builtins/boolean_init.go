@@ -125,7 +125,7 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 				primitiveValue = false
 			default:
 				// For objects, try valueOf/toString
-				if arg.IsObject() {
+				if arg.Type() == vm.TypeObject {
 					// Try valueOf first
 					if valueOf, exists := arg.AsPlainObject().GetOwn("valueOf"); exists && valueOf.IsFunction() {
 						result, err := vmInstance.Call(valueOf, arg, nil)

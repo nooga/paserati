@@ -191,7 +191,8 @@ func processReplacementPatternEx(str string, matched string, position int, captu
 					}
 					if endIdx < len(replacement) {
 						name := replacement[i+2 : endIdx]
-						if po := namedCaptures.AsPlainObject(); po != nil {
+						if namedCaptures.Type() == vm.TypeObject {
+							po := namedCaptures.AsPlainObject()
 							if val, ok := po.GetOwn(name); ok && val.Type() != vm.TypeUndefined {
 								result.WriteString(val.ToString())
 							}
@@ -498,7 +499,8 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			arg := args[0]
 			// Handle boxed String objects and other objects via ToPrimitive
 			if arg.IsObject() {
-				if plainObj := arg.AsPlainObject(); plainObj != nil {
+				if arg.Type() == vm.TypeObject {
+					plainObj := arg.AsPlainObject()
 					if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists && primitiveVal.Type() == vm.TypeString {
 						str = primitiveVal.ToString()
 					} else {
@@ -539,7 +541,8 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		if val.IsObject() {
 			// Check for [[PrimitiveValue]] (String wrapper)
-			if plainObj := val.AsPlainObject(); plainObj != nil {
+			if val.Type() == vm.TypeObject {
+				plainObj := val.AsPlainObject()
 				if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists && primitiveVal.Type() == vm.TypeString {
 					return primitiveVal.ToString()
 				}

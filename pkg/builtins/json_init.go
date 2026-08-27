@@ -165,7 +165,8 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 						}
 					} else if elem.Type() == vm.TypeObject {
 						// Check if it's a String or Number wrapper object
-						if obj := elem.AsPlainObject(); obj != nil {
+						if elem.Type() == vm.TypeObject {
+							obj := elem.AsPlainObject()
 							if _, ok := obj.GetOwn("[[PrimitiveValue]]"); ok {
 								// Has [[PrimitiveValue]] - it's a wrapper, call ToString via ToPrimitive
 								primVal := vmInstance.ToPrimitive(elem, "string")

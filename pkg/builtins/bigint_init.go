@@ -62,7 +62,8 @@ func thisBigIntValue(v vm.Value) (vm.Value, bool) {
 	case vm.TypeBigInt:
 		return v, true
 	case vm.TypeObject:
-		if po := v.AsPlainObject(); po != nil {
+		if v.Type() == vm.TypeObject {
+			po := v.AsPlainObject()
 			if data, exists := po.GetOwn("[[PrimitiveValue]]"); exists && data.Type() == vm.TypeBigInt {
 				return data, true
 			}

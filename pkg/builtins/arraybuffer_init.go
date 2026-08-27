@@ -223,7 +223,8 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Step 6: Get [Symbol.species] from constructor
 		var species vm.Value
 		if ctor.IsObject() {
-			if po := ctor.AsPlainObject(); po != nil {
+			if ctor.Type() == vm.TypeObject {
+				po := ctor.AsPlainObject()
 				species, _ = po.GetOwnByKey(vm.NewSymbolKey(vmInstance.SymbolSpecies))
 			}
 		}

@@ -156,8 +156,10 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Module Namespace Exotic Object [[Set]] behavior (ECMAScript 10.4.6.9)
 		// [[Set]] on a namespace always returns false
-		if po := target.AsPlainObject(); po != nil && po.IsModuleNamespace() {
-			return vm.BooleanValue(false), nil
+		if target.Type() == vm.TypeObject {
+			if po := target.AsPlainObject(); po.IsModuleNamespace() {
+				return vm.BooleanValue(false), nil
+			}
 		}
 
 		// For Proxy targets, we need to use the set trap differently
@@ -315,7 +317,8 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Handle PlainObject
-		if po := target.AsPlainObject(); po != nil {
+		if target.Type() == vm.TypeObject {
+			po := target.AsPlainObject()
 			// Module Namespace Exotic Object [[Delete]] behavior (ECMAScript 10.4.6.8)
 			if po.IsModuleNamespace() {
 				if propKeyArg.Type() == vm.TypeSymbol {
@@ -355,7 +358,8 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Handle DictObject
-		if d := target.AsDictObject(); d != nil {
+		if target.Type() == vm.TypeDictObject {
+			d := target.AsDictObject()
 			propKey := propKeyArg.ToString()
 			success := d.DeleteOwn(propKey)
 			return vm.BooleanValue(success), nil
@@ -501,10 +505,12 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// For now, delegate to Object.getOwnPropertyNames + getOwnPropertySymbols
 			// This is a simplification
 			if objCtor, ok := vmInstance.GetGlobal("Object"); ok {
-				if nfp := objCtor.AsNativeFunctionWithProps(); nfp != nil {
+				if objCtor.Type() == vm.TypeNativeFunctionWithProps {
+					nfp := objCtor.AsNativeFunctionWithProps()
 					if f, ok := nfp.Properties.GetOwn("getOwnPropertyNames"); ok {
 						if names, err := vmInstance.Call(f, vm.Undefined, []vm.Value{target}); err == nil {
-							if namesArr := names.AsArray(); namesArr != nil {
+							if names.Type() == vm.TypeArray {
+								namesArr := names.AsArray()
 								for i := 0; i < namesArr.Length(); i++ {
 									arr.Append(namesArr.Get(i))
 								}

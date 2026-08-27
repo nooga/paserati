@@ -1389,7 +1389,7 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		var srcLength int
 		if source.Type() == vm.TypeArray {
 			srcLength = source.AsArray().Length()
-		} else if obj := source.AsPlainObject(); obj != nil {
+		} else if source.Type() == vm.TypeObject {
 			// Step 16: Let srcLength be ? ToLength(? Get(src, "length")) -
 			// through the VM so a "length" accessor property actually runs.
 			lengthVal, gerr := vmInstance.GetProperty(source, "length")

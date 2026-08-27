@@ -100,10 +100,12 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		// Check if any input signal is already aborted
 		if len(args) > 0 {
-			if arr := args[0].AsArray(); arr != nil {
+			if args[0].Type() == vm.TypeArray {
+				arr := args[0].AsArray()
 				for i := 0; i < arr.Length(); i++ {
 					elem := arr.Get(i)
-					if obj := elem.AsPlainObject(); obj != nil {
+					if elem.Type() == vm.TypeObject {
+						obj := elem.AsPlainObject()
 						if aborted, exists := obj.GetOwn("aborted"); exists && aborted.IsBoolean() && aborted.AsBoolean() {
 							signal.aborted = true
 							if reason, exists := obj.GetOwn("reason"); exists {
@@ -141,7 +143,8 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	controllerConstructor := vm.NewConstructorWithProps(0, false, "AbortController", controllerConstructorFn)
-	if ctorProps := controllerConstructor.AsNativeFunctionWithProps(); ctorProps != nil {
+	if controllerConstructor.Type() == vm.TypeNativeFunctionWithProps {
+		ctorProps := controllerConstructor.AsNativeFunctionWithProps()
 		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(controllerProto))
 	}
 
