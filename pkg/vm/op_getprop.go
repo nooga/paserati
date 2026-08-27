@@ -41,7 +41,8 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			}
 			// If not in heap, check Object.prototype for standard methods
 			// GlobalObject has Null prototype to avoid issues, but should inherit Object.prototype methods
-			if objProto := vm.ObjectPrototype.AsPlainObject(); objProto != nil {
+			if vm.ObjectPrototype.Type() == TypeObject {
+				objProto := vm.ObjectPrototype.AsPlainObject()
 				if value, exists := objProto.GetOwn(propName); exists {
 					*dest = value
 					return true, InterpretOK, *dest
@@ -353,7 +354,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				current := po
 				for i := int8(0); i < entry.protoDepth && current != nil; i++ {
 					pv := current.GetPrototype()
-					if !pv.IsObject() {
+					if pv.Type() != TypeObject {
 						current = nil
 						break
 					}
@@ -491,9 +492,10 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			return true, InterpretOK, *dest
 		}
 
-		// resolvePropertyMeta didn't find property - try PlainObject.Get which handles
-		// function prototypes (functions can be used as prototypes in JavaScript)
-		if fv, ok := po.Get(propName); ok {
+		// resolvePropertyMeta didn't find property - fall back to a full generic
+		// chain walk, which handles prototypes of any object kind (functions,
+		// arrays, etc. can all be used as prototypes in JavaScript)
+		if fv, ok := vm.getInheritedGeneric(NewValueFromPlainObject(po), propName); ok {
 			*dest = fv
 			return true, InterpretOK, *dest
 		}
@@ -571,7 +573,8 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			current := po.GetPrototype()
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if p := current.AsPlainObject(); p != nil {
+					if current.Type() == TypeObject {
+						p := current.AsPlainObject()
 						if v, ok := p.GetOwn(propName); ok {
 							*dest = v
 							return true, InterpretOK, *dest
@@ -911,13 +914,15 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwn(propName); ok {
 							*dest = v
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -944,13 +949,15 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwn(propName); ok {
 							*dest = v
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -985,7 +992,8 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			current := proto.GetPrototype()
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if p := current.AsPlainObject(); p != nil {
+					if current.Type() == TypeObject {
+						p := current.AsPlainObject()
 						if v, ok := p.GetOwn(propName); ok {
 							*dest = v
 							return true, InterpretOK, *dest
@@ -1105,7 +1113,8 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				return false, InterpretRuntimeError, Undefined
 			}
 			// ECMAScript 10.5.8 invariant validation
-			if targetObj := proxy.target.AsPlainObject(); targetObj != nil {
+			if proxy.target.Type() == TypeObject {
+				targetObj := proxy.target.AsPlainObject()
 				if g, _, _, c, isAccessor := targetObj.GetOwnAccessor(propName); isAccessor && !c {
 					if g.Type() == TypeUndefined && !result.IsUndefined() {
 						if frame != nil && !frameWasNil {
@@ -1216,7 +1225,8 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 					current := funcProto.Properties.GetPrototype()
 					for current.typ != TypeNull && current.typ != TypeUndefined {
 						if current.IsObject() {
-							if proto := current.AsPlainObject(); proto != nil {
+							if current.Type() == TypeObject {
+								proto := current.AsPlainObject()
 								if v, ok := proto.GetOwn(propName); ok {
 									*dest = v
 									return true, InterpretOK, *dest
@@ -1239,7 +1249,8 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 					current := funcProto.prototype
 					for current.typ != TypeNull && current.typ != TypeUndefined {
 						if current.IsObject() {
-							if proto := current.AsPlainObject(); proto != nil {
+							if current.Type() == TypeObject {
+								proto := current.AsPlainObject()
 								if v, ok := proto.GetOwn(propName); ok {
 									*dest = v
 									return true, InterpretOK, *dest
@@ -1298,7 +1309,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
 							if debugVM {
@@ -1307,7 +1319,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1342,7 +1355,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
 							if debugVM {
@@ -1351,7 +1365,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1422,7 +1437,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						// Check for accessor property first
 						if getter, _, _, _, exists := proto2.GetOwnAccessorByKey(symKeyVal); exists {
 							if getter.Type() != TypeUndefined {
@@ -1445,7 +1461,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1469,13 +1486,15 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1499,13 +1518,15 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1529,13 +1550,15 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1575,7 +1598,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
 							if debugVM {
@@ -1584,7 +1608,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1611,7 +1636,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
 							if debugVM {
@@ -1620,7 +1646,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1647,7 +1674,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
 							if debugVM {
@@ -1656,7 +1684,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1703,13 +1732,15 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1735,13 +1766,15 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1771,13 +1804,15 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1807,13 +1842,15 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
 							*dest = v
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1849,13 +1886,15 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwnByKey(key); ok {
 							*dest = v
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
-					} else if dict := current.AsDictObject(); dict != nil {
+					} else if current.Type() == TypeDictObject {
+						dict := current.AsDictObject()
 						current = dict.prototype
 					} else {
 						break
@@ -1931,7 +1970,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 			if !current.IsObject() {
 				break
 			}
-			if proto := current.AsPlainObject(); proto != nil {
+			if current.Type() == TypeObject {
+				proto := current.AsPlainObject()
 				if g, _, _, _, ok := proto.GetOwnAccessorByKey(key); ok {
 					if g.Type() != TypeUndefined {
 						res, err := vm.Call(g, base, nil)
@@ -1984,7 +2024,8 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 				current = proto.prototype
 				continue
 			}
-			if dict := current.AsDictObject(); dict != nil {
+			if current.Type() == TypeDictObject {
+				dict := current.AsDictObject()
 				current = dict.prototype
 				continue
 			}

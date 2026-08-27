@@ -709,28 +709,32 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 func (vm *VM) effectiveBuiltinPrototype(objVal Value) Value {
 	switch objVal.Type() {
 	case TypeArray:
-		if arr := objVal.AsArray(); arr != nil {
+		if objVal.Type() == TypeArray {
+			arr := objVal.AsArray()
 			if proto := arr.GetPrototype(); proto.IsObject() {
 				return proto
 			}
 		}
 		return vm.ArrayPrototype
 	case TypeMap:
-		if mp := objVal.AsMap(); mp != nil {
+		if objVal.Type() == TypeMap {
+			mp := objVal.AsMap()
 			if proto := mp.GetPrototype(); proto.IsObject() {
 				return proto
 			}
 		}
 		return vm.MapPrototype
 	case TypeSet:
-		if st := objVal.AsSet(); st != nil {
+		if objVal.Type() == TypeSet {
+			st := objVal.AsSet()
 			if proto := st.GetPrototype(); proto.IsObject() {
 				return proto
 			}
 		}
 		return vm.SetPrototype
 	case TypeWeakRef:
-		if wr := objVal.AsWeakRef(); wr != nil {
+		if objVal.Type() == TypeWeakRef {
+			wr := objVal.AsWeakRef()
 			if proto := wr.GetPrototype(); proto.IsObject() {
 				return proto
 			}
@@ -1115,7 +1119,7 @@ func (vm *VM) resolvePropertyMeta(objVal Value, propName string, cache *PropInli
 			}
 		}
 		pv := current.GetPrototype()
-		if pv.IsObject() {
+		if pv.Type() == TypeObject {
 			current = pv.AsPlainObject()
 			depth++
 		} else if pv.Type() == TypeClosure || pv.Type() == TypeFunction || pv.Type() == TypeNativeFunction || pv.Type() == TypeNativeFunctionWithProps {

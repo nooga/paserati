@@ -573,7 +573,8 @@ func (vm *VM) WithRealmValue(realm *Realm, fn func() Value) Value {
 func (vm *VM) GetFunctionRealm(fn Value) (*Realm, error) {
 	switch fn.Type() {
 	case TypeFunction:
-		if fnObj := fn.AsFunction(); fnObj != nil {
+		if fn.Type() == TypeFunction {
+			fnObj := fn.AsFunction()
 			if fnObj.HomeRealm != nil {
 				return fnObj.HomeRealm, nil
 			}
@@ -585,24 +586,28 @@ func (vm *VM) GetFunctionRealm(fn Value) (*Realm, error) {
 			}
 		}
 	case TypeNativeFunction:
-		if nfn := fn.AsNativeFunction(); nfn != nil {
+		if fn.Type() == TypeNativeFunction {
+			nfn := fn.AsNativeFunction()
 			if nfn.HomeRealm != nil {
 				return nfn.HomeRealm, nil
 			}
 		}
 	case TypeNativeFunctionWithProps:
-		if nfp := fn.AsNativeFunctionWithProps(); nfp != nil {
+		if fn.Type() == TypeNativeFunctionWithProps {
+			nfp := fn.AsNativeFunctionWithProps()
 			if nfp.HomeRealm != nil {
 				return nfp.HomeRealm, nil
 			}
 		}
 	case TypeBoundFunction:
-		if bf := fn.AsBoundFunction(); bf != nil {
+		if fn.Type() == TypeBoundFunction {
+			bf := fn.AsBoundFunction()
 			// Recursively get realm from original function
 			return vm.GetFunctionRealm(bf.OriginalFunction)
 		}
 	case TypeProxy:
-		if proxy := fn.AsProxy(); proxy != nil {
+		if fn.Type() == TypeProxy {
+			proxy := fn.AsProxy()
 			if proxy.Revoked {
 				return nil, fmt.Errorf("cannot get realm of revoked proxy")
 			}
@@ -2946,7 +2951,8 @@ startExecution:
 						// ECMAScript 10.5.7 step 11: Invariant validation when trap returns false
 						if !hasProperty {
 							target := proxy.target
-							if targetObj := target.AsPlainObject(); targetObj != nil {
+							if target.Type() == TypeObject {
+								targetObj := target.AsPlainObject()
 								// Check if target has a non-configurable own property
 								if _, _, _, c, found := targetObj.GetOwnDescriptor(propKey); found && !c {
 									vm.ThrowTypeError("'has' on proxy: trap returned false for property '" + propKey + "' which exists in the proxy target as non-configurable")
@@ -7434,7 +7440,8 @@ startExecution:
 					}
 					// ECMAScript 10.5.8 invariant validation
 					propName := indexVal.ToString()
-					if targetObj := proxy.target.AsPlainObject(); targetObj != nil {
+					if proxy.target.Type() == TypeObject {
+						targetObj := proxy.target.AsPlainObject()
 						if g, _, _, c, isAccessor := targetObj.GetOwnAccessor(propName); isAccessor && !c {
 							if g.Type() == TypeUndefined && !result.IsUndefined() {
 								vm.ThrowTypeError("'get' on proxy: property '" + propName + "' is a non-configurable accessor without a getter, but the trap returned a non-undefined value")
@@ -8160,7 +8167,8 @@ startExecution:
 				// Use UTF-16 code unit count for JavaScript string length
 				length = float64(UTF16Length(str))
 			case TypeObject, TypeDictObject:
-				if po := srcVal.AsPlainObject(); po != nil {
+				if srcVal.Type() == TypeObject {
+					po := srcVal.AsPlainObject()
 					if v, ok := po.GetOwn("length"); ok {
 						length = v.ToFloat()
 						break
@@ -14481,7 +14489,8 @@ startExecution:
 
 					// ECMAScript 10.5.10 invariant: can't delete non-configurable property
 					if success {
-						if targetObj := proxy.target.AsPlainObject(); targetObj != nil {
+						if proxy.target.Type() == TypeObject {
+							targetObj := proxy.target.AsPlainObject()
 							if _, _, _, c, found := targetObj.GetOwnDescriptor(propName); found && !c {
 								vm.ThrowTypeError("'deleteProperty' on proxy: trap returned truish for property '" + propName + "' which is non-configurable in the proxy target")
 								return InterpretRuntimeError, Undefined
@@ -14491,15 +14500,18 @@ startExecution:
 				} else {
 					// No delete trap, fallback to target
 					if proxy.target.IsObject() {
-						if po := proxy.target.AsPlainObject(); po != nil {
+						if proxy.target.Type() == TypeObject {
+							po := proxy.target.AsPlainObject()
 							success = po.DeleteOwn(propName)
-						} else if d := proxy.target.AsDictObject(); d != nil {
+						} else if proxy.target.Type() == TypeDictObject {
+							d := proxy.target.AsDictObject()
 							success = d.DeleteOwn(propName)
 						}
 					}
 				}
 			} else if obj.IsObject() {
-				if po := obj.AsPlainObject(); po != nil {
+				if obj.Type() == TypeObject {
+					po := obj.AsPlainObject()
 					// Module Namespace Exotic Object [[Delete]] behavior (ECMAScript 10.4.6.8)
 					// For string properties: if the property exists in exports, throw TypeError
 					// (Symbols are handled normally below - not applicable here since propName is string)
@@ -14615,7 +14627,8 @@ startExecution:
 							vm.heap.Delete(idx)
 						}
 					}
-				} else if d := obj.AsDictObject(); d != nil {
+				} else if obj.Type() == TypeDictObject {
+					d := obj.AsDictObject()
 					// DictObject properties are always configurable, no strict mode check needed
 					success = d.DeleteOwn(propName)
 				}
@@ -14899,7 +14912,8 @@ startExecution:
 				registers[destReg] = BooleanValue(success)
 				continue
 			} else if obj.Type() == TypeObject {
-				if po := obj.AsPlainObject(); po != nil {
+				if obj.Type() == TypeObject {
+					po := obj.AsPlainObject()
 					if key.Type() == TypeSymbol {
 						// Check if property is non-configurable
 						symKey := NewSymbolKey(key)

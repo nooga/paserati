@@ -354,7 +354,8 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		current := po.GetPrototype()
 		for current.typ != TypeNull && current.typ != TypeUndefined {
 			if current.IsObject() {
-				if proto := current.AsPlainObject(); proto != nil {
+				if current.Type() == TypeObject {
+					proto := current.AsPlainObject()
 					// Check for accessor in prototype
 					if g, _, _, _, ok := proto.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
 						// Call the getter with this=original obj (not proto)
@@ -390,7 +391,8 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			current := po.prototype
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if proto2 := current.AsPlainObject(); proto2 != nil {
+					if current.Type() == TypeObject {
+						proto2 := current.AsPlainObject()
 						if v, ok := proto2.GetOwn(propName); ok {
 							return v, nil
 						}
@@ -517,7 +519,8 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 					current := proto.GetPrototype()
 					for current.typ != TypeNull && current.typ != TypeUndefined {
 						if current.IsObject() {
-							if grandProto := current.AsPlainObject(); grandProto != nil {
+							if current.Type() == TypeObject {
+								grandProto := current.AsPlainObject()
 								if g, _, _, _, ok := grandProto.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
 									result, err := vm.Call(g, obj, nil)
 									if err != nil {
@@ -988,7 +991,8 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			current := po.GetPrototype()
 			for current.typ != TypeNull && current.typ != TypeUndefined {
 				if current.IsObject() {
-					if cur := current.AsPlainObject(); cur != nil {
+					if current.Type() == TypeObject {
+						cur := current.AsPlainObject()
 						if g, _, _, _, ok := cur.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
 							result, err := vm.Call(g, obj, nil)
 							if err != nil {

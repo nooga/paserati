@@ -1118,20 +1118,18 @@ func (o *PlainObject) Get(name string) (Value, bool) {
 	// Walk prototype chain
 	current := o.prototype
 	for current.typ != TypeNull && current.typ != TypeUndefined {
-		if current.IsObject() {
-			if proto := current.AsPlainObject(); proto != nil {
-				if value, exists := proto.GetOwn(name); exists {
-					return value, true
-				}
-				current = proto.prototype
-			} else if dict := current.AsDictObject(); dict != nil {
-				if value, exists := dict.GetOwn(name); exists {
-					return value, true
-				}
-				current = dict.prototype
-			} else {
-				break
+		if current.Type() == TypeObject {
+			proto := current.AsPlainObject()
+			if value, exists := proto.GetOwn(name); exists {
+				return value, true
 			}
+			current = proto.prototype
+		} else if current.Type() == TypeDictObject {
+			dict := current.AsDictObject()
+			if value, exists := dict.GetOwn(name); exists {
+				return value, true
+			}
+			current = dict.prototype
 		} else if current.Type() == TypeClosure {
 			// Functions can be prototypes in JavaScript
 			closure := current.AsClosure()
@@ -1553,12 +1551,14 @@ func (d *DictObject) Get(name string) (Value, bool) {
 	current := d.prototype
 	for current.typ != TypeNull && current.typ != TypeUndefined {
 		if current.IsObject() {
-			if proto := current.AsPlainObject(); proto != nil {
+			if current.Type() == TypeObject {
+				proto := current.AsPlainObject()
 				if value, exists := proto.GetOwn(name); exists {
 					return value, true
 				}
 				current = proto.prototype
-			} else if dict := current.AsDictObject(); dict != nil {
+			} else if current.Type() == TypeDictObject {
+				dict := current.AsDictObject()
 				if value, exists := dict.GetOwn(name); exists {
 					return value, true
 				}

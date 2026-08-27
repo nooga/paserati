@@ -188,18 +188,18 @@ type ArrayObject struct {
 	Object
 	length       int
 	elements     []Value
-	properties   map[string]Value           // Named properties (e.g., "index", "input" for match results)
-	propertyDesc map[string]PropertyDesc    // Property descriptors for named properties
-	symbolProps  map[*SymbolObject]Value    // Symbol-keyed properties (e.g., Symbol.iterator override)
-	getters      map[string]Value           // Accessor getters for named properties
-	setters      map[string]Value           // Accessor setters for named properties
-	extensible   bool                       // When false, no new properties can be added (for Object.freeze/seal)
-	frozen       bool                       // When true, elements are also non-writable and non-configurable
-	execMeta     *execResultMeta            // Lazy exec result properties (nil for normal arrays)
+	properties   map[string]Value        // Named properties (e.g., "index", "input" for match results)
+	propertyDesc map[string]PropertyDesc // Property descriptors for named properties
+	symbolProps  map[*SymbolObject]Value // Symbol-keyed properties (e.g., Symbol.iterator override)
+	getters      map[string]Value        // Accessor getters for named properties
+	setters      map[string]Value        // Accessor setters for named properties
+	extensible   bool                    // When false, no new properties can be added (for Object.freeze/seal)
+	frozen       bool                    // When true, elements are also non-writable and non-configurable
+	execMeta     *execResultMeta         // Lazy exec result properties (nil for normal arrays)
 	// Subclass prototype override: for `class S extends Array {} new S()` instances,
 	// this points at S.prototype (whose own [[Prototype]] chains through Array.prototype).
 	// Zero value (TypeUndefined) means use the realm's intrinsic ArrayPrototype.
-	prototype    Value
+	prototype Value
 }
 
 // PropertyDesc stores property descriptor attributes
@@ -307,18 +307,18 @@ type GeneratorFrame = SuspendedFrame
 // Based on the design from docs/archived/generators-implementation-plan.md
 type GeneratorObject struct {
 	Object
-	Function          Value           // The generator function
-	State             GeneratorState  // Current state (suspended/completed/executing)
-	Frame             *SuspendedFrame // Execution frame (nil if completed)
-	YieldedValue      Value           // Last yielded value
-	ReturnValue       Value           // Final return value (when completed)
-	Done              bool            // True when generator is exhausted
-	Args              []Value         // Arguments passed when the generator was created
-	This              Value           // The 'this' value for the generator context
-	Prototype         *PlainObject    // Custom prototype (if set via function.prototype)
-	DelegatedIterator     Value // Iterator being delegated to (for yield* forwarding of .return()/.throw())
-	DelegationResult      Value // Result value when delegation completed via external throw/return with done:true
-	DelegationResultReady bool  // Flag indicating DelegationResult is set (needed because result could be undefined)
+	Function              Value           // The generator function
+	State                 GeneratorState  // Current state (suspended/completed/executing)
+	Frame                 *SuspendedFrame // Execution frame (nil if completed)
+	YieldedValue          Value           // Last yielded value
+	ReturnValue           Value           // Final return value (when completed)
+	Done                  bool            // True when generator is exhausted
+	Args                  []Value         // Arguments passed when the generator was created
+	This                  Value           // The 'this' value for the generator context
+	Prototype             *PlainObject    // Custom prototype (if set via function.prototype)
+	DelegatedIterator     Value           // Iterator being delegated to (for yield* forwarding of .return()/.throw())
+	DelegationResult      Value           // Result value when delegation completed via external throw/return with done:true
+	DelegationResultReady bool            // Flag indicating DelegationResult is set (needed because result could be undefined)
 }
 
 type AsyncGeneratorObject GeneratorObject
@@ -556,7 +556,7 @@ var (
 	Uninitialized = Value{typ: TypeUninitialized} // TDZ marker for let/const before initialization
 	True          = Value{typ: TypeBoolean, payload: 1}
 	False         = Value{typ: TypeBoolean, payload: 0}
-	NaN       = Value{typ: TypeFloatNumber, payload: math.Float64bits(math.NaN())}
+	NaN           = Value{typ: TypeFloatNumber, payload: math.Float64bits(math.NaN())}
 )
 
 func NumberValue(value float64) Value {
@@ -1442,8 +1442,8 @@ func (v Value) ToFloat() float64 {
 		return parseStringToNumber(v.AsString())
 	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeMap, TypeSet, TypeArrayBuffer, TypeSharedArrayBuffer, TypeTypedArray, TypeDataView, TypeProxy:
 		// Special case for Date objects - directly get timestamp
-		if obj := v.AsPlainObject(); obj != nil {
-			if timestampValue, exists := obj.GetOwn("__timestamp__"); exists {
+		if v.typ == TypeObject {
+			if timestampValue, exists := v.AsPlainObject().GetOwn("__timestamp__"); exists {
 				return timestampValue.ToFloat()
 			}
 		}
@@ -1469,7 +1469,8 @@ func (v Value) ToPrimitive(hint string) Value {
 	// For objects, we need to call valueOf/toString methods
 	// Since we don't have VM instance here, we use a simplified approach
 	// This will be enhanced when we have access to VM in this context
-	if po := v.AsPlainObject(); po != nil {
+	if v.typ == TypeObject {
+		po := v.AsPlainObject()
 		// For built-in wrappers, we can extract the primitive value directly
 		switch v.typ {
 		case TypeBoolean:
@@ -1480,10 +1481,8 @@ func (v Value) ToPrimitive(hint string) Value {
 			return NewString(v.ToString())
 		case TypeBigInt:
 			// For BigInt object wrappers, extract the primitive value from [[BigIntData]]
-			if po := v.AsPlainObject(); po != nil {
-				if dataVal, exists := po.GetOwn("[[BigIntData]]"); exists {
-					return dataVal
-				}
+			if dataVal, exists := po.GetOwn("[[BigIntData]]"); exists {
+				return dataVal
 			}
 			// If no [[BigIntData]], return as-is (shouldn't happen for valid BigInt objects)
 			return v
@@ -2804,8 +2803,8 @@ func (m *MapObject) Delete(key Value) bool {
 func (m *MapObject) Clear() {
 	m.entries = make(map[mapKey]Value)
 	m.keys = make(map[mapKey]Value)
-	m.order = nil        // Reset insertion order
-	m.tombstones = nil   // Clear tombstones
+	m.order = nil      // Reset insertion order
+	m.tombstones = nil // Clear tombstones
 	m.size = 0
 }
 
@@ -3155,7 +3154,7 @@ func findToStringMethod(obj *PlainObject) Value {
 	for current != nil && depth < 10 { // Prevent infinite loops
 		// Move up the prototype chain
 		protoVal := current.GetPrototype()
-		if !protoVal.IsObject() {
+		if protoVal.Type() != TypeObject {
 			break
 		}
 
