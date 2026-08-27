@@ -94,7 +94,7 @@ func (vm *VM) NewPromiseFromExecutor(executor Value) (Value, error) {
 		if err != nil {
 			// Per ECMAScript 25.4.3.1 step 10: reject with the executor's own
 			// thrown value, not a stringified Go error.
-			reason := Value{}
+			var reason Value
 			if ee, ok := err.(ExceptionError); ok {
 				reason = ee.GetExceptionValue()
 			} else {
