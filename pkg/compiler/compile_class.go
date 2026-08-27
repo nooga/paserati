@@ -1459,12 +1459,12 @@ func (c *Compiler) addStaticProperty(property *parser.PropertyDefinition, constr
 
 	// Check if this is a private field (ECMAScript # field)
 	if len(propertyName) > 0 && propertyName[0] == '#' {
-		// Private static field - strip the # and use OpSetPrivateField
+		// Private static field - strip the # and use OpDefinePrivateField
 		fieldName := propertyName[1:]
 		// Use branded key to distinguish private fields with same name in different classes
 		brandedKey := c.getPrivateFieldKey(fieldName)
 		propertyNameIdx := c.chunk.AddConstant(vm.String(brandedKey))
-		c.emitSetPrivateField(constructorReg, valueReg, propertyNameIdx, property.Token.Line)
+		c.emitDefinePrivateField(constructorReg, valueReg, propertyNameIdx, property.Token.Line)
 		debugPrintf("// DEBUG addStaticProperty: Static private field '%s' added to constructor\n", propertyName)
 	} else if _, isComputed := property.Key.(*parser.ComputedPropertyName); isComputed {
 		// Computed property key - use the pre-computed key from preEvaluateComputedFieldKeys

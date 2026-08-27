@@ -209,6 +209,10 @@ const (
 	// Ry is not an array. Bit-identical to what the built-in array iterator's Step
 	// yields, so it stands in for one next() on the fast destructuring path.
 	OpArrayRawGetInt OpCode = 175
+	// Rx Ry NameIdx(16bit): Rx.#field = Ry (private field initialization / PrivateFieldAdd -
+	// throws TypeError if the private field already exists on Rx; unlike OpSetPrivateField,
+	// which requires the field to already exist)
+	OpDefinePrivateField OpCode = 176
 
 	// --- NEW: Global Variable Operations ---
 	OpGetGlobal     OpCode = 46 // Rx GlobalIdx(16bit): Rx = Globals[GlobalIdx] (direct indexed access)
@@ -469,6 +473,8 @@ func (op OpCode) String() string {
 		return "OpGetPrivateField"
 	case OpSetPrivateField:
 		return "OpSetPrivateField"
+	case OpDefinePrivateField:
+		return "OpDefinePrivateField"
 	case OpSetPrivateMethod:
 		return "OpSetPrivateMethod"
 	case OpHasPrivateField:
@@ -1102,6 +1108,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpGetPrivateField:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpSetPrivateField:
+		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
+	case OpDefinePrivateField:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpSetPrivateMethod:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
