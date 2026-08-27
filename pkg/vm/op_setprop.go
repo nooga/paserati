@@ -804,9 +804,22 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			// Store override in named props so reads check there first
 			argObj.SetNamedProp("length", *valueToSet)
 		default:
-			// Check for numeric string index
-			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 {
-				argObj.SetIndexed(idx, *valueToSet)
+			// Check for numeric string index. Goes through argumentsSet (see
+			// arguments_props.go) so a defineProperty-installed accessor,
+			// non-writable rejection, or write-through-while-mapped is
+			// respected instead of always writing the raw slot. Strict-mode
+			// throwing isn't wired up here (this opcode doesn't have the
+			// calling frame's strictness on hand) - non-writable writes
+			// silently no-op, matching this switch's other cases.
+			if _, isIndex := ParseArgumentsIndex(propName); isIndex {
+				if err := vm.argumentsSet(argObj, propName, *valueToSet, false); err != nil {
+					if excErr, ok := err.(ExceptionError); ok {
+						vm.throwException(excErr.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
+					vm.ThrowTypeError(err.Error())
+					return false, InterpretRuntimeError, Undefined
+				}
 			} else {
 				// Store in overflow named properties
 				argObj.SetNamedProp(propName, *valueToSet)

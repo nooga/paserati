@@ -6990,8 +6990,23 @@ startExecution:
 					if idx < 0 {
 						registers[destReg] = Undefined // Negative index -> undefined
 					} else {
-						// Use Get() which checks args array and namedProps
-						registers[destReg] = args.Get(idx)
+						// Goes through argumentsGet (arguments_props.go) so a
+						// defineProperty-installed accessor or deletion is
+						// respected, not just the raw mapped/args slot.
+						v, err := vm.argumentsGet(args, strconv.Itoa(idx))
+						if err != nil {
+							frame.ip = ip
+							if excErr, ok := err.(ExceptionError); ok {
+								vm.throwException(excErr.GetExceptionValue())
+							} else {
+								vm.ThrowTypeError(err.Error())
+							}
+							if vm.frameCount == 0 || vm.unwindingCrossedNative {
+								return InterpretRuntimeError, vm.currentException
+							}
+							goto reloadFrame
+						}
+						registers[destReg] = v
 					}
 				case TypeString:
 					key := AsString(indexVal)
@@ -7008,8 +7023,20 @@ startExecution:
 					default:
 						// Try parsing as array index
 						if idx, ok := tryParseArrayIndex(key); ok {
-							// Use Get() which checks args array and namedProps
-							registers[destReg] = args.Get(idx)
+							v, err := vm.argumentsGet(args, strconv.Itoa(idx))
+							if err != nil {
+								frame.ip = ip
+								if excErr, ok := err.(ExceptionError); ok {
+									vm.throwException(excErr.GetExceptionValue())
+								} else {
+									vm.ThrowTypeError(err.Error())
+								}
+								if vm.frameCount == 0 || vm.unwindingCrossedNative {
+									return InterpretRuntimeError, vm.currentException
+								}
+								goto reloadFrame
+							}
+							registers[destReg] = v
 						} else {
 							// Delegate to Array.prototype for other string properties
 							if vm.ArrayPrototype.Type() == TypeObject {
@@ -7718,16 +7745,21 @@ startExecution:
 						status := vm.runtimeError("Arguments index cannot be negative, got %d", idx)
 						return status, Undefined
 					}
-					// For mapped arguments, write directly to the register
-					if idx < argObj.numMapped && argObj.mappedRegs != nil {
-						argObj.mappedRegs[idx] = valueVal
-					} else if idx < len(argObj.args) {
-						// Within original bounds - update the args array
-						argObj.args[idx] = valueVal
-					} else {
-						// Beyond original length - store as named property (DO NOT extend length)
-						// Per ECMAScript, arguments objects have fixed length based on actual arguments
-						argObj.SetNamedProp(strconv.Itoa(idx), valueVal)
+					// Goes through argumentsSet (arguments_props.go) so a
+					// defineProperty-installed accessor, non-writable
+					// rejection, or write-through-while-mapped is respected
+					// instead of always writing the raw slot.
+					if err := vm.argumentsSet(argObj, strconv.Itoa(idx), valueVal, false); err != nil {
+						frame.ip = ip
+						if excErr, ok := err.(ExceptionError); ok {
+							vm.throwException(excErr.GetExceptionValue())
+						} else {
+							vm.ThrowTypeError(err.Error())
+						}
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
+							return InterpretRuntimeError, vm.currentException
+						}
+						goto reloadFrame
 					}
 				} else if indexVal.Type() == TypeSymbol {
 					// Symbol key access on arguments object
@@ -7752,16 +7784,18 @@ startExecution:
 						argObj.SetNamedProp("length", valueVal)
 					default:
 						// Check for numeric string index
-						if idx, err := strconv.Atoi(key); err == nil && idx >= 0 {
-							// For mapped arguments, write directly to the register
-							if idx < argObj.numMapped && argObj.mappedRegs != nil {
-								argObj.mappedRegs[idx] = valueVal
-							} else if idx < len(argObj.args) {
-								// Within original bounds - update the args array
-								argObj.args[idx] = valueVal
-							} else {
-								// Beyond original length - store as named property (DO NOT extend length)
-								argObj.SetNamedProp(key, valueVal)
+						if _, isIndex := ParseArgumentsIndex(key); isIndex {
+							if err := vm.argumentsSet(argObj, key, valueVal, false); err != nil {
+								frame.ip = ip
+								if excErr, ok := err.(ExceptionError); ok {
+									vm.throwException(excErr.GetExceptionValue())
+								} else {
+									vm.ThrowTypeError(err.Error())
+								}
+								if vm.frameCount == 0 || vm.unwindingCrossedNative {
+									return InterpretRuntimeError, Undefined
+								}
+								goto reloadFrame
 							}
 						} else {
 							// Store in overflow named properties
@@ -12843,11 +12877,18 @@ startExecution:
 					keys[i] = strconv.Itoa(i)
 				}
 			case TypeArguments:
-				// Arguments objects enumerate their indices as strings
+				// Arguments objects enumerate their indices as strings, skipping
+				// any made non-enumerable (or deleted) via Object.defineProperty/
+				// delete - see arguments_props.go. Consulting ArgumentsOwnProperty
+				// per index (rather than assuming the CreateMappedArgumentsObject
+				// default of enumerable:true) is what verifyProperty's for-in-based
+				// isEnumerable() check in propertyHelper.js relies on.
 				argsObj := objValue.AsArguments()
-				keys = make([]string, argsObj.length)
 				for i := 0; i < argsObj.length; i++ {
-					keys[i] = strconv.Itoa(i)
+					key := strconv.Itoa(i)
+					if own := argsObj.ArgumentsOwnProperty(key); own.Exists && own.Enumerable {
+						keys = append(keys, key)
+					}
 				}
 			case TypeFunction:
 				// Enumerate own enumerable properties on the function's Properties object
@@ -14668,7 +14709,50 @@ startExecution:
 			}
 
 			var success bool
-			if obj.IsObject() {
+			if obj.Type() == TypeArguments {
+				// See arguments_props.go: [[Delete]] fails (returns false)
+				// for a non-configurable own property instead of always
+				// succeeding, and severs a still-mapped index's live
+				// parameter binding on a successful delete.
+				keyStr := key.ToString()
+				if key.Type() == TypeSymbol {
+					// Symbol-keyed properties on arguments (e.g. Symbol.iterator)
+					// are always configurable per spec - actually remove it so a
+					// following hasOwnProperty check (propertyHelper.js's
+					// isConfigurable) sees it gone, not just report success.
+					obj.AsArguments().DeleteSymbolProp(key.AsSymbolObject())
+					success = true
+				} else {
+					success = obj.AsArguments().argumentsDelete(keyStr)
+				}
+				if !success && function.Chunk.IsStrict {
+					frame.ip = ip
+					vm.ThrowTypeError("Cannot delete property '" + keyStr + "' of [object Arguments]")
+					if !vm.unwinding {
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					if vm.unwindingCrossedNative || vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
+				registers[destReg] = BooleanValue(success)
+				continue
+			} else if obj.Type() == TypeObject {
 				if po := obj.AsPlainObject(); po != nil {
 					if key.Type() == TypeSymbol {
 						// Check if property is non-configurable
@@ -14788,16 +14872,24 @@ startExecution:
 							}
 						}
 					}
-				} else if d := obj.AsDictObject(); d != nil {
-					if key.Type() == TypeSymbol {
-						success = false
-					} else {
-						success = d.DeleteOwn(key.ToString())
-					}
-				} else if a := obj.AsArray(); a != nil {
-					// Not supporting element deletion yet
-					success = false
 				}
+			} else if obj.Type() == TypeDictObject {
+				// Note: this branch (and the TypeArray one below) used to be
+				// nested inside the TypeObject case above via `obj.AsPlainObject()`
+				// falling through to an `else if` - but AsPlainObject() panics
+				// for any non-TypeObject value instead of returning nil, so
+				// they were unreachable dead code and `delete dictObj[computed]`/
+				// `delete arr[computed]` panicked instead. Promoted to their own
+				// top-level branches, guarded by Type() like every other case
+				// here, so they're actually reached instead of panicking.
+				if key.Type() == TypeSymbol {
+					success = false
+				} else {
+					success = obj.AsDictObject().DeleteOwn(key.ToString())
+				}
+			} else if obj.Type() == TypeArray {
+				// Not supporting element deletion yet
+				success = false
 			} else if obj.Type() == TypeString {
 				// String primitives: indices within length are non-configurable
 				// indices beyond length don't exist, so delete returns true

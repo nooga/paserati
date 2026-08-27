@@ -219,6 +219,40 @@ type ArgumentsObject struct {
 	namedProps  map[string]Value        // Overflow storage for arbitrary named properties
 	mappedRegs  []Value                 // Shared slice into frame registers for mapped arguments (sloppy mode)
 	numMapped   int                     // Number of mapped parameters (0 = unmapped)
+
+	// argDescs/deletedProps back the arguments exotic object's own property
+	// descriptors (ES 10.4.4) once anything has touched them via
+	// Object.defineProperty or delete - see arguments_props.go. Absent from
+	// argDescs (and not in deletedProps) means "use the
+	// CreateMappedArgumentsObject default for this key": a data property
+	// {writable:true, enumerable:true, configurable:true} for numeric
+	// indices below the original argument count, live-linked to the
+	// parameter register when index < numMapped.
+	argDescs     map[string]*ArgDescriptor
+	deletedProps map[string]bool
+}
+
+// ArgDescriptor overrides an arguments object's default per-key attributes
+// once Object.defineProperty (or an equivalent internal operation) has
+// touched that key. See arguments_props.go for how these are resolved,
+// applied, and kept in sync with the live parameter binding.
+type ArgDescriptor struct {
+	IsAccessor bool
+	Value      Value // data value; authoritative only once Unmapped (or key was never a live-mapped index)
+	Getter     Value
+	Setter     Value
+	HasGetter  bool
+	HasSetter  bool
+
+	Writable     bool // meaningful only when !IsAccessor
+	Enumerable   bool
+	Configurable bool
+
+	// Unmapped is set once ES 10.4.4.7 [[DefineOwnProperty]] step 6 has
+	// severed this index's live binding to the parameter register (by
+	// setting writable:false or by converting to an accessor). Only
+	// meaningful for numeric-index keys.
+	Unmapped bool
 }
 
 // GeneratorState represents the execution state of a generator
@@ -1058,6 +1092,13 @@ func (v Value) AsArguments() *ArgumentsObject {
 		panic("value is not an arguments object")
 	}
 	return (*ArgumentsObject)(v.obj)
+}
+
+// NewValueFromArguments wraps an existing *ArgumentsObject back into a
+// Value, e.g. to use as the `this` binding when calling an accessor getter/
+// setter defined on it via Object.defineProperty.
+func NewValueFromArguments(a *ArgumentsObject) Value {
+	return Value{typ: TypeArguments, obj: unsafe.Pointer(a)}
 }
 
 func (v Value) AsGenerator() *GeneratorObject {
@@ -2654,6 +2695,17 @@ func (a *ArgumentsObject) HasOwnSymbolProp(sym *SymbolObject) bool {
 	}
 	_, ok := a.symbolProps[sym]
 	return ok
+}
+
+// DeleteSymbolProp removes a symbol-keyed property (e.g. Symbol.iterator,
+// which is configurable per spec) and reports whether it was present.
+func (a *ArgumentsObject) DeleteSymbolProp(sym *SymbolObject) bool {
+	if a.symbolProps == nil {
+		return false
+	}
+	_, existed := a.symbolProps[sym]
+	delete(a.symbolProps, sym)
+	return existed
 }
 
 // SetCallee sets the callee property on the arguments object

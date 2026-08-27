@@ -911,14 +911,13 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 				}
 				return args.Callee(), nil
 			}
-			// Check for numeric index access. Bounds-check via Get() itself
-			// (which checks the live args slice, then namedProps) rather
-			// than args.Length() here - Length() is the *original* argument
-			// count and doesn't grow when SetIndexed() extends the backing
-			// slice past it (e.g. after `arguments[10] = x` or a generic
-			// Array.prototype method writing past the end via .call()).
-			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 {
-				return args.Get(idx), nil
+			// Check for numeric index access. Goes through argumentsGet (see
+			// arguments_props.go) rather than the raw Get()/mappedRegs fast
+			// path so a defineProperty-installed accessor or an explicit
+			// deletion is respected instead of always reading the live
+			// value straight through.
+			if _, isIndex := ParseArgumentsIndex(propName); isIndex {
+				return vm.argumentsGet(args, propName)
 			}
 			// Check for named properties (like value, writable, get, set, etc.)
 			if v, ok := args.GetNamedProp(propName); ok {
@@ -1071,11 +1070,13 @@ func (vm *VM) SetProperty(obj Value, propName string, value Value) error {
 		case "length":
 			args.SetNamedProp("length", value)
 		default:
-			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 {
-				args.SetIndexed(idx, value)
-			} else {
-				args.SetNamedProp(propName, value)
+			if _, isIndex := ParseArgumentsIndex(propName); isIndex {
+				// Non-strict: rejected writes (non-writable, accessor with
+				// no setter) silently no-op rather than erroring, matching
+				// this function's other cases.
+				return vm.argumentsSet(args, propName, value, false)
 			}
+			args.SetNamedProp(propName, value)
 		}
 		return nil
 
