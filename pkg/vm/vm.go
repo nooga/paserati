@@ -3918,7 +3918,7 @@ startExecution:
 					fmt.Printf("[DEBUG vm.go] OpCall: Exception thrown but not handled, unwinding=%v, frameCount=%d, crossedNative=%v\n", vm.unwinding, vm.frameCount, vm.unwindingCrossedNative)
 				}
 				// If we hit an isDirectCall boundary, return to let native code handle it
-				if vm.unwindingCrossedNative {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					if debugCalls {
 						fmt.Printf("[DEBUG vm.go] OpCall: Returning InterpretRuntimeError due to crossedNative\n")
 					}
@@ -9909,7 +9909,7 @@ startExecution:
 					fmt.Printf("[DEBUG vm.go] OpCallMethod: Exception thrown during call, unwinding=%v, crossedNative=%v\n", vm.unwinding, vm.unwindingCrossedNative)
 				}
 				// If we hit an isDirectCall boundary, return to let native code handle it
-				if vm.unwindingCrossedNative {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
 					return InterpretRuntimeError, vm.currentException
 				}
 				// Reload frame state and continue unwinding
