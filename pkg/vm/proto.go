@@ -10,12 +10,16 @@ package vm
 // helpers here give those slow/uncommon paths a correct, non-panicking way to
 // step through a mixed-kind chain.
 
-// prototypeOf returns v's [[Prototype]], honoring per-instance overrides set
+// PrototypeOf returns v's [[Prototype]], honoring per-instance overrides set
 // by subclassing a native constructor (see subclass.go) and otherwise falling
 // back to the realm's intrinsic prototype for v's kind. Returns Undefined for
 // values with no [[Prototype]] concept (primitive numbers aside from their
 // boxed prototype, null, undefined) — callers should treat that as "chain
 // exhausted".
+func (vm *VM) PrototypeOf(v Value) Value {
+	return vm.prototypeOf(v)
+}
+
 func (vm *VM) prototypeOf(v Value) Value {
 	if p, ok := vm.InstancePrototypeOverride(v); ok {
 		return p
@@ -108,9 +112,13 @@ func (vm *VM) prototypeOf(v Value) Value {
 	}
 }
 
-// getOwnGeneric looks up an own (non-inherited) property by name on any
+// GetOwnGeneric looks up an own (non-inherited) property by name on any
 // object-kind value. It does not consult accessors beyond what the
 // underlying kind's GetOwn already reports as a plain value.
+func (vm *VM) GetOwnGeneric(v Value, propName string) (Value, bool) {
+	return vm.getOwnGeneric(v, propName)
+}
+
 func (vm *VM) getOwnGeneric(v Value, propName string) (Value, bool) {
 	switch v.Type() {
 	case TypeObject:
@@ -163,11 +171,15 @@ func (vm *VM) getOwnGeneric(v Value, propName string) (Value, bool) {
 	}
 }
 
-// getInheritedGeneric walks start's own properties and then its full
+// GetInheritedGeneric walks start's own properties and then its full
 // [[Prototype]] chain (of any object kind) looking for propName. It is an
 // uncached, correctness-first fallback for the uncommon case where a
 // prototype chain contains something other than a PlainObject/DictObject
 // (e.g. `Foo.prototype = new Array(...)` or `Foo.prototype = someFunction`).
+func (vm *VM) GetInheritedGeneric(start Value, propName string) (Value, bool) {
+	return vm.getInheritedGeneric(start, propName)
+}
+
 func (vm *VM) getInheritedGeneric(start Value, propName string) (Value, bool) {
 	current := start
 	for i := 0; i < 200 && current.Type() != TypeNull && current.Type() != TypeUndefined; i++ {
