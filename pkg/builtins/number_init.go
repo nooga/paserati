@@ -230,7 +230,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisNum := vmInstance.GetThis()
 
 		// Extract primitive value from Number wrapper object
-		if thisNum.IsObject() {
+		if thisNum.Type() == vm.TypeObject {
 			obj := thisNum.AsPlainObject()
 			if primVal, found := obj.GetOwn("[[PrimitiveValue]]"); found && primVal != vm.Undefined {
 				thisNum = primVal
@@ -326,7 +326,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// If this is a Number wrapper object, extract [[PrimitiveValue]]
 		// IMPORTANT: Must verify the [[PrimitiveValue]] is actually a Number type
 		// (String objects also have [[PrimitiveValue]] but with string type)
-		if thisNum.IsObject() {
+		if thisNum.Type() == vm.TypeObject {
 			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
 				// Verify it's a Number primitive
 				if primitiveVal.Type() == vm.TypeFloatNumber || primitiveVal.Type() == vm.TypeIntegerNumber {
@@ -343,7 +343,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisNum := vmInstance.GetThis()
 
 		// Extract primitive value from wrapper if needed
-		if thisNum.IsObject() {
+		if thisNum.Type() == vm.TypeObject {
 			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
 				thisNum = primitiveVal
 			}
@@ -409,7 +409,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisNum := vmInstance.GetThis()
 
 		// Extract primitive value from wrapper if needed
-		if thisNum.IsObject() {
+		if thisNum.Type() == vm.TypeObject {
 			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
 				thisNum = primitiveVal
 			}
@@ -498,7 +498,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		thisNum := vmInstance.GetThis()
 
 		// Extract primitive value from wrapper if needed
-		if thisNum.IsObject() {
+		if thisNum.Type() == vm.TypeObject {
 			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
 				thisNum = primitiveVal
 			}
@@ -588,7 +588,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 			arg := args[0]
 
 			// Handle boxed primitives by extracting primitive value
-			if arg.IsObject() {
+			if arg.Type() == vm.TypeObject {
 				obj := arg.AsPlainObject()
 				if primVal, found := obj.GetOwn("[[PrimitiveValue]]"); found && primVal != vm.Undefined {
 					arg = primVal

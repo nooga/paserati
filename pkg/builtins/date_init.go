@@ -845,10 +845,10 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	dateProto.SetOwnNonEnumerable("setYear", vm.NewNativeFunction(1, false, "setYear", func(args []vm.Value) (vm.Value, error) {
 		thisDate := vmInstance.GetThis()
-		dateObj := thisDate.AsPlainObject()
-		if dateObj == nil {
+		if thisDate.Type() != vm.TypeObject {
 			return vm.Undefined, vmInstance.NewTypeError("setYear called on non-Date object")
 		}
+		dateObj := thisDate.AsPlainObject()
 
 		// Check if it's a Date object by verifying it has __timestamp__ property
 		if _, exists := dateObj.GetOwn("__timestamp__"); !exists {

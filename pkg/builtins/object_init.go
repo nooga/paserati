@@ -804,47 +804,37 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, nil
 		}
 		propName := keyVal.ToString()
-		// Walk up the prototype chain looking for accessor
+		// Walk up the prototype chain looking for an accessor. Only
+		// PlainObject/Array carry accessors in this VM's model; other kinds
+		// (Function, DictObject, ...) can still hold a matching data property
+		// (returning undefined per spec) or sit in the middle of the chain,
+		// so they're still visited via vmInstance.PrototypeOf, just without
+		// an accessor check.
 		current := thisValue
-		for {
-			var po *vm.PlainObject
+		for depth := 0; depth < 200 && current.Type() != vm.TypeNull && current.Type() != vm.TypeUndefined; depth++ {
 			switch current.Type() {
 			case vm.TypeObject:
-				po = current.AsPlainObject()
-			case vm.TypeArray:
-				arr := current.AsArray()
-				// Check if array has accessor property
-				if getter, _, _, _, isAccessor := arr.GetOwnAccessor(propName); isAccessor {
-					return getter, nil
-				}
-				// Check if array has data property (if so, return undefined)
-				if _, hasData := arr.GetOwn(propName); hasData {
-					return vm.Undefined, nil
-				}
-				// Move to array prototype
-				current = vmInstance.ArrayPrototype
-				continue
-			default:
-				po = current.AsPlainObject()
-			}
-			if po != nil {
-				// Check if it's an accessor property
+				po := current.AsPlainObject()
 				if getter, _, _, _, isAccessor := po.GetOwnAccessor(propName); isAccessor {
 					return getter, nil
 				}
-				// Check if it's a data property (if so, return undefined per spec)
 				if _, hasData := po.GetOwn(propName); hasData {
 					return vm.Undefined, nil
 				}
-				// Move up prototype chain
-				proto := po.GetPrototype()
-				if proto.Type() == vm.TypeNull || proto.Type() == vm.TypeUndefined || proto.Type() == 0 {
-					break
+			case vm.TypeArray:
+				arr := current.AsArray()
+				if getter, _, _, _, isAccessor := arr.GetOwnAccessor(propName); isAccessor {
+					return getter, nil
 				}
-				current = proto
-			} else {
-				break
+				if _, hasData := arr.GetOwn(propName); hasData {
+					return vm.Undefined, nil
+				}
+			default:
+				if _, hasData := vmInstance.GetOwnGeneric(current, propName); hasData {
+					return vm.Undefined, nil
+				}
 			}
+			current = vmInstance.PrototypeOf(current)
 		}
 		return vm.Undefined, nil
 	})
@@ -868,47 +858,37 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, nil
 		}
 		propName := keyVal.ToString()
-		// Walk up the prototype chain looking for accessor
+		// Walk up the prototype chain looking for an accessor. Only
+		// PlainObject/Array carry accessors in this VM's model; other kinds
+		// (Function, DictObject, ...) can still hold a matching data property
+		// (returning undefined per spec) or sit in the middle of the chain,
+		// so they're still visited via vmInstance.PrototypeOf, just without
+		// an accessor check.
 		current := thisValue
-		for {
-			var po *vm.PlainObject
+		for depth := 0; depth < 200 && current.Type() != vm.TypeNull && current.Type() != vm.TypeUndefined; depth++ {
 			switch current.Type() {
 			case vm.TypeObject:
-				po = current.AsPlainObject()
-			case vm.TypeArray:
-				arr := current.AsArray()
-				// Check if array has accessor property
-				if _, setter, _, _, isAccessor := arr.GetOwnAccessor(propName); isAccessor {
-					return setter, nil
-				}
-				// Check if array has data property (if so, return undefined)
-				if _, hasData := arr.GetOwn(propName); hasData {
-					return vm.Undefined, nil
-				}
-				// Move to array prototype
-				current = vmInstance.ArrayPrototype
-				continue
-			default:
-				po = current.AsPlainObject()
-			}
-			if po != nil {
-				// Check if it's an accessor property
+				po := current.AsPlainObject()
 				if _, setter, _, _, isAccessor := po.GetOwnAccessor(propName); isAccessor {
 					return setter, nil
 				}
-				// Check if it's a data property (if so, return undefined per spec)
 				if _, hasData := po.GetOwn(propName); hasData {
 					return vm.Undefined, nil
 				}
-				// Move up prototype chain
-				proto := po.GetPrototype()
-				if proto.Type() == vm.TypeNull || proto.Type() == vm.TypeUndefined || proto.Type() == 0 {
-					break
+			case vm.TypeArray:
+				arr := current.AsArray()
+				if _, setter, _, _, isAccessor := arr.GetOwnAccessor(propName); isAccessor {
+					return setter, nil
 				}
-				current = proto
-			} else {
-				break
+				if _, hasData := arr.GetOwn(propName); hasData {
+					return vm.Undefined, nil
+				}
+			default:
+				if _, hasData := vmInstance.GetOwnGeneric(current, propName); hasData {
+					return vm.Undefined, nil
+				}
 			}
+			current = vmInstance.PrototypeOf(current)
 		}
 		return vm.Undefined, nil
 	})

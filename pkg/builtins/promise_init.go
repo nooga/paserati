@@ -59,8 +59,8 @@ func (p *PromiseInitializer) InitTypes(ctx *TypeContext) error {
 			types.Any,               // Promise<any>
 		)).
 		WithProperty("try", types.NewVariadicFunction(
-			[]types.Type{types.Any}, // callbackfn
-			types.Any,               // Promise<any>
+			[]types.Type{types.Any},                  // callbackfn
+			types.Any,                                // Promise<any>
 			&types.ArrayType{ElementType: types.Any}, // ...args
 		))
 
@@ -72,6 +72,36 @@ func (p *PromiseInitializer) InitTypes(ctx *TypeContext) error {
 	promiseCtorType = promiseCtorType.WithSimpleCallSignature([]types.Type{executorType}, promiseProtoType)
 
 	return ctx.DefineGlobal("Promise", promiseCtorType)
+}
+
+// promiseCapabilityGuard returns a per-executor closure implementing the
+// bounds-safe argument extraction and "already called" TypeError guard from
+// the spec's GetCapabilitiesExecutor Functions (called by NewPromiseCapability):
+// resolve/reject default to undefined when the caller invokes the executor
+// with fewer than 2 arguments (a hand-rolled "constructor" passed to
+// Promise.all/race/etc. via .call() is free to do this), and a second call
+// throws once either slot already holds a non-undefined value. Call once per
+// executor closure - the guard must be called at the top of the native body.
+func promiseCapabilityGuard(vmInstance *vm.VM) func(execArgs []vm.Value) (vm.Value, vm.Value, error) {
+	capResolve, capReject := vm.Undefined, vm.Undefined
+	return func(execArgs []vm.Value) (vm.Value, vm.Value, error) {
+		resolve := vm.Undefined
+		if len(execArgs) > 0 {
+			resolve = execArgs[0]
+		}
+		reject := vm.Undefined
+		if len(execArgs) > 1 {
+			reject = execArgs[1]
+		}
+		if capResolve.Type() != vm.TypeUndefined {
+			return vm.Undefined, vm.Undefined, vmInstance.NewTypeError("Promise capability's resolve function was already set")
+		}
+		if capReject.Type() != vm.TypeUndefined {
+			return vm.Undefined, vm.Undefined, vmInstance.NewTypeError("Promise capability's reject function was already set")
+		}
+		capResolve, capReject = resolve, reject
+		return capResolve, capReject, nil
+	}
 }
 
 func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
@@ -300,9 +330,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Create the result promise via executor
 		// Per spec: NewPromiseCapability(C) first, then GetPromiseResolve(C),
 		// then IfAbruptRejectPromise if it fails
+		capabilityGuard := promiseCapabilityGuard(vmInstance)
 		executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
-			resolve := execArgs[0]
-			reject := execArgs[1]
+			resolve, reject, guardErr := capabilityGuard(execArgs)
+			if guardErr != nil {
+				return vm.Undefined, guardErr
+			}
 
 			if length == 0 {
 				_, _ = vmInstance.Call(resolve, vm.Undefined, []vm.Value{arr})
@@ -445,9 +478,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		length := arrayObj.Length()
 
 		// Create a new promise that settles when the first promise settles
+		capabilityGuard := promiseCapabilityGuard(vmInstance)
 		executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
-			resolve := execArgs[0]
-			reject := execArgs[1]
+			resolve, reject, guardErr := capabilityGuard(execArgs)
+			if guardErr != nil {
+				return vm.Undefined, guardErr
+			}
 
 			if length == 0 {
 				// Empty array - promise never settles (per ECMAScript spec)
@@ -569,9 +605,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Create a new promise that resolves with the first fulfilled promise
+		capabilityGuard := promiseCapabilityGuard(vmInstance)
 		executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
-			resolve := execArgs[0]
-			reject := execArgs[1]
+			resolve, reject, guardErr := capabilityGuard(execArgs)
+			if guardErr != nil {
+				return vm.Undefined, guardErr
+			}
 
 			// GetPromiseResolve(C) - per spec, if this fails, reject the promise
 			promiseResolve, resolveErr := getPromiseResolve(constructor)
@@ -711,9 +750,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Create a new promise that resolves when all promises settle
+		capabilityGuard := promiseCapabilityGuard(vmInstance)
 		executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
-			resolve := execArgs[0]
-			reject := execArgs[1]
+			resolve, reject, guardErr := capabilityGuard(execArgs)
+			if guardErr != nil {
+				return vm.Undefined, guardErr
+			}
 
 			// GetPromiseResolve(C) - per spec, if this fails, reject the promise
 			promiseResolve, resolveErr := getPromiseResolve(constructor)
@@ -857,9 +899,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Create a new promise via executor
+		capabilityGuard := promiseCapabilityGuard(vmInstance)
 		executor := vm.NewNativeFunction(2, false, "executor", func(execArgs []vm.Value) (vm.Value, error) {
-			resolve := execArgs[0]
-			reject := execArgs[1]
+			resolve, reject, guardErr := capabilityGuard(execArgs)
+			if guardErr != nil {
+				return vm.Undefined, guardErr
+			}
 
 			// Call the callback synchronously
 			result, err := vmInstance.Call(callbackfn, vm.Undefined, callArgs)

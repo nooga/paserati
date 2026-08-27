@@ -996,15 +996,17 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			}
 		}
 
-		// Now do bounds adjustments
+		// Now do bounds adjustments. Per spec (23.2.3.6), target/start/end are
+		// each independently clamped to [0, length] - negative values count
+		// back from length (floored at 0), non-negative values are capped at
+		// length (a huge or out-of-range argument must not escape the slice).
 		if target < 0 {
 			target = length + target
 			if target < 0 {
 				target = 0
 			}
-		}
-		if target >= length {
-			return thisArray, nil
+		} else if target > length {
+			target = length
 		}
 
 		if start < 0 {
@@ -1012,17 +1014,25 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			if start < 0 {
 				start = 0
 			}
+		} else if start > length {
+			start = length
 		}
+
 		if end < 0 {
 			end = length + end
-		}
-		if end > length {
+			if end < 0 {
+				end = 0
+			}
+		} else if end > length {
 			end = length
 		}
 
 		count := end - start
 		if target+count > length {
 			count = length - target
+		}
+		if count < 0 {
+			count = 0
 		}
 
 		// Step 11.c: If count > 0 and buffer is detached, throw TypeError
