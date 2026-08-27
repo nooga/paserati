@@ -440,6 +440,7 @@ type StringLiteral struct {
 	BaseExpression              // Embed base for ComputedType
 	Token          *lexer.Token // The lexer.STRING token
 	Value          string
+	HasEscape      bool // True if the source literal contained an escape sequence or line continuation (see Directive Prologue detection, which must match raw source text)
 }
 
 func (s *StringLiteral) expressionNode()      {}

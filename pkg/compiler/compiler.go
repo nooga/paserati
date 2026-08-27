@@ -851,8 +851,10 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 					// ExpressionStatement but not a string literal - directive prologue ends
 					break
 				}
-				// This is a directive - check if it's "use strict"
-				if strLit.Value == "use strict" {
+				// This is a directive - check if it's "use strict". Directive
+				// Prologue matching is on raw source text, so a literal with an
+				// escape sequence or line continuation must not count.
+				if strLit.Value == "use strict" && !strLit.HasEscape {
 					c.chunk.IsStrict = true
 					debugPrintf("[Compile] Detected 'use strict' directive - enabling strict mode\n")
 					break

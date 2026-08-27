@@ -1766,8 +1766,10 @@ func hasStrictDirective(body *parser.BlockStatement) bool {
 			// ExpressionStatement but not a string literal - directive prologue ends
 			break
 		}
-		// This is a directive - check if it's "use strict"
-		if strLit.Value == "use strict" {
+		// This is a directive - check if it's "use strict". Directive Prologue
+		// matching is on raw source text, so a literal containing an escape
+		// sequence or line continuation (e.g. 'use str\ict') must not count.
+		if strLit.Value == "use strict" && !strLit.HasEscape {
 			return true
 		}
 		// Otherwise it's another directive (like "another directive"), continue checking
