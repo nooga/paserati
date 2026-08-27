@@ -38,6 +38,15 @@ func (p *Parser) startsUsingDeclaration() bool {
 	return p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)
 }
 
+// isUsingOfDisambiguator reports whether a token following `using of` (or
+// `await using of`) in a for-loop head proves that `of` is being used as a
+// binding name, not the for-of separator: a for-of iterable expression can
+// never start with `=` or `:` (a TS type annotation on the binding), so
+// either one unambiguously means this is a using-declaration.
+func isUsingOfDisambiguator(t lexer.TokenType) bool {
+	return t == lexer.ASSIGN || t == lexer.COLON
+}
+
 // startsUsingDeclarationForLoop is startsUsingDeclaration's for-loop-head
 // counterpart: a for-of/for-in head unambiguously expects a binding target,
 // so `for (using {} of xs)` does commit to a using declaration even though
@@ -52,7 +61,12 @@ func (p *Parser) startsUsingDeclarationForLoop() bool {
 		return false
 	}
 	if p.peekTokenIs(lexer.OF) {
-		return false
+		// `using of` is ambiguous between a for-of loop over a variable named
+		// `using` (`for (using of xs)`) and a using-declaration whose binding
+		// name is literally `of` in a classic for-statement
+		// (`for (using of = e;;)`) - `of` isn't restricted as a for-loop
+		// binding name outside the for-of/for-in head itself.
+		return isUsingOfDisambiguator(p.lookAhead(1).Type)
 	}
 	return p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type) ||
 		p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE)
@@ -64,15 +78,19 @@ func (p *Parser) startsUsingDeclarationForLoop() bool {
 //
 // Requires `using` followed by a binding name, so `for (using of xs)` (a for-of
 // over a variable named `using`) and `for (await foo; ...)` (an await
-// expression) are both correctly left alone.
+// expression) are both correctly left alone - except `using of =`, see
+// startsUsingDeclarationForLoop.
 func (p *Parser) startsUsingDeclarationAt(at int) bool {
 	tok := p.lookAhead(at)
 	if tok.Type != lexer.IDENT || tok.Literal != "using" {
 		return false
 	}
 	name := p.lookAhead(at + 1)
-	if name.Line != tok.Line || name.Type == lexer.OF {
+	if name.Line != tok.Line {
 		return false
+	}
+	if name.Type == lexer.OF {
+		return isUsingOfDisambiguator(p.lookAhead(at + 2).Type)
 	}
 	return name.Type == lexer.IDENT || p.isKeywordThatCanBeIdentifier(name.Type) ||
 		name.Type == lexer.LBRACKET || name.Type == lexer.LBRACE
@@ -89,8 +107,12 @@ func (p *Parser) startsAwaitUsingDeclaration() bool {
 		return false
 	}
 	// Look past `using` for a binding name; `of` would make this a for-of over
-	// a variable named `using`.
-	return !p.peekTokenIs2(lexer.OF)
+	// a variable named `using` - unless followed by `=`/`:`, see
+	// startsUsingDeclarationForLoop.
+	if p.peekTokenIs2(lexer.OF) {
+		return isUsingOfDisambiguator(p.lookAhead(2).Type)
+	}
+	return true
 }
 
 // parseUsingStatement parses `using x = expr, y = expr;`. Current token is the
