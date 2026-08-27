@@ -576,6 +576,17 @@ func (c *Compiler) emitSetPrivateField(obj, val Register, nameConstIdx uint16, l
 	c.emitUint16(nameConstIdx)
 }
 
+// emitDefinePrivateField emits OpDefinePrivateField ObjReg, ValueReg, NameConstIdx(Uint16)
+// For ECMAScript private field initialization (PrivateFieldAdd): throws TypeError if
+// the private field already exists on the object (e.g. double construction of the
+// same instance via a base constructor that returns a pre-existing object).
+func (c *Compiler) emitDefinePrivateField(obj, val Register, nameConstIdx uint16, line int) {
+	c.emitOpCode(vm.OpDefinePrivateField, line)
+	c.emitByte(byte(obj))
+	c.emitByte(byte(val))
+	c.emitUint16(nameConstIdx)
+}
+
 // emitSetPrivateMethod emits OpSetPrivateMethod ObjReg, ValueReg, NameConstIdx(Uint16)
 // For ECMAScript private method definition: obj.#method = func (not writable)
 func (c *Compiler) emitSetPrivateMethod(obj, val Register, nameConstIdx uint16, line int) {

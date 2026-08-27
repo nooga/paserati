@@ -1226,6 +1226,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				debugPrintf("// DEBUG Assign Store Private Field: Emitting SetPrivateField R%d[%d] = R%d\n", memberInfo.objectReg, memberInfo.nameConstIdx, hint)
 				if memberInfo.isPrivateSetter {
 					c.emitCallPrivateSetter(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
+				} else if node.IsFieldInitializer {
+					// Class field initializer: this is the (only) definition of the
+					// private field, not a later assignment - use PrivateFieldAdd
+					// semantics so re-running it on an already-initialized object throws.
+					c.emitDefinePrivateField(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
 				} else {
 					c.emitSetPrivateField(memberInfo.objectReg, hint, memberInfo.nameConstIdx, line)
 				}
@@ -1720,11 +1725,28 @@ func (c *Compiler) compileMemberExpressionAssignment(memberExpr *parser.MemberEx
 
 	// MemberExpression is always non-computed (obj.prop), not obj[prop]
 	// For computed access, the parser creates an IndexExpression
-	propName, ok := memberExpr.Property.(*parser.Identifier)
-	if !ok {
+	propName := c.extractPropertyName(memberExpr.Property)
+	if len(propName) == 0 {
 		return NewCompileError(memberExpr, "member expression property must be an identifier")
 	}
-	propIdx := c.chunk.AddConstant(vm.String(propName.Value))
+
+	// Check for private field (starts with #) - this target is reached from
+	// destructuring assignment patterns (e.g. `[obj.#x] = arr`), which must
+	// honor the same private-field brand checks as plain assignment.
+	if propName[0] == '#' {
+		fieldName := propName[1:]
+		brandedKey := c.getPrivateFieldKey(fieldName)
+		nameConstIdx := c.chunk.AddConstant(vm.String(brandedKey))
+
+		if kind, _, ok := c.getPrivateMemberKind(fieldName); ok && (kind == PrivateMemberSetter || kind == PrivateMemberAccessor || kind == PrivateMemberGetter) {
+			c.emitCallPrivateSetter(objReg, valueReg, nameConstIdx, line)
+		} else {
+			c.emitSetPrivateField(objReg, valueReg, nameConstIdx, line)
+		}
+		return nil
+	}
+
+	propIdx := c.chunk.AddConstant(vm.String(propName))
 	c.emitSetProp(objReg, valueReg, propIdx, line)
 
 	return nil

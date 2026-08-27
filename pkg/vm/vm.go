@@ -9215,17 +9215,17 @@ startExecution:
 					return InterpretRuntimeError, Undefined
 				}
 			} else {
-				// Regular private data field - set it (this also handles initial field creation)
-				// ECMAScript spec PrivateFieldAdd: If O.[[Extensible]] is false, throw a TypeError
-				// This only applies when ADDING a new field, not when updating an existing one
-				if !obj.HasPrivateField(fieldName) && !obj.IsExtensible() {
-					// Extract display name without brand prefix for error message
+				// Regular private data field assignment (PrivateFieldSet):
+				// the field must already exist on this exact object - assignment
+				// never implicitly creates a private field. If it's missing, the
+				// object's class simply never declared this private name on it.
+				if !obj.HasPrivateField(fieldName) {
 					displayName := fieldName
 					if colonIdx := strings.Index(fieldName, ":"); colonIdx >= 0 {
 						displayName = fieldName[colonIdx+1:]
 					}
 					frame.ip = ip
-					vm.ThrowTypeError(fmt.Sprintf("Cannot add private field #%s to a non-extensible object", displayName))
+					vm.ThrowTypeError(fmt.Sprintf("Cannot write private member #%s to an object whose class did not declare it", displayName))
 					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
@@ -9240,6 +9240,96 @@ startExecution:
 				}
 				obj.SetPrivateField(fieldName, registers[valReg])
 			}
+
+		case OpDefinePrivateField:
+			// Private field initialization (PrivateFieldAdd): Rx.#field = Ry
+			// Used only for the initial definition of a private field (class field
+			// initializers). Throws TypeError if the field already exists on the
+			// object (e.g. a base constructor returned a pre-existing instance) or
+			// if the object is non-extensible.
+			objReg := code[ip]
+			valReg := code[ip+1]
+			nameConstIdxHi := code[ip+2]
+			nameConstIdxLo := code[ip+3]
+			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
+			ip += 4
+
+			if int(nameConstIdx) >= len(constants) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid constant index %d for private field name.", nameConstIdx)
+				return status, Undefined
+			}
+			nameVal := constants[nameConstIdx]
+			if !IsString(nameVal) {
+				frame.ip = ip
+				status := vm.runtimeError("Internal Error: Private field name constant %d is not a string.", nameConstIdx)
+				return status, Undefined
+			}
+			fieldName := AsString(nameVal)
+
+			objVal := registers[objReg]
+
+			var obj *PlainObject
+			if objVal.Type() == TypeObject {
+				obj = objVal.AsPlainObject()
+			} else if objVal.Type() == TypeFunction {
+				fn := objVal.AsFunction()
+				if fn.Properties == nil {
+					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+				}
+				obj = fn.Properties
+			} else if objVal.Type() == TypeClosure {
+				cl := objVal.AsClosure()
+				if cl.Properties == nil {
+					cl.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+				}
+				obj = cl.Properties
+			} else {
+				frame.ip = ip
+				status := vm.runtimeError("Cannot add private field '%s' of %s", fieldName, objVal.TypeName())
+				return status, Undefined
+			}
+
+			displayName := fieldName
+			if colonIdx := strings.Index(fieldName, ":"); colonIdx >= 0 {
+				displayName = fieldName[colonIdx+1:]
+			}
+
+			// PrivateFieldAdd: throw if the entry already exists on this object.
+			if obj.HasPrivateField(fieldName) || obj.IsPrivateMethod(fieldName) || obj.IsPrivateAccessor(fieldName) {
+				frame.ip = ip
+				vm.ThrowTypeError(fmt.Sprintf("Cannot add private member #%s, already exists on the object", displayName))
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
+			// PrivateFieldAdd: throw if the object is non-extensible.
+			if !obj.IsExtensible() {
+				frame.ip = ip
+				vm.ThrowTypeError(fmt.Sprintf("Cannot add private field #%s to a non-extensible object", displayName))
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
+			}
+
+			obj.SetPrivateField(fieldName, registers[valReg])
 
 		case OpCallPrivateSetter:
 			// Call a private setter - throws TypeError if the setter doesn't exist
@@ -9393,6 +9483,30 @@ startExecution:
 				frame.ip = ip
 				status := vm.runtimeError("Cannot set private method '%s' of %s", methodName, objVal.TypeName())
 				return status, Undefined
+			}
+
+			// ECMAScript spec PrivateMethodOrAccessorAdd: throw a TypeError if this
+			// object already has an entry for this private name (e.g. a base
+			// constructor returned a pre-existing instance, and construction runs
+			// a second time).
+			if obj.IsPrivateMethod(methodName) || obj.IsPrivateAccessor(methodName) || obj.HasPrivateField(methodName) {
+				displayName := methodName
+				if colonIdx := strings.Index(methodName, ":"); colonIdx >= 0 {
+					displayName = methodName[colonIdx+1:]
+				}
+				frame.ip = ip
+				vm.ThrowTypeError(fmt.Sprintf("Cannot add private member #%s, already exists on the object", displayName))
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
 			}
 
 			// ECMAScript spec PrivateFieldAdd: If O.[[Extensible]] is false, throw a TypeError
@@ -9549,6 +9663,28 @@ startExecution:
 				frame.ip = ip
 				status := vm.runtimeError("Cannot set private accessor '%s' on %s", fieldName, objVal.TypeName())
 				return status, Undefined
+			}
+
+			// ECMAScript spec PrivateMethodOrAccessorAdd: throw a TypeError if this
+			// object already has an entry for this private name.
+			if obj.IsPrivateMethod(fieldName) || obj.IsPrivateAccessor(fieldName) || obj.HasPrivateField(fieldName) {
+				displayName := fieldName
+				if colonIdx := strings.Index(fieldName, ":"); colonIdx >= 0 {
+					displayName = fieldName[colonIdx+1:]
+				}
+				frame.ip = ip
+				vm.ThrowTypeError(fmt.Sprintf("Cannot add private member #%s, already exists on the object", displayName))
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
 			}
 
 			// ECMAScript spec PrivateFieldAdd: If O.[[Extensible]] is false, throw a TypeError
