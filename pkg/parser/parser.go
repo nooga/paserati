@@ -11314,6 +11314,16 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 		// Named imports: { name1, name2 as alias, "string name" as alias, default as alias }
 		p.nextToken() // consume '{'
 
+		// Empty named import list: import {} from 'module' - valid per spec,
+		// equivalent to importing the module for its side effects only. Must
+		// return a non-nil (but empty) slice: the caller treats a nil return
+		// from this function as "parse failed" and aborts the whole import
+		// declaration, but `specs` here is nil (Go zero value, never
+		// appended to) rather than a deliberate failure signal.
+		if p.curToken.Type == lexer.RBRACE {
+			return []ImportSpecifier{}
+		}
+
 		for {
 			var imported *Identifier
 			var importedToken *lexer.Token
