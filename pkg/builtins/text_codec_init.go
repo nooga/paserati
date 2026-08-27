@@ -65,7 +65,8 @@ func (t *TextEncoderInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return inst, nil
 	})
 
-	if nf := ctor.AsNativeFunction(); nf != nil {
+	if ctor.Type() == vm.TypeNativeFunction {
+		nf := ctor.AsNativeFunction()
 		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
 		ctorProps := withProps.AsNativeFunctionWithProps()
 		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(encoderProto))
@@ -119,7 +120,8 @@ func (t *TextDecoderInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		input := args[0]
 		// Handle ArrayObject (Uint8Array-like)
-		if arrObj := input.AsArray(); arrObj != nil {
+		if input.Type() == vm.TypeArray {
+			arrObj := input.AsArray()
 			bytes := make([]byte, arrObj.Length())
 			for i := 0; i < arrObj.Length(); i++ {
 				val := arrObj.Get(i)
@@ -142,7 +144,8 @@ func (t *TextDecoderInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewValueFromPlainObject(inst), nil
 	})
 
-	if nf := ctor.AsNativeFunction(); nf != nil {
+	if ctor.Type() == vm.TypeNativeFunction {
+		nf := ctor.AsNativeFunction()
 		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
 		ctorProps := withProps.AsNativeFunctionWithProps()
 		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(decoderProto))

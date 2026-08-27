@@ -113,7 +113,8 @@ func getStringValueWithVM(vmInstance *vm.VM, val vm.Value) (string, error) {
 
 	// If it's an object, check for [[PrimitiveValue]] (String wrapper)
 	if val.IsObject() {
-		if plainObj := val.AsPlainObject(); plainObj != nil {
+		if val.Type() == vm.TypeObject {
+			plainObj := val.AsPlainObject()
 			if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
 				if primitiveVal.Type() == vm.TypeString {
 					return primitiveVal.ToString(), nil
@@ -154,7 +155,8 @@ func getStringValue(val vm.Value) string {
 
 	// If it's an object, check for [[PrimitiveValue]] (String wrapper)
 	if val.IsObject() {
-		if plainObj := val.AsPlainObject(); plainObj != nil {
+		if val.Type() == vm.TypeObject {
+			plainObj := val.AsPlainObject()
 			if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
 				if primitiveVal.Type() == vm.TypeString {
 					return primitiveVal.ToString()

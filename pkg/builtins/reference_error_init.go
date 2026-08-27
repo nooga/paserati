@@ -92,7 +92,8 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// If options is an Object and HasProperty(options, "cause") is true,
 		// install the cause property
 		if len(args) > 1 && args[1].IsObject() {
-			if optObj := args[1].AsPlainObject(); optObj != nil {
+			if args[1].Type() == vm.TypeObject {
+				optObj := args[1].AsPlainObject()
 				if cause, hasCause := optObj.Get("cause"); hasCause {
 					referenceErrorInstancePtr.SetOwnNonEnumerable("cause", cause)
 				}
@@ -103,7 +104,8 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Make it a proper constructor with prototype property
-	if ctorObj := referenceErrorConstructor.AsNativeFunction(); ctorObj != nil {
+	if referenceErrorConstructor.Type() == vm.TypeNativeFunction {
+		ctorObj := referenceErrorConstructor.AsNativeFunction()
 		// Convert to object with properties
 		ctorWithProps := vm.NewConstructorWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()

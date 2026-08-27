@@ -458,7 +458,8 @@ func NumericTypedArrayCtorBody(vmInstance *vm.VM, ek TypedArrayElementKind) func
 			}
 			return applyGPFCPrototype(vm.NewTypedArray(kind, sab, off, ln), proto), nil
 		}
-		if arr := arg.AsArray(); arr != nil {
+		if arg.Type() == vm.TypeArray {
+			arr := arg.AsArray()
 			proto, err := TypedArrayGPFC(vmInstance, protoName)
 			if err != nil {
 				return vm.Undefined, err
@@ -496,7 +497,8 @@ func TypedArrayFromArrayLike(ek TypedArrayElementKind, args []vm.Value) vm.Value
 		return vm.NewTypedArray(ek.Kind, 0, 0, 0)
 	}
 	source := args[0]
-	if sourceArray := source.AsArray(); sourceArray != nil {
+	if source.Type() == vm.TypeArray {
+		sourceArray := source.AsArray()
 		values := make([]vm.Value, sourceArray.Length())
 		for i := 0; i < sourceArray.Length(); i++ {
 			values[i] = ek.coerceElement(sourceArray.Get(i))

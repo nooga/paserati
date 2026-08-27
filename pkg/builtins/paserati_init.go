@@ -250,7 +250,8 @@ func (ctx *schemaContext) convert(typeDesc vm.Value) (vm.Value, error) {
 			if arr.Length() > 0 {
 				// Use the first index signature's value type for additionalProperties
 				firstSig := arr.Get(0)
-				if sigObj := firstSig.AsPlainObject(); sigObj != nil {
+				if firstSig.Type() == vm.TypeObject {
+					sigObj := firstSig.AsPlainObject()
 					valueTypeVal, _ := sigObj.GetOwn("valueType")
 					additionalSchema, err := ctx.convert(valueTypeVal)
 					if err != nil {

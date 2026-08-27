@@ -96,10 +96,10 @@ func getDisposeMethod(vmInstance *vm.VM, value vm.Value, async bool) (vm.Value, 
 // though they share a Go struct here).
 func disposableBrandCheck(vmInstance *vm.VM, methodLabel string, wantAsync bool) (*vm.PlainObject, *vm.DisposableStackState, error) {
 	thisVal := vmInstance.GetThis()
-	po := thisVal.AsPlainObject()
-	if po == nil {
+	if thisVal.Type() != vm.TypeObject {
 		return nil, nil, vmInstance.NewTypeError(methodLabel + " requires that 'this' be an Object")
 	}
+	po := thisVal.AsPlainObject()
 	st := po.DisposableState()
 	if st == nil || st.Async != wantAsync {
 		return nil, nil, vmInstance.NewTypeError(methodLabel + " called on incompatible receiver")

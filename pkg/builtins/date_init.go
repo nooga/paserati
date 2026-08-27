@@ -1535,10 +1535,10 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 // It returns the [[DateValue]] internal slot if value is a Date object, otherwise returns an error.
 // This is used by Date.prototype methods to validate the "this" value.
 func thisTimeValue(vmInstance *vm.VM, dateValue vm.Value) (float64, error) {
-	obj := dateValue.AsPlainObject()
-	if obj == nil {
+	if dateValue.Type() != vm.TypeObject {
 		return 0, vmInstance.NewTypeError("this is not a Date object")
 	}
+	obj := dateValue.AsPlainObject()
 	timestampValue, exists := obj.GetOwn("__timestamp__")
 	if !exists {
 		return 0, vmInstance.NewTypeError("this is not a Date object")
@@ -1549,7 +1549,8 @@ func thisTimeValue(vmInstance *vm.VM, dateValue vm.Value) (float64, error) {
 // getDateTimestamp is a legacy helper that returns (timestamp, ok).
 // For new code, prefer thisTimeValue which properly throws TypeError.
 func getDateTimestamp(dateValue vm.Value) (float64, bool) {
-	if obj := dateValue.AsPlainObject(); obj != nil {
+	if dateValue.Type() == vm.TypeObject {
+		obj := dateValue.AsPlainObject()
 		if timestampValue, exists := obj.GetOwn("__timestamp__"); exists {
 			return timestampValue.ToFloat(), true
 		}
@@ -1568,7 +1569,8 @@ func timeClip(t float64) float64 {
 
 func setDateTimestamp(dateValue vm.Value, timestamp float64) float64 {
 	clipped := timeClip(timestamp)
-	if obj := dateValue.AsPlainObject(); obj != nil {
+	if dateValue.Type() == vm.TypeObject {
+		obj := dateValue.AsPlainObject()
 		obj.SetOwnNonEnumerable("__timestamp__", vm.NumberValue(clipped))
 	}
 	return clipped

@@ -36,9 +36,9 @@ func (b *BlobInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Blob constructor type
 	blobConstructorType := types.NewObjectType().
-		WithSimpleCallSignature([]types.Type{}, blobType).                            // Blob()
-		WithSimpleCallSignature([]types.Type{types.Any}, blobType).                   // Blob(blobParts)
-		WithSimpleCallSignature([]types.Type{types.Any, blobOptionsType}, blobType).  // Blob(blobParts, options)
+		WithSimpleCallSignature([]types.Type{}, blobType).                           // Blob()
+		WithSimpleCallSignature([]types.Type{types.Any}, blobType).                  // Blob(blobParts)
+		WithSimpleCallSignature([]types.Type{types.Any, blobOptionsType}, blobType). // Blob(blobParts, options)
 		WithProperty("prototype", blobType)
 
 	return ctx.DefineGlobal("Blob", blobConstructorType)
@@ -60,7 +60,8 @@ func (b *BlobInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Parse blobParts if provided
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined && args[0].Type() != vm.TypeNull {
 			parts := args[0]
-			if arr := parts.AsArray(); arr != nil {
+			if parts.Type() == vm.TypeArray {
+				arr := parts.AsArray()
 				for i := 0; i < arr.Length(); i++ {
 					part := arr.Get(i)
 					blob.data = append(blob.data, blobPartToBytes(part)...)
@@ -73,11 +74,13 @@ func (b *BlobInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Parse options if provided
 		if len(args) > 1 && args[1].Type() != vm.TypeUndefined && args[1].Type() != vm.TypeNull {
-			if opts := args[1].AsPlainObject(); opts != nil {
+			if args[1].Type() == vm.TypeObject {
+				opts := args[1].AsPlainObject()
 				if t, exists := opts.GetOwn("type"); exists && t.Type() == vm.TypeString {
 					blob.mimeType = t.ToString()
 				}
-			} else if opts := args[1].AsDictObject(); opts != nil {
+			} else if args[1].Type() == vm.TypeDictObject {
+				opts := args[1].AsDictObject()
 				if t, exists := opts.GetOwn("type"); exists && t.Type() == vm.TypeString {
 					blob.mimeType = t.ToString()
 				}
@@ -88,7 +91,8 @@ func (b *BlobInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	blobConstructor := vm.NewConstructorWithProps(2, false, "Blob", blobConstructorFn)
-	if ctorProps := blobConstructor.AsNativeFunctionWithProps(); ctorProps != nil {
+	if blobConstructor.Type() == vm.TypeNativeFunctionWithProps {
+		ctorProps := blobConstructor.AsNativeFunctionWithProps()
 		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(blobProto))
 	}
 
@@ -124,11 +128,9 @@ func blobPartToBytes(part vm.Value) []byte {
 		}
 	case vm.TypeObject:
 		// Check if it's a Blob-like object with data
-		if obj := part.AsPlainObject(); obj != nil {
-			// Try to get internal blob data (would need special handling)
-			// For now, convert to string
-			return []byte(part.ToString())
-		}
+		// Try to get internal blob data (would need special handling)
+		// For now, convert to string
+		return []byte(part.ToString())
 	default:
 		return []byte(part.ToString())
 	}

@@ -75,11 +75,11 @@ func (f *FetchInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Response constructor type
 	responseConstructorType := types.NewObjectType().
-		WithSimpleCallSignature([]types.Type{}, responseType).                                    // Response()
-		WithSimpleCallSignature([]types.Type{types.Any}, responseType).                           // Response(body)
-		WithSimpleCallSignature([]types.Type{types.Any, responseInitType}, responseType).         // Response(body, init)
+		WithSimpleCallSignature([]types.Type{}, responseType).                            // Response()
+		WithSimpleCallSignature([]types.Type{types.Any}, responseType).                   // Response(body)
+		WithSimpleCallSignature([]types.Type{types.Any, responseInitType}, responseType). // Response(body, init)
 		WithProperty("prototype", responseType).
-		WithProperty("error", types.NewSimpleFunction([]types.Type{}, responseType)).             // Response.error()
+		WithProperty("error", types.NewSimpleFunction([]types.Type{}, responseType)).                              // Response.error()
 		WithProperty("redirect", types.NewSimpleFunction([]types.Type{types.String, types.Number}, responseType)). // Response.redirect(url, status)
 		WithProperty("json", types.NewSimpleFunction([]types.Type{types.Any, responseInitType}, responseType))     // Response.json(data, init)
 
@@ -92,8 +92,8 @@ func (f *FetchInitializer) InitTypes(ctx *TypeContext) error {
 		WithOptionalProperty("method", types.String).
 		WithOptionalProperty("headers", types.NewUnionType(headersType, types.NewObjectType())).
 		WithOptionalProperty("body", types.NewUnionType(types.String, types.NewObjectType())).
-		WithOptionalProperty("signal", types.Any).      // AbortSignal
-		WithOptionalProperty("redirect", types.String). // "follow" | "error" | "manual"
+		WithOptionalProperty("signal", types.Any).         // AbortSignal
+		WithOptionalProperty("redirect", types.String).    // "follow" | "error" | "manual"
 		WithOptionalProperty("credentials", types.String). // "omit" | "same-origin" | "include"
 		WithOptionalProperty("cache", types.String).       // cache mode
 		WithOptionalProperty("mode", types.String).        // CORS mode
@@ -116,20 +116,20 @@ func (f *FetchInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("redirect", types.String).
 		WithProperty("referrer", types.String).
 		WithProperty("referrerPolicy", types.String).
-		WithProperty("signal", types.Any). // AbortSignal
-		WithProperty("clone", types.NewSimpleFunction([]types.Type{}, types.Any)).        // Returns Request
-		WithProperty("arrayBuffer", types.NewSimpleFunction([]types.Type{}, types.Any)).  // Returns Promise<ArrayBuffer>
-		WithProperty("blob", types.NewSimpleFunction([]types.Type{}, types.Any)).         // Returns Promise<Blob>
-		WithProperty("formData", types.NewSimpleFunction([]types.Type{}, types.Any)).     // Returns Promise<FormData>
-		WithProperty("json", types.NewSimpleFunction([]types.Type{}, types.Any)).         // Returns Promise<any>
-		WithProperty("text", types.NewSimpleFunction([]types.Type{}, types.Any))          // Returns Promise<string>
+		WithProperty("signal", types.Any).                                               // AbortSignal
+		WithProperty("clone", types.NewSimpleFunction([]types.Type{}, types.Any)).       // Returns Request
+		WithProperty("arrayBuffer", types.NewSimpleFunction([]types.Type{}, types.Any)). // Returns Promise<ArrayBuffer>
+		WithProperty("blob", types.NewSimpleFunction([]types.Type{}, types.Any)).        // Returns Promise<Blob>
+		WithProperty("formData", types.NewSimpleFunction([]types.Type{}, types.Any)).    // Returns Promise<FormData>
+		WithProperty("json", types.NewSimpleFunction([]types.Type{}, types.Any)).        // Returns Promise<any>
+		WithProperty("text", types.NewSimpleFunction([]types.Type{}, types.Any))         // Returns Promise<string>
 
 	// Request constructor type
 	requestConstructorType := types.NewObjectType().
-		WithSimpleCallSignature([]types.Type{types.String}, requestType).                 // Request(url)
+		WithSimpleCallSignature([]types.Type{types.String}, requestType).                  // Request(url)
 		WithSimpleCallSignature([]types.Type{types.String, requestInitType}, requestType). // Request(url, init)
-		WithSimpleCallSignature([]types.Type{requestType}, requestType).                  // Request(request)
-		WithSimpleCallSignature([]types.Type{requestType, requestInitType}, requestType). // Request(request, init)
+		WithSimpleCallSignature([]types.Type{requestType}, requestType).                   // Request(request)
+		WithSimpleCallSignature([]types.Type{requestType, requestInitType}, requestType).  // Request(request, init)
 		WithProperty("prototype", requestType)
 
 	if err := ctx.DefineGlobal("Request", requestConstructorType); err != nil {
@@ -183,7 +183,8 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Use NewConstructorWithProps to make it callable with 'new'
 	headersConstructor := vm.NewConstructorWithProps(1, false, "Headers", headersConstructorFn)
-	if ctorProps := headersConstructor.AsNativeFunctionWithProps(); ctorProps != nil {
+	if headersConstructor.Type() == vm.TypeNativeFunctionWithProps {
+		ctorProps := headersConstructor.AsNativeFunctionWithProps()
 		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(headersProto))
 	}
 
@@ -253,7 +254,8 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	responseConstructor := vm.NewConstructorWithProps(2, false, "Response", responseConstructorFn)
-	if ctorProps := responseConstructor.AsNativeFunctionWithProps(); ctorProps != nil {
+	if responseConstructor.Type() == vm.TypeNativeFunctionWithProps {
+		ctorProps := responseConstructor.AsNativeFunctionWithProps()
 		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(responseProto))
 
 		// Response.error() - returns an error response
@@ -443,7 +445,8 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	requestConstructor := vm.NewConstructorWithProps(2, false, "Request", requestConstructorFn)
-	if ctorProps := requestConstructor.AsNativeFunctionWithProps(); ctorProps != nil {
+	if requestConstructor.Type() == vm.TypeNativeFunctionWithProps {
+		ctorProps := requestConstructor.AsNativeFunctionWithProps()
 		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(requestProto))
 	}
 
@@ -594,16 +597,16 @@ type FetchHeaders struct {
 
 // FetchResponse represents the Response object with VM reference for async methods
 type FetchResponse struct {
-	vm          *vm.VM
-	OK          bool
-	Status      int
-	StatusText  string
-	URL         string
-	Headers     *FetchHeaders
-	body        []byte
-	bodyUsed    bool
-	Redirected  bool   // Whether this response is the result of a redirect
-	Type        string // Response type: "basic", "cors", "default", "error", "opaque", "opaqueredirect"
+	vm         *vm.VM
+	OK         bool
+	Status     int
+	StatusText string
+	URL        string
+	Headers    *FetchHeaders
+	body       []byte
+	bodyUsed   bool
+	Redirected bool   // Whether this response is the result of a redirect
+	Type       string // Response type: "basic", "cors", "default", "error", "opaque", "opaqueredirect"
 }
 
 // boolToValue converts a bool to vm.Value

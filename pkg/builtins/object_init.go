@@ -466,7 +466,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if desc.IsUndefined() {
 				return vm.BooleanValue(false), nil
 			}
-			if descObj := desc.AsPlainObject(); descObj != nil {
+			if desc.Type() == vm.TypeObject {
+				descObj := desc.AsPlainObject()
 				if enumVal, hasEnum := descObj.GetOwn("enumerable"); hasEnum {
 					return vm.BooleanValue(!enumVal.IsFalsey()), nil
 				}
@@ -517,7 +518,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			case vm.TypeRegExp:
 				builtinTag = "RegExp"
 			case vm.TypeObject:
-				if plainObj := thisValue.AsPlainObject(); plainObj != nil {
+				if thisValue.Type() == vm.TypeObject {
+					plainObj := thisValue.AsPlainObject()
 					if _, hasErrorData := plainObj.GetOwn("[[ErrorData]]"); hasErrorData {
 						builtinTag = "Error"
 					} else if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
@@ -680,7 +682,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			handler := proxy.Handler()
 			var setProtoTrap vm.Value
 			var hasTrap bool
-			if po := handler.AsPlainObject(); po != nil {
+			if handler.Type() == vm.TypeObject {
+				po := handler.AsPlainObject()
 				setProtoTrap, hasTrap = po.GetOwn("setPrototypeOf")
 			}
 			if hasTrap && setProtoTrap.IsCallable() {
@@ -700,11 +703,13 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		success := true
 		switch thisValue.Type() {
 		case vm.TypeObject:
-			if po := thisValue.AsPlainObject(); po != nil {
+			if thisValue.Type() == vm.TypeObject {
+				po := thisValue.AsPlainObject()
 				success = po.SetPrototype(protoArg)
 			}
 		case vm.TypeDictObject:
-			if d := thisValue.AsDictObject(); d != nil {
+			if thisValue.Type() == vm.TypeDictObject {
+				d := thisValue.AsDictObject()
 				success = d.SetPrototype(protoArg)
 			}
 		default:
@@ -997,7 +1002,8 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Make it a proper constructor with static methods
-	if ctorObj := objectCtor.AsNativeFunction(); ctorObj != nil {
+	if objectCtor.Type() == vm.TypeNativeFunction {
+		ctorObj := objectCtor.AsNativeFunction()
 		// Convert to object with properties
 		ctorWithProps := vm.NewConstructorWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
@@ -1543,7 +1549,8 @@ func objectCreateWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if proto.Type() == vm.TypeNull {
 		// For null prototype, create object and set prototype to null
 		obj = vm.NewObject(vm.Null)
-		if plainObj := obj.AsPlainObject(); plainObj != nil {
+		if obj.Type() == vm.TypeObject {
+			plainObj := obj.AsPlainObject()
 			plainObj.SetPrototype(vm.Null)
 		}
 	} else {
@@ -1586,7 +1593,8 @@ func objectDefinePropertiesImpl(vmInstance *vm.VM, obj vm.Value, propertiesDesc 
 	var keys []string
 	switch propertiesDesc.Type() {
 	case vm.TypeObject:
-		if po := propertiesDesc.AsPlainObject(); po != nil {
+		if propertiesDesc.Type() == vm.TypeObject {
+			po := propertiesDesc.AsPlainObject()
 			for _, key := range po.OwnKeys() {
 				if _, _, enumerable, _, ok := po.GetOwnDescriptor(key); ok && enumerable {
 					keys = append(keys, key)
@@ -1594,7 +1602,8 @@ func objectDefinePropertiesImpl(vmInstance *vm.VM, obj vm.Value, propertiesDesc 
 			}
 		}
 	case vm.TypeArray:
-		if arr := propertiesDesc.AsArray(); arr != nil {
+		if propertiesDesc.Type() == vm.TypeArray {
+			arr := propertiesDesc.AsArray()
 			// Include numeric indices
 			for i := 0; i < arr.Length(); i++ {
 				keys = append(keys, strconv.Itoa(i))
@@ -1609,7 +1618,8 @@ func objectDefinePropertiesImpl(vmInstance *vm.VM, obj vm.Value, propertiesDesc 
 		}
 	default:
 		// For function types and others, try to get as PlainObject if possible
-		if po := propertiesDesc.AsPlainObject(); po != nil {
+		if propertiesDesc.Type() == vm.TypeObject {
+			po := propertiesDesc.AsPlainObject()
 			for _, key := range po.OwnKeys() {
 				if _, _, enumerable, _, ok := po.GetOwnDescriptor(key); ok && enumerable {
 					keys = append(keys, key)
@@ -1722,7 +1732,8 @@ func isTargetKeyEnumerable(vmInstance *vm.VM, target vm.Value, key string) bool 
 		return false
 	case vm.TypeDictObject:
 		// DictObject keys are always enumerable
-		if do := target.AsDictObject(); do != nil {
+		if target.Type() == vm.TypeDictObject {
+			do := target.AsDictObject()
 			if _, ok := do.Get(key); ok {
 				return true
 			}
@@ -2252,9 +2263,11 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	success := true
 	switch obj.Type() {
 	case vm.TypeObject:
-		if plainObj := obj.AsPlainObject(); plainObj != nil {
+		if obj.Type() == vm.TypeObject {
+			plainObj := obj.AsPlainObject()
 			success = plainObj.SetPrototype(proto)
-		} else if dictObj := obj.AsDictObject(); dictObj != nil {
+		} else if obj.Type() == vm.TypeDictObject {
+			dictObj := obj.AsDictObject()
 			success = dictObj.SetPrototype(proto)
 		}
 	case vm.TypeFunction:
@@ -2276,7 +2289,8 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		success = true
 	default:
 		// For other object types (Map, Set, Generator, etc.), try setting via AsPlainObject
-		if plainObj := obj.AsPlainObject(); plainObj != nil {
+		if obj.Type() == vm.TypeObject {
+			plainObj := obj.AsPlainObject()
 			success = plainObj.SetPrototype(proto)
 		}
 	}
@@ -2515,12 +2529,14 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 		arrObj.Append(vm.NewString("length"))
 		return arr, nil
 	case vm.TypeObject:
-		if po := obj.AsPlainObject(); po != nil {
+		if obj.Type() == vm.TypeObject {
+			po := obj.AsPlainObject()
 			// OwnPropertyNames returns ALL own string property names including non-enumerable
 			for _, k := range po.OwnPropertyNames() {
 				arrObj.Append(vm.NewString(k))
 			}
-		} else if d := obj.AsDictObject(); d != nil {
+		} else if obj.Type() == vm.TypeDictObject {
+			d := obj.AsDictObject()
 			// DictObject.OwnPropertyNames returns all property names
 			for _, k := range d.OwnPropertyNames() {
 				arrObj.Append(vm.NewString(k))
@@ -2664,7 +2680,8 @@ func objectGetOwnPropertySymbolsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.V
 	}
 	arr := vm.NewArray()
 	arrObj := arr.AsArray()
-	if po := obj.AsPlainObject(); po != nil {
+	if obj.Type() == vm.TypeObject {
+		po := obj.AsPlainObject()
 		for _, s := range po.OwnSymbolKeys() {
 			arrObj.Append(s)
 		}
@@ -2704,7 +2721,8 @@ func reflectOwnKeysImpl(args []vm.Value) (vm.Value, error) {
 	}
 	out := vm.NewArray()
 	outArr := out.AsArray()
-	if po := obj.AsPlainObject(); po != nil {
+	if obj.Type() == vm.TypeObject {
+		po := obj.AsPlainObject()
 		// Strings first
 		for _, k := range po.OwnKeys() {
 			outArr.Append(vm.NewString(k))
@@ -2713,12 +2731,14 @@ func reflectOwnKeysImpl(args []vm.Value) (vm.Value, error) {
 		for _, s := range po.OwnSymbolKeys() {
 			outArr.Append(s)
 		}
-	} else if d := obj.AsDictObject(); d != nil {
+	} else if obj.Type() == vm.TypeDictObject {
+		d := obj.AsDictObject()
 		for _, k := range d.OwnKeys() {
 			outArr.Append(vm.NewString(k))
 		}
 		// DictObject: no symbols yet
-	} else if a := obj.AsArray(); a != nil {
+	} else if obj.Type() == vm.TypeArray {
+		a := obj.AsArray()
 		for i := 0; i < a.Length(); i++ {
 			outArr.Append(vm.NewString(strconv.Itoa(i)))
 		}
@@ -2773,42 +2793,53 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		}
 
 		// Get own enumerable properties from source
-		if plainObj := source.AsPlainObject(); plainObj != nil {
+		if source.Type() == vm.TypeObject {
+			plainObj := source.AsPlainObject()
 			for _, key := range plainObj.OwnKeys() {
 				value, _ := plainObj.GetOwn(key)
 				// Set on target
-				if targetPlain := target.AsPlainObject(); targetPlain != nil {
+				if target.Type() == vm.TypeObject {
+					targetPlain := target.AsPlainObject()
 					targetPlain.SetOwnNonEnumerable(key, value)
-				} else if targetDict := target.AsDictObject(); targetDict != nil {
+				} else if target.Type() == vm.TypeDictObject {
+					targetDict := target.AsDictObject()
 					targetDict.SetOwn(key, value)
 				}
 			}
-		} else if dictObj := source.AsDictObject(); dictObj != nil {
+		} else if source.Type() == vm.TypeDictObject {
+			dictObj := source.AsDictObject()
 			for _, key := range dictObj.OwnKeys() {
 				value, _ := dictObj.GetOwn(key)
 				// Set on target
-				if targetPlain := target.AsPlainObject(); targetPlain != nil {
+				if target.Type() == vm.TypeObject {
+					targetPlain := target.AsPlainObject()
 					targetPlain.SetOwnNonEnumerable(key, value)
-				} else if targetDict := target.AsDictObject(); targetDict != nil {
+				} else if target.Type() == vm.TypeDictObject {
+					targetDict := target.AsDictObject()
 					targetDict.SetOwn(key, value)
 				}
 			}
-		} else if arrObj := source.AsArray(); arrObj != nil {
+		} else if source.Type() == vm.TypeArray {
+			arrObj := source.AsArray()
 			// For arrays, copy indexed properties
 			for i := 0; i < arrObj.Length(); i++ {
 				key := strconv.Itoa(i)
 				value := arrObj.Get(i)
 				// Set on target
-				if targetPlain := target.AsPlainObject(); targetPlain != nil {
+				if target.Type() == vm.TypeObject {
+					targetPlain := target.AsPlainObject()
 					targetPlain.SetOwnNonEnumerable(key, value)
-				} else if targetDict := target.AsDictObject(); targetDict != nil {
+				} else if target.Type() == vm.TypeDictObject {
+					targetDict := target.AsDictObject()
 					targetDict.SetOwn(key, value)
 				}
 			}
 			// Also copy length property
-			if targetPlain := target.AsPlainObject(); targetPlain != nil {
+			if target.Type() == vm.TypeObject {
+				targetPlain := target.AsPlainObject()
 				targetPlain.SetOwnNonEnumerable("length", vm.NumberValue(float64(arrObj.Length())))
-			} else if targetDict := target.AsDictObject(); targetDict != nil {
+			} else if target.Type() == vm.TypeDictObject {
+				targetDict := target.AsDictObject()
 				targetDict.SetOwn("length", vm.NumberValue(float64(arrObj.Length())))
 			}
 		}
@@ -2848,21 +2879,24 @@ func objectHasOwnWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	isSymbol := keyVal.Type() == vm.TypeSymbol
 
 	// Check if object has the property as own property
-	if plainObj := obj.AsPlainObject(); plainObj != nil {
+	if obj.Type() == vm.TypeObject {
+		plainObj := obj.AsPlainObject()
 		if isSymbol {
 			return vm.BooleanValue(plainObj.HasOwnByKey(vm.NewSymbolKey(keyVal))), nil
 		}
 		_, hasOwn := plainObj.GetOwn(keyVal.ToString())
 		return vm.BooleanValue(hasOwn), nil
 	}
-	if dictObj := obj.AsDictObject(); dictObj != nil {
+	if obj.Type() == vm.TypeDictObject {
+		dictObj := obj.AsDictObject()
 		if isSymbol {
 			return vm.BooleanValue(false), nil
 		}
 		_, hasOwn := dictObj.GetOwn(keyVal.ToString())
 		return vm.BooleanValue(hasOwn), nil
 	}
-	if arrObj := obj.AsArray(); arrObj != nil {
+	if obj.Type() == vm.TypeArray {
+		arrObj := obj.AsArray()
 		if isSymbol {
 			return vm.BooleanValue(false), nil
 		}
@@ -2894,15 +2928,19 @@ func objectFromEntriesImpl(args []vm.Value) (vm.Value, error) {
 	resultObj := result.AsPlainObject()
 
 	// If it's an array, iterate through it
-	if arr := iterable.AsArray(); arr != nil {
+	if iterable.Type() == vm.TypeArray {
+		arr := iterable.AsArray()
 		for i := 0; i < arr.Length(); i++ {
 			entry := arr.Get(i)
 
 			// Each entry should be an array-like with at least 2 elements
-			if entryArr := entry.AsArray(); entryArr != nil && entryArr.Length() >= 2 {
-				key := entryArr.Get(0).ToString()
-				value := entryArr.Get(1)
-				resultObj.SetOwnNonEnumerable(key, value)
+			if entry.Type() == vm.TypeArray {
+				entryArr := entry.AsArray()
+				if entryArr.Length() >= 2 {
+					key := entryArr.Get(0).ToString()
+					value := entryArr.Get(1)
+					resultObj.SetOwnNonEnumerable(key, value)
+				}
 			}
 		}
 	}
@@ -2992,7 +3030,8 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			var targetDescFound bool
 			var targetValue vm.Value
 			var targetConfigurable, targetWritable, targetEnumerable bool
-			if targetObj := target.AsPlainObject(); targetObj != nil {
+			if target.Type() == vm.TypeObject {
+				targetObj := target.AsPlainObject()
 				var found bool
 				targetValue, targetWritable, targetEnumerable, targetConfigurable, found = targetObj.GetOwnDescriptor(propName)
 				targetDescFound = found
@@ -3000,7 +3039,8 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 
 			// Step 16: Let extensibleTarget be target.[[IsExtensible]]()
 			targetExtensible := true
-			if targetObj := target.AsPlainObject(); targetObj != nil {
+			if target.Type() == vm.TypeObject {
+				targetObj := target.AsPlainObject()
 				targetExtensible = targetObj.IsExtensible()
 			}
 
@@ -3079,56 +3119,56 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	// Returns true if no change is requested, false otherwise
 	if obj.Type() == vm.TypeObject {
 		if plainObj := obj.AsPlainObject(); plainObj != nil && plainObj.IsModuleNamespace() {
-		// Get current property descriptor
-		var currentDesc vm.Value
-		if keyIsSymbol {
-			if _, _, wr, en, conf := plainObj.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym)); wr || en || conf {
-				// Property exists
-				currentDesc = vm.NewObject(vmInstance.ObjectPrototype)
+			// Get current property descriptor
+			var currentDesc vm.Value
+			if keyIsSymbol {
+				if _, _, wr, en, conf := plainObj.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym)); wr || en || conf {
+					// Property exists
+					currentDesc = vm.NewObject(vmInstance.ObjectPrototype)
+				}
+			} else {
+				if _, exists := plainObj.GetOwn(propName); exists {
+					// Property exists
+					currentDesc = vm.NewObject(vmInstance.ObjectPrototype)
+				}
 			}
-		} else {
-			if _, exists := plainObj.GetOwn(propName); exists {
-				// Property exists
-				currentDesc = vm.NewObject(vmInstance.ObjectPrototype)
+
+			// If property doesn't exist, fail
+			if currentDesc.Type() == vm.TypeUndefined {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot define property " + propName + " on a module namespace object")
 			}
-		}
 
-		// If property doesn't exist, fail
-		if currentDesc.Type() == vm.TypeUndefined {
-			return vm.Undefined, vmInstance.NewTypeError("Cannot define property " + propName + " on a module namespace object")
-		}
-
-		// Property exists - check if descriptor requests any changes
-		// For namespace properties, we only allow descriptors that don't change anything
-		descObj := descriptor.AsPlainObject()
-		if descObj != nil {
-			// Check for value change
-			if val, hasValue := descObj.GetOwn("value"); hasValue {
-				if keyIsSymbol {
-					if currentVal, ok := plainObj.GetOwnByKey(vm.NewSymbolKey(propSym)); ok {
-						if !val.StrictlyEquals(currentVal) {
-							return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property " + propName + " on a module namespace object")
+			// Property exists - check if descriptor requests any changes
+			// For namespace properties, we only allow descriptors that don't change anything
+			descObj := descriptor.AsPlainObject()
+			if descObj != nil {
+				// Check for value change
+				if val, hasValue := descObj.GetOwn("value"); hasValue {
+					if keyIsSymbol {
+						if currentVal, ok := plainObj.GetOwnByKey(vm.NewSymbolKey(propSym)); ok {
+							if !val.StrictlyEquals(currentVal) {
+								return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property " + propName + " on a module namespace object")
+							}
 						}
-					}
-				} else {
-					if currentVal, ok := plainObj.GetOwn(propName); ok {
-						if !val.StrictlyEquals(currentVal) {
-							return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property " + propName + " on a module namespace object")
+					} else {
+						if currentVal, ok := plainObj.GetOwn(propName); ok {
+							if !val.StrictlyEquals(currentVal) {
+								return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property " + propName + " on a module namespace object")
+							}
 						}
 					}
 				}
-			}
-			// Check for configurable change (namespace props are always non-configurable)
-			if conf, hasConf := descObj.GetOwn("configurable"); hasConf {
-				if conf.IsTruthy() {
-					return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property " + propName + " on a module namespace object")
+				// Check for configurable change (namespace props are always non-configurable)
+				if conf, hasConf := descObj.GetOwn("configurable"); hasConf {
+					if conf.IsTruthy() {
+						return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property " + propName + " on a module namespace object")
+					}
 				}
 			}
-		}
 
-		// No changes requested or descriptor matches - return the object
-		return obj, nil
-	}
+			// No changes requested or descriptor matches - return the object
+			return obj, nil
+		}
 	}
 
 	// Per ECMAScript 8.10.5 ToPropertyDescriptor step 1: If Type(Obj) is not Object, throw TypeError
@@ -3175,11 +3215,13 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 
 		switch obj.Type() {
 		case vm.TypeObject:
-			if po := obj.AsPlainObject(); po != nil {
+			if obj.Type() == vm.TypeObject {
+				po := obj.AsPlainObject()
 				exists = po.Has(propName)
 			}
 		case vm.TypeDictObject:
-			if do := obj.AsDictObject(); do != nil {
+			if obj.Type() == vm.TypeDictObject {
+				do := obj.AsDictObject()
 				_, exists = do.Get(propName)
 			}
 		case vm.TypeFunction:
@@ -3373,118 +3415,119 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 
 	// Define the property with attributes (on plain objects only for now)
 	if obj.Type() == vm.TypeObject {
-	if plainObj := obj.AsPlainObject(); plainObj != nil {
-		// Check if property already exists and get existing attributes
-		var exists bool
-		var w0, e0, c0 bool
-		var isAccessor0 bool
-		if keyIsSymbol {
-			if g, s, e, c, ok := plainObj.GetOwnAccessorByKey(vm.NewSymbolKey(propSym)); ok {
-				isAccessor0, e0, c0, exists = true, e, c, true
-				_ = g
-				_ = s
-			} else {
-				_, w0, e0, c0, exists = plainObj.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
-			}
-		} else {
-			if g, s, e, c, ok := plainObj.GetOwnAccessor(propName); ok {
-				isAccessor0, e0, c0, exists = true, e, c, true
-				_ = g
-				_ = s
-			} else {
-				_, w0, e0, c0, exists = plainObj.GetOwnDescriptor(propName)
-			}
-		}
-
-		// Per ECMAScript spec:
-		// - When creating a new property, missing attributes default to false
-		// - When updating an existing property, missing attributes are preserved
-		if exists {
-			// Preserve existing attributes for missing descriptor fields
-			if !(hasGetter || hasSetter) && writablePtr == nil {
-				writablePtr = &w0
-			}
-			if enumerablePtr == nil {
-				enumerablePtr = &e0
-			}
-			if configurablePtr == nil {
-				configurablePtr = &c0
-			}
-			// Preserve existing value when descriptor doesn't specify a value
-			// and we're not converting to an accessor property
-			if !hasValue && !isAccessor0 && !(hasGetter || hasSetter) {
-				if keyIsSymbol {
-					if existingVal, ok := plainObj.GetOwnByKey(vm.NewSymbolKey(propSym)); ok {
-						value = existingVal
-					}
+		if obj.Type() == vm.TypeObject {
+			plainObj := obj.AsPlainObject()
+			// Check if property already exists and get existing attributes
+			var exists bool
+			var w0, e0, c0 bool
+			var isAccessor0 bool
+			if keyIsSymbol {
+				if g, s, e, c, ok := plainObj.GetOwnAccessorByKey(vm.NewSymbolKey(propSym)); ok {
+					isAccessor0, e0, c0, exists = true, e, c, true
+					_ = g
+					_ = s
 				} else {
-					if existingVal, ok := plainObj.GetOwn(propName); ok {
-						value = existingVal
+					_, w0, e0, c0, exists = plainObj.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
+				}
+			} else {
+				if g, s, e, c, ok := plainObj.GetOwnAccessor(propName); ok {
+					isAccessor0, e0, c0, exists = true, e, c, true
+					_ = g
+					_ = s
+				} else {
+					_, w0, e0, c0, exists = plainObj.GetOwnDescriptor(propName)
+				}
+			}
+
+			// Per ECMAScript spec:
+			// - When creating a new property, missing attributes default to false
+			// - When updating an existing property, missing attributes are preserved
+			if exists {
+				// Preserve existing attributes for missing descriptor fields
+				if !(hasGetter || hasSetter) && writablePtr == nil {
+					writablePtr = &w0
+				}
+				if enumerablePtr == nil {
+					enumerablePtr = &e0
+				}
+				if configurablePtr == nil {
+					configurablePtr = &c0
+				}
+				// Preserve existing value when descriptor doesn't specify a value
+				// and we're not converting to an accessor property
+				if !hasValue && !isAccessor0 && !(hasGetter || hasSetter) {
+					if keyIsSymbol {
+						if existingVal, ok := plainObj.GetOwnByKey(vm.NewSymbolKey(propSym)); ok {
+							value = existingVal
+						}
+					} else {
+						if existingVal, ok := plainObj.GetOwn(propName); ok {
+							value = existingVal
+						}
 					}
 				}
-			}
-		} else {
-			// New property: check extensibility first
-			if !plainObj.IsExtensible() {
-				keyStr := propName
-				if keyIsSymbol {
-					keyStr = propSym.ToString()
+			} else {
+				// New property: check extensibility first
+				if !plainObj.IsExtensible() {
+					keyStr := propName
+					if keyIsSymbol {
+						keyStr = propSym.ToString()
+					}
+					return vm.Undefined, vmInstance.NewTypeError("Cannot define property " + keyStr + ", object is not extensible")
 				}
-				return vm.Undefined, vmInstance.NewTypeError("Cannot define property " + keyStr + ", object is not extensible")
-			}
-			// New property: default missing attributes to false
-			if !(hasGetter || hasSetter) {
-				if writablePtr == nil {
+				// New property: default missing attributes to false
+				if !(hasGetter || hasSetter) {
+					if writablePtr == nil {
+						b := false
+						writablePtr = &b
+					}
+				}
+				if enumerablePtr == nil {
 					b := false
-					writablePtr = &b
+					enumerablePtr = &b
+				}
+				if configurablePtr == nil {
+					b := false
+					configurablePtr = &b
 				}
 			}
-			if enumerablePtr == nil {
-				b := false
-				enumerablePtr = &b
-			}
-			if configurablePtr == nil {
-				b := false
-				configurablePtr = &b
-			}
-		}
 
-		if exists && !c0 {
-			// Non-configurable property validation - throw TypeError per DefinePropertyOrThrow
-			if configurablePtr != nil && *configurablePtr != c0 {
-				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
+			if exists && !c0 {
+				// Non-configurable property validation - throw TypeError per DefinePropertyOrThrow
+				if configurablePtr != nil && *configurablePtr != c0 {
+					return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
+				}
+				if enumerablePtr != nil && *enumerablePtr != e0 {
+					return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
+				}
+				// If data non-writable cannot make writable true
+				if !isAccessor0 && !w0 && writablePtr != nil && *writablePtr {
+					return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
+				}
+				// Disallow converting kind when not configurable (step 7c)
+				// A generic descriptor (no value/writable/get/set) does NOT trigger kind conversion
+				if isAccessor0 && (hasValue || hasWritable) {
+					return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
+				}
+				if !isAccessor0 && (hasGetter || hasSetter) {
+					return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
+				}
 			}
-			if enumerablePtr != nil && *enumerablePtr != e0 {
-				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
-			}
-			// If data non-writable cannot make writable true
-			if !isAccessor0 && !w0 && writablePtr != nil && *writablePtr {
-				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
-			}
-			// Disallow converting kind when not configurable (step 7c)
-			// A generic descriptor (no value/writable/get/set) does NOT trigger kind conversion
-			if isAccessor0 && (hasValue || hasWritable) {
-				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
-			}
-			if !isAccessor0 && (hasGetter || hasSetter) {
-				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
+			if hasGetter || hasSetter {
+				// Accessor path
+				if keyIsSymbol {
+					plainObj.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				} else {
+					plainObj.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				}
+			} else {
+				if keyIsSymbol {
+					plainObj.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+				} else {
+					plainObj.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+				}
 			}
 		}
-		if hasGetter || hasSetter {
-			// Accessor path
-			if keyIsSymbol {
-				plainObj.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
-			} else {
-				plainObj.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
-			}
-		} else {
-			if keyIsSymbol {
-				plainObj.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
-			} else {
-				plainObj.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
-			}
-		}
-	}
 	} else if obj.Type() == vm.TypeDictObject {
 		// DictObject has no attributes; set value only for string keys; symbols unsupported
 		if !keyIsSymbol {
@@ -3665,7 +3708,8 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			// Step 11: Get the target's own property descriptor
 			var targetDescFound bool
 			var targetConfigurable bool
-			if targetObj := target.AsPlainObject(); targetObj != nil {
+			if target.Type() == vm.TypeObject {
+				targetObj := target.AsPlainObject()
 				_, _, _, targetConfigurable, targetDescFound = targetObj.GetOwnDescriptor(propName)
 			} else if target.Type() == vm.TypeArray {
 				arrObj := target.AsArray()
@@ -3684,7 +3728,8 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 
 			// Step 12: Check target extensibility
 			targetExtensible := true
-			if targetObj := target.AsPlainObject(); targetObj != nil {
+			if target.Type() == vm.TypeObject {
+				targetObj := target.AsPlainObject()
 				targetExtensible = targetObj.IsExtensible()
 			} else if target.Type() == vm.TypeArray {
 				targetExtensible = target.AsArray().IsExtensible()
@@ -3735,7 +3780,8 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 				}
 				// Step 22 additional: If result is non-configurable+non-writable, target must also be non-writable
 				if writableVal, hasWritable := resultObj.GetOwn("writable"); hasWritable && writableVal.IsFalsey() {
-					if targetObj := target.AsPlainObject(); targetObj != nil {
+					if target.Type() == vm.TypeObject {
+						targetObj := target.AsPlainObject()
 						_, targetWritable, _, _, found := targetObj.GetOwnDescriptor(propName)
 						if found && targetWritable {
 							return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap reported non-configurable and non-writable for property '" + propName + "' which is writable in the proxy target")
@@ -4279,10 +4325,12 @@ func objectGetOwnPropertyDescriptorsWithVM(vmInstance *vm.VM, args []vm.Value) (
 
 	switch obj.Type() {
 	case vm.TypeObject:
-		if po := obj.AsPlainObject(); po != nil {
+		if obj.Type() == vm.TypeObject {
+			po := obj.AsPlainObject()
 			stringKeys = po.OwnPropertyNames()
 			symbolKeys = po.OwnSymbolKeys()
-		} else if d := obj.AsDictObject(); d != nil {
+		} else if obj.Type() == vm.TypeDictObject {
+			d := obj.AsDictObject()
 			stringKeys = d.OwnPropertyNames()
 		}
 	case vm.TypeArray:
@@ -4340,10 +4388,13 @@ func objectGetOwnPropertyDescriptorsWithVM(vmInstance *vm.VM, args []vm.Value) (
 	case vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps:
 		// Native functions have length and name
 		stringKeys = append(stringKeys, "length", "name")
-		if nfp := obj.AsNativeFunctionWithProps(); nfp != nil && nfp.Properties != nil {
-			for _, k := range nfp.Properties.OwnPropertyNames() {
-				if k != "length" && k != "name" {
-					stringKeys = append(stringKeys, k)
+		if obj.Type() == vm.TypeNativeFunctionWithProps {
+			nfp := obj.AsNativeFunctionWithProps()
+			if nfp.Properties != nil {
+				for _, k := range nfp.Properties.OwnPropertyNames() {
+					if k != "length" && k != "name" {
+						stringKeys = append(stringKeys, k)
+					}
 				}
 			}
 		}
@@ -4408,7 +4459,8 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 			trapResult := result.IsTruthy()
 			targetExtensible := true
 			if proxy.Target().Type() == vm.TypeObject {
-				if targetObj := proxy.Target().AsPlainObject(); targetObj != nil {
+				if proxy.Target().Type() == vm.TypeObject {
+					targetObj := proxy.Target().AsPlainObject()
 					targetExtensible = targetObj.IsExtensible()
 				}
 			} else if proxy.Target().Type() == vm.TypeArray {
@@ -4432,7 +4484,8 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 
 	// Check if object is extensible
 	if obj.IsObject() {
-		if plainObj := obj.AsPlainObject(); plainObj != nil {
+		if obj.Type() == vm.TypeObject {
+			plainObj := obj.AsPlainObject()
 			return vm.BooleanValue(plainObj.IsExtensible()), nil
 		}
 		// Other object types (DictObject, etc.) are extensible by default for now
@@ -4493,7 +4546,8 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 			// ECMAScript 10.5.4: if trap returns true, target must be non-extensible
 			targetExtensible := true
 			if proxy.Target().Type() == vm.TypeObject {
-				if targetObj := proxy.Target().AsPlainObject(); targetObj != nil {
+				if proxy.Target().Type() == vm.TypeObject {
+					targetObj := proxy.Target().AsPlainObject()
 					targetExtensible = targetObj.IsExtensible()
 				}
 			} else if proxy.Target().Type() == vm.TypeArray {
@@ -4524,7 +4578,8 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 
 	// Mark the object as non-extensible
 	if obj.Type() == vm.TypeObject {
-		if plainObj := obj.AsPlainObject(); plainObj != nil {
+		if obj.Type() == vm.TypeObject {
+			plainObj := obj.AsPlainObject()
 			plainObj.SetExtensible(false)
 		}
 	} else if obj.Type() == vm.TypeDictObject {
@@ -4555,7 +4610,8 @@ func objectFreezeWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	}
 
 	// Freeze: make object non-extensible and all properties non-configurable and non-writable
-	if plainObj := obj.AsPlainObject(); plainObj != nil {
+	if obj.Type() == vm.TypeObject {
+		plainObj := obj.AsPlainObject()
 		plainObj.SetExtensible(false)
 		// Use FreezeAllProperties to freeze ALL own properties (including non-enumerable and symbol)
 		plainObj.FreezeAllProperties()
@@ -4585,7 +4641,8 @@ func objectSealWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	}
 
 	// Seal: make object non-extensible and all properties non-configurable (but leave writable as-is)
-	if plainObj := obj.AsPlainObject(); plainObj != nil {
+	if obj.Type() == vm.TypeObject {
+		plainObj := obj.AsPlainObject()
 		plainObj.SetExtensible(false)
 		plainObj.SealAllProperties()
 	}
@@ -4612,7 +4669,8 @@ func objectIsFrozenWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 	}
 
 	// Check if extensible - frozen objects must not be extensible
-	if plainObj := obj.AsPlainObject(); plainObj != nil {
+	if obj.Type() == vm.TypeObject {
+		plainObj := obj.AsPlainObject()
 		if plainObj.IsExtensible() {
 			return vm.BooleanValue(false), nil
 		}
@@ -4620,7 +4678,8 @@ func objectIsFrozenWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 	}
 
 	// Functions are objects - check their properties object
-	if fn := obj.AsFunction(); fn != nil {
+	if obj.Type() == vm.TypeFunction {
+		fn := obj.AsFunction()
 		if fn.Properties != nil {
 			if fn.Properties.IsExtensible() {
 				return vm.BooleanValue(false), nil
@@ -4629,7 +4688,8 @@ func objectIsFrozenWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 		}
 		return vm.BooleanValue(false), nil // extensible by default
 	}
-	if cl := obj.AsClosure(); cl != nil {
+	if obj.Type() == vm.TypeClosure {
+		cl := obj.AsClosure()
 		if cl.Properties != nil {
 			if cl.Properties.IsExtensible() {
 				return vm.BooleanValue(false), nil
@@ -4666,7 +4726,8 @@ func objectIsSealedWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 	}
 
 	// Check if extensible - sealed objects must not be extensible
-	if plainObj := obj.AsPlainObject(); plainObj != nil {
+	if obj.Type() == vm.TypeObject {
+		plainObj := obj.AsPlainObject()
 		if plainObj.IsExtensible() {
 			return vm.BooleanValue(false), nil
 		}
@@ -4674,7 +4735,8 @@ func objectIsSealedWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 	}
 
 	// Functions are objects
-	if fn := obj.AsFunction(); fn != nil {
+	if obj.Type() == vm.TypeFunction {
+		fn := obj.AsFunction()
 		if fn.Properties != nil {
 			if fn.Properties.IsExtensible() {
 				return vm.BooleanValue(false), nil
@@ -4683,7 +4745,8 @@ func objectIsSealedWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 		}
 		return vm.BooleanValue(false), nil
 	}
-	if cl := obj.AsClosure(); cl != nil {
+	if obj.Type() == vm.TypeClosure {
+		cl := obj.AsClosure()
 		if cl.Properties != nil {
 			if cl.Properties.IsExtensible() {
 				return vm.BooleanValue(false), nil

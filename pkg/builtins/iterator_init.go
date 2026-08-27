@@ -2006,7 +2006,8 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if !paddingVal.IsUndefined() && paddingVal.IsObject() {
 				padding = make(map[string]vm.Value)
 				// Extract padding values keyed by property name
-				if plainObj := paddingVal.AsPlainObject(); plainObj != nil {
+				if paddingVal.Type() == vm.TypeObject {
+					plainObj := paddingVal.AsPlainObject()
 					for _, key := range plainObj.OwnKeys() {
 						if val, exists := plainObj.GetOwn(key); exists {
 							padding[key] = val
@@ -2052,7 +2053,8 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		var keys []string
 		iterators := make(map[string]vm.Value)
 
-		if plainObj := iterablesObj.AsPlainObject(); plainObj != nil {
+		if iterablesObj.Type() == vm.TypeObject {
+			plainObj := iterablesObj.AsPlainObject()
 			for _, key := range plainObj.OwnKeys() {
 				keys = append(keys, key)
 				item, _ := plainObj.GetOwn(key)
@@ -2068,7 +2070,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Iterator.zipKeyed: first argument must be a plain object")
 		}
 
-			// Create the zipKeyed iterator
+		// Create the zipKeyed iterator
 		zipKeyedIter := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
 		exhausted := make(map[string]bool)
 		for _, k := range keys {
@@ -2095,105 +2097,105 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return createIteratorResult(vm.Undefined, true), nil
 			}
 
-				results := make(map[string]vm.Value)
-				anyDone := false
-				allExhausted := true
+			results := make(map[string]vm.Value)
+			anyDone := false
+			allExhausted := true
 
-				for _, key := range keys {
-					if exhausted[key] {
-						// Already exhausted, use padding
-						if padding != nil {
-							if padVal, ok := padding[key]; ok {
-								results[key] = padVal
-							} else {
-								results[key] = vm.Undefined
-							}
-						} else {
-							results[key] = vm.Undefined
-						}
-						continue
-					}
-
-					allExhausted = false
-					iter := iterators[key]
-
-					nextMethod, _ := vmInstance.GetProperty(iter, "next")
-					result, err := vmInstance.Call(nextMethod, iter, []vm.Value{})
-					if err != nil {
-						return vm.Undefined, err
-					}
-
-					doneVal, _ := vmInstance.GetProperty(result, "done")
-					if doneVal.IsTruthy() {
-						exhausted[key] = true
-						anyDone = true
-						// Use padding for this key
-						if padding != nil {
-							if padVal, ok := padding[key]; ok {
-								results[key] = padVal
-							} else {
-								results[key] = vm.Undefined
-							}
+			for _, key := range keys {
+				if exhausted[key] {
+					// Already exhausted, use padding
+					if padding != nil {
+						if padVal, ok := padding[key]; ok {
+							results[key] = padVal
 						} else {
 							results[key] = vm.Undefined
 						}
 					} else {
-						valueVal, _ := vmInstance.GetProperty(result, "value")
-						results[key] = valueVal
+						results[key] = vm.Undefined
 					}
+					continue
 				}
 
-				// Handle modes
-				switch mode {
-				case "shortest":
-					if anyDone {
-						allDone = true
-						return createIteratorResult(vm.Undefined, true), nil
-					}
-				case "strict":
-					if anyDone {
-						// Check if ALL are done
-						allAreDone := true
-						for _, ex := range exhausted {
-							if !ex {
-								allAreDone = false
-								break
-							}
+				allExhausted = false
+				iter := iterators[key]
+
+				nextMethod, _ := vmInstance.GetProperty(iter, "next")
+				result, err := vmInstance.Call(nextMethod, iter, []vm.Value{})
+				if err != nil {
+					return vm.Undefined, err
+				}
+
+				doneVal, _ := vmInstance.GetProperty(result, "done")
+				if doneVal.IsTruthy() {
+					exhausted[key] = true
+					anyDone = true
+					// Use padding for this key
+					if padding != nil {
+						if padVal, ok := padding[key]; ok {
+							results[key] = padVal
+						} else {
+							results[key] = vm.Undefined
 						}
-						if !allAreDone {
-							allDone = true
-							return vm.Undefined, vmInstance.NewTypeError("Iterator.zipKeyed: iterators have different lengths in strict mode")
-						}
-						allDone = true
-						return createIteratorResult(vm.Undefined, true), nil
+					} else {
+						results[key] = vm.Undefined
 					}
-				case "longest":
-					// Check if all iterators were already exhausted at the start
-					if allExhausted {
-						allDone = true
-						return createIteratorResult(vm.Undefined, true), nil
-					}
-					// Also check if all iterators became exhausted during this iteration
-					nowAllExhausted := true
+				} else {
+					valueVal, _ := vmInstance.GetProperty(result, "value")
+					results[key] = valueVal
+				}
+			}
+
+			// Handle modes
+			switch mode {
+			case "shortest":
+				if anyDone {
+					allDone = true
+					return createIteratorResult(vm.Undefined, true), nil
+				}
+			case "strict":
+				if anyDone {
+					// Check if ALL are done
+					allAreDone := true
 					for _, ex := range exhausted {
 						if !ex {
-							nowAllExhausted = false
+							allAreDone = false
 							break
 						}
 					}
-					if nowAllExhausted {
+					if !allAreDone {
 						allDone = true
-						return createIteratorResult(vm.Undefined, true), nil
+						return vm.Undefined, vmInstance.NewTypeError("Iterator.zipKeyed: iterators have different lengths in strict mode")
+					}
+					allDone = true
+					return createIteratorResult(vm.Undefined, true), nil
+				}
+			case "longest":
+				// Check if all iterators were already exhausted at the start
+				if allExhausted {
+					allDone = true
+					return createIteratorResult(vm.Undefined, true), nil
+				}
+				// Also check if all iterators became exhausted during this iteration
+				nowAllExhausted := true
+				for _, ex := range exhausted {
+					if !ex {
+						nowAllExhausted = false
+						break
 					}
 				}
-
-				// Create result object
-				resultObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				for _, key := range keys {
-					resultObj.SetOwn(key, results[key])
+				if nowAllExhausted {
+					allDone = true
+					return createIteratorResult(vm.Undefined, true), nil
 				}
-				return createIteratorResult(vm.NewValueFromPlainObject(resultObj), false), nil
-			}))
+			}
+
+			// Create result object
+			resultObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			for _, key := range keys {
+				resultObj.SetOwn(key, results[key])
+			}
+			return createIteratorResult(vm.NewValueFromPlainObject(resultObj), false), nil
+		}))
 
 		// Add return method to close all iterators
 		zipKeyedIter.SetOwnNonEnumerable("return", vm.NewNativeFunction(0, false, "return", func(innerArgs []vm.Value) (vm.Value, error) {
