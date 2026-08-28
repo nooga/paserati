@@ -116,6 +116,18 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		return nil, err
 	}
 
+	// Specifier aliases (fs vs node:fs) share one record keyed by resolved path.
+	if resolved.ResolvedPath != "" {
+		if existing := ml.registry.GetByResolvedPath(resolved.ResolvedPath); existing != nil {
+			if resolved.Source != nil {
+				_ = resolved.Source.Close()
+			}
+			ml.registry.Set(specifier, existing)
+			debugPrintf("// [ModuleLoader] Aliased specifier %s -> existing %s\n", specifier, resolved.ResolvedPath)
+			return existing, nil
+		}
+	}
+
 	// Create module record
 	record := &ModuleRecord{
 		Specifier:    specifier,

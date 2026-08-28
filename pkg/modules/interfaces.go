@@ -83,6 +83,10 @@ type ModuleRegistry interface {
 	// Get retrieves a module record by specifier
 	Get(specifier string) *ModuleRecord
 
+	// GetByResolvedPath retrieves a module record by canonical resolved path.
+	// Specifier aliases (fs vs node:fs, ./foo vs ./foo.ts) share one record.
+	GetByResolvedPath(resolvedPath string) *ModuleRecord
+
 	// Set stores a module record
 	Set(specifier string, record *ModuleRecord)
 
