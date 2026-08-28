@@ -13794,9 +13794,31 @@ startExecution:
 				vm.pendingAction = ActionNone
 				vm.pendingValue = Undefined
 				vm.throwException(savedValue)
-				// If handler was found (unwinding=false), refresh local state from frame
-				// because throwException -> unwindException may have changed frame.ip
-				if !vm.unwinding {
+				// throwException -> unwindException may have popped every
+				// frame (uncaught exception) or crossed a native boundary;
+				// in either case there's no valid frame left to resync into
+				// or continue executing against, so return immediately
+				// instead of falling through to `continue` with a stale
+				// frame/code/ip - same shape as OpThrow's own handling just
+				// above.
+				if vm.unwinding {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
+						return InterpretRuntimeError, vm.currentException
+					}
+					// Still unwinding but hasn't hit a native boundary or
+					// been fully unwound - reload frame state and let the
+					// loop continue searching for a handler.
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+				} else {
+					// Handler was found - refresh local state from frame
+					// because throwException -> unwindException may have
+					// changed frame.ip
 					frame = &vm.frames[vm.frameCount-1]
 					closure = frame.closure
 					function = closure.Fn
@@ -15548,6 +15570,31 @@ startExecution:
 				vm.pendingValue = Undefined
 				// fmt.Printf("[DEBUG] Re-throwing saved exception: %s\n", savedValue.ToString())
 				vm.throwException(savedValue)
+				// Same shape as OpThrow/OpHandlePending's ActionThrow: a
+				// fully-unwound (uncaught) exception or a native-boundary
+				// crossing leaves no valid frame to resync into or keep
+				// executing against - return immediately rather than
+				// `continue`ing with a stale frame/code/ip.
+				if vm.unwinding {
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
+						return InterpretRuntimeError, vm.currentException
+					}
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+				} else {
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+				}
 				continue // Let exception unwinding take over
 			case ActionReturn:
 				// Resume the return with saved value
