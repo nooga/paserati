@@ -4013,6 +4013,11 @@ func (c *Checker) IsModuleMode() bool {
 	return c.moduleEnv != nil
 }
 
+// DisableModuleMode type-checks subsequent programs as scripts (no ESM module environment).
+func (c *Checker) DisableModuleMode() {
+	c.moduleEnv = nil
+}
+
 // GetImportBindings returns all import bindings from the module environment
 // This is used by the compiler to synchronize import information
 func (c *Checker) GetImportBindings() map[string]*ImportBinding {
