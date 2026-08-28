@@ -5,7 +5,6 @@ import (
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
-	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
 
@@ -382,34 +381,13 @@ func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parse
 
 		// Handle assignment based on target type (identifier vs nested pattern)
 		if ident, ok := prop.Target.(*parser.Identifier); ok {
-			// Simple identifier target
-			if prop.Default != nil {
-				// First, define the variable to reserve the name and get the target register
-				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Any, line)
-				if err != nil {
-					c.regAlloc.Free(extractedReg)
-					return err
-				}
-
-				// Get the target identifier for conditional assignment
-				targetIdent := &parser.Identifier{
-					Token: ident.Token,
-					Value: ident.Value,
-				}
-
-				// Use conditional assignment: target = extractedReg !== undefined ? extractedReg : defaultExpr
-				err = c.compileConditionalAssignment(targetIdent, extractedReg, prop.Default, line)
-				if err != nil {
-					c.regAlloc.Free(extractedReg)
-					return err
-				}
-			} else {
-				// Define variable with extracted value
-				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, extractedReg, line)
-				if err != nil {
-					c.regAlloc.Free(extractedReg)
-					return err
-				}
+			// Simple identifier target. Compute default first so const
+			// bindings (pre-declared via DefineConstTDZ) are initialized
+			// rather than assigned after the fact.
+			err := c.defineIdentWithOptionalDefault(ident.Value, node.IsConst, extractedReg, prop.Default, line)
+			if err != nil {
+				c.regAlloc.Free(extractedReg)
+				return err
 			}
 		} else {
 			// Nested pattern target (ArrayLiteral or ObjectLiteral)
