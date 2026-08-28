@@ -26,3 +26,45 @@ func (vm *VM) DrainMicrotasks() {
 		}
 	}
 }
+
+// DrainUntilIdle runs the full host event-loop drain: nextTicks, microtasks,
+// due timers, macrotasks, then waits for external ops or future timers.
+func (vm *VM) DrainUntilIdle() {
+	rt := vm.GetAsyncRuntime()
+	iterations := 0
+	for {
+		if rt.RunNextTicks() {
+			iterations++
+			continue
+		}
+		if rt.RunUntilIdle() {
+			iterations++
+			continue
+		}
+		if rt.RunDueTimers() {
+			iterations++
+			continue
+		}
+		if rt.RunMacrotasks() {
+			iterations++
+			continue
+		}
+		if rt.HasPendingExternalOps() {
+			rt.WaitForExternalOp()
+			iterations++
+			continue
+		}
+		if rt.HasPendingTimers() {
+			rt.WaitForIdleProgress()
+			iterations++
+			continue
+		}
+		if !rt.HasPendingWork() {
+			return
+		}
+		iterations++
+		if iterations > 1_000_000 {
+			return
+		}
+	}
+}

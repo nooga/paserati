@@ -1125,8 +1125,8 @@ func (p *Paserati) runAsModule(sourceCode string, program *parser.Program, modul
 	// Execute the chunk
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
 
-	// Drain microtasks for async operations (Promises, etc.)
-	p.vmInstance.DrainMicrotasks()
+	// Drain async work (microtasks, timers, etc.) until idle
+	p.vmInstance.DrainUntilIdle()
 
 	return finalValue, runtimeErrs
 }
