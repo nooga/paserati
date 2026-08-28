@@ -14319,15 +14319,23 @@ startExecution:
 				if awaitedPromise.State == PromisePending {
 					rt := vm.GetAsyncRuntime()
 					for awaitedPromise.State == PromisePending {
-						if !rt.RunUntilIdle() {
-							// No microtasks to run - check for pending external operations
-							hasPending := rt.HasPendingExternalOps()
-							if hasPending {
-								// Wait for an external operation to complete
-								// This will block until EndExternalOp is called
-								rt.WaitForExternalOp()
-								continue
-							}
+						progress := false
+						if rt.RunNextTicks() {
+							progress = true
+						} else if rt.RunUntilIdle() {
+							progress = true
+						} else if rt.RunDueTimers() {
+							progress = true
+						} else if rt.RunMacrotasks() {
+							progress = true
+						} else if rt.HasPendingExternalOps() {
+							rt.WaitForExternalOp()
+							progress = true
+						} else if rt.HasPendingTimers() {
+							rt.WaitForIdleProgress()
+							progress = true
+						}
+						if !progress {
 							frame.ip = ip
 							status := vm.runtimeError("Top-level await: promise remains pending with no microtasks to process")
 							return status, Undefined
