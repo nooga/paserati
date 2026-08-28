@@ -181,10 +181,10 @@ Node order: nextTick → microtasks → timers → I/O → setImmediate. Putting
 
 Once Phase 0 is on paserati `main` (or a `replace` directive):
 
-1. `github.com/nooga/noderati` with `go.work` pointing at local paserati.
-2. `cmd/noderati` — Node-shaped CLI: file, `-e`, `-p`, REPL, `process.argv = [execPath, script, …]`, exit 0/1 not sysexits 70.
-3. `DeclareModule("path"|"os"|"util")` + aliases; own `process` initializer.
-4. Then `fs` sync + `fs.promises` (fetch pattern), `Buffer`, timers (needs Phase 1), `events`/`stream`, then `require` (needs Phase 2).
+- [x] Sister module [`github.com/nooga/noderati`](https://github.com/nooga/noderati) (local: `../noderati`) with `go.work` replacing Paserati to this worktree.
+- [x] `cmd/noderati` — file, `-e`, `-p`, REPL; `process.argv = [execPath, script, …]`; exit 0/1.
+- [x] `DeclareModule("path"|"os"|"util")` + `node:` aliases; noderati-owned `process`; Paserati `NewHostTimerInitializer`.
+- [ ] `fs` sync + `fs.promises` (fetch pattern), `Buffer`, `events`/`stream`, `require` / `node_modules`.
 
 N-API / `.node` files stay optional and CGO-tagged in noderati. Keep CGO out of paserati.
 
