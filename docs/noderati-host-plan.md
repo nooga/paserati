@@ -159,11 +159,11 @@ Node order: nextTick → microtasks → timers → I/O → setImmediate. Putting
 
 ## Phase 4 — `AsyncFunction` actually returns a Promise
 
-[`ModuleBuilder.AsyncFunction`](../pkg/driver/native_module.go) delegates to `Function` (sync). Fine for `path.join`; a lie for `fs.promises.readFile`.
+[`ModuleBuilder.AsyncFunction`](../pkg/driver/native_module.go) wraps the Go function so the JS value is a fulfilled/rejected Promise (`NewResolvedPromise` / `NewRejectedPromise`). The Go body still runs on the caller thread.
 
-**Advice:** noderati should **not wait** on this for I/O. Use the fetch pattern. Still fix the declarative API so hosts are not surprised.
+**Advice:** noderati should **not wait** on this for I/O. Use the fetch pattern. The declarative API no longer lies for `path.join`-style helpers that happen to be async in Node.
 
-**Tests:** `AsyncFunction` returning a Go `string` is thenable; `await` gets the string.
+**Tests:** [`pkg/driver/host_async_function_test.go`](../pkg/driver/host_async_function_test.go) — `AsyncFunction` returning a Go `string` is thenable; `await` gets the string; Go `error` rejects and is catchable.
 
 ---
 
