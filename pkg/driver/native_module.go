@@ -26,6 +26,10 @@ type ModuleBuilder struct {
 
 	// VM instance for creating runtime objects
 	vm *vm.VM
+
+	// Default export (applied after the builder callback returns)
+	hasDefault   bool
+	defaultValue interface{} // nil means "namespace of named exports"
 }
 
 // NamespaceBuilder provides API for building namespaces within modules
@@ -169,10 +173,51 @@ func (m *ModuleBuilder) Type(name string, typedef interface{}) *ModuleBuilder {
 	return m
 }
 
-// Default sets the default export (TODO: implement)
+// Default sets the ESM default export.
+//
+// Passing nil makes the default a namespace object containing every named
+// export (Node CJS interop: `import fs from "fs"`). Named exports must be
+// registered before Default(nil); it is applied when the builder returns.
 func (m *ModuleBuilder) Default(value interface{}) *ModuleBuilder {
-	// TODO: implement default export
+	m.hasDefault = true
+	m.defaultValue = value
 	return m
+}
+
+func (m *ModuleBuilder) applyDefaultExport() {
+	if !m.hasDefault {
+		return
+	}
+
+	if m.defaultValue == nil {
+		proto := vm.Undefined
+		if m.vm != nil {
+			proto = m.vm.ObjectPrototype
+		}
+		nsType := types.NewObjectType()
+		nsObj := vm.NewObject(proto).AsPlainObject()
+		for name, typ := range m.exports {
+			if name == "default" {
+				continue
+			}
+			nsType = nsType.WithProperty(name, typ)
+			if val, ok := m.values[name]; ok {
+				nsObj.SetOwn(name, val)
+			}
+		}
+		m.exports["default"] = nsType
+		m.values["default"] = vm.NewValueFromPlainObject(nsObj)
+		return
+	}
+
+	if reflect.TypeOf(m.defaultValue) != nil && reflect.TypeOf(m.defaultValue).Kind() == reflect.Func {
+		m.exports["default"] = m.goFunctionToTSType(m.defaultValue)
+		m.values["default"] = m.goFunctionToVM(m.defaultValue)
+		return
+	}
+
+	m.exports["default"] = m.goValueToTSType(m.defaultValue)
+	m.values["default"] = m.goValueToVM(m.defaultValue)
 }
 
 // NamespaceBuilder methods (similar to ModuleBuilder)
@@ -1143,7 +1188,7 @@ func (r *NativeModuleResolver) Resolve(specifier string, fromPath string) (*modu
 
 	return &modules.ResolvedModule{
 		Specifier:    specifier,
-		ResolvedPath: "native://" + specifier,
+		ResolvedPath: "native://" + module.name,
 		Source:       &NativeModuleSource{module: module, isNativeModule: true},
 		Resolver:     "native",
 	}, nil
@@ -1164,6 +1209,31 @@ func (p *Paserati) DeclareModule(name string, builder func(m *ModuleBuilder)) *N
 
 	p.nativeResolver.RegisterModule(name, module)
 	return module
+}
+
+// DeclareModuleAlias registers alias as another specifier for an existing
+// native module (e.g. "node:fs" → "fs"). Both specifiers resolve to the same
+// NativeModule and, once loaded, the same ModuleRecord.
+func (p *Paserati) DeclareModuleAlias(alias, canonical string) error {
+	if alias == "" || canonical == "" {
+		return fmt.Errorf("DeclareModuleAlias: alias and name must be non-empty")
+	}
+	if p.nativeResolver == nil {
+		return fmt.Errorf("DeclareModuleAlias: no native module %q (call DeclareModule first)", canonical)
+	}
+	return p.nativeResolver.RegisterAlias(alias, canonical)
+}
+
+func (r *NativeModuleResolver) RegisterAlias(alias, canonical string) error {
+	module, ok := r.modules[canonical]
+	if !ok {
+		return fmt.Errorf("native module %q is not declared", canonical)
+	}
+	if existing, exists := r.modules[alias]; exists && existing != module {
+		return fmt.Errorf("alias %q is already registered to a different module", alias)
+	}
+	r.modules[alias] = module
+	return nil
 }
 
 // GetName implements the NativeModuleInterface
@@ -1188,6 +1258,7 @@ func (nm *NativeModule) initializeNativeModule(vmInstance *vm.VM) map[string]vm.
 
 		// Call the user's builder function
 		nm.builder(builder)
+		builder.applyDefaultExport()
 
 		// Store the results
 		nm.exports = builder.exports // Type information

@@ -606,6 +606,22 @@ func (p *Paserati) GetVM() *vm.VM {
 	return p.vmInstance
 }
 
+// GetModuleLoader returns the session's module loader so a host (e.g. noderati)
+// can inspect cache state or load modules without reaching into unexported fields.
+func (p *Paserati) GetModuleLoader() modules.ModuleLoader {
+	return p.moduleLoader
+}
+
+// AddResolver appends a module resolver to the loader chain and re-sorts by
+// Priority() (lower = earlier). Native modules are -100; the filesystem resolver
+// is 100. A Node node_modules resolver should sit in between (e.g. 0).
+func (p *Paserati) AddResolver(resolver modules.ModuleResolver) {
+	if p.moduleLoader == nil || resolver == nil {
+		return
+	}
+	p.moduleLoader.AddResolver(resolver)
+}
+
 // CompileModule compiles a module file with proper dependency resolution
 // This is used by the test framework to compile modules with full module loading
 func (p *Paserati) CompileModule(filename string) (*vm.Chunk, []errors.PaseratiError) {

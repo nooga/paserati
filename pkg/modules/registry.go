@@ -7,10 +7,11 @@ import (
 
 // registry implements the ModuleRegistry interface
 type registry struct {
-	modules   map[string]*ModuleRecord // Map of specifier -> module record
-	mutex     sync.RWMutex             // Protects concurrent access
-	stats     RegistryStats            // Performance statistics
-	config    *LoaderConfig            // Configuration
+	modules map[string]*ModuleRecord // Map of specifier -> module record
+	byPath  map[string]*ModuleRecord // Map of resolved path -> canonical record
+	mutex   sync.RWMutex             // Protects concurrent access
+	stats   RegistryStats            // Performance statistics
+	config  *LoaderConfig            // Configuration
 }
 
 // NewRegistry creates a new module registry
@@ -18,9 +19,10 @@ func NewRegistry(config *LoaderConfig) ModuleRegistry {
 	if config == nil {
 		config = DefaultLoaderConfig()
 	}
-	
+
 	return &registry{
 		modules: make(map[string]*ModuleRecord),
+		byPath:  make(map[string]*ModuleRecord),
 		config:  config,
 		stats:   RegistryStats{},
 	}
@@ -30,11 +32,11 @@ func NewRegistry(config *LoaderConfig) ModuleRegistry {
 func (r *registry) Get(specifier string) *ModuleRecord {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	
+
 	record := r.modules[specifier]
 	if record != nil {
 		r.stats.CacheHits++
-		
+
 		// Check TTL if configured
 		if r.config.CacheTTL > 0 {
 			if time.Since(record.LoadTime) > r.config.CacheTTL {
@@ -46,40 +48,52 @@ func (r *registry) Get(specifier string) *ModuleRecord {
 	} else {
 		r.stats.CacheMisses++
 	}
-	
+
 	return record
+}
+
+// GetByResolvedPath retrieves a module record by canonical resolved path.
+func (r *registry) GetByResolvedPath(resolvedPath string) *ModuleRecord {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	if resolvedPath == "" {
+		return nil
+	}
+	return r.byPath[resolvedPath]
 }
 
 // Set stores a module record
 func (r *registry) Set(specifier string, record *ModuleRecord) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	
+
 	// Check cache size limits
 	if r.config.CacheSize > 0 && len(r.modules) >= r.config.CacheSize {
 		// Remove oldest module if at capacity
 		r.evictOldest()
 	}
-	
+
 	// Update statistics
 	if r.modules[specifier] == nil {
 		r.stats.TotalModules++
 	}
-	
+
 	if record.State == ModuleCompiled {
 		r.stats.LoadedModules++
 	} else if record.State == ModuleError {
 		r.stats.FailedModules++
 	}
-	
+
 	r.modules[specifier] = record
+	r.indexResolvedPathLocked(record)
 }
 
 // SetParsed updates a module record with parse results
 func (r *registry) SetParsed(specifier string, result *ParseResult) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	
+
 	record := r.modules[specifier]
 	if record == nil {
 		// Create new record if it doesn't exist
@@ -90,18 +104,19 @@ func (r *registry) SetParsed(specifier string, result *ParseResult) {
 			LoadTime:     time.Now(),
 		}
 		r.modules[specifier] = record
+		r.indexResolvedPathLocked(record)
 		r.stats.TotalModules++
 	}
-	
+
 	// Update with parse results
 	record.AST = result.AST
 	record.ParseDuration = result.ParseDuration
 	record.WorkerID = result.WorkerID
 	record.Error = result.Error
-	
+
 	if result.Error == nil {
 		record.State = ModuleParsed
-		
+
 		// Extract dependencies from import specs
 		record.Dependencies = make([]string, len(result.ImportSpecs))
 		for i, importSpec := range result.ImportSpecs {
@@ -117,11 +132,12 @@ func (r *registry) SetParsed(specifier string, result *ParseResult) {
 func (r *registry) Remove(specifier string) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	
+
 	if record := r.modules[specifier]; record != nil {
 		delete(r.modules, specifier)
 		r.stats.TotalModules--
-		
+		r.unindexResolvedPathLocked(record)
+
 		if record.State == ModuleCompiled {
 			r.stats.LoadedModules--
 		} else if record.State == ModuleError {
@@ -134,8 +150,9 @@ func (r *registry) Remove(specifier string) {
 func (r *registry) Clear() {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	
+
 	r.modules = make(map[string]*ModuleRecord)
+	r.byPath = make(map[string]*ModuleRecord)
 	r.stats = RegistryStats{}
 }
 
@@ -143,12 +160,12 @@ func (r *registry) Clear() {
 func (r *registry) List() []string {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	
+
 	specifiers := make([]string, 0, len(r.modules))
 	for specifier := range r.modules {
 		specifiers = append(specifiers, specifier)
 	}
-	
+
 	return specifiers
 }
 
@@ -156,7 +173,7 @@ func (r *registry) List() []string {
 func (r *registry) Size() int {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	
+
 	return len(r.modules)
 }
 
@@ -164,7 +181,7 @@ func (r *registry) Size() int {
 func (r *registry) GetStats() RegistryStats {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	
+
 	// Calculate approximate memory usage
 	memoryUsage := int64(len(r.modules) * 1000) // Rough estimate per module
 	for _, record := range r.modules {
@@ -172,7 +189,7 @@ func (r *registry) GetStats() RegistryStats {
 			memoryUsage += int64(len(record.Source.Content))
 		}
 	}
-	
+
 	stats := r.stats
 	stats.MemoryUsage = memoryUsage
 	return stats
@@ -182,10 +199,10 @@ func (r *registry) GetStats() RegistryStats {
 func (r *registry) UpdateState(specifier string, state ModuleState) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	
+
 	if record := r.modules[specifier]; record != nil {
 		record.State = state
-		
+
 		// Update completion time if module is fully processed
 		if state == ModuleCompiled || state == ModuleError {
 			record.CompleteTime = time.Now()
@@ -197,7 +214,7 @@ func (r *registry) UpdateState(specifier string, state ModuleState) {
 func (r *registry) GetDependents(specifier string) []string {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	
+
 	var dependents []string
 	for _, record := range r.modules {
 		for _, dep := range record.Dependencies {
@@ -207,7 +224,7 @@ func (r *registry) GetDependents(specifier string) []string {
 			}
 		}
 	}
-	
+
 	return dependents
 }
 
@@ -215,7 +232,7 @@ func (r *registry) GetDependents(specifier string) []string {
 func (r *registry) evictOldest() {
 	var oldestSpecifier string
 	var oldestTime time.Time
-	
+
 	first := true
 	for specifier, record := range r.modules {
 		if first || record.LoadTime.Before(oldestTime) {
@@ -224,27 +241,50 @@ func (r *registry) evictOldest() {
 			first = false
 		}
 	}
-	
+
 	if oldestSpecifier != "" {
+		record := r.modules[oldestSpecifier]
 		delete(r.modules, oldestSpecifier)
 		r.stats.TotalModules--
+		r.unindexResolvedPathLocked(record)
 	}
+}
+
+func (r *registry) indexResolvedPathLocked(record *ModuleRecord) {
+	if record != nil && record.ResolvedPath != "" {
+		r.byPath[record.ResolvedPath] = record
+	}
+}
+
+func (r *registry) unindexResolvedPathLocked(record *ModuleRecord) {
+	if record == nil || record.ResolvedPath == "" {
+		return
+	}
+	if r.byPath[record.ResolvedPath] != record {
+		return
+	}
+	for _, rec := range r.modules {
+		if rec == record {
+			return // still referenced by another specifier alias
+		}
+	}
+	delete(r.byPath, record.ResolvedPath)
 }
 
 // IsStale returns true if a module should be reloaded due to TTL expiry
 func (r *registry) IsStale(specifier string) bool {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	
+
 	record := r.modules[specifier]
 	if record == nil {
 		return true // Not cached, needs loading
 	}
-	
+
 	if r.config.CacheTTL > 0 {
 		return time.Since(record.LoadTime) > r.config.CacheTTL
 	}
-	
+
 	return false // No TTL configured, never stale
 }
 
@@ -252,13 +292,13 @@ func (r *registry) IsStale(specifier string) bool {
 func (r *registry) GetByState(state ModuleState) []*ModuleRecord {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	
+
 	var modules []*ModuleRecord
 	for _, record := range r.modules {
 		if record.State == state {
 			modules = append(modules, record)
 		}
 	}
-	
+
 	return modules
 }
