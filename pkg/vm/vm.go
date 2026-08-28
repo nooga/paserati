@@ -367,6 +367,7 @@ type VM struct {
 	moduleContexts    map[string]*ModuleContext // Cached module contexts by path
 	moduleLoader      ModuleLoader              // Reference to module loader for loading modules
 	currentModulePath string                    // Currently executing module path (for module-scoped globals)
+	importMetaBaseDir string                    // FS resolver base dir; relative module paths Abs against this
 
 	// Async runtime (Phase 6 - Async/Await)
 	asyncRuntime runtime.AsyncRuntime
@@ -948,6 +949,12 @@ func (vm *VM) IsOriginalEval(v Value) bool {
 // SetCurrentModulePath sets the current module path for module-specific features like import.meta
 func (vm *VM) SetCurrentModulePath(modulePath string) {
 	vm.currentModulePath = modulePath
+}
+
+// SetImportMetaBaseDir sets the directory used to absolutize relative filesystem
+// module paths when building import.meta.url (DirFS resolved paths are not OS-absolute).
+func (vm *VM) SetImportMetaBaseDir(baseDir string) {
+	vm.importMetaBaseDir = baseDir
 }
 
 // GetGlobal retrieves a global variable by name
@@ -12415,10 +12422,9 @@ startExecution:
 			importMetaValue := NewDictObject(vm.ObjectPrototype)
 			importMetaObj := importMetaValue.AsDictObject()
 
-			// Set import.meta.url property to the current module path
-			// In a real environment this would be a file:// URL, but we use the module path
-			if vm.currentModulePath != "" {
-				importMetaObj.SetOwn("url", NewString(vm.currentModulePath))
+			// Set import.meta.url to a file:// URL for filesystem modules (native:// unchanged).
+			if url := ImportMetaURLWithBase(vm.currentModulePath, vm.importMetaBaseDir); url != "" {
+				importMetaObj.SetOwn("url", NewString(url))
 			} else {
 				// If not in a module context, use undefined (though this shouldn't happen)
 				importMetaObj.SetOwn("url", Undefined)
