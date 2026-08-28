@@ -106,10 +106,53 @@ func (m *ModuleBuilder) Function(name string, fn interface{}) *ModuleBuilder {
 	return m
 }
 
-// AsyncFunction adds an async function to the module (TODO: implement Promise wrapping)
+// AsyncFunction adds a function whose JS return value is a Promise.
+// The Go implementation still runs synchronously on the caller's thread
+// (do not use this for real I/O — copy the fetch BeginExternalOp pattern).
 func (m *ModuleBuilder) AsyncFunction(name string, fn interface{}) *ModuleBuilder {
-	// For now, just treat as regular function
-	return m.Function(name, fn)
+	m.exports[name] = goAsyncFunctionToTSType(fn)
+	m.values[name] = wrapNativeAsAsync(m.vm, name, goFunctionToVM(fn))
+	return m
+}
+
+func goAsyncFunctionToTSType(fn interface{}) types.Type {
+	fnType := reflect.TypeOf(fn)
+	if fnType.Kind() != reflect.Func {
+		return types.Any
+	}
+	params := make([]types.Type, fnType.NumIn())
+	for i := 0; i < fnType.NumIn(); i++ {
+		params[i] = goTypeToTSType(fnType.In(i))
+	}
+	var returnType types.Type = types.Void
+	if fnType.NumOut() > 0 {
+		returnType = goTypeToTSType(fnType.Out(0))
+	}
+	if returnType == nil {
+		returnType = types.Any
+	}
+	promiseRet := types.NewInstantiatedType(types.PromiseGeneric, []types.Type{returnType})
+	return types.NewSimpleFunction(params, promiseRet)
+}
+
+func wrapNativeAsAsync(vmInst *vm.VM, name string, inner vm.Value) vm.Value {
+	if vmInst == nil || !inner.IsCallable() {
+		return inner
+	}
+	arity := 0
+	variadic := true
+	if inner.Type() == vm.TypeNativeFunction {
+		nf := inner.AsNativeFunction()
+		arity = nf.Arity
+		variadic = nf.Variadic
+	}
+	return vm.NewNativeFunction(arity, variadic, name, func(args []vm.Value) (vm.Value, error) {
+		result, err := vmInst.Call(inner, vm.Undefined, args)
+		if err != nil {
+			return vmInst.NewRejectedPromise(vm.NewString(err.Error())), nil
+		}
+		return vmInst.NewResolvedPromise(result), nil
+	})
 }
 
 // Constructor adds a constructor function to the module
