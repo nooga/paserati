@@ -489,13 +489,11 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, err
 			}
 		}
-		// Convert to UTF-16 code units for proper JavaScript string semantics
-		utf16Units := vm.StringToUTF16(thisStr)
-		if index < 0 || index >= len(utf16Units) {
-			return vm.NewString(""), nil
+		// Return the character at the UTF-16 code unit index
+		if ch, ok := vm.UTF16CharAt(thisStr, index); ok {
+			return vm.NewString(ch), nil
 		}
-		// Return the character at the UTF-16 index
-		return vm.NewString(string(rune(utf16Units[index]))), nil
+		return vm.NewString(""), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("charCodeAt", vm.NewNativeFunction(1, false, "charCodeAt", func(args []vm.Value) (vm.Value, error) {
@@ -519,12 +517,10 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, err
 			}
 		}
-		// Convert to UTF-16 code units for proper JavaScript string semantics
-		utf16Units := vm.StringToUTF16(thisStr)
-		if index < 0 || index >= len(utf16Units) {
-			return vm.NaN, nil // Return NaN for out of bounds
+		if u, ok := vm.UTF16CodeUnitAt(thisStr, index); ok {
+			return vm.NumberValue(float64(u)), nil
 		}
-		return vm.NumberValue(float64(utf16Units[index])), nil
+		return vm.NaN, nil // Return NaN for out of bounds
 	}))
 
 	// String.prototype.at - returns character at relative index (supports negative indices)
@@ -540,9 +536,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		// Convert to UTF-16 code units for proper JavaScript string semantics
-		utf16Units := vm.StringToUTF16(thisStr)
-		length := len(utf16Units)
+		length := vm.UTF16Length(thisStr)
 
 		// Default to 0 if no argument provided, using proper ToInteger conversion
 		// that throws TypeError for Symbols
@@ -560,13 +554,11 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			index = length + index
 		}
 
-		// Return undefined if out of bounds
-		if index < 0 || index >= length {
-			return vm.Undefined, nil
+		// Return the character at the UTF-16 code unit index
+		if ch, ok := vm.UTF16CharAt(thisStr, index); ok {
+			return vm.NewString(ch), nil
 		}
-
-		// Return the character at the UTF-16 index
-		return vm.NewString(string(rune(utf16Units[index]))), nil
+		return vm.Undefined, nil
 	}))
 
 	// String.prototype.codePointAt - returns code point at position (handles surrogate pairs)
@@ -582,10 +574,6 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		// Convert to UTF-16 code units for proper JavaScript string semantics
-		utf16Units := vm.StringToUTF16(thisStr)
-		size := len(utf16Units)
-
 		// Default to 0 if no argument provided, using proper ToInteger conversion
 		// that throws TypeError for Symbols
 		position := 0
@@ -597,31 +585,12 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// Return undefined if out of bounds
-		if position < 0 || position >= size {
-			return vm.Undefined, nil
+		// UTF16CodePointAt combines a surrogate pair when position points at a
+		// lead surrogate followed by a trail surrogate, and reports out-of-range.
+		if cp, ok := vm.UTF16CodePointAt(thisStr, position); ok {
+			return vm.NumberValue(float64(cp)), nil
 		}
-
-		// Get the first code unit
-		first := utf16Units[position]
-
-		// If not a lead surrogate, or at end of string, return the code unit
-		if first < 0xD800 || first > 0xDBFF || position+1 >= size {
-			return vm.NumberValue(float64(first)), nil
-		}
-
-		// Get the second code unit
-		second := utf16Units[position+1]
-
-		// If not a trail surrogate, return the lead surrogate
-		if second < 0xDC00 || second > 0xDFFF {
-			return vm.NumberValue(float64(first)), nil
-		}
-
-		// Compute the full code point from surrogate pair
-		// Formula: (first - 0xD800) * 0x400 + (second - 0xDC00) + 0x10000
-		codePoint := (int(first)-0xD800)*0x400 + (int(second) - 0xDC00) + 0x10000
-		return vm.NumberValue(float64(codePoint)), nil
+		return vm.Undefined, nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("slice", vm.NewNativeFunction(2, false, "slice", func(args []vm.Value) (vm.Value, error) {

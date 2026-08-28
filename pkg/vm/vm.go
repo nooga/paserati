@@ -7204,11 +7204,10 @@ startExecution:
 						registers[destReg] = Undefined
 					} else {
 						idx := int(numIdx)
-						runes := []rune(str)
-						if idx < 0 || idx >= len(runes) {
-							registers[destReg] = Undefined // Out of bounds -> undefined
+						if ch, ok := UTF16CharAt(str, idx); ok {
+							registers[destReg] = String(ch) // Return code unit as string
 						} else {
-							registers[destReg] = String(string(runes[idx])) // Return char as string
+							registers[destReg] = Undefined // Out of bounds -> undefined
 						}
 					}
 				} else {
@@ -16649,77 +16648,8 @@ func compareStrings(a, b string) int {
 	return compareStringsUTF16(a, b)
 }
 
-// UTF16Length returns the number of UTF-16 code units in a string
-// This is the correct length for JavaScript string.length property
-func UTF16Length(s string) int {
-	return len(StringToUTF16(s))
-}
-
-// StringToUTF16 converts a Go string (UTF-8/WTF-8) to UTF-16 code units
-// This handles WTF-8 encoded lone surrogates that our lexer produces
-func StringToUTF16(s string) []uint16 {
-	result := make([]uint16, 0, len(s))
-	bytes := []byte(s)
-	i := 0
-
-	for i < len(bytes) {
-		b := bytes[i]
-		if b < 0x80 {
-			// ASCII
-			result = append(result, uint16(b))
-			i++
-		} else if b < 0xC0 {
-			// Invalid leading byte, treat as single byte
-			result = append(result, uint16(b))
-			i++
-		} else if b < 0xE0 {
-			// 2-byte sequence
-			if i+1 < len(bytes) {
-				r := rune(b&0x1F)<<6 | rune(bytes[i+1]&0x3F)
-				result = append(result, uint16(r))
-				i += 2
-			} else {
-				result = append(result, uint16(b))
-				i++
-			}
-		} else if b < 0xF0 {
-			// 3-byte sequence - check for WTF-8 surrogate encoding
-			if i+2 < len(bytes) {
-				b2 := bytes[i+1]
-				b3 := bytes[i+2]
-				// Decode the code point
-				r := rune(b&0x0F)<<12 | rune(b2&0x3F)<<6 | rune(b3&0x3F)
-				// This handles both regular BMP chars and WTF-8 surrogates
-				result = append(result, uint16(r))
-				i += 3
-			} else {
-				result = append(result, uint16(b))
-				i++
-			}
-		} else if b < 0xF8 {
-			// 4-byte sequence - supplementary character
-			if i+3 < len(bytes) {
-				r := rune(b&0x07)<<18 | rune(bytes[i+1]&0x3F)<<12 |
-					rune(bytes[i+2]&0x3F)<<6 | rune(bytes[i+3]&0x3F)
-				// Convert to surrogate pair
-				r -= 0x10000
-				high := uint16(0xD800 + (r >> 10))
-				low := uint16(0xDC00 + (r & 0x3FF))
-				result = append(result, high, low)
-				i += 4
-			} else {
-				result = append(result, uint16(b))
-				i++
-			}
-		} else {
-			// Invalid UTF-8 leading byte
-			result = append(result, uint16(b))
-			i++
-		}
-	}
-
-	return result
-}
+// UTF16Length, StringToUTF16, UTF16CodeUnitAt, UTF16CodePointAt and the string
+// classification cache that backs them live in string_utf16.go.
 
 // UTF16ToString converts a slice of UTF-16 code units back to a Go string
 // This preserves lone surrogates using WTF-8 encoding (same as lexer)
