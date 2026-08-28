@@ -148,12 +148,12 @@ Node order: nextTick → microtasks → timers → I/O → setImmediate. Putting
 
 **Paserati work:**
 
-- [ ] Emit `file://` URLs for filesystem modules (absolute path, proper slashes, encode).
-- [ ] Native modules can stay `native://fs` (or omit `.url` consumers).
+- [x] Emit `file://` URLs for filesystem modules (absolute path, proper slashes, encode).
+- [x] Native modules can stay `native://fs` (or omit `.url` consumers).
 
 **Advice:** this is a VM/driver change, not noderati. Do it before advertising ESM Node compat. Relative `import` from `import.meta.url` still goes through resolvers.
 
-**Tests:** `new URL('./foo.ts', import.meta.url).pathname` on a real file path.
+**Tests:** [`pkg/driver/host_import_meta_test.go`](../pkg/driver/host_import_meta_test.go) — `new URL('./foo.ts', import.meta.url).pathname` on a real file path (via `net/url`); native `native://fs` unchanged; eval `__code_module__` not abs-pathed into cwd; percent-encoding for spaces.
 
 ---
 

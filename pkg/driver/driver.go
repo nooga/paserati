@@ -207,6 +207,7 @@ func NewPaseratiWithInitializersAndBaseDir(customInitializers []builtins.Builtin
 
 	// Wire the module loader into the VM
 	vmInstance.SetModuleLoader(moduleLoader)
+	vmInstance.SetImportMetaBaseDir(baseDir)
 
 	// Set the eval driver for OpDirectEval
 	vmInstance.SetEvalDriver(paserati)
@@ -291,6 +292,7 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 
 	// Wire the module loader into the VM
 	vmInstance.SetModuleLoader(moduleLoader)
+	vmInstance.SetImportMetaBaseDir(baseDir)
 
 	// Set the eval driver for OpDirectEval
 	vmInstance.SetEvalDriver(paserati)
