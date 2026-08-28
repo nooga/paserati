@@ -47,6 +47,14 @@ const maxSafeInteger = 9007199254740991
 // that off immediately rather than requiring a fast per-iteration no-op.
 const maxArrayLength = 4294967295
 
+// maxDenseArraySetIndex bounds how far arrayLikeSet will grow a real
+// Array's elements slice via ArrayObject.Set for a single index write -
+// same value and same hazard as maxDenseArrayDefineIndex in package vm's
+// array_props.go (kept as a separate constant here rather than exported
+// from there, since the two guard unrelated call sites that happen to
+// share a threshold, not one shared piece of logic).
+const maxDenseArraySetIndex = 16777216 // 2^24
+
 // checkArrayCreateLength returns a RangeError if length exceeds the largest
 // valid Array length, matching ArrayCreate's own bounds check. Call this
 // immediately after computing a result array's target length and before any
@@ -311,7 +319,16 @@ func arrayLikeGetProxy(vmInstance *vm.VM, proxyVal vm.Value, i int) (vm.Value, b
 // arrayLikeSet writes index i of an array-like `this` to val - used by the
 // mutating generic methods (push, splice, copyWithin, fill, reverse, sort,
 // ...). Real Arrays invoke an own accessor setter if present (mirroring the
-// PlainObject case just below) before falling back to a plain element
+// PlainObject case just below); if there's no own property at that index at
+// all (a hole, or beyond the array's current length - i.e. this would
+// create a *new* own property), an inherited Array.prototype setter takes
+// priority over a plain write too, per [[Set]]'s "no own descriptor -> ask
+// the prototype" rule (see ArrayPrototypeSetterFor - this is what a push()
+// past the end of the array, or into a hole, needs to invoke a setter
+// defined on Array.prototype at that index, e.g. Test262's
+// push/set-length-array-is-frozen.js, which freezes the array from inside
+// such a setter and expects the *subsequent* length write to then fail).
+// Only once neither check applies does this fall back to a plain element
 // write; PlainObjects invoke an own accessor setter if present before
 // falling back to a plain data-property write; anything else goes through
 // the VM's generic property set (correct for TypedArray element coercion,
@@ -329,7 +346,32 @@ func arrayLikeSet(vmInstance *vm.VM, thisVal vm.Value, i int, val vm.Value) erro
 				return err
 			}
 		}
-		arr.Set(i, val)
+		if !arr.HasIndex(i) {
+			if handled, err := vmInstance.ArrayPrototypeSetterFor(thisVal, i, val); err != nil {
+				return err
+			} else if handled {
+				return nil
+			}
+		}
+		// ArrayObject.Set(i, ...) is O(i): it fills every slot up to i with
+		// Hole before writing, same hazard maxDenseArrayDefineIndex guards
+		// against in ArrayDefineOwnProperty (package vm). i can reach here
+		// as an array-index-sized value - not just a small loop counter -
+		// whenever the caller's own bound came from arrayLikeLength on a
+		// receiver whose "length" was set arbitrarily high without ever
+		// materializing that many elements (Array(N) for large N, or
+		// {length: N} array-likes); push/pop/shift/unshift all compute
+		// their write indices exactly that way. Past the bound, track it
+		// as a named property instead - same known-gap tradeoff
+		// ArrayDefineOwnProperty documents for the same case.
+		if i <= maxDenseArraySetIndex {
+			arr.Set(i, val)
+		} else {
+			arr.DefineOwnProperty(strconv.Itoa(i), val, true, true, true)
+			if i+1 > arr.Length() {
+				arr.SetLength(i + 1)
+			}
+		}
 		return nil
 	case vm.TypeObject:
 		po := thisVal.AsPlainObject()
@@ -346,22 +388,41 @@ func arrayLikeSet(vmInstance *vm.VM, thisVal vm.Value, i int, val vm.Value) erro
 }
 
 // arrayLikeSetLength writes a new "length" onto an array-like `this` -
-// needed by push/splice/etc. when the receiver isn't a real Array (whose
-// length is derived, not stored).
+// needed by push/pop/shift/unshift/splice/etc.'s final
+// Set(O, "length", newLen, true) step. Throw=true means this must reject a
+// non-writable "length" with a TypeError (ECMA-262 OrdinarySetWithOwnDescriptor:
+// "IsDataDescriptor(ownDesc) is true and ownDesc.[[Writable]] is false ->
+// return false", which Set's Throw=true then turns into a TypeError) - and
+// critically, that check fires even when newLen equals the current length
+// (no actual change), which is why every branch below checks writability
+// unconditionally rather than only on an actual length delta.
 func arrayLikeSetLength(vmInstance *vm.VM, thisVal vm.Value, length int) error {
 	switch thisVal.Type() {
 	case vm.TypeArray:
+		arr := thisVal.AsArray()
+		if !arr.IsLengthWritable() {
+			return vmInstance.NewTypeError("Cannot assign to read only property 'length' of object")
+		}
 		// A real Array's length is spec-capped at 2^32-1 (ArraySetLength);
 		// an arbitrary object's "length" property has no such limit, so
 		// this check only applies to the TypeArray branch.
 		if err := checkArrayCreateLength(vmInstance, length); err != nil {
 			return err
 		}
-		thisVal.AsArray().SetLength(length)
+		arr.SetLength(length)
 		return nil
 	case vm.TypeObject:
-		thisVal.AsPlainObject().SetOwn("length", vm.NumberValue(float64(length)))
+		po := thisVal.AsPlainObject()
+		if _, writable, _, _, exists := po.GetOwnDescriptor("length"); exists && !writable {
+			return vmInstance.NewTypeError("Cannot assign to read only property 'length' of object")
+		}
+		po.SetOwn("length", vm.NumberValue(float64(length)))
 		return nil
+	case vm.TypeString:
+		// A String exotic object's "length" is always non-configurable and
+		// non-writable (ECMA-262 10.4.3.4) - there's no descriptor to
+		// consult, it's simply never settable.
+		return vmInstance.NewTypeError("Cannot assign to read only property 'length' of object")
 	default:
 		return vmInstance.SetProperty(thisVal, "length", vm.NumberValue(float64(length)))
 	}

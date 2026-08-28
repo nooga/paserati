@@ -246,13 +246,18 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		if thisVal.Type() == vm.TypeArray {
-			thisArray := thisVal.AsArray()
-			for i := 0; i < len(args); i++ {
-				thisArray.Append(args[i])
-			}
-			return vm.NumberValue(float64(thisArray.Length())), nil
-		}
+		// No TypeArray fast path (see pop's identical comment above for
+		// why): the old one appended directly, bypassing
+		// Set(..., "length", ..., true)'s required TypeError on a
+		// frozen/non-writable-length array (the no-argument case,
+		// push() with zero elements to write still performs this step).
+		// Known gap this doesn't close: writing each new index still
+		// goes through arrayLikeSet's plain arr.Set(i, val), not a full
+		// [[Set]] that would walk Array.prototype for an inherited setter
+		// - so a setter defined on Array.prototype[<next index>] that
+		// freezes the array mid-push (the same trick pop's
+		// set-length-array-is-frozen.js test uses, via a getter) isn't
+		// observed here; push's own version of that test needs that walk.
 		length, err := arrayLikeLength(vmInstance, thisVal)
 		if err != nil {
 			return vm.Undefined, err
@@ -274,16 +279,20 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		if thisVal.Type() == vm.TypeArray {
-			thisArray := thisVal.AsArray()
-			if thisArray.Length() == 0 {
-				return vm.Undefined, nil
-			}
-			lastIndex := thisArray.Length() - 1
-			lastElement := thisArray.Get(lastIndex)
-			thisArray.SetLength(lastIndex)
-			return lastElement, nil
-		}
+		// No TypeArray fast path here (unlike several sibling methods
+		// below): the generic arrayLike* helpers ARE the fast path for a
+		// real Array (arrayLikeLength/Get/Delete/SetLength each resolve to
+		// a couple of ArrayObject method calls, no extra allocation), and
+		// skipping them like the old fast path here did meant bypassing
+		// DeletePropertyOrThrow and Set(..., "length", ..., true)'s
+		// required TypeError on a frozen/non-writable-length array - a
+		// gap Test262's set-length-*-is-frozen.js /
+		// set-length-*-length-is-non-writable.js cover, including one
+		// (set-length-array-is-frozen.js) that only throws because a
+		// getter on Array.prototype[0] freezes the array *during* the Get
+		// step, before the length write - arrayLikeGet's prototype-chain
+		// fallback (for the hole this creates) is what makes that
+		// ordering observable at all.
 		length, err := arrayLikeLength(vmInstance, thisVal)
 		if err != nil {
 			return vm.Undefined, err
@@ -310,20 +319,10 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		if thisVal.Type() == vm.TypeArray {
-			thisArray := thisVal.AsArray()
-			if thisArray.Length() == 0 {
-				return vm.Undefined, nil
-			}
-			firstElement := thisArray.Get(0)
-			// Shift all elements left
-			newElements := make([]vm.Value, thisArray.Length()-1)
-			for i := 1; i < thisArray.Length(); i++ {
-				newElements[i-1] = thisArray.Get(i)
-			}
-			thisArray.SetElements(newElements)
-			return firstElement, nil
-		}
+		// No TypeArray fast path (see pop's identical comment just above
+		// for why): the old one rebuilt elements directly, bypassing
+		// DeletePropertyOrThrow/Set(..., "length", ..., true)'s required
+		// TypeError on a frozen/non-writable-length array.
 		length, err := arrayLikeLength(vmInstance, thisVal)
 		if err != nil {
 			return vm.Undefined, err
@@ -363,21 +362,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
 		}
-		if thisVal.Type() == vm.TypeArray {
-			thisArray := thisVal.AsArray()
-			// Create new array with unshifted elements
-			newElements := make([]vm.Value, 0, thisArray.Length()+len(args))
-			// Add new elements first
-			for i := 0; i < len(args); i++ {
-				newElements = append(newElements, args[i])
-			}
-			// Add existing elements
-			for i := 0; i < thisArray.Length(); i++ {
-				newElements = append(newElements, thisArray.Get(i))
-			}
-			thisArray.SetElements(newElements)
-			return vm.NumberValue(float64(thisArray.Length())), nil
-		}
+		// No TypeArray fast path (see pop's identical comment above for
+		// why): the old one rebuilt elements directly, bypassing
+		// Set(..., "length", ..., true)'s required TypeError on a
+		// frozen/non-writable-length array (the zero-argument case still
+		// performs this step).
 		length, err := arrayLikeLength(vmInstance, thisVal)
 		if err != nil {
 			return vm.Undefined, err
