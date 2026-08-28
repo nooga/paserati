@@ -171,7 +171,9 @@ Node order: nextTick → microtasks → timers → I/O → setImmediate. Putting
 
 [`NativeModuleSource.generateSyntheticSource`](../pkg/driver/native_module.go) still emits placeholder `PI_SQUARED` / `square()`. Runtime skips parse via `IsNativeModule()`, and [`handleNativeModuleSource`](../pkg/modules/loader.go) already copies `GetTypeExports()` onto `record.Exports`. The placeholder is a footgun if anything ever *parses* native source.
 
-**Paserati work:** generate declarations from `exports` (or stop implementing `Read()` as fake TS). Needed when noderati typechecks user TS that imports `fs`.
+- [x] Generate `export declare const` / `export default` from `GetExports()` after init; `export {}` before init. No hardcoded placeholders.
+
+**Tests:** [`pkg/driver/host_native_source_test.go`](../pkg/driver/host_native_source_test.go) — real exports after `LoadModule`; empty `export {}` before init; no `PI_SQUARED` leak.
 
 ---
 
