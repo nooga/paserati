@@ -8,6 +8,17 @@ import (
 	"testing"
 )
 
+// urlPathToSlashPath strips the leading slash a file:// URL's path component
+// carries before a Windows drive letter (/C:/x), which is part of the WHATWG
+// pathname but not of the filesystem path. A no-op on POSIX paths.
+func urlPathToSlashPath(p string) string {
+	if len(p) >= 3 && p[0] == '/' && p[2] == ':' &&
+		((p[1] >= 'A' && p[1] <= 'Z') || (p[1] >= 'a' && p[1] <= 'z')) {
+		return p[1:]
+	}
+	return p
+}
+
 // resolveImportMetaPathname simulates new URL(relative, import.meta.url).pathname
 // using net/url, since Paserati has no WHATWG URL builtin.
 func resolveImportMetaPathname(baseURL, relative string) (string, error) {
@@ -59,7 +70,7 @@ func TestHostImportMetaURLFileModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveImportMetaPathname: %v", err)
 	}
-	if pathname != wantFoo {
+	if urlPathToSlashPath(pathname) != wantFoo {
 		t.Errorf("new URL('./foo.ts', import.meta.url).pathname = %q, want %q", pathname, wantFoo)
 	}
 }
