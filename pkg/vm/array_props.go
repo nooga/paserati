@@ -173,3 +173,46 @@ func (vm *VM) ArrayDefineOwnProperty(
 	a.DefineOwnProperty(key, newValue, writable, enumerable, configurable)
 	return nil
 }
+
+// DeleteIndex implements [[Delete]] (ECMA-262 10.4.2.1 -> OrdinaryDelete
+// 10.1.7) for a numeric array index, clearing the slot (and any tracked
+// accessor/descriptor state for it) and reporting success. A plain element
+// has no per-index configurable bit of its own (see this file's doc
+// comment on why) - its configurability instead comes from the array-wide
+// `frozen` flag (Object.freeze - SetFrozen), treated as making every
+// element non-configurable, same as this codebase's other frozen-array
+// checks (e.g. IsFrozen). An index that was turned into an accessor (or
+// otherwise given an explicit descriptor - see ArrayDefineOwnProperty) has
+// its own tracked configurable bit in propertyDesc and is checked instead.
+//
+// Shared by OpDeleteIndex (`delete arr[i]` in JS) and arrayLikeDelete
+// (array_generic.go, package builtins - copyWithin/splice/etc.'s
+// DeletePropertyOrThrow) so both report identical success/failure.
+func (a *ArrayObject) DeleteIndex(idx int) bool {
+	key := intToString(idx)
+	configurable := !a.frozen
+	if a.propertyDesc != nil {
+		if desc, ok := a.propertyDesc[key]; ok {
+			configurable = desc.Configurable
+		}
+	}
+	if !configurable {
+		return false
+	}
+	if a.getters != nil {
+		delete(a.getters, key)
+	}
+	if a.setters != nil {
+		delete(a.setters, key)
+	}
+	if a.propertyDesc != nil {
+		delete(a.propertyDesc, key)
+	}
+	if a.properties != nil {
+		delete(a.properties, key)
+	}
+	if idx < len(a.elements) {
+		a.elements[idx] = Hole
+	}
+	return true
+}

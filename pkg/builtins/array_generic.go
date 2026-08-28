@@ -244,6 +244,16 @@ func arrayLikeGet(vmInstance *vm.VM, thisVal vm.Value, i int) (vm.Value, bool, e
 		return arrayIndexGetFromProto(vmInstance, arr, thisVal, strconv.Itoa(i))
 	case vm.TypeObject:
 		return getOwnPlainObjectProperty(vmInstance, thisVal.AsPlainObject(), thisVal, strconv.Itoa(i))
+	case vm.TypeProxy:
+		// Proxy needs a real HasProperty check (invoking the "has" trap
+		// when present) before Get - unlike the default branch below,
+		// which just calls Get and always reports exists=true. That
+		// conflation is harmless for types with no genuinely-absent
+		// indices, but for a Proxy it means a "has" trap that would throw
+		// (or return false) never runs at all, and DeletePropertyOrThrow-
+		// based callers like copyWithin never see "this index doesn't
+		// exist, delete the destination instead" - see arrayLikeGetProxy.
+		return arrayLikeGetProxy(vmInstance, thisVal, i)
 	default:
 		key := strconv.Itoa(i)
 		v, err := vmInstance.GetProperty(thisVal, key)
@@ -252,6 +262,50 @@ func arrayLikeGet(vmInstance *vm.VM, thisVal vm.Value, i int) (vm.Value, bool, e
 		}
 		return v, true, nil
 	}
+}
+
+// arrayLikeGetProxy invokes a Proxy's "has" trap when one is defined,
+// before falling through to Get - fixing the specific failure mode where a
+// "has" trap that throws (or returns false) must be seen by a
+// DeletePropertyOrThrow-based caller like copyWithin's
+// `fromPresent := HasProperty(...)` step, which arrayLikeGet's default
+// branch below can't do at all (it only ever calls Get).
+//
+// This deliberately does NOT attempt full HasProperty semantics when no
+// "has" trap is defined (i.e. it does not fall back to consulting the
+// target's own properties/prototype chain for existence) - callers that
+// discard the returned `exists` bool (the majority - see arrayLikeGet's
+// callers) need Get invoked unconditionally regardless of "existence",
+// exactly like Array.prototype.includes's own spec algorithm (Get only, no
+// HasProperty at all: its Proxy test fixture defines only a "get" trap and
+// expects it invoked for every index). Reporting exists=false without ever
+// calling Get - which a target-consulting fallback would do for an
+// absent-on-target index - broke that. So: no has trap means "assume
+// present, just Get", same as this function's non-Proxy siblings; only an
+// explicit has-trap result changes that answer.
+func arrayLikeGetProxy(vmInstance *vm.VM, proxyVal vm.Value, i int) (vm.Value, bool, error) {
+	proxy := proxyVal.AsProxy()
+	if proxy.Revoked {
+		return vm.Undefined, false, vmInstance.NewTypeError("Cannot perform 'has' on a proxy that has been revoked")
+	}
+	key := strconv.Itoa(i)
+	if hasTrap, ok := proxy.Handler().AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != vm.TypeUndefined && hasTrap.Type() != vm.TypeNull {
+		if !hasTrap.IsCallable() {
+			return vm.Undefined, false, vmInstance.NewTypeError("'has' on proxy: trap is not a function")
+		}
+		result, err := vmInstance.Call(hasTrap, proxy.Handler(), []vm.Value{proxy.Target(), vm.NewString(key)})
+		if err != nil {
+			return vm.Undefined, false, err
+		}
+		if !result.IsTruthy() {
+			return vm.Undefined, false, nil
+		}
+	}
+	v, err := vmInstance.GetProperty(proxyVal, key)
+	if err != nil {
+		return vm.Undefined, false, err
+	}
+	return v, true, nil
 }
 
 // arrayLikeSet writes index i of an array-like `this` to val - used by the
@@ -375,22 +429,61 @@ func isConcatSpreadable(vmInstance *vm.VM, v vm.Value) (bool, error) {
 	return isArraySpec(vmInstance, v)
 }
 
-// arrayLikeDelete removes index i from an array-like `this`, leaving a hole
-// - used by splice/pop/shift-style methods on a non-Array receiver where
-// spec semantics call for DeletePropertyOrThrow rather than writing
-// undefined (so a subsequent HasProperty/`in` check on that index is false).
+// arrayLikeDelete implements DeletePropertyOrThrow(O, ToString(i))
+// (ECMA-262 7.3.11) for index i of an array-like `this` - used by
+// copyWithin/splice/pop/shift-style methods where spec semantics call for
+// a real delete (so a subsequent HasProperty/`in` check on that index is
+// false) that throws a TypeError if it fails, rather than the silent
+// always-succeeds write-undefined this replaced.
 func arrayLikeDelete(vmInstance *vm.VM, thisVal vm.Value, i int) error {
+	key := strconv.Itoa(i)
 	switch thisVal.Type() {
 	case vm.TypeArray:
-		// Arrays don't track holes below their length via delete in this
-		// engine's element storage; writing Undefined matches this file's
-		// pre-existing behavior for Array receivers in these code paths.
-		thisVal.AsArray().Set(i, vm.Undefined)
+		if !thisVal.AsArray().DeleteIndex(i) {
+			return vmInstance.NewTypeError("Cannot delete property '" + key + "' of array")
+		}
 		return nil
 	case vm.TypeObject:
-		thisVal.AsPlainObject().DeleteOwn(strconv.Itoa(i))
+		if !thisVal.AsPlainObject().DeleteOwn(key) {
+			return vmInstance.NewTypeError("Cannot delete property '" + key + "' of object")
+		}
 		return nil
+	case vm.TypeProxy:
+		return proxyDeleteProperty(vmInstance, thisVal, i, key)
 	default:
-		return vmInstance.SetProperty(thisVal, strconv.Itoa(i), vm.Undefined)
+		return vmInstance.SetProperty(thisVal, key, vm.Undefined)
 	}
+}
+
+// proxyDeleteProperty implements the Proxy exotic object's [[Delete]]
+// (ECMA-262 10.5.10) for one property key: invoke the deleteProperty trap
+// if present, checking the "can't report deleting a non-configurable
+// target property" invariant on a truthy result; otherwise delegate to the
+// target (recursively, so a Proxy wrapping a Proxy wrapping an Array all
+// resolves through the same DeleteIndex/DeleteOwn paths above).
+func proxyDeleteProperty(vmInstance *vm.VM, proxyVal vm.Value, i int, key string) error {
+	proxy := proxyVal.AsProxy()
+	if proxy.Revoked {
+		return vmInstance.NewTypeError("Cannot delete property from a revoked Proxy")
+	}
+	deleteTrap, ok := proxy.Handler().AsPlainObject().GetOwn("deleteProperty")
+	if !ok || deleteTrap.Type() == vm.TypeUndefined || deleteTrap.Type() == vm.TypeNull {
+		return arrayLikeDelete(vmInstance, proxy.Target(), i)
+	}
+	if !deleteTrap.IsCallable() {
+		return vmInstance.NewTypeError("'deleteProperty' on proxy: trap is not a function")
+	}
+	result, err := vmInstance.Call(deleteTrap, proxy.Handler(), []vm.Value{proxy.Target(), vm.NewString(key)})
+	if err != nil {
+		return err
+	}
+	if !result.IsTruthy() {
+		return vmInstance.NewTypeError("'deleteProperty' on proxy: trap returned falsish for property '" + key + "'")
+	}
+	if target := proxy.Target(); target.Type() == vm.TypeObject {
+		if _, _, _, configurable, found := target.AsPlainObject().GetOwnDescriptor(key); found && !configurable {
+			return vmInstance.NewTypeError("'deleteProperty' on proxy: trap returned truish for property '" + key + "' which is non-configurable in the proxy target")
+		}
+	}
+	return nil
 }
