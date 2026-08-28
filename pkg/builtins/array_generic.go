@@ -177,10 +177,17 @@ func getOwnPlainObjectProperty(vmInstance *vm.VM, po *vm.PlainObject, receiver v
 // prototype for an in-bounds hole.
 func arrayIndexGetFromProto(vmInstance *vm.VM, arr *vm.ArrayObject, receiver vm.Value, key string) (vm.Value, bool, error) {
 	proto := arr.GetPrototype()
-	if !proto.IsObject() {
+	if proto.Type() != vm.TypeObject {
 		proto = vmInstance.ArrayPrototype
 	}
-	for proto.IsObject() {
+	// proto.IsObject() is true for TypeArray/TypeProxy/TypeMap/... too (see
+	// Value.IsObject's doc comment) - not just TypeObject/PlainObject, so
+	// this must check the concrete type before calling AsPlainObject
+	// (which panics on anything else), same as opGetProp's own prototype
+	// walk for arrays. A chain member that isn't a PlainObject (a Proxy
+	// spliced in via Object.setPrototypeOf, say) ends the walk rather than
+	// being consulted - a known gap, not a crash.
+	for proto.Type() == vm.TypeObject {
 		po := proto.AsPlainObject()
 		if g, _, _, _, ok := po.GetOwnAccessor(key); ok {
 			if g.Type() == vm.TypeUndefined {
