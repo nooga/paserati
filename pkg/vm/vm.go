@@ -15169,45 +15169,13 @@ startExecution:
 			} else if obj.Type() == TypeArray {
 				// [[Delete]] for the Array exotic object (ECMA-262 10.4.2.1
 				// defers to OrdinaryDelete 10.1.7 for non-"length" keys).
-				// A plain element has no per-index configurable bit of its
-				// own (see ArrayDefineOwnProperty's doc comment on why) -
-				// its configurability instead comes from the array-wide
-				// `frozen` flag (Object.freeze - SetFrozen), which is
-				// treated as making every element non-configurable, same
-				// as this codebase's other frozen-array checks (e.g.
-				// IsFrozen). An index that was turned into an accessor (or
-				// otherwise given an explicit descriptor - see
-				// ArrayDefineOwnProperty) has its own tracked configurable
-				// bit in propertyDesc and is checked directly.
+				// See ArrayObject.DeleteIndex's doc comment for why a
+				// numeric index's configurability comes from the array-wide
+				// `frozen` flag rather than a per-element bit.
 				arr := obj.AsArray()
 				keyStr := key.ToString()
 				if idx, isNumeric := tryParseArrayIndex(keyStr); isNumeric {
-					configurable := !arr.frozen
-					if arr.propertyDesc != nil {
-						if desc, ok := arr.propertyDesc[keyStr]; ok {
-							configurable = desc.Configurable
-						}
-					}
-					if !configurable {
-						success = false
-					} else {
-						if arr.getters != nil {
-							delete(arr.getters, keyStr)
-						}
-						if arr.setters != nil {
-							delete(arr.setters, keyStr)
-						}
-						if arr.propertyDesc != nil {
-							delete(arr.propertyDesc, keyStr)
-						}
-						if arr.properties != nil {
-							delete(arr.properties, keyStr)
-						}
-						if idx < len(arr.elements) {
-							arr.elements[idx] = Hole
-						}
-						success = true
-					}
+					success = arr.DeleteIndex(idx)
 				} else if key.Type() != TypeSymbol {
 					success = arr.DeleteOwn(keyStr)
 				} else {
