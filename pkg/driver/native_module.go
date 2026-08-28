@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
+	"unicode"
 
+	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/modules"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
@@ -1211,16 +1214,63 @@ func (nms *NativeModuleSource) GetNativeModule() interface{} {
 }
 
 func (nms *NativeModuleSource) generateSyntheticSource() []byte {
-	// For now, generate a simple export statement
-	// TODO: Generate proper TypeScript declarations based on module exports
-	return []byte(`
-// Auto-generated native module exports
-export const PI_SQUARED: number = 9.8696; // placeholder
-export const EULER: number = 2.718281828; // placeholder
-export function square(x: number): number { return x * x; }
-export function add(a: number, b: number): number { return a + b; }
-export function divmod(a: number, b: number): any { return {}; }
-`)
+	mod := nms.module
+	exports := mod.GetExports()
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "// Auto-generated native module: %s\n", mod.name)
+
+	if len(exports) == 0 {
+		sb.WriteString("export {}\n")
+		return []byte(sb.String())
+	}
+
+	names := make([]string, 0, len(exports))
+	for name := range exports {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		typeStr := exportTypeString(exports[name])
+		switch name {
+		case "default":
+			fmt.Fprintf(&sb, "declare const __default: %s;\n", typeStr)
+			sb.WriteString("export default __default;\n")
+		default:
+			if isValidExportIdentifier(name) {
+				fmt.Fprintf(&sb, "export declare const %s: %s;\n", name, typeStr)
+			}
+		}
+	}
+
+	return []byte(sb.String())
+}
+
+func exportTypeString(typ types.Type) string {
+	if typ == nil {
+		return "any"
+	}
+	if s := typ.String(); s != "" {
+		return s
+	}
+	return "any"
+}
+
+func isValidExportIdentifier(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		if i == 0 {
+			if r != '_' && r != '$' && !unicode.IsLetter(r) {
+				return false
+			}
+		} else if r != '_' && r != '$' && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return lexer.LookupIdent(name) == lexer.IDENT
 }
 
 func (r *NativeModuleResolver) Resolve(specifier string, fromPath string) (*modules.ResolvedModule, error) {
