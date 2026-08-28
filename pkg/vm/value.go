@@ -2353,6 +2353,36 @@ func (a *ArrayObject) SetOwn(name string, value Value) {
 	a.properties[name] = value
 }
 
+// DeleteOwn removes a named (non-index) property, along with any tracked
+// accessor/descriptor state for it - unless propertyDesc marks it
+// non-configurable (e.g. Object.freeze/seal - see sealOrFreezeProperties,
+// or an explicit Object.defineProperty(..., {configurable: false})), in
+// which case it's left alone and this reports failure, matching
+// OrdinaryDelete's (10.1.7) [[Configurable]] check. A property with no
+// tracked descriptor at all (added via SetOwn, never through
+// DefineOwnProperty/DefineAccessorProperty) has the ES default
+// configurable: true.
+func (a *ArrayObject) DeleteOwn(name string) bool {
+	if a.propertyDesc != nil {
+		if desc, ok := a.propertyDesc[name]; ok && !desc.Configurable {
+			return false
+		}
+	}
+	if a.properties != nil {
+		delete(a.properties, name)
+	}
+	if a.propertyDesc != nil {
+		delete(a.propertyDesc, name)
+	}
+	if a.getters != nil {
+		delete(a.getters, name)
+	}
+	if a.setters != nil {
+		delete(a.setters, name)
+	}
+	return true
+}
+
 // DefineOwnProperty sets a named property with specified descriptor attributes
 func (a *ArrayObject) DefineOwnProperty(name string, value Value, writable, enumerable, configurable bool) {
 	if a.properties == nil {
@@ -2534,6 +2564,16 @@ func (a *ArrayObject) DefineAccessorProperty(name string, getter Value, hasGette
 
 	// Remove from regular properties if it was a data property
 	delete(a.properties, name)
+}
+
+// HasAccessors reports whether this array has ever had an accessor property
+// defined on it (via Object.defineProperty - see ArrayDefineOwnProperty).
+// Cheap nil-map check callers use to skip the GetOwnAccessor lookup (a
+// strconv.Itoa + map probe) on the overwhelmingly common array that has
+// never had one, on hot per-element paths like arrayLikeGet/Set and
+// OpGetIndex/OpSetIndex.
+func (a *ArrayObject) HasAccessors() bool {
+	return a.getters != nil || a.setters != nil
 }
 
 // GetOwnAccessor returns the getter and setter for an accessor property

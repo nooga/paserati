@@ -1075,6 +1075,12 @@ func tryParseArrayIndex(key string) (int, bool) {
 	return idx, true
 }
 
+// ParseArrayIndex is the exported wrapper around tryParseArrayIndex, for
+// callers outside package vm (e.g. builtins' Object.defineProperty) that
+// need to tell a canonical array-index key ("0", "17", ...) apart from an
+// arbitrary named property key ("foo", "01", "-1", ...).
+func ParseArrayIndex(key string) (int, bool) { return tryParseArrayIndex(key) }
+
 // intToString converts an int to string without importing strconv
 func intToString(n int) string {
 	if n == 0 {
