@@ -7903,50 +7903,19 @@ startExecution:
 				// idx is now set from either number or string path
 				// and we've verified it's a valid array index (non-negative integer)
 
-				// Check for setter on Array.prototype chain before direct write.
-				// ECMAScript requires invoking inherited setters for array indices,
-				// but integer-indexed accessors on the prototype chain essentially
-				// never exist, so guard the whole walk (a strconv.Itoa + string
-				// concat + chain scan, on every element write) behind a latch that is
-				// only set once such an accessor is actually defined. See
-				// arrayIndexAccessorSeen in object.go.
-				setterFound := false
-				if arrayIndexAccessorSeen.Load() && vm.ArrayPrototype.IsObject() {
-					idxKey := strconv.Itoa(idx)
-					setterKey := "s:" + idxKey // PropertyKey hash format for string keys
-					for cur := vm.ArrayPrototype.AsPlainObject(); cur != nil; {
-						// Check directly in the setters map (keyed by PropertyKey.hash())
-						if cur.setters != nil {
-							if s, ok := cur.setters[setterKey]; ok {
-								// Call the setter with this=array (original object)
-								frame.ip = ip
-								_, err := vm.Call(s, baseVal, []Value{valueVal})
-								if err != nil {
-									if ee, ok := err.(ExceptionError); ok {
-										vm.throwException(ee.GetExceptionValue())
-										return InterpretRuntimeError, Undefined
-									}
-									status := vm.runtimeError("%v", err)
-									return status, Undefined
-								}
-								setterFound = true
-								break
-							}
-						}
-						// Also check getters-only accessor (has getter but no setter)
-						if cur.getters != nil {
-							if _, ok := cur.getters[setterKey]; ok {
-								// Found accessor with getter but no setter - silently fail in non-strict mode
-								setterFound = true
-								break
-							}
-						}
-						protoVal := cur.GetPrototype()
-						if !protoVal.IsObject() {
-							break
-						}
-						cur = protoVal.AsPlainObject()
+				// Check for an inherited setter on Array.prototype's chain
+				// before direct write - see ArrayPrototypeSetterFor
+				// (array_props.go), which this and arrayLikeSet
+				// (package builtins) share.
+				frame.ip = ip
+				setterFound, setterErr := vm.ArrayPrototypeSetterFor(baseVal, idx, valueVal)
+				if setterErr != nil {
+					if ee, ok := setterErr.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+						return InterpretRuntimeError, Undefined
 					}
+					status := vm.runtimeError("%v", setterErr)
+					return status, Undefined
 				}
 				if setterFound {
 					continue

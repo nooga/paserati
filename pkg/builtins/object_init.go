@@ -3411,6 +3411,45 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		}
 	}
 
+	// Array objects: Object.defineProperty(arr, "length", desc) - ES
+	// 10.4.2.1 step 3 -> ArraySetLength (10.4.2.4). Only the "writable"
+	// attribute is implemented (see ArrayObject.IsLengthWritable/
+	// SetLengthWritable); a descriptor that also tries to change the
+	// length *value* to something other than the array's current length
+	// would need ArraySetLength's truncate-from-the-top semantics, which
+	// aren't implemented - such a call is a no-op (matching this
+	// function's pre-existing behavior for "length" before this block
+	// existed) rather than applying any requested writable attribute
+	// alongside it. get/set on "length" is always rejected: it's
+	// inherently a data property.
+	if obj.Type() == vm.TypeArray && !keyIsSymbol && propName == "length" {
+		arr := obj.AsArray()
+		if arr != nil {
+			if hasGetter || hasSetter {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: length")
+			}
+			if enumerablePtr != nil && *enumerablePtr {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: length")
+			}
+			if configurablePtr != nil && *configurablePtr {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: length")
+			}
+			if !hasValue || uint32(int64(value.ToFloat())) == uint32(arr.Length()) {
+				if writablePtr != nil {
+					if !arr.IsLengthWritable() && *writablePtr {
+						return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: length")
+					}
+					arr.SetLengthWritable(*writablePtr)
+				}
+			}
+			// else: a genuine value change - left untouched, same as this
+			// function's pre-existing no-op behavior for "length" before
+			// this block existed (ArraySetLength's truncation semantics
+			// aren't implemented - see this block's doc comment).
+			return obj, nil
+		}
+	}
+
 	// Array objects: implement ES 10.4.2.1 Array exotic [[DefineOwnProperty]]
 	// for everything except "length" (ArraySetLength's truncate-from-the-top
 	// semantics aren't implemented - see ArrayDefineOwnProperty's doc
@@ -3978,10 +4017,12 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		// For arrays, check if it's a valid index or 'length'
 		if propName == "length" {
 			value = vm.NumberValue(float64(arrObj.Length()))
-			// length is non-enumerable, non-configurable; writable unless frozen
+			// length is non-enumerable, non-configurable; writable unless
+			// frozen or explicitly made non-writable (Object.defineProperty
+			// - see ArrayObject.IsLengthWritable).
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", value)
-			descriptor.SetOwn("writable", vm.BooleanValue(!isFrozen))
+			descriptor.SetOwn("writable", vm.BooleanValue(arrObj.IsLengthWritable()))
 			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
 			descriptor.SetOwn("configurable", vm.BooleanValue(false))
 			return vm.NewValueFromPlainObject(descriptor), nil

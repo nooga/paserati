@@ -195,7 +195,13 @@ type ArrayObject struct {
 	setters      map[string]Value        // Accessor setters for named properties
 	extensible   bool                    // When false, no new properties can be added (for Object.freeze/seal)
 	frozen       bool                    // When true, elements are also non-writable and non-configurable
-	execMeta     *execResultMeta         // Lazy exec result properties (nil for normal arrays)
+	// lengthNonWritable tracks Object.defineProperty(arr, "length",
+	// {writable: false}) - stored inverted (zero value = writable, the ES
+	// default) so every existing ArrayObject construction site, which
+	// zero-initializes this field, doesn't need updating. See
+	// IsLengthWritable/SetLengthWritable.
+	lengthNonWritable bool
+	execMeta          *execResultMeta // Lazy exec result properties (nil for normal arrays)
 	// Subclass prototype override: for `class S extends Array {} new S()` instances,
 	// this points at S.prototype (whose own [[Prototype]] chains through Array.prototype).
 	// Zero value (TypeUndefined) means use the realm's intrinsic ArrayPrototype.
@@ -2493,6 +2499,31 @@ func (a *ArrayObject) sealOrFreezeProperties(freeze bool) {
 // IsExtensible returns whether new properties can be added to this array
 func (a *ArrayObject) IsExtensible() bool {
 	return a.extensible
+}
+
+// IsLengthWritable reports whether "length" is currently a writable own
+// property: false once either Object.freeze (SetFrozen) or an explicit
+// Object.defineProperty(arr, "length", {writable: false}) - see
+// SetLengthWritable - has been applied. Array.prototype's length-setting
+// methods (push/pop/shift/unshift/splice/...) must check this before
+// mutating length and throw a TypeError if it's false, per Set(O, "length",
+// v, true) -> OrdinarySetWithOwnDescriptor's "IsDataDescriptor(ownDesc) is
+// true and ownDesc.[[Writable]] is false -> return false" rule - which
+// fires even when v equals the current length (no actual change).
+func (a *ArrayObject) IsLengthWritable() bool {
+	return !a.frozen && !a.lengthNonWritable
+}
+
+// SetLengthWritable implements the "writable" half of
+// Object.defineProperty(arr, "length", {writable: ...}) - see
+// IsLengthWritable's doc comment. Only the writable bit is tracked here;
+// a defineProperty call that also tries to change the length *value* is
+// handled by the caller (ArrayDefineOwnProperty's caller in
+// objectDefinePropertyWithVM), which still doesn't implement
+// ArraySetLength's truncate-from-the-top semantics for an actual value
+// change - see that function's doc comment.
+func (a *ArrayObject) SetLengthWritable(writable bool) {
+	a.lengthNonWritable = !writable
 }
 
 // SetExtensible sets whether new properties can be added to this array

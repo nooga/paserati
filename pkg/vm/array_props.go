@@ -10,6 +10,52 @@ package vm
 // mirrors OpSetIndex's own identical guard in vm.go for `arr[hugeIdx] = v`.
 const maxDenseArrayDefineIndex = 16777216 // 2^24
 
+// ArrayPrototypeSetterFor checks whether idx has an inherited accessor
+// somewhere on Array.prototype's chain - an own-index write on an array
+// with no own property there must still consult the prototype first
+// (ECMA-262 9.1.9.2 OrdinarySetWithOwnDescriptor step 2's "ownDesc is
+// undefined -> walk to the parent" rule) rather than unconditionally
+// creating a new own data property. Returns (handled, err): handled is
+// true if a setter was invoked (delivering val that way) or a getter-only
+// accessor silently swallowed the write (matching sloppy-mode semantics,
+// since neither OpSetIndex nor arrayLikeSet's callers track strict mode);
+// false means the caller should fall through to a plain own-property
+// write.
+//
+// Guarded behind arrayIndexAccessorSeen (object.go) the same way this
+// logic always was, back when it only existed inline in OpSetIndex:
+// integer-indexed accessors on Array.prototype essentially never exist, so
+// the whole walk (a string-key format + chain scan on every element write)
+// is skipped until one is actually defined. Factored out here so
+// OpSetIndex (the `arr[i] = v` bytecode fast path) and arrayLikeSet
+// (package builtins - Array.prototype.push/unshift/... writing new
+// indices) share one implementation instead of two that could drift.
+func (vm *VM) ArrayPrototypeSetterFor(receiver Value, idx int, val Value) (bool, error) {
+	if !arrayIndexAccessorSeen.Load() || !vm.ArrayPrototype.IsObject() {
+		return false, nil
+	}
+	setterKey := "s:" + intToString(idx) // PropertyKey hash format for string keys
+	for cur := vm.ArrayPrototype.AsPlainObject(); cur != nil; {
+		if cur.setters != nil {
+			if s, ok := cur.setters[setterKey]; ok {
+				_, err := vm.Call(s, receiver, []Value{val})
+				return true, err
+			}
+		}
+		if cur.getters != nil {
+			if _, ok := cur.getters[setterKey]; ok {
+				return true, nil
+			}
+		}
+		protoVal := cur.GetPrototype()
+		if protoVal.Type() != TypeObject {
+			break
+		}
+		cur = protoVal.AsPlainObject()
+	}
+	return false, nil
+}
+
 // ArrayDefineOwnProperty implements the Array exotic object's
 // [[DefineOwnProperty]] (ECMA-262 10.4.2.1, deferring to
 // OrdinaryDefineOwnProperty 10.1.6.3 for everything but the "length" key,
