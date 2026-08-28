@@ -524,6 +524,30 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 	// 8. Array objects (after special properties are handled)
 	if objVal.Type() == TypeArray {
 		arr := objVal.AsArray()
+		// An index (or named key) explicitly turned into an accessor via
+		// Object.defineProperty (see ArrayDefineOwnProperty) takes priority
+		// over a plain element/named-property read below. Guarded behind
+		// HasAccessors() so the overwhelmingly common array - which never
+		// had one defined - pays only a nil check here, not a map probe.
+		if arr.HasAccessors() {
+			if g, _, _, _, ok := arr.GetOwnAccessor(propName); ok {
+				if g.Type() == TypeUndefined {
+					*dest = Undefined
+					return true, InterpretOK, *dest
+				}
+				result, err := vm.Call(g, *objVal, nil)
+				if err != nil {
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
+					}
+					status := vm.runtimeError("%v", err)
+					return false, status, Undefined
+				}
+				*dest = result
+				return true, InterpretOK, *dest
+			}
+		}
 		// Check if propName is a valid array index (numeric string like "0", "1", etc.)
 		// Per ECMAScript, arr["0"] should work the same as arr[0]
 		if len(propName) > 0 {

@@ -160,22 +160,81 @@ func getOwnPlainObjectProperty(vmInstance *vm.VM, po *vm.PlainObject, receiver v
 	return vm.Undefined, false, nil
 }
 
+// arrayIndexGetFromProto walks arr's prototype chain looking for key (a
+// canonical array index or any other property name) - the
+// OrdinaryHasProperty (9.1.7) + [[Get]] (9.1.8) fallback used once an
+// index's own slot has come up empty (a hole, or never set). Returns
+// (value, found, error); found mirrors HasProperty so callers can
+// distinguish "inherited value is undefined" from "no such property
+// anywhere". receiver is passed as `this` to an inherited getter, per
+// [[Get]]'s Receiver parameter.
+//
+// This does its own chain walk with vmInstance.Call rather than delegating
+// to vmInstance.GetProperty: GetProperty's own TypeArray fast path (see
+// opGetProp) returns arr.Get(idx) - Undefined for a hole - as soon as
+// idx < arr.Length(), without ever reaching its own prototype-walk code
+// below that check. Duplicating the walk here is what actually reaches the
+// prototype for an in-bounds hole.
+func arrayIndexGetFromProto(vmInstance *vm.VM, arr *vm.ArrayObject, receiver vm.Value, key string) (vm.Value, bool, error) {
+	proto := arr.GetPrototype()
+	if !proto.IsObject() {
+		proto = vmInstance.ArrayPrototype
+	}
+	for proto.IsObject() {
+		po := proto.AsPlainObject()
+		if g, _, _, _, ok := po.GetOwnAccessor(key); ok {
+			if g.Type() == vm.TypeUndefined {
+				return vm.Undefined, true, nil
+			}
+			v, err := vmInstance.Call(g, receiver, nil)
+			if err != nil {
+				return vm.Undefined, false, err
+			}
+			return v, true, nil
+		}
+		if v, ok := po.GetOwn(key); ok {
+			return v, true, nil
+		}
+		proto = po.GetPrototype()
+	}
+	return vm.Undefined, false, nil
+}
+
 // arrayLikeGet returns (value, exists, error) for index i of an array-like
 // `this`. "exists" mirrors HasProperty so callers can skip holes in a sparse
 // Array or a PlainObject missing that key, matching spec semantics for
-// every/filter/forEach/etc. Real Arrays preserve the exact hole-checking the
-// previous fast path did; PlainObjects go through getOwnPlainObjectProperty
-// for correct accessor handling (see its comment); every other type
-// (TypedArray, Arguments, Proxy, boxed primitives, Map/Set/...) has no holes
-// to speak of, so a plain Get is both correct and simpler.
+// every/filter/forEach/etc. Real Arrays check for an own accessor at that
+// index first (set via Object.defineProperty - see ArrayDefineOwnProperty)
+// before falling back to the exact hole-checking the previous fast path
+// did; PlainObjects go through getOwnPlainObjectProperty for correct
+// accessor handling (see its comment); every other type (TypedArray,
+// Arguments, Proxy, boxed primitives, Map/Set/...) has no holes to speak
+// of, so a plain Get is both correct and simpler.
 func arrayLikeGet(vmInstance *vm.VM, thisVal vm.Value, i int) (vm.Value, bool, error) {
 	switch thisVal.Type() {
 	case vm.TypeArray:
 		arr := thisVal.AsArray()
-		if !arr.HasIndex(i) {
-			return vm.Undefined, false, nil
+		if arr.HasAccessors() {
+			if g, _, _, _, ok := arr.GetOwnAccessor(strconv.Itoa(i)); ok {
+				if g.Type() == vm.TypeUndefined {
+					return vm.Undefined, true, nil
+				}
+				v, err := vmInstance.Call(g, thisVal, nil)
+				if err != nil {
+					return vm.Undefined, false, err
+				}
+				return v, true, nil
+			}
 		}
-		return arr.Get(i), true, nil
+		if arr.HasIndex(i) {
+			return arr.Get(i), true, nil
+		}
+		// Own slot is a hole (or absent, or was `delete`d): [[HasProperty]]
+		// (7.3.11 -> OrdinaryHasProperty 9.1.7) doesn't stop at "no own
+		// property" - it walks the prototype chain. Array.prototype[i] is
+		// rarely set, so only pay for the walk once the fast own-value path
+		// above has already missed.
+		return arrayIndexGetFromProto(vmInstance, arr, thisVal, strconv.Itoa(i))
 	case vm.TypeObject:
 		return getOwnPlainObjectProperty(vmInstance, thisVal.AsPlainObject(), thisVal, strconv.Itoa(i))
 	default:
@@ -190,15 +249,26 @@ func arrayLikeGet(vmInstance *vm.VM, thisVal vm.Value, i int) (vm.Value, bool, e
 
 // arrayLikeSet writes index i of an array-like `this` to val - used by the
 // mutating generic methods (push, splice, copyWithin, fill, reverse, sort,
-// ...). Real Arrays write directly; PlainObjects invoke an own accessor
-// setter if present (mirroring arrayLikeGet's getter handling) before
+// ...). Real Arrays invoke an own accessor setter if present (mirroring the
+// PlainObject case just below) before falling back to a plain element
+// write; PlainObjects invoke an own accessor setter if present before
 // falling back to a plain data-property write; anything else goes through
 // the VM's generic property set (correct for TypedArray element coercion,
 // Proxy set traps, setters, etc.).
 func arrayLikeSet(vmInstance *vm.VM, thisVal vm.Value, i int, val vm.Value) error {
 	switch thisVal.Type() {
 	case vm.TypeArray:
-		thisVal.AsArray().Set(i, val)
+		arr := thisVal.AsArray()
+		if arr.HasAccessors() {
+			if _, s, _, _, ok := arr.GetOwnAccessor(strconv.Itoa(i)); ok {
+				if s.Type() == vm.TypeUndefined {
+					return nil // accessor with no setter: silently ignored (sloppy-mode semantics)
+				}
+				_, err := vmInstance.Call(s, thisVal, []vm.Value{val})
+				return err
+			}
+		}
+		arr.Set(i, val)
 		return nil
 	case vm.TypeObject:
 		po := thisVal.AsPlainObject()

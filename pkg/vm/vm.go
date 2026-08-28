@@ -6917,6 +6917,16 @@ startExecution:
 						continue
 					}
 
+					if arr.HasAccessors() {
+						if ok, status, value := vm.opGetProp(frame, ip, &baseVal, strconv.Itoa(idx), &registers[destReg]); !ok {
+							if status != InterpretOK {
+								return status, value
+							}
+							goto reloadFrame
+						}
+						continue
+					}
+
 					if idx >= len(arr.elements) || arr.elements[idx].typ == TypeHole {
 						registers[destReg] = Undefined // Out of bounds or hole -> undefined
 					} else {
@@ -6931,6 +6941,15 @@ startExecution:
 						// Check if the string is a valid array index (numeric)
 						// In JavaScript, obj["0"] should access obj[0] for arrays
 						if idx, isNumeric := vm.parseArrayIndex(key); isNumeric {
+							if arr.HasAccessors() {
+								if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+									if status != InterpretOK {
+										return status, value
+									}
+									goto reloadFrame
+								}
+								continue
+							}
 							// Convert string index to numeric and access array element
 							if idx < 0 || idx >= len(arr.elements) || arr.elements[idx].typ == TypeHole {
 								registers[destReg] = Undefined
@@ -7931,6 +7950,32 @@ startExecution:
 				}
 				if setterFound {
 					continue
+				}
+
+				// Check for an accessor defined directly on this index of
+				// this array (via Object.defineProperty - see
+				// ArrayDefineOwnProperty), same guard pattern as the
+				// Array.prototype walk just above: HasAccessors() is a nil
+				// check, so an array that never had one defined pays
+				// nothing extra here.
+				if arr.HasAccessors() {
+					if _, s, _, _, ok := arr.GetOwnAccessor(strconv.Itoa(idx)); ok {
+						if s.Type() != TypeUndefined {
+							frame.ip = ip
+							_, err := vm.Call(s, baseVal, []Value{valueVal})
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+									return InterpretRuntimeError, Undefined
+								}
+								status := vm.runtimeError("%v", err)
+								return status, Undefined
+							}
+						}
+						// Getter-only (no setter): silently ignored, same as
+						// the prototype-chain case above.
+						continue
+					}
 				}
 
 				// Handle Array Expansion
@@ -13025,10 +13070,31 @@ startExecution:
 				keys = dict.OwnKeys()
 			case TypeArray:
 				arr := objValue.AsArray()
-				// Arrays enumerate their indices as strings
-				keys = make([]string, arr.Length())
+				// Arrays enumerate their indices as strings, skipping holes
+				// and any index made non-enumerable via Object.defineProperty
+				// (see ArrayDefineOwnProperty) - mirrors the TypeArguments
+				// case just below for the same reason (propertyHelper.js's
+				// for-in-based isEnumerable() check relies on this).
 				for i := 0; i < arr.Length(); i++ {
-					keys[i] = strconv.Itoa(i)
+					key := strconv.Itoa(i)
+					if arr.HasAccessors() {
+						if _, _, e, _, ok := arr.GetOwnAccessor(key); ok {
+							if e {
+								keys = append(keys, key)
+							}
+							continue
+						}
+					}
+					if arr.HasIndex(i) {
+						keys = append(keys, key)
+					} else if arr.propertyDesc != nil {
+						// Beyond maxDenseArrayDefineIndex, a defined data
+						// property is tracked in propertyDesc/properties
+						// instead of elements - see ArrayDefineOwnProperty.
+						if desc, ok := arr.propertyDesc[key]; ok && desc.Enumerable {
+							keys = append(keys, key)
+						}
+					}
 				}
 			case TypeArguments:
 				// Arguments objects enumerate their indices as strings, skipping
@@ -15101,8 +15167,52 @@ startExecution:
 					success = obj.AsDictObject().DeleteOwn(key.ToString())
 				}
 			} else if obj.Type() == TypeArray {
-				// Not supporting element deletion yet
-				success = false
+				// [[Delete]] for the Array exotic object (ECMA-262 10.4.2.1
+				// defers to OrdinaryDelete 10.1.7 for non-"length" keys).
+				// A plain element has no per-index configurable bit of its
+				// own (see ArrayDefineOwnProperty's doc comment on why) -
+				// its configurability instead comes from the array-wide
+				// `frozen` flag (Object.freeze - SetFrozen), which is
+				// treated as making every element non-configurable, same
+				// as this codebase's other frozen-array checks (e.g.
+				// IsFrozen). An index that was turned into an accessor (or
+				// otherwise given an explicit descriptor - see
+				// ArrayDefineOwnProperty) has its own tracked configurable
+				// bit in propertyDesc and is checked directly.
+				arr := obj.AsArray()
+				keyStr := key.ToString()
+				if idx, isNumeric := tryParseArrayIndex(keyStr); isNumeric {
+					configurable := !arr.frozen
+					if arr.propertyDesc != nil {
+						if desc, ok := arr.propertyDesc[keyStr]; ok {
+							configurable = desc.Configurable
+						}
+					}
+					if !configurable {
+						success = false
+					} else {
+						if arr.getters != nil {
+							delete(arr.getters, keyStr)
+						}
+						if arr.setters != nil {
+							delete(arr.setters, keyStr)
+						}
+						if arr.propertyDesc != nil {
+							delete(arr.propertyDesc, keyStr)
+						}
+						if arr.properties != nil {
+							delete(arr.properties, keyStr)
+						}
+						if idx < len(arr.elements) {
+							arr.elements[idx] = Hole
+						}
+						success = true
+					}
+				} else if key.Type() != TypeSymbol {
+					success = arr.DeleteOwn(keyStr)
+				} else {
+					success = true
+				}
 			} else if obj.Type() == TypeString {
 				// String primitives: indices within length are non-configurable
 				// indices beyond length don't exist, so delete returns true

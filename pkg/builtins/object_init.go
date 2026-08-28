@@ -190,9 +190,27 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if propName == "length" {
 				return vm.BooleanValue(true), nil
 			}
-			// Check numeric indices
-			if index, err := strconv.Atoi(propName); err == nil {
-				return vm.BooleanValue(index >= 0 && index < arrObj.Length()), nil
+			// Check numeric indices. An own accessor at this index (set via
+			// Object.defineProperty - see ArrayDefineOwnProperty) counts
+			// even for an index >= Length() (huge sparse indices are
+			// tracked in the properties map, not elements - see
+			// maxDenseArrayDefineIndex); otherwise fall back to
+			// HasIndex, which correctly reports a hole (from a literal
+			// array's elision, or a prior `delete arr[i]`) as absent
+			// rather than just checking the index is in bounds.
+			if index, err := strconv.Atoi(propName); err == nil && index >= 0 {
+				if arrObj.HasAccessors() {
+					if _, _, _, _, ok := arrObj.GetOwnAccessor(propName); ok {
+						return vm.BooleanValue(true), nil
+					}
+				}
+				if arrObj.HasIndex(index) {
+					return vm.BooleanValue(true), nil
+				}
+				// Beyond the dense elements slice: a huge sparse index (see
+				// maxDenseArrayDefineIndex) is tracked in the properties map.
+				_, hasOwn := arrObj.GetOwn(propName)
+				return vm.BooleanValue(hasOwn), nil
 			}
 			// Check custom named properties (e.g., pos, end for TypeScript node arrays)
 			_, hasOwn := arrObj.GetOwn(propName)
@@ -3393,6 +3411,21 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		}
 	}
 
+	// Array objects: implement ES 10.4.2.1 Array exotic [[DefineOwnProperty]]
+	// for everything except "length" (ArraySetLength's truncate-from-the-top
+	// semantics aren't implemented - see ArrayDefineOwnProperty's doc
+	// comment - so a "length" redefinition falls through to the no-op
+	// below, same pre-existing behavior as before this branch existed).
+	if obj.Type() == vm.TypeArray && !keyIsSymbol && propName != "length" {
+		arr := obj.AsArray()
+		if arr != nil {
+			if err := vmInstance.ArrayDefineOwnProperty(arr, propName, hasValue, value, writablePtr, enumerablePtr, configurablePtr, hasGetter, getter, hasSetter, setter); err != nil {
+				return vm.Undefined, err
+			}
+			return obj, nil
+		}
+	}
+
 	// Define the property with attributes (on plain objects only for now)
 	if obj.Type() == vm.TypeObject {
 		if obj.Type() == vm.TypeObject {
@@ -3930,6 +3963,18 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	if obj.Type() == vm.TypeArray {
 		arrObj := obj.AsArray()
 		isFrozen := arrObj.IsFrozen()
+		// An index (or named key) explicitly turned into an accessor via
+		// Object.defineProperty takes priority over the plain-element read
+		// below - see ArrayDefineOwnProperty's doc comment for why elements
+		// and accessors are tracked separately.
+		if g, s, e, c, ok := arrObj.GetOwnAccessor(propName); ok {
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("get", g)
+			descriptor.SetOwn("set", s)
+			descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+			descriptor.SetOwn("configurable", vm.BooleanValue(c))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
 		// For arrays, check if it's a valid index or 'length'
 		if propName == "length" {
 			value = vm.NumberValue(float64(arrObj.Length()))
