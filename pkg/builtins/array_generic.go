@@ -73,6 +73,29 @@ func toLengthInt(v vm.Value) int {
 	return int(n)
 }
 
+// toLengthWithVM converts v via the real ECMAScript ToLength algorithm:
+// ToNumber(v) - invoking a user-defined valueOf/toString through the VM when
+// v is an object, per OrdinaryToPrimitive - clamped to [0, 2^53-1] the same
+// way toLengthInt clamps a value already known to be a number. Any exception
+// thrown during that conversion (a throwing valueOf/toString, or a Symbol)
+// is propagated as ErrVMUnwinding/TypeError instead of silently coercing to
+// NaN, mirroring toIntegerOrInfinityWithVM's handling for ToInteger.
+func toLengthWithVM(vmInstance *vm.VM, v vm.Value) (int, error) {
+	if v.Type() == vm.TypeSymbol {
+		return 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+	}
+	if !v.IsObject() && !v.IsCallable() {
+		return toLengthInt(v), nil
+	}
+	vmInstance.EnterHelperCall()
+	n := vmInstance.ToNumber(v)
+	vmInstance.ExitHelperCall()
+	if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+		return 0, ErrVMUnwinding
+	}
+	return toLengthInt(vm.NumberValue(n)), nil
+}
+
 // arrayLikeLength returns LengthOfArrayLike(thisVal) (ECMA-262 7.3.20): the
 // real Length() for an Array, otherwise ToLength(Get(thisVal, "length")).
 // The PlainObject case goes through getOwnPlainObjectProperty so a "length"
@@ -80,7 +103,10 @@ func toLengthInt(v vm.Value) int {
 // as absent (see that helper's comment - this matters for real Test262
 // cases, not just theoretical ones). Everything else goes through the VM's
 // generic property get, which correctly handles TypedArray/Arguments/Proxy/
-// getters/etc.
+// getters/etc. Both branches finish through toLengthWithVM so a "length"
+// whose value is itself an object (e.g. `{toString(){return '2'}}`) gets
+// ToNumber's real valueOf/toString dispatch rather than silently reading as
+// NaN/0 - see toLengthWithVM's comment.
 func arrayLikeLength(vmInstance *vm.VM, thisVal vm.Value) (int, error) {
 	switch thisVal.Type() {
 	case vm.TypeArray:
@@ -93,13 +119,13 @@ func arrayLikeLength(vmInstance *vm.VM, thisVal vm.Value) (int, error) {
 		if !exists {
 			return 0, nil
 		}
-		return toLengthInt(lv), nil
+		return toLengthWithVM(vmInstance, lv)
 	default:
 		lv, err := vmInstance.GetProperty(thisVal, "length")
 		if err != nil {
 			return 0, err
 		}
-		return toLengthInt(lv), nil
+		return toLengthWithVM(vmInstance, lv)
 	}
 }
 
