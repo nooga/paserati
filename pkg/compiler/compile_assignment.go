@@ -13,9 +13,9 @@ const debugAssignment = false // Enable debug output for assignment compilation
 
 // WithPropertyInfo contains information about how to handle a with property access
 type WithPropertyInfo struct {
-	UseWithProperty bool     // True if this should use with-property resolution
-	HasLocalFallback bool    // True if there's a local variable to fall back to
-	LocalReg        Register // The local register to fall back to (if HasLocalFallback)
+	UseWithProperty  bool     // True if this should use with-property resolution
+	HasLocalFallback bool     // True if there's a local variable to fall back to
+	LocalReg         Register // The local register to fall back to (if HasLocalFallback)
 }
 
 // shouldUseWithProperty checks if an identifier should be treated as a with property
@@ -99,15 +99,15 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	var identInfo struct { // Info needed to store back to identifier
 		targetReg        Register
 		isUpvalue        bool
-		upvalueIndex     uint16 // 16-bit to support large closures (up to 65535 upvalues)
-		isGlobal         bool   // Track if this is a global variable
-		globalIdx        uint16 // Direct global index instead of name constant index
-		isCallerLocal    bool   // Track if this is a caller's local (for direct eval)
-		callerRegIdx     int    // Caller's register index (for direct eval)
-		isSpilled        bool   // Track if this is a spilled variable
-		spillIndex       uint16 // Spill slot index (for spilled variables)
-		isWithOrLocal    bool   // Track if this is a with-property with local fallback
-		withNameConstIdx uint16 // Name constant index for with-property
+		upvalueIndex     uint16   // 16-bit to support large closures (up to 65535 upvalues)
+		isGlobal         bool     // Track if this is a global variable
+		globalIdx        uint16   // Direct global index instead of name constant index
+		isCallerLocal    bool     // Track if this is a caller's local (for direct eval)
+		callerRegIdx     int      // Caller's register index (for direct eval)
+		isSpilled        bool     // Track if this is a spilled variable
+		spillIndex       uint16   // Spill slot index (for spilled variables)
+		isWithOrLocal    bool     // Track if this is a with-property with local fallback
+		withNameConstIdx uint16   // Name constant index for with-property
 		withLocalReg     Register // Local register to fall back to
 		withBindingReg   Register // Register holding captured binding (for simple assignments)
 	}
@@ -116,13 +116,13 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		indexReg Register
 	}
 	var memberInfo struct { // Info needed for member expr
-		objectReg         Register
-		nameConstIdx      uint16   // For static properties
-		isComputed        bool     // True if this is a computed property
-		keyReg            Register // For computed properties
-		isPrivateField    bool     // True if this is a private field (#field)
-		isPrivateSetter   bool     // True if this is a private setter (set #field)
-		isWithProperty    bool     // True if this is a with property (use OpGetWithProperty/OpSetWithProperty)
+		objectReg       Register
+		nameConstIdx    uint16   // For static properties
+		isComputed      bool     // True if this is a computed property
+		keyReg          Register // For computed properties
+		isPrivateField  bool     // True if this is a private field (#field)
+		isPrivateSetter bool     // True if this is a private setter (set #field)
+		isWithProperty  bool     // True if this is a with property (use OpGetWithProperty/OpSetWithProperty)
 	}
 
 	// Track temporary registers for cleanup
@@ -628,7 +628,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 
 				// Step 6: Write back using captured super base
 				c.chunk.WriteOpCode(vm.OpSetSuperComputedWithBase, line)
-				c.chunk.EmitByte(byte(baseReg))   // super base
+				c.chunk.EmitByte(byte(baseReg))  // super base
 				c.chunk.EmitByte(byte(keyReg))   // key
 				c.chunk.EmitByte(byte(valueReg)) // value
 
@@ -2202,6 +2202,78 @@ func (c *Compiler) compileObjectDestructuringAssignment(node *parser.ObjectDestr
 	return hint, nil
 }
 
+// emitSelectValueOrDefault writes valueReg into destReg unless it is
+// undefined, in which case defaultExpr is evaluated into destReg.
+// nameHint is used for anonymous function/class name inference.
+func (c *Compiler) emitSelectValueOrDefault(valueReg, destReg Register, defaultExpr parser.Expression, nameHint string, line int) errors.PaseratiError {
+	jumpToDefault := c.emitPlaceholderJump(vm.OpJumpIfUndefined, valueReg, line)
+	c.emitMove(destReg, valueReg, line)
+	jumpPastDefault := c.emitPlaceholderJump(vm.OpJump, 0, line)
+	c.patchJump(jumpToDefault)
+	if err := c.compileNamedDefaultExpr(defaultExpr, destReg, nameHint, line); err != nil {
+		c.patchJump(jumpPastDefault)
+		return err
+	}
+	c.patchJump(jumpPastDefault)
+	return nil
+}
+
+func (c *Compiler) compileNamedDefaultExpr(defaultExpr parser.Expression, destReg Register, nameHint string, line int) errors.PaseratiError {
+	if nameHint != "" {
+		if funcLit, ok := defaultExpr.(*parser.FunctionLiteral); ok && funcLit.Name == nil {
+			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, nameHint)
+			if err != nil {
+				return err
+			}
+			c.emitClosure(destReg, funcConstIndex, funcLit, freeSymbols)
+			return nil
+		}
+		if classExpr, ok := defaultExpr.(*parser.ClassExpression); ok && classExpr.Name == nil {
+			classExpr.Name = &parser.Identifier{
+				Token: classExpr.Token,
+				Value: "__Inferred__" + nameHint,
+			}
+			_, err := c.compileNode(classExpr, destReg)
+			classExpr.Name = nil
+			return err
+		}
+		if arrowFunc, ok := defaultExpr.(*parser.ArrowFunctionLiteral); ok {
+			funcConstIndex, freeSymbols, err := c.compileArrowFunctionWithName(arrowFunc, nameHint)
+			if err != nil {
+				return err
+			}
+			var body *parser.BlockStatement
+			if blockBody, ok := arrowFunc.Body.(*parser.BlockStatement); ok {
+				body = blockBody
+			} else {
+				body = &parser.BlockStatement{}
+			}
+			minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
+			c.emitClosure(destReg, funcConstIndex, minimalFuncLit, freeSymbols)
+			return nil
+		}
+	}
+	_, err := c.compileNode(defaultExpr, destReg)
+	return err
+}
+
+// defineIdentWithOptionalDefault initializes a destructuring declaration binding.
+// For const, the value must be computed first and then defined — assigning
+// after DefineConstTDZ throws "Assignment to constant variable".
+func (c *Compiler) defineIdentWithOptionalDefault(name string, isConst bool, valueReg Register, defaultExpr parser.Expression, line int) errors.PaseratiError {
+	if defaultExpr == nil {
+		return c.defineDestructuredVariableWithValue(name, isConst, valueReg, line)
+	}
+	resultReg := c.regAlloc.Alloc()
+	if err := c.emitSelectValueOrDefault(valueReg, resultReg, defaultExpr, name, line); err != nil {
+		c.regAlloc.Free(resultReg)
+		return err
+	}
+	err := c.defineDestructuredVariableWithValue(name, isConst, resultReg, line)
+	c.regAlloc.Free(resultReg)
+	return err
+}
+
 // compileConditionalAssignment compiles: target = (valueReg !== undefined) ? valueReg : defaultExpr
 func (c *Compiler) compileConditionalAssignment(target parser.Expression, valueReg Register, defaultExpr parser.Expression, line int) errors.PaseratiError {
 	// This implements: target = valueReg !== undefined ? valueReg : defaultExpr
@@ -3127,21 +3199,11 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 				}
 				c.regAlloc.Free(bindingReg)
 			} else if prop.Default != nil {
-				// Standard path: First, define the variable to reserve the name and get the target register
-				err := c.defineDestructuredVariable(targetIdent.Value, node.IsConst, types.Any, line)
-				if err != nil {
-					c.regAlloc.Free(valueReg)
-					return BadRegister, err
-				}
-
-				// Get the target identifier for conditional assignment
-				targetIdentCopy := &parser.Identifier{
-					Token: targetIdent.Token,
-					Value: targetIdent.Value,
-				}
-
-				// Use conditional assignment: target = valueReg !== undefined ? valueReg : defaultExpr
-				err = c.compileConditionalAssignment(targetIdentCopy, valueReg, prop.Default, line)
+				// Compute value-or-default first, then define. Defining a const
+				// and then assigning (compileConditionalAssignment) throws
+				// "Assignment to constant variable" inside functions, where
+				// the binding was already pre-declared via DefineConstTDZ.
+				err := c.defineIdentWithOptionalDefault(targetIdent.Value, node.IsConst, valueReg, prop.Default, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return BadRegister, err
