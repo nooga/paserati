@@ -599,6 +599,11 @@ func (c *Compiler) IsModuleMode() bool {
 	return c.moduleBindings != nil
 }
 
+// DisableModuleMode compiles subsequent programs as scripts (no ESM import/export bindings).
+func (c *Compiler) DisableModuleMode() {
+	c.moduleBindings = nil
+}
+
 // SetStrictMode sets the initial strict mode for the compiler
 // This is used by eval() to compile code in strict mode when called from strict context
 func (c *Compiler) SetStrictMode(strict bool) {

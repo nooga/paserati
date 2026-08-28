@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/builtins"
@@ -1153,6 +1154,52 @@ func (p *Paserati) runAsTemporaryModule(sourceCode string, program *parser.Progr
 	return p.runAsModule(sourceCode, program, "__temp_module__")
 }
 
+// runAsScript compiles and runs a program as a Script (not an ESM module).
+// Used for CommonJS wrapping: the host wraps the file body in a function and
+// calls it with (exports, require, module, __filename, __dirname).
+func (p *Paserati) runAsScript(program *parser.Program, filename string) (vm.Value, []errors.PaseratiError) {
+	p.checker.DisableModuleMode()
+	p.compiler.DisableModuleMode()
+
+	parser.DumpAST(program, "runAsScript")
+
+	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
+	p.compiler.SetSkipTypeCheck(p.skipTypeCheck)
+	p.compiler.SetForceScriptMode(true)
+	chunk, compileAndTypeErrs := p.compiler.Compile(program)
+	p.compiler.SetForceScriptMode(false)
+	if len(compileAndTypeErrs) > 0 {
+		return vm.Undefined, compileAndTypeErrs
+	}
+	if chunk == nil {
+		internalErr := &errors.RuntimeError{
+			Position: errors.Position{Line: 0, Column: 0},
+			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
+		}
+		return vm.Undefined, []errors.PaseratiError{internalErr}
+	}
+
+	p.vmInstance.SyncGlobalNames(p.compiler.GetHeapAlloc().GetNameToIndexMap())
+	p.vmInstance.ResizeHeapForGlobals(p.compiler.GetHeapAlloc().GetAllocatedSize())
+	p.vmInstance.SetCurrentModulePath(filename)
+
+	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
+	p.vmInstance.DrainUntilIdle()
+	return finalValue, runtimeErrs
+}
+
+// RunScript compiles source as a Script (not ESM) and runs it with filename as
+// the current path. It does not create a ModuleRecord or ESM exports.
+// A Node host typically wraps CommonJS as:
+//
+//	(function (exports, require, module, __filename, __dirname) { /* body */ })
+//
+// then Call()s the returned function with those arguments. filename is the
+// value noderati should pass as __filename (and from which it derives __dirname).
+func (p *Paserati) RunScript(sourceCode, filename string) (vm.Value, []errors.PaseratiError) {
+	return p.RunCode(sourceCode, RunOptions{Script: true, Filename: filename})
+}
+
 // EmitJavaScript parses TypeScript source and emits equivalent JavaScript code
 // without type annotations and TypeScript-specific syntax.
 func EmitJavaScript(sourceCode string) (string, []errors.PaseratiError) {
@@ -1238,12 +1285,28 @@ type RunOptions struct {
 	ShowCacheStats bool   // Show inline cache statistics
 	ModuleName     string // Module name to use (defaults to "__code_module__" if empty)
 	DisasmFilter   string // Filter string for disassembly (empty = all)
+	Script         bool   // Compile and run as a Script, not an ESM module
+	Filename       string // Current path for Script mode (and error reporting)
+}
+
+func scriptFilename(options RunOptions) string {
+	if options.Filename != "" {
+		return options.Filename
+	}
+	if options.ModuleName != "" {
+		return options.ModuleName
+	}
+	return "<script>"
 }
 
 // RunCode runs source code with the given Paserati session and options.
-// Now runs in module mode by default.
+// Module mode is the default; set Script to run as a Script (see RunScript).
 func (p *Paserati) RunCode(sourceCode string, options RunOptions) (vm.Value, []errors.PaseratiError) {
 	sourceFile := source.NewEvalSource(sourceCode)
+	if options.Script {
+		filename := scriptFilename(options)
+		sourceFile = source.NewSourceFile(filepath.Base(filename), filename, sourceCode)
+	}
 	l := lexer.NewLexerWithSource(sourceFile)
 	parseInstance := parser.NewParser(l)
 	program, parseErrs := parseInstance.ParseProgram()
@@ -1251,14 +1314,17 @@ func (p *Paserati) RunCode(sourceCode string, options RunOptions) (vm.Value, []e
 		return vm.Undefined, parseErrs
 	}
 
-	// Determine module name - use provided name or default to "__code_module__"
-	moduleName := options.ModuleName
-	if moduleName == "" {
-		moduleName = "__code_module__"
+	var value vm.Value
+	var errs []errors.PaseratiError
+	if options.Script {
+		value, errs = p.runAsScript(program, scriptFilename(options))
+	} else {
+		moduleName := options.ModuleName
+		if moduleName == "" {
+			moduleName = "__code_module__"
+		}
+		value, errs = p.runAsModule(sourceCode, program, moduleName)
 	}
-
-	// Run in module mode
-	value, errs := p.runAsModule(sourceCode, program, moduleName)
 
 	// Get the compiled chunk for debugging output if needed
 	if options.ShowBytecode || options.ShowCacheStats {

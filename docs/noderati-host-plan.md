@@ -133,12 +133,12 @@ Node order: nextTick → microtasks → timers → I/O → setImmediate. Putting
 
 **Paserati work:**
 
-- [ ] Public `RunScript(source, filename)` (or `RunOptions{Script: true, Filename}`) that compiles as script, sets a current path, does not invent ESM exports.
-- [ ] Enough context for noderati to inject `__filename` / `__dirname` (filename argument is enough if noderati wraps the source).
+- [x] Public `RunScript(source, filename)` and `RunOptions{Script: true, Filename}` compile as a Script (`ForceScriptMode`, no `EnableModuleMode`), set `SetCurrentModulePath(filename)`, and do not create a `ModuleRecord` or ESM exports.
+- [x] Filename is the current path the host should pass through as `__filename` (and from which it derives `__dirname`) after wrapping the body.
 
 **Advice:** implement `require()` in noderati as a native function that `LoadModule`s / wraps / caches `module.exports`. Do not teach the parser that `module.exports =` is ESM. Detection (`package.json` `"type"`, `.cjs`/`.mjs`, `--input-type`) is noderati’s.
 
-**Tests to add then:** wrap a CJS snippet, call it with an exports object, read `module.exports`; `__filename` matches the path passed in.
+**Tests:** [`pkg/driver/host_script_test.go`](../pkg/driver/host_script_test.go) — wrap a CJS snippet, `Call` it with an exports object, read `module.exports`; `__filename` matches the path passed in; no module record; `import.meta` rejected after a prior ESM `RunCode`.
 
 ---
 
