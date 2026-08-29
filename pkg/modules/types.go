@@ -75,6 +75,7 @@ type ModuleRecord struct {
 	Exports       map[string]types.Type // Exported types
 	ExportValues  map[string]vm.Value   // Exported runtime values
 	ExportIndices map[string]uint16     // Export name to global heap index mapping (for dynamic import)
+	ReExports     map[string]vm.ModuleReExport
 	Namespace     vm.Value              // Module namespace object
 
 	// Compilation results
@@ -303,6 +304,13 @@ func (mr *ModuleRecord) GetExportNames() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+func (mr *ModuleRecord) GetReExports() map[string]vm.ModuleReExport {
+	if mr.ReExports == nil {
+		return make(map[string]vm.ModuleReExport)
+	}
+	return mr.ReExports
 }
 
 // GetError returns the error associated with this module record

@@ -1838,6 +1838,16 @@ func (v Value) IsUndefined() bool {
 	return v.typ == TypeUndefined
 }
 
+// IsNull checks if the value is null.
+func (v Value) IsNull() bool {
+	return v.typ == TypeNull
+}
+
+// IsTrue checks if the value is the boolean true.
+func (v Value) IsTrue() bool {
+	return v.IsBoolean() && v.AsBoolean()
+}
+
 // --- Equality ---
 
 // Is compares two values for equality based on the ECMAScript SameValueZero algorithm.

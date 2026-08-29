@@ -129,6 +129,32 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 					}
 				}
 				proto = fn.Prototype
+			case TypeObject:
+				// Object.setPrototypeOf(fn, plainObject) — e.g. chalk's createChalk.prototype
+				po := proto.AsPlainObject()
+				if po == nil {
+					proto = Null
+					break
+				}
+				if getter, _, _, _, exists := po.GetOwnAccessor(propName); exists {
+					if getter.Type() != TypeUndefined {
+						res, err := vm.Call(getter, objVal, nil)
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+							} else {
+								vm.throwException(NewString(err.Error()))
+							}
+							return Undefined, false
+						}
+						return res, true
+					}
+					return Undefined, true
+				}
+				if prop, exists := po.GetOwn(propName); exists {
+					return prop, true
+				}
+				proto = po.GetPrototype()
 			default:
 				// Stop at built-in prototypes (NativeFunctionWithProps like Function.prototype)
 				// These are handled by the FunctionPrototype lookup below
