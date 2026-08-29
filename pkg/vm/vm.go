@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -990,6 +991,66 @@ func (vm *VM) moduleFromPath() string {
 		return "."
 	}
 	return vm.currentModulePath
+}
+
+// RegisterExecutingModule pre-registers a module context for a module that the driver
+// is about to execute directly (the entry module: it never goes through executeModule's
+// own load-and-run path, since the driver already has its compiled chunk in hand).
+//
+// Without this, a dependency that imports or re-exports something back from the entry
+// module's own path -- a circular reference -- finds no cached context for it in
+// executeModule and triggers a completely independent reload+recompile+re-run of the
+// same source, duplicating the entry module's top-level side effects. Registering it
+// here with `executing: true` lets executeModule's alias check (see below) recognize
+// the entry module as already in flight and skip the duplicate run, exactly as it
+// already does for ordinary (non-entry) circular imports reached by their own path.
+//
+// Call FinishExecutingModule once the module has finished running.
+func (vm *VM) RegisterExecutingModule(resolvedPath string, chunk *Chunk) {
+	if resolvedPath == "" {
+		return
+	}
+	vm.moduleContexts[resolvedPath] = &ModuleContext{
+		chunk:        chunk,
+		exports:      make(map[string]Value),
+		executing:    true,
+		resolvedPath: resolvedPath,
+	}
+}
+
+// FinishExecutingModule marks a module registered via RegisterExecutingModule as fully
+// executed and records its final exported values, so later reads of this module's
+// exports resolve to the real, final values.
+func (vm *VM) FinishExecutingModule(resolvedPath string, exports map[string]Value) {
+	moduleCtx, exists := vm.moduleContexts[resolvedPath]
+	if !exists {
+		return
+	}
+	moduleCtx.executing = false
+	moduleCtx.executed = true
+	for name, value := range exports {
+		moduleCtx.exports[name] = value
+	}
+}
+
+// findExecutingModuleContext scans registered module contexts for one that is
+// currently in flight (executing, not yet finished) whose resolved path matches --
+// after path cleaning, since a dependency may reference it via a differently-spelled
+// but equivalent relative specifier than the one it was registered under (see
+// RegisterExecutingModule). Used to recognize a circular reference back into a module
+// that is still mid-evaluation without asking the module loader to resolve it, which
+// would risk compiling an independent, divergent copy of that module's bindings.
+func (vm *VM) findExecutingModuleContext(modulePath string) *ModuleContext {
+	cleaned := filepath.Clean(modulePath)
+	for _, ctx := range vm.moduleContexts {
+		if ctx == nil || !ctx.executing || ctx.resolvedPath == "" {
+			continue
+		}
+		if ctx.resolvedPath == modulePath || filepath.Clean(ctx.resolvedPath) == cleaned {
+			return ctx
+		}
+	}
+	return nil
 }
 
 // SetImportMetaBaseDir sets the directory used to absolutize relative filesystem
@@ -18304,6 +18365,19 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 
 	// Load the module if not cached
 	if _, exists := vm.moduleContexts[modulePath]; !exists {
+		// Before asking the module loader to resolve+compile this path, check whether
+		// it's actually a currently-executing module already registered under a
+		// different (but equivalent) specifier -- most commonly the entry module,
+		// reached here by one of its own dependencies via a relative path back to it.
+		// Aliasing the key to that same in-flight context avoids both a redundant
+		// re-execution of the same source and, just as importantly, avoids compiling
+		// an independent copy of it whose global-index bindings would diverge from
+		// the copy actually running.
+		if aliased := vm.findExecutingModuleContext(modulePath); aliased != nil {
+			vm.moduleContexts[modulePath] = aliased
+			return InterpretOK, Undefined
+		}
+
 		if vm.moduleLoader == nil {
 			return vm.runtimeError("No module loader available"), Undefined
 		}
