@@ -322,3 +322,8 @@ func (mr *ModuleRecord) GetSource() string {
 	}
 	return mr.Source.Content
 }
+
+// GetResolvedPath returns the canonical resolved path for this module.
+func (mr *ModuleRecord) GetResolvedPath() string {
+	return mr.ResolvedPath
+}

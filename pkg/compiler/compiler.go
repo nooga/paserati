@@ -4225,7 +4225,11 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 		return BadRegister, nil
 	}
 
-	sourceModuleRecord, err := c.moduleLoader.LoadModule(sourceModule, ".")
+	fromPath := "."
+	if c.moduleBindings != nil && c.moduleBindings.ModulePath != "" {
+		fromPath = c.moduleBindings.ModulePath
+	}
+	sourceModuleRecord, err := c.moduleLoader.LoadModule(sourceModule, fromPath)
 	if err != nil {
 		return BadRegister, NewCompileError(node, fmt.Sprintf("Failed to load source module '%s' for re-export: %v", sourceModule, err))
 	}
