@@ -266,6 +266,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.READONLY, p.parseIdentifier) // READONLY is a contextual keyword, can be used as identifier
 	p.registerPrefix(lexer.OVERRIDE, p.parseIdentifier) // OVERRIDE is a contextual keyword, can be used as identifier
 	p.registerPrefix(lexer.ABSTRACT, p.parseIdentifier) // ABSTRACT is a contextual keyword, can be used as identifier
+	p.registerPrefix(lexer.IS, p.parseIdentifier)       // IS is a contextual keyword (type predicates), can be used as identifier in JS
 	p.registerPrefix(lexer.FUNCTION, func() Expression { return p.parseFunctionLiteral(false) })
 	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
@@ -1798,7 +1799,7 @@ func (p *Parser) parseLetStatement() Statement {
 		return p.parseObjectDestructuringDeclaration(letToken, false, true)
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
 		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF, lexer.FROM,
-		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.NULL, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT:
+		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.NULL, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS:
 		// Regular identifier: let x = ... or let x = ..., y = ... (including contextual keywords and FutureReservedWords)
 		stmt := &LetStatement{Token: letToken}
 		firstDeclarator := &VarDeclarator{}
@@ -1895,7 +1896,7 @@ func (p *Parser) parseConstStatement() Statement {
 		return p.parseObjectDestructuringDeclaration(constToken, true, true)
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
 		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF, lexer.FROM,
-		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.NULL, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT:
+		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.NULL, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS:
 		// Regular identifier: const x = ... or const x = ..., y = ... (including contextual keywords and FutureReservedWords)
 		stmt := &ConstStatement{Token: constToken}
 		firstDeclarator := &VarDeclarator{}
@@ -4177,7 +4178,7 @@ func (p *Parser) isContextualKeywordAsIdent() bool {
 	switch p.curToken.Type {
 	case lexer.SET, lexer.GET, lexer.FROM, lexer.OF, lexer.AS,
 		lexer.ASYNC, lexer.STATIC, lexer.TYPE, lexer.READONLY,
-		lexer.OVERRIDE, lexer.ABSTRACT, lexer.UNDEFINED:
+		lexer.OVERRIDE, lexer.ABSTRACT, lexer.UNDEFINED, lexer.IS:
 		return true
 	}
 	return false
@@ -4193,7 +4194,7 @@ func (p *Parser) peekIsIdentifierLike() bool {
 	switch p.peekToken.Type {
 	case lexer.IDENT, lexer.SET, lexer.GET, lexer.FROM, lexer.OF, lexer.AS,
 		lexer.ASYNC, lexer.STATIC, lexer.TYPE, lexer.READONLY,
-		lexer.OVERRIDE, lexer.ABSTRACT:
+		lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS:
 		return true
 	}
 	return false
@@ -4315,7 +4316,7 @@ func (p *Parser) curTokenIsIdentLike() bool {
 	switch p.curToken.Type {
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
 		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF, lexer.FROM,
-		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.NULL, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT:
+		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.NULL, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS:
 		return true
 	}
 	return false
@@ -4330,7 +4331,7 @@ func (p *Parser) expectPeekIdentifierOrKeyword() bool {
 	switch p.peekToken.Type {
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
 		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF, lexer.FROM,
-		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT:
+		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS:
 		p.nextToken()
 		return true
 	default:

@@ -73,17 +73,19 @@ type ModuleRecord interface {
 	GetError() error
 	IsJSONModule() bool
 	GetSource() string
+	GetResolvedPath() string
 }
 
 // ModuleContext represents a cached module execution context
 type ModuleContext struct {
-	chunk       *Chunk           // Compiled module chunk
-	exports     map[string]Value // Module's exported values
-	executed    bool             // Whether module has been executed
-	executing   bool             // Whether module is currently being executed
-	globals     []Value          // Module-specific global variables (indices 0+ within module)
-	globalNames []string         // Module-specific global variable names (for debugging)
-	namespace   Value            // Cached namespace object (ES6 9.4.6 Module Namespace Exotic Object)
+	chunk        *Chunk           // Compiled module chunk
+	exports      map[string]Value // Module's exported values
+	executed     bool             // Whether module has been executed
+	executing    bool             // Whether module is currently being executed
+	globals      []Value          // Module-specific global variables (indices 0+ within module)
+	globalNames  []string         // Module-specific global variable names (for debugging)
+	namespace    Value            // Cached namespace object (ES6 9.4.6 Module Namespace Exotic Object)
+	resolvedPath string           // Canonical path, used as fromPath for nested relative imports
 }
 
 // PendingAction represents actions that should be performed after finally blocks complete
@@ -949,6 +951,13 @@ func (vm *VM) IsOriginalEval(v Value) bool {
 // SetCurrentModulePath sets the current module path for module-specific features like import.meta
 func (vm *VM) SetCurrentModulePath(modulePath string) {
 	vm.currentModulePath = modulePath
+}
+
+func (vm *VM) moduleFromPath() string {
+	if vm.currentModulePath == "" {
+		return "."
+	}
+	return vm.currentModulePath
 }
 
 // SetImportMetaBaseDir sets the directory used to absolutize relative filesystem
@@ -18267,8 +18276,9 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 			return vm.runtimeError("No module loader available"), Undefined
 		}
 
-		// Load the module using the module loader
-		moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, ".")
+		// Load the module using the module loader. Relative specifiers must
+		// resolve against the importing module, not cwd.
+		moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, vm.moduleFromPath())
 		if err != nil {
 			return vm.runtimeError("Failed to load module '%s': %s", modulePath, err.Error()), Undefined
 		}
@@ -18290,9 +18300,10 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 
 			// Create module context for JSON module with default export
 			vm.moduleContexts[modulePath] = &ModuleContext{
-				chunk:    nil, // JSON modules don't have chunks
-				exports:  map[string]Value{"default": jsonValue},
-				executed: true, // JSON modules are immediately "executed"
+				chunk:        nil, // JSON modules don't have chunks
+				exports:      map[string]Value{"default": jsonValue},
+				executed:     true, // JSON modules are immediately "executed"
+				resolvedPath: moduleRecord.GetResolvedPath(),
 			}
 			return InterpretOK, Undefined
 		}
@@ -18308,11 +18319,12 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		// Create module context without module-scoped globals
 		// All modules now use the unified heap
 		vm.moduleContexts[modulePath] = &ModuleContext{
-			chunk:       chunk,
-			exports:     make(map[string]Value),
-			executed:    false,
-			globals:     nil, // No longer used - unified heap replaces this
-			globalNames: nil, // No longer used - unified heap replaces this
+			chunk:        chunk,
+			exports:      make(map[string]Value),
+			executed:     false,
+			globals:      nil, // No longer used - unified heap replaces this
+			globalNames:  nil, // No longer used - unified heap replaces this
+			resolvedPath: moduleRecord.GetResolvedPath(),
 		}
 	}
 
@@ -18352,9 +18364,12 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		// fmt.Printf("// [VM] executeModule: Saved execution context with %d registers deep copied\n", registerCount)
 	}
 
-	// Set current module context for module-scoped globals
-	// savedPath := vm.currentModulePath
-	vm.currentModulePath = modulePath
+	// Set current module context for nested relative imports and import.meta
+	if moduleCtx.resolvedPath != "" {
+		vm.currentModulePath = moduleCtx.resolvedPath
+	} else {
+		vm.currentModulePath = modulePath
+	}
 	// fmt.Printf("// [VM DEBUG] executeModule: Context switch from '%s' to '%s'\n", savedPath, modulePath)
 
 	// Execute the module with isolated error handling
@@ -18569,7 +18584,7 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) {
 	// Get the export values that were already collected by the driver during module execution
 	if vm.moduleLoader != nil {
-		moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, ".")
+		moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, vm.moduleFromPath())
 		if err == nil {
 			// Use the already-collected export values from the module record
 			// These were populated by the driver's collectExportedValues() function

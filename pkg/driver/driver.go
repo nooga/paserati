@@ -625,6 +625,29 @@ func (p *Paserati) AddResolver(resolver modules.ModuleResolver) {
 	p.moduleLoader.AddResolver(resolver)
 }
 
+// PreloadAllNativeModules loads every declared native module and registers
+// its exports on the shared heap so nested ESM files can import them.
+func (p *Paserati) PreloadAllNativeModules() error {
+	if p.nativeResolver == nil {
+		return nil
+	}
+	seen := make(map[*NativeModule]bool)
+	for name, mod := range p.nativeResolver.modules {
+		if seen[mod] {
+			continue
+		}
+		seen[mod] = true
+		rec, err := p.LoadModule(name, ".")
+		if err != nil {
+			return err
+		}
+		if concrete, ok := rec.(*modules.ModuleRecord); ok {
+			p.registerNativeModuleExports(concrete)
+		}
+	}
+	return nil
+}
+
 // CompileModule compiles a module file with proper dependency resolution
 // This is used by the test framework to compile modules with full module loading
 func (p *Paserati) CompileModule(filename string) (*vm.Chunk, []errors.PaseratiError) {
