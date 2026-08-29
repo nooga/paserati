@@ -304,6 +304,12 @@ type SuspendedFrame struct {
 	outputReg  byte    // Register where sent/resolved value should be stored on resumption
 	thisValue  Value   // The 'this' value for this frame (must be preserved across suspensions)
 	homeObject Value   // The [[HomeObject]] for super property access (must be preserved for object literal methods)
+	// openUpvalues is the head of this frame's open-upvalue list (Upvalue.next
+	// chain). Generators/async functions do NOT close their captures on
+	// suspend - a suspended closure over a `let` must stay live - so the list
+	// must survive the suspend and be restored on resume, then closed when the
+	// function finally completes.
+	openUpvalues *Upvalue
 }
 
 // GeneratorFrame is an alias for backwards compatibility

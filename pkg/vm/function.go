@@ -7,8 +7,8 @@ import (
 
 type FunctionObject struct {
 	Object
-	Arity                int          // Number of declared parameters (used for VM register allocation)
-	Length               int          // ECMAScript length property (params before first default, per spec)
+	Arity                int // Number of declared parameters (used for VM register allocation)
+	Length               int // ECMAScript length property (params before first default, per spec)
 	Variadic             bool
 	Chunk                *Chunk
 	Name                 string
@@ -31,8 +31,9 @@ type FunctionObject struct {
 	DeletedLength bool // True if the 'length' property has been deleted
 
 	// HasLocalCaptures indicates if any nested closure captures locals from this function.
-	// When false, closeUpvalues can be skipped entirely on return (major performance win).
+	// When false, upvalue closing can be skipped entirely on return (major performance win).
 	// Set at compile time when emitting OpClosure with CaptureFromRegister or CaptureFromSpill.
+	// The runtime-tighter gate is CallFrame.openUpvalues != nil.
 	HasLocalCaptures bool
 
 	// cachedClosure is used to avoid per-call allocations when invoking TypeFunction values.
@@ -44,7 +45,9 @@ type FunctionObject struct {
 type Upvalue struct {
 	Location *Value
 	Closed   Value
-	next     *Upvalue
+	// next links this upvalue into the owning CallFrame's open-upvalue list while
+	// it is still open. Cleared when the upvalue is closed or unlinked.
+	next *Upvalue
 }
 
 func (uv *Upvalue) Close() {
@@ -65,12 +68,12 @@ type ClosureObject struct {
 	Object
 	Fn                       *FunctionObject
 	Upvalues                 []*Upvalue
-	WithObjects              []Value // Captured with-object stack from enclosing with statements
-	CapturedThis             Value   // Captured 'this' for arrow functions (lexical this binding)
-	CapturedSuperConstructor Value   // Captured super constructor for arrow functions with super() calls
-	CapturedArguments        Value   // Captured 'arguments' for arrow functions (lexical arguments binding)
-	CapturedNewTarget        Value   // Captured 'new.target' for arrow functions (lexical new.target binding)
-	CapturedHomeObject       Value   // Captured [[HomeObject]] for arrow functions (for super property access)
+	WithObjects              []Value      // Captured with-object stack from enclosing with statements
+	CapturedThis             Value        // Captured 'this' for arrow functions (lexical this binding)
+	CapturedSuperConstructor Value        // Captured super constructor for arrow functions with super() calls
+	CapturedArguments        Value        // Captured 'arguments' for arrow functions (lexical arguments binding)
+	CapturedNewTarget        Value        // Captured 'new.target' for arrow functions (lexical new.target binding)
+	CapturedHomeObject       Value        // Captured [[HomeObject]] for arrow functions (for super property access)
 	Properties               *PlainObject // Per-closure properties like .prototype (created lazily, shadows Fn.Properties)
 	constructorFixed         bool         // True after we've fixed the constructor property to point to this closure
 }
@@ -133,11 +136,11 @@ type NativeFunctionObjectWithProps struct {
 // This uses Go channels for async communication with the VM
 type AsyncNativeFunctionObject struct {
 	Object
-	Arity      int
-	Variadic   bool
-	Name       string
+	Arity    int
+	Variadic bool
+	Name     string
 	// AsyncFn receives a VMCaller interface that can call bytecode functions
-	AsyncFn    func(caller VMCaller, args []Value) Value
+	AsyncFn func(caller VMCaller, args []Value) Value
 }
 
 // VMCaller provides an interface for native functions to call bytecode functions
