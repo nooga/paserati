@@ -6,5 +6,5 @@ function recurse(n) {
     if (n <= 0) return 0;
     return 1 + recurse(n - 1);
 }
-// 2000 exceeds the 1024 frame limit
-console.log(recurse(2000));
+// 20000 exceeds the VM's maximum call-stack depth (MaxFrames)
+console.log(recurse(20000));

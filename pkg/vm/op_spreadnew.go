@@ -72,7 +72,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		}
 
 		// Check stack limits
-		if vm.frameCount == MaxFrames {
+		if vm.frameCount >= len(vm.frames) {
 			frame.ip = callerIP
 			status := vm.runtimeError("Stack overflow during constructor call.")
 			return status, Undefined
@@ -174,7 +174,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		constructorFunc := constructorClosure.Fn
 
 		// Check stack limits
-		if vm.frameCount == MaxFrames {
+		if vm.frameCount >= len(vm.frames) {
 			frame.ip = callerIP
 			status := vm.runtimeError("Stack overflow during constructor call.")
 			return status, Undefined

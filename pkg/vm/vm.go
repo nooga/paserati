@@ -19,9 +19,28 @@ import (
 )
 
 const RegFileSize = 256 // Max registers per function call frame
-const MaxFrames = 512   // Max call stack depth
-// NOTE: Total stack = RegFileSize * MaxFrames = ~3MB. For dynamic expansion in the future,
-// upvalues would need to change from raw pointers to indices. See docs/bucketlist.md.
+
+// MaxFrames is the maximum call stack depth (number of simultaneously live
+// activations) and, multiplied by RegFileSize, the size of the VM-wide register
+// file. It is a var, not a const, so embedders can tune it before creating a VM
+// (see SetMaxFrames); the backing arrays (VM.frames, VM.registerStack) are
+// allocated once in NewVM from its then-current value and never reallocated, so
+// raw *Value pointers held by open upvalues stay valid for the VM's lifetime.
+//
+// Total register file = RegFileSize * MaxFrames * sizeof(Value) (~24B):
+// 4096 frames => ~24MB, allocated lazily per VM. Deep recursive workloads (e.g.
+// running tsc's binder) need more than the historical 512.
+var MaxFrames = 4096
+
+// SetMaxFrames overrides the call-stack depth / register-file size used by VMs
+// created afterwards. It has no effect on already-constructed VMs. A value < 64
+// is clamped to 64.
+func SetMaxFrames(n int) {
+	if n < 64 {
+		n = 64
+	}
+	MaxFrames = n
+}
 
 // Debug flags - set these to control debug output
 const debugVM = false              // VM execution tracing
@@ -153,13 +172,16 @@ type BytecodeCall struct {
 
 // VM represents the virtual machine state.
 type VM struct {
-	// The call stack
-	frames     [MaxFrames]CallFrame
+	// The call stack. Allocated once in NewVM (len == MaxFrames) and never
+	// reallocated, so &frames[i] stays stable for the VM's lifetime.
+	frames     []CallFrame
 	frameCount int
 
 	// Register file, treated as a stack. Each CallFrame gets a window into this.
-	// This avoids reallocating register arrays for every call.
-	registerStack [RegFileSize * MaxFrames]Value
+	// This avoids reallocating register arrays for every call. Allocated once in
+	// NewVM (len == RegFileSize*MaxFrames) and never reallocated, so raw *Value
+	// pointers held by open upvalues stay valid for the VM's lifetime.
+	registerStack []Value
 	nextRegSlot   int // Points to the next available slot in registerStack
 
 	// sentinelRegPool is a LIFO free-list of 1-element register slices reused as
@@ -446,6 +468,8 @@ func dumpFrameStack(vm *VM, context string) {
 func NewVM() *VM {
 	vm := &VM{
 		// frameCount and nextRegSlot initialized to 0
+		frames:                  make([]CallFrame, MaxFrames),         // Call stack (never reallocated)
+		registerStack:           make([]Value, RegFileSize*MaxFrames), // VM-wide register file (never reallocated)
 		propCache:               make(map[int]*PropInlineCache),  // Initialize inline cache
 		cacheStats:              ICacheStats{},                   // Initialize cache statistics
 		emptyRestArray:          NewArray(),                      // Initialize singleton empty array for rest params
@@ -1134,7 +1158,7 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 
 	// --- Sanity Check: Ensure enough stack space BEFORE pushing frame ---
 	// We need space for the new frame in frames array and registers in registerStack.
-	if vm.frameCount >= MaxFrames {
+	if vm.frameCount >= len(vm.frames) {
 		// Cannot add another frame.
 		placeholderToken := errors.Position{Line: 0, Column: 0} // TODO: Better position?
 		runtimeErr := &errors.RuntimeError{
@@ -10240,7 +10264,7 @@ startExecution:
 				// JavaScript allows passing more arguments than the function declares - they are
 				// simply ignored or can be accessed via the arguments object
 				// No arity checking needed for extra arguments
-				if vm.frameCount == MaxFrames {
+				if vm.frameCount >= len(vm.frames) {
 					frame.ip = callerIP
 					status := vm.runtimeError("Stack overflow during constructor call.")
 					return status, Undefined
@@ -10428,7 +10452,7 @@ startExecution:
 				// JavaScript allows passing more arguments than the function declares - they are
 				// simply ignored or can be accessed via the arguments object
 				// No arity checking needed for extra arguments
-				if vm.frameCount == MaxFrames {
+				if vm.frameCount >= len(vm.frames) {
 					frame.ip = callerIP
 					status := vm.runtimeError("Stack overflow during constructor call.")
 					return status, Undefined
@@ -10906,7 +10930,7 @@ startExecution:
 						vm.ThrowTypeError("Generator functions cannot be used as constructors")
 						return InterpretRuntimeError, Undefined
 					}
-					if vm.frameCount == MaxFrames {
+					if vm.frameCount >= len(vm.frames) {
 						frame.ip = callerIP
 						status := vm.runtimeError("Stack overflow during constructor call.")
 						return status, Undefined
@@ -17383,7 +17407,7 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	vm.frameCount++
 
 	// Check if we have space for the generator frame
-	if vm.frameCount >= MaxFrames {
+	if vm.frameCount >= len(vm.frames) {
 		vm.frameCount-- // Remove sentinel frame
 		return Undefined, fmt.Errorf("Stack overflow")
 	}
@@ -17644,7 +17668,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	vm.frameCount++
 
 	// Check if we have space for the generator frame
-	if vm.frameCount >= MaxFrames {
+	if vm.frameCount >= len(vm.frames) {
 		vm.frameCount-- // Remove sentinel frame
 		return Undefined, fmt.Errorf("Stack overflow")
 	}
@@ -17815,7 +17839,7 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	vm.frameCount++
 
 	// Check if we have space for the generator frame
-	if vm.frameCount >= MaxFrames {
+	if vm.frameCount >= len(vm.frames) {
 		vm.frameCount-- // Remove sentinel frame
 		return Undefined, fmt.Errorf("Stack overflow")
 	}
@@ -17994,7 +18018,7 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	vm.frameCount++
 
 	// Check if we have space for the async function frame
-	if vm.frameCount >= MaxFrames {
+	if vm.frameCount >= len(vm.frames) {
 		vm.frameCount = savedFrameCount // Restore
 		return Undefined, fmt.Errorf("Stack overflow")
 	}
@@ -18120,7 +18144,7 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	vm.frameCount++
 
 	// Check if we have space for the async function frame
-	if vm.frameCount >= MaxFrames {
+	if vm.frameCount >= len(vm.frames) {
 		vm.frameCount = savedFrameCount // Restore
 		return Undefined, fmt.Errorf("Stack overflow")
 	}

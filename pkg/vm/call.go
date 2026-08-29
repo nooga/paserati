@@ -278,7 +278,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		}
 
 		// Check frame limit
-		if vm.frameCount == MaxFrames {
+		if vm.frameCount >= len(vm.frames) {
 			currentFrame.ip = callerIP
 			trace := vm.CaptureStackTrace()
 			fmt.Printf("\n=== VM Stack (overflow) ===\n%s\n===========================\n", trace)

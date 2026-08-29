@@ -108,7 +108,7 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	vm.frameCount++
 
 	// Check if we have space for the async function frame
-	if vm.frameCount >= MaxFrames {
+	if vm.frameCount >= len(vm.frames) {
 		vm.frameCount = savedFrameCount // Restore
 		return Undefined, fmt.Errorf("Stack overflow")
 	}
