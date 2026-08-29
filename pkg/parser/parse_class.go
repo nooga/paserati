@@ -480,19 +480,25 @@ func (p *Parser) parseClassBody() *ClassBody {
 		}
 
 		hasNewlineAfterCur := p.peekToken.Line > p.curToken.Line
-		if p.curTokenIs(lexer.GET) && !p.peekTokenIs(lexer.LPAREN) && !hasNewlineAfterCur {
+		// A same-line terminator after 'get'/'set' means it's a field named "get"/"set",
+		// not an accessor. Mirrors isFieldName() above but excludes LPAREN/LT, which for
+		// get/set specifically mean "method named get/set" and "generic method", not a field.
+		isGetSetFieldTerminator := p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.ASSIGN) ||
+			p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION) ||
+			p.peekTokenIs(lexer.BANG) || p.peekTokenIs(lexer.RBRACE)
+		if p.curTokenIs(lexer.GET) && !p.peekTokenIs(lexer.LPAREN) && !hasNewlineAfterCur && !isGetSetFieldTerminator {
 			// Parse getter method: get propertyName() {}
 			// But NOT if followed by '(' - that's a method named "get": get() {}
-			// And NOT if there's a newline (ASI) - that's a field named "get"
+			// And NOT if there's a newline (ASI) or a field terminator - that's a field named "get"
 			method := p.parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
 			if method != nil {
 				attachDecorators(method)
 				methods = append(methods, method)
 			}
-		} else if p.curTokenIs(lexer.SET) && !p.peekTokenIs(lexer.LPAREN) && !hasNewlineAfterCur {
+		} else if p.curTokenIs(lexer.SET) && !p.peekTokenIs(lexer.LPAREN) && !hasNewlineAfterCur && !isGetSetFieldTerminator {
 			// Parse setter method: set propertyName(value) {}
 			// But NOT if followed by '(' - that's a method named "set": set() {}
-			// And NOT if there's a newline (ASI) - that's a field named "set"
+			// And NOT if there's a newline (ASI) or a field terminator - that's a field named "set"
 			method := p.parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
 			if method != nil {
 				attachDecorators(method)
