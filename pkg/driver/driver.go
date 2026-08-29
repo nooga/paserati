@@ -1164,11 +1164,25 @@ func (p *Paserati) runAsModule(sourceCode string, program *parser.Program, modul
 	// Set the module path in the VM so import.meta.url works correctly
 	p.vmInstance.SetCurrentModulePath(moduleName)
 
+	// Register this module as executing *before* running it, so that a dependency
+	// which circularly imports or re-exports back from this same path (most commonly:
+	// the entry module referenced by one of its own dependencies) recognizes it as
+	// already in flight instead of triggering an independent, divergent reload+re-run
+	// of the same source. See VM.RegisterExecutingModule.
+	p.vmInstance.RegisterExecutingModule(moduleName, chunk)
+
 	// Execute the chunk
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
 
 	// Drain async work (microtasks, timers, etc.) until idle
 	p.vmInstance.DrainUntilIdle()
+
+	// Record the final exported values so a circular reference that read this module
+	// mid-execution (and got Undefined for anything not yet initialized) is corrected
+	// for any subsequent read, and so a later, separate call resolves correctly too.
+	if p.compiler.IsModuleMode() {
+		p.vmInstance.FinishExecutingModule(moduleName, p.collectExportedValues())
+	}
 
 	return finalValue, runtimeErrs
 }
