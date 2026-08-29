@@ -263,6 +263,40 @@ func (vm *VM) unwindException() bool {
 	return false
 }
 
+// reclaimUnwoundRegisters restores the register-file invariant after
+// unwindException has popped one or more frames to reach a handler.
+//
+// unwindException's pop loop decrements vm.frameCount without giving back the
+// popped frames' register windows (doing it there risks double-counting against
+// the ad-hoc `nextRegSlot -= regSize` reclamation in the native-boundary error
+// paths - see issue #61 / the note in truncateFramesTo). Instead, once we've
+// settled on the frame that will actually resume bytecode execution, snap
+// vm.nextRegSlot back to the top of that frame's window. This only ever *lowers*
+// nextRegSlot (reclaiming leaked windows); it never raises it, and it no-ops for
+// frames whose registers are not carved from vm.registerStack (sentinel/native).
+func (vm *VM) reclaimUnwoundRegisters() {
+	if vm.frameCount == 0 {
+		return
+	}
+	frame := &vm.frames[vm.frameCount-1]
+	if frame.closure == nil || frame.isSentinelFrame || frame.isNativeFrame {
+		return
+	}
+	if len(frame.registers) == 0 {
+		return
+	}
+	// frame.registers was formed as vm.registerStack[base : base+n] (a 2-index
+	// slice), so cap(frame.registers) == len(vm.registerStack) - base.
+	base := len(vm.registerStack) - cap(frame.registers)
+	if base < 0 || base > len(vm.registerStack) {
+		return // not a registerStack-backed window; leave nextRegSlot untouched
+	}
+	top := base + frame.allocatedRegSize
+	if top >= 0 && top < vm.nextRegSlot {
+		vm.nextRegSlot = top
+	}
+}
+
 // handleCatchBlock transfers control to a catch block
 func (vm *VM) handleCatchBlock(handler *ExceptionHandler) {
 	frame := &vm.frames[vm.frameCount-1]
@@ -284,6 +318,9 @@ func (vm *VM) handleCatchBlock(handler *ExceptionHandler) {
 	if debugExceptions {
 		fmt.Printf("[DEBUG handleCatchBlock] Jumped to catch handler at PC %d\n", handler.HandlerPC)
 	}
+
+	// Reclaim register windows of any frames unwindException popped to get here.
+	vm.reclaimUnwoundRegisters()
 
 	// Clear exception state
 	vm.currentException = Null
@@ -318,6 +355,9 @@ func (vm *VM) handleFinallyBlock(handler *ExceptionHandler) {
 	// Jump to finally handler
 	frame.ip = handler.HandlerPC
 	vm.finallyDepth++
+
+	// Reclaim register windows of any frames unwindException popped to get here.
+	vm.reclaimUnwoundRegisters()
 
 	// fmt.Printf("[DEBUG] handleFinallyBlock: Set IP to %d, finallyDepth=%d\n", handler.HandlerPC, vm.finallyDepth)
 

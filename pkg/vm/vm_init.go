@@ -124,7 +124,7 @@ func (vm *VM) executeAsyncNativeFunction(asyncFn *AsyncNativeFunctionObject, arg
 func (vm *VM) executeUserFunctionReentrant(fn Value, thisValue Value, args []Value) (Value, error) {
 
 	// Check if we have space for another frame
-	if vm.frameCount >= MaxFrames {
+	if vm.frameCount >= len(vm.frames) {
 		return Undefined, fmt.Errorf("stack overflow during re-entrant call")
 	}
 
@@ -216,7 +216,7 @@ func (vm *VM) CallFunctionDirectly(fn Value, thisValue Value, args []Value) (Val
 	}
 
 	// Check if we have space for another frame
-	if vm.frameCount >= MaxFrames {
+	if vm.frameCount >= len(vm.frames) {
 		return Undefined, fmt.Errorf("stack overflow during direct function call")
 	}
 
