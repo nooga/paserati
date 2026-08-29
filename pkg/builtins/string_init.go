@@ -30,54 +30,30 @@ var ErrVMUnwinding = errors.New("VM unwinding")
 // charAt go through vm.StringToUTF16 — so this is about routing the rest of the
 // surface through the same coordinate system rather than inventing one.
 //
-// Offsets are converted rather than working in []uint16 throughout: conversion
-// is a linear scan, where materializing every string as UTF-16 to slice it would
-// allocate on every call for the ASCII case that dominates.
+// These three are thin wrappers over the cached primitives in pkg/vm. They were
+// once local scans, and that was the bug behind nooga#87: each one walked the
+// whole string on every call, so TypeScript's scanner — text.substring(tokenPos,
+// pos) over the entire source, once per token — made per-file parse quadratic in
+// length. A 4.5k-line .d.ts spent 53% of its parse CPU inside these two
+// functions.
+//
+// Keeping them as wrappers rather than deleting them is deliberate: the 46 call
+// sites read better in the local vocabulary, and one definition means there is
+// still exactly one UTF-16 coordinate system rather than a second, uncached one
+// living in builtins.
 
 // utf16Len is the string's length in UTF-16 code units — what .length reports.
-func utf16Len(s string) int {
-	n := 0
-	for _, r := range s {
-		n++
-		if r > 0xFFFF {
-			n++ // astral characters occupy a surrogate pair
-		}
-	}
-	return n
-}
+func utf16Len(s string) int { return vm.UTF16Length(s) }
 
 // utf16ToByteOffset maps a UTF-16 code unit offset to a byte offset, clamped to
 // the string. An offset landing between the halves of a surrogate pair rounds
 // up to the end of that character: a UTF-8 buffer cannot hold half of one, and
 // rounding up keeps the result a valid string rather than a broken sequence.
-func utf16ToByteOffset(s string, u16 int) int {
-	if u16 <= 0 {
-		return 0
-	}
-	n := 0
-	for i, r := range s {
-		if n >= u16 {
-			return i
-		}
-		n++
-		if r > 0xFFFF {
-			n++
-		}
-	}
-	return len(s)
-}
+func utf16ToByteOffset(s string, u16 int) int { return vm.UTF16ToByteOffset(s, u16) }
 
 // byteToUTF16Offset is the inverse, for reporting an index found by a byte-wise
 // search back to the caller in the units the caller thinks in.
-func byteToUTF16Offset(s string, b int) int {
-	if b <= 0 {
-		return 0
-	}
-	if b > len(s) {
-		b = len(s)
-	}
-	return utf16Len(s[:b])
-}
+func byteToUTF16Offset(s string, b int) int { return vm.ByteToUTF16Offset(s, b) }
 
 func requireObjectCoercible(vmInstance *vm.VM, val vm.Value, methodName string) error {
 	if val.Type() == vm.TypeNull {
