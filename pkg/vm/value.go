@@ -1815,11 +1815,16 @@ func (v Value) IsFalsey() bool {
 		return v.AsBigInt().Cmp(bigZero) == 0
 	case TypeString:
 		return v.AsString() == ""
-	case TypeSymbol, TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeRegExp, TypeProxy, TypePromise, TypeMap, TypeSet, TypeDictObject, TypeBoundFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction, TypeGenerator, TypeAsyncGenerator, TypeArrayBuffer, TypeSharedArrayBuffer, TypeTypedArray, TypeDataView:
-		// All object types (including symbols, regex, proxies, promises, maps, sets, etc.) are truthy
-		return false
+	case TypeHole, TypeUninitialized:
+		// Internal markers; these should never reach ToBoolean, but keep them
+		// falsey defensively rather than reporting a garbage value as truthy.
+		return true
 	default:
-		return true // Unknown types assumed truthy? Or panic? Let's assume truthy.
+		// Everything else - every object type (WeakMap/WeakSet/WeakRef/
+		// FinalizationRegistry included), every function type, and symbols - is
+		// truthy per ECMA-262 ToBoolean. A new object ValueType is truthy here
+		// by default instead of silently becoming falsey.
+		return false
 	}
 }
 

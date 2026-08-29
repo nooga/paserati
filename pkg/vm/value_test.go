@@ -1059,6 +1059,12 @@ func TestIsFalsey(t *testing.T) {
 		{"Function", NewFunction(0, 0, 0, 0, false, "", nil, false, false, false, false), false},
 		{"Closure", NewClosure(createTestFunctionObject("", 0), nil), false},
 		{"NativeFunction", NewNativeFunction(0, false, "", nil), false},
+		{"Map", NewMap(), false},
+		{"Set", NewSet(), false},
+		{"WeakMap", NewWeakMap(), false},
+		{"WeakSet", NewWeakSet(), false},
+		{"WeakRef", NewWeakRef(NewObject(DefaultObjectPrototype)), false},
+		{"FinalizationRegistry", NewFinalizationRegistry(NewNativeFunction(0, false, "", nil), Undefined), false},
 	}
 
 	for _, tc := range testCases {
