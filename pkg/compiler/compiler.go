@@ -3114,17 +3114,15 @@ func (c *Compiler) storeToLvalue(lvalueKind int, identInfo, memberInfo, indexInf
 
 	switch lvalueKind {
 	case lvalueIdentifier:
-		info := identInfo.(struct {
-			targetReg    Register
-			isUpvalue    bool
-			upvalueIndex uint16 // 16-bit to support large closures
-			isGlobal     bool
-			globalIndex  uint16
-		})
+		info := identInfo.(updateIdentInfo)
 		if info.isGlobal {
 			c.emitSetGlobal(info.globalIndex, valueReg, line)
 		} else if info.isUpvalue {
 			c.emitSetUpvalue(info.upvalueIndex, valueReg, line)
+		} else if info.isSpilled {
+			// Same defect as the fused path had: a spilled local's Register is
+			// zero, so moving into it writes R0 and drops the assignment.
+			c.emitStoreSpill(info.spillIndex, valueReg, line)
 		} else {
 			if valueReg != info.targetReg {
 				c.emitMove(info.targetReg, valueReg, line)
