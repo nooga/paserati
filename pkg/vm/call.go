@@ -345,6 +345,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.isConstructorCall = false
 		newFrame.isDirectCall = false
 		newFrame.isSentinelFrame = false // Clear sentinel flag when reusing frame
+		newFrame.openUpvalues = nil      // Clear stale open-upvalue list from prior use of this slot
 		newFrame.generatorObj = nil      // Clear generator object when reusing frame
 		newFrame.argCount = argCount     // Store actual argument count for arguments object
 		// Arguments handling:
@@ -357,7 +358,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		// duration of this callee frame. If/when `arguments` is accessed, NewArguments will
 		// allocate as needed.
 		newFrame.args = args
-		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
+		newFrame.argumentsObject = Undefined  // Initialize to Undefined (will be created on first access)
 		newFrame.calleeValue = originalCallee // Store original callee for arguments.callee
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
 		newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup

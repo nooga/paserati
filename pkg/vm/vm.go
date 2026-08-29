@@ -112,21 +112,21 @@ type CallFrame struct {
 	// `registers` is a slice pointing into the VM's main register stack,
 	// defining the window for this frame.
 	registers           []Value
-	spillSlots          []Value // Spill slots for register overflow (allocated only if needed)
-	allocatedRegSize    int     // Actual allocated register window size (may differ from function.RegisterSize due to TCO expansion)
-	targetRegister      byte    // Which register in the CALLER the result should go into
-	thisValue           Value   // The 'this' value for method calls (undefined for regular function calls)
-	homeObject          Value   // The [[HomeObject]] for super property access (object where method is defined)
-	hasOwnUpvalues      bool    // True iff captureUpvalue created an upvalue pointing into this frame's registers/spill slots. Runtime-tighter gate for closeUpvalues than the compile-time HasLocalCaptures flag.
-	isConstructorCall   bool    // Whether this frame was created by a constructor call (new expression)
-	newTargetValue      Value   // The constructor that was invoked with 'new' (for new.target)
-	isDirectCall        bool    // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
-	isSentinelFrame     bool    // Whether this frame is a sentinel that should cause vm.run() to return immediately
-	isGeneratorPrologue bool    // Whether this frame is executing a generator prologue (suppresses uncaught exception printing)
-	argCount            int     // Actual number of arguments passed to this function (for arguments object)
-	args                []Value // Actual argument values passed to this function (for arguments object, copied before registers are mutated)
-	argumentsObject     Value   // Cached arguments object (created on first access to 'arguments')
-	calleeValue         Value   // The original callee Value (for arguments.callee to reference the same object)
+	spillSlots          []Value  // Spill slots for register overflow (allocated only if needed)
+	allocatedRegSize    int      // Actual allocated register window size (may differ from function.RegisterSize due to TCO expansion)
+	targetRegister      byte     // Which register in the CALLER the result should go into
+	thisValue           Value    // The 'this' value for method calls (undefined for regular function calls)
+	homeObject          Value    // The [[HomeObject]] for super property access (object where method is defined)
+	openUpvalues        *Upvalue // Head of this frame's open-upvalue list (captures into this frame's registers/spill slots), linked via Upvalue.next. nil iff the frame has captured nothing.
+	isConstructorCall   bool     // Whether this frame was created by a constructor call (new expression)
+	newTargetValue      Value    // The constructor that was invoked with 'new' (for new.target)
+	isDirectCall        bool     // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
+	isSentinelFrame     bool     // Whether this frame is a sentinel that should cause vm.run() to return immediately
+	isGeneratorPrologue bool     // Whether this frame is executing a generator prologue (suppresses uncaught exception printing)
+	argCount            int      // Actual number of arguments passed to this function (for arguments object)
+	args                []Value  // Actual argument values passed to this function (for arguments object, copied before registers are mutated)
+	argumentsObject     Value    // Cached arguments object (created on first access to 'arguments')
+	calleeValue         Value    // The original callee Value (for arguments.callee to reference the same object)
 
 	// For async native functions that can call bytecode
 	isNativeFrame    bool
@@ -173,10 +173,12 @@ type VM struct {
 	// allocation. Same nesting invariant as sentinelRegPool.
 	argsBufPool [][]Value
 
-	// List of upvalues pointing to variables still on the registerStack
-	openUpvalues []*Upvalue
-	// Map for O(1) lookup of existing upvalues by location pointer
-	openUpvalueMap map[*Value]*Upvalue
+	// Open upvalues are tracked per-frame (CallFrame.openUpvalues), not VM-wide:
+	// every capture targets the currently-active frame's registers or spill slots,
+	// and dedup of sibling closures over the same local is a walk of that short
+	// per-frame list. Closing a frame walks its list only - O(this frame's
+	// captures), and it closes spill captures too (a global register-window scan
+	// could not).
 
 	// Enhanced inline cache for property access (maps instruction pointer to cache)
 	propCache      map[int]*PropInlineCache
@@ -442,8 +444,6 @@ func dumpFrameStack(vm *VM, context string) {
 func NewVM() *VM {
 	vm := &VM{
 		// frameCount and nextRegSlot initialized to 0
-		openUpvalues:            make([]*Upvalue, 0, 16),         // Pre-allocate slightly
-		openUpvalueMap:          make(map[*Value]*Upvalue, 16),   // Map for O(1) lookup
 		propCache:               make(map[int]*PropInlineCache),  // Initialize inline cache
 		cacheStats:              ICacheStats{},                   // Initialize cache statistics
 		emptyRestArray:          NewArray(),                      // Initialize singleton empty array for rest params
@@ -1068,6 +1068,7 @@ func (vm *VM) Reset() {
 	for i := 0; i < vm.frameCount; i++ {
 		vm.frames[i].closure = nil
 		vm.frames[i].registers = nil
+		vm.frames[i].openUpvalues = nil
 		vm.frames[i].thisValue = Undefined
 		vm.frames[i].newTargetValue = Undefined
 	}
@@ -1080,11 +1081,6 @@ func (vm *VM) Reset() {
 
 	vm.frameCount = 0
 	vm.nextRegSlot = 0
-	vm.openUpvalues = vm.openUpvalues[:0] // Clear slice while keeping capacity
-	// Clear the map while keeping the allocation
-	for k := range vm.openUpvalueMap {
-		delete(vm.openUpvalueMap, k)
-	}
 	vm.errors = vm.errors[:0] // Clear errors slice
 	vm.callDepth = 0          // Reset call depth counter
 	// Clear inline cache (with lock to prevent concurrent access)
@@ -1211,6 +1207,7 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	}
 	frame.isConstructorCall = false
 	frame.newTargetValue = Undefined
+	frame.openUpvalues = nil // frame slot is reused; start with no open upvalues
 	// IMPORTANT: Set isDirectCall=true for NESTED Interpret() calls (eval) so they return immediately
 	// This ensures eval()'s script execution returns its completion value back to the native function
 	// For top-level scripts (frameCount==0 before pushing), keep isDirectCall=false to allow normal completion
@@ -1571,20 +1568,23 @@ startExecution:
 			reg := code[ip]
 			ip++
 			targetPtr := &registers[reg]
-			// Use map for O(1) lookup instead of linear search
-			if upvalue, exists := vm.openUpvalueMap[targetPtr]; exists {
-				// Close this upvalue
-				upvalue.Closed = *upvalue.Location
-				upvalue.Location = nil
-				delete(vm.openUpvalueMap, targetPtr)
-				// Remove from slice by filtering
-				newOpenUpvalues := vm.openUpvalues[:0]
-				for _, uv := range vm.openUpvalues {
-					if uv.Location != nil {
-						newOpenUpvalues = append(newOpenUpvalues, uv)
+			// Walk this frame's open-upvalue list, close the one pointing at the
+			// target register (if any), and unlink it. The list is short (one entry
+			// per still-open per-iteration binding).
+			var prev *Upvalue
+			for uv := frame.openUpvalues; uv != nil; uv = uv.next {
+				if uv.Location == targetPtr {
+					uv.Closed = *uv.Location
+					uv.Location = nil
+					if prev == nil {
+						frame.openUpvalues = uv.next
+					} else {
+						prev.next = uv.next
 					}
+					uv.next = nil
+					break
 				}
-				vm.openUpvalues = newOpenUpvalues
+				prev = uv
 			}
 
 		case OpIteratorCleanupAbrupt:
@@ -3426,9 +3426,8 @@ startExecution:
 					}
 
 					// 4. Close upvalues for current frame BEFORE overwriting (only if needed)
-					if frame.hasOwnUpvalues {
-						vm.closeUpvalues(registers)
-						frame.hasOwnUpvalues = false
+					if frame.openUpvalues != nil {
+						vm.closeFrameUpvalues(frame)
 					}
 
 					// 5. Expand register window if needed (but never shrink)
@@ -3655,9 +3654,8 @@ startExecution:
 					// We can perform TCO!
 
 					// 5. Close upvalues for current frame BEFORE overwriting (only if needed)
-					if frame.hasOwnUpvalues {
-						vm.closeUpvalues(registers)
-						frame.hasOwnUpvalues = false
+					if frame.openUpvalues != nil {
+						vm.closeFrameUpvalues(frame)
 					}
 
 					// 6. Expand register window if needed (but never shrink)
@@ -5443,9 +5441,8 @@ startExecution:
 
 			// No finally handler, proceed with normal return
 			// Close upvalues for the returning frame (only if this function has captured locals)
-			if frame.hasOwnUpvalues {
-				vm.closeUpvalues(frame.registers)
-				frame.hasOwnUpvalues = false
+			if frame.openUpvalues != nil {
+				vm.closeFrameUpvalues(frame)
 			}
 
 			// Check if this is a generator function returning (not yielding)
@@ -5706,15 +5703,8 @@ startExecution:
 
 			// No finally handler, proceed with normal return
 			// Close upvalues for the returning frame (only if this function has captured locals)
-			if frame.hasOwnUpvalues {
-				if debugVM {
-					fmt.Printf("[DBG] About to closeUpvalues for frame with %d registers, openUpvalues=%d\n", len(frame.registers), len(vm.openUpvalues))
-				}
-				vm.closeUpvalues(frame.registers)
-				frame.hasOwnUpvalues = false
-				if debugVM {
-					fmt.Printf("[DBG] closeUpvalues completed\n")
-				}
+			if frame.openUpvalues != nil {
+				vm.closeFrameUpvalues(frame)
 			}
 
 			// Pop the current frame
@@ -10312,11 +10302,12 @@ startExecution:
 				newFrame.closure = constructorClosure
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
-				newFrame.thisValue = newInstance         // Set the new instance as 'this' (or undefined for derived)
-				newFrame.homeObject = instancePrototype  // Set [[HomeObject]] for super property access in constructors
-				newFrame.isConstructorCall = true        // Mark this as a constructor call
-				newFrame.isDirectCall = false            // Not a direct call (normal OpNew)
-				newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
+				newFrame.thisValue = newInstance        // Set the new instance as 'this' (or undefined for derived)
+				newFrame.homeObject = instancePrototype // Set [[HomeObject]] for super property access in constructors
+				newFrame.isConstructorCall = true       // Mark this as a constructor call
+				newFrame.isDirectCall = false           // Not a direct call (normal OpNew)
+				newFrame.isSentinelFrame = false        // Clear sentinel flag when reusing frame
+				newFrame.openUpvalues = nil
 				newFrame.newTargetValue = newTargetValue // Set new.target (propagated from caller or constructor)
 				newFrame.argCount = argCount             // Store actual argument count for arguments object
 				// Avoid per-call allocation: store a slice view of the caller args for OpGetArguments.
@@ -10498,11 +10489,12 @@ startExecution:
 				newFrame.closure = constructorClosure
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
-				newFrame.thisValue = newInstance         // Set the new instance as 'this' (or undefined for derived)
-				newFrame.homeObject = instancePrototype  // Set [[HomeObject]] for super property access in constructors
-				newFrame.isConstructorCall = true        // Mark this as a constructor call
-				newFrame.isDirectCall = false            // Not a direct call (normal OpNew)
-				newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
+				newFrame.thisValue = newInstance        // Set the new instance as 'this' (or undefined for derived)
+				newFrame.homeObject = instancePrototype // Set [[HomeObject]] for super property access in constructors
+				newFrame.isConstructorCall = true       // Mark this as a constructor call
+				newFrame.isDirectCall = false           // Not a direct call (normal OpNew)
+				newFrame.isSentinelFrame = false        // Clear sentinel flag when reusing frame
+				newFrame.openUpvalues = nil
 				newFrame.newTargetValue = newTargetValue // Set new.target (propagated from caller or constructor)
 				newFrame.argCount = argCount             // Store actual argument count for arguments object
 				// Avoid per-call allocation: store a slice view of the caller args for OpGetArguments.
@@ -10943,6 +10935,7 @@ startExecution:
 					newFrame.isConstructorCall = true
 					newFrame.isDirectCall = false
 					newFrame.isSentinelFrame = false
+					newFrame.openUpvalues = nil
 					newFrame.newTargetValue = newTargetValue
 					newFrame.argCount = finalArgCount
 					newFrame.args = finalArgs
@@ -13481,9 +13474,8 @@ startExecution:
 			}
 
 			// Close upvalues for the returning frame (only if this function has captured locals)
-			if frame.hasOwnUpvalues {
-				vm.closeUpvalues(frame.registers)
-				frame.hasOwnUpvalues = false
+			if frame.openUpvalues != nil {
+				vm.closeFrameUpvalues(frame)
 			}
 
 			// Check if this is a generator function returning (same as OpReturn's
@@ -13677,9 +13669,8 @@ startExecution:
 				vm.pendingValue = Undefined
 
 				// Close upvalues for the returning frame (only if this function has captured locals)
-				if frame.hasOwnUpvalues {
-					vm.closeUpvalues(frame.registers)
-					frame.hasOwnUpvalues = false
+				if frame.openUpvalues != nil {
+					vm.closeFrameUpvalues(frame)
 				}
 
 				// Check if this is a generator function returning
@@ -14196,6 +14187,8 @@ startExecution:
 
 			// Copy register state to generator frame
 			copy(genObj.Frame.registers, registers)
+			// Carry the frame's open-upvalue list across the suspend (not closed on yield)
+			genObj.Frame.openUpvalues = frame.openUpvalues
 
 			// Create iterator result { value: yieldedValue, done: false }
 			result := NewObject(vm.ObjectPrototype).AsPlainObject()
@@ -14244,6 +14237,7 @@ startExecution:
 					outputReg:  0, // Not used for init yield
 				}
 				copy(genObj.Frame.registers, registers)
+				genObj.Frame.openUpvalues = frame.openUpvalues
 
 				// Transition to SuspendedStart state
 				logGeneratorStateTransition(genObj, GeneratorSuspendedStart, "OpInitYield")
@@ -14309,6 +14303,7 @@ startExecution:
 
 			// Copy register state to generator frame
 			copy(genObj.Frame.registers, registers)
+			genObj.Frame.openUpvalues = frame.openUpvalues
 
 			// Return the iterator result as-is (don't wrap it)
 			return InterpretOK, iterResult
@@ -14412,6 +14407,8 @@ startExecution:
 				frame.promiseObj.Frame.homeObject = frame.homeObject // Update [[HomeObject]]
 			}
 			copy(frame.promiseObj.Frame.registers, registers)
+			// Carry the frame's open-upvalue list across the await (not closed on suspend)
+			frame.promiseObj.Frame.openUpvalues = frame.openUpvalues
 
 			asyncPromise := frame.promiseObj
 			rt := vm.GetAsyncRuntime()
@@ -15696,93 +15693,43 @@ reloadFrame:
 	goto startExecution // Continue the execution loop with updated frame
 }
 
-// captureUpvalue creates a new Upvalue object for a local variable at the given stack location.
-// It checks if an upvalue for this location already exists using a map for O(1) lookup.
+// captureUpvalue returns the Upvalue for a local variable at the given stack location,
+// creating one if this is the first closure to capture it.
+//
 // Callers MUST ensure location points into the currently-active frame's registers or
-// spill slots; this is relied on for the hasOwnUpvalues flag below.
+// spill slots. Given that invariant, dedup (sibling closures over the same local must
+// share one Upvalue) is a walk of the active frame's short open-upvalue list, and a
+// fresh Upvalue is prepended onto that same list so the frame can close it on return.
 func (vm *VM) captureUpvalue(location *Value) *Upvalue {
-	// O(1) lookup using map
-	if upvalue, exists := vm.openUpvalueMap[location]; exists {
-		return upvalue
+	if vm.frameCount == 0 {
+		// No active frame to own the upvalue; should not happen for real captures.
+		return &Upvalue{Location: location}
 	}
-
-	// If not found, create a new one
-	newUpvalue := &Upvalue{Location: location} // Closed field is zero-value (Undefined)
-	vm.openUpvalues = append(vm.openUpvalues, newUpvalue)
-	vm.openUpvalueMap[location] = newUpvalue // Add to map for future lookups
-	// Mark the active frame as owning at least one upvalue. This lets closeUpvalues
-	// skip the full-list scan entirely for frames that never actually captured a
-	// local (even if their bytecode's HasLocalCaptures flag is true due to an
-	// unexecuted branch).
-	if vm.frameCount > 0 {
-		vm.frames[vm.frameCount-1].hasOwnUpvalues = true
+	frame := &vm.frames[vm.frameCount-1]
+	for uv := frame.openUpvalues; uv != nil; uv = uv.next {
+		if uv.Location == location {
+			return uv
+		}
 	}
+	newUpvalue := &Upvalue{Location: location, next: frame.openUpvalues}
+	frame.openUpvalues = newUpvalue
 	return newUpvalue
 }
 
-// closeUpvalues closes all open upvalues that point to stack slots within the given
-// frame's registers (which are about to become invalid).
-// It takes the slice representing the frame's registers as input.
-func (vm *VM) closeUpvalues(frameRegisters []Value) {
-	if debugVM {
-		fmt.Printf("[DBG closeUpvalues] ENTER: frameRegs=%d, openUpvalues=%d\n", len(frameRegisters), len(vm.openUpvalues))
-	}
-	if len(frameRegisters) == 0 || len(vm.openUpvalues) == 0 {
-		if debugVM {
-			fmt.Printf("[DBG closeUpvalues] EXIT early: nothing to close\n")
+// closeFrameUpvalues closes every open upvalue owned by the given frame - its
+// registers AND spill slots - and clears the frame's list. O(this frame's captures);
+// callers gate on frame.openUpvalues != nil.
+func (vm *VM) closeFrameUpvalues(frame *CallFrame) {
+	for uv := frame.openUpvalues; uv != nil; {
+		next := uv.next
+		if uv.Location != nil {
+			uv.Closed = *uv.Location
+			uv.Location = nil
 		}
-		return // Nothing to close or no registers in frame
+		uv.next = nil // don't pin sibling upvalues via a dead frame list
+		uv = next
 	}
-
-	// Get the memory address range of the frame's register slice.
-	// This is somewhat fragile if the underlying array is reallocated,
-	// but should be okay as registerStack has fixed size.
-	frameStartPtr := uintptr(unsafe.Pointer(&frameRegisters[0]))
-	// Address of one past the last element
-	frameEndPtr := frameStartPtr + uintptr(len(frameRegisters))*unsafe.Sizeof(Value{})
-
-	if debugVM {
-		fmt.Printf("[DBG closeUpvalues] About to iterate %d upvalues\n", len(vm.openUpvalues))
-	}
-
-	// Iterate through openUpvalues and close those pointing into the frame.
-	// We also filter the openUpvalues list, removing the closed ones.
-	newOpenUpvalues := vm.openUpvalues[:0] // Reuse underlying array
-	for i, upvalue := range vm.openUpvalues {
-		if debugVM {
-			fmt.Printf("[DBG closeUpvalues] Processing upvalue %d/%d\n", i+1, len(vm.openUpvalues))
-		}
-		if upvalue.Location == nil { // Skip already closed upvalues
-			if debugVM {
-				fmt.Printf("[DBG closeUpvalues]   Skipping already-closed upvalue\n")
-			}
-			continue
-		}
-		upvaluePtr := uintptr(unsafe.Pointer(upvalue.Location))
-		// Check if the upvalue's location points within the memory range of frameRegisters
-		if upvaluePtr >= frameStartPtr && upvaluePtr < frameEndPtr {
-			// This upvalue points into the frame being popped, close it.
-			if debugVM {
-				fmt.Printf("[DBG closeUpvalues]   Closing upvalue (in frame range)\n")
-			}
-			location := upvalue.Location        // Save location for map removal
-			closedValue := *upvalue.Location    // Copy the value from the stack
-			upvalue.Closed = closedValue        // Store the value
-			upvalue.Location = nil              // Mark as closed
-			delete(vm.openUpvalueMap, location) // Remove from map
-			// Do NOT add it back to newOpenUpvalues
-		} else {
-			// This upvalue points elsewhere (e.g., higher up the stack), keep it open.
-			if debugVM {
-				fmt.Printf("[DBG closeUpvalues]   Keeping upvalue open (outside frame range)\n")
-			}
-			newOpenUpvalues = append(newOpenUpvalues, upvalue)
-		}
-	}
-	vm.openUpvalues = newOpenUpvalues
-	if debugVM {
-		fmt.Printf("[DBG closeUpvalues] EXIT: newOpenUpvalues=%d\n", len(vm.openUpvalues))
-	}
+	frame.openUpvalues = nil
 }
 
 // hasFunctionPrototypeProperty checks if FunctionPrototype has a property.
@@ -17265,6 +17212,7 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 	sentinelFrame := &vm.frames[vm.frameCount]
 	sentinelFrame.isSentinelFrame = true
 	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
 	vm.frameCount++
@@ -17420,6 +17368,7 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	sentinelFrame := &vm.frames[vm.frameCount]
 	sentinelFrame.isSentinelFrame = true
 	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
 	vm.frameCount++
@@ -17446,12 +17395,13 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	frame.thisValue = genObj.Frame.thisValue   // Restore the saved 'this' value
 	frame.homeObject = genObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
-	frame.isDirectCall = true         // Mark as direct call for proper return handling
-	frame.isSentinelFrame = false     // Ensure sentinel flag is clear (frame slot may have been reused)
-	frame.argCount = len(genObj.Args) // Restore argument count
-	frame.args = genObj.Args          // Restore arguments
-	frame.argumentsObject = Undefined // Initialize arguments object (will be created on first access)
-	frame.generatorObj = genObj       // Link frame to generator object
+	frame.isDirectCall = true                      // Mark as direct call for proper return handling
+	frame.isSentinelFrame = false                  // Ensure sentinel flag is clear (frame slot may have been reused)
+	frame.openUpvalues = genObj.Frame.openUpvalues // Restore open-upvalue list carried across the suspend
+	frame.argCount = len(genObj.Args)              // Restore argument count
+	frame.args = genObj.Args                       // Restore arguments
+	frame.argumentsObject = Undefined              // Initialize arguments object (will be created on first access)
+	frame.generatorObj = genObj                    // Link frame to generator object
 
 	if closureObj != nil {
 		frame.closure = closureObj
@@ -17679,6 +17629,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	sentinelFrame := &vm.frames[vm.frameCount]
 	sentinelFrame.isSentinelFrame = true
 	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
 	vm.frameCount++
@@ -17705,12 +17656,13 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	frame.thisValue = genObj.Frame.thisValue   // Restore the saved 'this' value
 	frame.homeObject = genObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
-	frame.isDirectCall = false        // Don't mark as direct call so exceptions can be caught
-	frame.isSentinelFrame = false     // Ensure sentinel flag is clear (frame slot may have been reused)
-	frame.argCount = len(genObj.Args) // Restore argument count
-	frame.args = genObj.Args          // Restore arguments
-	frame.argumentsObject = Undefined // Initialize arguments object (will be created on first access)
-	frame.generatorObj = genObj       // Link frame to generator object
+	frame.isDirectCall = false                     // Don't mark as direct call so exceptions can be caught
+	frame.isSentinelFrame = false                  // Ensure sentinel flag is clear (frame slot may have been reused)
+	frame.openUpvalues = genObj.Frame.openUpvalues // Restore open-upvalue list carried across the suspend
+	frame.argCount = len(genObj.Args)              // Restore argument count
+	frame.args = genObj.Args                       // Restore arguments
+	frame.argumentsObject = Undefined              // Initialize arguments object (will be created on first access)
+	frame.generatorObj = genObj                    // Link frame to generator object
 
 	if closureObj != nil {
 		frame.closure = closureObj
@@ -17848,6 +17800,7 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	sentinelFrame := &vm.frames[vm.frameCount]
 	sentinelFrame.isSentinelFrame = true
 	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
 	vm.frameCount++
@@ -17874,12 +17827,13 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	frame.thisValue = genObj.Frame.thisValue   // Restore the saved 'this' value
 	frame.homeObject = genObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
-	frame.isDirectCall = false        // Don't mark as direct call so exceptions can be caught
-	frame.isSentinelFrame = false     // Ensure sentinel flag is clear (frame slot may have been reused)
-	frame.argCount = len(genObj.Args) // Restore argument count
-	frame.args = genObj.Args          // Restore arguments
-	frame.argumentsObject = Undefined // Initialize arguments object (will be created on first access)
-	frame.generatorObj = genObj       // Link frame to generator object
+	frame.isDirectCall = false                     // Don't mark as direct call so exceptions can be caught
+	frame.isSentinelFrame = false                  // Ensure sentinel flag is clear (frame slot may have been reused)
+	frame.openUpvalues = genObj.Frame.openUpvalues // Restore open-upvalue list carried across the suspend
+	frame.argCount = len(genObj.Args)              // Restore argument count
+	frame.args = genObj.Args                       // Restore arguments
+	frame.argumentsObject = Undefined              // Initialize arguments object (will be created on first access)
+	frame.generatorObj = genObj                    // Link frame to generator object
 
 	if closureObj != nil {
 		frame.closure = closureObj
@@ -18025,6 +17979,7 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	sentinelFrame := &vm.frames[vm.frameCount]
 	sentinelFrame.isSentinelFrame = true
 	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
 	vm.frameCount++
@@ -18051,9 +18006,10 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	frame.thisValue = promiseObj.ThisValue         // Restore original this value
 	frame.homeObject = promiseObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
-	frame.isDirectCall = true     // Mark as direct call for proper return handling
-	frame.isSentinelFrame = false // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
-	frame.generatorObj = nil      // Clear generator object when reusing frame
+	frame.isDirectCall = true                          // Mark as direct call for proper return handling
+	frame.isSentinelFrame = false                      // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
+	frame.openUpvalues = promiseObj.Frame.openUpvalues // Restore open-upvalue list carried across the await
+	frame.generatorObj = nil                           // Clear generator object when reusing frame
 	frame.argCount = 0
 	frame.promiseObj = promiseObj // Link frame to promise object
 
@@ -18149,6 +18105,7 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	sentinelFrame := &vm.frames[vm.frameCount]
 	sentinelFrame.isSentinelFrame = true
 	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
 	vm.frameCount++
@@ -18175,9 +18132,10 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	frame.thisValue = promiseObj.ThisValue         // Restore original this value
 	frame.homeObject = promiseObj.Frame.homeObject // Restore [[HomeObject]] for super property access
 	frame.isConstructorCall = false
-	frame.isDirectCall = true     // Mark as direct call for proper return handling
-	frame.isSentinelFrame = false // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
-	frame.generatorObj = nil      // Clear generator object when reusing frame
+	frame.isDirectCall = true                          // Mark as direct call for proper return handling
+	frame.isSentinelFrame = false                      // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
+	frame.openUpvalues = promiseObj.Frame.openUpvalues // Restore open-upvalue list carried across the await
+	frame.generatorObj = nil                           // Clear generator object when reusing frame
 	frame.argCount = 0
 	frame.promiseObj = promiseObj // Link frame to promise object
 
@@ -18474,6 +18432,7 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	frame.allocatedRegSize = scriptRegSize // Track actual allocation for proper cleanup
 	frame.targetRegister = 0
 	frame.thisValue = Undefined
+	frame.openUpvalues = nil // frame slot may have been used before; start with no open upvalues
 	vm.nextRegSlot += scriptRegSize
 	vm.frameCount++
 
