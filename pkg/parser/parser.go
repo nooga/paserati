@@ -266,7 +266,8 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.READONLY, p.parseIdentifier) // READONLY is a contextual keyword, can be used as identifier
 	p.registerPrefix(lexer.OVERRIDE, p.parseIdentifier) // OVERRIDE is a contextual keyword, can be used as identifier
 	p.registerPrefix(lexer.ABSTRACT, p.parseIdentifier) // ABSTRACT is a contextual keyword, can be used as identifier
-	p.registerPrefix(lexer.IS, p.parseIdentifier)       // IS is a contextual keyword (type predicates), can be used as identifier in JS
+	p.registerPrefix(lexer.IS, p.parseIdentifier)         // IS is a contextual keyword (type predicates), can be used as identifier in JS
+	p.registerPrefix(lexer.SATISFIES, p.parseIdentifier) // SATISFIES is a TS operator, but also a valid binding name (e.g. semver)
 	p.registerPrefix(lexer.FUNCTION, func() Expression { return p.parseFunctionLiteral(false) })
 	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
@@ -4316,7 +4317,8 @@ func (p *Parser) curTokenIsIdentLike() bool {
 	switch p.curToken.Type {
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
 		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF, lexer.FROM,
-		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.NULL, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS:
+		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.NULL, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS,
+		lexer.SATISFIES:
 		return true
 	}
 	return false
@@ -4331,7 +4333,8 @@ func (p *Parser) expectPeekIdentifierOrKeyword() bool {
 	switch p.peekToken.Type {
 	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
 		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF, lexer.FROM,
-		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS:
+		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS,
+		lexer.SATISFIES:
 		p.nextToken()
 		return true
 	default:
@@ -11352,8 +11355,9 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 			}
 
 			// Handle different import name patterns
-			if p.curToken.Type == lexer.IDENT {
-				// Regular identifier: { name } or { name as alias }
+			if p.curToken.Type == lexer.IDENT || p.curToken.Type == lexer.SATISFIES {
+				// Regular identifier, or contextual keyword used as a binding name
+				// (semver exports `satisfies`).
 				imported = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 				importedToken = p.curToken
 			} else if p.curToken.Type == lexer.STRING {
@@ -11419,7 +11423,8 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 
 			// Next specifier should be identifier, string, default, or type
 			if p.curToken.Type != lexer.IDENT && p.curToken.Type != lexer.STRING &&
-				p.curToken.Type != lexer.DEFAULT && p.curToken.Type != lexer.TYPE {
+				p.curToken.Type != lexer.DEFAULT && p.curToken.Type != lexer.TYPE &&
+				p.curToken.Type != lexer.SATISFIES {
 				p.addError(p.curToken, "Expected identifier, string literal, 'default', or 'type' in import specifier")
 				return nil
 			}
@@ -11621,7 +11626,7 @@ func isExportSpecifierName(t lexer.TokenType) bool {
 		lexer.THIS, lexer.SUPER, lexer.NULL, lexer.TRUE, lexer.FALSE,
 		lexer.IMPORT, lexer.EXPORT, lexer.EXTENDS, lexer.IMPLEMENTS,
 		lexer.STATIC, lexer.GET, lexer.SET, lexer.ASYNC, lexer.AWAIT, lexer.YIELD,
-		lexer.TYPE, lexer.INTERFACE, lexer.ENUM,
+		lexer.TYPE, lexer.INTERFACE, lexer.ENUM, lexer.SATISFIES,
 		lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.READONLY, lexer.ABSTRACT,
 		lexer.KEYOF, lexer.INFER, lexer.IS:
 		return true

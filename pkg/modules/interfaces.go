@@ -148,6 +148,7 @@ type Compiler interface {
 	SetSkipTypeCheck(skip bool)
 	Compile(node parser.Node) (interface{}, []errors.PaseratiError)
 	GetExportGlobalIndices() map[string]int
+	GetReExports() map[string]vm.ModuleReExport
 }
 
 // DependencyAnalyzer tracks module dependencies during loading

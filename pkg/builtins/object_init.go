@@ -1651,7 +1651,8 @@ func objectDefinePropertiesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value,
 	}
 
 	obj := args[0]
-	if !obj.IsObject() {
+	// Functions are objects in JS (TypeFunction/TypeClosure sit outside the IsObject range).
+	if !obj.IsObject() && !obj.IsCallable() {
 		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperties called on non-object")
 	}
 
