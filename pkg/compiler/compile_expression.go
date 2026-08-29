@@ -583,6 +583,27 @@ func (c *Compiler) compileIndexExpression(node *parser.IndexExpression, hint Reg
 	return hint, nil
 }
 
+// updateIdentInfo describes the identifier lvalue of an update expression.
+//
+// It is a NAMED type because storeToLvalue receives it as an interface{} and
+// type-asserts it back. That assertion is structural, so while this was an
+// anonymous struct, adding a field to it compiled cleanly and then panicked at
+// run time in a caller that never mentioned the new field. Naming it makes the
+// two sites share one definition instead of agreeing by coincidence.
+type updateIdentInfo struct {
+	targetReg    Register
+	isUpvalue    bool
+	upvalueIndex uint16 // 16-bit to support large closures (up to 65535 upvalues)
+	isGlobal     bool
+	globalIndex  uint16
+	// A spilled local has no register at all: Symbol.Register is left at its
+	// zero value, which aliases R0. Reading .Register without checking this
+	// first is what made `c++` on a spilled local update R0, leaving c unchanged
+	// and the expression evaluating to NaN.
+	isSpilled  bool
+	spillIndex uint16
+}
+
 func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line
 
@@ -607,13 +628,7 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 	var currentValueReg Register // Register holding the current value before increment/decrement
 
 	// Information needed for storing back to different lvalue types
-	var identInfo struct {
-		targetReg    Register
-		isUpvalue    bool
-		upvalueIndex uint16 // 16-bit to support large closures (up to 65535 upvalues)
-		isGlobal     bool
-		globalIndex  uint16
-	}
+	var identInfo updateIdentInfo
 	var memberInfo struct {
 		objectReg      Register
 		nameConstIdx   uint16
@@ -702,10 +717,18 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 				c.emitGetGlobal(currentValueReg, symbolRef.GlobalIndex, line)
 			} else if definingTable == c.currentSymbolTable {
 				// Local variable in current scope
-				identInfo.targetReg = symbolRef.Register
 				identInfo.isUpvalue = false
 				identInfo.isGlobal = false
-				currentValueReg = identInfo.targetReg // Current value is already in targetReg
+				if symbolRef.IsSpilled {
+					identInfo.isSpilled = true
+					identInfo.spillIndex = symbolRef.SpillIndex
+					currentValueReg = c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, currentValueReg)
+					c.emitLoadSpill(currentValueReg, symbolRef.SpillIndex, line)
+				} else {
+					identInfo.targetReg = symbolRef.Register
+					currentValueReg = identInfo.targetReg // Current value is already in targetReg
+				}
 			} else if c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
 				// Variable defined in outer function: treat as upvalue
 				identInfo.isUpvalue = true
@@ -716,10 +739,18 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 				c.emitLoadFree(currentValueReg, identInfo.upvalueIndex, line)
 			} else {
 				// Variable in outer block scope of same function (or at top level): access directly via register
-				identInfo.targetReg = symbolRef.Register
 				identInfo.isUpvalue = false
 				identInfo.isGlobal = false
-				currentValueReg = identInfo.targetReg // Current value is already in targetReg
+				if symbolRef.IsSpilled {
+					identInfo.isSpilled = true
+					identInfo.spillIndex = symbolRef.SpillIndex
+					currentValueReg = c.regAlloc.Alloc()
+					tempRegs = append(tempRegs, currentValueReg)
+					c.emitLoadSpill(currentValueReg, symbolRef.SpillIndex, line)
+				} else {
+					identInfo.targetReg = symbolRef.Register
+					currentValueReg = identInfo.targetReg // Current value is already in targetReg
+				}
 			}
 		}
 
@@ -879,6 +910,15 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 			op = vm.OpDecPre
 		default: // "--" && postfix
 			op = vm.OpDecPost
+		}
+		// A spilled local has no register to update in place. Its current value is
+		// already loaded into currentValueReg above, so the fused opcode still
+		// applies — it just has to be written back to the slot afterwards rather
+		// than being the variable itself.
+		if identInfo.isSpilled {
+			c.emitFusedUpdate(op, hint, currentValueReg, line)
+			c.emitStoreSpill(identInfo.spillIndex, currentValueReg, line)
+			return hint, nil
 		}
 		c.emitFusedUpdate(op, hint, identInfo.targetReg, line)
 		return hint, nil
@@ -3378,7 +3418,7 @@ func (c *Compiler) compileSuperMemberExpression(node *parser.MemberExpression, h
 	nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
 
 	c.chunk.WriteOpCode(vm.OpGetSuper, node.Token.Line)
-	c.chunk.EmitByte(byte(hint))     // Destination register
+	c.chunk.EmitByte(byte(hint))      // Destination register
 	c.chunk.WriteUint16(nameConstIdx) // Property name constant index
 
 	return hint, nil
