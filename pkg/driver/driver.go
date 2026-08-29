@@ -973,6 +973,7 @@ func (p *Paserati) RunModule(filename string) bool {
 			exportIndices[name] = uint16(idx)
 		}
 		moduleRecord.ExportIndices = exportIndices
+		moduleRecord.ReExports = p.compiler.GetReExports()
 		debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
 	}
 
@@ -1095,6 +1096,7 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 			exportIndices[name] = uint16(idx)
 		}
 		moduleRecord.ExportIndices = exportIndices
+		moduleRecord.ReExports = p.compiler.GetReExports()
 		debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
 	}
 

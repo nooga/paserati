@@ -89,10 +89,17 @@ type ModuleRecord interface {
 	GetExportIndices() map[string]uint16
 	GetCompiledChunk() *Chunk
 	GetExportNames() []string
+	GetReExports() map[string]ModuleReExport
 	GetError() error
 	IsJSONModule() bool
 	GetSource() string
 	GetResolvedPath() string
+}
+
+// ModuleReExport describes `export { SourceName as ExportName } from SourceModule`.
+type ModuleReExport struct {
+	SourceModule string
+	SourceName   string
 }
 
 // ModuleContext represents a cached module execution context
@@ -104,7 +111,8 @@ type ModuleContext struct {
 	globals      []Value          // Module-specific global variables (indices 0+ within module)
 	globalNames  []string         // Module-specific global variable names (for debugging)
 	namespace    Value            // Cached namespace object (ES6 9.4.6 Module Namespace Exotic Object)
-	resolvedPath string           // Canonical path, used as fromPath for nested relative imports
+	resolvedPath      string           // Canonical path, used as fromPath for nested relative imports
+	collectingExports bool             // Guard against re-export collection recursion
 }
 
 // PendingAction represents actions that should be performed after finally blocks complete
@@ -18606,91 +18614,110 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 
 // collectModuleExports collects exported values from a module's global table
 func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) {
-	// Get the export values that were already collected by the driver during module execution
-	if vm.moduleLoader != nil {
-		moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, vm.moduleFromPath())
-		if err == nil {
-			// Use the already-collected export values from the module record
-			// These were populated by the driver's collectExportedValues() function
-			exportValues := moduleRecord.GetExportValues()
+	if vm.moduleLoader == nil {
+		return
+	}
+	from := vm.moduleFromPath()
+	if moduleCtx != nil && moduleCtx.resolvedPath != "" {
+		from = moduleCtx.resolvedPath
+	}
+	moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, from)
+	if err != nil {
+		return
+	}
 
-			// If no export values were collected, try to collect them using export indices
-			if len(exportValues) == 0 {
-				exportIndices := moduleRecord.GetExportIndices()
+	if moduleCtx.collectingExports {
+		return
+	}
+	moduleCtx.collectingExports = true
+	defer func() { moduleCtx.collectingExports = false }()
 
-				if len(exportIndices) > 0 {
-					// Use the export indices mapping to collect values directly from the heap
-					// This is the proper way for dynamically imported modules
-					for exportName, globalIdx := range exportIndices {
-						if value, exists := vm.heap.Get(int(globalIdx)); exists {
-							moduleCtx.exports[exportName] = value
-						} else {
-							moduleCtx.exports[exportName] = Undefined
-						}
-					}
-				} else {
-					// Final fallback: manual heap scanning (legacy approach)
-					// fmt.Printf("// [VM DEBUG] collectModuleExports: No export indices found for module '%s', attempting manual collection\n", modulePath)
-					exportNames := moduleRecord.GetExportNames()
+	exportValues := moduleRecord.GetExportValues()
+	for exportName, exportValue := range exportValues {
+		if exportValue.Type() == TypeUndefined {
+			continue
+		}
+		moduleCtx.exports[exportName] = exportValue
+	}
 
-					manuallyCollected := make(map[string]Value)
-					for _, exportName := range exportNames {
-						// Skip type-only exports
-						if exportName == "Vector2D" {
-							manuallyCollected[exportName] = Undefined
-							continue
-						}
+	exportIndices := moduleRecord.GetExportIndices()
+	for exportName, globalIdx := range exportIndices {
+		value, exists := vm.heap.Get(int(globalIdx))
+		if exists && value.Type() != TypeUndefined {
+			moduleCtx.exports[exportName] = value
+			continue
+		}
+		if _, ok := moduleCtx.exports[exportName]; !ok {
+			moduleCtx.exports[exportName] = Undefined
+		}
+	}
 
-						// Try to find a global variable or heap value that corresponds to this export
-						foundValue := vm.findExportValueInHeap(exportName)
-						manuallyCollected[exportName] = foundValue
-					}
-
-					// Use the manually collected values
-					for exportName, exportValue := range manuallyCollected {
-						moduleCtx.exports[exportName] = exportValue
-					}
-				}
-			} else {
-				// Copy the export values directly to the module context
-				for exportName, exportValue := range exportValues {
-					moduleCtx.exports[exportName] = exportValue
-				}
-				// fmt.Printf("// [VM DEBUG] collectModuleExports: Collected %d export values for module '%s'\n", len(exportValues), modulePath)
-				// for name, value := range exportValues {
-				//	fmt.Printf("// [VM DEBUG] collectModuleExports: Export '%s' = %s (type %d)\n", name, value.ToString(), int(value.Type()))
-				// }
+	if reExports := moduleRecord.GetReExports(); len(reExports) > 0 {
+		prevFrom := vm.currentModulePath
+		if moduleCtx.resolvedPath != "" {
+			vm.currentModulePath = moduleCtx.resolvedPath
+		}
+		for exportName, re := range reExports {
+			_, _ = vm.executeModule(re.SourceModule)
+			val := vm.getModuleExport(re.SourceModule, re.SourceName)
+			if val.Type() != TypeUndefined {
+				moduleCtx.exports[exportName] = val
 			}
+		}
+		vm.currentModulePath = prevFrom
+	}
+
+	if len(moduleCtx.exports) == 0 {
+		for _, exportName := range moduleRecord.GetExportNames() {
+			if exportName == "Vector2D" {
+				moduleCtx.exports[exportName] = Undefined
+				continue
+			}
+			moduleCtx.exports[exportName] = vm.findExportValueInHeap(exportName)
 		}
 	}
 }
 
 // getModuleExport retrieves an exported value from a module
 func (vm *VM) getModuleExport(modulePath string, exportName string) Value {
-	// Check if module context exists
-	if moduleCtx, exists := vm.moduleContexts[modulePath]; exists {
-		// fmt.Printf("// [VM DEBUG] getModuleExport: Module '%s' found, executed=%v, exports count=%d\n",
-		//	modulePath, moduleCtx.executed, len(moduleCtx.exports))
-
-		// If module has been executed but exports not collected, collect them now
-		if moduleCtx.executed && len(moduleCtx.exports) == 0 {
-			// fmt.Printf("// [VM DEBUG] getModuleExport: Module '%s' executed but exports not collected, collecting now\n", modulePath)
-			vm.collectModuleExports(modulePath, moduleCtx)
-		}
-
-		// Return the exported value if it exists
-		if exportValue, found := moduleCtx.exports[exportName]; found {
-			// fmt.Printf("// [VM DEBUG] getModuleExport: Found export '%s' = %s\n", exportName, exportValue.ToString())
-			return exportValue
-		} else {
-			// fmt.Printf("// [VM DEBUG] getModuleExport: Export '%s' not found in exports map\n", exportName)
-		}
-	} else {
-		// fmt.Printf("// [VM DEBUG] getModuleExport: Module '%s' not found in contexts\n", modulePath)
+	moduleCtx, exists := vm.moduleContexts[modulePath]
+	if !exists {
+		moduleCtx, exists = vm.findModuleContextByResolved(modulePath)
+	}
+	if !exists || moduleCtx == nil {
+		return Undefined
 	}
 
-	// Module not found, not executed, or export not found
+	if moduleCtx.executed {
+		if _, found := moduleCtx.exports[exportName]; !found {
+			vm.collectModuleExports(modulePath, moduleCtx)
+		}
+	}
+
+	if exportValue, found := moduleCtx.exports[exportName]; found {
+		return exportValue
+	}
 	return Undefined
+}
+
+func (vm *VM) findModuleContextByResolved(modulePath string) (*ModuleContext, bool) {
+	if vm.moduleLoader == nil {
+		return nil, false
+	}
+	rec, err := vm.moduleLoader.LoadModule(modulePath, vm.moduleFromPath())
+	if err != nil {
+		return nil, false
+	}
+	resolved := rec.GetResolvedPath()
+	if resolved == "" {
+		return nil, false
+	}
+	for _, ctx := range vm.moduleContexts {
+		if ctx != nil && ctx.resolvedPath == resolved {
+			return ctx, true
+		}
+	}
+	return nil, false
 }
 
 // createModuleNamespace creates a namespace object containing all exports from a module

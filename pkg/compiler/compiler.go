@@ -653,14 +653,12 @@ func (c *Compiler) syncImportsFromTypeChecker() {
 			importType = ImportNamedRef // Default fallback
 		}
 
-		// Get or assign global index for this import
-		globalIndex := c.GetOrAssignGlobalIndex(localName)
+		// Imported names must not share unified-heap slots by export name
+		// (every module's `parse` / `default` / `SettingsManager` would collide).
+		c.moduleBindings.DefineImport(localName, binding.SourceModule, binding.SourceName, importType, -1)
 
-		// Add to module bindings
-		c.moduleBindings.DefineImport(localName, binding.SourceModule, binding.SourceName, importType, int(globalIndex))
-
-		debugPrintf("// [Compiler] Synced import: %s from %s (global index: %d)\n",
-			localName, binding.SourceModule, globalIndex)
+		debugPrintf("// [Compiler] Synced import: %s from %s via OpGetModuleExport\n",
+			localName, binding.SourceModule)
 	}
 }
 
@@ -3876,14 +3874,34 @@ func (c *Compiler) GetExportGlobalIndices() map[string]int {
 
 	// Handle default export if it exists
 	if c.moduleBindings.DefaultExport != nil {
-		defaultLocalName := c.moduleBindings.DefaultExport.LocalName
-		if globalIdx := c.GetGlobalIndex(defaultLocalName); globalIdx >= 0 {
+		if globalIdx := c.moduleBindings.DefaultExport.GlobalIndex; globalIdx >= 0 {
 			exportIndices["default"] = globalIdx
-			// fmt.Printf("// [Compiler] GetExportGlobalIndices: Default export '%s' maps to global[%d]\n", defaultLocalName, globalIdx)
+		} else {
+			defaultLocalName := c.moduleBindings.DefaultExport.LocalName
+			if globalIdx := c.GetGlobalIndex(defaultLocalName); globalIdx >= 0 {
+				exportIndices["default"] = globalIdx
+			}
 		}
 	}
 
 	return exportIndices
+}
+
+// GetReExports returns named re-exports (`export { x } from "./mod"`).
+func (c *Compiler) GetReExports() map[string]vm.ModuleReExport {
+	out := make(map[string]vm.ModuleReExport)
+	if !c.IsModuleMode() || c.moduleBindings == nil {
+		return out
+	}
+	for exportName, exportRef := range c.moduleBindings.ExportedNames {
+		if exportRef != nil && exportRef.IsReExport {
+			out[exportName] = vm.ModuleReExport{
+				SourceModule: exportRef.SourceModule,
+				SourceName:   exportRef.LocalName,
+			}
+		}
+	}
+	return out
 }
 
 // hasMethodInType checks if an object type has a method with the given name
@@ -4065,14 +4083,10 @@ func (c *Compiler) compileJSONImport(node *parser.ImportDeclaration, sourceModul
 func (c *Compiler) processImportBinding(localName, sourceModule, sourceName string, importType ImportReferenceType) {
 	// If we're in module mode, use the module bindings for proper tracking
 	if c.IsModuleMode() {
-		// Since we're using a unified heap, the import should resolve to the same global index
-		// as the export. The source name (what we're importing) should have a global index.
-		globalIdx := c.GetGlobalIndex(sourceName)
-		if globalIdx == -1 {
-			// If not found, assign a new index (this coordinates the global index across modules)
-			globalIdx = int(c.GetOrAssignGlobalIndex(sourceName))
-		}
-		c.moduleBindings.DefineImport(localName, sourceModule, sourceName, importType, globalIdx)
+		// Imported names must not share unified-heap slots by export name
+		// (every module's `parse` / `default` would collide). Read the
+		// per-module snapshot via OpGetModuleExport instead.
+		c.moduleBindings.DefineImport(localName, sourceModule, sourceName, importType, -1)
 
 		// Try to resolve the actual value from the source module
 		resolvedValue := c.moduleBindings.ResolveImportedValue(localName)
@@ -4122,6 +4136,7 @@ func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclara
 			// Re-export: export { x } from "module"
 			sourceModule := node.Source.Value
 			debugPrintf("// [Compiler] Re-export from: %s\n", sourceModule)
+			c.emitEvalModule(sourceModule, node.Token.Line)
 
 			for _, spec := range node.Specifiers {
 				if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
@@ -4188,8 +4203,11 @@ func (c *Compiler) compileExportDefaultDeclaration(node *parser.ExportDefaultDec
 
 	// Register the default export
 	if c.IsModuleMode() {
-		// Get or assign a global index for the default export
-		globalIdx := c.GetOrAssignGlobalIndex("default")
+		key := "default"
+		if c.moduleBindings != nil && c.moduleBindings.ModulePath != "" {
+			key = c.moduleBindings.ModulePath + "\x00default"
+		}
+		globalIdx := c.GetOrAssignGlobalIndex(key)
 		c.moduleBindings.DefineExport("default", "default", vm.Undefined, nil, int(globalIdx))
 
 		// IMPORTANT: Store the compiled value to the global slot
@@ -4269,33 +4287,15 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 
 		debugPrintf("// [Compiler] Re-exporting '%s' from '%s'\n", exportName, sourceModule)
 
-		// Get/assign global index for this re-export
 		globalIdx := int(c.GetOrAssignGlobalIndex(exportName))
-
-		// 1. Define the import binding (like processImportDeclaration does)
-		// Use -1 for GlobalIndex to force module export lookup instead of direct global access
 		c.moduleBindings.DefineImport(exportName, sourceModule, exportName, ImportNamedRef, -1)
-
-		// 2. Define the export binding (like processExportDeclaration does)
 		c.moduleBindings.DefineExport(exportName, exportName, vm.Undefined, nil, globalIdx)
 
-		// 3. Generate bytecode to import and re-export the value
-		// Allocate a temporary register for the imported value
 		tempReg := c.regAlloc.Alloc()
-
-		// First ensure the source module is loaded
 		c.emitEvalModule(sourceModule, node.Token.Line)
-
-		// Then get the specific export from the source module
 		c.emitGetModuleExport(tempReg, sourceModule, exportName, node.Token.Line)
-
-		// Store the imported value as a global (like normal exports do)
 		globalIdxUint16 := c.GetOrAssignGlobalIndex(exportName)
 		c.emitSetGlobal(globalIdxUint16, tempReg, node.Token.Line)
-
-		debugPrintf("// [Compiler] Stored re-exported '%s' as global at index %d\n", exportName, globalIdxUint16)
-
-		// Free the temporary register
 		c.regAlloc.Free(tempReg)
 	}
 
@@ -4331,9 +4331,12 @@ func (c *Compiler) extractExportNamesFromAST(program *parser.Program) []string {
 						exportNames = append(exportNames, decl.Name.Value)
 					}
 				case *parser.ExpressionStatement:
-					// Handle function declarations: export function foo() {}
 					if expr, ok := decl.Expression.(*parser.FunctionLiteral); ok && expr.Name != nil {
 						exportNames = append(exportNames, expr.Name.Value)
+					}
+				case *parser.ClassDeclaration:
+					if decl.Name != nil {
+						exportNames = append(exportNames, decl.Name.Value)
 					}
 				}
 			} else if len(node.Specifiers) > 0 {
@@ -4419,6 +4422,25 @@ func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 				c.moduleBindings.DefineExport(expr.Name.Value, expr.Name.Value, vm.Undefined, d, globalIdx)
 				debugPrintf("// [Compiler] Exported function: %s at global[%d]\n", expr.Name.Value, globalIdx)
 			}
+		} else if expr, ok := d.Expression.(*parser.ClassExpression); ok && expr.Name != nil {
+			if c.IsModuleMode() {
+				globalIdx := c.GetGlobalIndex(expr.Name.Value)
+				if globalIdx == -1 {
+					globalIdx = int(c.GetOrAssignGlobalIndex(expr.Name.Value))
+				}
+				c.moduleBindings.DefineExport(expr.Name.Value, expr.Name.Value, vm.Undefined, d, globalIdx)
+				debugPrintf("// [Compiler] Exported class expression: %s at global[%d]\n", expr.Name.Value, globalIdx)
+			}
+		}
+
+	case *parser.ClassDeclaration:
+		if c.IsModuleMode() && d.Name != nil {
+			globalIdx := c.GetGlobalIndex(d.Name.Value)
+			if globalIdx == -1 {
+				globalIdx = int(c.GetOrAssignGlobalIndex(d.Name.Value))
+			}
+			c.moduleBindings.DefineExport(d.Name.Value, d.Name.Value, vm.Undefined, d, globalIdx)
+			debugPrintf("// [Compiler] Exported class: %s at global[%d]\n", d.Name.Value, globalIdx)
 		}
 
 	default:
@@ -4447,14 +4469,11 @@ func (c *Compiler) emitImportResolve(destReg Register, importName string, line i
 			if importRef.GlobalIndex != -1 {
 				c.emitSetGlobal(uint16(importRef.GlobalIndex), destReg, line)
 			}
-		} else if importRef.GlobalIndex != -1 {
-			// Direct global access - imported values should already be loaded
-			debugPrintf("// [Compiler] emitImportResolve: Using direct global access for '%s' at index %d\n",
-				importName, importRef.GlobalIndex)
-			c.emitGetGlobal(destReg, uint16(importRef.GlobalIndex), line)
 		} else {
-			// Fallback to module export lookup (for backwards compatibility)
-			debugPrintf("// [Compiler] emitImportResolve: Fallback to module export lookup for '%s'\n", importName)
+			// Named and default imports always read the per-module export
+			// snapshot. A unified-heap index here would collide across modules
+			// (SettingsManager, valid, parse, default, …).
+			debugPrintf("// [Compiler] emitImportResolve: Module export lookup for '%s'\n", importName)
 			c.emitGetModuleExport(destReg, importRef.SourceModule, importRef.SourceName, line)
 		}
 	} else {
