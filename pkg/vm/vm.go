@@ -19262,6 +19262,33 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 			return vm.runtimeError("Module '%s' failed to load: %s", modulePath, moduleErr.Error()), Undefined
 		}
 
+		// The module loader already dedupes *records* by resolved path (so this
+		// specifier and some other specifier that reaches the same file on disk
+		// share one ModuleRecord, one parse, one compile). But moduleContexts here
+		// is keyed by the raw specifier text as written at *this* import site, not
+		// by resolved path -- so without this check, a second distinct specifier
+		// string resolving to a module already executed (or currently executing)
+		// under a different spelling would fall through to "create a new context
+		// and run the chunk", re-running that module's top-level code and
+		// duplicating its side effects. findExecutingModuleContext (above) already
+		// guards the in-flight/circular case by resolved path; this guards the
+		// already-finished case the same way.
+		if resolvedPath := moduleRecord.GetResolvedPath(); resolvedPath != "" {
+			for path, ctx := range vm.moduleContexts {
+				if path == modulePath || ctx == nil || ctx.resolvedPath != resolvedPath {
+					continue
+				}
+				// Only alias the key when we can actually skip re-running the
+				// chunk below; otherwise leave moduleContexts untouched so the
+				// fresh-context path below (unchanged) is the single writer.
+				if ctx.executed || ctx.executing {
+					vm.moduleContexts[modulePath] = ctx
+					return InterpretOK, Undefined
+				}
+				break
+			}
+		}
+
 		// Handle JSON modules specially
 		if moduleRecord.IsJSONModule() {
 			// Parse JSON directly using Go's encoding/json
