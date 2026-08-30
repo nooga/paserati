@@ -392,6 +392,15 @@ type VM struct {
 	helperCallDepth        int   // Track when we're inside helper functions like toPrimitive
 	handlerFound           bool  // True when a catch handler was invoked while in a helper function
 
+	// unhandledRejectionPrefix, when non-empty, overrides handleUncaughtException's
+	// default "Uncaught exception: " prefix for the very next uncaught report only
+	// (cleared as soon as it's consumed). Used by top-level await to preserve the
+	// established "Uncaught (in promise): " wording for a rejection that turns out
+	// to have no enclosing try/catch, while still routing through the normal
+	// throwException/unwindException path so a try/catch that IS present can catch
+	// it (see #102).
+	unhandledRejectionPrefix string
+
 	// Finally block state (Phase 3)
 	pendingAction   PendingAction // Action to perform after finally blocks complete
 	pendingValue    Value         // Value associated with pending action (e.g., return value)
@@ -14484,9 +14493,42 @@ startExecution:
 					registers[resultReg] = awaitedPromise.Result
 					continue
 				} else {
+					// A rejected top-level await must behave like a thrown exception:
+					// unwind into any enclosing try/catch in the module chunk, exactly
+					// as OpThrow does. Previously this went straight to an unconditional
+					// "Uncaught (in promise)" runtimeError, so a rejected await inside
+					// TLA try/catch skipped the catch block entirely (#102) even though
+					// the exact same rejection is caught fine inside an async function
+					// (which resumes via resumeAsyncFunction / rejectPromise instead of
+					// this top-level branch).
 					frame.ip = ip
-					status := vm.runtimeError("Uncaught (in promise): %s", awaitedPromise.Result.Inspect())
-					return status, Undefined
+					// Preserve the established "Uncaught (in promise)" wording IF this
+					// rejection turns out to have no handler at all; throwException clears
+					// this itself once consumed, and if a handler DOES exist it's simply
+					// never read (see handleUncaughtException).
+					vm.unhandledRejectionPrefix = "Uncaught (in promise)"
+					vm.throwException(awaitedPromise.Result)
+
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
+						// No handler anywhere - genuinely uncaught. throwException already
+						// printed/reported it via handleUncaughtException.
+						return InterpretRuntimeError, vm.currentException
+					}
+					// A handler exists somewhere - the prefix override was never
+					// consumed. Clear it so a later, unrelated uncaught exception in
+					// this same run doesn't inherit stale "(in promise)" wording.
+					vm.unhandledRejectionPrefix = ""
+					// A handler was found (vm.unwinding is now false) - resync every
+					// cached local the same way OpThrow's handler does, since the
+					// handler may be in a different frame with different registers/code.
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
 				}
 			}
 
