@@ -19161,6 +19161,38 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	// Execute the VM run loop - it will return when the exception is handled or propagates
 	status, result := vm.run()
 
+	if status == InterpretRuntimeError {
+		// vm.run() surfaced this (e.g. the case ActionThrow path re-throwing
+		// after a finally block ran, hitting our own native-call boundary on
+		// its FIRST PASS) without clearing the VM's live unwind state -
+		// unlike a handled catch (handleCatchBlock explicitly clears it),
+		// nothing along this path does. This native call is effectively
+		// that exception's handler now (we're about to convert it into a Go
+		// error), so clear vm.unwinding/vm.currentException/
+		// vm.unwindingCrossedNative here, the same way the early-return
+		// above and handleCatchBlock do. Left uncleared, this stale state
+		// leaks into the very next, unrelated vm.run()/vm.Call invocation
+		// (e.g. the one that's about to invoke this rejection's own
+		// .then() callback) and gets misread as an already-pending
+		// exception, failing that unrelated call immediately regardless of
+		// what it actually does. Also don't take the "suspended at another
+		// await" branch below for frameCount bookkeeping - an errored
+		// resumption never legitimately re-suspends, so promiseObj.Frame
+		// must be cleared here too, not left stale as if a future
+		// resumption were still expected.
+		exc := vm.currentException
+		vm.currentException = Null
+		vm.unwinding = false
+		vm.unwindingCrossedNative = false
+		vm.frameCount = savedFrameCount
+		vm.nextRegSlot = savedNextRegSlot
+		promiseObj.Frame = nil
+		if exc != Null {
+			return Undefined, exceptionError{exception: exc}
+		}
+		return Undefined, exceptionError{exception: NewString("runtime error during async exception handling")}
+	}
+
 	// Clean up frames if function suspended at another await
 	if vm.frameCount > savedFrameCount {
 		// Function suspended at another await - clean up frames
@@ -19170,13 +19202,6 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	} else {
 		// Function completed normally - clear saved frame to signal completion
 		promiseObj.Frame = nil
-	}
-
-	if status == InterpretRuntimeError {
-		if vm.currentException != Null {
-			return Undefined, exceptionError{exception: vm.currentException}
-		}
-		return Undefined, exceptionError{exception: NewString("runtime error during async exception handling")}
 	}
 
 	return result, nil
