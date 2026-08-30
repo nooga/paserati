@@ -208,6 +208,23 @@ func (c *Compiler) declareClassPrivateNames(node *parser.ClassDeclaration) {
 	}
 }
 
+// classModuleGlobalKey returns the heap-allocator key to use for a top-level
+// module-scope class declaration named name. When this compiler is compiling
+// a file resolved by the module loader (see SetLoadedViaModuleLoader), the
+// key is namespaced by the module's resolved path so that same-named classes
+// declared in unrelated modules don't alias the same global heap slot merely
+// because an importer references the bare, un-imported name (#103). The
+// persistent session compiler (RunString/REPL/eval, reused under a synthetic
+// module name across separate Compile() calls) keeps the plain name so
+// classes stay visible to later lines the way script-mode globals always
+// have.
+func (c *Compiler) classModuleGlobalKey(name string) string {
+	if c.IsModuleMode() && c.loadedViaModuleLoader && c.moduleBindings != nil && c.moduleBindings.ModulePath != "" {
+		return c.moduleBindings.ModulePath + "\x00" + name
+	}
+	return name
+}
+
 // compileClassDeclaration compiles a class declaration into a constructor function + prototype setup
 // This follows the approach of desugaring classes to constructor functions + prototypes
 func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint Register) (Register, errors.PaseratiError) {
@@ -222,11 +239,15 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	// For eval code (isIndirectEval=true), class declarations should be local
 	// to the eval's lexical environment, not global.
 	isGlobalClassScope := c.enclosing == nil && !c.isIndirectEval
+	var classGlobalIdx uint16 // only meaningful when isGlobalClassScope
 	if isGlobalClassScope {
-		// Top-level class declaration
-		globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
-		c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
-		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined global class '%s' at index %d\n", node.Name.Value, globalIdx)
+		// Top-level class declaration. The symbol table always binds the
+		// plain name (so intra-module references, including recursive
+		// self-reference and re-derivation by exports, resolve normally);
+		// only the underlying heap slot's key may be namespaced.
+		classGlobalIdx = c.GetOrAssignGlobalIndex(c.classModuleGlobalKey(node.Name.Value))
+		c.currentSymbolTable.DefineGlobal(node.Name.Value, classGlobalIdx)
+		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined global class '%s' at index %d\n", node.Name.Value, classGlobalIdx)
 	} else {
 		// Local class declaration (or eval-scoped class)
 		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
@@ -248,8 +269,7 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 		// For globals, we use the same global index. For locals, we use nilRegister for now
 		// (will be updated to constructorReg later when the outer binding is updated).
 		if isGlobalClassScope {
-			globalIdx := c.GetGlobalIndex(node.Name.Value)
-			c.currentSymbolTable.DefineGlobalStrictImmutable(node.Name.Value, uint16(globalIdx))
+			c.currentSymbolTable.DefineGlobalStrictImmutable(node.Name.Value, classGlobalIdx)
 		} else {
 			c.currentSymbolTable.DefineStrictImmutable(node.Name.Value, nilRegister)
 		}
@@ -320,9 +340,21 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 							superConstructorReg = symbol.Register
 							needToFreeSuperReg = false
 						}
+					} else if c.IsModuleMode() && c.moduleBindings != nil && c.moduleBindings.IsImported(superClassName) {
+						// Imported names are tracked in moduleBindings, never in the
+						// symbol table (see syncImportsFromTypeChecker), so an import
+						// always reaches this branch. Resolve it as an import rather
+						// than falling through to the builtin/global guess below: a
+						// module-scope class's global slot may not even be plain-keyed
+						// (see classModuleGlobalKey, #103), so guessing wrong here would
+						// silently read an unrelated, never-written slot.
+						superConstructorReg = c.regAlloc.Alloc()
+						needToFreeSuperReg = true
+						c.emitImportResolve(superConstructorReg, superClassName, node.Token.Line)
 					} else {
-						// Not in symbol table - might be a built-in class (Object, Array, etc.)
-						// Emit code to look up the global variable at runtime
+						// Not in symbol table and not an import - might be a built-in
+						// class (Object, Array, etc.). Emit code to look up the global
+						// variable at runtime.
 						globalIdx := c.GetOrAssignGlobalIndex(superClassName)
 						superConstructorReg = c.regAlloc.Alloc()
 						needToFreeSuperReg = true
@@ -464,8 +496,7 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	// For local classes, update BOTH the inner and outer bindings before restoring the outer scope
 	if isGlobalClassScope {
 		// Top-level class declaration - set the global value
-		globalIdx := c.GetGlobalIndex(node.Name.Value)
-		c.emitSetGlobal(uint16(globalIdx), constructorReg, node.Token.Line)
+		c.emitSetGlobal(classGlobalIdx, constructorReg, node.Token.Line)
 		debugPrintf("// DEBUG compileClassDeclaration: Set global class '%s' to R%d\n", node.Name.Value, constructorReg)
 	} else {
 		// Local class declaration - update the inner binding's register first (while inner scope is active)

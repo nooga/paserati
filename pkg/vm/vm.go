@@ -1101,6 +1101,15 @@ func (vm *VM) SyncHeapToGlobalObject() {
 
 	// Sync all named heap variables to GlobalObject
 	for name, idx := range nameToIndex {
+		// A module-scope class's heap slot is keyed as "modulePath\x00Name"
+		// rather than its plain name, to keep same-named classes in unrelated
+		// modules from aliasing the same slot (#103). That key is an internal
+		// heap-allocator detail, never a real property name - skip it here so
+		// it can't leak onto globalThis as an enumerable property.
+		if strings.Contains(name, "\x00") {
+			continue
+		}
+
 		// Get the value from heap
 		val, ok := vm.heap.Get(idx)
 		if !ok {
@@ -13113,6 +13122,14 @@ startExecution:
 				// ECMAScript requires global var declarations to be enumerable properties on the global object
 				if cur == vm.GlobalObject {
 					for name, idx := range vm.heap.nameToIndex {
+						// A module-scope class's heap slot is keyed as "modulePath\x00Name"
+						// rather than its plain name, to keep same-named classes in unrelated
+						// modules from aliasing the same slot (#103). That key is an internal
+						// heap-allocator detail, never a real property name - skip it here so
+						// it can't leak into for-in enumeration of the global object.
+						if strings.Contains(name, "\x00") {
+							continue
+						}
 						// Global var declarations are enumerable
 						// Builtins are typically non-enumerable, but we include user-defined globals
 						// Check if the variable is user-defined (index >= builtinCount) AND initialized
