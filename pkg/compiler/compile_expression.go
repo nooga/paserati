@@ -1772,15 +1772,23 @@ func (c *Compiler) compileTypeofExpression(node *parser.TypeofExpression, hint R
 		// Special handling: 'arguments' is available in function scope but not in symbol table
 		_, _, found := c.currentSymbolTable.Resolve(ident.Value)
 
-		if !found && ident.Value != "arguments" {
-			// Identifier doesn't exist (and it's not 'arguments') - emit special OpTypeofIdentifier that returns "undefined"
+		// Under skip-typecheck, imported bindings never make it into the compiler's
+		// symbol table (the checker normally defines them, and the checker never ran).
+		// Without this check, `typeof importedName` would wrongly take the "identifier
+		// doesn't exist" path below instead of resolving the real import binding.
+		isUnresolvedImport := !found && c.IsModuleMode() && c.moduleBindings != nil &&
+			c.moduleBindings.IsImported(ident.Value)
+
+		if !found && ident.Value != "arguments" && !isUnresolvedImport {
+			// Identifier doesn't exist (and it's not 'arguments' or an import) - emit
+			// special OpTypeofIdentifier that returns "undefined"
 			if hint == NoHint || hint == BadRegister {
 				hint = c.regAlloc.Alloc()
 			}
 			c.emitTypeofIdentifier(hint, ident.Value, node.Token.Line)
 			return hint, nil
 		}
-		// If identifier exists (or is 'arguments'), fall through to normal compilation
+		// If identifier exists (or is 'arguments'/an import), fall through to normal compilation
 	}
 
 	// For all other expressions, compile normally and then typeof
