@@ -2103,12 +2103,34 @@ startExecution:
 			if primVal.IsBigInt() {
 				frame.ip = ip
 				vm.ThrowTypeError("Cannot convert a BigInt value to a number")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 			// ECMAScript: ToNumber(symbol) throws a TypeError
 			if primVal.Type() == TypeSymbol {
 				frame.ip = ip
 				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 			registers[destReg] = Number(primVal.ToFloat())
@@ -2142,6 +2164,17 @@ startExecution:
 			if primVal.Type() == TypeSymbol {
 				frame.ip = ip
 				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 			// BigInt is preserved as-is, everything else converts to Number
@@ -2191,6 +2224,17 @@ startExecution:
 			if primVal.Type() == TypeSymbol {
 				frame.ip = ip
 				vm.ThrowTypeError("Cannot convert a Symbol value to a number")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 			isDec := opcode == OpDecPre || opcode == OpDecPost
@@ -2235,6 +2279,17 @@ startExecution:
 			if leftVal.IsSymbol() || rightVal.IsSymbol() {
 				frame.ip = ip
 				vm.ThrowTypeError("Cannot convert a Symbol value to a string")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -3050,6 +3105,17 @@ startExecution:
 					proxy := objVal.AsProxy()
 					if proxy.Revoked {
 						vm.ThrowTypeError("Cannot perform 'in' on a revoked Proxy")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, Undefined
 					}
 
@@ -3058,6 +3124,17 @@ startExecution:
 						// Validate trap is callable
 						if !hasTrap.IsCallable() {
 							vm.ThrowTypeError("'has' on proxy: trap is not a function")
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
 							return InterpretRuntimeError, Undefined
 						}
 
@@ -3069,6 +3146,17 @@ startExecution:
 								vm.throwException(ee.GetExceptionValue())
 							} else {
 								vm.runtimeError("%s", err.Error())
+							}
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
 							}
 							return InterpretRuntimeError, Undefined
 						}
@@ -3083,12 +3171,34 @@ startExecution:
 								// Check if target has a non-configurable own property
 								if _, _, _, c, found := targetObj.GetOwnDescriptor(propKey); found && !c {
 									vm.ThrowTypeError("'has' on proxy: trap returned false for property '" + propKey + "' which exists in the proxy target as non-configurable")
+									if !vm.unwinding {
+										// Exception was caught by a handler, reload frame and continue
+										frame = &vm.frames[vm.frameCount-1]
+										closure = frame.closure
+										function = closure.Fn
+										code = function.Chunk.Code
+										constants = function.Chunk.Constants
+										registers = frame.registers
+										ip = frame.ip
+										continue
+									}
 									return InterpretRuntimeError, Undefined
 								}
 								// Check if target is not extensible and has the property
 								if !targetObj.IsExtensible() {
 									if _, found := targetObj.GetOwn(propKey); found {
 										vm.ThrowTypeError("'has' on proxy: trap returned false for property '" + propKey + "' but the proxy target is not extensible")
+										if !vm.unwinding {
+											// Exception was caught by a handler, reload frame and continue
+											frame = &vm.frames[vm.frameCount-1]
+											closure = frame.closure
+											function = closure.Fn
+											code = function.Chunk.Code
+											constants = function.Chunk.Constants
+											registers = frame.registers
+											ip = frame.ip
+											continue
+										}
 										return InterpretRuntimeError, Undefined
 									}
 								}
@@ -4292,6 +4402,17 @@ startExecution:
 								} else {
 									vm.runtimeError("%s", err.Error())
 								}
+								if !vm.unwinding {
+									// Exception was caught by a handler, reload frame and continue
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									goto reloadFrame
+								}
 								return InterpretRuntimeError, Undefined
 							}
 							hasProperty = result.IsTruthy()
@@ -4377,6 +4498,17 @@ startExecution:
 							vm.ThrowReferenceError(fmt.Sprintf("%s is not defined", propName))
 							if vm.handlerFound {
 								vm.handlerFound = false
+								goto reloadFrame
+							}
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
 								goto reloadFrame
 							}
 							return InterpretRuntimeError, Undefined
@@ -4720,6 +4852,17 @@ startExecution:
 								} else {
 									vm.runtimeError("%s", err.Error())
 								}
+								if !vm.unwinding {
+									// Exception was caught by a handler, reload frame and continue
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									goto reloadFrame
+								}
 								return InterpretRuntimeError, Undefined
 							}
 							hasProperty = result.IsTruthy()
@@ -4795,6 +4938,17 @@ startExecution:
 							vm.ThrowReferenceError(fmt.Sprintf("%s is not defined", propName))
 							if vm.handlerFound {
 								vm.handlerFound = false
+								goto reloadFrame
+							}
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
 								goto reloadFrame
 							}
 							return InterpretRuntimeError, Undefined
@@ -4895,6 +5049,17 @@ startExecution:
 									vm.throwException(ee.GetExceptionValue())
 								} else {
 									vm.runtimeError("%s", err.Error())
+								}
+								if !vm.unwinding {
+									// Exception was caught by a handler, reload frame and continue
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									goto reloadFrame
 								}
 								return InterpretRuntimeError, Undefined
 							}
@@ -5347,6 +5512,17 @@ startExecution:
 							vm.handlerFound = false
 							goto reloadFrame
 						}
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, Undefined
 					}
 					// Non-strict mode: return undefined
@@ -5646,10 +5822,32 @@ startExecution:
 					} else if result.Type() != TypeUndefined {
 						// ECMAScript 10.2.2 step 11c: derived constructor returning non-object, non-undefined
 						vm.ThrowTypeError("Derived constructors may only return object or undefined")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, vm.currentException
 					} else if constructorThisValue.typ == TypeUninitialized {
 						// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
 						vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, vm.currentException
 					} else {
 						finalResult = constructorThisValue // Derived constructor with super() called, returning undefined
@@ -5688,10 +5886,32 @@ startExecution:
 					} else if result.Type() != TypeUndefined {
 						// ECMAScript 10.2.2 step 11c: derived constructor returning non-object, non-undefined
 						vm.ThrowTypeError("Derived constructors may only return object or undefined")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, vm.currentException
 					} else if constructorThisValue.typ == TypeUninitialized {
 						// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
 						vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, vm.currentException
 					} else {
 						finalResult = constructorThisValue // Derived constructor with super() called, returning undefined
@@ -5870,6 +6090,17 @@ startExecution:
 					if isDerivedConstructor && constructorThisValue.typ == TypeUninitialized {
 						// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
 						vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, vm.currentException
 					}
 					finalResult = constructorThisValue
@@ -5904,6 +6135,17 @@ startExecution:
 					if isDerivedConstructor && constructorThisValue.typ == TypeUninitialized {
 						// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
 						vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, vm.currentException
 					}
 					finalResult = constructorThisValue
@@ -6747,6 +6989,17 @@ startExecution:
 				if propName == "prototype" {
 					frame.ip = ip
 					vm.ThrowTypeError("Classes may not have a static property named 'prototype'")
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 				obj = objVal.AsFunction().Properties
@@ -6755,6 +7008,17 @@ startExecution:
 				if propName == "prototype" {
 					frame.ip = ip
 					vm.ThrowTypeError("Classes may not have a static property named 'prototype'")
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 				closure := objVal.AsClosure()
@@ -7551,6 +7815,17 @@ startExecution:
 						excVal = NewValueFromPlainObject(eo)
 					}
 					vm.throwException(excVal)
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 
@@ -7560,6 +7835,17 @@ startExecution:
 					// Validate trap is callable
 					if !getTrap.IsCallable() {
 						vm.ThrowTypeError("'get' on proxy: trap is not a function")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, Undefined
 					}
 					// Call the get trap: handler.get(target, propertyKey, receiver)
@@ -7568,9 +7854,31 @@ startExecution:
 					if err != nil {
 						if ee, ok := err.(ExceptionError); ok {
 							vm.throwException(ee.GetExceptionValue())
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
 							return InterpretRuntimeError, Undefined
 						}
 						vm.ThrowTypeError(err.Error())
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, Undefined
 					}
 					// ECMAScript 10.5.8 invariant validation
@@ -7580,11 +7888,33 @@ startExecution:
 						if g, _, _, c, isAccessor := targetObj.GetOwnAccessor(propName); isAccessor && !c {
 							if g.Type() == TypeUndefined && !result.IsUndefined() {
 								vm.ThrowTypeError("'get' on proxy: property '" + propName + "' is a non-configurable accessor without a getter, but the trap returned a non-undefined value")
+								if !vm.unwinding {
+									// Exception was caught by a handler, reload frame and continue
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
 								return InterpretRuntimeError, Undefined
 							}
 						} else if v, w, _, c, found := targetObj.GetOwnDescriptor(propName); found && !c && !w {
 							if !v.StrictlyEquals(result) {
 								vm.ThrowTypeError("'get' on proxy: property '" + propName + "' is a read-only and non-configurable data property on the proxy target but the proxy did not return its actual value")
+								if !vm.unwinding {
+									// Exception was caught by a handler, reload frame and continue
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
 								return InterpretRuntimeError, Undefined
 							}
 						}
@@ -8028,6 +8358,17 @@ startExecution:
 				if setterErr != nil {
 					if ee, ok := setterErr.(ExceptionError); ok {
 						vm.throwException(ee.GetExceptionValue())
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, Undefined
 					}
 					status := vm.runtimeError("%v", setterErr)
@@ -8051,6 +8392,17 @@ startExecution:
 							if err != nil {
 								if ee, ok := err.(ExceptionError); ok {
 									vm.throwException(ee.GetExceptionValue())
+									if !vm.unwinding {
+										// Exception was caught by a handler, reload frame and continue
+										frame = &vm.frames[vm.frameCount-1]
+										closure = frame.closure
+										function = closure.Fn
+										code = function.Chunk.Code
+										constants = function.Chunk.Constants
+										registers = frame.registers
+										ip = frame.ip
+										continue
+									}
 									return InterpretRuntimeError, Undefined
 								}
 								status := vm.runtimeError("%v", err)
@@ -8195,6 +8547,17 @@ startExecution:
 							// Property exists and is not writable - throw TypeError
 							frame.ip = ip
 							vm.ThrowTypeError("Cannot assign to read only property 'prototype' of function")
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
 							return InterpretRuntimeError, Undefined
 						}
 					}
@@ -8205,6 +8568,17 @@ startExecution:
 						if err != nil {
 							if ee, ok := err.(ExceptionError); ok {
 								vm.throwException(ee.GetExceptionValue())
+								if !vm.unwinding {
+									// Exception was caught by a handler, reload frame and continue
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
 								return InterpretRuntimeError, Undefined
 							}
 							frame.ip = ip
@@ -8340,6 +8714,17 @@ startExecution:
 				frame.ip = ip
 				if ee, ok := err.(ExceptionError); ok {
 					vm.throwException(ee.GetExceptionValue())
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 				status := vm.runtimeError("Spread error: %s", err.Error())
@@ -8561,6 +8946,17 @@ startExecution:
 								} else {
 									vm.runtimeError("Error calling getter for property '%s': %v", key, err)
 								}
+								if !vm.unwinding {
+									// Exception was caught by a handler, reload frame and continue
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									goto reloadFrame
+								}
 								return InterpretRuntimeError, Undefined
 							}
 							value = res
@@ -8610,6 +9006,17 @@ startExecution:
 									vm.throwException(ee.GetExceptionValue())
 								} else {
 									vm.runtimeError("Error calling getter for symbol property: %v", err)
+								}
+								if !vm.unwinding {
+									// Exception was caught by a handler, reload frame and continue
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									goto reloadFrame
 								}
 								return InterpretRuntimeError, Undefined
 							}
@@ -10300,6 +10707,17 @@ startExecution:
 						} else {
 							vm.runtimeError("%s", err.Error())
 						}
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, Undefined
 					}
 
@@ -10371,12 +10789,34 @@ startExecution:
 				if constructorFunc.IsArrowFunction {
 					frame.ip = callerIP
 					vm.ThrowTypeError("Arrow functions cannot be used as constructors")
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 				// Check if it's a generator function - generator functions cannot be constructors
 				if constructorFunc.IsGenerator {
 					frame.ip = callerIP
 					vm.ThrowTypeError("Generator functions cannot be used as constructors")
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 				// Allow fewer arguments for constructors with optional parameters
@@ -10556,12 +10996,34 @@ startExecution:
 				if funcToCall.IsArrowFunction {
 					frame.ip = callerIP
 					vm.ThrowTypeError("Arrow functions cannot be used as constructors")
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 				// Check if it's a generator function - generator functions cannot be constructors
 				if funcToCall.IsGenerator {
 					frame.ip = callerIP
 					vm.ThrowTypeError("Generator functions cannot be used as constructors")
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 				constructorClosure := &ClosureObject{Fn: funcToCall, Upvalues: []*Upvalue{}}
@@ -11043,11 +11505,33 @@ startExecution:
 					if constructorFunc.IsArrowFunction {
 						frame.ip = callerIP
 						vm.ThrowTypeError("Arrow functions cannot be used as constructors")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, Undefined
 					}
 					if constructorFunc.IsGenerator {
 						frame.ip = callerIP
 						vm.ThrowTypeError("Generator functions cannot be used as constructors")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, Undefined
 					}
 					if vm.frameCount >= len(vm.frames) {
@@ -11501,6 +11985,17 @@ startExecution:
 			if frame.isConstructorCall && frame.thisValue.Type() == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -11569,6 +12064,17 @@ startExecution:
 			if frame.isConstructorCall && thisValue.Type() == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -11604,6 +12110,17 @@ startExecution:
 			if protoValue.Type() == TypeNull || protoValue.Type() == TypeUndefined {
 				frame.ip = ip
 				vm.ThrowTypeError("Cannot read super property from " + protoValue.Type().String() + " prototype")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -11700,6 +12217,17 @@ startExecution:
 							frame.ip = ip
 							if ee, ok := err.(ExceptionError); ok {
 								vm.throwException(ee.GetExceptionValue())
+								if !vm.unwinding {
+									// Exception was caught by a handler, reload frame and continue
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
 								return InterpretRuntimeError, Undefined
 							}
 							var excVal Value
@@ -11715,6 +12243,17 @@ startExecution:
 								excVal = NewValueFromPlainObject(eo)
 							}
 							vm.throwException(excVal)
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
 							return InterpretRuntimeError, Undefined
 						}
 						registers[destReg] = result
@@ -11733,6 +12272,17 @@ startExecution:
 							frame.ip = ip
 							if ee, ok := err.(ExceptionError); ok {
 								vm.throwException(ee.GetExceptionValue())
+								if !vm.unwinding {
+									// Exception was caught by a handler, reload frame and continue
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
 								return InterpretRuntimeError, Undefined
 							}
 							var excVal Value
@@ -11748,6 +12298,17 @@ startExecution:
 								excVal = NewValueFromPlainObject(eo)
 							}
 							vm.throwException(excVal)
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
 							return InterpretRuntimeError, Undefined
 						}
 						registers[destReg] = result
@@ -11803,6 +12364,17 @@ startExecution:
 			if frame.isConstructorCall && thisValue.Type() == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -12015,6 +12587,17 @@ startExecution:
 			if frame.isConstructorCall && thisValue.Type() == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -12089,6 +12672,17 @@ startExecution:
 			if protoValue.Type() == TypeNull || protoValue.Type() == TypeUndefined {
 				frame.ip = ip
 				vm.ThrowTypeError("Cannot read super property from " + protoValue.Type().String() + " prototype")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -12195,6 +12789,17 @@ startExecution:
 			if frame.isConstructorCall && thisValue.Type() == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -12403,6 +13008,17 @@ startExecution:
 			if frame.isConstructorCall && thisValue.Type() == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super() before accessing super properties in derived constructor")
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -13045,6 +13661,17 @@ startExecution:
 				// Check if this is a JavaScript exception - if so, re-throw it
 				if ee, ok := err.(ExceptionError); ok {
 					vm.throwException(ee.GetExceptionValue())
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 				status := vm.runtimeError("Spread call error: %s", err.Error())
@@ -13101,6 +13728,17 @@ startExecution:
 				// Check if this is a JavaScript exception - if so, re-throw it
 				if ee, ok := err.(ExceptionError); ok {
 					vm.throwException(ee.GetExceptionValue())
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 				status := vm.runtimeError("Spread method call error: %s", err.Error())
@@ -13872,9 +14510,31 @@ startExecution:
 							result = constructorThisValue
 						} else if result.Type() != TypeUndefined {
 							vm.ThrowTypeError("Derived constructors may only return object or undefined")
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
 							return InterpretRuntimeError, vm.currentException
 						} else if constructorThisValue.typ == TypeUninitialized {
 							vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
 							return InterpretRuntimeError, vm.currentException
 						} else {
 							result = constructorThisValue
@@ -13905,9 +14565,31 @@ startExecution:
 							finalResult = constructorThisValue
 						} else if result.Type() != TypeUndefined {
 							vm.ThrowTypeError("Derived constructors may only return object or undefined")
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
 							return InterpretRuntimeError, vm.currentException
 						} else if constructorThisValue.typ == TypeUninitialized {
 							vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
 							return InterpretRuntimeError, vm.currentException
 						} else {
 							finalResult = constructorThisValue
@@ -14733,6 +15415,17 @@ startExecution:
 			if obj.Type() == TypeUndefined || obj.Type() == TypeNull {
 				frame.ip = ip
 				vm.ThrowReferenceError("Cannot delete property '" + propName + "' of " + obj.Type().String())
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -14754,6 +15447,17 @@ startExecution:
 						excVal = NewValueFromPlainObject(eo)
 					}
 					vm.throwException(excVal)
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 
@@ -14763,6 +15467,17 @@ startExecution:
 					// Validate trap is callable
 					if !deleteTrap.IsCallable() {
 						vm.ThrowTypeError("'deleteProperty' on proxy: trap is not a function")
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, Undefined
 					}
 
@@ -14772,9 +15487,31 @@ startExecution:
 					if err != nil {
 						if ee, ok := err.(ExceptionError); ok {
 							vm.throwException(ee.GetExceptionValue())
+							if !vm.unwinding {
+								// Exception was caught by a handler, reload frame and continue
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
 							return InterpretRuntimeError, Undefined
 						}
 						vm.ThrowTypeError(err.Error())
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
 						return InterpretRuntimeError, Undefined
 					}
 					success = result.IsTruthy()
@@ -14785,6 +15522,17 @@ startExecution:
 							targetObj := proxy.target.AsPlainObject()
 							if _, _, _, c, found := targetObj.GetOwnDescriptor(propName); found && !c {
 								vm.ThrowTypeError("'deleteProperty' on proxy: trap returned truish for property '" + propName + "' which is non-configurable in the proxy target")
+								if !vm.unwinding {
+									// Exception was caught by a handler, reload frame and continue
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
 								return InterpretRuntimeError, Undefined
 							}
 						}
@@ -15156,6 +15904,17 @@ startExecution:
 				frame.ip = ip
 				keyStr := key.ToString()
 				vm.ThrowReferenceError("Cannot delete property '" + keyStr + "' of " + obj.Type().String())
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
