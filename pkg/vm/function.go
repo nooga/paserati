@@ -177,7 +177,7 @@ func (fn *FunctionObject) GetOrCreatePrototype() Value {
 func (fn *FunctionObject) GetOrCreatePrototypeWithVM(vm *VM) Value {
 	// Ensure Properties object exists
 	if fn.Properties == nil {
-		fn.Properties = NewObject(Undefined).AsPlainObject()
+		fn.Properties = newPropertiesTable()
 	}
 
 	// Check if prototype already exists
