@@ -51,7 +51,7 @@ func (vm *VM) handleOpDefineMethod(code []byte, ip *int, constants []Value, regi
 	case TypeFunction:
 		fn := objVal.AsFunction()
 		if fn.Properties == nil {
-			fn.Properties = NewObject(Undefined).AsPlainObject()
+			fn.Properties = newPropertiesTable()
 		}
 		fn.Properties.DefineOwnProperty(methodName, methodVal, &writable, &enumerable, &configurable)
 		return InterpretOK, Undefined
@@ -60,7 +60,7 @@ func (vm *VM) handleOpDefineMethod(code []byte, ip *int, constants []Value, regi
 		closure := objVal.AsClosure()
 		// Use closure's own Properties for per-closure isolation (consistent with OpSetProp)
 		if closure.Properties == nil {
-			closure.Properties = NewObject(Undefined).AsPlainObject()
+			closure.Properties = newPropertiesTable()
 		}
 		closure.Properties.DefineOwnProperty(methodName, methodVal, &writable, &enumerable, &configurable)
 		return InterpretOK, Undefined
@@ -68,7 +68,7 @@ func (vm *VM) handleOpDefineMethod(code []byte, ip *int, constants []Value, regi
 	case TypeNativeFunctionWithProps:
 		nfp := objVal.AsNativeFunctionWithProps()
 		if nfp.Properties == nil {
-			nfp.Properties = NewObject(Undefined).AsPlainObject()
+			nfp.Properties = newPropertiesTable()
 		}
 		nfp.Properties.DefineOwnProperty(methodName, methodVal, &writable, &enumerable, &configurable)
 		return InterpretOK, Undefined

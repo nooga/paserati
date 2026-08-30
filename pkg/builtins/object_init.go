@@ -3374,12 +3374,31 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		return vm.Undefined, vmInstance.NewTypeError("Invalid property descriptor. Cannot both specify accessors and a value or writable attribute")
 	}
 
+	// Functions, RegExps, Maps and Sets keep their own properties in a side
+	// table; a brand-new property needs that table to be extensible, the same
+	// check the TypeObject path below makes on the object itself.
+	if props := vm.OwnPropertiesTable(obj); props != nil && !props.IsExtensible() {
+		exists := false
+		if keyIsSymbol {
+			_, _, _, _, exists = props.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
+		} else {
+			_, _, _, _, exists = props.GetOwnDescriptor(propName)
+		}
+		if !exists {
+			keyStr := propName
+			if keyIsSymbol {
+				keyStr = propSym.ToString()
+			}
+			return vm.Undefined, vmInstance.NewTypeError("Cannot define property " + keyStr + ", object is not extensible")
+		}
+	}
+
 	// Handle BoundFunction first (before AsPlainObject which would panic)
 	if obj.Type() == vm.TypeBoundFunction {
 		bf := obj.AsBoundFunction()
 		if bf != nil {
 			if bf.Properties == nil {
-				bf.Properties = vm.NewObject(vm.Undefined).AsPlainObject()
+				bf.Properties = vm.EnsureOwnPropertiesTable(obj)
 			}
 			if hasGetter || hasSetter {
 				if keyIsSymbol {
@@ -3609,7 +3628,7 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		fn := obj.AsFunction()
 		if fn != nil {
 			if fn.Properties == nil {
-				fn.Properties = vm.NewObject(vm.Undefined).AsPlainObject()
+				fn.Properties = vm.EnsureOwnPropertiesTable(obj)
 			}
 			if hasGetter || hasSetter {
 				if keyIsSymbol {
@@ -3632,7 +3651,7 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		cl := obj.AsClosure()
 		if cl != nil {
 			if cl.Properties == nil {
-				cl.Properties = vm.NewObject(vm.Undefined).AsPlainObject()
+				cl.Properties = vm.EnsureOwnPropertiesTable(obj)
 			}
 			if hasGetter || hasSetter {
 				if keyIsSymbol {
@@ -4550,11 +4569,18 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 	}
 
 	// Check if object is extensible
+	if obj.Type() == vm.TypeObject {
+		return vm.BooleanValue(obj.AsPlainObject().IsExtensible()), nil
+	}
+
+	// Functions, RegExps, Maps and Sets record extensibility on their side
+	// table. No table means nothing ever made the value non-extensible.
+	// Checked before the catch-all below, which reaches RegExps and Maps too.
+	if props := vm.OwnPropertiesTable(obj); props != nil {
+		return vm.BooleanValue(props.IsExtensible()), nil
+	}
+
 	if obj.IsObject() {
-		if obj.Type() == vm.TypeObject {
-			plainObj := obj.AsPlainObject()
-			return vm.BooleanValue(plainObj.IsExtensible()), nil
-		}
 		// Other object types (DictObject, etc.) are extensible by default for now
 		return vm.BooleanValue(true), nil
 	}
@@ -4631,8 +4657,9 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 		return objectPreventExtensionsWithVM(vmInstance, []vm.Value{proxy.Target()})
 	}
 
-	// Per ECMAScript spec, primitives are returned unchanged
-	if !obj.IsObject() {
+	// Per ECMAScript spec, primitives are returned unchanged.
+	// Callables are objects even when Value.IsObject() says otherwise.
+	if !obj.IsObject() && !obj.IsCallable() {
 		return obj, nil
 	}
 
@@ -4644,41 +4671,20 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 	}
 
 	// Mark the object as non-extensible
-	if obj.Type() == vm.TypeObject {
-		if obj.Type() == vm.TypeObject {
-			plainObj := obj.AsPlainObject()
-			plainObj.SetExtensible(false)
-		}
-	} else if obj.Type() == vm.TypeDictObject {
+	switch obj.Type() {
+	case vm.TypeObject:
+		obj.AsPlainObject().SetExtensible(false)
+	case vm.TypeDictObject:
 		obj.AsDictObject().SetExtensible(false)
+	default:
+		// Functions, RegExps, Maps and Sets record extensibility on their side
+		// table, created here if the value doesn't have one yet.
+		if props := vm.EnsureOwnPropertiesTable(obj); props != nil {
+			props.SetExtensible(false)
+		}
 	}
 
 	return obj, nil
-}
-
-// exoticOwnProperties returns the PlainObject holding the ordinary own
-// properties of a value that keeps them in a side table rather than being one
-// (functions of every flavour and RegExp objects). Returns nil when the value
-// has no such table - either because it isn't one of those kinds, or because
-// nothing has ever defined a property on it, in which case there is nothing to
-// apply an integrity level to. Object.isFrozen/isSealed reach into the same
-// tables.
-func exoticOwnProperties(obj vm.Value) *vm.PlainObject {
-	switch obj.Type() {
-	case vm.TypeFunction:
-		return obj.AsFunction().Properties
-	case vm.TypeClosure:
-		return obj.AsClosure().Properties
-	case vm.TypeNativeFunction:
-		return obj.AsNativeFunction().Properties
-	case vm.TypeNativeFunctionWithProps:
-		return obj.AsNativeFunctionWithProps().Properties
-	case vm.TypeBoundFunction:
-		return obj.AsBoundFunction().Properties
-	case vm.TypeRegExp:
-		return obj.AsRegExpObject().Properties
-	}
-	return nil
 }
 
 func objectFreezeWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
@@ -4708,9 +4714,14 @@ func objectFreezeWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		plainObj.SetExtensible(false)
 		// Use FreezeAllProperties to freeze ALL own properties (including non-enumerable and symbol)
 		plainObj.FreezeAllProperties()
-	} else if props := exoticOwnProperties(obj); props != nil {
-		// Functions and RegExps are objects too: their own properties live in a
-		// side table, which is what has to be frozen.
+	} else if props := vm.EnsureOwnPropertiesTable(obj); props != nil {
+		// Functions, RegExps, Maps and Sets are objects too: their own
+		// properties - and their extensible flag - live in a side table, which
+		// is what has to be frozen. The table is created if the value doesn't
+		// have one yet, so freezing a property-less function still sticks, and
+		// a callable's synthesized own properties are materialized into it
+		// first so the freeze covers them too.
+		vm.MaterializeIntrinsicOwnProperties(vmInstance, obj)
 		props.SetExtensible(false)
 		props.FreezeAllProperties()
 	}
@@ -4744,7 +4755,9 @@ func objectSealWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		plainObj := obj.AsPlainObject()
 		plainObj.SetExtensible(false)
 		plainObj.SealAllProperties()
-	} else if props := exoticOwnProperties(obj); props != nil {
+	} else if props := vm.EnsureOwnPropertiesTable(obj); props != nil {
+		// See objectFreezeWithVM.
+		vm.MaterializeIntrinsicOwnProperties(vmInstance, obj)
 		props.SetExtensible(false)
 		props.SealAllProperties()
 	}
@@ -4779,31 +4792,11 @@ func objectIsFrozenWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 		return vm.BooleanValue(plainObj.IsFrozenProperties()), nil
 	}
 
-	// Functions are objects - check their properties object
-	if obj.Type() == vm.TypeFunction {
-		fn := obj.AsFunction()
-		if fn.Properties != nil {
-			if fn.Properties.IsExtensible() {
-				return vm.BooleanValue(false), nil
-			}
-			return vm.BooleanValue(fn.Properties.IsFrozenProperties()), nil
-		}
-		return vm.BooleanValue(false), nil // extensible by default
-	}
-	if obj.Type() == vm.TypeClosure {
-		cl := obj.AsClosure()
-		if cl.Properties != nil {
-			if cl.Properties.IsExtensible() {
-				return vm.BooleanValue(false), nil
-			}
-			return vm.BooleanValue(cl.Properties.IsFrozenProperties()), nil
-		}
-		return vm.BooleanValue(false), nil
-	}
-
-	// Other callable/object types - not frozen by default
-	if obj.IsCallable() {
-		return vm.BooleanValue(false), nil
+	// Functions, RegExps, Maps and Sets keep their own properties - and their
+	// extensible flag - in a side table. No table means nothing has ever made
+	// the value non-extensible, so it isn't frozen.
+	if props := vm.OwnPropertiesTable(obj); props != nil {
+		return vm.BooleanValue(!props.IsExtensible() && props.IsFrozenProperties()), nil
 	}
 
 	return vm.BooleanValue(false), nil
@@ -4836,31 +4829,9 @@ func objectIsSealedWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 		return vm.BooleanValue(plainObj.IsSealedProperties()), nil
 	}
 
-	// Functions are objects
-	if obj.Type() == vm.TypeFunction {
-		fn := obj.AsFunction()
-		if fn.Properties != nil {
-			if fn.Properties.IsExtensible() {
-				return vm.BooleanValue(false), nil
-			}
-			return vm.BooleanValue(fn.Properties.IsSealedProperties()), nil
-		}
-		return vm.BooleanValue(false), nil
-	}
-	if obj.Type() == vm.TypeClosure {
-		cl := obj.AsClosure()
-		if cl.Properties != nil {
-			if cl.Properties.IsExtensible() {
-				return vm.BooleanValue(false), nil
-			}
-			return vm.BooleanValue(cl.Properties.IsSealedProperties()), nil
-		}
-		return vm.BooleanValue(false), nil
-	}
-
-	// Other callable/object types
-	if obj.IsCallable() {
-		return vm.BooleanValue(false), nil
+	// Side-table kinds: see objectIsFrozenWithVM.
+	if props := vm.OwnPropertiesTable(obj); props != nil {
+		return vm.BooleanValue(!props.IsExtensible() && props.IsSealedProperties()), nil
 	}
 
 	return vm.BooleanValue(false), nil

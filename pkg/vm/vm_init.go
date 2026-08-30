@@ -1042,7 +1042,7 @@ func (vm *VM) SetProperty(obj Value, propName string, value Value) error {
 		// For other properties, store on the wrapper Properties object
 		regexObj := obj.AsRegExpObject()
 		if regexObj.Properties == nil {
-			regexObj.Properties = NewObject(Undefined).AsPlainObject()
+			regexObj.Properties = newPropertiesTable()
 		}
 		regexObj.Properties.SetOwn(propName, value)
 		return nil

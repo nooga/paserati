@@ -105,13 +105,13 @@ type ModuleReExport struct {
 
 // ModuleContext represents a cached module execution context
 type ModuleContext struct {
-	chunk        *Chunk           // Compiled module chunk
-	exports      map[string]Value // Module's exported values
-	executed     bool             // Whether module has been executed
-	executing    bool             // Whether module is currently being executed
-	globals      []Value          // Module-specific global variables (indices 0+ within module)
-	globalNames  []string         // Module-specific global variable names (for debugging)
-	namespace    Value            // Cached namespace object (ES6 9.4.6 Module Namespace Exotic Object)
+	chunk             *Chunk           // Compiled module chunk
+	exports           map[string]Value // Module's exported values
+	executed          bool             // Whether module has been executed
+	executing         bool             // Whether module is currently being executed
+	globals           []Value          // Module-specific global variables (indices 0+ within module)
+	globalNames       []string         // Module-specific global variable names (for debugging)
+	namespace         Value            // Cached namespace object (ES6 9.4.6 Module Namespace Exotic Object)
 	resolvedPath      string           // Canonical path, used as fromPath for nested relative imports
 	collectingExports bool             // Guard against re-export collection recursion
 }
@@ -488,13 +488,13 @@ func NewVM() *VM {
 		// frameCount and nextRegSlot initialized to 0
 		frames:                  make([]CallFrame, MaxFrames),         // Call stack (never reallocated)
 		registerStack:           make([]Value, RegFileSize*MaxFrames), // VM-wide register file (never reallocated)
-		propCache:               make(map[int]*PropInlineCache),  // Initialize inline cache
-		cacheStats:              ICacheStats{},                   // Initialize cache statistics
-		emptyRestArray:          NewArray(),                      // Initialize singleton empty array for rest params
-		errors:                  make([]errors.PaseratiError, 0), // Initialize error list
-		moduleContexts:          make(map[string]*ModuleContext), // Initialize module context cache
-		completionStack:         make([]Completion, 0, 4),        // Initialize completion stack
-		globalsFromGlobalObject: make(map[uint16]bool),           // Track globals read from GlobalObject
+		propCache:               make(map[int]*PropInlineCache),       // Initialize inline cache
+		cacheStats:              ICacheStats{},                        // Initialize cache statistics
+		emptyRestArray:          NewArray(),                           // Initialize singleton empty array for rest params
+		errors:                  make([]errors.PaseratiError, 0),      // Initialize error list
+		moduleContexts:          make(map[string]*ModuleContext),      // Initialize module context cache
+		completionStack:         make([]Completion, 0, 4),             // Initialize completion stack
+		globalsFromGlobalObject: make(map[uint16]bool),                // Track globals read from GlobalObject
 	}
 
 	// Create and initialize the default realm
@@ -6859,7 +6859,7 @@ startExecution:
 			} else if objVal.Type() == TypeClosure {
 				closure := objVal.AsClosure()
 				if closure.Properties == nil {
-					closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					closure.Properties = newPropertiesTable()
 				}
 				obj = closure.Properties
 			} else {
@@ -6932,7 +6932,7 @@ startExecution:
 				} else if objVal.Type() == TypeClosure {
 					closure := objVal.AsClosure()
 					if closure.Properties == nil {
-						closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+						closure.Properties = newPropertiesTable()
 					}
 					obj = closure.Properties
 				} else {
@@ -7030,7 +7030,7 @@ startExecution:
 				}
 				closure := objVal.AsClosure()
 				if closure.Properties == nil {
-					closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					closure.Properties = newPropertiesTable()
 				}
 				obj = closure.Properties
 			} else {
@@ -8521,79 +8521,19 @@ startExecution:
 				if baseVal.Type() == TypeDictObject {
 					dict := AsDictObject(baseVal)
 					dict.SetOwn(key, valueVal)
-				} else if baseVal.Type() == TypeFunction {
-					// For functions, set property on the function's Properties object
-					if status, res := vm.setFunctionProperty(baseVal, key, valueVal, ip); status != InterpretOK {
-						return status, res
-					}
-				} else if baseVal.Type() == TypeNativeFunction || baseVal.Type() == TypeNativeFunctionWithProps || baseVal.Type() == TypeBoundFunction || baseVal.Type() == TypeAsyncNativeFunction {
-					// For native/bound functions, delegate to opSetProp which handles promotion
+				} else if baseVal.IsCallable() {
+					// Every callable flavour routes through opSetProp, which owns
+					// the accessor dispatch, the non-writable name/length/prototype
+					// rules and the properties-table extensibility check.
+					frame.ip = ip
 					if ok, status, res := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
-						if status != InterpretOK {
+						// A thrown TypeError that a handler caught leaves
+						// unwinding false: reload the frame and keep going
+						// rather than aborting the whole run.
+						if status != InterpretOK && vm.unwinding {
 							return status, res
 						}
 						goto reloadFrame
-					}
-				} else if baseVal.Type() == TypeClosure {
-					// For closures, set property on the closure's own Properties object
-					closure := baseVal.AsClosure()
-					// Function intrinsic properties "name" and "length" are non-writable per ECMAScript spec
-					// Writes silently fail in non-strict mode
-					if key == "name" || key == "length" {
-						// TODO: In strict mode, this should throw TypeError
-						// For now, silently fail (continue without modifying)
-						continue
-					}
-					if closure.Properties == nil {
-						closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
-					}
-					// Check if prototype already exists and is non-writable
-					// Per ECMAScript, class constructors have prototype: {writable: false, configurable: false}
-					if key == "prototype" {
-						if _, w, _, _, exists := closure.Properties.GetOwnDescriptor("prototype"); exists && !w {
-							// Property exists and is not writable - throw TypeError
-							frame.ip = ip
-							vm.ThrowTypeError("Cannot assign to read only property 'prototype' of function")
-							if !vm.unwinding {
-								// Exception was caught by a handler, reload frame and continue
-								frame = &vm.frames[vm.frameCount-1]
-								closure = frame.closure
-								function = closure.Fn
-								code = function.Chunk.Code
-								constants = function.Chunk.Constants
-								registers = frame.registers
-								ip = frame.ip
-								continue
-							}
-							return InterpretRuntimeError, Undefined
-						}
-					}
-					// Check if this is an accessor property with a setter
-					if _, setter, _, _, ok := closure.Properties.GetOwnAccessor(key); ok && setter.Type() != TypeUndefined {
-						// Call the setter with the value
-						_, err := vm.Call(setter, baseVal, []Value{valueVal})
-						if err != nil {
-							if ee, ok := err.(ExceptionError); ok {
-								vm.throwException(ee.GetExceptionValue())
-								if !vm.unwinding {
-									// Exception was caught by a handler, reload frame and continue
-									frame = &vm.frames[vm.frameCount-1]
-									closure = frame.closure
-									function = closure.Fn
-									code = function.Chunk.Code
-									constants = function.Chunk.Constants
-									registers = frame.registers
-									ip = frame.ip
-									continue
-								}
-								return InterpretRuntimeError, Undefined
-							}
-							frame.ip = ip
-							status := vm.runtimeError("Error calling setter: %v", err)
-							return status, Undefined
-						}
-					} else {
-						closure.Properties.SetOwn(key, valueVal)
 					}
 				} else {
 					// Route through opSetProp which handles extensibility, writable,
@@ -9708,7 +9648,7 @@ startExecution:
 				fn := objVal.AsFunction()
 				if fn.Properties == nil {
 					// Create Properties object if it doesn't exist
-					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					fn.Properties = newPropertiesTable()
 				}
 				obj = fn.Properties
 			} else if objVal.Type() == TypeClosure {
@@ -9716,7 +9656,7 @@ startExecution:
 				cl := objVal.AsClosure()
 				if cl.Properties == nil {
 					// Create Properties object if it doesn't exist
-					cl.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					cl.Properties = newPropertiesTable()
 				}
 				obj = cl.Properties
 			} else {
@@ -9827,13 +9767,13 @@ startExecution:
 			} else if objVal.Type() == TypeFunction {
 				fn := objVal.AsFunction()
 				if fn.Properties == nil {
-					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					fn.Properties = newPropertiesTable()
 				}
 				obj = fn.Properties
 			} else if objVal.Type() == TypeClosure {
 				cl := objVal.AsClosure()
 				if cl.Properties == nil {
-					cl.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					cl.Properties = newPropertiesTable()
 				}
 				obj = cl.Properties
 			} else {
@@ -9921,13 +9861,13 @@ startExecution:
 			} else if objVal.Type() == TypeFunction {
 				fn := objVal.AsFunction()
 				if fn.Properties == nil {
-					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					fn.Properties = newPropertiesTable()
 				}
 				obj = fn.Properties
 			} else if objVal.Type() == TypeClosure {
 				cl := objVal.AsClosure()
 				if cl.Properties == nil {
-					cl.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					cl.Properties = newPropertiesTable()
 				}
 				obj = cl.Properties
 			} else {
@@ -10021,14 +9961,14 @@ startExecution:
 				// Static private methods are stored on the constructor's Properties object
 				fn := objVal.AsFunction()
 				if fn.Properties == nil {
-					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					fn.Properties = newPropertiesTable()
 				}
 				obj = fn.Properties
 			} else if objVal.Type() == TypeClosure {
 				// Static private methods on closures (class constructors)
 				closure := objVal.AsClosure()
 				if closure.Properties == nil {
-					closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					closure.Properties = newPropertiesTable()
 				}
 				obj = closure.Properties
 			} else {
@@ -10202,13 +10142,13 @@ startExecution:
 			} else if objVal.Type() == TypeFunction {
 				fn := objVal.AsFunction()
 				if fn.Properties == nil {
-					fn.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					fn.Properties = newPropertiesTable()
 				}
 				obj = fn.Properties
 			} else if objVal.Type() == TypeClosure {
 				closure := objVal.AsClosure()
 				if closure.Properties == nil {
-					closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+					closure.Properties = newPropertiesTable()
 				}
 				obj = closure.Properties
 			} else {
@@ -12542,7 +12482,7 @@ startExecution:
 					// Setting property on a closure (e.g., static method on class constructor)
 					cl := thisValue.AsClosure()
 					if cl.Properties == nil {
-						cl.Properties = NewObject(Undefined).AsPlainObject()
+						cl.Properties = newPropertiesTable()
 					}
 					cl.Properties.SetOwn(propertyName, value)
 
@@ -12550,7 +12490,7 @@ startExecution:
 					// Setting property on a function
 					fn := thisValue.AsFunction()
 					if fn.Properties == nil {
-						fn.Properties = NewObject(Undefined).AsPlainObject()
+						fn.Properties = newPropertiesTable()
 					}
 					fn.Properties.SetOwn(propertyName, value)
 

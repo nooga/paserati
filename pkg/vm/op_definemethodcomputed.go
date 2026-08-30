@@ -103,7 +103,7 @@ func (vm *VM) handleOpDefineMethodComputed(code []byte, ip *int, registers []Val
 		}
 		funcObj := objVal.AsFunction()
 		if funcObj.Properties == nil {
-			funcObj.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+			funcObj.Properties = newPropertiesTable()
 		}
 		funcObj.Properties.DefineOwnPropertyByKey(propKey, methodVal, &writable, &enumerable, &configurable)
 		return InterpretOK, Undefined
@@ -117,7 +117,7 @@ func (vm *VM) handleOpDefineMethodComputed(code []byte, ip *int, registers []Val
 		closure := objVal.AsClosure()
 		// Use closure's own Properties for per-closure isolation (consistent with OpSetProp)
 		if closure.Properties == nil {
-			closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+			closure.Properties = newPropertiesTable()
 		}
 		closure.Properties.DefineOwnPropertyByKey(propKey, methodVal, &writable, &enumerable, &configurable)
 		return InterpretOK, Undefined

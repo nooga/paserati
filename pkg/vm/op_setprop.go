@@ -236,7 +236,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 	case TypeFunction:
 		fn := AsFunction(*objVal)
 		if fn.Properties == nil {
-			fn.Properties = NewObject(Undefined).AsPlainObject()
+			fn.Properties = newPropertiesTable()
 		}
 		// Check for accessor property with a setter first (BEFORE prototype lookup)
 		// User-defined static setters named "arguments" or "caller" are allowed
@@ -270,12 +270,26 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			return true, InterpretOK, *valueToSet
 		}
 		if propName == "prototype" {
-			// Check if prototype already exists and is non-writable
-			if fn.Properties != nil {
-				if _, w, _, _, exists := fn.Properties.GetOwnDescriptor("prototype"); exists && !w {
+			// "prototype" can be non-writable (a class constructor's, or any
+			// function's after Object.freeze), and the properties table can be
+			// non-extensible before "prototype" has been materialized at all.
+			// Both reject the write - silently in sloppy mode, with a TypeError
+			// in strict mode.
+			if allowed, threw := vm.tableSetAllowed(fn.Properties, keyFromString("prototype"), "prototype"); !allowed {
+				if threw {
+					return false, InterpretRuntimeError, Undefined
+				}
+				// A class static field named "prototype" is a
+				// [[DefineOwnProperty]], which throws regardless of the
+				// surrounding code's strictness - and the compiler routes it
+				// through this opcode too. Until the two are distinguished,
+				// a class constructor throws either way; an ordinary function
+				// gets the sloppy-mode silent rejection.
+				if fn.IsClassConstructor {
 					vm.ThrowTypeError("Cannot assign to read only property 'prototype' of function")
 					return false, InterpretRuntimeError, Undefined
 				}
+				return true, InterpretOK, *valueToSet
 			}
 			// Per ECMAScript:
 			// - Class constructors: prototype is {writable: false, enumerable: false, configurable: false}
@@ -283,15 +297,14 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			e, c := false, false
 			w := !fn.IsClassConstructor // writable = true for regular functions, false for class constructors
 			fn.Properties.DefineOwnProperty("prototype", *valueToSet, &w, &e, &c)
-		} else {
-			fn.Properties.SetOwn(propName, *valueToSet)
+			return true, InterpretOK, *valueToSet
 		}
-		return true, InterpretOK, *valueToSet
+		return vm.setOwnChecked(fn.Properties, propName, *valueToSet)
 	case TypeClosure:
 		closure := AsClosure(*objVal)
 		// Use closure's own Properties to avoid sharing with other closures using same FunctionObject
 		if closure.Properties == nil {
-			closure.Properties = NewObject(Undefined).AsPlainObject()
+			closure.Properties = newPropertiesTable()
 		}
 		// Check for accessor property with a setter first (BEFORE strict mode caller/arguments check)
 		// User-defined static setters named "arguments" or "caller" are allowed in classes
@@ -341,15 +354,26 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			return true, InterpretOK, *valueToSet
 		}
 		if propName == "prototype" {
-			// Check if prototype already exists and is non-writable
-			// Per ECMAScript, class constructors have prototype: {writable: false, configurable: false}
-			// Attempting to set it should throw TypeError
-			if closure.Properties != nil {
-				if _, w, _, _, exists := closure.Properties.GetOwnDescriptor("prototype"); exists && !w {
-					// Property exists and is not writable - throw TypeError
+			// "prototype" can be non-writable (a class constructor's, or any
+			// function's after Object.freeze), and the properties table can be
+			// non-extensible before "prototype" has been materialized at all.
+			// Both reject the write - silently in sloppy mode, with a TypeError
+			// in strict mode.
+			if allowed, threw := vm.tableSetAllowed(closure.Properties, keyFromString("prototype"), "prototype"); !allowed {
+				if threw {
+					return false, InterpretRuntimeError, Undefined
+				}
+				// A class static field named "prototype" is a
+				// [[DefineOwnProperty]], which throws regardless of the
+				// surrounding code's strictness - and the compiler routes it
+				// through this opcode too. Until the two are distinguished,
+				// a class constructor throws either way; an ordinary function
+				// gets the sloppy-mode silent rejection.
+				if closure.Fn.IsClassConstructor {
 					vm.ThrowTypeError("Cannot assign to read only property 'prototype' of function")
 					return false, InterpretRuntimeError, Undefined
 				}
+				return true, InterpretOK, *valueToSet
 			}
 			// Per ECMAScript:
 			// - Class constructors: prototype is {writable: false, enumerable: false, configurable: false}
@@ -357,10 +381,9 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			e, c := false, false
 			w := !closure.Fn.IsClassConstructor // writable = true for regular functions, false for class constructors
 			closure.Properties.DefineOwnProperty("prototype", *valueToSet, &w, &e, &c)
-		} else {
-			closure.Properties.SetOwn(propName, *valueToSet)
+			return true, InterpretOK, *valueToSet
 		}
-		return true, InterpretOK, *valueToSet
+		return vm.setOwnChecked(closure.Properties, propName, *valueToSet)
 	case TypeNativeFunctionWithProps:
 		nfp := objVal.AsNativeFunctionWithProps()
 		if nfp != nil {
@@ -373,10 +396,9 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				return true, InterpretOK, *valueToSet
 			}
 			if nfp.Properties == nil {
-				nfp.Properties = NewObject(Undefined).AsPlainObject()
+				nfp.Properties = newPropertiesTable()
 			}
-			nfp.Properties.SetOwn(propName, *valueToSet)
-			return true, InterpretOK, *valueToSet
+			return vm.setOwnChecked(nfp.Properties, propName, *valueToSet)
 		}
 	case TypeNativeFunction:
 		nf := objVal.AsNativeFunction()
@@ -389,10 +411,9 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				return true, InterpretOK, *valueToSet
 			}
 			if nf.Properties == nil {
-				nf.Properties = NewObject(Undefined).AsPlainObject()
+				nf.Properties = newPropertiesTable()
 			}
-			nf.Properties.SetOwn(propName, *valueToSet)
-			return true, InterpretOK, *valueToSet
+			return vm.setOwnChecked(nf.Properties, propName, *valueToSet)
 		}
 	}
 
@@ -403,12 +424,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		}
 		bf := objVal.AsBoundFunction()
 		if bf.Properties != nil {
-			// Check if property exists and is non-writable (e.g., "length", "name")
-			if _, w, _, _, found := bf.Properties.GetOwnDescriptor(propName); found && !w {
-				// Non-writable: silently fail in sloppy mode
-				return true, InterpretOK, *valueToSet
-			}
-			bf.Properties.SetOwn(propName, *valueToSet)
+			return vm.setOwnChecked(bf.Properties, propName, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	}
@@ -867,9 +883,9 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				return true, InterpretOK, *valueToSet
 			}
 			if regex.Properties == nil {
-				regex.Properties = NewObject(Undefined).AsPlainObject()
+				regex.Properties = newPropertiesTable()
 			}
-			regex.Properties.SetOwn(propName, *valueToSet)
+			return vm.setOwnChecked(regex.Properties, propName, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	case TypeMap:
@@ -877,9 +893,9 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		mapObj := objVal.AsMap()
 		if mapObj != nil {
 			if mapObj.Properties == nil {
-				mapObj.Properties = NewObject(Undefined).AsPlainObject()
+				mapObj.Properties = newPropertiesTable()
 			}
-			mapObj.Properties.SetOwn(propName, *valueToSet)
+			return vm.setOwnChecked(mapObj.Properties, propName, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	case TypeSet:
@@ -887,9 +903,9 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		setObj := objVal.AsSet()
 		if setObj != nil {
 			if setObj.Properties == nil {
-				setObj.Properties = NewObject(Undefined).AsPlainObject()
+				setObj.Properties = newPropertiesTable()
 			}
-			setObj.Properties.SetOwn(propName, *valueToSet)
+			return vm.setOwnChecked(setObj.Properties, propName, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	case TypeArrayBuffer:
@@ -1073,10 +1089,9 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 		regex := objVal.AsRegExpObject()
 		if regex != nil {
 			if regex.Properties == nil {
-				regex.Properties = NewObject(Undefined).AsPlainObject()
+				regex.Properties = newPropertiesTable()
 			}
-			key := NewSymbolKey(symKey)
-			regex.Properties.DefineOwnPropertyByKey(key, *valueToSet, nil, nil, nil)
+			return vm.setOwnCheckedByKey(regex.Properties, NewSymbolKey(symKey), *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	}
@@ -1085,22 +1100,18 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 	if objVal.Type() == TypeFunction {
 		funcObj := objVal.AsFunction()
 		if funcObj.Properties == nil {
-			funcObj.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+			funcObj.Properties = newPropertiesTable()
 		}
-		key := NewSymbolKey(symKey)
-		funcObj.Properties.DefineOwnPropertyByKey(key, *valueToSet, nil, nil, nil)
-		return true, InterpretOK, *valueToSet
+		return vm.setOwnCheckedByKey(funcObj.Properties, NewSymbolKey(symKey), *valueToSet)
 	}
 
 	// Closure objects: store symbol properties on their Properties object
 	if objVal.Type() == TypeClosure {
 		closure := objVal.AsClosure()
 		if closure.Properties == nil {
-			closure.Properties = &PlainObject{prototype: Undefined, shape: RootShape}
+			closure.Properties = newPropertiesTable()
 		}
-		key := NewSymbolKey(symKey)
-		closure.Properties.DefineOwnPropertyByKey(key, *valueToSet, nil, nil, nil)
-		return true, InterpretOK, *valueToSet
+		return vm.setOwnCheckedByKey(closure.Properties, NewSymbolKey(symKey), *valueToSet)
 	}
 
 	// Array objects: store symbol properties directly on the array
