@@ -564,6 +564,26 @@ func (c *Compiler) GetHeapAlloc() *HeapAlloc {
 	return c.heapAlloc
 }
 
+// GetAllGlobalNames returns a snapshot of every name registered in this
+// compiler's heap allocator, mapped to its heap index - not just this
+// compiler's own exports (see GetExportGlobalIndices for that).
+//
+// Every module compiler shares one process-wide *HeapAlloc instance (see
+// driver.go's compiler-factory setup), so this snapshot reflects every
+// top-level name any module has registered so far, regardless of which
+// compiler instance GetAllGlobalNames is called on. The module loader calls
+// this after each module it compiles and re-syncs it into the VM's heap
+// (VM.SyncGlobalNames), so lookups keyed on the VM's own copy - e.g.
+// OpTypeofIdentifier's "does this bare name exist at all" check - see a name
+// a lazily-compiled dependency module just registered, rather than only
+// whatever existed at the moment the entry module finished compiling (#107).
+func (c *Compiler) GetAllGlobalNames() map[string]int {
+	if c.heapAlloc == nil {
+		return nil
+	}
+	return c.heapAlloc.GetNameToIndexMap()
+}
+
 // isDefinedInEnclosingCompiler checks if a symbol table belongs to ANY enclosing compiler's scope chain.
 // This helps distinguish between:
 // - Variables from outer block scopes in the SAME function (return false) -> use direct register

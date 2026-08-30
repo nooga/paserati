@@ -24,7 +24,18 @@ func debugPrintf(format string, args ...interface{}) {
 	}
 }
 
-func applyCompilerExports(record *ModuleRecord, moduleCompiler Compiler) {
+// applyCompilerExports records the just-compiled module's exports and
+// re-syncs the VM's global-name lookup with the shared heap allocator.
+//
+// The re-sync closes a staleness gap (#107): VM.SyncGlobalNames is otherwise
+// only called once, right after the entry module's own compile finishes, so
+// a name a lazily-compiled dependency module registers into the shared heap
+// allocator during *this* compile would stay invisible to name-existence
+// checks keyed on the VM's copy (e.g. OpTypeofIdentifier) for the rest of
+// the program. Every module compiler shares one heap allocator instance, so
+// this compiler's own view of it already reflects every name registered so
+// far, not just this module's.
+func (ml *moduleLoader) applyCompilerExports(record *ModuleRecord, moduleCompiler Compiler) {
 	exportGlobalIndices := moduleCompiler.GetExportGlobalIndices()
 	exportIndices := make(map[string]uint16, len(exportGlobalIndices))
 	for name, idx := range exportGlobalIndices {
@@ -32,6 +43,10 @@ func applyCompilerExports(record *ModuleRecord, moduleCompiler Compiler) {
 	}
 	record.ExportIndices = exportIndices
 	record.ReExports = moduleCompiler.GetReExports()
+
+	if ml.vmInstance != nil {
+		ml.vmInstance.SyncGlobalNames(moduleCompiler.GetAllGlobalNames())
+	}
 }
 
 // moduleLoader implements ModuleLoader interface
@@ -265,7 +280,7 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 
 			record.CompiledChunk = vmChunk
 
-			applyCompilerExports(record, moduleCompiler)
+			ml.applyCompilerExports(record, moduleCompiler)
 			debugPrintf("// [ModuleLoader] Stored %d export indices for module: %s\n", len(record.ExportIndices), record.ResolvedPath)
 		}
 		record.State = ModuleCompiled
@@ -303,7 +318,7 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 
 		record.CompiledChunk = vmChunk
 
-		applyCompilerExports(record, moduleCompiler)
+		ml.applyCompilerExports(record, moduleCompiler)
 		debugPrintf("// [ModuleLoader] Stored %d export indices for module: %s\n", len(record.ExportIndices), record.ResolvedPath)
 		record.State = ModuleCompiled
 	} else {
@@ -854,7 +869,7 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 			// Store the compiled chunk
 			record.CompiledChunk = vmChunk
 
-			applyCompilerExports(record, moduleCompiler)
+			ml.applyCompilerExports(record, moduleCompiler)
 
 			debugPrintf("// [ModuleLoader] Module '%s' compiled successfully\n", modulePath)
 		}
