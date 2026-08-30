@@ -221,7 +221,22 @@ func (vm *VM) triggerPromiseReactions(promise *PromiseObject, isFulfilled bool) 
 			// Call handler
 			result, err := vm.Call(reaction.Handler, Undefined, []Value{value})
 			if err != nil {
-				reaction.Reject(NewString(err.Error()))
+				// Reject with the real thrown value, not a stringified Go
+				// error - exceptionError's Error() method is a fixed literal
+				// ("VM exception"), so a plain NewString(err.Error()) here
+				// silently replaced a real thrown Error object (from an
+				// ordinary `.then(handler)` where handler throws) with an
+				// unrelated string carrying no .message/.stack. Mirrors the
+				// identical ExceptionError handling a few lines up in this
+				// same file (the executor-rejection path) and the resume
+				// paths in vm.go.
+				var reason Value
+				if ee, ok := err.(ExceptionError); ok {
+					reason = ee.GetExceptionValue()
+				} else {
+					reason = NewString(err.Error())
+				}
+				reaction.Reject(reason)
 			} else {
 				reaction.Resolve(result)
 			}
