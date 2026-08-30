@@ -2927,6 +2927,13 @@ startExecution:
 			propReg := code[ip+1]
 			objReg := code[ip+2]
 			ip += 3
+			// Sync frame IP up front: several paths below (the Proxy 'has'
+			// trap in particular) call into user JS and re-throw whatever
+			// exception comes back. unwindException looks for a handler at
+			// frame.ip, so it must reflect this instruction - not whatever
+			// stale value was left over from the last throw site that
+			// happened to set it - or a real surrounding try/catch is missed.
+			frame.ip = ip
 
 			propVal := registers[propReg]
 			objVal := registers[objReg]
@@ -15397,14 +15404,18 @@ startExecution:
 			nameConstIdxLo := code[ip+3]
 			nameConstIdx := uint16(nameConstIdxHi)<<8 | uint16(nameConstIdxLo)
 			ip += 4
+			// Sync frame IP up front: the Proxy 'deleteProperty' trap path
+			// below calls into user JS and re-throws whatever exception
+			// comes back. unwindException looks for a handler at frame.ip,
+			// so it must reflect this instruction - not a stale value left
+			// over from elsewhere - or a real surrounding try/catch is missed.
+			frame.ip = ip
 			if int(nameConstIdx) >= len(constants) {
-				frame.ip = ip
 				status := vm.runtimeError("Invalid constant index %d for property name.", nameConstIdx)
 				return status, Undefined
 			}
 			nameVal := constants[nameConstIdx]
 			if !IsString(nameVal) {
-				frame.ip = ip
 				status := vm.runtimeError("Internal Error: Property name constant %d is not a string.", nameConstIdx)
 				return status, Undefined
 			}
@@ -15413,7 +15424,6 @@ startExecution:
 
 			// Check for undefined or null base object - should throw ReferenceError
 			if obj.Type() == TypeUndefined || obj.Type() == TypeNull {
-				frame.ip = ip
 				vm.ThrowReferenceError("Cannot delete property '" + propName + "' of " + obj.Type().String())
 				if !vm.unwinding {
 					// Exception was caught by a handler, reload frame and continue

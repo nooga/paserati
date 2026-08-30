@@ -535,10 +535,18 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 					*dest = Undefined
 					return true, InterpretOK, *dest
 				}
+				if frame != nil && !frameWasNil {
+					frame.ip = ip - 4
+				}
 				result, err := vm.Call(g, *objVal, nil)
 				if err != nil {
 					if ee, ok := err.(ExceptionError); ok {
 						vm.throwException(ee.GetExceptionValue())
+						if !vm.unwinding {
+							// Exception was caught by a handler; caller
+							// (goto reloadFrame on false+InterpretOK) reloads.
+							return false, InterpretOK, Undefined
+						}
 						return false, InterpretRuntimeError, Undefined
 					}
 					status := vm.runtimeError("%v", err)
