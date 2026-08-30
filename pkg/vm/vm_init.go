@@ -1806,6 +1806,39 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 	return result, nil
 }
 
+// lastRecordedErrorMessage returns the message of the most recently recorded
+// internal diagnostic in vm.errors, without consuming it. Returns "" if
+// nothing was recorded.
+//
+// vm.runtimeError() - used for internal-invariant failures (a stack overflow
+// mid-construction, a corrupted register/constant index, a recovered Go
+// panic) - records the real diagnostic here and returns InterpretRuntimeError
+// *without* ever setting vm.unwinding/vm.currentException, because there is
+// no JS-level exception *value* to hand back (see runtimeError's callers in
+// vm.go). A caller of vm.run() that only checks
+// `vm.unwinding && vm.currentException != Null` to decide it got a real
+// exception therefore has nothing to report for this case and, before this
+// helper existed, fell back to a fixed generic string - discarding the one
+// piece of real information the VM actually recorded (#130).
+//
+// Deliberately a peek, not a pop (unlike the similar-looking vm.errors
+// fallback in the OpDynamicImport handling in vm.go, which *does* consume the
+// entry because it owns turning this into a terminal promise rejection):
+// executeUserFunctionSafe is not always the terminal consumer. When this
+// runtimeError fired inside a callback invoked from bytecode that is itself
+// running under the driver's own top-level Interpret(), popping here would
+// remove the entry Interpret() is still going to report from vm.errors
+// wholesale once the (re-wrapped, re-thrown) exception finishes propagating -
+// verified by hand: popping left a real top-level failure printing as a
+// multi-thousand-line garbage dump instead of the one-line diagnostic it
+// prints today.
+func (vm *VM) lastRecordedErrorMessage() string {
+	if len(vm.errors) == 0 {
+		return ""
+	}
+	return vm.errors[len(vm.errors)-1].Error()
+}
+
 // executeUserFunctionSafe executes a user function from a native function using sentinel frames
 // This allows proper nested calls without infinite recursion
 func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (Value, error) {
@@ -1890,6 +1923,9 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 			// by a later, unrelated throw.
 			vm.truncateFramesTo(frameCountAtEntry)
 			return Undefined, exceptionError{exception: ex}
+		}
+		if msg := vm.lastRecordedErrorMessage(); msg != "" {
+			return Undefined, fmt.Errorf("%s", msg)
 		}
 		return Undefined, fmt.Errorf("runtime error during user function execution")
 	}
