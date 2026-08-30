@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"sync"
@@ -678,7 +679,7 @@ func (o *PlainObject) SetOwnNonEnumerable(name string, v Value) {
 
 // DefineOwnProperty defines or updates an own property with explicit attributes.
 // For existing properties, unspecified attributes (nil) will keep previous values.
-func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool, enumerable *bool, configurable *bool) {
+func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool, enumerable *bool, configurable *bool) bool {
 	// Update existing
 	for i, f := range o.shape.fields {
 		if f.keyKind == KeyKindString && f.name == name {
@@ -688,7 +689,7 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 			if f.isAccessor {
 				// Convert accessor to data property: only if configurable
 				if !f.configurable {
-					return
+					return false
 				}
 				newF.isAccessor = false
 				newF.writable = false // Default for new data property
@@ -705,19 +706,24 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 			// If current non-configurable, cannot change configurable or enumerable
 			if !f.configurable {
 				if configurable != nil && *configurable != f.configurable {
-					return
+					return false
 				}
 				if enumerable != nil && *enumerable != f.enumerable {
-					return
+					return false
 				}
 				// Non-configurable, non-writable properties cannot have writable changed to true
 				if !f.writable && writable != nil && *writable {
-					return
+					return false
 				}
 			}
-			// Update value: if configurable, always allow; otherwise only if writable
+			// Update value: if configurable, always allow; otherwise only if writable.
+			// A non-configurable, non-writable property may only be "redefined"
+			// with the value it already has (SameValue) - anything else is a
+			// rejection, not a silent no-op.
 			if f.configurable || convertingFromAccessor || f.writable {
 				o.properties[f.offset] = value
+			} else if !sameValue(o.properties[f.offset], value) {
+				return false
 			}
 			if writable != nil {
 				newF.writable = *writable
@@ -730,7 +736,7 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 			}
 			o.forkShape()
 			o.shape.fields[i] = newF
-			return
+			return true
 		}
 	}
 	// New property via descriptor: defaults false unless specified
@@ -752,6 +758,58 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 	next := &Shape{parent: cur, fields: newFields, version: cur.version + 1}
 	o.shape = next
 	o.properties = append(o.properties, value)
+	return true
+}
+
+// accessorRedefineAllowed applies the non-configurable half of
+// ValidateAndApplyPropertyDescriptor (ES2025 10.1.6.3) for an accessor
+// descriptor. A non-configurable property can still be "redefined" as long as
+// nothing actually changes: same getter, same setter, same enumerable. Anything
+// else - including turning a non-configurable data property into an accessor -
+// is a rejection.
+func (o *PlainObject) accessorRedefineAllowed(f Field, key PropertyKey, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable, configurable *bool) bool {
+	if f.configurable {
+		return true
+	}
+	if configurable != nil && *configurable {
+		return false
+	}
+	if enumerable != nil && *enumerable != f.enumerable {
+		return false
+	}
+	if !f.isAccessor {
+		// Data -> accessor conversion needs configurable.
+		return false
+	}
+	curGet, curSet, _, _, _ := o.GetOwnAccessorByKey(key)
+	if hasGetter && !sameValue(curGet, getter) {
+		return false
+	}
+	if hasSetter && !sameValue(curSet, setter) {
+		return false
+	}
+	return true
+}
+
+// sameValue implements the spec's SameValue abstract operation (7.2.11), which
+// differs from === on exactly two inputs: NaN is the same value as NaN, and +0
+// is not the same value as -0. DefineOwnProperty uses it for the one case where
+// redefining a non-configurable, non-writable property is allowed - restating
+// the value it already has.
+func sameValue(a, b Value) bool {
+	aNum := a.Type() == TypeIntegerNumber || a.Type() == TypeFloatNumber
+	bNum := b.Type() == TypeIntegerNumber || b.Type() == TypeFloatNumber
+	if aNum && bNum {
+		x, y := AsNumber(a), AsNumber(b)
+		if math.IsNaN(x) && math.IsNaN(y) {
+			return true
+		}
+		if x == 0 && y == 0 {
+			return math.Signbit(x) == math.Signbit(y)
+		}
+		return x == y
+	}
+	return a.StrictlyEquals(b)
 }
 
 // DefineFixedProperty defines name as a data property that is non-writable,
@@ -818,15 +876,14 @@ func noteAccessorKey(name string) {
 }
 
 // DefineAccessorProperty defines or updates an accessor own property.
-func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) {
+func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) bool {
 	noteAccessorKey(name)
 	// Wrapper using string name
 	// Find existing field
 	for i, f := range o.shape.fields {
 		if f.keyKind == KeyKindString && f.name == name {
-			// If existing field is not configurable, cannot change it to accessor or modify flags
-			if !f.configurable {
-				return
+			if !o.accessorRedefineAllowed(f, keyFromString(name), getter, hasGetter, setter, hasSetter, enumerable, configurable) {
+				return false
 			}
 			// Update to accessor kind
 			newF := f
@@ -852,7 +909,7 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 			if hasSetter {
 				o.setters[keyFromString(name).hash()] = setter
 			}
-			return
+			return true
 		}
 	}
 	// New field - for accessors, always create a new shape (don't use transitions)
@@ -886,10 +943,11 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 	}
 	// Keep properties slice length consistent
 	o.properties = append(o.properties, Undefined)
+	return true
 }
 
 // DefineOwnPropertyByKey defines or updates an own property for arbitrary key kinds.
-func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writable *bool, enumerable *bool, configurable *bool) {
+func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writable *bool, enumerable *bool, configurable *bool) bool {
 	for i, f := range o.shape.fields {
 		match := (key.isString() && f.keyKind == KeyKindString && f.name == key.name) || (key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj)
 		if match {
@@ -897,25 +955,28 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 			if f.isAccessor {
 				// Only allow conversion if configurable
 				if !f.configurable {
-					return
+					return false
 				}
 				newF.isAccessor = false
 				newF.writable = false
 			}
 			if !f.configurable {
 				if configurable != nil && *configurable != f.configurable {
-					return
+					return false
 				}
 				if enumerable != nil && *enumerable != f.enumerable {
-					return
+					return false
 				}
 			}
 			if !f.configurable && !f.writable && writable != nil && *writable {
-				return
+				return false
 			}
-			// Update value: if configurable, always allow; otherwise only if writable
+			// Update value: if configurable, always allow; otherwise only if
+			// writable. See DefineOwnProperty for the SameValue rule.
 			if f.configurable || f.writable {
 				o.properties[f.offset] = value
+			} else if !sameValue(o.properties[f.offset], value) {
+				return false
 			}
 			if writable != nil {
 				newF.writable = *writable
@@ -928,7 +989,7 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 			}
 			o.forkShape()
 			o.shape.fields[i] = newF
-			return
+			return true
 		}
 	}
 	// New
@@ -953,6 +1014,7 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 	next := &Shape{parent: cur, fields: newFields, version: cur.version + 1}
 	o.shape = next
 	o.properties = append(o.properties, value)
+	return true
 }
 
 // accessorTransitionKey builds the transitions-map key for adding an accessor
@@ -974,7 +1036,7 @@ func accessorTransitionKey(key PropertyKey, enumerable, configurable bool) strin
 }
 
 // DefineAccessorPropertyByKey defines or updates an accessor property for arbitrary key kinds.
-func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) {
+func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) bool {
 	if key.isString() {
 		noteAccessorKey(key.name)
 	}
@@ -983,9 +1045,8 @@ func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value,
 		match := (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
 			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj)
 		if match {
-			// If existing field is not configurable, cannot modify
-			if !f.configurable {
-				return
+			if !o.accessorRedefineAllowed(f, key, getter, hasGetter, setter, hasSetter, enumerable, configurable) {
+				return false
 			}
 			newF := f
 			newF.isAccessor = true
@@ -1009,7 +1070,7 @@ func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value,
 			if hasSetter {
 				o.setters[key.hash()] = setter
 			}
-			return
+			return true
 		}
 	}
 	// New field. The cached transition must be keyed by the attributes as well
@@ -1062,6 +1123,7 @@ func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value,
 		o.setters[key.hash()] = setter
 	}
 	o.properties = append(o.properties, Undefined)
+	return true
 }
 
 // HasOwn reports whether an own property with the given name exists.

@@ -193,7 +193,7 @@ func MaterializeIntrinsicOwnProperties(vmInst *VM, v Value) {
 		fn := v.AsFunction()
 		name, length = fn.Name, fn.Length
 		deletedName, deletedLength = fn.DeletedName, fn.DeletedLength
-		if !fn.IsArrowFunction {
+		if !fn.IsArrowFunction && !(fn.IsAsync && !fn.IsGenerator) {
 			prototype, hasPrototype = fn.GetOrCreatePrototypeWithVM(vmInst), true
 		}
 	case TypeClosure:
@@ -201,12 +201,12 @@ func MaterializeIntrinsicOwnProperties(vmInst *VM, v Value) {
 		fn := cl.Fn
 		name, length = fn.Name, fn.Length
 		deletedName, deletedLength = fn.DeletedName, fn.DeletedLength
-		// Same own-property test the descriptor fallback and
-		// getOwnPropertyNames use: everything but an arrow has a "prototype".
-		// (Methods shouldn't, but this runtime doesn't distinguish them yet and
-		// already reports one for them; matching that keeps freeze consistent
-		// with what the rest of the runtime says the own properties are.)
-		if !fn.IsArrowFunction {
+		// Everything but an arrow and a plain async function has a
+		// "prototype". (Methods shouldn't either, but this runtime doesn't
+		// distinguish them yet and already reports one for them; matching that
+		// keeps freeze consistent with what the rest of the runtime says the
+		// own properties are.)
+		if !fn.IsArrowFunction && !(fn.IsAsync && !fn.IsGenerator) {
 			prototype, hasPrototype = cl.GetPrototypeWithVM(vmInst), true
 		}
 	case TypeNativeFunction:
