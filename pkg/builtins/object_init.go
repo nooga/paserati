@@ -2948,6 +2948,29 @@ func objectFromEntriesImpl(args []vm.Value) (vm.Value, error) {
 	return result, nil
 }
 
+// definePropertyTarget returns the PlainObject that objectDefinePropertyWithVM
+// will ultimately define on: the object itself, or the side table for a
+// callable / RegExp / Map / Set. Returns nil for kinds with their own define
+// logic (arrays, typed arrays, dicts, proxies).
+func definePropertyTarget(vmInstance *vm.VM, obj vm.Value) *vm.PlainObject {
+	if obj.Type() == vm.TypeObject {
+		return obj.AsPlainObject()
+	}
+	return vm.OwnPropertiesTable(obj)
+}
+
+// definePropertyRejected builds the TypeError that DefinePropertyOrThrow
+// (ES2025 7.3.8) raises when [[DefineOwnProperty]] returns false - a redefinition
+// the property's current attributes don't permit. Reflect.defineProperty turns
+// this back into a false return; Object.defineProperty lets it throw.
+func definePropertyRejected(vmInstance *vm.VM, propName string, propSym vm.Value, keyIsSymbol bool) error {
+	key := propName
+	if keyIsSymbol {
+		key = propSym.ToString()
+	}
+	return vmInstance.NewTypeError("Cannot redefine property: " + key)
+}
+
 func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) < 3 {
 		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperty requires 3 arguments")
@@ -3374,6 +3397,32 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		return vm.Undefined, vmInstance.NewTypeError("Invalid property descriptor. Cannot both specify accessors and a value or writable attribute")
 	}
 
+	// A callable's "length", "name" and "prototype" are synthesized on demand
+	// rather than stored, so defining over one would otherwise create a fresh
+	// property with all-false attributes instead of merging with the real
+	// descriptor - making a second defineProperty on it a rejection.
+	if obj.IsCallable() {
+		vm.MaterializeIntrinsicOwnProperties(vmInstance, obj)
+	}
+
+	// ValidateAndApplyPropertyDescriptor step 5 (ES2025 10.1.6.3): if every
+	// field of the descriptor is absent, redefining an *existing* property is a
+	// no-op that always succeeds - even a non-configurable one, which the
+	// rejection paths below would otherwise refuse.
+	if !hasValue && !hasWritable && !hasGetter && !hasSetter && enumerablePtr == nil && configurablePtr == nil {
+		if target := definePropertyTarget(vmInstance, obj); target != nil {
+			exists := false
+			if keyIsSymbol {
+				_, _, _, _, exists = target.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
+			} else {
+				_, _, _, _, exists = target.GetOwnDescriptor(propName)
+			}
+			if exists {
+				return obj, nil
+			}
+		}
+	}
+
 	// Functions, RegExps, Maps and Sets keep their own properties in a side
 	// table; a brand-new property needs that table to be extensible, the same
 	// check the TypeObject path below makes on the object itself.
@@ -3400,18 +3449,22 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			if bf.Properties == nil {
 				bf.Properties = vm.EnsureOwnPropertiesTable(obj)
 			}
+			var defined bool
 			if hasGetter || hasSetter {
 				if keyIsSymbol {
-					bf.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+					defined = bf.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
 				} else {
-					bf.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+					defined = bf.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
 				}
 			} else {
 				if keyIsSymbol {
-					bf.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+					defined = bf.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
 				} else {
-					bf.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+					defined = bf.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
 				}
+			}
+			if !defined {
+				return vm.Undefined, definePropertyRejected(vmInstance, propName, propSym, keyIsSymbol)
 			}
 		}
 		return obj, nil
@@ -3585,19 +3638,23 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 					return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
 				}
 			}
+			var defined bool
 			if hasGetter || hasSetter {
 				// Accessor path
 				if keyIsSymbol {
-					plainObj.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+					defined = plainObj.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
 				} else {
-					plainObj.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+					defined = plainObj.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
 				}
 			} else {
 				if keyIsSymbol {
-					plainObj.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+					defined = plainObj.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
 				} else {
-					plainObj.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+					defined = plainObj.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
 				}
+			}
+			if !defined {
+				return vm.Undefined, definePropertyRejected(vmInstance, propName, propSym, keyIsSymbol)
 			}
 		}
 	} else if obj.Type() == vm.TypeDictObject {
@@ -3609,18 +3666,22 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		// NativeFunctionWithProps (like Function.prototype) stores properties in Properties
 		nfp := obj.AsNativeFunctionWithProps()
 		if nfp != nil && nfp.Properties != nil {
+			var defined bool
 			if hasGetter || hasSetter {
 				if keyIsSymbol {
-					nfp.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+					defined = nfp.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
 				} else {
-					nfp.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+					defined = nfp.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
 				}
 			} else {
 				if keyIsSymbol {
-					nfp.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+					defined = nfp.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
 				} else {
-					nfp.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+					defined = nfp.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
 				}
+			}
+			if !defined {
+				return vm.Undefined, definePropertyRejected(vmInstance, propName, propSym, keyIsSymbol)
 			}
 		}
 	} else if obj.Type() == vm.TypeFunction {
@@ -3630,18 +3691,22 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			if fn.Properties == nil {
 				fn.Properties = vm.EnsureOwnPropertiesTable(obj)
 			}
+			var defined bool
 			if hasGetter || hasSetter {
 				if keyIsSymbol {
-					fn.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+					defined = fn.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
 				} else {
-					fn.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+					defined = fn.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
 				}
 			} else {
 				if keyIsSymbol {
-					fn.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+					defined = fn.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
 				} else {
-					fn.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+					defined = fn.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
 				}
+			}
+			if !defined {
+				return vm.Undefined, definePropertyRejected(vmInstance, propName, propSym, keyIsSymbol)
 			}
 		}
 	} else if obj.Type() == vm.TypeClosure {
@@ -3653,18 +3718,22 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			if cl.Properties == nil {
 				cl.Properties = vm.EnsureOwnPropertiesTable(obj)
 			}
+			var defined bool
 			if hasGetter || hasSetter {
 				if keyIsSymbol {
-					cl.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+					defined = cl.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
 				} else {
-					cl.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+					defined = cl.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
 				}
 			} else {
 				if keyIsSymbol {
-					cl.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+					defined = cl.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
 				} else {
-					cl.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+					defined = cl.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
 				}
+			}
+			if !defined {
+				return vm.Undefined, definePropertyRejected(vmInstance, propName, propSym, keyIsSymbol)
 			}
 		}
 	}
