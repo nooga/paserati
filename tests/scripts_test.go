@@ -319,6 +319,14 @@ func compileAndInitializeVMNew(scriptPath string) *TestResult {
 	if strings.Contains(sourceCode, "// no-typecheck") {
 		paserati.SetIgnoreTypeErrors(true)
 	}
+	// "// skip-typecheck" runs the type checker not at all (SetSkipTypeCheck), as
+	// opposed to "// no-typecheck" which still runs it but tolerates its errors
+	// (SetIgnoreTypeErrors). This is the code path real npm JavaScript takes via
+	// `paserati --no-typecheck` / noderati (SetSkipTypeCheck(true)); some bugs
+	// only reproduce there because the checker never populates its own state.
+	if strings.Contains(sourceCode, "// skip-typecheck") {
+		paserati.SetSkipTypeCheck(true)
+	}
 
 	// Special handling for manual type import test
 	if filepath.Base(scriptPath) == "test_manual_type_import.ts" {
