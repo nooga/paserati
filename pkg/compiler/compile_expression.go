@@ -1097,6 +1097,258 @@ func isSideEffectFreeOperand(node parser.Expression) bool {
 	return false
 }
 
+// emitStandardBinaryOp emits the three-address instruction for a non-logical
+// binary operator. Returns false if the operator has no standard encoding.
+func (c *Compiler) emitStandardBinaryOp(op string, dest, left, right Register, line int) bool {
+	switch op {
+	// Arithmetic
+	case "+":
+		c.emitAdd(dest, left, right, line)
+	case "-":
+		c.emitSubtract(dest, left, right, line)
+	case "*":
+		c.emitMultiply(dest, left, right, line)
+	case "/":
+		c.emitDivide(dest, left, right, line)
+	case "%":
+		c.emitRemainder(dest, left, right, line)
+	case "**":
+		c.emitExponent(dest, left, right, line)
+
+	// Comparison
+	case "<=":
+		c.emitLessEqual(dest, left, right, line)
+	case ">=":
+		c.emitGreaterEqual(dest, left, right, line)
+	case "==":
+		c.emitEqual(dest, left, right, line)
+	case "!=":
+		c.emitNotEqual(dest, left, right, line)
+	case "<":
+		c.emitLess(dest, left, right, line)
+	case ">":
+		c.emitGreater(dest, left, right, line)
+	case "in":
+		c.emitIn(dest, left, right, line)
+	case "instanceof":
+		c.emitInstanceof(dest, left, right, line)
+	case "===":
+		c.emitStrictEqual(dest, left, right, line)
+	case "!==":
+		c.emitStrictNotEqual(dest, left, right, line)
+
+	// Bitwise & shift
+	case "&":
+		c.emitBitwiseAnd(dest, left, right, line)
+	case "|":
+		c.emitBitwiseOr(dest, left, right, line)
+	case "^":
+		c.emitBitwiseXor(dest, left, right, line)
+	case "<<":
+		c.emitShiftLeft(dest, left, right, line)
+	case ">>":
+		c.emitShiftRight(dest, left, right, line)
+	case ">>>":
+		c.emitUnsignedShiftRight(dest, left, right, line)
+
+	default:
+		return false
+	}
+	return true
+}
+
+// foldableChainLink reports whether n, sitting as the LEFT operand of an
+// enclosing left-associative binary expression, compiles through the plain
+// "evaluate left, evaluate right, emit one three-address op" path of
+// compileInfixExpression. Only those nodes may be flattened into an iterative
+// fold; every other shape (logical operators, comma, the null/undefined
+// comparison peepholes, private-field `in`) has bespoke codegen and has to keep
+// going through the recursive path.
+func foldableChainLink(n *parser.InfixExpression) bool {
+	switch n.Operator {
+	case "+", "-", "*", "/", "%", "**",
+		"<=", ">=", "==", "!=", "<", ">", "in", "instanceof", "===", "!==",
+		"&", "|", "^", "<<", ">>", ">>>":
+	default:
+		return false
+	}
+	if n.Operator == "===" || n.Operator == "!==" {
+		if isNullLiteral(n.Left) || isUndefinedLiteral(n.Left) ||
+			isNullLiteral(n.Right) || isUndefinedLiteral(n.Right) {
+			return false
+		}
+	}
+	if n.Operator == "in" {
+		if _, ok := n.Left.(*parser.PrivateIdentifier); ok {
+			return false
+		}
+	}
+	return true
+}
+
+// compileInfixChain compiles a left-associative run of standard binary
+// operators (`a + b + c + ...`, `a * b - c`, ...) as an iterative left fold
+// through a single accumulator register.
+//
+// The recursive path allocates a register for each level's left operand
+// *before* descending into that operand, and can only free it once the whole
+// recursive call returns, so for an N-term chain all N registers are live at
+// once when the recursion bottoms out. With 256 registers per function that
+// made chains past ~250 terms fail to compile at all, even though real source
+// produces them (issue #121). Folding iteratively keeps register use constant
+// no matter how long the chain is, while emitting the same instructions.
+func (c *Compiler) compileInfixChain(node *parser.InfixExpression, hint Register) (Register, errors.PaseratiError) {
+	// Flatten the left spine. chain[0] is the outermost (last-executed) step.
+	chain := []*parser.InfixExpression{node}
+	for {
+		left, ok := chain[len(chain)-1].Left.(*parser.InfixExpression)
+		if !ok || !foldableChainLink(left) {
+			break
+		}
+		chain = append(chain, left)
+	}
+
+	acc := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(acc)
+
+	// Innermost step first; its left operand seeds the accumulator.
+	for i := len(chain) - 1; i >= 0; i-- {
+		step := chain[i]
+		line := step.Token.Line
+
+		// Every step but the first takes the accumulator as its left operand.
+		leftReg := acc
+		if i == len(chain)-1 {
+			// Seed step: same destination-driven read as the two-operand path.
+			// A plain local can be used in place, but only when the operand
+			// evaluated after it cannot mutate it before the operator reads it.
+			// The guard is on this step's right operand alone: once this step
+			// emits, the value lives in acc and later terms cannot disturb it.
+			if reg, ok := c.simpleLocalRegister(step.Left); ok && isSideEffectFreeOperand(step.Right) {
+				leftReg = reg
+			} else if _, err := c.compileNode(step.Left, acc); err != nil {
+				return BadRegister, err
+			}
+		}
+
+		var rightReg Register
+		rightIsTemp := false
+		if reg, ok := c.simpleLocalRegister(step.Right); ok {
+			rightReg = reg
+		} else {
+			rightReg = c.regAlloc.Alloc()
+			rightIsTemp = true
+			if _, err := c.compileNode(step.Right, rightReg); err != nil {
+				c.regAlloc.Free(rightReg)
+				return BadRegister, err
+			}
+		}
+
+		// Only the outermost step writes the caller's destination: hint may
+		// alias a live local that later terms still read, so it must not hold
+		// intermediate results.
+		dest := acc
+		if i == 0 {
+			dest = hint
+		}
+		known := c.emitStandardBinaryOp(step.Operator, dest, leftReg, rightReg, line)
+		if rightIsTemp {
+			// Freed per step rather than deferred: deferring would keep one
+			// register live per chain element and reintroduce issue #121.
+			c.regAlloc.Free(rightReg)
+		}
+		if !known {
+			return BadRegister, NewCompileError(step, fmt.Sprintf("unknown standard infix operator '%s'", step.Operator))
+		}
+	}
+	return hint, nil
+}
+
+// compileLogicalChain compiles a left-associative run of the *same* logical
+// operator (`a && b && c && ...`) as an iterative fold into one accumulator,
+// for the same reason as compileInfixChain: the recursive path burns a register
+// per chain element and blows the 256-register budget (issue #121). Each step
+// short-circuits by jumping straight to the single move that publishes the
+// accumulator into the destination.
+//
+// Only runs of one operator may be folded. Mixing them is unsound with a flat
+// jump-to-end: in `(a && b) || c` a falsey `a` short-circuits the `&&`, but the
+// `||` must then still evaluate `c`, whereas a shared exit would yield `a`.
+func (c *Compiler) compileLogicalChain(node *parser.InfixExpression, hint Register) (Register, errors.PaseratiError) {
+	op := node.Operator
+
+	// Flatten the left spine of same-operator nodes, then reverse into
+	// evaluation order.
+	terms := []parser.Expression{node.Right}
+	cur := node
+	for {
+		left, ok := cur.Left.(*parser.InfixExpression)
+		if !ok || left.Operator != op {
+			break
+		}
+		terms = append(terms, left.Right)
+		cur = left
+	}
+	terms = append(terms, cur.Left)
+	for i, j := 0, len(terms)-1; i < j; i, j = i+1, j-1 {
+		terms[i], terms[j] = terms[j], terms[i]
+	}
+
+	// Every short-circuit exit lands on the trailing move. Patching runs from a
+	// defer as well so that an error return can never leave a 0xFFFF
+	// placeholder offset behind in the chunk.
+	var exits []int
+	patched := false
+	patchExits := func() {
+		if patched {
+			return
+		}
+		patched = true
+		for _, pos := range exits {
+			c.patchJump(pos)
+		}
+	}
+	defer patchExits()
+
+	acc := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(acc)
+
+	line := node.Token.Line
+	oldTailPos := c.inTailPosition
+	defer func() { c.inTailPosition = oldTailPos }()
+
+	for i, term := range terms {
+		// Only the last term stays in tail position; every earlier one is
+		// followed by at least the accumulator move.
+		c.inTailPosition = oldTailPos && i == len(terms)-1
+		if _, err := c.compileNode(term, acc); err != nil {
+			return BadRegister, err
+		}
+		if i == len(terms)-1 {
+			break
+		}
+		switch op {
+		case "&&":
+			// Falsey short-circuits; acc already holds the result.
+			exits = append(exits, c.emitPlaceholderJump(vm.OpJumpIfFalse, acc, line))
+		case "||":
+			// There is no OpJumpIfTrue, so hop over an unconditional exit.
+			skip := c.emitPlaceholderJump(vm.OpJumpIfFalse, acc, line)
+			exits = append(exits, c.emitPlaceholderJump(vm.OpJump, 0, line))
+			c.patchJump(skip)
+		case "??":
+			// Nullish continues to the next term; anything else short-circuits.
+			skip := c.emitPlaceholderJump(vm.OpJumpIfNullish, acc, line)
+			exits = append(exits, c.emitPlaceholderJump(vm.OpJump, 0, line))
+			c.patchJump(skip)
+		}
+	}
+
+	patchExits()
+	c.emitMove(hint, acc, line)
+	return hint, nil
+}
+
 func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Register) (Register, errors.PaseratiError) {
 	line := node.Token.Line // Use operator token line number
 
@@ -1206,6 +1458,13 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			return hint, nil
 		}
 
+		// A long left-associative chain (`a + b + c + ...`) is compiled as an
+		// iterative fold instead of recursing once per term, which would keep a
+		// register live per level and exhaust the allocator (issue #121).
+		if left, ok := node.Left.(*parser.InfixExpression); ok && foldableChainLink(left) {
+			return c.compileInfixChain(node, hint)
+		}
+
 		// Destination-driven operand reads: when an operand is a plain local
 		// variable already in a register, feed that register straight to the
 		// operator instead of copying it into a fresh temp (eliminates OpMove).
@@ -1237,59 +1496,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			}
 		}
 
-		switch node.Operator {
-		// Arithmetic
-		case "+":
-			c.emitAdd(hint, leftReg, rightReg, line)
-		case "-":
-			c.emitSubtract(hint, leftReg, rightReg, line)
-		case "*":
-			c.emitMultiply(hint, leftReg, rightReg, line)
-		case "/":
-			c.emitDivide(hint, leftReg, rightReg, line)
-		case "%":
-			c.emitRemainder(hint, leftReg, rightReg, line)
-		case "**":
-			c.emitExponent(hint, leftReg, rightReg, line)
-
-		// Comparison
-		case "<=":
-			c.emitLessEqual(hint, leftReg, rightReg, line)
-		case ">=":
-			c.emitGreaterEqual(hint, leftReg, rightReg, line)
-		case "==":
-			c.emitEqual(hint, leftReg, rightReg, line)
-		case "!=":
-			c.emitNotEqual(hint, leftReg, rightReg, line)
-		case "<":
-			c.emitLess(hint, leftReg, rightReg, line)
-		case ">":
-			c.emitGreater(hint, leftReg, rightReg, line)
-		case "in":
-			c.emitIn(hint, leftReg, rightReg, line)
-		case "instanceof":
-			c.emitInstanceof(hint, leftReg, rightReg, line)
-		case "===":
-			c.emitStrictEqual(hint, leftReg, rightReg, line)
-		case "!==":
-			c.emitStrictNotEqual(hint, leftReg, rightReg, line)
-
-		// --- NEW: Bitwise & Shift ---
-		case "&":
-			c.emitBitwiseAnd(hint, leftReg, rightReg, line)
-		case "|":
-			c.emitBitwiseOr(hint, leftReg, rightReg, line)
-		case "^":
-			c.emitBitwiseXor(hint, leftReg, rightReg, line)
-		case "<<":
-			c.emitShiftLeft(hint, leftReg, rightReg, line)
-		case ">>":
-			c.emitShiftRight(hint, leftReg, rightReg, line)
-		case ">>>":
-			c.emitUnsignedShiftRight(hint, leftReg, rightReg, line)
-		// --- END NEW ---
-
-		default:
+		if !c.emitStandardBinaryOp(node.Operator, hint, leftReg, rightReg, line) {
 			return BadRegister, NewCompileError(node, fmt.Sprintf("unknown standard infix operator '%s'", node.Operator))
 		}
 
@@ -1297,6 +1504,13 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 	}
 
 	// --- Logical Operators (&&, ||, ??) with Short-Circuiting ---
+
+	// As above: fold a run of the same logical operator iteratively rather than
+	// recursing once per term (issue #121).
+	if left, ok := node.Left.(*parser.InfixExpression); ok && left.Operator == node.Operator {
+		return c.compileLogicalChain(node, hint)
+	}
+
 	// Manage temporary registers with automatic cleanup
 	var tempRegs []Register
 	defer func() {
