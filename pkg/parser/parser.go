@@ -7432,18 +7432,34 @@ func (p *Parser) parseObjectLiteral() Expression {
 					}
 				}
 
+				// Save and manage async function context when parsing body, same as
+				// parseFunctionLiteral and parseArrowFunctionBodyAndFinish (#129):
+				// without this, 'await' inside this method's body is resolved against
+				// whatever async/non-async depth the *enclosing* function left behind,
+				// so an async shorthand method nested inside a non-async function
+				// mis-parses its own 'await' as a plain identifier instead of an
+				// await-expression.
+				savedAsyncContext := p.inAsyncFunction
+				p.inAsyncFunction++
+
 				// Parse method body
 				funcLit.Body = p.parseBlockStatement()
-				if funcLit.Body == nil {
-					return nil
-				}
 
-				// Restore generator context
+				// Restore async function context. Do this before checking the parsed
+				// body for nil so a malformed body doesn't leak the incremented depth
+				// into whatever the parser recovers into next.
+				p.inAsyncFunction = savedAsyncContext
+
+				// Restore generator context (same ordering, same reason).
 				if funcLit.IsGenerator {
 					p.inGenerator = savedGeneratorContext
 					if debugParser {
 						fmt.Printf("[PARSER] Restored generator context to %d (async generator method)\n", p.inGenerator)
 					}
+				}
+
+				if funcLit.Body == nil {
+					return nil
 				}
 
 				// Transform function if it has destructuring parameters
