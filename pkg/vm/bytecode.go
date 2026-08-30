@@ -1104,7 +1104,10 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpToPropertyKey:
 		return c.simpleInstruction(builder, instruction.String(), offset)
 	case OpTypeofIdentifier:
-		return c.registerConstantInstruction(builder, instruction.String(), offset, false)
+		// Rx NameIdx(16bit): a 1-byte register operand followed by a 2-byte
+		// constant index (see the VM's execution case), not the 1-byte
+		// constant index isUint16Const=false would decode (#109).
+		return c.registerConstantInstruction(builder, instruction.String(), offset, true)
 	case OpGetPrivateField:
 		return c.registerRegisterConstantInstruction(builder, instruction.String(), offset, "NameIdx")
 	case OpSetPrivateField:
