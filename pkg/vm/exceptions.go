@@ -467,7 +467,12 @@ func (vm *VM) handleUncaughtException() {
 
 	// Add the uncaught exception as a runtime error (with stack trace if available)
 	// Format: "Uncaught exception: ErrorType: message" with proper location info
-	errorMsg := fmt.Sprintf("Uncaught exception: %s", displayStr)
+	prefix := "Uncaught exception"
+	if vm.unhandledRejectionPrefix != "" {
+		prefix = vm.unhandledRejectionPrefix
+		vm.unhandledRejectionPrefix = ""
+	}
+	errorMsg := fmt.Sprintf("%s: %s", prefix, displayStr)
 	if stackTrace != "" {
 		errorMsg += "\n" + stackTrace
 	}
