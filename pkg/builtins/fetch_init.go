@@ -185,7 +185,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 	headersConstructor := vm.NewConstructorWithProps(1, false, "Headers", headersConstructorFn)
 	if headersConstructor.Type() == vm.TypeNativeFunctionWithProps {
 		ctorProps := headersConstructor.AsNativeFunctionWithProps()
-		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(headersProto))
+		ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(headersProto))
 	}
 
 	// Set constructor on prototype
@@ -256,7 +256,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 	responseConstructor := vm.NewConstructorWithProps(2, false, "Response", responseConstructorFn)
 	if responseConstructor.Type() == vm.TypeNativeFunctionWithProps {
 		ctorProps := responseConstructor.AsNativeFunctionWithProps()
-		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(responseProto))
+		ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(responseProto))
 
 		// Response.error() - returns an error response
 		ctorProps.Properties.SetOwnNonEnumerable("error", vm.NewNativeFunction(0, false, "error", func(args []vm.Value) (vm.Value, error) {
@@ -447,7 +447,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 	requestConstructor := vm.NewConstructorWithProps(2, false, "Request", requestConstructorFn)
 	if requestConstructor.Type() == vm.TypeNativeFunctionWithProps {
 		ctorProps := requestConstructor.AsNativeFunctionWithProps()
-		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(requestProto))
+		ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(requestProto))
 	}
 
 	requestProto.SetOwnNonEnumerable("constructor", requestConstructor)

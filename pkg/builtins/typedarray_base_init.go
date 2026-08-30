@@ -135,7 +135,7 @@ func (i *TypedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property
-	typedArrayCtor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(typedArrayProto))
+	typedArrayCtor.AsNativeFunctionWithProps().Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(typedArrayProto))
 
 	// Add TypedArray.from() static method
 	typedArrayCtor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("from", vm.NewNativeFunction(1, false, "from", func(args []vm.Value) (vm.Value, error) {

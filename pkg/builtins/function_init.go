@@ -143,7 +143,7 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property
-		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", functionProtoFn)
+		ctorPropsObj.Properties.DefineFixedProperty("prototype", functionProtoFn)
 
 		functionCtor = ctorWithProps
 	}
@@ -170,7 +170,7 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorObj := asyncFunctionCtor.AsNativeFunction()
 		ctorWithProps := vm.NewConstructorWithProps(ctorObj.Arity, ctorObj.Variadic, ctorObj.Name, ctorObj.Fn)
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
-		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", asyncFunctionProto)
+		ctorPropsObj.Properties.DefineFixedProperty("prototype", asyncFunctionProto)
 		asyncFunctionCtor = ctorWithProps
 
 		// Set constructor property on AsyncFunction.prototype

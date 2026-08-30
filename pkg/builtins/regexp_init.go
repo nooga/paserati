@@ -1477,7 +1477,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Set up prototype relationship
 	regexpCtorProps := regexpCtor.AsNativeFunctionWithProps()
-	regexpCtorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(regexpProto))
+	regexpCtorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(regexpProto))
 
 	// RegExp.escape(string) - ES2025
 	regexpCtorProps.Properties.SetOwnNonEnumerable("escape", vm.NewNativeFunction(1, false, "escape", func(args []vm.Value) (vm.Value, error) {

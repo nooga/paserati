@@ -113,7 +113,7 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property
-		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(typeErrorPrototype))
+		ctorPropsObj.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(typeErrorPrototype))
 
 		// Per ECMAScript 19.5.6.2, the [[Prototype]] of a NativeError constructor is Error
 		if !vmInstance.ErrorConstructor.IsUndefined() {

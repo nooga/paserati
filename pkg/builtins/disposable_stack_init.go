@@ -335,7 +335,7 @@ func (d *DisposableStackInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewValueFromPlainObject(inst), nil
 	})
 	ctorProps := ctor.AsNativeFunctionWithProps()
-	ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+	ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(proto))
 	proto.SetOwnNonEnumerable("constructor", ctor)
 
 	if realm := vmInstance.CurrentRealm(); realm != nil {
@@ -442,7 +442,7 @@ func (a *AsyncDisposableStackInitializer) InitRuntime(ctx *RuntimeContext) error
 		return vm.NewValueFromPlainObject(inst), nil
 	})
 	ctorProps := ctor.AsNativeFunctionWithProps()
-	ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+	ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(proto))
 	proto.SetOwnNonEnumerable("constructor", ctor)
 
 	if realm := vmInstance.CurrentRealm(); realm != nil {

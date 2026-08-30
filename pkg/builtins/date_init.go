@@ -1328,7 +1328,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(dateProto))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(dateProto))
 
 	// Store Date prototype on VM for cross-realm support (GetPrototypeFromConstructor)
 	vmInstance.DatePrototype = vm.NewValueFromPlainObject(dateProto)

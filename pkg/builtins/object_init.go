@@ -4656,6 +4656,31 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 	return obj, nil
 }
 
+// exoticOwnProperties returns the PlainObject holding the ordinary own
+// properties of a value that keeps them in a side table rather than being one
+// (functions of every flavour and RegExp objects). Returns nil when the value
+// has no such table - either because it isn't one of those kinds, or because
+// nothing has ever defined a property on it, in which case there is nothing to
+// apply an integrity level to. Object.isFrozen/isSealed reach into the same
+// tables.
+func exoticOwnProperties(obj vm.Value) *vm.PlainObject {
+	switch obj.Type() {
+	case vm.TypeFunction:
+		return obj.AsFunction().Properties
+	case vm.TypeClosure:
+		return obj.AsClosure().Properties
+	case vm.TypeNativeFunction:
+		return obj.AsNativeFunction().Properties
+	case vm.TypeNativeFunctionWithProps:
+		return obj.AsNativeFunctionWithProps().Properties
+	case vm.TypeBoundFunction:
+		return obj.AsBoundFunction().Properties
+	case vm.TypeRegExp:
+		return obj.AsRegExpObject().Properties
+	}
+	return nil
+}
+
 func objectFreezeWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
 		return vm.Undefined, nil
@@ -4663,8 +4688,9 @@ func objectFreezeWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 
 	obj := args[0]
 
-	// If not an object, return as-is (primitives are already immutable)
-	if !obj.IsObject() {
+	// If not an object, return as-is (primitives are already immutable).
+	// Callables are objects even when Value.IsObject() says otherwise.
+	if !obj.IsObject() && !obj.IsCallable() {
 		return obj, nil
 	}
 
@@ -4682,6 +4708,11 @@ func objectFreezeWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		plainObj.SetExtensible(false)
 		// Use FreezeAllProperties to freeze ALL own properties (including non-enumerable and symbol)
 		plainObj.FreezeAllProperties()
+	} else if props := exoticOwnProperties(obj); props != nil {
+		// Functions and RegExps are objects too: their own properties live in a
+		// side table, which is what has to be frozen.
+		props.SetExtensible(false)
+		props.FreezeAllProperties()
 	}
 
 	return obj, nil
@@ -4694,8 +4725,9 @@ func objectSealWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 
 	obj := args[0]
 
-	// If not an object, return as-is
-	if !obj.IsObject() {
+	// If not an object, return as-is.
+	// Callables are objects even when Value.IsObject() says otherwise.
+	if !obj.IsObject() && !obj.IsCallable() {
 		return obj, nil
 	}
 
@@ -4712,6 +4744,9 @@ func objectSealWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		plainObj := obj.AsPlainObject()
 		plainObj.SetExtensible(false)
 		plainObj.SealAllProperties()
+	} else if props := exoticOwnProperties(obj); props != nil {
+		props.SetExtensible(false)
+		props.SealAllProperties()
 	}
 
 	return obj, nil
