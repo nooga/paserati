@@ -111,7 +111,7 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property
-		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(syntaxErrorPrototype))
+		ctorPropsObj.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(syntaxErrorPrototype))
 
 		// Per ECMAScript 19.5.6.2, the [[Prototype]] of a NativeError constructor is Error
 		if !vmInstance.ErrorConstructor.IsUndefined() {

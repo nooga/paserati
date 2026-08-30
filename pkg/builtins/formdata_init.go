@@ -57,7 +57,7 @@ func (f *FormDataInitializer) InitRuntime(ctx *RuntimeContext) error {
 	formDataConstructor := vm.NewConstructorWithProps(0, false, "FormData", formDataConstructorFn)
 	if formDataConstructor.Type() == vm.TypeNativeFunctionWithProps {
 		ctorProps := formDataConstructor.AsNativeFunctionWithProps()
-		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(formDataProto))
+		ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(formDataProto))
 	}
 
 	formDataProto.SetOwnNonEnumerable("constructor", formDataConstructor)

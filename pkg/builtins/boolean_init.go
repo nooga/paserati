@@ -160,7 +160,7 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property to constructor
-	booleanConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vmInstance.BooleanPrototype)
+	booleanConstructor.AsNativeFunctionWithProps().Properties.DefineFixedProperty("prototype", vmInstance.BooleanPrototype)
 
 	// Set constructor property on prototype
 	booleanProto.SetOwnNonEnumerable("constructor", booleanConstructor)

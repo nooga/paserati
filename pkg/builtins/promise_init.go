@@ -203,7 +203,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	props := promiseCtor.AsNativeFunctionWithProps().Properties
 
 	// Promise.prototype
-	props.SetOwnNonEnumerable("prototype", vmInstance.PromisePrototype)
+	props.DefineFixedProperty("prototype", vmInstance.PromisePrototype)
 
 	// Promise.resolve(value)
 	props.SetOwnNonEnumerable("resolve", vm.NewNativeFunction(1, false, "resolve", func(args []vm.Value) (vm.Value, error) {

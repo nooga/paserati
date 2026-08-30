@@ -179,7 +179,7 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj := ctorWithProps.AsNativeFunctionWithProps()
 
 		// Add prototype property
-		ctorPropsObj.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(errorPrototype))
+		ctorPropsObj.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(errorPrototype))
 
 		// Add Error.isError static method (ES2024)
 		ctorPropsObj.Properties.SetOwnNonEnumerable("isError", vm.NewNativeFunction(1, false, "isError", func(args []vm.Value) (vm.Value, error) {
@@ -335,7 +335,7 @@ func (e *AggregateErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		nf := ctor.AsNativeFunction()
 		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
 		ctorProps := withProps.AsNativeFunctionWithProps()
-		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+		ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(proto))
 
 		if !vmInstance.ErrorConstructor.IsUndefined() {
 			ctorProps.Properties.SetPrototype(vmInstance.ErrorConstructor)
@@ -429,7 +429,7 @@ func (e *SuppressedErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		nf := ctor.AsNativeFunction()
 		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
 		ctorProps := withProps.AsNativeFunctionWithProps()
-		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+		ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(proto))
 
 		if !vmInstance.ErrorConstructor.IsUndefined() {
 			ctorProps.Properties.SetPrototype(vmInstance.ErrorConstructor)
@@ -498,7 +498,7 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 		nf := ctor.AsNativeFunction()
 		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
 		ctorProps := withProps.AsNativeFunctionWithProps()
-		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(proto))
+		ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(proto))
 
 		// Per ECMAScript 19.5.6.2, the [[Prototype]] of a NativeError constructor is Error
 		if !vmInstance.ErrorConstructor.IsUndefined() {

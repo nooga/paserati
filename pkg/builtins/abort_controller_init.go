@@ -120,7 +120,7 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return createAbortSignalObject(vmInstance, signal, signalProto), nil
 	}))
 
-	signalConstructor.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(signalProto))
+	signalConstructor.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(signalProto))
 
 	if err := ctx.DefineGlobal("AbortSignal", vm.NewValueFromPlainObject(signalConstructor)); err != nil {
 		return err
@@ -145,7 +145,7 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 	controllerConstructor := vm.NewConstructorWithProps(0, false, "AbortController", controllerConstructorFn)
 	if controllerConstructor.Type() == vm.TypeNativeFunctionWithProps {
 		ctorProps := controllerConstructor.AsNativeFunctionWithProps()
-		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(controllerProto))
+		ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(controllerProto))
 	}
 
 	controllerProto.SetOwnNonEnumerable("constructor", controllerConstructor)

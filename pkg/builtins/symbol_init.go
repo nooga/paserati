@@ -179,7 +179,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 	ctorWithProps.AsNativeFunctionWithProps().IsConstructor = true
 
 	// Add prototype property - use the VM's SymbolPrototype
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vmInstance.SymbolPrototype)
+	ctorWithProps.AsNativeFunctionWithProps().Properties.DefineFixedProperty("prototype", vmInstance.SymbolPrototype)
 
 	// Symbol.prototype.constructor
 	symbolProto.SetOwnNonEnumerable("constructor", ctorWithProps)

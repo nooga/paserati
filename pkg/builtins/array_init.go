@@ -2280,7 +2280,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(arrayProto))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(arrayProto))
 
 	// Add static methods
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("isArray", vm.NewNativeFunction(1, false, "isArray", func(args []vm.Value) (vm.Value, error) {

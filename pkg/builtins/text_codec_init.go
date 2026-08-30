@@ -69,7 +69,7 @@ func (t *TextEncoderInitializer) InitRuntime(ctx *RuntimeContext) error {
 		nf := ctor.AsNativeFunction()
 		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
 		ctorProps := withProps.AsNativeFunctionWithProps()
-		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(encoderProto))
+		ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(encoderProto))
 		encoderProto.SetOwnNonEnumerable("constructor", withProps)
 		return ctx.DefineGlobal("TextEncoder", withProps)
 	}
@@ -148,7 +148,7 @@ func (t *TextDecoderInitializer) InitRuntime(ctx *RuntimeContext) error {
 		nf := ctor.AsNativeFunction()
 		withProps := vm.NewConstructorWithProps(nf.Arity, nf.Variadic, nf.Name, nf.Fn)
 		ctorProps := withProps.AsNativeFunctionWithProps()
-		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(decoderProto))
+		ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(decoderProto))
 		decoderProto.SetOwnNonEnumerable("constructor", withProps)
 		return ctx.DefineGlobal("TextDecoder", withProps)
 	}

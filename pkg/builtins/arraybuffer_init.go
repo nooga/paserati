@@ -369,7 +369,7 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(arrayBufferProto))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(arrayBufferProto))
 
 	// Add static methods
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("isView", vm.NewNativeFunction(1, false, "isView", func(args []vm.Value) (vm.Value, error) {

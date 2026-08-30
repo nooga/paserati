@@ -93,7 +93,7 @@ func (b *BlobInitializer) InitRuntime(ctx *RuntimeContext) error {
 	blobConstructor := vm.NewConstructorWithProps(2, false, "Blob", blobConstructorFn)
 	if blobConstructor.Type() == vm.TypeNativeFunctionWithProps {
 		ctorProps := blobConstructor.AsNativeFunctionWithProps()
-		ctorProps.Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(blobProto))
+		ctorProps.Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(blobProto))
 	}
 
 	blobProto.SetOwnNonEnumerable("constructor", blobConstructor)

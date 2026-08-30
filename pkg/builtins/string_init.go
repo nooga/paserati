@@ -2173,7 +2173,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add prototype property
-	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vm.NewValueFromPlainObject(stringProto))
+	ctorWithProps.AsNativeFunctionWithProps().Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(stringProto))
 
 	// Add static methods
 	// ECMAScript spec: String.fromCharCode.length = 1

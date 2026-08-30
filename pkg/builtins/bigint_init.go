@@ -262,7 +262,7 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewBigInt(result), nil
 	}))
 
-	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", vmInstance.BigIntPrototype)
+	bigintConstructor.AsNativeFunctionWithProps().Properties.DefineFixedProperty("prototype", vmInstance.BigIntPrototype)
 
 	// Set constructor property on prototype
 	bigintProto.SetOwnNonEnumerable("constructor", bigintConstructor)
