@@ -21,6 +21,11 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 	if !constructorVal.IsCallable() {
 		frame.ip = callerIP
 		vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", constructorVal.TypeName()))
+		if !vm.unwinding {
+			// Exception was caught by a handler; caller reloads its cached
+			// frame/registers from vm.frameCount and continues.
+			return InterpretOK, Undefined
+		}
 		return InterpretRuntimeError, Undefined
 	}
 
@@ -31,6 +36,9 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		if fn.IsArrowFunction || (fn.IsAsync && !fn.IsGenerator) {
 			frame.ip = callerIP
 			vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", constructorVal.TypeName()))
+			if !vm.unwinding {
+				return InterpretOK, Undefined
+			}
 			return InterpretRuntimeError, Undefined
 		}
 	} else if constructorVal.Type() == TypeClosure {
@@ -38,6 +46,9 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		if cl.Fn.IsArrowFunction || (cl.Fn.IsAsync && !cl.Fn.IsGenerator) {
 			frame.ip = callerIP
 			vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", constructorVal.TypeName()))
+			if !vm.unwinding {
+				return InterpretOK, Undefined
+			}
 			return InterpretRuntimeError, Undefined
 		}
 	}
@@ -51,6 +62,9 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		// Check if it's a VM exception (TypeError, etc.) and propagate it
 		if ee, ok := err.(ExceptionError); ok {
 			vm.throwException(ee.GetExceptionValue())
+			if !vm.unwinding {
+				return InterpretOK, Undefined
+			}
 			return InterpretRuntimeError, Undefined
 		}
 		// Otherwise wrap as generic runtime error
@@ -68,6 +82,9 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		if constructorFunc.IsArrowFunction {
 			frame.ip = callerIP
 			vm.ThrowTypeError("Arrow functions cannot be used as constructors")
+			if !vm.unwinding {
+				return InterpretOK, Undefined
+			}
 			return InterpretRuntimeError, Undefined
 		}
 
@@ -167,6 +184,9 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		if funcToCall.IsArrowFunction {
 			frame.ip = callerIP
 			vm.ThrowTypeError("Arrow functions cannot be used as constructors")
+			if !vm.unwinding {
+				return InterpretOK, Undefined
+			}
 			return InterpretRuntimeError, Undefined
 		}
 
@@ -280,6 +300,9 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		if !isCtor {
 			frame.ip = callerIP
 			vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", name))
+			if !vm.unwinding {
+				return InterpretOK, Undefined
+			}
 			return InterpretRuntimeError, Undefined
 		}
 
@@ -298,6 +321,9 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		if nativeErr != nil {
 			if ee, ok := nativeErr.(ExceptionError); ok {
 				vm.throwException(ee.GetExceptionValue())
+				if !vm.unwinding {
+					return InterpretOK, Undefined
+				}
 				return InterpretRuntimeError, Undefined
 			}
 			status := vm.runtimeError("Native constructor error: %s", nativeErr.Error())
