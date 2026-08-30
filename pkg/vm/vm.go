@@ -10169,6 +10169,17 @@ startExecution:
 			if !constructorVal.IsCallable() {
 				frame.ip = callerIP
 				vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", constructorVal.TypeName()))
+				if !vm.unwinding {
+					// Exception was caught by a handler, reload frame and continue
+					frame = &vm.frames[vm.frameCount-1]
+					closure = frame.closure
+					function = closure.Fn
+					code = function.Chunk.Code
+					constants = function.Chunk.Constants
+					registers = frame.registers
+					ip = frame.ip
+					continue
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -10179,6 +10190,17 @@ startExecution:
 				if fn.IsArrowFunction || (fn.IsAsync && !fn.IsGenerator) {
 					frame.ip = callerIP
 					vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", constructorVal.TypeName()))
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 			} else if constructorVal.Type() == TypeClosure {
@@ -10186,6 +10208,17 @@ startExecution:
 				if cl.Fn.IsArrowFunction || (cl.Fn.IsAsync && !cl.Fn.IsGenerator) {
 					frame.ip = callerIP
 					vm.ThrowTypeError(fmt.Sprintf("%s is not a constructor", constructorVal.TypeName()))
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
 					return InterpretRuntimeError, Undefined
 				}
 			}
