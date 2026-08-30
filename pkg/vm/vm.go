@@ -4414,8 +4414,6 @@ startExecution:
 									frame = &vm.frames[vm.frameCount-1]
 									closure = frame.closure
 									function = closure.Fn
-									code = function.Chunk.Code
-									constants = function.Chunk.Constants
 									registers = frame.registers
 									ip = frame.ip
 									goto reloadFrame
@@ -4512,8 +4510,6 @@ startExecution:
 								frame = &vm.frames[vm.frameCount-1]
 								closure = frame.closure
 								function = closure.Fn
-								code = function.Chunk.Code
-								constants = function.Chunk.Constants
 								registers = frame.registers
 								ip = frame.ip
 								goto reloadFrame
@@ -4864,8 +4860,6 @@ startExecution:
 									frame = &vm.frames[vm.frameCount-1]
 									closure = frame.closure
 									function = closure.Fn
-									code = function.Chunk.Code
-									constants = function.Chunk.Constants
 									registers = frame.registers
 									ip = frame.ip
 									goto reloadFrame
@@ -4952,8 +4946,6 @@ startExecution:
 								frame = &vm.frames[vm.frameCount-1]
 								closure = frame.closure
 								function = closure.Fn
-								code = function.Chunk.Code
-								constants = function.Chunk.Constants
 								registers = frame.registers
 								ip = frame.ip
 								goto reloadFrame
@@ -5062,8 +5054,6 @@ startExecution:
 									frame = &vm.frames[vm.frameCount-1]
 									closure = frame.closure
 									function = closure.Fn
-									code = function.Chunk.Code
-									constants = function.Chunk.Constants
 									registers = frame.registers
 									ip = frame.ip
 									goto reloadFrame
@@ -8898,8 +8888,6 @@ startExecution:
 									frame = &vm.frames[vm.frameCount-1]
 									closure = frame.closure
 									function = closure.Fn
-									code = function.Chunk.Code
-									constants = function.Chunk.Constants
 									registers = frame.registers
 									ip = frame.ip
 									goto reloadFrame
@@ -8959,8 +8947,6 @@ startExecution:
 									frame = &vm.frames[vm.frameCount-1]
 									closure = frame.closure
 									function = closure.Fn
-									code = function.Chunk.Code
-									constants = function.Chunk.Constants
 									registers = frame.registers
 									ip = frame.ip
 									goto reloadFrame
