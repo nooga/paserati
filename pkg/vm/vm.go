@@ -18613,6 +18613,17 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	frame.targetRegister = 0
 	frame.thisValue = Undefined
 	frame.openUpvalues = nil // frame slot may have been used before; start with no open upvalues
+	// Allocate this frame's spill slots, matching every other frame-setup site
+	// (Interpret, Call, Construct): a module whose top level spills a binding
+	// to a slot - e.g. a named class expression used as a module-scope value.
+	// such as `export default class Agent { ... }` - needs frame.spillSlots
+	// sized from the chunk, or OpStoreSpill/OpLoadSpill fault on a stale or
+	// nil slice left over from whatever previously used this frame slot (#108).
+	if chunk.NumSpillSlots > 0 {
+		frame.spillSlots = make([]Value, chunk.NumSpillSlots)
+	} else {
+		frame.spillSlots = nil
+	}
 	vm.nextRegSlot += scriptRegSize
 	vm.frameCount++
 
@@ -18623,10 +18634,20 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	resultStatus, result := vm.run()
 
 	// Capture any JavaScript exception that was thrown but not caught
-	// This happens when the module contains throw statements without try/catch
+	// This happens when the module contains throw statements without try/catch.
+	// hasModuleException tracks whether a real exception value was captured here,
+	// separately from moduleException's own value: a module can legally `throw
+	// undefined`, so testing "moduleException != Null" below to mean "was an
+	// exception captured" would also fire on moduleException's zero value (which
+	// is Undefined, same as a real `throw undefined`) whenever resultStatus is
+	// InterpretRuntimeError for some other reason - e.g. an internal panic
+	// recovered by vm.run() (see #108) - discarding the real error in vm.errors
+	// for a misleading, generic "Uncaught exception: undefined".
 	var moduleException Value
+	var hasModuleException bool
 	if vm.unwinding && vm.currentException != Null {
 		moduleException = vm.currentException
+		hasModuleException = true
 		// Clear the unwinding state since we're handling the exception here
 		vm.unwinding = false
 		vm.currentException = Null
@@ -18645,7 +18666,7 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	var errs []errors.PaseratiError
 	if resultStatus == InterpretRuntimeError {
 		// If we have a JS exception, that takes precedence
-		if moduleException != Null {
+		if hasModuleException {
 			// Create a RuntimeError from the exception - format like handleUncaughtException
 			displayStr := vm.formatExceptionDisplay(moduleException)
 			runtimeErr := &errors.RuntimeError{
