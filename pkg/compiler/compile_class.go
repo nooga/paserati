@@ -208,23 +208,6 @@ func (c *Compiler) declareClassPrivateNames(node *parser.ClassDeclaration) {
 	}
 }
 
-// classModuleGlobalKey returns the heap-allocator key to use for a top-level
-// module-scope class declaration named name. When this compiler is compiling
-// a file resolved by the module loader (see SetLoadedViaModuleLoader), the
-// key is namespaced by the module's resolved path so that same-named classes
-// declared in unrelated modules don't alias the same global heap slot merely
-// because an importer references the bare, un-imported name (#103). The
-// persistent session compiler (RunString/REPL/eval, reused under a synthetic
-// module name across separate Compile() calls) keeps the plain name so
-// classes stay visible to later lines the way script-mode globals always
-// have.
-func (c *Compiler) classModuleGlobalKey(name string) string {
-	if c.IsModuleMode() && c.loadedViaModuleLoader && c.moduleBindings != nil && c.moduleBindings.ModulePath != "" {
-		return c.moduleBindings.ModulePath + "\x00" + name
-	}
-	return name
-}
-
 // compileClassDeclaration compiles a class declaration into a constructor function + prototype setup
 // This follows the approach of desugaring classes to constructor functions + prototypes
 func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint Register) (Register, errors.PaseratiError) {
@@ -245,7 +228,7 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 		// plain name (so intra-module references, including recursive
 		// self-reference and re-derivation by exports, resolve normally);
 		// only the underlying heap slot's key may be namespaced.
-		classGlobalIdx = c.GetOrAssignGlobalIndex(c.classModuleGlobalKey(node.Name.Value))
+		classGlobalIdx = c.GetOrAssignGlobalIndex(c.moduleGlobalKey(node.Name.Value))
 		c.currentSymbolTable.DefineGlobal(node.Name.Value, classGlobalIdx)
 		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined global class '%s' at index %d\n", node.Name.Value, classGlobalIdx)
 	} else {
@@ -346,7 +329,7 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 						// always reaches this branch. Resolve it as an import rather
 						// than falling through to the builtin/global guess below: a
 						// module-scope class's global slot may not even be plain-keyed
-						// (see classModuleGlobalKey, #103), so guessing wrong here would
+						// (see moduleGlobalKey, #103/#106), so guessing wrong here would
 						// silently read an unrelated, never-written slot.
 						superConstructorReg = c.regAlloc.Alloc()
 						needToFreeSuperReg = true

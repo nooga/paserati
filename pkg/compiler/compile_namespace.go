@@ -36,8 +36,10 @@ func (c *Compiler) compileNamespaceDeclaration(node *parser.NamespaceDeclaration
 	var accessExpr parser.Expression
 	if c.currentNamespaceAccess == nil {
 		// Top-level namespace: bind to a global slot, initialize on first
-		// declaration, merge on subsequent ones.
-		globalIdx := c.GetOrAssignGlobalIndex(nsName)
+		// declaration, merge on subsequent ones. Namespace the heap key the
+		// same way top-level classes/functions/vars do (see moduleGlobalKey,
+		// #103/#106).
+		globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(nsName))
 		_, _, alreadyDefined := c.currentSymbolTable.Resolve(nsName)
 		if !alreadyDefined {
 			c.currentSymbolTable.DefineGlobal(nsName, globalIdx)

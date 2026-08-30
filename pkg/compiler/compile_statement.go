@@ -212,10 +212,18 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// Check if this is an eval-created binding that needs heap storage for deletion
 			useHeapForEval := c.ShouldUseHeapForEvalBinding(node.Name.Value)
 			if isGlobalScope || useHeapForEval {
-				// Global scope or eval-created binding: use heap storage
+				// Global scope or eval-created binding: use heap storage.
+				// Namespace the heap key only for a true top-level module
+				// declaration (isGlobalScope), not an eval-created binding
+				// (useHeapForEval) - eval's own bindings must stay plain-keyed
+				// (see moduleGlobalKey, #103/#106).
+				key := node.Name.Value
+				if isGlobalScope {
+					key = c.moduleGlobalKey(key)
+				}
 				undefReg := c.regAlloc.Alloc()
 				c.emitLoadUndefined(undefReg, node.Name.Token.Line)
-				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				globalIdx := c.GetOrAssignGlobalIndex(key)
 				c.emitSetGlobalInit(globalIdx, undefReg, node.Name.Token.Line) // TDZ init
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 				c.regAlloc.Free(undefReg)
@@ -258,8 +266,14 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// Check if this is an eval-created binding that needs heap storage for deletion
 			useHeapForEval := c.ShouldUseHeapForEvalBinding(node.Name.Value)
 			if isGlobalScope || useHeapForEval {
-				// Global scope or eval-created binding: use heap storage
-				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				// Global scope or eval-created binding: use heap storage.
+				// Namespace only for a true top-level module declaration, not
+				// an eval-created binding (see moduleGlobalKey, #103/#106).
+				key := node.Name.Value
+				if isGlobalScope {
+					key = c.moduleGlobalKey(key)
+				}
+				globalIdx := c.GetOrAssignGlobalIndex(key)
 				c.emitSetGlobalInit(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 			} else {
@@ -280,8 +294,14 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// Check if this is an eval-created binding that needs heap storage for deletion
 			useHeapForEval := c.ShouldUseHeapForEvalBinding(node.Name.Value)
 			if isGlobalScope || useHeapForEval {
-				// Top-level function or eval-created binding: use heap storage
-				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				// Top-level function or eval-created binding: use heap storage.
+				// Namespace only for a true top-level module declaration, not
+				// an eval-created binding (see moduleGlobalKey, #103/#106).
+				key := node.Name.Value
+				if isGlobalScope {
+					key = c.moduleGlobalKey(key)
+				}
+				globalIdx := c.GetOrAssignGlobalIndex(key)
 				// Get the closure register from the symbol table
 				symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
 				if found && symbolRef.Register != nilRegister {
@@ -563,7 +583,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				// debug disabled
 				if c.enclosing == nil {
 					// Top-level: use global variable
-					globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+					globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(node.Name.Value))
 					c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 					c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 					// Mark as non-configurable (DontDelete) only for true top-level var,
@@ -624,7 +644,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 				c.regAlloc.Free(valueReg)
 			} else if c.enclosing == nil {
 				// Top-level and not pre-defined: use global variable
-				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(node.Name.Value))
 				c.emitSetGlobal(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 				// Mark as non-configurable (DontDelete) only for true top-level var,
@@ -644,7 +664,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			}
 		} else if c.enclosing == nil && !handledInWithBlock {
 			// Top-level function: also set as global
-			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+			globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(node.Name.Value))
 			// Get the closure register from the symbol table
 			symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
 			if found && symbolRef.Register != nilRegister {
@@ -813,7 +833,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
 			if isGlobalScope {
 				// True global scope: use global variable (const)
-				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(node.Name.Value))
 				c.emitSetGlobalInit(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobalConst(node.Name.Value, globalIdx)
 			} else {
@@ -832,7 +852,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil && !c.isIndirectEval
 			if isGlobalScope {
 				// Top-level function: also set as global (const)
-				globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+				globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(node.Name.Value))
 				// Get the closure register from the symbol table
 				symbolRef, _, found := c.currentSymbolTable.Resolve(node.Name.Value)
 				if found && symbolRef.Register != nilRegister {
@@ -1122,7 +1142,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
 					if isGlobalScope {
 						// True global scope: predefine as global so identifier resolves as global in condition/update
-						globalIdx := c.GetOrAssignGlobalIndex(d.Name.Value)
+						globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(d.Name.Value))
 						c.currentSymbolTable.DefineGlobal(d.Name.Value, globalIdx)
 					} else {
 						// Local scope: predefine local binding; register will be set by compileVarStatement
@@ -1133,7 +1153,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 				name := vs.Name.Value
 				isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
 				if isGlobalScope {
-					globalIdx := c.GetOrAssignGlobalIndex(name)
+					globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 					c.currentSymbolTable.DefineGlobal(name, globalIdx)
 				} else {
 					c.currentSymbolTable.Define(name, nilRegister)
@@ -1147,7 +1167,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 				for _, d := range ls.Declarations {
 					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
 					if isGlobalScope {
-						globalIdx := c.GetOrAssignGlobalIndex(d.Name.Value)
+						globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(d.Name.Value))
 						c.currentSymbolTable.DefineGlobal(d.Name.Value, globalIdx)
 					} else {
 						reg, ok := c.regAlloc.TryAllocForVariable()
@@ -1168,7 +1188,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 				name := ls.Name.Value
 				isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
 				if isGlobalScope {
-					globalIdx := c.GetOrAssignGlobalIndex(name)
+					globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 					c.currentSymbolTable.DefineGlobal(name, globalIdx)
 				} else {
 					reg, ok := c.regAlloc.TryAllocForVariable()
@@ -1192,7 +1212,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 				for _, d := range cs.Declarations {
 					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
 					if isGlobalScope {
-						globalIdx := c.GetOrAssignGlobalIndex(d.Name.Value)
+						globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(d.Name.Value))
 						c.currentSymbolTable.DefineGlobalConst(d.Name.Value, globalIdx)
 					} else {
 						reg, ok := c.regAlloc.TryAllocForVariable()
@@ -1211,7 +1231,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 				name := cs.Name.Value
 				isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
 				if isGlobalScope {
-					globalIdx := c.GetOrAssignGlobalIndex(name)
+					globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 					c.currentSymbolTable.DefineGlobalConst(name, globalIdx)
 				} else {
 					reg, ok := c.regAlloc.TryAllocForVariable()
@@ -1993,7 +2013,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		if len(vs.Declarations) > 0 {
 			for _, d := range vs.Declarations {
 				if c.enclosing == nil {
-					idx := c.GetOrAssignGlobalIndex(d.Name.Value)
+					idx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(d.Name.Value))
 					c.currentSymbolTable.DefineGlobal(d.Name.Value, idx)
 					// fmt.Printf("// [ForInPredefine] var %s as global idx=%d\n", d.Name.Value, idx)
 				} else {
@@ -2004,7 +2024,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 		} else if vs.Name != nil {
 			name := vs.Name.Value
 			if c.enclosing == nil {
-				idx := c.GetOrAssignGlobalIndex(name)
+				idx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 				c.currentSymbolTable.DefineGlobal(name, idx)
 				// fmt.Printf("// [ForInPredefine] var %s as global idx=%d\n", name, idx)
 			} else {
@@ -2276,7 +2296,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 			if !found {
 				// As a fallback, predefine now mirroring regular for behavior
 				if c.enclosing == nil {
-					idx := c.GetOrAssignGlobalIndex(name)
+					idx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 					c.currentSymbolTable.DefineGlobal(name, idx)
 					symbolRef, _, found = c.currentSymbolTable.Resolve(name)
 				} else {
@@ -2311,7 +2331,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 				// fmt.Printf("// [ForInAssign] unresolved %s, defining var in outermost scope\n", target.Value)
 				// Define a function/global-scoped binding (var semantics)
 				if c.enclosing == nil {
-					idx := c.GetOrAssignGlobalIndex(target.Value)
+					idx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(target.Value))
 					c.currentSymbolTable.DefineGlobal(target.Value, idx)
 					c.emitSetGlobal(idx, currentKeyReg, node.Token.Line)
 				} else {
