@@ -20,6 +20,19 @@ type ModuleBindings struct {
 
 	// Module dependencies (for circular dependency detection)
 	Dependencies map[string]bool // Set of module paths this module depends on
+
+	// TopLevelLetConstNames names this module's own top-level let/const
+	// declarations (populated once, at the root compiler, before any hoisted
+	// function body compiles - see Compile's pre-registration step). A
+	// hoisted function's body compiled before its module's own let/const
+	// declaration is reached resolves that name via the general "not found
+	// in any scope, treat as external global" fallback (compileIdentifier's
+	// !found case). That fallback must know whether the name belongs to
+	// *this module* (in which case it needs moduleGlobalKey's namespaced
+	// heap key, matching where the real declaration will later write) or is
+	// a genuinely external/undeclared global (which must NOT be namespaced).
+	// See paserati#117.
+	TopLevelLetConstNames map[string]bool
 }
 
 // ImportReference represents an imported name's runtime binding information

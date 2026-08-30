@@ -261,9 +261,10 @@ func collectLetConstDeclarations(stmts []parser.Statement) []string {
 	var names []string
 	seen := make(map[string]bool)
 
-	for _, stmt := range stmts {
+	var visit func(stmt parser.Statement)
+	visit = func(stmt parser.Statement) {
 		if stmt == nil {
-			continue
+			return
 		}
 		switch s := stmt.(type) {
 		case *parser.LetStatement:
@@ -286,7 +287,19 @@ func collectLetConstDeclarations(stmts []parser.Statement) []string {
 			if s.Token.Literal == "let" || s.Token.Literal == "const" {
 				collectArrayDestructuringNames(s.Elements, seen, &names)
 			}
+		case *parser.ExportNamedDeclaration:
+			// `export const X = ...` / `export let X = ...` wrap the actual
+			// declaration in Declaration; unwrap it so exported let/const get
+			// the same pre-registration (and, at the call site above, the
+			// same symbol-table DefineGlobal) as unexported ones. Without
+			// this, a hoisted function's body compiled before this export
+			// statement is reached can't forward-reference it at all -- see
+			// paserati#117.
+			visit(s.Declaration)
 		}
+	}
+	for _, stmt := range stmts {
+		visit(stmt)
 	}
 	return names
 }
@@ -582,7 +595,22 @@ func (c *Compiler) GetHeapAlloc() *HeapAlloc {
 // field's own comment), which also means eval reusing that same compiler
 // (SetIndirectEval) can never reach the namespaced branch here either.
 func (c *Compiler) moduleGlobalKey(name string) string {
-	if c.IsModuleMode() && c.loadedViaModuleLoader && c.moduleBindings != nil && c.moduleBindings.ModulePath != "" {
+	// loadedViaModuleLoader is set on the top-level compiler only (by the
+	// module loader, right after construction) and is NOT among the fields
+	// newFunctionCompiler copies to nested function compilers - unlike
+	// heapAlloc, which every global-index lookup already resolves via the
+	// same walk-up-to-root (see GetOrAssignGlobalIndex). Without walking up
+	// here too, a nested function compiler's own zero-valued
+	// loadedViaModuleLoader silently falls through to the "not module mode"
+	// branch below, so an identifier reference *inside* a function body
+	// computes a different (bare) key than the identical call from the
+	// module's own top-level code, which correctly sees the flag - two
+	// different heap slots for what should be one binding. See #117.
+	topCompiler := c
+	for topCompiler.enclosing != nil {
+		topCompiler = topCompiler.enclosing
+	}
+	if c.IsModuleMode() && topCompiler.loadedViaModuleLoader && c.moduleBindings != nil && c.moduleBindings.ModulePath != "" {
 		return c.moduleBindings.ModulePath + "\x00" + name
 	}
 	return name
@@ -991,6 +1019,26 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			letConstNames := collectLetConstDeclarations(program.Statements)
 			for _, name := range letConstNames {
 				c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
+			}
+			// Record this module's own top-level let/const names (module mode
+			// only - moduleGlobalKey is a no-op outside it, so there's nothing
+			// to disambiguate) so compileIdentifier's "not found anywhere,
+			// treat as an external global" fallback can tell "this module's own
+			// not-yet-compiled top-level binding" apart from "a genuinely
+			// external/undeclared global" and use the matching namespaced key
+			// for the former. Deliberately NOT DefineGlobal on the symbol
+			// table here (that broadens "gen" to resolve as global even
+			// inside a hoisted function that declares its own local "gen",
+			// breaking local-shadows-global - see paserati#117's regression
+			// note on generator_nested.ts). This only widens one narrow,
+			// already-existing fallback path, not general name resolution.
+			if c.moduleBindings != nil {
+				if c.moduleBindings.TopLevelLetConstNames == nil {
+					c.moduleBindings.TopLevelLetConstNames = make(map[string]bool, len(letConstNames))
+				}
+				for _, name := range letConstNames {
+					c.moduleBindings.TopLevelLetConstNames[name] = true
+				}
 			}
 			debugPrintf("[Compile] Pre-registered %d var and %d let/const names for strict mode checks\n", len(varNames), len(letConstNames))
 		} else {
@@ -2244,9 +2292,20 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				return hint, nil
 			}
 
-			// Variable not found in any scope, treat as a global variable access
-			// This will return undefined at runtime if the global doesn't exist
-			globalIdx := c.GetOrAssignGlobalIndex(node.Value)
+			// Variable not found in any scope, treat as a global variable access.
+			// This will return undefined at runtime if the global doesn't exist -
+			// UNLESS this name is one of this module's own top-level let/const
+			// declarations, not yet compiled (a hoisted function's body compiles
+			// before the module's sequential statements are reached). In that
+			// case the real declaration will (under module mode) write to a
+			// moduleGlobalKey-namespaced heap slot, so this reference must use
+			// the same namespaced key rather than a bare one, or it resolves to
+			// a different, never-written slot ("X is not defined" - #117).
+			globalKey := node.Value
+			if c.moduleBindings != nil && c.moduleBindings.TopLevelLetConstNames[node.Value] {
+				globalKey = c.moduleGlobalKey(node.Value)
+			}
+			globalIdx := c.GetOrAssignGlobalIndex(globalKey)
 			c.emitGetGlobal(hint, globalIdx, node.Token.Line)
 			return hint, nil // Handle as global access
 		}
