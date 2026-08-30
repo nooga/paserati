@@ -15312,7 +15312,21 @@ startExecution:
 				rt.ScheduleMicrotask(func() {
 					result, err := vm.resumeAsyncFunction(asyncPromise, fulfilledValue)
 					if err != nil {
-						vm.rejectPromise(asyncPromise, NewString(err.Error()))
+						// Reject with the real thrown value (an Error object,
+						// etc.), not a stringified Go error - exceptionError's
+						// Error() method is a fixed literal ("VM exception"),
+						// so a plain NewString(err.Error()) here would hand
+						// the .catch()/reject handler a bare string with no
+						// .message, .stack, etc. Mirrors the identical
+						// ExceptionError handling in promise.go's executor
+						// rejection path.
+						var reason Value
+						if ee, ok := err.(ExceptionError); ok {
+							reason = ee.GetExceptionValue()
+						} else {
+							reason = NewString(err.Error())
+						}
+						vm.rejectPromise(asyncPromise, reason)
 					} else if asyncPromise.Frame != nil {
 						// Async function hit another await and suspended again
 						// Don't resolve - the new await's handlers will take over
@@ -15352,8 +15366,17 @@ startExecution:
 						// Resume async function with fulfilled value
 						result, err := vm.resumeAsyncFunction(asyncPromise, value)
 						if err != nil {
-							// Resume failed - reject the async promise
-							vm.rejectPromise(asyncPromise, NewString(err.Error()))
+							// Resume failed - reject the async promise with the
+							// real thrown value, not a stringified Go error -
+							// see the identical fix/comment on the
+							// PromiseFulfilled case above.
+							var reason Value
+							if ee, ok := err.(ExceptionError); ok {
+								reason = ee.GetExceptionValue()
+							} else {
+								reason = NewString(err.Error())
+							}
+							vm.rejectPromise(asyncPromise, reason)
 						} else if asyncPromise.Frame != nil {
 							// Async function hit another await and suspended again
 							// Don't resolve - the new await's handlers will take over
@@ -19015,6 +19038,35 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	// Execute the VM run loop - it will return when the async function completes or awaits again
 	status, result := vm.run()
 
+	if status == InterpretRuntimeError {
+		// Mirror resumeAsyncFunctionWithException's identical fix (paserati#118):
+		// code resumed here can throw with no handler (e.g. code that runs
+		// after the await point this function resumed from), and vm.run()
+		// surfacing InterpretRuntimeError this way never clears
+		// vm.unwinding/vm.currentException/vm.unwindingCrossedNative itself
+		// (unlike a handled catch - see handleCatchBlock's identical
+		// cleanup). Left uncleared, that stale state leaks into the very
+		// next, unrelated vm.run()/vm.Call invocation (e.g. the one that's
+		// about to invoke this rejection's own .then() callback) and gets
+		// misread as an already-pending exception, failing that unrelated
+		// call immediately regardless of what it actually does. This is
+		// also, unconditionally, a completion - an errored resumption never
+		// legitimately re-suspends, so promiseObj.Frame must be cleared
+		// here too, not left stale as if a future resumption were still
+		// expected.
+		exc := vm.currentException
+		vm.currentException = Null
+		vm.unwinding = false
+		vm.unwindingCrossedNative = false
+		vm.frameCount = savedFrameCount
+		vm.nextRegSlot = savedNextRegSlot
+		promiseObj.Frame = nil
+		if exc != Null {
+			return Undefined, exceptionError{exception: exc}
+		}
+		return Undefined, exceptionError{exception: NewString("runtime error during async function resumption")}
+	}
+
 	// Clean up frames if function suspended at another await
 	// When the function completes normally via OpReturn, frames are already cleaned up.
 	// But when it suspends at OpAwait, frames are left on the stack.
@@ -19026,13 +19078,6 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	} else {
 		// Function completed normally - clear saved frame to signal completion
 		promiseObj.Frame = nil
-	}
-
-	if status == InterpretRuntimeError {
-		if vm.unwinding && vm.currentException != Null {
-			return Undefined, exceptionError{exception: vm.currentException}
-		}
-		return Undefined, exceptionError{exception: NewString("runtime error during async function resumption")}
 	}
 
 	return result, nil
