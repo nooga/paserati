@@ -101,8 +101,12 @@ func (c *Compiler) compileEnumDeclaration(node *parser.EnumDeclaration, hint Reg
 	enumConstIndex := c.chunk.AddConstant(enumObj)
 	c.emitLoadConstant(hint, enumConstIndex, node.Token.Line)
 
-	// Define the enum as a global symbol (like function declarations)
-	globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+	// Define the enum as a global symbol (like function declarations).
+	// Namespace the heap key the same way top-level classes/functions/vars do
+	// (see moduleGlobalKey, #103/#106): an enum always installs a global here
+	// regardless of nesting, so an un-namespaced key would leak across
+	// modules exactly like the class case #103 first found.
+	globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(node.Name.Value))
 	c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 	c.emitSetGlobal(globalIdx, hint, node.Token.Line)
 

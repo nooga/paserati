@@ -3279,7 +3279,7 @@ func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool
 	isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
 	if isGlobalScope {
 		// Top-level: use global variable
-		globalIdx := c.GetOrAssignGlobalIndex(name)
+		globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 		c.emitSetGlobalInit(globalIdx, valueReg, line)
 		c.currentSymbolTable.DefineGlobal(name, globalIdx)
 	} else {

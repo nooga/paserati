@@ -564,6 +564,30 @@ func (c *Compiler) GetHeapAlloc() *HeapAlloc {
 	return c.heapAlloc
 }
 
+// moduleGlobalKey returns the heap-allocator key to use for a top-level
+// module-scope declaration named name - a class, function, var, let, const,
+// enum, or namespace declared directly at a module's top level. When this
+// compiler is compiling a file resolved by the module loader (see
+// SetLoadedViaModuleLoader), the key is namespaced by the module's resolved
+// path so that same-named declarations in unrelated modules don't alias the
+// same global heap slot merely because an importer references the bare,
+// un-imported name (#103, generalized beyond classes in #106). The symbol
+// table still binds the plain name for intra-module resolution; only the
+// underlying heap slot's key is namespaced.
+//
+// The persistent session compiler (RunString/REPL/eval, reused under a
+// synthetic module name across separate Compile() calls) keeps the plain
+// name so top-level bindings stay visible to later lines the way script-mode
+// globals always have - it never has loadedViaModuleLoader set (see that
+// field's own comment), which also means eval reusing that same compiler
+// (SetIndirectEval) can never reach the namespaced branch here either.
+func (c *Compiler) moduleGlobalKey(name string) string {
+	if c.IsModuleMode() && c.loadedViaModuleLoader && c.moduleBindings != nil && c.moduleBindings.ModulePath != "" {
+		return c.moduleBindings.ModulePath + "\x00" + name
+	}
+	return name
+}
+
 // GetAllGlobalNames returns a snapshot of every name registered in this
 // compiler's heap allocator, mapped to its heap index - not just this
 // compiler's own exports (see GetExportGlobalIndices for that).
@@ -960,17 +984,46 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 		// Pre-register var declarations
 		varNames := collectVarDeclarations(program.Statements)
 		for _, name := range varNames {
-			c.GetOrAssignGlobalIndex(name)
+			c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 		}
 		// Pre-register let/const declarations (except for eval which has different scoping)
 		if !c.isIndirectEval && c.callerScopeDesc == nil {
 			letConstNames := collectLetConstDeclarations(program.Statements)
 			for _, name := range letConstNames {
-				c.GetOrAssignGlobalIndex(name)
+				c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 			}
 			debugPrintf("[Compile] Pre-registered %d var and %d let/const names for strict mode checks\n", len(varNames), len(letConstNames))
 		} else {
 			debugPrintf("[Compile] Pre-registered %d var names for strict mode checks\n", len(varNames))
+		}
+
+		// Pre-register hoisted function names as full global symbol-table
+		// bindings (not just heap indices, unlike var/let/const above) so a
+		// hoisted function's body can forward-reference a sibling hoisted
+		// function compiled later in the (alphabetically) sorted order below.
+		//
+		// Before #106 namespaced these, this "just worked" by accident: an
+		// unresolved reference from an earlier-processed function fell
+		// through to the general "maybe it's a global" fallback (see the
+		// Identifier compile case), which allocated the SAME bare heap key
+		// the sibling's own later hoisting step would also use. Once the
+		// sibling's own key is namespaced (moduleGlobalKey) but that fallback
+		// intentionally stays bare - it also serves genuinely external/
+		// undeclared references, which must NOT be namespaced - the two
+		// diverge into two different heap slots. Pre-registering the real,
+		// namespaced index here (before any hoisted function body compiles)
+		// means the forward reference finds it via the symbol table's own
+		// IsGlobal/GlobalIndex instead of ever reaching that fallback.
+		if program.HoistedDeclarations != nil {
+			hoistedNames := make([]string, 0, len(program.HoistedDeclarations))
+			for name := range program.HoistedDeclarations {
+				hoistedNames = append(hoistedNames, name)
+			}
+			sort.Strings(hoistedNames)
+			for _, name := range hoistedNames {
+				globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
+				c.currentSymbolTable.DefineGlobal(name, globalIdx)
+			}
 		}
 	}
 
@@ -1010,7 +1063,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			closureReg := c.emitClosure(c.regAlloc.Alloc(), funcConstIndex, funcLit, freeSymbols) // Use actual freeSymbols
 
 			// 4. Get global index and define as global symbol
-			globalIdx := c.GetOrAssignGlobalIndex(name)
+			globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 
 			// Update the symbol table entry to mark it as global
 			c.currentSymbolTable.DefineGlobal(name, globalIdx)
@@ -1046,7 +1099,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 				continue
 			}
 			// Define as global with undefined value
-			globalIdx := c.GetOrAssignGlobalIndex(name)
+			globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 			c.currentSymbolTable.DefineGlobal(name, globalIdx)
 			// Emit code to initialize to undefined
 			tempReg := c.regAlloc.Alloc()
@@ -1078,7 +1131,7 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 					continue
 				}
 				// Define as global with Uninitialized value (TDZ)
-				globalIdx := c.GetOrAssignGlobalIndex(name)
+				globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 				c.currentSymbolTable.DefineGlobal(name, globalIdx)
 				// Emit code to initialize to Uninitialized (TDZ marker)
 				tempReg := c.regAlloc.Alloc()
@@ -1804,7 +1857,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 			// 5. If at top level, also set as global variable
 			if c.enclosing == nil {
-				globalIdx := c.GetOrAssignGlobalIndex(funcLit.Name.Value)
+				globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(funcLit.Name.Value))
 				c.emitSetGlobal(globalIdx, bindingReg, funcLit.Token.Line)
 				c.currentSymbolTable.DefineGlobal(funcLit.Name.Value, globalIdx)
 				// Mark as non-configurable (DontDelete) only for true top-level function declarations,
@@ -2255,8 +2308,13 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				// This is a global recursive call - module mode top-level function
 				// The variable will be stored as a global, so use OpGetGlobal
 				debugPrintf("// DEBUG Identifier '%s': Recursive call to GLOBAL (IsGlobal=%v, isModuleLevelDef=%v), using OpGetGlobal\n", node.Value, symbolRef.IsGlobal, isModuleLevelDef)
-				// Get or assign the global index
-				globalIdx := c.GetOrAssignGlobalIndex(node.Value)
+				// Get or assign the global index. This name isn't marked
+				// IsGlobal yet (we're compiling its own initializer/body,
+				// before the real DefineGlobal call runs), but it WILL become
+				// one at this same module-level key - moduleGlobalKey must
+				// match here so this pre-derivation lands on the identical
+				// heap slot the real declaration later installs (#106).
+				globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(node.Value))
 				c.emitGetGlobal(hint, globalIdx, node.Token.Line)
 			} else {
 				// True local recursive call - needs upvalue capture
@@ -2296,7 +2354,10 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				// This is a module-level variable that's being defined (let/const in module scope)
 				// It will become a global, so use OpGetGlobal
 				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, Register==nilRegister, treating as module-level global\n", node.Value)
-				globalIdx := c.GetOrAssignGlobalIndex(node.Value)
+				// Same pre-derivation reasoning as the recursive-self-call case
+				// above: this name will become global at its module-scoped key
+				// once its own DefineGlobal call runs (#106).
+				globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(node.Value))
 				c.emitGetGlobal(hint, globalIdx, node.Token.Line)
 			} else if c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
 				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, defined in OUTER FUNCTION, treating as FREE VARIABLE\n", node.Value)
@@ -3870,7 +3931,7 @@ func (c *Compiler) GetGlobalIndex(name string) int {
 // own record over a fresh heap-allocator lookup by that same plain name.
 //
 // This matters because a module-scope class's heap slot may be keyed by
-// something other than its plain name (see classModuleGlobalKey, #103):
+// something other than its plain name (see moduleGlobalKey, #103/#106):
 // GetGlobalIndex(plainName) would then miss it and silently allocate an
 // unrelated, never-written slot. The symbol table always binds the plain
 // name to the real index regardless of how the underlying heap key was
@@ -3940,12 +4001,22 @@ func (c *Compiler) GetExportGlobalIndices() map[string]int {
 					// fmt.Printf("// [Compiler] GetExportGlobalIndices: Re-export '%s' maps to local global[%d]\n", exportName, globalIdx)
 				}
 			}
+		} else if exportRef.GlobalIndex >= 0 {
+			// Local export: prefer the index recorded on the ExportReference
+			// itself (set at DefineExport time, when the caller had the exact
+			// index in hand - e.g. a namespaced module-scope key, see
+			// moduleGlobalKey #103/#106, or "export * from" re-exporting
+			// another module's value under this module's own global). A
+			// fresh lookupExportGlobalIndex(exportRef.LocalName) re-derivation
+			// would miss both of those: neither is bound in the symbol table
+			// under its plain local name, and the heap slot itself may not be
+			// plain-keyed either.
+			exportIndices[exportName] = exportRef.GlobalIndex
 		} else {
-			// Local export: The export name should correspond to the local name in globals.
-			// Prefer the symbol table's own record over a fresh by-name heap lookup: a
-			// module-scope class's heap slot may be keyed by something other than its
-			// plain name (see classModuleGlobalKey, #103), which GetGlobalIndex(plainName)
-			// would miss entirely.
+			// No index recorded on the reference (declaration compiled before
+			// this export was processed, or a legacy caller) - fall back to
+			// re-deriving it, preferring the symbol table's own record over a
+			// fresh by-name heap lookup for the same reason as above.
 			if globalIdx := c.lookupExportGlobalIndex(exportRef.LocalName); globalIdx >= 0 {
 				exportIndices[exportName] = globalIdx
 				// fmt.Printf("// [Compiler] GetExportGlobalIndices: Local export '%s' maps to global[%d]\n", exportName, globalIdx)
@@ -4338,7 +4409,12 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 			return BadRegister, NewCompileError(node, "invalid export name in 'export * as' declaration")
 		}
 
-		globalIdx := int(c.GetOrAssignGlobalIndex(nsName))
+		// Namespace the heap key the same way any other top-level module
+		// binding is (see moduleGlobalKey, #103/#106): "ns" is a real new
+		// binding this module installs, exactly like a class or function
+		// declaration, and must not alias an unrelated module's same-named
+		// bare global.
+		globalIdx := int(c.GetOrAssignGlobalIndex(c.moduleGlobalKey(nsName)))
 		c.moduleBindings.DefineExport(nsName, nsName, vm.Undefined, nil, globalIdx)
 
 		nsReg := c.regAlloc.Alloc()
@@ -4398,14 +4474,18 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 
 		debugPrintf("// [Compiler] Re-exporting '%s' from '%s'\n", exportName, sourceModule)
 
-		globalIdx := int(c.GetOrAssignGlobalIndex(exportName))
+		// Namespace the heap key the same way "export * as ns" does above:
+		// this module's own re-exported binding for exportName is a real new
+		// global this module installs (see moduleGlobalKey, #103/#106).
+		key := c.moduleGlobalKey(exportName)
+		globalIdx := int(c.GetOrAssignGlobalIndex(key))
 		c.moduleBindings.DefineImport(exportName, sourceModule, exportName, ImportNamedRef, -1)
 		c.moduleBindings.DefineExport(exportName, exportName, vm.Undefined, nil, globalIdx)
 
 		tempReg := c.regAlloc.Alloc()
 		c.emitEvalModule(sourceModule, node.Token.Line)
 		c.emitGetModuleExport(tempReg, sourceModule, exportName, node.Token.Line)
-		globalIdxUint16 := c.GetOrAssignGlobalIndex(exportName)
+		globalIdxUint16 := c.GetOrAssignGlobalIndex(key)
 		c.emitSetGlobal(globalIdxUint16, tempReg, node.Token.Line)
 		c.regAlloc.Free(tempReg)
 	}
@@ -4546,11 +4626,12 @@ func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 	case *parser.LetStatement:
 		if c.IsModuleMode() {
 			if d.Name != nil {
-				// Let/const declarations also get stored as globals at top-level
-				globalIdx := c.GetGlobalIndex(d.Name.Value)
-				if globalIdx == -1 {
-					globalIdx = int(c.GetOrAssignGlobalIndex(d.Name.Value))
-				}
+				// Let/const declarations also get stored as globals at top-level.
+				// Prefer the symbol table's own record over a fresh by-name heap
+				// lookup: a top-level let's heap slot may be keyed by something
+				// other than its plain name (see moduleGlobalKey, #103/#106),
+				// which GetGlobalIndex(plainName) would miss entirely.
+				globalIdx := c.resolveExportGlobalIndex(d.Name.Value)
 				c.moduleBindings.DefineExport(d.Name.Value, d.Name.Value, vm.Undefined, d, globalIdx)
 				debugPrintf("// [Compiler] Exported let: %s at global[%d]\n", d.Name.Value, globalIdx)
 			}
@@ -4559,11 +4640,10 @@ func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 	case *parser.VarStatement:
 		if c.IsModuleMode() {
 			if d.Name != nil {
-				// Var declarations also get stored as globals at top-level
-				globalIdx := c.GetGlobalIndex(d.Name.Value)
-				if globalIdx == -1 {
-					globalIdx = int(c.GetOrAssignGlobalIndex(d.Name.Value))
-				}
+				// Var declarations also get stored as globals at top-level.
+				// See the LetStatement case above for why resolveExportGlobalIndex
+				// (not a fresh plain-name lookup) is required here.
+				globalIdx := c.resolveExportGlobalIndex(d.Name.Value)
 				c.moduleBindings.DefineExport(d.Name.Value, d.Name.Value, vm.Undefined, d, globalIdx)
 				debugPrintf("// [Compiler] Exported var: %s at global[%d]\n", d.Name.Value, globalIdx)
 			}
@@ -4572,11 +4652,10 @@ func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 	case *parser.ConstStatement:
 		if c.IsModuleMode() {
 			if d.Name != nil {
-				// Let/const declarations also get stored as globals at top-level
-				globalIdx := c.GetGlobalIndex(d.Name.Value)
-				if globalIdx == -1 {
-					globalIdx = int(c.GetOrAssignGlobalIndex(d.Name.Value))
-				}
+				// Let/const declarations also get stored as globals at top-level.
+				// See the LetStatement case above for why resolveExportGlobalIndex
+				// (not a fresh plain-name lookup) is required here.
+				globalIdx := c.resolveExportGlobalIndex(d.Name.Value)
 				c.moduleBindings.DefineExport(d.Name.Value, d.Name.Value, vm.Undefined, d, globalIdx)
 				debugPrintf("// [Compiler] Exported const: %s at global[%d]\n", d.Name.Value, globalIdx)
 			}
@@ -4586,13 +4665,12 @@ func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 		// Handle function declarations in expression statements
 		if expr, ok := d.Expression.(*parser.FunctionLiteral); ok && expr.Name != nil {
 			if c.IsModuleMode() {
-				// Function declarations are automatically stored as globals at top-level
-				// Get the global index that was already assigned during function compilation
-				globalIdx := c.GetGlobalIndex(expr.Name.Value)
-				if globalIdx == -1 {
-					// If not found, assign a new one (though this shouldn't happen for functions)
-					globalIdx = int(c.GetOrAssignGlobalIndex(expr.Name.Value))
-				}
+				// Function declarations are automatically stored as globals at
+				// top-level. Get the global index that was already assigned
+				// during function compilation - via resolveExportGlobalIndex,
+				// not a fresh plain-name lookup, since a top-level function's
+				// heap slot may be namespaced (see moduleGlobalKey, #103/#106).
+				globalIdx := c.resolveExportGlobalIndex(expr.Name.Value)
 				c.moduleBindings.DefineExport(expr.Name.Value, expr.Name.Value, vm.Undefined, d, globalIdx)
 				debugPrintf("// [Compiler] Exported function: %s at global[%d]\n", expr.Name.Value, globalIdx)
 			}
@@ -4933,7 +5011,7 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 						// table, so an import always reaches this branch. Resolve it
 						// as an import rather than guessing it's a global/builtin: a
 						// module-scope class's global slot may not even be
-						// plain-keyed (see classModuleGlobalKey, #103).
+						// plain-keyed (see moduleGlobalKey, #103/#106).
 						superConstructorReg = c.regAlloc.Alloc()
 						needToFreeSuperReg = true
 						c.emitImportResolve(superConstructorReg, superClassName, node.Token.Line)
@@ -5052,8 +5130,13 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 	// Also skip if the name was inferred from assignment target (isNamedClassExpr is false).
 	if hint == BadRegister && isNamedClassExpr {
 		if c.enclosing == nil {
-			// Top-level class - define as global
-			globalIdx := c.GetOrAssignGlobalIndex(node.Name.Value)
+			// Top-level class - define as global. Namespace the heap key the
+			// same way compileClassDeclaration does (see moduleGlobalKey,
+			// #103/#106): this is the same "top-level module declaration"
+			// shape, just reached via `export default class Named {}` (or any
+			// other standalone named class expression at module top level)
+			// instead of a plain `class Named {}` declaration.
+			globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(node.Name.Value))
 			c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 			c.emitSetGlobal(globalIdx, constructorReg, node.Token.Line)
 			debugPrintf("// DEBUG compileClassExpression: Defined global class '%s' at index %d\n", node.Name.Value, globalIdx)
