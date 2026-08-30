@@ -15422,9 +15422,12 @@ startExecution:
 			propName := AsString(nameVal)
 			obj := registers[objReg]
 
-			// Check for undefined or null base object - should throw ReferenceError
+			// Per ECMAScript delete-operator semantics, a null/undefined base
+			// fails ToObject(ref.[[Base]]) with a TypeError, not a
+			// ReferenceError (test262 language/expressions/delete/member-
+			// identifier-reference-{null,undefined}.js).
 			if obj.Type() == TypeUndefined || obj.Type() == TypeNull {
-				vm.ThrowReferenceError("Cannot delete property '" + propName + "' of " + obj.Type().String())
+				vm.ThrowTypeError("Cannot convert " + obj.Type().String() + " to object (delete '" + propName + "')")
 				if !vm.unwinding {
 					// Exception was caught by a handler, reload frame and continue
 					frame = &vm.frames[vm.frameCount-1]
@@ -15909,11 +15912,14 @@ startExecution:
 			obj := registers[objReg]
 			key := registers[keyReg]
 
-			// Check for undefined or null base object - should throw ReferenceError
+			// Per ECMAScript delete-operator semantics, a null/undefined base
+			// fails ToObject(ref.[[Base]]) with a TypeError, not a
+			// ReferenceError (test262 language/expressions/delete/member-
+			// computed-reference-{null,undefined}.js).
 			if obj.Type() == TypeUndefined || obj.Type() == TypeNull {
 				frame.ip = ip
 				keyStr := key.ToString()
-				vm.ThrowReferenceError("Cannot delete property '" + keyStr + "' of " + obj.Type().String())
+				vm.ThrowTypeError("Cannot convert " + obj.Type().String() + " to object (delete '" + keyStr + "')")
 				if !vm.unwinding {
 					// Exception was caught by a handler, reload frame and continue
 					frame = &vm.frames[vm.frameCount-1]
