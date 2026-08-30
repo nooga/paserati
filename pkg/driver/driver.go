@@ -244,6 +244,11 @@ func NewPaseratiWithInitializersAndBaseDir(customInitializers []builtins.Builtin
 		// CRITICAL: Give module compiler the SAME heap allocator instance
 		// This ensures all compilers coordinate on the exact same global indices
 		newCompiler.SetHeapAlloc(paserati.heapAlloc)
+		// This compiler compiles one specific file resolved by the module
+		// loader (an import target, or the entry file under RunFile), unlike
+		// the persistent session compiler reused across RunString/REPL calls.
+		// See #103.
+		newCompiler.SetLoadedViaModuleLoader(true)
 
 		// Return a wrapper that adapts the return type to interface{}
 		return &compilerAdapter{newCompiler}
@@ -329,6 +334,11 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 		// CRITICAL: Give module compiler the SAME heap allocator instance
 		// This ensures all compilers coordinate on the exact same global indices
 		newCompiler.SetHeapAlloc(paserati.heapAlloc)
+		// This compiler compiles one specific file resolved by the module
+		// loader (an import target, or the entry file under RunFile), unlike
+		// the persistent session compiler reused across RunString/REPL calls.
+		// See #103.
+		newCompiler.SetLoadedViaModuleLoader(true)
 
 		// Return a wrapper that adapts the return type to interface{}
 		return &compilerAdapter{newCompiler}

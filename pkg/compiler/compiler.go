@@ -369,6 +369,16 @@ type Compiler struct {
 	globalCount int
 	// Unified heap allocator for coordinating global indices across modules
 	heapAlloc *HeapAlloc
+	// loadedViaModuleLoader is true when this compiler instance was created by
+	// the module loader's compiler factory to compile a specific file resolved
+	// by import (or the entry file under RunFile/RunModule). It is false for
+	// the persistent session compiler used by RunString/REPL/eval, where a
+	// synthetic module name is reused across separate Compile() calls and
+	// top-level bindings must stay plain-name-keyed for that sharing to work.
+	// See #103: only compilers with this flag set namespace a top-level
+	// module-scope class's heap slot by module path, so same-named classes in
+	// unrelated modules don't alias the same global.
+	loadedViaModuleLoader bool
 	// line tracking
 	line int
 	// Anonymous class counter for generating unique names
@@ -521,6 +531,21 @@ func (c *Compiler) SetSkipTypeCheck(skip bool) {
 // SetHeapAlloc sets the heap allocator for coordinating global indices
 func (c *Compiler) SetHeapAlloc(heapAlloc *HeapAlloc) {
 	c.heapAlloc = heapAlloc
+}
+
+// SetLoadedViaModuleLoader marks this compiler as compiling a specific file
+// resolved by the module loader (an import target, or the entry file under
+// RunFile/RunModule), as opposed to the persistent session compiler reused
+// across separate RunString/REPL/eval calls under a synthetic module name.
+// See the loadedViaModuleLoader field comment and #103.
+func (c *Compiler) SetLoadedViaModuleLoader(v bool) {
+	c.loadedViaModuleLoader = v
+}
+
+// IsLoadedViaModuleLoader reports whether this compiler was created by the
+// module loader's compiler factory (see SetLoadedViaModuleLoader).
+func (c *Compiler) IsLoadedViaModuleLoader() bool {
+	return c.loadedViaModuleLoader
 }
 
 // AllocSpillSlot allocates a new spill slot for storing a variable when registers are exhausted.
@@ -3820,6 +3845,38 @@ func (c *Compiler) GetGlobalIndex(name string) int {
 	return -1
 }
 
+// resolveExportGlobalIndex returns the heap index that a plain top-level name
+// currently resolves to for export purposes, preferring the symbol table's
+// own record over a fresh heap-allocator lookup by that same plain name.
+//
+// This matters because a module-scope class's heap slot may be keyed by
+// something other than its plain name (see classModuleGlobalKey, #103):
+// GetGlobalIndex(plainName) would then miss it and silently allocate an
+// unrelated, never-written slot. The symbol table always binds the plain
+// name to the real index regardless of how the underlying heap key was
+// derived, so consulting it first is correct for every top-level binding
+// kind, not just classes, and changes nothing for the plain-keyed ones.
+func (c *Compiler) resolveExportGlobalIndex(name string) int {
+	if globalIdx := c.lookupExportGlobalIndex(name); globalIdx >= 0 {
+		return globalIdx
+	}
+	return int(c.GetOrAssignGlobalIndex(name))
+}
+
+// lookupExportGlobalIndex is the non-allocating counterpart to
+// resolveExportGlobalIndex: it returns -1 (never allocates a fresh index) when
+// name isn't already bound anywhere. GetExportGlobalIndices relies on that -1
+// to skip names it can't resolve, falling back to findExportValueInHeap's
+// by-value heap scan; resolveExportGlobalIndex's "assign one if missing"
+// behavior would silently paper over that miss with an unrelated, never
+// -written slot instead of letting the fallback run.
+func (c *Compiler) lookupExportGlobalIndex(name string) int {
+	if sym, _, found := c.currentSymbolTable.Resolve(name); found && sym.IsGlobal {
+		return int(sym.GlobalIndex)
+	}
+	return c.GetGlobalIndex(name)
+}
+
 // SetGlobalIndex forces a global variable name to use a specific index
 // This is used to coordinate global indices between different compiler instances
 func (c *Compiler) SetGlobalIndex(name string, index int) {
@@ -3864,8 +3921,12 @@ func (c *Compiler) GetExportGlobalIndices() map[string]int {
 				}
 			}
 		} else {
-			// Local export: The export name should correspond to the local name in globals
-			if globalIdx := c.GetGlobalIndex(exportRef.LocalName); globalIdx >= 0 {
+			// Local export: The export name should correspond to the local name in globals.
+			// Prefer the symbol table's own record over a fresh by-name heap lookup: a
+			// module-scope class's heap slot may be keyed by something other than its
+			// plain name (see classModuleGlobalKey, #103), which GetGlobalIndex(plainName)
+			// would miss entirely.
+			if globalIdx := c.lookupExportGlobalIndex(exportRef.LocalName); globalIdx >= 0 {
 				exportIndices[exportName] = globalIdx
 				// fmt.Printf("// [Compiler] GetExportGlobalIndices: Local export '%s' maps to global[%d]\n", exportName, globalIdx)
 			}
@@ -4168,10 +4229,7 @@ func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclara
 							// For now, we can't get the runtime value until execution
 							// So we register it with undefined and resolve later
 							// Get the global index for this export
-							globalIdx := c.GetGlobalIndex(localName)
-							if globalIdx == -1 {
-								globalIdx = int(c.GetOrAssignGlobalIndex(localName))
-							}
+							globalIdx := c.resolveExportGlobalIndex(localName)
 							c.moduleBindings.DefineExport(localName, exportName, vm.Undefined, nil, globalIdx)
 						}
 						debugPrintf("// [Compiler] Exported: %s as %s\n", localName, exportName)
@@ -4520,10 +4578,7 @@ func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 			}
 		} else if expr, ok := d.Expression.(*parser.ClassExpression); ok && expr.Name != nil {
 			if c.IsModuleMode() {
-				globalIdx := c.GetGlobalIndex(expr.Name.Value)
-				if globalIdx == -1 {
-					globalIdx = int(c.GetOrAssignGlobalIndex(expr.Name.Value))
-				}
+				globalIdx := c.resolveExportGlobalIndex(expr.Name.Value)
 				c.moduleBindings.DefineExport(expr.Name.Value, expr.Name.Value, vm.Undefined, d, globalIdx)
 				debugPrintf("// [Compiler] Exported class expression: %s at global[%d]\n", expr.Name.Value, globalIdx)
 			}
@@ -4531,10 +4586,7 @@ func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 
 	case *parser.ClassDeclaration:
 		if c.IsModuleMode() && d.Name != nil {
-			globalIdx := c.GetGlobalIndex(d.Name.Value)
-			if globalIdx == -1 {
-				globalIdx = int(c.GetOrAssignGlobalIndex(d.Name.Value))
-			}
+			globalIdx := c.resolveExportGlobalIndex(d.Name.Value)
 			c.moduleBindings.DefineExport(d.Name.Value, d.Name.Value, vm.Undefined, d, globalIdx)
 			debugPrintf("// [Compiler] Exported class: %s at global[%d]\n", d.Name.Value, globalIdx)
 		}
@@ -4856,8 +4908,17 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 							superConstructorReg = symbol.Register
 							needToFreeSuperReg = false
 						}
+					} else if c.IsModuleMode() && c.moduleBindings != nil && c.moduleBindings.IsImported(superClassName) {
+						// Imported names live in moduleBindings, never in the symbol
+						// table, so an import always reaches this branch. Resolve it
+						// as an import rather than guessing it's a global/builtin: a
+						// module-scope class's global slot may not even be
+						// plain-keyed (see classModuleGlobalKey, #103).
+						superConstructorReg = c.regAlloc.Alloc()
+						needToFreeSuperReg = true
+						c.emitImportResolve(superConstructorReg, superClassName, node.Token.Line)
 					} else {
-						// Not in symbol table - might be a built-in class
+						// Not in symbol table and not an import - might be a built-in class
 						globalIdx := c.GetOrAssignGlobalIndex(superClassName)
 						superConstructorReg = c.regAlloc.Alloc()
 						needToFreeSuperReg = true
