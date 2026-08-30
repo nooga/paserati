@@ -149,6 +149,14 @@ type Compiler interface {
 	Compile(node parser.Node) (interface{}, []errors.PaseratiError)
 	GetExportGlobalIndices() map[string]int
 	GetReExports() map[string]vm.ModuleReExport
+	// GetAllGlobalNames returns every name->heap-index mapping registered so
+	// far in the shared heap allocator all module compilers coordinate
+	// through - not just this compiler's own exports. See #107: the module
+	// loader re-syncs this into the VM's heap after each module it compiles,
+	// so name-existence checks keyed on the VM's copy stay current as
+	// dependency modules are lazily compiled, instead of reflecting only
+	// whatever existed when the entry module finished compiling.
+	GetAllGlobalNames() map[string]int
 }
 
 // DependencyAnalyzer tracks module dependencies during loading
