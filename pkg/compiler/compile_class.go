@@ -218,11 +218,11 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 
 	// 1. Pre-define the class name in the OUTER scope so the constructor can reference it
 	// This is needed for cases like: constructor() { Counter.increment(); }
-	// We temporarily define it with nilRegister, then update it later
 	// For eval code (isIndirectEval=true), class declarations should be local
 	// to the eval's lexical environment, not global.
 	isGlobalClassScope := c.enclosing == nil && !c.isIndirectEval
 	var classGlobalIdx uint16 // only meaningful when isGlobalClassScope
+	var classSpillSlot uint16 // only meaningful when !isGlobalClassScope
 	if isGlobalClassScope {
 		// Top-level class declaration. The symbol table always binds the
 		// plain name (so intra-module references, including recursive
@@ -232,29 +232,40 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 		c.currentSymbolTable.DefineGlobal(node.Name.Value, classGlobalIdx)
 		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined global class '%s' at index %d\n", node.Name.Value, classGlobalIdx)
 	} else {
-		// Local class declaration (or eval-scoped class)
-		c.currentSymbolTable.Define(node.Name.Value, nilRegister)
-		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined local class '%s'\n", node.Name.Value)
+		// Local class declaration (or eval-scoped class).
+		// Pre-allocate a stable spill slot for the binding right now, before the
+		// constructor/methods compile, so any closure compiled while the class body
+		// compiles (the constructor's own self-reference, other methods, or nested
+		// functions inside them) captures the real, final storage location via
+		// CaptureFromSpill. The old approach defined this with a nilRegister
+		// placeholder that wasn't updated to the real register until after the
+		// whole class body - including all its methods - had already compiled, so
+		// any closure captured as an upvalue baked in a dangling nilRegister that
+		// never got fixed up (#128, same root-cause shape as #117/#119 but for
+		// function-scoped classes captured by upvalue instead of module-level
+		// ones). A spill slot is index-based like the global slot above, so it's
+		// stable across the whole compile - mirrors what compileClassExpression
+		// already does for named class expressions.
+		classSpillSlot = c.AllocSpillSlot()
+		c.currentSymbolTable.DefineSpilled(node.Name.Value, classSpillSlot)
+		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined local class '%s' in spill slot %d\n", node.Name.Value, classSpillSlot)
 	}
 
 	// Per ECMAScript spec (sec-runtime-semantics-classdefinitionevaluation):
 	// Create an inner scope with an immutable binding of the class name.
 	// This ensures methods inside the class see the immutable binding.
-	// NOTE: We don't allocate a separate register for the inner binding - that would
-	// cause register leaks when closures capture it. Instead, the inner binding shares
-	// storage with the outer binding (global or outer register). The TDZ case
-	// (class x extends x {}) is handled specially in heritage resolution.
+	// The inner binding shares storage with the outer binding (global index or
+	// spill slot). The TDZ case (class x extends x {}) is handled specially in
+	// heritage resolution.
 	var prevSymbolTable *SymbolTable
 	if node.Name.Value != "" {
 		prevSymbolTable = c.currentSymbolTable
 		c.currentSymbolTable = NewEnclosedSymbolTable(c.currentSymbolTable)
 		// The inner binding shares storage with the outer binding but has IsStrictImmutable set.
-		// For globals, we use the same global index. For locals, we use nilRegister for now
-		// (will be updated to constructorReg later when the outer binding is updated).
 		if isGlobalClassScope {
 			c.currentSymbolTable.DefineGlobalStrictImmutable(node.Name.Value, classGlobalIdx)
 		} else {
-			c.currentSymbolTable.DefineStrictImmutable(node.Name.Value, nilRegister)
+			c.currentSymbolTable.DefineSpilledStrictImmutable(node.Name.Value, classSpillSlot)
 		}
 		debugPrintf("// DEBUG compileClassDeclaration: Created inner immutable binding for class '%s'\n", node.Name.Value)
 	}
@@ -475,27 +486,21 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	}
 	c.currentClassDecorators = nil
 
-	// 5. Update the class constructor register/global
-	// For local classes, update BOTH the inner and outer bindings before restoring the outer scope
+	// 5. Store the finished constructor into the class binding.
+	// For local classes, the inner and outer bindings already share the same
+	// spill slot (defined up front in step 1), so a single store satisfies both.
 	if isGlobalClassScope {
 		// Top-level class declaration - set the global value
 		c.emitSetGlobal(classGlobalIdx, constructorReg, node.Token.Line)
 		debugPrintf("// DEBUG compileClassDeclaration: Set global class '%s' to R%d\n", node.Name.Value, constructorReg)
 	} else {
-		// Local class declaration - update the inner binding's register first (while inner scope is active)
-		c.currentSymbolTable.UpdateRegister(node.Name.Value, constructorReg)
-		debugPrintf("// DEBUG compileClassDeclaration: Updated inner binding for class '%s' to R%d\n", node.Name.Value, constructorReg)
+		c.emitStoreSpill(classSpillSlot, constructorReg, node.Token.Line)
+		debugPrintf("// DEBUG compileClassDeclaration: Stored local class '%s' constructor into spill slot %d\n", node.Name.Value, classSpillSlot)
 	}
 
 	// Restore outer scope
 	if prevSymbolTable != nil {
 		c.currentSymbolTable = prevSymbolTable
-	}
-
-	// For local classes, also update the outer binding
-	if !isGlobalClassScope {
-		c.currentSymbolTable.UpdateRegister(node.Name.Value, constructorReg)
-		debugPrintf("// DEBUG compileClassDeclaration: Updated outer binding for class '%s' to R%d\n", node.Name.Value, constructorReg)
 	}
 
 	// Class declarations don't produce a value for the hint register
