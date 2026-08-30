@@ -281,7 +281,20 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 						// In strict mode, assignment to undeclared variable throws ReferenceError
 						// But first check if this is an existing global (e.g., var/let/const at global scope)
 						// Also skip for 'arguments' and 'eval' which have special handling elsewhere
-						if c.chunk.IsStrict && !c.GlobalExists(lhsNode.Value) && lhsNode.Value != "arguments" && lhsNode.Value != "eval" {
+						//
+						// globalKey mirrors compileIdentifier's read-side fallback (see its
+						// comment, and paserati#117): if this name is one of this module's
+						// own not-yet-compiled top-level var/let/const declarations, both
+						// the existence check and the assignment below must use the same
+						// moduleGlobalKey-namespaced key the real declaration will (under
+						// module mode) write to, or GlobalExists wrongly reports "doesn't
+						// exist" and this gets misdiagnosed as an undeclared-variable
+						// ReferenceError.
+						globalKey := lhsNode.Value
+						if c.moduleBindings != nil && c.moduleBindings.TopLevelDeclNames[lhsNode.Value] {
+							globalKey = c.moduleGlobalKey(lhsNode.Value)
+						}
+						if c.chunk.IsStrict && !c.GlobalExists(globalKey) && lhsNode.Value != "arguments" && lhsNode.Value != "eval" {
 							// Emit runtime error for strict mode undeclared variable assignment
 							c.emitStrictUndeclaredAssignmentError(lhsNode.Value, line)
 							// Still evaluate RHS for side effects
@@ -292,7 +305,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 						}
 						// Either non-strict mode or existing global: treat as global assignment
 						identInfo.isGlobal = true
-						identInfo.globalIdx = c.GetOrAssignGlobalIndex(lhsNode.Value)
+						identInfo.globalIdx = c.GetOrAssignGlobalIndex(globalKey)
 						if node.Operator != "=" {
 							currentValueReg = c.regAlloc.Alloc()
 							tempRegs = append(tempRegs, currentValueReg)
@@ -306,7 +319,13 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					// In strict mode, assignment to undeclared variable throws ReferenceError
 					// But first check if this is an existing global (e.g., var/let/const at global scope)
 					// Also skip for 'arguments' and 'eval' which have special error handling elsewhere
-					if c.chunk.IsStrict && !c.GlobalExists(lhsNode.Value) && lhsNode.Value != "arguments" && lhsNode.Value != "eval" {
+					//
+					// See the identical globalKey comment in the callerScopeDesc branch above.
+					globalKey := lhsNode.Value
+					if c.moduleBindings != nil && c.moduleBindings.TopLevelDeclNames[lhsNode.Value] {
+						globalKey = c.moduleGlobalKey(lhsNode.Value)
+					}
+					if c.chunk.IsStrict && !c.GlobalExists(globalKey) && lhsNode.Value != "arguments" && lhsNode.Value != "eval" {
 						// Emit runtime error for strict mode undeclared variable assignment
 						c.emitStrictUndeclaredAssignmentError(lhsNode.Value, line)
 						// Still evaluate RHS for side effects
@@ -317,7 +336,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					}
 					// Either non-strict mode or existing global: treat as global assignment
 					identInfo.isGlobal = true
-					identInfo.globalIdx = c.GetOrAssignGlobalIndex(lhsNode.Value)
+					identInfo.globalIdx = c.GetOrAssignGlobalIndex(globalKey)
 					// For compound assignments, we need the current value
 					if node.Operator != "=" {
 						currentValueReg = c.regAlloc.Alloc()

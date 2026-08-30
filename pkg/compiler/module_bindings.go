@@ -21,18 +21,24 @@ type ModuleBindings struct {
 	// Module dependencies (for circular dependency detection)
 	Dependencies map[string]bool // Set of module paths this module depends on
 
-	// TopLevelLetConstNames names this module's own top-level let/const
+	// TopLevelDeclNames names this module's own top-level var/let/const/class
 	// declarations (populated once, at the root compiler, before any hoisted
 	// function body compiles - see Compile's pre-registration step). A
-	// hoisted function's body compiled before its module's own let/const
-	// declaration is reached resolves that name via the general "not found
-	// in any scope, treat as external global" fallback (compileIdentifier's
-	// !found case). That fallback must know whether the name belongs to
-	// *this module* (in which case it needs moduleGlobalKey's namespaced
-	// heap key, matching where the real declaration will later write) or is
-	// a genuinely external/undeclared global (which must NOT be namespaced).
-	// See paserati#117.
-	TopLevelLetConstNames map[string]bool
+	// hoisted function's body compiled before its module's own var/let/const/
+	// class declaration is reached resolves that name via the general "not
+	// found in any scope, treat as external global" fallback
+	// (compileIdentifier's !found case, and the analogous fallbacks in
+	// compileAssignmentExpression). That fallback must know whether the name
+	// belongs to *this module* (in which case it needs moduleGlobalKey's
+	// namespaced heap key, matching where the real declaration will later
+	// write) or is a genuinely external/undeclared global (which must NOT be
+	// namespaced). See paserati#117 (which introduced this for let/const
+	// only) and paserati#119 (which extended it to var and class - the
+	// pre-registration step a few lines up already computed the namespaced
+	// heap key for var names via moduleGlobalKey, but nothing told this
+	// fallback to use it, so a hoisted function referencing its own module's
+	// top-level var or class still got a ReferenceError).
+	TopLevelDeclNames map[string]bool
 }
 
 // ImportReference represents an imported name's runtime binding information

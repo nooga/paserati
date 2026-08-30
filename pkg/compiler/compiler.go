@@ -304,6 +304,42 @@ func collectLetConstDeclarations(stmts []parser.Statement) []string {
 	return names
 }
 
+// collectClassDeclarations collects the names of this module's own top-level
+// class declarations (including `export class X {}`), the same way
+// collectLetConstDeclarations does for let/const - see its comment and
+// paserati#117. (`export default class X {}` is a separate AST shape not
+// handled here.) A class declaration only registers its own
+// name in the symbol table when compileClassDeclaration itself runs, at the
+// class statement's sequential position; a hoisted function compiled ahead
+// of that position that references the class by name needs to know it
+// belongs to this module (for the namespaced moduleGlobalKey fallback in
+// compileIdentifier) rather than being a genuinely external/undeclared
+// global.
+func collectClassDeclarations(stmts []parser.Statement) []string {
+	var names []string
+	seen := make(map[string]bool)
+
+	var visit func(stmt parser.Statement)
+	visit = func(stmt parser.Statement) {
+		if stmt == nil {
+			return
+		}
+		switch s := stmt.(type) {
+		case *parser.ClassDeclaration:
+			if !s.Declare && s.Name != nil && s.Name.Value != "" && !seen[s.Name.Value] {
+				names = append(names, s.Name.Value)
+				seen[s.Name.Value] = true
+			}
+		case *parser.ExportNamedDeclaration:
+			visit(s.Declaration)
+		}
+	}
+	for _, stmt := range stmts {
+		visit(stmt)
+	}
+	return names
+}
+
 // --- New: Loop Context for Break/Continue ---
 type LoopContext struct {
 	// Optional label for this loop/statement
@@ -1014,6 +1050,21 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 		for _, name := range varNames {
 			c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 		}
+		// Record this module's own top-level var names the same way the
+		// let/const branch below records its own (see the comment there) -
+		// var's namespaced heap key was just computed above, but nothing
+		// told compileIdentifier's fallback to use it, so a hoisted
+		// function referencing its own module's top-level var before the
+		// var statement itself had compiled got a ReferenceError instead of
+		// resolving to the not-yet-initialized (undefined) binding.
+		if c.moduleBindings != nil && len(varNames) > 0 {
+			if c.moduleBindings.TopLevelDeclNames == nil {
+				c.moduleBindings.TopLevelDeclNames = make(map[string]bool, len(varNames))
+			}
+			for _, name := range varNames {
+				c.moduleBindings.TopLevelDeclNames[name] = true
+			}
+		}
 		// Pre-register let/const declarations (except for eval which has different scoping)
 		if !c.isIndirectEval && c.callerScopeDesc == nil {
 			letConstNames := collectLetConstDeclarations(program.Statements)
@@ -1033,16 +1084,43 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			// note on generator_nested.ts). This only widens one narrow,
 			// already-existing fallback path, not general name resolution.
 			if c.moduleBindings != nil {
-				if c.moduleBindings.TopLevelLetConstNames == nil {
-					c.moduleBindings.TopLevelLetConstNames = make(map[string]bool, len(letConstNames))
+				if c.moduleBindings.TopLevelDeclNames == nil {
+					c.moduleBindings.TopLevelDeclNames = make(map[string]bool, len(letConstNames))
 				}
 				for _, name := range letConstNames {
-					c.moduleBindings.TopLevelLetConstNames[name] = true
+					c.moduleBindings.TopLevelDeclNames[name] = true
 				}
 			}
 			debugPrintf("[Compile] Pre-registered %d var and %d let/const names for strict mode checks\n", len(varNames), len(letConstNames))
 		} else {
 			debugPrintf("[Compile] Pre-registered %d var names for strict mode checks\n", len(varNames))
+		}
+
+		// Record this module's own top-level class names into the same
+		// fallback set, for the same reason as let/const above. Unlike
+		// let/const/var, a class's own global index is reserved lazily by
+		// compileClassDeclaration itself (via the same moduleGlobalKey), not
+		// pre-assigned here - classes have no runtime value to default-
+		// initialize ahead of their declaration, so there is nothing to
+		// GetOrAssignGlobalIndex for in advance. Only the *name* needs to be
+		// known ahead of time, so an earlier-compiled hoisted function that
+		// references this module's own not-yet-declared class (see
+		// paserati#119, #117's class-specific counterpart) computes the same
+		// namespaced key compileClassDeclaration will later use, instead of
+		// a bare key that falls through to a bogus "ReferenceError:
+		// AgentSessionRuntime is not defined" (nothing ever writes the bare
+		// key). Deliberately NOT DefineGlobal here either, for the same
+		// local-shadows-global reason as let/const.
+		if !c.isIndirectEval && c.callerScopeDesc == nil && c.moduleBindings != nil {
+			classNames := collectClassDeclarations(program.Statements)
+			if len(classNames) > 0 {
+				if c.moduleBindings.TopLevelDeclNames == nil {
+					c.moduleBindings.TopLevelDeclNames = make(map[string]bool, len(classNames))
+				}
+				for _, name := range classNames {
+					c.moduleBindings.TopLevelDeclNames[name] = true
+				}
+			}
 		}
 
 		// Pre-register hoisted function names as full global symbol-table
@@ -2294,15 +2372,16 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 			// Variable not found in any scope, treat as a global variable access.
 			// This will return undefined at runtime if the global doesn't exist -
-			// UNLESS this name is one of this module's own top-level let/const
+			// UNLESS this name is one of this module's own top-level var/let/const
 			// declarations, not yet compiled (a hoisted function's body compiles
 			// before the module's sequential statements are reached). In that
 			// case the real declaration will (under module mode) write to a
 			// moduleGlobalKey-namespaced heap slot, so this reference must use
 			// the same namespaced key rather than a bare one, or it resolves to
-			// a different, never-written slot ("X is not defined" - #117).
+			// a different, never-written slot ("X is not defined" - #117, and
+			// its var-specific counterpart).
 			globalKey := node.Value
-			if c.moduleBindings != nil && c.moduleBindings.TopLevelLetConstNames[node.Value] {
+			if c.moduleBindings != nil && c.moduleBindings.TopLevelDeclNames[node.Value] {
 				globalKey = c.moduleGlobalKey(node.Value)
 			}
 			globalIdx := c.GetOrAssignGlobalIndex(globalKey)

@@ -19127,10 +19127,35 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	// This will be handled by the VM's exception handling system
 	vm.throwException(exception)
 
-	// Check if the exception unwound all frames (uncaught exception)
-	if vm.frameCount == 0 && vm.unwinding {
-		// Exception propagated through all frames - surface as ExceptionError
-		return Undefined, exceptionError{exception: vm.currentException}
+	// Check if the exception unwound all frames (uncaught exception), OR
+	// stopped at this frame's own direct-call boundary without finding a
+	// handler in between (vm.unwindingCrossedNative - see paserati#61's
+	// mechanism). Both cases leave a live vm.currentException with no
+	// pending handler for vm.run() to jump to. Previously only the
+	// frameCount==0 case was handled here; the unwindingCrossedNative case
+	// fell through to vm.run(), whose entry guard (`if vm.frameCount == 0
+	// || vm.unwindingCrossedNative { return InterpretOK, Undefined }`)
+	// treated the still-pending exception as "nothing to run" and
+	// discarded it silently - the resumed async function's own promise
+	// then never settled, hanging the whole await chain with no error
+	// surfaced anywhere. See paserati#118.
+	if vm.unwinding && (vm.frameCount == 0 || vm.unwindingCrossedNative) {
+		// Exception propagated through all frames, or stopped at our own
+		// boundary - surface as ExceptionError either way. This native
+		// call is the handler for this exception (like a catch block -
+		// see handleCatchBlock's identical cleanup), so clear the VM's
+		// unwinding state the same way a catch does; otherwise the stale
+		// vm.unwinding/vm.currentException would be misread as still-live
+		// by the next, unrelated vm.run() call (e.g. invoking the
+		// rejection handler this error is about to feed into).
+		exc := vm.currentException
+		vm.currentException = Null
+		vm.unwinding = false
+		vm.unwindingCrossedNative = false
+		vm.frameCount = savedFrameCount
+		vm.nextRegSlot = savedNextRegSlot
+		promiseObj.Frame = nil
+		return Undefined, exceptionError{exception: exc}
 	}
 
 	// Execute the VM run loop - it will return when the exception is handled or propagates
