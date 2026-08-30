@@ -4252,25 +4252,39 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 		return BadRegister, NewCompileError(node, fmt.Sprintf("Failed to load source module '%s' for re-export: %v", sourceModule, err))
 	}
 
-	// Get export names from the source module
-	// Try runtime values first, then fall back to export names
-	sourceExports := sourceModuleRecord.GetExportValues()
-	exportNames := sourceModuleRecord.GetExportNames()
-
-	debugPrintf("// [Compiler] Source module '%s' has %d runtime exports and %d export names\n", sourceModule, len(sourceExports), len(exportNames))
-
-	// If we have runtime exports, use those names (most reliable)
-	if len(sourceExports) > 0 {
-		exportNames = nil // Clear the names array
-		for exportName := range sourceExports {
-			exportNames = append(exportNames, exportName)
+	// "export * as ns from 'module'" binds a single namespace export; unlike bare
+	// "export *" it does NOT flatten the source module's names into this one.
+	if node.Exported != nil {
+		nsName := getExportSpecName(node.Exported)
+		if nsName == "" {
+			return BadRegister, NewCompileError(node, "invalid export name in 'export * as' declaration")
 		}
-		debugPrintf("// [Compiler] Using runtime export names: %v\n", exportNames)
-	} else if len(exportNames) > 0 {
-		debugPrintf("// [Compiler] Using export names from module record: %v\n", exportNames)
-	} else {
-		debugPrintf("// [Compiler] No exports found in source module\n")
+
+		globalIdx := int(c.GetOrAssignGlobalIndex(nsName))
+		c.moduleBindings.DefineExport(nsName, nsName, vm.Undefined, nil, globalIdx)
+
+		nsReg := c.regAlloc.Alloc()
+		c.emitEvalModule(sourceModule, node.Token.Line)
+		c.emitCreateNamespace(nsReg, sourceModule, node.Token.Line)
+		c.emitSetGlobal(uint16(globalIdx), nsReg, node.Token.Line)
+		c.regAlloc.Free(nsReg)
+
+		debugPrintf("// [Compiler] Bound namespace export '%s' from '%s'\n", nsName, sourceModule)
+		return BadRegister, nil
 	}
+
+	// Get export names from the source module. Try runtime/checker-populated data
+	// first (checkExportAllDeclaration normally fills this in), then fall back to
+	// harvesting names from the source module's AST -- needed under skip-typecheck,
+	// where the checker never ran and never populated either map (see #99).
+	//
+	// visited starts empty (NOT pre-seeded with this module's own path): a mutual
+	// cycle like d.ts "export * from e.ts" / e.ts "export * from d.ts" must still
+	// discover d.ts's own local names when the traversal loops back through e.ts.
+	// collectExportAllNames marks each module visited as it is entered, which is
+	// enough on its own to stop a module (including this one) from being expanded
+	// more than once.
+	exportNames := c.collectExportAllNames(sourceModuleRecord, sourceModule, make(map[string]bool))
 
 	debugPrintf("// [Compiler] Will re-export %d names from '%s'\n", len(exportNames), sourceModule)
 
@@ -4278,10 +4292,29 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 	// This transforms "export * from './math'" into:
 	// 1. Generate import resolution for each export
 	// 2. Store each imported value as a global (like normal exports do)
+	seen := make(map[string]bool, len(exportNames))
 	for _, exportName := range exportNames {
 		// Skip default exports for "export *" (TypeScript behavior)
 		if exportName == "default" {
 			debugPrintf("// [Compiler] Skipping default export '%s' in re-export all\n", exportName)
+			continue
+		}
+		if seen[exportName] {
+			// Diamond re-export (e.g. a barrel that export*s two modules which both
+			// transitively export*  the same shared module) - only emit it once.
+			continue
+		}
+		seen[exportName] = true
+
+		if c.moduleBindings.IsExported(exportName) {
+			// This module already exports this name itself (an own declaration
+			// exported earlier in source order, or - notably - a mutual re-export
+			// cycle where the "source" module's own name harvest looped back and
+			// picked up this module's name). Per spec, a module's own binding
+			// always wins over a star re-export of the same name; re-exporting it
+			// here would overwrite the correct value with a stale/self-referential
+			// one (see the "own local export vs. cyclic export *" case).
+			debugPrintf("// [Compiler] Skipping '%s' in re-export all: already exported locally\n", exportName)
 			continue
 		}
 
@@ -4299,8 +4332,71 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 		c.regAlloc.Free(tempReg)
 	}
 
-	debugPrintf("// [Compiler] Completed re-export transformation for %d exports\n", len(exportNames))
+	debugPrintf("// [Compiler] Completed re-export transformation for %d exports\n", len(seen))
 	return BadRegister, nil
+}
+
+// collectExportAllNames resolves the flattened set of names that "export * from
+// specifier" should re-export. It prefers already-populated data (runtime export
+// values, or export names the type checker's checkExportAllDeclaration recorded)
+// and falls back to harvesting names from the module's AST when neither is
+// available -- the case under skip-typecheck, where the checker never runs.
+//
+// It recurses into nested bare "export *" re-exports (a barrel re-exporting
+// another barrel is the common npm shape) and treats a nested "export * as ns"
+// as contributing exactly one name, "ns", per spec. visited guards against
+// re-export cycles by resolved module path.
+func (c *Compiler) collectExportAllNames(rec vm.ModuleRecord, specifier string, visited map[string]bool) []string {
+	resolvedPath := rec.GetResolvedPath()
+	if resolvedPath == "" {
+		resolvedPath = specifier
+	}
+	if visited[resolvedPath] {
+		return nil
+	}
+	visited[resolvedPath] = true
+
+	if exportValues := rec.GetExportValues(); len(exportValues) > 0 {
+		names := make([]string, 0, len(exportValues))
+		for name := range exportValues {
+			names = append(names, name)
+		}
+		return names
+	}
+	if exportNames := rec.GetExportNames(); len(exportNames) > 0 {
+		return exportNames
+	}
+
+	// Nothing populated yet - harvest from the source module's AST.
+	if c.moduleLoader == nil {
+		return nil
+	}
+	concreteRec := c.moduleLoader.GetModule(specifier)
+	if concreteRec == nil || concreteRec.AST == nil {
+		return nil
+	}
+
+	names := c.extractExportNamesFromAST(concreteRec.AST)
+	for _, stmt := range concreteRec.AST.Statements {
+		all, ok := stmt.(*parser.ExportAllDeclaration)
+		if !ok || all.Source == nil {
+			continue
+		}
+		if all.Exported != nil {
+			// "export * as ns from '...'" contributes exactly one name: ns.
+			if nsName := getExportSpecName(all.Exported); nsName != "" {
+				names = append(names, nsName)
+			}
+			continue
+		}
+		// Nested bare "export * from '...'" - recurse into the nested source.
+		nestedRec, err := c.moduleLoader.LoadModule(all.Source.Value, resolvedPath)
+		if err != nil {
+			continue
+		}
+		names = append(names, c.collectExportAllNames(nestedRec, all.Source.Value, visited)...)
+	}
+	return names
 }
 
 // extractExportNamesFromAST extracts export names from a module's AST
