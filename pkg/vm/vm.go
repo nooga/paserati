@@ -10759,14 +10759,40 @@ startExecution:
 				// No arity checking needed for extra arguments
 				if vm.frameCount >= len(vm.frames) {
 					frame.ip = callerIP
-					status := vm.runtimeError("Stack overflow during constructor call.")
-					return status, Undefined
+					// #135: a catchable RangeError, not an internal runtimeError -
+					// deep constructor recursion is a normal (if buggy) JS program
+					// state, not a VM invariant violation, so it must be
+					// try/catch-able like V8/Node's "Maximum call stack size
+					// exceeded".
+					vm.ThrowRangeError("Maximum call stack size exceeded")
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					return InterpretRuntimeError, Undefined
 				}
 				requiredRegs := constructorFunc.RegisterSize
 				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
 					frame.ip = callerIP
-					status := vm.runtimeError("Register stack overflow during constructor call.")
-					return status, Undefined
+					vm.ThrowRangeError("Maximum call stack size exceeded")
+					if !vm.unwinding {
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					return InterpretRuntimeError, Undefined
 				}
 
 				// Determine the new.target value for this constructor call
@@ -10969,14 +10995,40 @@ startExecution:
 				// No arity checking needed for extra arguments
 				if vm.frameCount >= len(vm.frames) {
 					frame.ip = callerIP
-					status := vm.runtimeError("Stack overflow during constructor call.")
-					return status, Undefined
+					// #135: a catchable RangeError, not an internal runtimeError -
+					// deep constructor recursion is a normal (if buggy) JS program
+					// state, not a VM invariant violation, so it must be
+					// try/catch-able like V8/Node's "Maximum call stack size
+					// exceeded".
+					vm.ThrowRangeError("Maximum call stack size exceeded")
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					return InterpretRuntimeError, Undefined
 				}
 				requiredRegs := constructorFunc.RegisterSize
 				if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
 					frame.ip = callerIP
-					status := vm.runtimeError("Register stack overflow during constructor call.")
-					return status, Undefined
+					vm.ThrowRangeError("Maximum call stack size exceeded")
+					if !vm.unwinding {
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						code = function.Chunk.Code
+						constants = function.Chunk.Constants
+						registers = frame.registers
+						ip = frame.ip
+						continue
+					}
+					return InterpretRuntimeError, Undefined
 				}
 
 				// Determine the new.target value for this constructor call
@@ -11469,14 +11521,36 @@ startExecution:
 					}
 					if vm.frameCount >= len(vm.frames) {
 						frame.ip = callerIP
-						status := vm.runtimeError("Stack overflow during constructor call.")
-						return status, Undefined
+						// #135: a catchable RangeError, not an internal runtimeError -
+						// see the identical comment on the other constructor-call sites.
+						vm.ThrowRangeError("Maximum call stack size exceeded")
+						if !vm.unwinding {
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+						return InterpretRuntimeError, Undefined
 					}
 					requiredRegs := constructorFunc.RegisterSize
 					if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
 						frame.ip = callerIP
-						status := vm.runtimeError("Register stack overflow during constructor call.")
-						return status, Undefined
+						vm.ThrowRangeError("Maximum call stack size exceeded")
+						if !vm.unwinding {
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+						return InterpretRuntimeError, Undefined
 					}
 
 					// For bound function construction, new.target is the original constructor

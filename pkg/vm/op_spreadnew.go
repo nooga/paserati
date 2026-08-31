@@ -91,14 +91,24 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		// Check stack limits
 		if vm.frameCount >= len(vm.frames) {
 			frame.ip = callerIP
-			status := vm.runtimeError("Stack overflow during constructor call.")
-			return status, Undefined
+			// #135: a catchable RangeError, not an internal runtimeError - deep
+			// constructor recursion is a normal (if buggy) JS program state, not
+			// a VM invariant violation, so it must be try/catch-able like
+			// V8/Node's "Maximum call stack size exceeded".
+			vm.ThrowRangeError("Maximum call stack size exceeded")
+			if !vm.unwinding {
+				return InterpretOK, Undefined
+			}
+			return InterpretRuntimeError, Undefined
 		}
 		requiredRegs := constructorFunc.RegisterSize
 		if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
 			frame.ip = callerIP
-			status := vm.runtimeError("Register stack overflow during constructor call.")
-			return status, Undefined
+			vm.ThrowRangeError("Maximum call stack size exceeded")
+			if !vm.unwinding {
+				return InterpretOK, Undefined
+			}
+			return InterpretRuntimeError, Undefined
 		}
 
 		// Determine the new.target value for this constructor call
@@ -196,14 +206,24 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		// Check stack limits
 		if vm.frameCount >= len(vm.frames) {
 			frame.ip = callerIP
-			status := vm.runtimeError("Stack overflow during constructor call.")
-			return status, Undefined
+			// #135: a catchable RangeError, not an internal runtimeError - deep
+			// constructor recursion is a normal (if buggy) JS program state, not
+			// a VM invariant violation, so it must be try/catch-able like
+			// V8/Node's "Maximum call stack size exceeded".
+			vm.ThrowRangeError("Maximum call stack size exceeded")
+			if !vm.unwinding {
+				return InterpretOK, Undefined
+			}
+			return InterpretRuntimeError, Undefined
 		}
 		requiredRegs := constructorFunc.RegisterSize
 		if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
 			frame.ip = callerIP
-			status := vm.runtimeError("Register stack overflow during constructor call.")
-			return status, Undefined
+			vm.ThrowRangeError("Maximum call stack size exceeded")
+			if !vm.unwinding {
+				return InterpretOK, Undefined
+			}
+			return InterpretRuntimeError, Undefined
 		}
 
 		// Determine the new.target value for this constructor call
