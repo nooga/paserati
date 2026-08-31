@@ -101,10 +101,14 @@ func (vm *VM) NewPromiseFromExecutor(executor Value) (Value, error) {
 				reason = NewString(err.Error())
 			}
 			vm.rejectPromise(promise, reason)
-			// vm.Call itself now clears vm.unwinding/unwindingCrossedNative
-			// when it hands an exception off as a Go error (#142 - see the
-			// comment in executeUserFunctionSafe), so this is defense in
-			// depth rather than load-bearing: we're not re-throwing, the
+			// vm.Call itself now clears vm.unwinding when it hands an
+			// exception off as a Go error (#142 - see the comment in
+			// executeUserFunctionSafe). It deliberately does NOT clear
+			// unwindingCrossedNative, which stays set for re-throw
+			// detection, so this ClearUnwindingState() call is still doing
+			// real work on that third flag - but for the phantom-exception
+			// bug specifically it is now defense in depth rather than the
+			// only thing standing between us and it: we're not re-throwing, the
 			// executor's exception has been fully absorbed into a rejected
 			// promise, a normal (non-erroring) return value from this
 			// function, so there is nothing left for the caller to see as
@@ -235,14 +239,21 @@ func (vm *VM) triggerPromiseReactions(promise *PromiseObject, isFulfilled bool) 
 					reason = NewString(err.Error())
 				}
 				reaction.Reject(reason)
-				// Defense in depth, mirroring NewPromiseFromExecutor's own
-				// call a few lines up in this file: vm.Call now clears
-				// vm.unwinding/unwindingCrossedNative itself when it hands an
-				// exception off as a Go error (#142), but this was the
-				// actual site that leaked it before that fix - a reaction
+				// Mirrors NewPromiseFromExecutor's own call a few lines up in
+				// this file. vm.Call now clears vm.unwinding itself when it
+				// hands an exception off as a Go error (#142); it leaves
+				// unwindingCrossedNative set for re-throw detection, which
+				// this call does still clear. This was the actual site that
+				// leaked the phantom exception before that fix - a reaction
 				// handler's exception is fully absorbed into a rejection
 				// right here, a normal (non-erroring) return, so there is
-				// nothing left in flight for a caller to see regardless.
+				// nothing left in flight for a caller to see.
+				//
+				// NOTE for anyone reverting either half: this line and the
+				// vm_init.go clear are each independently sufficient for
+				// tests/scripts/promise_reaction_throw_no_unwinding_leak.ts,
+				// so that test stays green with either one alone. See its
+				// header for the measured breakdown.
 				vm.ClearUnwindingState()
 			} else {
 				reaction.Resolve(result)
