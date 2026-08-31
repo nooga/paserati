@@ -1852,41 +1852,55 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		} // end if !needsEnclosedScope (function body var hoisting)
 
 		// 0.6) Pre-register this block's own local class declarations BEFORE
-		// compiling hoisted functions below. A hoisted function's body compiles
-		// here, ahead of its sibling class declaration's own sequential
-		// position later in this block's statement loop - so a reference to
-		// the class from inside the hoisted function (directly, or via a
-		// closure nested inside it) would otherwise resolve the class name
-		// before compileClassDeclaration has allocated its spill slot, baking
-		// in a dangling capture that can never be fixed up. Same root-cause
+		// compiling ANY statement in this block below - not just its hoisted
+		// functions. A closure compiled at its own sequential position in
+		// this block's statement loop (an ordinary `const f = () => ...`, a
+		// plain function expression assigned to a binding - anything that
+		// isn't itself hoisted) can still be positioned earlier in source
+		// order than a class it references, as long as it's only actually
+		// *called* later, after the class has been declared - completely
+		// ordinary, common JS with no real TDZ violation. Originally this
+		// only ran when the block had hoisted functions, covering a hoisted
+		// function's own forward reference to a later sibling class (#141);
+		// generalizing the same pre-registration to every block (not just
+		// ones with hoisted declarations) additionally covers a non-hoisted
+		// closure doing the same thing (#144) - real JS scoping means a
+		// block-scoped class binding conceptually exists (in TDZ) for the
+		// entire block from the start, not just from its own declaration
+		// point onward, so any closure compiled anywhere in the block should
+		// be able to capture its final storage location. Without this, such
+		// a closure would resolve the class name before
+		// compileClassDeclaration has allocated its spill slot, baking in a
+		// dangling capture that can never be fixed up - same root-cause
 		// shape as #128 (a hoisted binding compiled before its own value
-		// exists), but for a hoisted *function* sibling instead of a closure
-		// nested directly inside the class body itself (#141).
+		// exists), just for an ordinary sequential-position closure instead
+		// of a hoisted function or a closure nested directly inside the
+		// class body itself.
 		//
 		// Only for classes that will actually take compileClassDeclaration's
 		// local/spilled path (mirrors its own isGlobalClassScope check) - a
 		// class that will end up global-scoped there must NOT get a spill
-		// slot here, or a hoisted function compiled early would capture the
-		// wrong storage location once the class's own declaration switches to
-		// the global binding.
+		// slot here, or an earlier-compiled closure would capture the wrong
+		// storage location once the class's own declaration switches to the
+		// global binding.
 		//
-		// Known remaining gap, NOT fixed here: this only covers a hoisted
-		// function and the class it references being direct siblings in the
-		// *same* block (collectClassDeclarations looks at node.Statements,
-		// this block's own statement list only). A function hoisted inside a
-		// *nested* block that references a class declared in an *enclosing*
-		// block still throws ReferenceError, because that nested block's own
+		// Known remaining gap, NOT fixed here: this only covers a closure
+		// and the class it references being direct siblings in the *same*
+		// block (collectClassDeclarations looks at node.Statements, this
+		// block's own statement list only). A closure inside a *nested*
+		// block that references a class declared in an *enclosing* block
+		// still throws ReferenceError, because that nested block's own
 		// pre-registration pass never sees the outer block's statements.
 		// Same shape as #128's own documented loop-body limitation - a
 		// separate, deeper cross-scope-forward-reference problem than the
-		// same-scope one #141 targets.
-		if len(node.HoistedDeclarations) > 0 && (c.enclosing != nil || c.isIndirectEval) {
+		// same-scope one this targets.
+		if c.enclosing != nil || c.isIndirectEval {
 			classNames := collectClassDeclarations(node.Statements)
 			for _, name := range classNames {
 				if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; !alreadyInCurrentScope {
 					spillIdx := c.AllocSpillSlot()
 					c.currentSymbolTable.DefineSpilled(name, spillIdx)
-					debugPrintf("// [ClassHoist] Pre-defined local class '%s' in SPILL SLOT %d for hoisted-function forward reference\n", name, spillIdx)
+					debugPrintf("// [ClassHoist] Pre-defined local class '%s' in SPILL SLOT %d for early-closure forward reference\n", name, spillIdx)
 				}
 			}
 		}
