@@ -347,7 +347,21 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.isSentinelFrame = false // Clear sentinel flag when reusing frame
 		newFrame.openUpvalues = nil      // Clear stale open-upvalue list from prior use of this slot
 		newFrame.generatorObj = nil      // Clear generator object when reusing frame
-		newFrame.argCount = argCount     // Store actual argument count for arguments object
+		// #133: clear promiseObj too. This path also sets up the frame that
+		// drives an async generator's underlying body (called with
+		// isGeneratorExecution=true from startGenerator/resumeGenerator), and
+		// that frame CAN reach OpAwait (an `async function*` body may itself
+		// contain `await`). Every genuine async-function frame sets
+		// frame.promiseObj explicitly right after this call
+		// (executeAsyncFunctionBody, resumeAsyncFunction), so clearing it
+		// here is safe for them - but for every other caller of this frame
+		// slot (plain calls, and specifically the generator/async-generator
+		// path), leaving a stale pointer from whatever async call last
+		// occupied this frame slot means OpAwait misattributes its suspend
+		// state to that unrelated, already-in-flight promise instead of
+		// staying nil (top-level-await-style draining) or being its own.
+		newFrame.promiseObj = nil
+		newFrame.argCount = argCount // Store actual argument count for arguments object
 		// Arguments handling:
 		//
 		// Historically we copied args here so OpGetArguments could build the `arguments` object
