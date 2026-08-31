@@ -910,6 +910,22 @@ func (c *Compiler) emitCloseUpvalue(reg Register, line int) {
 	c.emitByte(byte(reg))
 }
 
+// emitCloseUpvalueSpill emits OpCloseUpvalueSpill(16) to close any open upvalue
+// pointing at a spill slot. Spill-slot counterpart to emitCloseUpvalue, needed
+// for per-iteration bindings that live in a spill slot instead of a register -
+// e.g. a class declared inside a loop body, whose name binding is always
+// spill-based (#128). Uses 8-bit opcode for indices 0-255, 16-bit for larger.
+func (c *Compiler) emitCloseUpvalueSpill(spillIdx uint16, line int) {
+	if spillIdx <= 255 {
+		c.emitOpCode(vm.OpCloseUpvalueSpill, line)
+		c.emitByte(byte(spillIdx))
+	} else {
+		c.emitOpCode(vm.OpCloseUpvalueSpill16, line)
+		c.emitByte(byte(spillIdx >> 8))   // High byte
+		c.emitByte(byte(spillIdx & 0xFF)) // Low byte
+	}
+}
+
 // emitIteratorCleanupAbrupt emits OpIteratorCleanupAbrupt for exception-triggered iterator cleanup.
 // Per ECMAScript spec, when an exception propagates out of a for-of loop, iterator.return()
 // must be called with error suppression - any errors from getting/calling return are ignored.

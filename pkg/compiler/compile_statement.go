@@ -155,6 +155,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 				c.emitStoreSpill(sym.SpillIndex, valueReg, node.Name.Token.Line)
 				c.regAlloc.Free(valueReg)
 				c.currentSymbolTable.InitializeTDZ(node.Name.Value)
+				c.trackIfLoopBodyLocal(node.Name.Value) // #132
 				continue
 			}
 
@@ -199,6 +200,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 				c.regAlloc.Free(targetReg)
 				// Define the variable as spilled
 				c.currentSymbolTable.DefineSpilled(node.Name.Value, spillIdx)
+				c.trackIfLoopBodyLocal(node.Name.Value) // #132
 				// Skip normal valueReg assignment since we've handled it
 				continue
 			}
@@ -314,6 +316,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 		}
 		// Mark TDZ as initialized now that the let declaration has been processed
 		c.currentSymbolTable.InitializeTDZ(node.Name.Value)
+		c.trackIfLoopBodyLocal(node.Name.Value) // #132
 	} // end for declarator
 
 	return BadRegister, nil
@@ -790,6 +793,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 				c.emitStoreSpill(csym.SpillIndex, valueReg, node.Name.Token.Line)
 				c.regAlloc.Free(valueReg)
 				c.currentSymbolTable.InitializeTDZ(node.Name.Value)
+				c.trackIfLoopBodyLocal(node.Name.Value) // #132
 				continue
 			}
 
@@ -806,6 +810,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			c.emitStoreSpill(sym.SpillIndex, tempReg, node.Name.Token.Line)
 			c.regAlloc.Free(tempReg)
 			c.currentSymbolTable.InitializeTDZ(node.Name.Value)
+			c.trackIfLoopBodyLocal(node.Name.Value) // #132
 			continue
 		} else {
 			// Compile other value types normally
@@ -865,6 +870,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 		}
 		// Mark TDZ as initialized now that the const declaration has been processed
 		c.currentSymbolTable.InitializeTDZ(node.Name.Value)
+		c.trackIfLoopBodyLocal(node.Name.Value) // #132
 	} // end for declarator
 	return BadRegister, nil
 }
@@ -1039,6 +1045,15 @@ func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, lab
 		return BadRegister, NewCompileError(node, "error compiling while body").CausedBy(err)
 	}
 
+	// #132: continue must land here, BEFORE closing this iteration's
+	// body-declared per-iteration bindings (let/const/class declared directly
+	// in the loop body) - otherwise a `continue` would skip the close and the
+	// next iteration's closures would end up sharing this iteration's value.
+	// (There's no header binding to close for `while` - only for/for-in/for-of
+	// have one - so unlike those loops this is the only closing done here.)
+	continueLandingPos := len(c.chunk.Code)
+	c.closeLoopBodyPerIterationBindings(loopContext, line)
+
 	// --- Jump Back To Start ---
 	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2 // OpCode + 16bit offset
 	backOffset := loopStartPos - jumpBackInstructionEndPos
@@ -1058,10 +1073,11 @@ func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, lab
 	}
 
 	// --- NEW: Patch continue jumps ---
-	// Continue jumps back to the condition check (loopStartPos)
+	// Continue jumps to continueLandingPos (just before the per-iteration close
+	// and the jump back to the condition check).
 	for _, continuePos := range poppedContext.ContinuePlaceholderPosList {
 		jumpInstructionEndPos := continuePos + 1 + 2 // OpCode + 16bit offset
-		targetOffset := poppedContext.LoopStartPos - jumpInstructionEndPos
+		targetOffset := continueLandingPos - jumpInstructionEndPos
 
 		if targetOffset > math.MaxInt16 || targetOffset < math.MinInt16 {
 			return BadRegister, NewCompileError(node, fmt.Sprintf("internal compiler error: continue jump offset %d exceeds 16-bit limit", targetOffset))
@@ -1318,6 +1334,10 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 	for _, reg := range perIterationRegs {
 		c.emitCloseUpvalue(reg, node.Token.Line)
 	}
+	// #132: same treatment for let/const/class declared directly in the loop's
+	// own body (as opposed to the header above) - see BodyPerIterationRegs'
+	// doc comment on LoopContext.
+	c.closeLoopBodyPerIterationBindings(loopContext, node.Token.Line)
 
 	// *** Compile Update Expression (Optional) ***
 	if node.Update != nil {
@@ -1683,6 +1703,10 @@ func (c *Compiler) compileDoWhileStatementLabeled(node *parser.DoWhileStatement,
 	for _, continuePos := range loopContext.ContinuePlaceholderPosList {
 		c.patchJump(continuePos)
 	}
+
+	// #132: close per-iteration bindings for let/const/class declared directly
+	// in the loop body, same as for/for-in/for-of/while.
+	c.closeLoopBodyPerIterationBindings(loopContext, line)
 
 	// 4. Mark Condition Position (for clarity, not used directly in jump calcs below)
 	_ = len(c.chunk.Code) // conditionPos := len(c.chunk.Code)
@@ -2404,6 +2428,9 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 	for _, reg := range perIterationRegs {
 		c.emitCloseUpvalue(reg, node.Token.Line)
 	}
+	// #132: same treatment for let/const/class declared directly in the loop's
+	// own body (as opposed to the header binding above).
+	c.closeLoopBodyPerIterationBindings(loopContext, node.Token.Line)
 
 	// 9. Increment key index
 	oneReg := c.regAlloc.Alloc()

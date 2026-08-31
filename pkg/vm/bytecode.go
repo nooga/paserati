@@ -213,6 +213,13 @@ const (
 	// throws TypeError if the private field already exists on Rx; unlike OpSetPrivateField,
 	// which requires the field to already exist)
 	OpDefinePrivateField OpCode = 176
+	// SpillIdx: Close any open upvalue pointing at spillSlots[SpillIdx] (8-bit
+	// index). Spill-slot counterpart to OpCloseUpvalue, needed for per-iteration
+	// bindings that live in a spill slot instead of a register - e.g. a class
+	// declared inside a loop body, whose name binding is always spill-based (#128).
+	OpCloseUpvalueSpill OpCode = 177
+	// SpillIdxHi SpillIdxLo: Like OpCloseUpvalueSpill but with a 16-bit spill index.
+	OpCloseUpvalueSpill16 OpCode = 178
 
 	// --- NEW: Global Variable Operations ---
 	OpGetGlobal     OpCode = 46 // Rx GlobalIdx(16bit): Rx = Globals[GlobalIdx] (direct indexed access)
@@ -511,6 +518,10 @@ func (op OpCode) String() string {
 		return "OpCheckUninitialized"
 	case OpCloseUpvalue:
 		return "OpCloseUpvalue"
+	case OpCloseUpvalueSpill:
+		return "OpCloseUpvalueSpill"
+	case OpCloseUpvalueSpill16:
+		return "OpCloseUpvalueSpill16"
 	case OpIteratorCleanupAbrupt:
 		return "OpIteratorCleanupAbrupt"
 	case OpIteratorCleanupAbruptIfNotDone:
@@ -1376,6 +1387,26 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		srcReg := c.Code[offset+3]
 		builder.WriteString(fmt.Sprintf("%-16s Spill[%d], R%d\n", "OpStoreSpill16", spillIdx, srcReg))
 		return offset + 4
+
+	case OpCloseUpvalueSpill:
+		// SpillIdx: Close any open upvalue pointing at spillSlots[SpillIdx]
+		if offset+1 >= len(c.Code) {
+			builder.WriteString("OpCloseUpvalueSpill (missing operands)\n")
+			return offset + 1
+		}
+		spillIdx := c.Code[offset+1]
+		builder.WriteString(fmt.Sprintf("%-16s Spill[%d]\n", "OpCloseUpvalueSpill", spillIdx))
+		return offset + 2
+
+	case OpCloseUpvalueSpill16:
+		// SpillIdxHi SpillIdxLo: Close any open upvalue pointing at spillSlots[SpillIdx] (16-bit index)
+		if offset+2 >= len(c.Code) {
+			builder.WriteString("OpCloseUpvalueSpill16 (missing operands)\n")
+			return offset + 1
+		}
+		spillIdx := uint16(c.Code[offset+1])<<8 | uint16(c.Code[offset+2])
+		builder.WriteString(fmt.Sprintf("%-16s Spill[%d]\n", "OpCloseUpvalueSpill16", spillIdx))
+		return offset + 3
 
 	case OpArrayCopy:
 		// Rx, DestOffset(16), StartReg, Count

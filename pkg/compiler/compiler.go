@@ -358,6 +358,20 @@ type LoopContext struct {
 	IteratorCleanup *IteratorCleanupInfo
 	// Completion value register for this loop (for break/continue to set to undefined per UpdateEmpty)
 	CompletionReg Register
+	// #132: registers/spill slots backing a let/const/class declared directly
+	// in this loop's body (at any nesting depth, but not crossing into a
+	// nested function or a nested loop's own body - those register/track
+	// against their own, innermost LoopContext instead). ECMAScript's
+	// CreatePerIterationEnvironment gives each iteration of the body a fresh
+	// copy of these bindings; closing any open upvalue pointing at them right
+	// before the next iteration starts achieves the same effect: a closure
+	// created in one iteration keeps that iteration's value instead of
+	// sharing the register/slot's final value with every other iteration's
+	// closures. Populated while the body compiles (see declareLoopBodyLocal*
+	// helpers) and closed alongside the loop header's own per-iteration
+	// registers.
+	BodyPerIterationRegs   []Register
+	BodyPerIterationSpills []uint16
 }
 
 // IteratorCleanupInfo tracks iterator objects that need cleanup on early exit
@@ -3461,6 +3475,72 @@ func (c *Compiler) currentLoopContext() *LoopContext {
 		return nil
 	}
 	return c.loopContextStack[len(c.loopContextStack)-1]
+}
+
+// declareLoopBodyLocalRegister records that reg backs a let/const/class binding
+// declared directly in the innermost currently-compiling loop's body (#132),
+// so the loop can close any open upvalue pointing at it once each iteration
+// finishes - giving that iteration's closures their own captured value instead
+// of all iterations sharing whatever the register holds when the loop ends.
+// A no-op outside of a loop body. The register is pinned like a loop header's
+// per-iteration registers, for the same reason: it must not be handed to a
+// different declaration later in the same loop body, or closing it at the
+// iteration boundary could close the wrong variable's upvalue.
+func (c *Compiler) declareLoopBodyLocalRegister(reg Register) {
+	lc := c.currentLoopContext()
+	if lc == nil {
+		return
+	}
+	c.regAlloc.Pin(reg)
+	lc.BodyPerIterationRegs = append(lc.BodyPerIterationRegs, reg)
+}
+
+// declareLoopBodyLocalSpill is declareLoopBodyLocalRegister's spill-slot
+// counterpart, for a class declared directly in a loop body - local class
+// name bindings always live in a spill slot (#128), never a register. Spill
+// slots are never reused (AllocSpillSlot is a monotonic counter), so unlike
+// the register case there's no need to pin anything against reuse.
+func (c *Compiler) declareLoopBodyLocalSpill(spillIdx uint16) {
+	lc := c.currentLoopContext()
+	if lc == nil {
+		return
+	}
+	lc.BodyPerIterationSpills = append(lc.BodyPerIterationSpills, spillIdx)
+}
+
+// trackIfLoopBodyLocal looks up name in the current symbol table and, if it
+// resolved to a local (non-global) register- or spill-backed binding, records
+// it against the innermost currently-compiling loop's body for per-iteration
+// closing (#132). Call this once a let/const/class declaration's binding has
+// reached its final form in the symbol table. A no-op if name didn't resolve
+// to a local binding, or outside of a loop body.
+func (c *Compiler) trackIfLoopBodyLocal(name string) {
+	sym, _, found := c.currentSymbolTable.Resolve(name)
+	if !found || sym.IsGlobal {
+		return
+	}
+	if sym.IsSpilled {
+		c.declareLoopBodyLocalSpill(sym.SpillIndex)
+	} else if sym.Register != nilRegister {
+		c.declareLoopBodyLocalRegister(sym.Register)
+	}
+}
+
+// closeLoopBodyPerIterationBindings emits OpCloseUpvalue(Spill) for every
+// body-declared per-iteration binding tracked on lc (#132). Called at the
+// same point in each loop's compile where its own header per-iteration
+// registers are closed - once continues have been patched to land there, and
+// before the update/next-iteration step runs.
+func (c *Compiler) closeLoopBodyPerIterationBindings(lc *LoopContext, line int) {
+	if lc == nil {
+		return
+	}
+	for _, reg := range lc.BodyPerIterationRegs {
+		c.emitCloseUpvalue(reg, line)
+	}
+	for _, spillIdx := range lc.BodyPerIterationSpills {
+		c.emitCloseUpvalueSpill(spillIdx, line)
+	}
 }
 
 // --- Private Field Brand Tracking ---
