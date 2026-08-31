@@ -16849,7 +16849,24 @@ func (vm *VM) isUnscopable(withObj Value, propName string) (bool, bool) {
 	// This must trigger getters on the unscopables object
 	excludeVal, err := vm.GetProperty(unscopablesVal, propName)
 	if err != nil {
-		// Error thrown during getter execution - propagate it
+		// Error thrown during getter execution - re-throw so the exception is
+		// actually in flight, then report hadError, the same way the Proxy
+		// get-trap branch above does. Returning a bare hadError=true used to
+		// be enough only because vm.Call left vm.unwinding set after handing
+		// the exception off as a Go error, and this function's contract is
+		// "if hadError, check vm.unwinding" (see the doc comment). Once
+		// vm.Call clears that flag (#142), a throwing getter on the
+		// unscopables object was silently swallowed instead - caught by
+		// language/statements/with/unscopables-prop-get-err.js.
+		//
+		// Do NOT add the same re-throw to the two GetSymbolPropertyWithGetter
+		// error paths above: that function already puts the exception in
+		// flight itself, so re-throwing there double-throws and breaks
+		// language/statements/with/unscopables-get-err.js. Only this
+		// vm.GetProperty path needs it.
+		if ee, ok := err.(ExceptionError); ok {
+			vm.throwException(ee.GetExceptionValue())
+		}
 		return false, true
 	}
 	if vm.unwinding {

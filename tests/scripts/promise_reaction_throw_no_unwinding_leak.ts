@@ -39,12 +39,58 @@
 // to reaction scheduling / RunUntilIdle's batching reorders them) and this
 // test passes trivially even with the fix reverted, because
 // executeUserFunctionSafe's entry guard would scrub the leaked flag when
-// `marker`'s own resolution reaction runs afterward instead. Verified by
-// hand at the time this was written: reverting the vm_init.go fix makes
-// this test fail with exactly "Uncaught exception: null". If this test ever
-// stops catching that failure, it no longer exercises #142 and needs
-// rewriting (e.g. re-establishing the ordering some other way), not
-// deleting.
+// `marker`'s own resolution reaction runs afterward instead.
+//
+// WHAT THIS TEST ACTUALLY DISCRIMINATES - measured, not assumed. The #142
+// fix landed in two places, and either one alone is sufficient for THIS
+// scenario, so the test is an OR over both:
+//
+//   vm_init.go clear only      -> PASSES
+//   promise.go clear only      -> PASSES
+//   both reverted              -> FAILS, "Uncaught exception: null"
+//
+// So this test proves the leak was real and that it is now closed on the
+// promise-reaction path, but it does NOT pin down the general fix on its
+// own: reverting just the four `vm.unwinding = false` lines in
+// pkg/vm/vm_init.go leaves it green, because triggerPromiseReactions'
+// own ClearUnwindingState() call absorbs the leak one level up. Do not
+// read a green run here as coverage of executeUserFunctionSafe /
+// executeUserFunctionWithNewTarget in isolation.
+//
+// The general clear in vm_init.go is kept because the promise path is only
+// one absorber shape: any native code that takes a vm.Call exception as a
+// Go error, absorbs it, and returns nil without re-throwing or making
+// another vm.Call hits the same trap, and vm_init.go is the only place that
+// closes it for all of them. It is not covered by this smoke test, but it
+// is far from untested - it is worth +21 Test262 built-ins tests on its
+// own, all in exception handling (Array.from iterator-close errors,
+// Promise.all capability-resolve throws, Iterator.zip suspended-yield
+// close, Reflect.apply/construct argument-list errors, TypedArray Get key
+// errors, RegExp Symbol.search / String matchAll throws). Reverting the
+// four lines in vm_init.go gives all 21 back up, which is the check to run
+// if anyone is tempted to narrow this to the promise path alone.
+//
+// Two things the general clear also does, both deliberate:
+//
+//  - It exposed one real latent bug and it is fixed alongside it: vm.go's
+//    isUnscopable() documented its contract as "if hadError, check
+//    vm.unwinding", which only worked while vm.Call left the flag set. Its
+//    vm.GetProperty error path now re-throws instead. See the comment
+//    there; language/statements/with/unscopables-prop-get-err.js covers it.
+//
+//  - It turns language/types/reference/put-value-prop-base-primitive-realm.js
+//    from a pass into a failure, and that is an improvement, not a
+//    regression. On main that test "passes" only because the leaked flag
+//    aborts the script at its cross-realm `other.eval(...)` before its
+//    first assertion ever runs, and the runner scores a silently aborted
+//    script as a pass (paserati#65). With the leak closed the script runs
+//    to completion and reports the honest result: cross-realm primitive-base
+//    [[Set]] does not honor the other realm's prototype chain. That is a
+//    separate, pre-existing gap, not touched here.
+//
+// If this test ever stops catching the both-reverted failure, it no longer
+// exercises #142 at all and needs rewriting (e.g. re-establishing the
+// ordering some other way), not deleting.
 
 let resolveMarker: (v: number) => void;
 const marker = new Promise<number>((res) => {
