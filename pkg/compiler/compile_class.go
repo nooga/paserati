@@ -496,6 +496,11 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	} else {
 		c.emitStoreSpill(classSpillSlot, constructorReg, node.Token.Line)
 		debugPrintf("// DEBUG compileClassDeclaration: Stored local class '%s' constructor into spill slot %d\n", node.Name.Value, classSpillSlot)
+		// #132: a class declared directly in a loop body needs the same
+		// per-iteration treatment as a let/const there - each iteration's
+		// closures over the class name should see that iteration's class,
+		// not whichever one the loop ends on.
+		c.declareLoopBodyLocalSpill(classSpillSlot)
 	}
 
 	// Restore outer scope

@@ -1707,6 +1707,43 @@ startExecution:
 				prev = uv
 			}
 
+		case OpCloseUpvalueSpill, OpCloseUpvalueSpill16:
+			// Spill-slot counterpart to OpCloseUpvalue (#132): a per-iteration
+			// binding that lives in a spill slot instead of a register - e.g. a
+			// class declared inside a loop body, whose name binding is always
+			// spill-based (#128) - needs the same "close on iteration boundary"
+			// treatment so each iteration's closures capture their own value
+			// instead of all sharing the loop's final one.
+			var spillIdx int
+			if OpCode(code[ip-1]) == OpCloseUpvalueSpill16 {
+				spillIdx = int(code[ip])<<8 | int(code[ip+1])
+				ip += 2
+			} else {
+				spillIdx = int(code[ip])
+				ip++
+			}
+			if spillIdx >= len(frame.spillSlots) {
+				frame.ip = ip
+				status := vm.runtimeError("Invalid spill slot index %d for upvalue close.", spillIdx)
+				return status, Undefined
+			}
+			targetPtr := &frame.spillSlots[spillIdx]
+			var prevSpill *Upvalue
+			for uv := frame.openUpvalues; uv != nil; uv = uv.next {
+				if uv.Location == targetPtr {
+					uv.Closed = *uv.Location
+					uv.Location = nil
+					if prevSpill == nil {
+						frame.openUpvalues = uv.next
+					} else {
+						prevSpill.next = uv.next
+					}
+					uv.next = nil
+					break
+				}
+				prevSpill = uv
+			}
+
 		case OpIteratorCleanupAbrupt:
 			// Call iterator.return() for exception/return cleanup.
 			// Per ECMAScript spec 7.4.6 IteratorClose:

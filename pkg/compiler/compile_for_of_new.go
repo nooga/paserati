@@ -439,6 +439,9 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	for _, reg := range perIterationRegs {
 		c.emitCloseUpvalue(reg, node.Token.Line)
 	}
+	// #132: same treatment for let/const/class declared directly in the loop's
+	// own body (as opposed to the header binding above).
+	c.closeLoopBodyPerIterationBindings(loopContext, node.Token.Line)
 
 	// 16. Jump back to loop start
 	jumpBackPos := len(c.chunk.Code) + 1 + 2
