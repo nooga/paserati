@@ -7,6 +7,36 @@ import (
 
 const debugOpSetProp = false
 
+// throwFromCallError turns an error returned by vm.Call into an in-flight VM
+// exception. An ExceptionError already carries a JS value, so it is re-thrown
+// as-is; anything else is a Go-level failure and gets wrapped in a JS Error
+// first. Callers should `return false, InterpretRuntimeError, Undefined`
+// immediately after calling this.
+//
+// The same logic appears inline at ~11 other call sites across this package.
+// This is deliberately NOT a refactor of those - it exists so the two
+// primitive-base paths in opSetProp below, which previously had no error
+// handling at all, can propagate without another 35-line copy each.
+func (vm *VM) throwFromCallError(err error) {
+	if ee, ok := err.(ExceptionError); ok {
+		vm.throwException(ee.GetExceptionValue())
+		return
+	}
+	var excVal Value
+	if errCtor, ok := vm.GetGlobal("Error"); ok {
+		if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+			excVal = res
+		}
+	}
+	if excVal.Type() == 0 {
+		eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+		eo.SetOwn("name", NewString("Error"))
+		eo.SetOwn("message", NewString(err.Error()))
+		excVal = NewValueFromPlainObject(eo)
+	}
+	vm.throwException(excVal)
+}
+
 func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Value) (bool, InterpretResult, Value) {
 	if debugOpSetProp {
 		fmt.Printf("[DEBUG opSetProp] ENTRY: propName=%q, objType=%s, valueType=%s\n", propName, objVal.TypeName(), valueToSet.TypeName())
@@ -469,9 +499,22 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 						// Call the set trap: trap(target, property, value, receiver)
 						// receiver is the original primitive coerced to object
 						trapArgs := []Value{proxy.Target(), NewString(propName), *valueToSet, *objVal}
-						if _, err := vm.Call(setTrap, proxy.handler, trapArgs); err == nil {
-							return true, InterpretOK, *valueToSet
+						if _, err := vm.Call(setTrap, proxy.handler, trapArgs); err != nil {
+							// A throwing set trap must propagate, not be
+							// discarded. This used to fall through to the
+							// `continue walking` step below and then to the
+							// "no setter found - silently succeed" return at
+							// the bottom, so `"s".y = 1` with a throwing trap
+							// on String.prototype's [[Prototype]] reported
+							// success and swallowed the exception - while the
+							// identical shape on an object base threw
+							// correctly. Same false-success family as
+							// paserati#65.
+							vm.throwFromCallError(err)
+							return false, InterpretRuntimeError, Undefined
 						}
+						// Trap ran: the Proxy's [[Set]] governs, stop walking.
+						return true, InterpretOK, *valueToSet
 					}
 				}
 			}
@@ -481,9 +524,16 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				if po.setters != nil {
 					if setter, hasSetter := po.setters[propKeyHash]; hasSetter && setter.IsCallable() {
 						// Invoke setter with the primitive as 'this'
-						if _, err := vm.Call(setter, *objVal, []Value{*valueToSet}); err == nil {
-							return true, InterpretOK, *valueToSet
+						if _, err := vm.Call(setter, *objVal, []Value{*valueToSet}); err != nil {
+							// Propagate rather than discard - see the matching
+							// comment in the Proxy branch above. Falling
+							// through here also kept walking the prototype
+							// chain past a setter that had already run and
+							// thrown, instead of stopping at it.
+							vm.throwFromCallError(err)
+							return false, InterpretRuntimeError, Undefined
 						}
+						return true, InterpretOK, *valueToSet
 					}
 				}
 				current = po.prototype
