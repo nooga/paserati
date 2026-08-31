@@ -1899,8 +1899,25 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			for _, name := range classNames {
 				if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; !alreadyInCurrentScope {
 					spillIdx := c.AllocSpillSlot()
-					c.currentSymbolTable.DefineSpilled(name, spillIdx)
-					debugPrintf("// [ClassHoist] Pre-defined local class '%s' in SPILL SLOT %d for early-closure forward reference\n", name, spillIdx)
+					// TDZ-marked, and the slot is seeded with the TDZ sentinel
+					// at runtime. Reserving the slot without either of those
+					// silently DELETED TDZ for class bindings: a spill slot
+					// reads as Undefined when unwritten, and neither the
+					// spilled-identifier nor the upvalue load path checked for
+					// the sentinel, so `try { C } catch {}` before `class C {}`
+					// stopped throwing ReferenceError and just yielded
+					// undefined. Caught in review by @mparrett on #143.
+					c.currentSymbolTable.DefineTDZSpilled(name, spillIdx)
+					// Seed the sentinel BEFORE any statement in this block
+					// runs, and on every entry to the block (this whole step
+					// re-executes per block entry, so a class in a loop body
+					// gets a fresh dead slot each iteration rather than
+					// inheriting the previous iteration's constructor).
+					sentinelReg := c.regAlloc.Alloc()
+					c.emitLoadUninitialized(sentinelReg, node.Token.Line)
+					c.emitStoreSpill(spillIdx, sentinelReg, node.Token.Line)
+					c.regAlloc.Free(sentinelReg)
+					debugPrintf("// [ClassHoist] Pre-defined local class '%s' in SPILL SLOT %d (TDZ-seeded) for early-closure forward reference\n", name, spillIdx)
 				}
 			}
 		}
@@ -2571,10 +2588,31 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				// Use OpLoadFree to access it via closure mechanism
 				freeVarIndex := c.addFreeSymbol(node, &symbolRef)
 				c.emitLoadFree(hint, freeVarIndex, node.Token.Line)
+				// No TDZ check emitted here on purpose: OpLoadFree already
+				// performs an unconditional runtime TDZ check in the VM
+				// (see the `val.typ == TypeUninitialized` guard in vm.go's
+				// OpLoadFree case). That is strictly better than emitting
+				// OpCheckUninitialized here would be, because it is not
+				// subject to that opcode's self-rewrite-to-OpNop, so it keeps
+				// firing for every call rather than only the first. This is
+				// what makes an early call of a closure that captured a
+				// class's TDZ-seeded spill slot throw ReferenceError. Verified
+				// by removing an equivalent emitted check here and confirming
+				// the behavior is unchanged. OpLoadSpill has no such guard,
+				// which is why the two spilled paths below do need one.
 			} else if symbolRef.IsSpilled {
 				// Variable is spilled (stored in spill slot, not a register)
 				debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, SPILLED variable in outer block scope, spillIdx=%d\n", node.Value, symbolRef.SpillIndex)
 				c.emitLoadSpill(hint, symbolRef.SpillIndex, node.Token.Line)
+				// Same missing TDZ check as the other spilled load path below.
+				// This is the branch a direct `C` reference in the class's own
+				// block takes (the block's table is an outer block scope of the
+				// same function), so leaving it out here made `try { C } catch`
+				// before `class C {}` yield the raw sentinel instead of
+				// throwing.
+				if symbolRef.IsTDZ {
+					c.emitCheckUninitialized(hint, node.Token.Line)
+				}
 			} else if c.currentFuncWithDepth > 0 {
 				// Inside a with block in the CURRENT function, with-object properties shadow outer block variables.
 				// NOTE: We use currentFuncWithDepth (not withBlockDepth) because this is still within
@@ -2602,6 +2640,12 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			// LOCAL spilled variable - load from spill slot
 			debugPrintf("// DEBUG Identifier '%s': LOCAL SPILLED variable, spillIdx=%d\n", node.Value, symbolRef.SpillIndex)
 			c.emitLoadSpill(hint, symbolRef.SpillIndex, node.Token.Line)
+			// Spilled loads had no TDZ check at all, unlike the two
+			// register-based paths below, so a spilled let/const/class read
+			// before its declaration produced undefined instead of throwing.
+			if symbolRef.IsTDZ {
+				c.emitCheckUninitialized(hint, node.Token.Line)
+			}
 		} else {
 			debugPrintf("// DEBUG Identifier '%s': LOCAL variable, register=R%d\n", node.Value, symbolRef.Register) // <<< ADDED
 			// This is a standard local variable (handled by current stack frame)
