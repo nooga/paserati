@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
 )
 
@@ -38,10 +39,19 @@ func benchGetOwn(b *testing.B, fieldCount int, accessPattern string) {
 	}
 
 	b.ReportAllocs()
+	var sink Value
+	var found bool
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = obj.GetOwn(lookup(i))
+		sink, found = obj.GetOwn(lookup(i))
 	}
+	// (*PlainObject).GetOwn costs 179 against an inline budget of 80, so the call
+	// survives today — but (*ArrayObject).GetOwn sits at 84 against that same
+	// budget, having crossed it from 73 while this benchmark was in use. Discarding
+	// both results is what makes the difference load-bearing: once the callee
+	// inlines, nothing observes the work and the loop can be optimised away.
+	runtime.KeepAlive(sink)
+	runtime.KeepAlive(found)
 }
 
 func BenchmarkGetOwn(b *testing.B) {
