@@ -78,15 +78,26 @@
 //    vm.GetProperty error path now re-throws instead. See the comment
 //    there; language/statements/with/unscopables-prop-get-err.js covers it.
 //
-//  - It turns language/types/reference/put-value-prop-base-primitive-realm.js
-//    from a pass into a failure, and that is an improvement, not a
-//    regression. On main that test "passes" only because the leaked flag
-//    aborts the script at its cross-realm `other.eval(...)` before its
-//    first assertion ever runs, and the runner scores a silently aborted
-//    script as a pass (paserati#65). With the leak closed the script runs
-//    to completion and reports the honest result: cross-realm primitive-base
-//    [[Set]] does not honor the other realm's prototype chain. That is a
-//    separate, pre-existing gap, not touched here.
+//  - It briefly turned language/types/reference/put-value-prop-base-primitive-realm.js
+//    from a pass into a failure. That test is a FALSE PASS both before and
+//    after this PR, so read no signal into it either way. On main the leaked
+//    flag aborts the script at its cross-realm `other.eval(...)` before the
+//    first assertion runs, and the runner scores a silently aborted script as
+//    a pass (paserati#65). Closing the leak let it reach the assertion and
+//    fail honestly; the primitive-base setter fix in op_setprop.go then made
+//    the trap's own exception propagate, which aborts the script at the same
+//    `other.eval(...)` again - so it is back to "passing" by abort. Verified
+//    with print() markers: the script still never reaches its first
+//    assertion.
+//
+//    Two separate, pre-existing gaps keep it there, neither touched here:
+//    (1) a cross-realm call does not switch to the callee's [[Realm]], so the
+//    main-realm set trap throws ReferenceError on its own `numberCount`
+//    global when invoked from the other realm; and (2) an exception escaping
+//    `realmGlobal.eval(...)` silently aborts the script instead of being
+//    catchable - confirmed pre-existing by running a plain
+//    `try { other.eval('throw new Error("x")') } catch (e) {}` on a
+//    a88125c2 worktree, where it also aborts uncatchably.
 //
 // If this test ever stops catching the both-reverted failure, it no longer
 // exercises #142 at all and needs rewriting (e.g. re-establishing the
