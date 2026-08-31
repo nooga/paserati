@@ -768,9 +768,15 @@ func CompileString(sourceCode string) (*vm.Chunk, []errors.PaseratiError) {
 	// --- Type Check is handled internally by Compile when no checker is set ---
 	// No need to call checker.Check() here.
 
-	comp := compiler.NewCompiler() // Fresh compiler
-	// Compile will create and use its own internal checker
-	chunk, compileAndTypeErrs := comp.Compile(program)
+	// A chunk's global indices are assigned by the compiler that produced it, so
+	// they are only meaningful against a VM whose globals were numbered the same
+	// way. A bare compiler.NewCompiler() has never seen the builtins, so it starts
+	// numbering user globals at 0 - straight over the slots NewPaserati() gives to
+	// Array, Map and friends. Compiling through an initialised instance numbers
+	// them behind the builtins, which is what every VM this chunk can run on
+	// expects. Builtin registration is deterministic, so the chunk stays portable
+	// across instances (#149).
+	chunk, compileAndTypeErrs := NewPaserati().CompileProgram(program)
 	if len(compileAndTypeErrs) > 0 {
 		return nil, compileAndTypeErrs
 	}
@@ -802,9 +808,15 @@ func CompileFile(filename string) (*vm.Chunk, []errors.PaseratiError) {
 	// Dump AST if enabled
 	parser.DumpAST(program, "CompileFile")
 
-	comp := compiler.NewCompiler() // Fresh compiler
-	// Compile will create and use its own internal checker
-	chunk, compileAndTypeErrs := comp.Compile(program)
+	// A chunk's global indices are assigned by the compiler that produced it, so
+	// they are only meaningful against a VM whose globals were numbered the same
+	// way. A bare compiler.NewCompiler() has never seen the builtins, so it starts
+	// numbering user globals at 0 - straight over the slots NewPaserati() gives to
+	// Array, Map and friends. Compiling through an initialised instance numbers
+	// them behind the builtins, which is what every VM this chunk can run on
+	// expects. Builtin registration is deterministic, so the chunk stays portable
+	// across instances (#149).
+	chunk, compileAndTypeErrs := NewPaserati().CompileProgram(program)
 	if len(compileAndTypeErrs) > 0 {
 		return nil, compileAndTypeErrs
 	}
