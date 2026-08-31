@@ -18394,6 +18394,12 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	frame.args = genObj.Args                       // Restore arguments
 	frame.argumentsObject = Undefined              // Initialize arguments object (will be created on first access)
 	frame.generatorObj = genObj                    // Link frame to generator object
+	// #133: clear a stale promiseObj left by a previous occupant of this
+	// frame slot. Only executeAsyncFunctionBody/resumeAsyncFunction
+	// legitimately set this field; a leftover pointer here would make an
+	// `await` inside this generator body (e.g. an async generator's own
+	// body) misattribute its suspend state to that unrelated promise.
+	frame.promiseObj = nil
 
 	if closureObj != nil {
 		frame.closure = closureObj
@@ -18655,6 +18661,12 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	frame.args = genObj.Args                       // Restore arguments
 	frame.argumentsObject = Undefined              // Initialize arguments object (will be created on first access)
 	frame.generatorObj = genObj                    // Link frame to generator object
+	// #133: clear a stale promiseObj left by a previous occupant of this
+	// frame slot. Only executeAsyncFunctionBody/resumeAsyncFunction
+	// legitimately set this field; a leftover pointer here would make an
+	// `await` inside this generator body (e.g. an async generator's own
+	// body) misattribute its suspend state to that unrelated promise.
+	frame.promiseObj = nil
 
 	if closureObj != nil {
 		frame.closure = closureObj
@@ -18826,6 +18838,12 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	frame.args = genObj.Args                       // Restore arguments
 	frame.argumentsObject = Undefined              // Initialize arguments object (will be created on first access)
 	frame.generatorObj = genObj                    // Link frame to generator object
+	// #133: clear a stale promiseObj left by a previous occupant of this
+	// frame slot. Only executeAsyncFunctionBody/resumeAsyncFunction
+	// legitimately set this field; a leftover pointer here would make an
+	// `await` inside this generator body (e.g. an async generator's own
+	// body) misattribute its suspend state to that unrelated promise.
+	frame.promiseObj = nil
 
 	if closureObj != nil {
 		frame.closure = closureObj
