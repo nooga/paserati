@@ -246,9 +246,24 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 		// ones). A spill slot is index-based like the global slot above, so it's
 		// stable across the whole compile - mirrors what compileClassExpression
 		// already does for named class expressions.
-		classSpillSlot = c.AllocSpillSlot()
+		//
+		// A sibling hoisted function declared earlier in the same block may
+		// already have forced this class's spill slot into existence (see
+		// #141: the block-level pre-registration step that runs before hoisted
+		// function bodies compile) so that its own body - compiled ahead of
+		// this class's sequential position - could capture the real, final
+		// storage location too. Reuse that slot instead of allocating a
+		// second one, or the hoisted function's early capture and this
+		// declaration's own constructor store would end up in different
+		// slots.
+		if existing, ok := c.currentSymbolTable.store[node.Name.Value]; ok && existing.IsSpilled {
+			classSpillSlot = existing.SpillIndex
+			debugPrintf("// DEBUG compileClassDeclaration: Reusing pre-registered spill slot %d for local class '%s'\n", classSpillSlot, node.Name.Value)
+		} else {
+			classSpillSlot = c.AllocSpillSlot()
+			debugPrintf("// DEBUG compileClassDeclaration: Pre-defined local class '%s' in spill slot %d\n", node.Name.Value, classSpillSlot)
+		}
 		c.currentSymbolTable.DefineSpilled(node.Name.Value, classSpillSlot)
-		debugPrintf("// DEBUG compileClassDeclaration: Pre-defined local class '%s' in spill slot %d\n", node.Name.Value, classSpillSlot)
 	}
 
 	// Per ECMAScript spec (sec-runtime-semantics-classdefinitionevaluation):

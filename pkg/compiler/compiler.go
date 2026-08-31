@@ -1851,6 +1851,46 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			}
 		} // end if !needsEnclosedScope (function body var hoisting)
 
+		// 0.6) Pre-register this block's own local class declarations BEFORE
+		// compiling hoisted functions below. A hoisted function's body compiles
+		// here, ahead of its sibling class declaration's own sequential
+		// position later in this block's statement loop - so a reference to
+		// the class from inside the hoisted function (directly, or via a
+		// closure nested inside it) would otherwise resolve the class name
+		// before compileClassDeclaration has allocated its spill slot, baking
+		// in a dangling capture that can never be fixed up. Same root-cause
+		// shape as #128 (a hoisted binding compiled before its own value
+		// exists), but for a hoisted *function* sibling instead of a closure
+		// nested directly inside the class body itself (#141).
+		//
+		// Only for classes that will actually take compileClassDeclaration's
+		// local/spilled path (mirrors its own isGlobalClassScope check) - a
+		// class that will end up global-scoped there must NOT get a spill
+		// slot here, or a hoisted function compiled early would capture the
+		// wrong storage location once the class's own declaration switches to
+		// the global binding.
+		//
+		// Known remaining gap, NOT fixed here: this only covers a hoisted
+		// function and the class it references being direct siblings in the
+		// *same* block (collectClassDeclarations looks at node.Statements,
+		// this block's own statement list only). A function hoisted inside a
+		// *nested* block that references a class declared in an *enclosing*
+		// block still throws ReferenceError, because that nested block's own
+		// pre-registration pass never sees the outer block's statements.
+		// Same shape as #128's own documented loop-body limitation - a
+		// separate, deeper cross-scope-forward-reference problem than the
+		// same-scope one #141 targets.
+		if len(node.HoistedDeclarations) > 0 && (c.enclosing != nil || c.isIndirectEval) {
+			classNames := collectClassDeclarations(node.Statements)
+			for _, name := range classNames {
+				if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; !alreadyInCurrentScope {
+					spillIdx := c.AllocSpillSlot()
+					c.currentSymbolTable.DefineSpilled(name, spillIdx)
+					debugPrintf("// [ClassHoist] Pre-defined local class '%s' in SPILL SLOT %d for hoisted-function forward reference\n", name, spillIdx)
+				}
+			}
+		}
+
 		// 1) Hoist function declarations within this block (function-scoped hoisting)
 		if len(node.HoistedDeclarations) > 0 {
 			debugPrintf("// [BlockStatement] Processing %d hoisted declarations\n", len(node.HoistedDeclarations))
