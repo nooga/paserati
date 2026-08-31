@@ -101,16 +101,14 @@ func (vm *VM) NewPromiseFromExecutor(executor Value) (Value, error) {
 				reason = NewString(err.Error())
 			}
 			vm.rejectPromise(promise, reason)
-			// vm.Call leaves vm.unwinding/unwindingCrossedNative set on error
-			// (deliberately - a caller that re-throws via bytecode injection
-			// needs that state to know it already crossed a boundary). We're
-			// not re-throwing: the executor's exception has been fully
-			// absorbed into a rejected promise, a normal (non-erroring)
-			// return value from this function. Leaving the flags set would
-			// leak into whatever bytecode dispatch called `new Promise(...)`,
-			// which would see unwinding=true after this native call "returns
-			// successfully" and treat it as an uncaught exception still in
-			// flight.
+			// vm.Call itself now clears vm.unwinding/unwindingCrossedNative
+			// when it hands an exception off as a Go error (#142 - see the
+			// comment in executeUserFunctionSafe), so this is defense in
+			// depth rather than load-bearing: we're not re-throwing, the
+			// executor's exception has been fully absorbed into a rejected
+			// promise, a normal (non-erroring) return value from this
+			// function, so there is nothing left for the caller to see as
+			// still in flight either way.
 			vm.ClearUnwindingState()
 		}
 	}
@@ -237,6 +235,15 @@ func (vm *VM) triggerPromiseReactions(promise *PromiseObject, isFulfilled bool) 
 					reason = NewString(err.Error())
 				}
 				reaction.Reject(reason)
+				// Defense in depth, mirroring NewPromiseFromExecutor's own
+				// call a few lines up in this file: vm.Call now clears
+				// vm.unwinding/unwindingCrossedNative itself when it hands an
+				// exception off as a Go error (#142), but this was the
+				// actual site that leaked it before that fix - a reaction
+				// handler's exception is fully absorbed into a rejection
+				// right here, a normal (non-erroring) return, so there is
+				// nothing left in flight for a caller to see regardless.
+				vm.ClearUnwindingState()
 			} else {
 				reaction.Resolve(result)
 			}
