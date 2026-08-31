@@ -1789,7 +1789,14 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 	if status == InterpretRuntimeError {
 		if vm.unwinding && vm.currentException != Null {
 			ex := vm.currentException
+			// Clear vm.unwinding along with currentException when handing the
+			// exception off as a Go error - see the matching, longer comment
+			// in executeUserFunctionSafe (#142). Leaving vm.unwinding=true
+			// here left the exact same stale-state trap for `new`-constructor
+			// calls that absorb a Go error (e.g. Reflect.construct-style
+			// wrappers) without re-throwing.
 			vm.currentException = Null
+			vm.unwinding = false
 			vm.truncateFramesTo(frameCountAtEntry)
 			return Undefined, exceptionError{exception: ex}
 		}
@@ -1799,6 +1806,7 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 	if vm.unwinding && vm.currentException != Null {
 		ex := vm.currentException
 		vm.currentException = Null
+		vm.unwinding = false
 		vm.truncateFramesTo(frameCountAtEntry)
 		return Undefined, exceptionError{exception: ex}
 	}
@@ -1911,12 +1919,38 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 		// If the VM is unwinding an exception, surface it as an ExceptionError
 		if vm.unwinding && vm.currentException != Null {
 			ex := vm.currentException
-			// ⚠️ CRITICAL CHANGE: Don't clear vm.unwinding or vm.unwindingCrossedNative!
-			// These flags need to persist for re-throw detection
-			// Only clear currentException since we're passing it as a Go error
+			// Clear vm.unwinding here too (#142), not just currentException.
+			// An earlier version of this left vm.unwinding=true deliberately
+			// ("persist for re-throw detection"), reasoning that whatever
+			// native code receives this Go error would either make a new
+			// vm.Call (whose own entry guard, a few lines below this
+			// function, scrubs stale state when currentException==Null) or
+			// re-throw via vm.throwException (which sets vm.unwinding=true
+			// itself regardless of its prior value). Both are true, but they
+			// don't cover a third, common case: native code that ABSORBS the
+			// exception - turns it into a rejected promise, aggregates it
+			// into a SuppressedError while disposing further resources, etc.
+			// - and then returns normally (nil error) without making another
+			// vm.Call or re-throwing at all. vm.unwinding is checked, bare,
+			// after nearly every opcode across vm.go (that's the actual
+			// convention - a fresh, per-operation "did unwinding just start"
+			// flag, not sticky ambient state) - including once per
+			// instruction in the main dispatch loop itself. Left true, a
+			// single absorbed exception poisons every subsequent instruction
+			// any vm.run() invocation executes, anywhere, until the next
+			// vm.Call happens to scrub it: the very next opcode sees
+			// unwinding=true with currentException=Null (a phantom
+			// exception) and either aborts the script outright or corrupts
+			// unrelated control flow. Reproduced via a promise reaction
+			// whose handler throws (pkg/vm/promise.go's
+			// triggerPromiseReactions absorbs the Go error into a rejection
+			// without ever clearing vm.unwinding, unlike
+			// NewPromiseFromExecutor's ClearUnwindingState call for the same
+			// shape) followed by an unrelated top-level-await resuming
+			// normally - the resumption's very first instruction reported a
+			// bogus "Uncaught exception: null" and aborted the script.
 			vm.currentException = Null
-			// vm.unwinding = false         // OLD: Don't clear this!
-			// vm.unwindingCrossedNative... // OLD: Don't clear this either!
+			vm.unwinding = false
 			// We're taking ownership of the exception as a Go error - drop any
 			// frame(s) unwinding stopped at without popping (see comment above
 			// frameCountAtEntry) so they can't be mistaken for a live boundary
@@ -1934,8 +1968,7 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	if vm.unwinding && vm.currentException != Null {
 		ex := vm.currentException
 		vm.currentException = Null
-		// vm.unwinding = false         // OLD: Don't clear this!
-		// vm.unwindingCrossedNative... // OLD: Don't clear this either!
+		vm.unwinding = false // see the matching comment above (#142)
 		vm.truncateFramesTo(frameCountAtEntry)
 		return Undefined, exceptionError{exception: ex}
 	}
