@@ -64,15 +64,38 @@ func NewRegExp(pattern, flags string) (Value, error) {
 		return Undefined, err
 	}
 
-	// Deliberately NO regexp2 fallback here. RE2 rejecting a pattern is how
-	// this path reports the SyntaxError that ECMAScript requires for the
-	// modifier and named-group early errors; routing those to regexp2, which
-	// accepts them, silently loses 27 test262 cases. Constructs RE2 cannot
-	// express (lookahead, backreferences) therefore still throw from the
-	// constructor while working in a literal — see the ticket.
 	compiledRegex, err := regexp.Compile(goPattern)
+	var compiledRegex2 *regexp2.Regexp
 	if err != nil {
-		return Undefined, err
+		// A regexp2 fallback here is deliberately narrow, not the unconditional
+		// one compileRegexEngines uses for regex literals (paserati#172).
+		// Measured against built-ins/RegExp at -timeout 2s (that suite is too
+		// flaky at the usual 0.2s to resolve a change this size - see
+		// 02454018's own note):
+		//   - unconditional fallback (whenever RE2 fails, regardless of why):
+		//     -27/+11. RE2 refusing a pattern is also how this path reports
+		//     the SyntaxError ECMAScript requires for a cluster of early
+		//     errors regexp2 doesn't itself enforce - contradictory/invalid
+		//     regexp-modifier arithmetic, invalid named-group identifiers,
+		//     and Annex B's restricted-escape/quantifiable-assertion rules
+		//     under the `u` flag.
+		//   - gated on the pattern containing one of the four lookaround
+		//     openers RE2 can't express at all: -1/+3. The one loss is
+		//     built-ins/RegExp/unicode_restricted_quantifiable_assertion.js:
+		//     a quantified lookaround under the `u` flag (`(?=.)*`) is itself
+		//     one of those Annex-B early errors, uses lookaround syntax, and
+		//     regexp2 (no notion of that restriction) happily accepts it.
+		// That one known, narrow regression is the cost of unblocking every
+		// other real use of lookaround - the thing this fallback exists for.
+		// (At -timeout 0.2s the net reads as -1/+0: the +3 property-escape
+		// gains, unrelated to lookaround, don't resolve inside that window.)
+		if needsRegexp2Fallback(pattern) {
+			opts := regexp2ECMAScriptOptions(flags)
+			compiledRegex2, err = regexp2.Compile(pattern, opts)
+		}
+		if compiledRegex2 == nil {
+			return Undefined, err
+		}
 	}
 
 	// Parse individual flags
@@ -83,28 +106,52 @@ func NewRegExp(pattern, flags string) (Value, error) {
 	sticky := strings.Contains(flags, "y")
 
 	regexObj := &RegExpObject{
-		Object:        Object{}, // Initialize base object
-		compiledRegex: compiledRegex,
-		source:        pattern,
-		flags:         flags,
-		global:        global,
-		ignoreCase:    ignoreCase,
-		multiline:     multiline,
-		dotAll:        dotAll,
-		sticky:        sticky,
-		lastIndex:     0,
+		Object:         Object{}, // Initialize base object
+		compiledRegex:  compiledRegex,
+		compiledRegex2: compiledRegex2,
+		source:         pattern,
+		flags:          flags,
+		global:         global,
+		ignoreCase:     ignoreCase,
+		multiline:      multiline,
+		dotAll:         dotAll,
+		sticky:         sticky,
+		lastIndex:      0,
 	}
 
 	return RegExpValue(regexObj), nil
 }
 
+// regexp2ECMAScriptOptions builds regexp2's option set for the given
+// JavaScript flags, shared by every call site that compiles with it.
+func regexp2ECMAScriptOptions(flags string) regexp2.RegexOptions {
+	opts := regexp2.RegexOptions(regexp2.ECMAScript)
+	if strings.Contains(flags, "i") {
+		opts |= regexp2.RegexOptions(regexp2.IgnoreCase)
+	}
+	if strings.Contains(flags, "m") {
+		opts |= regexp2.RegexOptions(regexp2.Multiline)
+	}
+	if strings.Contains(flags, "s") {
+		opts |= regexp2.RegexOptions(regexp2.Singleline) // In regexp2, Singleline makes . match \n
+	}
+	return opts
+}
+
+// needsRegexp2Fallback reports whether pattern uses a lookaround construct -
+// (?=, (?!, (?<= or (?<! - the only ECMAScript-valid syntax RE2 cannot
+// express at all. See the fallback's own comment in NewRegExp for why this
+// check exists and what it deliberately doesn't cover.
+func needsRegexp2Fallback(pattern string) bool {
+	return strings.Contains(pattern, "(?=") ||
+		strings.Contains(pattern, "(?!") ||
+		strings.Contains(pattern, "(?<=") ||
+		strings.Contains(pattern, "(?<!")
+}
+
 // compileRegexEngines compiles the regex pattern with both engines and returns a cached result.
 // This is called once per unique (pattern, flags) combination.
 func compileRegexEngines(pattern, flags string) *cachedCompiledRegex {
-	ignoreCase := strings.Contains(flags, "i")
-	multiline := strings.Contains(flags, "m")
-	dotAll := strings.Contains(flags, "s")
-
 	var compiledRegex *regexp.Regexp
 	var compiledRegex2 *regexp2.Regexp
 	var compileError string
@@ -115,21 +162,12 @@ func compileRegexEngines(pattern, flags string) *cachedCompiledRegex {
 		compiledRegex, _ = regexp.Compile(goPattern)
 	}
 
-	// If RE2 failed, try regexp2 (full ECMAScript support)
+	// If RE2 failed, try regexp2 (full ECMAScript support). Regex literals
+	// have always fallen back unconditionally here (unlike NewRegExp's own,
+	// deliberately narrower fallback for the RegExp constructor - see its
+	// comment) - this function's own behavior is unchanged by paserati#172.
 	if compiledRegex == nil {
-		// Build regexp2 options
-		opts := regexp2.RegexOptions(regexp2.ECMAScript)
-		if ignoreCase {
-			opts |= regexp2.RegexOptions(regexp2.IgnoreCase)
-		}
-		if multiline {
-			opts |= regexp2.RegexOptions(regexp2.Multiline)
-		}
-		if dotAll {
-			opts |= regexp2.RegexOptions(regexp2.Singleline) // In regexp2, Singleline makes . match \n
-		}
-
-		compiledRegex2, err = regexp2.Compile(pattern, opts)
+		compiledRegex2, err = regexp2.Compile(pattern, regexp2ECMAScriptOptions(flags))
 		if err != nil {
 			compileError = err.Error()
 		}
