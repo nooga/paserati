@@ -4168,6 +4168,20 @@ startExecution:
 				// Our frame was popped - we need to exit this VM loop immediately
 				// The exception should be handled by the caller (executeUserFunctionSafe)
 				// Don't update frame variables, just continue to let the main loop handle unwinding
+				//
+				// ...except that `continue` does not exit the loop, it re-enters
+				// the body with frame/code/ip still cached from the frame that
+				// was just popped. With frames left below, the loop's own
+				// unwinding machinery picks it up. With NO frames left - an
+				// uncaught exception, where handleUncaughtException has already
+				// reported it and set frameCount to 0 to stop execution - there
+				// is nothing to pick it up, so the loop decoded the dead frame's
+				// bytecode and eventually ran its OpReturn, taking frameCount to
+				// -1 and panicking on vm.frames[-2] (#156). Return the way the
+				// other post-unwind sites in this loop already do.
+				if vm.frameCount == 0 {
+					return InterpretRuntimeError, vm.currentException
+				}
 				continue
 			}
 
@@ -11328,6 +11342,15 @@ startExecution:
 				// Check if VM started unwinding during the native function call
 				// (e.g., ToPrimitive threw an exception but returned nil error)
 				if vm.unwinding {
+					// A native that raised through vm.ThrowTypeError (rather than
+					// returning an ExceptionError) reports "unwinding" by returning
+					// normally. If nothing caught it, handleUncaughtException has
+					// already reported it and zeroed frameCount to stop execution,
+					// so there is no frame for the loop to resume into and
+					// `continue` would decode the dead frame's bytecode (#156).
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
 					continue // Let exception handling take over
 				}
 
@@ -11476,6 +11499,15 @@ startExecution:
 				// Check if VM started unwinding during the native function call
 				// (e.g., ToPrimitive threw an exception but returned nil error)
 				if vm.unwinding {
+					// A native that raised through vm.ThrowTypeError (rather than
+					// returning an ExceptionError) reports "unwinding" by returning
+					// normally. If nothing caught it, handleUncaughtException has
+					// already reported it and zeroed frameCount to stop execution,
+					// so there is no frame for the loop to resume into and
+					// `continue` would decode the dead frame's bytecode (#156).
+					if vm.frameCount == 0 {
+						return InterpretRuntimeError, vm.currentException
+					}
 					continue // Let exception handling take over
 				}
 
@@ -11740,6 +11772,12 @@ startExecution:
 						continue
 					}
 					if vm.unwinding {
+						// See #156: with no frames left there is nothing to
+						// resume into, and `continue` would run the dead frame's
+						// bytecode.
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
 						continue
 					}
 					if inheritNewTarget && !newTargetForNative.Is(originalConstructor) {
@@ -11820,6 +11858,12 @@ startExecution:
 						continue
 					}
 					if vm.unwinding {
+						// See #156: with no frames left there is nothing to
+						// resume into, and `continue` would run the dead frame's
+						// bytecode.
+						if vm.frameCount == 0 {
+							return InterpretRuntimeError, vm.currentException
+						}
 						continue
 					}
 					if inheritNewTarget && !newTargetForNative.Is(originalConstructor) {
@@ -16923,8 +16967,15 @@ func (vm *VM) runtimeErrorFrom(cause error, format string, args ...interface{}) 
 // and returns the InterpretRuntimeError status.
 func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 
-	// Get the current frame to access chunk and IP
-	if vm.frameCount == 0 {
+	// Get the current frame to access chunk and IP.
+	//
+	// `< 1`, not `== 0`: this is the *reporting* path, reached from the panic
+	// recovery in run(), so it must stay safe even when frame bookkeeping is
+	// already broken. With `== 0` a negative frameCount fell through to
+	// vm.frames[frameCount-1] and panicked a second time, which is how #156
+	// printed "runtimeError itself panicked while reporting the above" and
+	// buried the original diagnostic.
+	if vm.frameCount < 1 {
 		// Should not happen if called during run()
 		// Create a generic error if no frame context
 		runtimeErr := &errors.RuntimeError{
