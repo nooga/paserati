@@ -1334,36 +1334,8 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) < 1 {
 			return vm.NaN, nil
 		}
-		dateStr := args[0].ToString()
-
-		// Try common date formats (UTC formats first per ECMAScript spec)
-		// Year-only and date-only formats default to UTC
-		if parsedTime, err := time.Parse(time.RFC3339, dateStr); err == nil {
-			return vm.NumberValue(float64(parsedTime.UnixMilli())), nil
-		}
-		if parsedTime, err := time.Parse("2006-01-02T15:04:05Z", dateStr); err == nil {
-			return vm.NumberValue(float64(parsedTime.UnixMilli())), nil
-		}
-		if parsedTime, err := time.Parse("2006-01-02", dateStr); err == nil {
-			// Date-only per spec defaults to UTC
-			return vm.NumberValue(float64(parsedTime.UTC().UnixMilli())), nil
-		}
-		if parsedTime, err := time.Parse("2006", dateStr); err == nil {
-			// Year-only per spec defaults to January 1st UTC
-			return vm.NumberValue(float64(parsedTime.UTC().UnixMilli())), nil
-		}
-		// Try other common formats (local time)
-		otherFormats := []string{
-			"01/02/2006",
-			"January 2, 2006",
-		}
-		for _, format := range otherFormats {
-			if parsedTime, err := time.Parse(format, dateStr); err == nil {
-				return vm.NumberValue(float64(parsedTime.UnixMilli())), nil
-			}
-		}
-
-		return vm.NaN, nil // Invalid date
+		// Same ladder as new Date(string) - see parseDateString.
+		return vm.NumberValue(parseDateString(args[0].ToString())), nil
 	}))
 
 	ctorWithProps.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("UTC", vm.NewNativeFunction(7, true, "UTC", func(args []vm.Value) (vm.Value, error) {
@@ -1541,24 +1513,40 @@ func thisTimeValue(vmInstance *vm.VM, dateValue vm.Value) (float64, error) {
 // getDateTimestamp is a legacy helper that returns (timestamp, ok).
 // For new code, prefer thisTimeValue which properly throws TypeError.
 // parseDateString turns a date string into a timestamp, returning NaN for
-// anything it cannot parse - the spec's "unrecognizable String" result. Shared
-// by the Date constructor and Date.parse so the two cannot drift.
+// anything it cannot parse - the spec's "unrecognizable String" result.
 //
-// It also replaces a float64(0x7FF8000000000000) that used to stand in for NaN
-// on one of the two paths: that converts the bit pattern as an *integer*,
-// producing ~9.22e18 rather than a NaN, which is why new Date(someObject)
-// reported a huge timestamp instead of an Invalid Date.
+// Shared by `new Date(string)` and Date.parse, which per spec 21.4.3.2 must
+// accept exactly the same formats. They did not: the constructor had its own
+// shorter ladder, so new Date("01/02/2006") and new Date("January 2, 2006")
+// were Invalid Date while Date.parse of the same strings worked.
+//
+// It also replaces a float64(0x7FF8000000000000) the constructor used to store
+// for an unparseable string: that converts the NaN bit pattern as an *integer*,
+// producing ~9.22e18 rather than a NaN, so the result read as a real timestamp
+// instead of an Invalid Date.
 func parseDateString(dateStr string) float64 {
+	// UTC formats first per ECMAScript spec; year-only and date-only default to UTC.
 	if parsedTime, err := time.Parse(time.RFC3339, dateStr); err == nil {
 		return float64(parsedTime.UnixMilli())
 	}
-	// Date-only format per ECMAScript spec defaults to UTC
+	if parsedTime, err := time.Parse("2006-01-02T15:04:05Z", dateStr); err == nil {
+		return float64(parsedTime.UnixMilli())
+	}
 	if parsedTime, err := time.Parse("2006-01-02", dateStr); err == nil {
 		return float64(parsedTime.UTC().UnixMilli())
 	}
-	// Year-only format per ECMAScript spec defaults to January 1st UTC
 	if parsedTime, err := time.Parse("2006", dateStr); err == nil {
+		// Year-only defaults to January 1st UTC
 		return float64(parsedTime.UTC().UnixMilli())
+	}
+	// Other common formats, interpreted as local time.
+	for _, format := range []string{
+		"01/02/2006",
+		"January 2, 2006",
+	} {
+		if parsedTime, err := time.Parse(format, dateStr); err == nil {
+			return float64(parsedTime.UnixMilli())
+		}
 	}
 	return math.NaN()
 }
