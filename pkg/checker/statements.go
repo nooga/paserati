@@ -1141,6 +1141,14 @@ func (c *Checker) defineDestructuringTarget(target parser.Expression, typ types.
 	case *parser.ObjectLiteral:
 		// Nested object destructuring - recursively handle
 		for _, prop := range t.Properties {
+			// A rest element nested inside the pattern (`{a: {b, ...rr}}`)
+			// arrives as a SpreadElement in Key, so the identifier check below
+			// would skip it silently and the later read would be "Cannot find
+			// name 'rr'".
+			if spread, isRest := prop.Key.(*parser.SpreadElement); isRest {
+				c.defineDestructuringTarget(spread.Argument, nestedObjectPatternRestType(typ, t), isConst, isVar)
+				continue
+			}
 			// Extract key name from the property
 			if ident, ok := prop.Key.(*parser.Identifier); ok {
 				var propType types.Type

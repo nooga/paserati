@@ -1,4 +1,4 @@
-// expect: 1,2|3|4|5|6,7|8|9|10|11|12,13|14,15|56,57,[58,59]|16,[17,18]|19,{"m":20}|21|22|23,23|25,25|27|57|57
+// expect: 1,2|3|4|5|6,7|8|9|10|11|12,13|14,15|56,57,[58,59]|60,{"h":61,"i":62}|16,[17,18]|19,{"m":20}|21|22|23,23|25,25|27|57|57
 // A namespace member exported via a destructuring pattern never landed on the
 // namespace object: `namespace N { export const {a} = obj; }` left N.a
 // undefined at runtime, and absent from N's type (TS2339).
@@ -101,6 +101,20 @@ namespace JD {
   export const [[x, ...ys]] = [[57, 58, 59]];
 }
 out.push([JD.g, JD.x, JSON.stringify(JD.ys)].join(","));
+
+// A rest element nested inside an object pattern. retargetPattern reaches it
+// through ObjectProperty.Key rather than as a target, so the shorthand branch
+// used to treat the SpreadElement itself as the property name and bind nothing -
+// N.rr came back undefined while its sibling was correct.
+namespace JR {
+  export const {
+    f: { g: jrg, ...jrRest },
+  } = { f: { g: 60, h: 61, i: 62 } };
+}
+out.push(jrJoin());
+function jrJoin(): string {
+  return JR.jrg + "," + JSON.stringify(JR.jrRest);
+}
 
 // --- defaults, rest and elision ---
 namespace K {

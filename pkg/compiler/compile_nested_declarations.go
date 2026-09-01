@@ -90,6 +90,20 @@ func (c *Compiler) compileNestedObjectDeclaration(objectTarget *parser.ObjectLit
 
 	// Convert properties to destructuring properties
 	for _, prop := range objectTarget.Properties {
+		// A rest element inside a nested object pattern (`{a: {b, ...rr}}`).
+		// The parser stores it as a SpreadElement in Key with a nil Value - the
+		// nested pattern is a raw ObjectLiteral, so it has no RestProperty field
+		// of its own the way a top-level ObjectDestructuringDeclaration does.
+		// Route it to the synthesized declaration's RestProperty, where the
+		// existing top-level rest lowering picks it up.
+		if spread, ok := prop.Key.(*parser.SpreadElement); ok {
+			declaration.RestProperty = &parser.DestructuringElement{
+				Target: spread.Argument,
+				IsRest: true,
+			}
+			continue
+		}
+
 		// Key can be identifier, number, or bigint (for array destructuring as object)
 		var keyIdent *parser.Identifier
 		if ident, ok := prop.Key.(*parser.Identifier); ok {
