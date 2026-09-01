@@ -792,6 +792,12 @@ type Chunk struct {
 	Constants      []Value            // Constant pool (Now uses Value from vm package)
 	Lines          []int              // Line number for each byte in Code (parallel array)
 	ExceptionTable []ExceptionHandler // Exception handlers for try/catch blocks
+	// BuiltinGlobalNames and GlobalNames record the compiler's indexed global
+	// layout. InterpretChunk consumers use them to reject incompatible VMs before
+	// bytecode can read or overwrite a different binding at the same index.
+	// Empty metadata denotes a legacy chunk whose layout is unknown.
+	BuiltinGlobalNames []string
+	GlobalNames        []string
 	IsStrict              bool               // Whether this chunk runs in strict mode
 	HasSimpleParameterList bool              // True if all params are plain identifiers (no defaults, rest, or destructuring)
 	ScopeDesc             *ScopeDescriptor   // Scope info for direct eval (nil if not needed)
