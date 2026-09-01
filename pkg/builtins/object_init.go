@@ -951,46 +951,30 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			wrapper := vm.NewObject(vmInstance.BigIntPrototype).AsPlainObject()
 			// Store the primitive value internally
 			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
-			// Add valueOf method that returns the primitive
-			wrapper.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
-				return arg, nil
-			}))
 			return vm.NewValueFromPlainObject(wrapper), nil
 
 		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
 			// Create Number wrapper object
 			wrapper := vm.NewObject(vmInstance.NumberPrototype).AsPlainObject()
 			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
-			wrapper.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
-				return arg, nil
-			}))
 			return vm.NewValueFromPlainObject(wrapper), nil
 
 		case vm.TypeString:
 			// Create String wrapper object
 			wrapper := vm.NewObject(vmInstance.StringPrototype).AsPlainObject()
 			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
-			wrapper.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
-				return arg, nil
-			}))
 			return vm.NewValueFromPlainObject(wrapper), nil
 
 		case vm.TypeBoolean:
 			// Create Boolean wrapper object
 			wrapper := vm.NewObject(vmInstance.BooleanPrototype).AsPlainObject()
 			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
-			wrapper.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
-				return arg, nil
-			}))
 			return vm.NewValueFromPlainObject(wrapper), nil
 
 		case vm.TypeSymbol:
 			// Create Symbol wrapper object
 			wrapper := vm.NewObject(vmInstance.SymbolPrototype).AsPlainObject()
 			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
-			wrapper.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
-				return arg, nil
-			}))
 			return vm.NewValueFromPlainObject(wrapper), nil
 
 		default:
