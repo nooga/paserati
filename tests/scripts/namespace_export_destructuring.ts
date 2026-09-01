@@ -1,4 +1,4 @@
-// expect: 1,2|3|4|5|6,7|8|9|10|11|12,13|14,15|16,[17,18]|19,{"m":20}|21|22|23,23|25,25|27|57|57
+// expect: 1,2|3|4|5|6,7|8|9|10|11|12,13|14,15|56,57,[58,59]|16,[17,18]|19,{"m":20}|21|22|23,23|25,25|27|57|57
 // A namespace member exported via a destructuring pattern never landed on the
 // namespace object: `namespace N { export const {a} = obj; }` left N.a
 // undefined at runtime, and absent from N's type (TS2339).
@@ -88,6 +88,19 @@ namespace J {
   export const [[i]] = [[15]];
 }
 out.push([J.h, J.i].join(","));
+
+// A nested default and a nested rest. These were verified only with
+// --no-typecheck when this test was written, because the checker rejected them
+// ("invalid destructuring target type: *parser.AssignmentExpression /
+// *parser.SpreadElement") independently of namespaces - so retargetPattern's
+// two wrapper branches had no typed coverage. They do now.
+namespace JD {
+  export const {
+    f: { g = 56 },
+  } = { f: {} };
+  export const [[x, ...ys]] = [[57, 58, 59]];
+}
+out.push([JD.g, JD.x, JSON.stringify(JD.ys)].join(","));
 
 // --- defaults, rest and elision ---
 namespace K {

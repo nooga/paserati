@@ -1112,10 +1112,13 @@ func (c *Checker) checkObjectDestructuringInForLoop(node *parser.ObjectDestructu
 //
 // Note this walker is shallower than checkDestructuringTargetForDeclaration: for
 // a nested object pattern it reads prop.Key only, so a nested *renamed* target
-// (`{f: {g: h}}`) binds g rather than h, and it has no AssignmentExpression
-// (nested default) or SpreadElement (nested rest) cases. Pre-existing, and not
-// about scope.
+// (`{f: {g: h}}`) binds g rather than h. Pre-existing, and not about scope.
 func (c *Checker) defineDestructuringTarget(target parser.Expression, typ types.Type, isConst bool, isVar bool) {
+	// A nested default or rest wraps the binding - see
+	// unwrapNestedPatternTarget. Without this, `for (const [[x, ...ys]] of xs)`
+	// and `for (const {a: [q = 5]} of xs)` silently bound nothing (this walk's
+	// default case skips quietly), so the later read was TS2304.
+	target, typ = c.unwrapNestedPatternTarget(target, typ)
 	env := c.declarationEnv(isVar)
 	switch t := target.(type) {
 	case *parser.Identifier:
