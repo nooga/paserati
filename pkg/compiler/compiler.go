@@ -3705,6 +3705,34 @@ func (c *Compiler) trackIfLoopBodyLocal(name string) {
 	}
 }
 
+// headPerIterationBindings returns the storage of the bindings a let/const loop
+// *head* pattern introduced, so the loop can give each iteration a fresh one.
+// It is the header counterpart of trackIfLoopBodyLocal (#132), and exists
+// because a pattern head's bindings are created deep inside the destructuring
+// helpers - nested targets, defaults and rest elements all land in the symbol
+// table through different paths - so collecting registers at each binding site
+// would mean threading a sink through all of them. Looking the names up once
+// the pattern is bound gets every shape.
+//
+// Only the CURRENT scope is consulted, deliberately: unlike a body declaration,
+// whose binding is certainly in the current table by the time it is tracked, a
+// head pattern name may coincide with an outer binding. Resolving outward and
+// closing that register would clobber an enclosing scope's variable.
+func (c *Compiler) headPerIterationBindings(decl parser.Statement) (regs []Register, spills []uint16) {
+	for _, name := range parser.DeclaredNames(decl) {
+		sym, ok := c.currentSymbolTable.store[name]
+		if !ok || sym.IsGlobal {
+			continue
+		}
+		if sym.IsSpilled {
+			spills = append(spills, sym.SpillIndex)
+		} else if sym.Register != nilRegister {
+			regs = append(regs, sym.Register)
+		}
+	}
+	return regs, spills
+}
+
 // closeLoopBodyPerIterationBindings emits OpCloseUpvalue(Spill) for every
 // body-declared per-iteration binding tracked on lc (#132). Called at the
 // same point in each loop's compile where its own header per-iteration
