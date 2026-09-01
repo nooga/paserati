@@ -28,6 +28,19 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # Benchmarks are not run by `go test ./...` - it needs -bench - so a
+      # benchmark that stops working is invisible to every other check here.
+      # BenchmarkSetIndex was broken on main from 2026-08-30 while CI stayed
+      # green (#149).
+      #
+      # -benchtime 1x is deliberate: one iteration each, so this asks "does every
+      # benchmark still run?" and takes seconds. It is NOT a performance gate.
+      # Shared runners are far too noisy to gate timings on (#21), and pretending
+      # otherwise is how a perf check becomes a flaky check people learn to
+      # ignore.
+      - name: Benchmark smoke
+        run: go test -run '^$' -bench . -benchtime 1x ./pkg/vm ./tests
+
   lint:
     runs-on: ubuntu-latest
     steps:
