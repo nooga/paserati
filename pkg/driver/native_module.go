@@ -353,6 +353,17 @@ func (m *ModuleBuilder) createClassConstructor(goStruct interface{}, constructor
 			return vm.Undefined, nil
 		}
 
+		// Handle the common (value, error) constructor shape (paserati#167):
+		// mirrors goFunctionToVM's own len(results) == 2 error check above -
+		// without this, a non-nil error here was silently discarded and
+		// `new X(...)` evaluated to undefined instead of throwing.
+		if len(results) == 2 && results[1].Type().Implements(reflect.TypeOf((*error)(nil)).Elem()) {
+			if !results[1].IsNil() {
+				errVal := results[1].Interface().(error)
+				return vm.Undefined, errVal
+			}
+		}
+
 		// Get the created Go instance
 		goInstance := results[0]
 		if !goInstance.IsValid() || goInstance.IsNil() {
