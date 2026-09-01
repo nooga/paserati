@@ -18,10 +18,7 @@ import (
 // vmInstance.Call/native helpers, falling back to a plain string for Go
 // errors that never went through the exception machinery.
 func exceptionValue(vmInstance *vm.VM, err error) vm.Value {
-	if ee, ok := err.(vm.ExceptionError); ok {
-		return ee.GetExceptionValue()
-	}
-	return vm.NewString(err.Error())
+	return vmInstance.ExceptionValueFromError(err)
 }
 
 // newSuppressedError builds a SuppressedError instance directly against the

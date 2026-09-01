@@ -95,11 +95,7 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			vmInstance.ClearErrors()
 
 			// Extract exception value and wrap in rejected promise
-			if ee, ok := err.(vm.ExceptionError); ok {
-				return vmInstance.NewRejectedPromise(ee.GetExceptionValue()), nil
-			}
-			// Fallback for other errors
-			return vmInstance.NewRejectedPromise(vm.NewString(err.Error())), nil
+			return vmInstance.NewRejectedPromise(vmInstance.ExceptionValueFromError(err)), nil
 		}
 
 		return vmInstance.NewResolvedPromise(result), nil
