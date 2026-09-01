@@ -2453,6 +2453,23 @@ func (a *ArrayObject) DefineOwnProperty(name string, value Value, writable, enum
 	}
 }
 
+// GetIndexAttributesOverride returns the writable/enumerable/configurable
+// combination ArrayDefineOwnProperty tracked for a dense-element index
+// (paserati#178), if any. Unlike GetOwnPropertyDescriptor, this isn't
+// gated on the .properties map: a dense index's value lives in .elements,
+// never in .properties, so GetOwnPropertyDescriptor would never find an
+// entry that lives only in propertyDesc for it. Callers reading a dense
+// element's descriptor (Object.getOwnPropertyDescriptor's array path) use
+// this to detect a non-default combination instead of assuming the ES
+// default.
+func (a *ArrayObject) GetIndexAttributesOverride(key string) (PropertyDesc, bool) {
+	if a.propertyDesc == nil {
+		return PropertyDesc{}, false
+	}
+	desc, ok := a.propertyDesc[key]
+	return desc, ok
+}
+
 // GetOwnPropertyDescriptor returns the descriptor for a named property
 func (a *ArrayObject) GetOwnPropertyDescriptor(name string) (Value, PropertyDesc, bool) {
 	if a.execMeta != nil {
@@ -2524,23 +2541,44 @@ func (a *ArrayObject) SealProperties() {
 }
 
 func (a *ArrayObject) sealOrFreezeProperties(freeze bool) {
-	if a.properties == nil {
-		return
+	if a.properties != nil {
+		if a.propertyDesc == nil {
+			a.propertyDesc = make(map[string]PropertyDesc)
+		}
+		for name, val := range a.properties {
+			_ = val
+			desc, hasDesc := a.propertyDesc[name]
+			if !hasDesc {
+				desc = PropertyDesc{Writable: true, Enumerable: true, Configurable: true}
+			}
+			desc.Configurable = false
+			if freeze {
+				desc.Writable = false
+			}
+			a.propertyDesc[name] = desc
+		}
 	}
-	if a.propertyDesc == nil {
-		a.propertyDesc = make(map[string]PropertyDesc)
-	}
-	for name, val := range a.properties {
-		_ = val
-		desc, hasDesc := a.propertyDesc[name]
-		if !hasDesc {
-			desc = PropertyDesc{Writable: true, Enumerable: true, Configurable: true}
+
+	// A dense-element index can also carry its own propertyDesc entry -
+	// tracked by ArrayDefineOwnProperty when an explicit Object.defineProperty
+	// call requested a non-default writable/enumerable/configurable
+	// combination for it (paserati#178). Such an index has no entry in
+	// .properties (its value lives in .elements), so the loop above never
+	// reaches it. Lock it down the same way, or a leftover
+	// writable/configurable:true entry makes IsFrozen()'s own
+	// re-validation loop (which walks every propertyDesc entry looking for
+	// exactly this) incorrectly report the array as not frozen even though
+	// SetFrozen(true) just ran.
+	for key, desc := range a.propertyDesc {
+		idx, isIndex := tryParseArrayIndex(key)
+		if !isIndex || idx >= len(a.elements) || a.elements[idx].typ == TypeHole {
+			continue // not a dense-element override - e.g. an accessor's own entry, left alone
 		}
 		desc.Configurable = false
 		if freeze {
 			desc.Writable = false
 		}
-		a.propertyDesc[name] = desc
+		a.propertyDesc[key] = desc
 	}
 }
 

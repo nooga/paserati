@@ -63,16 +63,21 @@ func (vm *VM) ArrayPrototypeSetterFor(receiver Value, idx int, val Value) (bool,
 // covering both a numeric index (an element of the array) and an arbitrary
 // named property.
 //
-// Array elements have no per-index attribute storage: the elements slice
-// holds only values (or Hole for a sparse gap), not a writable/enumerable/
-// configurable triple per slot. So a plain data element's "current"
-// descriptor is always reported as the ES default (value, true, true,
-// true) - this codebase's existing posture of not enforcing per-element
-// non-writable/non-configurable (see e.g. Object.freeze's array handling,
-// which sets a single array-wide `frozen` flag rather than per-index
-// descriptors). An index that has been explicitly turned into an accessor
-// *is* tracked precisely, through the same getters/setters/propertyDesc
-// maps a named property uses (see ArrayObject.DefineAccessorProperty).
+// The elements slice itself holds only values (or Hole for a sparse gap),
+// not a writable/enumerable/configurable triple per slot - so a plain data
+// element's descriptor defaults to the ES default (value, true, true, true)
+// when nothing has ever said otherwise. An explicit Object.defineProperty
+// call that requests a non-default combination for an in-range index is
+// tracked in propertyDesc instead (keyed by the index's string form, same
+// map a named property or an accessor index already uses - see
+// ArrayObject.DefineAccessorProperty) - GetOwnPropertyDescriptor,
+// DeleteIndex, and this function's own re-entry all check it first before
+// falling back to the default (paserati#178; a plain `arr[i] = v` never
+// goes through this function and so never creates an entry, keeping the
+// common case free of any per-element bookkeeping). This codebase still
+// doesn't enforce non-writable/non-configurable at the *whole-array*
+// level any more precisely than a single `frozen` flag (Object.freeze),
+// independent of this per-index tracking.
 //
 // Mirrors ArgumentsDefineOwnProperty's structure (arguments_props.go) for a
 // different exotic object with the same shape of problem: numeric indices
@@ -100,7 +105,17 @@ func (vm *VM) ArrayDefineOwnProperty(
 	if _, _, e, c, ok := a.GetOwnAccessor(key); ok {
 		exists, isAccessor, curEnumerable, curConfigurable = true, true, e, c
 	} else if isIndex && idx < len(a.elements) && a.elements[idx].typ != TypeHole {
+		// The ES default for a plain element (paserati#178: a prior
+		// ArrayDefineOwnProperty call on this same index may have tracked a
+		// non-default combination in propertyDesc instead - see the write
+		// side below - and DeleteIndex already checks propertyDesc first
+		// for exactly this reason).
 		exists, curWritable, curEnumerable, curConfigurable = true, true, true, true
+		if a.propertyDesc != nil {
+			if desc, ok := a.propertyDesc[key]; ok {
+				curWritable, curEnumerable, curConfigurable = desc.Writable, desc.Enumerable, desc.Configurable
+			}
+		}
 	} else if _, desc, ok := a.GetOwnPropertyDescriptor(key); ok {
 		exists, curWritable, curEnumerable, curConfigurable = true, desc.Writable, desc.Enumerable, desc.Configurable
 	}
@@ -193,26 +208,35 @@ func (vm *VM) ArrayDefineOwnProperty(
 		}
 		if idx <= maxDenseArrayDefineIndex {
 			a.Set(idx, newValue)
+			// A plain element's descriptor otherwise reports the ES
+			// default (value, true, true, true) - see this file's doc
+			// comment. Track a non-default writable/enumerable/
+			// configurable combination explicitly in propertyDesc instead
+			// (paserati#178) - GetOwnPropertyDescriptor, DeleteIndex, and
+			// this function's own "resolve current descriptor" step above
+			// all already check propertyDesc first for exactly this
+			// reason. An all-default combination needs no entry, matching
+			// the delete just above (which also clears whatever an
+			// earlier defineProperty call on this index may have left).
+			if !(writable && enumerable && configurable) {
+				if a.propertyDesc == nil {
+					a.propertyDesc = make(map[string]PropertyDesc)
+				}
+				a.propertyDesc[key] = PropertyDesc{Writable: writable, Enumerable: enumerable, Configurable: configurable}
+			}
 		} else {
 			// Beyond the dense-allocation bound: track it as a named
 			// property instead of materializing the elements slice up to
-			// idx (see maxDenseArrayDefineIndex). Known gap, shared with
-			// OpSetIndex's identical fallback: a direct `arr[idx]`/
-			// arrayLikeGet read for an index this large that's still below
-			// the (now-grown) `length` hits the elements-array fast path
-			// first and misses this map, rather than falling through to
-			// the named-property lookup that would find it. Rare enough in
-			// practice (an index this close to the 2^32-2 boundary) that
-			// this codebase accepts it elsewhere rather than adding a
-			// sparse-index data structure.
-			a.DefineOwnProperty(key, newValue, true, true, true)
+			// idx (see maxDenseArrayDefineIndex). DefineOwnProperty stores
+			// the actual attributes here (unlike the old hardcoded
+			// true/true/true - paserati#178), since it always tracks a
+			// full descriptor for a named property regardless of index
+			// size.
+			a.DefineOwnProperty(key, newValue, writable, enumerable, configurable)
 			if idx+1 > a.length {
 				a.length = idx + 1
 			}
 		}
-		// writable/enumerable/configurable for a plain element have nowhere
-		// to live (see doc comment) - dropped here, matching this
-		// codebase's existing non-enforcement of per-element attributes.
 		return nil
 	}
 
@@ -239,7 +263,16 @@ func (a *ArrayObject) DeleteIndex(idx int) bool {
 	configurable := !a.frozen
 	if a.propertyDesc != nil {
 		if desc, ok := a.propertyDesc[key]; ok {
-			configurable = desc.Configurable
+			// Object.freeze only ever flips the array-wide `frozen` flag,
+			// never touching propertyDesc (see ArrayDefineOwnProperty's doc
+			// comment) - so a tracked configurable:true from before the
+			// freeze must still be ANDed with !a.frozen here (paserati#178):
+			// freeze can only take the capability away, never hand back one
+			// an explicit defineProperty granted. Before #178 tracked a
+			// plain data index's own attributes at all, this branch could
+			// only ever fire for an accessor index, where the same
+			// intersection already applies for the same reason.
+			configurable = desc.Configurable && !a.frozen
 		}
 	}
 	if !configurable {
