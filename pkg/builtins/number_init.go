@@ -587,11 +587,23 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		} else {
 			arg := args[0]
 
-			// Handle boxed primitives by extracting primitive value
-			if arg.Type() == vm.TypeObject {
-				obj := arg.AsPlainObject()
-				if primVal, found := obj.GetOwn("[[PrimitiveValue]]"); found && primVal != vm.Undefined {
-					arg = primVal
+			// Convert an object argument the way the spec does: ToNumber(obj)
+			// is ToNumber(ToPrimitive(obj, number)). This used to reach into
+			// [[PrimitiveValue]] for a wrapper and fall through to NaN for
+			// everything else, which meant Number(obj) never converted an
+			// ordinary object at all - Number([5]), Number(new Date(0)) and
+			// Number({valueOf: () => 7}) were all NaN - while unary + on the
+			// same values was correct, because that path goes through the VM's
+			// own ToPrimitive. Reading the slot directly also skipped the
+			// prototype's valueOf/toString entirely, so an override of either
+			// was ignored and the spec's "throw TypeError when neither is
+			// callable" never fired (#115's second half).
+			if arg.IsObject() || arg.IsCallable() {
+				vmInstance.EnterHelperCall()
+				arg = vmInstance.ToPrimitive(arg, "number")
+				vmInstance.ExitHelperCall()
+				if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+					return vm.Undefined, nil
 				}
 			}
 

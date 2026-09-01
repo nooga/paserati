@@ -1248,45 +1248,37 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// new Date() - current time
 			timestamp = float64(time.Now().UnixMilli())
 		} else if len(args) == 1 {
+			// Per ECMAScript 21.4.2.1 step 3: a Date argument is copied from its
+			// own [[DateValue]]; anything else goes through ToPrimitive first,
+			// and only *then* is a String parsed as a date and everything else
+			// run through ToNumber.
+			//
+			// The ToPrimitive step used to be missing for object arguments: they
+			// went straight to arg.ToString(), so new Date({valueOf: () => 0})
+			// and new Date([0]) tried to parse "[object Object]" / "0" as a date
+			// string instead of converting through valueOf, and the prototype's
+			// valueOf/toString were never consulted at all. The same shortcut in
+			// Number() is fixed alongside this.
 			arg := args[0]
-			if arg.IsNumber() {
-				// new Date(timestamp)
-				timestamp = arg.ToFloat()
-			} else if arg.IsObject() {
-				// Check if it's a Date object by looking for __timestamp__
-				if ts, ok := getDateTimestamp(arg); ok {
-					// new Date(dateObject) - copy constructor
-					timestamp = ts
-				} else {
-					// Not a Date object, try string parsing
-					dateStr := arg.ToString()
-					if parsedTime, err := time.Parse(time.RFC3339, dateStr); err == nil {
-						timestamp = float64(parsedTime.UnixMilli())
-					} else if parsedTime, err := time.Parse("2006-01-02", dateStr); err == nil {
-						// Date-only format per ECMAScript spec defaults to UTC
-						timestamp = float64(parsedTime.UTC().UnixMilli())
-					} else if parsedTime, err := time.Parse("2006", dateStr); err == nil {
-						// Year-only format per ECMAScript spec defaults to January 1st UTC
-						timestamp = float64(parsedTime.UTC().UnixMilli())
-					} else {
-						// Invalid date string - use NaN to indicate invalid date
-						timestamp = float64(0x7FF8000000000000) // NaN value
+			if ts, ok := getDateTimestamp(arg); ok {
+				// new Date(dateObject) - copy constructor
+				timestamp = ts
+			} else {
+				if arg.IsObject() || arg.IsCallable() {
+					vmInstance.EnterHelperCall()
+					arg = vmInstance.ToPrimitive(arg, "default")
+					vmInstance.ExitHelperCall()
+					if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+						return vm.Undefined, nil
 					}
 				}
-			} else {
-				// new Date(dateString) - simplified parsing
-				dateStr := arg.ToString()
-				if parsedTime, err := time.Parse(time.RFC3339, dateStr); err == nil {
-					timestamp = float64(parsedTime.UnixMilli())
-				} else if parsedTime, err := time.Parse("2006-01-02", dateStr); err == nil {
-					// Date-only format per ECMAScript spec defaults to UTC
-					timestamp = float64(parsedTime.UTC().UnixMilli())
-				} else if parsedTime, err := time.Parse("2006", dateStr); err == nil {
-					// Year-only format per ECMAScript spec defaults to January 1st UTC
-					timestamp = float64(parsedTime.UTC().UnixMilli())
+				if arg.Type() == vm.TypeString {
+					timestamp = parseDateString(arg.ToString())
 				} else {
-					// Invalid date string - use NaN to indicate invalid date
-					timestamp = math.NaN()
+					// ToNumber for every other primitive, so new Date(true),
+					// new Date(null) and new Date(1n) follow the same rule as
+					// new Date(0) rather than being parsed as text.
+					timestamp = vmInstance.ToNumber(arg)
 				}
 			}
 		} else {
@@ -1548,6 +1540,29 @@ func thisTimeValue(vmInstance *vm.VM, dateValue vm.Value) (float64, error) {
 
 // getDateTimestamp is a legacy helper that returns (timestamp, ok).
 // For new code, prefer thisTimeValue which properly throws TypeError.
+// parseDateString turns a date string into a timestamp, returning NaN for
+// anything it cannot parse - the spec's "unrecognizable String" result. Shared
+// by the Date constructor and Date.parse so the two cannot drift.
+//
+// It also replaces a float64(0x7FF8000000000000) that used to stand in for NaN
+// on one of the two paths: that converts the bit pattern as an *integer*,
+// producing ~9.22e18 rather than a NaN, which is why new Date(someObject)
+// reported a huge timestamp instead of an Invalid Date.
+func parseDateString(dateStr string) float64 {
+	if parsedTime, err := time.Parse(time.RFC3339, dateStr); err == nil {
+		return float64(parsedTime.UnixMilli())
+	}
+	// Date-only format per ECMAScript spec defaults to UTC
+	if parsedTime, err := time.Parse("2006-01-02", dateStr); err == nil {
+		return float64(parsedTime.UTC().UnixMilli())
+	}
+	// Year-only format per ECMAScript spec defaults to January 1st UTC
+	if parsedTime, err := time.Parse("2006", dateStr); err == nil {
+		return float64(parsedTime.UTC().UnixMilli())
+	}
+	return math.NaN()
+}
+
 func getDateTimestamp(dateValue vm.Value) (float64, bool) {
 	if dateValue.Type() == vm.TypeObject {
 		obj := dateValue.AsPlainObject()
