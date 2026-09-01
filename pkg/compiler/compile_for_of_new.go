@@ -254,6 +254,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	iteratorCleanupTryStart := len(c.chunk.Code)
 
 	var perIterationRegs []Register
+	var perIterationSpills []uint16
 	if letStmt, ok := node.Variable.(*parser.LetStatement); ok {
 		symbol := c.currentSymbolTable.Define(letStmt.Name.Value, c.regAlloc.Alloc())
 		c.regAlloc.Pin(symbol.Register)
@@ -284,6 +285,12 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		err := c.compileForOfArrayDestructuring(arrayDestr, valueReg, isConst, isVarDeclToken(arrayDestr.Token), node.Token.Line)
 		if err != nil {
 			return BadRegister, err
+		}
+		// let/const get a fresh binding per iteration; var is one binding.
+		if !isVarDeclToken(arrayDestr.Token) {
+			regs, spills := c.headPerIterationBindings(arrayDestr)
+			perIterationRegs = append(perIterationRegs, regs...)
+			perIterationSpills = append(perIterationSpills, spills...)
 		}
 	} else if objDestr, ok := node.Variable.(*parser.ObjectDestructuringDeclaration); ok {
 		// Object destructuring: for(const {x, y} of arr)
@@ -349,6 +356,12 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 					return BadRegister, err
 				}
 			}
+		}
+		// let/const get a fresh binding per iteration; var is one binding.
+		if !headIsVar {
+			regs, spills := c.headPerIterationBindings(objDestr)
+			perIterationRegs = append(perIterationRegs, regs...)
+			perIterationSpills = append(perIterationSpills, spills...)
 		}
 	} else if exprStmt, ok := node.Variable.(*parser.ExpressionStatement); ok {
 		// This is an existing variable/pattern being assigned to
@@ -430,6 +443,9 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	// capture the value at this iteration, not the final value.
 	for _, reg := range perIterationRegs {
 		c.emitCloseUpvalue(reg, node.Token.Line)
+	}
+	for _, spillIdx := range perIterationSpills {
+		c.emitCloseUpvalueSpill(spillIdx, node.Token.Line)
 	}
 	// #132: same treatment for let/const/class declared directly in the loop's
 	// own body (as opposed to the header binding above).

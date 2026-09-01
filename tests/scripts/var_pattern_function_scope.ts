@@ -1,4 +1,4 @@
-// expect: 1|2|3|4|5|six|51|52,53|3,3,3|1,2,3|99|99|99|99|99|99|13
+// expect: 1|2|3|4|5|six|51|52,53|3,3,3|1,2,3|1,2,3|1,2,3|1,2,3|5,2,5|1/[9],2/[8]|1,2,3|1,2|1,3|1/10 1/20 2/10 2/20|99|99|99|99|99|99|13
 // `var` is function-scoped, so its bindings belong in the nearest function (or
 // global) scope no matter how many blocks deep the declaration sits. The checker
 // has no var-hoisting pre-pass - it defines a binding when it visits the
@@ -119,6 +119,109 @@ function letHeadIsPerIteration(): string {
   return fs.map((g) => g()).join(",");
 }
 out.push(letHeadIsPerIteration());
+
+// The same, for a let/const *pattern* head. These used to give the last value
+// for every closure: only the plain-identifier branches of the head dispatch
+// recorded their register as a per-iteration binding, so the pattern branches -
+// whose names are bound deep inside the destructuring helpers - were never
+// closed at the loop's back edge.
+function letPatternHeadIsPerIteration(): string {
+  const fs: (() => number)[] = [];
+  for (let { w } of [{ w: 1 }, { w: 2 }, { w: 3 }]) {
+    fs.push(() => w);
+  }
+  return fs.map((g) => g()).join(",");
+}
+out.push(letPatternHeadIsPerIteration());
+
+function constPatternHeadIsPerIteration(): string {
+  const fs: (() => number)[] = [];
+  for (const [w] of [[1], [2], [3]]) {
+    fs.push(() => w);
+  }
+  return fs.map((g) => g()).join(",");
+}
+out.push(constPatternHeadIsPerIteration());
+
+// A NESTED target is the discriminating shape: it is bound through
+// compileNestedPatternDeclaration rather than the head's own binding code, so it
+// only works if the per-iteration collection looks names up after the whole
+// pattern is bound.
+function nestedPatternHeadIsPerIteration(): string {
+  const fs: (() => number)[] = [];
+  for (let {
+    a: { b },
+  } of [{ a: { b: 1 } }, { a: { b: 2 } }, { a: { b: 3 } }]) {
+    fs.push(() => b);
+  }
+  return fs.map((g) => g()).join(",");
+}
+out.push(nestedPatternHeadIsPerIteration());
+
+// Defaults and rest elements reach their bindings through yet other paths.
+function defaultAndRestHeadsArePerIteration(): string {
+  const withDefault: (() => number)[] = [];
+  for (let { a = 5 } of [{}, { a: 2 }, {}]) {
+    withDefault.push(() => a);
+  }
+  const withRest: (() => string)[] = [];
+  for (let [a, ...r] of [
+    [1, 9],
+    [2, 8],
+  ]) {
+    withRest.push(() => a + "/" + JSON.stringify(r));
+  }
+  return (
+    withDefault.map((g) => g()).join(",") +
+    "|" +
+    withRest.map((g) => g()).join(",")
+  );
+}
+out.push(defaultAndRestHeadsArePerIteration());
+
+// A let/const pattern in a C-style for INITIALIZER is a per-iteration binding
+// too: the spec copies the bindings before the first test and after each update.
+function letPatternForInitIsPerIteration(): string {
+  const fs: (() => number)[] = [];
+  for (let { w } = { w: 1 }; w < 4; w++) {
+    fs.push(() => w);
+  }
+  return fs.map((g) => g()).join(",");
+}
+out.push(letPatternForInitIsPerIteration());
+
+// break and continue must not disturb the captures.
+function patternHeadWithBreak(): string {
+  const fs: (() => number)[] = [];
+  for (let { w } of [{ w: 1 }, { w: 2 }, { w: 3 }]) {
+    fs.push(() => w);
+    if (w === 2) break;
+  }
+  return fs.map((g) => g()).join(",");
+}
+out.push(patternHeadWithBreak());
+
+function patternHeadWithContinue(): string {
+  const fs: (() => number)[] = [];
+  for (let { w } of [{ w: 1 }, { w: 2 }, { w: 3 }]) {
+    if (w === 2) continue;
+    fs.push(() => w);
+  }
+  return fs.map((g) => g()).join(",");
+}
+out.push(patternHeadWithContinue());
+
+// Nested loops each get their own per-iteration bindings.
+function nestedPatternLoops(): string {
+  const fs: (() => string)[] = [];
+  for (let { w } of [{ w: 1 }, { w: 2 }]) {
+    for (let { v } of [{ v: 10 }, { v: 20 }]) {
+      fs.push(() => w + "/" + v);
+    }
+  }
+  return fs.map((g) => g()).join(" ");
+}
+out.push(nestedPatternLoops());
 
 // --- the shapes that reach the function scope through an enclosing statement.
 // Each was TS2304 (a compile error failing the whole file) before the scope fix,

@@ -1165,6 +1165,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 	// ECMAScript spec: each iteration gets fresh bindings, so closures capture
 	// different values per iteration. We close upvalues at end of each iteration.
 	var perIterationRegs []Register
+	var perIterationSpills []uint16
 	if hasLexicalDecl {
 		prevSymbolTable = c.currentSymbolTable
 		c.currentSymbolTable = NewEnclosedSymbolTable(c.currentSymbolTable)
@@ -1281,6 +1282,25 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 		if _, err := c.compileNode(node.Initializer, initReg); err != nil {
 			return BadRegister, err
 		}
+		// A let/const *pattern* initializer (`for (let {w} = obj; ...)`) binds its
+		// names inside the destructuring helpers, so unlike the plain-declarator
+		// branches above there is no single register to record at declare time.
+		// Collect them once the pattern is bound - they are per-iteration
+		// bindings like any other let/const loop variable.
+		switch init := node.Initializer.(type) {
+		case *parser.ObjectDestructuringDeclaration:
+			if !isVarDeclToken(init.Token) {
+				regs, spills := c.headPerIterationBindings(init)
+				perIterationRegs = append(perIterationRegs, regs...)
+				perIterationSpills = append(perIterationSpills, spills...)
+			}
+		case *parser.ArrayDestructuringDeclaration:
+			if !isVarDeclToken(init.Token) {
+				regs, spills := c.headPerIterationBindings(init)
+				perIterationRegs = append(perIterationRegs, regs...)
+				perIterationSpills = append(perIterationSpills, spills...)
+			}
+		}
 	}
 
 	// *** Per-iteration bindings: close upvalues AFTER init but BEFORE first iteration ***
@@ -1290,6 +1310,9 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 	// the initial values, separate from closures created in test/body/update.
 	for _, reg := range perIterationRegs {
 		c.emitCloseUpvalue(reg, node.Token.Line)
+	}
+	for _, spillIdx := range perIterationSpills {
+		c.emitCloseUpvalueSpill(spillIdx, node.Token.Line)
 	}
 
 	// Per ECMAScript spec, initialize completion value V = undefined
@@ -1346,6 +1369,9 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 	// the value at this iteration. The register keeps its value for the update.
 	for _, reg := range perIterationRegs {
 		c.emitCloseUpvalue(reg, node.Token.Line)
+	}
+	for _, spillIdx := range perIterationSpills {
+		c.emitCloseUpvalueSpill(spillIdx, node.Token.Line)
 	}
 	// #132: same treatment for let/const/class declared directly in the loop's
 	// own body (as opposed to the header above) - see BodyPerIterationRegs'
