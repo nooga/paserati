@@ -19940,6 +19940,34 @@ func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) 
 	}
 }
 
+// GetModuleExport resolves a named export from a module by its module
+// specifier/path, executing it first if it hasn't run yet (idempotent -
+// safe to call on an already-executed module, mirroring how
+// collectModuleExports resolves a ModuleRecord's own re-exports above,
+// including its save/restore of currentModulePath around the same pair of
+// calls - a relative modulePath like "./base.ts" resolves against whatever
+// currentModulePath happens to be, via vm.moduleFromPath(), so this must
+// pin it to fromResolvedPath rather than leaving it at whatever the most
+// recent unrelated Interpret call left it as).
+//
+// This is the public entry point a driver needs to resolve a re-export
+// of an imported binding (export { X } where X came from an import, or
+// export { x } from "./mod") from outside module execution - such
+// re-exports live only in this VM's module-context machinery, never in a
+// ModuleRecord's own ExportValues/ExportIndices. fromResolvedPath is the
+// resolved path of the module that declared the re-export (i.e. the one
+// modulePath is relative to). See paserati#163, #165.
+func (vm *VM) GetModuleExport(fromResolvedPath, modulePath, exportName string) Value {
+	prevFrom := vm.currentModulePath
+	if fromResolvedPath != "" {
+		vm.currentModulePath = fromResolvedPath
+	}
+	defer func() { vm.currentModulePath = prevFrom }()
+
+	_, _ = vm.executeModule(modulePath)
+	return vm.getModuleExport(modulePath, exportName)
+}
+
 // getModuleExport retrieves an exported value from a module
 func (vm *VM) getModuleExport(modulePath string, exportName string) Value {
 	moduleCtx, exists := vm.moduleContexts[modulePath]

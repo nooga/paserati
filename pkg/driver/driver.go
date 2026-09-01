@@ -975,6 +975,19 @@ func (p *Paserati) RunModule(filename string) bool {
 
 		// Store the compiled chunk in the module record for VM access
 		moduleRecord.CompiledChunk = chunk
+
+		// This compile (unlike the loader's own, in the common case above)
+		// happened on p.compiler right here, so its export indices/re-exports
+		// are trustworthy - record them on moduleRecord now, the same way the
+		// loader's applyCompilerExports does, so export collection below can
+		// rely solely on moduleRecord regardless of which branch ran.
+		exportGlobalIndices := p.compiler.GetExportGlobalIndices()
+		exportIndices := make(map[string]uint16, len(exportGlobalIndices))
+		for name, idx := range exportGlobalIndices {
+			exportIndices[name] = uint16(idx)
+		}
+		moduleRecord.ExportIndices = exportIndices
+		moduleRecord.ReExports = p.compiler.GetReExports()
 	}
 
 	// Set the module path in the VM so import.meta.url works correctly
@@ -991,21 +1004,13 @@ func (p *Paserati) RunModule(filename string) bool {
 		return p.DisplayResult(sourceCode, finalValue, runtimeErrs)
 	}
 
-	// After successful execution, collect exported values from the compiler
-	if p.compiler.IsModuleMode() {
-		exportedValues := p.collectExportedValues()
-		moduleRecord.ExportValues = exportedValues
-		// Also store the export indices mapping for dynamic import support
-		// Convert map[string]int to map[string]uint16
-		exportGlobalIndices := p.compiler.GetExportGlobalIndices()
-		exportIndices := make(map[string]uint16, len(exportGlobalIndices))
-		for name, idx := range exportGlobalIndices {
-			exportIndices[name] = uint16(idx)
-		}
-		moduleRecord.ExportIndices = exportIndices
-		moduleRecord.ReExports = p.compiler.GetReExports()
-		debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
-	}
+	// After successful execution, collect exported values using this
+	// module's own recorded export indices (see collectExportedValuesForModule -
+	// paserati#165: p.compiler's *current* IsModuleMode()/export indices are
+	// not reliable here, since this call may be reentrant).
+	exportedValues := p.collectExportedValuesForModule(moduleRecord)
+	moduleRecord.ExportValues = exportedValues
+	debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
 
 	// Get source code for error display
 	sourceCode := ""
@@ -1106,6 +1111,19 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 
 		// Store the compiled chunk in the module record for VM access
 		moduleRecord.CompiledChunk = chunk
+
+		// This compile (unlike the loader's own, in the common case above)
+		// happened on p.compiler right here, so its export indices/re-exports
+		// are trustworthy - record them on moduleRecord now, the same way the
+		// loader's applyCompilerExports does, so export collection below can
+		// rely solely on moduleRecord regardless of which branch ran.
+		exportGlobalIndices := p.compiler.GetExportGlobalIndices()
+		exportIndices := make(map[string]uint16, len(exportGlobalIndices))
+		for name, idx := range exportGlobalIndices {
+			exportIndices[name] = uint16(idx)
+		}
+		moduleRecord.ExportIndices = exportIndices
+		moduleRecord.ReExports = p.compiler.GetReExports()
 	}
 
 	// Set the module path in the VM so import.meta.url works correctly
@@ -1114,21 +1132,14 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 	// Execute the module and return the final value
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
 
-	// After successful execution, collect exported values from the compiler
-	if p.compiler.IsModuleMode() {
-		exportedValues := p.collectExportedValues()
-		moduleRecord.ExportValues = exportedValues
-		// Also store the export indices mapping for dynamic import support
-		// Convert map[string]int to map[string]uint16
-		exportGlobalIndices := p.compiler.GetExportGlobalIndices()
-		exportIndices := make(map[string]uint16, len(exportGlobalIndices))
-		for name, idx := range exportGlobalIndices {
-			exportIndices[name] = uint16(idx)
-		}
-		moduleRecord.ExportIndices = exportIndices
-		moduleRecord.ReExports = p.compiler.GetReExports()
-		debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
-	}
+	// After successful execution, collect exported values using this
+	// module's own recorded export indices (see collectExportedValuesForModule -
+	// paserati#165: p.compiler's *current* IsModuleMode()/export indices are
+	// not reliable here, since this call may be reentrant, e.g. reached via a
+	// require() partway through executing an unrelated entry script).
+	exportedValues := p.collectExportedValuesForModule(moduleRecord)
+	moduleRecord.ExportValues = exportedValues
+	debugPrintf("// [Driver] Collected %d exported values from module\n", len(exportedValues))
 
 	return finalValue, []errors.PaseratiError{}, runtimeErrs
 }
@@ -1213,7 +1224,7 @@ func (p *Paserati) runAsModule(sourceCode string, program *parser.Program, modul
 	// mid-execution (and got Undefined for anything not yet initialized) is corrected
 	// for any subsequent read, and so a later, separate call resolves correctly too.
 	if p.compiler.IsModuleMode() {
-		p.vmInstance.FinishExecutingModule(moduleName, p.collectExportedValues())
+		p.vmInstance.FinishExecutingModule(moduleName, p.collectExportedValues(moduleName))
 	}
 
 	return finalValue, runtimeErrs
@@ -1665,9 +1676,17 @@ func (p *Paserati) InitializeRealmBuiltins(realm *vm.Realm, initializers []built
 	return nil
 }
 
-// collectExportedValues collects the runtime values of exported variables from the VM
-// This is called after successful module execution to populate the ModuleRecord.ExportValues
-func (p *Paserati) collectExportedValues() map[string]vm.Value {
+// collectExportedValues collects the runtime values of exported variables from the VM.
+// This is called after successful module execution to populate the ModuleRecord.ExportValues.
+//
+// Unlike collectExportedValuesForModule, this trusts p.compiler's *current*
+// module-mode state and export indices directly - safe only at a call site
+// that just finished compiling and running this exact chunk on p.compiler
+// itself (runAsModule, the sole remaining caller), so nothing reentrant can
+// have touched it in between. fromResolvedPath is that module's own
+// resolved path, needed to resolve any re-exports of an imported binding
+// (see paserati#163) via VM.GetModuleExport.
+func (p *Paserati) collectExportedValues(fromResolvedPath string) map[string]vm.Value {
 	exports := make(map[string]vm.Value)
 
 	// Debug disabled
@@ -1690,6 +1709,68 @@ func (p *Paserati) collectExportedValues() map[string]vm.Value {
 		}
 	}
 	// Debug disabled
+
+	// Re-exports (export { x } from "./mod", or export { X } where X was
+	// itself an imported binding - see paserati#163) never occupy a local
+	// global slot, so exportIndices above can't see them.
+	for exportName, re := range p.compiler.GetReExports() {
+		if _, already := exports[exportName]; already {
+			continue
+		}
+		exports[exportName] = p.vmInstance.GetModuleExport(fromResolvedPath, re.SourceModule, re.SourceName)
+	}
+
+	return exports
+}
+
+// collectExportedValuesForModule collects the runtime values of a specific
+// module's exports directly from moduleRecord.ExportIndices, rather than
+// asking the shared p.compiler what its *current* module-mode state and
+// export indices happen to be.
+//
+// p.compiler is a single stateful instance whose module-mode flag and export
+// indices reflect whichever compile last ran on it. RunModule/RunModuleWithValue
+// don't always do that compile themselves - most of the time moduleRecord
+// already arrives pre-compiled by the module loader's own per-module compiler
+// (see modules/loader.go's applyCompilerExports, which is what actually
+// populated moduleRecord.ExportIndices/ReExports at compile time). A call
+// reached reentrantly - e.g. a require() handled partway through executing
+// the entry script - can find p.compiler's mode flag flipped back to
+// non-module by whatever compiled in between, silently skipping export
+// collection with no error. See paserati#165.
+func (p *Paserati) collectExportedValuesForModule(moduleRecord *modules.ModuleRecord) map[string]vm.Value {
+	// A native module's real exports are populated directly by
+	// handleNativeModuleSource at load time, not by compiling/running a
+	// chunk - it has no ExportIndices/ReExports of its own to derive
+	// anything from (RunModule/RunModuleWithValue still compile+run its
+	// placeholder empty AST for such a module, since nothing short-circuits
+	// that path). Recomputing from those empty maps would produce an empty
+	// result and silently wipe out the real exports already on the record.
+	if moduleRecord.IsNativeModule() {
+		return moduleRecord.GetExportValues()
+	}
+
+	exports := make(map[string]vm.Value)
+	for exportName, globalIdx := range moduleRecord.ExportIndices {
+		if value, exists := p.vmInstance.GetGlobalByIndex(int(globalIdx)); exists {
+			exports[exportName] = value
+		} else {
+			exports[exportName] = vm.Undefined
+		}
+	}
+
+	// Re-exports (export { x } from "./mod", or export { X } where X was
+	// itself an imported binding rather than a local declaration - see
+	// paserati#163) never occupy a local global slot, so ExportIndices above
+	// can't see them. They resolve through the VM's own module-context
+	// machinery instead - see VM.GetModuleExport.
+	for exportName, re := range moduleRecord.GetReExports() {
+		if _, already := exports[exportName]; already {
+			continue
+		}
+		exports[exportName] = p.vmInstance.GetModuleExport(moduleRecord.ResolvedPath, re.SourceModule, re.SourceName)
+	}
+
 	return exports
 }
 
