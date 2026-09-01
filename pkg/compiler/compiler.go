@@ -60,78 +60,29 @@ func getExportSpecName(expr parser.Expression) string {
 	return ""
 }
 
+// The pattern-name enumeration below lives in pkg/parser
+// (parser.CollectPatternNames and friends) - it is a pure AST query, and the
+// checker needs the same answer for module export registration. These are thin
+// aliases kept so the existing call sites read unchanged.
+
 // collectDestructuringNames extracts variable names from object destructuring properties
 func collectDestructuringNames(props []*parser.DestructuringProperty, rest *parser.DestructuringElement, seen map[string]bool, names *[]string) {
-	for _, prop := range props {
-		if prop == nil || prop.Target == nil {
-			continue
-		}
-		collectPatternNames(prop.Target, seen, names)
-	}
-	if rest != nil && rest.Target != nil {
-		collectPatternNames(rest.Target, seen, names)
-	}
+	parser.CollectObjectPatternNames(props, rest, seen, names)
 }
 
 // collectArrayDestructuringNames extracts variable names from array destructuring elements
 func collectArrayDestructuringNames(elements []*parser.DestructuringElement, seen map[string]bool, names *[]string) {
-	for _, elem := range elements {
-		if elem == nil || elem.Target == nil {
-			continue
-		}
-		collectPatternNames(elem.Target, seen, names)
-	}
-}
-
-// collectPatternNames recursively extracts variable names from a destructuring pattern target
-func collectPatternNames(target parser.Expression, seen map[string]bool, names *[]string) {
-	if target == nil {
-		return
-	}
-	switch t := target.(type) {
-	case *parser.Identifier:
-		if !seen[t.Value] {
-			*names = append(*names, t.Value)
-			seen[t.Value] = true
-		}
-	case *parser.ObjectLiteral:
-		// Nested object pattern: { a: { b, c } }
-		for _, prop := range t.Properties {
-			if prop == nil {
-				continue
-			}
-			if prop.Value != nil {
-				// Key: Value pattern - the target is in Value
-				collectPatternNames(prop.Value, seen, names)
-			} else if prop.Key != nil {
-				// Shorthand pattern { a } - Key is both the source and target
-				collectPatternNames(prop.Key, seen, names)
-			}
-		}
-	case *parser.ArrayLiteral:
-		// Nested array pattern: [a, [b, c]]
-		for _, elem := range t.Elements {
-			collectPatternNames(elem, seen, names)
-		}
-	}
+	parser.CollectArrayPatternNames(elements, seen, names)
 }
 
 // extractDestructuringVarNames extracts all variable names from an ObjectDestructuringDeclaration
-// This is a wrapper that creates a new seen map for use in block predefine pass
 func extractDestructuringVarNames(decl *parser.ObjectDestructuringDeclaration) []string {
-	var names []string
-	seen := make(map[string]bool)
-	collectDestructuringNames(decl.Properties, decl.RestProperty, seen, &names)
-	return names
+	return parser.DeclaredNames(decl)
 }
 
 // extractArrayDestructuringVarNames extracts all variable names from an ArrayDestructuringDeclaration
-// This is a wrapper that creates a new seen map for use in block predefine pass
 func extractArrayDestructuringVarNames(decl *parser.ArrayDestructuringDeclaration) []string {
-	var names []string
-	seen := make(map[string]bool)
-	collectArrayDestructuringNames(decl.Elements, seen, &names)
-	return names
+	return parser.DeclaredNames(decl)
 }
 
 // collectVarDeclarations recursively collects all var declaration names from statements.
