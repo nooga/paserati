@@ -3959,7 +3959,8 @@ func (p *Parser) isContextualKeywordAsIdent() bool {
 	switch p.curToken.Type {
 	case lexer.SET, lexer.GET, lexer.FROM, lexer.OF, lexer.AS,
 		lexer.ASYNC, lexer.STATIC, lexer.TYPE, lexer.READONLY,
-		lexer.OVERRIDE, lexer.ABSTRACT, lexer.UNDEFINED, lexer.IS:
+		lexer.OVERRIDE, lexer.ABSTRACT, lexer.UNDEFINED, lexer.IS,
+		lexer.SATISFIES:
 		return true
 	}
 	return false
