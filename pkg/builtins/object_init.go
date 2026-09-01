@@ -4113,12 +4113,36 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			return vm.NewValueFromPlainObject(descriptor), nil
 		} else if index, err := strconv.Atoi(propName); err == nil && index >= 0 && index < arrObj.Length() {
 			value = arrObj.Get(index)
+			// arrObj.Get only looks at the dense .elements slice; an index
+			// beyond maxDenseArrayDefineIndex/maxDenseArraySetIndex is
+			// tracked as a named property instead (see ArrayDefineOwnProperty),
+			// so fall back the same way the bracket-read opcodes already do
+			// (paserati#176) rather than reporting an empty value for it here.
+			if !arrObj.HasIndex(index) {
+				if v, ok := arrObj.GetOwn(propName); ok {
+					value = v
+				}
+			}
+			// The ES default (writable/configurable true unless frozen,
+			// enumerable always true) unless an earlier Object.defineProperty
+			// call on this same index tracked a different combination in
+			// propertyDesc instead (paserati#178) - the write side
+			// (ArrayDefineOwnProperty) is the only thing that ever puts an
+			// entry there for a plain (non-accessor) index. Object.freeze
+			// only ever flips the array-wide `frozen` flag (SetFrozen), never
+			// touching propertyDesc, so a tracked writable/configurable:true
+			// from before the freeze must still be ANDed with !isFrozen here -
+			// freeze can only take capabilities away, never hand back one an
+			// explicit defineProperty granted.
+			writable, enumerable, configurable := !isFrozen, true, !isFrozen
+			if desc, ok := arrObj.GetIndexAttributesOverride(propName); ok {
+				writable, enumerable, configurable = desc.Writable && !isFrozen, desc.Enumerable, desc.Configurable && !isFrozen
+			}
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", value)
-			// When frozen, elements are not writable and not configurable
-			descriptor.SetOwn("writable", vm.BooleanValue(!isFrozen))
-			descriptor.SetOwn("enumerable", vm.BooleanValue(true))
-			descriptor.SetOwn("configurable", vm.BooleanValue(!isFrozen))
+			descriptor.SetOwn("writable", vm.BooleanValue(writable))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(enumerable))
+			descriptor.SetOwn("configurable", vm.BooleanValue(configurable))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
 		// Check custom properties on the array (e.g., "raw" for template objects, "index"/"input" for regex matches)
