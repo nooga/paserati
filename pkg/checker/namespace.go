@@ -215,20 +215,15 @@ func (c *Checker) checkNamespaceBodyStatement(stmt parser.Statement, nsType *typ
 		_ = n
 		return
 
-	case *parser.LetStatement:
-		c.visit(n)
+	case *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement,
+		*parser.ObjectDestructuringDeclaration, *parser.ArrayDestructuringDeclaration:
+		c.visit(inner)
 		if exported {
-			c.copyVarBindings(n.Declarations, nsType)
-		}
-	case *parser.ConstStatement:
-		c.visit(n)
-		if exported {
-			c.copyVarBindings(n.Declarations, nsType)
-		}
-	case *parser.VarStatement:
-		c.visit(n)
-		if exported {
-			c.copyVarBindings(n.Declarations, nsType)
+			// Every declarator of the clause, and every name a destructuring
+			// pattern binds - `export const {a} = obj` had no case here at all,
+			// so a was missing from the namespace type (TS2339 on N.a) even
+			// though it existed as a binding inside the body.
+			c.copyBindingTypes(parser.DeclaredNames(inner), nsType)
 		}
 
 	case *parser.ExpressionStatement:
@@ -267,15 +262,12 @@ func (c *Checker) checkNamespaceBodyStatement(stmt parser.Statement, nsType *typ
 	}
 }
 
-// copyVarBindings copies the resolved types of var/let/const declarators from
-// the current body env into the namespace's ValueShape.
-func (c *Checker) copyVarBindings(decls []*parser.VarDeclarator, nsType *types.NamespaceType) {
-	for _, d := range decls {
-		if d == nil || d.Name == nil {
-			continue
-		}
-		if t, _, found := c.env.Resolve(d.Name.Value); found {
-			nsType.ValueShape.Properties[d.Name.Value] = t
+// copyBindingTypes copies the resolved types of the named bindings from the
+// current body env into the namespace's ValueShape.
+func (c *Checker) copyBindingTypes(names []string, nsType *types.NamespaceType) {
+	for _, name := range names {
+		if t, _, found := c.env.Resolve(name); found {
+			nsType.ValueShape.Properties[name] = t
 		}
 	}
 }
