@@ -4327,49 +4327,26 @@ func (c *Checker) checkExportAllDeclaration(node *parser.ExportAllDeclaration) {
 // processExportDeclaration processes a declaration that's being exported directly
 func (c *Checker) processExportDeclaration(decl parser.Statement) {
 	switch node := decl.(type) {
-	case *parser.LetStatement:
-		if node.Name != nil {
-			localName := node.Name.Value
-			// Look up the type from the environment (the statement was already processed)
-			exportType, _, exists := c.env.Resolve(localName)
-			if !exists {
-				exportType = types.Any
-			}
-
-			if c.IsModuleMode() {
-				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
-			}
-			debugPrintf("// [Checker] Exported let: %s (type: %s)\n", localName, exportType.String())
+	case *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement,
+		*parser.ObjectDestructuringDeclaration, *parser.ArrayDestructuringDeclaration,
+		*parser.DeclarationGroup:
+		// Every name the declaration binds is exported, not just the first
+		// declarator - and a destructuring pattern binds several. This used to
+		// read the statement's legacy first-declarator Name field, which
+		// exported one name from a multi-declarator clause and nothing at all
+		// from a destructuring declaration (`export const {a} = obj`).
+		if !c.IsModuleMode() {
+			return
 		}
-
-	case *parser.ConstStatement:
-		if node.Name != nil {
-			localName := node.Name.Value
-			// Look up the type from the environment (the statement was already processed)
+		for _, localName := range parser.DeclaredNames(decl) {
+			// The declaration has already been checked, so its bindings are in
+			// the environment with their inferred or annotated types.
 			exportType, _, exists := c.env.Resolve(localName)
 			if !exists {
 				exportType = types.Any
 			}
-
-			if c.IsModuleMode() {
-				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
-			}
-			debugPrintf("// [Checker] Exported const: %s (type: %s)\n", localName, exportType.String())
-		}
-
-	case *parser.VarStatement:
-		if node.Name != nil {
-			localName := node.Name.Value
-			// Look up the type from the environment (the statement was already processed)
-			exportType, _, exists := c.env.Resolve(localName)
-			if !exists {
-				exportType = types.Any
-			}
-
-			if c.IsModuleMode() {
-				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
-			}
-			debugPrintf("// [Checker] Exported var: %s (type: %s)\n", localName, exportType.String())
+			c.moduleEnv.DefineExport(localName, localName, exportType, decl)
+			debugPrintf("// [Checker] Exported declaration binding: %s (type: %s)\n", localName, exportType.String())
 		}
 
 	case *parser.ExpressionStatement:
