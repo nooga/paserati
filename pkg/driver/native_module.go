@@ -152,7 +152,13 @@ func wrapNativeAsAsync(vmInst *vm.VM, name string, inner vm.Value) vm.Value {
 	return vm.NewNativeFunction(arity, variadic, name, func(args []vm.Value) (vm.Value, error) {
 		result, err := vmInst.Call(inner, vm.Undefined, args)
 		if err != nil {
-			return vmInst.NewRejectedPromise(vm.NewString(err.Error())), nil
+			// Reject with the real thrown value when the inner function threw
+			// one (#147). Flattening it to vm.NewString(err.Error()) used to
+			// drop everything a host had built onto its Error object - .code,
+			// .errno, .syscall - so an async native API's rejection reason
+			// arrived in .catch() as a bare string while its synchronous
+			// counterpart, built the identical way, threw the real object.
+			return vmInst.NewRejectedPromise(vmInst.ExceptionValueFromError(err)), nil
 		}
 		return vmInst.NewResolvedPromise(result), nil
 	})

@@ -2559,8 +2559,11 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Check if asyncItems is undefined or null
 		if asyncItems.Type() == vm.TypeUndefined || asyncItems.Type() == vm.TypeNull {
 			// Return a rejected promise with TypeError
+			// Reject with the real TypeError object, not its message string
+			// (#147): vm.NewString(reason.Error()) handed .catch() a bare
+			// string, so e instanceof TypeError and e.message were both wrong.
 			reason := vmInstance.NewTypeError("Cannot convert undefined or null to object")
-			return vmInstance.NewRejectedPromise(vm.NewString(reason.Error())), nil
+			return vmInstance.NewRejectedPromise(vmInstance.ExceptionValueFromError(reason)), nil
 		}
 
 		// Get mapfn (optional)
@@ -2578,7 +2581,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// If mapfn is not undefined and not callable, throw TypeError
 		if mapfn.Type() != vm.TypeUndefined && !mapfn.IsCallable() {
 			reason := vmInstance.NewTypeError(fmt.Sprintf("%s is not a function", mapfn.Type().String()))
-			return vmInstance.NewRejectedPromise(vm.NewString(reason.Error())), nil
+			return vmInstance.NewRejectedPromise(vmInstance.ExceptionValueFromError(reason)), nil
 		}
 
 		// Get C (the this value - for subclass support)

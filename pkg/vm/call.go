@@ -648,3 +648,26 @@ func (vm *VM) prepareDirectCall(calleeVal Value, thisValue Value, args []Value, 
 
 	return shouldSwitch, err
 }
+
+// ExceptionValueFromError extracts the JS value a Go error is carrying, for
+// native code that needs to turn a Go error back into a JS value rather than
+// re-throw it (rejecting a promise with it, aggregating it into a
+// SuppressedError, ...).
+//
+// An ExceptionError already holds the real thrown value - a rich Error object
+// with .code/.errno/.name/whatever the thrower built - and that value must
+// survive. Only a Go error that never went through the exception machinery
+// (an I/O failure, an internal invariant) has nothing better to offer than its
+// message, and falls back to a plain string.
+//
+// Callers that want to *throw* rather than *inspect* should keep using the
+// throwException(ee.GetExceptionValue()) idiom instead: that path also has to
+// construct a real Error instance for the fallback case, which this helper
+// deliberately does not do (it would change the rejection value of every
+// existing caller at once).
+func (vm *VM) ExceptionValueFromError(err error) Value {
+	if ee, ok := err.(ExceptionError); ok {
+		return ee.GetExceptionValue()
+	}
+	return NewString(err.Error())
+}
