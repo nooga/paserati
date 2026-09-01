@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	paseratiErrors "github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/source"
@@ -240,7 +241,7 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		// If type checking failed and we're not ignoring errors, still allow compilation
 		// but store the error for later reporting
 		if len(checkErrors) > 0 && !ml.config.IgnoreTypeErrors {
-			record.Error = fmt.Errorf("type checking failed: %s", checkErrors[0].Error())
+			record.Error = paseratiErrors.NewPositionedError("type checking failed", checkErrors[0])
 			record.State = ModuleError
 			debugPrintf("// [ModuleLoader] Type check error in %s (exports still extracted): %s\n", specifier, checkErrors[0].Error())
 			return record, nil
@@ -259,7 +260,7 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 			chunk, compileErrors := moduleCompiler.Compile(record.AST)
 			if len(compileErrors) > 0 {
 				debugPrintf("// [ModuleLoader] Compilation error: %s\n", compileErrors[0].Error())
-				record.Error = fmt.Errorf("compilation failed: %s", compileErrors[0].Error())
+				record.Error = paseratiErrors.NewPositionedError("compilation failed", compileErrors[0])
 				record.State = ModuleError
 				return record, nil
 			}
@@ -297,7 +298,7 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		chunk, compileErrors := moduleCompiler.Compile(record.AST)
 		if len(compileErrors) > 0 {
 			debugPrintf("// [ModuleLoader] Compilation error: %s\n", compileErrors[0].Error())
-			record.Error = fmt.Errorf("compilation failed: %s", compileErrors[0].Error())
+			record.Error = paseratiErrors.NewPositionedError("compilation failed", compileErrors[0])
 			record.State = ModuleError
 			return record, nil
 		}
@@ -435,7 +436,7 @@ func (ml *moduleLoader) parseModuleSequential(record *ModuleRecord, resolved *Re
 
 	program, parseErrs := parserInstance.ParseProgram()
 	if len(parseErrs) > 0 {
-		return fmt.Errorf("parsing failed: %s", parseErrs[0].Error())
+		return paseratiErrors.NewPositionedError("parsing failed", parseErrs[0])
 	}
 
 	// Store the parsed AST and source
@@ -812,7 +813,7 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 			errors := moduleChecker.Check(record.AST)
 			if len(errors) > 0 && !ml.config.IgnoreTypeErrors {
 				// Store the first error (can be enhanced to store all errors)
-				record.Error = fmt.Errorf("type checking failed: %s", errors[0].Error())
+				record.Error = paseratiErrors.NewPositionedError("type checking failed", errors[0])
 				record.State = ModuleError
 				continue
 			}
@@ -847,7 +848,7 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 			// Compile the module to bytecode
 			chunk, compileErrors := moduleCompiler.Compile(record.AST)
 			if len(compileErrors) > 0 {
-				record.Error = fmt.Errorf("compilation failed: %s", compileErrors[0].Error())
+				record.Error = paseratiErrors.NewPositionedError("compilation failed", compileErrors[0])
 				record.State = ModuleError
 				continue
 			}

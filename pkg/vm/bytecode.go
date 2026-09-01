@@ -2,9 +2,9 @@ package vm
 
 import (
 	"fmt"
-	// "github.com/nooga/paserati/pkg/value" // No longer needed
-	//"github.com/nooga/paserati/pkg/value"
 	"strings"
+
+	"github.com/nooga/paserati/pkg/source"
 )
 
 // OpCode defines the type for bytecode instructions.
@@ -34,8 +34,8 @@ const (
 	OpStringConcat OpCode = 49 // Rx Ry Rz: Rx = Ry + Rz (optimized string concatenation)
 
 	// Unary
-	OpNegate         OpCode = 11 // Rx Ry: Rx = -Ry
-	OpNot            OpCode = 12 // Rx Ry: Rx = !Ry (logical not)
+	OpNegate         OpCode = 11  // Rx Ry: Rx = -Ry
+	OpNot            OpCode = 12  // Rx Ry: Rx = !Ry (logical not)
 	OpTypeof         OpCode = 48  // Rx Ry: Rx = typeof Ry (returns string)
 	OpToNumber       OpCode = 50  // Rx Ry: Rx = Number(Ry) (unary plus conversion)
 	OpToNumeric      OpCode = 123 // Rx Ry: Rx = ToNumeric(Ry) (preserves BigInt, converts others to Number)
@@ -107,12 +107,12 @@ const (
 	OpTypeofIdentifier OpCode = 88 // Rx NameIdx(16bit): Rx = typeof identifier - returns "undefined" if identifier doesn't exist (no ReferenceError)
 
 	// --- Private Field Operations (ECMAScript # fields) ---
-	OpGetPrivateField     OpCode = 91  // Rx Ry NameIdx(16bit): Rx = Ry.#field (private field access)
-	OpSetPrivateField     OpCode = 92  // Rx Ry NameIdx(16bit): Rx.#field = Ry (private field assignment)
-	OpSetPrivateMethod    OpCode = 98  // Rx Ry NameIdx(16bit): Rx.#method = Ry (private method - not writable)
-	OpHasPrivateField     OpCode = 99  // Rx Ry NameIdx(16bit): Rx = #field in Ry (check private field presence)
-	OpSetPrivateAccessor  OpCode = 106 // Rx GetterReg SetterReg NameIdx(16bit): Set up private getter/setter on Rx
-	OpCallPrivateSetter   OpCode = 161 // Rx Ry NameIdx(16bit): Rx.#setter = Ry (calls setter, throws if not exist)
+	OpGetPrivateField    OpCode = 91  // Rx Ry NameIdx(16bit): Rx = Ry.#field (private field access)
+	OpSetPrivateField    OpCode = 92  // Rx Ry NameIdx(16bit): Rx.#field = Ry (private field assignment)
+	OpSetPrivateMethod   OpCode = 98  // Rx Ry NameIdx(16bit): Rx.#method = Ry (private method - not writable)
+	OpHasPrivateField    OpCode = 99  // Rx Ry NameIdx(16bit): Rx = #field in Ry (check private field presence)
+	OpSetPrivateAccessor OpCode = 106 // Rx GetterReg SetterReg NameIdx(16bit): Set up private getter/setter on Rx
+	OpCallPrivateSetter  OpCode = 161 // Rx Ry NameIdx(16bit): Rx.#setter = Ry (calls setter, throws if not exist)
 
 	// --- Type Guards for Runtime Validation ---
 	OpTypeGuardIterable       OpCode = 93 // Rx: Throw TypeError if Rx is not iterable
@@ -222,8 +222,8 @@ const (
 	OpCloseUpvalueSpill16 OpCode = 178
 
 	// --- NEW: Global Variable Operations ---
-	OpGetGlobal     OpCode = 46 // Rx GlobalIdx(16bit): Rx = Globals[GlobalIdx] (direct indexed access)
-	OpSetGlobal     OpCode = 47 // GlobalIdx(16bit) Ry: Globals[GlobalIdx] = Ry (direct indexed access)
+	OpGetGlobal     OpCode = 46  // Rx GlobalIdx(16bit): Rx = Globals[GlobalIdx] (direct indexed access)
+	OpSetGlobal     OpCode = 47  // GlobalIdx(16bit) Ry: Globals[GlobalIdx] = Ry (direct indexed access)
 	OpSetGlobalInit OpCode = 145 // GlobalIdx(16bit) Ry: Globals[GlobalIdx] = Ry (init at declaration, bypasses TDZ check)
 	// --- END NEW ---
 
@@ -788,22 +788,29 @@ type ScopeDescriptor struct {
 
 // Chunk represents a sequence of bytecode instructions and associated data.
 type Chunk struct {
-	Code           []byte             // The bytecode instructions (OpCodes and operands)
-	Constants      []Value            // Constant pool (Now uses Value from vm package)
-	Lines          []int              // Line number for each byte in Code (parallel array)
+	Code      []byte  // The bytecode instructions (OpCodes and operands)
+	Constants []Value // Constant pool (Now uses Value from vm package)
+	Lines     []int   // Line number for each byte in Code (parallel array)
+	// Source is the file this chunk was compiled from, so a runtime error can
+	// name and quote the right file. Without it every VM-raised error's
+	// Position.Source stayed nil and errors.DisplayErrors fell back to whatever
+	// source the embedder passed - the entry script - printing a line of the
+	// wrong file underneath an otherwise-correct line number (#148). Nil for
+	// hand-assembled chunks and any compile path that has no source file.
+	Source         *source.SourceFile
 	ExceptionTable []ExceptionHandler // Exception handlers for try/catch blocks
 	// BuiltinGlobalNames and GlobalNames record the compiler's indexed global
 	// layout. InterpretChunk consumers use them to reject incompatible VMs before
 	// bytecode can read or overwrite a different binding at the same index.
 	// Empty metadata denotes a legacy chunk whose layout is unknown.
-	BuiltinGlobalNames []string
-	GlobalNames        []string
-	IsStrict              bool               // Whether this chunk runs in strict mode
-	HasSimpleParameterList bool              // True if all params are plain identifiers (no defaults, rest, or destructuring)
-	ScopeDesc             *ScopeDescriptor   // Scope info for direct eval (nil if not needed)
-	MaxRegs        int                // Maximum registers needed to execute this chunk
-	NumSpillSlots  int                // Number of spill slots needed (for register overflow)
-	currentLine    int                // Current line for operand bytes (internal use)
+	BuiltinGlobalNames     []string
+	GlobalNames            []string
+	IsStrict               bool             // Whether this chunk runs in strict mode
+	HasSimpleParameterList bool             // True if all params are plain identifiers (no defaults, rest, or destructuring)
+	ScopeDesc              *ScopeDescriptor // Scope info for direct eval (nil if not needed)
+	MaxRegs                int              // Maximum registers needed to execute this chunk
+	NumSpillSlots          int              // Number of spill slots needed (for register overflow)
+	currentLine            int              // Current line for operand bytes (internal use)
 	// Inline caches for property access sites within this chunk, indexed by bytecode offset
 	// (the IP where the opcode starts). This avoids a global map lookup per property access.
 	propInlineCaches []*PropInlineCache
@@ -811,9 +818,9 @@ type Chunk struct {
 	// These indices should have their heap slots marked as non-configurable (DontDelete)
 	VarGlobalIndices []uint16
 	// Constant deduplication caches for O(1) lookup (avoids O(n) linear search)
-	stringConstCache  map[string]uint16  // Cache for string constants
-	intConstCache     map[int64]uint16   // Cache for integer constants
-	floatConstCache   map[float64]uint16 // Cache for float constants
+	stringConstCache map[string]uint16  // Cache for string constants
+	intConstCache    map[int64]uint16   // Cache for integer constants
+	floatConstCache  map[float64]uint16 // Cache for float constants
 }
 
 // GetLine returns the source line number corresponding to a given bytecode offset.

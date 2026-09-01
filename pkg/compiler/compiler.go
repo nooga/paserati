@@ -821,8 +821,9 @@ func (c *Compiler) GetModuleExports() map[string]vm.Value {
 func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 	// Pass the checker and module bindings down to nested compilers
 	chunk := vm.NewChunk()
-	// Inherit strict mode from enclosing compiler
+	// Inherit strict mode and the source file from enclosing compiler
 	chunk.IsStrict = enclosingCompiler.chunk.IsStrict
+	chunk.Source = enclosingCompiler.chunk.Source
 	return &Compiler{
 		chunk:                    chunk,
 		regAlloc:                 NewRegisterAllocator(),
@@ -924,6 +925,10 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 
 	// --- Bytecode Compilation Step ---
 	c.chunk = vm.NewChunk()
+	// Remember which file this bytecode came from, so a runtime error raised
+	// while executing it can quote that file rather than the entry script
+	// (#148). Nested function compilers inherit it in newFunctionCompiler.
+	c.chunk.Source = program.Source
 	c.regAlloc = NewRegisterAllocator()
 	c.currentSymbolTable = NewSymbolTable()
 	c.allLocalNames = make(map[Register]string) // Reset local name tracking
