@@ -224,14 +224,17 @@ func collectLetConstDeclarations(stmts []parser.Statement) []string {
 		}
 		switch s := stmt.(type) {
 		case *parser.LetStatement:
-			if !s.Declare && s.Name != nil && !seen[s.Name.Value] {
-				names = append(names, s.Name.Value)
-				seen[s.Name.Value] = true
+			// EVERY declarator, not just the first. s.Name is the legacy
+			// first-declaration alias, so `let a = 1, b = 2` used to pre-register
+			// only a - leaving b with no TDZ marker, which made a
+			// before-declaration read of b report "b is not defined" instead of
+			// "Cannot access 'b' before initialization".
+			if !s.Declare {
+				parser.CollectDeclaredNames(s, seen, &names)
 			}
 		case *parser.ConstStatement:
-			if !s.Declare && s.Name != nil && !seen[s.Name.Value] {
-				names = append(names, s.Name.Value)
-				seen[s.Name.Value] = true
+			if !s.Declare {
+				parser.CollectDeclaredNames(s, seen, &names)
 			}
 		case *parser.ObjectDestructuringDeclaration:
 			// let/const destructuring
@@ -1256,49 +1259,22 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 			for _, stmt := range program.Statements {
 				switch s := stmt.(type) {
 				case *parser.LetStatement:
-					if s.Name == nil {
-						continue
-					}
 					// A caller-local of the same name must be *shadowed*, not
 					// deferred to: the eval's own let/const always introduces a
 					// fresh binding in its own lexical environment. Only skip
 					// when this scope already has a real (non-caller-local)
 					// definition for the name (e.g. already hoisted above).
-					if existing, ok := c.currentSymbolTable.store[s.Name.Value]; ok && !existing.IsCallerLocal {
-						continue
-					}
-					if reg, ok := c.regAlloc.TryAllocForVariable(); ok {
-						c.currentSymbolTable.DefineTDZ(s.Name.Value, reg)
-						c.regAlloc.Pin(reg)
-						c.emitLoadUninitialized(reg, s.Token.Line)
-					} else {
-						spillIdx := c.AllocSpillSlot()
-						c.currentSymbolTable.DefineTDZSpilled(s.Name.Value, spillIdx)
-						tempReg := c.regAlloc.Alloc()
-						c.emitLoadUninitialized(tempReg, s.Token.Line)
-						c.emitStoreSpill(spillIdx, tempReg, s.Token.Line)
-						c.regAlloc.Free(tempReg)
+					//
+					// Every declarator, not just s.Name (the legacy
+					// first-declaration alias): `eval("let a = 1, b = 2")` gave
+					// b no TDZ marker.
+					for _, name := range parser.DeclaredNames(s) {
+						c.predefineEvalLexicalName(name, false, s.Token.Line)
 					}
 				case *parser.ConstStatement:
-					if s.Name == nil {
-						continue
-					}
-					// See the LetStatement case above: shadow caller-locals,
-					// only skip a real existing definition in this scope.
-					if existing, ok := c.currentSymbolTable.store[s.Name.Value]; ok && !existing.IsCallerLocal {
-						continue
-					}
-					if reg, ok := c.regAlloc.TryAllocForVariable(); ok {
-						c.currentSymbolTable.DefineConstTDZ(s.Name.Value, reg)
-						c.regAlloc.Pin(reg)
-						c.emitLoadUninitialized(reg, s.Token.Line)
-					} else {
-						spillIdx := c.AllocSpillSlot()
-						c.currentSymbolTable.DefineConstTDZSpilled(s.Name.Value, spillIdx)
-						tempReg := c.regAlloc.Alloc()
-						c.emitLoadUninitialized(tempReg, s.Token.Line)
-						c.emitStoreSpill(spillIdx, tempReg, s.Token.Line)
-						c.regAlloc.Free(tempReg)
+					// See the LetStatement case above.
+					for _, name := range parser.DeclaredNames(s) {
+						c.predefineEvalLexicalName(name, true, s.Token.Line)
 					}
 				}
 			}
@@ -1565,54 +1541,14 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			for _, stmt := range node.Statements {
 				switch s := stmt.(type) {
 				case *parser.LetStatement:
-					if s.Name != nil {
-						// Check if variable exists in CURRENT scope only (not outer scopes)
-						// to allow shadowing in enclosed block scopes
-						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-							reg, ok := c.regAlloc.TryAllocForVariable()
-							if ok {
-								c.currentSymbolTable.DefineTDZ(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-								// Emit TDZ marker (Uninitialized value) into the register
-								c.emitLoadUninitialized(reg, s.Token.Line)
-								debugPrintf("// [BlockPredefine] Pre-defined let '%s' in register R%d (symbolTable=%p)\n", s.Name.Value, reg, c.currentSymbolTable)
-							} else {
-								// Variable register threshold reached, use spilling
-								spillIdx := c.AllocSpillSlot()
-								c.currentSymbolTable.DefineTDZSpilled(s.Name.Value, spillIdx)
-								// Emit TDZ marker to temp register, then store to spill slot
-								tempReg := c.regAlloc.Alloc()
-								c.emitLoadUninitialized(tempReg, s.Token.Line)
-								c.emitStoreSpill(spillIdx, tempReg, s.Token.Line)
-								c.regAlloc.Free(tempReg)
-								debugPrintf("// [BlockPredefine] Pre-defined let '%s' in SPILL SLOT %d (symbolTable=%p)\n", s.Name.Value, spillIdx, c.currentSymbolTable)
-							}
-						}
+					// Every declarator, not just s.Name (the legacy
+					// first-declaration alias) - see predefineLexicalName.
+					for _, name := range parser.DeclaredNames(s) {
+						c.predefineLexicalName(name, false, s.Token.Line)
 					}
 				case *parser.ConstStatement:
-					if s.Name != nil {
-						// Check if variable exists in CURRENT scope only (not outer scopes)
-						// to allow shadowing in enclosed block scopes
-						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-							reg, ok := c.regAlloc.TryAllocForVariable()
-							if ok {
-								c.currentSymbolTable.DefineConstTDZ(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-								// Emit TDZ marker (Uninitialized value) into the register
-								c.emitLoadUninitialized(reg, s.Token.Line)
-								debugPrintf("// [BlockPredefine] Pre-defined const '%s' in register R%d (symbolTable=%p)\n", s.Name.Value, reg, c.currentSymbolTable)
-							} else {
-								// Variable register threshold reached, use spilling
-								spillIdx := c.AllocSpillSlot()
-								c.currentSymbolTable.DefineConstTDZSpilled(s.Name.Value, spillIdx)
-								// Emit TDZ marker to temp register, then store to spill slot
-								tempReg := c.regAlloc.Alloc()
-								c.emitLoadUninitialized(tempReg, s.Token.Line)
-								c.emitStoreSpill(spillIdx, tempReg, s.Token.Line)
-								c.regAlloc.Free(tempReg)
-								debugPrintf("// [BlockPredefine] Pre-defined const '%s' in SPILL SLOT %d (symbolTable=%p)\n", s.Name.Value, spillIdx, c.currentSymbolTable)
-							}
-						}
+					for _, name := range parser.DeclaredNames(s) {
+						c.predefineLexicalName(name, true, s.Token.Line)
 					}
 				case *parser.ObjectDestructuringDeclaration:
 					// Pre-define all variables from the pattern so closures can
@@ -3240,6 +3176,77 @@ func (c *Compiler) storeToHoistedVar(name string, valueReg Register, line int) b
 		c.regAlloc.Pin(valueReg)
 	}
 	return true
+}
+
+// predefineLexicalName gives one let/const binding its TDZ marker in the current
+// block scope, so a read before the declaration line throws
+// "Cannot access '<name>' before initialization" rather than falling through to
+// an outer binding or reporting the name as undefined.
+//
+// A no-op when the name is already defined in the CURRENT scope only (not outer
+// scopes), which is what lets an inner block shadow an outer binding.
+//
+// Callers must invoke this once per declarator. The three sites that used to
+// inline this body all read the statement's legacy first-declaration alias
+// (s.Name), so `let a = 1, b = 2` marked only a.
+func (c *Compiler) predefineLexicalName(name string, isConst bool, line int) {
+	if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; alreadyInCurrentScope {
+		return
+	}
+	if reg, ok := c.regAlloc.TryAllocForVariable(); ok {
+		if isConst {
+			c.currentSymbolTable.DefineConstTDZ(name, reg)
+		} else {
+			c.currentSymbolTable.DefineTDZ(name, reg)
+		}
+		c.regAlloc.Pin(reg)
+		c.emitLoadUninitialized(reg, line)
+		debugPrintf("// [BlockPredefine] Pre-defined lexical '%s' in register R%d (symbolTable=%p)\n", name, reg, c.currentSymbolTable)
+		return
+	}
+	// Variable register threshold reached, use spilling.
+	spillIdx := c.AllocSpillSlot()
+	if isConst {
+		c.currentSymbolTable.DefineConstTDZSpilled(name, spillIdx)
+	} else {
+		c.currentSymbolTable.DefineTDZSpilled(name, spillIdx)
+	}
+	tempReg := c.regAlloc.Alloc()
+	c.emitLoadUninitialized(tempReg, line)
+	c.emitStoreSpill(spillIdx, tempReg, line)
+	c.regAlloc.Free(tempReg)
+	debugPrintf("// [BlockPredefine] Pre-defined lexical '%s' in SPILL SLOT %d (symbolTable=%p)\n", name, spillIdx, c.currentSymbolTable)
+}
+
+// predefineEvalLexicalName is predefineLexicalName for direct-eval code, where a
+// caller-local of the same name must be *shadowed* rather than deferred to: the
+// eval's own let/const always introduces a fresh binding in its own lexical
+// environment, so only a real (non-caller-local) definition already in this
+// scope suppresses the marker.
+func (c *Compiler) predefineEvalLexicalName(name string, isConst bool, line int) {
+	if existing, ok := c.currentSymbolTable.store[name]; ok && !existing.IsCallerLocal {
+		return
+	}
+	if reg, ok := c.regAlloc.TryAllocForVariable(); ok {
+		if isConst {
+			c.currentSymbolTable.DefineConstTDZ(name, reg)
+		} else {
+			c.currentSymbolTable.DefineTDZ(name, reg)
+		}
+		c.regAlloc.Pin(reg)
+		c.emitLoadUninitialized(reg, line)
+		return
+	}
+	spillIdx := c.AllocSpillSlot()
+	if isConst {
+		c.currentSymbolTable.DefineConstTDZSpilled(name, spillIdx)
+	} else {
+		c.currentSymbolTable.DefineTDZSpilled(name, spillIdx)
+	}
+	tempReg := c.regAlloc.Alloc()
+	c.emitLoadUninitialized(tempReg, line)
+	c.emitStoreSpill(spillIdx, tempReg, line)
+	c.regAlloc.Free(tempReg)
 }
 
 // varHoistTable returns the symbol table a `var` binding belongs in: this
