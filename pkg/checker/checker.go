@@ -3301,10 +3301,11 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 			c.addError(node, "const declaration must be initialized")
 		}
 		// For let/var without initializer, all variables get undefined type
+		env := c.declarationEnv(node.Token != nil && node.Token.Literal == "var")
 		for _, element := range node.Elements {
 			if element != nil && element.Target != nil {
 				if ident, ok := element.Target.(*parser.Identifier); ok {
-					if !c.env.Define(ident.Value, types.Undefined, node.IsConst) {
+					if !env.Define(ident.Value, types.Undefined, node.IsConst) {
 						c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
 					}
 					ident.SetComputedType(types.Undefined)
@@ -3451,10 +3452,11 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 			c.addError(node, "const declaration must be initialized")
 		}
 		// For let/var without initializer, all variables get undefined type
+		env := c.declarationEnv(node.Token != nil && node.Token.Literal == "var")
 		for _, prop := range node.Properties {
 			if prop != nil && prop.Target != nil {
 				if ident, ok := prop.Target.(*parser.Identifier); ok {
-					if !c.env.Define(ident.Value, types.Undefined, node.IsConst) {
+					if !env.Define(ident.Value, types.Undefined, node.IsConst) {
 						c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
 					}
 					ident.SetComputedType(types.Undefined)
@@ -3465,7 +3467,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 		// Handle rest property without initializer
 		if node.RestProperty != nil {
 			if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
-				if !c.env.Define(ident.Value, types.Undefined, node.IsConst) {
+				if !env.Define(ident.Value, types.Undefined, node.IsConst) {
 					c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
 				}
 				ident.SetComputedType(types.Undefined)

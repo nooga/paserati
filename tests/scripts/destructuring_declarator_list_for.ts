@@ -1,4 +1,4 @@
-// expect: 0,1,2|0,1,2|0,1|ok|3,2,1|undefined,1
+// expect: 0,1,2|0,1,2|0,1|ok|3,2,1|undefined,undefined,1,2
 // A `for` initializer is a declarator list too, so a binding pattern is legal
 // in any of its positions: `for (let i = 0, {a} = obj; ...)`. It shared the
 // same defects as statement position (#159, #160) and the same fix - see
@@ -39,18 +39,18 @@ for (let { a: a5 } = { a: 3 }; a5 > 0; a5--) acc5.push(a5);
 out.push(acc5.join(","));
 
 // var declarations in the head hoist to the top of the function, through the
-// group: v6 already exists (as undefined) before the loop runs.
-//
-// Only the plain binding is asserted here. `var` with a *pattern* doesn't hoist
-// its names past an enclosing block or loop head for the type checker at all -
-// `function f(){ { var {w} = o; } return w; }` and
-// `for (var {w} of xs)` both report TS2304 too - a pre-existing checker gap
-// unrelated to the declarator-list fix. The runtime binds them correctly.
+// group: v6 and w6 both exist (as undefined) before the loop runs, and both are
+// readable after it. The pattern half used to report TS2304 - the checker
+// defined a var pattern's bindings in the current scope rather than the
+// function scope - which is why this assertion originally covered only v6.
 function hoisted(): string {
-  const before = typeof v6 === "undefined" ? "undefined" : "defined";
+  const before = [
+    typeof v6 === "undefined" ? "undefined" : "defined",
+    typeof w6 === "undefined" ? "undefined" : "defined",
+  ];
   for (var v6 = 1, { w: w6 } = { w: 2 }; false; ) {
   }
-  return [before, v6].join(",");
+  return [before[0], before[1], v6, w6].join(",");
 }
 out.push(hoisted());
 

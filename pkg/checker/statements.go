@@ -845,10 +845,14 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 	c.env = loopEnv
 	debugPrintf("// [Checker ForOfStmt] Created loop scope %p (outer: %p)\n", loopEnv, originalEnv)
 
-	// Hoist var declarations to the outer scope so they're visible in the iterable expression.
-	// e.g. `for (var of of of)` — the iterable `of` must find `var of` in scope.
+	// Hoist var declarations out of the loop scope so they're visible in the
+	// iterable expression - e.g. `for (var of of of)`, where the iterable `of`
+	// must find `var of` in scope - and, since var is function-scoped, after the
+	// loop as well. originalEnv is only the *immediately* enclosing scope, so
+	// defining there left `{ for (var q of xs) {} } q` unresolvable one block
+	// deeper; the function scope is the right home.
 	if varStmt, ok := node.Variable.(*parser.VarStatement); ok && varStmt.Name != nil {
-		originalEnv.Define(varStmt.Name.Value, types.Any, false)
+		c.declarationEnv(true).Define(varStmt.Name.Value, types.Any, false)
 	}
 
 	// Visit the iterable first to determine its type
@@ -974,9 +978,10 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 					constStmt.Name.SetComputedType(elementType)
 				}
 			} else if varStmt, ok := node.Variable.(*parser.VarStatement); ok {
-				// Define the loop variable with the element type
+				// Define the loop variable with the element type. var is
+				// function-scoped, so it does not belong in the loop scope.
 				if varStmt.Name != nil {
-					c.env.Define(varStmt.Name.Value, elementType, false)
+					c.declarationEnv(true).Define(varStmt.Name.Value, elementType, false)
 					varStmt.ComputedType = elementType
 					varStmt.Name.SetComputedType(elementType)
 				}
@@ -1022,6 +1027,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 
 // checkArrayDestructuringInForLoop type-checks array destructuring patterns in for-of/for-in loops
 func (c *Checker) checkArrayDestructuringInForLoop(node *parser.ArrayDestructuringDeclaration, sourceType types.Type) {
+	isVar := node.Token != nil && node.Token.Literal == "var"
 	// For each element in the destructuring pattern, extract its type and define it
 	for i, element := range node.Elements {
 		var elemType types.Type
@@ -1051,12 +1057,13 @@ func (c *Checker) checkArrayDestructuringInForLoop(node *parser.ArrayDestructuri
 		}
 
 		// Define the variable(s) from the target
-		c.defineDestructuringTarget(element.Target, elemType, node.IsConst)
+		c.defineDestructuringTarget(element.Target, elemType, node.IsConst, isVar)
 	}
 }
 
 // checkObjectDestructuringInForLoop type-checks object destructuring patterns in for-of/for-in loops
 func (c *Checker) checkObjectDestructuringInForLoop(node *parser.ObjectDestructuringDeclaration, sourceType types.Type) {
+	isVar := node.Token != nil && node.Token.Literal == "var"
 	// For each property in the destructuring pattern, extract its type and define it
 	for _, prop := range node.Properties {
 		var propType types.Type
@@ -1088,22 +1095,32 @@ func (c *Checker) checkObjectDestructuringInForLoop(node *parser.ObjectDestructu
 		}
 
 		// Define the variable from the target
-		c.defineDestructuringTarget(prop.Target, propType, node.IsConst)
+		c.defineDestructuringTarget(prop.Target, propType, node.IsConst, isVar)
 	}
 
 	// Handle rest property
 	if node.RestProperty != nil {
 		// Rest gets the remaining object type (simplified as the source type for now)
-		c.defineDestructuringTarget(node.RestProperty.Target, sourceType, node.IsConst)
+		c.defineDestructuringTarget(node.RestProperty.Target, sourceType, node.IsConst, isVar)
 	}
 }
 
 // defineDestructuringTarget defines variables from a destructuring target (handles nested patterns)
-func (c *Checker) defineDestructuringTarget(target parser.Expression, typ types.Type, isConst bool) {
+// defineDestructuringTarget defines the bindings of a for-of/for-in head's
+// destructuring pattern. isVar routes them to the function scope, since `var` is
+// function-scoped however deep the loop sits (see declarationEnv).
+//
+// Note this walker is shallower than checkDestructuringTargetForDeclaration: for
+// a nested object pattern it reads prop.Key only, so a nested *renamed* target
+// (`{f: {g: h}}`) binds g rather than h, and it has no AssignmentExpression
+// (nested default) or SpreadElement (nested rest) cases. Pre-existing, and not
+// about scope.
+func (c *Checker) defineDestructuringTarget(target parser.Expression, typ types.Type, isConst bool, isVar bool) {
+	env := c.declarationEnv(isVar)
 	switch t := target.(type) {
 	case *parser.Identifier:
 		// Simple identifier - define it
-		c.env.Define(t.Value, typ, isConst)
+		env.Define(t.Value, typ, isConst)
 		t.SetComputedType(typ)
 	case *parser.ArrayLiteral:
 		// Nested array destructuring - recursively handle
@@ -1116,7 +1133,7 @@ func (c *Checker) defineDestructuringTarget(target parser.Expression, typ types.
 			} else {
 				elemType = types.Any
 			}
-			c.defineDestructuringTarget(elem, elemType, isConst)
+			c.defineDestructuringTarget(elem, elemType, isConst, isVar)
 		}
 	case *parser.ObjectLiteral:
 		// Nested object destructuring - recursively handle
@@ -1133,7 +1150,7 @@ func (c *Checker) defineDestructuringTarget(target parser.Expression, typ types.
 				} else {
 					propType = types.Any
 				}
-				c.env.Define(ident.Value, propType, isConst)
+				env.Define(ident.Value, propType, isConst)
 				ident.SetComputedType(propType)
 			}
 		}
@@ -1160,9 +1177,11 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 	c.env = loopEnv
 	debugPrintf("// [Checker ForInStmt] Created loop scope %p (outer: %p)\n", loopEnv, originalEnv)
 
-	// Hoist var declarations to the outer scope so they're visible in the object expression.
+	// Hoist var declarations out of the loop scope so they're visible in the
+	// object expression, and - since var is function-scoped - after the loop as
+	// well. See the matching comment in checkForOfStatement.
 	if varStmt, ok := node.Variable.(*parser.VarStatement); ok && varStmt.Name != nil {
-		originalEnv.Define(varStmt.Name.Value, types.Any, false)
+		c.declarationEnv(true).Define(varStmt.Name.Value, types.Any, false)
 	}
 
 	// Visit the object first to determine its type
@@ -1197,14 +1216,12 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 					letStmt.Name.SetComputedType(elementType)
 				}
 			} else if varStmt, ok := node.Variable.(*parser.VarStatement); ok {
-				// Var in for-in header hoists to nearest function/global scope.
+				// Var in for-in header hoists to nearest function/global scope -
+				// which is what the comment always said, but originalEnv is only
+				// the immediately enclosing scope, not necessarily a function
+				// scope.
 				if varStmt.Name != nil {
-					// Define in the outer (original) environment, not the temporary loop block.
-					if originalEnv != nil {
-						originalEnv.Define(varStmt.Name.Value, elementType, false)
-					} else {
-						c.env.Define(varStmt.Name.Value, elementType, false)
-					}
+					c.declarationEnv(true).Define(varStmt.Name.Value, elementType, false)
 					varStmt.ComputedType = elementType
 					varStmt.Name.SetComputedType(elementType)
 				}
