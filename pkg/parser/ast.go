@@ -3065,6 +3065,36 @@ func (add *ArrayDestructuringDeclaration) String() string {
 	return out.String()
 }
 
+// DeclarationGroup represents a single let/const/var clause whose declarator
+// list mixes plain bindings with destructuring patterns, e.g.
+// `let r = 1, {a} = obj, b = 2`. There is no single AST node that can hold both
+// kinds of declarator (VarDeclarator.Name is an *Identifier, and the
+// destructuring declarations are statements in their own right), so the parser
+// desugars such a clause into one declaration statement per declarator and
+// groups them here, in source order.
+//
+// A DeclarationGroup introduces no scope of its own: its members must be
+// checked/compiled exactly as if they were siblings in the enclosing statement
+// list. In statement position the parser splices the members straight into that
+// list, so a group normally only survives where a single Statement is required -
+// most notably a `for` initializer (`for (let i = 0, {a} = obj; ...)`).
+type DeclarationGroup struct {
+	Token        *lexer.Token // The 'let', 'const', or 'var' token
+	Declarations []Statement  // One declaration statement per declarator, in source order
+}
+
+func (dg *DeclarationGroup) statementNode()       {}
+func (dg *DeclarationGroup) TokenLiteral() string { return dg.Token.Literal }
+func (dg *DeclarationGroup) String() string {
+	parts := []string{}
+	for _, d := range dg.Declarations {
+		if d != nil {
+			parts = append(parts, d.String())
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
 // ObjectDestructuringDeclaration represents let/const/var {a, b} = expr
 type ObjectDestructuringDeclaration struct {
 	Token          *lexer.Token             // The 'let', 'const', or 'var' token

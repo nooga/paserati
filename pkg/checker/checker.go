@@ -2118,6 +2118,14 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.ObjectDestructuringDeclaration:
 		c.checkObjectDestructuringDeclaration(node)
 
+	case *parser.DeclarationGroup:
+		// A single let/const/var clause mixing plain bindings with destructuring
+		// patterns. The group adds no scope of its own - visit its members in
+		// source order, exactly as if they were siblings.
+		for _, decl := range node.Declarations {
+			c.visit(decl)
+		}
+
 	case *parser.ReturnStatement:
 		if c.functionNestingDepth == 0 && !c.allowTopLevelReturn {
 			c.addError(node, "A 'return' statement can only be used within a function body.")
