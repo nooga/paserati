@@ -2730,6 +2730,55 @@ func reflectOwnKeysImpl(args []vm.Value) (vm.Value, error) {
 	return out, nil
 }
 
+// setObjectAssignTargetProperty copies one property onto Object.assign's
+// target, dispatching on the target's concrete type. The three call sites in
+// objectAssignWithVM's copy loop below used to each inline this same
+// two-branch (TypeObject/TypeDictObject) dispatch directly; a TypeArray
+// target matched neither, so Object.assign(arr, ...) silently did nothing at
+// all when the target was an array (paserati#174) - a common pattern for
+// tagging metadata onto a results array without a wrapper object.
+//
+// A numeric-index key gets a real indexed element - extending the array if
+// needed, the same way arr[idx] = value already does (see the identical
+// dispatch in op_setprop.go's TypeArray branch) - and anything else becomes
+// a plain named property, exactly like the `.provisional` case that
+// motivated this fix.
+func setObjectAssignTargetProperty(target vm.Value, key string, value vm.Value) {
+	switch target.Type() {
+	case vm.TypeObject:
+		// Object.assign copies as if by ordinary [[Set]] - the property must
+		// land enumerable on the target, not non-enumerable (paserati#168).
+		// SetOwnNonEnumerable exists for built-in method registration, not
+		// for this.
+		target.AsPlainObject().SetOwn(key, value)
+	case vm.TypeDictObject:
+		target.AsDictObject().SetOwn(key, value)
+	case vm.TypeArray:
+		arr := target.AsArray()
+		if idx, isIndex := vm.ParseArrayIndex(key); isIndex {
+			// ArrayObject.Set is O(idx): it fills every slot up to idx with
+			// Hole before writing. ParseArrayIndex accepts anything up to
+			// 2^32-2, so an object source key like "4294967294" would try
+			// to allocate/loop over four billion slots and hang - the same
+			// hazard maxDenseArraySetIndex already guards against for
+			// arrayLikeSet (array_generic.go) and maxDenseArrayDefineIndex
+			// guards for ArrayDefineOwnProperty (package vm). Past the
+			// bound, track it as a named/sparse property instead, same
+			// tradeoff those two call sites make.
+			if idx <= maxDenseArraySetIndex {
+				arr.Set(idx, value)
+			} else {
+				arr.DefineOwnProperty(key, value, true, true, true)
+				if idx+1 > arr.Length() {
+					arr.SetLength(idx + 1)
+				}
+			}
+		} else {
+			arr.SetOwn(key, value)
+		}
+	}
+}
+
 func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
 		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
@@ -2780,35 +2829,13 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			plainObj := source.AsPlainObject()
 			for _, key := range plainObj.OwnKeys() {
 				value, _ := plainObj.GetOwn(key)
-				// Set on target
-				if target.Type() == vm.TypeObject {
-					targetPlain := target.AsPlainObject()
-					// Object.assign copies as if by ordinary [[Set]] - the
-					// property must land enumerable on the target, not
-					// non-enumerable (paserati#168). SetOwnNonEnumerable
-					// exists for built-in method registration, not for this.
-					targetPlain.SetOwn(key, value)
-				} else if target.Type() == vm.TypeDictObject {
-					targetDict := target.AsDictObject()
-					targetDict.SetOwn(key, value)
-				}
+				setObjectAssignTargetProperty(target, key, value)
 			}
 		} else if source.Type() == vm.TypeDictObject {
 			dictObj := source.AsDictObject()
 			for _, key := range dictObj.OwnKeys() {
 				value, _ := dictObj.GetOwn(key)
-				// Set on target
-				if target.Type() == vm.TypeObject {
-					targetPlain := target.AsPlainObject()
-					// Object.assign copies as if by ordinary [[Set]] - the
-					// property must land enumerable on the target, not
-					// non-enumerable (paserati#168). SetOwnNonEnumerable
-					// exists for built-in method registration, not for this.
-					targetPlain.SetOwn(key, value)
-				} else if target.Type() == vm.TypeDictObject {
-					targetDict := target.AsDictObject()
-					targetDict.SetOwn(key, value)
-				}
+				setObjectAssignTargetProperty(target, key, value)
 			}
 		} else if source.Type() == vm.TypeArray {
 			arrObj := source.AsArray()
@@ -2816,20 +2843,17 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			for i := 0; i < arrObj.Length(); i++ {
 				key := strconv.Itoa(i)
 				value := arrObj.Get(i)
-				// Set on target
-				if target.Type() == vm.TypeObject {
-					targetPlain := target.AsPlainObject()
-					// Object.assign copies as if by ordinary [[Set]] - the
-					// property must land enumerable on the target, not
-					// non-enumerable (paserati#168). SetOwnNonEnumerable
-					// exists for built-in method registration, not for this.
-					targetPlain.SetOwn(key, value)
-				} else if target.Type() == vm.TypeDictObject {
-					targetDict := target.AsDictObject()
-					targetDict.SetOwn(key, value)
-				}
+				setObjectAssignTargetProperty(target, key, value)
 			}
-			// Also copy length property
+			// Also copy length property. Deliberately no vm.TypeArray case
+			// here (unlike setObjectAssignTargetProperty above, which now
+			// handles all three target types uniformly): an array's own
+			// "length" isn't enumerable, so real Object.assign wouldn't
+			// copy it at all - copying it here for object/dict targets is
+			// itself a pre-existing spec deviation (see paserati#168), and
+			// extending it to array targets would overwrite (truncate or
+			// grow) the target's own length instead of adding a property,
+			// which is worse than the existing deviation, not a fix for it.
 			if target.Type() == vm.TypeObject {
 				targetPlain := target.AsPlainObject()
 				targetPlain.SetOwnNonEnumerable("length", vm.NumberValue(float64(arrObj.Length())))
