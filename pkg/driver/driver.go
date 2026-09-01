@@ -55,6 +55,8 @@ type Paserati struct {
 	compiler         *compiler.Compiler
 	moduleLoader     modules.ModuleLoader
 	heapAlloc        *compiler.HeapAlloc   // Unified global heap allocator
+	builtinGlobals   []string              // Builtin names indexed by their unified heap slot
+	preparedChunk    *vm.Chunk             // Most recently checked chunk (avoids repeat validation without retaining every chunk)
 	nativeResolver   *NativeModuleResolver // *NativeModuleResolver - defined in native_module.go to avoid import cycles
 	ignoreTypeErrors bool                  // When true, type checking errors are ignored and compilation continues
 	skipTypeCheck    bool                  // When true, type checker is not run at all (for pure JS mode)
@@ -161,6 +163,8 @@ func (p *Paserati) Cleanup() {
 	p.compiler = nil
 	p.moduleLoader = nil
 	p.heapAlloc = nil
+	p.builtinGlobals = nil
+	p.preparedChunk = nil
 	p.nativeResolver = nil
 }
 
@@ -360,6 +364,10 @@ func (p *Paserati) CompileProgram(program *parser.Program) (*vm.Chunk, []errors.
 	p.compiler.SetIgnoreTypeErrors(p.ignoreTypeErrors)
 	p.compiler.SetSkipTypeCheck(p.skipTypeCheck)
 	chunk, errs := p.compiler.Compile(program)
+	if chunk != nil {
+		chunk.BuiltinGlobalNames = append([]string(nil), p.builtinGlobals...)
+		chunk.GlobalNames = indexedGlobalNames(p.heapAlloc.GetNameToIndexMap())
+	}
 	// Sync global names to VM so with statements can resolve global variable names
 	p.SyncGlobalNamesFromCompiler()
 	return chunk, errs
@@ -773,9 +781,9 @@ func CompileString(sourceCode string) (*vm.Chunk, []errors.PaseratiError) {
 	// way. A bare compiler.NewCompiler() has never seen the builtins, so it starts
 	// numbering user globals at 0 - straight over the slots NewPaserati() gives to
 	// Array, Map and friends. Compiling through an initialised instance numbers
-	// them behind the builtins, which is what every VM this chunk can run on
-	// expects. Builtin registration is deterministic, so the chunk stays portable
-	// across instances (#149).
+	// them behind the standard builtins. CompileProgram records that layout on the
+	// chunk so InterpretChunk can import compatible user mappings and reject a VM
+	// with colliding custom builtins before execution (#149).
 	chunk, compileAndTypeErrs := NewPaserati().CompileProgram(program)
 	if len(compileAndTypeErrs) > 0 {
 		return nil, compileAndTypeErrs
@@ -813,9 +821,9 @@ func CompileFile(filename string) (*vm.Chunk, []errors.PaseratiError) {
 	// way. A bare compiler.NewCompiler() has never seen the builtins, so it starts
 	// numbering user globals at 0 - straight over the slots NewPaserati() gives to
 	// Array, Map and friends. Compiling through an initialised instance numbers
-	// them behind the builtins, which is what every VM this chunk can run on
-	// expects. Builtin registration is deterministic, so the chunk stays portable
-	// across instances (#149).
+	// them behind the standard builtins. CompileProgram records that layout on the
+	// chunk so InterpretChunk can import compatible user mappings and reject a VM
+	// with colliding custom builtins before execution (#149).
 	chunk, compileAndTypeErrs := NewPaserati().CompileProgram(program)
 	if len(compileAndTypeErrs) > 0 {
 		return nil, compileAndTypeErrs
@@ -1425,7 +1433,96 @@ func (p *Paserati) GetCacheStats() vm.ExtendedCacheStats {
 
 // InterpretChunk executes a compiled chunk on the VM instance with initialized builtins
 func (p *Paserati) InterpretChunk(chunk *vm.Chunk) (vm.Value, []errors.PaseratiError) {
+	if err := p.prepareChunkGlobalLayout(chunk); err != nil {
+		return vm.Undefined, []errors.PaseratiError{err}
+	}
 	return p.vmInstance.Interpret(chunk)
+}
+
+// prepareChunkGlobalLayout verifies that the target session assigns every
+// compile-time builtin and global name to the same index as the chunk. New user
+// names can be imported into an unused target slot; an occupied or differently
+// indexed slot is rejected before any bytecode runs.
+func (p *Paserati) prepareChunkGlobalLayout(chunk *vm.Chunk) errors.PaseratiError {
+	if chunk == nil || len(chunk.GlobalNames) == 0 || p.heapAlloc == nil {
+		return nil
+	}
+	if p.preparedChunk == chunk {
+		return nil
+	}
+
+	targetNames := p.heapAlloc.GetNameToIndexMap()
+	targetByIndex := make(map[int]string, len(targetNames))
+	for name, idx := range targetNames {
+		targetByIndex[idx] = name
+	}
+
+	for idx, name := range chunk.BuiltinGlobalNames {
+		if name == "" {
+			continue
+		}
+		targetIdx, exists := targetNames[name]
+		if !exists || targetIdx != idx {
+			return incompatibleChunkGlobalLayout(idx, name, targetByIndex[idx])
+		}
+	}
+
+	for idx, name := range chunk.GlobalNames {
+		if name == "" {
+			continue
+		}
+		if targetIdx, exists := targetNames[name]; exists {
+			if targetIdx != idx {
+				return incompatibleChunkGlobalLayout(idx, name, targetByIndex[idx])
+			}
+			continue
+		}
+		if targetName, occupied := targetByIndex[idx]; occupied {
+			return incompatibleChunkGlobalLayout(idx, name, targetName)
+		}
+	}
+
+	for idx, name := range chunk.GlobalNames {
+		if name == "" {
+			continue
+		}
+		if _, exists := targetNames[name]; !exists {
+			p.heapAlloc.SetIndex(name, idx)
+		}
+	}
+	p.SyncGlobalNamesFromCompiler()
+	p.preparedChunk = chunk
+	return nil
+}
+
+func incompatibleChunkGlobalLayout(index int, chunkName, targetName string) errors.PaseratiError {
+	if targetName == "" {
+		targetName = "<unassigned>"
+	}
+	return &errors.RuntimeError{
+		Position: errors.Position{Line: 0, Column: 0},
+		Msg: fmt.Sprintf(
+			"cannot interpret chunk: incompatible global layout at index %d (chunk=%q, VM=%q)",
+			index, chunkName, targetName,
+		),
+	}
+}
+
+func indexedGlobalNames(nameToIndex map[string]int) []string {
+	maxIndex := -1
+	for _, idx := range nameToIndex {
+		if idx > maxIndex {
+			maxIndex = idx
+		}
+	}
+	if maxIndex < 0 {
+		return nil
+	}
+	names := make([]string, maxIndex+1)
+	for name, idx := range nameToIndex {
+		names[idx] = name
+	}
+	return names
 }
 
 // initializeBuiltins sets up all builtin global variables in both the compiler and VM
@@ -1506,6 +1603,7 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 	if err := vmInstance.SetBuiltinGlobals(globalVariables, indexMap); err != nil {
 		return err
 	}
+	paserati.builtinGlobals = indexedGlobalNames(indexMap)
 
 	return nil
 }
