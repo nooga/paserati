@@ -3322,26 +3322,7 @@ func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool
 		c.emitSetGlobalInit(globalIdx, valueReg, line)
 		c.currentSymbolTable.DefineGlobal(name, globalIdx)
 	} else if isVar {
-		// var: write through to the hoisted binding. findVarInFunctionScope walks
-		// out of enclosing *blocks* but stops at the enclosing compiler, so a var
-		// can never write into an outer function's binding.
-		if sym, funcTable := c.findVarInFunctionScope(name); funcTable != nil {
-			switch {
-			case sym.IsGlobal:
-				// Top-level var inside a block: the hoisted binding is a global.
-				c.emitSetGlobal(sym.GlobalIndex, valueReg, line)
-			case sym.IsSpilled:
-				c.emitStoreSpill(sym.SpillIndex, valueReg, line)
-			case sym.Register != nilRegister:
-				if valueReg != sym.Register {
-					c.emitMove(sym.Register, valueReg, line)
-				}
-			default:
-				// Symbol exists but has no storage yet - claim this register for it.
-				funcTable.Define(name, valueReg)
-				c.regAlloc.Pin(valueReg)
-			}
-		} else {
+		if !c.storeToHoistedVar(name, valueReg, line) {
 			// No hoisted binding found (a var reached without collectVarDeclarations
 			// having seen it). Define it in this function's scope, not the block's.
 			c.currentSymbolTable.Define(name, valueReg)

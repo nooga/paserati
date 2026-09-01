@@ -1091,6 +1091,34 @@ func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, lab
 	return hint, nil
 }
 
+// predefineForHeadVar pre-declares a `var` bound in a for/for-in/for-of head so
+// the name resolves while the condition, update and body are compiled.
+//
+// It deliberately declares NOTHING when the name already has a hoisted binding
+// in this function's scope: `var` is function-scoped, and collectVarDeclarations
+// recurses into loop heads, so that binding is what the head must write to. The
+// two sites this replaces defined a fresh nilRegister binding in the *current*
+// table instead, which shadowed the hoisted one - the store then landed in the
+// shadow and a read after the loop saw the still-undefined hoisted register
+// (`function f(){ { for (var q of [5]) {} } return q; }` gave undefined). Only
+// the true-global branch was right, which is why the same loops worked at script
+// top level.
+func (c *Compiler) predefineForHeadVar(name string) {
+	if _, funcTable := c.findVarInFunctionScope(name); funcTable != nil {
+		// Already hoisted - leave it alone so Resolve() finds the hoisted binding.
+		return
+	}
+	if c.enclosing == nil && c.currentSymbolTable.Outer == nil {
+		// True global scope: predefine as global so the identifier resolves as a
+		// global in the condition/update.
+		globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
+		c.currentSymbolTable.DefineGlobal(name, globalIdx)
+		return
+	}
+	// Nothing hoisted: declare it in this function's scope, not the block's.
+	c.varHoistTable().Define(name, nilRegister)
+}
+
 func (c *Compiler) compileForStatement(node *parser.ForStatement, hint Register) (Register, errors.PaseratiError) {
 	return c.compileForStatementLabeled(node, "", hint)
 }
@@ -1155,25 +1183,10 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 			// Prefer explicit declarations if present; otherwise fall back to legacy Name field
 			if len(vs.Declarations) > 0 {
 				for _, d := range vs.Declarations {
-					isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
-					if isGlobalScope {
-						// True global scope: predefine as global so identifier resolves as global in condition/update
-						globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(d.Name.Value))
-						c.currentSymbolTable.DefineGlobal(d.Name.Value, globalIdx)
-					} else {
-						// Local scope: predefine local binding; register will be set by compileVarStatement
-						c.currentSymbolTable.Define(d.Name.Value, nilRegister)
-					}
+					c.predefineForHeadVar(d.Name.Value)
 				}
 			} else if vs.Name != nil {
-				name := vs.Name.Value
-				isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
-				if isGlobalScope {
-					globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
-					c.currentSymbolTable.DefineGlobal(name, globalIdx)
-				} else {
-					c.currentSymbolTable.Define(name, nilRegister)
-				}
+				c.predefineForHeadVar(vs.Name.Value)
 			}
 		} else if ls, ok := node.Initializer.(*parser.LetStatement); ok {
 			// Handle let declarations in for loop
@@ -2036,27 +2049,10 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 	if vs, ok := node.Variable.(*parser.VarStatement); ok {
 		if len(vs.Declarations) > 0 {
 			for _, d := range vs.Declarations {
-				if c.enclosing == nil {
-					idx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(d.Name.Value))
-					c.currentSymbolTable.DefineGlobal(d.Name.Value, idx)
-					// fmt.Printf("// [ForInPredefine] var %s as global idx=%d\n", d.Name.Value, idx)
-				} else {
-					c.currentSymbolTable.Define(d.Name.Value, nilRegister)
-					// fmt.Printf("// [ForInPredefine] var %s as local (nil reg)\n", d.Name.Value)
-				}
+				c.predefineForHeadVar(d.Name.Value)
 			}
 		} else if vs.Name != nil {
-			name := vs.Name.Value
-			if c.enclosing == nil {
-				idx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
-				c.currentSymbolTable.DefineGlobal(name, idx)
-				// fmt.Printf("// [ForInPredefine] var %s as global idx=%d\n", name, idx)
-			} else {
-				c.currentSymbolTable.Define(name, nilRegister)
-				// fmt.Printf("// [ForInPredefine] var %s as local (nil reg)\n", name)
-			}
-		} else {
-			// fmt.Printf("// [ForInPredefine] VarStatement without Name/Declarations\n")
+			c.predefineForHeadVar(vs.Name.Value)
 		}
 	} else if hasLexicalDecl {
 		// Define TDZ bindings for let/const variables BEFORE compiling object expression

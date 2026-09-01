@@ -151,21 +151,22 @@ func collectVarDeclarations(stmts []parser.Statement) []string {
 				collect(s.Body)
 			}
 		case *parser.ForInStatement:
-			// For-in initializer can be a var declaration
+			// For-in head can be a var declaration - including a destructuring
+			// pattern (`for (var {w} in o)`), which the VarStatement-only check
+			// this replaces missed entirely, leaving w unhoisted and its later
+			// read a ReferenceError. collect ignores head shapes that declare
+			// nothing (an assignment to an existing binding).
 			if s.Variable != nil {
-				if varStmt, ok := s.Variable.(*parser.VarStatement); ok {
-					collect(varStmt)
-				}
+				collect(s.Variable)
 			}
 			if s.Body != nil {
 				collect(s.Body)
 			}
 		case *parser.ForOfStatement:
-			// For-of initializer can be a var declaration
+			// For-of head can be a var declaration, pattern included - see the
+			// ForInStatement case above.
 			if s.Variable != nil {
-				if varStmt, ok := s.Variable.(*parser.VarStatement); ok {
-					collect(varStmt)
-				}
+				collect(s.Variable)
 			}
 			if s.Body != nil {
 				collect(s.Body)
@@ -3207,6 +3208,40 @@ func (c *Compiler) ShouldUseHeapForEvalBinding(name string) bool {
 // Unlike Resolve(), this stops at function boundaries (doesn't cross into enclosing compilers).
 // This is used to check if a var was pre-defined during block hoisting in the SAME function.
 // Returns the symbol and the function-level table if found, otherwise returns zero Symbol and nil.
+// storeToHoistedVar emits the store for a `var` binding whose name was already
+// hoisted into this function's scope (or, at top level, to a global) by
+// collectVarDeclarations, and reports whether such a binding was found.
+//
+// `var` is function-scoped, so a declaration or loop head nested inside a block
+// must write *through* to the hoisted binding rather than define a new one -
+// defining one in the current scope shadows the hoisted register, so the value
+// lands in the shadow and a read after the block sees the still-undefined
+// hoisted binding. findVarInFunctionScope walks out of enclosing blocks but
+// stops at the enclosing compiler, so a var can never write into an outer
+// function's binding.
+func (c *Compiler) storeToHoistedVar(name string, valueReg Register, line int) bool {
+	sym, funcTable := c.findVarInFunctionScope(name)
+	if funcTable == nil {
+		return false
+	}
+	switch {
+	case sym.IsGlobal:
+		// Top-level var inside a block: the hoisted binding is a global.
+		c.emitSetGlobal(sym.GlobalIndex, valueReg, line)
+	case sym.IsSpilled:
+		c.emitStoreSpill(sym.SpillIndex, valueReg, line)
+	case sym.Register != nilRegister:
+		if valueReg != sym.Register {
+			c.emitMove(sym.Register, valueReg, line)
+		}
+	default:
+		// Symbol exists but has no storage yet - claim this register for it.
+		funcTable.Define(name, valueReg)
+		c.regAlloc.Pin(valueReg)
+	}
+	return true
+}
+
 // varHoistTable returns the symbol table a `var` binding belongs in: this
 // compiler's function-level table, found by walking out of any enclosing block
 // scopes but stopping at the enclosing compiler (a var never lands in an outer

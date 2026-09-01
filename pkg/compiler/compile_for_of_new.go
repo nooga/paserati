@@ -266,23 +266,29 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		perIterationRegs = append(perIterationRegs, symbol.Register)
 		c.emitMove(symbol.Register, valueReg, node.Token.Line)
 	} else if varStmt, ok := node.Variable.(*parser.VarStatement); ok {
-		symbol := c.currentSymbolTable.Define(varStmt.Name.Value, c.regAlloc.Alloc())
-		c.regAlloc.Pin(symbol.Register)
-		// Note: var is function-scoped, so no per-iteration binding needed
-		c.emitMove(symbol.Register, valueReg, node.Token.Line)
+		// var is function-scoped: one binding, reassigned each iteration, so it
+		// gets no per-iteration register. Write through to the binding
+		// collectVarDeclarations hoisted - defining a fresh one here shadowed it,
+		// so a read after the loop saw the still-undefined hoisted register.
+		if !c.storeToHoistedVar(varStmt.Name.Value, valueReg, node.Token.Line) {
+			symbol := c.currentSymbolTable.Define(varStmt.Name.Value, c.regAlloc.Alloc())
+			c.regAlloc.Pin(symbol.Register)
+			c.emitMove(symbol.Register, valueReg, node.Token.Line)
+		}
 	} else if arrayDestr, ok := node.Variable.(*parser.ArrayDestructuringDeclaration); ok {
 		// Array destructuring: for(const [x, y] of arr)
 		// Check for null/undefined before destructuring (ECMAScript requirement)
 		c.emitDestructuringNullCheck(valueReg, node.Token.Line)
 		// Use iterator protocol to destructure the value
 		isConst := arrayDestr.IsConst
-		err := c.compileForOfArrayDestructuring(arrayDestr, valueReg, isConst, node.Token.Line)
+		err := c.compileForOfArrayDestructuring(arrayDestr, valueReg, isConst, isVarDeclToken(arrayDestr.Token), node.Token.Line)
 		if err != nil {
 			return BadRegister, err
 		}
 	} else if objDestr, ok := node.Variable.(*parser.ObjectDestructuringDeclaration); ok {
 		// Object destructuring: for(const {x, y} of arr)
 		// Check for null/undefined before destructuring (ECMAScript requirement)
+		headIsVar := isVarDeclToken(objDestr.Token)
 		c.emitDestructuringNullCheck(valueReg, node.Token.Line)
 		for _, prop := range objDestr.Properties {
 			if prop.Target == nil {
@@ -309,38 +315,24 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 
 			// Handle assignment with potential default value
 			if ident, ok := prop.Target.(*parser.Identifier); ok {
-				// Simple identifier target
-				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
-				c.regAlloc.Pin(symbol.Register)
-
-				if prop.Default != nil {
-					// Use conditional assignment: target = extractedReg !== undefined ? extractedReg : default
-					targetIdent := &parser.Identifier{Token: ident.Token, Value: ident.Value}
-					err := c.compileConditionalAssignment(targetIdent, extractedReg, prop.Default, node.Token.Line)
-					if err != nil {
-						return BadRegister, err
-					}
-				} else {
-					c.emitMove(symbol.Register, extractedReg, node.Token.Line)
+				if err := c.bindForOfHeadTarget(ident, extractedReg, prop.Default, headIsVar, node.Token.Line); err != nil {
+					return BadRegister, err
 				}
 			} else {
-				// Nested pattern target (ArrayLiteral or ObjectLiteral)
-				isConst := true // default for const
-				if _, ok := node.Variable.(*parser.VarStatement); ok {
-					isConst = false
-				} else if _, ok := node.Variable.(*parser.LetStatement); ok {
-					isConst = false
-				}
-
+				// Nested pattern target (ArrayLiteral or ObjectLiteral).
+				// isConst/isVar come from the destructuring declaration's own
+				// keyword token - node.Variable IS that declaration for a pattern
+				// head, never a Let/Var/ConstStatement, so the old type switch
+				// here always fell through and left isConst true.
 				if prop.Default != nil {
 					// Handle conditional assignment for nested patterns
-					err := c.compileConditionalAssignmentForDeclaration(prop.Target, extractedReg, prop.Default, isConst, false, node.Token.Line)
+					err := c.compileConditionalAssignmentForDeclaration(prop.Target, extractedReg, prop.Default, objDestr.IsConst, headIsVar, node.Token.Line)
 					if err != nil {
 						return BadRegister, err
 					}
 				} else {
 					// Direct nested pattern assignment
-					err := c.compileNestedPatternDeclaration(prop.Target, extractedReg, isConst, false, node.Token.Line)
+					err := c.compileNestedPatternDeclaration(prop.Target, extractedReg, objDestr.IsConst, headIsVar, node.Token.Line)
 					if err != nil {
 						return BadRegister, err
 					}
@@ -352,8 +344,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		if objDestr.RestProperty != nil {
 			if ident, ok := objDestr.RestProperty.Target.(*parser.Identifier); ok {
 				// Create rest object with remaining properties
-				// A for-of head binding is per-iteration, never a write-through var.
-				err := c.compileObjectRestDeclaration(valueReg, objDestr.Properties, ident.Value, true, false, node.Token.Line)
+				err := c.compileObjectRestDeclaration(valueReg, objDestr.Properties, ident.Value, objDestr.IsConst, headIsVar, node.Token.Line)
 				if err != nil {
 					return BadRegister, err
 				}
@@ -649,7 +640,30 @@ func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.Arra
 }
 
 // compileForOfArrayDestructuring uses iterator protocol to destructure array patterns in for-of loops
-func (c *Compiler) compileForOfArrayDestructuring(arrayDestr *parser.ArrayDestructuringDeclaration, valueReg Register, isConst bool, line int) errors.PaseratiError {
+// bindForOfHeadTarget binds one identifier target of a for-of head's
+// destructuring pattern.
+//
+// `var` is function-scoped: one binding, reassigned each iteration, so it writes
+// through to the binding collectVarDeclarations hoisted (see storeToHoistedVar).
+// Defining a fresh register in the loop's own scope instead left the name
+// unresolvable once the loop scope was popped, so `for (var {w} of xs)` followed
+// by a read of w threw ReferenceError. let/const keep their per-iteration
+// register.
+func (c *Compiler) bindForOfHeadTarget(ident *parser.Identifier, valueReg Register, defaultExpr parser.Expression, isVar bool, line int) errors.PaseratiError {
+	if isVar {
+		return c.defineIdentWithOptionalDefault(ident.Value, false, true, valueReg, defaultExpr, line)
+	}
+	symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
+	c.regAlloc.Pin(symbol.Register)
+	if defaultExpr != nil {
+		targetIdent := &parser.Identifier{Token: ident.Token, Value: ident.Value}
+		return c.compileConditionalAssignment(targetIdent, valueReg, defaultExpr, line)
+	}
+	c.emitMove(symbol.Register, valueReg, line)
+	return nil
+}
+
+func (c *Compiler) compileForOfArrayDestructuring(arrayDestr *parser.ArrayDestructuringDeclaration, valueReg Register, isConst bool, isVar bool, line int) errors.PaseratiError {
 	// Set up the destructuring source. Without a rest element and over a pristine
 	// array at runtime, elements are read by index and the iterator protocol is
 	// skipped (see beginArrayDestruct).
@@ -684,13 +698,14 @@ func (c *Compiler) compileForOfArrayDestructuring(arrayDestr *parser.ArrayDestru
 
 			// Bind rest array to target
 			if ident, ok := element.Target.(*parser.Identifier); ok {
-				symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
-				c.regAlloc.Pin(symbol.Register)
-				c.emitMove(symbol.Register, restArrayReg, line)
+				err := c.bindForOfHeadTarget(ident, restArrayReg, nil, isVar, line)
 				c.regAlloc.Free(restArrayReg)
+				if err != nil {
+					return err
+				}
 			} else {
 				// Nested pattern: [...[x, y]]
-				err := c.compileNestedPatternDeclaration(element.Target, restArrayReg, isConst, false, line)
+				err := c.compileNestedPatternDeclaration(element.Target, restArrayReg, isConst, isVar, line)
 				c.regAlloc.Free(restArrayReg)
 				if err != nil {
 					return err
@@ -707,33 +722,21 @@ func (c *Compiler) compileForOfArrayDestructuring(arrayDestr *parser.ArrayDestru
 
 		// Handle assignment based on target type
 		if ident, ok := element.Target.(*parser.Identifier); ok {
-			// Simple identifier target
-			symbol := c.currentSymbolTable.Define(ident.Value, c.regAlloc.Alloc())
-			c.regAlloc.Pin(symbol.Register)
-
-			if element.Default != nil {
-				// Conditional assignment with default
-				targetIdent := &parser.Identifier{Token: ident.Token, Value: ident.Value}
-				err := c.compileConditionalAssignment(targetIdent, extractedReg, element.Default, line)
-				c.regAlloc.Free(extractedReg)
-				if err != nil {
-					return err
-				}
-			} else {
-				// Simple move
-				c.emitMove(symbol.Register, extractedReg, line)
-				c.regAlloc.Free(extractedReg)
+			err := c.bindForOfHeadTarget(ident, extractedReg, element.Default, isVar, line)
+			c.regAlloc.Free(extractedReg)
+			if err != nil {
+				return err
 			}
 		} else {
 			// Nested pattern
 			if element.Default != nil {
-				err := c.compileConditionalAssignmentForDeclaration(element.Target, extractedReg, element.Default, isConst, false, line)
+				err := c.compileConditionalAssignmentForDeclaration(element.Target, extractedReg, element.Default, isConst, isVar, line)
 				c.regAlloc.Free(extractedReg)
 				if err != nil {
 					return err
 				}
 			} else {
-				err := c.compileNestedPatternDeclaration(element.Target, extractedReg, isConst, false, line)
+				err := c.compileNestedPatternDeclaration(element.Target, extractedReg, isConst, isVar, line)
 				c.regAlloc.Free(extractedReg)
 				if err != nil {
 					return err
