@@ -2111,7 +2111,15 @@ func (p *Parser) parseIfStatement() *IfStatement {
 	}
 
 	p.nextToken() // Consume '(', move to condition
-	stmt.Condition = p.parseExpression(COMMA)
+	// LOWEST, not COMMA: an if condition sits inside its own parentheses, which
+	// is exactly the context where a raw comma operator is unambiguous and
+	// legal - `if (a, b)`. COMMA means "stop before consuming a comma", which is
+	// right for a genuinely comma-delimited context (declarator initializers,
+	// parameter defaults) and wrong here: parseExpression stopped after `a`,
+	// leaving the `,` for expectPeek(RPAREN) to reject with "')' expected"
+	// (#157). while/do-while/switch all already parse their parenthesized
+	// condition at LOWEST; if was the sole outlier.
+	stmt.Condition = p.parseExpression(LOWEST)
 	if stmt.Condition == nil {
 		return nil
 	}
