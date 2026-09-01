@@ -260,13 +260,13 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.PRIVATE, p.parseIdentifier)
 	p.registerPrefix(lexer.PROTECTED, p.parseIdentifier)
 	p.registerPrefix(lexer.PUBLIC, p.parseIdentifier)
-	p.registerPrefix(lexer.OF, p.parseIdentifier)       // OF is a contextual keyword, can be used as identifier
-	p.registerPrefix(lexer.FROM, p.parseIdentifier)     // FROM is a contextual keyword (import/export), can be used as identifier
-	p.registerPrefix(lexer.TYPE, p.parseIdentifier)     // TYPE is a contextual keyword (TypeScript), can be used as identifier in JS
-	p.registerPrefix(lexer.READONLY, p.parseIdentifier) // READONLY is a contextual keyword, can be used as identifier
-	p.registerPrefix(lexer.OVERRIDE, p.parseIdentifier) // OVERRIDE is a contextual keyword, can be used as identifier
-	p.registerPrefix(lexer.ABSTRACT, p.parseIdentifier) // ABSTRACT is a contextual keyword, can be used as identifier
-	p.registerPrefix(lexer.IS, p.parseIdentifier)         // IS is a contextual keyword (type predicates), can be used as identifier in JS
+	p.registerPrefix(lexer.OF, p.parseIdentifier)        // OF is a contextual keyword, can be used as identifier
+	p.registerPrefix(lexer.FROM, p.parseIdentifier)      // FROM is a contextual keyword (import/export), can be used as identifier
+	p.registerPrefix(lexer.TYPE, p.parseIdentifier)      // TYPE is a contextual keyword (TypeScript), can be used as identifier in JS
+	p.registerPrefix(lexer.READONLY, p.parseIdentifier)  // READONLY is a contextual keyword, can be used as identifier
+	p.registerPrefix(lexer.OVERRIDE, p.parseIdentifier)  // OVERRIDE is a contextual keyword, can be used as identifier
+	p.registerPrefix(lexer.ABSTRACT, p.parseIdentifier)  // ABSTRACT is a contextual keyword, can be used as identifier
+	p.registerPrefix(lexer.IS, p.parseIdentifier)        // IS is a contextual keyword (type predicates), can be used as identifier in JS
 	p.registerPrefix(lexer.SATISFIES, p.parseIdentifier) // SATISFIES is a TS operator, but also a valid binding name (e.g. semver)
 	p.registerPrefix(lexer.FUNCTION, func() Expression { return p.parseFunctionLiteral(false) })
 	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
@@ -520,7 +520,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 		}
 		stmt := p.parseStatement()
 		if stmt != nil {
-			program.Statements = append(program.Statements, stmt)
+			program.Statements = appendFlatteningGroups(program.Statements, stmt)
 
 			// --- Directive Prologue Check for "use strict" ---
 			if inDirectivePrologue {
@@ -1788,91 +1788,14 @@ func (p *Parser) isTupleElementLabelStart() bool {
 func (p *Parser) parseLetStatement() Statement {
 	letToken := p.curToken // Save the 'let' token
 
-	// Peek at the next token to determine if it's a destructuring pattern
 	p.nextToken() // Move to what comes after 'let'
 
-	switch p.curToken.Type {
-	case lexer.LBRACKET:
-		// Array destructuring: let [a, b] = ...
-		return p.parseArrayDestructuringDeclaration(letToken, false, true)
-	case lexer.LBRACE:
-		// Object destructuring: let {a, b} = ...
-		return p.parseObjectDestructuringDeclaration(letToken, false, true)
-	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
-		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF, lexer.FROM,
-		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.NULL, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS:
-		// Regular identifier: let x = ... or let x = ..., y = ... (including contextual keywords and FutureReservedWords)
-		stmt := &LetStatement{Token: letToken}
-		firstDeclarator := &VarDeclarator{}
-		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-
-		// Optional definite-assignment assertion and type annotation
-		if !p.parseDeclaratorAnnotation(firstDeclarator) {
-			return nil
-		}
-
-		// Allow omitting = value, defaulting to undefined
-		if p.peekTokenIs(lexer.ASSIGN) {
-			p.nextToken() // Consume '='
-			p.nextToken() // Consume token starting the expression
-			// Use COMMA precedence to allow assignment expressions but stop at commas
-			// This enables: var result = [x, y] = [1, 2] while stopping at: var a = 1, b = 2
-			firstDeclarator.Value = p.parseExpression(COMMA)
-		}
-
-		stmt.Declarations = []*VarDeclarator{firstDeclarator}
-
-		// Parse additional declarations separated by commas
-		for p.peekTokenIs(lexer.COMMA) {
-			commaToken := p.peekToken
-			p.nextToken() // Consume ','
-
-			// TS1009: detect trailing comma before statement keywords or end-of-statement
-			if p.peekTokenIs(lexer.RETURN) || p.peekTokenIs(lexer.BREAK) ||
-				p.peekTokenIs(lexer.CONTINUE) || p.peekTokenIs(lexer.THROW) ||
-				p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.EOF) ||
-				p.peekTokenIs(lexer.RBRACE) {
-				p.addError(commaToken, "Trailing comma not allowed.")
-				break
-			}
-
-			if !p.expectPeekIdentifierOrKeyword() {
-				return nil
-			}
-
-			declarator := &VarDeclarator{}
-			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-
-			// Optional definite-assignment assertion and type annotation
-			if !p.parseDeclaratorAnnotation(declarator) {
-				return nil
-			}
-
-			// Allow omitting = value, defaulting to undefined
-			if p.peekTokenIs(lexer.ASSIGN) {
-				p.nextToken() // Consume '='
-				p.nextToken() // Consume token starting the expression
-				// Use COMMA precedence to allow assignment expressions but stop at commas
-				declarator.Value = p.parseExpression(COMMA)
-			}
-
-			stmt.Declarations = append(stmt.Declarations, declarator)
-		}
-
-		// Set legacy fields for backward compatibility (first declaration)
-		if len(stmt.Declarations) > 0 {
-			stmt.Name = stmt.Declarations[0].Name
-			stmt.TypeAnnotation = stmt.Declarations[0].TypeAnnotation
-			stmt.Value = stmt.Declarations[0].Value
-			stmt.ComputedType = stmt.Declarations[0].ComputedType
-		}
-
-		// Optional semicolon
-		if p.peekTokenIs(lexer.SEMICOLON) {
-			p.nextToken()
-		}
-
-		return stmt
+	// Any declarator position may hold an identifier or a binding pattern, so
+	// the whole clause is parsed by one shared declarator-list parser - see
+	// parseVariableDeclarationList (paserati#159, #160).
+	switch {
+	case p.curTokenIs(lexer.LBRACKET), p.curTokenIs(lexer.LBRACE), p.curTokenIsIdentLike():
+		return p.parseVariableDeclarationList(letToken, varDeclLet)
 	default:
 		p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'let', got %s", p.curToken.Type))
 		return nil
@@ -1882,83 +1805,14 @@ func (p *Parser) parseLetStatement() Statement {
 func (p *Parser) parseConstStatement() Statement {
 	constToken := p.curToken // Save the 'const' token
 
-	// Peek at the next token to determine if it's a destructuring pattern
 	p.nextToken() // Move to what comes after 'const'
 
-	switch p.curToken.Type {
-	case lexer.ENUM:
+	switch {
+	case p.curTokenIs(lexer.ENUM):
 		// Const enum: const enum Name { ... }
 		return p.parseConstEnumDeclarationStatement(constToken)
-	case lexer.LBRACKET:
-		// Array destructuring: const [a, b] = ...
-		return p.parseArrayDestructuringDeclaration(constToken, true, true)
-	case lexer.LBRACE:
-		// Object destructuring: const {a, b} = ...
-		return p.parseObjectDestructuringDeclaration(constToken, true, true)
-	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
-		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF, lexer.FROM,
-		lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.UNDEFINED, lexer.NULL, lexer.READONLY, lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS:
-		// Regular identifier: const x = ... or const x = ..., y = ... (including contextual keywords and FutureReservedWords)
-		stmt := &ConstStatement{Token: constToken}
-		firstDeclarator := &VarDeclarator{}
-		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-
-		// Optional definite-assignment assertion and type annotation
-		if !p.parseDeclaratorAnnotation(firstDeclarator) {
-			return nil
-		}
-
-		// const requires initializer
-		if !p.expectPeek(lexer.ASSIGN) {
-			return nil
-		}
-
-		p.nextToken()                                    // Consume token starting the expression
-		firstDeclarator.Value = p.parseExpression(COMMA) // Use COMMA precedence to allow chained assignments but stop at comma
-
-		stmt.Declarations = []*VarDeclarator{firstDeclarator}
-
-		// Parse additional declarations separated by commas
-		for p.peekTokenIs(lexer.COMMA) {
-			p.nextToken() // Consume ','
-
-			if !p.expectPeekIdentifierOrKeyword() {
-				return nil
-			}
-
-			declarator := &VarDeclarator{}
-			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-
-			// Optional definite-assignment assertion and type annotation
-			if !p.parseDeclaratorAnnotation(declarator) {
-				return nil
-			}
-
-			// const requires initializer for each declarator
-			if !p.expectPeek(lexer.ASSIGN) {
-				return nil
-			}
-
-			p.nextToken()                               // Consume token starting the expression
-			declarator.Value = p.parseExpression(COMMA) // Use COMMA precedence to allow chained assignments but stop at comma
-
-			stmt.Declarations = append(stmt.Declarations, declarator)
-		}
-
-		// Set legacy fields for backward compatibility (first declaration)
-		if len(stmt.Declarations) > 0 {
-			stmt.Name = stmt.Declarations[0].Name
-			stmt.TypeAnnotation = stmt.Declarations[0].TypeAnnotation
-			stmt.Value = stmt.Declarations[0].Value
-			stmt.ComputedType = stmt.Declarations[0].ComputedType
-		}
-
-		// Optional semicolon
-		if p.peekTokenIs(lexer.SEMICOLON) {
-			p.nextToken()
-		}
-
-		return stmt
+	case p.curTokenIs(lexer.LBRACKET), p.curTokenIs(lexer.LBRACE), p.curTokenIsIdentLike():
+		return p.parseVariableDeclarationList(constToken, varDeclConst)
 	default:
 		p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'const', got %s", p.curToken.Type))
 		return nil
@@ -1968,94 +1822,11 @@ func (p *Parser) parseConstStatement() Statement {
 func (p *Parser) parseVarStatement() Statement {
 	varToken := p.curToken // Save the 'var' token
 
-	// Peek at the next token to determine if it's a destructuring pattern
 	p.nextToken() // Move to what comes after 'var'
 
-	switch p.curToken.Type {
-	case lexer.LBRACKET:
-		// Array destructuring: var [a, b] = ...
-		return p.parseArrayDestructuringDeclaration(varToken, false, true)
-	case lexer.LBRACE:
-		// Object destructuring: var {a, b} = ...
-		debugPrint("// [PARSER DEBUG] parseVarStatement: detected LBRACE, calling parseObjectDestructuringDeclaration\n")
-		return p.parseObjectDestructuringDeclaration(varToken, false, true)
-	case lexer.IDENT, lexer.YIELD, lexer.GET, lexer.SET, lexer.THROW, lexer.RETURN, lexer.LET, lexer.AWAIT,
-		lexer.STATIC, lexer.IMPLEMENTS, lexer.INTERFACE, lexer.PRIVATE, lexer.PROTECTED, lexer.PUBLIC, lexer.OF,
-		lexer.UNDEFINED, lexer.NULL, lexer.FROM, lexer.TYPE, lexer.AS, lexer.ASYNC, lexer.ABSTRACT:
-		// Regular identifier case (including contextual keywords, FutureReservedWords in non-strict mode,
-		// and global property names like undefined/null which are not reserved words)
-		// Note: 'abstract' was removed from the future reserved words list in ES5
-		stmt := &VarStatement{Token: varToken}
-		firstDeclarator := &VarDeclarator{}
-		firstDeclarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-
-		// Optional definite-assignment assertion and type annotation
-		if !p.parseDeclaratorAnnotation(firstDeclarator) {
-			return nil
-		}
-
-		// Allow omitting = value, defaulting to undefined
-		if p.peekTokenIs(lexer.ASSIGN) {
-			p.nextToken() // Consume '='
-			p.nextToken() // Consume token starting the expression
-			// Use COMMA precedence to allow assignment expressions but stop at commas
-			// This enables: var result = [x, y] = [1, 2] while stopping at: var a = 1, b = 2
-			firstDeclarator.Value = p.parseExpression(COMMA)
-		}
-
-		stmt.Declarations = []*VarDeclarator{firstDeclarator}
-
-		// Parse additional declarations separated by commas
-		for p.peekTokenIs(lexer.COMMA) {
-			commaToken := p.peekToken
-			p.nextToken() // Consume ','
-
-			// TS1009: detect trailing comma before statement keywords or end-of-statement
-			if p.peekTokenIs(lexer.RETURN) || p.peekTokenIs(lexer.BREAK) ||
-				p.peekTokenIs(lexer.CONTINUE) || p.peekTokenIs(lexer.THROW) ||
-				p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.EOF) ||
-				p.peekTokenIs(lexer.RBRACE) {
-				p.addError(commaToken, "Trailing comma not allowed.")
-				break
-			}
-
-			if !p.expectPeekIdentifierOrKeyword() {
-				return nil
-			}
-
-			declarator := &VarDeclarator{}
-			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-
-			// Optional definite-assignment assertion and type annotation
-			if !p.parseDeclaratorAnnotation(declarator) {
-				return nil
-			}
-
-			// Allow omitting = value, defaulting to undefined
-			if p.peekTokenIs(lexer.ASSIGN) {
-				p.nextToken() // Consume '='
-				p.nextToken() // Consume token starting the expression
-				// Use COMMA precedence to allow assignment expressions but stop at commas
-				declarator.Value = p.parseExpression(COMMA)
-			}
-
-			stmt.Declarations = append(stmt.Declarations, declarator)
-		}
-
-		// Set legacy fields for backward compatibility (first declaration)
-		if len(stmt.Declarations) > 0 {
-			stmt.Name = stmt.Declarations[0].Name
-			stmt.TypeAnnotation = stmt.Declarations[0].TypeAnnotation
-			stmt.Value = stmt.Declarations[0].Value
-			stmt.ComputedType = stmt.Declarations[0].ComputedType
-		}
-
-		// Optional semicolon - Consume it here
-		if p.peekTokenIs(lexer.SEMICOLON) {
-			p.nextToken()
-		}
-
-		return stmt
+	switch {
+	case p.curTokenIs(lexer.LBRACKET), p.curTokenIs(lexer.LBRACE), p.curTokenIsIdentLike():
+		return p.parseVariableDeclarationList(varToken, varDeclVar)
 	default:
 		p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'var', got %s", p.curToken.Type))
 		return nil
@@ -4056,7 +3827,7 @@ func (p *Parser) parseBlockStatement() *BlockStatement {
 	for !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		stmt := p.parseStatement()
 		if stmt != nil {
-			block.Statements = append(block.Statements, stmt)
+			block.Statements = appendFlatteningGroups(block.Statements, stmt)
 
 			// --- Hoisting Check ---
 			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
@@ -4115,7 +3886,7 @@ func (p *Parser) parseFunctionBodyWithDirectives() *BlockStatement {
 	for !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		stmt := p.parseStatement()
 		if stmt != nil {
-			block.Statements = append(block.Statements, stmt)
+			block.Statements = appendFlatteningGroups(block.Statements, stmt)
 
 			// Check for directive prologue ("use strict")
 			if inDirectivePrologue {
@@ -5964,15 +5735,18 @@ func (p *Parser) parseArrayDestructuringDeclaration(declToken *lexer.Token, isCo
 		}
 
 		p.nextToken() // Move to RHS expression
-		decl.Value = p.parseExpression(LOWEST)
+		// COMMA precedence: an Initializer is an AssignmentExpression, so it must
+		// stop at the comma separating declarators. At LOWEST,
+		// `let {a} = obj, b = 2` parsed as one destructuring declaration whose
+		// source was the comma expression `(obj, b = 2)` - i.e. `b`'s own value -
+		// which is what made #160 silently destructure the wrong thing.
+		decl.Value = p.parseExpression(COMMA)
 		if decl.Value == nil {
 			return nil
 		}
-
-		// Optional semicolon
-		if p.peekTokenIs(lexer.SEMICOLON) {
-			p.nextToken()
-		}
+		// The statement terminator belongs to whoever owns the declarator list
+		// (parseVariableDeclarationList); consuming it here would eat the ';'
+		// before that loop could see the clause had ended.
 	}
 
 	return decl
@@ -6195,15 +5969,18 @@ func (p *Parser) parseObjectDestructuringDeclaration(declToken *lexer.Token, isC
 		}
 
 		p.nextToken() // Move to RHS expression
-		decl.Value = p.parseExpression(LOWEST)
+		// COMMA precedence: an Initializer is an AssignmentExpression, so it must
+		// stop at the comma separating declarators. At LOWEST,
+		// `let {a} = obj, b = 2` parsed as one destructuring declaration whose
+		// source was the comma expression `(obj, b = 2)` - i.e. `b`'s own value -
+		// which is what made #160 silently destructure the wrong thing.
+		decl.Value = p.parseExpression(COMMA)
 		if decl.Value == nil {
 			return nil
 		}
-
-		// Optional semicolon
-		if p.peekTokenIs(lexer.SEMICOLON) {
-			p.nextToken()
-		}
+		// The statement terminator belongs to whoever owns the declarator list
+		// (parseVariableDeclarationList); consuming it here would eat the ';'
+		// before that loop could see the clause had ended.
 	}
 
 	return decl
@@ -6911,7 +6688,7 @@ func (p *Parser) parseSwitchCase() *SwitchCase {
 	for !p.curTokenIs(lexer.CASE) && !p.curTokenIs(lexer.DEFAULT) && !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		stmt := p.parseStatement() // parseStatement consumes tokens including optional semicolon
 		if stmt != nil {
-			caseClause.Body.Statements = append(caseClause.Body.Statements, stmt)
+			caseClause.Body.Statements = appendFlatteningGroups(caseClause.Body.Statements, stmt)
 
 			// --- Hoisting Check (same as parseBlockStatement) ---
 			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
@@ -9237,7 +9014,7 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 					p.nextToken() // consume '='
 					p.nextToken() // move to RHS
 					if arrayDecl, ok := varStmt.(*ArrayDestructuringDeclaration); ok {
-						arrayDecl.Value = p.parseExpression(LOWEST)
+						arrayDecl.Value = p.parseExpression(COMMA) // COMMA: an initializer stops at the declarator comma
 					}
 				}
 			} else if p.curTokenIs(lexer.LBRACE) {
@@ -9257,7 +9034,7 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 					p.nextToken() // consume '='
 					p.nextToken() // move to RHS
 					if objDecl, ok := varStmt.(*ObjectDestructuringDeclaration); ok {
-						objDecl.Value = p.parseExpression(LOWEST)
+						objDecl.Value = p.parseExpression(COMMA) // COMMA: an initializer stops at the declarator comma
 					}
 				}
 			} else if p.curTokenIs(lexer.IDENT) || p.isContextualKeywordAsIdent() {
@@ -9333,7 +9110,7 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 				p.nextToken() // consume '='
 				p.nextToken() // move to RHS
 				if arrayDecl, ok := varStmt.(*ArrayDestructuringDeclaration); ok {
-					arrayDecl.Value = p.parseExpression(LOWEST)
+					arrayDecl.Value = p.parseExpression(COMMA) // COMMA: an initializer stops at the declarator comma
 				}
 			}
 		} else if p.curTokenIs(lexer.LBRACE) {
@@ -9353,7 +9130,7 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 				p.nextToken() // consume '='
 				p.nextToken() // move to RHS
 				if objDecl, ok := varStmt.(*ObjectDestructuringDeclaration); ok {
-					objDecl.Value = p.parseExpression(LOWEST)
+					objDecl.Value = p.parseExpression(COMMA) // COMMA: an initializer stops at the declarator comma
 				}
 			}
 		} else if p.curTokenIs(lexer.IDENT) || p.isContextualKeywordAsIdent() {
@@ -9376,7 +9153,11 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 		// Check for destructuring patterns
 		if p.curTokenIs(lexer.LBRACKET) {
 			// Array destructuring: for(var [a, b] ...)
-			varStmt = p.parseArrayDestructuringDeclaration(varToken, false, false)
+			arrayDecl := p.parseArrayDestructuringDeclaration(varToken, false, false)
+			if arrayDecl == nil {
+				return nil // Error already reported (e.g. a rest element with an initializer)
+			}
+			varStmt = arrayDecl
 			varName = "" // Destructuring doesn't have a single name
 
 			// Check if there's an initializer for regular for loops
@@ -9384,12 +9165,18 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 				p.nextToken() // consume '='
 				p.nextToken() // move to RHS
 				if arrayDecl, ok := varStmt.(*ArrayDestructuringDeclaration); ok && arrayDecl != nil {
-					arrayDecl.Value = p.parseExpression(LOWEST)
+					// COMMA, not LOWEST: a declarator initializer must stop at the
+					// comma separating it from the next declarator.
+					arrayDecl.Value = p.parseExpression(COMMA)
 				}
 			}
 		} else if p.curTokenIs(lexer.LBRACE) {
 			// Object destructuring: for(var {a, b} ...)
-			varStmt = p.parseObjectDestructuringDeclaration(varToken, false, false)
+			objectDecl := p.parseObjectDestructuringDeclaration(varToken, false, false)
+			if objectDecl == nil {
+				return nil // Error already reported
+			}
+			varStmt = objectDecl
 			varName = "" // Destructuring doesn't have a single name
 
 			// Check if there's an initializer for regular for loops
@@ -9397,7 +9184,8 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 				p.nextToken() // consume '='
 				p.nextToken() // move to RHS
 				if objDecl, ok := varStmt.(*ObjectDestructuringDeclaration); ok && objDecl != nil {
-					objDecl.Value = p.parseExpression(LOWEST)
+					// COMMA, not LOWEST: see the ArrayDestructuringDeclaration case.
+					objDecl.Value = p.parseExpression(COMMA)
 				}
 			}
 		} else if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.LET) || p.isContextualKeywordAsIdent() {
@@ -9716,87 +9504,32 @@ func (p *Parser) parseRegularForStatementWithVar(forToken *lexer.Token, varStmt 
 	}
 
 	// Sync Declarations with legacy fields for all statement types
-	if vs, ok := varStmt.(*VarStatement); ok {
-		if len(vs.Declarations) > 0 {
-			vs.Declarations[0].Value = vs.Value
-			vs.Declarations[0].TypeAnnotation = vs.TypeAnnotation
+	switch s := varStmt.(type) {
+	case *VarStatement:
+		if len(s.Declarations) > 0 {
+			s.Declarations[0].Value = s.Value
+			s.Declarations[0].TypeAnnotation = s.TypeAnnotation
 		}
-		// Parse additional comma-separated declarations: for (var x = 1, y = 2; ...)
-		for p.peekTokenIs(lexer.COMMA) {
-			p.nextToken() // Consume ','
-			if !p.expectPeekIdentifierOrKeyword() {
-				return nil
-			}
-			declarator := &VarDeclarator{}
-			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-			// Optional Type Annotation
-			if p.peekTokenIs(lexer.COLON) {
-				p.nextToken() // Consume ':'
-				p.nextToken() // Consume token starting the type expression
-				declarator.TypeAnnotation = p.parseTypeExpression()
-			}
-			// Optional assignment
-			if p.peekTokenIs(lexer.ASSIGN) {
-				p.nextToken() // Consume '='
-				p.nextToken() // Consume token starting the expression
-				declarator.Value = p.parseExpression(COMMA)
-			}
-			vs.Declarations = append(vs.Declarations, declarator)
+	case *LetStatement:
+		if len(s.Declarations) > 0 {
+			s.Declarations[0].Value = s.Value
+			s.Declarations[0].TypeAnnotation = s.TypeAnnotation
 		}
-	} else if letStmt, ok := varStmt.(*LetStatement); ok {
-		if len(letStmt.Declarations) > 0 {
-			letStmt.Declarations[0].Value = letStmt.Value
-			letStmt.Declarations[0].TypeAnnotation = letStmt.TypeAnnotation
+	case *ConstStatement:
+		if len(s.Declarations) > 0 {
+			s.Declarations[0].Value = s.Value
+			s.Declarations[0].TypeAnnotation = s.TypeAnnotation
 		}
-		// Parse additional comma-separated declarations: for (let x = 1, y = 2; ...)
-		for p.peekTokenIs(lexer.COMMA) {
-			p.nextToken() // Consume ','
-			if !p.expectPeekIdentifierOrKeyword() {
-				return nil
-			}
-			declarator := &VarDeclarator{}
-			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-			// Optional Type Annotation
-			if p.peekTokenIs(lexer.COLON) {
-				p.nextToken() // Consume ':'
-				p.nextToken() // Consume token starting the type expression
-				declarator.TypeAnnotation = p.parseTypeExpression()
-			}
-			// Optional assignment
-			if p.peekTokenIs(lexer.ASSIGN) {
-				p.nextToken() // Consume '='
-				p.nextToken() // Consume token starting the expression
-				declarator.Value = p.parseExpression(COMMA)
-			}
-			letStmt.Declarations = append(letStmt.Declarations, declarator)
+	}
+
+	// Parse any additional comma-separated declarators:
+	// for (let x = 1, y = 2; ...) and for (let i = 0, {a} = obj; ...).
+	if kind, declToken, isDecl := forInitDeclKind(varStmt); isDecl {
+		initializer := p.continueForInitDeclarators(varStmt, declToken, kind)
+		if initializer == nil {
+			return nil
 		}
-	} else if constStmt, ok := varStmt.(*ConstStatement); ok {
-		if len(constStmt.Declarations) > 0 {
-			constStmt.Declarations[0].Value = constStmt.Value
-			constStmt.Declarations[0].TypeAnnotation = constStmt.TypeAnnotation
-		}
-		// Parse additional comma-separated declarations: for (const x = 1, y = 2; ...)
-		for p.peekTokenIs(lexer.COMMA) {
-			p.nextToken() // Consume ','
-			if !p.expectPeekIdentifierOrKeyword() {
-				return nil
-			}
-			declarator := &VarDeclarator{}
-			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-			// Optional Type Annotation
-			if p.peekTokenIs(lexer.COLON) {
-				p.nextToken() // Consume ':'
-				p.nextToken() // Consume token starting the type expression
-				declarator.TypeAnnotation = p.parseTypeExpression()
-			}
-			// Optional assignment (const requires it, but parser doesn't enforce)
-			if p.peekTokenIs(lexer.ASSIGN) {
-				p.nextToken() // Consume '='
-				p.nextToken() // Consume token starting the expression
-				declarator.Value = p.parseExpression(COMMA)
-			}
-			constStmt.Declarations = append(constStmt.Declarations, declarator)
-		}
+		stmt.Initializer = initializer
 	}
 
 	// Expect semicolon after initializer
@@ -11799,17 +11532,27 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken *lexer.To
 }
 
 // parseExportNamedDeclarationWithDeclaration parses: export const x = 1; export function foo() {}
-func (p *Parser) parseExportNamedDeclarationWithDeclaration(exportToken *lexer.Token) *ExportNamedDeclaration {
-	stmt := &ExportNamedDeclaration{Token: exportToken}
-
+func (p *Parser) parseExportNamedDeclarationWithDeclaration(exportToken *lexer.Token) Statement {
 	// Parse the declaration statement
 	declaration := p.parseStatement()
 	if declaration == nil {
 		return nil
 	}
 
-	stmt.Declaration = declaration
-	return stmt
+	// `export let a = 1, {b} = obj` desugars to several declaration statements
+	// (see DeclarationGroup); each is exported in its own right, and the group
+	// is spliced back into the enclosing statement list by
+	// appendFlatteningGroups - export only ever appears in a statement list.
+	if group, ok := declaration.(*DeclarationGroup); ok {
+		exported := &DeclarationGroup{Token: group.Token}
+		for _, d := range group.Declarations {
+			exported.Declarations = append(exported.Declarations,
+				&ExportNamedDeclaration{Token: exportToken, Declaration: d})
+		}
+		return exported
+	}
+
+	return &ExportNamedDeclaration{Token: exportToken, Declaration: declaration}
 }
 
 // parseLeadingPipeUnionType handles union types that start with | like:

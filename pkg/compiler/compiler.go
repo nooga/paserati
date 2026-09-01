@@ -167,6 +167,10 @@ func collectVarDeclarations(stmts []parser.Statement) []string {
 			if s.Token.Literal == "var" {
 				collectArrayDestructuringNames(s.Elements, seen, &names)
 			}
+		case *parser.DeclarationGroup:
+			for _, inner := range s.Declarations {
+				collect(inner)
+			}
 		case *parser.BlockStatement:
 			if s != nil && s.Statements != nil {
 				for _, inner := range s.Statements {
@@ -286,6 +290,10 @@ func collectLetConstDeclarations(stmts []parser.Statement) []string {
 			// let/const destructuring
 			if s.Token.Literal == "let" || s.Token.Literal == "const" {
 				collectArrayDestructuringNames(s.Elements, seen, &names)
+			}
+		case *parser.DeclarationGroup:
+			for _, inner := range s.Declarations {
+				visit(inner)
 			}
 		case *parser.ExportNamedDeclaration:
 			// `export const X = ...` / `export let X = ...` wrap the actual
@@ -2151,6 +2159,20 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 	case *parser.ObjectDestructuringDeclaration:
 		return c.compileObjectDestructuringDeclaration(node, hint)
+
+	case *parser.DeclarationGroup:
+		// A single let/const/var clause mixing plain bindings with destructuring
+		// patterns. The group adds no scope of its own - compile its members in
+		// source order, exactly as if they were siblings.
+		var lastReg Register = BadRegister
+		for _, decl := range node.Declarations {
+			reg, err := c.compileNode(decl, hint)
+			if err != nil {
+				return BadRegister, err
+			}
+			lastReg = reg
+		}
+		return lastReg, nil
 
 	case *parser.ReturnStatement: // Although less relevant for top-level script return
 		return c.compileReturnStatement(node, hint) // TODO: Fix this
