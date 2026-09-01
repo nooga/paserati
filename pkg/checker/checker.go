@@ -3610,10 +3610,17 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 			restType = &types.ObjectType{Properties: make(map[string]types.Type)}
 		}
 
-		// Define the rest variable
+		// Define the rest variable. Like every other binding of the pattern, a
+		// `var` rest belongs in the function scope, not the current block - see
+		// declarationEnv.
 		if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
-			if !c.env.Define(ident.Value, restType, node.IsConst) {
-				c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
+			restEnv := c.declarationEnv(node.Token != nil && node.Token.Literal == "var")
+			if !restEnv.Define(ident.Value, restType, node.IsConst) {
+				if node.Token != nil && node.Token.Literal == "var" {
+					restEnv.Update(ident.Value, restType)
+				} else {
+					c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
+				}
 			}
 			ident.SetComputedType(restType)
 		}

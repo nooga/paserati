@@ -334,13 +334,13 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 
 				if prop.Default != nil {
 					// Handle conditional assignment for nested patterns
-					err := c.compileConditionalAssignmentForDeclaration(prop.Target, extractedReg, prop.Default, isConst, node.Token.Line)
+					err := c.compileConditionalAssignmentForDeclaration(prop.Target, extractedReg, prop.Default, isConst, false, node.Token.Line)
 					if err != nil {
 						return BadRegister, err
 					}
 				} else {
 					// Direct nested pattern assignment
-					err := c.compileNestedPatternDeclaration(prop.Target, extractedReg, isConst, node.Token.Line)
+					err := c.compileNestedPatternDeclaration(prop.Target, extractedReg, isConst, false, node.Token.Line)
 					if err != nil {
 						return BadRegister, err
 					}
@@ -352,7 +352,8 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		if objDestr.RestProperty != nil {
 			if ident, ok := objDestr.RestProperty.Target.(*parser.Identifier); ok {
 				// Create rest object with remaining properties
-				err := c.compileObjectRestDeclaration(valueReg, objDestr.Properties, ident.Value, true, node.Token.Line)
+				// A for-of head binding is per-iteration, never a write-through var.
+				err := c.compileObjectRestDeclaration(valueReg, objDestr.Properties, ident.Value, true, false, node.Token.Line)
 				if err != nil {
 					return BadRegister, err
 				}
@@ -478,8 +479,8 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		HandlerPC:         iteratorCleanupHandlerPC,
 		CatchReg:          -1,
 		IsCatch:           false,
-		IsFinally:         false,             // NOT a regular finally - shouldn't intercept returns
-		IsIteratorCleanup: true,              // Special handler for iterator cleanup on exception
+		IsFinally:         false, // NOT a regular finally - shouldn't intercept returns
+		IsIteratorCleanup: true,  // Special handler for iterator cleanup on exception
 		FinallyReg:        -1,
 	}
 	c.chunk.ExceptionTable = append(c.chunk.ExceptionTable, iteratorCleanupHandler)
@@ -638,8 +639,8 @@ func (c *Compiler) compileForOfArrayAssignmentWithIterator(arrayLit *parser.Arra
 		HandlerPC:         iteratorCleanupHandlerPC,
 		CatchReg:          -1,
 		IsCatch:           false,
-		IsFinally:         false,             // NOT a regular finally - shouldn't intercept normal returns
-		IsIteratorCleanup: true,              // Special handler for iterator cleanup on exception
+		IsFinally:         false, // NOT a regular finally - shouldn't intercept normal returns
+		IsIteratorCleanup: true,  // Special handler for iterator cleanup on exception
 		FinallyReg:        -1,
 	}
 	c.chunk.ExceptionTable = append(c.chunk.ExceptionTable, iteratorCleanupHandler)
@@ -689,7 +690,7 @@ func (c *Compiler) compileForOfArrayDestructuring(arrayDestr *parser.ArrayDestru
 				c.regAlloc.Free(restArrayReg)
 			} else {
 				// Nested pattern: [...[x, y]]
-				err := c.compileNestedPatternDeclaration(element.Target, restArrayReg, isConst, line)
+				err := c.compileNestedPatternDeclaration(element.Target, restArrayReg, isConst, false, line)
 				c.regAlloc.Free(restArrayReg)
 				if err != nil {
 					return err
@@ -726,13 +727,13 @@ func (c *Compiler) compileForOfArrayDestructuring(arrayDestr *parser.ArrayDestru
 		} else {
 			// Nested pattern
 			if element.Default != nil {
-				err := c.compileConditionalAssignmentForDeclaration(element.Target, extractedReg, element.Default, isConst, line)
+				err := c.compileConditionalAssignmentForDeclaration(element.Target, extractedReg, element.Default, isConst, false, line)
 				c.regAlloc.Free(extractedReg)
 				if err != nil {
 					return err
 				}
 			} else {
-				err := c.compileNestedPatternDeclaration(element.Target, extractedReg, isConst, line)
+				err := c.compileNestedPatternDeclaration(element.Target, extractedReg, isConst, false, line)
 				c.regAlloc.Free(extractedReg)
 				if err != nil {
 					return err
@@ -772,8 +773,8 @@ func (c *Compiler) compileForOfArrayDestructuring(arrayDestr *parser.ArrayDestru
 		HandlerPC:         iteratorCleanupHandlerPC,
 		CatchReg:          -1,
 		IsCatch:           false,
-		IsFinally:         false,             // NOT a regular finally - shouldn't intercept normal returns
-		IsIteratorCleanup: true,              // Special handler for iterator cleanup on exception
+		IsFinally:         false, // NOT a regular finally - shouldn't intercept normal returns
+		IsIteratorCleanup: true,  // Special handler for iterator cleanup on exception
 		FinallyReg:        -1,
 	}
 	c.chunk.ExceptionTable = append(c.chunk.ExceptionTable, iteratorCleanupHandler)
