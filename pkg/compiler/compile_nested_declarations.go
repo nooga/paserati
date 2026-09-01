@@ -9,20 +9,20 @@ import (
 )
 
 // compileNestedPatternDeclaration handles nested pattern variable declarations
-func (c *Compiler) compileNestedPatternDeclaration(target parser.Expression, valueReg Register, isConst bool, line int) errors.PaseratiError {
+func (c *Compiler) compileNestedPatternDeclaration(target parser.Expression, valueReg Register, isConst bool, isVar bool, line int) errors.PaseratiError {
 	switch targetNode := target.(type) {
 	case *parser.ArrayLiteral:
 		// Convert to ArrayDestructuringDeclaration and compile
-		return c.compileNestedArrayDeclaration(targetNode, valueReg, isConst, line)
+		return c.compileNestedArrayDeclaration(targetNode, valueReg, isConst, isVar, line)
 	case *parser.ObjectLiteral:
 		// Convert to ObjectDestructuringDeclaration and compile
-		return c.compileNestedObjectDeclaration(targetNode, valueReg, isConst, line)
+		return c.compileNestedObjectDeclaration(targetNode, valueReg, isConst, isVar, line)
 	case *parser.ArrayParameterPattern:
 		// Handle ArrayParameterPattern from transformed function parameters
-		return c.compileNestedArrayParameterPattern(targetNode, valueReg, isConst, line)
+		return c.compileNestedArrayParameterPattern(targetNode, valueReg, isConst, isVar, line)
 	case *parser.ObjectParameterPattern:
 		// Handle ObjectParameterPattern from transformed function parameters
-		return c.compileNestedObjectParameterPattern(targetNode, valueReg, isConst, line)
+		return c.compileNestedObjectParameterPattern(targetNode, valueReg, isConst, isVar, line)
 	case *parser.UndefinedLiteral:
 		// Elision in destructuring - no code to generate, just skip this element
 		return nil
@@ -32,7 +32,7 @@ func (c *Compiler) compileNestedPatternDeclaration(target parser.Expression, val
 }
 
 // compileNestedArrayDeclaration handles nested array pattern declarations
-func (c *Compiler) compileNestedArrayDeclaration(arrayTarget *parser.ArrayLiteral, valueReg Register, isConst bool, line int) errors.PaseratiError {
+func (c *Compiler) compileNestedArrayDeclaration(arrayTarget *parser.ArrayLiteral, valueReg Register, isConst bool, isVar bool, line int) errors.PaseratiError {
 	// Convert ArrayLiteral to ArrayDestructuringDeclaration format
 	declaration := &parser.ArrayDestructuringDeclaration{
 		Token:   arrayTarget.Token,
@@ -76,11 +76,11 @@ func (c *Compiler) compileNestedArrayDeclaration(arrayTarget *parser.ArrayLitera
 	}
 
 	// Use iterator protocol for nested destructuring (handles arrays and iterables)
-	return c.compileArrayDestructuringIteratorPath(declaration, valueReg, line)
+	return c.compileArrayDestructuringIteratorPath(declaration, isVar, valueReg, line)
 }
 
 // compileNestedObjectDeclaration handles nested object pattern declarations
-func (c *Compiler) compileNestedObjectDeclaration(objectTarget *parser.ObjectLiteral, valueReg Register, isConst bool, line int) errors.PaseratiError {
+func (c *Compiler) compileNestedObjectDeclaration(objectTarget *parser.ObjectLiteral, valueReg Register, isConst bool, isVar bool, line int) errors.PaseratiError {
 	// Convert ObjectLiteral to ObjectDestructuringDeclaration format
 	declaration := &parser.ObjectDestructuringDeclaration{
 		Token:   objectTarget.Token,
@@ -146,11 +146,11 @@ func (c *Compiler) compileNestedObjectDeclaration(objectTarget *parser.ObjectLit
 	}
 
 	// Reuse existing compilation logic but with direct value register
-	return c.compileObjectDestructuringDeclarationWithValueReg(declaration, valueReg, line)
+	return c.compileObjectDestructuringDeclarationWithValueReg(declaration, isVar, valueReg, line)
 }
 
 // compileArrayDestructuringDeclarationWithValueReg compiles array destructuring declarations using an existing value register
-func (c *Compiler) compileArrayDestructuringDeclarationWithValueReg(node *parser.ArrayDestructuringDeclaration, valueReg Register, line int) errors.PaseratiError {
+func (c *Compiler) compileArrayDestructuringDeclarationWithValueReg(node *parser.ArrayDestructuringDeclaration, isVar bool, valueReg Register, line int) errors.PaseratiError {
 	// ECMAScript compliance: Throw TypeError if destructuring null or undefined
 	// This is required at runtime even if type checker catches it at compile time
 	c.emitDestructuringNullCheck(valueReg, line)
@@ -264,7 +264,7 @@ func (c *Compiler) compileArrayDestructuringDeclarationWithValueReg(node *parser
 				c.patchJump(jumpPastDefault)
 
 				// Now define the variable with the computed value
-				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, resultReg, line)
+				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, isVar, resultReg, line)
 				if err != nil {
 					c.regAlloc.Free(resultReg)
 					c.regAlloc.Free(extractedReg)
@@ -274,7 +274,7 @@ func (c *Compiler) compileArrayDestructuringDeclarationWithValueReg(node *parser
 				c.regAlloc.Free(resultReg)
 			} else {
 				// Define variable with extracted value
-				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, extractedReg, line)
+				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, isVar, extractedReg, line)
 				if err != nil {
 					c.regAlloc.Free(extractedReg)
 					return err
@@ -284,14 +284,14 @@ func (c *Compiler) compileArrayDestructuringDeclarationWithValueReg(node *parser
 			// Nested pattern target (ArrayLiteral or ObjectLiteral)
 			if element.Default != nil {
 				// Handle conditional assignment for nested patterns
-				err := c.compileConditionalAssignmentForDeclaration(element.Target, extractedReg, element.Default, node.IsConst, line)
+				err := c.compileConditionalAssignmentForDeclaration(element.Target, extractedReg, element.Default, node.IsConst, isVar, line)
 				if err != nil {
 					c.regAlloc.Free(extractedReg)
 					return err
 				}
 			} else {
 				// Direct nested pattern assignment using recursive compilation
-				err := c.compileNestedPatternDeclaration(element.Target, extractedReg, node.IsConst, line)
+				err := c.compileNestedPatternDeclaration(element.Target, extractedReg, node.IsConst, isVar, line)
 				if err != nil {
 					c.regAlloc.Free(extractedReg)
 					return err
@@ -307,7 +307,7 @@ func (c *Compiler) compileArrayDestructuringDeclarationWithValueReg(node *parser
 }
 
 // compileObjectDestructuringDeclarationWithValueReg compiles object destructuring declarations using an existing value register
-func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parser.ObjectDestructuringDeclaration, valueReg Register, line int) errors.PaseratiError {
+func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parser.ObjectDestructuringDeclaration, isVar bool, valueReg Register, line int) errors.PaseratiError {
 	// ECMAScript compliance: Throw TypeError if destructuring null or undefined
 	// This is required at runtime even if type checker catches it at compile time
 	c.emitDestructuringNullCheck(valueReg, line)
@@ -384,7 +384,7 @@ func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parse
 			// Simple identifier target. Compute default first so const
 			// bindings (pre-declared via DefineConstTDZ) are initialized
 			// rather than assigned after the fact.
-			err := c.defineIdentWithOptionalDefault(ident.Value, node.IsConst, extractedReg, prop.Default, line)
+			err := c.defineIdentWithOptionalDefault(ident.Value, node.IsConst, isVar, extractedReg, prop.Default, line)
 			if err != nil {
 				c.regAlloc.Free(extractedReg)
 				return err
@@ -393,14 +393,14 @@ func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parse
 			// Nested pattern target (ArrayLiteral or ObjectLiteral)
 			if prop.Default != nil {
 				// Handle conditional assignment for nested patterns
-				err := c.compileConditionalAssignmentForDeclaration(prop.Target, extractedReg, prop.Default, node.IsConst, line)
+				err := c.compileConditionalAssignmentForDeclaration(prop.Target, extractedReg, prop.Default, node.IsConst, isVar, line)
 				if err != nil {
 					c.regAlloc.Free(extractedReg)
 					return err
 				}
 			} else {
 				// Direct nested pattern assignment using recursive compilation
-				err := c.compileNestedPatternDeclaration(prop.Target, extractedReg, node.IsConst, line)
+				err := c.compileNestedPatternDeclaration(prop.Target, extractedReg, node.IsConst, isVar, line)
 				if err != nil {
 					c.regAlloc.Free(extractedReg)
 					return err
@@ -416,7 +416,7 @@ func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parse
 	if node.RestProperty != nil {
 		if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
 			// Create rest object with remaining properties
-			err := c.compileObjectRestDeclaration(valueReg, node.Properties, ident.Value, node.IsConst, line)
+			err := c.compileObjectRestDeclaration(valueReg, node.Properties, ident.Value, node.IsConst, isVar, line)
 			if err != nil {
 				return err
 			}
@@ -427,7 +427,7 @@ func (c *Compiler) compileObjectDestructuringDeclarationWithValueReg(node *parse
 }
 
 // compileConditionalAssignmentForDeclaration handles conditional assignment for nested patterns in declarations
-func (c *Compiler) compileConditionalAssignmentForDeclaration(target parser.Expression, valueReg Register, defaultExpr parser.Expression, isConst bool, line int) errors.PaseratiError {
+func (c *Compiler) compileConditionalAssignmentForDeclaration(target parser.Expression, valueReg Register, defaultExpr parser.Expression, isConst bool, isVar bool, line int) errors.PaseratiError {
 	// This implements: target = (valueReg !== undefined) ? valueReg : defaultExpr
 	// IMPORTANT: We must only declare variables ONCE, not in both branches!
 	// Solution: Select the value at runtime, store in a single register, then declare once
@@ -459,7 +459,7 @@ func (c *Compiler) compileConditionalAssignmentForDeclaration(target parser.Expr
 
 	// 5. Now resultReg contains the correct value (either from valueReg or default)
 	// Declare variables once using resultReg
-	err = c.compileNestedPatternDeclaration(target, resultReg, isConst, line)
+	err = c.compileNestedPatternDeclaration(target, resultReg, isConst, isVar, line)
 	if err != nil {
 		return err
 	}
@@ -468,7 +468,7 @@ func (c *Compiler) compileConditionalAssignmentForDeclaration(target parser.Expr
 }
 
 // compileNestedArrayParameterPattern handles nested array parameter patterns from function parameters
-func (c *Compiler) compileNestedArrayParameterPattern(pattern *parser.ArrayParameterPattern, valueReg Register, isConst bool, line int) errors.PaseratiError {
+func (c *Compiler) compileNestedArrayParameterPattern(pattern *parser.ArrayParameterPattern, valueReg Register, isConst bool, isVar bool, line int) errors.PaseratiError {
 	// ArrayParameterPattern already has Elements as []*DestructuringElement
 	// Create a declaration and compile it
 	declaration := &parser.ArrayDestructuringDeclaration{
@@ -478,11 +478,11 @@ func (c *Compiler) compileNestedArrayParameterPattern(pattern *parser.ArrayParam
 		Value:    nil, // We already have the value in valueReg
 	}
 
-	return c.compileArrayDestructuringIteratorPath(declaration, valueReg, line)
+	return c.compileArrayDestructuringIteratorPath(declaration, isVar, valueReg, line)
 }
 
 // compileNestedObjectParameterPattern handles nested object parameter patterns from function parameters
-func (c *Compiler) compileNestedObjectParameterPattern(pattern *parser.ObjectParameterPattern, valueReg Register, isConst bool, line int) errors.PaseratiError {
+func (c *Compiler) compileNestedObjectParameterPattern(pattern *parser.ObjectParameterPattern, valueReg Register, isConst bool, isVar bool, line int) errors.PaseratiError {
 	// ObjectParameterPattern already has Properties as []*DestructuringProperty
 	// Create a declaration and compile it
 	declaration := &parser.ObjectDestructuringDeclaration{
@@ -493,5 +493,5 @@ func (c *Compiler) compileNestedObjectParameterPattern(pattern *parser.ObjectPar
 		Value:        nil, // We already have the value in valueReg
 	}
 
-	return c.compileObjectDestructuringDeclarationWithValueReg(declaration, valueReg, line)
+	return c.compileObjectDestructuringDeclarationWithValueReg(declaration, isVar, valueReg, line)
 }

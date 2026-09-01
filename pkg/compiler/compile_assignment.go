@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
@@ -2276,19 +2277,26 @@ func (c *Compiler) compileNamedDefaultExpr(defaultExpr parser.Expression, destRe
 	return err
 }
 
+// isVarDeclToken reports whether a destructuring declaration's keyword token is
+// `var`. var is function-scoped; let/const are block-scoped. See
+// defineDestructuredVariableWithValue.
+func isVarDeclToken(tok *lexer.Token) bool {
+	return tok != nil && tok.Type == lexer.VAR
+}
+
 // defineIdentWithOptionalDefault initializes a destructuring declaration binding.
 // For const, the value must be computed first and then defined — assigning
 // after DefineConstTDZ throws "Assignment to constant variable".
-func (c *Compiler) defineIdentWithOptionalDefault(name string, isConst bool, valueReg Register, defaultExpr parser.Expression, line int) errors.PaseratiError {
+func (c *Compiler) defineIdentWithOptionalDefault(name string, isConst bool, isVar bool, valueReg Register, defaultExpr parser.Expression, line int) errors.PaseratiError {
 	if defaultExpr == nil {
-		return c.defineDestructuredVariableWithValue(name, isConst, valueReg, line)
+		return c.defineDestructuredVariableWithValue(name, isConst, isVar, valueReg, line)
 	}
 	resultReg := c.regAlloc.Alloc()
 	if err := c.emitSelectValueOrDefault(valueReg, resultReg, defaultExpr, name, line); err != nil {
 		c.regAlloc.Free(resultReg)
 		return err
 	}
-	err := c.defineDestructuredVariableWithValue(name, isConst, resultReg, line)
+	err := c.defineDestructuredVariableWithValue(name, isConst, isVar, resultReg, line)
 	c.regAlloc.Free(resultReg)
 	return err
 }
@@ -2469,7 +2477,7 @@ func (c *Compiler) compileObjectRestProperty(objReg Register, extractedProps []*
 }
 
 // compileObjectRestDeclaration compiles rest property declaration for object destructuring
-func (c *Compiler) compileObjectRestDeclaration(objReg Register, extractedProps []*parser.DestructuringProperty, varName string, isConst bool, line int) errors.PaseratiError {
+func (c *Compiler) compileObjectRestDeclaration(objReg Register, extractedProps []*parser.DestructuringProperty, varName string, isConst bool, isVar bool, line int) errors.PaseratiError {
 	// Create array of property names to exclude
 	excludeArrayReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(excludeArrayReg)
@@ -2541,7 +2549,7 @@ func (c *Compiler) compileObjectRestDeclaration(objReg Register, extractedProps 
 	c.emitByte(byte(excludeArrayReg)) // exclude array register
 
 	// Define the rest variable with the rest object
-	return c.defineDestructuredVariableWithValue(varName, isConst, restObjReg, line)
+	return c.defineDestructuredVariableWithValue(varName, isConst, isVar, restObjReg, line)
 }
 
 // compileArrayDestructuringDeclaration compiles let/const [a, b] = expr declarations
@@ -2561,7 +2569,7 @@ func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestru
 
 			if ident, ok := element.Target.(*parser.Identifier); ok {
 				// Define variable with undefined value
-				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Undefined, line)
+				err := c.defineDestructuredVariable(ident.Value, node.IsConst, isVarDeclToken(node.Token), types.Undefined, line)
 				if err != nil {
 					return BadRegister, err
 				}
@@ -2582,7 +2590,7 @@ func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestru
 	// 2. Use iterator protocol for all destructuring
 	// This works for arrays (which have Symbol.iterator built-in) AND custom iterables
 	// Arrays' Symbol.iterator provides optimal performance by returning numeric indices
-	err = c.compileArrayDestructuringIteratorPath(node, valueReg, line)
+	err = c.compileArrayDestructuringIteratorPath(node, isVarDeclToken(node.Token), valueReg, line)
 	if err != nil {
 		return BadRegister, err
 	}
@@ -2591,7 +2599,7 @@ func (c *Compiler) compileArrayDestructuringDeclaration(node *parser.ArrayDestru
 }
 
 // compileArrayDestructuringFastPath compiles array destructuring using numeric indexing (fast path)
-func (c *Compiler) compileArrayDestructuringFastPath(node *parser.ArrayDestructuringDeclaration, arrayReg Register, line int) errors.PaseratiError {
+func (c *Compiler) compileArrayDestructuringFastPath(node *parser.ArrayDestructuringDeclaration, isVar bool, arrayReg Register, line int) errors.PaseratiError {
 	// For each element, compile: define target = array[index]
 	for i, element := range node.Elements {
 		if element.Target == nil {
@@ -2700,7 +2708,7 @@ func (c *Compiler) compileArrayDestructuringFastPath(node *parser.ArrayDestructu
 				c.patchJump(jumpPastDefault)
 
 				// Now define the variable with the computed value
-				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, resultReg, line)
+				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, isVar, resultReg, line)
 				if err != nil {
 					c.regAlloc.Free(resultReg)
 					c.regAlloc.Free(valueReg)
@@ -2710,7 +2718,7 @@ func (c *Compiler) compileArrayDestructuringFastPath(node *parser.ArrayDestructu
 				c.regAlloc.Free(resultReg)
 			} else {
 				// Define variable with extracted value
-				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
+				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, isVar, valueReg, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return err
@@ -2720,14 +2728,14 @@ func (c *Compiler) compileArrayDestructuringFastPath(node *parser.ArrayDestructu
 			// Nested pattern target (ArrayLiteral or ObjectLiteral)
 			if element.Default != nil {
 				// Handle conditional assignment for nested patterns
-				err := c.compileConditionalAssignmentForDeclaration(element.Target, valueReg, element.Default, node.IsConst, line)
+				err := c.compileConditionalAssignmentForDeclaration(element.Target, valueReg, element.Default, node.IsConst, isVar, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return err
 				}
 			} else {
 				// Direct nested pattern assignment using recursive compilation
-				err := c.compileNestedPatternDeclaration(element.Target, valueReg, node.IsConst, line)
+				err := c.compileNestedPatternDeclaration(element.Target, valueReg, node.IsConst, isVar, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return err
@@ -2743,7 +2751,7 @@ func (c *Compiler) compileArrayDestructuringFastPath(node *parser.ArrayDestructu
 }
 
 // compileArrayDestructuringIteratorPath compiles array destructuring using iterator protocol
-func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestructuringDeclaration, iterableReg Register, line int) errors.PaseratiError {
+func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestructuringDeclaration, isVar bool, iterableReg Register, line int) errors.PaseratiError {
 	// fmt.Printf("// [COMPILE-ITER] Starting iterator path compilation, iterableReg=R%d\n", iterableReg)
 
 	// Set up the destructuring source. When the pattern has no rest element and
@@ -2779,14 +2787,14 @@ func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestr
 
 			// Bind rest array to target
 			if ident, ok := element.Target.(*parser.Identifier); ok {
-				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, restArrayReg, line)
+				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, isVar, restArrayReg, line)
 				c.regAlloc.Free(restArrayReg)
 				if err != nil {
 					return err
 				}
 			} else {
 				// Nested pattern: [...[x, y]] - destructure the rest array into the pattern
-				err := c.compileNestedPatternDeclaration(element.Target, restArrayReg, node.IsConst, line)
+				err := c.compileNestedPatternDeclaration(element.Target, restArrayReg, node.IsConst, isVar, line)
 				c.regAlloc.Free(restArrayReg)
 				if err != nil {
 					return err
@@ -2881,7 +2889,7 @@ func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestr
 				c.patchJump(jumpPastDefault)
 
 				// 5. Now resultReg contains the correct value - define the variable with it
-				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, resultReg, line)
+				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, isVar, resultReg, line)
 				c.regAlloc.Free(resultReg)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
@@ -2889,7 +2897,7 @@ func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestr
 				}
 			} else {
 				// Define variable with value
-				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, valueReg, line)
+				err := c.defineDestructuredVariableWithValue(ident.Value, node.IsConst, isVar, valueReg, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return err
@@ -2898,13 +2906,13 @@ func (c *Compiler) compileArrayDestructuringIteratorPath(node *parser.ArrayDestr
 		} else {
 			// Nested pattern
 			if element.Default != nil {
-				err := c.compileConditionalAssignmentForDeclaration(element.Target, valueReg, element.Default, node.IsConst, line)
+				err := c.compileConditionalAssignmentForDeclaration(element.Target, valueReg, element.Default, node.IsConst, isVar, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return err
 				}
 			} else {
-				err := c.compileNestedPatternDeclaration(element.Target, valueReg, node.IsConst, line)
+				err := c.compileNestedPatternDeclaration(element.Target, valueReg, node.IsConst, isVar, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return err
@@ -2939,7 +2947,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 
 			if ident, ok := prop.Target.(*parser.Identifier); ok {
 				// Define variable with undefined value
-				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Undefined, line)
+				err := c.defineDestructuredVariable(ident.Value, node.IsConst, isVarDeclToken(node.Token), types.Undefined, line)
 				if err != nil {
 					return BadRegister, err
 				}
@@ -2949,7 +2957,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 		// Handle rest property without initializer
 		if node.RestProperty != nil {
 			if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
-				err := c.defineDestructuredVariable(ident.Value, node.IsConst, types.Undefined, line)
+				err := c.defineDestructuredVariable(ident.Value, node.IsConst, isVarDeclToken(node.Token), types.Undefined, line)
 				if err != nil {
 					return BadRegister, err
 				}
@@ -3222,14 +3230,14 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 				// and then assigning (compileConditionalAssignment) throws
 				// "Assignment to constant variable" inside functions, where
 				// the binding was already pre-declared via DefineConstTDZ.
-				err := c.defineIdentWithOptionalDefault(targetIdent.Value, node.IsConst, valueReg, prop.Default, line)
+				err := c.defineIdentWithOptionalDefault(targetIdent.Value, node.IsConst, isVarDeclToken(node.Token), valueReg, prop.Default, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return BadRegister, err
 				}
 			} else {
 				// Define variable with extracted value
-				err := c.defineDestructuredVariableWithValue(targetIdent.Value, node.IsConst, valueReg, line)
+				err := c.defineDestructuredVariableWithValue(targetIdent.Value, node.IsConst, isVarDeclToken(node.Token), valueReg, line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return BadRegister, err
@@ -3239,14 +3247,14 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 			// Nested pattern target (ArrayLiteral or ObjectLiteral)
 			if prop.Default != nil {
 				// Handle conditional assignment for nested patterns
-				err := c.compileConditionalAssignmentForDeclaration(prop.Target, valueReg, prop.Default, node.IsConst, line)
+				err := c.compileConditionalAssignmentForDeclaration(prop.Target, valueReg, prop.Default, node.IsConst, isVarDeclToken(node.Token), line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return BadRegister, err
 				}
 			} else {
 				// Direct nested pattern assignment using recursive compilation
-				err := c.compileNestedPatternDeclaration(prop.Target, valueReg, node.IsConst, line)
+				err := c.compileNestedPatternDeclaration(prop.Target, valueReg, node.IsConst, isVarDeclToken(node.Token), line)
 				if err != nil {
 					c.regAlloc.Free(valueReg)
 					return BadRegister, err
@@ -3262,7 +3270,7 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	if node.RestProperty != nil {
 		if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
 			// Create rest object with remaining properties
-			err := c.compileObjectRestDeclaration(tempReg, node.Properties, ident.Value, node.IsConst, line)
+			err := c.compileObjectRestDeclaration(tempReg, node.Properties, ident.Value, node.IsConst, isVarDeclToken(node.Token), line)
 			if err != nil {
 				return BadRegister, err
 			}
@@ -3273,11 +3281,11 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 }
 
 // defineDestructuredVariable defines a new variable from destructuring (without value)
-func (c *Compiler) defineDestructuredVariable(name string, isConst bool, valueType types.Type, line int) errors.PaseratiError {
+func (c *Compiler) defineDestructuredVariable(name string, isConst bool, isVar bool, valueType types.Type, line int) errors.PaseratiError {
 	undefReg := c.regAlloc.Alloc()
 	c.emitLoadUndefined(undefReg, line)
 
-	err := c.defineDestructuredVariableWithValue(name, isConst, undefReg, line)
+	err := c.defineDestructuredVariableWithValue(name, isConst, isVar, undefReg, line)
 	if err != nil {
 		c.regAlloc.Free(undefReg)
 		return err
@@ -3291,8 +3299,20 @@ func (c *Compiler) defineDestructuredVariable(name string, isConst bool, valueTy
 	return nil
 }
 
-// defineDestructuredVariableWithValue defines a new variable from destructuring with a specific value
-func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool, valueReg Register, line int) errors.PaseratiError {
+// defineDestructuredVariableWithValue defines a new variable from destructuring with a specific value.
+//
+// isVar distinguishes a `var` pattern from let/const. `var` is function-scoped:
+// its name was already hoisted into this function's scope (or, at top level, to
+// a global) by collectVarDeclarations, and the destructuring must write *through*
+// to that binding. let/const are block-scoped and get a fresh binding here, which
+// is what makes them shadow an outer one.
+//
+// Without the distinction, `function f(){ { var {w} = {w: 2}; } return w; }`
+// defined a second, block-local `w` at the destructuring's temp register,
+// shadowing the hoisted one - so the value landed in the temp and `return w`
+// read the still-undefined hoisted register. The plain-var path writes through
+// correctly, which is why `{ var w = 2; }` worked and `{ var {w} = o; }` did not.
+func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool, isVar bool, valueReg Register, line int) errors.PaseratiError {
 	// Check if we're truly at global scope: no enclosing function AND no enclosed symbol table
 	// For loops with let/const create an enclosed symbol table, so those variables should be local
 	isGlobalScope := c.enclosing == nil && c.currentSymbolTable.Outer == nil
@@ -3301,6 +3321,32 @@ func (c *Compiler) defineDestructuredVariableWithValue(name string, isConst bool
 		globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 		c.emitSetGlobalInit(globalIdx, valueReg, line)
 		c.currentSymbolTable.DefineGlobal(name, globalIdx)
+	} else if isVar {
+		// var: write through to the hoisted binding. findVarInFunctionScope walks
+		// out of enclosing *blocks* but stops at the enclosing compiler, so a var
+		// can never write into an outer function's binding.
+		if sym, funcTable := c.findVarInFunctionScope(name); funcTable != nil {
+			switch {
+			case sym.IsGlobal:
+				// Top-level var inside a block: the hoisted binding is a global.
+				c.emitSetGlobal(sym.GlobalIndex, valueReg, line)
+			case sym.IsSpilled:
+				c.emitStoreSpill(sym.SpillIndex, valueReg, line)
+			case sym.Register != nilRegister:
+				if valueReg != sym.Register {
+					c.emitMove(sym.Register, valueReg, line)
+				}
+			default:
+				// Symbol exists but has no storage yet - claim this register for it.
+				funcTable.Define(name, valueReg)
+				c.regAlloc.Pin(valueReg)
+			}
+		} else {
+			// No hoisted binding found (a var reached without collectVarDeclarations
+			// having seen it). Define it in this function's scope, not the block's.
+			c.currentSymbolTable.Define(name, valueReg)
+			c.regAlloc.Pin(valueReg)
+		}
 	} else {
 		// IMPORTANT: Check ONLY the CURRENT scope for existing bindings.
 		// This is critical for proper shadowing (e.g., catch parameters should shadow outer vars).

@@ -1444,12 +1444,12 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 		// The destructuring will extract values from paramReg and bind them to local variables
 		switch pattern := param.Pattern.(type) {
 		case *parser.ArrayParameterPattern:
-			err := functionCompiler.compileNestedArrayParameterPattern(pattern, paramReg, false, param.Token.Line)
+			err := functionCompiler.compileNestedArrayParameterPattern(pattern, paramReg, false, false, param.Token.Line)
 			if err != nil {
 				functionCompiler.addError(param, fmt.Sprintf("error compiling parameter destructuring: %v", err))
 			}
 		case *parser.ObjectParameterPattern:
-			err := functionCompiler.compileNestedObjectParameterPattern(pattern, paramReg, false, param.Token.Line)
+			err := functionCompiler.compileNestedObjectParameterPattern(pattern, paramReg, false, false, param.Token.Line)
 			if err != nil {
 				functionCompiler.addError(param, fmt.Sprintf("error compiling parameter destructuring: %v", err))
 			}
@@ -1513,13 +1513,13 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 		switch pattern := restParamPattern.(type) {
 		case *parser.ArrayParameterPattern:
 			// Convert to destructuring and compile it
-			err := functionCompiler.compileNestedArrayParameterPattern(pattern, restParamReg, false, node.Token.Line)
+			err := functionCompiler.compileNestedArrayParameterPattern(pattern, restParamReg, false, false, node.Token.Line)
 			if err != nil {
 				functionCompiler.addError(node.RestParameter, fmt.Sprintf("error compiling rest parameter destructuring: %v", err))
 			}
 		case *parser.ObjectParameterPattern:
 			// Convert to destructuring and compile it
-			err := functionCompiler.compileNestedObjectParameterPattern(pattern, restParamReg, false, node.Token.Line)
+			err := functionCompiler.compileNestedObjectParameterPattern(pattern, restParamReg, false, false, node.Token.Line)
 			if err != nil {
 				functionCompiler.addError(node.RestParameter, fmt.Sprintf("error compiling rest parameter destructuring: %v", err))
 			}

@@ -1,4 +1,4 @@
-// expect: 1|2|3|4|5|6|7|8|9|10|11|12|13
+// expect: 1|2|3|4|5|6|99|99|99|99|99|99|13
 // `var` is function-scoped, so its bindings belong in the nearest function (or
 // global) scope no matter how many blocks deep the declaration sits. The checker
 // has no var-hoisting pre-pass - it defines a binding when it visits the
@@ -13,15 +13,11 @@
 // fine. Same for a pattern in a for-of or for-init head, in a switch case, a try
 // block, a while body, or a labeled block.
 //
-// WHAT THIS TEST ASSERTS: that the *name resolves*. It deliberately does not
-// assert the destructured value for the cases below that go through an
-// enclosing block, because a separate open codegen bug makes `var` with a
-// pattern inside a block write a block-local binding instead of the hoisted one,
-// so those read back as undefined at function scope - identically with
-// --no-typecheck, i.e. nothing to do with the checker. Those cases just
-// reference the name (`void w`), which is what fails to compile when the name
-// does not resolve. The for-of and for-init heads are the shapes whose runtime
-// is already correct, so those assert real values.
+// Every case below asserts the destructured *value*, which also proves the name
+// resolves. The block-family cases originally asserted only resolution: a
+// companion codegen bug made a `var` pattern inside a block write a block-local
+// binding instead of the hoisted one, so they read back as undefined. Both
+// halves are fixed - see the commit that repaired the write-through.
 
 let out: string[] = [];
 
@@ -58,9 +54,17 @@ out.push(String(forInitHeadMixed()));
 // --- a plain var in a for-of/for-in head nested one block deeper. The head
 // hoisted its name to the *immediately* enclosing scope, which is the block, not
 // the function - so this reported TS2304 for a plain binding too.
+//
+// These two assert resolution only. A `var` declared in a `for` *head* inside a
+// nested block still writes a block-local rather than the hoisted binding - a
+// separate open bug in the loop-head path, broken identically for a plain
+// binding (`{ for (var q of [5]) {} } q` reads undefined) and worse for a
+// pattern (`{ for (var {w} of xs) {} } w` throws ReferenceError). Unrelated to
+// the declaration path this test covers; asserting the value here would bake in
+// the wrong number.
 function forOfInBlock(): string {
   {
-    for (var q of [1]) {
+    for (var q of [5]) {
     }
   }
   void q;
@@ -70,7 +74,7 @@ out.push(forOfInBlock());
 
 function forInInBlock(): string {
   {
-    for (var k in { a: 1 }) {
+    for (var k in { six: 1 }) {
     }
   }
   void k;
@@ -79,64 +83,57 @@ function forInInBlock(): string {
 out.push(forInInBlock());
 
 // --- the shapes that reach the function scope through an enclosing statement.
-// Reading `w` after the enclosing statement IS the assertion: before the fix
-// each of these was TS2304, a compile error that failed the whole file. The
-// value is deliberately not asserted - see the header note - so `void w` records
-// the reference without depending on what it holds.
-function inBlock(): string {
+// Each was TS2304 (a compile error failing the whole file) before the scope fix,
+// and read back undefined before the write-through fix.
+function inBlock(): number {
   {
     var { w } = { w: 99 };
   }
-  void w;
-  return "7";
+  return w;
 }
-out.push(inBlock());
+out.push(String(inBlock()));
 
-function inIf(): string {
+function inIf(): number {
   if (true) {
     var { w } = { w: 99 };
   }
-  void w;
-  return "8";
+  return w;
 }
-out.push(inIf());
+out.push(String(inIf()));
 
-function inSwitch(): string {
+function inSwitch(): number {
   switch (1) {
     case 1:
       var { w } = { w: 99 };
   }
-  void w;
-  return "9";
+  return w;
 }
-out.push(inSwitch());
+out.push(String(inSwitch()));
 
-function inTry(): string {
+function inTry(): number {
   try {
     var { w } = { w: 99 };
   } catch (e) {}
-  void w;
-  return "10";
+  return w;
 }
-out.push(inTry());
+out.push(String(inTry()));
 
-function inWhile(): string {
-  while (false) {
+function inWhile(): number {
+  while (true) {
     var { w } = { w: 99 };
+    break;
   }
-  void w;
-  return "11";
+  return w;
 }
-out.push(inWhile());
+out.push(String(inWhile()));
 
-function inLabeled(): string {
+function inLabeled(): number {
   lbl: {
     var { w } = { w: 99 };
   }
-  void w;
-  return "12";
+  return w;
 }
-out.push(inLabeled());
+out.push(String(inLabeled()));
 
 // --- the same at script top level, where the "function scope" is the global
 // env. The for-of head's runtime is correct here, so assert the value.

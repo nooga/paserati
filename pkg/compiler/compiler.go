@@ -1614,13 +1614,43 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 						}
 					}
 				case *parser.ObjectDestructuringDeclaration:
-					// Pre-define all variables from object destructuring pattern
-					// This is needed so closures can capture them before the destructuring is executed
-					// Use TDZ for let/const, regular Define for var
+					// Pre-define all variables from the pattern so closures can
+					// capture them before the destructuring executes.
+					//
+					// A `var` pattern is function-scoped and its names were already
+					// hoisted into the function (or module) scope by
+					// collectVarDeclarations. Pre-defining them again HERE, in the
+					// block's own table, created a second binding at a fresh
+					// register that shadowed the hoisted one - so the destructuring
+					// wrote to the shadow and a read after the block saw the
+					// still-undefined hoisted register. Route var to the function
+					// table, exactly as the VarStatement case below does.
 					useTDZ := s.Token.Type == lexer.LET || s.Token.Type == lexer.CONST
 					isConst := s.Token.Type == lexer.CONST
+					isVar := s.Token.Type == lexer.VAR
 					varNames := extractDestructuringVarNames(s)
 					for _, name := range varNames {
+						if isVar {
+							funcTable := c.varHoistTable()
+							if sym, _, found := funcTable.Resolve(name); found && (sym.Register != nilRegister || sym.IsSpilled || sym.IsGlobal) {
+								debugPrintf("// [BlockPredefine] var destructured '%s' already hoisted in function scope, skipping\n", name)
+								continue
+							}
+							reg, ok := c.regAlloc.TryAllocForVariable()
+							if ok {
+								funcTable.Define(name, reg)
+								c.emitLoadUndefined(reg, s.Token.Line)
+								debugPrintf("// [BlockPredefine] Pre-defined var destructured '%s' in register R%d in function scope\n", name, reg)
+							} else {
+								spillIdx := c.AllocSpillSlot()
+								funcTable.DefineSpilled(name, spillIdx)
+								spillTempUsed = true
+								c.emitLoadUndefined(spillTempReg, s.Token.Line)
+								c.emitStoreSpill(spillIdx, spillTempReg, s.Token.Line)
+								debugPrintf("// [BlockPredefine] Pre-defined var destructured '%s' in SPILL SLOT %d in function scope\n", name, spillIdx)
+							}
+							continue
+						}
 						if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; !alreadyInCurrentScope {
 							reg, ok := c.regAlloc.TryAllocForVariable()
 							if ok {
@@ -1659,12 +1689,43 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 						}
 					}
 				case *parser.ArrayDestructuringDeclaration:
-					// Pre-define all variables from array destructuring pattern
-					// Use TDZ for let/const, regular Define for var
+					// Pre-define all variables from the pattern so closures can
+					// capture them before the destructuring executes.
+					//
+					// A `var` pattern is function-scoped and its names were already
+					// hoisted into the function (or module) scope by
+					// collectVarDeclarations. Pre-defining them again HERE, in the
+					// block's own table, created a second binding at a fresh
+					// register that shadowed the hoisted one - so the destructuring
+					// wrote to the shadow and a read after the block saw the
+					// still-undefined hoisted register. Route var to the function
+					// table, exactly as the VarStatement case below does.
 					useTDZ := s.Token.Type == lexer.LET || s.Token.Type == lexer.CONST
 					isConst := s.Token.Type == lexer.CONST
+					isVar := s.Token.Type == lexer.VAR
 					varNames := extractArrayDestructuringVarNames(s)
 					for _, name := range varNames {
+						if isVar {
+							funcTable := c.varHoistTable()
+							if sym, _, found := funcTable.Resolve(name); found && (sym.Register != nilRegister || sym.IsSpilled || sym.IsGlobal) {
+								debugPrintf("// [BlockPredefine] var array destructured '%s' already hoisted in function scope, skipping\n", name)
+								continue
+							}
+							reg, ok := c.regAlloc.TryAllocForVariable()
+							if ok {
+								funcTable.Define(name, reg)
+								c.emitLoadUndefined(reg, s.Token.Line)
+								debugPrintf("// [BlockPredefine] Pre-defined var array destructured '%s' in register R%d in function scope\n", name, reg)
+							} else {
+								spillIdx := c.AllocSpillSlot()
+								funcTable.DefineSpilled(name, spillIdx)
+								spillTempUsed = true
+								c.emitLoadUndefined(spillTempReg, s.Token.Line)
+								c.emitStoreSpill(spillIdx, spillTempReg, s.Token.Line)
+								debugPrintf("// [BlockPredefine] Pre-defined var array destructured '%s' in SPILL SLOT %d in function scope\n", name, spillIdx)
+							}
+							continue
+						}
 						if _, alreadyInCurrentScope := c.currentSymbolTable.store[name]; !alreadyInCurrentScope {
 							reg, ok := c.regAlloc.TryAllocForVariable()
 							if ok {
@@ -1708,15 +1769,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 					// walk up to find the function-level symbol table
 					for _, declarator := range s.Declarations {
 						if declarator.Name != nil {
-							// Find the function-level symbol table (the one with Outer == nil OR whose Outer is from enclosing compiler)
-							funcTable := c.currentSymbolTable
-							for funcTable.Outer != nil {
-								// Stop if the outer scope belongs to an enclosing compiler (for nested functions)
-								if c.enclosing != nil && c.isDefinedInEnclosingCompiler(funcTable.Outer) {
-									break
-								}
-								funcTable = funcTable.Outer
-							}
+							funcTable := c.varHoistTable()
 
 							// Check if var already defined in function scope
 							if sym, _, found := funcTable.Resolve(declarator.Name.Value); !found || sym.Register == nilRegister {
@@ -3154,6 +3207,21 @@ func (c *Compiler) ShouldUseHeapForEvalBinding(name string) bool {
 // Unlike Resolve(), this stops at function boundaries (doesn't cross into enclosing compilers).
 // This is used to check if a var was pre-defined during block hoisting in the SAME function.
 // Returns the symbol and the function-level table if found, otherwise returns zero Symbol and nil.
+// varHoistTable returns the symbol table a `var` binding belongs in: this
+// compiler's function-level table, found by walking out of any enclosing block
+// scopes but stopping at the enclosing compiler (a var never lands in an outer
+// function's scope).
+func (c *Compiler) varHoistTable() *SymbolTable {
+	funcTable := c.currentSymbolTable
+	for funcTable.Outer != nil {
+		if c.enclosing != nil && c.isDefinedInEnclosingCompiler(funcTable.Outer) {
+			break
+		}
+		funcTable = funcTable.Outer
+	}
+	return funcTable
+}
+
 func (c *Compiler) findVarInFunctionScope(name string) (Symbol, *SymbolTable) {
 	// Walk up the scope chain within this compiler's function
 	funcTable := c.currentSymbolTable
