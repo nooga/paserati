@@ -1,4 +1,4 @@
-// expect: 1|2|3|4|5|6|99|99|99|99|99|99|13
+// expect: 1|2|3|4|5|six|51|52,53|3,3,3|1,2,3|99|99|99|99|99|99|13
 // `var` is function-scoped, so its bindings belong in the nearest function (or
 // global) scope no matter how many blocks deep the declaration sits. The checker
 // has no var-hoisting pre-pass - it defines a binding when it visits the
@@ -13,11 +13,11 @@
 // fine. Same for a pattern in a for-of or for-init head, in a switch case, a try
 // block, a while body, or a labeled block.
 //
-// Every case below asserts the destructured *value*, which also proves the name
-// resolves. The block-family cases originally asserted only resolution: a
-// companion codegen bug made a `var` pattern inside a block write a block-local
-// binding instead of the hoisted one, so they read back as undefined. Both
-// halves are fixed - see the commit that repaired the write-through.
+// Every case below asserts the *value*, which also proves the name resolves.
+// This test grew in three passes, each one converting deferred assertions into
+// real ones as the matching half landed: the checker scope fix, the declaration
+// write-through fix, and the loop-head write-through fix. Nothing is deferred
+// now.
 
 let out: string[] = [];
 
@@ -51,36 +51,74 @@ function forInitHeadMixed(): number {
 }
 out.push(String(forInitHeadMixed()));
 
-// --- a plain var in a for-of/for-in head nested one block deeper. The head
-// hoisted its name to the *immediately* enclosing scope, which is the block, not
-// the function - so this reported TS2304 for a plain binding too.
-//
-// These two assert resolution only. A `var` declared in a `for` *head* inside a
-// nested block still writes a block-local rather than the hoisted binding - a
-// separate open bug in the loop-head path, broken identically for a plain
-// binding (`{ for (var q of [5]) {} } q` reads undefined) and worse for a
-// pattern (`{ for (var {w} of xs) {} } w` throws ReferenceError). Unrelated to
-// the declaration path this test covers; asserting the value here would bake in
-// the wrong number.
-function forOfInBlock(): string {
+// --- a var declared in a `for` HEAD nested one block deeper. The head
+// pre-declared its name in the *immediately* enclosing scope - the block, not
+// the function - so it reported TS2304 before the scope fix, and then wrote to
+// that shadow rather than the hoisted binding: a plain binding read back
+// undefined and a pattern threw ReferenceError, because the loop scope holding
+// the shadow was popped before the read.
+function forOfInBlock(): number {
   {
     for (var q of [5]) {
     }
   }
-  void q;
-  return "5";
+  return q;
 }
-out.push(forOfInBlock());
+out.push(String(forOfInBlock()));
 
 function forInInBlock(): string {
   {
     for (var k in { six: 1 }) {
     }
   }
-  void k;
-  return "6";
+  return k;
 }
 out.push(forInInBlock());
+
+function forInitInBlock(): number {
+  {
+    for (var fi = 51; false; ) {
+    }
+  }
+  return fi;
+}
+out.push(String(forInitInBlock()));
+
+// A pattern in a for-of head inside a block threw ReferenceError: its names were
+// never hoisted at all - collectVarDeclarations only recognised a plain
+// VarStatement in a loop head, not a destructuring declaration.
+function forOfPatternInBlock(): string {
+  {
+    for (var { w } of [{ w: 52 }]) {
+    }
+  }
+  {
+    for (var [z] of [[53]]) {
+    }
+  }
+  return [w, z].join(",");
+}
+out.push(forOfPatternInBlock());
+
+// var in a loop head is ONE binding, reassigned each iteration, so closures over
+// it all see the last value - unlike a let head, which is per-iteration.
+function varHeadIsOneBinding(): string {
+  const fs: (() => number)[] = [];
+  for (var vh of [1, 2, 3]) {
+    fs.push(() => vh);
+  }
+  return fs.map((g) => g()).join(",");
+}
+out.push(varHeadIsOneBinding());
+
+function letHeadIsPerIteration(): string {
+  const fs: (() => number)[] = [];
+  for (let lh of [1, 2, 3]) {
+    fs.push(() => lh);
+  }
+  return fs.map((g) => g()).join(",");
+}
+out.push(letHeadIsPerIteration());
 
 // --- the shapes that reach the function scope through an enclosing statement.
 // Each was TS2304 (a compile error failing the whole file) before the scope fix,
