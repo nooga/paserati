@@ -1374,7 +1374,16 @@ func scriptFilename(options RunOptions) string {
 // Module mode is the default; set Script to run as a Script (see RunScript).
 func (p *Paserati) RunCode(sourceCode string, options RunOptions) (vm.Value, []errors.PaseratiError) {
 	sourceFile := source.NewEvalSource(sourceCode)
-	if options.Script {
+	// Name the source after the file it came from whenever the caller told us
+	// one, in module mode as well as Script mode. Errors raised while running
+	// it now carry this SourceFile (#148), so leaving it as "<eval>" would
+	// label a file the user ran by name with a placeholder. Callers that
+	// genuinely have no file (the REPL, -e) set neither field and keep
+	// "<eval>"; ModuleName alone is not enough, since it is often a synthetic
+	// specifier rather than a path.
+	if filename := options.Filename; filename != "" {
+		sourceFile = source.NewSourceFile(filepath.Base(filename), filename, sourceCode)
+	} else if options.Script {
 		filename := scriptFilename(options)
 		sourceFile = source.NewSourceFile(filepath.Base(filename), filename, sourceCode)
 	}

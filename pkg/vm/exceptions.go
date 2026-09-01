@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/source"
 )
 
 // --- Exception State ---
@@ -94,10 +95,17 @@ func (vm *VM) throwException(value Value) {
 		if vm.frameCount > 0 {
 			vm.lastThrowLine, vm.lastThrowFuncName = vm.getFrameLineInfo(&vm.frames[vm.frameCount-1])
 			vm.lastThrowColumn = 1 // Column tracking not implemented yet
+			// Capture the file too, not just the line. lastThrowLine is a line
+			// in the *throwing* frame's own source, which for a throw inside an
+			// imported module is not the entry script - reporting the one
+			// without the other made DisplayErrors quote that line number out
+			// of the wrong file (#148).
+			vm.lastThrowSource = frameSource(&vm.frames[vm.frameCount-1])
 		} else {
 			vm.lastThrowLine = 1
 			vm.lastThrowColumn = 1
 			vm.lastThrowFuncName = "<script>"
+			vm.lastThrowSource = nil
 		}
 	}
 	// If already unwinding, keep the flag and location (we're re-throwing after native propagation)
@@ -365,6 +373,15 @@ func (vm *VM) handleFinallyBlock(handler *ExceptionHandler) {
 	// check for pending actions and execute them appropriately.
 }
 
+// frameSource returns the source file the frame's bytecode was compiled from,
+// or nil when the chunk has none (hand-assembled chunks, host-built functions).
+func frameSource(frame *CallFrame) *source.SourceFile {
+	if frame == nil || frame.closure == nil || frame.closure.Fn == nil || frame.closure.Fn.Chunk == nil {
+		return nil
+	}
+	return frame.closure.Fn.Chunk.Source
+}
+
 // getFrameLineInfo extracts the line number from a frame at the current instruction position
 // Returns (line, functionName) where line is 1 if no info available
 func (vm *VM) getFrameLineInfo(frame *CallFrame) (int, string) {
@@ -478,11 +495,15 @@ func (vm *VM) handleUncaughtException() {
 	}
 
 	// Create runtime error with actual line and function information
+	fileName := "<script>"
+	if vm.lastThrowSource != nil {
+		fileName = vm.lastThrowSource.DisplayPath()
+	}
 	runtimeErr := &errors.RuntimeError{
-		Position:     errors.Position{Line: line, Column: column, StartPos: 0, EndPos: 0},
+		Position:     errors.Position{Line: line, Column: column, StartPos: 0, EndPos: 0, Source: vm.lastThrowSource},
 		Msg:          errorMsg,
 		FunctionName: funcName,
-		FileName:     "<script>", // TODO: Add actual filename tracking
+		FileName:     fileName,
 	}
 	vm.errors = append(vm.errors, runtimeErr)
 

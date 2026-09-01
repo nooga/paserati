@@ -17,6 +17,7 @@ import (
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/runtime"
+	"github.com/nooga/paserati/pkg/source"
 )
 
 const RegFileSize = 256 // Max registers per function call frame
@@ -320,11 +321,12 @@ type VM struct {
 	currentNewTarget  Value // newTarget for Reflect.construct cross-realm support
 
 	// Exception/call boundary diagnostics
-	lastThrownException       Value  // remembers the last thrown exception value
-	escapedDirectCallBoundary bool   // true if unwinding skipped a direct-call frame to reach outer handler
-	lastThrowLine             int    // line number where exception was thrown
-	lastThrowColumn           int    // column number where exception was thrown
-	lastThrowFuncName         string // function name where exception was thrown
+	lastThrownException       Value              // remembers the last thrown exception value
+	escapedDirectCallBoundary bool               // true if unwinding skipped a direct-call frame to reach outer handler
+	lastThrowLine             int                // line number where exception was thrown
+	lastThrowColumn           int                // column number where exception was thrown
+	lastThrowFuncName         string             // function name where exception was thrown
+	lastThrowSource           *source.SourceFile // source file the throwing frame came from (nil if unknown)
 
 	// TypedArray prototypes
 	TypedArrayConstructor      Value // Abstract %TypedArray% constructor - all typed arrays inherit from this
@@ -16877,6 +16879,46 @@ func (vm *VM) isUnscopable(withObj Value, propName string) (bool, bool) {
 	return excludeVal.IsTruthy(), false
 }
 
+// runtimeErrorAt is runtimeError with a real source position supplied by the
+// caller, for the cases where one is actually known.
+//
+// runtimeError below can only synthesize a position from the *currently
+// executing* frame, which is the right answer for an error raised by the code
+// in that frame and the wrong answer whenever the failure is really about some
+// other source entirely - a module that failed to compile, say, whose own
+// diagnostic already knows its exact line, column and file (#148). Passing
+// that position through means errors.DisplayErrors renders the caret and
+// snippet against the file that actually failed instead of falling back to
+// whatever source the embedder happened to hand it.
+//
+// FileName is re-pointed at the supplied position's own source when it has
+// one, so RuntimeError.Error()'s "file:line:column" triple stays internally
+// consistent rather than labelling another file's line with "<script>".
+// FunctionName is left at the synthesized frame's value: the executing
+// function genuinely is the frame's, it just isn't where the failure lives.
+func (vm *VM) runtimeErrorAt(pos errors.Position, format string, args ...interface{}) InterpretResult {
+	result := vm.runtimeError(format, args...)
+	if len(vm.errors) > 0 {
+		if re, ok := vm.errors[len(vm.errors)-1].(*errors.RuntimeError); ok {
+			re.Position = pos
+			if pos.Source != nil {
+				re.FileName = pos.Source.DisplayPath()
+			}
+		}
+	}
+	return result
+}
+
+// runtimeErrorFrom is runtimeErrorAt when the real position has to be dug out
+// of an opaque error first, falling back to runtimeError's frame synthesis when
+// the error carries no position at all.
+func (vm *VM) runtimeErrorFrom(cause error, format string, args ...interface{}) InterpretResult {
+	if pos, ok := errors.PositionOf(cause); ok {
+		return vm.runtimeErrorAt(pos, format, args...)
+	}
+	return vm.runtimeError(format, args...)
+}
+
 // runtimeError formats a runtime error message, appends it to the VM's error list,
 // and returns the InterpretRuntimeError status.
 func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
@@ -16931,16 +16973,29 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 
 	msg := fmt.Sprintf(format, args...)
 
+	// Attach the executing frame's own source file. The line above came out of
+	// that frame's line table, so reporting it against any other file - which is
+	// what a nil Source does, since DisplayErrors then falls back to whatever
+	// the embedder passed, i.e. the entry script - underlines an unrelated line
+	// of an unrelated file (#148). Column stays 1: the bytecode line table has
+	// no column information to recover, and inventing one is worse than
+	// admitting the line is all we know.
+	src := frameSource(frame)
+	fileName := "<script>" // TODO: name host-built chunks better
+	if src != nil {
+		fileName = src.DisplayPath()
+	}
 	runtimeErr := &errors.RuntimeError{
 		Position: errors.Position{
 			Line:     line,
 			Column:   1, // Default to column 1
 			StartPos: 0,
 			EndPos:   0,
+			Source:   src,
 		},
 		Msg:          msg,
 		FunctionName: funcName,
-		FileName:     "<script>", // TODO: Add actual filename tracking
+		FileName:     fileName,
 	}
 	vm.errors = append(vm.errors, runtimeErr)
 
@@ -19420,13 +19475,13 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		// resolve against the importing module, not cwd.
 		moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, vm.moduleFromPath())
 		if err != nil {
-			return vm.runtimeError("Failed to load module '%s': %s", modulePath, err.Error()), Undefined
+			return vm.runtimeErrorFrom(err, "Failed to load module '%s': %s", modulePath, err.Error()), Undefined
 		}
 
 		// Check if the module had any errors during loading/compilation
 		if moduleErr := moduleRecord.GetError(); moduleErr != nil {
 			// fmt.Printf("// [VM] executeModule: Module '%s' has error: %v\n", modulePath, moduleErr)
-			return vm.runtimeError("Module '%s' failed to load: %s", modulePath, moduleErr.Error()), Undefined
+			return vm.runtimeErrorFrom(moduleErr, "Module '%s' failed to load: %s", modulePath, moduleErr.Error()), Undefined
 		}
 
 		// The module loader already dedupes *records* by resolved path (so this

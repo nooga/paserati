@@ -195,7 +195,7 @@ func runFileWithTypes(filename string, scriptArgs []string, showCacheStats bool,
 		paserati.SetSkipTypeCheck(true)
 	}
 
-	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode, ModuleName: filename, DisasmFilter: disasmFilter}
+	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode, ModuleName: filename, Filename: filename, DisasmFilter: disasmFilter}
 	value, errs := paserati.RunCode(source, options)
 	ok := paserati.DisplayResult(source, value, errs)
 	if !ok {

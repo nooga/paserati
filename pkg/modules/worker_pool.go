@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	paseratiErrors "github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
 )
@@ -287,7 +288,7 @@ func (w *parseWorker) processJob(job *ParseJob) *ParseResult {
 	program, parseErrs := w.parserInstance.ParseProgram()
 	if len(parseErrs) > 0 {
 		// Take the first error
-		result.Error = fmt.Errorf("parsing failed: %s", parseErrs[0].Error())
+		result.Error = paseratiErrors.NewPositionedError("parsing failed", parseErrs[0])
 		result.ParseDuration = time.Since(startTime)
 		return result
 	}
