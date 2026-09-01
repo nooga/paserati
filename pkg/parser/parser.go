@@ -268,6 +268,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.ABSTRACT, p.parseIdentifier)  // ABSTRACT is a contextual keyword, can be used as identifier
 	p.registerPrefix(lexer.IS, p.parseIdentifier)        // IS is a contextual keyword (type predicates), can be used as identifier in JS
 	p.registerPrefix(lexer.SATISFIES, p.parseIdentifier) // SATISFIES is a TS operator, but also a valid binding name (e.g. semver)
+	p.registerPrefix(lexer.AS, p.parseIdentifier)        // AS is a TS operator (type assertions), but also a valid binding name
 	p.registerPrefix(lexer.FUNCTION, func() Expression { return p.parseFunctionLiteral(false) })
 	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
