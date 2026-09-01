@@ -378,8 +378,13 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 func (c *Checker) setupFunctionEnvironment(ctx *FunctionCheckContext, paramTypes []types.Type, paramNames []*parser.Identifier, restParameterType types.Type, restParameterName *parser.Identifier, preliminarySignature *types.Signature, typeParamEnv *Environment) *Environment {
 	debugPrintf("// [Checker Function Common] Creating scope for '%s'. Current Env: %p\n", ctx.FunctionName, c.env)
 	originalEnv := c.env
-	// Use the type parameter environment as the base for the function body environment
-	funcEnv := NewEnclosedEnvironment(typeParamEnv)
+	// Use the type parameter environment as the base for the function body
+	// environment. NewFunctionEnvironment, not NewEnclosedEnvironment: this is a
+	// function scope, and GetFunctionScope (which is where every `var` binding
+	// lands) walks up until it finds one. A block-scoped env here let a `var` in
+	// any function body escape to the *enclosing* function or global scope -
+	// `function outer(){ function inner(){ var w = 1; } return w; }` resolved w.
+	funcEnv := NewFunctionEnvironment(typeParamEnv)
 	c.env = funcEnv
 
 	// Define regular parameters (skip 'this' parameters which have nil nameNode)
