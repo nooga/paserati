@@ -969,6 +969,51 @@ func (c *Compiler) addSetterToPrototype(method *parser.MethodDefinition, prototy
 	return nil
 }
 
+// flattenCommaExpression returns expr's comma-joined ("," InfixExpression)
+// sub-expressions in left-to-right evaluation order. Comma chains parse
+// left-associatively (`a,b,c` is `((a,b),c)`), so this recurses down the
+// Left spine, collecting terms as it unwinds. Anything that isn't a comma
+// InfixExpression is returned as a single-element result unchanged - in
+// particular, a "," inside a call's argument list or an object/array
+// literal is part of a *different* Expression node entirely (arguments,
+// elements, ...), never seen here, so this can't misfire on those.
+func flattenCommaExpression(expr parser.Expression) []parser.Expression {
+	infix, ok := expr.(*parser.InfixExpression)
+	if !ok || infix.Operator != "," {
+		return []parser.Expression{expr}
+	}
+	return append(flattenCommaExpression(infix.Left), infix.Right)
+}
+
+// flattenTopLevelCommaStatements expands any top-level ExpressionStatement
+// whose expression is a comma chain into one ExpressionStatement per
+// sub-expression, in order - the reverse of what a minifier's "join
+// consecutive statements with the comma operator" pass did to produce it.
+// Behavior-preserving: a bare ExpressionStatement's value is always
+// discarded, so `a(), b();` and `a(); b();` run identically. Every other
+// statement kind (declarations, control flow, ...) passes through
+// untouched. See injectFieldInitializers' derived-class branch (paserati#180)
+// for why this needs to run before searching for a bare super() call.
+func flattenTopLevelCommaStatements(statements []parser.Statement) []parser.Statement {
+	out := make([]parser.Statement, 0, len(statements))
+	for _, stmt := range statements {
+		exprStmt, ok := stmt.(*parser.ExpressionStatement)
+		if !ok {
+			out = append(out, stmt)
+			continue
+		}
+		parts := flattenCommaExpression(exprStmt.Expression)
+		if len(parts) == 1 {
+			out = append(out, stmt)
+			continue
+		}
+		for _, part := range parts {
+			out = append(out, &parser.ExpressionStatement{Token: exprStmt.Token, Expression: part})
+		}
+	}
+	return out
+}
+
 // injectFieldInitializers creates a new function literal with field initializers prepended to the constructor body
 func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functionLiteral *parser.FunctionLiteral) *parser.FunctionLiteral {
 	// Collect field initializer statements
@@ -1191,10 +1236,25 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 
 	isDerivedClass := node.SuperClass != nil
 	if isDerivedClass {
+		// A minifier commonly merges `super(...);` with the statement right
+		// after it into one `super(...), <next>;` via the comma operator -
+		// legal JS (a bare ExpressionStatement's value is always discarded,
+		// so splitting the chain back into separate statements is behavior-
+		// preserving) and a real, common shape (paserati#180: esbuild's
+		// bundling of glob@13.0.6 produces exactly
+		// `super(t,mi,"/",{...e,nocase:s}),this.nocase=s` for one
+		// constructor). The search below only recognizes a super() call
+		// that IS the entire expression of its statement, so flatten any
+		// top-level comma chain into separate statements first - this
+		// also correctly relocates whatever followed super() in the same
+		// chain to *after* the injected field initializers, not before
+		// them, which a "detect but don't restructure" fix could not do.
+		statements := flattenTopLevelCommaStatements(functionLiteral.Body.Statements)
+
 		// Find the super() call and insert field initializers after it
 		insertPos := 0
 		foundSuper := false
-		for i, stmt := range functionLiteral.Body.Statements {
+		for i, stmt := range statements {
 			// Check if this statement contains a super() call
 			if exprStmt, ok := stmt.(*parser.ExpressionStatement); ok {
 				if callExpr, ok := exprStmt.Expression.(*parser.CallExpression); ok {
@@ -1209,15 +1269,15 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 
 		if foundSuper {
 			// Insert field initializers after super() call
-			newStatements = append(newStatements, functionLiteral.Body.Statements[:insertPos]...)
+			newStatements = append(newStatements, statements[:insertPos]...)
 			newStatements = append(newStatements, fieldInitializers...)
-			newStatements = append(newStatements, functionLiteral.Body.Statements[insertPos:]...)
+			newStatements = append(newStatements, statements[insertPos:]...)
 		} else {
 			// No explicit super() call found - this is an error in real code,
 			// but for now prepend (will fail at runtime when fields try to access this)
 			debugPrintf("// WARNING: Derived class constructor without explicit super() call\n")
 			newStatements = append(newStatements, fieldInitializers...)
-			newStatements = append(newStatements, functionLiteral.Body.Statements...)
+			newStatements = append(newStatements, statements...)
 		}
 	} else {
 		// Regular class - prepend field initializers
