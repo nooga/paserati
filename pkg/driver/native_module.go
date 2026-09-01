@@ -720,6 +720,11 @@ func mapTypeToObjectType(t reflect.Type, valueType types.Type) types.Type {
 
 // vmValueToReflectValue converts a VM value to a reflect.Value for function calls
 func vmValueToReflectValue(vmVal vm.Value, targetType reflect.Type) reflect.Value {
+	// A Go parameter typed vm.Value itself wants the raw argument, untouched.
+	// Mirror reflectValueToVM's symmetric passthrough on the return side.
+	if targetType == reflect.TypeOf(vm.Value{}) {
+		return reflect.ValueOf(vmVal)
+	}
 	switch targetType.Kind() {
 	case reflect.String:
 		if vmVal.IsString() {
