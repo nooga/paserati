@@ -2783,7 +2783,11 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				// Set on target
 				if target.Type() == vm.TypeObject {
 					targetPlain := target.AsPlainObject()
-					targetPlain.SetOwnNonEnumerable(key, value)
+					// Object.assign copies as if by ordinary [[Set]] - the
+					// property must land enumerable on the target, not
+					// non-enumerable (paserati#168). SetOwnNonEnumerable
+					// exists for built-in method registration, not for this.
+					targetPlain.SetOwn(key, value)
 				} else if target.Type() == vm.TypeDictObject {
 					targetDict := target.AsDictObject()
 					targetDict.SetOwn(key, value)
@@ -2796,7 +2800,11 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				// Set on target
 				if target.Type() == vm.TypeObject {
 					targetPlain := target.AsPlainObject()
-					targetPlain.SetOwnNonEnumerable(key, value)
+					// Object.assign copies as if by ordinary [[Set]] - the
+					// property must land enumerable on the target, not
+					// non-enumerable (paserati#168). SetOwnNonEnumerable
+					// exists for built-in method registration, not for this.
+					targetPlain.SetOwn(key, value)
 				} else if target.Type() == vm.TypeDictObject {
 					targetDict := target.AsDictObject()
 					targetDict.SetOwn(key, value)
@@ -2811,7 +2819,11 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				// Set on target
 				if target.Type() == vm.TypeObject {
 					targetPlain := target.AsPlainObject()
-					targetPlain.SetOwnNonEnumerable(key, value)
+					// Object.assign copies as if by ordinary [[Set]] - the
+					// property must land enumerable on the target, not
+					// non-enumerable (paserati#168). SetOwnNonEnumerable
+					// exists for built-in method registration, not for this.
+					targetPlain.SetOwn(key, value)
 				} else if target.Type() == vm.TypeDictObject {
 					targetDict := target.AsDictObject()
 					targetDict.SetOwn(key, value)
