@@ -4917,42 +4917,29 @@ func (c *Compiler) extractExportNamesFromAST(program *parser.Program) []string {
 // Parallels type checker's processExportDeclaration
 func (c *Compiler) processExportDeclaration(decl parser.Statement) {
 	switch d := decl.(type) {
-	case *parser.LetStatement:
-		if c.IsModuleMode() {
-			if d.Name != nil {
-				// Let/const declarations also get stored as globals at top-level.
-				// Prefer the symbol table's own record over a fresh by-name heap
-				// lookup: a top-level let's heap slot may be keyed by something
-				// other than its plain name (see moduleGlobalKey, #103/#106),
-				// which GetGlobalIndex(plainName) would miss entirely.
-				globalIdx := c.resolveExportGlobalIndex(d.Name.Value)
-				c.moduleBindings.DefineExport(d.Name.Value, d.Name.Value, vm.Undefined, d, globalIdx)
-				debugPrintf("// [Compiler] Exported let: %s at global[%d]\n", d.Name.Value, globalIdx)
-			}
+	case *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement,
+		*parser.ObjectDestructuringDeclaration, *parser.ArrayDestructuringDeclaration,
+		*parser.DeclarationGroup:
+		// Every name the declaration binds is exported, not just the first
+		// declarator - and a destructuring pattern binds several. Reading the
+		// statement's legacy first-declarator Name field exported exactly one
+		// name (and, for a multi-declarator clause, the *last* one, because
+		// compileLetStatement aliases node.Name to each declarator as it goes
+		// and the declaration is compiled before we get here); a destructuring
+		// declaration had no case at all, so `export const {a} = obj` exported
+		// nothing.
+		if !c.IsModuleMode() {
+			return
 		}
-
-	case *parser.VarStatement:
-		if c.IsModuleMode() {
-			if d.Name != nil {
-				// Var declarations also get stored as globals at top-level.
-				// See the LetStatement case above for why resolveExportGlobalIndex
-				// (not a fresh plain-name lookup) is required here.
-				globalIdx := c.resolveExportGlobalIndex(d.Name.Value)
-				c.moduleBindings.DefineExport(d.Name.Value, d.Name.Value, vm.Undefined, d, globalIdx)
-				debugPrintf("// [Compiler] Exported var: %s at global[%d]\n", d.Name.Value, globalIdx)
-			}
-		}
-
-	case *parser.ConstStatement:
-		if c.IsModuleMode() {
-			if d.Name != nil {
-				// Let/const declarations also get stored as globals at top-level.
-				// See the LetStatement case above for why resolveExportGlobalIndex
-				// (not a fresh plain-name lookup) is required here.
-				globalIdx := c.resolveExportGlobalIndex(d.Name.Value)
-				c.moduleBindings.DefineExport(d.Name.Value, d.Name.Value, vm.Undefined, d, globalIdx)
-				debugPrintf("// [Compiler] Exported const: %s at global[%d]\n", d.Name.Value, globalIdx)
-			}
+		for _, name := range parser.DeclaredNames(decl) {
+			// Top-level let/const/var and pattern bindings are all stored as
+			// globals. Prefer the symbol table's own record over a fresh by-name
+			// heap lookup: a top-level binding's heap slot may be keyed by
+			// something other than its plain name (see moduleGlobalKey,
+			// #103/#106), which GetGlobalIndex(plainName) would miss entirely.
+			globalIdx := c.resolveExportGlobalIndex(name)
+			c.moduleBindings.DefineExport(name, name, vm.Undefined, decl, globalIdx)
+			debugPrintf("// [Compiler] Exported declaration binding: %s at global[%d]\n", name, globalIdx)
 		}
 
 	case *parser.ExpressionStatement:
