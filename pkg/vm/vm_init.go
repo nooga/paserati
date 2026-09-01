@@ -1416,22 +1416,83 @@ func (vm *VM) CallArgs4(fn, thisValue, a0, a1, a2, a3 Value) (Value, error) {
 	return r, err
 }
 
+// enterOrdinaryNativeCall establishes the state a native callee sees for an
+// ordinary [[Call]], and returns the function that restores it.
+//
+// The point is what it *clears*: currentNewTarget and inConstructorCall. A
+// [[Call]] has no new.target - only [[Construct]] carries one - but vm.Call
+// used to save and set only currentThis, so both of those leaked in from
+// whatever was on the Go stack above. Called from inside a native constructor
+// (which the interpreter runs with currentNewTarget set to the constructor and
+// inConstructorCall true), every nested vm.Call inherited them, and any native
+// callee reading GetNewTarget()/IsConstructorCall() silently behaved as though
+// it were being constructed by the *outer* constructor.
+//
+// That is how `new String(o)`, for an object with no callable toString/valueOf,
+// came to throw a String rather than a TypeError (#154): ToPrimitive's final
+// step calls vm.ThrowTypeError, which builds its instance with
+// vm.Call(TypeError, ...) - and that call resolved its prototype from
+// new.target, which was still the String constructor. The thrown object had
+// name "TypeError" and the right message, but String.prototype for its
+// [[Prototype]], so `e instanceof TypeError` was false.
+//
+// ConstructWithNewTarget is the deliberate counterpart: it saves the same three
+// fields and *sets* them, because it really is a [[Construct]].
+func (vm *VM) enterOrdinaryNativeCall(thisValue Value) func() {
+	prevThis := vm.currentThis
+	vm.currentThis = thisValue
+	restoreCallState := vm.enterOrdinaryCall()
+	return func() {
+		restoreCallState()
+		vm.currentThis = prevThis
+	}
+}
+
+// enterOrdinaryCall clears the construct context for the duration of an
+// ordinary [[Call]] and returns the function that restores it. See
+// enterOrdinaryNativeCall for why.
+//
+// Both of vm.Call's callee kinds need this, for different reasons. A native
+// callee reads these fields itself. A *user-JS* callee does not - new.target
+// inside a function is per-frame and was already correct - but the bytecode it
+// runs plain-calls natives through the interpreter, and the interpreter's
+// plain-call path does not touch these fields (only its four construct sites
+// do). So a native constructor that calls back into user JS used to leave its
+// construct context visible to every native that user JS called:
+//
+//	new String({ toString() { return typeof String("a"); } })
+//
+// reported "object" - the inner String("a"), an ordinary call, saw
+// inConstructorCall still true from the outer `new String` and returned a
+// wrapper object instead of a primitive.
+//
+// executeUserFunctionWithNewTarget is the construct counterpart and is
+// deliberately left alone: it sets up new.target rather than clearing it.
+func (vm *VM) enterOrdinaryCall() func() {
+	prevNewTarget := vm.currentNewTarget
+	prevInConstructorCall := vm.inConstructorCall
+	vm.currentNewTarget = Undefined
+	vm.inConstructorCall = false
+	return func() {
+		vm.currentNewTarget = prevNewTarget
+		vm.inConstructorCall = prevInConstructorCall
+	}
+}
+
 func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {
 	switch fn.Type() {
 	case TypeNativeFunction:
 		// For native functions, call directly with proper 'this' context
 		nativeFunc := AsNativeFunction(fn)
-		prevThis := vm.currentThis
-		vm.currentThis = thisValue
-		defer func() { vm.currentThis = prevThis }()
+		restore := vm.enterOrdinaryNativeCall(thisValue)
+		defer restore()
 		return nativeFunc.Fn(args)
 
 	case TypeNativeFunctionWithProps:
 		// Handle native function with properties
 		nativeFuncWithProps := fn.AsNativeFunctionWithProps()
-		prevThis := vm.currentThis
-		vm.currentThis = thisValue
-		defer func() { vm.currentThis = prevThis }()
+		restore := vm.enterOrdinaryNativeCall(thisValue)
+		defer restore()
 		return nativeFuncWithProps.Fn(args)
 
 	case TypeClosure, TypeFunction:
@@ -1850,6 +1911,10 @@ func (vm *VM) lastRecordedErrorMessage() string {
 // executeUserFunctionSafe executes a user function from a native function using sentinel frames
 // This allows proper nested calls without infinite recursion
 func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (Value, error) {
+	// This is an ordinary [[Call]], so nothing it reaches - including natives
+	// its bytecode calls - may see an enclosing construct context.
+	defer vm.enterOrdinaryCall()()
+
 	// If unwinding flags are set but currentException is Null, it means the exception was
 	// already handed off to native code as a Go error. Native code either:
 	// 1. Handled it and is making a new call (not re-throwing) - clear the flags
