@@ -39,7 +39,7 @@ jobs:
       # otherwise is how a perf check becomes a flaky check people learn to
       # ignore.
       - name: Benchmark smoke
-        run: go test -run '^$' -bench . -benchtime 1x ./pkg/vm ./tests
+        run: go test -run '^$' -bench . -benchtime 1x ./pkg/compiler ./pkg/modules ./pkg/vm ./tests
 
   lint:
     runs-on: ubuntu-latest
