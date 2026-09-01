@@ -417,7 +417,17 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			}
 			// Check for numeric index access (e.g., "0", "1", "2")
 			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < arr.Length() {
-				return arr.Get(idx), nil
+				if idx < len(arr.elements) && arr.elements[idx].typ != TypeHole {
+					return arr.elements[idx], nil
+				}
+				// idx is within .length but not backed by a dense element -
+				// see paserati#176: fall back to the named-property store
+				// (where an index beyond maxDenseArraySetIndex/
+				// maxDenseArrayDefineIndex lives) before Undefined.
+				if v, ok := arr.GetOwn(propName); ok {
+					return v, nil
+				}
+				return Undefined, nil
 			}
 			// Check own named properties on the array
 			if v, ok := arr.GetOwn(propName); ok {
