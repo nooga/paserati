@@ -265,17 +265,15 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			return false, nil // Don't switch frames - async execution happens via microtasks
 		}
 
-		// Arity checking
-		if calleeFunc.Variadic {
-			if argCount < calleeFunc.Arity {
-				currentFrame.ip = callerIP
-				return false, fmt.Errorf("Expected at least %d arguments but got %d", calleeFunc.Arity, argCount)
-			}
-		} else {
-			// Allow fewer arguments for functions with optional parameters
-			// The compiler handles padding with undefined for missing optional parameters
-			// Allow extra arguments (JavaScript behavior) - they are ignored or available via arguments object
-		}
+		// Arity checking: real JS never enforces a minimum argument count on an
+		// ordinary call, variadic or not - a parameter with no argument supplied
+		// is simply bound to undefined. The variadic branch used to throw here
+		// when called with fewer arguments than the non-rest parameter count
+		// (calleeFunc.Arity), treating it as a hard minimum; it isn't one, any
+		// more than it is for a non-variadic function's optional parameters.
+		// Missing named parameters are padded with undefined below regardless
+		// of variadic-ness, and the rest parameter itself already correctly
+		// ends up [] when there's nothing left to collect. See paserati#170.
 
 		// Check frame limit
 		if vm.frameCount >= len(vm.frames) {
@@ -410,7 +408,14 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			extraArgCount := argCount - calleeFunc.Arity
 			var restArray Value
 
-			if extraArgCount == 0 {
+			// extraArgCount is negative when called with fewer arguments than
+			// the non-rest parameter count (now legal - see the arity-checking
+			// comment above, paserati#170) - treat that the same as exactly
+			// zero extra arguments: an empty rest array, reusing the shared
+			// one rather than falling into the loop below with a negative
+			// bound (which happens to still produce an empty array, just via
+			// an unnecessary fresh allocation).
+			if extraArgCount <= 0 {
 				restArray = vm.emptyRestArray
 			} else {
 				restArray = NewArray()
