@@ -72,13 +72,19 @@ func TestExportDeclarationExportsEveryBinding(t *testing.T) {
 			want:  "1,2,3,4",
 		},
 		{
+			// The nested default and nested rest shapes were left out when this
+			// test was written: the checker rejected them ("invalid destructuring
+			// target type: *parser.AssignmentExpression / *parser.SpreadElement")
+			// independently of exports. They are included now that it doesn't.
 			name: "renamed, elided, defaulted and nested pattern targets",
 			lib: "export const {x: a, y: b} = {x: 1, y: 2};\n" +
 				"export const [c, , d] = [3, 99, 4];\n" +
 				"export const {e = 5} = {};\n" +
-				"export const {f: {g}} = {f: {g: 6}};\n",
-			names: []string{"a", "b", "c", "d", "e", "g"},
-			want:  "1,2,3,4,5,6",
+				"export const {f: {g}} = {f: {g: 6}};\n" +
+				"export const {h: {i = 7}} = {h: {}};\n" +
+				"export const {l: [m = 11]} = {l: []};\n",
+			names: []string{"a", "b", "c", "d", "e", "g", "i", "m"},
+			want:  "1,2,3,4,5,6,7,11",
 		},
 	}
 
@@ -104,6 +110,21 @@ func TestExportDeclarationExportsEveryBinding(t *testing.T) {
 				t.Errorf("namespace import = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestExportedNestedRestBinding covers a rest element nested inside a pattern.
+// It gets its own test rather than joining the table above, because a rest
+// binding is an array and Array.prototype.join flattens it - which would make
+// the assertion pass whether k held [9, 10] or two separate scalar exports.
+func TestExportedNestedRestBinding(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "lib.ts"), "export const [[j, ...k]] = [[8, 9, 10]];\n")
+	mustWrite(t, filepath.Join(dir, "entry.ts"),
+		"import { j, k } from \"./lib.ts\";\n"+
+			"j + \"|\" + JSON.stringify(k);\n")
+	if got := runFileForValue(t, dir, "entry.ts"); got != "8|[9,10]" {
+		t.Errorf("nested rest export = %q, want %q", got, "8|[9,10]")
 	}
 }
 

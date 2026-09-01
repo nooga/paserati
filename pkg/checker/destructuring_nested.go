@@ -7,6 +7,71 @@ import (
 	"github.com/nooga/paserati/pkg/types"
 )
 
+// unwrapNestedPatternTarget peels the wrappers a *nested* destructuring target
+// can carry, and adjusts the type the binding inside should receive.
+//
+// A pattern is represented two ways depending on depth. At the top level of a
+// declaration a default lives in DestructuringProperty.Default /
+// DestructuringElement.Default and a rest in DestructuringElement.IsRest, with
+// Target holding the binding. Nested one level down, Target is a raw
+// ObjectLiteral/ArrayLiteral, so a default appears as an AssignmentExpression
+// and a rest as a SpreadElement, with the binding inside the wrapper. The
+// target walks knew Identifier/ObjectLiteral/ArrayLiteral but neither wrapper,
+// so `const {h: {i = 7}} = o` and `const [[j, ...k]] = o` were rejected with
+// "invalid destructuring target type: *parser.AssignmentExpression/SpreadElement"
+// even though the runtime binds them correctly.
+//
+// The type adjustments mirror the top-level cases: a default replaces an
+// Undefined/Unknown type with its own widened type, and a rest binding gets an
+// array of the element type. Returns the target unchanged when it carries
+// neither wrapper.
+func (c *Checker) unwrapNestedPatternTarget(target parser.Expression, expectedType types.Type) (parser.Expression, types.Type) {
+	switch t := target.(type) {
+	case *parser.AssignmentExpression:
+		// Nested default: `{h: {i = 7}}` / `[[m = 4]]`.
+		if t.Value != nil {
+			c.visit(t.Value)
+			defaultType := t.Value.GetComputedType()
+			if defaultType == nil {
+				defaultType = types.Any
+			}
+			if expectedType == types.Undefined || expectedType == types.Unknown {
+				expectedType = types.GetWidenedType(defaultType)
+			}
+		}
+		return t.Left, expectedType
+	case *parser.SpreadElement:
+		// Nested rest: `[[x, ...ys]]`. The caller passes the element type, so an
+		// array of it is right for a plain array or Any source. A tuple source
+		// needs the union of the *remaining* element types instead, which only
+		// the array walk knows the position for - it calls restElementType
+		// directly and bypasses this.
+		return t.Argument, &types.ArrayType{ElementType: expectedType}
+	}
+	return target, expectedType
+}
+
+// restElementType is the type a rest binding receives when destructuring source
+// at position index: an array of the remaining element types. Mirrors the
+// top-level IsRest case in checkArrayDestructuringDeclaration.
+func restElementType(source types.Type, index int) types.Type {
+	switch t := source.(type) {
+	case *types.ArrayType:
+		return &types.ArrayType{ElementType: t.ElementType}
+	case *types.TupleType:
+		if index >= len(t.ElementTypes) {
+			return &types.ArrayType{ElementType: types.Never}
+		}
+		remaining := t.ElementTypes[index:]
+		if len(remaining) == 1 {
+			return &types.ArrayType{ElementType: remaining[0]}
+		}
+		return &types.ArrayType{ElementType: &types.UnionType{Types: remaining}}
+	default:
+		return &types.ArrayType{ElementType: types.Any}
+	}
+}
+
 // checkDestructuringTarget handles recursive type checking for destructuring targets
 func (c *Checker) checkDestructuringTarget(target parser.Expression, expectedType types.Type, context interface{}) {
 	switch targetNode := target.(type) {
@@ -30,6 +95,10 @@ func (c *Checker) checkDestructuringTarget(target parser.Expression, expectedTyp
 		// Index access as target: [arr[0]] = [value]
 		// Type check the index expression and ensure it's assignable
 		c.visit(targetNode)
+	case *parser.AssignmentExpression, *parser.SpreadElement:
+		// Nested default or rest - see unwrapNestedPatternTarget.
+		inner, innerType := c.unwrapNestedPatternTarget(target, expectedType)
+		c.checkDestructuringTarget(inner, innerType, context)
 	case *parser.UndefinedLiteral:
 		// Elision in destructuring - no type checking needed, just skip this element
 		return
@@ -57,6 +126,10 @@ func (c *Checker) checkDestructuringTargetForProperty(target parser.Expression, 
 	case *parser.IndexExpression:
 		// Index access as target: {prop: arr[0]} = {prop: value}
 		c.visit(targetNode)
+	case *parser.AssignmentExpression, *parser.SpreadElement:
+		// Nested default or rest - see unwrapNestedPatternTarget.
+		inner, innerType := c.unwrapNestedPatternTarget(target, expectedType)
+		c.checkDestructuringTargetForProperty(inner, innerType, propName)
 	case *parser.UndefinedLiteral:
 		// Elision in destructuring - no type checking needed, just skip this element
 		return
@@ -187,6 +260,15 @@ func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, ex
 			} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
 				propName = numLit.Token.Literal
 			} else {
+				if _, isRest := prop.Key.(*parser.SpreadElement); isRest {
+					// A rest element nested inside an object pattern
+					// (`{a: {b, ...rr}}`). The parser stores it as a
+					// SpreadElement in Key, so it reaches this key check rather
+					// than the target walk. The compiler cannot emit it either,
+					// so name the limitation instead of blaming the key.
+					c.addError(prop.Key, "a rest element is not supported inside a nested object pattern")
+					continue
+				}
 				c.addError(prop.Key, "object destructuring key must be an identifier or number")
 				continue
 			}
@@ -283,6 +365,10 @@ func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expressio
 		// Index access as target: const [arr[0]] = [value]
 		// This is valid in JavaScript (though less common in declarations)
 		c.visit(targetNode)
+	case *parser.AssignmentExpression, *parser.SpreadElement:
+		// Nested default or rest - see unwrapNestedPatternTarget.
+		inner, innerType := c.unwrapNestedPatternTarget(target, expectedType)
+		c.checkDestructuringTargetForDeclaration(inner, innerType, isConst, isVar)
 	default:
 		c.addError(target, fmt.Sprintf("invalid destructuring target type: %T", target))
 	}
@@ -299,6 +385,14 @@ func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.Array
 	} else if tupleType, ok := widenedType.(*types.TupleType); ok {
 		// For tuple types, check each element with its specific type
 		for i, element := range arrayTarget.Elements {
+			// A rest element consumes the remaining tuple members, so it gets an
+			// array of their union - not element i's type, which would
+			// over-narrow and silently accept e.g. string[] for a
+			// (string|boolean)[] value.
+			if spread, ok := element.(*parser.SpreadElement); ok {
+				c.checkDestructuringTargetForDeclaration(spread.Argument, restElementType(tupleType, i), isConst, isVar)
+				continue
+			}
 			var elemType types.Type
 			if i < len(tupleType.ElementTypes) {
 				elemType = tupleType.ElementTypes[i]
@@ -387,6 +481,15 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 			} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
 				propName = numLit.Token.Literal
 			} else {
+				if _, isRest := prop.Key.(*parser.SpreadElement); isRest {
+					// A rest element nested inside an object pattern
+					// (`{a: {b, ...rr}}`). The parser stores it as a
+					// SpreadElement in Key, so it reaches this key check rather
+					// than the target walk. The compiler cannot emit it either,
+					// so name the limitation instead of blaming the key.
+					c.addError(prop.Key, "a rest element is not supported inside a nested object pattern")
+					continue
+				}
 				c.addError(prop.Key, "object destructuring key must be an identifier or number")
 				continue
 			}
