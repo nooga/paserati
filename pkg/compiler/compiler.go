@@ -4756,6 +4756,27 @@ func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclara
 							c.moduleBindings.DefineExport(localName, exportName, vm.Undefined, nil, globalIdx)
 						}
 						debugPrintf("// [Compiler] Exported: %s as %s\n", localName, exportName)
+					} else if c.IsModuleMode() && c.moduleBindings.IsImported(localName) &&
+						c.moduleBindings.ImportedNames[localName].ImportType != ImportNamespaceRef {
+						// The local name isn't a local declaration - it's an
+						// imported named/default binding (import { X } from
+						// "./mod"; export { X };, or the default-import
+						// equivalent). Imported names are deliberately never
+						// defined in the symbol table (see processImportBinding
+						// above), so treat this the same as a direct re-export
+						// clause: resolve it through the import's own source
+						// module/name rather than this module's own scope.
+						// See paserati#163.
+						//
+						// A namespace import (import * as NS) falls through to
+						// the "not found" error below instead: its "source
+						// name" is the sentinel "*", which nothing downstream
+						// (GetReExports/VM.GetModuleExport) can resolve as a
+						// real export name, so accepting it here would silently
+						// compile to an undefined re-export rather than erroring.
+						importRef := c.moduleBindings.ImportedNames[localName]
+						c.moduleBindings.DefineReExport(exportName, importRef.SourceModule, importRef.SourceName)
+						debugPrintf("// [Compiler] Re-exported (via import): %s as %s from %s\n", importRef.SourceName, exportName, importRef.SourceModule)
 					} else {
 						return BadRegister, NewCompileError(node, fmt.Sprintf("exported name '%s' not found in current scope", localName))
 					}
