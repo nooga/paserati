@@ -576,7 +576,26 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 					idx = idx*10 + int(c-'0')
 				}
 				if idx < arr.Length() {
-					*dest = arr.Get(idx)
+					if idx < len(arr.elements) && arr.elements[idx].typ != TypeHole {
+						*dest = arr.elements[idx]
+						return true, InterpretOK, *dest
+					}
+					// idx is within .length but not backed by a dense
+					// element - either a genuine sparse hole, or (see
+					// paserati#176) an index that DefineOwnProperty stored
+					// as a named property instead of growing .elements
+					// (ArrayObject.Set is O(idx); see
+					// maxDenseArrayDefineIndex/maxDenseArraySetIndex).
+					// Consult the named-property store before defaulting
+					// to Undefined - falling through to the same
+					// arr.GetOwn(propName) check just below would also
+					// work, but returning here keeps this branch
+					// self-contained and mirrors OpGetIndex's identical fix.
+					if v, ok := arr.GetOwn(propName); ok {
+						*dest = v
+						return true, InterpretOK, *dest
+					}
+					*dest = Undefined
 					return true, InterpretOK, *dest
 				}
 			}

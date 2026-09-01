@@ -7359,7 +7359,17 @@ startExecution:
 					}
 
 					if idx >= len(arr.elements) || arr.elements[idx].typ == TypeHole {
-						registers[destReg] = Undefined // Out of bounds or hole -> undefined
+						// Not in the dense elements slice - fall back to the
+						// named-property store before defaulting to
+						// Undefined: an index beyond maxDenseArraySetIndex/
+						// maxDenseArrayDefineIndex is stored there instead
+						// of growing .elements (ArrayObject.Set is O(idx)) -
+						// see paserati#176.
+						if v, ok := arr.GetOwn(strconv.Itoa(idx)); ok {
+							registers[destReg] = v
+						} else {
+							registers[destReg] = Undefined // Out of bounds or hole -> undefined
+						}
 					} else {
 						registers[destReg] = arr.elements[idx]
 					}
@@ -7383,7 +7393,16 @@ startExecution:
 							}
 							// Convert string index to numeric and access array element
 							if idx < 0 || idx >= len(arr.elements) || arr.elements[idx].typ == TypeHole {
-								registers[destReg] = Undefined
+								// See paserati#176: fall back to the
+								// named-property store (idx < 0 can't be
+								// stored there, but parseArrayIndex never
+								// returns a negative idx, so this is just
+								// the shared bounds check).
+								if v, ok := arr.GetOwn(key); ok {
+									registers[destReg] = v
+								} else {
+									registers[destReg] = Undefined
+								}
 							} else {
 								registers[destReg] = arr.elements[idx]
 							}
@@ -7980,7 +7999,17 @@ startExecution:
 						if IsNumber(indexVal) {
 							idx := int(AsNumber(indexVal))
 							if idx < 0 || idx >= len(arr.elements) || arr.elements[idx].typ == TypeHole {
-								registers[destReg] = Undefined
+								// See paserati#176: fall back to the
+								// named-property store before Undefined.
+								if idx >= 0 {
+									if v, ok := arr.GetOwn(strconv.Itoa(idx)); ok {
+										registers[destReg] = v
+									} else {
+										registers[destReg] = Undefined
+									}
+								} else {
+									registers[destReg] = Undefined
+								}
 							} else {
 								registers[destReg] = arr.elements[idx]
 							}

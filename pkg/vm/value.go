@@ -2288,6 +2288,33 @@ func (a *ArrayObject) SetLength(newLength int) {
 	}
 	// Don't expand elements slice - JavaScript arrays are sparse
 	// Elements beyond len(a.elements) will return undefined when accessed
+
+	// ArraySetLength (ECMA-262 10.4.2.4) step 3.l: truncating length also
+	// deletes every own property whose key is an array index >= the new
+	// length - not just the dense elements just truncated above, but also
+	// any index stored in .properties instead (an index beyond
+	// maxDenseArraySetIndex/maxDenseArrayDefineIndex - see paserati#176,
+	// whose read-path fix is what exposed this: previously such an index
+	// always read back as undefined anyway, masking this never having run).
+	// The spec's refinement - a non-configurable such property instead
+	// clamps newLength rather than being deleted - isn't implemented here,
+	// matching this codebase's existing posture of not enforcing per-index
+	// non-configurability elsewhere (see ArrayDefineOwnProperty's comment).
+	//
+	// Only scan .properties when length actually *shrinks*: growing can
+	// never delete anything, and SetLength runs on every `arr.length = n`
+	// (plus push/pop's own length maintenance) - RegExp match results in
+	// particular always have .properties (index/input/groups via SetOwn),
+	// so an unconditional scan would tax that hot, unrelated path for
+	// every length write instead of only real truncations.
+	if newLength < a.length && a.properties != nil {
+		for key := range a.properties {
+			if idx, ok := tryParseArrayIndex(key); ok && idx >= newLength {
+				a.DeleteOwn(key)
+			}
+		}
+	}
+
 	a.length = newLength
 }
 
