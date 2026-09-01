@@ -7,6 +7,43 @@ import (
 	"github.com/nooga/paserati/pkg/types"
 )
 
+// nestedObjectPatternRestType is the type a rest binding inside a nested object
+// pattern receives: an object of the source's properties minus the ones the
+// pattern extracted by name. Mirrors the top-level RestProperty case in
+// checkObjectDestructuringDeclaration.
+//
+// A nested pattern is a raw ObjectLiteral, so its rest arrives as a
+// SpreadElement in ObjectProperty.Key rather than in a RestProperty field -
+// which is why it reaches the key check rather than the target walk.
+func nestedObjectPatternRestType(source types.Type, pattern *parser.ObjectLiteral) types.Type {
+	if types.GetWidenedType(source) == types.Any {
+		return types.Any
+	}
+	objType, ok := source.(*types.ObjectType)
+	if !ok {
+		return &types.ObjectType{Properties: make(map[string]types.Type)}
+	}
+	extracted := make(map[string]struct{})
+	for _, prop := range pattern.Properties {
+		if prop == nil {
+			continue
+		}
+		if keyIdent, ok := prop.Key.(*parser.Identifier); ok {
+			extracted[keyIdent.Value] = struct{}{}
+		} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
+			extracted[numLit.Token.Literal] = struct{}{}
+		}
+		// Computed keys and the rest element itself contribute nothing.
+	}
+	remaining := make(map[string]types.Type)
+	for name, t := range objType.Properties {
+		if _, wasExtracted := extracted[name]; !wasExtracted {
+			remaining[name] = t
+		}
+	}
+	return &types.ObjectType{Properties: remaining}
+}
+
 // unwrapNestedPatternTarget peels the wrappers a *nested* destructuring target
 // can carry, and adjusts the type the binding inside should receive.
 //
@@ -260,13 +297,10 @@ func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, ex
 			} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
 				propName = numLit.Token.Literal
 			} else {
-				if _, isRest := prop.Key.(*parser.SpreadElement); isRest {
+				if spread, isRest := prop.Key.(*parser.SpreadElement); isRest {
 					// A rest element nested inside an object pattern
-					// (`{a: {b, ...rr}}`). The parser stores it as a
-					// SpreadElement in Key, so it reaches this key check rather
-					// than the target walk. The compiler cannot emit it either,
-					// so name the limitation instead of blaming the key.
-					c.addError(prop.Key, "a rest element is not supported inside a nested object pattern")
+					// (`{a: {b, ...rr}}`) - see nestedObjectPatternRestType.
+					c.checkDestructuringTargetForProperty(spread.Argument, nestedObjectPatternRestType(expectedType, objectTarget), "")
 					continue
 				}
 				c.addError(prop.Key, "object destructuring key must be an identifier or number")
@@ -291,6 +325,10 @@ func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, ex
 	} else {
 		// For Any type, all nested targets get Any type
 		for _, prop := range objectTarget.Properties {
+			if spread, isRest := prop.Key.(*parser.SpreadElement); isRest {
+				c.checkDestructuringTargetForProperty(spread.Argument, types.Any, "")
+				continue
+			}
 			c.checkDestructuringTargetForProperty(prop.Value, types.Any, "")
 		}
 	}
@@ -481,13 +519,11 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 			} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
 				propName = numLit.Token.Literal
 			} else {
-				if _, isRest := prop.Key.(*parser.SpreadElement); isRest {
+				if spread, isRest := prop.Key.(*parser.SpreadElement); isRest {
 					// A rest element nested inside an object pattern
-					// (`{a: {b, ...rr}}`). The parser stores it as a
-					// SpreadElement in Key, so it reaches this key check rather
-					// than the target walk. The compiler cannot emit it either,
-					// so name the limitation instead of blaming the key.
-					c.addError(prop.Key, "a rest element is not supported inside a nested object pattern")
+					// (`{a: {b, ...rr}}`): it gets the source's remaining
+					// properties, like a top-level object rest.
+					c.checkDestructuringTargetForDeclaration(spread.Argument, nestedObjectPatternRestType(expectedType, objectTarget), isConst, isVar)
 					continue
 				}
 				c.addError(prop.Key, "object destructuring key must be an identifier or number")
@@ -512,6 +548,10 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 	} else {
 		// For Any type, all nested targets get Any type
 		for _, prop := range objectTarget.Properties {
+			if spread, isRest := prop.Key.(*parser.SpreadElement); isRest {
+				c.checkDestructuringTargetForDeclaration(spread.Argument, types.Any, isConst, isVar)
+				continue
+			}
 			c.checkDestructuringTargetForDeclaration(prop.Value, types.Any, isConst, isVar)
 		}
 	}

@@ -128,6 +128,21 @@ func TestExportedNestedRestBinding(t *testing.T) {
 	}
 }
 
+// TestExportedNestedObjectRestBinding covers a rest element nested inside an
+// object pattern. Like the nested array rest above it is an array-free value but
+// still gets its own test rather than joining the table's join(","), because
+// JSON.stringify is the only way to assert an object's shape.
+func TestExportedNestedObjectRestBinding(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "lib.ts"), "export const {a: {b, ...rr}} = {a: {b: 1, c: 2, d: 3}};\n")
+	mustWrite(t, filepath.Join(dir, "entry.ts"),
+		"import { b, rr } from \"./lib.ts\";\n"+
+			"b + \"|\" + JSON.stringify(rr);\n")
+	if got := runFileForValue(t, dir, "entry.ts"); got != "1|{\"c\":2,\"d\":3}" {
+		t.Errorf("nested object rest export = %q, want %q", got, "1|{\"c\":2,\"d\":3}")
+	}
+}
+
 // TestExportedPatternBindingKeepsItsType checks the checker half: the export has
 // to be registered with the binding's real type, not skipped (which surfaces as
 // `any` at the import site and silently accepts everything).

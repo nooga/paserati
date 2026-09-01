@@ -530,6 +530,21 @@ func (c *Compiler) retargetPattern(target parser.Expression, accessExpr parser.E
 				props = append(props, nil)
 				continue
 			}
+			if spread, isRest := prop.Key.(*parser.SpreadElement); isRest {
+				// A rest element inside the nested pattern (`{f: {g, ...rr}}`),
+				// which the parser stores as a SpreadElement in Key with a nil
+				// Value. Retarget its argument and keep it in Key - the
+				// shorthand branch below would otherwise treat the SpreadElement
+				// itself as the property name and bind nothing.
+				arg, err := c.retargetPattern(spread.Argument, accessExpr)
+				if err != nil {
+					return nil, err
+				}
+				props = append(props, &parser.ObjectProperty{
+					Key: &parser.SpreadElement{Token: spread.Token, Argument: arg},
+				})
+				continue
+			}
 			if prop.Value != nil {
 				// `g: h` - the target is the value.
 				value, err := c.retargetPattern(prop.Value, accessExpr)
