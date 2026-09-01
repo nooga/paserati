@@ -9337,89 +9337,21 @@ func (p *Parser) parseRegularForStatement(forToken *lexer.Token) *ForStatement {
 		}
 	}
 
-	// Now parse initializer if curToken is not SEMICOLON
+	// Now parse initializer if curToken is not SEMICOLON.
+	//
+	// This is only ever an *expression* initializer. A let/const/var for-head is
+	// routed to parseForStatementOrForOf by parseForStatement (which checks for
+	// the keyword in peek position before it can get here), because deciding
+	// between for-of/for-in and a regular for needs the head binding parsed
+	// first. This function is only reached with an empty initializer, or with a
+	// non-declaration one - so the three keyword branches that used to live here
+	// were dead, and were a fourth stale copy of the declarator loop that
+	// parseVariableDeclarationList now owns. Verified dead against the whole Go
+	// test suite and all 23,523 test262 language/ tests before removal.
 	if !p.curTokenIs(lexer.SEMICOLON) {
-		// IMPORTANT: 'let' is only a declaration keyword if followed by '[', '{', or an identifier
-		// Otherwise, 'let' can be used as an identifier in non-strict mode
-		isLetDeclaration := p.curTokenIs(lexer.LET) &&
-			(p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) ||
-				p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type))
-		if isLetDeclaration {
-			letStmt := &LetStatement{Token: p.curToken}
-			if !p.expectPeek(lexer.IDENT) {
-				return nil
-			}
-			declarator := &VarDeclarator{}
-			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-			if p.peekTokenIs(lexer.COLON) {
-				p.nextToken()
-				p.nextToken()
-				declarator.TypeAnnotation = p.parseTypeExpression()
-			}
-			if p.peekTokenIs(lexer.ASSIGN) {
-				p.nextToken()
-				p.nextToken()
-				// Use COMMA precedence to allow assignment expressions but stop at commas
-				declarator.Value = p.parseExpression(COMMA)
-			}
-			letStmt.Declarations = []*VarDeclarator{declarator}
-			// Set legacy fields for backward compatibility
-			letStmt.Name = declarator.Name
-			letStmt.TypeAnnotation = declarator.TypeAnnotation
-			letStmt.Value = declarator.Value
-			stmt.Initializer = letStmt
-		} else if p.curTokenIs(lexer.CONST) {
-			constStmt := &ConstStatement{Token: p.curToken}
-			if !p.expectPeek(lexer.IDENT) {
-				return nil
-			}
-			declarator := &VarDeclarator{}
-			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-			if p.peekTokenIs(lexer.COLON) {
-				p.nextToken()
-				p.nextToken()
-				declarator.TypeAnnotation = p.parseTypeExpression()
-			}
-			if p.peekTokenIs(lexer.ASSIGN) {
-				p.nextToken()
-				p.nextToken()
-				// Use COMMA precedence to allow assignment expressions but stop at commas
-				declarator.Value = p.parseExpression(COMMA)
-			}
-			constStmt.Declarations = []*VarDeclarator{declarator}
-			constStmt.Name = declarator.Name
-			constStmt.TypeAnnotation = declarator.TypeAnnotation
-			constStmt.Value = declarator.Value
-			stmt.Initializer = constStmt
-		} else if p.curTokenIs(lexer.VAR) {
-			varStmt := &VarStatement{Token: p.curToken}
-			if !p.expectPeek(lexer.IDENT) {
-				return nil
-			}
-			declarator := &VarDeclarator{}
-			declarator.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
-			if p.peekTokenIs(lexer.COLON) {
-				p.nextToken()
-				p.nextToken()
-				declarator.TypeAnnotation = p.parseTypeExpression()
-			}
-			if p.peekTokenIs(lexer.ASSIGN) {
-				p.nextToken()
-				p.nextToken()
-				// Use COMMA precedence to allow assignment expressions but stop at commas
-				declarator.Value = p.parseExpression(COMMA)
-			}
-			varStmt.Declarations = []*VarDeclarator{declarator}
-			varStmt.Name = declarator.Name
-			varStmt.TypeAnnotation = declarator.TypeAnnotation
-			varStmt.Value = declarator.Value
-			stmt.Initializer = varStmt
-		} else {
-			// Expression initializer (handles any expression including function calls)
-			exprStmt := &ExpressionStatement{Token: p.curToken}
-			exprStmt.Expression = p.parseExpression(LOWEST)
-			stmt.Initializer = exprStmt
-		}
+		exprStmt := &ExpressionStatement{Token: p.curToken}
+		exprStmt.Expression = p.parseExpression(LOWEST)
+		stmt.Initializer = exprStmt
 		if !p.expectPeek(lexer.SEMICOLON) {
 			return nil
 		}
