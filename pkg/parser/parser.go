@@ -2001,6 +2001,16 @@ func (p *Parser) parseExpression(precedence int) Expression {
 	}
 	debugPrint("parseExpression(prec=%d): after prefix, leftExp=%T, cur='%s', peek='%s'", precedence, leftExp, p.curToken.Literal, p.peekToken.Literal)
 
+	return p.parseInfixContinuation(leftExp, precedence)
+}
+
+// parseInfixContinuation runs the Pratt infix-climb loop over an already-parsed
+// left operand: it keeps consuming infix operators whose precedence is above
+// `precedence` and returns the combined expression. parseExpression is
+// prefix-parse + this loop; callers that had to stop an expression early (the
+// for-head, which parses at LESSGREATER so a following `in`/`of` is not eaten
+// as an operator) use it to resume once the stop is no longer needed.
+func (p *Parser) parseInfixContinuation(leftExp Expression, precedence int) Expression {
 	for !p.peekTokenIs(lexer.SEMICOLON) && !p.curTokenIs(lexer.SEMICOLON) && precedence < p.peekPrecedence() {
 		// ASI restricted production: [no LineTerminator here] before postfix ++/--
 		// Per ECMAScript §12.9.3, if there is a LineTerminator between the left-hand
@@ -9405,6 +9415,21 @@ func (p *Parser) parseRegularForStatementWithVar(forToken *lexer.Token, varStmt 
 	stmt := &ForStatement{Token: forToken}
 	stmt.Initializer = varStmt
 
+	// A head that is a plain expression (member/this/bracket/brace/paren
+	// prefixed) was parsed at LESSGREATER by parseForStatementOrForOf so that a
+	// following `in`/`of` would not be consumed as an infix operator. Neither
+	// followed, so this is a C-style for: resume the infix climb down to LOWEST
+	// to pick up the rest of the initializer - `=`, compound assignment, `||`,
+	// `&&`, `??`, `==`, `|`, `?:`, `,` (issue #194). Without this, `=` used to
+	// be consumed below and its RHS silently discarded, and every other
+	// operator below LESSGREATER was a "';' expected" parse error.
+	if exprStmt, ok := varStmt.(*ExpressionStatement); ok && exprStmt.Expression != nil {
+		exprStmt.Expression = p.parseInfixContinuation(exprStmt.Expression, LOWEST)
+		if exprStmt.Expression == nil {
+			return nil
+		}
+	}
+
 	// Continue parsing the initializer (might have type annotation or assignment)
 	if p.peekTokenIs(lexer.COLON) {
 		// Handle type annotation for let statements
@@ -9434,7 +9459,8 @@ func (p *Parser) parseRegularForStatementWithVar(forToken *lexer.Token, varStmt 
 			// Use COMMA precedence to stop at comma separators for multi-variable declarations
 			vs.Value = p.parseExpression(COMMA)
 		}
-		// For expression statements, we'd need to create an assignment expression
+		// An *ExpressionStatement head never reaches here with '=' pending:
+		// parseInfixContinuation above already consumed it as an assignment.
 	}
 
 	// Sync Declarations with legacy fields for all statement types
