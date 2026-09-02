@@ -697,8 +697,10 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 				// Variable not found in symbol table
 				// In JavaScript mode, treat as potential global variable (will throw ReferenceError at runtime if doesn't exist)
 				// In TypeScript mode, this is a compile error
-				// For now, treat as global and let runtime handle it
-				globalIdx := c.GetOrAssignGlobalIndex(argNode.Value)
+				// For now, treat as global and let runtime handle it. The key must
+				// agree with the read side (compileIdentifier) for a module's own
+				// not-yet-compiled top-level binding - see unresolvedGlobalKey (#192).
+				globalIdx := c.GetOrAssignGlobalIndex(c.unresolvedGlobalKey(argNode.Value))
 				identInfo.isGlobal = true
 				identInfo.globalIndex = globalIdx
 				currentValueReg = c.regAlloc.Alloc()
@@ -1999,7 +2001,9 @@ func (c *Compiler) compileTypeofExpression(node *parser.TypeofExpression, hint R
 			if hint == NoHint || hint == BadRegister {
 				hint = c.regAlloc.Alloc()
 			}
-			c.emitTypeofIdentifier(hint, ident.Value, node.Token.Line)
+			// Under the key the binding actually lives at, when it is one of this
+			// module's own not-yet-compiled top-level declarations (#192).
+			c.emitTypeofIdentifier(hint, c.unresolvedGlobalKey(ident.Value), node.Token.Line)
 			return hint, nil
 		}
 		// If identifier exists (or is 'arguments'/an import), fall through to normal compilation

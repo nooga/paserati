@@ -291,10 +291,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 						// module mode) write to, or GlobalExists wrongly reports "doesn't
 						// exist" and this gets misdiagnosed as an undeclared-variable
 						// ReferenceError.
-						globalKey := lhsNode.Value
-						if c.moduleBindings != nil && c.moduleBindings.TopLevelDeclNames[lhsNode.Value] {
-							globalKey = c.moduleGlobalKey(lhsNode.Value)
-						}
+						globalKey := c.unresolvedGlobalKey(lhsNode.Value)
 						if c.chunk.IsStrict && !c.GlobalExists(globalKey) && lhsNode.Value != "arguments" && lhsNode.Value != "eval" {
 							// Emit runtime error for strict mode undeclared variable assignment
 							c.emitStrictUndeclaredAssignmentError(lhsNode.Value, line)
@@ -322,10 +319,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					// Also skip for 'arguments' and 'eval' which have special error handling elsewhere
 					//
 					// See the identical globalKey comment in the callerScopeDesc branch above.
-					globalKey := lhsNode.Value
-					if c.moduleBindings != nil && c.moduleBindings.TopLevelDeclNames[lhsNode.Value] {
-						globalKey = c.moduleGlobalKey(lhsNode.Value)
-					}
+					globalKey := c.unresolvedGlobalKey(lhsNode.Value)
 					if c.chunk.IsStrict && !c.GlobalExists(globalKey) && lhsNode.Value != "arguments" && lhsNode.Value != "eval" {
 						// Emit runtime error for strict mode undeclared variable assignment
 						c.emitStrictUndeclaredAssignmentError(lhsNode.Value, line)
@@ -1436,11 +1430,13 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 								c.emitMove(identSymbol.Register, restArrayReg, line)
 							}
 						}
-					} else if c.chunk.IsStrict {
+					} else if key := c.unresolvedGlobalKey(targetNode.Value); c.chunk.IsStrict && !c.GlobalExists(key) {
 						c.emitStrictUnresolvableReferenceError(targetNode.Value, line)
 					} else {
-						// Implicit global in non-strict
-						globalIdx := c.GetOrAssignGlobalIndex(targetNode.Value)
+						// Implicit global in non-strict, or an existing global slot -
+						// including this module's own not-yet-compiled top-level
+						// declaration (see unresolvedGlobalKey, #192).
+						globalIdx := c.GetOrAssignGlobalIndex(key)
 						c.emitSetGlobal(globalIdx, restArrayReg, line)
 					}
 
@@ -1683,14 +1679,18 @@ func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, v
 	// Resolve the identifier to determine how to store it
 	symbol, _, found := c.currentSymbolTable.Resolve(identTarget.Value)
 	if !found {
-		// Variable not found in any scope
-		// In strict mode, this is a ReferenceError per ECMAScript spec
-		if c.chunk.IsStrict {
+		// Variable not found in any scope. In strict mode an unresolvable
+		// reference is a ReferenceError per ECMAScript spec; a name that already
+		// has a global slot (including this module's own not-yet-compiled
+		// top-level declaration, see unresolvedGlobalKey) is resolvable and is
+		// assigned like compileAssignmentExpression does for `x = v` (#192).
+		globalKey := c.unresolvedGlobalKey(identTarget.Value)
+		if c.chunk.IsStrict && !c.GlobalExists(globalKey) {
 			c.emitStrictUnresolvableReferenceError(identTarget.Value, line)
 			return nil
 		}
-		// In non-strict mode, treat as implicit global assignment
-		globalIdx := c.GetOrAssignGlobalIndex(identTarget.Value)
+		// Non-strict mode or existing global: treat as global assignment
+		globalIdx := c.GetOrAssignGlobalIndex(globalKey)
 		c.emitSetGlobal(globalIdx, valueReg, line)
 		return nil
 	}

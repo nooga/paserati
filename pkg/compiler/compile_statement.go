@@ -2376,7 +2376,12 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 			if !found {
 				// fmt.Printf("// [ForInAssign] unresolved %s, defining var in outermost scope\n", target.Value)
 				// Define a function/global-scoped binding (var semantics)
-				if c.enclosing == nil {
+				// - unless the name already has a global slot, including this module's
+				// own not-yet-compiled top-level declaration (see unresolvedGlobalKey),
+				// which is assigned in place rather than shadowed (#192).
+				if key := c.unresolvedGlobalKey(target.Value); c.enclosing != nil && c.GlobalExists(key) {
+					c.emitSetGlobal(c.GetOrAssignGlobalIndex(key), currentKeyReg, node.Token.Line)
+				} else if c.enclosing == nil {
 					idx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(target.Value))
 					c.currentSymbolTable.DefineGlobal(target.Value, idx)
 					c.emitSetGlobal(idx, currentKeyReg, node.Token.Line)

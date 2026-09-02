@@ -362,9 +362,10 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 						c.emitImportResolve(superConstructorReg, superClassName, node.Token.Line)
 					} else {
 						// Not in symbol table and not an import - might be a built-in
-						// class (Object, Array, etc.). Emit code to look up the global
+						// class (Object, Array, etc.) or one of this module's own classes
+						// declared further down (#192). Emit code to look up the global
 						// variable at runtime.
-						globalIdx := c.GetOrAssignGlobalIndex(superClassName)
+						globalIdx := c.GetOrAssignGlobalIndex(c.unresolvedGlobalKey(superClassName))
 						superConstructorReg = c.regAlloc.Alloc()
 						needToFreeSuperReg = true
 						c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)

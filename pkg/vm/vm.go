@@ -2115,6 +2115,22 @@ startExecution:
 			// Use the heap's nameToIndex map if available
 			if heapIdx, exists := vm.heap.nameToIndex[identifierName]; exists {
 				val, _ := vm.heap.Get(heapIdx)
+				// A let/const/class binding still in its temporal dead zone throws
+				// on typeof like on any other read (spec: typeof evaluates the
+				// reference first). The name may carry a module prefix, see the
+				// compiler's moduleGlobalKey; report the bare name (#192).
+				if val.typ == TypeUninitialized {
+					frame.ip = ip
+					bare := identifierName
+					if i := strings.LastIndexByte(bare, 0); i >= 0 {
+						bare = bare[i+1:]
+					}
+					vm.ThrowReferenceError(fmt.Sprintf("Cannot access '%s' before initialization", bare))
+					if vm.unwinding {
+						return InterpretRuntimeError, Undefined
+					}
+					goto reloadFrame
+				}
 				typeofStr := getTypeofString(val)
 				registers[destReg] = String(typeofStr)
 			} else if vm.GlobalObject != nil && vm.GlobalObject.HasOwn(identifierName) {
