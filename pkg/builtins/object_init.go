@@ -431,6 +431,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < arr.Length() {
 				return vm.BooleanValue(true), nil
 			}
+			if _, enumerable, ok := arr.GetNamedPropertyDescriptor(propName); ok {
+				return vm.BooleanValue(enumerable), nil
+			}
 			return vm.BooleanValue(false), nil
 		case vm.TypeClosure:
 			// Closure own properties: name, length are configurable but not enumerable
@@ -1939,6 +1942,16 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		for i := 0; i < arrObj.Length(); i++ {
 			keysArray.Append(vm.NewString(strconv.Itoa(i)))
 		}
+		// Named own properties (an exec result's index/input/groups/indices,
+		// or anything stored on the array) follow the indices.
+		for _, key := range arrObj.NamedPropertyKeys() {
+			if vm.LooksLikeArrayIndex(key) {
+				continue
+			}
+			if _, enumerable, ok := arrObj.GetNamedPropertyDescriptor(key); ok && enumerable {
+				keysArray.Append(vm.NewString(key))
+			}
+		}
 	case vm.TypeArguments:
 		argsObj := obj.AsArguments()
 		// Arguments object: return numeric indices as keys
@@ -2531,6 +2544,11 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 			arrObj.Append(vm.NewString(strconv.Itoa(i)))
 		}
 		arrObj.Append(vm.NewString("length"))
+		for _, key := range a.NamedPropertyKeys() {
+			if !vm.LooksLikeArrayIndex(key) {
+				arrObj.Append(vm.NewString(key))
+			}
+		}
 	case vm.TypeFunction:
 		fn := obj.AsFunction()
 		// Per ECMAScript OrdinaryOwnPropertyKeys:

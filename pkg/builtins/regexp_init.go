@@ -80,7 +80,9 @@ func regexpUnicodeEscape(c rune) string {
 // $' -> portion after match
 // $n -> nth capture group (1-9)
 // $nn -> nth capture group (01-99)
-func processReplacementPattern(str string, match []int, replacement string) string {
+// $<name> -> named capture group (names is the pattern's GroupNames; nil
+//            when it has none, in which case "$<" is literal text)
+func processReplacementPattern(str string, match []int, names []string, replacement string) string {
 	var result strings.Builder
 	i := 0
 	for i < len(replacement) {
@@ -90,6 +92,24 @@ func processReplacementPattern(str string, match []int, replacement string) stri
 				// $$ -> $
 				result.WriteByte('$')
 				i += 2
+			case '<':
+				// $<name> -> named capture. Per GetSubstitution it is literal
+				// when the pattern has no named groups or the '>' is missing;
+				// an unknown or unmatched name substitutes the empty string.
+				end := strings.IndexByte(replacement[i+2:], '>')
+				if names == nil || end < 0 {
+					result.WriteByte('$')
+					i++
+					continue
+				}
+				name := replacement[i+2 : i+2+end]
+				for k := 1; k < len(names) && 2*k+1 < len(match); k++ {
+					if names[k] == name && match[2*k] >= 0 {
+						result.WriteString(str[match[2*k]:match[2*k+1]])
+						break
+					}
+				}
+				i += 3 + end
 			case '&':
 				// $& -> matched substring
 				result.WriteString(str[match[0]:match[1]])
@@ -150,6 +170,85 @@ func processReplacementPattern(str string, match []int, replacement string) stri
 		}
 	}
 	return result.String()
+}
+
+// namedGroupsObject builds the null-prototype `groups` object of a match at
+// byte offsets loc - each named capture's text, undefined when it did not
+// participate - or Undefined when the pattern has no named groups.
+func namedGroupsObject(regex *vm.RegExpObject, str string, loc []int) vm.Value {
+	names := regex.GroupNames()
+	if names == nil {
+		return vm.Undefined
+	}
+	groups := vm.NewObject(vm.Null)
+	gobj := groups.AsPlainObject()
+	for k := 1; k < len(names) && 2*k+1 < len(loc); k++ {
+		if names[k] == "" {
+			continue
+		}
+		if loc[2*k] == -1 {
+			gobj.SetOwn(names[k], vm.Undefined)
+		} else {
+			gobj.SetOwn(names[k], vm.NewString(str[loc[2*k]:loc[2*k+1]]))
+		}
+	}
+	return groups
+}
+
+// buildRegExpExecResult builds the array RegExpBuiltinExec returns for a match
+// whose capture spans are the byte-offset pairs loc: the captures themselves,
+// then index/input/groups, and with the d flag an `indices` array holding a
+// [start, end] code-unit pair (or undefined) per capture plus its own groups
+// object (paserati#195). Both groups objects have a null prototype and hold
+// the named captures in capture order, per spec.
+func buildRegExpExecResult(regex *vm.RegExpObject, str string, loc []int) vm.Value {
+	result := vm.NewArray()
+	arr := result.AsArray()
+	for i := 0; i < len(loc); i += 2 {
+		if loc[i] == -1 {
+			// Non-participating group: undefined (JavaScript semantics)
+			arr.Append(vm.Undefined)
+		} else {
+			arr.Append(vm.NewString(str[loc[i]:loc[i+1]]))
+		}
+	}
+	// index is JS-visible, so it is reported in code units even though loc
+	// speaks bytes.
+	arr.SetExecMeta(byteToUTF16Offset(str, loc[0]), str)
+
+	names := regex.GroupNames()
+	if names != nil {
+		arr.SetExecGroups(namedGroupsObject(regex, str, loc))
+	}
+
+	if regex.HasIndices() {
+		indices := vm.NewArray()
+		iarr := indices.AsArray()
+		for i := 0; i < len(loc); i += 2 {
+			if loc[i] == -1 {
+				iarr.Append(vm.Undefined)
+				continue
+			}
+			pair := vm.NewArray()
+			parr := pair.AsArray()
+			parr.Append(vm.NumberValue(float64(byteToUTF16Offset(str, loc[i]))))
+			parr.Append(vm.NumberValue(float64(byteToUTF16Offset(str, loc[i+1]))))
+			iarr.Append(pair)
+		}
+		igroups := vm.Undefined
+		if names != nil {
+			igroups = vm.NewObject(vm.Null)
+			gobj := igroups.AsPlainObject()
+			for k := 1; k < len(names) && k < iarr.Length(); k++ {
+				if names[k] != "" {
+					gobj.SetOwn(names[k], iarr.Get(k))
+				}
+			}
+		}
+		iarr.SetOwn("groups", igroups)
+		arr.SetExecIndices(indices)
+	}
+	return result
 }
 
 // processReplacementPatternEx processes $ patterns with captures as values
@@ -276,6 +375,7 @@ func (r *RegExpInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("sticky", types.Boolean).
 		WithProperty("unicode", types.Boolean).
 		WithProperty("hasIndices", types.Boolean).
+		WithProperty("unicodeSets", types.Boolean).
 		WithProperty("lastIndex", types.Number).
 		WithProperty("test", types.NewSimpleFunction([]types.Type{types.String}, types.Boolean)).
 		WithProperty("exec", types.NewSimpleFunction([]types.Type{types.String}, types.NewUnionType(types.Null, &types.ArrayType{ElementType: types.String}))).
@@ -447,25 +547,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Null, nil
 		}
 
-		// Create result array with matches
-		// Use FindStringSubmatchIndex to detect non-participating groups
-		// (they have indices of -1, -1)
-		result := vm.NewArray()
-		arr := result.AsArray()
-		// loc contains pairs of indices [start0, end0, start1, end1, ...]
-		for i := 0; i < len(loc); i += 2 {
-			start, end := loc[i], loc[i+1]
-			if start == -1 {
-				// Non-participating group: use undefined (JavaScript semantics)
-				arr.Append(vm.Undefined)
-			} else {
-				arr.Append(vm.NewString(str[start:end]))
-			}
-		}
-		// Set required properties: index, input, groups. The index is JS-visible,
-		// so it is reported in code units even though loc speaks bytes.
-		arr.SetExecMeta(byteToUTF16Offset(str, loc[0]), str)
-		return result, nil
+		return buildRegExpExecResult(regex, str, loc), nil
 	}))
 
 	regexpProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
@@ -524,7 +606,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		allMatches := regex.FindAllStringSubmatchIndex(str, -1)
 
 		// Create and return a RegExp String Iterator (using the same iterator as String.prototype.matchAll)
-		return createMatchAllIterator(vmInstance, str, allMatches), nil
+		return createMatchAllIterator(vmInstance, regex, str, allMatches), nil
 	})
 	regexpProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolMatchAll), matchAllFunc, &w, &e, &c)
 
@@ -725,20 +807,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				if loc == nil {
 					return vm.Null, nil
 				}
-				result := vm.NewArray()
-				arr := result.AsArray()
-				for i := 0; i < len(loc); i += 2 {
-					start, end := loc[i], loc[i+1]
-					if start == -1 {
-						arr.Append(vm.Undefined)
-					} else {
-						arr.Append(vm.NewString(str[start:end]))
-					}
-				}
-				arr.SetOwn("index", vm.NumberValue(float64(byteToUTF16Offset(str, loc[0]))))
-				arr.SetOwn("input", vm.NewString(str))
-				arr.SetOwn("groups", vm.Undefined)
-				return result, nil
+				return buildRegExpExecResult(regex, str, loc), nil
 			}
 		}
 
@@ -758,7 +827,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Step 6: Global match
-		fullUnicode := strings.Contains(flags, "u")
+		fullUnicode := strings.ContainsAny(flags, "uv")
 
 		if err := vmInstance.SetProperty(rx, "lastIndex", vm.NumberValue(0)); err != nil {
 			return vm.Undefined, err
@@ -944,6 +1013,9 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 							}
 							callArgs = append(callArgs, vm.NumberValue(float64(byteToUTF16Offset(str, match[0]))))
 							callArgs = append(callArgs, vm.NewString(str))
+							if groups := namedGroupsObject(regex, str, match); groups.Type() != vm.TypeUndefined {
+								callArgs = append(callArgs, groups)
+							}
 							vmInstance.EnterHelperCall()
 							res, err := vmInstance.Call(replaceValue, vm.Undefined, callArgs)
 							vmInstance.ExitHelperCall()
@@ -952,7 +1024,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 							}
 							replacement = res.ToString()
 						} else {
-							replacement = processReplacementPattern(str, match, replaceValue.ToString())
+							replacement = processReplacementPattern(str, match, regex.GroupNames(), replaceValue.ToString())
 						}
 						result.WriteString(replacement)
 						lastIndex = match[1]
@@ -974,6 +1046,9 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 							}
 							callArgs = append(callArgs, vm.NumberValue(float64(byteToUTF16Offset(str, match[0]))))
 							callArgs = append(callArgs, vm.NewString(str))
+							if groups := namedGroupsObject(regex, str, match); groups.Type() != vm.TypeUndefined {
+								callArgs = append(callArgs, groups)
+							}
 							vmInstance.EnterHelperCall()
 							res, err := vmInstance.Call(replaceValue, vm.Undefined, callArgs)
 							vmInstance.ExitHelperCall()
@@ -982,7 +1057,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 							}
 							replacement = res.ToString()
 						} else {
-							replacement = processReplacementPattern(str, match, replaceValue.ToString())
+							replacement = processReplacementPattern(str, match, regex.GroupNames(), replaceValue.ToString())
 						}
 						result.WriteString(replacement)
 						lastIndex = match[1]
@@ -1004,7 +1079,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Step 7-8: Check for global and unicode flags
 		isGlobal := strings.Contains(flags, "g")
-		fullUnicode := strings.Contains(flags, "u")
+		fullUnicode := strings.ContainsAny(flags, "uv")
 
 		// Step 9: If global, reset lastIndex to 0
 		if isGlobal {
@@ -1238,7 +1313,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		flags := flagsVal.ToString()
 
 		// Step 8: Check for unicode flag
-		unicodeMatching := strings.Contains(flags, "u")
+		unicodeMatching := strings.ContainsAny(flags, "uv")
 
 		// Step 9-10: Add sticky flag if not present (for our matching logic)
 		// We'll handle sticky logic manually
@@ -1395,8 +1470,12 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 				return result, nil
 			} else {
-				// new RegExp(pattern) - convert to string and use empty flags
-				pattern := arg.ToString()
+				// new RegExp(pattern) - convert to string and use empty flags;
+				// an undefined pattern is the empty pattern.
+				pattern := "(?:)"
+				if arg.Type() != vm.TypeUndefined {
+					pattern = toStringJS(arg)
+				}
 				result, err := vm.NewRegExp(pattern, "")
 				if err != nil {
 					return vm.Undefined, vmInstance.NewSyntaxError(err.Error())
@@ -1405,9 +1484,19 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// new RegExp(pattern, flags)
-		pattern := args[0].ToString()
-		flags := args[1].ToString()
+		// new RegExp(pattern, flags). A RegExp pattern contributes its source
+		// (and its own flags when flags is undefined); an undefined pattern is
+		// the empty pattern; undefined flags are "".
+		pattern, flags := "(?:)", ""
+		if args[0].IsRegExp() {
+			existing := args[0].AsRegExpObject()
+			pattern, flags = existing.GetSource(), existing.GetFlags()
+		} else if args[0].Type() != vm.TypeUndefined {
+			pattern = toStringJS(args[0])
+		}
+		if args[1].Type() != vm.TypeUndefined {
+			flags = toStringJS(args[1])
+		}
 		result, err := vm.NewRegExp(pattern, flags)
 		if err != nil {
 			return vm.Undefined, vmInstance.NewSyntaxError(err.Error())
@@ -1455,7 +1544,8 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 		regexpProto.DefineAccessorProperty("dotAll", makeFlagGetter("dotAll", func(r *vm.RegExpObject) bool { return r.IsDotAll() }), true, vm.Undefined, false, &eFalse, &cTrue)
 		regexpProto.DefineAccessorProperty("sticky", makeFlagGetter("sticky", func(r *vm.RegExpObject) bool { return r.IsSticky() }), true, vm.Undefined, false, &eFalse, &cTrue)
 		regexpProto.DefineAccessorProperty("unicode", makeFlagGetter("unicode", func(r *vm.RegExpObject) bool { return strings.Contains(r.GetFlags(), "u") }), true, vm.Undefined, false, &eFalse, &cTrue)
-		regexpProto.DefineAccessorProperty("hasIndices", makeFlagGetter("hasIndices", func(r *vm.RegExpObject) bool { return strings.Contains(r.GetFlags(), "d") }), true, vm.Undefined, false, &eFalse, &cTrue)
+		regexpProto.DefineAccessorProperty("hasIndices", makeFlagGetter("hasIndices", func(r *vm.RegExpObject) bool { return r.HasIndices() }), true, vm.Undefined, false, &eFalse, &cTrue)
+		regexpProto.DefineAccessorProperty("unicodeSets", makeFlagGetter("unicodeSets", func(r *vm.RegExpObject) bool { return r.IsUnicodeSets() }), true, vm.Undefined, false, &eFalse, &cTrue)
 
 		// source accessor
 		sourceGetter := vm.NewNativeFunction(0, false, "get source", func(args []vm.Value) (vm.Value, error) {
@@ -1501,7 +1591,9 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if v, err := vmInstance.GetProperty(thisVal, "unicode"); err == nil && v.IsTruthy() {
 				result += "u"
 			}
-			// TODO: unicodeSets (v flag)
+			if v, err := vmInstance.GetProperty(thisVal, "unicodeSets"); err == nil && v.IsTruthy() {
+				result += "v"
+			}
 			if v, err := vmInstance.GetProperty(thisVal, "sticky"); err == nil && v.IsTruthy() {
 				result += "y"
 			}

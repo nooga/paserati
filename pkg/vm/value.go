@@ -180,8 +180,36 @@ func (v Value) CanBeHeldWeakly() bool {
 // execResultMeta stores lazy exec/match result metadata.
 // Only allocated for arrays returned by RegExp.exec or String.match.
 type execResultMeta struct {
-	index int
-	input string
+	index      int
+	input      string
+	groups     Value // null-prototype object of named captures, or Undefined
+	indices    Value // the d flag's indices array; only meaningful when hasIndices
+	hasIndices bool
+}
+
+// get returns the exec-result property `name` holds, if it is one of them.
+func (m *execResultMeta) get(name string) (Value, bool) {
+	switch name {
+	case "index":
+		return NumberValue(float64(m.index)), true
+	case "input":
+		return NewString(m.input), true
+	case "groups":
+		return m.groups, true
+	case "indices":
+		if m.hasIndices {
+			return m.indices, true
+		}
+	}
+	return Undefined, false
+}
+
+// keys lists the exec-result properties in their creation order.
+func (m *execResultMeta) keys() []string {
+	if m.hasIndices {
+		return []string{"index", "input", "groups", "indices"}
+	}
+	return []string{"index", "input", "groups"}
 }
 
 type ArrayObject struct {
@@ -2377,19 +2405,58 @@ func (a *ArrayObject) HasIndex(index int) bool {
 // SetExecMeta stores exec result metadata for lazy property access.
 // This avoids allocating a map for index/input/groups on every exec call.
 func (a *ArrayObject) SetExecMeta(index int, input string) {
-	a.execMeta = &execResultMeta{index: index, input: input}
+	a.execMeta = &execResultMeta{index: index, input: input, groups: Undefined}
+}
+
+// SetExecGroups records an exec result's `groups`: the null-prototype object
+// of named captures, or Undefined when the pattern has no group names.
+func (a *ArrayObject) SetExecGroups(groups Value) {
+	if a.execMeta != nil {
+		a.execMeta.groups = groups
+	}
+}
+
+// SetExecIndices records the `indices` array a d-flag exec result carries.
+func (a *ArrayObject) SetExecIndices(indices Value) {
+	if a.execMeta != nil {
+		a.execMeta.indices = indices
+		a.execMeta.hasIndices = true
+	}
+}
+
+// materializeExecMeta moves an exec result's lazily held index/input/groups
+// (and indices) into ordinary named properties, so that a user write,
+// redefinition or delete of one of those keys then behaves as on any other
+// array instead of being shadowed by the lazy values.
+func (a *ArrayObject) materializeExecMeta() {
+	m := a.execMeta
+	if m == nil {
+		return
+	}
+	a.execMeta = nil
+	if a.properties == nil {
+		a.properties = make(map[string]Value)
+	}
+	for _, k := range m.keys() {
+		a.properties[k], _ = m.get(k)
+	}
+}
+
+// isExecMetaKey reports whether name is one of the lazily held exec-result
+// properties of this array.
+func (a *ArrayObject) isExecMetaKey(name string) bool {
+	if a.execMeta == nil {
+		return false
+	}
+	_, ok := a.execMeta.get(name)
+	return ok
 }
 
 // GetOwn returns a named property from the array (e.g., "index", "input" for match results)
 func (a *ArrayObject) GetOwn(name string) (Value, bool) {
 	if a.execMeta != nil {
-		switch name {
-		case "index":
-			return NumberValue(float64(a.execMeta.index)), true
-		case "input":
-			return NewString(a.execMeta.input), true
-		case "groups":
-			return Undefined, true
+		if v, ok := a.execMeta.get(name); ok {
+			return v, true
 		}
 	}
 	if a.properties == nil {
@@ -2401,6 +2468,9 @@ func (a *ArrayObject) GetOwn(name string) (Value, bool) {
 
 // SetOwn sets a named property on the array (e.g., "index", "input" for match results)
 func (a *ArrayObject) SetOwn(name string, value Value) {
+	if a.isExecMetaKey(name) {
+		a.materializeExecMeta()
+	}
 	if a.properties == nil {
 		a.properties = make(map[string]Value)
 	}
@@ -2417,6 +2487,9 @@ func (a *ArrayObject) SetOwn(name string, value Value) {
 // DefineOwnProperty/DefineAccessorProperty) has the ES default
 // configurable: true.
 func (a *ArrayObject) DeleteOwn(name string) bool {
+	if a.isExecMetaKey(name) {
+		a.materializeExecMeta()
+	}
 	if a.propertyDesc != nil {
 		if desc, ok := a.propertyDesc[name]; ok && !desc.Configurable {
 			return false
@@ -2439,6 +2512,9 @@ func (a *ArrayObject) DeleteOwn(name string) bool {
 
 // DefineOwnProperty sets a named property with specified descriptor attributes
 func (a *ArrayObject) DefineOwnProperty(name string, value Value, writable, enumerable, configurable bool) {
+	if a.isExecMetaKey(name) {
+		a.materializeExecMeta()
+	}
 	if a.properties == nil {
 		a.properties = make(map[string]Value)
 	}
@@ -2473,14 +2549,8 @@ func (a *ArrayObject) GetIndexAttributesOverride(key string) (PropertyDesc, bool
 // GetOwnPropertyDescriptor returns the descriptor for a named property
 func (a *ArrayObject) GetOwnPropertyDescriptor(name string) (Value, PropertyDesc, bool) {
 	if a.execMeta != nil {
-		desc := PropertyDesc{Writable: true, Enumerable: true, Configurable: true}
-		switch name {
-		case "index":
-			return NumberValue(float64(a.execMeta.index)), desc, true
-		case "input":
-			return NewString(a.execMeta.input), desc, true
-		case "groups":
-			return Undefined, desc, true
+		if v, ok := a.execMeta.get(name); ok {
+			return v, PropertyDesc{Writable: true, Enumerable: true, Configurable: true}, true
 		}
 	}
 	if a.properties == nil {
@@ -2732,18 +2802,39 @@ func (a *ArrayObject) GetOwnAccessor(name string) (Value, Value, bool, bool, boo
 
 // NamedPropertyKeys returns all named (non-numeric) property keys on the array
 func (a *ArrayObject) NamedPropertyKeys() []string {
-	if a.properties == nil {
-		return nil
+	var keys []string
+	if a.execMeta != nil {
+		// index, input, groups (and indices) are own enumerable properties
+		// of an exec result, created in this order right after the captures.
+		keys = append(keys, a.execMeta.keys()...)
 	}
-	keys := make([]string, 0, len(a.properties))
 	for k := range a.properties {
 		keys = append(keys, k)
 	}
 	return keys
 }
 
+// LooksLikeArrayIndex reports whether key is a canonical array index string
+// ("0", "17", but never "01" or "length"), as opposed to a named property.
+func LooksLikeArrayIndex(key string) bool {
+	if key == "" || (len(key) > 1 && key[0] == '0') {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		if key[i] < '0' || key[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // GetNamedPropertyDescriptor returns the value and descriptor for a named property
 func (a *ArrayObject) GetNamedPropertyDescriptor(name string) (Value, bool, bool) {
+	if a.execMeta != nil {
+		if v, ok := a.execMeta.get(name); ok {
+			return v, true, true
+		}
+	}
 	if a.properties == nil {
 		return Undefined, false, false
 	}

@@ -2213,8 +2213,8 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, 
 			seenFlags := make(map[byte]bool)
 			for i := 0; i < len(flagsStr); i++ {
 				flag := flagsStr[i]
-				// Valid JavaScript regex flags: g, i, m, s, u, y
-				if flag != 'g' && flag != 'i' && flag != 'm' && flag != 's' && flag != 'u' && flag != 'y' {
+				// Valid JavaScript regex flags: d, g, i, m, s, u, v, y (#195)
+				if !strings.ContainsRune("dgimsuvy", rune(flag)) {
 					debugPrintf("readRegexLiteral: invalid flag '%c' found, backtracking", flag)
 					// Backtrack on invalid flag
 					l.position = savedPosition
@@ -2234,6 +2234,16 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, 
 					return "", "", false, true // Duplicate flag but complete regex
 				}
 				seenFlags[flag] = true
+			}
+			// `u` and `v` are mutually exclusive: a pattern is in Unicode mode
+			// or UnicodeSets mode, never both.
+			if seenFlags['u'] && seenFlags['v'] {
+				l.position = savedPosition
+				l.readPosition = savedReadPosition
+				l.ch = savedCh
+				l.line = savedLine
+				l.column = savedColumn
+				return "", "", false, true // Conflicting flags but complete regex
 			}
 
 			return patternBuilder.String(), flagsStr, true, true

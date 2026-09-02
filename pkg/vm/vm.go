@@ -14044,6 +14044,18 @@ startExecution:
 						}
 					}
 				}
+				// Then the named (non-index) own properties: an exec result's
+				// index/input/groups/indices, or anything a program stored on
+				// the array. Sparse indices living in the named store were
+				// already handled by the index loop above.
+				for _, key := range arr.NamedPropertyKeys() {
+					if LooksLikeArrayIndex(key) {
+						continue
+					}
+					if _, enumerable, ok := arr.GetNamedPropertyDescriptor(key); ok && enumerable {
+						keys = append(keys, key)
+					}
+				}
 			case TypeArguments:
 				// Arguments objects enumerate their indices as strings, skipping
 				// any made non-enumerable (or deleted) via Object.defineProperty/
