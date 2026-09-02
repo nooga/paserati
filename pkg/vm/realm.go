@@ -27,6 +27,7 @@ type Realm struct {
 	WeakSetPrototype              Value
 	WeakRefPrototype              Value
 	FinalizationRegistryPrototype Value
+	IntlSegmenterPrototype        Value // %Intl.Segmenter.prototype%
 	GeneratorPrototype            Value
 	AsyncGeneratorPrototype       Value
 	IteratorPrototype             Value // %Iterator.prototype% - base for all iterators
@@ -161,6 +162,7 @@ func (r *Realm) InitializePrototypes() {
 	r.WeakSetPrototype = NewObject(r.ObjectPrototype)
 	r.WeakRefPrototype = NewObject(r.ObjectPrototype)
 	r.FinalizationRegistryPrototype = NewObject(r.ObjectPrototype)
+	r.IntlSegmenterPrototype = NewObject(r.ObjectPrototype)
 	r.PromisePrototype = NewObject(r.ObjectPrototype)
 	r.ArrayBufferPrototype = NewObject(r.ObjectPrototype)
 	r.SharedArrayBufferPrototype = NewObject(r.ObjectPrototype)

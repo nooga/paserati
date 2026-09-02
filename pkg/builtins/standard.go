@@ -62,6 +62,7 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &FetchInitializer{})
 	initializers = append(initializers, &DateInitializer{})
 	initializers = append(initializers, &TemporalInitializer{})
+	initializers = append(initializers, &IntlInitializer{})
 	initializers = append(initializers, &PerformanceInitializer{})
 	initializers = append(initializers, &ArrayBufferInitializer{})
 	initializers = append(initializers, &SharedArrayBufferInitializer{})

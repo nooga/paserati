@@ -266,6 +266,7 @@ type VM struct {
 	WeakSetPrototype              Value
 	WeakRefPrototype              Value
 	FinalizationRegistryPrototype Value
+	IntlSegmenterPrototype        Value // %Intl.Segmenter.prototype%
 	GeneratorPrototype            Value
 	AsyncGeneratorPrototype       Value
 	IteratorPrototype             Value // %Iterator.prototype% - base for all iterators
@@ -717,6 +718,8 @@ func (vm *VM) GetPrototypeFromConstructor(constructor Value, intrinsicDefault st
 		return realm.WeakRefPrototype, nil
 	case "%FinalizationRegistryPrototype%":
 		return realm.FinalizationRegistryPrototype, nil
+	case "%Intl.Segmenter.prototype%":
+		return realm.IntlSegmenterPrototype, nil
 	case "%ErrorPrototype%":
 		return realm.ErrorPrototype, nil
 	case "%TypeErrorPrototype%":
@@ -800,6 +803,7 @@ func (vm *VM) syncPrototypesFromRealm() {
 	vm.WeakSetPrototype = r.WeakSetPrototype
 	vm.WeakRefPrototype = r.WeakRefPrototype
 	vm.FinalizationRegistryPrototype = r.FinalizationRegistryPrototype
+	vm.IntlSegmenterPrototype = r.IntlSegmenterPrototype
 	vm.PromisePrototype = r.PromisePrototype
 	vm.SymbolPrototype = r.SymbolPrototype
 	vm.DatePrototype = r.DatePrototype
@@ -897,6 +901,7 @@ func (vm *VM) SyncPrototypesToRealm() {
 	r.WeakSetPrototype = vm.WeakSetPrototype
 	r.WeakRefPrototype = vm.WeakRefPrototype
 	r.FinalizationRegistryPrototype = vm.FinalizationRegistryPrototype
+	r.IntlSegmenterPrototype = vm.IntlSegmenterPrototype
 	r.PromisePrototype = vm.PromisePrototype
 	r.SymbolPrototype = vm.SymbolPrototype
 	r.DatePrototype = vm.DatePrototype
@@ -18117,7 +18122,9 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 	}
 
 	for _, methodName := range methods {
-		// Try to get the method
+		// Try to get the method. A throwing accessor for valueOf/toString
+		// propagates: the exception is already set, so stop here (mirrors the
+		// @@toPrimitive lookup above).
 		var methodVal Value
 		ok, status, _ := vm.opGetProp(nil, 0, &val, methodName, &methodVal)
 		// A throwing accessor (e.g. `{ get toString() { throw ... } }`) leaves an

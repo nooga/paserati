@@ -90,6 +90,10 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Use the VM's Symbol.prototype
 	symbolProto := vmInstance.SymbolPrototype.AsPlainObject()
+	// The VM allocates %Symbol.prototype% before ObjectInitializer installs the
+	// real %Object.prototype%, so re-parent it now; otherwise Symbol wrapper
+	// objects never see Object.prototype (getters, hasOwnProperty, ...).
+	symbolProto.SetPrototype(vmInstance.ObjectPrototype)
 
 	// thisSymbolValue extracts the symbol from `this`:
 	// - If `this` is a Symbol primitive, return it directly
