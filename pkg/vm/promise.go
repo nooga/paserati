@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"sync"
 	"unsafe"
 )
 
@@ -29,6 +30,28 @@ type PromiseReaction struct {
 // PromiseObject represents a JavaScript Promise
 type PromiseObject struct {
 	Object
+
+	// mu guards State, Result, FulfillReactions and RejectReactions - the
+	// fields a Promise created via NewPromiseFromExecutor/NewPendingPromise
+	// can have settled from a goroutine other than the VM's own execution
+	// goroutine (e.g. fetch()'s doFetchRequestWithContext calling
+	// vm.ResolvePromise/vm.RejectPromise once its HTTP round-trip
+	// completes). Before this lock existed, every read of these fields -
+	// most notably the `await` opcode's `switch awaitedPromise.State`
+	// (vm.go) and the top-level-await drain loop's `for awaitedPromise.State
+	// == PromisePending` - raced unsynchronized against that goroutine's
+	// writes; `go test -race` flags this with nothing more than a bare
+	// NewPendingPromise() + a goroutine calling ResolvePromise() + a naive
+	// polling read, no fetch() or other feature involved. All access to
+	// these four fields must go through the methods below (snapshot/
+	// trySettle/takeReactions/addReaction), never direct field access.
+	//
+	// Frame/Function/ThisValue (async-function suspension state) and
+	// Properties/prototype are NOT guarded here: they are only ever read or
+	// written from the VM's own execution goroutine (resumed exclusively via
+	// scheduled microtasks, which always run on that same goroutine), never
+	// from an external host goroutine.
+	mu               sync.Mutex
 	State            PromiseState
 	Result           Value // Fulfillment value or rejection reason
 	FulfillReactions []PromiseReaction
@@ -46,14 +69,120 @@ type PromiseObject struct {
 func (p *PromiseObject) GetPrototype() Value  { return p.prototype }
 func (p *PromiseObject) SetPrototype(v Value) { p.prototype = v }
 
-// GetState returns the promise state
+// GetState returns the promise state. Safe to call from any goroutine.
 func (p *PromiseObject) GetState() PromiseState {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.State
 }
 
-// GetResult returns the promise result (value or reason)
+// GetResult returns the promise result (value or reason). Safe to call from
+// any goroutine.
 func (p *PromiseObject) GetResult() Value {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.Result
+}
+
+// snapshot returns a mutually consistent (State, Result) pair. Safe to call
+// from any goroutine. Prefer this over GetState()+GetResult() separately
+// when both are needed together, since two separate locked reads could
+// otherwise observe an in-between settlement (a Pending State paired with a
+// Result written moments later).
+func (p *PromiseObject) snapshot() (PromiseState, Value) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.State, p.Result
+}
+
+// trySettle atomically transitions the promise from Pending to state/value
+// and reports whether this call performed the transition (false if the
+// promise had already settled - matches the spec's [[AlreadyResolved]]
+// guard). It does not touch reactions or invoke any callback; the caller is
+// responsible for calling triggerPromiseReactions itself on success. Safe to
+// call from any goroutine.
+func (p *PromiseObject) trySettle(state PromiseState, value Value) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.State != PromisePending {
+		return false
+	}
+	p.State = state
+	p.Result = value
+	return true
+}
+
+// takeReactions atomically reads and clears the reaction list for the given
+// disposition (isFulfilled selects FulfillReactions vs RejectReactions).
+// Idempotent: a second call with nothing newly added since the first
+// returns an empty slice, which is what makes concurrent addReaction +
+// trySettle-triggered dispatch race-free without ever double-firing a
+// reaction (see the two call sites in triggerPromiseReactions callers).
+// Safe to call from any goroutine.
+func (p *PromiseObject) takeReactions(isFulfilled bool) []PromiseReaction {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if isFulfilled {
+		r := p.FulfillReactions
+		p.FulfillReactions = nil
+		return r
+	}
+	r := p.RejectReactions
+	p.RejectReactions = nil
+	return r
+}
+
+// addReaction appends a reaction for the given disposition and, in the same
+// critical section, reports the promise's current State - so a caller never
+// has to separately (and racily) check State before deciding whether to
+// also trigger dispatch immediately: whichever of {this append} or {a
+// concurrent trySettle+takeReactions pair} the mutex serializes first is
+// exactly what determines whether the newly added reaction is picked up by
+// that concurrent dispatch or needs to be dispatched by this caller instead
+// - and because takeReactions is idempotent, doing both is always safe: at
+// most one of them will find the reaction still present. Safe to call from
+// any goroutine.
+func (p *PromiseObject) addReaction(isFulfilled bool, reaction PromiseReaction) PromiseState {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if isFulfilled {
+		p.FulfillReactions = append(p.FulfillReactions, reaction)
+	} else {
+		p.RejectReactions = append(p.RejectReactions, reaction)
+	}
+	return p.State
+}
+
+// addAwaitReactions is addReaction's counterpart for `await`'s own internal
+// bookkeeping (vm.go's OpAwait), where - unlike .then()'s chaining, which
+// always needs both a fulfill and a reject reaction structurally paired to
+// build its returned promise - only ONE of onFulfill/onReject will ever
+// actually matter, because a promise's disposition is immutable once
+// settled. Determining that disposition and registering only the reaction
+// that can still fire happens in one critical section (no separate,
+// TOCTOU-prone State check beforehand): if already Fulfilled or Rejected,
+// only the matching reaction is appended; if still Pending, both are
+// appended (either could still end up firing). This is what keeps a loop
+// like `for (;;) { await cachedResolvedPromise; }` from leaking one dead
+// reaction (and its captured closure) per iteration onto the opposite,
+// permanently-inert reaction list forever - registering unconditionally via
+// two addReaction calls, as an earlier version of this fix did, avoided the
+// race but not that leak. Returns the disposition observed in the same
+// critical section, so the caller knows whether to also trigger dispatch
+// immediately. Safe to call from any goroutine.
+func (p *PromiseObject) addAwaitReactions(onFulfill, onReject PromiseReaction) PromiseState {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch p.State {
+	case PromiseFulfilled:
+		p.FulfillReactions = append(p.FulfillReactions, onFulfill)
+	case PromiseRejected:
+		p.RejectReactions = append(p.RejectReactions, onReject)
+	default: // Pending
+		p.FulfillReactions = append(p.FulfillReactions, onFulfill)
+		p.RejectReactions = append(p.RejectReactions, onReject)
+	}
+	return p.State
 }
 
 // NewPromiseFromExecutor creates a new Promise with an executor function
@@ -145,70 +274,68 @@ func (vm *VM) NewRejectedPromise(reason Value) Value {
 	return Value{typ: TypePromise, obj: promiseToUnsafe(promise)}
 }
 
-// resolvePromise fulfills a promise with a value
+// resolvePromise fulfills a promise with a value. Safe to call from any
+// goroutine (see PromiseObject's mu doc comment).
 func (vm *VM) resolvePromise(promise *PromiseObject, value Value) {
-	if promise.State != PromisePending {
-		return // Already settled
-	}
-
 	// Handle promise resolution with thenable chaining
 	if value.Type() == TypePromise {
 		otherPromise := value.AsPromise()
 		if otherPromise == nil {
-			promise.State = PromiseFulfilled
-			promise.Result = value
-			vm.triggerPromiseReactions(promise, true)
+			if promise.trySettle(PromiseFulfilled, value) {
+				vm.triggerPromiseReactions(promise, true)
+			}
 			return
 		}
 
-		if otherPromise.State == PromiseFulfilled {
-			value = otherPromise.Result
-		} else if otherPromise.State == PromiseRejected {
-			vm.rejectPromise(promise, otherPromise.Result)
-			return
-		} else {
-			// Chain to pending promise
+		otherState, otherResult := otherPromise.snapshot()
+		switch otherState {
+		case PromiseFulfilled:
+			if promise.trySettle(PromiseFulfilled, otherResult) {
+				vm.triggerPromiseReactions(promise, true)
+			}
+		case PromiseRejected:
+			vm.rejectPromise(promise, otherResult)
+		default: // Pending: chain to it
 			vm.addPromiseReaction(value, true, func(v Value) {
 				vm.resolvePromise(promise, v)
 			})
 			vm.addPromiseReaction(value, false, func(r Value) {
 				vm.rejectPromise(promise, r)
 			})
-			return
 		}
+		return
 	}
 
-	promise.State = PromiseFulfilled
-	promise.Result = value
-	vm.triggerPromiseReactions(promise, true)
+	if promise.trySettle(PromiseFulfilled, value) {
+		vm.triggerPromiseReactions(promise, true)
+	}
 }
 
-// rejectPromise rejects a promise with a reason
+// rejectPromise rejects a promise with a reason. Safe to call from any
+// goroutine (see PromiseObject's mu doc comment).
 func (vm *VM) rejectPromise(promise *PromiseObject, reason Value) {
-	if promise.State != PromisePending {
-		return // Already settled
+	if promise.trySettle(PromiseRejected, reason) {
+		vm.triggerPromiseReactions(promise, false)
 	}
-
-	promise.State = PromiseRejected
-	promise.Result = reason
-	vm.triggerPromiseReactions(promise, false)
 }
 
-// triggerPromiseReactions schedules all reactions for a settled promise
+// triggerPromiseReactions schedules all reactions for a settled promise.
+// Must only be called after the promise has actually settled (State is
+// Fulfilled/Rejected, checked via trySettle/addReaction's return value by
+// every caller) - it reads Result via GetResult() rather than trySettle's
+// return so it works equally when called for reactions added after
+// settlement (addReaction/PromiseThen's "already settled, trigger
+// immediately" paths), not just right after the settling trySettle call.
 func (vm *VM) triggerPromiseReactions(promise *PromiseObject, isFulfilled bool) {
-	var reactions []PromiseReaction
-	if isFulfilled {
-		reactions = promise.FulfillReactions
-		promise.FulfillReactions = nil
-	} else {
-		reactions = promise.RejectReactions
-		promise.RejectReactions = nil
+	reactions := promise.takeReactions(isFulfilled)
+	if len(reactions) == 0 {
+		return
 	}
+	value := promise.GetResult()
 
 	rt := vm.GetAsyncRuntime()
 	for _, reaction := range reactions {
 		reaction := reaction // Capture for closure
-		value := promise.Result
 
 		rt.ScheduleMicrotask(func() {
 			if reaction.Handler.Type() == 0 || reaction.Handler.Type() == TypeUndefined {
@@ -276,16 +403,15 @@ func (vm *VM) addPromiseReaction(promiseVal Value, isFulfilled bool, callback fu
 		Reject:  callback,
 	}
 
+	// addReaction appends and reports the current state in one atomic step -
+	// see its doc comment for why checking State separately afterward would
+	// be racy against a concurrent settle.
 	if isFulfilled {
-		promise.FulfillReactions = append(promise.FulfillReactions, reaction)
-		// If already fulfilled, trigger immediately
-		if promise.State == PromiseFulfilled {
+		if promise.addReaction(true, reaction) == PromiseFulfilled {
 			vm.triggerPromiseReactions(promise, true)
 		}
 	} else {
-		promise.RejectReactions = append(promise.RejectReactions, reaction)
-		// If already rejected, trigger immediately
-		if promise.State == PromiseRejected {
+		if promise.addReaction(false, reaction) == PromiseRejected {
 			vm.triggerPromiseReactions(promise, false)
 		}
 	}
@@ -319,10 +445,10 @@ func (vm *VM) PromiseThen(thisPromise Value, onFulfilled, onRejected Value) (Val
 					_, _ = vm.Call(reject, Undefined, []Value{r})
 				},
 			}
-			promise.FulfillReactions = append(promise.FulfillReactions, reaction)
-
-			// If already fulfilled, trigger immediately
-			if promise.State == PromiseFulfilled {
+			// addReaction appends and reports the current state atomically -
+			// see its doc comment for why a separate State check afterward
+			// would be racy against a concurrent settle.
+			if promise.addReaction(true, reaction) == PromiseFulfilled {
 				vm.triggerPromiseReactions(promise, true)
 			}
 		}
@@ -343,10 +469,7 @@ func (vm *VM) PromiseThen(thisPromise Value, onFulfilled, onRejected Value) (Val
 					_, _ = vm.Call(reject, Undefined, []Value{r})
 				},
 			}
-			promise.RejectReactions = append(promise.RejectReactions, reaction)
-
-			// If already rejected, trigger immediately
-			if promise.State == PromiseRejected {
+			if promise.addReaction(false, reaction) == PromiseRejected {
 				vm.triggerPromiseReactions(promise, false)
 			}
 		}

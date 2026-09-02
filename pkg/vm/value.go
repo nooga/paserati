@@ -1777,13 +1777,19 @@ func (v Value) inspectWithDepth(nested bool, depth int, maxDepth int) string {
 	case TypePromise:
 		promise := v.AsPromise()
 		if promise != nil {
-			switch promise.State {
+			// snapshot(), not direct field access: the promise may be
+			// settled from a goroutine other than this one (e.g. an
+			// in-flight fetch()), and inspecting it - for a console.log,
+			// say - is a perfectly ordinary thing to do concurrently with
+			// that.
+			state, result := promise.snapshot()
+			switch state {
 			case PromisePending:
 				return "Promise { <pending> }"
 			case PromiseFulfilled:
-				return fmt.Sprintf("Promise { %s }", promise.Result.inspectWithDepth(false, depth+1, maxDepth))
+				return fmt.Sprintf("Promise { %s }", result.inspectWithDepth(false, depth+1, maxDepth))
 			case PromiseRejected:
-				return fmt.Sprintf("Promise { <rejected> %s }", promise.Result.inspectWithDepth(false, depth+1, maxDepth))
+				return fmt.Sprintf("Promise { <rejected> %s }", result.inspectWithDepth(false, depth+1, maxDepth))
 			default:
 				return "Promise { <unknown state> }"
 			}
