@@ -494,13 +494,13 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 					if aborted, exists := signalObj.GetOwn("aborted"); exists {
 						if aborted.IsBoolean() && aborted.AsBoolean() {
 							// Signal is already aborted - reject immediately without async
-							reason := "AbortError: signal is aborted without reason"
+							reason := "signal is aborted without reason"
 							if r, exists := signalObj.GetOwn("reason"); exists && r.Type() != vm.TypeUndefined {
-								reason = "AbortError: " + r.ToString()
+								reason = r.ToString()
 							}
 							promise := vmInstance.NewPendingPromise()
 							promiseObj := promise.AsPromise()
-							vmInstance.RejectPromise(promiseObj, vm.NewString(reason))
+							vmInstance.RejectPromise(promiseObj, newAbortErrorValue(vmInstance, reason))
 							return promise, nil
 						}
 					}
@@ -566,27 +566,44 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}()
 		}
 
-		// Perform HTTP request asynchronously in a goroutine. cancel and rt
-		// pass ownership of "clean up the context" / "the external op is
-		// over" into doFetchRequestWithContext: on a response that streams
-		// (the common case, #205), both outlive this goroutine and are
-		// discharged later by the body-drain goroutine it starts instead.
+		// Perform HTTP request asynchronously in a goroutine. On a response
+		// that streams (the common case, #205), cancel/rt outlive this
+		// goroutine and are discharged later by the body-drain goroutine
+		// doFetchRequestWithContext starts instead; on an early-return
+		// error, *this* goroutine owns them, and must discharge them only
+		// after settling the promise below (#213 - see the doc comment on
+		// doFetchRequestWithContext for why the order matters: cancel()/
+		// rt.EndExternalOp() wake the driver's event-loop drain, and doing
+		// that before the rejection is scheduled can make the drain exit
+		// with the promise settled but its continuation never resumed).
 		go func() {
 			response, err := doFetchRequestWithContext(ctx, cancel, rt, vmInstance, url, init)
 
 			if err != nil {
-				// Check if this was a context cancellation (abort)
-				if ctx.Err() == context.Canceled {
-					reason := "AbortError: The operation was aborted"
+				// Classify by the error type doFetchRequestWithContext
+				// returned, *not* ctx.Err(): a naive post-hoc ctx.Err() ==
+				// context.Canceled check can't tell a real abort from a
+				// plain network error once cleanup (which cancels ctx) has
+				// run - and per the above, cleanup must run before we reach
+				// this line for the case that actually reached this code -
+				// so this checks the error's own type instead (#213: this
+				// branch used to be checked via ctx.Err(), which was always
+				// true here, so every non-abort failure falsely rejected as
+				// AbortError instead of the real error).
+				if _, ok := errors.AsType[*AbortError](err); ok {
+					reason := "The operation was aborted"
 					if signalObj != nil {
 						if r, exists := signalObj.GetOwn("reason"); exists && r.Type() != vm.TypeUndefined {
-							reason = "AbortError: " + r.ToString()
+							reason = r.ToString()
 						}
 					}
-					vmInstance.RejectPromise(promiseObj, vm.NewString(reason))
+					vmInstance.RejectPromise(promiseObj, newAbortErrorValue(vmInstance, reason))
 				} else {
-					vmInstance.RejectPromise(promiseObj, vm.NewString(err.Error()))
+					vmInstance.RejectPromise(promiseObj, newFetchNetworkErrorValue(vmInstance, err.Error()))
 				}
+				// Settled above; safe to wake the driver's drain loop now.
+				cancel()
+				rt.EndExternalOp()
 			} else {
 				vmInstance.ResolvePromise(promiseObj, response)
 			}
@@ -1047,6 +1064,35 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 	return vm.NewValueFromPlainObject(obj)
 }
 
+// newErrorValueWithPrototype builds an Error-shaped instance directly as
+// data - NOT by calling the Error/TypeError constructor (vm.Call). fetch()'s
+// completion runs on its own goroutine, off the VM's own goroutine, and
+// vm.Call mutates shared VM fields (currentThis/currentNewTarget) around
+// the native call with no synchronization against the main interpreter
+// loop; building the instance by hand instead only touches data freshly
+// allocated for this call, which is safe from any goroutine.
+func newErrorValueWithPrototype(proto vm.Value, name, message string) vm.Value {
+	errVal := vm.NewObject(proto)
+	obj := errVal.AsPlainObject()
+	obj.SetOwnNonEnumerable("name", vm.NewString(name))
+	obj.SetOwnNonEnumerable("message", vm.NewString(message))
+	return errVal
+}
+
+// newAbortErrorValue builds a real Error instance (name "AbortError") so a
+// fetch() abort rejects with an actual Error object rather than a bare
+// string (#214) - there is no DOMException in this runtime to construct
+// instead.
+func newAbortErrorValue(vmInstance *vm.VM, message string) vm.Value {
+	return newErrorValueWithPrototype(vmInstance.ErrorPrototype, "AbortError", message)
+}
+
+// newFetchNetworkErrorValue builds a real TypeError - what a network failure
+// rejects fetch() with per spec - instead of a bare string (#214).
+func newFetchNetworkErrorValue(vmInstance *vm.VM, message string) vm.Value {
+	return newErrorValueWithPrototype(vmInstance.TypeErrorPrototype, "TypeError", message)
+}
+
 // bytesToValue wraps raw bytes as a Uint8Array, the representation blob()/
 // bytes() resolve to.
 func bytesToValue(data []byte) vm.Value {
@@ -1057,23 +1103,22 @@ func bytesToValue(data []byte) vm.Value {
 }
 
 // doFetchRequestWithContext performs the HTTP request with context support
-// for cancellation. It owns cancel and rt for the whole request: on any
-// early return (parse error, network error, no response) it calls both
-// itself before returning. On success (#205) the response resolves as soon
-// as headers arrive - real fetch()/spec semantics, and required so an SSE
-// body that never EOFs doesn't block the fetch() promise forever - and a
-// goroutine it starts streams the body into a ReadableStream, discharging
-// cancel/rt only once that finishes (EOF, read error, or the request being
-// aborted mid-body).
+// for cancellation. On any early return (parse error, network error, no
+// response) it leaves cancel/rt untouched - the caller must discharge them
+// itself, and must do so *after* settling the fetch() promise with the
+// returned error: cancel()/rt.EndExternalOp() wake the driver's event-loop
+// drain immediately, and if that happened before the promise reaction is
+// scheduled, the drain can see nothing pending and return, leaving the
+// promise settled but its `await`/`.then()` continuation never resumed
+// (previously masked by #213, which made this path effectively dead code -
+// see the fetchFn caller for where settlement now happens first). On
+// success (#205) the response resolves as soon as headers arrive - real
+// fetch()/spec semantics, and required so an SSE body that never EOFs
+// doesn't block the fetch() promise forever - and a goroutine started here
+// streams the body into a ReadableStream, discharging cancel/rt itself only
+// once that finishes (EOF, read error, or the request being aborted
+// mid-body); the caller must NOT discharge them again in that case.
 func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, rt runtime.AsyncRuntime, vmInstance *vm.VM, url string, init vm.Value) (vm.Value, error) {
-	streaming := false
-	defer func() {
-		if !streaming {
-			cancel()
-			rt.EndExternalOp()
-		}
-	}()
-
 	// Default options
 	method := "GET"
 	headers := &FetchHeaders{headers: make(http.Header)}
@@ -1213,6 +1258,13 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 	// fires), not until the body is fully read.
 	resp, err := client.Do(req)
 	if err != nil {
+		// A canceled ctx here means the abort-signal poller genuinely fired
+		// cancel() concurrently (this function no longer cancels ctx itself
+		// before returning - see the doc comment above, #213) - so this
+		// correctly distinguishes a real abort from a plain network error.
+		if ctx.Err() == context.Canceled {
+			return vm.Undefined, &AbortError{Message: "The operation was aborted"}
+		}
 		return vm.Undefined, err
 	}
 
@@ -1229,8 +1281,6 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 
 	// Headers are in hand: hand off cancel/rt to the body-drain goroutine
 	// below instead of discharging them when this function returns.
-	streaming = true
-
 	bodyStream, controller := NewHostFedReadableStream(vmInstance)
 	bodyState := newFetchBody()
 
