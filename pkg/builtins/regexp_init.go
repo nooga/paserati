@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"fmt"
+	"github.com/nooga/paserati/pkg/wtf8"
 	"math"
 	"strconv"
 	"strings"
@@ -81,7 +82,8 @@ func regexpUnicodeEscape(c rune) string {
 // $n -> nth capture group (1-9)
 // $nn -> nth capture group (01-99)
 // $<name> -> named capture group (names is the pattern's GroupNames; nil
-//            when it has none, in which case "$<" is literal text)
+//
+//	when it has none, in which case "$<" is literal text)
 func processReplacementPattern(str string, match []int, names []string, replacement string) string {
 	var result strings.Builder
 	i := 0
@@ -978,7 +980,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 					replaceStr := replaceValue.ToString()
 					if !strings.Contains(replaceStr, "$") {
 						if isGlobal {
-							return vm.NewString(regex.ReplaceAllLiteralString(str, replaceStr)), nil
+							return vm.NewString(wtf8.JoinSurrogatePairs(regex.ReplaceAllLiteralString(str, replaceStr))), nil
 						}
 						// Non-global: replace first match only
 						match := regex.FindStringSubmatchIndex(str)
@@ -989,7 +991,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 						result.WriteString(str[:match[0]])
 						result.WriteString(replaceStr)
 						result.WriteString(str[match[1]:])
-						return vm.NewString(result.String()), nil
+						return vm.NewString(wtf8.JoinSurrogatePairs(result.String())), nil
 					}
 				}
 
@@ -1064,7 +1066,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 					}
 				}
 				result.WriteString(str[lastIndex:])
-				return vm.NewString(result.String()), nil
+				return vm.NewString(wtf8.JoinSurrogatePairs(result.String())), nil
 			}
 		}
 
@@ -1204,7 +1206,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			accumulatedResult += str[nextSourcePosition:]
 		}
 
-		return vm.NewString(accumulatedResult), nil
+		return vm.NewString(wtf8.JoinSurrogatePairs(accumulatedResult)), nil
 	})
 	regexpProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolReplace), replaceFunc, &w, &e, &c)
 

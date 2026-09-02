@@ -3,6 +3,7 @@ package builtins
 import (
 	"errors"
 	"fmt"
+	"github.com/nooga/paserati/pkg/wtf8"
 	"math"
 	"strings"
 
@@ -346,7 +347,7 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("repeat", types.NewSimpleFunction([]types.Type{types.Number}, types.String)).
 		WithProperty("padStart", types.NewOptionalFunction([]types.Type{types.Number, types.String}, types.String, []bool{false, true})).
 		WithProperty("padEnd", types.NewOptionalFunction([]types.Type{types.Number, types.String}, types.String, []bool{false, true})).
-		WithProperty("concat", types.NewVariadicFunction([]types.Type{}, types.String, types.String)).
+		WithProperty("concat", types.NewVariadicFunction([]types.Type{}, types.String, &types.ArrayType{ElementType: types.String})).
 		WithProperty("split", types.NewOptionalFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.Number}, &types.ArrayType{ElementType: types.String}, []bool{true, true})).
 		WithProperty("replace", types.NewSimpleFunction([]types.Type{
 			types.NewUnionType(types.String, types.RegExp),
@@ -638,7 +639,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if start >= end {
 			return vm.NewString(""), nil
 		}
-		return vm.NewString(thisStr[utf16ToByteOffset(thisStr, start):utf16ToByteOffset(thisStr, end)]), nil
+		return vm.NewString(vm.UTF16Substring(thisStr, start, end)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("substring", vm.NewNativeFunction(2, false, "substring", func(args []vm.Value) (vm.Value, error) {
@@ -674,7 +675,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if start > end {
 			start, end = end, start
 		}
-		return vm.NewString(thisStr[utf16ToByteOffset(thisStr, start):utf16ToByteOffset(thisStr, end)]), nil
+		return vm.NewString(vm.UTF16Substring(thisStr, start, end)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("substr", vm.NewNativeFunction(2, false, "substr", func(args []vm.Value) (vm.Value, error) {
@@ -738,7 +739,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if end < start {
 			end = start
 		}
-		return vm.NewString(thisStr[utf16ToByteOffset(thisStr, start):utf16ToByteOffset(thisStr, end)]), nil
+		return vm.NewString(vm.UTF16Substring(thisStr, start, end)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("indexOf", vm.NewNativeFunction(1, false, "indexOf", func(args []vm.Value) (vm.Value, error) {
@@ -786,6 +787,11 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		// Search over bytes, report in code units: strings.Index is the fast path
 		// and the offsets it speaks are not the ones the caller asked in.
+		// A needle holding a lone surrogate can match half of a 4-byte character,
+		// which a byte search cannot see: compare code units instead.
+		if wtf8.HasSurrogate(searchStr) {
+			return vm.NumberValue(float64(vm.UTF16IndexOf(thisStr, searchStr, position))), nil
+		}
 		startByte := utf16ToByteOffset(thisStr, position)
 		index := strings.Index(thisStr[startByte:], searchStr)
 		if index == -1 {
@@ -828,6 +834,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			} else if position > utf16Len(thisStr) {
 				position = utf16Len(thisStr)
 			}
+		}
+		if wtf8.HasSurrogate(searchStr) {
+			return vm.NumberValue(float64(vm.UTF16LastIndexOf(thisStr, searchStr, position))), nil
 		}
 		// Ensure we don't go past the end of the string
 		endPos := utf16ToByteOffset(thisStr, position) + len(searchStr)
@@ -883,6 +892,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if position >= utf16Len(thisStr) {
 			return vm.BooleanValue(false), nil
 		}
+		if wtf8.HasSurrogate(searchStr) {
+			return vm.BooleanValue(vm.UTF16IndexOf(thisStr, searchStr, position) >= 0), nil
+		}
 		return vm.BooleanValue(strings.Contains(thisStr[utf16ToByteOffset(thisStr, position):], searchStr)), nil
 	}))
 
@@ -924,6 +936,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if position >= utf16Len(thisStr) {
 			return vm.BooleanValue(false), nil
 		}
+		if wtf8.HasSurrogate(searchStr) {
+			return vm.BooleanValue(vm.UTF16HasPrefixAt(thisStr, searchStr, position)), nil
+		}
 		return vm.BooleanValue(strings.HasPrefix(thisStr[utf16ToByteOffset(thisStr, position):], searchStr)), nil
 	}))
 
@@ -963,6 +978,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			} else if length > utf16Len(thisStr) {
 				length = utf16Len(thisStr)
 			}
+		}
+		if wtf8.HasSurrogate(searchStr) {
+			return vm.BooleanValue(vm.UTF16HasSuffixAt(thisStr, searchStr, length)), nil
 		}
 		// endPos is where the caller's `length` lands in bytes; the comparison
 		// below is byte-wise because searchStr is measured the same way.
@@ -1225,7 +1243,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if count == 0 || thisStr == "" {
 			return vm.NewString(""), nil
 		}
-		return vm.NewString(strings.Repeat(thisStr, count)), nil
+		return vm.NewString(wtf8.JoinSurrogatePairs(strings.Repeat(thisStr, count))), nil
 	}))
 
 	// String.prototype.padStart - pads string at the start to reach target length
@@ -1272,24 +1290,19 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		fillLength := targetLength - stringLength
 		padUtf16 := vm.StringToUTF16(padString)
 
-		// Build the padding
-		var result strings.Builder
-		for result.Len() < fillLength {
+		// Build the padding in UTF-16 code units (fillLength counts units), then
+		// encode: a fill string's surrogates survive and are paired where adjacent.
+		padUnits := make([]uint16, 0, fillLength)
+		for len(padUnits) < fillLength && len(padUtf16) > 0 {
 			for _, unit := range padUtf16 {
-				if result.Len() >= fillLength {
+				if len(padUnits) >= fillLength {
 					break
 				}
-				result.WriteRune(rune(unit))
+				padUnits = append(padUnits, unit)
 			}
 		}
-		// Truncate if necessary and append original string
-		padding := result.String()
-		if len(vm.StringToUTF16(padding)) > fillLength {
-			// Truncate to exact fill length
-			padRunes := []rune(padding)
-			padding = string(padRunes[:fillLength])
-		}
-		return vm.NewString(padding + thisStr), nil
+		padding := vm.UTF16ToString(padUnits)
+		return vm.NewString(wtf8.Concat(padding, thisStr)), nil
 	}))
 
 	// String.prototype.padEnd - pads string at the end to reach target length
@@ -1336,24 +1349,19 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		fillLength := targetLength - stringLength
 		padUtf16 := vm.StringToUTF16(padString)
 
-		// Build the padding
-		var result strings.Builder
-		for result.Len() < fillLength {
+		// Build the padding in UTF-16 code units (fillLength counts units), then
+		// encode: a fill string's surrogates survive and are paired where adjacent.
+		padUnits := make([]uint16, 0, fillLength)
+		for len(padUnits) < fillLength && len(padUtf16) > 0 {
 			for _, unit := range padUtf16 {
-				if result.Len() >= fillLength {
+				if len(padUnits) >= fillLength {
 					break
 				}
-				result.WriteRune(rune(unit))
+				padUnits = append(padUnits, unit)
 			}
 		}
-		// Truncate if necessary and prepend original string
-		padding := result.String()
-		if len(vm.StringToUTF16(padding)) > fillLength {
-			// Truncate to exact fill length
-			padRunes := []rune(padding)
-			padding = string(padRunes[:fillLength])
-		}
-		return vm.NewString(thisStr + padding), nil
+		padding := vm.UTF16ToString(padUnits)
+		return vm.NewString(wtf8.Concat(thisStr, padding)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("concat", vm.NewNativeFunction(1, true, "concat", func(args []vm.Value) (vm.Value, error) {
@@ -1377,7 +1385,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			result += argStr
 		}
-		return vm.NewString(result), nil
+		return vm.NewString(wtf8.JoinSurrogatePairs(result)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("split", vm.NewNativeFunction(2, false, "split", func(args []vm.Value) (vm.Value, error) {
@@ -1558,16 +1566,31 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewArrayWithArgs(elements), nil
 		} else {
 			// String separator
-			if separator == "" {
-				// Split into individual characters
-				runes := []rune(thisStr)
-				count := uint32(len(runes))
-				if limit < count {
-					count = limit
+			if separator == "" || wtf8.HasSurrogate(separator) {
+				// Code-unit based split. "" yields one element per UTF-16 code unit (a
+				// surrogate pair becomes its two lone halves, as in JS), and a separator
+				// holding a lone surrogate can match half of a 4-byte character, which a
+				// byte-level strings.Split cannot see.
+				elements := []vm.Value{}
+				strLen := vm.UTF16Length(thisStr)
+				if separator == "" {
+					for i := 0; i < strLen && uint32(len(elements)) < limit; i++ {
+						elements = append(elements, vm.NewString(vm.UTF16Substring(thisStr, i, i+1)))
+					}
+					return vm.NewArrayWithArgs(elements), nil
 				}
-				elements := make([]vm.Value, count)
-				for i := uint32(0); i < count; i++ {
-					elements[i] = vm.NewString(string(runes[i]))
+				sepLen := vm.UTF16Length(separator)
+				p := 0
+				for uint32(len(elements)) < limit {
+					q := vm.UTF16IndexOf(thisStr, separator, p)
+					if q < 0 {
+						break
+					}
+					elements = append(elements, vm.NewString(vm.UTF16Substring(thisStr, p, q)))
+					p = q + sepLen
+				}
+				if uint32(len(elements)) < limit {
+					elements = append(elements, vm.NewString(vm.UTF16Substring(thisStr, p, strLen)))
 				}
 				return vm.NewArrayWithArgs(elements), nil
 			}
@@ -1677,7 +1700,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		result := thisStr[:idx] + replacement + thisStr[idx+len(searchValue):]
-		return vm.NewString(result), nil
+		return vm.NewString(wtf8.JoinSurrogatePairs(result)), nil
 	}))
 
 	// String.prototype.replaceAll - replaces all occurrences of a search string/pattern
@@ -1779,7 +1802,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 					result.WriteRune(runes[i])
 				}
 			}
-			return vm.NewString(result.String()), nil
+			return vm.NewString(wtf8.JoinSurrogatePairs(result.String())), nil
 		}
 
 		// Find all occurrences and replace
@@ -1819,7 +1842,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Add the rest of the string
 		result.WriteString(thisStr[lastIndex:])
-		return vm.NewString(result.String()), nil
+		return vm.NewString(wtf8.JoinSurrogatePairs(result.String())), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("match", vm.NewNativeFunction(1, false, "match", func(args []vm.Value) (vm.Value, error) {
@@ -2220,8 +2243,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if len(args) == 0 {
 			return vm.NewString(""), nil
 		}
-		// Use runes to properly handle Unicode code points
-		result := make([]rune, len(args))
+		// Collect UTF-16 code units; UTF16ToString pairs adjacent surrogates and
+		// keeps lone ones as WTF-8 (string(rune) would turn them into U+FFFD).
+		units := make([]uint16, len(args))
 		for i, arg := range args {
 			// BigInt to Number throws TypeError per ECMAScript
 			if arg.Type() == vm.TypeBigInt {
@@ -2242,9 +2266,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Truncate to integer and mask to 16 bits
 				code = int(math.Trunc(num)) & 0xFFFF
 			}
-			result[i] = rune(code)
+			units[i] = uint16(code)
 		}
-		return vm.NewString(string(result)), nil
+		return vm.NewString(vm.UTF16ToString(units)), nil
 	}))
 
 	// String.fromCodePoint - creates string from code points (supports full Unicode range)
@@ -2277,10 +2301,15 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if codePoint < 0 || codePoint > 0x10FFFF {
 				return vm.Undefined, vmInstance.NewRangeError("Invalid code point " + fmt.Sprintf("%d", codePoint))
 			}
-			// Convert code point to string (handles surrogate pairs automatically)
-			result.WriteRune(rune(codePoint))
+			// Surrogate code points are legal here and must survive as WTF-8 (WriteRune
+			// would emit U+FFFD); an adjacent lead+trail pair is joined below.
+			if codePoint >= 0xD800 && codePoint <= 0xDFFF {
+				wtf8.WriteCodeUnit(&result, uint16(codePoint))
+			} else {
+				result.WriteRune(rune(codePoint))
+			}
 		}
-		return vm.NewString(result.String()), nil
+		return vm.NewString(wtf8.JoinSurrogatePairs(result.String())), nil
 	}))
 
 	// String.raw - template tag function for raw string literals (21.1.2.4)

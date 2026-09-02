@@ -3,6 +3,7 @@ package vm
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/nooga/paserati/pkg/wtf8"
 	"math"
 	"math/big"
 	"os"
@@ -2414,7 +2415,7 @@ startExecution:
 			// Now convert primitives to strings
 			leftStr := leftVal.ToString()
 			rightStr := rightVal.ToString()
-			registers[destReg] = String(leftStr + rightStr)
+			registers[destReg] = String(wtf8.Concat(leftStr, rightStr))
 
 		case OpAdd, OpSubtract, OpMultiply, OpDivide,
 			OpEqual, OpNotEqual, OpStrictEqual, OpStrictNotEqual,
@@ -2584,7 +2585,7 @@ startExecution:
 						ip = frame.ip
 						continue
 					}
-					registers[destReg] = String(leftPrim.ToString() + rightPrim.ToString())
+					registers[destReg] = String(wtf8.Concat(leftPrim.ToString(), rightPrim.ToString()))
 				} else if leftPrim.IsBigInt() && rightPrim.IsBigInt() {
 					// Both are BigInt: do BigInt addition
 					result := new(big.Int).Add(leftPrim.AsBigInt(), rightPrim.AsBigInt())
@@ -17390,11 +17391,18 @@ func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 		return args, nil
 
 	case TypeString:
-		// Strings are iterable - spread into individual characters
-		str := AsString(iterableVal)
-		args := make([]Value, 0, len(str))
-		for _, char := range str {
-			args = append(args, NewString(string(char)))
+		// Strings are iterable by code point over their UTF-16 view (the same
+		// elements String.prototype[Symbol.iterator] yields): a surrogate pair is
+		// one element, a lone surrogate is one element kept as WTF-8.
+		units := StringToUTF16(AsString(iterableVal))
+		args := make([]Value, 0, len(units))
+		for i := 0; i < len(units); i++ {
+			n := 1
+			if units[i] >= 0xD800 && units[i] <= 0xDBFF && i+1 < len(units) && units[i+1] >= 0xDC00 && units[i+1] <= 0xDFFF {
+				n = 2
+			}
+			args = append(args, NewString(UTF16ToString(units[i:i+n])))
+			i += n - 1
 		}
 		return args, nil
 

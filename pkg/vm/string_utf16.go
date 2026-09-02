@@ -378,3 +378,88 @@ func stringToUTF16WithOffsets(s string, wantOffsets bool) ([]uint16, []int32) {
 	}
 	return result, offs
 }
+
+// splitsSurrogatePair reports whether UTF-16 offset i falls between the two
+// halves of a surrogate pair in s - the one place where a code unit offset
+// has no byte offset of its own.
+func splitsSurrogatePair(s string, i int) bool {
+	e := stringInfo(s)
+	if e.ascii || i <= 0 || i >= e.n {
+		return false
+	}
+	prev, cur := e.units[i-1], e.units[i]
+	return prev >= 0xD800 && prev <= 0xDBFF && cur >= 0xDC00 && cur <= 0xDFFF
+}
+
+// UTF16Substring returns the JS substring of s between UTF-16 offsets start
+// and end (0 <= start <= end <= UTF16Length(s), the caller's job). When both
+// offsets sit on character boundaries this is a zero-copy byte slice. When one
+// splits a surrogate pair - "😀".slice(1) - the result cannot be a byte slice
+// of the UTF-8 character, so it is re-encoded from the code units, which
+// yields the lone half as WTF-8 exactly as charAt would.
+func UTF16Substring(s string, start, end int) string {
+	if start >= end {
+		return ""
+	}
+	if splitsSurrogatePair(s, start) || splitsSurrogatePair(s, end) {
+		return UTF16ToString(stringInfo(s).units[start:end])
+	}
+	return s[UTF16ToByteOffset(s, start):UTF16ToByteOffset(s, end)]
+}
+
+// UTF16IndexOf is String.prototype.indexOf over code units: the first
+// position >= from where needle occurs in s, or -1. The byte-level
+// strings.Index is the fast path for well-formed needles; this is the slow
+// path for needles holding a lone surrogate, which can match half of a
+// 4-byte character and so is invisible to a byte search.
+func UTF16IndexOf(s, needle string, from int) int {
+	su, nu := StringToUTF16(s), StringToUTF16(needle)
+	if from < 0 {
+		from = 0
+	}
+	for i := from; i+len(nu) <= len(su); i++ {
+		if utf16Match(su, nu, i) {
+			return i
+		}
+	}
+	return -1
+}
+
+// UTF16LastIndexOf is String.prototype.lastIndexOf over code units: the last
+// position <= from where needle occurs in s, or -1.
+func UTF16LastIndexOf(s, needle string, from int) int {
+	su, nu := StringToUTF16(s), StringToUTF16(needle)
+	if from > len(su)-len(nu) {
+		from = len(su) - len(nu)
+	}
+	for i := from; i >= 0; i-- {
+		if utf16Match(su, nu, i) {
+			return i
+		}
+	}
+	return -1
+}
+
+// UTF16HasPrefixAt reports whether needle occurs in s exactly at code unit
+// offset at (String.prototype.startsWith with a position).
+func UTF16HasPrefixAt(s, needle string, at int) bool {
+	su, nu := StringToUTF16(s), StringToUTF16(needle)
+	return at >= 0 && at+len(nu) <= len(su) && utf16Match(su, nu, at)
+}
+
+// UTF16HasSuffixAt reports whether needle ends exactly at code unit offset
+// end in s (String.prototype.endsWith with an endPosition).
+func UTF16HasSuffixAt(s, needle string, end int) bool {
+	su, nu := StringToUTF16(s), StringToUTF16(needle)
+	start := end - len(nu)
+	return start >= 0 && end <= len(su) && utf16Match(su, nu, start)
+}
+
+func utf16Match(su, nu []uint16, at int) bool {
+	for j, u := range nu {
+		if su[at+j] != u {
+			return false
+		}
+	}
+	return true
+}
