@@ -94,6 +94,10 @@ func ownPropertiesSlot(v Value) **PlainObject {
 		if s := v.AsSet(); s != nil {
 			return &s.Properties
 		}
+	case TypePromise:
+		if p := v.AsPromise(); p != nil {
+			return &p.Properties
+		}
 	}
 	return nil
 }

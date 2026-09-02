@@ -39,7 +39,8 @@ type PromiseObject struct {
 	Function  Value           // The async function (for resumption)
 	ThisValue Value           // The 'this' value when async function was called
 
-	prototype Value // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	prototype  Value        // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	Properties *PlainObject // User-defined properties on the Promise object (e.g. `class X extends Promise { constructor() { super(...); this.foo = 1; } }`)
 }
 
 func (p *PromiseObject) GetPrototype() Value  { return p.prototype }

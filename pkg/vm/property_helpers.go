@@ -566,7 +566,13 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 			prototype = vm.AsyncGeneratorPrototype.AsPlainObject()
 		}
 	case TypePromise:
-		if vm.PromisePrototype.Type() == TypeObject {
+		if pr := objVal.AsPromise(); pr != nil && pr.prototype.Type() == TypeObject {
+			// Per-instance [[Prototype]] override set by a subclass ctor
+			// (`class S extends Promise {}`) takes precedence, so an
+			// overridden method like `then` resolves to the subclass's
+			// before falling back to the intrinsic - see paserati#198.
+			prototype = pr.prototype.AsPlainObject()
+		} else if vm.PromisePrototype.Type() == TypeObject {
 			prototype = vm.PromisePrototype.AsPlainObject()
 		}
 	case TypeTypedArray:
