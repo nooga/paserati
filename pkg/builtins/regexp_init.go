@@ -1149,14 +1149,15 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			str = toStringJS(args[0])
 		}
 
-		// Fast path: native RegExp object - use Go's regex Split directly
+		// Fast path: native RegExp object - implement the spec algorithm
+		// directly against Go's submatch-index API (captures included).
 		if rx.IsRegExp() {
 			regex := rx.AsRegExpObject()
 			if regex != nil && !regex.HasCompileError() {
 				resultArr := vm.NewArray()
 				arr := resultArr.AsArray()
 
-				// Handle limit per ECMAScript: split fully, then truncate
+				// Handle limit per ECMAScript
 				var limit uint32 = 0xFFFFFFFF
 				if len(args) >= 2 && args[1].Type() != vm.TypeUndefined {
 					lim := args[1].ToFloat()
@@ -1168,14 +1169,58 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 					}
 				}
 
-				// Split fully (unlimited), then truncate to limit
-				parts := regex.Split(str, -1)
-				for i, part := range parts {
-					if uint32(i) >= limit {
+				// Special case: empty input string (spec step 14)
+				if len(str) == 0 {
+					if regex.MatchString("") {
+						return resultArr, nil
+					}
+					arr.Append(vm.NewString(""))
+					return resultArr, nil
+				}
+
+				appendLimited := func(v vm.Value) bool {
+					arr.Append(v)
+					return uint32(arr.Length()) >= limit
+				}
+
+				// Non-overlapping matches (whole match + capture groups), byte indices.
+				allMatches := regex.FindAllStringSubmatchIndex(str, -1)
+				p := 0 // start of the next substring to emit
+				for _, match := range allMatches {
+					matchStart, matchEnd := match[0], match[1]
+					// The spec's search loop only considers positions q < size
+					// (a match can never be attempted with q at the very end of
+					// the string), so ignore a zero-length match sitting exactly
+					// at the end - it doesn't produce a trailing empty piece.
+					if matchStart >= len(str) {
 						break
 					}
-					arr.Append(vm.NewString(part))
+					// Spec step 23: a zero-length match right at the current split
+					// position doesn't split (avoids empty pieces / no progress);
+					// skip it.
+					if matchEnd == p {
+						continue
+					}
+
+					if appendLimited(vm.NewString(str[p:matchStart])) {
+						return resultArr, nil
+					}
+					p = matchEnd
+
+					for i := 2; i < len(match); i += 2 {
+						var capVal vm.Value
+						if match[i] >= 0 && match[i+1] >= 0 {
+							capVal = vm.NewString(str[match[i]:match[i+1]])
+						} else {
+							capVal = vm.Undefined
+						}
+						if appendLimited(capVal) {
+							return resultArr, nil
+						}
+					}
 				}
+
+				arr.Append(vm.NewString(str[p:]))
 				return resultArr, nil
 			}
 		}
