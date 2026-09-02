@@ -61,8 +61,8 @@ func TestHostDeclareModuleAliasSameRecord(t *testing.T) {
 		t.Fatal("fs and node:fs must be the same module record")
 	}
 
-	fsRecord := p.GetModuleLoader().GetModule("fs")
-	nodeRecord := p.GetModuleLoader().GetModule("node:fs")
+	fsRecord := p.GetModuleLoader().GetModule("fs", ".")
+	nodeRecord := p.GetModuleLoader().GetModule("node:fs", ".")
 	if fsRecord == nil || nodeRecord == nil {
 		t.Fatal("expected both specifiers to be cached")
 	}

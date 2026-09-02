@@ -130,7 +130,7 @@ func (me *ModuleEnvironment) ResolveImportedType(localName string) types.Type {
 
 	// Try to resolve the type from the source module using ModuleLoader
 	if me.ModuleLoader != nil {
-		sourceModule := me.ModuleLoader.GetModule(binding.SourceModule)
+		sourceModule := me.ModuleLoader.GetModule(binding.SourceModule, me.ModulePath)
 		// If module not loaded yet, trigger loading (needed for type checking before compilation)
 		if sourceModule == nil {
 			loaded, err := me.ModuleLoader.LoadModule(binding.SourceModule, me.ModulePath)
@@ -257,7 +257,7 @@ func (me *ModuleEnvironment) resolveReExportType(binding *ExportBinding) types.T
 	debugPrintf("// [ModuleEnv] Resolving re-export: %s from %s\n", binding.LocalName, binding.SourceModule)
 
 	// Get the source module
-	sourceModule := me.ModuleLoader.GetModule(binding.SourceModule)
+	sourceModule := me.ModuleLoader.GetModule(binding.SourceModule, me.ModulePath)
 	if sourceModule == nil {
 		debugPrintf("// [ModuleEnv] Source module '%s' not found for re-export\n", binding.SourceModule)
 		return nil

@@ -128,12 +128,22 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		return ml.loadJSONModule(specifier, fromPath)
 	}
 
-	// Check cache first
-	cachedRecord := ml.registry.Get(specifier)
+	// Check cache first. The key includes the importer: the same relative
+	// specifier text names different files from different directories (#183).
+	cacheKey := ModuleCacheKey(specifier, fromPath)
+	cachedRecord := ml.registry.Get(cacheKey)
 	debugPrintf("// [ModuleLoader] Cache check for %s: %v\n", specifier, cachedRecord != nil)
 	if cachedRecord != nil {
 		debugPrintf("// [ModuleLoader] Returning cached module: %s (has error: %v)\n", specifier, cachedRecord.GetError() != nil)
 		return cachedRecord, nil
+	}
+
+	// A specifier that is already a canonical resolved path (the compiler emits
+	// those into bytecode, see Compiler.canonicalModulePath) maps straight to
+	// its record without going through the resolvers.
+	if existing := ml.registry.GetByResolvedPath(specifier); existing != nil {
+		ml.registry.Set(cacheKey, existing)
+		return existing, nil
 	}
 
 	// Resolve the module
@@ -148,7 +158,7 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 			if resolved.Source != nil {
 				_ = resolved.Source.Close()
 			}
-			ml.registry.Set(specifier, existing)
+			ml.registry.Set(cacheKey, existing)
 			debugPrintf("// [ModuleLoader] Aliased specifier %s -> existing %s\n", specifier, resolved.ResolvedPath)
 			return existing, nil
 		}
@@ -164,7 +174,7 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 
 	// Store in registry
 	debugPrintf("// [ModuleLoader] Storing in registry: specifier=%s, resolvedPath=%s\n", specifier, record.ResolvedPath)
-	ml.registry.Set(specifier, record)
+	ml.registry.Set(cacheKey, record)
 
 	// Actually parse the module
 	err = ml.parseModuleSequential(record, resolved)
@@ -337,11 +347,16 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 func (ml *moduleLoader) loadJSONModule(specifier string, fromPath string) (*ModuleRecord, error) {
 	debugPrintf("// [ModuleLoader] loadJSONModule START: %s from %s\n", specifier, fromPath)
 
-	// Check cache first
-	cachedRecord := ml.registry.Get(specifier)
+	// Check cache first (keyed by importer + specifier, see ModuleCacheKey)
+	cacheKey := ModuleCacheKey(specifier, fromPath)
+	cachedRecord := ml.registry.Get(cacheKey)
 	if cachedRecord != nil {
 		debugPrintf("// [ModuleLoader] Returning cached JSON module: %s\n", specifier)
 		return cachedRecord, nil
+	}
+	if existing := ml.registry.GetByResolvedPath(specifier); existing != nil {
+		ml.registry.Set(cacheKey, existing)
+		return existing, nil
 	}
 
 	// Resolve the module
@@ -360,7 +375,7 @@ func (ml *moduleLoader) loadJSONModule(specifier string, fromPath string) (*Modu
 	}
 
 	// Store in registry
-	ml.registry.Set(specifier, record)
+	ml.registry.Set(cacheKey, record)
 
 	// Read JSON content
 	defer resolved.Source.Close()
@@ -726,9 +741,14 @@ func (ml *moduleLoader) AddResolver(resolver ModuleResolver) {
 	})
 }
 
-// GetModule retrieves a cached module record
-func (ml *moduleLoader) GetModule(specifier string) *ModuleRecord {
-	return ml.registry.Get(specifier)
+// GetModule retrieves a cached module record for specifier as imported from
+// fromPath, without loading it. Falls back to treating specifier as a
+// resolved path, so callers holding a canonical path can look up by it.
+func (ml *moduleLoader) GetModule(specifier, fromPath string) *ModuleRecord {
+	if record := ml.registry.Get(ModuleCacheKey(specifier, fromPath)); record != nil {
+		return record
+	}
+	return ml.registry.GetByResolvedPath(specifier)
 }
 
 // ClearCache clears the module cache

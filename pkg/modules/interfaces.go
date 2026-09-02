@@ -59,8 +59,11 @@ type ModuleLoader interface {
 	// SetVMInstance sets the VM instance for native module initialization
 	SetVMInstance(vm *vm.VM)
 
-	// GetModule retrieves a cached module record
-	GetModule(specifier string) *ModuleRecord
+	// GetModule retrieves a cached module record for specifier as imported
+	// from fromPath, without loading it. The importer matters: the same
+	// relative specifier text names different files from different
+	// directories. A specifier that is itself a resolved path is also found.
+	GetModule(specifier, fromPath string) *ModuleRecord
 
 	// ClearCache clears the module cache
 	ClearCache()
@@ -80,14 +83,15 @@ type ModuleLoader interface {
 
 // ModuleRegistry manages the cache of loaded modules
 type ModuleRegistry interface {
-	// Get retrieves a module record by specifier
+	// Get retrieves a module record by cache key (see ModuleCacheKey), or by
+	// resolved path when the key misses.
 	Get(specifier string) *ModuleRecord
 
 	// GetByResolvedPath retrieves a module record by canonical resolved path.
 	// Specifier aliases (fs vs node:fs, ./foo vs ./foo.ts) share one record.
 	GetByResolvedPath(resolvedPath string) *ModuleRecord
 
-	// Set stores a module record
+	// Set stores a module record under a cache key (see ModuleCacheKey)
 	Set(specifier string, record *ModuleRecord)
 
 	// SetParsed updates a module record with parse results

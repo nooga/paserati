@@ -114,6 +114,7 @@ type ModuleContext struct {
 	globalNames       []string         // Module-specific global variable names (for debugging)
 	namespace         Value            // Cached namespace object (ES6 9.4.6 Module Namespace Exotic Object)
 	resolvedPath      string           // Canonical path, used as fromPath for nested relative imports
+	record            ModuleRecord     // Loader record; nil for contexts pre-registered by the driver
 	collectingExports bool             // Guard against re-export collection recursion
 }
 
@@ -1002,6 +1003,31 @@ func (vm *VM) moduleFromPath() string {
 		return "."
 	}
 	return vm.currentModulePath
+}
+
+// moduleContextKey maps an import specifier, as written at the current import
+// site, to the key its ModuleContext lives under: the loader's canonical
+// resolved path. Keying by the raw specifier text conflated distinct files
+// imported by the same relative spelling from different directories (#183).
+// The loader record comes back too so callers need not resolve twice. When
+// there is no loader or resolution fails the raw specifier is returned and
+// the caller surfaces the failure through its own load path.
+func (vm *VM) moduleContextKey(modulePath string) (string, ModuleRecord) {
+	// Bytecode carries resolved paths already; those hit directly.
+	if ctx, exists := vm.moduleContexts[modulePath]; exists && ctx != nil {
+		return modulePath, ctx.record
+	}
+	if vm.moduleLoader == nil {
+		return modulePath, nil
+	}
+	rec, err := vm.moduleLoader.LoadModule(modulePath, vm.moduleFromPath())
+	if err != nil || rec == nil {
+		return modulePath, nil
+	}
+	if resolved := rec.GetResolvedPath(); resolved != "" {
+		return resolved, rec
+	}
+	return modulePath, rec
 }
 
 // RegisterExecutingModule pre-registers a module context for a module that the driver
@@ -13317,7 +13343,13 @@ startExecution:
 			importMetaObj := importMetaValue.AsDictObject()
 
 			// Set import.meta.url to a file:// URL for filesystem modules (native:// unchanged).
-			if url := ImportMetaURLWithBase(vm.currentModulePath, vm.importMetaBaseDir); url != "" {
+			// The chunk's own module, not whichever module is running now (see
+			// Chunk.ModulePath); a function's import.meta must name its file.
+			metaModulePath := vm.currentModulePath
+			if function.Chunk.ModulePath != "" {
+				metaModulePath = function.Chunk.ModulePath
+			}
+			if url := ImportMetaURLWithBase(metaModulePath, vm.importMetaBaseDir); url != "" {
 				importMetaObj.SetOwn("url", NewString(url))
 			} else {
 				// If not in a module context, use undefined (though this shouldn't happen)
@@ -13401,7 +13433,28 @@ startExecution:
 
 			// Execute the module using the standard module loading infrastructure
 			// This goes through the resolver chain (fs, virtual, data URLs, native modules)
+			//
+			// A relative specifier resolves against the module containing this
+			// import() call, which is not necessarily the module running right
+			// now: a function exported from dirA/user.mjs and called from
+			// main.mjs still imports "./_helper.mjs" from dirA/. The chunk
+			// records its module; pin the VM's current module to it while
+			// loading, then restore.
+			prevImportFrom := vm.currentModulePath
+			if mp := function.Chunk.ModulePath; mp != "" {
+				vm.currentModulePath = mp
+			}
 			status, moduleErrVal := vm.executeModule(specifier)
+			var moduleCtx *ModuleContext
+			var ctxExists bool
+			if status == InterpretOK {
+				contextKey, _ := vm.moduleContextKey(specifier)
+				moduleCtx, ctxExists = vm.moduleContexts[contextKey]
+				if ctxExists && len(moduleCtx.exports) == 0 {
+					vm.collectModuleExports(specifier, moduleCtx)
+				}
+			}
+			vm.currentModulePath = prevImportFrom
 			if status != InterpretOK {
 				// Module load failed - reject the promise with the error.
 				// Prefer the actual thrown value (moduleErrVal) as the rejection
@@ -13437,20 +13490,14 @@ startExecution:
 				continue
 			}
 
-			// Get the module context to access its exports
-			moduleCtx, exists := vm.moduleContexts[specifier]
-			if !exists {
+			// The module context (exports already collected above)
+			if !ctxExists {
 				errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
 				errObj.SetOwn("name", NewString("Error"))
 				errObj.SetOwn("message", NewString(fmt.Sprintf("Module '%s' was loaded but context is missing", specifier)))
 				vm.rejectPromise(promiseObj, NewValueFromPlainObject(errObj))
 				registers[destReg] = promiseVal
 				continue
-			}
-
-			// Ensure exports are collected
-			if len(moduleCtx.exports) == 0 {
-				vm.collectModuleExports(specifier, moduleCtx)
 			}
 
 			// Create a namespace object containing all exports
@@ -19548,8 +19595,11 @@ func (vm *VM) convertJSONToValue(value interface{}) Value {
 }
 func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	// fmt.Printf("// [VM] executeModule: CALLED for module '%s'\n", modulePath)
+	// Contexts are keyed by resolved path, not by the specifier text (#183).
+	contextKey, moduleRecord := vm.moduleContextKey(modulePath)
+
 	// Check if module is already cached and executed
-	if moduleCtx, exists := vm.moduleContexts[modulePath]; exists {
+	if moduleCtx, exists := vm.moduleContexts[contextKey]; exists {
 		if moduleCtx.executed {
 			// Module already executed, ensure exports are collected and return success
 			if len(moduleCtx.exports) == 0 {
@@ -19567,7 +19617,7 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	}
 
 	// Load the module if not cached
-	if _, exists := vm.moduleContexts[modulePath]; !exists {
+	if _, exists := vm.moduleContexts[contextKey]; !exists {
 		// Before asking the module loader to resolve+compile this path, check whether
 		// it's actually a currently-executing module already registered under a
 		// different (but equivalent) specifier -- most commonly the entry module,
@@ -19576,8 +19626,8 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		// re-execution of the same source and, just as importantly, avoids compiling
 		// an independent copy of it whose global-index bindings would diverge from
 		// the copy actually running.
-		if aliased := vm.findExecutingModuleContext(modulePath); aliased != nil {
-			vm.moduleContexts[modulePath] = aliased
+		if aliased := vm.findExecutingModuleContext(contextKey); aliased != nil {
+			vm.moduleContexts[contextKey] = aliased
 			return InterpretOK, Undefined
 		}
 
@@ -19585,10 +19635,14 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 			return vm.runtimeError("No module loader available"), Undefined
 		}
 
-		// Load the module using the module loader. Relative specifiers must
-		// resolve against the importing module, not cwd.
-		moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, vm.moduleFromPath())
-		if err != nil {
+		// moduleContextKey already asked the loader for the record, resolving
+		// the specifier against the importing module rather than cwd. A nil
+		// record means that failed; repeat the load to surface the error.
+		if moduleRecord == nil {
+			_, err := vm.moduleLoader.LoadModule(modulePath, vm.moduleFromPath())
+			if err == nil {
+				err = fmt.Errorf("module loader returned no record")
+			}
 			return vm.runtimeErrorFrom(err, "Failed to load module '%s': %s", modulePath, err.Error()), Undefined
 		}
 
@@ -19598,27 +19652,23 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 			return vm.runtimeErrorFrom(moduleErr, "Module '%s' failed to load: %s", modulePath, moduleErr.Error()), Undefined
 		}
 
-		// The module loader already dedupes *records* by resolved path (so this
-		// specifier and some other specifier that reaches the same file on disk
-		// share one ModuleRecord, one parse, one compile). But moduleContexts here
-		// is keyed by the raw specifier text as written at *this* import site, not
-		// by resolved path -- so without this check, a second distinct specifier
-		// string resolving to a module already executed (or currently executing)
-		// under a different spelling would fall through to "create a new context
-		// and run the chunk", re-running that module's top-level code and
-		// duplicating its side effects. findExecutingModuleContext (above) already
-		// guards the in-flight/circular case by resolved path; this guards the
-		// already-finished case the same way.
+		// Contexts are keyed by resolved path, so a second spelling of the same
+		// file normally lands on the same key above. The exception is a context
+		// the driver pre-registered (RegisterExecutingModule) under a path
+		// spelled differently from the loader's resolved path; without this
+		// check that module would be run a second time, duplicating its
+		// top-level side effects. findExecutingModuleContext (above) guards the
+		// in-flight/circular case; this guards the already-finished case.
 		if resolvedPath := moduleRecord.GetResolvedPath(); resolvedPath != "" {
 			for path, ctx := range vm.moduleContexts {
-				if path == modulePath || ctx == nil || ctx.resolvedPath != resolvedPath {
+				if path == contextKey || ctx == nil || ctx.resolvedPath != resolvedPath {
 					continue
 				}
 				// Only alias the key when we can actually skip re-running the
 				// chunk below; otherwise leave moduleContexts untouched so the
 				// fresh-context path below (unchanged) is the single writer.
 				if ctx.executed || ctx.executing {
-					vm.moduleContexts[modulePath] = ctx
+					vm.moduleContexts[contextKey] = ctx
 					return InterpretOK, Undefined
 				}
 				break
@@ -19635,11 +19685,12 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 			}
 
 			// Create module context for JSON module with default export
-			vm.moduleContexts[modulePath] = &ModuleContext{
+			vm.moduleContexts[contextKey] = &ModuleContext{
 				chunk:        nil, // JSON modules don't have chunks
 				exports:      map[string]Value{"default": jsonValue},
 				executed:     true, // JSON modules are immediately "executed"
 				resolvedPath: moduleRecord.GetResolvedPath(),
+				record:       moduleRecord,
 			}
 			return InterpretOK, Undefined
 		}
@@ -19654,17 +19705,18 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 
 		// Create module context without module-scoped globals
 		// All modules now use the unified heap
-		vm.moduleContexts[modulePath] = &ModuleContext{
+		vm.moduleContexts[contextKey] = &ModuleContext{
 			chunk:        chunk,
 			exports:      make(map[string]Value),
 			executed:     false,
 			globals:      nil, // No longer used - unified heap replaces this
 			globalNames:  nil, // No longer used - unified heap replaces this
 			resolvedPath: moduleRecord.GetResolvedPath(),
+			record:       moduleRecord,
 		}
 	}
 
-	moduleCtx := vm.moduleContexts[modulePath]
+	moduleCtx := vm.moduleContexts[contextKey]
 
 	// If already executed, return success
 	if moduleCtx.executed {
@@ -19678,27 +19730,13 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		moduleCtx.executing = false
 	}()
 
-	// Push current execution context onto stack with deep copy of registers
-	if vm.frameCount > 0 {
-		currentFrame := vm.frames[vm.frameCount-1]
-
-		// Deep copy the register values for proper isolation
-		registerCount := len(currentFrame.registers)
-		savedRegisters := make([]Value, registerCount)
-		copy(savedRegisters, currentFrame.registers)
-
-		ctx := ExecutionContext{
-			frame:              currentFrame,
-			frameCount:         vm.frameCount,
-			nextRegSlot:        vm.nextRegSlot,
-			currentModulePath:  vm.currentModulePath,
-			savedRegisters:     savedRegisters,
-			savedRegisterCount: registerCount,
-		}
-		vm.executionContextStack = append(vm.executionContextStack, ctx)
-
-		// fmt.Printf("// [VM] executeModule: Saved execution context with %d registers deep copied\n", registerCount)
-	}
+	// The module frame runs on top of the current stack (see below), so the
+	// caller's frames and registers are left untouched; only the current
+	// module path needs saving. (This used to deep-copy the innermost frame's
+	// registers because the module was run in frame slot 0, over the entry
+	// frame; that also silently reverted writes the module made through
+	// upvalues into the caller's registers.)
+	savedModulePath := vm.currentModulePath
 
 	// Set current module context for nested relative imports and import.meta
 	if moduleCtx.resolvedPath != "" {
@@ -19767,22 +19805,53 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		return vm.runtimeError("Register stack overflow during module execution"), Undefined
 	}
 
-	// Save current frame state for isolation
+	// Save current frame state. The module frame is popped by its own OpReturn,
+	// or left in place by an uncaught exception; either way both are restored
+	// below.
 	savedFrameCount := vm.frameCount
 	savedNextRegSlot := vm.nextRegSlot
+	savedCrossedNative := vm.unwindingCrossedNative
+	if vm.frameCount >= len(vm.frames) {
+		return vm.runtimeError("Frame stack overflow during module execution"), Undefined
+	}
 
-	// Execute module as top-level frame (frameCount=1) for proper isolation
-	vm.frameCount = 0
-	vm.nextRegSlot = 0
-
-	// Push module frame as the ONLY frame (frameCount will become 1)
+	// Push the module frame ON TOP of the current stack, like a nested eval
+	// (Interpret) or a native-to-bytecode call (CallFunctionDirectly). It used
+	// to reset frameCount and nextRegSlot to 0 and run the module in frame
+	// slot 0: fine for an import at the entry module's top level, whose frame
+	// is slot 0 and was saved and restored, but whenever the import happened
+	// inside a function call - a dynamic import() in a function body - the
+	// module overwrote the entry frame and every outer register window, and
+	// only the innermost frame was restored, so the caller resumed with
+	// garbage in its registers. isDirectCall makes vm.run() return when this
+	// frame returns, and makes the exception unwinder stop at it instead of
+	// walking into the caller's handlers.
 	frame := &vm.frames[vm.frameCount]
 	frame.closure = mainClosureObj
 	frame.ip = 0
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+scriptRegSize]
+	for i := range frame.registers {
+		frame.registers[i] = Undefined // slots above nextRegSlot hold stale values
+	}
 	frame.allocatedRegSize = scriptRegSize // Track actual allocation for proper cleanup
-	frame.targetRegister = 0
+	frame.targetRegister = 0               // a direct-call return writes no caller register
 	frame.thisValue = Undefined
+	frame.homeObject = Undefined
+	frame.isConstructorCall = false
+	frame.newTargetValue = Undefined
+	frame.isDirectCall = vm.frameCount > 0
+	frame.isSentinelFrame = false
+	frame.isGeneratorPrologue = false
+	frame.argCount = 0
+	frame.args = nil
+	frame.argumentsObject = Undefined
+	frame.calleeValue = Undefined
+	frame.isNativeFrame = false
+	frame.nativeReturnCh = nil
+	frame.nativeYieldCh = nil
+	frame.nativeCompleteCh = nil
+	frame.generatorObj = nil
+	frame.promiseObj = nil
 	frame.openUpvalues = nil // frame slot may have been used before; start with no open upvalues
 	// Allocate this frame's spill slots, matching every other frame-setup site
 	// (Interpret, Call, Construct): a module whose top level spills a binding
@@ -19798,10 +19867,8 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	vm.nextRegSlot += scriptRegSize
 	vm.frameCount++
 
-	// fmt.Printf("// [VM DEBUG] executeModule: Module '%s' executing with frameCount=%d (isolated)\n", modulePath, vm.frameCount)
-
-	// Execute module directly using isolated vm.run() call
-	// Now the module will execute as frameCount=1 and OpReturn will exit at frameCount=0
+	// Run the module; vm.run() returns when the module frame returns (direct
+	// call) or, when there was no caller frame, when the stack empties.
 	resultStatus, result := vm.run()
 
 	// Capture any JavaScript exception that was thrown but not caught
@@ -19819,13 +19886,17 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	if vm.unwinding && vm.currentException != Null {
 		moduleException = vm.currentException
 		hasModuleException = true
-		// Clear the unwinding state since we're handling the exception here
+		// Clear the unwinding state since we're handling the exception here.
+		// The unwinder stopped at our direct-call frame and flagged the
+		// crossing; we consume the exception, so put that flag back too.
 		vm.unwinding = false
 		vm.currentException = Null
+		vm.unwindingCrossedNative = savedCrossedNative
 		resultStatus = InterpretRuntimeError
 	}
 
-	// Restore frame state after module execution
+	// Restore frame state after module execution (pops the module frame, and
+	// anything an uncaught exception left above it)
 	vm.frameCount = savedFrameCount
 	vm.nextRegSlot = savedNextRegSlot
 	// fmt.Printf("// [VM DEBUG] executeModule: Module '%s' completed, frameCount restored to %d\n", modulePath, vm.frameCount)
@@ -19873,31 +19944,8 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	//	}
 	// }
 
-	// Pop and restore execution context from stack with deep copied registers
-	if len(vm.executionContextStack) > 0 {
-		ctx := vm.executionContextStack[len(vm.executionContextStack)-1]
-		vm.executionContextStack = vm.executionContextStack[:len(vm.executionContextStack)-1]
-
-		vm.frameCount = ctx.frameCount
-		vm.nextRegSlot = ctx.nextRegSlot
-		if vm.frameCount > 0 {
-			vm.frames[vm.frameCount-1] = ctx.frame
-
-			// Restore the deep copied register values for proper isolation
-			if len(ctx.savedRegisters) > 0 && ctx.savedRegisterCount > 0 {
-				// Ensure we don't exceed the current frame's register capacity
-				restoreCount := ctx.savedRegisterCount
-				if restoreCount > len(vm.frames[vm.frameCount-1].registers) {
-					restoreCount = len(vm.frames[vm.frameCount-1].registers)
-				}
-
-				copy(vm.frames[vm.frameCount-1].registers[:restoreCount], ctx.savedRegisters[:restoreCount])
-				// fmt.Printf("// [VM] executeModule: Restored execution context with %d registers deep copied back\n", restoreCount)
-			}
-		}
-		// fmt.Printf("// [VM DEBUG] executeModule: Context restore from '%s' to '%s'\n", vm.currentModulePath, ctx.currentModulePath)
-		vm.currentModulePath = ctx.currentModulePath
-	}
+	// Back to the importing module's context
+	vm.currentModulePath = savedModulePath
 
 	// With unified heap, success is determined by execution status rather than module globals
 	// Since moduleCtx.globals is nil (unified heap replaces it), check execution status directly
@@ -19942,13 +19990,18 @@ func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) 
 	if vm.moduleLoader == nil {
 		return
 	}
-	from := vm.moduleFromPath()
-	if moduleCtx != nil && moduleCtx.resolvedPath != "" {
-		from = moduleCtx.resolvedPath
-	}
-	moduleRecord, err := vm.moduleLoader.LoadModule(modulePath, from)
-	if err != nil {
-		return
+	moduleRecord := moduleCtx.record
+	if moduleRecord == nil {
+		// Contexts pre-registered by the driver carry no record; re-resolve.
+		from := vm.moduleFromPath()
+		if moduleCtx.resolvedPath != "" {
+			from = moduleCtx.resolvedPath
+		}
+		rec, err := vm.moduleLoader.LoadModule(modulePath, from)
+		if err != nil {
+			return
+		}
+		moduleRecord = rec
 	}
 
 	if moduleCtx.collectingExports {
@@ -20033,7 +20086,8 @@ func (vm *VM) GetModuleExport(fromResolvedPath, modulePath, exportName string) V
 
 // getModuleExport retrieves an exported value from a module
 func (vm *VM) getModuleExport(modulePath string, exportName string) Value {
-	moduleCtx, exists := vm.moduleContexts[modulePath]
+	contextKey, _ := vm.moduleContextKey(modulePath)
+	moduleCtx, exists := vm.moduleContexts[contextKey]
 	if !exists {
 		moduleCtx, exists = vm.findModuleContextByResolved(modulePath)
 	}
@@ -20081,9 +20135,10 @@ func (vm *VM) DebugPrintGlobals() {
 }
 
 func (vm *VM) createModuleNamespace(modulePath string) Value {
+	contextKey, _ := vm.moduleContextKey(modulePath)
 
 	// Check if module context exists
-	if moduleCtx, exists := vm.moduleContexts[modulePath]; exists {
+	if moduleCtx, exists := vm.moduleContexts[contextKey]; exists {
 
 		// Always try to collect exports if they haven't been collected yet
 		// This is crucial for having complete export lists before caching
