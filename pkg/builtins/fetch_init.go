@@ -599,7 +599,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 					}
 					vmInstance.RejectPromise(promiseObj, newAbortErrorValue(vmInstance, reason))
 				} else {
-					vmInstance.RejectPromise(promiseObj, newFetchNetworkErrorValue(vmInstance, err.Error()))
+					vmInstance.RejectPromise(promiseObj, newTypeErrorValue(vmInstance, err.Error()))
 				}
 				// Settled above; safe to wake the driver's drain loop now.
 				cancel()
@@ -1087,10 +1087,23 @@ func newAbortErrorValue(vmInstance *vm.VM, message string) vm.Value {
 	return newErrorValueWithPrototype(vmInstance.ErrorPrototype, "AbortError", message)
 }
 
-// newFetchNetworkErrorValue builds a real TypeError - what a network failure
-// rejects fetch() with per spec - instead of a bare string (#214).
-func newFetchNetworkErrorValue(vmInstance *vm.VM, message string) vm.Value {
+// newTypeErrorValue builds a real TypeError instance - what a network
+// failure rejects fetch() with per spec - instead of a bare string (#214).
+// Safe to call from any goroutine; see newErrorValueWithPrototype.
+func newTypeErrorValue(vmInstance *vm.VM, message string) vm.Value {
 	return newErrorValueWithPrototype(vmInstance.TypeErrorPrototype, "TypeError", message)
+}
+
+// newTypeError is newTypeErrorValue wrapped as a Go error via
+// vmInstance.NewExceptionError, for call sites inside doFetchRequestWithContext
+// that return (vm.Value, error) directly rather than settling a promise -
+// they too run on fetch()'s background goroutine, so they need the same
+// goroutine-safe construction (vmInstance.NewTypeError itself is not safe
+// here: it calls the TypeError constructor via vm.Call, which mutates
+// shared VM fields with no synchronization against the main interpreter
+// loop - see newErrorValueWithPrototype).
+func newTypeError(vmInstance *vm.VM, message string) error {
+	return vmInstance.NewExceptionError(newTypeErrorValue(vmInstance, message))
 }
 
 // bytesToValue wraps raw bytes as a Uint8Array, the representation blob()/
@@ -1175,14 +1188,14 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 						// Auto-stringify objects for JSON content type
 						jsonBytes, err := b.MarshalJSON()
 						if err != nil {
-							return vm.Undefined, vmInstance.NewTypeError("failed to serialize body to JSON: " + err.Error())
+							return vm.Undefined, newTypeError(vmInstance, "failed to serialize body to JSON: "+err.Error())
 						}
 						body = bytes.NewReader(jsonBytes)
 					} else if b.Type() == vm.TypeObject || b.Type() == vm.TypeDictObject {
 						// Default to JSON for objects
 						jsonBytes, err := b.MarshalJSON()
 						if err != nil {
-							return vm.Undefined, vmInstance.NewTypeError("failed to serialize body to JSON: " + err.Error())
+							return vm.Undefined, newTypeError(vmInstance, "failed to serialize body to JSON: "+err.Error())
 						}
 						body = bytes.NewReader(jsonBytes)
 					} else {
