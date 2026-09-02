@@ -119,8 +119,33 @@ func (t *TextDecoderInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewString(""), nil
 		}
 		input := args[0]
-		// Handle ArrayObject (Uint8Array-like)
-		if input.Type() == vm.TypeArray {
+		switch input.Type() {
+		case vm.TypeTypedArray:
+			// A real Uint8Array (or any other TypedArray view) - the case that
+			// matters most, since every ReadableStream/fetch body chunk is one
+			// (#212). Per spec, decode() treats the input as a raw byte range:
+			// the view's byteOffset/byteLength window into its backing buffer,
+			// regardless of the view's element kind.
+			ta := input.AsTypedArray()
+			raw := ta.GetBufferData().GetData()
+			start := ta.GetByteOffset()
+			end := start + ta.GetByteLength()
+			if start > len(raw) {
+				start = len(raw)
+			}
+			if end > len(raw) {
+				end = len(raw)
+			}
+			if start > end {
+				start = end
+			}
+			return vm.NewString(string(raw[start:end])), nil
+		case vm.TypeArrayBuffer:
+			ab := input.AsArrayBuffer()
+			return vm.NewString(string(ab.GetData())), nil
+		case vm.TypeArray:
+			// Not a real BufferSource, but TextEncoder.encode() here still
+			// returns a plain array of byte values - keep decoding those.
 			arrObj := input.AsArray()
 			bytes := make([]byte, arrObj.Length())
 			for i := 0; i < arrObj.Length(); i++ {
@@ -128,8 +153,9 @@ func (t *TextDecoderInitializer) InitRuntime(ctx *RuntimeContext) error {
 				bytes[i] = byte(val.ToFloat())
 			}
 			return vm.NewString(string(bytes)), nil
+		default:
+			return vm.NewString(input.ToString()), nil
 		}
-		return vm.NewString(input.ToString()), nil
 	}))
 
 	ctor := vm.NewNativeFunction(0, true, "TextDecoder", func(args []vm.Value) (vm.Value, error) {
