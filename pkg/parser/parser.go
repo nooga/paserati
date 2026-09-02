@@ -7155,11 +7155,10 @@ func (p *Parser) parseObjectLiteral() Expression {
 				var key Expression
 				var funcLit *FunctionLiteral
 
-				// Handle different name types
-				if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.YIELD) ||
-					p.curTokenIs(lexer.GET) || p.curTokenIs(lexer.SET) ||
-					p.curTokenIs(lexer.THROW) || p.curTokenIs(lexer.RETURN) ||
-					p.curTokenIs(lexer.LET) || p.curTokenIs(lexer.AWAIT) {
+				// Handle different name types. A method's PropertyName is an
+				// IdentifierName, which includes every reserved word (#203) -
+				// not just the handful this branch used to hand-maintain.
+				if p.isIdentifierNameToken(p.curToken) {
 					key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 					funcLit = &FunctionLiteral{
 						Token:       asyncToken,
@@ -7290,12 +7289,12 @@ func (p *Parser) parseObjectLiteral() Expression {
 				var key Expression
 				var funcLit *FunctionLiteral
 
-				// Handle different name types for generator methods
-				if p.curTokenIs(lexer.IDENT) || p.curTokenIs(lexer.YIELD) ||
-					p.curTokenIs(lexer.GET) || p.curTokenIs(lexer.SET) ||
-					p.curTokenIs(lexer.THROW) || p.curTokenIs(lexer.RETURN) ||
-					p.curTokenIs(lexer.LET) || p.curTokenIs(lexer.AWAIT) {
-					// *foo() or *yield() or other contextual keywords
+				// Handle different name types for generator methods. A method's
+				// PropertyName is an IdentifierName, which includes every
+				// reserved word (#203) - not just the handful this branch used
+				// to hand-maintain.
+				if p.isIdentifierNameToken(p.curToken) {
+					// *foo() or *class() or other IdentifierName
 					key = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 					funcLit = &FunctionLiteral{
 						Token:       asteriskToken,

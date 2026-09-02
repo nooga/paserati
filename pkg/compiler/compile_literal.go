@@ -830,14 +830,18 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				}
 			}
 
-			// Compile the function value
+			// Compile the function value. Use compileFunctionLiteralAsObjectMethod (not the
+			// generic compileNode dispatch) so this method is compiled with isMethod=true -
+			// otherwise its synthesized display Name (set above) gets checked as if it were
+			// a real named-function-expression binding identifier (#204).
 			valueReg := c.regAlloc.Alloc()
 			regsToFree = append(regsToFree, valueReg)
-			_, err := c.compileNode(methodDef.Value, valueReg)
+			funcConstIndex, freeSymbols, err := c.compileFunctionLiteralAsObjectMethod(methodDef.Value, "")
 			if err != nil {
 				freePropertyRegs()
 				return BadRegister, err
 			}
+			c.emitClosure(valueReg, funcConstIndex, methodDef.Value, freeSymbols)
 
 			// Handle accessor properties (getters/setters)
 			if methodDef.Kind == "getter" || methodDef.Kind == "setter" {
@@ -1131,6 +1135,18 @@ func (c *Compiler) compileFunctionLiteralAsMethod(node *parser.FunctionLiteral, 
 	return c.compileFunctionLiteralWithOptions(node, nameHint, true, true)
 }
 
+// compileFunctionLiteralAsObjectMethod compiles a function literal as an object-literal
+// method (regular method, getter, or setter). Like class methods it has [[HomeObject]] for
+// super property access (isMethod=true), but unlike class methods it is NOT unconditionally
+// strict - object literals only become strict if the enclosing scope already is (#204: a
+// method's Name is a display name synthesized from its PropertyName for the function's own
+// .name property, not a real BindingIdentifier, so isMethod=true also exempts it from the
+// eval/arguments/FutureReservedWord binding-identifier checks that only apply to genuine
+// named function expressions).
+func (c *Compiler) compileFunctionLiteralAsObjectMethod(node *parser.FunctionLiteral, nameHint string) (uint16, []*Symbol, errors.PaseratiError) {
+	return c.compileFunctionLiteralWithOptions(node, nameHint, false, true)
+}
+
 // compileFunctionLiteralAsFieldInitializer compiles a function literal as a class field initializer.
 // Field initializers are strict mode (class bodies are strict) and forbid 'arguments' access in eval.
 // This is used when wrapping class field initializer expressions in functions.
@@ -1178,8 +1194,12 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 		debugPrintf("// [compileFunctionLiteral] Detected 'use strict' directive in function body\n")
 	}
 
-	// 1.6. Strict mode validation: cannot use 'eval' or 'arguments' as function names
-	if functionCompiler.chunk.IsStrict && node.Name != nil {
+	// 1.6. Strict mode validation: cannot use 'eval' or 'arguments' as function names.
+	// This only applies to a genuine named-function-expression binding identifier,
+	// not a method's Name - for a method, node.Name is a display name synthesized
+	// from its PropertyName (an IdentifierName, which explicitly allows every
+	// reserved word) purely so the function's own .name property is correct (#204).
+	if functionCompiler.chunk.IsStrict && node.Name != nil && !isMethod {
 		if node.Name.Value == "eval" || node.Name.Value == "arguments" {
 			functionCompiler.addError(node.Name, fmt.Sprintf("SyntaxError: Function name '%s' is not allowed in strict mode", node.Name.Value))
 		}
