@@ -27,7 +27,7 @@ type RegExpObject struct {
 	compiledRegex  *regexp.Regexp  // Go's compiled regex engine (fast, RE2)
 	compiledRegex2 *regexp2.Regexp // Fallback regex engine (slower, full ECMAScript support)
 	source         string          // Original pattern string (without slashes)
-	flags          string          // JavaScript flags (g, i, m, s, u, y)
+	flags          string          // JavaScript flags (d, g, i, m, s, u, v, y)
 	global         bool            // Cached global flag for performance
 	ignoreCase     bool            // Cached ignoreCase flag
 	multiline      bool            // Cached multiline flag
@@ -44,6 +44,13 @@ func (re *RegExpObject) SetPrototype(p Value) { re.prototype = p }
 
 // NewRegExp creates a new RegExp object from pattern and flags
 func NewRegExp(pattern, flags string) (Value, error) {
+	if err := ValidateRegExpFlags(flags); err != nil {
+		return Undefined, err
+	}
+	if strings.Contains(flags, "v") && unicodeSetsUnsupportedSyntax(pattern) {
+		return Undefined, fmt.Errorf("Invalid regular expression: %s", unicodeSetsUnsupportedMessage)
+	}
+
 	// ECMAScript forbids line terminators (U+2028, U+2029) in regex patterns
 	if strings.ContainsRune(pattern, '\u2028') || strings.ContainsRune(pattern, '\u2029') {
 		return Undefined, fmt.Errorf("Invalid regular expression: line terminator in pattern")
@@ -155,6 +162,10 @@ func compileRegexEngines(pattern, flags string) *cachedCompiledRegex {
 	var compiledRegex *regexp.Regexp
 	var compiledRegex2 *regexp2.Regexp
 	var compileError string
+
+	if strings.Contains(flags, "v") && unicodeSetsUnsupportedSyntax(pattern) {
+		return &cachedCompiledRegex{compileError: unicodeSetsUnsupportedMessage}
+	}
 
 	// Try Go's standard regexp (RE2) first - it's faster
 	goPattern, err := translateJSFlagsToGo(pattern, flags)
@@ -407,21 +418,147 @@ func (r *RegExpObject) FindStringSubmatchIndexAt(s string, byteStartAt int) []in
 	return nil
 }
 
-// matchToByteIndices converts a regexp2 Match to byte index pairs
+// matchToByteIndices converts a regexp2 Match to byte index pairs, in
+// ECMAScript capture order, with -1/-1 for a group that did not participate.
 func (r *RegExpObject) matchToByteIndices(s string, match *regexp2.Match) []int {
 	groups := match.Groups()
-	runeIndices := make([]int, len(groups)*2)
-	for i, g := range groups {
-		if g.Length > 0 {
-			runeIndices[i*2] = g.Index
-			runeIndices[i*2+1] = g.Index + g.Length
-		} else {
-			runeIndices[i*2] = -1
-			runeIndices[i*2+1] = -1
+	order := r.regexp2GroupOrder()
+	runeIndices := make([]int, 0, len(order)*2)
+	for _, gi := range order {
+		// A group that took part in the match has a capture, even an empty
+		// one; only a group with no capture at all is unmatched.
+		if gi < 0 || gi >= len(groups) || len(groups[gi].Captures) == 0 {
+			runeIndices = append(runeIndices, -1, -1)
+			continue
 		}
+		g := groups[gi]
+		runeIndices = append(runeIndices, g.Index, g.Index+g.Length)
 	}
 	// Convert rune indices to byte indices
 	return runeIndexToByteIndex(s, runeIndices)
+}
+
+// regexp2GroupOrder maps ECMAScript capture numbers (source order, named and
+// unnamed alike; 0 is the whole match) to positions in a regexp2 Match's
+// Groups(). regexp2 follows .NET and numbers every unnamed group before any
+// named one, so a pattern mixing the two would otherwise report its captures
+// shuffled.
+func (r *RegExpObject) regexp2GroupOrder() []int {
+	names := ecmaCaptureNames(r.source)
+	order := make([]int, len(names))
+	unnamed := 0
+	for k := 1; k < len(names); k++ {
+		if names[k] == "" {
+			unnamed++
+			order[k] = unnamed
+		} else {
+			order[k] = r.compiledRegex2.GroupNumberFromName(names[k])
+		}
+	}
+	return order
+}
+
+// ecmaCaptureNames lists a pattern's capture groups in source order - the
+// order ECMAScript numbers them - as their names ("" for an unnamed group),
+// with element 0 standing for the whole match.
+func ecmaCaptureNames(pattern string) []string {
+	names := []string{""}
+	inClass := false
+	for i := 0; i < len(pattern); i++ {
+		c := pattern[i]
+		switch {
+		case c == '\\':
+			i++ // the escaped character is never syntax
+		case inClass:
+			if c == ']' {
+				inClass = false
+			}
+		case c == '[':
+			inClass = true
+		case c == '(':
+			if i+1 >= len(pattern) || pattern[i+1] != '?' {
+				names = append(names, "")
+			} else if i+3 < len(pattern) && pattern[i+2] == '<' && pattern[i+3] != '=' && pattern[i+3] != '!' {
+				// (?<name>...) - but not the lookbehinds (?<= and (?<!
+				if end := strings.IndexByte(pattern[i+3:], '>'); end >= 0 {
+					names = append(names, pattern[i+3:i+3+end])
+					i += 3 + end
+				}
+			}
+			// Every other (?...) form is a non-capturing construct.
+		}
+	}
+	return names
+}
+
+// GroupNames returns the pattern's capture-group names by ECMAScript capture
+// number (element 0 is the whole match, an unnamed group is ""), or nil when
+// the pattern has no named group at all.
+func (r *RegExpObject) GroupNames() []string {
+	names := ecmaCaptureNames(r.source)
+	for _, n := range names {
+		if n != "" {
+			return names
+		}
+	}
+	return nil
+}
+
+// ValidateRegExpFlags is the RegExp constructor's flag check: each flag must
+// be one of d g i m s u v y, none may repeat, and u and v are mutually
+// exclusive (a pattern is in Unicode mode or UnicodeSets mode, never both).
+func ValidateRegExpFlags(flags string) error {
+	var seen [256]bool
+	for i := 0; i < len(flags); i++ {
+		f := flags[i]
+		if !strings.ContainsRune("dgimsuvy", rune(f)) || seen[f] {
+			return fmt.Errorf("Invalid flags supplied to RegExp constructor '%s'", flags)
+		}
+		seen[f] = true
+	}
+	if seen['u'] && seen['v'] {
+		return fmt.Errorf("Invalid flags supplied to RegExp constructor '%s'", flags)
+	}
+	return nil
+}
+
+const unicodeSetsUnsupportedMessage = "UnicodeSets mode (v flag) class set operations - nested classes, --, &&, \\q{...} - are not supported"
+
+// unicodeSetsUnsupportedSyntax reports whether a v-flag pattern uses the
+// class-set syntax only UnicodeSets mode has: a nested class, `--`
+// difference, `&&` intersection, or a \q{...} string literal. Neither engine
+// implements those, and letting them through would silently match the wrong
+// thing (RE2 reads `[a--b]` as a plain class), so such a pattern is refused
+// instead. Every pattern the u flag accepts works under v as usual.
+func unicodeSetsUnsupportedSyntax(pattern string) bool {
+	inClass := false
+	for i := 0; i < len(pattern); i++ {
+		c := pattern[i]
+		if c == '\\' && i+1 < len(pattern) {
+			if inClass && pattern[i+1] == 'q' && i+2 < len(pattern) && pattern[i+2] == '{' {
+				return true
+			}
+			i++
+			continue
+		}
+		if !inClass {
+			if c == '[' {
+				inClass = true
+			}
+			continue
+		}
+		switch {
+		case c == '[':
+			return true
+		case c == ']':
+			inClass = false
+		case c == '-' && i+1 < len(pattern) && pattern[i+1] == '-':
+			return true
+		case c == '&' && i+1 < len(pattern) && pattern[i+1] == '&':
+			return true
+		}
+	}
+	return false
 }
 
 // FindAllStringSubmatchIndex returns all matches with their indices
@@ -840,8 +977,10 @@ func translateJSFlagsToGo(pattern, flags string) (string, error) {
 	// including inside `(?s:...)` in a pattern carrying no s flag at all.
 	flagPrefixes = append(flagPrefixes, "(?s)")
 
-	// Note: 'g' (global) and 'y' (sticky) are handled at the JavaScript level,
-	// not in Go's regex engine. 'u' (unicode) is default in Go.
+	// Note: 'g' (global), 'y' (sticky) and 'd' (hasIndices) are handled at
+	// the JavaScript level, not in Go's regex engine. 'u' (unicode) is the
+	// default in Go, and 'v' (unicodeSets) is a superset of it whose extra
+	// class-set syntax is refused up front (see unicodeSetsUnsupportedSyntax).
 
 	// Prepend all flag prefixes to the pattern
 	if len(flagPrefixes) > 0 {
@@ -908,6 +1047,16 @@ func (r *RegExpObject) IsMultiline() bool {
 
 func (r *RegExpObject) IsDotAll() bool {
 	return r.dotAll
+}
+
+// HasIndices reports the d flag: exec results carry an `indices` array.
+func (r *RegExpObject) HasIndices() bool {
+	return strings.Contains(r.flags, "d")
+}
+
+// IsUnicodeSets reports the v flag (UnicodeSets mode).
+func (r *RegExpObject) IsUnicodeSets() bool {
+	return strings.Contains(r.flags, "v")
 }
 
 func (r *RegExpObject) GetLastIndex() int {

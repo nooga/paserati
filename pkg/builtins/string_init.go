@@ -2393,7 +2393,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 }
 
 // createMatchAllIterator creates an iterator for String.prototype.matchAll
-func createMatchAllIterator(vmInstance *vm.VM, str string, allMatches [][]int) vm.Value {
+func createMatchAllIterator(vmInstance *vm.VM, regex *vm.RegExpObject, str string, allMatches [][]int) vm.Value {
 	// Create iterator object inheriting from %RegExpStringIteratorPrototype%
 	iterator := vm.NewObject(vmInstance.RegExpStringIteratorPrototype).AsPlainObject()
 
@@ -2410,33 +2410,9 @@ func createMatchAllIterator(vmInstance *vm.VM, str string, allMatches [][]int) v
 			result.SetOwn("value", vm.Undefined)
 			result.SetOwn("done", vm.BooleanValue(true))
 		} else {
-			// Get current match indices
-			matchIndices := allMatches[currentMatchIndex]
-
-			// Create match result array (similar to RegExp.exec result)
-			matchResult := vm.NewArray()
-			arr := matchResult.AsArray()
-
-			// Add full match first
-			if matchIndices[0] >= 0 && matchIndices[1] >= 0 {
-				arr.Append(vm.NewString(str[matchIndices[0]:matchIndices[1]]))
-			} else {
-				arr.Append(vm.Undefined)
-			}
-
-			// Add capture groups
-			for i := 2; i < len(matchIndices); i += 2 {
-				if matchIndices[i] >= 0 && matchIndices[i+1] >= 0 {
-					arr.Append(vm.NewString(str[matchIndices[i]:matchIndices[i+1]]))
-				} else {
-					arr.Append(vm.Undefined)
-				}
-			}
-
-			// Add index property, in code units — matchIndices speaks bytes.
-			arr.SetOwn("index", vm.NumberValue(float64(byteToUTF16Offset(str, matchIndices[0]))))
-			// Add input property
-			arr.SetOwn("input", vm.NewString(str))
+			// Each value is shaped like a RegExp.prototype.exec result:
+			// captures, index, input, groups (and indices under the d flag).
+			matchResult := buildRegExpExecResult(regex, str, allMatches[currentMatchIndex])
 
 			result.SetOwn("value", matchResult)
 			result.SetOwn("done", vm.BooleanValue(false))
