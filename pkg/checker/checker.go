@@ -3642,6 +3642,18 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 
 	debugPrintf("// [Checker VisitContext] Node: %T, Expected: %s\n", node, context.ExpectedType.String())
 
+	// A union expected type (`number[] | null`, `Options | undefined`,
+	// `(() => void) | null`) contextually types a literal through the one
+	// constituent the literal could be, so `[]` against `number[] | null` is
+	// `number[]` rather than the context-free `unknown[]`, which the union
+	// would then reject.
+	if union, ok := context.ExpectedType.(*types.UnionType); ok {
+		if narrowed := c.contextualTypeFromUnion(node, union); narrowed != nil {
+			debugPrintf("// [Checker VisitContext] Narrowed union context to constituent: %s\n", narrowed.String())
+			context = &ContextualType{ExpectedType: narrowed, IsContextual: context.IsContextual}
+		}
+	}
+
 	// Handle specific node types that benefit from contextual typing
 	switch node := node.(type) {
 	case *parser.ArrayLiteral:
@@ -3665,6 +3677,114 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		// For other node types, use regular visit for now
 		c.visit(node)
 	}
+}
+
+// contextualTypeFromUnion picks, out of a union expected type, the constituent
+// that should contextually type the literal `node`: array/tuple members for an
+// array literal, non-callable object members for an object literal, callable
+// members for an arrow function. It returns nil when no single constituent
+// applies; the caller then keeps the union, and the literal is checked without
+// context as before.
+func (c *Checker) contextualTypeFromUnion(node parser.Node, union *types.UnionType) types.Type {
+	var candidates []types.Type
+	switch n := node.(type) {
+	case *parser.ArrayLiteral:
+		for _, t := range union.Types {
+			switch t.(type) {
+			case *types.ArrayType, *types.TupleType:
+				candidates = append(candidates, t)
+			}
+		}
+		// An empty literal cannot disambiguate between several array
+		// constituents (tsc types it `never[]`, which fits any of them), so
+		// take the first plain array one: `[]` against `number[] | string[]`.
+		if len(n.Elements) == 0 && len(candidates) > 1 {
+			for _, t := range candidates {
+				if _, isArray := t.(*types.ArrayType); isArray {
+					return t
+				}
+			}
+		}
+	case *parser.ObjectLiteral:
+		for _, t := range union.Types {
+			switch ot := t.(type) {
+			case *types.ObjectType:
+				if !ot.IsCallable() {
+					candidates = append(candidates, t)
+				}
+			case *types.MappedType:
+				candidates = append(candidates, t)
+			}
+		}
+		if len(candidates) > 1 {
+			candidates = discriminateObjectCandidates(n, candidates)
+		}
+	case *parser.ArrowFunctionLiteral:
+		for _, t := range union.Types {
+			if ot, isObj := t.(*types.ObjectType); isObj && ot.IsCallable() {
+				candidates = append(candidates, t)
+			}
+		}
+	}
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+	return nil
+}
+
+// discriminateObjectCandidates narrows the object constituents of a union by
+// the literal-valued properties of an object literal, the way tsc picks the
+// member of a discriminated union: `{ k: "b", v: [] }` against
+// `{ k: "a"; v: number[] } | { k: "b"; v: string[] }` keeps only the second,
+// because `"b"` is not assignable to the first's `k`. A candidate is dropped
+// only when it declares the property and the literal does not fit it; other
+// properties (missing, non-literal values) leave the candidate list alone.
+func discriminateObjectCandidates(lit *parser.ObjectLiteral, candidates []types.Type) []types.Type {
+	for _, prop := range lit.Properties {
+		var keyName string
+		switch key := prop.Key.(type) {
+		case *parser.Identifier:
+			keyName = key.Value
+		case *parser.StringLiteral:
+			keyName = key.Value
+		default:
+			continue
+		}
+		var litType types.Type
+		switch v := prop.Value.(type) {
+		case *parser.StringLiteral:
+			litType = &types.LiteralType{Value: vm.String(v.Value)}
+		case *parser.NumberLiteral:
+			litType = &types.LiteralType{Value: vm.Number(v.Value)}
+		case *parser.BooleanLiteral:
+			litType = &types.LiteralType{Value: vm.BooleanValue(v.Value)}
+		default:
+			continue
+		}
+		var kept []types.Type
+		for _, cand := range candidates {
+			objType, isObj := cand.(*types.ObjectType)
+			if !isObj {
+				kept = append(kept, cand)
+				continue
+			}
+			propType, declared := objType.Properties[keyName]
+			if !declared || types.IsAssignable(litType, propType) {
+				kept = append(kept, cand)
+			}
+		}
+		if len(kept) == 0 {
+			// Nothing matches this property; keep the full list so the
+			// caller falls back to context-free checking and reports the
+			// mismatch against the whole union.
+			return candidates
+		}
+		candidates = kept
+		if len(candidates) == 1 {
+			break
+		}
+	}
+	return candidates
 }
 
 // checkArrowFunctionLiteralWithContext handles contextual typing for arrow functions
