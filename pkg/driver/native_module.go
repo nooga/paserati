@@ -179,7 +179,7 @@ func (m *ModuleBuilder) Class(name string, goStruct interface{}, constructor int
 	m.exports[name] = constructorType
 
 	// Create a constructor function that properly creates instances with prototypes
-	constructorValue := m.createClassConstructor(goStruct, constructor)
+	constructorValue := m.createClassConstructor(name, goStruct, constructor)
 	m.values[name] = constructorValue
 
 	return m
@@ -324,7 +324,7 @@ func (m *ModuleBuilder) goFunctionToVM(fn interface{}) vm.Value {
 // 1. Can be called with 'new' to create instances
 // 2. Binds methods from the Go struct to the created instance
 // 3. Sets up proper prototype chain
-func (m *ModuleBuilder) createClassConstructor(goStruct interface{}, constructor interface{}) vm.Value {
+func (m *ModuleBuilder) createClassConstructor(name string, goStruct interface{}, constructor interface{}) vm.Value {
 	constructorFn := reflect.ValueOf(constructor)
 	constructorType := reflect.TypeOf(constructor)
 	structType := reflect.TypeOf(goStruct).Elem() // Remove pointer to get struct type
@@ -333,7 +333,19 @@ func (m *ModuleBuilder) createClassConstructor(goStruct interface{}, constructor
 		return vm.Undefined
 	}
 
-	return vm.NewNativeConstructor(constructorType.NumIn(), constructorType.IsVariadic(), "class_constructor", func(args []vm.Value) (vm.Value, error) {
+	// A shared prototype object for instances to point at, so `instanceof`
+	// has something to walk to instead of throwing "Function has non-object
+	// prototype in instanceof check" (paserati#201). bindStructMethods binds
+	// methods directly onto each *instance* rather than this prototype, so
+	// it only needs to exist and carry `constructor` - nothing else reads it.
+	protoParent := vm.Undefined
+	if m.vm != nil {
+		protoParent = m.vm.ObjectPrototype
+	}
+	classPrototype := vm.NewObject(protoParent).AsPlainObject()
+	classPrototypeVal := vm.NewValueFromPlainObject(classPrototype)
+
+	constructorValue := vm.NewConstructorWithProps(constructorType.NumIn(), constructorType.IsVariadic(), name, func(args []vm.Value) (vm.Value, error) {
 		// Convert VM values to Go values for constructor call
 		goArgs := make([]reflect.Value, len(args))
 		for i, arg := range args {
@@ -370,8 +382,9 @@ func (m *ModuleBuilder) createClassConstructor(goStruct interface{}, constructor
 			return vm.Undefined, nil
 		}
 
-		// Create a VM object to represent the instance
-		instance := vm.NewObject(vm.Undefined)
+		// Create a VM object to represent the instance, chained to the
+		// class's shared prototype so `instance instanceof Class` resolves.
+		instance := vm.NewObject(classPrototypeVal)
 		instanceObj := instance.AsPlainObject()
 
 		// Bind all methods from the Go struct to the VM object
@@ -383,6 +396,13 @@ func (m *ModuleBuilder) createClassConstructor(goStruct interface{}, constructor
 
 		return instance, nil
 	})
+
+	if constructorValue.Type() == vm.TypeNativeFunctionWithProps {
+		constructorValue.AsNativeFunctionWithProps().Properties.DefineFixedProperty("prototype", classPrototypeVal)
+	}
+	classPrototype.SetOwnNonEnumerable("constructor", constructorValue)
+
+	return constructorValue
 }
 
 // bindStructMethods binds all exported methods from a Go struct to a VM object
