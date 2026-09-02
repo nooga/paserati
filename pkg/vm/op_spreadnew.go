@@ -2,6 +2,62 @@ package vm
 
 import "fmt"
 
+// populateSpreadCallRegisters copies spreadArgs into a newly-created frame's
+// parameter registers and builds any rest-parameter array, mirroring what
+// prepareCallWithGeneratorMode (call.go) already does for every other kind
+// of call (a direct call, and a spread call to an ordinary function).
+// handleOpSpreadNew (super(...)/new Foo(...) with a spread argument) had
+// neither of these (paserati#182):
+//   - without Undefined-padding, a declared parameter beyond argCount but
+//     within the callee's arity kept whatever stale value already happened
+//     to be sitting in that register-stack slot from an earlier frame that
+//     used the same slots (register-stack space is reused across frames,
+//     not zeroed per call) - only reachable, and only observable, once a
+//     spread call passes fewer arguments than the callee declares;
+//   - without rest-parameter handling, a variadic constructor's `...rest`
+//     parameter received whatever got copied positionally into its
+//     register (the first spread argument, or undefined) instead of a real
+//     array - the exact shape of a `super(...arguments)` pass-through
+//     constructor once the "arguments is not iterable" bug this issue is
+//     about stopped masking it.
+func populateSpreadCallRegisters(vmInstance *VM, calleeFunc *FunctionObject, spreadArgs []Value, registers []Value) {
+	argCount := len(spreadArgs)
+	maxArgsToCopy := argCount
+	if calleeFunc.Arity > maxArgsToCopy {
+		maxArgsToCopy = calleeFunc.Arity
+	}
+	if maxArgsToCopy > len(registers) {
+		maxArgsToCopy = len(registers)
+	}
+	for i := 0; i < maxArgsToCopy; i++ {
+		if i < argCount {
+			registers[i] = spreadArgs[i]
+		} else {
+			registers[i] = Undefined
+		}
+	}
+
+	if calleeFunc.Variadic {
+		extraArgCount := argCount - calleeFunc.Arity
+		var restArray Value
+		if extraArgCount <= 0 {
+			restArray = vmInstance.emptyRestArray
+		} else {
+			restArray = NewArray()
+			restArrayObj := restArray.AsArray()
+			for i := 0; i < extraArgCount; i++ {
+				argIndex := calleeFunc.Arity + i
+				if argIndex < len(spreadArgs) {
+					restArrayObj.Append(spreadArgs[argIndex])
+				}
+			}
+		}
+		if calleeFunc.Arity < len(registers) {
+			registers[calleeFunc.Arity] = restArray
+		}
+	}
+}
+
 // handleOpSpreadNew handles OpSpreadNew bytecode instruction for constructor calls with spread arguments
 func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, registers []Value) (InterpretResult, Value) {
 	destReg := code[*ip]
@@ -175,10 +231,11 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 			newFrame.spillSlots = nil
 		}
 
-		// Copy spread arguments to new frame
-		for i := 0; i < argCount && i < len(newFrame.registers); i++ {
-			newFrame.registers[i] = spreadArgs[i]
-		}
+		// Copy spread arguments to new frame, padding any declared parameter
+		// beyond argCount with Undefined and building a real rest-parameter
+		// array if the constructor is variadic - see populateSpreadCallRegisters
+		// (paserati#182).
+		populateSpreadCallRegisters(vm, constructorFunc, spreadArgs, newFrame.registers)
 		vm.frameCount++
 
 		// Store instance in caller's destination register
@@ -289,10 +346,11 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 			newFrame.spillSlots = nil
 		}
 
-		// Copy spread arguments to new frame
-		for i := 0; i < argCount && i < len(newFrame.registers); i++ {
-			newFrame.registers[i] = spreadArgs[i]
-		}
+		// Copy spread arguments to new frame, padding any declared parameter
+		// beyond argCount with Undefined and building a real rest-parameter
+		// array if the constructor is variadic - see populateSpreadCallRegisters
+		// (paserati#182).
+		populateSpreadCallRegisters(vm, constructorFunc, spreadArgs, newFrame.registers)
 		vm.frameCount++
 
 		// Store instance in caller's destination register
