@@ -264,3 +264,60 @@ func TestNativeModuleClass(t *testing.T) {
 		t.Errorf("Expected 'class_test_passed', got: %v", result.ToString())
 	}
 }
+
+// TestNativeModuleClassInstanceof is a regression test for paserati#201:
+// `ModuleBuilder.Class`-registered constructors threw
+// "Function has non-object prototype in instanceof check" on `instanceof`
+// instead of the instance's prototype chain actually including the
+// constructor's `.prototype`, because createClassConstructor built its
+// constructor with no Properties table (and so nowhere to put one) and gave
+// created instances Undefined as their [[Prototype]].
+func TestNativeModuleClassInstanceof(t *testing.T) {
+	p := NewPaserati()
+
+	p.DeclareModule("geometry2", func(m *ModuleBuilder) {
+		m.Class("Point", (*Point)(nil), func(x, y float64) *Point {
+			return &Point{X: x, Y: y}
+		})
+	})
+
+	tsCode := `
+		import { Point } from "geometry2";
+
+		let p1 = new Point(3, 4);
+
+		let checks: any[] = [
+			p1 instanceof Point,
+			(new Point(0, 0)) instanceof Point,
+			typeof Point.prototype === "object",
+			p1.constructor === Point,
+			(({} as any) instanceof Point) === false,
+			// 'constructor' lives on the shared prototype as a non-enumerable
+			// property, same as FormData's - it must not leak into
+			// enumeration or serialization of an instance.
+			JSON.stringify(p1).indexOf("constructor") === -1,
+			Object.keys(p1).indexOf("constructor") === -1,
+			// Instances now chain to Object.prototype (previously
+			// Undefined), so ordinary Object.prototype methods resolve
+			// instead of being undefined.
+			typeof p1.hasOwnProperty === "function",
+			p1.hasOwnProperty("x") === true,
+			p1.hasOwnProperty("constructor") === false,
+			// The constructor's own .name should be the class name given to
+			// Class(), not the generic internal placeholder it used to be.
+			(Point as any).name === "Point",
+			p1.constructor.name === "Point",
+		];
+
+		checks.every((c) => c === true) ? "instanceof_test_passed" : "FAIL: " + JSON.stringify(checks);
+	`
+
+	result, errs := p.RunStringWithModules(tsCode)
+	if len(errs) > 0 {
+		t.Fatalf("Failed to evaluate instanceof test: %v", errs[0])
+	}
+
+	if result.ToString() != "instanceof_test_passed" {
+		t.Errorf("Expected 'instanceof_test_passed', got: %v", result.ToString())
+	}
+}
