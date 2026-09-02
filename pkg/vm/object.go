@@ -287,6 +287,25 @@ type PlainObject struct {
 	// Nil for ordinary objects; non-nil doubles as the brand check that
 	// RequireInternalSlot performs on every DisposableStack.prototype method.
 	disposableState *DisposableStackState
+	// Internal state for builtins implemented outside pkg/vm that have no
+	// dedicated object type (currently Intl.Segmenter and its Segments /
+	// Segment Iterator objects). Nil for ordinary objects; the builtin's own
+	// type assertion on the stored value is the spec's internal-slot brand
+	// check, so a plain object or another builtin's instance never passes.
+	internalSlots any
+}
+
+// InternalSlots returns the opaque builtin-specific internal state attached
+// with SetInternalSlots, or nil for ordinary objects. Kept off the property
+// storage so it is invisible to user code, like spec internal slots.
+func (o *PlainObject) InternalSlots() any {
+	return o.internalSlots
+}
+
+// SetInternalSlots attaches builtin-specific internal state; called once when
+// a builtin constructs a new instance.
+func (o *PlainObject) SetInternalSlots(state any) {
+	o.internalSlots = state
 }
 
 // InternalIterState returns the Map/Set iterator internal state, or nil for
