@@ -91,7 +91,7 @@ func NewRegExp(pattern, flags string) (Value, error) {
 		// gains, unrelated to lookaround, don't resolve inside that window.)
 		if needsRegexp2Fallback(pattern) {
 			opts := regexp2ECMAScriptOptions(flags)
-			compiledRegex2, err = regexp2.Compile(pattern, opts)
+			compiledRegex2, err = regexp2.Compile(expandDerivedUnicodeProperties(pattern), opts)
 		}
 		if compiledRegex2 == nil {
 			return Undefined, err
@@ -167,7 +167,7 @@ func compileRegexEngines(pattern, flags string) *cachedCompiledRegex {
 	// deliberately narrower fallback for the RegExp constructor - see its
 	// comment) - this function's own behavior is unchanged by paserati#172.
 	if compiledRegex == nil {
-		compiledRegex2, err = regexp2.Compile(pattern, regexp2ECMAScriptOptions(flags))
+		compiledRegex2, err = regexp2.Compile(expandDerivedUnicodeProperties(pattern), regexp2ECMAScriptOptions(flags))
 		if err != nil {
 			compileError = err.Error()
 		}
@@ -804,6 +804,12 @@ func rewriteECMAClasses(pattern string, dotAll bool) string {
 func translateJSFlagsToGo(pattern, flags string) (string, error) {
 	// Preprocess Unicode escapes (\uXXXX, \xXX) that Go's regexp doesn't support
 	pattern = preprocessUnicodeEscapes(pattern)
+
+	// Expand the two derived properties neither engine knows by name
+	// (paserati#190). After preprocessUnicodeEscapes on purpose: the expansion
+	// spells ASCII members as \xHH so class metacharacters stay escaped, and
+	// that pass would otherwise turn them back into bare syntax.
+	pattern = expandDerivedUnicodeProperties(pattern)
 
 	// Check for JavaScript features that Go's regexp doesn't support
 	// Go's regexp library doesn't support numbered backreferences like \1, \2, etc.
