@@ -15387,10 +15387,23 @@ startExecution:
 
 			// Check if we're in top-level await (no async function context)
 			if frame.promiseObj == nil {
-				// Top-level await - drain microtasks until settled for pending promises
-				if awaitedPromise.State == PromisePending {
+				// Top-level await - drain microtasks until settled for pending
+				// promises. Every check of the promise's disposition below
+				// goes through snapshot() rather than direct field access:
+				// awaitedPromise may be settled from a goroutine other than
+				// this one (e.g. fetch()'s own request goroutine calling
+				// vm.ResolvePromise once its HTTP round-trip completes), and
+				// a raw `awaitedPromise.State` read here is exactly the
+				// unsynchronized access `go test -race` catches racing
+				// against that goroutine's write.
+				tlaState, tlaResult := awaitedPromise.snapshot()
+				if tlaState == PromisePending {
 					rt := vm.GetAsyncRuntime()
-					for awaitedPromise.State == PromisePending {
+					for {
+						tlaState, tlaResult = awaitedPromise.snapshot()
+						if tlaState != PromisePending {
+							break
+						}
 						progress := false
 						if rt.RunNextTicks() {
 							progress = true
@@ -15415,8 +15428,8 @@ startExecution:
 					}
 				}
 				// Promise has settled - return result or throw
-				if awaitedPromise.State == PromiseFulfilled {
-					registers[resultReg] = awaitedPromise.Result
+				if tlaState == PromiseFulfilled {
+					registers[resultReg] = tlaResult
 					continue
 				} else {
 					// A rejected top-level await must behave like a thrown exception:
@@ -15433,7 +15446,7 @@ startExecution:
 					// this itself once consumed, and if a handler DOES exist it's simply
 					// never read (see handleUncaughtException).
 					vm.unhandledRejectionPrefix = "Uncaught (in promise)"
-					vm.throwException(awaitedPromise.Result)
+					vm.throwException(tlaResult)
 
 					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						// No handler anywhere - genuinely uncaught. throwException already
@@ -15481,73 +15494,42 @@ startExecution:
 			frame.promiseObj.Frame.openUpvalues = frame.openUpvalues
 
 			asyncPromise := frame.promiseObj
-			rt := vm.GetAsyncRuntime()
 
-			// Check promise state and schedule appropriate resumption
-			switch awaitedPromise.State {
-			case PromiseFulfilled:
-				// Promise already fulfilled - schedule resumption with value as microtask
-				fulfilledValue := awaitedPromise.Result
-				if debugAsyncAwait {
-					funcName := "?"
-					if frame.closure != nil && frame.closure.Fn != nil {
-						funcName = frame.closure.Fn.Name
-					}
-					fmt.Printf("[AWAIT-DEBUG] func=%s FULFILLED: scheduling resume with value=%s, outputReg=%d\n",
-						funcName, fulfilledValue.Inspect(), resultReg)
-				}
-				rt.ScheduleMicrotask(func() {
-					result, err := vm.resumeAsyncFunction(asyncPromise, fulfilledValue)
-					if err != nil {
-						// Reject with the real thrown value (an Error object,
-						// etc.), not a stringified Go error - exceptionError's
-						// Error() method is a fixed literal ("VM exception"),
-						// so a plain NewString(err.Error()) here would hand
-						// the .catch()/reject handler a bare string with no
-						// .message, .stack, etc. Mirrors the identical
-						// ExceptionError handling in promise.go's executor
-						// rejection path.
-						var reason Value
-						if ee, ok := err.(ExceptionError); ok {
-							reason = ee.GetExceptionValue()
-						} else {
-							reason = NewString(err.Error())
-						}
-						vm.rejectPromise(asyncPromise, reason)
-					} else if asyncPromise.Frame != nil {
-						// Async function hit another await and suspended again
-						// Don't resolve - the new await's handlers will take over
-					} else {
-						// Async function completed - resolve with final value
-						vm.resolvePromise(asyncPromise, result)
-					}
-				})
-				return InterpretOK, Undefined
-
-			case PromiseRejected:
-				// Promise already rejected - schedule resumption with throw as microtask
-				rejectedReason := awaitedPromise.Result
-				rt.ScheduleMicrotask(func() {
-					result, err := vm.resumeAsyncFunctionWithException(asyncPromise, rejectedReason)
-					if err != nil {
-						// Exception wasn't caught - reject the async promise
-						vm.rejectPromise(asyncPromise, rejectedReason)
-					} else if asyncPromise.Frame != nil {
-						// Async function hit another await and suspended again
-						// Don't resolve - the new await's handlers will take over
-					} else {
-						// Async function completed - resolve with final value
-						vm.resolvePromise(asyncPromise, result)
-					}
-				})
-				return InterpretOK, Undefined
-
-			case PromisePending:
-				// Promise is pending - attach handlers for when it settles
-				// Frame state already saved above
-
-				// Register fulfillment handler
-				awaitedPromise.FulfillReactions = append(awaitedPromise.FulfillReactions, PromiseReaction{
+			// addAwaitReactions atomically determines awaitedPromise's
+			// disposition and registers only the reaction(s) that can
+			// actually still fire for it, then we trigger dispatch
+			// ourselves if it turns out to already be settled.
+			//
+			// This unifies what used to be three separate branches (a
+			// `switch awaitedPromise.State` reading Fulfilled/Rejected/
+			// Pending, with the two "already settled" cases each hand-
+			// rolling their own rt.ScheduleMicrotask(...) call around the
+			// exact same resume logic the Pending case's reactions used)
+			// into one race-free path: the old `switch awaitedPromise.State`
+			// here was exactly the unsynchronized read `go test -race`
+			// flags racing against a concurrent settle (e.g. fetch()'s own
+			// request goroutine calling vm.ResolvePromise) - determining
+			// disposition and registering interest atomically under
+			// PromiseObject's own lock closes that gap, and doing so via
+			// addAwaitReactions specifically (rather than two separate
+			// addReaction calls) also avoids leaving a permanently-dead
+			// reaction of the opposite disposition attached to an
+			// already-settled promise forever (see its doc comment - that
+			// matters because a promise's disposition never changes once
+			// settled, so e.g. `for (;;) { await cachedResolvedPromise }`
+			// would otherwise leak one dead reaction per iteration).
+			// triggerPromiseReactions is itself idempotent (it atomically
+			// takes-and-clears the reaction list), so calling it here never
+			// risks double-firing the same reaction if the promise happens
+			// to settle and dispatch its reactions via resolvePromise/
+			// rejectPromise's own call to it at the same moment.
+			//
+			// Per ECMAScript spec, await always suspends and resumes via a
+			// microtask even for an already-settled promise;
+			// triggerPromiseReactions always defers through
+			// rt.ScheduleMicrotask, so that guarantee still holds here.
+			awaitState := awaitedPromise.addAwaitReactions(
+				PromiseReaction{
 					Handler: Undefined, // No user handler - internal resumption
 					Resolve: func(value Value) {
 						// Resume async function with fulfilled value
@@ -15555,8 +15537,12 @@ startExecution:
 						if err != nil {
 							// Resume failed - reject the async promise with the
 							// real thrown value, not a stringified Go error -
-							// see the identical fix/comment on the
-							// PromiseFulfilled case above.
+							// exceptionError's Error() method is a fixed literal
+							// ("VM exception"), so a plain NewString(err.Error())
+							// here would hand the .catch()/reject handler a bare
+							// string with no .message/.stack. Mirrors the
+							// identical ExceptionError handling in promise.go's
+							// executor rejection path.
 							var reason Value
 							if ee, ok := err.(ExceptionError); ok {
 								reason = ee.GetExceptionValue()
@@ -15576,11 +15562,9 @@ startExecution:
 						// This is called if the Resolve handler throws
 						vm.rejectPromise(asyncPromise, reason)
 					},
-				})
-
-				// Register rejection handler
+				},
 				// Note: For no-handler pass-through, triggerPromiseReactions calls Reject, not Resolve
-				awaitedPromise.RejectReactions = append(awaitedPromise.RejectReactions, PromiseReaction{
+				PromiseReaction{
 					Handler: Undefined, // No user handler - internal resumption
 					Resolve: func(reason Value) {
 						// Not called for rejection pass-through
@@ -15599,13 +15583,28 @@ startExecution:
 							vm.resolvePromise(asyncPromise, result)
 						}
 					},
-				})
+				},
+			)
 
-				// Suspend execution - return to caller
-				// The async function's promise remains pending
-				return InterpretOK, Undefined
+			if debugAsyncAwait {
+				funcName := "?"
+				if frame.closure != nil && frame.closure.Fn != nil {
+					funcName = frame.closure.Fn.Name
+				}
+				fmt.Printf("[AWAIT-DEBUG] func=%s registered reaction(s), state=%v outputReg=%d\n",
+					funcName, awaitState, resultReg)
 			}
-			continue
+
+			switch awaitState {
+			case PromiseFulfilled:
+				vm.triggerPromiseReactions(awaitedPromise, true)
+			case PromiseRejected:
+				vm.triggerPromiseReactions(awaitedPromise, false)
+			}
+
+			// Suspend execution - return to caller
+			// The async function's promise remains pending
+			return InterpretOK, Undefined
 
 		case OpDeleteProp:
 			destReg := code[ip]

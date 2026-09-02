@@ -2744,7 +2744,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 							// If mappedValue is a promise, wait for it
 							if mappedValue.Type() == vm.TypePromise {
 								mp := mappedValue.AsPromise()
-								if mp != nil && mp.State == vm.PromisePending {
+								if mp != nil && mp.GetState() == vm.PromisePending {
 									vmInstance.AddPromiseReaction(mappedValue, true, func(v vm.Value) {
 										// Add to result array
 										if A.IsArray() {
@@ -2759,10 +2759,10 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 										rejectWithError(errors.New(r.ToString()))
 									})
 									return
-								} else if mp != nil && mp.State == vm.PromiseFulfilled {
-									mappedValue = mp.Result
-								} else if mp != nil && mp.State == vm.PromiseRejected {
-									rejectWithError(errors.New(mp.Result.ToString()))
+								} else if mp != nil && mp.GetState() == vm.PromiseFulfilled {
+									mappedValue = mp.GetResult()
+								} else if mp != nil && mp.GetState() == vm.PromiseRejected {
+									rejectWithError(errors.New(mp.GetResult().ToString()))
 									return
 								}
 							}
@@ -2780,16 +2780,16 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 						// If value is a promise (for sync iterator with promise elements), wait for it
 						if value.Type() == vm.TypePromise {
 							vp := value.AsPromise()
-							if vp != nil && vp.State == vm.PromisePending {
+							if vp != nil && vp.GetState() == vm.PromisePending {
 								vmInstance.AddPromiseReaction(value, true, handleValue)
 								vmInstance.AddPromiseReaction(value, false, func(r vm.Value) {
 									rejectWithError(errors.New(r.ToString()))
 								})
 								return
-							} else if vp != nil && vp.State == vm.PromiseFulfilled {
-								value = vp.Result
-							} else if vp != nil && vp.State == vm.PromiseRejected {
-								rejectWithError(errors.New(vp.Result.ToString()))
+							} else if vp != nil && vp.GetState() == vm.PromiseFulfilled {
+								value = vp.GetResult()
+							} else if vp != nil && vp.GetState() == vm.PromiseRejected {
+								rejectWithError(errors.New(vp.GetResult().ToString()))
 								return
 							}
 						}
@@ -2799,16 +2799,16 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 					// If nextResult is a promise (async iterator), wait for it
 					if usingAsyncIterator && nextResult.Type() == vm.TypePromise {
 						np := nextResult.AsPromise()
-						if np != nil && np.State == vm.PromisePending {
+						if np != nil && np.GetState() == vm.PromisePending {
 							vmInstance.AddPromiseReaction(nextResult, true, handleNextResult)
 							vmInstance.AddPromiseReaction(nextResult, false, func(r vm.Value) {
 								rejectWithError(errors.New(r.ToString()))
 							})
 							return
-						} else if np != nil && np.State == vm.PromiseFulfilled {
-							nextResult = np.Result
-						} else if np != nil && np.State == vm.PromiseRejected {
-							rejectWithError(errors.New(np.Result.ToString()))
+						} else if np != nil && np.GetState() == vm.PromiseFulfilled {
+							nextResult = np.GetResult()
+						} else if np != nil && np.GetState() == vm.PromiseRejected {
+							rejectWithError(errors.New(np.GetResult().ToString()))
 							return
 						}
 					}
@@ -2877,7 +2877,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 						// If mappedValue is a promise, wait for it
 						if mappedValue.Type() == vm.TypePromise {
 							mp := mappedValue.AsPromise()
-							if mp != nil && mp.State == vm.PromisePending {
+							if mp != nil && mp.GetState() == vm.PromisePending {
 								vmInstance.AddPromiseReaction(mappedValue, true, func(v vm.Value) {
 									// Add to result array
 									if A.IsArray() {
@@ -2892,10 +2892,10 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 									rejectWithError(errors.New(r.ToString()))
 								})
 								return
-							} else if mp != nil && mp.State == vm.PromiseFulfilled {
-								mappedValue = mp.Result
-							} else if mp != nil && mp.State == vm.PromiseRejected {
-								rejectWithError(errors.New(mp.Result.ToString()))
+							} else if mp != nil && mp.GetState() == vm.PromiseFulfilled {
+								mappedValue = mp.GetResult()
+							} else if mp != nil && mp.GetState() == vm.PromiseRejected {
+								rejectWithError(errors.New(mp.GetResult().ToString()))
 								return
 							}
 						}
@@ -2913,16 +2913,16 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 					// If kValue is a promise, wait for it
 					if kValue.Type() == vm.TypePromise {
 						kp := kValue.AsPromise()
-						if kp != nil && kp.State == vm.PromisePending {
+						if kp != nil && kp.GetState() == vm.PromisePending {
 							vmInstance.AddPromiseReaction(kValue, true, handleKValue)
 							vmInstance.AddPromiseReaction(kValue, false, func(r vm.Value) {
 								rejectWithError(errors.New(r.ToString()))
 							})
 							return
-						} else if kp != nil && kp.State == vm.PromiseFulfilled {
-							kValue = kp.Result
-						} else if kp != nil && kp.State == vm.PromiseRejected {
-							rejectWithError(errors.New(kp.Result.ToString()))
+						} else if kp != nil && kp.GetState() == vm.PromiseFulfilled {
+							kValue = kp.GetResult()
+						} else if kp != nil && kp.GetState() == vm.PromiseRejected {
+							rejectWithError(errors.New(kp.GetResult().ToString()))
 							return
 						}
 					}
