@@ -958,6 +958,17 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			return vm.setOwnChecked(setObj.Properties, propName, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
+	case TypePromise:
+		// Promise objects can have user-defined properties (e.g. a subclass
+		// constructor doing `this.foo = 1` after super()).
+		promiseObj := objVal.AsPromise()
+		if promiseObj != nil {
+			if promiseObj.Properties == nil {
+				promiseObj.Properties = newPropertiesTable()
+			}
+			return vm.setOwnChecked(promiseObj.Properties, propName, *valueToSet)
+		}
+		return true, InterpretOK, *valueToSet
 	case TypeArrayBuffer:
 		// ArrayBuffer objects can have user-defined properties (e.g., constructor override)
 		ab := objVal.AsArrayBuffer()

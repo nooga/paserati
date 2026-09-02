@@ -259,8 +259,17 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		// Check if this is an async function - wrap execution in a Promise
 		// Skip this if we're executing a generator (including async generators)
 		if calleeFunc.IsAsync && !isGeneratorExecution {
+			// An async arrow function still has a lexical 'this' binding -
+			// it must use its captured 'this', not the call site's receiver.
+			// This check has to happen here, ahead of the IsArrowFunction
+			// branch below, because the async path returns early without
+			// ever reaching it (see paserati#199).
+			asyncThis := thisValue
+			if calleeFunc.IsArrowFunction {
+				asyncThis = calleeClosure.CapturedThis
+			}
 			// Create a Promise and start async execution
-			promiseVal := vm.executeAsyncFunction(calleeVal, thisValue, args)
+			promiseVal := vm.executeAsyncFunction(calleeVal, asyncThis, args)
 			callerRegisters[destReg] = promiseVal
 			return false, nil // Don't switch frames - async execution happens via microtasks
 		}
