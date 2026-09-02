@@ -1501,20 +1501,59 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		if isRegExp {
-			// RegExp separator
+			// RegExp separator. This mirrors RegExp.prototype[Symbol.split]
+			// (which normally handles this via the lookup above); kept as a
+			// spec-correct fallback in case that lookup doesn't fire, and must
+			// interleave captured groups per ECMA-262, not just emit the pieces
+			// around each match.
 			regex := separatorArg.AsRegExpObject()
 			// Check for deferred compile error
 			if regex.HasCompileError() {
 				return vm.Undefined, vmInstance.NewSyntaxError("Invalid regular expression: " + regex.GetCompileError())
 			}
 
-			parts := regex.Split(thisStr, -1)
-			if uint32(len(parts)) > limit {
-				parts = parts[:limit]
+			if len(thisStr) == 0 {
+				if regex.MatchString("") {
+					return vm.NewArray(), nil
+				}
+				return vm.NewArrayWithArgs([]vm.Value{vm.NewString("")}), nil
 			}
-			elements := make([]vm.Value, len(parts))
-			for i, part := range parts {
-				elements[i] = vm.NewString(part)
+
+			var elements []vm.Value
+			appendLimited := func(v vm.Value) bool {
+				elements = append(elements, v)
+				return uint32(len(elements)) >= limit
+			}
+
+			allMatches := regex.FindAllStringSubmatchIndex(thisStr, -1)
+			p := 0
+		splitLoop:
+			for _, match := range allMatches {
+				matchStart, matchEnd := match[0], match[1]
+				if matchStart >= len(thisStr) {
+					break
+				}
+				if matchEnd == p {
+					continue
+				}
+				if appendLimited(vm.NewString(thisStr[p:matchStart])) {
+					break splitLoop
+				}
+				p = matchEnd
+				for i := 2; i < len(match); i += 2 {
+					var capVal vm.Value
+					if match[i] >= 0 && match[i+1] >= 0 {
+						capVal = vm.NewString(thisStr[match[i]:match[i+1]])
+					} else {
+						capVal = vm.Undefined
+					}
+					if appendLimited(capVal) {
+						break splitLoop
+					}
+				}
+			}
+			if uint32(len(elements)) < limit {
+				elements = append(elements, vm.NewString(thisStr[p:]))
 			}
 			return vm.NewArrayWithArgs(elements), nil
 		} else {
