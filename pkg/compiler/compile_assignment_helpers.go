@@ -66,13 +66,16 @@ func (c *Compiler) compileDestructuringTargetRef(target parser.Expression, line 
 
 		symbol, _, found := c.currentSymbolTable.Resolve(targetNode.Value)
 		if !found {
-			// In strict mode, this is a ReferenceError
-			// In non-strict mode, it's an implicit global
-			if c.chunk.IsStrict {
+			// In strict mode an unresolvable reference is a ReferenceError; in
+			// non-strict mode it's an implicit global. A name that already has a
+			// global slot - including this module's own not-yet-compiled top-level
+			// declaration, see unresolvedGlobalKey - is resolvable either way (#192).
+			globalKey := c.unresolvedGlobalKey(targetNode.Value)
+			if c.chunk.IsStrict && !c.GlobalExists(globalKey) {
 				ref.IsGlobal = false // Will emit error at assignment time
 			} else {
 				ref.IsGlobal = true
-				ref.GlobalIdx = c.GetOrAssignGlobalIndex(targetNode.Value)
+				ref.GlobalIdx = c.GetOrAssignGlobalIndex(globalKey)
 			}
 		} else {
 			ref.Symbol = &symbol

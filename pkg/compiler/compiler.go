@@ -629,6 +629,23 @@ func (c *Compiler) moduleGlobalKey(name string) string {
 	return name
 }
 
+// unresolvedGlobalKey is the heap key for a name the symbol table could not
+// resolve at this point in compilation. Usually that is a genuinely external
+// global and the bare name is right. The exception is one of this module's own
+// top-level var/let/const/class declarations that simply hasn't compiled yet
+// (a hoisted function body compiles before the module's sequential statements
+// are reached): its declaration will write to a moduleGlobalKey-namespaced
+// slot, so the reference must use that same key or it lands on a different,
+// never-written slot ("X is not defined", or a silently stale value - #117,
+// #192). Every not-found fallback that allocates a global index for a user
+// identifier must go through here so all of them agree.
+func (c *Compiler) unresolvedGlobalKey(name string) string {
+	if c.moduleBindings != nil && c.moduleBindings.TopLevelDeclNames[name] {
+		return c.moduleGlobalKey(name)
+	}
+	return name
+}
+
 // GetAllGlobalNames returns a snapshot of every name registered in this
 // compiler's heap allocator, mapped to its heap index - not just this
 // compiler's own exports (see GetExportGlobalIndices for that).
@@ -2440,11 +2457,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			// the same namespaced key rather than a bare one, or it resolves to
 			// a different, never-written slot ("X is not defined" - #117, and
 			// its var-specific counterpart).
-			globalKey := node.Value
-			if c.moduleBindings != nil && c.moduleBindings.TopLevelDeclNames[node.Value] {
-				globalKey = c.moduleGlobalKey(node.Value)
-			}
-			globalIdx := c.GetOrAssignGlobalIndex(globalKey)
+			globalIdx := c.GetOrAssignGlobalIndex(c.unresolvedGlobalKey(node.Value))
 			c.emitGetGlobal(hint, globalIdx, node.Token.Line)
 			return hint, nil // Handle as global access
 		}
@@ -5495,7 +5508,8 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 						c.emitImportResolve(superConstructorReg, superClassName, node.Token.Line)
 					} else {
 						// Not in symbol table and not an import - might be a built-in class
-						globalIdx := c.GetOrAssignGlobalIndex(superClassName)
+						// - or one of this module's own classes declared further down.
+						globalIdx := c.GetOrAssignGlobalIndex(c.unresolvedGlobalKey(superClassName))
 						superConstructorReg = c.regAlloc.Alloc()
 						needToFreeSuperReg = true
 						c.emitGetGlobal(superConstructorReg, globalIdx, node.Token.Line)

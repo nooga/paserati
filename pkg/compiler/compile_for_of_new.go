@@ -370,8 +370,12 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(target.Value)
 			if !found {
 				// Variable not found in any scope
-				// In strict mode, this is a ReferenceError per ECMAScript spec
-				if c.chunk.IsStrict {
+				// A name that already has a global slot - including this module's own
+				// not-yet-compiled top-level declaration, see unresolvedGlobalKey - is
+				// resolvable and is assigned in place rather than shadowed (#192).
+				if key := c.unresolvedGlobalKey(target.Value); c.GlobalExists(key) {
+					c.emitSetGlobal(c.GetOrAssignGlobalIndex(key), valueReg, node.Token.Line)
+				} else if c.chunk.IsStrict {
 					c.emitStrictUnresolvableReferenceError(target.Value, node.Token.Line)
 				} else {
 					// In non-strict mode, define a function/global-scoped binding (var semantics)
