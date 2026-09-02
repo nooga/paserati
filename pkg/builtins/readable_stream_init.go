@@ -482,9 +482,10 @@ func (c *ReadableStreamController) Error(reason vm.Value) { c.state.errorOut(rea
 
 // NewHostFedReadableStream creates a ReadableStream with no JS-authored
 // underlying source, whose contents are instead fed entirely from Go via the
-// returned ReadableStreamController. This is the primitive a real
-// incrementally-streamed fetch() Response.body (left to noderati per #205)
-// would be built on. Only valid once ReadableStreamInitializer.InitRuntime
+// returned ReadableStreamController. This is the primitive fetch()'s
+// incrementally-streamed Response.body is built on (see fetch_init.go,
+// #205) - fetch is a core paserati builtin like this one, not something
+// deferred to noderati. Only valid once ReadableStreamInitializer.InitRuntime
 // has already run against vmInstance (i.e. after normal
 // Paserati/driver initialization).
 func NewHostFedReadableStream(vmInstance *vm.VM) (vm.Value, *ReadableStreamController) {

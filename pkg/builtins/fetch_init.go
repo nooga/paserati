@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nooga/paserati/pkg/runtime"
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
@@ -237,6 +238,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
+		bodyState, bodyStream := newImmediateFetchBody(vmInstance, bodyBytes)
 		response := &FetchResponse{
 			vm:         vmInstance,
 			OK:         status >= 200 && status < 300,
@@ -244,7 +246,8 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 			StatusText: statusText,
 			URL:        "",
 			Headers:    headers,
-			body:       bodyBytes,
+			bodyState:  bodyState,
+			bodyStream: bodyStream,
 			bodyUsed:   false,
 			Redirected: false,
 			Type:       "default",
@@ -260,6 +263,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Response.error() - returns an error response
 		ctorProps.Properties.SetOwnNonEnumerable("error", vm.NewNativeFunction(0, false, "error", func(args []vm.Value) (vm.Value, error) {
+			bodyState, bodyStream := newImmediateFetchBody(vmInstance, nil)
 			response := &FetchResponse{
 				vm:         vmInstance,
 				OK:         false,
@@ -267,7 +271,8 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 				StatusText: "",
 				URL:        "",
 				Headers:    &FetchHeaders{headers: make(http.Header)},
-				body:       []byte{},
+				bodyState:  bodyState,
+				bodyStream: bodyStream,
 				bodyUsed:   false,
 				Redirected: false,
 				Type:       "error",
@@ -291,6 +296,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			headers := &FetchHeaders{headers: make(http.Header)}
 			headers.headers.Set("Location", url)
+			bodyState, bodyStream := newImmediateFetchBody(vmInstance, nil)
 			response := &FetchResponse{
 				vm:         vmInstance,
 				OK:         false,
@@ -298,7 +304,8 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 				StatusText: http.StatusText(status),
 				URL:        "",
 				Headers:    headers,
-				body:       []byte{},
+				bodyState:  bodyState,
+				bodyStream: bodyStream,
 				bodyUsed:   false,
 				Redirected: false,
 				Type:       "default",
@@ -341,6 +348,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 			}
 
+			bodyState, bodyStream := newImmediateFetchBody(vmInstance, jsonBytes)
 			response := &FetchResponse{
 				vm:         vmInstance,
 				OK:         status >= 200 && status < 300,
@@ -348,7 +356,8 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 				StatusText: statusText,
 				URL:        "",
 				Headers:    headers,
-				body:       jsonBytes,
+				bodyState:  bodyState,
+				bodyStream: bodyStream,
 				bodyUsed:   false,
 				Redirected: false,
 				Type:       "default",
@@ -557,11 +566,13 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}()
 		}
 
-		// Perform HTTP request asynchronously in a goroutine
+		// Perform HTTP request asynchronously in a goroutine. cancel and rt
+		// pass ownership of "clean up the context" / "the external op is
+		// over" into doFetchRequestWithContext: on a response that streams
+		// (the common case, #205), both outlive this goroutine and are
+		// discharged later by the body-drain goroutine it starts instead.
 		go func() {
-			defer cancel() // Clean up context when done
-
-			response, err := doFetchRequestWithContext(ctx, vmInstance, url, init)
+			response, err := doFetchRequestWithContext(ctx, cancel, rt, vmInstance, url, init)
 
 			if err != nil {
 				// Check if this was a context cancellation (abort)
@@ -579,9 +590,6 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 			} else {
 				vmInstance.ResolvePromise(promiseObj, response)
 			}
-
-			// Mark that the external operation is complete
-			rt.EndExternalOp()
 		}()
 
 		return promise, nil
@@ -603,10 +611,86 @@ type FetchResponse struct {
 	StatusText string
 	URL        string
 	Headers    *FetchHeaders
-	body       []byte
+	bodyState  *fetchBody // accumulates/holds the body bytes; see fetchBody
+	bodyStream vm.Value   // the ReadableStream exposed as Response.body (#205)
 	bodyUsed   bool
 	Redirected bool   // Whether this response is the result of a redirect
 	Type       string // Response type: "basic", "cors", "default", "error", "opaque", "opaqueredirect"
+}
+
+// fetchBody holds a Response body's bytes as they become known, whether that
+// happens all at once (a synchronously constructed Response, or a static
+// factory like Response.json()) or incrementally as a real network response
+// streams in. doneCh closes exactly once, when the bytes are final (clean
+// EOF or a read error) - text()/json()/blob()/arrayBuffer()/bytes() block on
+// it (off the VM goroutine, see createResponseObject) rather than assuming
+// the body is already fully buffered by the time they're called.
+type fetchBody struct {
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	err    error
+	doneCh chan struct{}
+}
+
+func newFetchBody() *fetchBody {
+	return &fetchBody{doneCh: make(chan struct{})}
+}
+
+// appendChunk records a chunk that has already been enqueued on the
+// ReadableStream side. Safe to call from any goroutine.
+func (b *fetchBody) appendChunk(chunk []byte) {
+	b.mu.Lock()
+	b.buf.Write(chunk)
+	b.mu.Unlock()
+}
+
+// finish marks the body as final, unblocking every wait(). err is nil for a
+// clean end of stream. Must be called exactly once.
+func (b *fetchBody) finish(err error) {
+	b.mu.Lock()
+	b.err = err
+	b.mu.Unlock()
+	close(b.doneCh)
+}
+
+// wait blocks until the body is final and returns its accumulated bytes (or
+// the read error, if any). Only ever call this from a throwaway goroutine,
+// never from the VM's own execution goroutine - a still-streaming body can
+// take arbitrarily long (or, on an abandoned connection, forever).
+func (b *fetchBody) wait() ([]byte, error) {
+	<-b.doneCh
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]byte(nil), b.buf.Bytes()...), b.err
+}
+
+// isDone reports whether the body is already final, without blocking.
+func (b *fetchBody) isDone() bool {
+	select {
+	case <-b.doneCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// newImmediateFetchBody wraps already-fully-known bytes (a Response built by
+// `new Response(...)`, `Response.json()`/`.error()`/`.redirect()`, or
+// `.clone()`) as a fetchBody plus a matching ReadableStream containing
+// exactly those bytes, then closed. This keeps `.body` a real ReadableStream
+// (per spec) for every Response, not only ones a real fetch() produced,
+// while text()/json()/etc. resolve exactly as they did before #205.
+func newImmediateFetchBody(vmInstance *vm.VM, data []byte) (*fetchBody, vm.Value) {
+	fb := newFetchBody()
+	fb.buf.Write(data)
+	fb.finish(nil)
+
+	streamVal, controller := NewHostFedReadableStream(vmInstance)
+	if len(data) > 0 {
+		controller.EnqueueBytes(data)
+	}
+	controller.Close()
+	return fb, streamVal
 }
 
 // boolToValue converts a bool to vm.Value
@@ -823,6 +907,44 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 	obj.SetOwn("bodyUsed", boolToValue(r.bodyUsed))
 	obj.SetOwn("redirected", boolToValue(r.Redirected))
 	obj.SetOwn("type", vm.NewString(r.Type))
+	obj.SetOwn("body", r.bodyStream)
+
+	// drainBody waits for the body's full bytes - off the VM goroutine, if a
+	// real fetch() response is still streaming in (see fetchBody) - and
+	// settles a promise with transform's result. Shared by text()/json()/
+	// blob()/arrayBuffer()/bytes(); they only differ in transform.
+	drainBody := func(transform func([]byte) (vm.Value, error)) vm.Value {
+		if r.bodyState.isDone() {
+			data, err := r.bodyState.wait() // already final; does not block
+			if err != nil {
+				return vmInstance.NewRejectedPromise(vm.NewString(err.Error()))
+			}
+			result, err := transform(data)
+			if err != nil {
+				return vmInstance.NewRejectedPromise(vm.NewString(err.Error()))
+			}
+			return vmInstance.NewResolvedPromise(result)
+		}
+		promise := vmInstance.NewPendingPromise()
+		promiseObj := promise.AsPromise()
+		rt := vmInstance.GetAsyncRuntime()
+		rt.BeginExternalOp()
+		go func() {
+			defer rt.EndExternalOp()
+			data, err := r.bodyState.wait()
+			if err != nil {
+				vmInstance.RejectPromise(promiseObj, vm.NewString(err.Error()))
+				return
+			}
+			result, err := transform(data)
+			if err != nil {
+				vmInstance.RejectPromise(promiseObj, vm.NewString(err.Error()))
+				return
+			}
+			vmInstance.ResolvePromise(promiseObj, result)
+		}()
+		return promise
+	}
 
 	// text() -> Promise<string>
 	obj.SetOwnNonEnumerable("text", vm.NewNativeFunction(0, false, "text", func(args []vm.Value) (vm.Value, error) {
@@ -832,7 +954,9 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 		r.bodyUsed = true
 		// Update bodyUsed property on the object
 		obj.SetOwn("bodyUsed", vm.True)
-		return vmInstance.NewResolvedPromise(vm.NewString(string(r.body))), nil
+		return drainBody(func(data []byte) (vm.Value, error) {
+			return vm.NewString(string(data)), nil
+		}), nil
 	}))
 
 	// json() -> Promise<any>
@@ -842,12 +966,13 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 		}
 		r.bodyUsed = true
 		obj.SetOwn("bodyUsed", vm.True)
-
-		var result vm.Value
-		if err := result.UnmarshalJSON(r.body); err != nil {
-			return vmInstance.NewRejectedPromise(vm.NewString(err.Error())), nil
-		}
-		return vmInstance.NewResolvedPromise(result), nil
+		return drainBody(func(data []byte) (vm.Value, error) {
+			var result vm.Value
+			if err := result.UnmarshalJSON(data); err != nil {
+				return vm.Undefined, err
+			}
+			return result, nil
+		}), nil
 	}))
 
 	// blob() -> Promise<Uint8Array>
@@ -857,13 +982,9 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 		}
 		r.bodyUsed = true
 		obj.SetOwn("bodyUsed", vm.True)
-
-		// Create Uint8Array from body bytes
-		arrayBufferValue := vm.NewArrayBuffer(len(r.body))
-		buffer := arrayBufferValue.AsArrayBuffer()
-		copy(buffer.GetData(), r.body)
-		uint8Array := vm.NewTypedArray(vm.TypedArrayUint8, buffer, 0, -1)
-		return vmInstance.NewResolvedPromise(uint8Array), nil
+		return drainBody(func(data []byte) (vm.Value, error) {
+			return bytesToValue(data), nil
+		}), nil
 	}))
 
 	// arrayBuffer() -> Promise<ArrayBuffer>
@@ -873,12 +994,11 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 		}
 		r.bodyUsed = true
 		obj.SetOwn("bodyUsed", vm.True)
-
-		// Create ArrayBuffer from body bytes
-		arrayBufferValue := vm.NewArrayBuffer(len(r.body))
-		buffer := arrayBufferValue.AsArrayBuffer()
-		copy(buffer.GetData(), r.body)
-		return vmInstance.NewResolvedPromise(arrayBufferValue), nil
+		return drainBody(func(data []byte) (vm.Value, error) {
+			arrayBufferValue := vm.NewArrayBuffer(len(data))
+			copy(arrayBufferValue.AsArrayBuffer().GetData(), data)
+			return arrayBufferValue, nil
+		}), nil
 	}))
 
 	// bytes() -> Promise<Uint8Array> (same as blob, but standard name)
@@ -888,13 +1008,9 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 		}
 		r.bodyUsed = true
 		obj.SetOwn("bodyUsed", vm.True)
-
-		// Create Uint8Array from body bytes
-		arrayBufferValue := vm.NewArrayBuffer(len(r.body))
-		buffer := arrayBufferValue.AsArrayBuffer()
-		copy(buffer.GetData(), r.body)
-		uint8Array := vm.NewTypedArray(vm.TypedArrayUint8, buffer, 0, -1)
-		return vmInstance.NewResolvedPromise(uint8Array), nil
+		return drainBody(func(data []byte) (vm.Value, error) {
+			return bytesToValue(data), nil
+		}), nil
 	}))
 
 	// clone() -> Response (creates a copy of the response)
@@ -902,8 +1018,16 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 		if r.bodyUsed {
 			return vm.Undefined, vmInstance.NewTypeError("Response body is already used")
 		}
+		if !r.bodyState.isDone() {
+			// No tee() on the underlying ReadableStream primitive (#205 is
+			// deliberately scoped without one) - cloning a real fetch()
+			// response mid-stream has nothing safe to copy yet.
+			return vm.Undefined, vmInstance.NewTypeError("Response.clone(): cannot clone a response body that is still streaming")
+		}
+		data, _ := r.bodyState.wait() // isDone() above; does not block
+		clonedBodyState, clonedBodyStream := newImmediateFetchBody(vmInstance, data)
 
-		// Create a copy of the response with the same body
+		// Create a copy of the response with the same body bytes
 		clonedResponse := &FetchResponse{
 			vm:         r.vm,
 			OK:         r.OK,
@@ -911,7 +1035,8 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 			StatusText: r.StatusText,
 			URL:        r.URL,
 			Headers:    &FetchHeaders{headers: r.Headers.headers.Clone()},
-			body:       r.body, // Share the same body bytes (they're not modified)
+			bodyState:  clonedBodyState,
+			bodyStream: clonedBodyStream,
 			bodyUsed:   false,
 			Redirected: r.Redirected,
 			Type:       r.Type,
@@ -922,8 +1047,33 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 	return vm.NewValueFromPlainObject(obj)
 }
 
-// doFetchRequestWithContext performs the HTTP request with context support for cancellation
-func doFetchRequestWithContext(ctx context.Context, vmInstance *vm.VM, url string, init vm.Value) (vm.Value, error) {
+// bytesToValue wraps raw bytes as a Uint8Array, the representation blob()/
+// bytes() resolve to.
+func bytesToValue(data []byte) vm.Value {
+	arrayBufferValue := vm.NewArrayBuffer(len(data))
+	buffer := arrayBufferValue.AsArrayBuffer()
+	copy(buffer.GetData(), data)
+	return vm.NewTypedArray(vm.TypedArrayUint8, buffer, 0, -1)
+}
+
+// doFetchRequestWithContext performs the HTTP request with context support
+// for cancellation. It owns cancel and rt for the whole request: on any
+// early return (parse error, network error, no response) it calls both
+// itself before returning. On success (#205) the response resolves as soon
+// as headers arrive - real fetch()/spec semantics, and required so an SSE
+// body that never EOFs doesn't block the fetch() promise forever - and a
+// goroutine it starts streams the body into a ReadableStream, discharging
+// cancel/rt only once that finishes (EOF, read error, or the request being
+// aborted mid-body).
+func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, rt runtime.AsyncRuntime, vmInstance *vm.VM, url string, init vm.Value) (vm.Value, error) {
+	streaming := false
+	defer func() {
+		if !streaming {
+			cancel()
+			rt.EndExternalOp()
+		}
+	}()
+
 	// Default options
 	method := "GET"
 	headers := &FetchHeaders{headers: make(http.Header)}
@@ -1025,9 +1175,13 @@ func doFetchRequestWithContext(ctx context.Context, vmInstance *vm.VM, url strin
 	redirected := false
 	originalURL := url
 
-	// Create HTTP client with reasonable timeout
+	// Create HTTP client with a timeout on getting a response at all, but not
+	// on reading the body afterward - a real (e.g. SSE) stream can run far
+	// longer than 30s and must not be killed mid-read (#205).
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) > 0 {
 				redirected = true
@@ -1055,15 +1209,9 @@ func doFetchRequestWithContext(ctx context.Context, vmInstance *vm.VM, url strin
 	// Set headers
 	req.Header = headers.headers
 
-	// Perform request
+	// Perform request - blocks until headers arrive (or ResponseHeaderTimeout
+	// fires), not until the body is fully read.
 	resp, err := client.Do(req)
-	if err != nil {
-		return vm.Undefined, err
-	}
-	defer resp.Body.Close()
-
-	// Read response body
-	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return vm.Undefined, err
 	}
@@ -1079,7 +1227,13 @@ func doFetchRequestWithContext(ctx context.Context, vmInstance *vm.VM, url strin
 		responseType = "cors"
 	}
 
-	// Create Response object
+	// Headers are in hand: hand off cancel/rt to the body-drain goroutine
+	// below instead of discharging them when this function returns.
+	streaming = true
+
+	bodyStream, controller := NewHostFedReadableStream(vmInstance)
+	bodyState := newFetchBody()
+
 	response := &FetchResponse{
 		vm:         vmInstance,
 		OK:         resp.StatusCode >= 200 && resp.StatusCode < 300,
@@ -1087,11 +1241,43 @@ func doFetchRequestWithContext(ctx context.Context, vmInstance *vm.VM, url strin
 		StatusText: resp.Status,
 		URL:        respURL,
 		Headers:    responseHeaders,
-		body:       bodyBytes,
+		bodyState:  bodyState,
+		bodyStream: bodyStream,
 		bodyUsed:   false,
 		Redirected: redirected,
 		Type:       responseType,
 	}
+
+	// Stream the body in off the VM goroutine: enqueue each chunk on the
+	// ReadableStream as it arrives (for consumers reading response.body
+	// directly) and accumulate it in bodyState (for text()/json()/etc,
+	// which still want the whole thing at once). ctx/cancel/resp.Body and
+	// the external op all now live for exactly this goroutine's lifetime.
+	go func() {
+		defer cancel()
+		defer rt.EndExternalOp()
+		defer resp.Body.Close()
+
+		buf := make([]byte, 32*1024)
+		for {
+			n, readErr := resp.Body.Read(buf)
+			if n > 0 {
+				chunk := append([]byte(nil), buf[:n]...)
+				controller.EnqueueBytes(chunk)
+				bodyState.appendChunk(chunk)
+			}
+			if readErr != nil {
+				if readErr == io.EOF {
+					controller.Close()
+					bodyState.finish(nil)
+				} else {
+					controller.Error(vm.NewString(readErr.Error()))
+					bodyState.finish(readErr)
+				}
+				return
+			}
+		}
+	}()
 
 	return createResponseObject(vmInstance, response), nil
 }

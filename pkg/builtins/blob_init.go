@@ -210,10 +210,16 @@ func createBlobObject(vmInstance *vm.VM, blob *Blob, _ *vm.PlainObject) vm.Value
 		return createBlobObject(vmInstance, newBlob, nil), nil
 	}))
 
-	// stream() -> ReadableStream (stub - returns undefined for now)
+	// stream() -> ReadableStream over the Blob's already-known bytes,
+	// pre-filled and closed - a Blob's data is never itself streamed in, so
+	// there's nothing to feed incrementally (#205).
 	obj.SetOwnNonEnumerable("stream", vm.NewNativeFunction(0, false, "stream", func(args []vm.Value) (vm.Value, error) {
-		// ReadableStream would require significant infrastructure
-		return vm.Undefined, nil
+		streamVal, controller := NewHostFedReadableStream(vmInstance)
+		if len(blob.data) > 0 {
+			controller.EnqueueBytes(blob.data)
+		}
+		controller.Close()
+		return streamVal, nil
 	}))
 
 	return vm.NewValueFromPlainObject(obj)
