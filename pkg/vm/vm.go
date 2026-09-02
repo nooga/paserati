@@ -17237,6 +17237,40 @@ func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 		copy(args, arrayObj.elements)
 		return args, nil
 
+	case TypeArguments:
+		// Fast path for the arguments object (paserati#182). It's genuinely
+		// iterable - argsObj[Symbol.iterator] is set as a real own property
+		// at creation time (see OpLoadArguments), which is exactly why
+		// for-of/Array.from/destructuring already work on it - but this
+		// switch's default branch below only walks a hand-picked list of
+		// types (TypeObject/TypeGenerator/TypeAsyncGenerator/TypeDictObject)
+		// looking for Symbol.iterator via their *prototype chain*, and
+		// TypeArguments was never one of them, so it always fell through to
+		// "is not iterable". Read each index through argumentsGet (not the
+		// raw args/mappedRegs slices directly) so a live-mapped parameter
+		// register, a deleted index, or a defineProperty-installed accessor
+		// on some index is honored exactly the way plain property access on
+		// arguments already respects it elsewhere. Likewise for "length"
+		// itself: `arguments.length = n` stores an override in namedProps
+		// rather than the raw length field (see op_setprop.go's TypeArguments
+		// case) - check it first, matching the same "check GetNamedProp
+		// before the raw field" pattern property_helpers.go's own
+		// "length" lookup already uses for arguments.
+		argsObj := AsArguments(iterableVal)
+		length := argsObj.length
+		if v, ok := argsObj.GetNamedProp("length"); ok {
+			length = int(v.ToFloat())
+		}
+		args := make([]Value, 0, length)
+		for i := 0; i < length; i++ {
+			val, err := vm.argumentsGet(argsObj, strconv.Itoa(i))
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, val)
+		}
+		return args, nil
+
 	case TypeString:
 		// Strings are iterable - spread into individual characters
 		str := AsString(iterableVal)
