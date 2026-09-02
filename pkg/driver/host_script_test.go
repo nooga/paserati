@@ -71,7 +71,7 @@ func TestHostRunScriptNoModuleRecord(t *testing.T) {
 	if len(errs) > 0 {
 		t.Fatalf("RunScript failed: %v", errs[0])
 	}
-	if rec := p.GetModuleLoader().GetModule(filename); rec != nil {
+	if rec := p.GetModuleLoader().GetModule(filename, "."); rec != nil {
 		t.Fatal("RunScript must not invent a ModuleRecord")
 	}
 }

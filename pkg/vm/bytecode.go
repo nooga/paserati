@@ -797,7 +797,15 @@ type Chunk struct {
 	// source the embedder passed - the entry script - printing a line of the
 	// wrong file underneath an otherwise-correct line number (#148). Nil for
 	// hand-assembled chunks and any compile path that has no source file.
-	Source         *source.SourceFile
+	Source *source.SourceFile
+	// ModulePath is the module this chunk was compiled as part of (the loader's
+	// resolved path, or the driver's entry-module name), inherited by nested
+	// function chunks. Dynamic import() and import.meta inside a function body
+	// resolve against it, because the function may run long after its module
+	// finished, called from code in another module: the VM's "current module"
+	// is then the caller's, not the one containing the code (#183 follow-up).
+	// Empty for script (non-module) compiles.
+	ModulePath     string
 	ExceptionTable []ExceptionHandler // Exception handlers for try/catch blocks
 	// BuiltinGlobalNames and GlobalNames record the compiler's indexed global
 	// layout. InterpretChunk consumers use them to reject incompatible VMs before

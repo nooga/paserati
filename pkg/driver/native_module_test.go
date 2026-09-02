@@ -68,7 +68,7 @@ func TestNativeModuleBasic(t *testing.T) {
 	`
 
 	// Test that the native module can be resolved
-	moduleRecord := p.moduleLoader.GetModule("math-utils")
+	moduleRecord := p.moduleLoader.GetModule("math-utils", ".")
 	if moduleRecord == nil {
 		// Let's try resolving it directly
 		if p.nativeResolver != nil {

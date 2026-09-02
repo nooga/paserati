@@ -28,12 +28,28 @@ func NewRegistry(config *LoaderConfig) ModuleRegistry {
 	}
 }
 
-// Get retrieves a module record by specifier
+// ModuleCacheKey builds the key a module is cached under in the specifier
+// map. The raw specifier text alone is not a valid key: a relative specifier
+// names a different file from every importing directory ("./_helper.mjs"
+// from dirA/ vs dirB/), and a bare one can resolve differently under nested
+// node_modules (#183). Folding in the importer's path keeps those apart;
+// specifiers that resolve to the same file still share one record through
+// the byPath index.
+func ModuleCacheKey(specifier, fromPath string) string {
+	return fromPath + "\x00" + specifier
+}
+
+// Get retrieves a module record by cache key (see ModuleCacheKey). A key
+// that misses is also tried as a resolved path, so callers holding a
+// canonical path can look a module up directly.
 func (r *registry) Get(specifier string) *ModuleRecord {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
 	record := r.modules[specifier]
+	if record == nil {
+		record = r.byPath[specifier]
+	}
 	if record != nil {
 		r.stats.CacheHits++
 

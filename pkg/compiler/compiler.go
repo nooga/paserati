@@ -787,6 +787,7 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 	// Inherit strict mode and the source file from enclosing compiler
 	chunk.IsStrict = enclosingCompiler.chunk.IsStrict
 	chunk.Source = enclosingCompiler.chunk.Source
+	chunk.ModulePath = enclosingCompiler.chunk.ModulePath
 	return &Compiler{
 		chunk:                    chunk,
 		regAlloc:                 NewRegisterAllocator(),
@@ -892,6 +893,12 @@ func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError)
 	// while executing it can quote that file rather than the entry script
 	// (#148). Nested function compilers inherit it in newFunctionCompiler.
 	c.chunk.Source = program.Source
+	// And which module, so code in this chunk that runs later (a function
+	// called from another module) still resolves import() and import.meta
+	// against its own module. Nested function compilers inherit it too.
+	if c.moduleBindings != nil {
+		c.chunk.ModulePath = c.moduleBindings.ModulePath
+	}
 	c.regAlloc = NewRegisterAllocator()
 	c.currentSymbolTable = NewSymbolTable()
 	c.allLocalNames = make(map[Register]string) // Reset local name tracking
@@ -4982,7 +4989,8 @@ func (c *Compiler) collectExportAllNames(rec vm.ModuleRecord, specifier string, 
 	if c.moduleLoader == nil {
 		return nil
 	}
-	concreteRec := c.moduleLoader.GetModule(specifier)
+	// rec is this very module's record; only the concrete type exposes the AST.
+	concreteRec, _ := rec.(*modules.ModuleRecord)
 	if concreteRec == nil || concreteRec.AST == nil {
 		return nil
 	}
@@ -5168,9 +5176,37 @@ func (c *Compiler) emitImportResolve(destReg Register, importName string, line i
 	}
 }
 
+// canonicalModulePath maps an import specifier, as written in the module being
+// compiled, to the loader's resolved path for it. The bytecode names the file
+// rather than the specifier text because the same relative spelling
+// ("./_helper.mjs") means different files from different directories, and an
+// import binding read inside a function body executes long after the importing
+// module finished running, when the VM's notion of "current module" is the
+// caller's (#183). Resolving here mirrors ESM link-time resolution. Falls back
+// to the specifier when it cannot be resolved; the VM then reports the load
+// failure at run time exactly as before.
+func (c *Compiler) canonicalModulePath(specifier string) string {
+	if c.moduleLoader == nil {
+		return specifier
+	}
+	fromPath := "."
+	if c.moduleBindings != nil && c.moduleBindings.ModulePath != "" {
+		fromPath = c.moduleBindings.ModulePath
+	}
+	rec, err := c.moduleLoader.LoadModule(specifier, fromPath)
+	if err != nil || rec == nil {
+		return specifier
+	}
+	if resolved := rec.GetResolvedPath(); resolved != "" {
+		return resolved
+	}
+	return specifier
+}
+
 // emitEvalModule generates OpEvalModule bytecode to execute a module
 func (c *Compiler) emitEvalModule(modulePath string, line int) {
 	// Add module path as a string constant
+	modulePath = c.canonicalModulePath(modulePath)
 	modulePathValue := vm.String(modulePath)
 	constantIdx := c.chunk.AddConstant(modulePathValue)
 
@@ -5193,6 +5229,7 @@ func (c *Compiler) emitLoadJSONModule(modulePath string, line int) {
 // emitCreateNamespace generates bytecode to create a namespace object from module exports
 func (c *Compiler) emitCreateNamespace(destReg Register, modulePath string, line int) {
 	// Add module path as a string constant
+	modulePath = c.canonicalModulePath(modulePath)
 	modulePathValue := vm.String(modulePath)
 	modulePathIdx := c.chunk.AddConstant(modulePathValue)
 
@@ -5208,6 +5245,7 @@ func (c *Compiler) emitCreateNamespace(destReg Register, modulePath string, line
 // emitGetModuleExport generates OpGetModuleExport bytecode to get an exported value
 func (c *Compiler) emitGetModuleExport(destReg Register, modulePath string, exportName string, line int) {
 	// Add module path as a string constant
+	modulePath = c.canonicalModulePath(modulePath)
 	modulePathValue := vm.String(modulePath)
 	modulePathIdx := c.chunk.AddConstant(modulePathValue)
 

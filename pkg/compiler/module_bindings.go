@@ -151,7 +151,7 @@ func (mb *ModuleBindings) ResolveImportedValue(localName string) vm.Value {
 
 	// Try to resolve the value from the source module using ModuleLoader
 	if mb.ModuleLoader != nil {
-		if sourceModule := mb.ModuleLoader.GetModule(reference.SourceModule); sourceModule != nil {
+		if sourceModule := mb.ModuleLoader.GetModule(reference.SourceModule, mb.ModulePath); sourceModule != nil {
 			// Look up the exported value from the source module
 			if reference.ImportType == ImportNamespaceRef {
 				// For namespace imports, create a namespace object with all exports
