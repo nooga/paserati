@@ -55,6 +55,7 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &ReflectInitializer{})
 	initializers = append(initializers, &ProxyInitializer{})
 	initializers = append(initializers, &ConsoleInitializer{})
+	initializers = append(initializers, &ReadableStreamInitializer{})
 	initializers = append(initializers, &BlobInitializer{})
 	initializers = append(initializers, &FormDataInitializer{})
 	initializers = append(initializers, &AbortControllerInitializer{})
