@@ -2374,19 +2374,35 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
-			// For objects, call ToPrimitive with "string" hint to invoke toString()
+			// For objects, call ToPrimitive with "string" hint to invoke toString().
+			// frame.ip is published first so a throwing toString/valueOf can find
+			// this frame's handler table, and helperCallDepth is raised so that a
+			// handler in *this* frame reports itself via vm.handlerFound rather
+			// than silently swallowing the throw (see exceptionPending).
 			if leftVal.IsObject() || leftVal.IsCallable() {
+				frame.ip = ip
+				vm.helperCallDepth++
 				leftVal = vm.toPrimitive(leftVal, "string")
+				vm.helperCallDepth--
 				if vm.unwinding {
-					frame.ip = ip
-					return InterpretRuntimeError, vm.currentException
+					return InterpretRuntimeError, Undefined
+				}
+				if vm.handlerFound {
+					vm.handlerFound = false
+					goto reloadFrame
 				}
 			}
 			if rightVal.IsObject() || rightVal.IsCallable() {
+				frame.ip = ip
+				vm.helperCallDepth++
 				rightVal = vm.toPrimitive(rightVal, "string")
+				vm.helperCallDepth--
 				if vm.unwinding {
-					frame.ip = ip
-					return InterpretRuntimeError, vm.currentException
+					return InterpretRuntimeError, Undefined
+				}
+				if vm.handlerFound {
+					vm.handlerFound = false
+					goto reloadFrame
 				}
 			}
 
@@ -4279,6 +4295,29 @@ startExecution:
 					fmt.Printf("[DEBUG vm.go] OpCall: Reloaded frame state, ip=%d (frame.ip=%d), unwinding=%v\n", ip, frame.ip, vm.unwinding)
 				}
 				continue
+			}
+
+			// An exception was thrown during the call AND a handler claimed it
+			// (handleCatchBlock cleared unwinding and set handlerFound). prepareCall
+			// returned without storing a result, so the only thing left to do is
+			// resume at the handler.
+			//
+			// The frame.ip != frameIPBeforeCall check above cannot cover this: it is
+			// guarded on frameCount being unchanged, and a handler in an *outer*
+			// frame only becomes reachable after unwinding popped frames to get
+			// there. Without this, the loop kept running with code/registers/ip
+			// still cached from the popped frame and delivered garbage to the catch
+			// clause. OpCallMethod has carried the same check for this reason.
+			//
+			// No frameCount/unwindingCrossedNative guard: handleCatchBlock is the
+			// only setter of handlerFound, and it runs against a live frame and
+			// clears unwindingCrossedNative, so neither can hold here.
+			if vm.handlerFound {
+				if debugExceptions {
+					fmt.Printf("[DEBUG vm.go] OpCall: Handler found during native call, reloading frame\n")
+				}
+				vm.handlerFound = false
+				goto reloadFrame
 			}
 
 			// DISABLED: This logic was incorrectly detecting exception handling
@@ -17976,6 +18015,17 @@ func (vm *VM) stringToBigInt(str string) (*big.Int, bool) {
 	return result, true
 }
 
+// exceptionPending reports whether a helper-context property lookup left an
+// exception in flight. opGetProp/opGetPropSymbol signal a throw three different
+// ways depending on where the handler lives: InterpretRuntimeError when nothing
+// caught it, vm.unwinding while it is still propagating outward, and
+// vm.handlerFound (with status InterpretOK and unwinding already cleared) when a
+// catch block in the *current* frame claimed it. Only the last one is easy to
+// miss, and it is exactly the shape a throwing getter inside a try block takes.
+func (vm *VM) exceptionPending(status InterpretResult) bool {
+	return status == InterpretRuntimeError || vm.unwinding || vm.handlerFound
+}
+
 // toPrimitive implements JavaScript ToPrimitive abstract operation
 // hint can be "string", "number", or "default"
 func (vm *VM) toPrimitive(val Value, hint string) Value {
@@ -17994,7 +18044,13 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 	if hint == "default" {
 		// Check if this is a Date object by looking for getTime method
 		var getTimeMethod Value
-		if ok, _, _ := vm.opGetProp(nil, 0, &val, "getTime", &getTimeMethod); ok {
+		ok, status, _ := vm.opGetProp(nil, 0, &val, "getTime", &getTimeMethod)
+		// A "getTime" accessor that throws leaves an exception pending; report it
+		// to the caller instead of probing on. See exceptionPending below.
+		if vm.exceptionPending(status) {
+			return Undefined
+		}
+		if ok {
 			if getTimeMethod.Type() == TypeNativeFunction || getTimeMethod.Type() == TypeNativeFunctionWithProps {
 				// This looks like a Date object - use "string" hint
 				hint = "string"
@@ -18007,8 +18063,8 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 	var toPrimMethod Value
 	if vm.SymbolToPrimitive.Type() != TypeUndefined {
 		ok, status, _ := vm.opGetPropSymbol(nil, 0, &val, vm.SymbolToPrimitive, &toPrimMethod)
-		// If getter threw an error, return undefined (exception is already set)
-		if status == InterpretRuntimeError {
+		// If the lookup threw, return undefined (the exception is already pending).
+		if vm.exceptionPending(status) {
 			return Undefined
 		}
 		if ok {
@@ -18063,7 +18119,15 @@ func (vm *VM) toPrimitive(val Value, hint string) Value {
 	for _, methodName := range methods {
 		// Try to get the method
 		var methodVal Value
-		if ok, _, _ := vm.opGetProp(nil, 0, &val, methodName, &methodVal); ok {
+		ok, status, _ := vm.opGetProp(nil, 0, &val, methodName, &methodVal)
+		// A throwing accessor (e.g. `{ get toString() { throw ... } }`) leaves an
+		// exception pending and reports ok == false. Without this check the loop
+		// would treat it as "no such method", fall through to step 6 and throw a
+		// bogus "Cannot convert object to primitive value" over the real error.
+		if vm.exceptionPending(status) {
+			return Undefined
+		}
+		if ok {
 			// Check if it's a function
 			if methodVal.Type() == TypeFunction || methodVal.Type() == TypeClosure ||
 				methodVal.Type() == TypeNativeFunction || methodVal.Type() == TypeNativeFunctionWithProps {
