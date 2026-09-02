@@ -3972,6 +3972,51 @@ func (c *Compiler) compileOptionalIndexExpression(node *parser.OptionalIndexExpr
 	return hint, nil
 }
 
+// compileOptionalMethodCallArgs compiles the arguments of a method-style optional call
+// (i.e. one with a `this` binding: obj.method?.(...), obj[key]?.(...), super.method?.(...))
+// and emits the call itself. When any argument is a spread element, the arguments are
+// collected into an array at runtime and OpSpreadCallMethod is used - mirroring how
+// compileMultiSpreadCall handles the non-optional `obj.method(...args)` case; without this,
+// a spread argument here would either fail to compile (a *parser.SpreadElement isn't a plain
+// expression) or, in the array/index-callee shape, be silently mishandled.
+func (c *Compiler) compileOptionalMethodCallArgs(node *parser.OptionalCallExpression, methodReg, thisReg, callResultReg Register, tempRegs *[]Register, line int) errors.PaseratiError {
+	if c.hasSpreadArgument(node.Arguments) {
+		arrayReg := c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, arrayReg)
+
+		arrayLiteral := &parser.ArrayLiteral{
+			Elements: node.Arguments,
+			Token:    node.Token,
+		}
+		_, err := c.compileArrayLiteral(arrayLiteral, arrayReg)
+		if err != nil {
+			return NewCompileError(node, "error compiling spread arguments in optional call expression").CausedBy(err)
+		}
+
+		c.emitSpreadCallMethod(callResultReg, methodReg, thisReg, arrayReg, line)
+		return nil
+	}
+
+	totalArgCount := len(node.Arguments)
+	blockSize := 1 + totalArgCount
+	funcCallReg := c.regAlloc.AllocContiguous(blockSize)
+	for i := 0; i < blockSize; i++ {
+		*tempRegs = append(*tempRegs, funcCallReg+Register(i))
+	}
+	c.emitMove(funcCallReg, methodReg, line)
+
+	for i, arg := range node.Arguments {
+		argReg := funcCallReg + Register(1+i)
+		_, err := c.compileNode(arg, argReg)
+		if err != nil {
+			return NewCompileError(arg, "error compiling argument in optional call expression").CausedBy(err)
+		}
+	}
+
+	c.emitCallMethod(callResultReg, funcCallReg, thisReg, byte(totalArgCount), line)
+	return nil
+}
+
 // compileOptionalCallExpression compiles optional function calls (e.g., func?.())
 func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpression, hint Register) (Register, errors.PaseratiError) {
 	// Manage temporary registers with automatic cleanup
@@ -4020,32 +4065,14 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 			// Method is not null/undefined - do method call with this binding
 			c.patchJump(jumpToCallPos)
 
-			// 4. Allocate contiguous block for function + arguments
-			totalArgCount := len(node.Arguments)
-			blockSize := 1 + totalArgCount
-			funcCallReg := c.regAlloc.AllocContiguous(blockSize)
-			for i := 0; i < blockSize; i++ {
-				tempRegs = append(tempRegs, funcCallReg+Register(i))
-			}
-
-			// 5. Move method to call block
-			c.emitMove(funcCallReg, methodReg, node.Token.Line)
-
-			// 6. Compile arguments
-			for i, arg := range node.Arguments {
-				argReg := funcCallReg + Register(1+i)
-				_, err := c.compileNode(arg, argReg)
-				if err != nil {
-					c.inTailPosition = oldTailPos
-					return BadRegister, NewCompileError(arg, "error compiling argument in super optional call expression").CausedBy(err)
-				}
+			// 4. Compile arguments (spread-aware) and emit the call
+			if err := c.compileOptionalMethodCallArgs(node, methodReg, thisReg, hint, &tempRegs, node.Token.Line); err != nil {
+				c.inTailPosition = oldTailPos
+				return BadRegister, err
 			}
 			c.inTailPosition = oldTailPos
 
-			// 7. Emit method call with proper this binding
-			c.emitCallMethod(hint, funcCallReg, thisReg, byte(totalArgCount), node.Token.Line)
-
-			// 8. Patch end jump
+			// 5. Patch end jump
 			c.patchJump(endJumpPos)
 
 			return hint, nil
@@ -4090,32 +4117,14 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 			tempRegs = append(tempRegs, callResultReg)
 		}
 
-		// 4. Allocate contiguous block for function + arguments
-		totalArgCount := len(node.Arguments)
-		blockSize := 1 + totalArgCount
-		funcCallReg := c.regAlloc.AllocContiguous(blockSize)
-		for i := 0; i < blockSize; i++ {
-			tempRegs = append(tempRegs, funcCallReg+Register(i))
-		}
-
-		// 5. Move method to call block
-		c.emitMove(funcCallReg, methodReg, node.Token.Line)
-
-		// 6. Compile arguments
-		for i, arg := range node.Arguments {
-			argReg := funcCallReg + Register(1+i)
-			_, err := c.compileNode(arg, argReg)
-			if err != nil {
-				c.inTailPosition = oldTailPos
-				return BadRegister, NewCompileError(arg, "error compiling argument in optional call expression").CausedBy(err)
-			}
+		// 4. Compile arguments (spread-aware) and emit the call with proper this binding
+		if err := c.compileOptionalMethodCallArgs(node, methodReg, thisReg, callResultReg, &tempRegs, node.Token.Line); err != nil {
+			c.inTailPosition = oldTailPos
+			return BadRegister, err
 		}
 		c.inTailPosition = oldTailPos
 
-		// 7. Emit method call with proper this binding
-		c.emitCallMethod(callResultReg, funcCallReg, thisReg, byte(totalArgCount), node.Token.Line)
-
-		// 8. Apply continuation if present (e.g., the .c in obj.method?.().c)
+		// 5. Apply continuation if present (e.g., the .c in obj.method?.().c)
 		if node.Continuation != nil {
 			_, err := c.compileOptionalContinuation(node.Continuation, callResultReg, hint, &tempRegs, node.Token.Line)
 			if err != nil {
@@ -4123,7 +4132,7 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 			}
 		}
 
-		// 9. Patch end jump
+		// 6. Patch end jump
 		c.patchJump(endJumpPos)
 
 		return hint, nil
@@ -4173,32 +4182,14 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 		// Method is not null/undefined - do method call with this binding
 		c.patchJump(jumpToCallPos)
 
-		// 5. Allocate contiguous block for function + arguments
-		totalArgCount := len(node.Arguments)
-		blockSize := 1 + totalArgCount
-		funcCallReg := c.regAlloc.AllocContiguous(blockSize)
-		for i := 0; i < blockSize; i++ {
-			tempRegs = append(tempRegs, funcCallReg+Register(i))
-		}
-
-		// 6. Move method to call block
-		c.emitMove(funcCallReg, methodReg, node.Token.Line)
-
-		// 7. Compile arguments
-		for i, arg := range node.Arguments {
-			argReg := funcCallReg + Register(1+i)
-			_, err := c.compileNode(arg, argReg)
-			if err != nil {
-				c.inTailPosition = oldTailPos
-				return BadRegister, NewCompileError(arg, "error compiling argument in optional call expression").CausedBy(err)
-			}
+		// 5. Compile arguments (spread-aware) and emit the call with proper this binding
+		if err := c.compileOptionalMethodCallArgs(node, methodReg, thisReg, hint, &tempRegs, node.Token.Line); err != nil {
+			c.inTailPosition = oldTailPos
+			return BadRegister, err
 		}
 		c.inTailPosition = oldTailPos
 
-		// 8. Emit method call with proper this binding
-		c.emitCallMethod(hint, funcCallReg, thisReg, byte(totalArgCount), node.Token.Line)
-
-		// 9. Patch end jump
+		// 6. Patch end jump
 		c.patchJump(endJumpPos)
 
 		return hint, nil
@@ -4236,27 +4227,12 @@ func (c *Compiler) compileOptionalCallExpression(node *parser.OptionalCallExpres
 			tempRegs = append(tempRegs, callResultReg)
 		}
 
-		// 5. Method is not nullish - do the method call with this binding
-		totalArgCount := len(node.Arguments)
-		blockSize := 1 + totalArgCount
-		funcCallReg := c.regAlloc.AllocContiguous(blockSize)
-		for i := 0; i < blockSize; i++ {
-			tempRegs = append(tempRegs, funcCallReg+Register(i))
-		}
-
-		c.emitMove(funcCallReg, methodReg, node.Token.Line)
-
-		for i, arg := range node.Arguments {
-			argReg := funcCallReg + Register(1+i)
-			_, err := c.compileNode(arg, argReg)
-			if err != nil {
-				c.inTailPosition = oldTailPos
-				return BadRegister, NewCompileError(arg, "error compiling argument in optional call expression").CausedBy(err)
-			}
+		// 5. Method is not nullish - compile arguments (spread-aware) and call with this binding
+		if err := c.compileOptionalMethodCallArgs(node, methodReg, thisReg, callResultReg, &tempRegs, node.Token.Line); err != nil {
+			c.inTailPosition = oldTailPos
+			return BadRegister, err
 		}
 		c.inTailPosition = oldTailPos
-
-		c.emitCallMethod(callResultReg, funcCallReg, thisReg, byte(totalArgCount), node.Token.Line)
 
 		// Apply continuation if present (e.g., the .c in a?.b?.().c)
 		if node.Continuation != nil {
