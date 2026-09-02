@@ -2,6 +2,7 @@ package lexer
 
 import (
 	"fmt"
+	"github.com/nooga/paserati/pkg/wtf8"
 	"strconv" // Added for ParseInt
 	"strings" // Added for strings.Builder
 	"unicode"
@@ -889,7 +890,7 @@ func PreprocessUnicodeEscapesContextAware(input string) string {
 		}
 	}
 
-	return result.String()
+	return wtf8.JoinSurrogatePairs(result.String())
 }
 
 // isWhitespaceUnicodeEscape checks if the current position contains a Unicode escape
@@ -1811,7 +1812,7 @@ func (l *Lexer) readIdentifierWithUnicode() (string, bool) {
 		}
 	}
 
-	return result.String(), hasEscape
+	return wtf8.JoinSurrogatePairs(result.String()), hasEscape
 }
 
 // readNumber reads a number literal (integer or float, various bases) and advances the lexer's position.
@@ -1992,6 +1993,11 @@ func (l *Lexer) readString(quote byte) (string, bool, bool) {
 		// Check for termination conditions *before* processing the character
 		if l.ch == quote {
 			l.readChar() // Consume the closing quote
+			if hasEscape {
+				// Escapes are decoded per \uXXXX unit, so a lead+trail pair written
+				// as two escapes must be joined into the one character it denotes.
+				return wtf8.JoinSurrogatePairs(builder.String()), true, true
+			}
 			return builder.String(), hasEscape, true
 		}
 		if l.isEOF() { // EOF - use isEOF() to distinguish from literal null bytes
@@ -3152,7 +3158,7 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 	// If there was an invalid escape, the cooked value should be undefined (for tagged templates)
 	return Token{
 		Type:              TEMPLATE_STRING,
-		Literal:           cooked.String(),
+		Literal:           wtf8.JoinSurrogatePairs(cooked.String()),
 		RawLiteral:        raw.String(),
 		CookedIsUndefined: hasInvalidEscape,
 		Line:              startLine,

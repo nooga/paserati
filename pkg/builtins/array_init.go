@@ -3,6 +3,7 @@ package builtins
 import (
 	"errors"
 	"fmt"
+	"github.com/nooga/paserati/pkg/wtf8"
 
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
@@ -695,7 +696,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			result += separator + v.ToString()
 		}
-		return vm.NewString(result), nil
+		return vm.NewString(wtf8.JoinSurrogatePairs(result)), nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
@@ -723,7 +724,7 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			result += "," + v.ToString()
 		}
-		return vm.NewString(result), nil
+		return vm.NewString(wtf8.JoinSurrogatePairs(result)), nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("reverse", vm.NewNativeFunction(0, false, "reverse", func(args []vm.Value) (vm.Value, error) {

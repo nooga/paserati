@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nooga/paserati/pkg/wtf8"
 	"math"
 	"sort"
 	"strconv"
@@ -103,8 +104,16 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return internalizeJSONProperty(vmInstance, rootVal, "", reviver, sourceMap, "")
 		}
 
-		// No reviver - use standard parser (faster)
-		val, err := parseJSONToValueWithPrototypes(vmInstance, text)
+		// No reviver - use the standard parser (faster). Go's decoder turns a lone
+		// surrogate escape into U+FFFD, so text that may hold one goes through the
+		// WTF-8-preserving manual parser instead.
+		var val vm.Value
+		var err error
+		if jsonMayContainSurrogateEscape(text) || wtf8.HasSurrogate(text) {
+			val, _, err = parseJSONWithSource(vmInstance, text)
+		} else {
+			val, err = parseJSONToValueWithPrototypes(vmInstance, text)
+		}
 		if err != nil {
 			// Wrap parse error as SyntaxError exception
 			ctor, _ := ctx.VM.GetGlobal("SyntaxError")
@@ -618,7 +627,7 @@ func parseJSONString(text string) (string, int, error) {
 	i := 1 // Skip opening quote
 	for i < len(text) {
 		if text[i] == '"' {
-			return result.String(), i + 1, nil
+			return wtf8.JoinSurrogatePairs(result.String()), i + 1, nil
 		}
 		if text[i] == '\\' {
 			if i+1 >= len(text) {
@@ -646,7 +655,9 @@ func parseJSONString(text string) (string, int, error) {
 				if err != nil {
 					return "", 0, errors.New("invalid unicode escape")
 				}
-				result.WriteRune(rune(code))
+				// \uXXXX names a UTF-16 code unit: surrogates must survive as WTF-8
+				// (WriteRune would emit U+FFFD) and pairs are joined on return.
+				wtf8.WriteCodeUnit(&result, uint16(code))
 				i += 4
 			default:
 				return "", 0, errors.New("invalid escape sequence")
@@ -1601,4 +1612,23 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 	default:
 		return "null", nil
 	}
+}
+
+// jsonMayContainSurrogateEscape reports whether text contains a \uXXXX escape
+// that could name a UTF-16 surrogate (\uD800..\uDFFF, any hex case). It is a
+// cheap over-approximation (퀀..퟿ also match) used, together with a
+// check for raw WTF-8 surrogate bytes in the text, only to pick the parser
+// that preserves lone surrogates (encoding/json would emit U+FFFD).
+func jsonMayContainSurrogateEscape(text string) bool {
+	for i := strings.Index(text, "\\u"); i >= 0; {
+		if i+2 < len(text) && (text[i+2] == 'd' || text[i+2] == 'D') {
+			return true
+		}
+		j := strings.Index(text[i+2:], "\\u")
+		if j < 0 {
+			return false
+		}
+		i += 2 + j
+	}
+	return false
 }
