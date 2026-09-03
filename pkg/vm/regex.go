@@ -65,15 +65,23 @@ func NewRegExp(pattern, flags string) (Value, error) {
 		}
 	}
 
-	// Translate JavaScript flags to Go regex pattern
-	goPattern, err := translateJSFlagsToGo(pattern, flags)
-	if err != nil {
-		return Undefined, err
-	}
+	// Translate JavaScript flags to Go regex pattern. translateJSFlagsToGo can
+	// itself hard-error on constructs RE2 can never express (e.g. numbered
+	// backreferences like \1) before regexp.Compile is even called - route
+	// that into the same narrow regexp2 fallback below rather than returning
+	// immediately, so `new RegExp("(a)\\1")` falls back the way the
+	// equivalent literal /(a)\1/ already does (paserati#218).
+	goPattern, translateErr := translateJSFlagsToGo(pattern, flags)
 
-	compiledRegex, err := regexp.Compile(goPattern)
+	var compiledRegex *regexp.Regexp
 	var compiledRegex2 *regexp2.Regexp
-	if err != nil {
+	var err error
+	if translateErr != nil {
+		err = translateErr
+	} else {
+		compiledRegex, err = regexp.Compile(goPattern)
+	}
+	if compiledRegex == nil {
 		// A regexp2 fallback here is deliberately narrow, not the unconditional
 		// one compileRegexEngines uses for regex literals (paserati#172).
 		// Measured against built-ins/RegExp at -timeout 2s (that suite is too
@@ -96,7 +104,7 @@ func NewRegExp(pattern, flags string) (Value, error) {
 		// other real use of lookaround - the thing this fallback exists for.
 		// (At -timeout 0.2s the net reads as -1/+0: the +3 property-escape
 		// gains, unrelated to lookaround, don't resolve inside that window.)
-		if needsRegexp2Fallback(pattern) {
+		if needsRegexp2Fallback(pattern, flags) {
 			opts := regexp2ECMAScriptOptions(flags)
 			compiledRegex2, err = regexp2.Compile(expandDerivedUnicodeProperties(pattern), opts)
 		}
@@ -146,14 +154,34 @@ func regexp2ECMAScriptOptions(flags string) regexp2.RegexOptions {
 }
 
 // needsRegexp2Fallback reports whether pattern uses a lookaround construct -
-// (?=, (?!, (?<= or (?<! - the only ECMAScript-valid syntax RE2 cannot
-// express at all. See the fallback's own comment in NewRegExp for why this
-// check exists and what it deliberately doesn't cover.
-func needsRegexp2Fallback(pattern string) bool {
-	return strings.Contains(pattern, "(?=") ||
+// (?=, (?!, (?<= or (?<! - or a numbered backreference (\1-\9), the
+// ECMAScript-valid syntax RE2 cannot express at all (the latter added for
+// paserati#218, matching translateJSFlagsToGo's own backreference check).
+// See the fallback's own comment in NewRegExp for why this check exists and
+// what it deliberately doesn't cover.
+//
+// The backreference check is skipped under the `u`/`v` flags: Annex B's
+// relaxed backreference/octal-escape handling (which is what makes \1-\9
+// legal even without a matching capture group) applies only in non-unicode
+// mode, so under `u`/`v` a bare \1-\9 must remain the SyntaxError
+// translateJSFlagsToGo already reports (built-ins/RegExp/
+// unicode_restricted_octal_escape.js exercises exactly this) rather than
+// silently succeed via regexp2, which has no notion of that restriction.
+func needsRegexp2Fallback(pattern, flags string) bool {
+	if strings.Contains(pattern, "(?=") ||
 		strings.Contains(pattern, "(?!") ||
 		strings.Contains(pattern, "(?<=") ||
-		strings.Contains(pattern, "(?<!")
+		strings.Contains(pattern, "(?<!") {
+		return true
+	}
+	if !strings.Contains(flags, "u") && !strings.Contains(flags, "v") {
+		for i := 1; i <= 9; i++ {
+			if strings.Contains(pattern, fmt.Sprintf(`\%d`, i)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // compileRegexEngines compiles the regex pattern with both engines and returns a cached result.
