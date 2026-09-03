@@ -298,12 +298,110 @@ func writeClassRanges(b *strings.Builder, ranges []runeRange) {
 	}
 }
 
+// scriptValueAliases maps the standard short (ISO 15924-style) aliases that
+// ECMAScript's Script/Script_Extensions property values accept to Go's
+// unicode.Scripts canonical key. A value that already spells a Go Scripts
+// key exactly (e.g. "Han", "Hiragana", "Greek") needs no entry here at all -
+// this table exists only to bridge the abbreviated forms (paserati#225).
+// Not exhaustive over every obscure historic script Go carries, but covers
+// the scripts real-world patterns actually name.
+var scriptValueAliases = map[string]string{
+	"Latn": "Latin", "Grek": "Greek", "Cyrl": "Cyrillic", "Armn": "Armenian",
+	"Hebr": "Hebrew", "Arab": "Arabic", "Syrc": "Syriac", "Thaa": "Thaana",
+	"Deva": "Devanagari", "Beng": "Bengali", "Guru": "Gurmukhi", "Gujr": "Gujarati",
+	"Orya": "Oriya", "Taml": "Tamil", "Telu": "Telugu", "Knda": "Kannada",
+	"Mlym": "Malayalam", "Sinh": "Sinhala", "Thai": "Thai", "Laoo": "Lao",
+	"Tibt": "Tibetan", "Mymr": "Myanmar", "Geor": "Georgian", "Hang": "Hangul",
+	"Ethi": "Ethiopic", "Cher": "Cherokee", "Cans": "Canadian_Aboriginal",
+	"Ogam": "Ogham", "Runr": "Runic", "Khmr": "Khmer", "Mong": "Mongolian",
+	"Hira": "Hiragana", "Kana": "Katakana", "Bopo": "Bopomofo", "Hani": "Han",
+	"Yiii": "Yi", "Ital": "Old_Italic", "Goth": "Gothic", "Dsrt": "Deseret",
+	"Zyyy": "Common", "Zinh": "Inherited", "Copt": "Coptic", "Brai": "Braille",
+	"Nkoo": "Nko", "Tglg": "Tagalog", "Hano": "Hanunoo", "Buhd": "Buhid",
+	"Tagb": "Tagbanwa", "Limb": "Limbu", "Tale": "Tai_Le", "Talu": "New_Tai_Lue",
+	"Bugi": "Buginese", "Bali": "Balinese", "Java": "Javanese", "Sund": "Sundanese",
+	"Batk": "Batak", "Lepc": "Lepcha", "Olck": "Ol_Chiki", "Vaii": "Vai",
+	"Bamu": "Bamum", "Adlm": "Adlam", "Osge": "Osage", "Glag": "Glagolitic",
+	"Shaw": "Shavian", "Osma": "Osmanya", "Cprt": "Cypriot", "Linb": "Linear_B",
+	"Lina": "Linear_A", "Xsux": "Cuneiform", "Egyp": "Egyptian_Hieroglyphs",
+	"Phnx": "Phoenician", "Samr": "Samaritan", "Mand": "Mandaic", "Avst": "Avestan",
+	"Prti": "Inscriptional_Parthian", "Phli": "Inscriptional_Pahlavi",
+	"Xpeo": "Old_Persian", "Ugar": "Ugaritic", "Sarb": "Old_South_Arabian",
+	"Narb": "Old_North_Arabian", "Armi": "Imperial_Aramaic", "Palm": "Palmyrene",
+	"Nbat": "Nabataean", "Hatr": "Hatran", "Chrs": "Chorasmian", "Sogd": "Sogdian",
+	"Sogo": "Old_Sogdian", "Elym": "Elymaic", "Mani": "Manichaean",
+	"Merc": "Meroitic_Cursive", "Mero": "Meroitic_Hieroglyphs",
+}
+
+// generalCategoryValueAliases maps the long-form ECMAScript General_Category
+// values (and a few common short aliases like "digit"/"punct"/"cntrl") to
+// Go's unicode.Categories canonical key. A value already spelling a Go
+// Categories key exactly (e.g. "Lu", "Nd", "Cn", "LC") needs no lookup here.
+var generalCategoryValueAliases = map[string]string{
+	"Cased_Letter": "LC", "Uppercase_Letter": "Lu", "Lowercase_Letter": "Ll",
+	"Titlecase_Letter": "Lt", "Modifier_Letter": "Lm", "Other_Letter": "Lo",
+	"Letter":          "L",
+	"Nonspacing_Mark": "Mn", "Spacing_Mark": "Mc", "Enclosing_Mark": "Me",
+	"Mark": "M", "Combining_Mark": "M",
+	"Decimal_Number": "Nd", "Letter_Number": "Nl", "Other_Number": "No",
+	"Number": "N", "digit": "Nd",
+	"Connector_Punctuation": "Pc", "Dash_Punctuation": "Pd", "Open_Punctuation": "Ps",
+	"Close_Punctuation": "Pe", "Initial_Punctuation": "Pi", "Final_Punctuation": "Pf",
+	"Other_Punctuation": "Po", "Punctuation": "P", "punct": "P",
+	"Math_Symbol": "Sm", "Currency_Symbol": "Sc", "Modifier_Symbol": "Sk",
+	"Other_Symbol": "So", "Symbol": "S",
+	"Space_Separator": "Zs", "Line_Separator": "Zl", "Paragraph_Separator": "Zp",
+	"Separator": "Z",
+	"Control":   "Cc", "cntrl": "Cc", "Format": "Cf", "Surrogate": "Cs",
+	"Private_Use": "Co", "Unassigned": "Cn", "Other": "C",
+}
+
+// resolveUnicodePropertyValuePair resolves an ECMAScript \p{Name=Value} /
+// \P{Name=Value} property escape (Script, Script_Extensions, and
+// General_Category, plus their short aliases sc/scx/gc - the forms
+// ECMAScript defines) into a bare property name both RE2 and regexp2 already
+// recognize natively (paserati#225). Neither engine parses the Name=Value
+// grammar at all - not "unknown value", the syntax itself isn't recognized -
+// so this rewrite happens before either engine ever sees the pattern.
+//
+// Script_Extensions is approximated with the same per-codepoint Script data
+// (Go ships no separate ScriptExtensions.txt table); this covers the
+// overwhelming majority of real usage - the two properties differ only for
+// characters shared across multiple scripts (e.g. combining marks, some
+// punctuation).
+func resolveUnicodePropertyValuePair(content string) (string, bool) {
+	name, value, hasEq := strings.Cut(content, "=")
+	if !hasEq {
+		return "", false
+	}
+	switch name {
+	case "Script", "sc", "Script_Extensions", "scx":
+		if _, ok := unicode.Scripts[value]; ok {
+			return value, true
+		}
+		if canonical, ok := scriptValueAliases[value]; ok {
+			return canonical, true
+		}
+	case "General_Category", "gc":
+		if _, ok := unicode.Categories[value]; ok {
+			return value, true
+		}
+		if canonical, ok := generalCategoryValueAliases[value]; ok {
+			return canonical, true
+		}
+	}
+	return "", false
+}
+
 // expandDerivedUnicodeProperties rewrites every \p{Name} / \P{Name} whose
-// Name is in derivedUnicodeProperties into explicit ranges. Inside a
-// character class only the members are emitted; outside, they're wrapped in
-// a class of their own. Every other escape - including every other \p{...}
-// name, and the \p{Script=...} / \p{General_Category=...} forms - passes
-// through untouched for the engines to judge.
+// Name is in derivedUnicodeProperties into explicit ranges, and every
+// \p{Name=Value} / \P{Name=Value} pair that resolveUnicodePropertyValuePair
+// recognizes into the bare engine-native property name it resolves to (see
+// that function's doc comment - paserati#225). Inside a character class only
+// the members are emitted; outside, they're wrapped in a class of their own.
+// Every other escape - including every other \p{...} name, and an
+// unresolvable \p{Name=Value} pair - passes through untouched for the
+// engines to judge.
 //
 // Operates on bytes like rewriteECMAClasses: every construct inspected is
 // ASCII, so multi-byte runes copy through as-is.
@@ -319,7 +417,8 @@ func expandDerivedUnicodeProperties(pattern string) string {
 		if c == '\\' && i+1 < len(pattern) {
 			if e := pattern[i+1]; (e == 'p' || e == 'P') && i+2 < len(pattern) && pattern[i+2] == '{' {
 				if end := strings.IndexByte(pattern[i+3:], '}'); end >= 0 {
-					if prop, ok := derivedUnicodeProperties[pattern[i+3:i+3+end]]; ok {
+					content := pattern[i+3 : i+3+end]
+					if prop, ok := derivedUnicodeProperties[content]; ok {
 						prop.get()
 						ranges := prop.ranges
 						if e == 'P' {
@@ -332,6 +431,15 @@ func expandDerivedUnicodeProperties(pattern string) string {
 						if !inClass {
 							b.WriteByte(']')
 						}
+						i += 3 + end
+						continue
+					}
+					if resolved, ok := resolveUnicodePropertyValuePair(content); ok {
+						b.WriteByte('\\')
+						b.WriteByte(e)
+						b.WriteByte('{')
+						b.WriteString(resolved)
+						b.WriteByte('}')
 						i += 3 + end
 						continue
 					}
