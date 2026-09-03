@@ -122,6 +122,24 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 			case TypeClosure:
 				cl := proto.AsClosure()
 				if cl.Properties != nil {
+					// Check accessor properties (getters/setters) before plain data
+					// properties — e.g. chalk's `level` getter defined via
+					// Object.defineProperty on a Function-typed prototype.
+					if getter, _, _, _, exists := cl.Properties.GetOwnAccessor(propName); exists {
+						if getter.Type() != TypeUndefined {
+							res, err := vm.Call(getter, objVal, nil)
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+								} else {
+									vm.throwException(NewString(err.Error()))
+								}
+								return Undefined, false
+							}
+							return res, true
+						}
+						return Undefined, true
+					}
 					if prop, exists := cl.Properties.GetOwn(propName); exists {
 						return prop, true
 					}
@@ -130,6 +148,23 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 			case TypeFunction:
 				fn := proto.AsFunction()
 				if fn.Properties != nil {
+					// Check accessor properties (getters/setters) before plain data
+					// properties — see TypeClosure case above for rationale.
+					if getter, _, _, _, exists := fn.Properties.GetOwnAccessor(propName); exists {
+						if getter.Type() != TypeUndefined {
+							res, err := vm.Call(getter, objVal, nil)
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+								} else {
+									vm.throwException(NewString(err.Error()))
+								}
+								return Undefined, false
+							}
+							return res, true
+						}
+						return Undefined, true
+					}
 					if prop, exists := fn.Properties.GetOwn(propName); exists {
 						return prop, true
 					}
@@ -489,6 +524,102 @@ func (vm *VM) checkFunctionProtoAccessorSetter(propName string, objVal *Value, v
 				return true, false, InterpretRuntimeError, Undefined
 			}
 			return true, true, InterpretOK, *valueToSet
+		}
+	}
+	return false, false, InterpretOK, Undefined
+}
+
+// checkCustomProtoChainAccessorSetter walks a Closure/Function's *custom*
+// [[Prototype]] chain (set via Object.setPrototypeOf, e.g. chalk's
+// `Object.setPrototypeOf(builder, proto)` where proto is itself a Function)
+// looking for an inherited accessor property with a setter. This mirrors the
+// getter-side walk in handleCallableProperty: without it, `fn.level = v` where
+// `level` is a setter defined on a Function-typed prototype silently creates
+// a shadowing own data property on fn instead of invoking the inherited
+// setter, matching the getter bug's root cause (issue #223).
+func (vm *VM) checkCustomProtoChainAccessorSetter(startProto Value, propName string, objVal *Value, valueToSet *Value) (handled bool, ok bool, status InterpretResult, val Value) {
+	proto := startProto
+	for proto.Type() != TypeNull && proto.Type() != TypeUndefined {
+		switch proto.Type() {
+		case TypeClosure:
+			cl := proto.AsClosure()
+			if cl.Properties != nil {
+				if _, setter, _, _, exists := cl.Properties.GetOwnAccessor(propName); exists {
+					if setter.Type() == TypeUndefined {
+						// Accessor exists but has no setter: per spec this is a
+						// silent no-op in sloppy mode (throwing is handled by
+						// the caller's strict-mode logic elsewhere, if any).
+						return true, true, InterpretOK, *valueToSet
+					}
+					_, err := vm.Call(setter, *objVal, []Value{*valueToSet})
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						} else {
+							vm.throwException(NewString(err.Error()))
+						}
+						return true, false, InterpretRuntimeError, Undefined
+					}
+					return true, true, InterpretOK, *valueToSet
+				}
+				if _, exists := cl.Properties.GetOwn(propName); exists {
+					// Inherited plain data property: per spec, assignment
+					// creates a new own property on the receiver rather than
+					// mutating the inherited one, so stop walking and let the
+					// caller fall through to its normal own-property set path.
+					return false, false, InterpretOK, Undefined
+				}
+			}
+			proto = cl.Fn.Prototype
+		case TypeFunction:
+			fnProto := proto.AsFunction()
+			if fnProto.Properties != nil {
+				if _, setter, _, _, exists := fnProto.Properties.GetOwnAccessor(propName); exists {
+					if setter.Type() == TypeUndefined {
+						return true, true, InterpretOK, *valueToSet
+					}
+					_, err := vm.Call(setter, *objVal, []Value{*valueToSet})
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						} else {
+							vm.throwException(NewString(err.Error()))
+						}
+						return true, false, InterpretRuntimeError, Undefined
+					}
+					return true, true, InterpretOK, *valueToSet
+				}
+				if _, exists := fnProto.Properties.GetOwn(propName); exists {
+					return false, false, InterpretOK, Undefined
+				}
+			}
+			proto = fnProto.Prototype
+		case TypeObject:
+			po := proto.AsPlainObject()
+			if po == nil {
+				return false, false, InterpretOK, Undefined
+			}
+			if _, setter, _, _, exists := po.GetOwnAccessor(propName); exists {
+				if setter.Type() == TypeUndefined {
+					return true, true, InterpretOK, *valueToSet
+				}
+				_, err := vm.Call(setter, *objVal, []Value{*valueToSet})
+				if err != nil {
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+					} else {
+						vm.throwException(NewString(err.Error()))
+					}
+					return true, false, InterpretRuntimeError, Undefined
+				}
+				return true, true, InterpretOK, *valueToSet
+			}
+			if _, exists := po.GetOwn(propName); exists {
+				return false, false, InterpretOK, Undefined
+			}
+			proto = po.GetPrototype()
+		default:
+			return false, false, InterpretOK, Undefined
 		}
 	}
 	return false, false, InterpretOK, Undefined

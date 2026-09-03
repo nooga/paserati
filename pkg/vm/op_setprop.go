@@ -282,6 +282,14 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			}
 			return true, InterpretOK, *valueToSet
 		}
+		// Check the function's *custom* [[Prototype]] chain (set via
+		// Object.setPrototypeOf) for an inherited accessor setter — e.g.
+		// chalk's `level` setter defined on a Function-typed prototype.
+		if propName != "prototype" && fn.Prototype.Type() != TypeNull && fn.Prototype.Type() != TypeUndefined {
+			if handled, ok, status, val := vm.checkCustomProtoChainAccessorSetter(fn.Prototype, propName, objVal, valueToSet); handled {
+				return ok, status, val
+			}
+		}
 		// Check Function.prototype for inherited accessor properties (e.g., caller, arguments)
 		// Only for strict/arrow/generator/async functions; sloppy regular functions allow setting caller/arguments
 		if fn.IsArrowFunction || fn.IsGenerator || fn.IsAsync || (fn.Chunk != nil && fn.Chunk.IsStrict) {
@@ -365,6 +373,14 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				return false, InterpretRuntimeError, Undefined
 			}
 			return true, InterpretOK, *valueToSet
+		}
+		// Check the closure's *custom* [[Prototype]] chain (set via
+		// Object.setPrototypeOf) for an inherited accessor setter — e.g.
+		// chalk's `level` setter defined on a Function-typed prototype.
+		if propName != "prototype" && closure.Fn.Prototype.Type() != TypeNull && closure.Fn.Prototype.Type() != TypeUndefined {
+			if handled, ok, status, val := vm.checkCustomProtoChainAccessorSetter(closure.Fn.Prototype, propName, objVal, valueToSet); handled {
+				return ok, status, val
+			}
 		}
 		// Check Function.prototype for inherited accessor properties (e.g., caller, arguments)
 		// Only for strict/arrow/generator/async functions; sloppy regular functions allow setting caller/arguments
