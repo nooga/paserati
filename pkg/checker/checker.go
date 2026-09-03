@@ -1891,6 +1891,38 @@ func (c *Checker) visit(node parser.Node) {
 			}
 			c.checkDefiniteAssignmentAssertionInitializer(declarator)
 
+			// --- FIX for self-referencing const arrow/function expressions nested in a
+			// function body: temporarily define the name (mirroring what LetStatement
+			// and VarStatement already do) BEFORE visiting the initializer, so a
+			// self-reference inside the initializer's own body (e.g. a memoized/lazy
+			// builder pattern: `const builder = () => { return builder.level; }`)
+			// resolves instead of reporting "Cannot find name". At module/program
+			// scope this is already handled by Pass 2 hoisting; nested const
+			// declarations have no such pre-pass, so it must happen here too. ---
+			var preliminaryInitializerType types.Type = nil
+			if funcLit, ok := declarator.Value.(*parser.FunctionLiteral); ok {
+				prelimSig := c.resolveFunctionLiteralSignature(funcLit, c.env)
+				if prelimSig == nil {
+					prelimSig = &types.Signature{
+						ParameterTypes: make([]types.Type, len(funcLit.Parameters)),
+						ReturnType:     types.Any,
+					}
+					for i := range prelimSig.ParameterTypes {
+						prelimSig.ParameterTypes[i] = types.Any
+					}
+				}
+				preliminaryInitializerType = types.NewFunctionType(prelimSig)
+			}
+			tempType := preliminaryInitializerType
+			if tempType == nil {
+				tempType = declaredType // Use annotation if no prelim func type
+			}
+			if tempType == nil {
+				tempType = types.Any // Fallback to Any (covers arrow functions, etc.)
+			}
+			preDefined := declarator.Value != nil && c.env.Define(declarator.Name.Value, tempType, true)
+			debugPrintf("// [Checker ConstStmt] Temp Define '%s' as: %s (ok=%v)\n", declarator.Name.Value, tempType.String(), preDefined)
+
 			// 2. Handle Initializer (Must be present for const)
 			var computedInitializerType types.Type
 			if declarator.Value != nil {
@@ -1953,8 +1985,13 @@ func (c *Checker) visit(node parser.Node) {
 				}
 			}
 
-			// 4. Define variable in the current environment
-			if !c.env.Define(declarator.Name.Value, finalType, true) {
+			// 4. Define (or, if pre-defined above for self-reference support, update)
+			// the variable's final type in the current environment.
+			if preDefined {
+				if !c.env.Update(declarator.Name.Value, finalType) {
+					debugPrintf("// [Checker ConstStmt] WARNING: Update failed unexpectedly for '%s'\n", declarator.Name.Value)
+				}
+			} else if !c.env.Define(declarator.Name.Value, finalType, true) {
 				c.addError(declarator.Name, fmt.Sprintf("constant '%s' already declared in this scope", declarator.Name.Value))
 			}
 			// Set computed type on the Name Identifier node itself and the declarator
