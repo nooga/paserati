@@ -460,6 +460,17 @@ func (m *ModuleBuilder) createBoundMethod(methodFunc reflect.Value) vm.Value {
 		// Call the Go method
 		results := methodFunc.Call(goArgs)
 
+		// Handle the common (value, error) method shape (paserati#221):
+		// mirrors createClassConstructor's own len(results) == 2 error check -
+		// without this, a non-nil error here was silently discarded and the
+		// call evaluated to a value instead of throwing.
+		if len(results) == 2 && results[1].Type().Implements(reflect.TypeOf((*error)(nil)).Elem()) {
+			if !results[1].IsNil() {
+				errVal := results[1].Interface().(error)
+				return vm.Undefined, errVal
+			}
+		}
+
 		// Convert result back to VM value
 		if len(results) > 0 {
 			return reflectValueToVM(results[0]), nil
