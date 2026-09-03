@@ -269,6 +269,8 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.IS, p.parseIdentifier)        // IS is a contextual keyword (type predicates), can be used as identifier in JS
 	p.registerPrefix(lexer.SATISFIES, p.parseIdentifier) // SATISFIES is a TS operator, but also a valid binding name (e.g. semver)
 	p.registerPrefix(lexer.AS, p.parseIdentifier)        // AS is a TS operator (type assertions), but also a valid binding name
+	p.registerPrefix(lexer.KEYOF, p.parseIdentifier)     // KEYOF is a TS type operator, but also a valid binding name in JS
+	p.registerPrefix(lexer.INFER, p.parseIdentifier)     // INFER is a TS type operator, but also a valid binding name in JS
 	p.registerPrefix(lexer.FUNCTION, func() Expression { return p.parseFunctionLiteral(false) })
 	p.registerPrefix(lexer.ASYNC, p.parseAsyncExpression) // Added for async functions and async arrows
 	p.registerPrefix(lexer.CLASS, p.parseClassExpression)
@@ -2606,7 +2608,10 @@ func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 		p.peekTokenIs(lexer.TYPE) || p.peekTokenIs(lexer.FROM) ||
 		p.peekTokenIs(lexer.OF) || p.peekTokenIs(lexer.AS) ||
 		p.peekTokenIs(lexer.ASYNC) || p.peekTokenIs(lexer.STATIC) ||
-		p.peekTokenIs(lexer.WITH) {
+		p.peekTokenIs(lexer.WITH) || p.peekTokenIs(lexer.SATISFIES) ||
+		p.peekTokenIs(lexer.IS) || p.peekTokenIs(lexer.INFER) ||
+		p.peekTokenIs(lexer.READONLY) || p.peekTokenIs(lexer.OVERRIDE) ||
+		p.peekTokenIs(lexer.ABSTRACT) || p.peekTokenIs(lexer.KEYOF) {
 		p.nextToken() // Consume name identifier/keyword
 		// Create identifier from token (works for both IDENT and keywords)
 		lit.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
