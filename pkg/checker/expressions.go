@@ -3053,12 +3053,6 @@ func (c *Checker) isSpreadableIterableType(t types.Type) bool {
 	if t == nil {
 		return false
 	}
-	if t == types.String {
-		return false
-	}
-	if literalType, ok := t.(*types.LiteralType); ok && literalType.Value.Type() == vm.TypeString {
-		return false
-	}
 	if genericType, ok := t.(*types.GenericType); ok {
 		if genericType.Name == "Iterable" || genericType.Name == "Iterator" {
 			return true
@@ -3120,7 +3114,18 @@ func (c *Checker) getSpreadElementType(t types.Type) types.Type {
 		}
 	}
 
-	nextType := c.getPropertyTypeFromType(t, "next", false)
+	// If t isn't already iterator-shaped (no .next of its own), it's an iterable:
+	// resolve its [Symbol.iterator]() return type and look for .next on that instead.
+	iteratorType := t
+	if !c.hasIteratorNext(t) {
+		if methodType := c.getPropertyTypeFromType(t, "__COMPUTED_PROPERTY__", false); methodType != nil && methodType != types.Never {
+			if methodReturn := callableReturnType(methodType); methodReturn != nil && methodReturn != types.Any {
+				iteratorType = methodReturn
+			}
+		}
+	}
+
+	nextType := c.getPropertyTypeFromType(iteratorType, "next", false)
 	nextReturnType := callableReturnType(nextType)
 	if nextReturnType == nil || nextReturnType == types.Any || nextReturnType == types.Never {
 		return types.Any
