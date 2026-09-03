@@ -394,13 +394,16 @@ func resolveUnicodePropertyValuePair(content string) (string, bool) {
 }
 
 // expandDerivedUnicodeProperties rewrites every \p{Name} / \P{Name} whose
-// Name is in derivedUnicodeProperties into explicit ranges, and every
+// Name is in derivedUnicodeProperties into explicit ranges, every
 // \p{Name=Value} / \P{Name=Value} pair that resolveUnicodePropertyValuePair
 // recognizes into the bare engine-native property name it resolves to (see
-// that function's doc comment - paserati#225). Inside a character class only
-// the members are emitted; outside, they're wrapped in a class of their own.
-// Every other escape - including every other \p{...} name, and an
-// unresolvable \p{Name=Value} pair - passes through untouched for the
+// that function's doc comment - paserati#225), and every standalone,
+// non-negated \p{Name} naming one of Unicode's "properties of strings" (see
+// regex_emoji.go - paserati#224) into its sequence-alternation expansion.
+// Inside a character class only the members are emitted; outside, they're
+// wrapped in a class of their own. Every other escape - including every
+// other \p{...} name, an unresolvable \p{Name=Value} pair, and a property of
+// strings used negated or inside a class - passes through untouched for the
 // engines to judge.
 //
 // Operates on bytes like rewriteECMAClasses: every construct inspected is
@@ -442,6 +445,23 @@ func expandDerivedUnicodeProperties(pattern string) string {
 						b.WriteByte('}')
 						i += 3 + end
 						continue
+					}
+					// Unicode "properties of strings" (RGI_Emoji and friends,
+					// paserati#224): only valid as \p{Name} (never \P{Name} -
+					// negating a property of strings is a SyntaxError per
+					// spec), and only outside a character class - a
+					// multi-codepoint alternation has no equivalent inside
+					// `[...]` in either underlying engine. Leave both of
+					// those cases unexpanded so they fall through to the
+					// engines' own (correct) rejection.
+					if e == 'p' && !inClass {
+						if piece, ok := emojiStringProperties[content]; ok {
+							b.WriteString("(?:")
+							b.WriteString(piece.get())
+							b.WriteString(")")
+							i += 3 + end
+							continue
+						}
 					}
 				}
 			}
