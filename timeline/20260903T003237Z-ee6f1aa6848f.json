@@ -1,0 +1,1405 @@
+{
+  "version": 2,
+  "reducer": "mean",
+  "sample_count": 3,
+  "captured_at": "2026-09-03T00:36:51Z",
+  "captured_at_sha": "ee6f1aa6848f",
+  "machine": {
+    "os": "linux",
+    "arch": "amd64",
+    "num_cpu": 4,
+    "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+    "go_version": "go1.26.0"
+  },
+  "anchor": {
+    "name": "BenchmarkRatchetAnchor",
+    "package": "github.com/nooga/paserati/pkg/vm",
+    "ns_per_op": 1.4073333333333335,
+    "iterations": 852813057,
+    "samples": [
+      {
+        "iterations": 849066481,
+        "ns_per_op": 1.4080000000000001,
+        "bytes_per_op": 0,
+        "allocs_per_op": 0,
+        "captured_at": "2026-09-03T00:33:18Z"
+      },
+      {
+        "iterations": 852290631,
+        "ns_per_op": 1.4070000000000003,
+        "bytes_per_op": 0,
+        "allocs_per_op": 0,
+        "captured_at": "2026-09-03T00:33:18Z"
+      },
+      {
+        "iterations": 852813057,
+        "ns_per_op": 1.4070000000000003,
+        "bytes_per_op": 0,
+        "allocs_per_op": 0,
+        "captured_at": "2026-09-03T00:33:18Z"
+      }
+    ]
+  },
+  "benchmarks": {
+    "github.com/nooga/paserati/pkg/vm.BenchmarkCharCodeAtScan": {
+      "ns_per_op": 475381,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 337788.4888678351,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 2266,
+          "ns_per_op": 475261.00000000006,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 337703.2212221696,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 2520,
+          "ns_per_op": 475495.00000000006,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 337869.49313121743,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 2521,
+          "ns_per_op": 475387,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 337792.75225011836,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkCharCodeAtScanNonASCII": {
+      "ns_per_op": 239326.33333333334,
+      "allocs_per_op": 0,
+      "bytes_per_op": 120,
+      "ratio_to_anchor": 170056.60824253905,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 5017,
+          "ns_per_op": 238983,
+          "bytes_per_op": 120,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 169812.64803410703,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 5010,
+          "ns_per_op": 237771,
+          "bytes_per_op": 121,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 168951.44481288487,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 5014,
+          "ns_per_op": 241225.00000000003,
+          "bytes_per_op": 120,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 171405.7318806253,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=1/first": {
+      "ns_per_op": 8.173,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 5.807437233538606,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 148221967,
+          "ns_per_op": 8.665000000000001,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 6.157034580767409,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 153995638,
+          "ns_per_op": 7.995,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 5.680956892468024,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 149313198,
+          "ns_per_op": 7.859000000000001,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 5.584320227380388,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=1/last": {
+      "ns_per_op": 8.418333333333335,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 5.981762198010422,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 137947075,
+          "ns_per_op": 8.491,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 6.033396494552344,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 144014793,
+          "ns_per_op": 8.483,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 6.027711984841307,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 139043972,
+          "ns_per_op": 8.281000000000002,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 5.8841781146376135,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=1/round-robin": {
+      "ns_per_op": 8.133000000000001,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 5.77901468498342,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 145892193,
+          "ns_per_op": 8.129,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 5.7761724301279,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 147333951,
+          "ns_per_op": 8.098,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 5.754144954997631,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 148000182,
+          "ns_per_op": 8.172,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 5.8067266698247275,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=16/first": {
+      "ns_per_op": 16.430000000000003,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 11.674561819043108,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 73066188,
+          "ns_per_op": 16.430000000000003,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.674561819043108,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 73064493,
+          "ns_per_op": 16.440000000000005,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.681667456181906,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 73026196,
+          "ns_per_op": 16.420000000000005,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.667456181904313,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=16/last": {
+      "ns_per_op": 16.706666666666667,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 11.871151113216483,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 72531752,
+          "ns_per_op": 16.590000000000003,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.788252013263856,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 71972857,
+          "ns_per_op": 16.6,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.795357650402652,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 72345673,
+          "ns_per_op": 16.93,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12.029843675982944,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=16/round-robin": {
+      "ns_per_op": 17.97666666666667,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 12.773567029843676,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 67466920,
+          "ns_per_op": 17.960000000000004,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12.761724301279015,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 67174166,
+          "ns_per_op": 18.000000000000004,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12.790146849834203,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 67249042,
+          "ns_per_op": 17.970000000000002,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12.768829938417811,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=32/first": {
+      "ns_per_op": 16.44666666666667,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 11.686404547607768,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 72990702,
+          "ns_per_op": 16.490000000000002,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.717195641875888,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 70171953,
+          "ns_per_op": 16.440000000000005,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.681667456181906,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 72705508,
+          "ns_per_op": 16.410000000000004,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.660350544765516,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=32/last": {
+      "ns_per_op": 16.56666666666667,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 11.77167219327333,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 72809220,
+          "ns_per_op": 16.560000000000002,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.766935101847466,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 72439682,
+          "ns_per_op": 16.550000000000004,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.75982946470867,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 72611586,
+          "ns_per_op": 16.590000000000003,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.788252013263856,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=32/round-robin": {
+      "ns_per_op": 17.683333333333334,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 12.565135007105635,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 68291970,
+          "ns_per_op": 17.68,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12.562766461392703,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 68624688,
+          "ns_per_op": 17.65,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12.541449549976312,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 68570209,
+          "ns_per_op": 17.72,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12.59118900994789,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=4/first": {
+      "ns_per_op": 8.048666666666668,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 5.719090478446234,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 154924572,
+          "ns_per_op": 7.984000000000001,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 5.673140691615348,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 148745760,
+          "ns_per_op": 8.072,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 5.735670298436759,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 149263933,
+          "ns_per_op": 8.09,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 5.748460445286593,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=4/last": {
+      "ns_per_op": 21.313333333333336,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 15.144481288488867,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 56592441,
+          "ns_per_op": 21.210000000000004,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 15.071056371387968,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 56512952,
+          "ns_per_op": 21.55,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 15.312648034107056,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 56862516,
+          "ns_per_op": 21.180000000000003,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 15.049739459971578,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=4/round-robin": {
+      "ns_per_op": 14.71,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 10.45239223117006,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 81778507,
+          "ns_per_op": 14.62,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 10.388441496920889,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 81700386,
+          "ns_per_op": 14.88,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 10.573188062529606,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 82208076,
+          "ns_per_op": 14.63,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 10.395547134059687,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=64/first": {
+      "ns_per_op": 16.470000000000002,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 11.702984367598294,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 73029267,
+          "ns_per_op": 16.4,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.653244907626714,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 72077803,
+          "ns_per_op": 16.420000000000005,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.667456181904313,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 73022149,
+          "ns_per_op": 16.590000000000003,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.788252013263856,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=64/last": {
+      "ns_per_op": 16.723333333333333,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 11.882993841781143,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 72506426,
+          "ns_per_op": 16.65,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.830885836096634,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 72519106,
+          "ns_per_op": 16.89,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12.001421127427758,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 72276852,
+          "ns_per_op": 16.63,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 11.81667456181904,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=64/round-robin": {
+      "ns_per_op": 18.2,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 12.932259592610135,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 65046946,
+          "ns_per_op": 18.21,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12.939365229748933,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 66741613,
+          "ns_per_op": 18.14,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12.889625769777355,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 66824215,
+          "ns_per_op": 18.25,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12.96778777830412,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=8/first": {
+      "ns_per_op": 8.103,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 5.7576977735670285,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 148245495,
+          "ns_per_op": 8.113,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 5.7648034107058255,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 147718912,
+          "ns_per_op": 8.104,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 5.758408337280908,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 148233423,
+          "ns_per_op": 8.092,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 5.749881572714353,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=8/last": {
+      "ns_per_op": 40.03333333333333,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 28.44623401231643,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 30221389,
+          "ns_per_op": 40.18,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 28.550450023685453,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 30273866,
+          "ns_per_op": 40.04,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 28.450971103742297,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 30122959,
+          "ns_per_op": 39.88,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 28.337280909521553,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkGetOwn/n=8/round-robin": {
+      "ns_per_op": 23.89,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 16.975367124585503,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 50054550,
+          "ns_per_op": 23.92,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 16.996684036001895,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 48565250,
+          "ns_per_op": 23.92,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 16.996684036001895,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 50259009,
+          "ns_per_op": 23.83,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 16.93273330175272,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkIsObject": {
+      "ns_per_op": 13.090000000000002,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 9.301279014684983,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 90051580,
+          "ns_per_op": 13.07,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 9.28706774040739,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 91628940,
+          "ns_per_op": 13.140000000000002,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 9.336807200378967,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 89325126,
+          "ns_per_op": 13.06,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 9.279962103268591,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkScannerSubstring/n=16384": {
+      "ns_per_op": 17700.333333333336,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 12577.214590241592,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 67887,
+          "ns_per_op": 17687.000000000004,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12567.740407389863,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 67728,
+          "ns_per_op": 17675.000000000004,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12559.213642823308,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 67782,
+          "ns_per_op": 17739,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 12604.689720511604,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkScannerSubstring/n=262144": {
+      "ns_per_op": 282782.3333333334,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 200934.86499289435,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 4242,
+          "ns_per_op": 282786.00000000006,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 200937.4703931786,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 4246,
+          "ns_per_op": 282738.00000000006,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 200903.36333491237,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 4237,
+          "ns_per_op": 282823,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 200963.7612505921,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkScannerSubstring/n=65536": {
+      "ns_per_op": 70703.66666666667,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 50239.459971577446,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 16983,
+          "ns_per_op": 70683,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 50224.77498815727,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 16977,
+          "ns_per_op": 70777,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 50291.567977261955,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 16980,
+          "ns_per_op": 70651,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 50202.036949313115,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/pkg/vm.BenchmarkToInteger": {
+      "ns_per_op": 90.94333333333334,
+      "allocs_per_op": 0,
+      "bytes_per_op": 0,
+      "ratio_to_anchor": 64.62103268593083,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 13278456,
+          "ns_per_op": 91.64,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 65.11605873993368,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 13214865,
+          "ns_per_op": 90.62000000000002,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 64.39128375177641,
+          "captured_at": "2026-09-03T00:33:18Z"
+        },
+        {
+          "iterations": 13261386,
+          "ns_per_op": 90.57,
+          "bytes_per_op": 0,
+          "allocs_per_op": 0,
+          "ratio_to_anchor": 64.35575556608241,
+          "captured_at": "2026-09-03T00:33:18Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkAdd": {
+      "ns_per_op": 299455463.6666667,
+      "allocs_per_op": 6,
+      "bytes_per_op": 3758,
+      "ratio_to_anchor": 212782186.4045476,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 4,
+          "ns_per_op": 301161915,
+          "bytes_per_op": 3758,
+          "allocs_per_op": 6,
+          "ratio_to_anchor": 213994728.80151585,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 4,
+          "ns_per_op": 297573448,
+          "bytes_per_op": 3758,
+          "allocs_per_op": 6,
+          "ratio_to_anchor": 211444894.36286116,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 4,
+          "ns_per_op": 299631028,
+          "bytes_per_op": 3758,
+          "allocs_per_op": 6,
+          "ratio_to_anchor": 212906936.0492657,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkArith": {
+      "ns_per_op": 145017441,
+      "allocs_per_op": 4,
+      "bytes_per_op": 2394,
+      "ratio_to_anchor": 103044131.45428705,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 7,
+          "ns_per_op": 145199471,
+          "bytes_per_op": 2394,
+          "allocs_per_op": 4,
+          "ratio_to_anchor": 103173475.36712457,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 7,
+          "ns_per_op": 144786381.00000003,
+          "bytes_per_op": 2394,
+          "allocs_per_op": 4,
+          "ratio_to_anchor": 102879948.60255803,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 7,
+          "ns_per_op": 145066471,
+          "bytes_per_op": 2394,
+          "allocs_per_op": 4,
+          "ratio_to_anchor": 103078970.39317857,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkFactorial": {
+      "ns_per_op": 752985889.3333334,
+      "allocs_per_op": 9,
+      "bytes_per_op": 6940,
+      "ratio_to_anchor": 535044450.0236854,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 2,
+          "ns_per_op": 756746424,
+          "bytes_per_op": 6940,
+          "allocs_per_op": 9,
+          "ratio_to_anchor": 537716549.5026053,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2,
+          "ns_per_op": 749359988,
+          "bytes_per_op": 6940,
+          "allocs_per_op": 9,
+          "ratio_to_anchor": 532468016.10611075,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2,
+          "ns_per_op": 752851256,
+          "bytes_per_op": 6940,
+          "allocs_per_op": 9,
+          "ratio_to_anchor": 534948784.46234006,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkMatrixMult": {
+      "ns_per_op": 5427561.333333333,
+      "allocs_per_op": 42,
+      "bytes_per_op": 179650,
+      "ratio_to_anchor": 3856628.1383230686,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 220,
+          "ns_per_op": 5425847,
+          "bytes_per_op": 179651,
+          "allocs_per_op": 42,
+          "ratio_to_anchor": 3855409.995262908,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 222,
+          "ns_per_op": 5414244,
+          "bytes_per_op": 179650,
+          "allocs_per_op": 42,
+          "ratio_to_anchor": 3847165.3244907623,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 219,
+          "ns_per_op": 5442593,
+          "bytes_per_op": 179651,
+          "allocs_per_op": 42,
+          "ratio_to_anchor": 3867309.095215537,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkPrototypeCacheHitRate": {
+      "ns_per_op": 442.59999999999997,
+      "allocs_per_op": 2,
+      "bytes_per_op": 384,
+      "ratio_to_anchor": 314.49549976314535,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 2628122,
+          "ns_per_op": 430.7,
+          "bytes_per_op": 384,
+          "allocs_per_op": 2,
+          "ratio_to_anchor": 306.0397915679772,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2296165,
+          "ns_per_op": 440.30000000000007,
+          "bytes_per_op": 384,
+          "allocs_per_op": 2,
+          "ratio_to_anchor": 312.8612032212222,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2739612,
+          "ns_per_op": 456.8,
+          "bytes_per_op": 384,
+          "allocs_per_op": 2,
+          "ratio_to_anchor": 324.5855045002368,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkPrototypeMethodAccess/Baseline/ArrayPrototypeMethod": {
+      "ns_per_op": 595.5333333333334,
+      "allocs_per_op": 4,
+      "bytes_per_op": 624,
+      "ratio_to_anchor": 423.1643770724775,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 2021625,
+          "ns_per_op": 593.7000000000002,
+          "bytes_per_op": 624,
+          "allocs_per_op": 4,
+          "ratio_to_anchor": 421.8616769303648,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2023059,
+          "ns_per_op": 596.6,
+          "bytes_per_op": 624,
+          "allocs_per_op": 4,
+          "ratio_to_anchor": 423.92231170061575,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 1868959,
+          "ns_per_op": 596.3000000000001,
+          "bytes_per_op": 624,
+          "allocs_per_op": 4,
+          "ratio_to_anchor": 423.7091425864519,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkPrototypeMethodAccess/Baseline/ObjectPrototypeChain": {
+      "ns_per_op": 1606.3333333333333,
+      "allocs_per_op": 8,
+      "bytes_per_op": 1248,
+      "ratio_to_anchor": 1141.4021790620557,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 745975,
+          "ns_per_op": 1610,
+          "bytes_per_op": 1248,
+          "allocs_per_op": 8,
+          "ratio_to_anchor": 1144.0075793462813,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 629922,
+          "ns_per_op": 1609.0000000000002,
+          "bytes_per_op": 1248,
+          "allocs_per_op": 8,
+          "ratio_to_anchor": 1143.2970156324018,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 743655,
+          "ns_per_op": 1600.0000000000002,
+          "bytes_per_op": 1248,
+          "allocs_per_op": 8,
+          "ratio_to_anchor": 1136.9019422074846,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkPrototypeMethodAccess/Baseline/StringPrototypeMethod": {
+      "ns_per_op": 429.90000000000003,
+      "allocs_per_op": 2,
+      "bytes_per_op": 384,
+      "ratio_to_anchor": 305.4713405968735,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 2749918,
+          "ns_per_op": 425.50000000000006,
+          "bytes_per_op": 384,
+          "allocs_per_op": 2,
+          "ratio_to_anchor": 302.3448602558029,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2755345,
+          "ns_per_op": 430.8,
+          "bytes_per_op": 384,
+          "allocs_per_op": 2,
+          "ratio_to_anchor": 306.1108479393652,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2760184,
+          "ns_per_op": 433.4,
+          "bytes_per_op": 384,
+          "allocs_per_op": 2,
+          "ratio_to_anchor": 307.95831359545235,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkPrototypeMethodAccess/WithDetailedStats/ArrayPrototypeMethod": {
+      "ns_per_op": 600.7000000000002,
+      "allocs_per_op": 4,
+      "bytes_per_op": 624,
+      "ratio_to_anchor": 426.83562292752254,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 1986988,
+          "ns_per_op": 595.4000000000001,
+          "bytes_per_op": 624,
+          "allocs_per_op": 4,
+          "ratio_to_anchor": 423.0696352439602,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2027174,
+          "ns_per_op": 593.7000000000002,
+          "bytes_per_op": 624,
+          "allocs_per_op": 4,
+          "ratio_to_anchor": 421.8616769303648,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2018386,
+          "ns_per_op": 613,
+          "bytes_per_op": 624,
+          "allocs_per_op": 4,
+          "ratio_to_anchor": 435.5755566082425,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkPrototypeMethodAccess/WithDetailedStats/ObjectPrototypeChain": {
+      "ns_per_op": 1619,
+      "allocs_per_op": 8,
+      "bytes_per_op": 1248,
+      "ratio_to_anchor": 1150.4026527711983,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 835953,
+          "ns_per_op": 1618,
+          "bytes_per_op": 1248,
+          "allocs_per_op": 8,
+          "ratio_to_anchor": 1149.6920890573185,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 813621,
+          "ns_per_op": 1634.0000000000002,
+          "bytes_per_op": 1248,
+          "allocs_per_op": 8,
+          "ratio_to_anchor": 1161.0611084793936,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 689732,
+          "ns_per_op": 1605,
+          "bytes_per_op": 1248,
+          "allocs_per_op": 8,
+          "ratio_to_anchor": 1140.4547607768827,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkPrototypeMethodAccess/WithDetailedStats/StringPrototypeMethod": {
+      "ns_per_op": 435.93333333333334,
+      "allocs_per_op": 2,
+      "bytes_per_op": 384,
+      "ratio_to_anchor": 309.75840833728085,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 2769987,
+          "ns_per_op": 430.4,
+          "bytes_per_op": 384,
+          "allocs_per_op": 2,
+          "ratio_to_anchor": 305.8266224538133,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2673772,
+          "ns_per_op": 442,
+          "bytes_per_op": 384,
+          "allocs_per_op": 2,
+          "ratio_to_anchor": 314.06916153481757,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2724120,
+          "ns_per_op": 435.4,
+          "bytes_per_op": 384,
+          "allocs_per_op": 2,
+          "ratio_to_anchor": 309.3794410232117,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkPrototypeMethodAccess/WithPrototypeCache/ArrayPrototypeMethod": {
+      "ns_per_op": 594.1333333333333,
+      "allocs_per_op": 4,
+      "bytes_per_op": 624,
+      "ratio_to_anchor": 422.1695878730459,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 1995676,
+          "ns_per_op": 593.4,
+          "bytes_per_op": 624,
+          "allocs_per_op": 4,
+          "ratio_to_anchor": 421.6485078162008,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 1995834,
+          "ns_per_op": 594.8,
+          "bytes_per_op": 624,
+          "allocs_per_op": 4,
+          "ratio_to_anchor": 422.6432970156323,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 1974298,
+          "ns_per_op": 594.2,
+          "bytes_per_op": 624,
+          "allocs_per_op": 4,
+          "ratio_to_anchor": 422.2169587873046,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkPrototypeMethodAccess/WithPrototypeCache/ObjectPrototypeChain": {
+      "ns_per_op": 1622.3333333333333,
+      "allocs_per_op": 8,
+      "bytes_per_op": 1248,
+      "ratio_to_anchor": 1152.7711984841305,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 736615,
+          "ns_per_op": 1607,
+          "bytes_per_op": 1248,
+          "allocs_per_op": 8,
+          "ratio_to_anchor": 1141.8758882046423,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 831726,
+          "ns_per_op": 1627,
+          "bytes_per_op": 1248,
+          "allocs_per_op": 8,
+          "ratio_to_anchor": 1156.0871624822357,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 821455,
+          "ns_per_op": 1633,
+          "bytes_per_op": 1248,
+          "allocs_per_op": 8,
+          "ratio_to_anchor": 1160.3505447655139,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkPrototypeMethodAccess/WithPrototypeCache/StringPrototypeMethod": {
+      "ns_per_op": 434.73333333333335,
+      "allocs_per_op": 2,
+      "bytes_per_op": 384,
+      "ratio_to_anchor": 308.90573188062524,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 2770734,
+          "ns_per_op": 428.5,
+          "bytes_per_op": 384,
+          "allocs_per_op": 2,
+          "ratio_to_anchor": 304.47655139744194,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2739031,
+          "ns_per_op": 436.40000000000003,
+          "bytes_per_op": 384,
+          "allocs_per_op": 2,
+          "ratio_to_anchor": 310.0900047370914,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 2750191,
+          "ns_per_op": 439.3,
+          "bytes_per_op": 384,
+          "allocs_per_op": 2,
+          "ratio_to_anchor": 312.1506395073425,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    },
+    "github.com/nooga/paserati/tests.BenchmarkSetIndex": {
+      "ns_per_op": 146155893,
+      "allocs_per_op": 15,
+      "bytes_per_op": 18250,
+      "ratio_to_anchor": 103853074.1354808,
+      "best_since_sha": "ee6f1aa6848f",
+      "best_since_at": "2026-09-03T00:36:51Z",
+      "samples": [
+        {
+          "iterations": 7,
+          "ns_per_op": 146113601,
+          "bytes_per_op": 18250,
+          "allocs_per_op": 15,
+          "ratio_to_anchor": 103823022.9748934,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 7,
+          "ns_per_op": 145998259.00000003,
+          "bytes_per_op": 18250,
+          "allocs_per_op": 15,
+          "ratio_to_anchor": 103741065.13500711,
+          "captured_at": "2026-09-03T00:35:15Z"
+        },
+        {
+          "iterations": 7,
+          "ns_per_op": 146355819,
+          "bytes_per_op": 18250,
+          "allocs_per_op": 15,
+          "ratio_to_anchor": 103995134.29654191,
+          "captured_at": "2026-09-03T00:35:15Z"
+        }
+      ]
+    }
+  }
+}
