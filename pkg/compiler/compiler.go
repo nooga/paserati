@@ -1515,8 +1515,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		if hint == NoHint || hint == BadRegister {
 			hint = c.regAlloc.Alloc()
 		}
-		// Emit OpClosure using the generic emitter
-		c.emitClosureGeneric(hint, funcConstIndex, node.Token.Line, node.Name, freeSymbols)
+		// Emit OpClosure using the generic emitter (shorthand methods are not arrow functions)
+		c.emitClosureGeneric(hint, funcConstIndex, node.Token.Line, node.Name, freeSymbols, false)
 
 		return hint, nil
 
@@ -4033,9 +4033,14 @@ func (c *Compiler) emitClosure(destReg Register, funcConstIndex uint16, node *pa
 // emitClosureGeneric is a generic version of emitClosure that works with any node type
 // that has Token.Line and Name fields (like ShorthandMethod)
 // OPTIMIZATION: If there are no upvalues, just load the function constant directly.
-func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, line int, nameNode *parser.Identifier, freeSymbols []*Symbol) Register {
+// This optimization is unsafe for arrow functions: they always need their own
+// Closure wrapper so CapturedThis (and new.target/arguments inheritance) is
+// populated, even when they capture zero named free variables (e.g. an arrow
+// whose only free reference is `this`). Callers must pass isArrowFunction=true
+// for arrow functions so this path always goes through OpClosure instead.
+func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, line int, nameNode *parser.Identifier, freeSymbols []*Symbol, isArrowFunction bool) Register {
 	// OPTIMIZATION: If no upvalues, just load the function constant
-	if len(freeSymbols) == 0 {
+	if len(freeSymbols) == 0 && !isArrowFunction {
 		debugPrintf("// [emitClosureGeneric OPTIMIZED] No upvalues, using OpLoadConstant instead of OpClosure\n")
 		c.emitLoadConstant(destReg, funcConstIndex, line)
 		return destReg

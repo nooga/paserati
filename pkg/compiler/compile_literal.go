@@ -943,7 +943,7 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 							freePropertyRegs()
 							return BadRegister, compileErr
 						}
-						c.emitClosureGeneric(valueReg, funcConstIndex, arrowFunc.Token.Line, &parser.Identifier{Token: arrowFunc.Token, Value: propName}, freeSymbols)
+						c.emitClosureGeneric(valueReg, funcConstIndex, arrowFunc.Token.Line, &parser.Identifier{Token: arrowFunc.Token, Value: propName}, freeSymbols, true)
 						valueCompiled = true
 					} else if funcLit, ok := prop.Value.(*parser.FunctionLiteral); ok {
 						if funcLit.Name == nil || funcLit.Name.Value == "" {
