@@ -33,8 +33,8 @@ check("fromCharCode", String.fromCharCode(0xd800, 0xdc00) === lit && bytes(Strin
 check("fromCodePoint surrogates", String.fromCodePoint(0xd800, 0xdc00) === lit && bytes(String.fromCodePoint(0xdc00)) === 3);
 check("JSON.parse", JSON.parse("\"\\ud800\\udc00\"") === lit && bytes(JSON.parse("\"\\ud800\"")) === 3 && JSON.parse("\"\\ud800\"").charCodeAt(0) === 0xd800);
 check("JSON roundtrip", JSON.stringify(lead + trail) === JSON.stringify(lit) && JSON.stringify(lead) === "\"\\ud800\"");
-check("spread pair", [...((lead + trail) as any)].length === 1 && [...(("a" + lit + "b") as any)].length === 3);
-check("spread lone", [...(lead as any)].length === 1 && [...(lead as any)][0] === lead && [...((trail + lead) as any)].length === 2);
+check("spread pair", [...(lead + trail)].length === 1 && [...("a" + lit + "b")].length === 3);
+check("spread lone", [...lead].length === 1 && [...lead][0] === lead && [...(trail + lead)].length === 2);
 check("encodeURIComponent", encodeURIComponent(lead + trail) === "%F0%90%80%80");
 check("regex /u", /^.$/u.test(lead + trail) && /^\p{Any}$/u.test(lead + trail));
 check("iterator", Array.from(lead + trail).length === 1);

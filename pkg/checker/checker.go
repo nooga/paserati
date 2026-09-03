@@ -3365,12 +3365,12 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 		for range node.Elements {
 			elementTypes = append(elementTypes, types.Any)
 		}
-	} else if _, ok := destructureType.(*types.ObjectType); ok {
-		// Object types might implement Symbol.iterator (iterable protocol)
-		// At runtime, we'll check and use iterator protocol
-		// For type checking, assume elements are Any since we can't statically determine iterator element type
+	} else if c.isSpreadableIterableType(destructureType) {
+		// Iterable protocol values (objects with Symbol.iterator, strings, etc.)
+		// destructure element-wise using the iterator's declared value type.
+		elemType := types.DeeplyWidenType(c.getSpreadElementType(destructureType))
 		for range node.Elements {
-			elementTypes = append(elementTypes, types.Any)
+			elementTypes = append(elementTypes, elemType)
 		}
 	} else {
 		// Not an array-like or iterable type
