@@ -556,3 +556,139 @@ func TestConcurrentAsyncFunctionsWithSpilledLocalsDontCrossContaminate(t *testin
 		t.Errorf("expected both instances' spilled local to independently reach 101, got %v", seen)
 	}
 }
+
+// TestConcurrentAsyncInstancesDontCrossCloseUpvalues covers a distinct bug
+// from #247/the spill-slot gap above: it's not about a suspended frame's
+// upvalues losing track of their storage, but about one async instance's
+// *fresh, non-resumed* initial call frame inheriting a stale open-upvalue
+// chain left behind by a completely different, still-suspended instance that
+// previously occupied the same physical vm.frames[N] slot.
+//
+// Root cause: executeAsyncFunctionBody (pkg/vm/async.go), which sets up the
+// frame for an async function's *initial* synchronous call (as opposed to a
+// resumption), built that frame by hand and never reset frame.openUpvalues -
+// unlike prepareCall's regular call path and every resumeGenerator*/
+// resumeAsyncFunction* resume path, which all do. So when instance A
+// suspends at an await and instance B is then called and happens to reuse
+// A's now-vacated frame slot, B's own captureUpvalue calls prepend onto A's
+// leftover chain (harmless by itself - relocateOpenUpvalues correctly skips
+// entries whose address falls outside its own register window). The actual
+// corruption happens when B later returns normally: closing B's own
+// (contaminated) upvalue chain via closeFrameUpvalues also closes A's
+// still-live, unrelated upvalues at whatever value they held at that moment,
+// permanently freezing A's closures out from ever observing A's own later
+// writes - even though A hasn't resumed yet and is nowhere near returning.
+//
+// This reproduces with two concurrent async functions on DIFFERENT
+// setTimeout delays (so the earlier-called, later-resolving instance "a" is
+// the one whose frame slot gets reused and later closed out from under it
+// by "b"), each with a local captured by a closure, mutated after the
+// instance's own await:
+//
+//	a's `get()` (a closure) would return the pre-mutation value of `n`
+//	forever after resume, while a direct register read of `n` in the same
+//	scope correctly saw the mutation - i.e. a closure read and a direct
+//	read of the very same local silently diverging.
+func TestConcurrentAsyncInstancesDontCrossCloseUpvalues(t *testing.T) {
+	p := newHostTimerPaserati()
+
+	js := `
+		async function f(delay, tag) {
+			let n = 1;
+			const get = () => n;
+			await new Promise((r) => setTimeout(r, delay));
+			n = n + 100;
+			return { tag, value: get() };
+		}
+		let results = [];
+		Promise.all([f(2, "a"), f(1, "b")]).then((rs) => { results = rs; });
+	`
+	_, errs := p.RunCode(js, RunOptions{})
+	if len(errs) > 0 {
+		t.Fatalf("RunCode failed: %v", errs[0])
+	}
+
+	results, ok := p.GetVM().GetGlobal("results")
+	if !ok || !results.IsArray() || results.AsArray().Length() != 2 {
+		t.Fatalf("expected a 2-element results array, got %v", results)
+	}
+	arr := results.AsArray()
+	seen := map[string]string{}
+	for i := 0; i < 2; i++ {
+		entry := arr.Get(i).AsPlainObject()
+		tag, _ := entry.GetOwn("tag")
+		value, _ := entry.GetOwn("value")
+		seen[tag.ToString()] = value.ToString()
+	}
+	if seen["a"] != "101" || seen["b"] != "101" {
+		t.Errorf("expected both instances' closures to independently observe their own post-await mutation (101), got %v", seen)
+	}
+}
+
+// TestSpreadNewDoesNotCrossCloseSuspendedAsyncUpvalues covers the same bug
+// class as TestConcurrentAsyncInstancesDontCrossCloseUpvalues above, but via
+// a different frame-setup path: handleOpSpreadNew (pkg/vm/op_spreadnew.go,
+// `new Ctor(...args)`/`super(...args)`) had the identical gap -
+// newFrame.openUpvalues was never cleared, unlike the non-spread `new Ctor()`
+// path (OpNew) right next to it. A spread-new constructor call that reuses
+// the frame slot a suspended async instance just vacated inherits that
+// instance's leftover open-upvalue chain; the constructor's own normal
+// return then closes that inherited chain along with its own, freezing the
+// suspended instance's closure at its pre-suspend value once it resumes -
+// even though the constructor call itself has nothing to do with it.
+func TestSpreadNewDoesNotCrossCloseSuspendedAsyncUpvalues(t *testing.T) {
+	p := newHostTimerPaserati()
+
+	js := `
+		async function f(delay, tag) {
+			let n = 1;
+			const get = () => n;
+			await new Promise((r) => setTimeout(r, delay));
+			n = n + 100;
+			return { tag, value: get() };
+		}
+
+		class C {
+			constructor(...args) {
+				let local = args.length;
+				const getLocal = () => local;
+				this.result = getLocal();
+			}
+		}
+
+		// One layer of plain-call indirection so this spread-new lands at
+		// the same vm.frames[] depth f("a")'s own body frame used (that
+		// body frame sits one level deeper than its sentinel, which the
+		// top-level script's *direct* callee would otherwise land on
+		// instead - the sentinel's slot is already correctly cleared).
+		function makeC() {
+			return new C(...[1, 2, 3]);
+		}
+
+		let ra = null;
+		f(1, "a").then((r) => { ra = r; });
+		// Reuses the frame slot f("a")'s own body vacated by suspending at
+		// its await above - the spread call is what routes through
+		// handleOpSpreadNew instead of the plain OpNew path.
+		let c = makeC();
+		let cResult = c.result;
+	`
+	_, errs := p.RunCode(js, RunOptions{})
+	if len(errs) > 0 {
+		t.Fatalf("RunCode failed: %v", errs[0])
+	}
+
+	cResult, _ := p.GetVM().GetGlobal("cResult")
+	if cResult.ToString() != "3" {
+		t.Fatalf("expected constructor's own closure to see local=3, got %s", cResult.Inspect())
+	}
+
+	ra, ok := p.GetVM().GetGlobal("ra")
+	if !ok || !ra.IsObject() {
+		t.Fatalf("expected ra to be resolved to an object, got %v", ra)
+	}
+	value, _ := ra.AsPlainObject().GetOwn("value")
+	if value.ToString() != "101" {
+		t.Errorf("expected f(\"a\")'s closure to observe its own post-await mutation (101), got %s", value.Inspect())
+	}
+}

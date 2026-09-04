@@ -103,6 +103,7 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	sentinelFrame := &vm.frames[vm.frameCount]
 	sentinelFrame.isSentinelFrame = true
 	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
 	vm.frameCount++
@@ -133,6 +134,26 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	frame.isSentinelFrame = false  // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
 	frame.promiseObj = promiseObj  // Link frame to promise object - critical for OpAwait!
 	frame.generatorObj = nil       // Clear generator object when reusing frame
+	// Clear any stale open-upvalue chain left behind by whatever call last
+	// occupied this frame slot. Every other fresh-frame setup does this
+	// (prepareCall's regular path, every sentinelFrame reuse, every
+	// resumeGenerator*/resumeAsyncFunction* resume) - this was the one path
+	// that didn't, because an async function's *initial* synchronous call
+	// (as opposed to a resumption) builds its frame by hand here rather than
+	// going through prepareCall. Left uncleared, a still-open upvalue chain
+	// from a DIFFERENT, still-suspended async instance that previously used
+	// this same physical vm.frames[N] slot gets silently prepended onto by
+	// this instance's own captureUpvalue calls (harmless address-wise, since
+	// relocateOpenUpvalues correctly skips entries outside its own register
+	// window) - but when THIS instance later returns normally, closing its
+	// own (contaminated) chain via closeFrameUpvalues also closes the OTHER,
+	// unrelated instance's still-live upvalues at whatever stale value they
+	// held at that moment, permanently freezing that other instance's
+	// closures out from ever observing its own later writes. Reproduced with
+	// two concurrent async functions on different setTimeout delays, each
+	// with a local captured by a closure: the earlier-scheduled one's
+	// closure got stuck reading its pre-suspend value forever.
+	frame.openUpvalues = nil
 
 	if closureObj != nil {
 		frame.closure = closureObj

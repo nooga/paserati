@@ -1813,6 +1813,7 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 	sentinelFrame := &vm.frames[vm.frameCount]
 	sentinelFrame.isSentinelFrame = true
 	sentinelFrame.closure = nil
+	sentinelFrame.openUpvalues = nil // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg
 	sentinelFrame.registers = callerRegisters
 	vm.frameCount++
@@ -1994,6 +1995,7 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	sentinelFrame := &vm.frames[vm.frameCount]
 	sentinelFrame.isSentinelFrame = true
 	sentinelFrame.closure = nil               // Sentinel frames don't have closures
+	sentinelFrame.openUpvalues = nil          // Never captures; clear any stale head from prior slot use
 	sentinelFrame.targetRegister = destReg    // Target register in caller
 	sentinelFrame.registers = callerRegisters // Give it the caller registers for the result
 	vm.frameCount++

@@ -214,6 +214,14 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.isConstructorCall = true
 		newFrame.isDirectCall = false            // Not a direct call (spread new)
 		newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
+		// Clear any stale open-upvalue chain left by a prior occupant of this
+		// frame slot - every other frame-setup site does this (OpNew at
+		// vm.go, prepareCall's regular path at call.go), and this one didn't.
+		// A still-open chain here could get silently inherited (and, on this
+		// constructor's own normal return, wrongly closed out from under
+		// whatever unrelated suspended generator/async instance it really
+		// belongs to) - the same bug class fixed in executeAsyncFunctionBody.
+		newFrame.openUpvalues = nil
 		newFrame.newTargetValue = newTargetValue // Use propagated new.target
 		newFrame.argCount = argCount             // Store actual argument count for arguments object
 		// Avoid per-call allocation: keep a view of spreadArgs for OpGetArguments.
@@ -330,6 +338,14 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.isConstructorCall = true
 		newFrame.isDirectCall = false            // Not a direct call (spread new)
 		newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
+		// Clear any stale open-upvalue chain left by a prior occupant of this
+		// frame slot - every other frame-setup site does this (OpNew at
+		// vm.go, prepareCall's regular path at call.go), and this one didn't.
+		// A still-open chain here could get silently inherited (and, on this
+		// constructor's own normal return, wrongly closed out from under
+		// whatever unrelated suspended generator/async instance it really
+		// belongs to) - the same bug class fixed in executeAsyncFunctionBody.
+		newFrame.openUpvalues = nil
 		newFrame.newTargetValue = newTargetValue // Use propagated new.target
 		newFrame.argCount = argCount             // Store actual argument count for arguments object
 		// Avoid per-call allocation: keep a view of spreadArgs for OpGetArguments.
