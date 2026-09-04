@@ -1266,6 +1266,50 @@ func (c *Compiler) compileInfixChain(node *parser.InfixExpression, hint Register
 	return hint, nil
 }
 
+// compileCommaChain compiles a left-associative run of comma expressions
+// (`a, b, c, ...`) by evaluating each operand in sequence, discarding every
+// result but the last. The naive recursive path (compile the two-operand
+// comma case, recursing into node.Left - itself another comma
+// InfixExpression for a long chain - *before* the recursive call returns)
+// holds one register live per chain element until the whole recursion
+// unwinds, exhausting the 255-register allocator on long chains: exactly
+// issue #121's pattern, just reached through the comma operator instead of
+// arithmetic (issue #242). Unlike compileInfixChain there's no accumulator
+// to fold - comma has no operator to apply - so every discarded term can
+// share one scratch register and only the last term's result is kept.
+//
+// This only bounds *register* use to O(1); flattenCommaExpression itself
+// recurses down node.Left's spine to build terms, so it still costs one Go
+// stack frame per chain element (fine well past any register-driven limit
+// - it's ordinary Go recursion over a flat list, not VM state - but worth
+// noting since it's the one place this fix isn't literally constant-space).
+func (c *Compiler) compileCommaChain(node *parser.InfixExpression, hint Register) (Register, errors.PaseratiError) {
+	terms := flattenCommaExpression(node)
+
+	// Only the last term is in tail position; every earlier one is a
+	// discarded side effect and must not be treated as a tail call.
+	oldTailPos := c.inTailPosition
+	defer func() { c.inTailPosition = oldTailPos }()
+
+	scratch := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(scratch)
+
+	for i, term := range terms {
+		last := i == len(terms)-1
+		c.inTailPosition = oldTailPos && last
+		dest := scratch
+		if last {
+			// The final term writes the caller's destination directly -
+			// no separate temp-then-move needed.
+			dest = hint
+		}
+		if _, err := c.compileNode(term, dest); err != nil {
+			return BadRegister, err
+		}
+	}
+	return hint, nil
+}
+
 // compileLogicalChain compiles a left-associative run of the *same* logical
 // operator (`a && b && c && ...`) as an iterative fold into one accumulator,
 // for the same reason as compileInfixChain: the recursive path burns a register
@@ -1436,28 +1480,11 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			}
 		}
 
-		// For comma operator, only the right operand is in tail position
-		// Clear tail position for left operand
+		// Comma discards every operand's value but the last; see
+		// compileCommaChain for why a long chain needs iterative folding
+		// rather than the two-operand recursive path (issue #242).
 		if node.Operator == "," {
-			oldTailPos := c.inTailPosition
-			c.inTailPosition = false
-			leftReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, leftReg)
-			_, err := c.compileNode(node.Left, leftReg)
-			c.inTailPosition = oldTailPos
-			if err != nil {
-				return BadRegister, err
-			}
-			// Right operand keeps tail position
-			rightReg := c.regAlloc.Alloc()
-			tempRegs = append(tempRegs, rightReg)
-			_, err = c.compileNode(node.Right, rightReg)
-			if err != nil {
-				return BadRegister, err
-			}
-			// Comma operator: return the right one
-			c.emitMove(hint, rightReg, line)
-			return hint, nil
+			return c.compileCommaChain(node, hint)
 		}
 
 		// A long left-associative chain (`a + b + c + ...`) is compiled as an
