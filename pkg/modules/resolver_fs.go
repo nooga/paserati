@@ -121,6 +121,21 @@ func (r *FileSystemResolver) calculateTargetPath(specifier string, fromPath stri
 			return "", fmt.Errorf("relative import %s requires fromPath", specifier)
 		}
 
+		if filepath.IsAbs(fromPath) {
+			// fromPath is a real OS filesystem path here (e.g. the CLI's
+			// entry file, given by absolute path - #232), not a "/"-
+			// separated module specifier. On Windows that means backslashes
+			// and a drive letter, which pathpkg (forward-slash only) can't
+			// parse: pathpkg.Dir on "C:\Users\...\entry.mjs" sees no "/" at
+			// all and returns ".", silently losing the entry file's real
+			// directory - the exact same "no resolver could handle
+			// specifier" failure #232 already had, just Windows-only and
+			// unfixed by switching resolvers alone. filepath.Join also
+			// accepts (and correctly normalizes) a forward-slash specifier
+			// like "./helper.mjs" here, so this only needs to swap which
+			// path package does the joining, not touch the specifier.
+			return filepath.Join(filepath.Dir(fromPath), specifier), nil
+		}
 		fromDir := pathpkg.Dir(fromPath)
 		return pathpkg.Join(fromDir, specifier), nil
 	}
@@ -240,24 +255,35 @@ type osFS struct {
 	baseDir string
 }
 
+// resolveOSPath joins name onto baseDir, unless name is already an absolute
+// OS path (#232) - e.g. a relative import ("./helper.mjs") resolved against
+// an entry module whose own path is absolute, which calculateTargetPath's
+// relative-import branch (pathpkg.Join(pathpkg.Dir(fromPath), specifier))
+// correctly leaves absolute. filepath.Join doesn't special-case an absolute
+// later argument - Join(baseDir, "/tmp/helper.mjs") would come out as
+// ".../baseDir/tmp/helper.mjs", silently wrong rather than erroring - so an
+// already-absolute name must bypass baseDir entirely and be used as-is.
+func (osfs *osFS) resolveOSPath(name string) string {
+	if filepath.IsAbs(name) {
+		return name
+	}
+	return filepath.Join(osfs.baseDir, name)
+}
+
 func (osfs *osFS) Open(name string) (fs.File, error) {
-	fullPath := filepath.Join(osfs.baseDir, name)
-	return os.Open(fullPath)
+	return os.Open(osfs.resolveOSPath(name))
 }
 
 func (osfs *osFS) ReadFile(name string) ([]byte, error) {
-	fullPath := filepath.Join(osfs.baseDir, name)
-	return os.ReadFile(fullPath)
+	return os.ReadFile(osfs.resolveOSPath(name))
 }
 
 func (osfs *osFS) Stat(name string) (fs.FileInfo, error) {
-	fullPath := filepath.Join(osfs.baseDir, name)
-	return os.Stat(fullPath)
+	return os.Stat(osfs.resolveOSPath(name))
 }
 
 func (osfs *osFS) ReadDir(name string) ([]fs.DirEntry, error) {
-	fullPath := filepath.Join(osfs.baseDir, name)
-	return os.ReadDir(fullPath)
+	return os.ReadDir(osfs.resolveOSPath(name))
 }
 
 // Glob implements fs.GlobFS
