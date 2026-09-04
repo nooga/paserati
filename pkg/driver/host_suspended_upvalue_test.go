@@ -1,6 +1,8 @@
 package driver
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/nooga/paserati/pkg/vm"
@@ -444,5 +446,113 @@ func TestConcurrentGeneratorInstancesDontCrossContaminate(t *testing.T) {
 		if got != w {
 			t.Errorf("snapshot %d: got %v, want %v", i, got, w)
 		}
+	}
+}
+
+// spillPadding returns n throwaway `let` declarations that are never freed
+// (all live in the same top-level function scope for its whole body), to
+// push the compiler's register allocator for that function past
+// VariableRegisterThreshold (200, see pkg/compiler/regalloc.go) so that
+// whatever local is declared after them lands in a spill slot
+// (frame.spillSlots) rather than a register.
+func spillPadding(n int) string {
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		b.WriteString("let pad")
+		b.WriteString(strconv.Itoa(i))
+		b.WriteString(" = 0;\n")
+	}
+	return b.String()
+}
+
+// TestAsyncClosureMutationAfterResumeStaysCoherentWithSpilledLocal is the
+// spill-slot counterpart of TestAsyncClosureMutationAfterResumeStaysCoherent:
+// the captured local `n` is forced into a spill slot (not a register) by 250
+// throwaway padding declarations ahead of it, then mutated both directly and
+// via a closure after resume. Note this alone does not reproduce the
+// frame.spillSlots restore bug (with nothing else running between suspend
+// and resume, the same CallFrame slot happens to still hold this call's own
+// spillSlots array even without an explicit restore) - it's a coherence
+// check, kept alongside the true discriminator below
+// (TestConcurrentAsyncFunctionsWithSpilledLocalsDontCrossContaminate, which
+// forces the reused-slot collision and does fail without the fix).
+func TestAsyncClosureMutationAfterResumeStaysCoherentWithSpilledLocal(t *testing.T) {
+	p := newHostTimerPaserati()
+
+	js := `
+		async function f() {
+			` + spillPadding(250) + `
+			let n = 1; // forced into a spill slot by the 250 padding locals above
+			const get = () => n;
+			const inc = () => { n++; };
+			await new Promise((r) => setTimeout(r, 0));
+			inc();
+			n = n + 10;
+			return [n, get()];
+		}
+		let result = null;
+		f().then((r) => { result = r; });
+	`
+	_, errs := p.RunCode(js, RunOptions{})
+	if len(errs) > 0 {
+		t.Fatalf("RunCode failed: %v", errs[0])
+	}
+
+	result, ok := p.GetVM().GetGlobal("result")
+	if !ok || !result.IsArray() {
+		t.Fatalf("expected array result, got %v", result)
+	}
+	arr := result.AsArray()
+	if arr.Length() != 2 || arr.Get(0).ToString() != "12" || arr.Get(1).ToString() != "12" {
+		t.Errorf("expected [12, 12] (direct write and closure read of the spilled local must agree), got %s", result.Inspect())
+	}
+}
+
+// TestConcurrentAsyncFunctionsWithSpilledLocalsDontCrossContaminate runs two
+// concurrently-suspended instances of the same async function, each with a
+// spilled captured local, resumed together off the same timer tick - each
+// instance's closure must keep observing its own spill array, never the
+// other instance's.
+//
+// (Deliberately uses the *same* delay for both: an earlier version of this
+// test gave the two instances different delays and hit an unrelated,
+// pre-existing timer-ordering bug where the earlier-scheduled instance's
+// post-await continuation silently never ran its own body - confirmed with
+// no spilling involved at all, so out of scope here. Same delay sidesteps it
+// without weakening what this test is actually checking.)
+func TestConcurrentAsyncFunctionsWithSpilledLocalsDontCrossContaminate(t *testing.T) {
+	p := newHostTimerPaserati()
+
+	js := `
+		async function f(tag) {
+			` + spillPadding(250) + `
+			let n = 1; // forced into a spill slot
+			const get = () => n;
+			await new Promise((r) => setTimeout(r, 1));
+			n = n + 100;
+			return { tag, value: get() };
+		}
+		let results = [];
+		Promise.all([f("a"), f("b")]).then((rs) => { results = rs; });
+	`
+	_, errs := p.RunCode(js, RunOptions{})
+	if len(errs) > 0 {
+		t.Fatalf("RunCode failed: %v", errs[0])
+	}
+
+	results, ok := p.GetVM().GetGlobal("results")
+	if !ok || !results.IsArray() || results.AsArray().Length() != 2 {
+		t.Fatalf("expected a 2-element results array, got %v", results)
+	}
+	arr := results.AsArray()
+	seen := map[string]string{}
+	for i := 0; i < 2; i++ {
+		entry := arr.Get(i).AsPlainObject()
+		tag, _ := entry.GetOwn("tag")
+		value, _ := entry.GetOwn("value")
+		seen[tag.ToString()] = value.ToString()
+	}
+	if seen["a"] != "101" || seen["b"] != "101" {
+		t.Errorf("expected both instances' spilled local to independently reach 101, got %v", seen)
 	}
 }

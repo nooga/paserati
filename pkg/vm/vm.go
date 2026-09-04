@@ -15324,6 +15324,16 @@ startExecution:
 			// which persists for the generator's lifetime - `registers` itself is
 			// about to be handed back to vm.registerStack for reuse (#247).
 			relocateOpenUpvalues(genObj.Frame.openUpvalues, registers, genObj.Frame.registers)
+			// Carry the frame's spill-slot array itself across the suspend. No
+			// relocation is needed here (unlike registers above): frame.spillSlots
+			// is already a private per-call array, not part of vm.registerStack,
+			// so it isn't about to be reused by anyone else. Sharing the array
+			// (not copying it) is load-bearing, not an optimization - any open
+			// upvalue captured via CaptureFromSpill points directly at a slot in
+			// this array, so the resume side must re-attach the SAME backing
+			// array rather than a copy, or a closure's writes would silently
+			// diverge from what .next()/await sees, same class of bug as #247.
+			genObj.Frame.spillSlots = frame.spillSlots
 
 			// Create iterator result { value: yieldedValue, done: false }
 			result := NewObject(vm.ObjectPrototype).AsPlainObject()
@@ -15374,6 +15384,7 @@ startExecution:
 				copy(genObj.Frame.registers, registers)
 				genObj.Frame.openUpvalues = frame.openUpvalues
 				relocateOpenUpvalues(genObj.Frame.openUpvalues, registers, genObj.Frame.registers)
+				genObj.Frame.spillSlots = frame.spillSlots
 
 				// Transition to SuspendedStart state
 				logGeneratorStateTransition(genObj, GeneratorSuspendedStart, "OpInitYield")
@@ -15441,6 +15452,7 @@ startExecution:
 			copy(genObj.Frame.registers, registers)
 			genObj.Frame.openUpvalues = frame.openUpvalues
 			relocateOpenUpvalues(genObj.Frame.openUpvalues, registers, genObj.Frame.registers)
+			genObj.Frame.spillSlots = frame.spillSlots
 
 			// Return the iterator result as-is (don't wrap it)
 			return InterpretOK, iterResult
@@ -15624,6 +15636,9 @@ startExecution:
 			// which persists for the async function's lifetime - `registers`
 			// itself is about to be handed back to vm.registerStack for reuse (#247).
 			relocateOpenUpvalues(frame.promiseObj.Frame.openUpvalues, registers, frame.promiseObj.Frame.registers)
+			// Carry the frame's spill-slot array itself across the suspend - see
+			// the identical comment on the generator suspend sites above.
+			frame.promiseObj.Frame.spillSlots = frame.spillSlots
 
 			asyncPromise := frame.promiseObj
 
@@ -17060,16 +17075,12 @@ func (vm *VM) closeFrameUpvalues(frame *CallFrame) {
 // writing that unrelated code's data instead of the paused function's own
 // variable the moment anything else reuses the slot, without the paused
 // function ever being touched again. (A spill-slot capture's Location
-// pointer itself stays valid the same way - frame.spillSlots is a separate
-// make([]Value, n) per call, kept alive by the pointer via the Go GC even
-// after the CallFrame struct slot that made it is reused by an unrelated
-// call - but that's a narrower guarantee than "no such problem": resume does
-// not currently restore frame.spillSlots from anything saved at suspend, so
-// a spilled local's own direct reads/writes after resume run against
-// whatever spill array the reused CallFrame slot happened to have last,
-// which can desync from a closure's still-correctly-aliased view of the
-// pre-suspend array. Pre-existing, out of scope for #247, and orthogonal to
-// this function - not touched here.)
+// pointer needs no such relocation: frame.spillSlots is a separate
+// make([]Value, n) per call, not part of vm.registerStack, so the pointer
+// stays valid via the Go GC even after the CallFrame struct slot that made
+// it is reused by an unrelated call - the same array just has to be
+// re-attached to frame.spillSlots on resume, which every suspend/resume site
+// below does right alongside its openUpvalues save/restore.)
 //
 // The fix relocates each register-backed upvalue's Location in lockstep with
 // the register VALUES already being copied at every suspend/resume boundary:
@@ -18964,6 +18975,10 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	// register window, so this run's direct register reads/writes stay
 	// coherent with anything closed over the same binding (#247).
 	relocateOpenUpvalues(frame.openUpvalues, genObj.Frame.registers, frame.registers)
+	// Re-attach this generator's own spill-slot array (saved at suspend) -
+	// without this, frame.spillSlots would be whatever the reused CallFrame
+	// slot last held from an unrelated call.
+	frame.spillSlots = genObj.Frame.spillSlots
 
 	if debugGeneratorStates {
 		fmt.Printf("[GEN STATE] resumeGenerator: AFTER restore, frame.registers values:\n")
@@ -19227,6 +19242,8 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	// Re-home any register-backed upvalue into this freshly allocated live
 	// register window (#247 - see relocateOpenUpvalues doc comment).
 	relocateOpenUpvalues(frame.openUpvalues, genObj.Frame.registers, frame.registers)
+	// Re-attach this generator's own spill-slot array (saved at suspend).
+	frame.spillSlots = genObj.Frame.spillSlots
 
 	// Update VM state
 	vm.frameCount++
@@ -19407,6 +19424,8 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	// Re-home any register-backed upvalue into this freshly allocated live
 	// register window (#247 - see relocateOpenUpvalues doc comment).
 	relocateOpenUpvalues(frame.openUpvalues, genObj.Frame.registers, frame.registers)
+	// Re-attach this generator's own spill-slot array (saved at suspend).
+	frame.spillSlots = genObj.Frame.spillSlots
 
 	// Update VM state
 	vm.frameCount++
@@ -19588,6 +19607,8 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	// Re-home any register-backed upvalue into this freshly allocated live
 	// register window (#247 - see relocateOpenUpvalues doc comment).
 	relocateOpenUpvalues(frame.openUpvalues, promiseObj.Frame.registers, frame.registers)
+	// Re-attach this async function's own spill-slot array (saved at suspend).
+	frame.spillSlots = promiseObj.Frame.spillSlots
 
 	// Store the resolved value in the register specified by the await instruction
 	if promiseObj.Frame != nil && int(promiseObj.Frame.outputReg) < len(frame.registers) {
@@ -19739,6 +19760,8 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	// Re-home any register-backed upvalue into this freshly allocated live
 	// register window (#247 - see relocateOpenUpvalues doc comment).
 	relocateOpenUpvalues(frame.openUpvalues, promiseObj.Frame.registers, frame.registers)
+	// Re-attach this async function's own spill-slot array (saved at suspend).
+	frame.spillSlots = promiseObj.Frame.spillSlots
 
 	// Update VM state
 	vm.frameCount++

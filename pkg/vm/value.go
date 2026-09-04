@@ -338,6 +338,17 @@ type SuspendedFrame struct {
 	// must survive the suspend and be restored on resume, then closed when the
 	// function finally completes.
 	openUpvalues *Upvalue
+	// spillSlots preserves this frame's overflow locals (used once a function
+	// has more than 255 live registers) across a suspend. Without this, a
+	// resumed frame keeps whatever spillSlots array the reused CallFrame slot
+	// last had (from some unrelated prior call) instead of this instance's
+	// own, so its own direct spill-slot reads/writes after resume would
+	// diverge from a closure's still-correctly-aliased view of the original
+	// array. This mirrors the register-stack aliasing bug #247's
+	// relocateOpenUpvalues fixed - see that function's doc comment, which
+	// flagged this exact gap as pre-existing and out of scope there. nil when
+	// the function never spills, which is the common case.
+	spillSlots []Value
 }
 
 // GeneratorFrame is an alias for backwards compatibility
