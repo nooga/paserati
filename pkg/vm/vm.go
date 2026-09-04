@@ -2144,10 +2144,23 @@ startExecution:
 
 			identifierName := AsString(constants[nameIdx])
 
-			// Try to resolve the identifier - check heap for global variables
-			// Use the heap's nameToIndex map if available
-			if heapIdx, exists := vm.heap.nameToIndex[identifierName]; exists {
-				val, _ := vm.heap.Get(heapIdx)
+			// Try to resolve the identifier - check heap for global variables.
+			// A name can appear in nameToIndex merely because some OTHER reference
+			// to it earlier in this same compile unit caused a heap slot to be
+			// allocated for it (GetOrAssignGlobalIndex) - that slot may never have
+			// actually been Set. Use the value-returning form of Get and only treat
+			// the identifier as heap-resolved when a value was really written there;
+			// otherwise fall through to the GlobalObject check below, same as
+			// OpGetGlobal (see #246 - this previously made bare Object.prototype
+			// methods report "undefined" whenever anything else in the script also
+			// referenced them by name).
+			heapIdx, nameExists := vm.heap.nameToIndex[identifierName]
+			heapVal, heapValExists := Undefined, false
+			if nameExists {
+				heapVal, heapValExists = vm.heap.Get(heapIdx)
+			}
+			if heapValExists {
+				val := heapVal
 				// A let/const/class binding still in its temporal dead zone throws
 				// on typeof like on any other read (spec: typeof evaluates the
 				// reference first). The name may carry a module prefix, see the
@@ -2166,8 +2179,10 @@ startExecution:
 				}
 				typeofStr := getTypeofString(val)
 				registers[destReg] = String(typeofStr)
-			} else if vm.GlobalObject != nil && vm.GlobalObject.HasOwn(identifierName) {
-				// Also check GlobalObject for properties set via Object.defineProperty(this, ...)
+			} else if vm.GlobalObject != nil && vm.GlobalObject.Has(identifierName) {
+				// Also check GlobalObject for properties set via Object.defineProperty(this, ...),
+				// or inherited from its prototype chain (e.g. bare Object.prototype methods like
+				// hasOwnProperty, toString, valueOf - see #246).
 				frame.ip = ip
 				vm.helperCallDepth++
 				propVal, err := vm.GetProperty(NewValueFromPlainObject(vm.GlobalObject), identifierName)
@@ -13617,8 +13632,10 @@ startExecution:
 			// If not in heap, also check GlobalObject (for properties set via Object.defineProperty(this, ...))
 			if !exists && vm.GlobalObject != nil {
 				varName := vm.heap.GetNameByIndex(int(globalIdx))
-				if varName != "" && vm.GlobalObject.HasOwn(varName) {
-					// Get from GlobalObject - use GetProperty to handle getters
+				if varName != "" && vm.GlobalObject.Has(varName) {
+					// Get from GlobalObject - use GetProperty to handle getters. This also
+					// covers properties inherited via the global object's prototype chain,
+					// e.g. bare Object.prototype methods like hasOwnProperty (#246).
 					frame.ip = ip
 					vm.helperCallDepth++
 					propVal, err := vm.GetProperty(NewValueFromPlainObject(vm.GlobalObject), varName)
@@ -13728,8 +13745,13 @@ startExecution:
 			if isStrict && !heapExists && vm.globalsFromGlobalObject[globalIdx] {
 				varName := vm.heap.GetNameByIndex(int(globalIdx))
 				if varName != "" && vm.GlobalObject != nil {
-					// Check if property exists on GlobalObject
-					if !vm.GlobalObject.HasOwn(varName) {
+					// Check if the binding still exists on GlobalObject. Per ECMAScript
+					// 9.1.1.2.1 HasBinding, an object environment record's binding test
+					// is [[HasProperty]] - prototype-chain inclusive, not own-properties-only -
+					// so an inherited-only binding (e.g. bare Object.prototype methods like
+					// hasOwnProperty, see #246) still counts as present here and a plain
+					// assignment should create an own property, not throw.
+					if !vm.GlobalObject.Has(varName) {
 						frame.ip = ip
 						vm.ThrowReferenceError(fmt.Sprintf("Cannot assign to deleted binding '%s' in strict mode", varName))
 						if vm.unwinding {
