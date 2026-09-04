@@ -15320,6 +15320,10 @@ startExecution:
 			copy(genObj.Frame.registers, registers)
 			// Carry the frame's open-upvalue list across the suspend (not closed on yield)
 			genObj.Frame.openUpvalues = frame.openUpvalues
+			// Re-home any register-backed upvalue into the copy just made above,
+			// which persists for the generator's lifetime - `registers` itself is
+			// about to be handed back to vm.registerStack for reuse (#247).
+			relocateOpenUpvalues(genObj.Frame.openUpvalues, registers, genObj.Frame.registers)
 
 			// Create iterator result { value: yieldedValue, done: false }
 			result := NewObject(vm.ObjectPrototype).AsPlainObject()
@@ -15369,6 +15373,7 @@ startExecution:
 				}
 				copy(genObj.Frame.registers, registers)
 				genObj.Frame.openUpvalues = frame.openUpvalues
+				relocateOpenUpvalues(genObj.Frame.openUpvalues, registers, genObj.Frame.registers)
 
 				// Transition to SuspendedStart state
 				logGeneratorStateTransition(genObj, GeneratorSuspendedStart, "OpInitYield")
@@ -15435,6 +15440,7 @@ startExecution:
 			// Copy register state to generator frame
 			copy(genObj.Frame.registers, registers)
 			genObj.Frame.openUpvalues = frame.openUpvalues
+			relocateOpenUpvalues(genObj.Frame.openUpvalues, registers, genObj.Frame.registers)
 
 			// Return the iterator result as-is (don't wrap it)
 			return InterpretOK, iterResult
@@ -15614,6 +15620,10 @@ startExecution:
 			copy(frame.promiseObj.Frame.registers, registers)
 			// Carry the frame's open-upvalue list across the await (not closed on suspend)
 			frame.promiseObj.Frame.openUpvalues = frame.openUpvalues
+			// Re-home any register-backed upvalue into the copy just made above,
+			// which persists for the async function's lifetime - `registers`
+			// itself is about to be handed back to vm.registerStack for reuse (#247).
+			relocateOpenUpvalues(frame.promiseObj.Frame.openUpvalues, registers, frame.promiseObj.Frame.registers)
 
 			asyncPromise := frame.promiseObj
 
@@ -17030,6 +17040,84 @@ func (vm *VM) closeFrameUpvalues(frame *CallFrame) {
 		uv = next
 	}
 	frame.openUpvalues = nil
+}
+
+// relocateOpenUpvalues redirects every open upvalue in the list that
+// currently points somewhere inside `from` to the corresponding index inside
+// `to`, leaving everything else (closed upvalues, and upvalues captured from
+// a spill slot rather than a register - captureUpvalue's callers only ever
+// pass a register or a spill-slot location) untouched.
+//
+// Why this is needed (#247): a generator/async frame's open upvalues are
+// deliberately NOT closed across a yield/await - a suspended closure over a
+// `let` must keep observing later writes to that binding once the function
+// resumes, so closeFrameUpvalues (which permanently detaches Location) is
+// wrong here. But `frame.registers` is a slice of the single shared
+// vm.registerStack, and suspending immediately hands that exact stack region
+// back for reuse by whatever unrelated code runs next (see
+// executeAsyncFunctionBody/resumeGenerator's savedNextRegSlot restore) - an
+// upvalue whose Location still points into it silently starts reading and
+// writing that unrelated code's data instead of the paused function's own
+// variable the moment anything else reuses the slot, without the paused
+// function ever being touched again. (A spill-slot capture's Location
+// pointer itself stays valid the same way - frame.spillSlots is a separate
+// make([]Value, n) per call, kept alive by the pointer via the Go GC even
+// after the CallFrame struct slot that made it is reused by an unrelated
+// call - but that's a narrower guarantee than "no such problem": resume does
+// not currently restore frame.spillSlots from anything saved at suspend, so
+// a spilled local's own direct reads/writes after resume run against
+// whatever spill array the reused CallFrame slot happened to have last,
+// which can desync from a closure's still-correctly-aliased view of the
+// pre-suspend array. Pre-existing, out of scope for #247, and orthogonal to
+// this function - not touched here.)
+//
+// The fix relocates each register-backed upvalue's Location in lockstep with
+// the register VALUES already being copied at every suspend/resume boundary:
+// on suspend, from the live (about-to-be-reclaimed) registers into the
+// GeneratorFrame/SuspendedFrame's own persistently-owned save buffer (stable
+// for the lifetime of the generator/promise object, so nothing else can ever
+// reuse it); on resume, back out of that save buffer into the freshly
+// allocated live register window, so this run's direct register reads/writes
+// stay coherent with anything closed over the same binding.
+func relocateOpenUpvalues(openUpvalues *Upvalue, from, to []Value) {
+	if openUpvalues == nil || len(from) == 0 {
+		return
+	}
+	// Everything here converts an already-valid pointer (&from[0], or an open
+	// upvalue's own live Location) to a uintptr for pure arithmetic and back;
+	// it never materializes an unsafe.Pointer to an address that isn't itself
+	// a real element of an existing allocation (in particular, never a
+	// one-past-the-end sentinel) - `go test -race`'s checkptr instrumentation
+	// flags that pattern even though the resulting pointer is never
+	// dereferenced.
+	baseAddr := uintptr(unsafe.Pointer(&from[0]))
+	span := uintptr(len(from)) * unsafe.Sizeof(Value{})
+	for uv := openUpvalues; uv != nil; uv = uv.next {
+		if uv.Location == nil {
+			continue // already closed (shouldn't normally appear in an open list)
+		}
+		locAddr := uintptr(unsafe.Pointer(uv.Location))
+		// Unsigned subtraction: if locAddr < baseAddr, this wraps around to a
+		// huge value, which the >= span check below rejects the same as any
+		// other out-of-range offset - no separate "before base" check needed.
+		offset := locAddr - baseAddr
+		if offset >= span {
+			continue // not inside `from` - e.g. a spill-slot capture
+		}
+		idx := offset / unsafe.Sizeof(Value{})
+		// `to` should always be at least as long as `from`: both the save
+		// buffer and the live register window for a given generator/async
+		// call are sized to funcObj.RegisterSize (TCO, the one thing that can
+		// give a frame a different allocatedRegSize, is unconditionally
+		// disabled for generator and async functions - see the
+		// canPerformTCO checks in OpTailCall/OpTailCallMethod). This bounds
+		// check is defensive only; if it is ever false the relocation is
+		// silently skipped and the upvalue is left pointing at `from`; letting
+		// its lifetime run out that way is preferable to a panic here.
+		if int(idx) < len(to) {
+			uv.Location = &to[idx]
+		}
+	}
 }
 
 // hasFunctionPrototypeProperty checks if FunctionPrototype has a property.
@@ -18871,6 +18959,11 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 
 	// Restore register state from saved frame
 	copy(frame.registers, genObj.Frame.registers)
+	// Re-home any register-backed upvalue (relocated to the save buffer by the
+	// suspend that parked this generator) into this freshly allocated live
+	// register window, so this run's direct register reads/writes stay
+	// coherent with anything closed over the same binding (#247).
+	relocateOpenUpvalues(frame.openUpvalues, genObj.Frame.registers, frame.registers)
 
 	if debugGeneratorStates {
 		fmt.Printf("[GEN STATE] resumeGenerator: AFTER restore, frame.registers values:\n")
@@ -19131,6 +19224,9 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 
 	// Restore register state from saved frame
 	copy(frame.registers, genObj.Frame.registers)
+	// Re-home any register-backed upvalue into this freshly allocated live
+	// register window (#247 - see relocateOpenUpvalues doc comment).
+	relocateOpenUpvalues(frame.openUpvalues, genObj.Frame.registers, frame.registers)
 
 	// Update VM state
 	vm.frameCount++
@@ -19308,6 +19404,9 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 
 	// Restore register state from saved frame
 	copy(frame.registers, genObj.Frame.registers)
+	// Re-home any register-backed upvalue into this freshly allocated live
+	// register window (#247 - see relocateOpenUpvalues doc comment).
+	relocateOpenUpvalues(frame.openUpvalues, genObj.Frame.registers, frame.registers)
 
 	// Update VM state
 	vm.frameCount++
@@ -19486,6 +19585,9 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 
 	// Restore register state from saved frame
 	copy(frame.registers, promiseObj.Frame.registers)
+	// Re-home any register-backed upvalue into this freshly allocated live
+	// register window (#247 - see relocateOpenUpvalues doc comment).
+	relocateOpenUpvalues(frame.openUpvalues, promiseObj.Frame.registers, frame.registers)
 
 	// Store the resolved value in the register specified by the await instruction
 	if promiseObj.Frame != nil && int(promiseObj.Frame.outputReg) < len(frame.registers) {
@@ -19634,6 +19736,9 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 
 	// Restore register state from saved frame
 	copy(frame.registers, promiseObj.Frame.registers)
+	// Re-home any register-backed upvalue into this freshly allocated live
+	// register window (#247 - see relocateOpenUpvalues doc comment).
+	relocateOpenUpvalues(frame.openUpvalues, promiseObj.Frame.registers, frame.registers)
 
 	// Update VM state
 	vm.frameCount++
