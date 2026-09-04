@@ -3054,22 +3054,22 @@ func (c *Checker) isSpreadableIterableType(t types.Type) bool {
 		return false
 	}
 	if genericType, ok := t.(*types.GenericType); ok {
-		if genericType.Name == "Iterable" || genericType.Name == "Iterator" {
+		if genericType.Name == "Iterable" || genericType.Name == "Iterator" || genericType.Name == "Generator" {
 			return true
 		}
 	}
 	if genericRef, ok := t.(*types.GenericTypeAliasForwardReference); ok {
-		if genericRef.AliasName == "Iterable" || genericRef.AliasName == "Iterator" {
+		if genericRef.AliasName == "Iterable" || genericRef.AliasName == "Iterator" || genericRef.AliasName == "Generator" {
 			return true
 		}
 	}
 	if parameterizedRef, ok := t.(*types.ParameterizedForwardReferenceType); ok {
-		if parameterizedRef.ClassName == "Iterable" || parameterizedRef.ClassName == "Iterator" {
+		if parameterizedRef.ClassName == "Iterable" || parameterizedRef.ClassName == "Iterator" || parameterizedRef.ClassName == "Generator" {
 			return true
 		}
 	}
 	if instantiatedType, ok := t.(*types.InstantiatedType); ok {
-		if instantiatedType.Generic != nil && (instantiatedType.Generic.Name == "Iterable" || instantiatedType.Generic.Name == "Iterator") {
+		if instantiatedType.Generic != nil && (instantiatedType.Generic.Name == "Iterable" || instantiatedType.Generic.Name == "Iterator" || instantiatedType.Generic.Name == "Generator") {
 			return true
 		}
 	}
@@ -3109,7 +3109,7 @@ func (c *Checker) getSpreadElementType(t types.Type) types.Type {
 	}
 	if instantiatedType, ok := t.(*types.InstantiatedType); ok {
 		if instantiatedType.Generic != nil && len(instantiatedType.TypeArguments) > 0 &&
-			(instantiatedType.Generic.Name == "Iterable" || instantiatedType.Generic.Name == "Iterator") {
+			(instantiatedType.Generic.Name == "Iterable" || instantiatedType.Generic.Name == "Iterator" || instantiatedType.Generic.Name == "Generator") {
 			return instantiatedType.TypeArguments[0]
 		}
 	}
