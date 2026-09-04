@@ -1901,6 +1901,12 @@ func (p *Parser) parseIfStatement() *IfStatement {
 	if !p.expectPeek(lexer.RPAREN) {
 		return nil
 	}
+	// An un-braced consequence starting with `/` is a regex literal, not
+	// division - RPAREN isn't in canBeRegexStart's set (correctly, since most
+	// of the time it closes a value-producing expression), so the peek ahead
+	// of it needs the same rescan every other statement-boundary token gets
+	// (#235).
+	p.rescanPeekAsRegex()
 
 	// --- MODIFIED: Handle both block statements and single statements ---
 	if p.peekTokenIs(lexer.LBRACE) {
@@ -6019,6 +6025,8 @@ func (p *Parser) parseWhileStatement() *WhileStatement {
 	if !p.expectPeek(lexer.RPAREN) {
 		return nil // Expected ')' after condition
 	}
+	// See parseIfStatement's identical rescan for why (#235).
+	p.rescanPeekAsRegex()
 
 	// --- MODIFIED: Handle both block statements and single statements ---
 	if p.peekTokenIs(lexer.LBRACE) {
@@ -6068,6 +6076,8 @@ func (p *Parser) parseWithStatement() *WithStatement {
 	if !p.expectPeek(lexer.RPAREN) {
 		return nil // Expected ')' after expression
 	}
+	// See parseIfStatement's identical rescan for why (#235).
+	p.rescanPeekAsRegex()
 
 	// Handle both block statements and single statements
 	if p.peekTokenIs(lexer.LBRACE) {
@@ -9534,6 +9544,11 @@ func (p *Parser) parseRegularForStatementWithVar(forToken *lexer.Token, varStmt 
 
 // parseForBody parses the body of any for loop
 func (p *Parser) parseForBody() *BlockStatement {
+	// curToken is the ')' closing the for-head (regular/for-of/for-in alike,
+	// every caller reaches here via expectPeek(RPAREN)). An un-braced body
+	// starting with `/` is a regex literal, not division - see
+	// parseIfStatement's identical rescan for why (#235).
+	p.rescanPeekAsRegex()
 	if p.peekTokenIs(lexer.LBRACE) {
 		if !p.expectPeek(lexer.LBRACE) {
 			return nil
