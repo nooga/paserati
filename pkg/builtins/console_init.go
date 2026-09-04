@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/nooga/paserati/pkg/types"
@@ -70,17 +71,20 @@ func (c *ConsoleInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	consoleObj.SetOwnNonEnumerable("error", vm.NewNativeFunction(0, true, "error", func(args []vm.Value) (vm.Value, error) {
-		fmt.Printf("ERROR: %s\n", formatArgs(args))
+		fmt.Fprintln(os.Stderr, formatArgs(args))
 		return vm.Undefined, nil
 	}))
 
 	consoleObj.SetOwnNonEnumerable("warn", vm.NewNativeFunction(0, true, "warn", func(args []vm.Value) (vm.Value, error) {
-		fmt.Printf("WARN: %s\n", formatArgs(args))
+		fmt.Fprintln(os.Stderr, formatArgs(args))
 		return vm.Undefined, nil
 	}))
 
 	consoleObj.SetOwnNonEnumerable("info", vm.NewNativeFunction(0, true, "info", func(args []vm.Value) (vm.Value, error) {
-		fmt.Printf("INFO: %s\n", formatArgs(args))
+		// info's destination (stdout) was already correct - only the
+		// non-standard "INFO: " prefix needed to go, matching log's plain
+		// formatting (#230's issue body called this out alongside error/warn).
+		fmt.Println(formatArgs(args))
 		return vm.Undefined, nil
 	}))
 
