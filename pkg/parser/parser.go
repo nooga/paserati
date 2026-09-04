@@ -7146,8 +7146,12 @@ func (p *Parser) parseObjectLiteral() Expression {
 			}
 		} else {
 			// --- NEW: Check for async methods/generators (async foo() or async *foo()) ---
-			// But first check if 'async' is just a property name (async: value, { async }, etc.)
-			if p.curTokenIs(lexer.ASYNC) && !p.peekTokenIs(lexer.COLON) && !p.peekTokenIs(lexer.COMMA) && !p.peekTokenIs(lexer.RBRACE) {
+			// But first check if 'async' is just a property name (async: value, { async },
+			// { async, other }, or a plain shorthand method literally named 'async' -
+			// { async(...) {} } - #229). Per the grammar, AsyncMethod requires a
+			// PropertyName between 'async' and '(', so 'async' immediately followed by
+			// '(' can't be the async-modifier form at all.
+			if p.curTokenIs(lexer.ASYNC) && !p.peekTokenIs(lexer.COLON) && !p.peekTokenIs(lexer.COMMA) && !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.LPAREN) {
 				asyncToken := p.curToken
 				p.nextToken() // Consume 'async' to see what's next
 
