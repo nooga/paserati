@@ -15471,6 +15471,7 @@ startExecution:
 				tlaState, tlaResult := awaitedPromise.snapshot()
 				if tlaState == PromisePending {
 					rt := vm.GetAsyncRuntime()
+					deadlockRetries := 0
 					for {
 						tlaState, tlaResult = awaitedPromise.snapshot()
 						if tlaState != PromisePending {
@@ -15493,6 +15494,33 @@ startExecution:
 							progress = true
 						}
 						if !progress {
+							// Each check above locks/unlocks the runtime's
+							// mutex separately, rather than deciding "nothing
+							// is pending" from one atomic snapshot. That
+							// leaves a gap a background goroutine can land
+							// in: e.g. fetch()'s body-drain goroutine (or a
+							// Response.text()/.json()/etc drainBody
+							// goroutine) can schedule the microtask that
+							// resumes this very await *and* end its external
+							// op in the window between this loop's
+							// RunUntilIdle() call (too early to see that
+							// microtask - not scheduled yet) and its
+							// HasPendingExternalOps() call (too late - the
+							// op has already ended) - so every check above
+							// reports nothing pending even though real work
+							// is sitting in the microtask queue (#238).
+							// HasPendingWork() takes a single snapshot under
+							// the runtime's own lock, so it can't be fooled
+							// by that same race - if it says something is
+							// pending, retry instead of wrongly declaring
+							// deadlock (mirrors the identical guard in
+							// VM.DrainUntilIdle, async_runtime.go). Capped
+							// the same way, in case something really is
+							// stuck forever.
+							if rt.HasPendingWork() && deadlockRetries < 1_000_000 {
+								deadlockRetries++
+								continue
+							}
 							frame.ip = ip
 							status := vm.runtimeError("Top-level await: promise remains pending with no microtasks to process")
 							return status, Undefined
