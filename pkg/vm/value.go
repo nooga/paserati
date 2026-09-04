@@ -525,20 +525,46 @@ type Value struct {
 // newErrorHelper constructs an error exception, clearing currentNewTarget to prevent
 // interference from outer ConstructWithNewTarget contexts (e.g., a custom newTarget
 // with a throwing prototype getter would prevent the error object from being created).
+//
+// Guards against unbounded recursion via constructingIntrinsicError (#231):
+// if constructing this error's instance is itself what needs the engine to
+// raise another intrinsic error (e.g. a reassigned constructor that isn't
+// callable as a plain function, or a revoked Proxy's apply trap), that
+// nested attempt must not call back out to (possibly the very same) ctor
+// again - see constructingIntrinsicError's doc comment on the VM struct.
 func (vm *VM) newErrorHelper(name string, message string) error {
 	ctor, _ := vm.GetGlobal(name)
-	if ctor != Undefined {
-		prevNewTarget := vm.currentNewTarget
-		vm.currentNewTarget = Undefined
-		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
-		vm.currentNewTarget = prevNewTarget
-		return exceptionError{exception: errObj}
+	if ctor != Undefined && !vm.constructingIntrinsicError {
+		if exc, ok := vm.callIntrinsicErrorCtor(ctor, message); ok {
+			return exc
+		}
 	}
 	// Fallback generic error object
 	obj := NewObject(Null).AsPlainObject()
 	obj.SetOwn("name", NewString(name))
 	obj.SetOwn("message", NewString(message))
 	return exceptionError{exception: NewValueFromPlainObject(obj)}
+}
+
+// callIntrinsicErrorCtor calls ctor(message) to build an intrinsic error's
+// instance, guarding constructingIntrinsicError for the duration via defer -
+// not a plain assignment before and after the call - so that even a panic
+// inside vm.Call (recovered higher up, in vm.run()'s top-level recover())
+// can't leave the guard stuck true. Left stuck, every subsequent internal
+// error for the rest of the VM's lifetime would silently degrade to the
+// prototype-less fallback object below instead of a real error instance.
+func (vm *VM) callIntrinsicErrorCtor(ctor Value, message string) (error, bool) {
+	vm.constructingIntrinsicError = true
+	defer func() { vm.constructingIntrinsicError = false }()
+
+	prevNewTarget := vm.currentNewTarget
+	vm.currentNewTarget = Undefined
+	errObj, callErr := vm.Call(ctor, Undefined, []Value{NewString(message)})
+	vm.currentNewTarget = prevNewTarget
+	if callErr != nil {
+		return nil, false
+	}
+	return exceptionError{exception: errObj}, true
 }
 
 // NewTypeError constructs a TypeError exception error for builtin helpers to return
@@ -556,14 +582,13 @@ func (vm *VM) NewTypeErrorInRealm(realm *Realm, message string) error {
 }
 
 // newErrorHelperInRealm constructs an error exception using a constructor from the specified realm.
+// See newErrorHelper's doc comment for the constructingIntrinsicError guard (#231).
 func (vm *VM) newErrorHelperInRealm(realm *Realm, name string, message string) error {
 	ctor, ok := realm.GetGlobal(name)
-	if ok && ctor != Undefined {
-		prevNewTarget := vm.currentNewTarget
-		vm.currentNewTarget = Undefined
-		errObj, _ := vm.Call(ctor, Undefined, []Value{NewString(message)})
-		vm.currentNewTarget = prevNewTarget
-		return exceptionError{exception: errObj}
+	if ok && ctor != Undefined && !vm.constructingIntrinsicError {
+		if exc, ok := vm.callIntrinsicErrorCtor(ctor, message); ok {
+			return exc
+		}
 	}
 	// Fallback to current realm
 	return vm.newErrorHelper(name, message)

@@ -362,8 +362,35 @@ type VM struct {
 	// Flag to track if we're in a builtin calling a user function
 	inBuiltinCall bool
 
-	// Flag to prevent infinite recursion when throwing ReferenceError
-	throwingReferenceError bool
+	// constructingIntrinsicError guards against unbounded recursion when a
+	// script has reassigned one of the intrinsic error constructors
+	// (TypeError, RangeError, ReferenceError, SyntaxError, ...) to a value
+	// whose own invocation itself needs the engine to raise that same kind
+	// of error again - e.g. a class constructor called without `new`, or a
+	// revoked Proxy's apply trap, both confirmed live loops (#231). Set for
+	// the duration of any vm.Call that invokes a (possibly-reassigned)
+	// intrinsic error constructor, by every helper below that does one;
+	// while set, those helpers build a plain fallback error object directly
+	// instead of calling out again.
+	//
+	// One flag shared by every error kind, not one per kind: replaces the
+	// narrower, TypeError/RangeError/SyntaxError-less throwingReferenceError
+	// this guard used to be. Every self-recursion actually reproduced so far
+	// is same-kind (TypeError constructing TypeError, both confirmed loops
+	// above), so a per-kind flag would already stop them; sharing is a
+	// deliberate belt-and-suspenders choice against a *hypothetical*
+	// cross-kind loop (e.g. a reassigned TypeError whose construction
+	// legitimately needs a ReferenceError - say, a TDZ access inside a
+	// getter it calls) that hasn't been demonstrated, not a fix for one that
+	// has. The cost: constructing one kind now also suppresses the *normal*,
+	// non-recursive construction of a different kind if the first is somehow
+	// still in flight when the second is needed (e.g. a real ReferenceError
+	// legitimately raised while a TypeError instance is being built loses
+	// its realm-correct constructor and stack, falling back to a bare
+	// prototype-less object) - narrow, currently unexercised by any test,
+	// but real. If that trade-off ever bites, split back into per-kind
+	// flags for the pairs that need to stay independent.
+	constructingIntrinsicError bool
 
 	// Instance-specific initialization callbacks
 	//initCallbacks []VMInitCallback
@@ -20574,7 +20601,11 @@ func (vm *VM) ThrowTypeError(message string) {
 	// Per ECMAScript spec, the TypeError should come from the realm of the
 	// running execution context's function. Check the current frame's HomeRealm.
 	typeErrorCtor, exists := vm.getRealmAwareGlobal("TypeError")
-	if !exists || typeErrorCtor.Type() == TypeUndefined {
+	// See constructingIntrinsicError's doc comment (#231): if we're already
+	// in the middle of constructing some intrinsic error's instance, don't
+	// call back out to a (possibly reassigned) constructor again - build the
+	// fallback directly, unconditionally.
+	if !exists || typeErrorCtor.Type() == TypeUndefined || vm.constructingIntrinsicError {
 		// Fallback: create a basic error object
 		errObj := NewObject(vm.TypeErrorPrototype).AsPlainObject()
 		errObj.SetOwn("name", NewString("TypeError"))
@@ -20583,6 +20614,9 @@ func (vm *VM) ThrowTypeError(message string) {
 		vm.throwException(NewValueFromPlainObject(errObj))
 		return
 	}
+
+	vm.constructingIntrinsicError = true
+	defer func() { vm.constructingIntrinsicError = false }()
 
 	// Call the TypeError constructor to create a proper instance
 	errorInstance, err := vm.Call(typeErrorCtor, Undefined, []Value{NewString(message)})
@@ -20618,11 +20652,15 @@ func (vm *VM) getRealmAwareGlobal(name string) (Value, bool) {
 
 // ThrowReferenceError creates and throws a proper ReferenceError instance
 func (vm *VM) ThrowReferenceError(message string) {
-	// Guard against infinite recursion when throwing ReferenceError for uninitialized globals
-	// This can happen if accessing ReferenceError constructor or its dependencies triggers another ReferenceError
-	if vm.throwingReferenceError {
-		// Already in the process of throwing a ReferenceError, create minimal error to avoid recursion
-		// Use Undefined as prototype to avoid any potential issues with prototype access
+	// Guard against infinite recursion when throwing ReferenceError for
+	// uninitialized globals, or when constructing the instance itself needs
+	// the engine to raise another intrinsic error - see
+	// constructingIntrinsicError's doc comment (#231).
+	refErrorCtor, exists := vm.GetGlobal("ReferenceError")
+	if vm.constructingIntrinsicError {
+		// Already constructing some intrinsic error, create minimal error to
+		// avoid recursion. Use Undefined as prototype to avoid any potential
+		// issues with prototype access.
 		errObj := NewObject(Undefined).AsPlainObject()
 		errObj.SetOwn("name", NewString("ReferenceError"))
 		errObj.SetOwn("message", NewString(message))
@@ -20630,11 +20668,10 @@ func (vm *VM) ThrowReferenceError(message string) {
 		return
 	}
 
-	vm.throwingReferenceError = true
-	defer func() { vm.throwingReferenceError = false }()
+	vm.constructingIntrinsicError = true
+	defer func() { vm.constructingIntrinsicError = false }()
 
 	// Get the ReferenceError constructor from globals
-	refErrorCtor, exists := vm.GetGlobal("ReferenceError")
 	if !exists || refErrorCtor.Type() == TypeUndefined {
 		// Fallback: create a basic error object
 		errObj := NewObject(vm.ReferenceErrorPrototype).AsPlainObject()
@@ -20664,7 +20701,8 @@ func (vm *VM) ThrowReferenceError(message string) {
 func (vm *VM) ThrowSyntaxError(message string) {
 	// Get the SyntaxError constructor from globals
 	syntaxErrorCtor, exists := vm.GetGlobal("SyntaxError")
-	if !exists || syntaxErrorCtor.Type() == TypeUndefined {
+	// See constructingIntrinsicError's doc comment (#231).
+	if !exists || syntaxErrorCtor.Type() == TypeUndefined || vm.constructingIntrinsicError {
 		// Fallback: create a basic error object
 		errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
 		errObj.SetOwn("name", NewString("SyntaxError"))
@@ -20673,6 +20711,9 @@ func (vm *VM) ThrowSyntaxError(message string) {
 		vm.throwException(NewValueFromPlainObject(errObj))
 		return
 	}
+
+	vm.constructingIntrinsicError = true
+	defer func() { vm.constructingIntrinsicError = false }()
 
 	// Call the SyntaxError constructor to create a proper instance
 	errorInstance, err := vm.Call(syntaxErrorCtor, Undefined, []Value{NewString(message)})
@@ -20689,11 +20730,27 @@ func (vm *VM) ThrowSyntaxError(message string) {
 	vm.throwException(errorInstance)
 }
 
+// newStackOverflowError builds a RangeError-shaped exception value directly,
+// without calling any constructor (built-in or user-reassigned). Used by
+// executeUserFunctionSafe's call-stack-full guard (#231): at that point
+// vm.frames has no room for another frame, so going through vm.Call - as
+// ThrowRangeError's own constructor lookup would - risks hitting that exact
+// same guard again. See ThrowRangeError below for the normal, constructor-
+// backed path used everywhere the stack has room.
+func (vm *VM) newStackOverflowError() Value {
+	errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+	errObj.SetOwn("name", NewString("RangeError"))
+	errObj.SetOwn("message", NewString("Maximum call stack size exceeded"))
+	errObj.SetOwn("stack", NewString(vm.CaptureStackTrace()))
+	return NewValueFromPlainObject(errObj)
+}
+
 // ThrowRangeError creates and throws a proper RangeError instance
 func (vm *VM) ThrowRangeError(message string) {
 	// Get the RangeError constructor from globals
 	rangeErrorCtor, exists := vm.GetGlobal("RangeError")
-	if !exists || rangeErrorCtor.Type() == TypeUndefined {
+	// See constructingIntrinsicError's doc comment (#231).
+	if !exists || rangeErrorCtor.Type() == TypeUndefined || vm.constructingIntrinsicError {
 		// Fallback: create a basic error object
 		errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
 		errObj.SetOwn("name", NewString("RangeError"))
@@ -20702,6 +20759,9 @@ func (vm *VM) ThrowRangeError(message string) {
 		vm.throwException(NewValueFromPlainObject(errObj))
 		return
 	}
+
+	vm.constructingIntrinsicError = true
+	defer func() { vm.constructingIntrinsicError = false }()
 
 	// Call the RangeError constructor to create a proper instance
 	errorInstance, err := vm.Call(rangeErrorCtor, Undefined, []Value{NewString(message)})
