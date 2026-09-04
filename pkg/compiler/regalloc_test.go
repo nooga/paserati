@@ -276,6 +276,106 @@ func TestMaxRegs(t *testing.T) {
 	}
 }
 
+// TestContiguousAllocationBoundaryDoesNotWrap pins issue #244: TryAllocContiguous
+// and AllocContiguous both used to check "nextReg+count <= 256" (and "> 256" for
+// the panicking fallback), one past registerLimit. Register is a uint8, so
+// landing a contiguous block's end exactly on 256 wrapped `ra.nextReg =
+// firstReg + Register(count)` back to 0 (256 mod 256) while leaving maxReg
+// correctly at 255 - and MaxRegs() reads nextReg==0 as "nothing was ever
+// allocated", silently reporting a function that used up to register 255 as
+// needing zero registers. The VM then handed that function a zero-length
+// register window and indexed straight past it on the first write - a raw
+// Go panic, not a catchable error (found via a real-world minified bundle
+// that#242's comma-chain fix newly let compile far enough to reach this).
+func TestContiguousAllocationBoundaryDoesNotWrap(t *testing.T) {
+	ra := NewRegisterAllocator()
+
+	// Drive nextReg to exactly 200 first (mirrors the many-parameters shape
+	// that reaches this boundary in real code - see
+	// tests/scripts/contiguous_alloc_boundary_test.ts).
+	for i := 0; i < 200; i++ {
+		ra.Alloc()
+	}
+	if ra.nextReg != 200 {
+		t.Fatalf("setup: expected nextReg=200, got %d", ra.nextReg)
+	}
+
+	// A contiguous request landing exactly on the old 256 boundary
+	// (200+56=256) must fail cleanly - never silently wrap nextReg to 0.
+	if reg, ok := ra.TryAllocContiguous(56); ok {
+		t.Fatalf("TryAllocContiguous(56) at nextReg=200 should fail (200+56=256 > registerLimit), got reg=%d, ok=true", reg)
+	}
+	if ra.nextReg == 0 {
+		t.Fatalf("TryAllocContiguous's failed attempt corrupted nextReg to 0 (the #244 wraparound)")
+	}
+	if ra.nextReg != 200 {
+		t.Fatalf("a failed TryAllocContiguous must not mutate allocator state at all, got nextReg=%d", ra.nextReg)
+	}
+
+	// AllocContiguous's own fallback path must panic (a catchable
+	// registerExhaustionPanic, per #239) rather than wrap silently too.
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatalf("AllocContiguous(56) at nextReg=200 should panic instead of silently wrapping")
+			}
+			if _, ok := r.(registerExhaustionPanic); !ok {
+				t.Fatalf("expected a registerExhaustionPanic, got %T: %v", r, r)
+			}
+		}()
+		ra.AllocContiguous(56)
+	}()
+	if ra.nextReg == 0 {
+		t.Fatalf("AllocContiguous's panic path corrupted nextReg to 0 (the #244 wraparound)")
+	}
+
+	// A request that exactly fills the true capacity (200+55=255) must still
+	// succeed - the fix must not have shaved a legitimate register off the
+	// top along with the buggy one.
+	if reg, ok := ra.TryAllocContiguous(55); !ok {
+		t.Fatalf("TryAllocContiguous(55) at nextReg=200 should succeed (200+55=255 == registerLimit), got ok=false")
+	} else if reg != 200 {
+		t.Fatalf("expected the 55-register block to start at R200, got R%d", reg)
+	}
+	if ra.nextReg != 255 {
+		t.Fatalf("expected nextReg=255 after filling to true capacity, got %d", ra.nextReg)
+	}
+	if got := ra.MaxRegs(); got != 255 {
+		t.Fatalf("expected MaxRegs()=255 after using every register up to the limit, got %d", got)
+	}
+}
+
+// TestMaxRegsDoesNotTrustNextRegAlone hardens the other half of issue #244:
+// MaxRegs() used to infer "no registers ever allocated" from nextReg == 0,
+// which is exactly the field the boundary wraparound corrupted - turning one
+// arithmetic slip into a silently-undersized register window instead of a
+// loud failure. It now tracks usedAny directly, so even a hypothetical
+// future bug that zeroes nextReg some other way can't reintroduce that
+// specific silent-corruption path: this test manually zeroes nextReg (the
+// way the #244 bug did) after real allocations and confirms MaxRegs() still
+// reports the true high-water mark rather than 0.
+func TestMaxRegsDoesNotTrustNextRegAlone(t *testing.T) {
+	ra := NewRegisterAllocator()
+
+	for i := 0; i < 18; i++ {
+		ra.Alloc()
+	}
+	if got := ra.MaxRegs(); got != 18 {
+		t.Fatalf("expected MaxRegs()=18 after 18 allocations, got %d", got)
+	}
+
+	// Simulate the #244 wraparound directly: nextReg corrupted to 0 without
+	// maxReg or usedAny being touched (a hypothetical future bug of the same
+	// shape, not achievable through the public API anymore since the actual
+	// #244 site is fixed).
+	ra.nextReg = 0
+
+	if got := ra.MaxRegs(); got != 18 {
+		t.Fatalf("MaxRegs() must trust usedAny/maxReg, not nextReg: expected 18 even with nextReg corrupted to 0, got %d", got)
+	}
+}
+
 func TestReset(t *testing.T) {
 	ra := NewRegisterAllocator()
 
@@ -300,6 +400,12 @@ func TestReset(t *testing.T) {
 	}
 	if len(ra.pinnedRegs) != 0 {
 		t.Errorf("Expected pinned registers to be empty after reset, got %v", ra.pinnedRegs)
+	}
+	if ra.usedAny {
+		t.Errorf("Expected usedAny to be reset to false")
+	}
+	if ra.MaxRegs() != 0 {
+		t.Errorf("Expected MaxRegs() to be 0 for a freshly reset allocator, got %d", ra.MaxRegs())
 	}
 }
 
