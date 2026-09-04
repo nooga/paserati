@@ -12,6 +12,7 @@ import (
 	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/modules"
 	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/source"
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
@@ -842,7 +843,41 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 // Compile traverses the AST, performs type checking using its assigned checker,
 // and generates bytecode.
 // Returns the generated chunk and any errors encountered (including type errors).
-func (c *Compiler) Compile(node parser.Node) (*vm.Chunk, []errors.PaseratiError) {
+func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs []errors.PaseratiError) {
+	// Register exhaustion (RegisterAllocator.Alloc/AllocContiguous panicking
+	// once a function's 255-register budget is used up) is raised from
+	// hundreds of unchecked call sites throughout the compiler, so it isn't
+	// practical to thread a normal error return through all of them. Instead
+	// Alloc panics with a typed registerExhaustionPanic, and this top-level
+	// recover is the single place that turns it into an ordinary, catchable
+	// compile error instead of letting it unwind as a raw Go panic and take
+	// the whole process down (issue #239) - nested function literals are
+	// compiled synchronously within this same call (see newFunctionCompiler),
+	// so this one recover catches exhaustion at any nesting depth. Anything
+	// else re-panics unchanged: a real compiler bug (nil deref, index out of
+	// range, ...) should still fail loudly rather than be laundered into a
+	// generic "compile error".
+	defer func() {
+		if r := recover(); r != nil {
+			exhaustion, ok := r.(registerExhaustionPanic)
+			if !ok {
+				panic(r)
+			}
+			msg := "register exhaustion: expression too deeply nested"
+			if exhaustion.functionName != "" {
+				msg = fmt.Sprintf("%s (in function %q)", msg, exhaustion.functionName)
+			}
+			var src *source.SourceFile
+			if c.chunk != nil {
+				src = c.chunk.Source
+			}
+			resultChunk = nil
+			resultErrs = []errors.PaseratiError{&errors.CompileError{
+				Position: errors.Position{Line: c.line, Source: src},
+				Msg:      msg,
+			}}
+		}
+	}()
 
 	// --- Type Checking Step ---
 	program, ok := node.(*parser.Program)

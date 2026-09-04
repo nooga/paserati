@@ -1,6 +1,13 @@
 // Test for register exhaustion with many local variables
 // no-typecheck
-// skip: register exhaustion causes panic instead of graceful error (needs TryAlloc)
+// expect: 259
+//
+// This used to be skipped because declaring past the 200-register
+// VariableRegisterThreshold panicked instead of failing gracefully. That's
+// long since handled by the spill mechanism (vars past the threshold spill
+// to a side slice via OpStoreSpill/OpLoadSpill instead of exhausting the
+// allocator), and issue #239's fix made the raw-panic path itself catchable
+// as well, so there's nothing left here to skip.
 
 // This function declares 260 variables, exceeding the 255 register limit
 function manyVars() {

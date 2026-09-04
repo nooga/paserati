@@ -97,12 +97,26 @@ func (ra *RegisterAllocator) TryAlloc() (Register, bool) {
 	return 0, false
 }
 
+// registerExhaustionPanic is the panic value Alloc raises when a function's
+// register budget (255, the bytecode operand width) is exhausted. It is a
+// distinct type so that Compile's top-level recover (compiler.go) can
+// identify it specifically and turn it into a normal, catchable
+// errors.PaseratiError instead of crashing the process — the panic still
+// propagates through the hundreds of unchecked Alloc() call sites (see
+// issue #239), but it can no longer escape compilation itself. Any other
+// panic value is re-raised unchanged, so genuine compiler bugs still fail
+// loudly rather than being laundered into a "compile error".
+type registerExhaustionPanic struct {
+	functionName string
+}
+
 // Alloc allocates the next available register.
-// Panics if no registers are available. Use TryAlloc for non-panicking version.
+// Panics (with a registerExhaustionPanic) if no registers are available.
+// Use TryAlloc for a non-panicking version.
 func (ra *RegisterAllocator) Alloc() Register {
 	reg, ok := ra.TryAlloc()
 	if !ok {
-		panic("Compiler Error: Ran out of registers!")
+		panic(registerExhaustionPanic{functionName: ra.functionName})
 	}
 	return reg
 }
@@ -192,7 +206,7 @@ func (ra *RegisterAllocator) AllocContiguous(count int) Register {
 
 	// Check if we have enough room
 	if int(firstReg)+count > 256 {
-		panic("Compiler Error: Not enough registers for contiguous allocation")
+		panic(registerExhaustionPanic{functionName: ra.functionName})
 	}
 
 	// Allocate the block

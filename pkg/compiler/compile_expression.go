@@ -1487,9 +1487,28 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			}
 		}
 
+		// A right-nested chain (`a + (b + (c + ...))`, however it arose -
+		// explicit parens, generated code, reduceRight-style codegen) puts an
+		// InfixExpression in the Right slot at every level. Compiling it into
+		// a freshly allocated rightReg the ordinary way would hold one
+		// register live per nesting level for the whole recursive descent
+		// (the temp isn't freed until this call's own emit, which only runs
+		// after the entire right subtree - including all its own nested
+		// rightRegs - has finished), exhausting the 255-register budget on
+		// long chains (issue #239). Threading hint straight down instead
+		// lets every level share the same destination register: safe as
+		// long as hint doesn't alias leftReg, since compiling the right
+		// subtree into hint would otherwise clobber leftReg's value before
+		// the operator below reads it. When it does alias, fall back to a
+		// real temp exactly as before.
 		var rightReg Register
 		if reg, ok := c.simpleLocalRegister(node.Right); ok {
 			rightReg = reg
+		} else if leftReg != hint {
+			rightReg = hint
+			if _, err := c.compileNode(node.Right, rightReg); err != nil {
+				return BadRegister, err
+			}
 		} else {
 			rightReg = c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, rightReg)
