@@ -184,8 +184,15 @@ func NewPaseratiWithInitializersAndBaseDir(customInitializers []builtins.Builtin
 	// Create module loader first
 	config := modules.DefaultLoaderConfig()
 
-	// Create file system resolver for the specified base directory
-	fsResolver := modules.NewFileSystemResolver(os.DirFS(baseDir), baseDir)
+	// Create file system resolver for the specified base directory. Uses the
+	// real OS filesystem directly (not an fs.FS wrapping os.DirFS(baseDir))
+	// so that an entry file passed by absolute path - and any relative
+	// import resolved against it - can be found: fs.FS's contract rejects
+	// any absolute path outright, which surfaced as "no resolver could
+	// handle specifier" for a relative import from an absolute-path entry
+	// module (#232, misreported as top-level await not working, since that's
+	// what the failing import happened to sit next to).
+	fsResolver := modules.NewOSFileSystemResolver(baseDir)
 
 	// Create module loader with file system resolver
 	moduleLoader := modules.NewModuleLoader(config, fsResolver)
@@ -274,8 +281,15 @@ func NewPaseratiWithBaseDir(baseDir string) *Paserati {
 	// Create module loader first
 	config := modules.DefaultLoaderConfig()
 
-	// Create file system resolver for the specified base directory
-	fsResolver := modules.NewFileSystemResolver(os.DirFS(baseDir), baseDir)
+	// Create file system resolver for the specified base directory. Uses the
+	// real OS filesystem directly (not an fs.FS wrapping os.DirFS(baseDir))
+	// so that an entry file passed by absolute path - and any relative
+	// import resolved against it - can be found: fs.FS's contract rejects
+	// any absolute path outright, which surfaced as "no resolver could
+	// handle specifier" for a relative import from an absolute-path entry
+	// module (#232, misreported as top-level await not working, since that's
+	// what the failing import happened to sit next to).
+	fsResolver := modules.NewOSFileSystemResolver(baseDir)
 
 	// Create module loader with file system resolver
 	moduleLoader := modules.NewModuleLoader(config, fsResolver)
