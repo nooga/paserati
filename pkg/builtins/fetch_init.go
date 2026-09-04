@@ -553,7 +553,8 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Perform HTTP request asynchronously in a goroutine. On a response
 		// that streams (the common case, #205), cancel/rt outlive this
 		// goroutine and are discharged later by the body-drain goroutine
-		// doFetchRequestWithContext starts instead; on an early-return
+		// doFetchRequestWithContext starts instead, *after* doFetchRequestWithContext
+		// has already resolved promiseObj itself (#238); on an early-return
 		// error, *this* goroutine owns them, and must discharge them only
 		// after settling the promise below (#213 - see the doc comment on
 		// doFetchRequestWithContext for why the order matters: cancel()/
@@ -561,7 +562,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// that before the rejection is scheduled can make the drain exit
 		// with the promise settled but its continuation never resumed).
 		go func() {
-			response, err := doFetchRequestWithContext(ctx, cancel, rt, vmInstance, url, init)
+			err := doFetchRequestWithContext(ctx, cancel, rt, vmInstance, promiseObj, url, init)
 
 			if err != nil {
 				// Classify by the error type doFetchRequestWithContext
@@ -588,9 +589,9 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 				// Settled above; safe to wake the driver's drain loop now.
 				cancel()
 				rt.EndExternalOp()
-			} else {
-				vmInstance.ResolvePromise(promiseObj, response)
 			}
+			// Success: doFetchRequestWithContext already resolved promiseObj
+			// and handed cancel/rt off to its own body-drain goroutine.
 		}()
 
 		return promise, nil
@@ -1109,21 +1110,31 @@ func bytesToValue(data []byte) vm.Value {
 
 // doFetchRequestWithContext performs the HTTP request with context support
 // for cancellation. On any early return (parse error, network error, no
-// response) it leaves cancel/rt untouched - the caller must discharge them
-// itself, and must do so *after* settling the fetch() promise with the
-// returned error: cancel()/rt.EndExternalOp() wake the driver's event-loop
-// drain immediately, and if that happened before the promise reaction is
-// scheduled, the drain can see nothing pending and return, leaving the
-// promise settled but its `await`/`.then()` continuation never resumed
-// (previously masked by #213, which made this path effectively dead code -
-// see the fetchFn caller for where settlement now happens first). On
+// response) it leaves cancel/rt untouched and the promise unsettled - the
+// caller must reject the promise with the returned error and only then
+// discharge cancel/rt itself: cancel()/rt.EndExternalOp() wake the driver's
+// event-loop drain immediately, and if that happened before the promise
+// reaction is scheduled, the drain can see nothing pending and return,
+// leaving the promise settled but its `await`/`.then()` continuation never
+// resumed (previously masked by #213, which made this path effectively dead
+// code - see the fetchFn caller for where settlement happens first). On
 // success (#205) the response resolves as soon as headers arrive - real
 // fetch()/spec semantics, and required so an SSE body that never EOFs
-// doesn't block the fetch() promise forever - and a goroutine started here
-// streams the body into a ReadableStream, discharging cancel/rt itself only
-// once that finishes (EOF, read error, or the request being aborted
-// mid-body); the caller must NOT discharge them again in that case.
-func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, rt runtime.AsyncRuntime, vmInstance *vm.VM, url string, init vm.Value) (vm.Value, error) {
+// doesn't block the fetch() promise forever - and this function resolves
+// promiseObj itself, synchronously, *before* spawning the goroutine that
+// streams the body into a ReadableStream and only then discharges cancel/rt.
+// That ordering is required, not cosmetic (#238): the body-drain goroutine
+// can finish arbitrarily fast (an empty or already-buffered body EOFs
+// immediately) and its rt.EndExternalOp() can otherwise race the promise
+// settlement on a completely unsynchronized goroutine - if the external-op
+// count reaches zero before the promise is actually resolved, a top-level
+// await polling in the gap between those two events sees no pending
+// microtasks, no pending external ops, and a still-pending promise, and
+// falsely reports deadlock even though the promise was about to settle.
+// Resolving here, strictly before the `go func(){...}()` below even starts,
+// makes that ordering impossible instead of merely unlikely. The caller
+// must NOT resolve/reject promiseObj again in the success case.
+func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, rt runtime.AsyncRuntime, vmInstance *vm.VM, promiseObj *vm.PromiseObject, url string, init vm.Value) error {
 	// Default options
 	method := "GET"
 	headers := &FetchHeaders{headers: make(http.Header)}
@@ -1166,14 +1177,14 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 						// Auto-stringify objects for JSON content type
 						jsonBytes, err := b.MarshalJSON()
 						if err != nil {
-							return vm.Undefined, newTypeError(vmInstance, "failed to serialize body to JSON: "+err.Error())
+							return newTypeError(vmInstance, "failed to serialize body to JSON: "+err.Error())
 						}
 						body = bytes.NewReader(jsonBytes)
 					} else if b.Type() == vm.TypeObject || b.Type() == vm.TypeDictObject {
 						// Default to JSON for objects
 						jsonBytes, err := b.MarshalJSON()
 						if err != nil {
-							return vm.Undefined, newTypeError(vmInstance, "failed to serialize body to JSON: "+err.Error())
+							return newTypeError(vmInstance, "failed to serialize body to JSON: "+err.Error())
 						}
 						body = bytes.NewReader(jsonBytes)
 					} else {
@@ -1192,7 +1203,7 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 						if r, exists := signalObj.GetOwn("reason"); exists && r.Type() != vm.TypeUndefined {
 							reason = r
 						}
-						return vm.Undefined, &AbortError{Message: reason.ToString()}
+						return &AbortError{Message: reason.ToString()}
 					}
 				}
 				// Store reference for potential future abort (would need more infrastructure)
@@ -1239,7 +1250,7 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 	// Create request with context for cancellation support
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
-		return vm.Undefined, err
+		return err
 	}
 
 	// Set headers
@@ -1254,9 +1265,9 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 		// before returning - see the doc comment above, #213) - so this
 		// correctly distinguishes a real abort from a plain network error.
 		if ctx.Err() == context.Canceled {
-			return vm.Undefined, &AbortError{Message: "The operation was aborted"}
+			return &AbortError{Message: "The operation was aborted"}
 		}
-		return vm.Undefined, err
+		return err
 	}
 
 	// Create response headers
@@ -1289,6 +1300,13 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 		Type:       responseType,
 	}
 
+	// Resolve the promise now, strictly before spawning the body-drain
+	// goroutine below - see the doc comment above (#238) for why the order
+	// matters: this must happen-before that goroutine's rt.EndExternalOp()
+	// can possibly run, which is only guaranteed if it has not even been
+	// spawned yet.
+	vmInstance.ResolvePromise(promiseObj, createResponseObject(vmInstance, response))
+
 	// Stream the body in off the VM goroutine: enqueue each chunk on the
 	// ReadableStream as it arrives (for consumers reading response.body
 	// directly) and accumulate it in bodyState (for text()/json()/etc,
@@ -1320,7 +1338,7 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 		}
 	}()
 
-	return createResponseObject(vmInstance, response), nil
+	return nil
 }
 
 // FetchRequest represents the Request object
