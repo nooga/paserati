@@ -160,23 +160,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Initialize with headers if provided
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined && args[0].Type() != vm.TypeNull {
-			if args[0].Type() == vm.TypeObject {
-				obj := args[0].AsPlainObject()
-				keys := obj.OwnKeys()
-				for _, key := range keys {
-					if val, exists := obj.GetOwn(key); exists {
-						headers.headers.Set(key, val.ToString())
-					}
-				}
-			} else if args[0].Type() == vm.TypeDictObject {
-				dictObj := args[0].AsDictObject()
-				keys := dictObj.OwnKeys()
-				for _, key := range keys {
-					if val, exists := dictObj.GetOwn(key); exists {
-						headers.headers.Set(key, val.ToString())
-					}
-				}
-			}
+			mergeHeadersFrom(headers, args[0])
 		}
 
 		return createHeadersObject(vmInstance, headers), nil
@@ -722,6 +706,14 @@ func boolToValue(b bool) vm.Value {
 func createHeadersObject(vmInstance *vm.VM, h *FetchHeaders) vm.Value {
 	obj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 
+	// Brand the object with its backing FetchHeaders so code that reads a
+	// Headers-shaped value (fetch()'s request builder, parseHeaders, the
+	// Headers constructor itself) can recover the actual header data. Every
+	// accessor below is installed non-enumerable, so OwnKeys() on this
+	// object is always empty - reading headers via OwnKeys() alone silently
+	// drops everything set through .set()/.append()/new Headers(...) (#237).
+	obj.SetInternalSlots(h)
+
 	obj.SetOwnNonEnumerable("get", vm.NewNativeFunction(1, false, "get", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 1 {
 			return vm.NewString(""), nil
@@ -1159,21 +1151,7 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 
 			// Headers
 			if h, exists := initObj.GetOwn("headers"); exists && h.Type() != vm.TypeUndefined {
-				if h.Type() == vm.TypeObject {
-					hObj := h.AsPlainObject()
-					for _, key := range hObj.OwnKeys() {
-						if val, exists := hObj.GetOwn(key); exists {
-							headers.headers.Set(key, val.ToString())
-						}
-					}
-				} else if h.Type() == vm.TypeDictObject {
-					hDictObj := h.AsDictObject()
-					for _, key := range hDictObj.OwnKeys() {
-						if val, exists := hDictObj.GetOwn(key); exists {
-							headers.headers.Set(key, val.ToString())
-						}
-					}
-				}
+				mergeHeadersFrom(headers, h)
 			}
 
 			// Body
@@ -1398,22 +1376,45 @@ func valueToBytes(v vm.Value) []byte {
 // parseHeaders parses a value into FetchHeaders
 func parseHeaders(v vm.Value) *FetchHeaders {
 	headers := &FetchHeaders{headers: make(http.Header)}
+	mergeHeadersFrom(headers, v)
+	return headers
+}
+
+// mergeHeadersFrom reads header entries out of v - which may be a real
+// Headers instance, or a plain object/dict literal such as
+// { "Content-Type": "application/json" } - into dst.
+//
+// A Headers instance's own data lives behind SetInternalSlots (see
+// createHeadersObject): every one of its get/set/append/etc. accessors is
+// installed non-enumerable, so OwnKeys() on it is always empty. Reading
+// headers via OwnKeys() alone therefore silently drops everything set
+// through a real Headers object's .set()/.append(), or passed as
+// new Headers(anotherHeadersInstance) - #237. Check for that internal state
+// first and only fall back to OwnKeys() for genuine object/dict literals.
+func mergeHeadersFrom(dst *FetchHeaders, v vm.Value) {
 	if v.Type() == vm.TypeObject {
 		obj := v.AsPlainObject()
+		if h, ok := obj.InternalSlots().(*FetchHeaders); ok && h != nil {
+			for name, values := range h.headers {
+				for _, value := range values {
+					dst.headers.Add(name, value)
+				}
+			}
+			return
+		}
 		for _, key := range obj.OwnKeys() {
 			if val, exists := obj.GetOwn(key); exists {
-				headers.headers.Set(key, val.ToString())
+				dst.headers.Set(key, val.ToString())
 			}
 		}
 	} else if v.Type() == vm.TypeDictObject {
 		dictObj := v.AsDictObject()
 		for _, key := range dictObj.OwnKeys() {
 			if val, exists := dictObj.GetOwn(key); exists {
-				headers.headers.Set(key, val.ToString())
+				dst.headers.Set(key, val.ToString())
 			}
 		}
 	}
-	return headers
 }
 
 // parseRequestInit parses RequestInit options from a PlainObject
