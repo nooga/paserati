@@ -1953,11 +1953,42 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	// sequence, each via its own executeUserFunctionSafe call).
 	frameCountAtEntry := vm.frameCount
 
+	// Remember whether we were already unwinding *with* a live exception at
+	// entry (the cleanup just above only scrubs the currentException==Null
+	// case, deliberately leaving this one alone - a native caller mid-
+	// unwind, forwarding or absorbing an exception, is expected to be able
+	// to make further vm.Call calls). The shouldSwitch=false branch below
+	// must only treat vm.unwinding as *this* call's own doing if it became
+	// true during it - otherwise a prepareCall that runs a native function
+	// to completion, perfectly successfully, while an unrelated exception
+	// from before this call is still sitting on the VM, would get its
+	// legitimate result thrown away and replaced with that stale exception.
+	unwindingAtEntry := vm.unwinding && vm.currentException != Null
+
 	// Set up the caller context first (pooled 1-element result holder)
 	callerRegisters := vm.getSentinelReg()
 	defer vm.putSentinelReg(callerRegisters)
 	destReg := byte(0)
 	callerIP := 0
+
+	// Bail out before touching vm.frames if the call stack is already full.
+	// This path is reentrant - a native Go call into JS, e.g. vm.Call from
+	// ThrowTypeError/ThrowRangeError/etc. constructing an exception instance,
+	// or any other builtin invoking a callback - and unlike the bytecode-level
+	// call sites (OpCall/OpSpreadNew), which already guard against
+	// overflowing vm.frames before pushing a new frame, this one used to
+	// index straight past the end of the fixed-size frames array once
+	// frameCount reached len(vm.frames), panicking with a raw "index out of
+	// range" instead of raising a catchable exception (#231 - reassigning
+	// globalThis.TypeError to a class made every internal ThrowTypeError call
+	// recurse into itself indefinitely through exactly this path). Build the
+	// exception directly rather than going through vm.ThrowRangeError/vm.Call
+	// - the stack is exactly as full as it was a moment ago, so calling back
+	// into a (possibly user-reassigned) RangeError constructor here would hit
+	// this very guard again.
+	if vm.frameCount >= len(vm.frames) {
+		return Undefined, exceptionError{exception: vm.newStackOverflowError()}
+	}
 
 	// Add a sentinel frame that will cause vm.run() to return when it hits this frame
 	sentinelFrame := &vm.frames[vm.frameCount]
@@ -1976,6 +2007,37 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	}
 
 	if !shouldSwitch {
+		// prepareCall executed synchronously without switching frames - either
+		// a native function ran directly, or an exception (e.g. ThrowTypeError
+		// for a class constructor called without `new`, see call.go's
+		// IsClassConstructor check) was raised inline. The interpreter's own
+		// dispatch loop handles the latter case implicitly, by checking
+		// vm.unwinding after every instruction it executes - but this is a
+		// native Go call into JS with no such loop watching it, so it must
+		// check for a pending exception itself before reporting success. Left
+		// unchecked, this silently discarded the real exception and reported
+		// success with a stale/undefined "result" instead - which is how
+		// reassigning globalThis.TypeError to a class went from an unbounded-
+		// recursion panic (#231, fixed by the stack-depth guard above) to an
+		// "Uncaught exception: undefined" instead of the catchable TypeError
+		// real engines produce: the reassigned class's own construction hit
+		// this exact "called without new" check, and its resulting exception
+		// was getting swallowed right here before ThrowTypeError even saw it.
+		//
+		// Gated on the transition (!unwindingAtEntry), not just the current
+		// state: a native caller can legitimately already be mid-unwind with
+		// a live exception when it makes this call (e.g. IteratorClose
+		// forwarding a throw completion while it runs cleanup) and have
+		// prepareCall's native function complete normally - that must return
+		// its real result, not get it discarded in favor of the pre-existing,
+		// unrelated exception.
+		if !unwindingAtEntry && vm.unwinding && vm.currentException != Null {
+			ex := vm.currentException
+			vm.currentException = Null
+			vm.unwinding = false
+			vm.truncateFramesTo(frameCountAtEntry)
+			return Undefined, exceptionError{exception: ex}
+		}
 		// Native function was executed directly
 		// Remove sentinel frame
 		vm.frameCount--
