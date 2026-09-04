@@ -15,6 +15,27 @@ type Register uint8 // Assuming max 256 registers per function for now
 const NoHint Register = 255
 const BadRegister Register = 254
 
+// registerLimit is the exclusive upper bound on allocatable register indices:
+// valid data registers are 0..254 (255 total), matching TryAlloc's own
+// `nextReg < 255` guard - register 255 is permanently reserved as NoHint and
+// must never be handed out as real storage. Every capacity check in this
+// file must compare against this, not a raw 256: `Register` is a uint8, so
+// `firstReg + Register(count)` silently wraps to 0 the moment a block's end
+// reaches exactly 256 (255 + 1 mod 256), and a boundary of "<= 256" lets
+// that happen right at the edge instead of one slot earlier where it's safe.
+// That wraparound previously zeroed nextReg after a contiguous allocation
+// that happened to land exactly on the register-count boundary, which
+// MaxRegs() then misread as "no registers used at all" (nextReg == 0) and
+// reported a function's RegisterSize as 0 despite its bytecode using far
+// more - an undersized register window the VM then indexed straight past
+// (issue #244). #242's chain-folding fix didn't introduce this: it made
+// long comma chains so much cheaper that functions built by patterns like a
+// large module-bootstrap bundle now compile successfully far enough to
+// reach a contiguous allocation landing on this exact boundary, where they
+// used to exhaust their register budget (via the old, register-hungry
+// comma path) long before ever getting there.
+const registerLimit = 255
+
 // VariableRegisterThreshold is the register index above which new variables
 // should be spilled to make room for temporaries and function call arguments.
 // Temporaries can still use registers 200-254 for intermediate calculations.
@@ -29,6 +50,15 @@ type RegisterAllocator struct {
 	allocatorID int32    // Unique ID for debugging
 	nextReg     Register // Index of the next register to allocate
 	maxReg      Register // Highest register index allocated so far
+	// usedAny is true once any register has ever been handed out. MaxRegs
+	// used to infer this from nextReg == 0 instead of tracking it directly -
+	// which meant an unrelated arithmetic slip that zeroed nextReg (issue
+	// #244: a uint8 wraparound in TryAllocContiguous/AllocContiguous) turned
+	// into MaxRegs() silently reporting "no registers used" for a function
+	// that had used well over a hundred, instead of surfacing as a loud
+	// failure. Tracking it explicitly here means the next bug of that shape
+	// - wherever it turns up - can't repeat that particular amplification.
+	usedAny bool
 	// Could add a free list later for more complex allocation
 	freeRegs []Register // Stack of available registers to reuse
 	// Pinning mechanism to prevent important registers from being freed
@@ -55,6 +85,21 @@ func NewRegisterAllocator() *RegisterAllocator {
 	}
 }
 
+// track records that reg has just been handed out to a caller: it updates
+// maxReg (if reg is a new high) and unconditionally marks usedAny, so
+// MaxRegs() has a source of truth for "has anything been allocated" that
+// doesn't depend on nextReg's own arithmetic staying correct. Every
+// register-producing success path in this file should call this exactly
+// once for the register it returns, instead of repeating the old inline
+// "if reg > ra.maxReg { ra.maxReg = reg }" (which updated maxReg but had no
+// equivalent for usedAny).
+func (ra *RegisterAllocator) track(reg Register) {
+	ra.usedAny = true
+	if reg > ra.maxReg {
+		ra.maxReg = reg
+	}
+}
+
 // TryAlloc attempts to allocate a register without panicking.
 // Returns (register, true) on success, or (0, false) if no registers available.
 func (ra *RegisterAllocator) TryAlloc() (Register, bool) {
@@ -65,10 +110,7 @@ func (ra *RegisterAllocator) TryAlloc() (Register, bool) {
 		lastIdx := len(ra.freeRegs) - 1
 		reg = ra.freeRegs[lastIdx]
 		ra.freeRegs = ra.freeRegs[:lastIdx]
-		// Update maxReg to track highest register ever used
-		if reg > ra.maxReg {
-			ra.maxReg = reg
-		}
+		ra.track(reg)
 		if debugRegAlloc {
 			fmt.Printf("[REGALLOC %s] REUSE R%d (from free list, %d available, maxReg now %d)\n", ra.functionName, reg, len(ra.freeRegs), ra.maxReg)
 		}
@@ -79,9 +121,7 @@ func (ra *RegisterAllocator) TryAlloc() (Register, bool) {
 	if ra.nextReg < 255 { // Check before incrementing to avoid overflow wrap-around
 		reg = ra.nextReg
 		ra.nextReg++
-		if reg > ra.maxReg {
-			ra.maxReg = reg
-		}
+		ra.track(reg)
 		if debugRegAlloc {
 			fmt.Printf("[REGALLOC %s] NEW R%d (nextReg now %d, maxReg %d, %d free)\n", ra.functionName, reg, ra.nextReg, ra.maxReg, len(ra.freeRegs))
 		}
@@ -135,9 +175,7 @@ func (ra *RegisterAllocator) TryAllocForVariable() (Register, bool) {
 				reg = ra.freeRegs[i]
 				// Remove from free list
 				ra.freeRegs = append(ra.freeRegs[:i], ra.freeRegs[i+1:]...)
-				if reg > ra.maxReg {
-					ra.maxReg = reg
-				}
+				ra.track(reg)
 				if debugRegAlloc {
 					fmt.Printf("[REGALLOC %s] REUSE FOR VAR R%d (from free list, %d available)\n", ra.functionName, reg, len(ra.freeRegs))
 				}
@@ -150,9 +188,7 @@ func (ra *RegisterAllocator) TryAllocForVariable() (Register, bool) {
 	if ra.nextReg < VariableRegisterThreshold {
 		reg = ra.nextReg
 		ra.nextReg++
-		if reg > ra.maxReg {
-			ra.maxReg = reg
-		}
+		ra.track(reg)
 		if debugRegAlloc {
 			fmt.Printf("[REGALLOC %s] NEW FOR VAR R%d (nextReg now %d, threshold %d)\n", ra.functionName, reg, ra.nextReg, VariableRegisterThreshold)
 		}
@@ -205,16 +241,13 @@ func (ra *RegisterAllocator) AllocContiguous(count int) Register {
 	firstReg := ra.nextReg
 
 	// Check if we have enough room
-	if int(firstReg)+count > 256 {
+	if int(firstReg)+count > registerLimit {
 		panic(registerExhaustionPanic{functionName: ra.functionName})
 	}
 
 	// Allocate the block
 	for i := 0; i < count; i++ {
-		reg := firstReg + Register(i)
-		if reg > ra.maxReg {
-			ra.maxReg = reg
-		}
+		ra.track(firstReg + Register(i))
 	}
 
 	ra.nextReg = firstReg + Register(count)
@@ -235,7 +268,7 @@ func (ra *RegisterAllocator) TryAllocContiguous(count int) (Register, bool) {
 	}
 	if count == 1 {
 		// Single register always possible unless we're at hard limit
-		if int(ra.nextReg) < 256 {
+		if int(ra.nextReg) < registerLimit {
 			return ra.Alloc(), true
 		}
 		if len(ra.freeRegs) > 0 {
@@ -262,10 +295,7 @@ func (ra *RegisterAllocator) TryAllocContiguous(count int) (Register, bool) {
 				// Remove these from free list and update maxReg
 				for j := 0; j < count; j++ {
 					regToRemove := firstReg + Register(j)
-					// Update maxReg to track highest register ever used
-					if regToRemove > ra.maxReg {
-						ra.maxReg = regToRemove
-					}
+					ra.track(regToRemove)
 					for k := 0; k < len(ra.freeRegs); k++ {
 						if ra.freeRegs[k] == regToRemove {
 							ra.freeRegs = append(ra.freeRegs[:k], ra.freeRegs[k+1:]...)
@@ -282,13 +312,10 @@ func (ra *RegisterAllocator) TryAllocContiguous(count int) (Register, bool) {
 	}
 
 	// Tail space from nextReg
-	if int(ra.nextReg)+count <= 256 {
+	if int(ra.nextReg)+count <= registerLimit {
 		firstReg := ra.nextReg
 		for i := 0; i < count; i++ {
-			reg := firstReg + Register(i)
-			if reg > ra.maxReg {
-				ra.maxReg = reg
-			}
+			ra.track(firstReg + Register(i))
 		}
 		ra.nextReg = firstReg + Register(count)
 		if debugRegAlloc {
@@ -301,9 +328,9 @@ func (ra *RegisterAllocator) TryAllocContiguous(count int) (Register, bool) {
 }
 
 // AvailableTotal returns the approximate number of registers that can still be allocated
-// without exceeding the 256 limit, counting both the tail and the free list.
+// without exceeding registerLimit, counting both the tail and the free list.
 func (ra *RegisterAllocator) AvailableTotal() int {
-	tail := 256 - int(ra.nextReg)
+	tail := registerLimit - int(ra.nextReg)
 	if tail < 0 {
 		tail = 0
 	}
@@ -311,10 +338,10 @@ func (ra *RegisterAllocator) AvailableTotal() int {
 }
 
 // MaxContiguousAvailable returns the maximum size of a contiguous block currently available
-// either in the free list or from the tail (nextReg..255).
+// either in the free list or from the tail (nextReg..254).
 func (ra *RegisterAllocator) MaxContiguousAvailable() int {
 	// Tail run size
-	maxRun := 256 - int(ra.nextReg)
+	maxRun := registerLimit - int(ra.nextReg)
 	if maxRun < 0 {
 		maxRun = 0
 	}
@@ -379,9 +406,7 @@ func (ra *RegisterAllocator) reserve(reg Register) {
 	// If beyond nextReg, advance nextReg
 	if reg >= ra.nextReg {
 		ra.nextReg = reg + 1
-		if reg > ra.maxReg {
-			ra.maxReg = reg
-		}
+		ra.track(reg)
 		if debugRegAlloc {
 			fmt.Printf("[REGALLOC] RESERVE R%d (advanced nextReg to %d)\n", reg, ra.nextReg)
 		}
@@ -397,7 +422,7 @@ func (ra *RegisterAllocator) Peek() Register {
 // MaxRegs returns the maximum register index allocated by this allocator + 1
 // (representing the number of register slots needed).
 func (ra *RegisterAllocator) MaxRegs() Register {
-	if ra.nextReg == 0 {
+	if !ra.usedAny {
 		if debugRegAlloc {
 			fmt.Printf("[REGALLOC] MaxRegs = 0 (no registers allocated)\n")
 		}
@@ -414,6 +439,7 @@ func (ra *RegisterAllocator) MaxRegs() Register {
 func (ra *RegisterAllocator) Reset() {
 	ra.nextReg = 0
 	ra.maxReg = 0
+	ra.usedAny = false
 	ra.freeRegs = ra.freeRegs[:0]             // Clear free list (keeps allocated capacity)
 	ra.pinnedRegs = make(map[Register]bool)   // Clear pinned registers
 	ra.capturedRegs = make(map[Register]bool) // Clear captured registers
