@@ -775,19 +775,19 @@ func vmValueToReflectValue(vmVal vm.Value, targetType reflect.Type) reflect.Valu
 		return reflect.ValueOf(vmVal.ToString())
 	case reflect.Float64:
 		if vmVal.IsNumber() {
-			return reflect.ValueOf(vmVal.AsFloat())
+			return reflect.ValueOf(vmVal.ToFloat())
 		}
 		return reflect.ValueOf(0.0)
 	case reflect.Float32:
 		if vmVal.IsNumber() {
-			return reflect.ValueOf(float32(vmVal.AsFloat()))
+			return reflect.ValueOf(float32(vmVal.ToFloat()))
 		}
 		return reflect.ValueOf(float32(0.0))
 	case reflect.Int, reflect.Int64:
 		if vmVal.IsNumber() {
-			return reflect.ValueOf(int64(vmVal.AsFloat()))
+			return reflect.ValueOf(int64(vmVal.ToFloat())).Convert(targetType)
 		}
-		return reflect.ValueOf(int64(0))
+		return reflect.Zero(targetType)
 	case reflect.Bool:
 		if vmVal.IsBoolean() {
 			return reflect.ValueOf(vmVal.AsBoolean())
@@ -836,7 +836,7 @@ func vmValueToReflectValue(vmVal vm.Value, targetType reflect.Type) reflect.Valu
 		case vmVal.IsString():
 			return reflect.ValueOf(vmVal.AsString())
 		case vmVal.IsNumber():
-			return reflect.ValueOf(vmVal.AsFloat())
+			return reflect.ValueOf(vmVal.ToFloat())
 		case vmVal.IsBoolean():
 			return reflect.ValueOf(vmVal.AsBoolean())
 		case vmVal.Type() == vm.TypeNull:
@@ -879,7 +879,7 @@ func vmValueToInterface(vmVal vm.Value) interface{} {
 	case vmVal.IsString():
 		return vmVal.AsString()
 	case vmVal.IsNumber():
-		return vmVal.AsFloat()
+		return vmVal.ToFloat()
 	case vmVal.IsBoolean():
 		return vmVal.AsBoolean()
 	case vmVal.Type() == vm.TypeNull:
@@ -1071,19 +1071,19 @@ func (vc *ValueConverter) convertVMValueToReflectValue(vmVal vm.Value, targetTyp
 		return reflect.ValueOf(vmVal.ToString())
 	case reflect.Float64:
 		if vmVal.IsNumber() {
-			return reflect.ValueOf(vmVal.AsFloat())
+			return reflect.ValueOf(vmVal.ToFloat())
 		}
 		return reflect.ValueOf(0.0)
 	case reflect.Float32:
 		if vmVal.IsNumber() {
-			return reflect.ValueOf(float32(vmVal.AsFloat()))
+			return reflect.ValueOf(float32(vmVal.ToFloat()))
 		}
 		return reflect.ValueOf(float32(0.0))
 	case reflect.Int, reflect.Int64:
 		if vmVal.IsNumber() {
-			return reflect.ValueOf(int64(vmVal.AsFloat()))
+			return reflect.ValueOf(int64(vmVal.ToFloat())).Convert(targetType)
 		}
-		return reflect.ValueOf(int64(0))
+		return reflect.Zero(targetType)
 	case reflect.Bool:
 		if vmVal.IsBoolean() {
 			return reflect.ValueOf(vmVal.AsBoolean())
