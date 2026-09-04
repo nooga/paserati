@@ -1606,6 +1606,19 @@ func initializeBuiltinsWithCustom(paserati *Paserati, initializers []builtins.Bu
 		}
 	}
 
+	// vmInstance.GlobalObject was created (in realm.InitializePrototypes) before
+	// this loop ran, chained to the placeholder Object.prototype that existed at
+	// that time. ObjectInitializer.InitRuntime above replaces vmInstance.ObjectPrototype
+	// wholesale with a brand-new object carrying the real methods (hasOwnProperty,
+	// toString, valueOf, ...) - GlobalObject's prototype link still points at the
+	// orphaned placeholder unless re-pointed here. Without this, bare references to
+	// Object.prototype methods (which fall back to a lookup on GlobalObject) report
+	// as absent even though `globalThis.hasOwnProperty` correctly resolves via a
+	// separate special case in property access. See #246.
+	if vmInstance.GlobalObject != nil && vmInstance.ObjectPrototype.IsObject() {
+		vmInstance.GlobalObject.SetPrototype(vmInstance.ObjectPrototype)
+	}
+
 	// Get builtin names and preallocate indices in the heap allocator
 	// IMPORTANT: Separate standard builtins from custom ones to ensure stable indices
 	// Standard builtins (from GetStandardInitializers) must have consistent indices
@@ -1681,6 +1694,20 @@ func (p *Paserati) InitializeRealmBuiltins(realm *vm.Realm, initializers []built
 				// Log error but continue - some initializers may fail in secondary realms
 				continue
 			}
+		}
+
+		// realm.GlobalObject was created (in realm.InitializePrototypes) chained to
+		// whatever placeholder Object.prototype existed at that time. The
+		// ObjectInitializer.InitRuntime call above replaces vmInstance.ObjectPrototype
+		// wholesale with a brand-new object carrying the real methods (hasOwnProperty,
+		// toString, valueOf, ...) - GlobalObject's prototype link still points at the
+		// orphaned placeholder unless re-pointed here, same root cause fixed for the
+		// main realm above in initializeBuiltinsWithCustom. Do this once, here,
+		// rather than in SyncPrototypesToRealm (called on every WithRealm exit),
+		// which would silently re-force the link over a legitimate later
+		// Object.setPrototypeOf(globalThis, ...) in this realm. See #246.
+		if realm.GlobalObject != nil && vmInstance.ObjectPrototype.IsObject() {
+			realm.GlobalObject.SetPrototype(vmInstance.ObjectPrototype)
 		}
 	})
 
