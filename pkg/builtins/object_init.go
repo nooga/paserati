@@ -1976,6 +1976,20 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				}
 			}
 		}
+	case vm.TypeBoundFunction:
+		// A bound function's own properties (whether from direct assignment
+		// or Object.assign) live on its side table same as a plain
+		// function's - this case was missing entirely, so Object.keys on a
+		// bound function always came back empty even after `bound.x = 1`
+		// (paserati#254).
+		bf := obj.AsBoundFunction()
+		if bf.Properties != nil {
+			for _, key := range bf.Properties.OwnKeys() {
+				if _, _, en, _, ok := bf.Properties.GetOwnDescriptor(key); ok && en {
+					keysArray.Append(vm.NewString(key))
+				}
+			}
+		}
 	}
 
 	return keys, nil
@@ -2361,6 +2375,16 @@ func objectValuesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				}
 			}
 		}
+	case vm.TypeBoundFunction:
+		bf := obj.AsBoundFunction()
+		if bf.Properties != nil {
+			for _, key := range bf.Properties.OwnKeys() {
+				if _, _, en, _, ok := bf.Properties.GetOwnDescriptor(key); ok && en {
+					value, _ := bf.Properties.GetOwn(key)
+					valuesArray.Append(value)
+				}
+			}
+		}
 	}
 
 	return values, nil
@@ -2471,6 +2495,19 @@ func objectEntriesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			for _, key := range closure.Properties.OwnKeys() {
 				if _, _, en, _, ok := closure.Properties.GetOwnDescriptor(key); ok && en {
 					value, _ := closure.Properties.GetOwn(key)
+					entry := vm.NewArray()
+					entry.AsArray().Append(vm.NewString(key))
+					entry.AsArray().Append(value)
+					entriesArray.Append(entry)
+				}
+			}
+		}
+	case vm.TypeBoundFunction:
+		bf := obj.AsBoundFunction()
+		if bf.Properties != nil {
+			for _, key := range bf.Properties.OwnKeys() {
+				if _, _, en, _, ok := bf.Properties.GetOwnDescriptor(key); ok && en {
+					value, _ := bf.Properties.GetOwn(key)
 					entry := vm.NewArray()
 					entry.AsArray().Append(vm.NewString(key))
 					entry.AsArray().Append(value)
@@ -2793,6 +2830,20 @@ func setObjectAssignTargetProperty(target vm.Value, key string, value vm.Value) 
 			}
 		} else {
 			arr.SetOwn(key, value)
+		}
+	case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
+		// Functions (plain, closures, natives, and bound functions) are
+		// ordinary callable objects to user code - Object.assign onto one
+		// used to match none of the branches above and silently drop every
+		// source property (paserati#254; the actual construction pattern
+		// @babel/template's public API uses: bind the callable, then
+		// Object.assign named sub-builders onto it). Their own properties
+		// live in a side table reached via EnsureOwnPropertiesTable, which
+		// allocates the table lazily the same way direct assignment
+		// (`fn.a = 1`) already does for these types - and lands the
+		// property enumerable, just like SetOwn does for TypeObject above.
+		if props := vm.EnsureOwnPropertiesTable(target); props != nil {
+			props.SetOwn(key, value)
 		}
 	}
 }
