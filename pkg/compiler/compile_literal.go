@@ -1639,6 +1639,44 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 				}
 			}
 
+			// Predefine top-level let/const bindings from remaining statements BEFORE
+			// OpInitYield too (#262). Regular (non-generator) function bodies get this
+			// via the general BlockStatement "pass 0" predefine step in compileNode,
+			// but a generator's body is compiled statement-by-statement here instead
+			// (to splice in OpInitYield at the right point), which skipped that pass
+			// entirely for let/const. Left unhandled, a body-local `const`/`let` had no
+			// entry in the generator's own symbol table until its declaration statement
+			// was compiled - so an *enclosing function's* same-named parameter or outer
+			// binding was found instead by the Resolve() calls compileConstStatement/
+			// compileLetStatement use to detect an already-predefined binding, and the
+			// body-local declaration silently wrote into (what it thought was) that
+			// existing register instead of ever defining its own local, leaving every
+			// read of the name resolve as a captured upvalue of the outer binding.
+			for _, stmt := range remainingStmts {
+				switch s := stmt.(type) {
+				case *parser.LetStatement:
+					for _, name := range parser.DeclaredNames(s) {
+						functionCompiler.predefineLexicalName(name, false, s.Token.Line)
+					}
+				case *parser.ConstStatement:
+					for _, name := range parser.DeclaredNames(s) {
+						functionCompiler.predefineLexicalName(name, true, s.Token.Line)
+					}
+				case *parser.ObjectDestructuringDeclaration:
+					if s.Token.Literal == "let" || s.Token.Literal == "const" {
+						for _, name := range extractDestructuringVarNames(s) {
+							functionCompiler.predefineLexicalName(name, s.Token.Literal == "const", s.Token.Line)
+						}
+					}
+				case *parser.ArrayDestructuringDeclaration:
+					if s.Token.Literal == "let" || s.Token.Literal == "const" {
+						for _, name := range extractArrayDestructuringVarNames(s) {
+							functionCompiler.predefineLexicalName(name, s.Token.Literal == "const", s.Token.Line)
+						}
+					}
+				}
+			}
+
 			// NOW emit OpInitYield after desugared parameters and var hoisting
 			functionCompiler.emitOpCode(vm.OpInitYield, node.Body.Token.Line)
 			debugPrintf("// [Generator] Emitted OpInitYield after %d desugared parameter declarations\n", desugarCount)
