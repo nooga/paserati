@@ -118,6 +118,10 @@ Remaining gaps:
 
 See [docs/bucketlist.md](docs/bucketlist.md) for the exhaustive yet messy feature inventory.
 
+For an implementation plan covering compiler and VM correctness, Go memory
+management, interpreter performance, and bounded development benchmarks, see the
+[production runtime roadmap](docs/runtime-production-roadmap.md).
+
 ### Contributing
 
 Seriously, why would you want to contribute to this? _…But if you do, I'm both terrified and thrilled. PRs and issues are welcome._
