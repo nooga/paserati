@@ -845,38 +845,45 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 // Returns the generated chunk and any errors encountered (including type errors).
 func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs []errors.PaseratiError) {
 	// Register exhaustion (RegisterAllocator.Alloc/AllocContiguous panicking
-	// once a function's 255-register budget is used up) is raised from
-	// hundreds of unchecked call sites throughout the compiler, so it isn't
-	// practical to thread a normal error return through all of them. Instead
-	// Alloc panics with a typed registerExhaustionPanic, and this top-level
-	// recover is the single place that turns it into an ordinary, catchable
-	// compile error instead of letting it unwind as a raw Go panic and take
-	// the whole process down (issue #239) - nested function literals are
-	// compiled synchronously within this same call (see newFunctionCompiler),
-	// so this one recover catches exhaustion at any nesting depth. Anything
-	// else re-panics unchanged: a real compiler bug (nil deref, index out of
-	// range, ...) should still fail loudly rather than be laundered into a
-	// generic "compile error".
+	// once a function's 255-register budget is used up) and constant-pool
+	// exhaustion (Chunk.AddConstant panicking once a chunk's 65,536-entry
+	// pool is full, A5) are both raised from hundreds of unchecked call sites
+	// throughout the compiler, so it isn't practical to thread a normal error
+	// return through all of them. Instead each condition panics with its own
+	// typed value, and this top-level recover is the single place that turns
+	// either into an ordinary, catchable compile error instead of letting it
+	// unwind as a raw Go panic and take the whole process down (issue #239) -
+	// nested function literals are compiled synchronously within this same
+	// call (see newFunctionCompiler), so this one recover catches either at
+	// any nesting depth. Anything else re-panics unchanged: a real compiler
+	// bug (nil deref, index out of range, ...) should still fail loudly
+	// rather than be laundered into a generic "compile error".
 	defer func() {
-		if r := recover(); r != nil {
-			exhaustion, ok := r.(registerExhaustionPanic)
-			if !ok {
-				panic(r)
-			}
-			msg := "register exhaustion: expression too deeply nested"
-			if exhaustion.functionName != "" {
-				msg = fmt.Sprintf("%s (in function %q)", msg, exhaustion.functionName)
-			}
-			var src *source.SourceFile
-			if c.chunk != nil {
-				src = c.chunk.Source
-			}
-			resultChunk = nil
-			resultErrs = []errors.PaseratiError{&errors.CompileError{
-				Position: errors.Position{Line: c.line, Source: src},
-				Msg:      msg,
-			}}
+		r := recover()
+		if r == nil {
+			return
 		}
+		var msg string
+		switch p := r.(type) {
+		case registerExhaustionPanic:
+			msg = "register exhaustion: expression too deeply nested"
+			if p.functionName != "" {
+				msg = fmt.Sprintf("%s (in function %q)", msg, p.functionName)
+			}
+		case vm.ConstantPoolExhaustionPanic:
+			msg = fmt.Sprintf("compile error: %s", p.Error())
+		default:
+			panic(r)
+		}
+		var src *source.SourceFile
+		if c.chunk != nil {
+			src = c.chunk.Source
+		}
+		resultChunk = nil
+		resultErrs = []errors.PaseratiError{&errors.CompileError{
+			Position: errors.Position{Line: c.line, Source: src},
+			Msg:      msg,
+		}}
 	}()
 
 	// --- Type Checking Step ---

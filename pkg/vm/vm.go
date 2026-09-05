@@ -248,10 +248,6 @@ type VM struct {
 	// This is used by OpSetGlobal to determine if a deleted property error should be thrown
 	globalsFromGlobalObject map[uint16]bool
 
-	// Singleton empty array for rest parameters optimization
-	// Used when variadic functions are called with no extra arguments
-	emptyRestArray Value
-
 	// Built-in prototypes owned by this VM
 	ObjectPrototype               Value
 	FunctionPrototype             Value
@@ -522,7 +518,6 @@ func NewVM() *VM {
 		registerStack:           make([]Value, RegFileSize*MaxFrames), // VM-wide register file (never reallocated)
 		propCache:               make(map[int]*PropInlineCache),       // Initialize inline cache
 		cacheStats:              ICacheStats{},                        // Initialize cache statistics
-		emptyRestArray:          NewArray(),                           // Initialize singleton empty array for rest params
 		errors:                  make([]errors.PaseratiError, 0),      // Initialize error list
 		moduleContexts:          make(map[string]*ModuleContext),      // Initialize module context cache
 		completionStack:         make([]Completion, 0, 4),             // Initialize completion stack
@@ -3885,7 +3880,7 @@ startExecution:
 						extraArgCount := argCount - calleeFunc.Arity
 						var restArray Value
 						if extraArgCount <= 0 {
-							restArray = vm.emptyRestArray
+							restArray = NewArray()
 						} else {
 							restArray = NewArray()
 							restArrayObj := restArray.AsArray()
@@ -4106,7 +4101,7 @@ startExecution:
 						extraArgCount := argCount - calleeFunc.Arity
 						var restArray Value
 						if extraArgCount <= 0 {
-							restArray = vm.emptyRestArray
+							restArray = NewArray()
 						} else {
 							restArray = NewArray()
 							restArrayObj := restArray.AsArray()
@@ -11136,7 +11131,7 @@ startExecution:
 					var restArray Value
 
 					if extraArgCount == 0 {
-						restArray = vm.emptyRestArray
+						restArray = NewArray()
 					} else {
 						restArray = NewArray()
 						restArrayObj := restArray.AsArray()
@@ -11371,7 +11366,7 @@ startExecution:
 					var restArray Value
 
 					if extraArgCount == 0 {
-						restArray = vm.emptyRestArray
+						restArray = NewArray()
 					} else {
 						restArray = NewArray()
 						restArrayObj := restArray.AsArray()
@@ -11842,7 +11837,7 @@ startExecution:
 						extraArgCount := finalArgCount - constructorFunc.Arity
 						var restArray Value
 						if extraArgCount <= 0 {
-							restArray = vm.emptyRestArray
+							restArray = NewArray()
 						} else {
 							restArray = NewArray()
 							restArrayObj := restArray.AsArray()
@@ -13981,7 +13976,7 @@ startExecution:
 					frame.registers[i] = Undefined
 				}
 				if calleeFunc.Variadic && calleeFunc.Arity < len(frame.registers) && argCount <= calleeFunc.Arity {
-					frame.registers[calleeFunc.Arity] = vm.emptyRestArray
+					frame.registers[calleeFunc.Arity] = NewArray()
 				}
 
 				// Switch to new frame
@@ -14048,7 +14043,7 @@ startExecution:
 					frame.registers[i] = Undefined
 				}
 				if calleeFunc.Variadic && calleeFunc.Arity < len(frame.registers) && argCount <= calleeFunc.Arity {
-					frame.registers[calleeFunc.Arity] = vm.emptyRestArray
+					frame.registers[calleeFunc.Arity] = NewArray()
 				}
 
 				// Switch to new frame

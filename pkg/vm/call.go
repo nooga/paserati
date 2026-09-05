@@ -420,12 +420,12 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			// extraArgCount is negative when called with fewer arguments than
 			// the non-rest parameter count (now legal - see the arity-checking
 			// comment above, paserati#170) - treat that the same as exactly
-			// zero extra arguments: an empty rest array, reusing the shared
-			// one rather than falling into the loop below with a negative
-			// bound (which happens to still produce an empty array, just via
-			// an unnecessary fresh allocation).
+			// zero extra arguments: an empty rest array. Each call must get a
+			// fresh, independently identifiable array (paserati A4) - a shared
+			// singleton here would let one call's mutation of its rest array
+			// leak into every other call's.
 			if extraArgCount <= 0 {
-				restArray = vm.emptyRestArray
+				restArray = NewArray()
 			} else {
 				restArray = NewArray()
 				restArrayObj := restArray.AsArray()

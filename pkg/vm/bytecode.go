@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/source"
@@ -828,7 +829,17 @@ type Chunk struct {
 	// Constant deduplication caches for O(1) lookup (avoids O(n) linear search)
 	stringConstCache map[string]uint16  // Cache for string constants
 	intConstCache    map[int64]uint16   // Cache for integer constants
-	floatConstCache  map[float64]uint16 // Cache for float constants
+	// floatConstCache is keyed by the constant's raw IEEE-754 bit pattern,
+	// not the float64 itself: Go's built-in float equality (and so its map
+	// key equality) treats +0.0 == -0.0 as true and NaN == NaN as always
+	// false. A plain float64 key would therefore alias -0 constants onto an
+	// existing +0 entry (a silent wrong-value bug - see A5's dedup
+	// acceptance criteria) while making every NaN constant uncacheable
+	// (harmless before the pool had a hard cap; now it needlessly spends
+	// slots against constantPoolCapacity). Bit-pattern keys make both
+	// distinctions exact and let repeated identical NaN literals dedup
+	// normally.
+	floatConstCache map[uint64]uint16
 }
 
 // GetLine returns the source line number corresponding to a given bytecode offset.
@@ -890,10 +901,42 @@ func (c *Chunk) WriteUint16(val uint16) {
 	c.Lines = append(c.Lines, c.currentLine)
 }
 
+// constantPoolCapacity is the number of distinct constants a chunk can hold:
+// LoadConst and friends address the pool with a uint16 operand, so indices
+// 0..65535 are representable and a 65,537th distinct entry is not (A5).
+const constantPoolCapacity = 65536
+
+// ConstantPoolExhaustionPanic is the panic value AddConstant raises when a
+// chunk's constant pool is already at constantPoolCapacity and a genuinely
+// new (non-duplicate) constant is requested. It is a distinct, exported type
+// so a caller in another package - the compiler's top-level recover in
+// Compile() - can identify it specifically and turn it into a normal,
+// catchable errors.PaseratiError instead of either crashing the process or
+// (the bug this replaces) silently narrowing the overflowed index back into
+// uint16 range and returning the wrong existing constant. AddConstant is
+// called from well over a hundred unchecked compiler call sites, so
+// panicking here - rather than threading an error return through all of
+// them - mirrors regalloc.go's registerExhaustionPanic for the same reason.
+type ConstantPoolExhaustionPanic struct {
+	// Capacity is the pool's fixed capacity (constantPoolCapacity) at the
+	// time of the panic, included so callers don't need to import the
+	// unexported constant to report a useful message.
+	Capacity int
+}
+
+func (p ConstantPoolExhaustionPanic) Error() string {
+	return fmt.Sprintf("too many distinct constants in one chunk: exceeds the %d-entry limit addressable by a constant-pool index", p.Capacity)
+}
+
 // AddConstant adds a value to the chunk's constant pool and returns its index.
 // Returns a uint16 as we might need more than 256 constants.
-// Deduplicates constants to avoid storing the same value multiple times.
+// Deduplicates constants to avoid storing the same value multiple times: an
+// already-present constant is always returned from cache/scan, even once the
+// pool is at capacity, so filling the pool cannot break code that only
+// re-references constants it already emitted.
 // Uses type-specific caches for O(1) lookup of common types (strings, integers, floats).
+// Panics with ConstantPoolExhaustionPanic (see above) if a genuinely new
+// constant would push the pool past constantPoolCapacity.
 func (c *Chunk) AddConstant(v Value) uint16 {
 	// Fast path: use type-specific caches for common types
 	switch v.Type() {
@@ -904,6 +947,7 @@ func (c *Chunk) AddConstant(v Value) uint16 {
 		} else if idx, exists := c.stringConstCache[s]; exists {
 			return idx
 		}
+		c.checkConstantPoolCapacity()
 		// Add new constant
 		c.Constants = append(c.Constants, v)
 		idx := uint16(len(c.Constants) - 1)
@@ -917,32 +961,31 @@ func (c *Chunk) AddConstant(v Value) uint16 {
 		} else if idx, exists := c.intConstCache[i]; exists {
 			return idx
 		}
+		c.checkConstantPoolCapacity()
 		c.Constants = append(c.Constants, v)
 		idx := uint16(len(c.Constants) - 1)
 		c.intConstCache[i] = idx
 		return idx
 
 	case TypeFloatNumber:
-		f := v.AsFloat()
+		bits := math.Float64bits(v.AsFloat())
 		if c.floatConstCache == nil {
-			c.floatConstCache = make(map[float64]uint16)
-		} else if idx, exists := c.floatConstCache[f]; exists {
+			c.floatConstCache = make(map[uint64]uint16)
+		} else if idx, exists := c.floatConstCache[bits]; exists {
 			return idx
 		}
+		c.checkConstantPoolCapacity()
 		c.Constants = append(c.Constants, v)
 		idx := uint16(len(c.Constants) - 1)
-		c.floatConstCache[f] = idx
+		c.floatConstCache[bits] = idx
 		return idx
 
 	case TypeDictObject:
 		// Skip deduplication for DictObject to avoid memory corruption issues
 		// (DictObjects like enums are typically unique anyway)
+		c.checkConstantPoolCapacity()
 		c.Constants = append(c.Constants, v)
-		idx := len(c.Constants) - 1
-		if idx > 65535 {
-			panic("Too many constants in one chunk.")
-		}
-		return uint16(idx)
+		return uint16(len(c.Constants) - 1)
 	}
 
 	// Fallback: linear search for other types (functions, objects, etc.)
@@ -953,12 +996,19 @@ func (c *Chunk) AddConstant(v Value) uint16 {
 	}
 
 	// Constant doesn't exist, add it
+	c.checkConstantPoolCapacity()
 	c.Constants = append(c.Constants, v)
-	idx := len(c.Constants) - 1
-	if idx > 65535 {
-		panic("Too many constants in one chunk.")
+	return uint16(len(c.Constants) - 1)
+}
+
+// checkConstantPoolCapacity panics with ConstantPoolExhaustionPanic if the
+// pool is already full. Call immediately before appending a confirmed-new
+// constant - never after, which would let a 65,537th entry get appended (and
+// so be observably reachable by a stale index range) before the check fires.
+func (c *Chunk) checkConstantPoolCapacity() {
+	if len(c.Constants) >= constantPoolCapacity {
+		panic(ConstantPoolExhaustionPanic{Capacity: constantPoolCapacity})
 	}
-	return uint16(idx)
 }
 
 // --- Disassembly ---

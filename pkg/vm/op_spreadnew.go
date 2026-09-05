@@ -41,7 +41,7 @@ func populateSpreadCallRegisters(vmInstance *VM, calleeFunc *FunctionObject, spr
 		extraArgCount := argCount - calleeFunc.Arity
 		var restArray Value
 		if extraArgCount <= 0 {
-			restArray = vmInstance.emptyRestArray
+			restArray = NewArray()
 		} else {
 			restArray = NewArray()
 			restArrayObj := restArray.AsArray()
