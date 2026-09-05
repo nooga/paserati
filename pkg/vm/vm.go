@@ -1500,6 +1500,35 @@ func (vm *VM) run() (status InterpretResult, resultValue Value) {
 			}
 			stack := debug.Stack()
 			fmt.Fprintf(os.Stderr, "[VM PANIC] recovered: %v\n%s", r, stack)
+			// #276: a panic shaped like "index out of range [N] with length M"
+			// here almost always means the CURRENT frame's register window
+			// (length M, always exactly its function's RegisterSize - see
+			// the allocation sites in call.go/async.go/vm.go, none of which
+			// ever pad or shrink it) is too small for the bytecode actually
+			// executing against it - i.e. a compiler register-count
+			// under-count for that specific function, not a VM bookkeeping
+			// bug. Dump the offending frame's identity so a future
+			// recurrence is immediately actionable instead of requiring a
+			// fresh multi-hour investigation like #276's own.
+			if vm.frameCount > 0 {
+				pf := &vm.frames[vm.frameCount-1]
+				fnName := "<unknown>"
+				var regSize, allocSize int
+				var isGen, isAsync bool
+				if pf.closure != nil && pf.closure.Fn != nil {
+					fnName = pf.closure.Fn.Name
+					regSize = pf.closure.Fn.RegisterSize
+					isGen = pf.closure.Fn.IsGenerator
+					isAsync = pf.closure.Fn.IsAsync
+				}
+				allocSize = pf.allocatedRegSize
+				fmt.Fprintf(os.Stderr,
+					"[VM PANIC] frame#%d func=%q RegisterSize=%d allocatedRegSize=%d ip=%d isGenerator=%v isAsync=%v generatorObj=%v promiseObj=%v\n",
+					vm.frameCount-1, fnName, regSize, allocSize, pf.ip, isGen, isAsync, pf.generatorObj != nil, pf.promiseObj != nil)
+				if pf.closure != nil && pf.closure.Fn != nil && pf.closure.Fn.Chunk != nil {
+					fmt.Fprintf(os.Stderr, "[VM PANIC] chunk disassembly:\n%s\n", pf.closure.Fn.Chunk.DisassembleChunk(fnName))
+				}
+			}
 			// vm.runtimeError() reads current frame/chunk state to attach a
 			// source position; if the panic itself corrupted that state,
 			// runtimeError could panic in turn. Guard against that so a
@@ -19329,6 +19358,26 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 		genObj.State = GeneratorCompleted
 		genObj.Done = true
 		genObj.Frame = nil
+		// Unlike this function's other early returns above, this path
+		// previously left vm.frameCount/vm.nextRegSlot untouched - a real
+		// leak, distinct from #276's register-undercount panic, flagged in
+		// #276's own investigation but not itself the cause of that crash
+		// (a leak displaces future allocations, it can't shrink a frame's
+		// own window). Left unreclaimed, the generator+sentinel frames this
+		// call pushed stay "allocated" forever from the VM's point of view,
+		// visible only as accumulating register-stack/frame-stack pressure
+		// under repeated failed .throw() calls. Mirror resumeGenerator's own
+		// error-path cleanup so this call leaves the stack exactly as it
+		// found it, matching every other return in this function.
+		if vm.frameCount > 0 {
+			vm.frameCount--
+			if vm.frameCount > 0 {
+				vm.nextRegSlot -= regSize
+			}
+		}
+		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+			vm.frameCount--
+		}
 		if vm.currentException != Null {
 			return Undefined, exceptionError{exception: vm.currentException}
 		}
@@ -19510,6 +19559,26 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 				status, result.ToString(), vm.currentException.ToString())
 		}
 		if status == InterpretRuntimeError {
+			// An error while running the finally/iterator-cleanup handler
+			// completes the generator (per resumeGeneratorWithException's
+			// identical handling) - this path previously left genObj.State
+			// as GeneratorExecuting forever and leaked the generator+sentinel
+			// frames this call pushed (same leak class as
+			// resumeGeneratorWithException's error path, see its comment;
+			// distinct from and not the cause of #276's register-undercount
+			// panic).
+			genObj.State = GeneratorCompleted
+			genObj.Done = true
+			genObj.Frame = nil
+			if vm.frameCount > 0 {
+				vm.frameCount--
+				if vm.frameCount > 0 {
+					vm.nextRegSlot -= regSize
+				}
+			}
+			if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
+				vm.frameCount--
+			}
 			// vm.run() returns the exception as the result value
 			if result != Null && result != Undefined {
 				if debugExceptions {
