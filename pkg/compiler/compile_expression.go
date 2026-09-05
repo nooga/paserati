@@ -1933,13 +1933,13 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 			// Check if this is delete super.property - this must throw ReferenceError
 			if _, isSuper := operand.Object.(*parser.SuperExpression); isSuper {
 				// delete super.property always throws ReferenceError per ECMAScript spec
-				errorReg := c.regAlloc.Alloc()
-				tempRegs = append(tempRegs, errorReg)
+				// OpCall reads its argument from errorReg+1: allocate the pair contiguously.
+				errorReg := c.regAlloc.AllocContiguous(2)
+				msgReg := errorReg + 1
+				tempRegs = append(tempRegs, errorReg, msgReg)
 				refErrorGlobalIdx := c.GetOrAssignGlobalIndex("ReferenceError")
 				c.emitGetGlobal(errorReg, refErrorGlobalIdx, node.Token.Line)
 
-				msgReg := c.regAlloc.Alloc()
-				tempRegs = append(tempRegs, msgReg)
 				msgConstIdx := c.chunk.AddConstant(vm.String("Unsupported reference to 'super'"))
 				c.emitLoadConstant(msgReg, msgConstIdx, node.Token.Line)
 
@@ -1967,13 +1967,13 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 			// Check if this is delete super[key] - this must throw ReferenceError
 			if _, isSuper := operand.Left.(*parser.SuperExpression); isSuper {
 				// delete super[key] always throws ReferenceError per ECMAScript spec
-				errorReg := c.regAlloc.Alloc()
-				tempRegs = append(tempRegs, errorReg)
+				// OpCall reads its argument from errorReg+1: allocate the pair contiguously.
+				errorReg := c.regAlloc.AllocContiguous(2)
+				msgReg := errorReg + 1
+				tempRegs = append(tempRegs, errorReg, msgReg)
 				refErrorGlobalIdx := c.GetOrAssignGlobalIndex("ReferenceError")
 				c.emitGetGlobal(errorReg, refErrorGlobalIdx, node.Token.Line)
 
-				msgReg := c.regAlloc.Alloc()
-				tempRegs = append(tempRegs, msgReg)
 				msgConstIdx := c.chunk.AddConstant(vm.String("Unsupported reference to 'super'"))
 				c.emitLoadConstant(msgReg, msgConstIdx, node.Token.Line)
 
@@ -3960,15 +3960,18 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 	// 5. Loop: call iterator.next(sentValue) and yield the result
 	loopStart := len(c.chunk.Code)
 
-	// Get iterator.next method
-	nextMethodReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, nextMethodReg)
+	// Get iterator.next method. OpCallMethod reads its arguments from funcReg+1
+	// onwards, so the method register and the argument register MUST be
+	// adjacent. Two separate Alloc() calls do not guarantee that: Alloc() pops
+	// a LIFO free list, so once earlier statements in the generator have freed
+	// registers, the "argument" would be read from whatever stale value happens
+	// to live at nextMethodReg+1 (#267).
+	nextMethodReg := c.regAlloc.AllocContiguous(2)
+	argReg := nextMethodReg + 1
+	tempRegs = append(tempRegs, nextMethodReg, argReg)
 	nextConstIdx := c.chunk.AddConstant(vm.String("next"))
 	c.emitGetProp(nextMethodReg, iteratorReg, nextConstIdx, node.Token.Line)
 
-	// Allocate argument register for the call (must be nextMethodReg+1 per calling convention)
-	argReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, argReg)
 	// Copy sentValue into the argument register
 	c.emitOpCode(vm.OpMove, node.Token.Line)
 	c.emitByte(byte(argReg))
