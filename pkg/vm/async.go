@@ -134,17 +134,34 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	frame.isSentinelFrame = false  // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
 	frame.promiseObj = promiseObj  // Link frame to promise object - critical for OpAwait!
 	frame.generatorObj = nil       // Clear generator object when reusing frame
+	// frame.args is the field OpGetArguments actually reads to build the
+	// `arguments` object (frame.argCount only sizes the register-copy loop
+	// below) - see its "args were copied when the frame was created in
+	// prepareCall" comment in vm.go. prepareCall (call.go) and every other
+	// frame-setup path sets this; this hand-built one previously didn't, so
+	// it stayed at whatever `frame.args` slice (or nil) was left by the last
+	// call to reuse this physical vm.frames[N] slot - independent of the
+	// correctly-set argCount/registers, so an async function's own
+	// `arguments.length` always read as if called with the *previous*
+	// occupant's argument count (typically 0, since a freshly-extended
+	// vm.frames backing array zero-initializes every field). Set from the
+	// same `args` this function already copies into registers, before
+	// anything could mutate it.
+	frame.args = args
+	// Store original callee for arguments.callee, mirroring prepareCall.
+	// calleeVal is this function's own top-level parameter, not
+	// necessarily the same value prepareCallWithGeneratorMode's two separate
+	// calleeVal/originalCallee parameters would use on every path - verified
+	// directly for both a plain call and a bound call (arguments.callee must
+	// name the original target, not the bound wrapper) in
+	// pkg/driver/async_arguments_length_test.go's TestAsyncFunctionArgumentsCallee.
+	frame.calleeValue = calleeVal
 	// Clear any stale cached `arguments` object left behind by whatever call
 	// last occupied this frame slot, for the same reuse-by-index reason as
 	// openUpvalues below: every other fresh-frame setup (prepareCall,
 	// op_spreadnew.go, every resumeGenerator*/resumeAsyncFunction* resume)
 	// explicitly resets this to Undefined, and this hand-built setup is the
-	// one path that historically didn't. Not independently confirmed
-	// reachable right now - a separate, pre-existing bug makes
-	// `arguments.length` read 0 inside every async function regardless of
-	// this field, which masks the staleness this would otherwise cause - but
-	// that bug is no reason to leave the same reset gap here that the
-	// openUpvalues comment already documents for this exact function.
+	// one path that historically didn't.
 	frame.argumentsObject = Undefined
 	// Clear any stale open-upvalue chain left behind by whatever call last
 	// occupied this frame slot. Every other fresh-frame setup does this
