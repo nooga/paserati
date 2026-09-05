@@ -1149,9 +1149,10 @@ func (ts *TryStatement) String() string {
 
 // CatchClause represents a catch block.
 type CatchClause struct {
-	Token     *lexer.Token    // The 'catch' token
-	Parameter Expression      // Exception variable: identifier or destructuring pattern (optional in ES2019+)
-	Body      *BlockStatement // The catch block
+	Token          *lexer.Token    // The 'catch' token
+	Parameter      Expression      // Exception variable: identifier or destructuring pattern (optional in ES2019+)
+	TypeAnnotation Expression      // Optional TS annotation on the binding: catch (e: unknown). Only any/unknown are legal (TS1196).
+	Body           *BlockStatement // The catch block
 }
 
 func (cc *CatchClause) String() string {
@@ -1160,6 +1161,10 @@ func (cc *CatchClause) String() string {
 	if cc.Parameter != nil {
 		out.WriteString(" (")
 		out.WriteString(cc.Parameter.String())
+		if cc.TypeAnnotation != nil {
+			out.WriteString(": ")
+			out.WriteString(cc.TypeAnnotation.String())
+		}
 		out.WriteString(")")
 	}
 	out.WriteString(" ")

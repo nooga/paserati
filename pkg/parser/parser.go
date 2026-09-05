@@ -10245,6 +10245,17 @@ func (p *Parser) parseCatchClause() *CatchClause {
 			return nil
 		}
 
+		// Optional TypeScript type annotation: catch (e: unknown) / catch ({ message }: any).
+		// The checker restricts it to 'any' or 'unknown' (TS1196).
+		if p.peekTokenIs(lexer.COLON) {
+			p.nextToken() // Consume ':'
+			p.nextToken() // Move to the start of the type expression
+			clause.TypeAnnotation = p.parseTypeExpression()
+			if clause.TypeAnnotation == nil {
+				return nil
+			}
+		}
+
 		if !p.expectPeek(lexer.RPAREN) {
 			return nil // Expected ')' after catch parameter
 		}
