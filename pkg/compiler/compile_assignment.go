@@ -868,12 +868,16 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					}
 					minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 					c.emitClosure(rhsValueReg, funcConstIndex, minimalFuncLit, freeSymbols)
-				} else if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
-					// Anonymous function literal - set name before compilation
-					if funcLit.Name == nil || funcLit.Name.Value == "" {
-						funcLit.Name = &parser.Identifier{Token: funcLit.Token, Value: nameHint}
+				} else if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok && (funcLit.Name == nil || funcLit.Name.Value == "") {
+					// Anonymous function literal - infer .name from the target via nameHint.
+					// Do NOT mutate funcLit.Name: that would create a named-function-expression
+					// self-binding, so `f = function() { return f }` would see the closure
+					// itself instead of the (possibly reassigned) outer `f` (#265).
+					funcConstIndex, freeSymbols, compileErr := c.compileFunctionLiteral(funcLit, nameHint)
+					if compileErr != nil {
+						return BadRegister, compileErr
 					}
-					_, err = c.compileNode(node.Value, rhsValueReg)
+					c.emitClosure(rhsValueReg, funcConstIndex, funcLit, freeSymbols)
 				} else if classExpr, ok := node.Value.(*parser.ClassExpression); ok {
 					// Anonymous class expression - set inferred name before compilation
 					// Use __Inferred__ prefix so compileClassExpression doesn't create inner binding
@@ -996,12 +1000,16 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					}
 					minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 					c.emitClosure(rhsValueReg, funcConstIndex, minimalFuncLit, freeSymbols)
-				} else if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok {
-					// Anonymous function literal - set name before compilation
-					if funcLit.Name == nil || funcLit.Name.Value == "" {
-						funcLit.Name = &parser.Identifier{Token: funcLit.Token, Value: nameHint}
+				} else if funcLit, ok := node.Value.(*parser.FunctionLiteral); ok && (funcLit.Name == nil || funcLit.Name.Value == "") {
+					// Anonymous function literal - infer .name from the target via nameHint.
+					// Do NOT mutate funcLit.Name: that would create a named-function-expression
+					// self-binding, so `f = function() { return f }` would see the closure
+					// itself instead of the (possibly reassigned) outer `f` (#265).
+					funcConstIndex, freeSymbols, compileErr := c.compileFunctionLiteral(funcLit, nameHint)
+					if compileErr != nil {
+						return BadRegister, compileErr
 					}
-					_, err = c.compileNode(node.Value, rhsValueReg)
+					c.emitClosure(rhsValueReg, funcConstIndex, funcLit, freeSymbols)
 				} else if classExpr, ok := node.Value.(*parser.ClassExpression); ok {
 					// Anonymous class expression - set inferred name before compilation
 					// Use __Inferred__ prefix so compileClassExpression doesn't create inner binding
