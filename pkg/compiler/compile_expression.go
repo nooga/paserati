@@ -480,6 +480,31 @@ func (c *Compiler) compileOptionalContinuationWithReceiver(cont parser.Expressio
 			}
 		}
 
+		// If any argument uses spread syntax (e.g. obj?.method(...args)), the fixed
+		// contiguous-register calling convention below can't represent it - the spread's
+		// runtime-expanded length isn't known at compile time. Build an arguments array
+		// at runtime instead and use the spread call opcodes, mirroring compileMultiSpreadCall.
+		if c.hasSpreadArgument(node.Arguments) {
+			arrayReg := c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, arrayReg)
+
+			arrayLiteral := &parser.ArrayLiteral{
+				Elements: node.Arguments,
+				Token:    node.Token,
+			}
+			_, err := c.compileArrayLiteral(arrayLiteral, arrayReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			if isFirstCall && receiverReg != BadRegister {
+				c.emitSpreadCallMethod(hint, funcReg, receiverReg, arrayReg, line)
+			} else {
+				c.emitSpreadCall(hint, funcReg, arrayReg, line)
+			}
+			return hint, nil
+		}
+
 		// Compile arguments
 		argCount := len(node.Arguments)
 		blockSize := 1 + argCount
