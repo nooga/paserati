@@ -134,6 +134,18 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	frame.isSentinelFrame = false  // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
 	frame.promiseObj = promiseObj  // Link frame to promise object - critical for OpAwait!
 	frame.generatorObj = nil       // Clear generator object when reusing frame
+	// Clear any stale cached `arguments` object left behind by whatever call
+	// last occupied this frame slot, for the same reuse-by-index reason as
+	// openUpvalues below: every other fresh-frame setup (prepareCall,
+	// op_spreadnew.go, every resumeGenerator*/resumeAsyncFunction* resume)
+	// explicitly resets this to Undefined, and this hand-built setup is the
+	// one path that historically didn't. Not independently confirmed
+	// reachable right now - a separate, pre-existing bug makes
+	// `arguments.length` read 0 inside every async function regardless of
+	// this field, which masks the staleness this would otherwise cause - but
+	// that bug is no reason to leave the same reset gap here that the
+	// openUpvalues comment already documents for this exact function.
+	frame.argumentsObject = Undefined
 	// Clear any stale open-upvalue chain left behind by whatever call last
 	// occupied this frame slot. Every other fresh-frame setup does this
 	// (prepareCall's regular path, every sentinelFrame reuse, every
@@ -176,11 +188,51 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 		frame.registers[i] = Undefined
 	}
 
-	// Set up arguments in registers
-	frame.argCount = len(args)
-	for i, arg := range args {
-		if i < len(frame.registers) {
-			frame.registers[i] = arg
+	// Set up arguments in registers. Mirrors prepareCall's argument-copying
+	// and variadic-handling logic specifically (call.go), not its full frame
+	// setup - this path builds its frame by hand instead of going through
+	// prepareCall (see the openUpvalues comment above for why), so it must
+	// independently reproduce prepareCall's variadic handling too.
+	// It previously didn't: a rest-only async function (e.g. `async
+	// function f(...args) {}`) called with fewer arguments than its arity
+	// left the rest-parameter register at its zeroed Undefined default
+	// instead of an empty array, since nothing here ever checked
+	// funcObj.Variadic. `await f()` observed `undefined` where `[]` was
+	// expected.
+	argCount := len(args)
+	frame.argCount = argCount
+	maxArgsToCopy := argCount
+	if funcObj.Arity > maxArgsToCopy {
+		maxArgsToCopy = funcObj.Arity
+	}
+	if maxArgsToCopy > len(frame.registers) {
+		maxArgsToCopy = len(frame.registers)
+	}
+	for i := 0; i < maxArgsToCopy; i++ {
+		if i < argCount {
+			frame.registers[i] = args[i]
+		} else {
+			frame.registers[i] = Undefined
+		}
+	}
+
+	if funcObj.Variadic {
+		extraArgCount := argCount - funcObj.Arity
+		var restArray Value
+		if extraArgCount <= 0 {
+			restArray = NewArray()
+		} else {
+			restArray = NewArray()
+			restArrayObj := restArray.AsArray()
+			for i := 0; i < extraArgCount; i++ {
+				argIndex := funcObj.Arity + i
+				if argIndex < len(args) {
+					restArrayObj.Append(args[argIndex])
+				}
+			}
+		}
+		if funcObj.Arity < len(frame.registers) {
+			frame.registers[funcObj.Arity] = restArray
 		}
 	}
 
