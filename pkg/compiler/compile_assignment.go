@@ -3008,13 +3008,14 @@ func (c *Compiler) compileObjectDestructuringDeclaration(node *parser.ObjectDest
 	notNullJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, checkReg, line)
 
 	// Throw TypeError: Cannot destructure null
-	errorReg := c.regAlloc.Alloc()
+	// OpCall reads its argument from errorReg+1: allocate the pair contiguously.
+	errorReg := c.regAlloc.AllocContiguous(2)
+	msgReg := errorReg + 1
 	defer c.regAlloc.Free(errorReg)
+	defer c.regAlloc.Free(msgReg)
 	typeErrorGlobalIdx := c.GetOrAssignGlobalIndex("TypeError")
 	c.emitGetGlobal(errorReg, typeErrorGlobalIdx, line)
 
-	msgReg := c.regAlloc.Alloc()
-	defer c.regAlloc.Free(msgReg)
 	msgConstIdx := c.chunk.AddConstant(vm.String("Cannot destructure 'null'"))
 	c.emitLoadConstant(msgReg, msgConstIdx, line)
 
