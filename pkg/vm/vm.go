@@ -3425,8 +3425,20 @@ startExecution:
 					// Native functions don't have custom properties but inherit from FunctionPrototype
 					hasProperty = vm.hasFunctionPrototypeProperty(propKey)
 				case TypeBoundFunction:
-					// Bound functions inherit from FunctionPrototype
-					hasProperty = vm.hasFunctionPrototypeProperty(propKey)
+					// Bound functions can have their own properties (in
+					// bf.Properties, e.g. from direct assignment or
+					// Object.assign - paserati#254) before falling back to
+					// FunctionPrototype. This own-properties check was
+					// missing entirely, so for-in's per-key re-verification
+					// ("is this key still present?") always failed for a
+					// bound function and silently dropped every key that
+					// OpGetOwnKeys had just found.
+					bf := objVal.AsBoundFunction()
+					if bf.Properties != nil && bf.Properties.Has(propKey) {
+						hasProperty = true
+					} else {
+						hasProperty = vm.hasFunctionPrototypeProperty(propKey)
+					}
 				case TypeSet:
 					// Set: check own property "size", then prototype chain
 					if propKey == "size" {
@@ -14192,6 +14204,32 @@ startExecution:
 				if closure.Properties != nil {
 					seen := make(map[string]bool)
 					cur := closure.Properties
+					for cur != nil {
+						for _, k := range cur.OwnKeys() {
+							if !seen[k] {
+								keys = append(keys, k)
+							}
+						}
+						for _, k := range cur.OwnPropertyNames() {
+							seen[k] = true
+						}
+						pv := cur.GetPrototype()
+						if !pv.IsObject() {
+							break
+						}
+						cur = pv.AsPlainObject()
+					}
+				}
+			case TypeBoundFunction:
+				// Enumerate own enumerable properties on the bound function's
+				// Properties object - this case was missing entirely, so
+				// `for (k in boundFn)` came back with nothing even after
+				// `boundFn.x = 1` (paserati#254), unlike the identical
+				// TypeFunction/TypeClosure cases just above.
+				bf := objValue.AsBoundFunction()
+				if bf.Properties != nil {
+					seen := make(map[string]bool)
+					cur := bf.Properties
 					for cur != nil {
 						for _, k := range cur.OwnKeys() {
 							if !seen[k] {
