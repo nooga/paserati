@@ -2798,14 +2798,28 @@ func reflectOwnKeysImpl(args []vm.Value) (vm.Value, error) {
 // dispatch in op_setprop.go's TypeArray branch) - and anything else becomes
 // a plain named property, exactly like the `.provisional` case that
 // motivated this fix.
-func setObjectAssignTargetProperty(target vm.Value, key string, value vm.Value) {
+//
+// This is the [[Set]] half of Object.assign's copy: CreateDataProperty-like
+// for a plain data slot, but if target already has key as an own accessor
+// property, [[Set]] must invoke its setter rather than clobbering it with a
+// data value (paserati#274) - mirrors the own-accessor check vm.SetProperty
+// makes for the same reason.
+func setObjectAssignTargetProperty(vmInstance *vm.VM, target vm.Value, key string, value vm.Value) error {
 	switch target.Type() {
 	case vm.TypeObject:
+		plainTarget := target.AsPlainObject()
+		if _, setter, _, _, isAccessor := plainTarget.GetOwnAccessor(key); isAccessor {
+			if setter.Type() == vm.TypeUndefined {
+				return nil // accessor with no setter: [[Set]] silently no-ops (non-strict)
+			}
+			_, err := vmInstance.Call(setter, target, []vm.Value{value})
+			return err
+		}
 		// Object.assign copies as if by ordinary [[Set]] - the property must
 		// land enumerable on the target, not non-enumerable (paserati#168).
 		// SetOwnNonEnumerable exists for built-in method registration, not
 		// for this.
-		target.AsPlainObject().SetOwn(key, value)
+		plainTarget.SetOwn(key, value)
 	case vm.TypeDictObject:
 		target.AsDictObject().SetOwn(key, value)
 	case vm.TypeArray:
@@ -2846,6 +2860,7 @@ func setObjectAssignTargetProperty(target vm.Value, key string, value vm.Value) 
 			props.SetOwn(key, value)
 		}
 	}
+	return nil
 }
 
 func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
@@ -2897,14 +2912,35 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		if source.Type() == vm.TypeObject {
 			plainObj := source.AsPlainObject()
 			for _, key := range plainObj.OwnKeys() {
-				value, _ := plainObj.GetOwn(key)
-				setObjectAssignTargetProperty(target, key, value)
+				// Object.assign reads each source property via [[Get]], which
+				// for an accessor property means calling its getter rather
+				// than copying the (unset) data slot underneath it
+				// (paserati#274).
+				var value vm.Value
+				if getter, _, _, _, isAccessor := plainObj.GetOwnAccessor(key); isAccessor {
+					if getter.Type() == vm.TypeUndefined {
+						value = vm.Undefined
+					} else {
+						var err error
+						value, err = vmInstance.Call(getter, source, nil)
+						if err != nil {
+							return vm.Undefined, err
+						}
+					}
+				} else {
+					value, _ = plainObj.GetOwn(key)
+				}
+				if err := setObjectAssignTargetProperty(vmInstance, target, key, value); err != nil {
+					return vm.Undefined, err
+				}
 			}
 		} else if source.Type() == vm.TypeDictObject {
 			dictObj := source.AsDictObject()
 			for _, key := range dictObj.OwnKeys() {
 				value, _ := dictObj.GetOwn(key)
-				setObjectAssignTargetProperty(target, key, value)
+				if err := setObjectAssignTargetProperty(vmInstance, target, key, value); err != nil {
+					return vm.Undefined, err
+				}
 			}
 		} else if source.Type() == vm.TypeArray {
 			arrObj := source.AsArray()
@@ -2912,7 +2948,9 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			for i := 0; i < arrObj.Length(); i++ {
 				key := strconv.Itoa(i)
 				value := arrObj.Get(i)
-				setObjectAssignTargetProperty(target, key, value)
+				if err := setObjectAssignTargetProperty(vmInstance, target, key, value); err != nil {
+					return vm.Undefined, err
+				}
 			}
 			// Also copy length property. Deliberately no vm.TypeArray case
 			// here (unlike setObjectAssignTargetProperty above, which now
