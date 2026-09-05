@@ -4009,8 +4009,11 @@ func (c *Compiler) compileOptionalIndexExpression(node *parser.OptionalIndexExpr
 	c.emitByte(byte(indexReg))       // Index register
 
 	// 5. Apply continuation chain if present
+	// Pass objectReg as the receiver for method calls in the continuation (e.g.,
+	// a?.[k]() needs `a` as `this`) - mirrors compileOptionalChainingExpression,
+	// which does the same for the dot-access form (a?.b()).
 	if node.Continuation != nil {
-		_, err := c.compileOptionalContinuation(node.Continuation, indexResultReg, hint, &tempRegs, node.Token.Line)
+		_, err := c.compileOptionalContinuationWithReceiver(node.Continuation, indexResultReg, objectReg, hint, &tempRegs, node.Token.Line)
 		if err != nil {
 			return BadRegister, err
 		}
