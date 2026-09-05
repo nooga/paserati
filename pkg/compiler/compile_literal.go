@@ -945,10 +945,19 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 						}
 						c.emitClosureGeneric(valueReg, funcConstIndex, arrowFunc.Token.Line, &parser.Identifier{Token: arrowFunc.Token, Value: propName}, freeSymbols, true)
 						valueCompiled = true
-					} else if funcLit, ok := prop.Value.(*parser.FunctionLiteral); ok {
-						if funcLit.Name == nil || funcLit.Name.Value == "" {
-							funcLit.Name = &parser.Identifier{Token: funcLit.Token, Value: propName}
+					} else if funcLit, ok := prop.Value.(*parser.FunctionLiteral); ok && (funcLit.Name == nil || funcLit.Name.Value == "") {
+						// Anonymous function expression - pass the property key as a name
+						// hint so the function's .name is inferred WITHOUT creating a
+						// named-function-expression self-binding inside its body. Mutating
+						// funcLit.Name here would make `{ sync: function() { sync() } }`
+						// resolve `sync` to itself instead of the closed-over outer `sync` (#265).
+						funcConstIndex, freeSymbols, compileErr := c.compileFunctionLiteral(funcLit, propName)
+						if compileErr != nil {
+							freePropertyRegs()
+							return BadRegister, compileErr
 						}
+						c.emitClosure(valueReg, funcConstIndex, funcLit, freeSymbols)
+						valueCompiled = true
 					} else if classExpr, ok := prop.Value.(*parser.ClassExpression); ok {
 						// Inferred name from property - use prefix so no inner binding is created
 						if classExpr.Name == nil {
