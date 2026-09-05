@@ -21,9 +21,10 @@ const o: any = {
 const r1 = o?.m(...args);
 
 // obj?.["method"](...args) - same shape via computed/bracket access.
-// (Uses an arrow, not a method: obj?.[expr](...) continuations don't
-// thread a `this` receiver at all - a separate, pre-existing gap
-// unrelated to spread arguments - so this isolates the spread handling.)
+// (Uses an arrow, not a method: this isolates the spread-handling fix
+// in this PR from the separate this-binding fix for obj?.[expr](...)
+// continuations tracked in #258/PR #259 - see
+// optional_index_call_this_binding.ts for that coverage.)
 const o2: any = { m: (...a: number[]) => a.reduce((x, y) => x + y, 0) };
 const r2 = o2?.["m"](...args);
 
