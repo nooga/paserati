@@ -1165,3 +1165,45 @@ func TestJumpOffsetOverflowIsGracefulError(t *testing.T) {
 		t.Fatalf("expected a 'function too large' error, got: %v", compileErrs)
 	}
 }
+
+// TestConstantPoolOverflowIsGracefulError covers the paserati A5 finding:
+// a chunk whose constant pool needs more than 65,536 distinct entries used
+// to silently narrow the overflowed index back into uint16 range and
+// compile successfully with a wrong constant reference (see
+// docs/runtime-production-roadmap.md's appendix repro, which observed
+// "audit-constant-1" printed instead of the last assigned string). The fix
+// panics with vm.ConstantPoolExhaustionPanic from Chunk.AddConstant, and
+// Compile()'s top-level recover must turn that into an ordinary compile
+// error - never a raw process panic, and never a successfully compiled
+// chunk with a wrapped-around constant index.
+func TestConstantPoolOverflowIsGracefulError(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("var x;\n")
+	// One more than the pool can hold; each string literal is a distinct
+	// constant since none repeats.
+	for i := 0; i < 65537; i++ {
+		fmt.Fprintf(&b, "x = \"audit-constant-%d\";\n", i)
+	}
+	b.WriteString("x;\n")
+
+	program, parseErrs := compileSource(b.String())
+	if len(parseErrs) > 0 {
+		t.Fatalf("unexpected parse errors: %v", parseErrs)
+	}
+
+	// The call itself must not panic - that is the core of the regression.
+	_, compileErrs := NewCompiler().Compile(program)
+	if len(compileErrs) == 0 {
+		t.Fatal("expected a compile error for the overflowing constant pool, got none")
+	}
+	found := false
+	for _, e := range compileErrs {
+		if strings.Contains(e.Error(), "too many distinct constants") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected a 'too many distinct constants' error, got: %v", compileErrs)
+	}
+}
