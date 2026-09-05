@@ -31,6 +31,9 @@ func (s *SyntaxErrorInitializer) InitTypes(ctx *TypeContext) error {
 		WithSimpleCallSignature([]types.Type{types.String}, syntaxErrorProtoType).
 		WithSimpleConstructSignature([]types.Type{}, syntaxErrorProtoType).
 		WithSimpleConstructSignature([]types.Type{types.String}, syntaxErrorProtoType).
+		WithProperty("captureStackTrace", types.NewObjectType().
+			WithSimpleCallSignature([]types.Type{types.Any}, types.Void).
+			WithSimpleCallSignature([]types.Type{types.Any, types.Any}, types.Void)).
 		WithProperty("prototype", syntaxErrorProtoType)
 
 	// Define the constructor globally
