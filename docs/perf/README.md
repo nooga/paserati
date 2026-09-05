@@ -1,5 +1,11 @@
 # Perf
 
+The [production runtime roadmap](../runtime-production-roadmap.md#f-development-benchmarking-infrastructure)
+proposes an incremental extension of this tooling with bounded local checks,
+paired comparisons, workload contracts, and scheduled memory/latency runs. Its
+new commands and policies are design proposals; the commands below describe the
+existing implementation.
+
 `cmd/bench-ratchet` runs the Go benchmarks and normalizes each against a frozen
 calibration anchor (`BenchmarkRatchetAnchor`, a pure-CPU FMA loop in `pkg/vm`),
 so a benchmark reads as a multiple of the anchor's ns/op rather than an absolute
