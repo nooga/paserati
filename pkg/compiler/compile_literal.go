@@ -1565,7 +1565,19 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 
 		// Compile the body specially for generators to insert OpInitYield at the right place
 		bodyReg := functionCompiler.regAlloc.Alloc()
-		functionCompiler.isCompilingFunctionBody = true
+		// Note: deliberately NOT setting isCompilingFunctionBody=true here. That flag
+		// tells the *next* BlockStatement compileNode call "you are the function's own
+		// top-level body, don't create an enclosed scope for yourself" - it's consumed
+		// (and cleared) by the very first BlockStatement dispatch it sees. A generator's
+		// top-level body is never itself passed through compileNode (its statements are
+		// walked by hand below, to splice in OpInitYield at the right place), so setting
+		// this flag true here doesn't do anything at that level - it just survives to be
+		// wrongly consumed by the first NESTED block statement instead (e.g. an `if`'s
+		// consequence), telling it to skip creating its own enclosed scope. That made a
+		// block-scoped `let`/`const` inside the first nested block get predefined
+		// directly into the generator's own top-level symbol table (and never freed on
+		// block exit) rather than a scoped child table - leaking past the block and
+		// shadowing/clobbering any enclosing binding of the same name (#271).
 
 		// Get the body as a block statement (it's always a BlockStatement for function literals)
 		blockBody := node.Body
@@ -1702,6 +1714,9 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 			_, _ = functionCompiler.compileNode(node.Body, bodyReg)
 		}
 
+		// Defensive reset only - this branch never sets isCompilingFunctionBody true
+		// (see the comment above), so this is normally a no-op. Left in case some
+		// nested compileNode call above ever sets it and fails to clear it itself.
 		functionCompiler.isCompilingFunctionBody = false
 		functionCompiler.regAlloc.Free(bodyReg)
 	} else {
