@@ -464,14 +464,76 @@ func (c *Compiler) compileOptionalContinuationWithReceiver(cont parser.Expressio
 
 	case *parser.CallExpression:
 		// Call: base(args)
-		// If this is the first call in the continuation (Function is nil), we need method call
-		// with receiverReg as `this` to preserve this binding
+		// Every call whose callee is a property access needs *that access's
+		// object* as `this`, not just the first call in the continuation - a
+		// later call chained onto an earlier call's result (e.g. the second
+		// call in `e.code?.replace(a, b).replace(c, d)`) is just as much a
+		// method call as the first one. thisCallReceiver tracks the receiver
+		// for *this specific* call; the innermost call (Function == nil) is
+		// the one exception that still binds to the chain's original
+		// receiverReg, since there's no local property access to derive one
+		// from at that depth.
 		var funcReg Register
-		isFirstCall := node.Function == nil
+		var thisCallReceiver Register = BadRegister
 
-		if isFirstCall {
+		if node.Function == nil {
 			funcReg = baseReg
+			thisCallReceiver = receiverReg
+		} else if calleeMember, isMember := node.Function.(*parser.MemberExpression); isMember {
+			// Callee is itself a property access (e.g. `.replace` in the
+			// second call above) - fetch the property AND keep its object
+			// register around to use as this call's receiver.
+			objReg := baseReg
+			if calleeMember.Object != nil {
+				objReg = c.regAlloc.Alloc()
+				*tempRegs = append(*tempRegs, objReg)
+				_, err := c.compileOptionalContinuationWithReceiver(calleeMember.Object, baseReg, receiverReg, objReg, tempRegs, line)
+				if err != nil {
+					return BadRegister, err
+				}
+			}
+			funcReg = c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, funcReg)
+			propertyName := c.extractPropertyName(calleeMember.Property)
+			if len(propertyName) > 0 && propertyName[0] == '#' {
+				fieldName := propertyName[1:]
+				brandedKey := c.getPrivateFieldKey(fieldName)
+				nameConstIdx := c.chunk.AddConstant(vm.String(brandedKey))
+				c.emitGetPrivateField(funcReg, objReg, nameConstIdx, line)
+			} else {
+				nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+				c.emitGetProp(funcReg, objReg, nameConstIdx, line)
+			}
+			thisCallReceiver = objReg
+		} else if calleeIndex, isIndex := node.Function.(*parser.IndexExpression); isIndex {
+			// Callee is a computed property access (e.g. `obj?.a()[k]()`) -
+			// same idea as the MemberExpression case above.
+			objReg := baseReg
+			if calleeIndex.Left != nil {
+				objReg = c.regAlloc.Alloc()
+				*tempRegs = append(*tempRegs, objReg)
+				_, err := c.compileOptionalContinuationWithReceiver(calleeIndex.Left, baseReg, receiverReg, objReg, tempRegs, line)
+				if err != nil {
+					return BadRegister, err
+				}
+			}
+			indexReg := c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, indexReg)
+			_, err := c.compileNode(calleeIndex.Index, indexReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			funcReg = c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, funcReg)
+			c.emitOpCode(vm.OpGetIndex, line)
+			c.emitByte(byte(funcReg))
+			c.emitByte(byte(objReg))
+			c.emitByte(byte(indexReg))
+			thisCallReceiver = objReg
 		} else {
+			// Callee isn't a direct property access (e.g. `a?.b()()` - calling
+			// the return value of an earlier call directly) - no `this`
+			// binding, matching plain-call JS semantics.
 			funcReg = c.regAlloc.Alloc()
 			*tempRegs = append(*tempRegs, funcReg)
 			_, err := c.compileOptionalContinuationWithReceiver(node.Function, baseReg, receiverReg, funcReg, tempRegs, line)
@@ -497,8 +559,8 @@ func (c *Compiler) compileOptionalContinuationWithReceiver(cont parser.Expressio
 				return BadRegister, err
 			}
 
-			if isFirstCall && receiverReg != BadRegister {
-				c.emitSpreadCallMethod(hint, funcReg, receiverReg, arrayReg, line)
+			if thisCallReceiver != BadRegister {
+				c.emitSpreadCallMethod(hint, funcReg, thisCallReceiver, arrayReg, line)
 			} else {
 				c.emitSpreadCall(hint, funcReg, arrayReg, line)
 			}
@@ -525,9 +587,9 @@ func (c *Compiler) compileOptionalContinuationWithReceiver(cont parser.Expressio
 			}
 		}
 
-		// Emit call - use method call if this is the first call and we have a receiver
-		if isFirstCall && receiverReg != BadRegister {
-			c.emitCallMethod(hint, funcCallReg, receiverReg, byte(argCount), line)
+		// Emit call - use method call whenever this call's callee was a property access
+		if thisCallReceiver != BadRegister {
+			c.emitCallMethod(hint, funcCallReg, thisCallReceiver, byte(argCount), line)
 		} else {
 			c.emitCall(hint, funcCallReg, byte(argCount), line)
 		}
