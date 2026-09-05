@@ -40,6 +40,9 @@ func (e *ErrorInitializer) InitTypes(ctx *TypeContext) error {
 		WithSimpleConstructSignature([]types.Type{types.String}, errorProtoType).            // new Error(msg)
 		WithSimpleConstructSignature([]types.Type{types.String, types.Any}, errorProtoType). // new Error(msg, options)
 		WithProperty("isError", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
+		WithProperty("captureStackTrace", types.NewObjectType().
+			WithSimpleCallSignature([]types.Type{types.Any}, types.Void).
+			WithSimpleCallSignature([]types.Type{types.Any, types.Any}, types.Void)).
 		WithProperty("prototype", errorProtoType)
 
 	// Define the constructor globally
@@ -191,6 +194,49 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.BooleanValue(isErrorValue(vmInstance, arg)), nil
 		}))
 
+		// Add Error.captureStackTrace (V8/Node non-standard extension, #263).
+		// Real code widely calls this unconditionally in its own error-handling
+		// paths; without it, that code crashes with "undefined is not a
+		// function" and masks whatever error it was trying to report.
+		ctorPropsObj.Properties.SetOwnNonEnumerable("captureStackTrace", vm.NewNativeFunction(2, false, "captureStackTrace", func(args []vm.Value) (vm.Value, error) {
+			if len(args) == 0 || !args[0].IsObject() {
+				return vm.Undefined, vmInstance.NewTypeError("Error.captureStackTrace target must be an object")
+			}
+			target := args[0]
+
+			// Optional constructorOpt: frames at or above it (i.e. its own call
+			// and everything it called) are omitted from the captured trace,
+			// matching V8 semantics. Anything that isn't a callable is just
+			// ignored - no filtering happens, same as if it were omitted.
+			var excludeFn *vm.FunctionObject
+			if len(args) > 1 {
+				switch ctorOpt := args[1]; ctorOpt.Type() {
+				case vm.TypeClosure:
+					excludeFn = ctorOpt.AsClosure().Fn
+				case vm.TypeFunction:
+					excludeFn = ctorOpt.AsFunction()
+				}
+			}
+
+			stackTrace := vmInstance.CaptureStackTraceExcluding(excludeFn)
+			stackValue := vm.NewString(stackTrace)
+
+			// Per real V8, "stack" is non-enumerable - including when
+			// captureStackTrace is the one creating it (e.g. on a plain object
+			// target that had no prior "stack" property at all). Go through
+			// SetOwnNonEnumerable for a PlainObject target so a fresh property
+			// gets the right attributes; fall back to the generic SetProperty
+			// (which preserves an existing property's own attributes, and is
+			// the best DictObject can do since it has no non-enumerable concept
+			// at all) for anything else.
+			if target.Type() == vm.TypeObject {
+				target.AsPlainObject().SetOwnNonEnumerable("stack", stackValue)
+			} else if err := vmInstance.SetProperty(target, "stack", stackValue); err != nil {
+				return vm.Undefined, err
+			}
+			return vm.Undefined, nil
+		}))
+
 		errorConstructor = ctorWithProps
 	}
 
@@ -218,7 +264,10 @@ func (e *EvalErrorInitializer) Priority() int { return 22 }
 func (e *EvalErrorInitializer) InitTypes(ctx *TypeContext) error {
 	t := types.NewObjectType().WithSimpleCallSignature([]types.Type{}, types.Any).WithSimpleCallSignature([]types.Type{types.String}, types.Any).
 		WithSimpleConstructSignature([]types.Type{}, types.Any).
-		WithSimpleConstructSignature([]types.Type{types.String}, types.Any)
+		WithSimpleConstructSignature([]types.Type{types.String}, types.Any).
+		WithProperty("captureStackTrace", types.NewObjectType().
+			WithSimpleCallSignature([]types.Type{types.Any}, types.Void).
+			WithSimpleCallSignature([]types.Type{types.Any, types.Any}, types.Void))
 	return ctx.DefineGlobal("EvalError", t)
 }
 func (e *EvalErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
@@ -233,7 +282,10 @@ func (e *RangeErrorInitializer) Priority() int { return 22 }
 func (e *RangeErrorInitializer) InitTypes(ctx *TypeContext) error {
 	t := types.NewObjectType().WithSimpleCallSignature([]types.Type{}, types.Any).WithSimpleCallSignature([]types.Type{types.String}, types.Any).
 		WithSimpleConstructSignature([]types.Type{}, types.Any).
-		WithSimpleConstructSignature([]types.Type{types.String}, types.Any)
+		WithSimpleConstructSignature([]types.Type{types.String}, types.Any).
+		WithProperty("captureStackTrace", types.NewObjectType().
+			WithSimpleCallSignature([]types.Type{types.Any}, types.Void).
+			WithSimpleCallSignature([]types.Type{types.Any, types.Any}, types.Void))
 	return ctx.DefineGlobal("RangeError", t)
 }
 func (e *RangeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
@@ -248,7 +300,10 @@ func (e *URIErrorInitializer) Priority() int { return 22 }
 func (e *URIErrorInitializer) InitTypes(ctx *TypeContext) error {
 	t := types.NewObjectType().WithSimpleCallSignature([]types.Type{}, types.Any).WithSimpleCallSignature([]types.Type{types.String}, types.Any).
 		WithSimpleConstructSignature([]types.Type{}, types.Any).
-		WithSimpleConstructSignature([]types.Type{types.String}, types.Any)
+		WithSimpleConstructSignature([]types.Type{types.String}, types.Any).
+		WithProperty("captureStackTrace", types.NewObjectType().
+			WithSimpleCallSignature([]types.Type{types.Any}, types.Void).
+			WithSimpleCallSignature([]types.Type{types.Any, types.Any}, types.Void))
 	return ctx.DefineGlobal("URIError", t)
 }
 func (e *URIErrorInitializer) InitRuntime(ctx *RuntimeContext) error {

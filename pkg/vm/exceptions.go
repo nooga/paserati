@@ -578,7 +578,20 @@ type StackFrame struct {
 
 // CaptureStackTrace captures the current call stack and returns it as a formatted string
 func (vm *VM) CaptureStackTrace() string {
-	frames := vm.getStackFrames()
+	return vm.formatStackFrames(vm.getStackFrames())
+}
+
+// CaptureStackTraceExcluding captures the current call stack like CaptureStackTrace,
+// but - mirroring V8's Error.captureStackTrace(targetObject, constructorOpt) -
+// omits the frame for constructorOpt and every frame more recent than it (i.e.
+// everything from the top of the stack down through constructorOpt's own call).
+// If target is nil, or isn't found on the current stack at all, this behaves
+// exactly like CaptureStackTrace.
+func (vm *VM) CaptureStackTraceExcluding(target *FunctionObject) string {
+	return vm.formatStackFrames(vm.getStackFramesExcluding(target))
+}
+
+func (vm *VM) formatStackFrames(frames []StackFrame) string {
 	if len(frames) == 0 {
 		return ""
 	}
@@ -595,10 +608,36 @@ func (vm *VM) CaptureStackTrace() string {
 
 // getStackFrames extracts stack frame information from the current VM call stack
 func (vm *VM) getStackFrames() []StackFrame {
+	return vm.getStackFramesExcluding(nil)
+}
+
+// getStackFramesExcluding is getStackFrames, but starts collecting one frame
+// further out (older) than the most recent frame whose closure targets
+// `target` (see CaptureStackTraceExcluding) - i.e. target's own frame and
+// everything more recent than it (called from inside it, or after it but
+// before this capture) are omitted. Pass nil to skip nothing. If target
+// doesn't actually appear on the current stack, nothing is skipped -
+// matching V8, where passing a constructorOpt that was never called leaves
+// the trace untouched rather than swallowing it entirely.
+func (vm *VM) getStackFramesExcluding(target *FunctionObject) []StackFrame {
+	startIdx := vm.frameCount - 1
+	if target != nil {
+		for i := vm.frameCount - 1; i >= 0; i-- {
+			f := &vm.frames[i]
+			if f.isNativeFrame {
+				continue
+			}
+			if f.closure != nil && f.closure.Fn == target {
+				startIdx = i - 1
+				break
+			}
+		}
+	}
+
 	var frames []StackFrame
 
-	// Walk through all active frames
-	for i := vm.frameCount - 1; i >= 0; i-- {
+	// Walk through all active frames, starting below target's own frame (if found)
+	for i := startIdx; i >= 0; i-- {
 		frame := &vm.frames[i]
 
 		// Skip native frames - they don't have meaningful source location info
