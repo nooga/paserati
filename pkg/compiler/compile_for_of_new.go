@@ -392,8 +392,17 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 			} else {
 				if symbolRef.IsGlobal {
 					c.emitSetGlobal(symbolRef.GlobalIndex, valueReg, node.Token.Line)
+				} else if !symbolRef.IsSpilled && definingTable != c.currentSymbolTable &&
+					c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+					// `for (capturedVar of items)` where capturedVar belongs to
+					// an enclosing function (#276): symbolRef.Register is a
+					// register index in THAT function's frame, not this one -
+					// see the identical comment in compileIdentifierAssignment.
+					upvalueIndex := c.addFreeSymbol(target, &symbolRef)
+					c.emitSetUpvalue(upvalueIndex, valueReg, node.Token.Line)
+				} else if symbolRef.IsSpilled {
+					c.emitStoreSpill(symbolRef.SpillIndex, valueReg, node.Token.Line)
 				} else {
-					_ = definingTable
 					c.emitMove(symbolRef.Register, valueReg, node.Token.Line)
 				}
 			}

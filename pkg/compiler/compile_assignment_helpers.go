@@ -21,6 +21,13 @@ type DestructuringTargetRef struct {
 	SymbolName string
 	IsGlobal   bool
 	GlobalIdx  uint16
+	// IsUpvalue is true when Symbol was resolved from an ENCLOSING function's
+	// scope rather than this one (#276): Symbol.Register is then a register
+	// index in that other function's frame, meaningless as a register number
+	// here, so the assignment must go through UpvalueIndex/OpSetUpvalue
+	// instead of a raw move into Symbol.Register.
+	IsUpvalue    bool
+	UpvalueIndex uint16
 
 	// For MemberExpression targets (obj.prop)
 	ObjReg  Register // Pre-evaluated object
@@ -64,7 +71,7 @@ func (c *Compiler) compileDestructuringTargetRef(target parser.Expression, line 
 			}
 		}
 
-		symbol, _, found := c.currentSymbolTable.Resolve(targetNode.Value)
+		symbol, definingTable, found := c.currentSymbolTable.Resolve(targetNode.Value)
 		if !found {
 			// In strict mode an unresolvable reference is a ReferenceError; in
 			// non-strict mode it's an implicit global. A name that already has a
@@ -82,6 +89,20 @@ func (c *Compiler) compileDestructuringTargetRef(target parser.Expression, line 
 			ref.IsGlobal = symbol.IsGlobal
 			if symbol.IsGlobal {
 				ref.GlobalIdx = symbol.GlobalIndex
+			} else if !symbol.IsSpilled && definingTable != c.currentSymbolTable &&
+				c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+				// The variable is a free variable captured from an enclosing
+				// function (#276). symbol.Register is a register index in
+				// THAT function's own frame - using it as a register number
+				// in this one (as the plain-local branch below would) either
+				// corrupts an unrelated local sharing that number here, or,
+				// if the number exceeds this function's own RegisterSize,
+				// panics the VM with a raw "index out of range" the moment
+				// it's written. Route through the same upvalue machinery
+				// compileAssignmentExpression uses for `x = value` against a
+				// captured variable.
+				ref.IsUpvalue = true
+				ref.UpvalueIndex = c.addFreeSymbol(targetNode, &symbol)
 			}
 		}
 		return ref, nil
@@ -179,6 +200,10 @@ func (c *Compiler) assignToDestructuringTargetRef(ref *DestructuringTargetRef, v
 				c.emitSetGlobal(ref.Symbol.GlobalIndex, valueReg, line)
 			} else if ref.Symbol.IsSpilled {
 				c.emitStoreSpill(ref.Symbol.SpillIndex, valueReg, line)
+			} else if ref.IsUpvalue {
+				// Captured from an enclosing function - see the identical
+				// comment in compileDestructuringTargetRef (#276).
+				c.emitSetUpvalue(ref.UpvalueIndex, valueReg, line)
 			} else {
 				if valueReg != ref.Symbol.Register {
 					c.emitMove(ref.Symbol.Register, valueReg, line)

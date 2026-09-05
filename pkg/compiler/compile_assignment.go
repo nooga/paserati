@@ -1364,6 +1364,7 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 
 			var baseReg, propReg Register = BadRegister, BadRegister
 			var identSymbol Symbol
+			var identDefiningTable *SymbolTable
 			var identFound bool
 			var isSimpleTarget bool
 
@@ -1371,7 +1372,7 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 			switch targetNode := element.Target.(type) {
 			case *parser.Identifier:
 				// Simple identifier - resolve now but don't assign yet
-				identSymbol, _, identFound = c.currentSymbolTable.Resolve(targetNode.Value)
+				identSymbol, identDefiningTable, identFound = c.currentSymbolTable.Resolve(targetNode.Value)
 				isSimpleTarget = true
 
 			case *parser.MemberExpression:
@@ -1433,6 +1434,13 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 							c.emitSetGlobal(identSymbol.GlobalIndex, restArrayReg, line)
 						} else if identSymbol.IsSpilled {
 							c.emitStoreSpill(identSymbol.SpillIndex, restArrayReg, line)
+						} else if identDefiningTable != c.currentSymbolTable && c.enclosing != nil &&
+							c.isDefinedInEnclosingCompiler(identDefiningTable) {
+							// Rest target captured from an enclosing function
+							// (#276) - see the identical comment in
+							// compileIdentifierAssignment.
+							upvalueIndex := c.addFreeSymbol(targetNode, &identSymbol)
+							c.emitSetUpvalue(upvalueIndex, restArrayReg, line)
 						} else {
 							if restArrayReg != identSymbol.Register {
 								c.emitMove(identSymbol.Register, restArrayReg, line)
@@ -1685,7 +1693,7 @@ func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, v
 	}
 
 	// Resolve the identifier to determine how to store it
-	symbol, _, found := c.currentSymbolTable.Resolve(identTarget.Value)
+	symbol, definingTable, found := c.currentSymbolTable.Resolve(identTarget.Value)
 	if !found {
 		// Variable not found in any scope. In strict mode an unresolvable
 		// reference is a ReferenceError per ECMAScript spec; a name that already
@@ -1731,8 +1739,23 @@ func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, v
 	} else if symbol.IsSpilled {
 		// For spilled variables, store to spill slot
 		c.emitStoreSpill(symbol.SpillIndex, valueReg, line)
+	} else if definingTable != c.currentSymbolTable && c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
+		// The variable is a free variable captured from an enclosing function
+		// (#276): symbol.Register is a register index in THAT function's own
+		// frame, not this one - writing it with a plain OpMove here would
+		// target an arbitrary register number this function's own register
+		// allocator never allocated or accounted for in its RegisterSize,
+		// silently corrupting whatever real local happens to sit at that
+		// index (or, if the number exceeds this function's RegisterSize
+		// entirely, panicking with "index out of range" the moment the VM
+		// tries to write it). Route through the same upvalue machinery
+		// compileAssignmentExpression uses for `x = value` on a captured
+		// variable: register it as a free symbol and store via OpSetUpvalue.
+		upvalueIndex := c.addFreeSymbol(identTarget, &symbol)
+		c.emitSetUpvalue(upvalueIndex, valueReg, line)
 	} else {
-		// For local variables, move to the allocated register
+		// For local variables (including an outer block scope of this same
+		// function), move to the allocated register.
 		if valueReg != symbol.Register {
 			c.emitMove(symbol.Register, valueReg, line)
 		}
