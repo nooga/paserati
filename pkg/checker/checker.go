@@ -3956,16 +3956,42 @@ func (c *Checker) checkCatchClause(clause *parser.CatchClause) {
 
 	// Define the catch parameter if present
 	if clause.Parameter != nil {
-		// In JavaScript/TypeScript, catch parameter is implicitly 'any' type
+		// The catch binding is implicitly 'any'. TypeScript allows an explicit
+		// annotation, but only 'any' or 'unknown' (TS1196).
+		bindingType := types.Type(types.Any)
+		if clause.TypeAnnotation != nil {
+			annotated := c.resolveTypeAnnotation(clause.TypeAnnotation)
+			if annotated == types.Any || annotated == types.Unknown {
+				bindingType = annotated
+			} else if annotated != nil {
+				c.addErrorWithCode(clause.TypeAnnotation, errors.TS1196, "Catch clause variable type annotation must be 'any' or 'unknown' if specified.")
+			}
+		}
 		switch param := clause.Parameter.(type) {
 		case *parser.Identifier:
 			// Simple identifier: catch (e)
-			if !c.env.Define(param.Value, types.Any, false) {
+			if !c.env.Define(param.Value, bindingType, false) {
 				c.addError(param, fmt.Sprintf("parameter '%s' already declared", param.Value))
 			}
-			param.SetComputedType(types.Any)
+			param.SetComputedType(bindingType)
 		case *parser.ArrayParameterPattern, *parser.ObjectParameterPattern:
 			// Destructuring pattern: catch ([x, y]) or catch ({message})
+			// Destructuring an 'unknown' binding is an error, exactly as it would be
+			// for `const { x } = e` with e: unknown. The bindings themselves still get
+			// defined (as any) so the body checks without cascading errors.
+			if bindingType == types.Unknown {
+				switch pattern := param.(type) {
+				case *parser.ObjectParameterPattern:
+					for _, prop := range pattern.Properties {
+						if prop == nil || prop.Key == nil {
+							continue
+						}
+						c.addErrorWithCode(prop.Key, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'unknown'.", c.extractPropertyName(prop.Key)))
+					}
+				case *parser.ArrayParameterPattern:
+					c.addErrorWithCode(pattern, errors.TS2461, "Type 'unknown' is not an array type.")
+				}
+			}
 			// Type check the pattern and define all bindings
 			c.visit(clause.Parameter)
 			// The visit will define all bindings from the pattern

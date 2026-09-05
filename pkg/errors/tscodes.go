@@ -12,6 +12,7 @@ const (
 	TS1005  = "TS1005"  // '<token>' expected
 	TS1100  = "TS1100"  // Invalid use of 'X' in strict mode
 	TS1109  = "TS1109"  // Expression expected
+	TS1196  = "TS1196"  // Catch clause variable type annotation must be 'any' or 'unknown' if specified
 	TS1042  = "TS1042"  // 'X' modifier cannot be used here
 	TS1127  = "TS1127"  // Invalid character
 	TS1206  = "TS1206"  // Decorators are not valid here
@@ -24,6 +25,7 @@ const (
 	TS2304  = "TS2304"  // Cannot find name 'X'
 	TS2322  = "TS2322"  // Type 'X' is not assignable to type 'Y'
 	TS2339  = "TS2339"  // Property 'X' does not exist on type 'Y'
+	TS2461  = "TS2461"  // Type 'X' is not an array type
 	TS2345  = "TS2345"  // Argument of type 'X' is not assignable to parameter of type 'Y'
 	TS2362  = "TS2362"  // The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type
 	TS2363  = "TS2363"  // The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type
