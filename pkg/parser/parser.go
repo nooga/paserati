@@ -3981,7 +3981,14 @@ func (p *Parser) curTokenIs(t lexer.TokenType) bool {
 // isContextualKeywordAsIdent checks if the current token is a contextual keyword
 // that can be used as an identifier (e.g., set, get, from, of, as, async, static, type)
 func (p *Parser) isContextualKeywordAsIdent() bool {
-	switch p.curToken.Type {
+	return isContextualKeywordType(p.curToken.Type)
+}
+
+// isContextualKeywordType reports whether t is a contextual keyword: reserved
+// in some grammar positions but a plain identifier everywhere else, including
+// as an import/export binding name.
+func isContextualKeywordType(t lexer.TokenType) bool {
+	switch t {
 	case lexer.SET, lexer.GET, lexer.FROM, lexer.OF, lexer.AS,
 		lexer.ASYNC, lexer.STATIC, lexer.TYPE, lexer.READONLY,
 		lexer.OVERRIDE, lexer.ABSTRACT, lexer.UNDEFINED, lexer.IS,
@@ -11124,9 +11131,9 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 			}
 
 			// Handle different import name patterns
-			if p.curToken.Type == lexer.IDENT || p.curToken.Type == lexer.SATISFIES {
-				// Regular identifier, or contextual keyword used as a binding name
-				// (semver exports `satisfies`).
+			if isImportBindingName(p.curToken.Type) {
+				// Regular identifier, or a contextual keyword used as a binding
+				// name (e.g. `{ from }`, `{ async as fn }`).
 				imported = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 				importedToken = p.curToken
 			} else if p.curToken.Type == lexer.STRING {
@@ -11154,7 +11161,9 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 				p.nextToken() // consume 'as'
 
 				if !isImportBindingName(p.curToken.Type) {
-					p.peekError(lexer.IDENT)
+					// curToken (not peekToken) is the offending token here: the
+					// two nextToken() calls above already moved past 'as' onto it.
+					p.addErrorWithCode(p.curToken, errors.TS1003, "Identifier expected.")
 					return nil
 				}
 				local = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -11190,10 +11199,10 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 				return specs
 			}
 
-			// Next specifier should be identifier, string, default, or type
-			if p.curToken.Type != lexer.IDENT && p.curToken.Type != lexer.STRING &&
-				p.curToken.Type != lexer.DEFAULT && p.curToken.Type != lexer.TYPE &&
-				p.curToken.Type != lexer.SATISFIES {
+			// Next specifier should be an identifier, contextual keyword, string,
+			// 'default', or 'type'.
+			if !isImportBindingName(p.curToken.Type) && p.curToken.Type != lexer.STRING &&
+				p.curToken.Type != lexer.DEFAULT {
 				p.addError(p.curToken, "Expected identifier, string literal, 'default', or 'type' in import specifier")
 				return nil
 			}
@@ -11215,11 +11224,12 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 }
 
 // isImportBindingName reports whether a token can name an import binding.
-// `from`, `type`, and `satisfies` are contextual keywords elsewhere but plain
-// identifiers in this position: `import from from "m"` binds the default
-// export as `from`.
+// Contextual keywords (`from`, `type`, `satisfies`, `async`, `get`, `set`,
+// `of`, `as`, `static`, `readonly`, `override`, `abstract`, `undefined`, `is`)
+// are plain identifiers in this position: `import from from "m"` binds the
+// default export as `from`, and likewise for the others.
 func isImportBindingName(t lexer.TokenType) bool {
-	return t == lexer.IDENT || t == lexer.FROM || t == lexer.TYPE || t == lexer.SATISFIES
+	return t == lexer.IDENT || isContextualKeywordType(t)
 }
 
 // parseExportDeclaration parses various export statement forms:
