@@ -713,7 +713,11 @@ func (p *Parser) parseStatement() Statement {
 			// This is import(), parse as expression statement (dynamic import)
 			return p.parseExpressionStatement()
 		}
-		return p.parseImportDeclaration()
+		// A nil *ImportDeclaration must not escape as a non-nil Statement.
+		if decl := p.parseImportDeclaration(); decl != nil {
+			return decl
+		}
+		return nil
 	case lexer.EXPORT:
 		return p.parseExportDeclaration()
 	case lexer.LBRACE:
@@ -10894,8 +10898,9 @@ func (p *Parser) parseImportDeclaration() *ImportDeclaration {
 	// Move to the next token to see what kind of import this is
 	p.nextToken()
 
-	// Check for type-only import: import type { ... } from "module"
-	if p.curToken.Type == lexer.TYPE {
+	// Check for type-only import: import type { ... } from "module".
+	// `type` directly followed by `from` or `,` is a default binding named "type".
+	if p.curToken.Type == lexer.TYPE && p.peekToken.Type != lexer.FROM && p.peekToken.Type != lexer.COMMA {
 		stmt.IsTypeOnly = true
 		p.nextToken() // consume 'type' keyword
 	}
@@ -10940,7 +10945,7 @@ func (p *Parser) parseImportDeclaration() *ImportDeclaration {
 	var specifiers []ImportSpecifier
 
 	// Check for different import patterns
-	if p.curToken.Type == lexer.IDENT {
+	if isImportBindingName(p.curToken.Type) {
 		// Default import: import defaultName from "module"
 		// Or mixed: import defaultName, { named } from "module"
 		// Or mixed: import defaultName, * as name from "module"
@@ -11081,9 +11086,11 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 		if !p.expectPeek(lexer.AS) {
 			return nil
 		}
-		if !p.expectPeek(lexer.IDENT) {
+		if !isImportBindingName(p.peekToken.Type) {
+			p.peekError(lexer.IDENT)
 			return nil
 		}
+		p.nextToken()
 
 		namespaceSpec := &ImportNamespaceSpecifier{
 			Token: p.curToken,
@@ -11146,7 +11153,7 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 				p.nextToken() // consume imported name/string/default
 				p.nextToken() // consume 'as'
 
-				if p.curToken.Type != lexer.IDENT {
+				if !isImportBindingName(p.curToken.Type) {
 					p.peekError(lexer.IDENT)
 					return nil
 				}
@@ -11196,9 +11203,23 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 		if !p.expectPeek(lexer.RBRACE) {
 			return nil
 		}
+	} else {
+		// Without this, an unexpected token here returned nil with no error
+		// recorded, and the caller's nil *ImportDeclaration reached the
+		// module loader as a non-nil Statement and dereferenced.
+		p.addError(p.curToken, "Expected '{', '*', or an identifier after 'import'")
+		return nil
 	}
 
 	return specs
+}
+
+// isImportBindingName reports whether a token can name an import binding.
+// `from`, `type`, and `satisfies` are contextual keywords elsewhere but plain
+// identifiers in this position: `import from from "m"` binds the default
+// export as `from`.
+func isImportBindingName(t lexer.TokenType) bool {
+	return t == lexer.IDENT || t == lexer.FROM || t == lexer.TYPE || t == lexer.SATISFIES
 }
 
 // parseExportDeclaration parses various export statement forms:
