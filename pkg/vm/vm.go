@@ -3877,6 +3877,18 @@ startExecution:
 							frame.thisValue = Undefined
 						}
 					}
+					// Set [[HomeObject]] for super property access (see prepareCall in call.go).
+					// Arrow functions use their captured [[HomeObject]] (frame.closure.CapturedHomeObject)
+					// at read time, so frame.homeObject itself doesn't need updating for them.
+					if !calleeFunc.IsArrowFunction {
+						if calleeFunc.HomeObject.Type() != TypeUndefined && calleeFunc.HomeObject.Type() != TypeNull {
+							frame.homeObject = calleeFunc.HomeObject
+						} else if frame.thisValue.Type() != TypeUndefined && frame.thisValue.Type() != TypeNull {
+							frame.homeObject = frame.thisValue
+						} else {
+							frame.homeObject = Undefined
+						}
+					}
 					frame.isConstructorCall = false
 					frame.isDirectCall = false
 					frame.isSentinelFrame = false
@@ -4097,6 +4109,18 @@ startExecution:
 						frame.thisValue = calleeClosure.CapturedThis
 					} else {
 						frame.thisValue = thisVal // Method call: preserve 'this'
+					}
+					// Set [[HomeObject]] for super property access (see prepareCall in call.go).
+					// Arrow functions use their captured [[HomeObject]] (frame.closure.CapturedHomeObject)
+					// at read time, so frame.homeObject itself doesn't need updating for them.
+					if !calleeFunc.IsArrowFunction {
+						if calleeFunc.HomeObject.Type() != TypeUndefined && calleeFunc.HomeObject.Type() != TypeNull {
+							frame.homeObject = calleeFunc.HomeObject
+						} else if thisVal.Type() != TypeUndefined && thisVal.Type() != TypeNull {
+							frame.homeObject = thisVal
+						} else {
+							frame.homeObject = Undefined
+						}
 					}
 					frame.isConstructorCall = false
 					frame.isDirectCall = false
