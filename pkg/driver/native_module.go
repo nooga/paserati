@@ -346,12 +346,19 @@ func (m *ModuleBuilder) createClassConstructor(name string, goStruct interface{}
 	classPrototypeVal := vm.NewValueFromPlainObject(classPrototype)
 
 	constructorValue := vm.NewConstructorWithProps(constructorType.NumIn(), constructorType.IsVariadic(), name, func(args []vm.Value) (vm.Value, error) {
-		// Convert VM values to Go values for constructor call
-		goArgs := make([]reflect.Value, len(args))
-		for i, arg := range args {
-			if i < constructorType.NumIn() {
-				goArgs[i] = vmValueToReflectValue(arg, constructorType.In(i))
-			}
+		// Convert VM values to Go values for constructor call. Capped at
+		// constructorType.NumIn() (paserati#278): a non-variadic Go function
+		// called with MORE JS args than it declares (routine - e.g. any
+		// generic JS machinery that always calls back with a fixed argument
+		// count, regardless of what the callee actually wants) must have
+		// those extras silently dropped, matching real JS semantics. Sizing
+		// goArgs to len(args) and only filling indices < NumIn() left the
+		// tail as unset reflect.Value{} zero values and handed
+		// reflect.Value.Call a slice longer than the function's declared
+		// arity - which panics outright rather than ignoring the extras.
+		goArgs := make([]reflect.Value, 0, constructorType.NumIn())
+		for i := 0; i < len(args) && i < constructorType.NumIn(); i++ {
+			goArgs = append(goArgs, vmValueToReflectValue(args[i], constructorType.In(i)))
 		}
 
 		// Add missing arguments as zero values if constructor expects more
@@ -444,12 +451,12 @@ func (m *ModuleBuilder) createBoundMethod(methodFunc reflect.Value) vm.Value {
 	methodType := methodFunc.Type()
 
 	return vm.NewNativeFunction(methodType.NumIn(), methodType.IsVariadic(), "bound_method", func(args []vm.Value) (vm.Value, error) {
-		// Convert VM values to Go values for method call
-		goArgs := make([]reflect.Value, len(args))
-		for i, arg := range args {
-			if i < methodType.NumIn() {
-				goArgs[i] = vmValueToReflectValue(arg, methodType.In(i))
-			}
+		// Convert VM values to Go values for method call. Capped at
+		// methodType.NumIn() (paserati#278) - see the identical comment in
+		// createClassConstructor.
+		goArgs := make([]reflect.Value, 0, methodType.NumIn())
+		for i := 0; i < len(args) && i < methodType.NumIn(); i++ {
+			goArgs = append(goArgs, vmValueToReflectValue(args[i], methodType.In(i)))
 		}
 
 		// Add missing arguments as zero values if method expects more
@@ -679,12 +686,12 @@ func goFunctionToVM(fn interface{}) vm.Value {
 			return vm.Undefined, nil
 		}
 
-		// Non-variadic function handling (original code)
-		goArgs := make([]reflect.Value, len(args))
-		for i, arg := range args {
-			if i < fnType.NumIn() {
-				goArgs[i] = vmValueToReflectValue(arg, fnType.In(i))
-			}
+		// Non-variadic function handling (original code). Capped at
+		// fnType.NumIn() (paserati#278) - see the identical comment in
+		// createClassConstructor.
+		goArgs := make([]reflect.Value, 0, fnType.NumIn())
+		for i := 0; i < len(args) && i < fnType.NumIn(); i++ {
+			goArgs = append(goArgs, vmValueToReflectValue(args[i], fnType.In(i)))
 		}
 
 		// Add missing arguments as zero values if function expects more
@@ -1037,12 +1044,12 @@ func (vc *ValueConverter) wrapGoFunction(fn interface{}) vm.Value {
 	fnType := reflect.TypeOf(fn)
 
 	return vm.NewNativeFunction(fnType.NumIn(), fnType.IsVariadic(), "native_function", func(args []vm.Value) (vm.Value, error) {
-		// Convert VM values to Go values for input
-		goArgs := make([]reflect.Value, len(args))
-		for i, arg := range args {
-			if i < fnType.NumIn() {
-				goArgs[i] = vc.convertVMValueToReflectValue(arg, fnType.In(i))
-			}
+		// Convert VM values to Go values for input. Capped at fnType.NumIn()
+		// (paserati#278) - see the identical comment in
+		// createClassConstructor.
+		goArgs := make([]reflect.Value, 0, fnType.NumIn())
+		for i := 0; i < len(args) && i < fnType.NumIn(); i++ {
+			goArgs = append(goArgs, vc.convertVMValueToReflectValue(args[i], fnType.In(i)))
 		}
 
 		// Add missing arguments as zero values if function expects more
