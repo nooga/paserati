@@ -217,6 +217,15 @@ and update README figures from the same output. Do not call the expected drop in
 reported conformance a runtime regression. This is a prerequisite for using
 Test262 correctness to qualify a performance result.
 
+**Dependency:** land #26 (pin a reference test set for `test262.total`) before
+this item. `test262.total` is defined over the passing, non-timed-out set;
+correcting the success heuristic here changes that set's membership for reasons
+unrelated to execution speed, and would otherwise surface on the perf timeline
+as an unexplained step. A useful acceptance probe while implementing this: append
+a terminal `throw` near the end of a test file and confirm the verdict flips — a
+test whose appended throw does not change the outcome was not executed to
+completion, whatever the runner currently reports.
+
 ### A2. Specify property-cache validity
 
 The default [property-get path][src-getprop] validates the receiver/holder too
@@ -1012,6 +1021,15 @@ operations. Allocation-free primitive operations can have an explicit zero-
 allocation contract; other allocation/byte budgets require units and a documented
 workload boundary. Post-GC retention uses a separate repeated-lifecycle test,
 not the timing sign test. Tail percentiles use F5's longer protocol.
+
+Two measured data points bound how tight those budgets can be. A
+behavior-neutral, layout-only 27-line change to `pkg/vm` moved 10 of 42
+benchmarks by more than 2%, maximum 4.2%, from code layout alone (#52) — any
+`pkg/vm` threshold below that is unfalsifiable, which bears on C and D. Separately,
+`PrototypeMethodAccess/WithDetailedStats/StringPrototypeMethod` has a sticky
+bimodal mode (~300ns/~384ns) that holds across all three samples of a `-count 3`
+capture, so min-of-N does not defend against it and a single capture can be off
+by ~27% depending on which mode it lands in (#48).
 
 Enable hard timing gates only on workload/environment lanes whose A/A history
 demonstrates acceptable false-alarm behavior and usable sensitivity. Gather that
