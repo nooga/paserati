@@ -5419,8 +5419,17 @@ func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expre
 	// Consume the '=' token (already checked in caller)
 	p.nextToken()
 
-	// Parse the right-hand side expression
-	destructure.Value = p.parseExpression(LOWEST)
+	// Parse the right-hand side expression at ARG_SEPARATOR precedence, not
+	// LOWEST (paserati#283): matching the plain-assignment path just above
+	// in parseAssignmentExpression, this must stop before a trailing comma
+	// operator - `[a, b] = c, d` is `([a, b] = c), d` (an assignment whose
+	// RHS is `c`, followed by `d`), not `[a, b] = (c, d)` (destructuring the
+	// *comma expression's* result). LOWEST let it swallow the comma and
+	// everything after it into the RHS, most visibly wrong when the
+	// destructuring assignment is itself the alternate of a ternary inside
+	// a comma expression (`cond ? x = y : [a, b] = c, d` miscompiled to
+	// destructure `(c, d)` instead of stopping the RHS at `c`).
+	destructure.Value = p.parseExpression(ARG_SEPARATOR)
 	if destructure.Value == nil {
 		p.addError(p.curToken, "expected expression after '=' in array destructuring assignment")
 		return nil
@@ -5570,8 +5579,10 @@ func (p *Parser) parseObjectDestructuringAssignment(objectLit *ObjectLiteral) Ex
 	// Consume the '=' token (already checked in caller)
 	p.nextToken()
 
-	// Parse the right-hand side expression
-	destructure.Value = p.parseExpression(LOWEST)
+	// Parse the right-hand side expression at ARG_SEPARATOR precedence, not
+	// LOWEST (paserati#283) - see the identical comment in
+	// parseArrayDestructuringAssignment.
+	destructure.Value = p.parseExpression(ARG_SEPARATOR)
 	if destructure.Value == nil {
 		p.addError(p.curToken, "expected expression after '=' in object destructuring assignment")
 		return nil
