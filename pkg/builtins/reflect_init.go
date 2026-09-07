@@ -304,72 +304,10 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Reflect.deleteProperty(target, propertyKey)
-	// Per ECMAScript spec, this invokes [[Delete]] and returns the result
+	// Per ECMAScript spec, this invokes [[Delete]] and returns the result.
+	// The dispatch across object kinds lives in reflect_delete.go.
 	reflectObj.SetOwnNonEnumerable("deleteProperty", vm.NewNativeFunction(2, false, "deleteProperty", func(args []vm.Value) (vm.Value, error) {
-		if len(args) < 2 {
-			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.deleteProperty requires 2 arguments")
-		}
-		target := args[0]
-		propKeyArg := args[1]
-
-		if !target.IsObject() {
-			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.deleteProperty called on non-object")
-		}
-
-		// Handle PlainObject
-		if target.Type() == vm.TypeObject {
-			po := target.AsPlainObject()
-			// Module Namespace Exotic Object [[Delete]] behavior (ECMAScript 10.4.6.8)
-			if po.IsModuleNamespace() {
-				if propKeyArg.Type() == vm.TypeSymbol {
-					// For symbols: return OrdinaryDelete(O, P)
-					// Check if property is non-configurable
-					symKey := vm.NewSymbolKey(propKeyArg)
-					if exists, nonConfig := po.IsOwnPropertyNonConfigurableByKey(symKey); exists && nonConfig {
-						// Non-configurable property - return false
-						return vm.BooleanValue(false), nil
-					}
-					// Property doesn't exist or is configurable - delete it
-					success := po.DeleteOwnByKey(symKey)
-					return vm.BooleanValue(success), nil
-				}
-				// For string properties: if the property exists in exports, return false
-				propKey := propKeyArg.ToString()
-				if _, exists := po.GetOwn(propKey); exists {
-					// Export property exists - return false (don't throw)
-					return vm.BooleanValue(false), nil
-				}
-				// Property doesn't exist in exports - return true
-				return vm.BooleanValue(true), nil
-			}
-
-			propKey := propKeyArg.ToString()
-
-			// Check if property exists and is non-configurable
-			exists, nonConfig := po.IsOwnPropertyNonConfigurable(propKey)
-			if exists && nonConfig {
-				// Non-configurable property - [[Delete]] returns false
-				return vm.BooleanValue(false), nil
-			}
-
-			// Delete the property
-			success := po.DeleteOwn(propKey)
-			return vm.BooleanValue(success), nil
-		}
-
-		// Handle DictObject
-		if target.Type() == vm.TypeDictObject {
-			d := target.AsDictObject()
-			propKey := propKeyArg.ToString()
-			success := d.DeleteOwn(propKey)
-			return vm.BooleanValue(success), nil
-		}
-
-		// Handle Array - arrays use PlainObject for property storage
-		// so they're handled by the PlainObject case above
-
-		// Default: property deleted successfully or didn't exist
-		return vm.BooleanValue(true), nil
+		return reflectDeletePropertyImpl(vmInstance, args)
 	}))
 
 	// Helper: check target is an object, throw TypeError if not (Reflect methods require objects)

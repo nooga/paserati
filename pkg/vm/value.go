@@ -3475,3 +3475,15 @@ func formatDateTimestamp(timestamp float64) string {
 	t := time.UnixMilli(int64(timestamp))
 	return t.Format("Mon Jan 02 2006 15:04:05 GMT-0700 (MST)")
 }
+
+// DeleteSymbolProp removes a symbol-keyed own property from the array object
+// and reports whether it was present. Symbol-keyed array properties are
+// ordinary configurable properties, so removal always succeeds.
+func (a *ArrayObject) DeleteSymbolProp(sym *SymbolObject) bool {
+	if a.symbolProps == nil {
+		return false
+	}
+	_, existed := a.symbolProps[sym]
+	delete(a.symbolProps, sym)
+	return existed
+}
