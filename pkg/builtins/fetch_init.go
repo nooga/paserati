@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,25 @@ import (
 
 // Priority constant for fetch
 const PriorityFetch = 200 // After most builtins
+
+// FetchResponseHeaderTimeout bounds how long fetch() waits for response
+// headers to arrive before failing with a network error; it does not bound
+// reading the body afterward (see doFetchRequestWithContext). Defaults to
+// 30s. A host embedding this engine may set this (before any fetch() call -
+// it is read fresh per-request but not synchronized against concurrent
+// in-flight requests) to match its own configurable timeout, or to 0 to
+// disable the timeout entirely (#290).
+var FetchResponseHeaderTimeout = 30 * time.Second
+
+// FetchProxy selects the proxy to use for a given outbound fetch() request,
+// in the same shape as http.Transport.Proxy. Defaults to
+// http.ProxyFromEnvironment so the standard HTTP_PROXY/HTTPS_PROXY/NO_PROXY
+// environment variables are respected without any host-side configuration -
+// http.Transport's own zero value leaves this nil, which silently makes
+// direct connections instead of erroring, so this default matters. A host
+// may override it (e.g. to force a specific proxy, or nil to disable
+// proxying) before any fetch() call (#290).
+var FetchProxy func(*http.Request) (*url.URL, error) = http.ProxyFromEnvironment
 
 type FetchInitializer struct{}
 
@@ -1227,7 +1247,8 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 	// longer than 30s and must not be killed mid-read (#205).
 	client := &http.Client{
 		Transport: &http.Transport{
-			ResponseHeaderTimeout: 30 * time.Second,
+			Proxy:                 FetchProxy,
+			ResponseHeaderTimeout: FetchResponseHeaderTimeout,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) > 0 {
