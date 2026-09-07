@@ -677,18 +677,21 @@ func (c *Compiler) compileArrayLiteralWithSpread(node *parser.ArrayLiteral, hint
 
 	// Process each element, adding to the result array
 	// Free registers eagerly to avoid exhaustion with large arrays
-	for _, elem := range node.Elements {
-		switch e := elem.(type) {
-		case *parser.SpreadElement:
+	for i, elem := range node.Elements {
+		if spreadElem, isSpread := elem.(*parser.SpreadElement); isSpread {
 			// Compile the spread expression (should be an array)
 			spreadReg := c.regAlloc.Alloc()
-			_, err := c.compileNode(e.Argument, spreadReg)
+			_, err := c.compileNode(spreadElem.Argument, spreadReg)
 			if err != nil {
 				c.regAlloc.Free(spreadReg)
 				return BadRegister, err
 			}
 
-			// Use OpArraySpread to append all elements from spreadReg to hint
+			// Use OpArraySpread to append all elements from spreadReg to
+			// hint - a real spread must read its source through the
+			// iterator protocol (which resolves a hole in the SOURCE array
+			// to a present Undefined, per spec), so this is deliberately
+			// NOT OpArrayAppendRaw.
 			c.emitOpCode(vm.OpArraySpread, line)
 			c.emitByte(byte(hint))      // DestReg: result array (modified in place)
 			c.emitByte(byte(spreadReg)) // SrcReg: array to spread
@@ -696,32 +699,30 @@ func (c *Compiler) compileArrayLiteralWithSpread(node *parser.ArrayLiteral, hint
 			// Free spreadReg immediately
 			c.regAlloc.Free(spreadReg)
 
-		default:
-			// Regular element: compile and add to array
+		} else {
+			// Regular element (or an elision - see ArrayLiteral.Elisions):
+			// compile it (or load the Hole sentinel for an elision) and
+			// append the raw register value directly. This used to wrap
+			// the element in a synthetic 1-element array and OpArraySpread
+			// that in, which - for an elision - would have resolved the
+			// Hole to Undefined via OpArraySpread's iterator-based read
+			// before it ever reached the destination, silently turning
+			// `[1,,...xs,,2]`'s holes into present undefined values
+			// (paserati#300 follow-up). OpArrayAppendRaw is a plain slice
+			// append (ArrayObject.Append), so a Hole - or any other value -
+			// survives unchanged.
 			elemReg := c.regAlloc.Alloc()
-			_, err := c.compileNode(elem, elemReg)
+			_, err := c.compileArrayLiteralElement(node, i, elemReg, line)
 			if err != nil {
 				c.regAlloc.Free(elemReg)
 				return BadRegister, err
 			}
 
-			// Create a temporary single-element array and spread it
-			singleElemArrayReg := c.regAlloc.Alloc()
-			c.emitOpCode(vm.OpMakeArray, line)
-			c.emitByte(byte(singleElemArrayReg)) // DestReg: temporary array
-			c.emitByte(byte(elemReg))            // StartReg: single element
-			c.emitByte(1)                        // Count: 1 element
+			c.emitOpCode(vm.OpArrayAppendRaw, line)
+			c.emitByte(byte(hint))    // DestReg: result array (modified in place)
+			c.emitByte(byte(elemReg)) // ValueReg: value to append as-is
 
-			// Free elemReg - no longer needed after MakeArray
 			c.regAlloc.Free(elemReg)
-
-			// Spread the single-element array into the result
-			c.emitOpCode(vm.OpArraySpread, line)
-			c.emitByte(byte(hint))               // DestReg: result array (modified in place)
-			c.emitByte(byte(singleElemArrayReg)) // SrcReg: single-element array
-
-			// Free singleElemArrayReg - no longer needed after spread
-			c.regAlloc.Free(singleElemArrayReg)
 		}
 	}
 

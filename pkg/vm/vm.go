@@ -8965,6 +8965,29 @@ startExecution:
 			// Update array length
 			destArray.length = len(destArray.elements)
 
+		// --- Spread-Literal Element Append ---
+		case OpArrayAppendRaw:
+			destReg := code[ip]
+			valueReg := code[ip+1]
+			ip += 2
+
+			destVal := registers[destReg]
+			if destVal.Type() != TypeArray {
+				frame.ip = ip
+				status := vm.runtimeError("OpArrayAppendRaw: destination must be an array, got '%v'", destVal.Type())
+				return status, Undefined
+			}
+
+			// A plain raw append - unlike OpArraySpread, this never reads
+			// valueReg through the iterator/[[Get]] protocol first, so a
+			// Hole value (an array-literal elision alongside a spread
+			// element in the same literal, e.g. [1,,...xs,,2] - see
+			// compileArrayLiteralWithSpread, paserati#300) survives the
+			// append unchanged instead of being resolved to Undefined.
+			destArray := AsArray(destVal)
+			destArray.elements = append(destArray.elements, registers[valueReg])
+			destArray.length = len(destArray.elements)
+
 		// --- NEW: Object Spread Support ---
 		case OpObjectSpread:
 			destReg := code[ip]
