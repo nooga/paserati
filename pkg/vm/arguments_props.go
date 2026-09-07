@@ -372,3 +372,11 @@ func (a *ArgumentsObject) argumentsDelete(key string) bool {
 	}
 	return true
 }
+
+// Delete is the exported [[Delete]] for a string key on an arguments object
+// (see argumentsDelete), for builtins such as Reflect.deleteProperty that
+// need the same semantics as the `delete` operator without going through
+// the OpDeleteIndex opcode.
+func (a *ArgumentsObject) Delete(key string) bool {
+	return a.argumentsDelete(key)
+}
