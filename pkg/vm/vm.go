@@ -3419,8 +3419,15 @@ startExecution:
 					// For arrays, check if the property is a valid index or known property
 					arrayObj := objVal.AsArray()
 					if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
-						// Check if index is within bounds
-						hasProperty = index < arrayObj.Length()
+						if arrayObj.HasOwnIndexProperty(propKey, index) {
+							hasProperty = true
+						} else {
+							// A hole (from `delete arr[i]`, a literal elision,
+							// or `new Array(n)`) is not an own property at
+							// all - fall through to the prototype chain like
+							// any other absent index (paserati#300).
+							hasProperty = vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(objVal), keyFromString(propKey))
+						}
 					} else if _, ok := arrayObj.GetOwn(propKey); ok {
 						hasProperty = true
 					} else if propKey == "length" {

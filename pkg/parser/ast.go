@@ -1656,6 +1656,19 @@ type ArrayLiteral struct {
 	BaseExpression              // Embed base for ComputedType (e.g., types.ArrayType)
 	Token          *lexer.Token // The '[' token
 	Elements       []Expression
+	// Elisions marks which of Elements is a genuine elision - a real hole
+	// written in source as an empty slot between commas ([1,,3], a
+	// trailing [1,2,,], or new Array-style leading/only commas [,,,]) -
+	// rather than an explicit `undefined`. Elements still holds an
+	// UndefinedLiteral placeholder at that position (so every other AST
+	// consumer - the checker, tuple-context checking, for-of spread
+	// compilation, and the cover-grammar conversion to a destructuring
+	// target - sees the exact same non-nil node shape it always has and
+	// needs no changes); only compileArrayLiteral (compile_literal.go)
+	// consults this parallel slice, to emit a real Hole value (paserati#300)
+	// instead of Undefined at that position. nil (not every literal has
+	// elisions) or, when non-nil, always the same length as Elements.
+	Elisions []bool
 }
 
 func (al *ArrayLiteral) expressionNode()      {}

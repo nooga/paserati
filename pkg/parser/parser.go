@@ -6493,12 +6493,23 @@ func (p *Parser) parseArrayLiteral() Expression {
 	// parseExpressionList expects an element expression before commas; for sparse arrays,
 	// treat missing elements as undefined placeholders.
 	elements := []Expression{}
+	var elisions []bool // lazily backfilled to stay parallel to elements - see below
+	sawElision := false
 	// Advance to first token after '['
 	p.nextToken()
 	for !p.curTokenIs(lexer.RBRACKET) && !p.curTokenIs(lexer.EOF) {
 		if p.curTokenIs(lexer.COMMA) {
-			// Elision: push an explicit undefined literal node
+			// Elision: push an explicit undefined literal node, and record
+			// this position as a genuine hole (as opposed to a literal
+			// `undefined`) for compileArrayLiteral - see ArrayLiteral.Elisions.
+			if !sawElision {
+				// First hole seen: backfill `false` for every element parsed
+				// so far so elisions stays index-aligned with elements.
+				elisions = make([]bool, len(elements))
+				sawElision = true
+			}
 			elements = append(elements, &UndefinedLiteral{Token: p.curToken})
+			elisions = append(elisions, true)
 			// Consume comma and continue; multiple commas generate multiple holes
 			p.nextToken()
 			continue
@@ -6532,6 +6543,10 @@ func (p *Parser) parseArrayLiteral() Expression {
 		}
 
 		elements = append(elements, elem)
+		if sawElision {
+			// Keep elisions parallel to elements once any hole has been seen.
+			elisions = append(elisions, false)
+		}
 		if debugParser {
 			debugPrint("parseArrayLiteral: appended element=%T ('%s')", elem, elem.String())
 		}
@@ -6555,6 +6570,7 @@ func (p *Parser) parseArrayLiteral() Expression {
 		return nil
 	}
 	array.Elements = elements
+	array.Elisions = elisions
 	return array
 }
 

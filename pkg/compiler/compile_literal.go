@@ -463,9 +463,29 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	return constIdx, freeSymbols, nil
 }
 
+// compileArrayLiteralElement compiles one element of an array literal
+// (identified by its position in node.Elements) into targetReg. A genuine
+// elision - node.Elisions[index] true, e.g. the middle slot of [1,,3] -
+// loads the Hole sentinel instead of compiling the UndefinedLiteral
+// placeholder Elements holds there, so the resulting array has a real
+// sparse hole at that index (paserati#300: HasIndex/hasOwnProperty/`in`/
+// Object.keys etc. all already treat a Hole value as an absent own
+// property) rather than a present element whose value happens to be
+// undefined.
+func (c *Compiler) compileArrayLiteralElement(node *parser.ArrayLiteral, index int, targetReg Register, line int) (Register, errors.PaseratiError) {
+	if index < len(node.Elisions) && node.Elisions[index] {
+		c.emitLoadNewConstant(targetReg, vm.Hole, line)
+		return targetReg, nil
+	}
+	return c.compileNode(node.Elements[index], targetReg)
+}
+
 func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register) (Register, errors.PaseratiError) {
 	elementCount := len(node.Elements)
-	// Normalize elisions (holes) to explicit undefined literals so runtime sees correct length and values
+	// Normalize elisions (holes) to explicit undefined literals so runtime sees correct length and values.
+	// This is now purely a safety net - the parser always fills Elements with
+	// an UndefinedLiteral at an elided position (see ArrayLiteral.Elisions) -
+	// but keep it in case some other AST construction path still leaves a nil.
 	for i, elem := range node.Elements {
 		if elem == nil {
 			node.Elements[i] = &parser.UndefinedLiteral{Token: parser.GetTokenFromNode(node)}
@@ -536,9 +556,9 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 			// (control flows to the chunking path below)
 		} else {
 			// Compile elements directly into contiguous positions
-			for i, elem := range node.Elements {
+			for i := range node.Elements {
 				targetReg := firstTargetReg + Register(i)
-				if _, err := c.compileNode(elem, targetReg); err != nil {
+				if _, err := c.compileArrayLiteralElement(node, i, targetReg, line); err != nil {
 					// Free already allocated registers on error
 					for j := 0; j < elementCount; j++ {
 						c.regAlloc.Free(firstTargetReg + Register(j))
@@ -596,21 +616,23 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 		// Try to allocate a contiguous block for this chunk
 		startReg, ok := c.regAlloc.TryAllocContiguous(n)
 		if !ok {
-			// If contiguous allocation fails, fall back to one-by-one insertion
+			// If contiguous allocation fails, fall back to one-by-one
+			// insertion via OpArrayCopy (count=1): a raw slice write into
+			// arrObj.elements, same as the chunk-copy path below - unlike
+			// OpSetIndex (a full property-set with prototype/setter/proxy
+			// semantics meant for real `arr[i] = v` assignments), this can't
+			// mishandle a Hole value from an elision (paserati#300).
 			for i := 0; i < n; i++ {
 				elemReg := c.regAlloc.Alloc()
-				if _, err := c.compileNode(node.Elements[offset+i], elemReg); err != nil {
+				if _, err := c.compileArrayLiteralElement(node, offset+i, elemReg, line); err != nil {
 					c.regAlloc.Free(elemReg)
 					return BadRegister, err
 				}
-				// Emit OpSetIndex to set array[offset+i] = element
-				indexReg := c.regAlloc.Alloc()
-				c.emitLoadNewConstant(indexReg, vm.Number(float64(offset+i)), line)
-				c.emitOpCode(vm.OpSetIndex, line)
-				c.emitByte(byte(hint))     // array
-				c.emitByte(byte(indexReg)) // index
-				c.emitByte(byte(elemReg))  // value
-				c.regAlloc.Free(indexReg)
+				c.emitOpCode(vm.OpArrayCopy, line)
+				c.emitByte(byte(hint))
+				c.emitUint16(uint16(offset + i))
+				c.emitByte(byte(elemReg))
+				c.emitByte(1)
 				c.regAlloc.Free(elemReg)
 			}
 			offset += n
@@ -618,7 +640,7 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 		}
 		// Compile chunk elements into the allocated registers
 		for i := 0; i < n; i++ {
-			if _, err := c.compileNode(node.Elements[offset+i], startReg+Register(i)); err != nil {
+			if _, err := c.compileArrayLiteralElement(node, offset+i, startReg+Register(i), line); err != nil {
 				// Free already allocated regs before returning
 				for j := 0; j <= i; j++ {
 					c.regAlloc.Free(startReg + Register(j))
