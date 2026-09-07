@@ -1,5 +1,43 @@
 package vm
 
+// HasOwnIndexProperty reports whether a numeric index is a genuine own
+// property of the array - the same three-way check ArrayObject.Get's
+// callers (hasOwnProperty, `in`, Object.keys/values/entries/
+// getOwnPropertyNames, Reflect.ownKeys, Object.assign,
+// getOwnPropertyDescriptor, and the Proxy invariant checks that mirror it)
+// must all agree on, or a hole (from `delete arr[i]`, a literal elision, or
+// `new Array(n)`) gets reported as a present property whose value happens
+// to be undefined (paserati#300):
+//
+//  1. An accessor explicitly installed at this index via
+//     Object.defineProperty takes priority - it's tracked separately from
+//     `elements` (see ArrayDefineOwnProperty's doc comment).
+//  2. Otherwise, HasIndex covers the dense `elements` range, correctly
+//     reporting a hole as absent.
+//  3. Beyond that range (see maxDenseArrayDefineIndex), a huge sparse index
+//     defined via Object.defineProperty (paserati#176/#178) is tracked in
+//     the properties map instead of `elements`, so it must still count as
+//     present even though HasIndex can't see it.
+//
+// propName must be index formatted as a decimal string (the same key
+// GetOwnAccessor/GetOwn use); callers that already have both the parsed int
+// and its string form pass both to avoid re-formatting.
+func (a *ArrayObject) HasOwnIndexProperty(propName string, index int) bool {
+	if index < 0 {
+		return false
+	}
+	if a.HasAccessors() {
+		if _, _, _, _, ok := a.GetOwnAccessor(propName); ok {
+			return true
+		}
+	}
+	if a.HasIndex(index) {
+		return true
+	}
+	_, ok := a.GetOwn(propName)
+	return ok
+}
+
 // maxDenseArrayDefineIndex bounds how far ArrayDefineOwnProperty will grow
 // the elements slice via ArrayObject.Set for a single index write. A valid
 // array index can be as large as 2^32-2 (ArraySetLength's bound - see

@@ -1397,6 +1397,15 @@ func (v Value) ToString() string {
 		return "null"
 	case TypeUndefined:
 		return "undefined"
+	case TypeHole:
+		// Hole is never itself a user-observable value - ArrayObject.Get
+		// converts it to Undefined before user code ever sees one - so this
+		// case exists only to give bytecode disassembly (-bytecode, which
+		// calls ToString on every constant, including a Hole emitted for an
+		// array-literal elision - see compileArrayLiteralElement,
+		// paserati#300) something readable instead of falling into the
+		// generic "<unknown type N>" fallback below.
+		return "<hole>"
 	case TypeRegExp:
 		regex := v.AsRegExpObject()
 		if regex != nil {
@@ -1795,6 +1804,15 @@ func (v Value) inspectWithDepth(nested bool, depth int, maxDepth int) string {
 		return "null"
 	case TypeUndefined:
 		return "undefined"
+	case TypeHole:
+		// A real sparse hole (`delete arr[i]`, a literal elision like
+		// [1,,3], or new Array(n) - paserati#300) reaches this via the
+		// TypeArray case above iterating arr.elements directly; unlike a
+		// property read (which HasIndex/Get already turn into Undefined
+		// before user code sees it), inspecting the array exposes the hole
+		// itself. Node/V8 group consecutive holes into "<N empty items>";
+		// this is the simpler per-element form, not that compact grouping.
+		return "<empty>"
 	case TypeRegExp:
 		regex := v.AsRegExpObject()
 		if regex != nil {
@@ -1940,8 +1958,15 @@ func (v Value) Is(other Value) bool {
 
 	// Types are the same
 	switch v.typ {
-	case TypeUndefined, TypeNull:
-		return true // Singleton types are always equal to themselves
+	case TypeUndefined, TypeNull, TypeHole:
+		// Singleton types are always equal to themselves. TypeHole is
+		// included here purely so the constant pool's dedup can compare
+		// two Hole constants (emitted for array-literal elisions, see
+		// compileArrayLiteralElement, paserati#300) without hitting the
+		// panic below - Hole is never itself a user-observable value
+		// (ArrayObject.Get converts it to Undefined before user code ever
+		// sees it), so this never affects real equality semantics.
+		return true
 	case TypeBoolean:
 		return v.AsBoolean() == other.AsBoolean() // Compare boolean payloads directly
 	case TypeIntegerNumber:
@@ -2008,8 +2033,15 @@ func (v Value) StrictlyEquals(other Value) bool {
 
 	// Types are the same
 	switch v.typ {
-	case TypeUndefined, TypeNull:
-		return true // Singleton types are always equal to themselves
+	case TypeUndefined, TypeNull, TypeHole:
+		// Singleton types are always equal to themselves. TypeHole is
+		// included defensively for the same reason as in Is() above - a
+		// Hole never actually reaches this comparison today (it's only
+		// ever live in a register between emitLoadNewConstant and the
+		// immediately following OpMakeArray/OpArrayCopy/OpAllocArray), but
+		// there's no reason to leave a latent panic here for whoever next
+		// puts one somewhere new.
+		return true
 	case TypeBoolean:
 		return v.AsBoolean() == other.AsBoolean()
 	case TypeIntegerNumber:

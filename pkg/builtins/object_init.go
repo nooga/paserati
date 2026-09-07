@@ -199,18 +199,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// array's elision, or a prior `delete arr[i]`) as absent
 			// rather than just checking the index is in bounds.
 			if index, err := strconv.Atoi(propName); err == nil && index >= 0 {
-				if arrObj.HasAccessors() {
-					if _, _, _, _, ok := arrObj.GetOwnAccessor(propName); ok {
-						return vm.BooleanValue(true), nil
-					}
-				}
-				if arrObj.HasIndex(index) {
-					return vm.BooleanValue(true), nil
-				}
-				// Beyond the dense elements slice: a huge sparse index (see
-				// maxDenseArrayDefineIndex) is tracked in the properties map.
-				_, hasOwn := arrObj.GetOwn(propName)
-				return vm.BooleanValue(hasOwn), nil
+				return vm.BooleanValue(arrObj.HasOwnIndexProperty(propName, index)), nil
 			}
 			// Check custom named properties (e.g., pos, end for TypeScript node arrays)
 			_, hasOwn := arrObj.GetOwn(propName)
@@ -1940,7 +1929,11 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	case vm.TypeArray:
 		arrObj := obj.AsArray()
 		for i := 0; i < arrObj.Length(); i++ {
-			keysArray.Append(vm.NewString(strconv.Itoa(i)))
+			key := strconv.Itoa(i)
+			if !arrObj.HasOwnIndexProperty(key, i) {
+				continue // hole - not an own property at all (paserati#300)
+			}
+			keysArray.Append(vm.NewString(key))
 		}
 		// Named own properties (an exec result's index/input/groups/indices,
 		// or anything stored on the array) follow the indices.
@@ -2353,6 +2346,10 @@ func objectValuesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	case vm.TypeArray:
 		arrObj := obj.AsArray()
 		for i := 0; i < arrObj.Length(); i++ {
+			key := strconv.Itoa(i)
+			if !arrObj.HasOwnIndexProperty(key, i) {
+				continue // hole - not an own property at all (paserati#300)
+			}
 			valuesArray.Append(arrObj.Get(i))
 		}
 	case vm.TypeFunction:
@@ -2471,8 +2468,12 @@ func objectEntriesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	case vm.TypeArray:
 		arrObj := obj.AsArray()
 		for i := 0; i < arrObj.Length(); i++ {
+			key := strconv.Itoa(i)
+			if !arrObj.HasOwnIndexProperty(key, i) {
+				continue // hole - not an own property at all (paserati#300)
+			}
 			entry := vm.NewArray()
-			entry.AsArray().Append(vm.NewString(strconv.Itoa(i)))
+			entry.AsArray().Append(vm.NewString(key))
 			entry.AsArray().Append(arrObj.Get(i))
 			entriesArray.Append(entry)
 		}
@@ -2578,7 +2579,11 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 	case vm.TypeArray:
 		a := obj.AsArray()
 		for i := 0; i < a.Length(); i++ {
-			arrObj.Append(vm.NewString(strconv.Itoa(i)))
+			key := strconv.Itoa(i)
+			if !a.HasOwnIndexProperty(key, i) {
+				continue // hole - not an own property at all (paserati#300)
+			}
+			arrObj.Append(vm.NewString(key))
 		}
 		arrObj.Append(vm.NewString("length"))
 		for _, key := range a.NamedPropertyKeys() {
@@ -2778,7 +2783,11 @@ func reflectOwnKeysImpl(args []vm.Value) (vm.Value, error) {
 	} else if obj.Type() == vm.TypeArray {
 		a := obj.AsArray()
 		for i := 0; i < a.Length(); i++ {
-			outArr.Append(vm.NewString(strconv.Itoa(i)))
+			key := strconv.Itoa(i)
+			if !a.HasOwnIndexProperty(key, i) {
+				continue // hole - not an own property at all (paserati#300)
+			}
+			outArr.Append(vm.NewString(key))
 		}
 		outArr.Append(vm.NewString("length"))
 	}
@@ -2947,6 +2956,9 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			// For arrays, copy indexed properties
 			for i := 0; i < arrObj.Length(); i++ {
 				key := strconv.Itoa(i)
+				if !arrObj.HasOwnIndexProperty(key, i) {
+					continue // hole - not an own property at all, nothing to copy (paserati#300)
+				}
 				value := arrObj.Get(i)
 				if err := setObjectAssignTargetProperty(vmInstance, target, key, value); err != nil {
 					return vm.Undefined, err
@@ -3032,8 +3044,8 @@ func objectHasOwnWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			return vm.BooleanValue(true), nil
 		}
 		// Check numeric indices
-		if index, err := strconv.Atoi(propName); err == nil {
-			return vm.BooleanValue(index >= 0 && index < arrObj.Length()), nil
+		if index, err := strconv.Atoi(propName); err == nil && index >= 0 {
+			return vm.BooleanValue(arrObj.HasOwnIndexProperty(propName, index)), nil
 		}
 	}
 
@@ -3993,7 +4005,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 				if propName == "length" {
 					targetDescFound = true
 					targetConfigurable = false
-				} else if index, parseErr := strconv.Atoi(propName); parseErr == nil && index >= 0 && index < arrObj.Length() {
+				} else if index, parseErr := strconv.Atoi(propName); parseErr == nil && index >= 0 && arrObj.HasOwnIndexProperty(propName, index) {
 					targetDescFound = true
 					targetConfigurable = !arrObj.IsFrozen()
 				} else if _, desc, ok := arrObj.GetOwnPropertyDescriptor(propName); ok {
@@ -4252,6 +4264,13 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			descriptor.SetOwn("configurable", vm.BooleanValue(false))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		} else if index, err := strconv.Atoi(propName); err == nil && index >= 0 && index < arrObj.Length() {
+			// A hole (from `delete arr[i]`, a literal elision, or `new
+			// Array(n)`) is not an own property at all - report undefined
+			// rather than a data descriptor whose value happens to be
+			// undefined (paserati#300).
+			if !arrObj.HasOwnIndexProperty(propName, index) {
+				return vm.Undefined, nil
+			}
 			value = arrObj.Get(index)
 			// arrObj.Get only looks at the dense .elements slice; an index
 			// beyond maxDenseArrayDefineIndex/maxDenseArraySetIndex is

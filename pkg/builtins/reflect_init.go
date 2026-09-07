@@ -432,9 +432,15 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		case vm.TypeArray:
 			arrayObj := target.AsArray()
-			// Add numeric indices
+			// Add numeric indices - skipping holes (paserati#300): a hole
+			// from `delete arr[i]`, a literal elision, or `new Array(n)` is
+			// not an own property at all.
 			for i := 0; i < arrayObj.Length(); i++ {
-				arr.Append(vm.NewString(strconv.Itoa(i)))
+				key := strconv.Itoa(i)
+				if !arrayObj.HasOwnIndexProperty(key, i) {
+					continue
+				}
+				arr.Append(vm.NewString(key))
 			}
 			// Add "length"
 			arr.Append(vm.NewString("length"))
