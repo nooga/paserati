@@ -1479,6 +1479,30 @@ func (vm *VM) InterpretWithCallerScope(chunk *Chunk, callerRegs []Value, callerT
 	return result, errs
 }
 
+// setTailCallHomeObject gives a tail-called callee its [[HomeObject]] for
+// super property access (see prepareCall in call.go). Arrow functions read
+// their captured [[HomeObject]] (frame.closure.CapturedHomeObject) at use
+// time, so the frame's own field is left alone for them.
+//
+// Kept out of (*VM).run deliberately. Inlined in the OpTailCall and
+// OpTailCallMethod cases, these lines grew run's amd64 stack frame by four
+// spill slots and cost 28% on a call-free arithmetic loop that never reaches
+// them; the dispatch loop's register allocation is the thing being protected.
+//
+//go:noinline
+func setTailCallHomeObject(frame *CallFrame, calleeFunc *FunctionObject, thisVal Value) {
+	if calleeFunc.IsArrowFunction {
+		return
+	}
+	if calleeFunc.HomeObject.Type() != TypeUndefined && calleeFunc.HomeObject.Type() != TypeNull {
+		frame.homeObject = calleeFunc.HomeObject
+	} else if thisVal.Type() != TypeUndefined && thisVal.Type() != TypeNull {
+		frame.homeObject = thisVal
+	} else {
+		frame.homeObject = Undefined
+	}
+}
+
 // run is the main execution loop.
 // It now returns the InterpretResult status AND the final script Value.
 func (vm *VM) run() (status InterpretResult, resultValue Value) {
@@ -3877,18 +3901,7 @@ startExecution:
 							frame.thisValue = Undefined
 						}
 					}
-					// Set [[HomeObject]] for super property access (see prepareCall in call.go).
-					// Arrow functions use their captured [[HomeObject]] (frame.closure.CapturedHomeObject)
-					// at read time, so frame.homeObject itself doesn't need updating for them.
-					if !calleeFunc.IsArrowFunction {
-						if calleeFunc.HomeObject.Type() != TypeUndefined && calleeFunc.HomeObject.Type() != TypeNull {
-							frame.homeObject = calleeFunc.HomeObject
-						} else if frame.thisValue.Type() != TypeUndefined && frame.thisValue.Type() != TypeNull {
-							frame.homeObject = frame.thisValue
-						} else {
-							frame.homeObject = Undefined
-						}
-					}
+					setTailCallHomeObject(frame, calleeFunc, frame.thisValue)
 					frame.isConstructorCall = false
 					frame.isDirectCall = false
 					frame.isSentinelFrame = false
@@ -4110,18 +4123,7 @@ startExecution:
 					} else {
 						frame.thisValue = thisVal // Method call: preserve 'this'
 					}
-					// Set [[HomeObject]] for super property access (see prepareCall in call.go).
-					// Arrow functions use their captured [[HomeObject]] (frame.closure.CapturedHomeObject)
-					// at read time, so frame.homeObject itself doesn't need updating for them.
-					if !calleeFunc.IsArrowFunction {
-						if calleeFunc.HomeObject.Type() != TypeUndefined && calleeFunc.HomeObject.Type() != TypeNull {
-							frame.homeObject = calleeFunc.HomeObject
-						} else if thisVal.Type() != TypeUndefined && thisVal.Type() != TypeNull {
-							frame.homeObject = thisVal
-						} else {
-							frame.homeObject = Undefined
-						}
-					}
+					setTailCallHomeObject(frame, calleeFunc, thisVal)
 					frame.isConstructorCall = false
 					frame.isDirectCall = false
 					frame.isSentinelFrame = false
