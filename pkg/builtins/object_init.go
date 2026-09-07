@@ -3765,8 +3765,17 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 					return vm.Undefined, vmInstance.NewTypeError("Cannot redefine property: " + propName)
 				}
 			}
+			// A generic descriptor (no value/writable/get/set - e.g. just
+			// {enumerable: true}) must not change an existing property's
+			// kind (ValidateAndApplyPropertyDescriptor, ES2025 10.1.6.3): if
+			// the property is already an accessor, route it through the
+			// accessor path (which leaves an unspecified getter/setter
+			// untouched) rather than the data path, which would otherwise
+			// stomp the accessor with a data property whose value defaults
+			// to undefined.
+			useAccessorPath := hasGetter || hasSetter || (exists && isAccessor0 && !hasValue && !hasWritable)
 			var defined bool
-			if hasGetter || hasSetter {
+			if useAccessorPath {
 				// Accessor path
 				if keyIsSymbol {
 					defined = plainObj.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
