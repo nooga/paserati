@@ -515,6 +515,9 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 	// Parse the source code
 	lx := lexer.NewLexer(source)
 	p := parser.NewParser(lx)
+	// Per ECMA-262 20.2.1.1.1 CreateDynamicFunction, the body parses with the
+	// FunctionBody goal - reject import/export declarations and import.meta.
+	p.SetDisallowModuleSyntax(true)
 	prog, parseErrs := p.ParseProgram()
 	if len(parseErrs) > 0 {
 		return vm.Undefined, vmInstance.NewSyntaxError(parseErrs[0].Error())
@@ -625,6 +628,9 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 	// Parse the source code
 	lx := lexer.NewLexer(source)
 	p := parser.NewParser(lx)
+	// Per ECMA-262 20.2.1.1.1 CreateDynamicFunction, the body parses with the
+	// FunctionBody goal - reject import/export declarations and import.meta.
+	p.SetDisallowModuleSyntax(true)
 	prog, parseErrs := p.ParseProgram()
 	if len(parseErrs) > 0 {
 		return vm.Undefined, vmInstance.NewSyntaxError(parseErrs[0].Error())
