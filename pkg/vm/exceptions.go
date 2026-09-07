@@ -260,7 +260,17 @@ func (vm *VM) unwindException() bool {
 		}
 
 		// fmt.Printf("[DEBUG] unwindException: No handler in frame %d, unwinding to caller\n", vm.frameCount-1)
-		// No handler in current frame and not a direct call boundary, unwind to caller
+		// No handler in current frame and not a direct call boundary, unwind to caller.
+		// Close the frame's open upvalues first, exactly as OpReturn does: a
+		// closure created inside this frame that escaped (stored on an outer
+		// variable, registered as a callback) still aliases this frame's
+		// register slots through them, and the handler frame we resume in -
+		// or the next call made from it - reuses those slots straight away.
+		// Skipping this made `let x = 1; h = () => x; throw ...` observe
+		// whatever the next function call wrote into x's slot.
+		if frame.openUpvalues != nil {
+			vm.closeFrameUpvalues(frame)
+		}
 		vm.frameCount--
 		// For register-based VM, just decrement frame count
 		// Register cleanup is handled by the frame management

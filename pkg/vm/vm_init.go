@@ -1786,6 +1786,15 @@ func (vm *VM) putSentinelReg(r []Value) {
 // negative). Left as a documented pre-existing gap rather than a local fix
 // that isn't provably correct; see issue #61.
 func (vm *VM) truncateFramesTo(entryCount int) {
+	// unwindException leaves the native-boundary frame it stopped at on the
+	// stack without popping it; dropping it here retires it for good, so its
+	// open upvalues must be closed like any other returning frame's (see the
+	// matching note in unwindException's pop loop).
+	for i := vm.frameCount - 1; i >= entryCount && i >= 0; i-- {
+		if f := &vm.frames[i]; f.openUpvalues != nil {
+			vm.closeFrameUpvalues(f)
+		}
+	}
 	vm.frameCount = entryCount
 	vm.unwindingCrossedNative = false
 }
