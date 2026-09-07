@@ -303,6 +303,19 @@ const (
 	OpAllocArray OpCode = 77 // Rx Len(16bit): Preallocate array of length Len into Rx, filled with undefined
 	OpArrayCopy  OpCode = 78 // Rx DestOffset(16bit) StartReg Count: Copy Count registers starting at StartReg into Rx at DestOffset
 
+	// --- Spread-Literal Element Append ---
+	// OpArrayAppendRaw appends the raw value in Ry to the end of the array in
+	// Rx (growing .length by 1), the same plain slice-append ArrayObject.Append
+	// already does in Go - unlike OpArraySpread, it never reads Ry through the
+	// iterator protocol first, so a Hole value (an array-literal elision - see
+	// compileArrayLiteralElement, paserati#300) survives the append unchanged
+	// instead of being resolved to Undefined. compileArrayLiteralWithSpread
+	// uses this for every regular (non-spread) element in a literal that also
+	// has a spread element, since the destination array's length at that
+	// point is only known at runtime (a prior spread may have contributed a
+	// variable number of items), ruling out OpArrayCopy's compile-time offset.
+	OpArrayAppendRaw OpCode = 179 // Rx Ry: Rx.elements = append(Rx.elements, Ry); Rx.length++
+
 	// --- Accessor Property Support ---
 	OpDefineAccessor        OpCode = 80 // ObjReg GetterReg SetterReg NameIdx(16bit): Define accessor property on object
 	OpDefineAccessorDynamic OpCode = 84 // ObjReg GetterReg SetterReg NameReg: Define accessor property with dynamic name
@@ -671,6 +684,8 @@ func (op OpCode) String() string {
 		return "OpAllocArray"
 	case OpArrayCopy:
 		return "OpArrayCopy"
+	case OpArrayAppendRaw:
+		return "OpArrayAppendRaw"
 	case OpDefineAccessor:
 		return "OpDefineAccessor"
 	case OpDefineAccessorDynamic:
@@ -1170,6 +1185,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpArraySlice:
 		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset)
 	case OpArraySpread:
+		return c.registerRegisterInstruction(builder, instruction.String(), offset)
+	case OpArrayAppendRaw:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset)
 	case OpObjectSpread:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset)
