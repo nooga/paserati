@@ -427,6 +427,10 @@ func (p *Paserati) EvalCode(code string, inheritStrict bool) (vm.Value, []error)
 	// Parse the source code
 	lx := lexer.NewLexer(code)
 	ps := parser.NewParser(lx)
+	// Per ECMA-262 19.2.1.1 PerformEval, eval always parses with the Script
+	// goal, regardless of whether the calling context is a module - reject
+	// import/export/import.meta and top-level await.
+	ps.SetDisallowModuleSyntax(true)
 	// Set strict mode before parsing so legacy octal etc. are rejected during parse
 	if inheritStrict {
 		ps.SetStrictMode(true)
@@ -490,6 +494,9 @@ func (p *Paserati) IndirectEvalCode(code string) (vm.Value, []error) {
 	lx := lexer.NewLexer(code)
 	ps := parser.NewParser(lx)
 	ps.SetDisallowSuper(true)
+	// Per ECMA-262 19.2.1.1 PerformEval, eval always parses with the Script
+	// goal - reject import/export/import.meta and top-level await.
+	ps.SetDisallowModuleSyntax(true)
 	prog, parseErrs := ps.ParseProgram()
 	if len(parseErrs) > 0 {
 		errs := make([]error, len(parseErrs))
@@ -547,6 +554,10 @@ func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm
 	// Parse the source code
 	lx := lexer.NewLexer(code)
 	ps := parser.NewParser(lx)
+	// Per ECMA-262 19.2.1.1 PerformEval, eval always parses with the Script
+	// goal, regardless of whether the calling context is a module - reject
+	// import/export/import.meta and top-level await.
+	ps.SetDisallowModuleSyntax(true)
 	// Set strict mode before parsing so legacy octal etc. are rejected during parse
 	if inheritStrict {
 		ps.SetStrictMode(true)

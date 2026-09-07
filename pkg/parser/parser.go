@@ -66,6 +66,14 @@ type Parser struct {
 	// Eval context flags
 	disallowSuper bool // When true, super expressions throw SyntaxError (for indirect eval)
 
+	// disallowModuleSyntax is set when parsing with the Script or FunctionBody
+	// grammar goal (eval, new Function/AsyncFunction) rather than the Module
+	// goal. Per ECMA-262 19.2.1.1 (PerformEval) and 20.2.1.1.1
+	// (CreateDynamicFunction), such code must raise an early SyntaxError for
+	// import/export declarations and import.meta, which are Module-only
+	// productions.
+	disallowModuleSyntax bool
+
 	// Strict mode tracking
 	strictMode bool // True when parsing strict mode code
 
@@ -429,6 +437,24 @@ func (p *Parser) SetDisallowSuper(disallow bool) {
 	p.disallowSuper = disallow
 }
 
+// SetDisallowModuleSyntax switches this parse to the Script/FunctionBody
+// grammar goal: import/export declarations and import.meta become early
+// SyntaxErrors, matching PerformEval (ECMA-262 19.2.1.1) and
+// CreateDynamicFunction (20.2.1.1.1). Call this immediately after
+// constructing the parser, before any tokens are consumed - it also bumps
+// the "inside a non-async function" context so an unparenthesized top-level
+// 'await' in this parse is treated as a plain identifier reference rather
+// than an AwaitExpression, exactly as it already is inside an ordinary
+// (non-async) function body: neither eval nor a Function()/AsyncFunction()
+// body's outermost statement list is Module top-level, so top-level await
+// never applies there.
+func (p *Parser) SetDisallowModuleSyntax(disallow bool) {
+	p.disallowModuleSyntax = disallow
+	if disallow {
+		p.inNonAsyncFunction++
+	}
+}
+
 // SetStrictMode sets whether the parser should operate in strict mode.
 // This is used for eval() to inherit strict mode from the calling context.
 func (p *Parser) SetStrictMode(strict bool) {
@@ -706,12 +732,18 @@ func (p *Parser) parseStatement() Statement {
 	case lexer.IMPORT:
 		// Check if this is import.meta, import(), or import declaration
 		if p.peekTokenIs(lexer.DOT) {
-			// This is import.meta, parse as expression statement
+			// This is import.meta/import.defer/import.source - parse as an
+			// expression statement; parseImportMetaExpression rejects it
+			// itself when disallowModuleSyntax is set.
 			return p.parseExpressionStatement()
 		}
 		if p.peekTokenIs(lexer.LPAREN) {
-			// This is import(), parse as expression statement (dynamic import)
+			// This is import(), parse as expression statement (dynamic
+			// import) - a Script-goal production, always allowed.
 			return p.parseExpressionStatement()
+		}
+		if p.disallowModuleSyntax {
+			p.addError(p.curToken, "SyntaxError: 'import' declarations are only valid in module code")
 		}
 		// A nil *ImportDeclaration must not escape as a non-nil Statement.
 		if decl := p.parseImportDeclaration(); decl != nil {
@@ -719,6 +751,9 @@ func (p *Parser) parseStatement() Statement {
 		}
 		return nil
 	case lexer.EXPORT:
+		if p.disallowModuleSyntax {
+			p.addError(p.curToken, "SyntaxError: 'export' declarations are only valid in module code")
+		}
 		return p.parseExportDeclaration()
 	case lexer.LBRACE:
 		// Check if this is a block statement or destructuring assignment
@@ -2519,10 +2554,16 @@ func (p *Parser) parseImportMetaExpression() Expression {
 		p.nextToken() // Move to '.'
 		if p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "meta" {
 			p.nextToken() // Move to 'meta'
+			if p.disallowModuleSyntax {
+				p.addError(importToken, "SyntaxError: 'import.meta' is only valid in module code")
+			}
 			return &ImportMetaExpression{Token: importToken}
 		} else if p.peekTokenIs(lexer.IDENT) && (p.peekToken.Literal == "defer" || p.peekToken.Literal == "source") {
 			importPhase := p.peekToken.Literal
 			p.nextToken() // Move to 'defer' or 'source'
+			if p.disallowModuleSyntax {
+				p.addError(importToken, "SyntaxError: 'import."+importPhase+"' is only valid in module code")
+			}
 
 			// Expect LPAREN after defer/source
 			if !p.expectPeek(lexer.LPAREN) {
