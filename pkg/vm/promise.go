@@ -480,130 +480,155 @@ func (vm *VM) PromiseThen(thisPromise Value, onFulfilled, onRejected Value) (Val
 	return vm.NewPromiseFromExecutor(executor)
 }
 
-// IterableToArray converts an iterable value to an array
-// Supports arrays directly and any object with Symbol.iterator
+// maxIterableToArrayIterations bounds how many elements IterableToArray pulls
+// from a custom (Generator or arbitrary Symbol.iterator) iterable before
+// giving up. Promise.all/allSettled/any/race all eagerly materialize their
+// argument into an array up front, unlike the spec's PerformPromiseAll et al,
+// which interleave iteration with per-element resolution - so an iterable
+// that never reports done hangs the VM forever converting it, rather than
+// getting the chance to fail fast the way a real interleaved implementation
+// would (a handful of Test262 tests pair a never-done iterator with a
+// same-tick `resolve()`/`.then()` that throws immediately, expecting exactly
+// that fast, bounded failure). extractSpreadArguments has no such cap, and
+// must not gain one here - `[...infiniteIterator]` genuinely never
+// terminates in real engines either, and that's the correct, spec-mandated
+// behavior for spread.
+const maxIterableToArrayIterations = 10000
+
+// IterableToArray converts an iterable value to an array.
+// Supports arrays directly, plus anything else the iterator protocol covers.
+//
+// This used to hand-roll its own Symbol.iterator lookup and next()/done/value
+// walk, guarding every step with `value.IsObject()` before unconditionally
+// calling `.AsPlainObject()`. IsObject() is true for the whole object-ish
+// span of ValueTypes (TypeObject..TypeProxy), not just TypeObject, so any
+// iterable that wasn't a plain object - a generator (Generator[Symbol.iterator]()
+// returns itself, a TypeGenerator value, not TypeObject), a Set, a Map, ...
+// - made AsPlainObject() panic with "value is not an object" (paserati#293,
+// hit via `new AggregateError(someGenerator)`; the same call chain is shared
+// by Promise.all/allSettled/any/race).
+//
+// Types that are inherently finite (String/Arguments/Set/Map - Array is
+// handled directly above) delegate to extractSpreadArguments, which already
+// implements the iterator protocol correctly for them. Generator and
+// everything else fall through to iterateBounded below instead, since those
+// can be infinite and this function - unlike `...spread` - needs a cap (see
+// maxIterableToArrayIterations).
 func (vm *VM) IterableToArray(value Value) (Value, error) {
 	// If it's already an array, return it
 	if value.Type() == TypeArray {
 		return value, nil
 	}
 
-	// Try to get Symbol.iterator
-	if vm.SymbolIterator.Type() == TypeUndefined {
-		return Undefined, fmt.Errorf("value is not iterable")
-	}
-
-	// Get value[Symbol.iterator]
-	var iteratorMethod Value
-	if value.IsObject() {
-		// Try to get the Symbol.iterator property using the symbol key
-		obj := value.AsPlainObject()
-		if obj != nil {
-			if method, exists := obj.GetOwnByKey(NewSymbolKey(vm.SymbolIterator)); exists {
-				iteratorMethod = method
-			}
+	switch value.Type() {
+	case TypeString, TypeArguments, TypeSet, TypeMap:
+		elements, err := vm.extractSpreadArguments(value)
+		if err != nil {
+			return Undefined, err
 		}
-		// DictObjects don't support symbol keys, so skip them
+		return vm.NewArrayFromSlice(elements), nil
+	default:
+		return vm.iterableToArrayBounded(value)
+	}
+}
+
+// iterableToArrayBounded implements the generic ES6 iterator protocol
+// (Symbol.iterator lookup walked across the TypeObject/TypeGenerator/
+// TypeAsyncGenerator/TypeDictObject prototype chain, exactly like
+// extractSpreadArguments's own default case) capped at
+// maxIterableToArrayIterations calls to next().
+func (vm *VM) iterableToArrayBounded(value Value) (Value, error) {
+	if vm.SymbolIterator.Type() == TypeUndefined {
+		return Undefined, vm.NewTypeError(fmt.Sprintf("%s is not iterable", value.TypeName()))
 	}
 
-	// If no iterator method found, it's not iterable
-	if iteratorMethod.Type() == TypeUndefined || !iteratorMethod.IsCallable() {
-		return Undefined, fmt.Errorf("value is not iterable")
+	iteratorMethod := Undefined
+	found := false
+	iterKey := NewSymbolKey(vm.SymbolIterator)
+	current := value
+
+	for current.Type() != TypeNull && current.Type() != TypeUndefined {
+		switch current.Type() {
+		case TypeObject:
+			obj := current.AsPlainObject()
+			if g, _, _, _, ok := obj.GetOwnAccessorByKey(iterKey); ok && g.Type() != TypeUndefined {
+				res, err := vm.Call(g, value, nil)
+				if err != nil {
+					return Undefined, err
+				}
+				iteratorMethod = res
+				found = true
+			} else if val, ok := obj.GetOwnByKey(iterKey); ok {
+				iteratorMethod = val
+				found = true
+			} else {
+				current = obj.prototype
+				continue
+			}
+		case TypeGenerator:
+			genObj := current.AsGenerator()
+			if genObj.Prototype == nil {
+				return Undefined, vm.NewTypeError(fmt.Sprintf("%s is not iterable", value.TypeName()))
+			}
+			current = NewValueFromPlainObject(genObj.Prototype)
+			continue
+		case TypeAsyncGenerator:
+			genObj := current.AsAsyncGenerator()
+			if genObj.Prototype == nil {
+				return Undefined, vm.NewTypeError(fmt.Sprintf("%s is not iterable", value.TypeName()))
+			}
+			current = NewValueFromPlainObject(genObj.Prototype)
+			continue
+		case TypeDictObject:
+			// DictObjects don't support symbol keys, so there's nothing to
+			// find on this link - just keep walking its prototype.
+			current = current.AsDictObject().prototype
+			continue
+		default:
+			return Undefined, vm.NewTypeError(fmt.Sprintf("%s is not iterable", value.TypeName()))
+		}
+		break
 	}
 
-	// Call the iterator method to get the iterator object
+	if !found || !iteratorMethod.IsCallable() {
+		return Undefined, vm.NewTypeError(fmt.Sprintf("%s is not iterable", value.TypeName()))
+	}
+
 	iteratorObj, err := vm.Call(iteratorMethod, value, []Value{})
 	if err != nil {
 		return Undefined, err
 	}
 
-	// Get the next method
-	var nextMethod Value
-	if iteratorObj.IsObject() {
-		obj := iteratorObj.AsPlainObject()
-		if obj != nil {
-			if next, exists := obj.GetOwn("next"); exists {
-				nextMethod = next
-			}
-		} else if iteratorObj.Type() == TypeDictObject {
-			dictObj := iteratorObj.AsDictObject()
-			if next, exists := dictObj.GetOwn("next"); exists {
-				nextMethod = next
-			}
-		}
+	nextMethod, err := vm.GetProperty(iteratorObj, "next")
+	if err != nil {
+		return Undefined, err
 	}
-
 	if !nextMethod.IsCallable() {
-		return Undefined, fmt.Errorf("iterator does not have a next method")
+		return Undefined, vm.NewTypeError("iterator does not have a next method")
 	}
 
-	// Collect all values from the iterator
 	var elements []Value
-	maxIterations := 10000 // Safety limit
-	for i := 0; i < maxIterations; i++ {
-		// Call next()
+	for i := 0; i < maxIterableToArrayIterations; i++ {
 		result, err := vm.Call(nextMethod, iteratorObj, []Value{})
 		if err != nil {
 			return Undefined, err
 		}
 
-		// Get result.done
-		var done Value = Undefined
-		if result.IsObject() {
-			obj := result.AsPlainObject()
-			if obj != nil {
-				if d, exists := obj.GetOwn("done"); exists {
-					done = d
-				}
-			} else if result.Type() == TypeDictObject {
-				dictObj := result.AsDictObject()
-				if d, exists := dictObj.GetOwn("done"); exists {
-					done = d
-				}
-			}
+		done, err := vm.GetProperty(result, "done")
+		if err != nil {
+			return Undefined, err
 		}
-
-		// Check if done is truthy (JavaScript semantics)
-		// Falsy: false, 0, "", null, undefined
-		// Everything else is truthy
-		isDone := false
-		if done.Type() == TypeBoolean {
-			isDone = done.AsBoolean()
-		} else if done.IsNumber() {
-			isDone = done.ToFloat() != 0
-		} else if done.Type() == TypeString {
-			isDone = done.ToString() != ""
-		} else if done.Type() == TypeNull || done.Type() == TypeUndefined {
-			isDone = false
-		} else {
-			// Objects, arrays, functions etc. are truthy
-			isDone = true
-		}
-
-		if isDone {
+		if done.IsTruthy() {
 			break
 		}
 
-		// Get result.value
-		var itemValue Value = Undefined
-		if result.IsObject() {
-			obj := result.AsPlainObject()
-			if obj != nil {
-				if v, exists := obj.GetOwn("value"); exists {
-					itemValue = v
-				}
-			} else if result.Type() == TypeDictObject {
-				dictObj := result.AsDictObject()
-				if v, exists := dictObj.GetOwn("value"); exists {
-					itemValue = v
-				}
-			}
+		itemValue, err := vm.GetProperty(result, "value")
+		if err != nil {
+			return Undefined, err
 		}
-
 		elements = append(elements, itemValue)
 	}
 
-	// Create array from collected elements
 	return vm.NewArrayFromSlice(elements), nil
 }
 
