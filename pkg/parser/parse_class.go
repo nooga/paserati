@@ -1546,24 +1546,43 @@ func (p *Parser) parseComputedProperty(bracketToken *lexer.Token, keyExpr Expres
 		// This allows chained assignments like: x = obj['lol'] = 42
 		initializer = p.parseExpression(COMMA)
 
-		// Consume optional semicolon after initializer
+		// After parseExpression, curToken is at the last token of the
+		// initializer. Handle ASI: consume an explicit semicolon and move
+		// past it, or - if there isn't one - just advance past the
+		// initializer's last token to reach the next class member.
+		//
+		// This used to skip that advance whenever curToken was already a
+		// '}', on the theory that it must be the class body's own closing
+		// brace. But a '}' ending the *initializer* itself (an arrow
+		// function's block body, an object literal, ...) is exactly as
+		// likely, and stopping there mistook that inner brace for the
+		// class's, making parseClassBody return early right after this
+		// member (paserati#292: `[k1] = (x) => { return x }` followed by
+		// another computed member `[k2] () {}` on the next line - the
+		// generic Pratt loop no longer swallows `[k2]` into the arrow
+		// function once it isn't parenthesized, per the ArrowFunctionLiteral
+		// check in parseInfixContinuation, but this advance still needs to
+		// step past the arrow's own closing brace to reach `[k2]`).
+		// parseProperty (the non-computed sibling of this function) never
+		// had this special case and doesn't need it either.
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Move to semicolon
-		}
-
-		// Advance past the current token to prepare for the next class member
-		// parseExpression leaves us AT the last token, so we need to advance
-		if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+			p.nextToken() // Move past semicolon to next class member
+		} else {
 			p.nextToken()
 		}
 	} else {
-		// No initializer - we're still at the ']' token from parseComputedClassMember
-		// We need to advance to the next token
+		// No initializer - curToken is at the last token of the member so
+		// far: the ']' from parseComputedClassMember, or - if there was a
+		// type annotation - that type's own last token, which can just as
+		// easily be a '}' (an object type literal, e.g. `[k1]: { a: number }`)
+		// as the earlier initializer case above, and for the exact same
+		// reason must not be special-cased as "must be the class body's
+		// closing brace".
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Move to semicolon
-		}
-		// Advance past current token (either ']' or ';') to next member
-		if !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+			p.nextToken() // Move past semicolon to next class member
+		} else {
 			p.nextToken()
 		}
 	}

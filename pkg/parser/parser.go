@@ -2032,6 +2032,24 @@ func (p *Parser) parseInfixContinuation(leftExp Expression, precedence int) Expr
 			break
 		}
 
+		// An (unparenthesized) ArrowFunction is not a MemberExpression or
+		// LeftHandSideExpression, so `.`, `?.`, `[`, `(`, and tagged templates
+		// cannot continue it directly - real engines reject `(x) => {}[0]`
+		// even with no line terminator in between (paserati#292, found via a
+		// computed class field whose arrow-function initializer, with no
+		// trailing semicolon, was followed by another computed member:
+		// `[k1] = (x) => {}\n[k2]() {}` - without this check the Pratt climb
+		// happily kept consuming `[k2]` and `()` as if they were postfix
+		// operators on the arrow function, swallowing the next class member).
+		// `((x) => {})[0]` is fine - parseGroupedExpression marks that case
+		// Parenthesized.
+		if arrow, ok := leftExp.(*ArrowFunctionLiteral); ok && !arrow.Parenthesized {
+			switch p.peekToken.Type {
+			case lexer.DOT, lexer.OPTIONAL_CHAINING, lexer.LBRACKET, lexer.LPAREN, lexer.TEMPLATE_START:
+				return leftExp
+			}
+		}
+
 		infix := p.infixParseFns[p.peekToken.Type]
 		if infix == nil {
 			debugPrint("parseExpression(prec=%d): no infix for peek='%s', returning leftExp=%T", precedence, leftExp, p.peekToken.Literal, leftExp)
@@ -4679,6 +4697,13 @@ func (p *Parser) parseGroupedExpression() Expression {
 	// (-x) ** y (valid) from -x ** y (syntax error per ES2016)
 	if prefix, ok := exp.(*PrefixExpression); ok {
 		prefix.Parenthesized = true
+	}
+	// Mark arrow functions as parenthesized so parseInfixContinuation can tell
+	// `((x) => {})[0]` (valid) apart from a bare `(x) => {}` immediately
+	// followed by `[`/`.`/`(` etc., which real engines reject because
+	// ArrowFunction is not a LeftHandSideExpression - see paserati#292.
+	if arrow, ok := exp.(*ArrowFunctionLiteral); ok {
+		arrow.Parenthesized = true
 	}
 	return exp
 }

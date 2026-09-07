@@ -740,6 +740,15 @@ type ArrowFunctionLiteral struct {
 	RestParameter        *RestParameter   // Optional rest parameter (...args)
 	ReturnTypeAnnotation Expression       // << MODIFIED
 	Body                 Node             // Can be Expression or *BlockStatement
+	// Parenthesized is true when this arrow function was wrapped in its own
+	// parens, e.g. `((x) => {})`. An ArrowFunction is not a MemberExpression/
+	// LeftHandSideExpression, so `.`, `?.`, `[`, `(`, and tagged templates
+	// cannot apply directly to it (`(x) => {}[0]` is a syntax error in real
+	// engines - see PrefixParseFns' parseInfixContinuation) unless it was
+	// parenthesized first (`((x) => {})[0]` is fine). Mirrors
+	// PrefixExpression.Parenthesized, which exists for the same reason
+	// ((-x) ** y vs -x ** y).
+	Parenthesized bool
 }
 
 func (afl *ArrowFunctionLiteral) expressionNode()      {}
