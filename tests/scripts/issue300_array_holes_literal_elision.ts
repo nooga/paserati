@@ -10,8 +10,8 @@
 // issue300_array_holes_delete_and_new_array.ts) now agree for literals too.
 //
 // Elisions mixed with a spread element in the same literal ([1,,...xs,,2])
-// are a separate, NOT-yet-fixed gap (that path still materializes them as
-// real `undefined`) - not covered here.
+// go through a different compiler path (compileArrayLiteralWithSpread) and
+// are covered separately - see issue300_array_holes_elision_with_spread.ts.
 const checks: boolean[] = [];
 
 const h: any = [1, , 3];
