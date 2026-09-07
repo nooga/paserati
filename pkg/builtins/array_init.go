@@ -677,8 +677,21 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
+		// Per ECMA-262 23.1.3.16 Array.prototype.join step 3: "If separator
+		// is undefined, let sep be the single-element String ','" - an
+		// explicit `undefined` argument must default to "," exactly like an
+		// omitted one, not stringify to the literal "undefined". This also
+		// matters when type checking is enabled: the compiler pads a call
+		// site to a native function's declared (checker-known) arity with
+		// explicit `undefined` arguments for any parameter the checker
+		// considers optional-but-unprovided (compileArgumentsWithOptionalHandling,
+		// pkg/compiler/compiler.go), so `arr.join()` and `arr.join(undefined)`
+		// are indistinguishable from this function's point of view - only a
+		// `len(args) >= 1` check (as opposed to checking the value itself)
+		// would wrongly treat the padded call the same as an explicit
+		// separator.
 		separator := ","
-		if len(args) >= 1 {
+		if len(args) >= 1 && !args[0].IsUndefined() {
 			separator = args[0].ToString()
 		}
 		if length == 0 {
