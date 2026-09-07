@@ -1343,6 +1343,18 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 		return Undefined, vm.errors
 	}
 
+	// With no live frames there are no live register windows either, so a
+	// top-level run always starts from the bottom of the register stack. This
+	// reclaims what an uncaught exception left behind: unwindException pops
+	// frames without giving back their windows (see reclaimUnwoundRegisters,
+	// which only runs when a handler is found), so a script that died on a
+	// throw used to leak its whole window into every later run on this VM.
+	// Popped frames have had their upvalues closed, so nothing still aliases
+	// those slots.
+	if vm.frameCount == 0 {
+		vm.nextRegSlot = 0
+	}
+
 	// --- Push the new frame ---
 	frame := &vm.frames[vm.frameCount] // Get pointer to the frame slot
 	// Initialize the first frame to run the mainClosureObj
@@ -5959,6 +5971,7 @@ startExecution:
 					vm.currentException = vm.pendingValue
 					return InterpretRuntimeError, vm.pendingValue
 				}
+				vm.popTopLevelScriptFrame(frame)
 				return InterpretOK, result
 			}
 			// fmt.Printf("// [VM DEBUG] OpReturn: Hit in module '%s', frameCount=%d, result=%s\n", vm.currentModulePath, vm.frameCount, result.ToString())
@@ -6251,6 +6264,7 @@ startExecution:
 					vm.handleUncaughtException()
 					return InterpretRuntimeError, vm.currentException
 				}
+				vm.popTopLevelScriptFrame(frame)
 				return InterpretOK, Undefined
 			}
 
@@ -17141,6 +17155,38 @@ func (vm *VM) closeFrameUpvalues(frame *CallFrame) {
 		uv = next
 	}
 	frame.openUpvalues = nil
+}
+
+// popTopLevelScriptFrame retires the outermost "<script>" frame once its
+// chunk has run to completion (OpReturn/OpReturnUndefined at frameCount==1).
+//
+// Those two fast paths used to `return InterpretOK` with the frame still on
+// vm.frames and its register window still reserved (#298). Every completed
+// top-level Interpret therefore left one dead frame behind, so the NEXT
+// Interpret on the same VM - a second RunCode/EvalCode on a persistent
+// driver.Paserati, the REPL, a host installing globals via a helper script -
+// saw frameCount > 0 and pushed its own script frame as a *nested*,
+// isDirectCall=true frame. unwindException treats such a frame as a native
+// boundary: a throw that crossed a native call (vm.Call from a Go builtin)
+// and was re-thrown into that script stopped there on its "first pass",
+// reporting the exception as handled, and handleUncaughtException never ran.
+// The script ended with InterpretRuntimeError but an empty vm.errors, so the
+// caller saw a clean, error-free run with the throw silently dropped. The
+// leak also grew vm.frames/vm.registerStack by one window per run.
+//
+// Closing the frame's open upvalues first is what keeps closures created by
+// the script (a callback stored on globalThis, a promise reaction that runs
+// in DrainUntilIdle) working once the window is handed back: an open upvalue
+// aliases a register slot, and the next run's frame will reuse that slot.
+func (vm *VM) popTopLevelScriptFrame(frame *CallFrame) {
+	if frame.openUpvalues != nil {
+		vm.closeFrameUpvalues(frame)
+	}
+	vm.frameCount--
+	vm.nextRegSlot -= frame.allocatedRegSize
+	if vm.nextRegSlot < 0 {
+		vm.nextRegSlot = 0
+	}
 }
 
 // relocateOpenUpvalues redirects every open upvalue in the list that
