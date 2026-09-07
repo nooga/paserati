@@ -25,6 +25,30 @@ func (e exceptionError) GetExceptionValue() Value {
 	return e.exception
 }
 
+// setTailCallHomeObject gives a tail-called callee its [[HomeObject]] for
+// super property access (see prepareCall below). Arrow functions read
+// their captured [[HomeObject]] (frame.closure.CapturedHomeObject) at use
+// time, so the frame's own field is left alone for them.
+//
+// Kept out of (*VM).run deliberately. Inlined in the OpTailCall and
+// OpTailCallMethod cases, these lines grew run's amd64 stack frame by four
+// spill slots and cost 28% on a call-free arithmetic loop that never reaches
+// them; the dispatch loop's register allocation is the thing being protected.
+//
+//go:noinline
+func setTailCallHomeObject(frame *CallFrame, calleeFunc *FunctionObject, thisVal Value) {
+	if calleeFunc.IsArrowFunction {
+		return
+	}
+	if calleeFunc.HomeObject.Type() != TypeUndefined && calleeFunc.HomeObject.Type() != TypeNull {
+		frame.homeObject = calleeFunc.HomeObject
+	} else if thisVal.Type() != TypeUndefined && thisVal.Type() != TypeNull {
+		frame.homeObject = thisVal
+	} else {
+		frame.homeObject = Undefined
+	}
+}
+
 // prepareCall sets up a function call and returns whether the interpreter should switch to the new frame.
 // For native functions, it executes immediately and returns false.
 // For closures/functions, it sets up the frame and returns true to switch context.
