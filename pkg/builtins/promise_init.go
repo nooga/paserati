@@ -104,6 +104,25 @@ func promiseCapabilityGuard(vmInstance *vm.VM) func(execArgs []vm.Value) (vm.Val
 	}
 }
 
+// newAggregateError builds a real `new AggregateError(errors, message)` instance
+// (so callers get a genuine `.errors` array and `instanceof Error`/`AggregateError`,
+// per spec) by invoking the actual global constructor rather than faking one up
+// as a plain string. Promise.any's "all promises rejected" rejection (both the
+// empty-iterable case and the "all N settled as rejected" case) is the spec's
+// only built-in producer of AggregateError, and used to reject with a bare
+// string message with no `.errors` at all - see paserati#293, found via real
+// npm `undici` code that does `err instanceof AggregateError && err.errors.some(...)`.
+// Falls back to a plain Error if the global was somehow removed/shadowed, so
+// this can never itself throw.
+func newAggregateError(vmInstance *vm.VM, errors vm.Value, message string) vm.Value {
+	if ctor, ok := vmInstance.GetGlobal("AggregateError"); ok && ctor.IsCallable() {
+		if inst, err := vmInstance.Construct(ctor, []vm.Value{errors, vm.NewString(message)}); err == nil {
+			return inst
+		}
+	}
+	return vm.NewString(message)
+}
+
 func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
@@ -307,22 +326,46 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			iterable = args[0]
 		}
 
-		// Step 1-2: Let C be the this value. If Type(C) is not Object, throw TypeError.
+		// Step 1-2: Let C be the this value. NewPromiseCapability(C) (spec step
+		// 6-7, run before the iterable is even looked at) requires
+		// IsConstructor(C) and throws TypeError synchronously otherwise - a
+		// plain IsObject()/IsCallable() check lets a non-constructor callable
+		// like `eval` through, and this must throw here rather than surface
+		// later as a rejected promise (paserati#293 regression check:
+		// `Promise.all.call(eval)` used to throw synchronously only by
+		// accident, because converting the missing iterable argument failed
+		// too and *that* error path threw synchronously; now that iterable
+		// conversion failures correctly reject the promise instead - see
+		// IfAbruptRejectPromise below - this check needs to actually be here).
 		thisVal := vmInstance.GetThis()
-		if !thisVal.IsObject() && !thisVal.IsCallable() {
-			return vm.Undefined, vmInstance.NewTypeError("Promise.all called on non-object")
+		if !vmInstance.IsConstructor(thisVal) {
+			return vm.Undefined, vmInstance.NewTypeError("Promise.all called on non-constructor")
 		}
 		constructor := getSpeciesConstructor(thisVal)
 
 		// Convert iterable to array (before promise creation per spec)
 		arr, err := vmInstance.IterableToArray(iterable)
 		if err != nil {
-			return vm.Undefined, vmInstance.NewTypeError("Promise.all requires an iterable")
+			// Per spec (IfAbruptRejectPromise), a failure here - GetIterator
+			// throwing, iterator.next() throwing, or an ordinary getter access
+			// like result.value throwing mid-iteration - rejects the result
+			// promise with that failure's actual value; it must not escape as
+			// a synchronous throw out of Promise.all itself (paserati#293:
+			// IterableToArray now correctly propagates such errors instead of
+			// silently swallowing them, so this needs to actually honor
+			// IfAbruptRejectPromise instead of only handling "not iterable").
+			// vm.Call (inside IterableToArray) leaves vm.unwinding set on
+			// error for legitimate re-throw callers; absorbing that error
+			// into a rejection here instead means it must be cleared, or it
+			// leaks into whatever bytecode called this static method (see
+			// the matching invoke-then-error-close style handlers below).
+			vmInstance.ClearUnwindingState()
+			return vmInstance.NewRejectedPromise(exceptionValue(vmInstance, err)), nil
 		}
 
 		arrayObj := arr.AsArray()
 		if arrayObj == nil {
-			return vm.Undefined, vmInstance.NewTypeError("Promise.all requires an iterable")
+			return vmInstance.NewRejectedPromise(exceptionValue(vmInstance, vmInstance.NewTypeError("Promise.all requires an iterable"))), nil
 		}
 
 		length := arrayObj.Length()
@@ -457,22 +500,33 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			iterable = args[0]
 		}
 
-		// Step 1-2: Let C be the this value. If Type(C) is not Object, throw TypeError.
+		// See the matching comment in Promise.all: NewPromiseCapability(C)
+		// requires IsConstructor(C), checked synchronously before the
+		// iterable is touched.
 		thisVal := vmInstance.GetThis()
-		if !thisVal.IsObject() && !thisVal.IsCallable() {
-			return vm.Undefined, vmInstance.NewTypeError("Promise.race called on non-object")
+		if !vmInstance.IsConstructor(thisVal) {
+			return vm.Undefined, vmInstance.NewTypeError("Promise.race called on non-constructor")
 		}
 		constructor := getSpeciesConstructor(thisVal)
 
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
 		if err != nil {
-			return vm.Undefined, vmInstance.NewTypeError("Promise.race requires an iterable")
+			// See the matching comment in Promise.all: IfAbruptRejectPromise
+			// means this rejects the result promise with the real value,
+			// rather than throwing synchronously out of Promise.race itself.
+			// vm.Call (inside IterableToArray) leaves vm.unwinding set on
+			// error for legitimate re-throw callers; absorbing that error
+			// into a rejection here instead means it must be cleared, or it
+			// leaks into whatever bytecode called this static method (see
+			// the matching invoke-then-error-close style handlers below).
+			vmInstance.ClearUnwindingState()
+			return vmInstance.NewRejectedPromise(exceptionValue(vmInstance, err)), nil
 		}
 
 		arrayObj := arr.AsArray()
 		if arrayObj == nil {
-			return vm.Undefined, vmInstance.NewTypeError("Promise.race requires an iterable")
+			return vmInstance.NewRejectedPromise(exceptionValue(vmInstance, vmInstance.NewTypeError("Promise.race requires an iterable"))), nil
 		}
 
 		length := arrayObj.Length()
@@ -578,30 +632,40 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			iterable = args[0]
 		}
 
-		// Step 1-2: Let C be the this value. If Type(C) is not Object, throw TypeError.
+		// See the matching comment in Promise.all: NewPromiseCapability(C)
+		// requires IsConstructor(C), checked synchronously before the
+		// iterable is touched.
 		thisVal := vmInstance.GetThis()
-		if !thisVal.IsObject() && !thisVal.IsCallable() {
-			return vm.Undefined, vmInstance.NewTypeError("Promise.any called on non-object")
+		if !vmInstance.IsConstructor(thisVal) {
+			return vm.Undefined, vmInstance.NewTypeError("Promise.any called on non-constructor")
 		}
 		constructor := getSpeciesConstructor(thisVal)
 
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
 		if err != nil {
-			return vm.Undefined, vmInstance.NewTypeError("Promise.any requires an iterable")
+			// See the matching comment in Promise.all: IfAbruptRejectPromise
+			// means this rejects the result promise with the real value,
+			// rather than throwing synchronously out of Promise.any itself.
+			// vm.Call (inside IterableToArray) leaves vm.unwinding set on
+			// error for legitimate re-throw callers; absorbing that error
+			// into a rejection here instead means it must be cleared, or it
+			// leaks into whatever bytecode called this static method (see
+			// the matching invoke-then-error-close style handlers below).
+			vmInstance.ClearUnwindingState()
+			return vmInstance.NewRejectedPromise(exceptionValue(vmInstance, err)), nil
 		}
 
 		arrayObj := arr.AsArray()
 		if arrayObj == nil {
-			return vm.Undefined, vmInstance.NewTypeError("Promise.any requires an iterable")
+			return vmInstance.NewRejectedPromise(exceptionValue(vmInstance, vmInstance.NewTypeError("Promise.any requires an iterable"))), nil
 		}
 
 		length := arrayObj.Length()
 		if length == 0 {
 			// Empty array - reject immediately with AggregateError
-			// TODO: Implement proper AggregateError
-			errorMsg := vm.NewString("AggregateError: All promises were rejected")
-			return vmInstance.NewRejectedPromise(errorMsg), nil
+			aggErr := newAggregateError(vmInstance, vm.NewArray(), "All promises were rejected")
+			return vmInstance.NewRejectedPromise(aggErr), nil
 		}
 
 		// Create a new promise that resolves with the first fulfilled promise
@@ -680,10 +744,9 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 					// If all promises rejected, reject with AggregateError
 					if remaining == 0 {
-						// TODO: Create proper AggregateError with errors array
-						// For now, just create a simple error message
-						errorMsg := vm.NewString("AggregateError: All promises were rejected")
-						_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{errorMsg})
+						errorsArray := vmInstance.NewArrayFromSlice(errors)
+						aggErr := newAggregateError(vmInstance, errorsArray, "All promises were rejected")
+						_, _ = vmInstance.Call(reject, vm.Undefined, []vm.Value{aggErr})
 					}
 
 					return vm.Undefined, nil
@@ -725,22 +788,33 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			iterable = args[0]
 		}
 
-		// Step 1-2: Let C be the this value. If Type(C) is not Object, throw TypeError.
+		// See the matching comment in Promise.all: NewPromiseCapability(C)
+		// requires IsConstructor(C), checked synchronously before the
+		// iterable is touched.
 		thisVal := vmInstance.GetThis()
-		if !thisVal.IsObject() && !thisVal.IsCallable() {
-			return vm.Undefined, vmInstance.NewTypeError("Promise.allSettled called on non-object")
+		if !vmInstance.IsConstructor(thisVal) {
+			return vm.Undefined, vmInstance.NewTypeError("Promise.allSettled called on non-constructor")
 		}
 		constructor := getSpeciesConstructor(thisVal)
 
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
 		if err != nil {
-			return vm.Undefined, vmInstance.NewTypeError("Promise.allSettled requires an iterable")
+			// See the matching comment in Promise.all: IfAbruptRejectPromise
+			// means this rejects the result promise with the real value,
+			// rather than throwing synchronously out of Promise.allSettled.
+			// vm.Call (inside IterableToArray) leaves vm.unwinding set on
+			// error for legitimate re-throw callers; absorbing that error
+			// into a rejection here instead means it must be cleared, or it
+			// leaks into whatever bytecode called this static method (see
+			// the matching invoke-then-error-close style handlers below).
+			vmInstance.ClearUnwindingState()
+			return vmInstance.NewRejectedPromise(exceptionValue(vmInstance, err)), nil
 		}
 
 		arrayObj := arr.AsArray()
 		if arrayObj == nil {
-			return vm.Undefined, vmInstance.NewTypeError("Promise.allSettled requires an iterable")
+			return vmInstance.NewRejectedPromise(exceptionValue(vmInstance, vmInstance.NewTypeError("Promise.allSettled requires an iterable"))), nil
 		}
 
 		length := arrayObj.Length()
