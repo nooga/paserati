@@ -391,7 +391,15 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		target := args[0]
 
-		if !target.IsObject() {
+		// Every sibling Reflect method in this file (get/set/has/apply/
+		// construct/...) gates on "!IsObject() && !IsCallable()" - this one
+		// used to gate on "!IsObject()" alone, so it threw a TypeError
+		// outright for a plain function, a class, a native function, a
+		// native constructor, or a bound function - values every other
+		// Reflect method here already accepts. Confirmed against Node:
+		// Reflect.ownKeys(Array.prototype.slice) is ["length","name"]
+		// there, not a throw.
+		if !target.IsObject() && !target.IsCallable() {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.ownKeys called on non-object")
 		}
 
@@ -400,6 +408,55 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		arr := keysArray.AsArray()
 
 		switch target.Type() {
+		case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
+			// Fixing the gate above just made these five kinds reach this
+			// switch instead of throwing - but the switch itself had no
+			// case for any of them, so they'd have fallen through to
+			// "return keysArray, nil" and answered [] instead of actually
+			// throwing OR actually working (silently wrong either way).
+			//
+			// Rather than hand-rolling a THIRD independent per-kind
+			// name/length/prototype synthesis switch alongside
+			// objectGetOwnPropertyNamesWithVM's (Object.getOwnPropertyNames)
+			// and objectGetOwnPropertySymbolsWithVM's (Object.
+			// getOwnPropertySymbols) own already-correct ones - the exact
+			// "N independent copies of the same per-kind dispatch slowly
+			// drift apart" pattern behind most of this session's bug
+			// fixes - delegate straight to those two for these five kinds
+			// only (TypeObject/TypeDictObject/TypeArray/TypeProxy below
+			// keep their own existing, already-correct logic exactly as
+			// it was; TypeNativeFunction/TypeBoundFunction were just added
+			// to objectGetOwnPropertyNamesWithVM as part of this same fix,
+			// since it had no case for either of them either - the same
+			// gap, just one level down).
+			//
+			// Per ECMAScript 10.1.11 OrdinaryOwnPropertyKeys, Reflect.
+			// ownKeys's required order - integer indices ascending, then
+			// string keys in creation order, then symbol keys in creation
+			// order - is exactly what concatenating these two functions'
+			// own outputs already produces, so no reordering is needed
+			// here.
+			namesVal, err := objectGetOwnPropertyNamesWithVM(vmInstance, []vm.Value{target})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if namesVal.Type() == vm.TypeArray {
+				namesArr := namesVal.AsArray()
+				for i := 0; i < namesArr.Length(); i++ {
+					arr.Append(namesArr.Get(i))
+				}
+			}
+			symsVal, err := objectGetOwnPropertySymbolsWithVM(vmInstance, []vm.Value{target})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if symsVal.Type() == vm.TypeArray {
+				symsArr := symsVal.AsArray()
+				for i := 0; i < symsArr.Length(); i++ {
+					arr.Append(symsArr.Get(i))
+				}
+			}
+			return keysArray, nil
 		case vm.TypeObject:
 			obj := target.AsPlainObject()
 			// 1. String keys (all, including non-enumerable)

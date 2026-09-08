@@ -2864,6 +2864,78 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 				arrObj.Append(vm.NewString(k))
 			}
 		}
+	case vm.TypeNativeFunction:
+		// A plain (non-Props) native function - this switch never had a case
+		// for it at all, so Object.getOwnPropertyNames fell to the
+		// default/"non-object types" branch and answered [] even for a
+		// function with real own properties (Object.defineProperty already
+		// let you add one - Object.getOwnPropertyDescriptor(s) already
+		// listed it correctly, PR #339). Mirrors the
+		// TypeNativeFunctionWithProps case above - "length"/"name" are
+		// synthesized (not real own properties for this kind either), and
+		// "prototype" is included only when this native function is
+		// actually a constructor (checked here since, unlike
+		// TypeFunction/TypeClosure below, every TypeNativeFunction defined
+		// in this codebase today is IsConstructor==false in practice, so
+		// this guard is what correctly keeps "prototype" OFF a plain
+		// native function like Array.prototype.slice - verified against
+		// Node, which agrees: no "prototype" there).
+		nf := obj.AsNativeFunction()
+		var propNames []string
+		if props := vm.OwnPropertiesTable(obj); props != nil {
+			propNames = props.OwnPropertyNames()
+		}
+
+		for _, k := range propNames {
+			if isIntegerIndex(k) {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
+
+		arrObj.Append(vm.NewString("length"))
+		arrObj.Append(vm.NewString("name"))
+
+		hasPrototype := false
+		for _, k := range propNames {
+			if k == "prototype" {
+				hasPrototype = true
+				break
+			}
+		}
+		if hasPrototype {
+			arrObj.Append(vm.NewString("prototype"))
+		}
+
+		for _, k := range propNames {
+			if k != "length" && k != "name" && k != "prototype" && !isIntegerIndex(k) {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
+
+		if !hasPrototype && nf.IsConstructor {
+			arrObj.Append(vm.NewString("prototype"))
+		}
+	case vm.TypeBoundFunction:
+		// Another kind this switch never had a case for at all - fell to
+		// the default/empty branch. Unlike every other callable kind
+		// above, a bound function needs NO synthesis whatsoever: "name"
+		// (bound " + original) and "length" are REAL own properties
+		// written directly into bf.Properties at bind time (PR #343's
+		// "Bound functions: 'name'/'length' is a real own property set at
+		// bind time" precedent - re-synthesizing them here would just
+		// duplicate them), and a bound function exotic object never has
+		// its own "prototype" property at all, regardless of whether its
+		// target is a constructor (verified against Node:
+		// `Reflect.ownKeys(SomeClass.bind(null))` is `["length","name"]`,
+		// no "prototype", even though SomeClass itself has one). So the
+		// stored table's own names, already integer-indices-first per
+		// OwnPropertyNames(), are the complete, correctly-ordered answer.
+		bf := obj.AsBoundFunction()
+		if bf.Properties != nil {
+			for _, k := range bf.Properties.OwnPropertyNames() {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
 	default:
 		// Non-object types return empty array
 		return arr, nil
