@@ -1355,6 +1355,16 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 		vm.nextRegSlot = 0
 	}
 
+	// Remembered so the InterpretRuntimeError handling below can restore
+	// frameCount/nextRegSlot exactly, the same way executeUserFunctionSafe's
+	// frameCountAtEntry + truncateFramesTo does for its own native boundary,
+	// rather than assuming unwindException left exactly one frame (ours) to
+	// pop: some run() exit paths return InterpretRuntimeError while frames
+	// above ours are still live (e.g. OpDirectEval's reassigned-eval
+	// fallback), and a single-frame pop would silently under-restore then.
+	entryFrameCount := vm.frameCount
+	entryNextRegSlot := vm.nextRegSlot
+
 	// --- Push the new frame ---
 	frame := &vm.frames[vm.frameCount] // Get pointer to the frame slot
 	// Initialize the first frame to run the mainClosureObj
@@ -1400,6 +1410,10 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	// This ensures eval()'s script execution returns its completion value back to the native function
 	// For top-level scripts (frameCount==0 before pushing), keep isDirectCall=false to allow normal completion
 	frame.isDirectCall = (vm.frameCount > 0)
+	// Captured for the InterpretRuntimeError handling below, once run() has
+	// returned and frame.isDirectCall may no longer be trustworthy to read
+	// (the slot could in principle have been reused by then).
+	isNestedInterpretCall := frame.isDirectCall
 	frame.isSentinelFrame = false
 	frame.argCount = 0
 	frame.args = nil
@@ -1448,6 +1462,70 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	// }
 
 	if resultStatus == InterpretRuntimeError {
+		// isNestedInterpretCall is true exactly when this was a *nested*
+		// Interpret() call (frameCount > 0 before we pushed our frame above -
+		// e.g. indirect/direct eval, or any other host embedding eval'ing
+		// into an already-running VM) - see where it's captured from
+		// frame.isDirectCall above. vm.unwinding still true in that case
+		// means the exception never reached a handler at all: it ran into
+		// the top-level script frame we just pushed, which unwindException
+		// treats as a native call boundary (frame.isDirectCall ||
+		// frame.isSentinelFrame - the same mechanism executeUserFunctionSafe/
+		// vm.Call rely on to receive a catchable exception as a Go error
+		// rather than have it print as uncaught) and stops there without
+		// popping the frame or touching vm.errors - throwException only
+		// calls handleUncaughtException (which populates vm.errors, and
+		// leaves vm.unwinding=true itself, deliberately, "to signal
+		// termination") when NO frame stopped the unwind at all, i.e. a
+		// genuinely uncaught exception at frameCount==0. That top-level,
+		// non-nested case (isNestedInterpretCall==false here) must keep
+		// using vm.errors as before - it's already been populated, and
+		// re-entering this branch for it would misreport a real uncaught
+		// exception as a catchable one and, on a persistent VM, resume
+		// executing past a script that has already been fully torn down.
+		//
+		// For the nested case, a runtime exception used to return here with
+		// vm.errors empty (throwException doesn't populate it - only
+		// runtimeError/handleUncaughtException do, and neither ran) and the
+		// VM's exception state (unwinding/currentException/
+		// unwindingCrossedNative) left dangling: the caller saw an
+		// error-free result despite InterpretRuntimeError, and the stray
+		// state then corrupted whatever ran next on this VM. (A parse/
+		// compile error never reaches this point at all -
+		// IndirectEvalCode/DirectEvalCode/EvalCode return it before ever
+		// calling Interpret, which is why only genuine runtime exceptions
+		// from eval'd code showed this bug.)
+		//
+		// Take ownership of the exception here, the same way a native
+		// boundary caller does: extract it, clear the VM's unwind state, and
+		// restore frameCount/nextRegSlot to exactly what they were before we
+		// pushed - the same truncateFramesTo(frameCountAtEntry) idiom
+		// executeUserFunctionSafe uses for its own native boundary, rather
+		// than assuming unwindException left exactly our one frame to pop:
+		// some run() exit paths return InterpretRuntimeError while frames
+		// above ours are still live (e.g. OpDirectEval's reassigned-eval
+		// fallback), and popping only one frame would under-restore then.
+		// truncateFramesTo closes upvalues for every frame it drops but
+		// doesn't touch nextRegSlot (its other callers' pushed frames aren't
+		// carved from vm.registerStack), so that part is ours to do here.
+		// Report the exception via a fresh local slice rather than
+		// vm.errors: the caller's own execution keeps running after we
+		// return (this is a *nested* Interpret call), and nothing clears
+		// vm.errors again before the outer script eventually completes, so
+		// appending to it here would leak a stale error into an otherwise
+		// successful run.
+		if isNestedInterpretCall && vm.unwinding {
+			exc := vm.currentException
+			vm.unwinding = false
+			vm.currentException = Null
+			vm.truncateFramesTo(entryFrameCount)
+			vm.nextRegSlot = entryNextRegSlot
+			runtimeErr := errors.NewRuntimeError(
+				errors.Position{Line: vm.lastThrowLine, Column: vm.lastThrowColumn},
+				"Uncaught "+vm.formatExceptionDisplay(exc),
+			).CausedBy(exceptionError{exception: exc})
+			return finalValue, []errors.PaseratiError{runtimeErr}
+		}
 		// An error occurred, return the potentially partial value and the collected errors
 		// fmt.Printf("// [VM] Interpret: Returning runtime error with %d errors\n", len(vm.errors))
 		return finalValue, vm.errors
@@ -16818,23 +16896,46 @@ startExecution:
 			}
 
 			if len(evalErrs) > 0 {
-				// Compile/parse error occurred - throw as SyntaxError exception
 				// Check if we're already unwinding
 				if vm.unwinding {
 					return InterpretRuntimeError, Undefined
 				}
-				// Create a SyntaxError object and throw it
-				errMsg := evalErrs[0].Error()
+				// A genuine runtime exception from the eval'd code (as
+				// opposed to a parse/compile failure) comes back wrapped so
+				// the original thrown value survives - see vm.Interpret's
+				// InterpretRuntimeError handling. Unwrap and re-throw that
+				// value as-is, so e.g. a ReferenceError thrown by eval'd code
+				// is still a ReferenceError (and catchable here) rather than
+				// every eval failure collapsing into a SyntaxError.
 				var errObj Value
-				if ctor, ok := vm.GetGlobal("SyntaxError"); ok {
-					msg := NewString(errMsg)
-					errObj, _ = vm.Call(ctor, Undefined, []Value{msg})
-				} else {
-					// Fallback to plain error object
-					plainErr := NewObject(vm.ErrorPrototype).AsPlainObject()
-					plainErr.SetOwn("name", NewString("SyntaxError"))
-					plainErr.SetOwn("message", NewString(errMsg))
-					errObj = NewValueFromPlainObject(plainErr)
+				gotExc := false
+				if unwrapper, ok := evalErrs[0].(interface{ Unwrap() error }); ok {
+					if cause := unwrapper.Unwrap(); cause != nil {
+						if exc, ok := cause.(ExceptionError); ok {
+							// GetExceptionValue() can legitimately be
+							// Undefined (`throw undefined` inside the eval'd
+							// code) or Null (`throw null`) - gotExc, not
+							// errObj's type, is what distinguishes "found a
+							// real thrown value" from "no wrapped exception,
+							// this is a parse/compile error" below.
+							errObj = exc.GetExceptionValue()
+							gotExc = true
+						}
+					}
+				}
+				if !gotExc {
+					// Compile/parse error - create a SyntaxError object and throw it
+					errMsg := evalErrs[0].Error()
+					if ctor, ok := vm.GetGlobal("SyntaxError"); ok {
+						msg := NewString(errMsg)
+						errObj, _ = vm.Call(ctor, Undefined, []Value{msg})
+					} else {
+						// Fallback to plain error object
+						plainErr := NewObject(vm.ErrorPrototype).AsPlainObject()
+						plainErr.SetOwn("name", NewString("SyntaxError"))
+						plainErr.SetOwn("message", NewString(errMsg))
+						errObj = NewValueFromPlainObject(plainErr)
+					}
 				}
 				vm.throwException(errObj)
 				// After exception unwinding, reload frame state
