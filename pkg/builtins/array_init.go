@@ -3102,8 +3102,17 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 // shared index.
 func makeBuiltinIterNext(vmInstance *vm.VM, state *vm.BuiltinIterState) vm.Value {
 	nextFn := vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
+		// StepVM (not the plain Step) so an own accessor property on the
+		// source array (IterKindArrayValues/ArrayEntries) has its getter
+		// called instead of reading the raw backing slot - see StepVM's own
+		// comment. A throwing getter propagates as this native call's error,
+		// exactly like a thrown exception from a real accessor read anywhere
+		// else the VM calls into script.
+		v, done, err := state.StepVM(vmInstance)
+		if err != nil {
+			return vm.Undefined, err
+		}
 		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		v, done := state.Step()
 		result.SetOwnNonEnumerable("value", v)
 		result.SetOwnNonEnumerable("done", vm.BooleanValue(done))
 		return vm.NewValueFromPlainObject(result), nil
