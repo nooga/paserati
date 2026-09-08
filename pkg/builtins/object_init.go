@@ -4822,9 +4822,37 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		}
 	case vm.TypeBoundFunction:
 		bf := obj.AsBoundFunction()
-		// Bound function name/length are real own properties in bf.Properties
-		// They can be deleted (configurable:true) or redefined via Object.defineProperty
 		if bf.Properties != nil {
+			// A symbol key never names the synthesized "name"/"length"
+			// intrinsics above, so it skips straight to the side-table
+			// lookup - mirroring the TypeMap/TypeSet/TypePromise block
+			// below (accessor first, then data), which this case never
+			// had at all: it only ever looked up `propName`, a string, so
+			// `Object.getOwnPropertyDescriptor(boundFn, sym)` answered
+			// undefined even for a real own symbol property that
+			// Reflect.has/`in` already found correctly.
+			if keyIsSymbol {
+				symKey := vm.NewSymbolKey(propSym)
+				if g, s, e, c, ok := bf.Properties.GetOwnAccessorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("get", g)
+					descriptor.SetOwn("set", s)
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				if v, w, e, c, ok := bf.Properties.GetOwnDescriptorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", v)
+					descriptor.SetOwn("writable", vm.BooleanValue(w))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				return vm.Undefined, nil
+			}
+			// Bound function name/length are real own properties in bf.Properties
+			// They can be deleted (configurable:true) or redefined via Object.defineProperty
 			if propName == "name" || propName == "length" {
 				if val, ok := bf.Properties.GetOwn(propName); ok {
 					_, w, e, c, _ := bf.Properties.GetOwnDescriptor(propName)
@@ -4854,6 +4882,38 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	// Handle RegExp intrinsic property: lastIndex
 	// Per ECMAScript spec: {value: 0, writable: true, enumerable: false, configurable: false}
 	if obj.Type() == vm.TypeRegExp {
+		// A symbol key is never "lastIndex" (a symbol never equals a
+		// string), so that intrinsic check stays string-only and this
+		// skips straight to the side-table lookup - mirroring the
+		// TypeMap/TypeSet/TypePromise block above (accessor first, then
+		// data), which the "custom properties on the regex" check just
+		// below never had at all: it only ever looked up `propName`, a
+		// string, so `Object.getOwnPropertyDescriptor(regex, sym)`
+		// answered undefined even for a real own symbol property that
+		// Reflect.has/`in` already found correctly.
+		if keyIsSymbol {
+			regexObj := obj.AsRegExpObject()
+			if regexObj != nil && regexObj.Properties != nil {
+				symKey := vm.NewSymbolKey(propSym)
+				if g, s, e, c, ok := regexObj.Properties.GetOwnAccessorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("get", g)
+					descriptor.SetOwn("set", s)
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				if v, w, e, c, ok := regexObj.Properties.GetOwnDescriptorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", v)
+					descriptor.SetOwn("writable", vm.BooleanValue(w))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+			}
+			return vm.Undefined, nil
+		}
 		if propName == "lastIndex" {
 			regexObj := obj.AsRegExpObject()
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
