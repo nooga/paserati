@@ -3292,7 +3292,15 @@ startExecution:
 						}
 					}
 				case TypePromise:
-					// Walk Promise prototype chain for symbol properties
+					// Own side-table symbol property first (same table a
+					// plain assignment/Object.defineProperty writes into -
+					// see the non-symbol TypePromise case below), then walk
+					// the Promise.prototype chain for symbol properties.
+					promiseObj := objVal.AsPromise()
+					if promiseObj.Properties != nil && promiseObj.Properties.HasOwnByKey(NewSymbolKey(propVal)) {
+						hasProperty = true
+						break
+					}
 					proto := vm.PromisePrototype
 					if proto.IsObject() {
 						for cur := proto.AsPlainObject(); cur != nil; {
@@ -3671,9 +3679,23 @@ startExecution:
 						hasProperty = vm.ObjectPrototype.AsPlainObject().Has(propKey)
 					}
 				case TypePromise:
-					// Promise objects: check Promise.prototype chain
-					// Promises don't have user-accessible own properties, only internal state
-					if vm.PromisePrototype.IsObject() {
+					// Promise: a plain property CAN be assigned directly onto
+					// one (e.g. a subclass constructor doing `this.foo = 1`
+					// after super() - see op_setprop.go's TypePromise case,
+					// which writes into the same side table as Map/Set) even
+					// though a Promise exposes no *intrinsic* own state of its
+					// own - check that side table before falling back to
+					// Promise.prototype. This own-properties check was
+					// missing entirely (the stale comment here claimed
+					// Promises "don't have user-accessible own properties" -
+					// they do, once anything is assigned), so `in` answered
+					// false for an own property Reflect.has already found,
+					// and for-in's per-key re-verification (see
+					// TypeBoundFunction's comment above) silently dropped
+					// every such key that OpGetOwnKeys had just found.
+					if promiseObj := objVal.AsPromise(); promiseObj.Properties != nil && promiseObj.Properties.HasOwn(propKey) {
+						hasProperty = true
+					} else if vm.PromisePrototype.IsObject() {
 						hasProperty = vm.PromisePrototype.AsPlainObject().Has(propKey)
 					}
 				case TypeRegExp:
@@ -14548,6 +14570,41 @@ startExecution:
 				if regexObj != nil && regexObj.Properties != nil {
 					seen := make(map[string]bool)
 					cur := regexObj.Properties
+					for cur != nil {
+						for _, k := range cur.OwnKeys() {
+							if !seen[k] {
+								keys = append(keys, k)
+							}
+						}
+						for _, k := range cur.OwnPropertyNames() {
+							seen[k] = true
+						}
+						pv := cur.GetPrototype()
+						if !pv.IsObject() {
+							break
+						}
+						cur = pv.AsPlainObject()
+					}
+				}
+			case TypeMap, TypeSet, TypePromise:
+				// Same side table as TypeRegExp just above (OwnPropertiesTable,
+				// pkg/vm/properties_table.go) - this case was missing
+				// entirely, so `for (k in map)`/`for (k in set)`/
+				// `for (k in promise)` came back with nothing even after a
+				// plain assignment onto the value. Map/Set's own "size" is
+				// never an own property (it's a getter on Map.prototype/
+				// Set.prototype - Object.getOwnPropertyDescriptor(new Map(),
+				// "size") is undefined in Node), and Promise exposes no
+				// user-accessible own state, so only the side table matters
+				// here, same as RegExp's "lastIndex" staying excluded above.
+				// OwnPropertiesTable abstracts over the three kinds' actual
+				// field names (MapObject/SetObject/PromiseObject.Properties)
+				// via ownPropertiesSlot, so one case covers all three
+				// instead of duplicating the TypeRegExp case's body three
+				// times.
+				if props := OwnPropertiesTable(objValue); props != nil {
+					seen := make(map[string]bool)
+					cur := props
 					for cur != nil {
 						for _, k := range cur.OwnKeys() {
 							if !seen[k] {
