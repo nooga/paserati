@@ -17643,10 +17643,33 @@ func (vm *VM) parseArrayIndex(key string) (int, bool) {
 func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 	switch iterableVal.Type() {
 	case TypeArray:
-		// Fast path for arrays
+		// Fast path for arrays. A real spread reads the source through its
+		// default iterator (%Array.prototype%[Symbol.iterator]), which reads
+		// each index via ordinary [[Get]] - and [[Get]] on a hole (from
+		// `delete arr[i]`, a literal elision `[1,,3]`, or `new Array(n)`)
+		// always yields a genuine, PRESENT `undefined`, never "no property
+		// at all". So the spread result must never itself contain a hole.
+		// A raw `copy(args, arrayObj.elements)` (the previous implementation)
+		// carried a Hole value straight through unchanged instead - and, for
+		// an array whose `.length` exceeds its elements slice (e.g.
+		// `new Array(6)`, or `arr.length = 6` on a 3-element array - see
+		// ArrayObject.SetLength, which deliberately never grows the elements
+		// slice on its own), it silently truncated the spread to
+		// `len(elements)` rather than the array's actual `.length`.
+		// arrayObj.Get(i) already resolves a Hole to Undefined and returns
+		// Undefined for any out-of-slice index up to length, fixing both.
+		// It does not consult own accessors installed via
+		// Object.defineProperty (see arrayLikeGet in array_generic.go for
+		// the accessor-aware version generic Array.prototype methods use) -
+		// that's a separate, pre-existing gap, unaffected by this fix in
+		// either direction: an accessor's raw backing slot was already read
+		// as-is by the old `copy`, and still is here.
 		arrayObj := AsArray(iterableVal)
-		args := make([]Value, len(arrayObj.elements))
-		copy(args, arrayObj.elements)
+		length := arrayObj.length
+		args := make([]Value, length)
+		for i := 0; i < length; i++ {
+			args[i] = arrayObj.Get(i)
+		}
 		return args, nil
 
 	case TypeArguments:
