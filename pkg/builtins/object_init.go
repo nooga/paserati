@@ -2913,6 +2913,25 @@ func objectGetOwnPropertySymbolsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.V
 				arrObj.Append(s)
 			}
 		}
+	} else if obj.Type() == vm.TypeNativeFunction || obj.Type() == vm.TypeNativeFunctionWithProps || obj.Type() == vm.TypeBoundFunction {
+		// These three callable kinds keep their own properties in the same
+		// lazily-allocated *PlainObject side table shape as TypeFunction/
+		// TypeClosure above (OwnPropertiesTable, pkg/vm/properties_table.go),
+		// but this function never had a case for any of them at all - so
+		// Object.getOwnPropertySymbols always answered [] even after
+		// Object.defineProperty had just added a symbol-keyed own property,
+		// even though Object.getOwnPropertyDescriptor(obj, sym) already
+		// correctly reported that same property existing (and, for
+		// TypeNativeFunction/TypeNativeFunctionWithProps,
+		// Object.getOwnPropertyDescriptors already lists it correctly too -
+		// PR #339 fixed that plural function's own equivalent gap for these
+		// same three kinds without this singular-purpose function being
+		// touched, which is what let this one lag behind unnoticed).
+		if props := vm.OwnPropertiesTable(obj); props != nil {
+			for _, s := range props.OwnSymbolKeys() {
+				arrObj.Append(s)
+			}
+		}
 	}
 	// DictObject does not support symbols; returns empty array
 	return arr, nil
@@ -5193,6 +5212,28 @@ func objectGetOwnPropertyDescriptorsWithVM(vmInstance *vm.VM, args []vm.Value) (
 				}
 				symbolKeys = append(symbolKeys, nf.Properties.OwnSymbolKeys()...)
 			}
+		}
+	case vm.TypeBoundFunction:
+		// This case didn't exist at all before this fix, so
+		// Object.getOwnPropertyDescriptors(boundFn) always returned {}
+		// entirely - missing even "name"/"length", unlike every other
+		// callable kind's branch in this same switch (which all
+		// synthesize those two explicitly, since for THEM name/length
+		// aren't real entries in the side table). A bound function is the
+		// one callable kind where "name" ("bound " + original name) and
+		// "length" (computed at bind time) genuinely ARE real own
+		// properties set directly into bf.Properties (see
+		// pkg/vm/property_helpers.go's "Bound functions: 'name'/'length'
+		// is a real own property set at bind time" comments), so unlike
+		// TypeFunction/TypeNativeFunction*/TypeClosure above, no special
+		// synthesis is needed here - a plain OwnPropertyNames()/
+		// OwnSymbolKeys() walk already includes them alongside any other
+		// custom own property (Object.defineProperty, bracket-notation
+		// assignment).
+		bf := obj.AsBoundFunction()
+		if bf.Properties != nil {
+			stringKeys = append(stringKeys, bf.Properties.OwnPropertyNames()...)
+			symbolKeys = append(symbolKeys, bf.Properties.OwnSymbolKeys()...)
 		}
 	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise:
 		// These exotic kinds keep their ordinary own properties in the same
