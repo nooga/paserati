@@ -3426,9 +3426,17 @@ startExecution:
 						// this index itself ever being set. Check real
 						// presence (dense value, or an own accessor/sparse
 						// data property at this exact index) instead of
-						// `index < arrayObj.Length()`.
-						hasProperty = ArrayHasOwnIndex(arrayObj, index)
-					} else if _, ok := arrayObj.GetOwn(propKey); ok {
+						// `index < arrayObj.Length()` - and, per `in`
+						// being HasProperty (not HasOwnProperty), an index
+						// that isn't an own property still needs the
+						// prototype-chain walk below rather than reporting
+						// absent outright (e.g. Array.prototype[5] = ...).
+						if ArrayHasOwnIndex(arrayObj, index) {
+							hasProperty = true
+						} else {
+							hasProperty = vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(objVal), keyFromString(propKey))
+						}
+					} else if ArrayHasOwnNamedProperty(arrayObj, propKey) {
 						hasProperty = true
 					} else if propKey == "length" {
 						hasProperty = true
