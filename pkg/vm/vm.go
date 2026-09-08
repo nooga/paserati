@@ -3416,6 +3416,119 @@ startExecution:
 					if vm.hasFunctionPrototypeSymbolProperty(symKey) {
 						hasProperty = true
 					}
+				case TypeProxy:
+					// Mirrors the non-symbol TypeProxy case just below
+					// exactly (revoked check, 'has' trap invocation with
+					// the invariant-validation steps, no-trap fallback to
+					// target.[[HasProperty]]) - only the propertyKey passed
+					// to the trap and used for the own-property lookups
+					// differs (the raw Symbol Value instead of a string).
+					// Before this case existed, ANY symbol-keyed `in` check
+					// on a Proxy fell to the default below and answered
+					// false unconditionally - regardless of a `has` trap or
+					// what the target actually has - even though
+					// Reflect.has (proxyReflectHas, pkg/builtins/
+					// reflect_has.go) already handled this correctly.
+					proxy := objVal.AsProxy()
+					if proxy.Revoked {
+						vm.ThrowTypeError("Cannot perform 'in' on a revoked Proxy")
+						if !vm.unwinding {
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+						return InterpretRuntimeError, Undefined
+					}
+
+					if hasTrap, ok := proxyGetHasTrap(proxy.handler); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
+						if !hasTrap.IsCallable() {
+							vm.ThrowTypeError("'has' on proxy: trap is not a function")
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							return InterpretRuntimeError, Undefined
+						}
+
+						// Call handler.has(target, propertyKey) - propertyKey
+						// is the raw Symbol value itself, matching
+						// proxyReflectHas's own trap args for a symbol key.
+						trapArgs := []Value{proxy.target, propVal}
+						result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+							} else {
+								vm.runtimeError("%s", err.Error())
+							}
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							return InterpretRuntimeError, Undefined
+						}
+						hasProperty = !result.IsFalsey()
+
+						// ECMAScript 10.5.7 step 11: invariant validation
+						// when the trap returns false.
+						if !hasProperty {
+							target := proxy.target
+							if target.Type() == TypeObject {
+								targetObj := target.AsPlainObject()
+								symKey := NewSymbolKey(propVal)
+								if _, _, _, c, found := targetObj.GetOwnDescriptorByKey(symKey); found && !c {
+									vm.ThrowTypeError("'has' on proxy: trap returned false for a property which exists in the proxy target as non-configurable")
+									if !vm.unwinding {
+										frame = &vm.frames[vm.frameCount-1]
+										closure = frame.closure
+										function = closure.Fn
+										code = function.Chunk.Code
+										constants = function.Chunk.Constants
+										registers = frame.registers
+										ip = frame.ip
+										continue
+									}
+									return InterpretRuntimeError, Undefined
+								}
+								if !targetObj.IsExtensible() {
+									if _, found := targetObj.GetOwnByKey(symKey); found {
+										vm.ThrowTypeError("'has' on proxy: trap returned false for a property but the proxy target is not extensible")
+										if !vm.unwinding {
+											frame = &vm.frames[vm.frameCount-1]
+											closure = frame.closure
+											function = closure.Fn
+											code = function.Chunk.Code
+											constants = function.Chunk.Constants
+											registers = frame.registers
+											ip = frame.ip
+											continue
+										}
+										return InterpretRuntimeError, Undefined
+									}
+								}
+							}
+						}
+					} else {
+						// No has trap, fallback to target.[[HasProperty]]
+						hasProperty = vm.proxyHasSymbolPropertyFallback(proxy.target, propVal)
+					}
 				default:
 					hasProperty = false
 				}
@@ -21482,6 +21595,139 @@ func (vm *VM) proxyHasPropertyFallback(target Value, propKey string) bool {
 			}
 		}
 		return vm.hasFunctionPrototypeProperty(propKey)
+	default:
+		return false
+	}
+}
+
+// proxyGetHasTrap looks up a Proxy handler's "has" trap the way
+// GetMethod(handler, "has") does per spec (10.5.7 step 4): an inherited
+// trap counts, not just an own one, and the handler can be a TypeDictObject
+// (a module namespace or enum value, pkg/vm/object.go's NewDictObject) as
+// well as an ordinary TypeObject - AsPlainObject() on the former panics.
+//
+// This exists because both of this function's callers (OpIn's symbol-key
+// TypeProxy case above and proxyHasSymbolPropertyFallback below) used to
+// inline `proxy.handler.AsPlainObject().GetOwn("has")` directly, copied
+// from the pre-existing string-key TypeProxy case's identical shape a few
+// lines below - itself not spec-correct on either count (own-only, and an
+// unguarded AsPlainObject that panics for a TypeDictObject handler; try
+// `new Proxy({}, someEnum)` on either the string- or symbol-key path
+// before this fix). That pre-existing gap was left alone here rather than
+// silently fixed as a drive-by - it's flagged as a shared follow-up
+// instead (see this branch's PR body) since fixing it changes the
+// string-key path's behavior too and deserves its own verification.
+func proxyGetHasTrap(handler Value) (Value, bool) {
+	switch handler.Type() {
+	case TypeObject:
+		return handler.AsPlainObject().Get("has")
+	case TypeDictObject:
+		return handler.AsDictObject().Get("has")
+	default:
+		return Undefined, false
+	}
+}
+
+// proxyHasSymbolPropertyFallback is proxyHasPropertyFallback's symbol-key
+// counterpart: [[HasProperty]] fallback for a proxy target when no 'has'
+// trap is defined, for a Symbol propKey rather than a string one. Used by
+// OpIn's symbol-key TypeProxy case (pkg/vm/vm.go) - mirrors
+// proxyReflectHas's own no-trap recursion (pkg/builtins/reflect_has.go),
+// which already handled this correctly for Reflect.has; `in` did not,
+// since its symbol-key switch had no TypeProxy case at all before this.
+//
+// Deliberately covers the same target-type scope as
+// proxyHasPropertyFallback (TypeProxy/TypeObject/TypeDictObject/TypeArray/
+// TypeRegExp/TypeFunction/TypeClosure, default false) rather than the
+// fuller Map/Set/Promise/BoundFunction/NativeFunction/
+// NativeFunctionWithProps/Arguments coverage OpIn's own symbol-key switch
+// has for a *direct* (non-Proxy) target - that asymmetry already exists in
+// the string-key fallback this mirrors, so a Proxy-wrapping-Map with no
+// trap has the same pre-existing gap for both key kinds, not a new one
+// introduced here.
+func (vm *VM) proxyHasSymbolPropertyFallback(target Value, propVal Value) bool {
+	key := NewSymbolKey(propVal)
+	switch target.Type() {
+	case TypeProxy:
+		proxy := target.AsProxy()
+		if proxy.Revoked {
+			return false
+		}
+		if hasTrap, ok := proxyGetHasTrap(proxy.handler); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
+			if hasTrap.IsCallable() {
+				trapArgs := []Value{proxy.target, propVal}
+				result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
+				if err != nil {
+					return false
+				}
+				return !result.IsFalsey()
+			}
+			return false
+		}
+		// Recursively check the nested proxy's target
+		return vm.proxyHasSymbolPropertyFallback(proxy.target, propVal)
+	case TypeObject:
+		po := target.AsPlainObject()
+		for cur := po; cur != nil; {
+			if _, ok := cur.GetOwnByKey(key); ok {
+				return true
+			}
+			pv := cur.GetPrototype()
+			if !pv.IsObject() {
+				break
+			}
+			cur = pv.AsPlainObject()
+		}
+		return false
+	case TypeDictObject:
+		// DictObject ignores symbols, same as OpIn's own symbol-key
+		// TypeDictObject case above.
+		return false
+	case TypeArray:
+		arrayObj := target.AsArray()
+		if arrayObj.HasOwnSymbolProp(propVal.AsSymbolObject()) {
+			return true
+		}
+		return vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(target), key)
+	case TypeRegExp:
+		regexObj := target.AsRegExpObject()
+		if regexObj != nil && regexObj.Properties != nil {
+			if _, ok := regexObj.Properties.GetOwnByKey(key); ok {
+				return true
+			}
+		}
+		proto := Undefined
+		if regexObj != nil {
+			proto = regexObj.GetPrototype()
+		}
+		if !proto.IsObject() {
+			proto = vm.RegExpPrototype
+		}
+		if proto.IsObject() {
+			return vm.hasPropertyByKeyFromPrototypeChain(proto, key)
+		}
+		return false
+	case TypeFunction:
+		fn := target.AsFunction()
+		if fn.Properties != nil {
+			if _, ok := fn.Properties.GetOwnByKey(key); ok {
+				return true
+			}
+		}
+		return vm.hasFunctionPrototypeSymbolProperty(key)
+	case TypeClosure:
+		cl := target.AsClosure()
+		if cl.Properties != nil {
+			if _, ok := cl.Properties.GetOwnByKey(key); ok {
+				return true
+			}
+		}
+		if cl.Fn != nil && cl.Fn.Properties != nil {
+			if _, ok := cl.Fn.Properties.GetOwnByKey(key); ok {
+				return true
+			}
+		}
+		return vm.hasFunctionPrototypeSymbolProperty(key)
 	default:
 		return false
 	}
