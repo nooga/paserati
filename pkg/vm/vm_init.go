@@ -2271,19 +2271,51 @@ func (vm *VM) ConstructWithNewTarget(constructor Value, args []Value, newTarget 
 
 		// Get prototype from newTarget (not constructor)
 		// Per ECMAScript, the prototype is determined by newTarget
-		var newTargetFn *FunctionObject
-		if newTarget.Type() == TypeClosure {
-			newTargetFn = newTarget.AsClosure().Fn
-		} else if newTarget.Type() == TypeFunction {
-			newTargetFn = newTarget.AsFunction()
-		}
-
+		//
+		// This used to unconditionally unwrap TypeClosure to its
+		// underlying, SHARED *FunctionObject (newTarget.AsClosure().Fn)
+		// and call GetOrCreatePrototypeWithVM on that directly - which
+		// creates/reads "prototype" on the function's own table, not the
+		// closure INSTANCE's table. But `someClosure.prototype = x`
+		// (op_setprop.go's TypeClosure case) writes into
+		// closure.Properties, a per-closure-instance side table that
+		// shadows the shared Fn's - exactly the same shadowing
+		// TypeFunction/TypeClosure's ordinary property-read path
+		// (getPropertyWithReceiver above) already respects. So
+		// Reflect.construct(Ctor, args, newTarget) with an explicit
+		// newTarget whose .prototype had been reassigned (or a class,
+		// which compiles to TypeClosure) silently used newTarget's
+		// stale, unshadowed default prototype instead of the real one:
+		//
+		//   function C(a) { this.a = a; }
+		//   function D() {}
+		//   D.prototype = { fromD: true };
+		//   Object.getPrototypeOf(Reflect.construct(C, [1], D)) === D.prototype; // before: false - Node: true
+		//
+		// Fixed by using ClosureObject.GetPrototypeWithVM (pkg/vm/function.go),
+		// which already gets this shadowing right - it's the same method
+		// OpValidateSuperclass (`class X extends Y`, pkg/vm/vm.go) already
+		// uses for the identical purpose. TypeNativeFunction/
+		// TypeNativeFunctionWithProps/TypeBoundFunction newTargets (a
+		// native or bound constructor) had the same bug via the same
+		// "fall back to constructor's own prototype, not newTarget's"
+		// path - handled by GetPrototypeFromConstructor below directly
+		// (their own "prototype" is a real, non-lazily-created property,
+		// so vm.GetProperty - which GetPrototypeFromConstructor calls -
+		// already reads it correctly for all three, unlike
+		// TypeFunction/TypeClosure's synthesized-on-first-access one).
 		var prototype Value
-		if newTargetFn != nil {
-			prototype = newTargetFn.GetOrCreatePrototypeWithVM(vm)
-		} else {
-			// Fallback to constructor's prototype
-			prototype = fn.GetOrCreatePrototypeWithVM(vm)
+		switch newTarget.Type() {
+		case TypeClosure:
+			prototype = newTarget.AsClosure().GetPrototypeWithVM(vm)
+		case TypeFunction:
+			prototype = newTarget.AsFunction().GetOrCreatePrototypeWithVM(vm)
+		default:
+			var gpfcErr error
+			prototype, gpfcErr = vm.GetPrototypeFromConstructor(newTarget, "%ObjectPrototype%")
+			if gpfcErr != nil {
+				return Undefined, gpfcErr
+			}
 		}
 
 		// ECMAScript spec 9.1.14 GetPrototypeFromConstructor:

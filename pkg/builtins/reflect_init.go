@@ -57,13 +57,24 @@ func (r *ReflectInitializer) InitTypes(ctx *TypeContext) error {
 		// "get" takes an optional third `receiver` argument (used as the
 		// `this` an accessor's getter is called with - the runtime
 		// implementation now actually reads it, see reflectObj's "get"
-		// closure below). Reflect.set/Reflect.construct have the exact
-		// same "optional trailing argument the runtime accepts but the
-		// declared signature doesn't" gap for their own optional
-		// receiver/newTarget parameters - left alone here (out of this
-		// fix's scope) and flagged as a separate follow-up.
+		// closure below). "set"/"construct" have the same shape of gap for
+		// their own optional trailing arguments - fixed alongside "get"
+		// here rather than left as a separate follow-up, since the runtime
+		// already accepted a 4th/3rd argument for both before this fix
+		// (Reflect.set(t, k, v, receiver) already worked under
+		// --no-typecheck; Reflect.construct(t, args, newTarget) did NOT -
+		// see the "construct" closure below for the real, causally-coupled
+		// runtime bug this surfaced and fixed in the same commit).
+		//
+		// "set"'s spec signature (ECMA-262, and lib.es2015.reflect.d.ts in
+		// the pinned TypeScript v6.0.3 tree) is
+		// `set(target, propertyKey, value, receiver?)` - only the trailing
+		// `receiver` is optional, `value` is required (it legitimately
+		// defaults to `undefined` at the VALUE level when omitted, same as
+		// any other required `any`-typed parameter given `undefined` -
+		// that's not the same as the parameter itself being optional).
 		WithProperty("get", types.NewOptionalFunction([]types.Type{types.Any, keyType, types.Any}, types.Any, []bool{false, false, true})).
-		WithProperty("set", types.NewSimpleFunction([]types.Type{types.Any, keyType, types.Any}, types.Boolean)).
+		WithProperty("set", types.NewOptionalFunction([]types.Type{types.Any, keyType, types.Any, types.Any}, types.Boolean, []bool{false, false, false, true})).
 		WithProperty("has", types.NewSimpleFunction([]types.Type{types.Any, keyType}, types.Boolean)).
 		WithProperty("deleteProperty", types.NewSimpleFunction([]types.Type{types.Any, keyType}, types.Boolean)).
 		// Prototype operations
@@ -79,7 +90,7 @@ func (r *ReflectInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("preventExtensions", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
 		// Function operations
 		WithProperty("apply", types.NewSimpleFunction([]types.Type{types.Any, types.Any, types.Any}, types.Any)).
-		WithProperty("construct", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any))
+		WithProperty("construct", types.NewOptionalFunction([]types.Type{types.Any, types.Any, types.Any}, types.Any, []bool{false, false, true}))
 
 	return ctx.DefineGlobal("Reflect", reflectType)
 }
