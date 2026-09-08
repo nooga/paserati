@@ -66,20 +66,45 @@ checks.push("name" in bound && Reflect.has(bound, "name"));
 checks.push("name" in Arr && Reflect.has(Arr, "name"));
 checks.push("call" in nf && Reflect.has(nf, "call"));
 
-// --- Known, separately-tracked divergence risk: `in`'s new case here
-// walks vm.FunctionPrototype for an *inherited* symbol property (e.g.
-// Symbol.hasInstance), same as the pre-existing TypeFunction/TypeClosure
-// cases it mirrors - but Reflect.has (pkg/builtins/reflect_has.go)
-// unconditionally skips that walk for a symbol key on any callable. The
-// two agree today ONLY because the walk itself doesn't actually find
-// Function.prototype[Symbol.hasInstance] yet - a separate, pre-existing
-// bug (task_92b7c9d4, reproduces identically for a plain function, so
-// unrelated to this fix). Both sides are false today; this assertion
-// pins that agreement (NOT Node parity - Node has both true) so that
-// fixing the walk without also adding Reflect.has's matching
-// FunctionPrototype fallback flips this and fails loudly instead of
-// silently reintroducing the exact "in disagrees with Reflect.has" class
-// of bug this whole session has been fixing one kind at a time. ---
-checks.push((Symbol.hasInstance in bound) === Reflect.has(bound, Symbol.hasInstance));
+// --- `in`'s FunctionPrototype walk (used above by BoundFunction) also
+// correctly finds an *inherited* symbol property, e.g.
+// Function.prototype[Symbol.hasInstance], and Reflect.has agrees - both
+// now true, matching Node. (This assertion previously pinned a
+// false/false agreement caused by two compounding pre-existing bugs: the
+// walk itself couldn't find FunctionPrototype's own properties at all,
+// since vm.FunctionPrototype is a TypeNativeFunctionWithProps at runtime
+// rather than a bare PlainObject, and Reflect.has unconditionally skipped
+// the walk for any symbol key. Both are fixed now - see
+// hasFunctionPrototypeSymbolProperty's doc comment in pkg/vm/vm.go.) ---
+checks.push(Symbol.hasInstance in bound && Reflect.has(bound, Symbol.hasInstance));
+
+// --- Same inherited-symbol lookup for a plain function and a class,
+// verified to match Node (both true). ---
+function plainFn() {}
+checks.push(Symbol.hasInstance in plainFn && Reflect.has(plainFn, Symbol.hasInstance));
+
+class SomeClass {}
+checks.push(Symbol.hasInstance in SomeClass && Reflect.has(SomeClass, Symbol.hasInstance));
+
+// --- The walk doesn't stop at Function.prototype - it continues up to
+// Function.prototype's own [[Prototype]] (Object.prototype) too, for a
+// symbol property that lives there instead. Confirms the fix's shared
+// helper (hasFunctionPrototypeSymbolProperty) walks the full chain, not
+// just its first step. ---
+const inheritedFromObjectProto = Symbol("inheritedFromObjectProto");
+(Object.prototype as any)[inheritedFromObjectProto] = 1;
+checks.push(
+  inheritedFromObjectProto in plainFn && Reflect.has(plainFn, inheritedFromObjectProto)
+);
+
+// --- A class that overrides Symbol.hasInstance as its own static
+// property is still found via the own-table check, same as before -
+// unaffected by the FunctionPrototype walk fix. ---
+class OverridesHasInstance {
+  static [Symbol.hasInstance](_x: unknown) {
+    return true;
+  }
+}
+checks.push(Symbol.hasInstance in OverridesHasInstance && Reflect.has(OverridesHasInstance, Symbol.hasInstance));
 
 checks.every((c) => c === true);

@@ -215,11 +215,19 @@ func reflectHas(vmInstance *vm.VM, target vm.Value, key vm.Value) (bool, error) 
 			}
 		}
 		if isSym {
-			// See HasFunctionPrototypeProperty's doc comment: a symbol
-			// key on a callable isn't handled by the string-only
-			// FunctionPrototype fallback, so it stays unconditionally
-			// false here - same as it already was before this fix.
-			return false, nil
+			// HasFunctionPrototypeSymbolProperty mirrors OpIn's own
+			// TypeFunction/TypeClosure/TypeBoundFunction/TypeNativeFunction/
+			// TypeNativeFunctionWithProps symbol-key cases (vm.go), which
+			// walk FunctionPrototype's chain for an inherited symbol
+			// property like Symbol.hasInstance. Before this, `in` and
+			// Reflect.has already disagreed here in principle (in's walk
+			// used to look for FunctionPrototype as a bare PlainObject and
+			// silently find nothing, since it's actually a
+			// TypeNativeFunctionWithProps at runtime - see that function's
+			// doc comment), but with in's walk now fixed, leaving this
+			// unconditionally false would make the disagreement real
+			// instead of masked.
+			return vmInstance.HasFunctionPrototypeSymbolProperty(propKey), nil
 		}
 		return vmInstance.HasFunctionPrototypeProperty(name), nil
 	}

@@ -3364,18 +3364,8 @@ startExecution:
 						}
 					}
 					// Walk Function.prototype chain
-					if vm.FunctionPrototype.IsObject() {
-						for cur := vm.FunctionPrototype.AsPlainObject(); cur != nil; {
-							if _, ok := cur.GetOwnByKey(symKey); ok {
-								hasProperty = true
-								break
-							}
-							pv := cur.GetPrototype()
-							if !pv.IsObject() {
-								break
-							}
-							cur = pv.AsPlainObject()
-						}
+					if vm.hasFunctionPrototypeSymbolProperty(symKey) {
+						hasProperty = true
 					}
 				case TypeClosure:
 					// Check closure's own properties first (shadows Fn.Properties)
@@ -3395,18 +3385,8 @@ startExecution:
 						}
 					}
 					// Walk Function.prototype chain
-					if vm.FunctionPrototype.IsObject() {
-						for cur := vm.FunctionPrototype.AsPlainObject(); cur != nil; {
-							if _, ok := cur.GetOwnByKey(symKey); ok {
-								hasProperty = true
-								break
-							}
-							pv := cur.GetPrototype()
-							if !pv.IsObject() {
-								break
-							}
-							cur = pv.AsPlainObject()
-						}
+					if vm.hasFunctionPrototypeSymbolProperty(symKey) {
+						hasProperty = true
 					}
 				case TypeBoundFunction, TypeNativeFunction, TypeNativeFunctionWithProps:
 					// Same shape as TypeFunction/TypeClosure above: all three
@@ -3433,18 +3413,8 @@ startExecution:
 							break
 						}
 					}
-					if vm.FunctionPrototype.IsObject() {
-						for cur := vm.FunctionPrototype.AsPlainObject(); cur != nil; {
-							if _, ok := cur.GetOwnByKey(symKey); ok {
-								hasProperty = true
-								break
-							}
-							pv := cur.GetPrototype()
-							if !pv.IsObject() {
-								break
-							}
-							cur = pv.AsPlainObject()
-						}
+					if vm.hasFunctionPrototypeSymbolProperty(symKey) {
+						hasProperty = true
 					}
 				default:
 					hasProperty = false
@@ -17724,6 +17694,55 @@ func (vm *VM) hasFunctionPrototypeProperty(propKey string) bool {
 	return false
 }
 
+// functionPrototypeOwnTable returns the PlainObject actually holding
+// FunctionPrototype's own properties - see hasFunctionPrototypeProperty's
+// doc comment for why this isn't just vm.FunctionPrototype.AsPlainObject().
+// At runtime Function.prototype is created as a callable
+// TypeNativeFunctionWithProps (pkg/builtins/function_init.go, so that
+// Function.prototype() itself is a valid no-op call per spec), and its own
+// properties - including call/apply/bind/toString and
+// Symbol.hasInstance - live in that value's Properties side table, not in
+// vm.FunctionPrototype itself. Returns nil if FunctionPrototype is neither
+// shape (shouldn't happen once initialized) or its table isn't allocated.
+func (vm *VM) functionPrototypeOwnTable() *PlainObject {
+	switch vm.FunctionPrototype.Type() {
+	case TypeObject:
+		return vm.FunctionPrototype.AsPlainObject()
+	case TypeNativeFunctionWithProps:
+		if fp := vm.FunctionPrototype.AsNativeFunctionWithProps(); fp != nil {
+			return fp.Properties
+		}
+	}
+	return nil
+}
+
+// hasFunctionPrototypeSymbolProperty is hasFunctionPrototypeProperty for a
+// symbol key, used by OpIn's TypeFunction/TypeClosure/TypeBoundFunction/
+// TypeNativeFunction/TypeNativeFunctionWithProps cases to find an inherited
+// symbol property (e.g. Function.prototype[Symbol.hasInstance]) once a
+// callable's own Properties table doesn't have it. Before this existed,
+// each of those cases open-coded `vm.FunctionPrototype.AsPlainObject()`
+// directly - which is nil whenever FunctionPrototype is (as it always is
+// at runtime) a TypeNativeFunctionWithProps rather than a TypeObject, so
+// `vm.FunctionPrototype.IsObject()` was false and the walk never even
+// started. `Symbol.hasInstance in someFunction` answered false even though
+// `Symbol.hasInstance in Function.prototype` (addressed directly, going
+// through OpIn's own TypeNativeFunctionWithProps-aware handling) correctly
+// answered true, and even though the property demonstrably exists.
+func (vm *VM) hasFunctionPrototypeSymbolProperty(key PropertyKey) bool {
+	for cur := vm.functionPrototypeOwnTable(); cur != nil; {
+		if _, ok := cur.GetOwnByKey(key); ok {
+			return true
+		}
+		pv := cur.GetPrototype()
+		if !pv.IsObject() {
+			return false
+		}
+		cur = pv.AsPlainObject()
+	}
+	return false
+}
+
 // isUnscopable checks if a property is excluded by Symbol.unscopables on the with-object.
 // This properly triggers the getter for @@unscopables per ECMAScript spec.
 // Returns (unscopable, hadError) - if hadError is true, check vm.unwinding
@@ -21437,10 +21456,11 @@ func (vm *VM) proxyHasPropertyFallback(target Value, propKey string) bool {
 				return true
 			}
 		}
-		if vm.FunctionPrototype.Type() == TypeObject {
-			return vm.FunctionPrototype.AsPlainObject().Has(propKey)
-		}
-		return false
+		// Was `if vm.FunctionPrototype.Type() == TypeObject { ... }; return
+		// false` - silently false whenever FunctionPrototype is (as it
+		// always is at runtime) TypeNativeFunctionWithProps rather than
+		// TypeObject. See hasFunctionPrototypeProperty's doc comment.
+		return vm.hasFunctionPrototypeProperty(propKey)
 	case TypeClosure:
 		cl := target.AsClosure()
 		if propKey == "name" || propKey == "length" {
@@ -21459,10 +21479,7 @@ func (vm *VM) proxyHasPropertyFallback(target Value, propKey string) bool {
 				return true
 			}
 		}
-		if vm.FunctionPrototype.Type() == TypeObject {
-			return vm.FunctionPrototype.AsPlainObject().Has(propKey)
-		}
-		return false
+		return vm.hasFunctionPrototypeProperty(propKey)
 	default:
 		return false
 	}
