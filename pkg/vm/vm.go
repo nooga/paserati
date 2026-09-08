@@ -17682,31 +17682,67 @@ func (vm *VM) parseArrayIndex(key string) (int, bool) {
 func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 	switch iterableVal.Type() {
 	case TypeArray:
-		// Fast path for arrays. A real spread reads the source through its
-		// default iterator (%Array.prototype%[Symbol.iterator]), which reads
-		// each index via ordinary [[Get]] - and [[Get]] on a hole (from
-		// `delete arr[i]`, a literal elision `[1,,3]`, or `new Array(n)`)
-		// always yields a genuine, PRESENT `undefined`, never "no property
-		// at all". So the spread result must never itself contain a hole.
-		// A raw `copy(args, arrayObj.elements)` (the previous implementation)
-		// carried a Hole value straight through unchanged instead - and, for
-		// an array whose `.length` exceeds its elements slice (e.g.
-		// `new Array(6)`, or `arr.length = 6` on a 3-element array - see
-		// ArrayObject.SetLength, which deliberately never grows the elements
-		// slice on its own), it silently truncated the spread to
-		// `len(elements)` rather than the array's actual `.length`.
-		// arrayObj.Get(i) already resolves a Hole to Undefined and returns
-		// Undefined for any out-of-slice index up to length, fixing both.
-		// It does not consult own accessors installed via
-		// Object.defineProperty (see arrayLikeGet in array_generic.go for
-		// the accessor-aware version generic Array.prototype methods use) -
-		// that's a separate, pre-existing gap, unaffected by this fix in
-		// either direction: an accessor's raw backing slot was already read
-		// as-is by the old `copy`, and still is here.
+		// A real spread reads the source through its default iterator
+		// (%Array.prototype%[Symbol.iterator]), which reads each index via
+		// ordinary [[Get]]:
+		//  - [[Get]] on a hole (from `delete arr[i]`, a literal elision
+		//    `[1,,3]`, or `new Array(n)`) always yields a genuine, PRESENT
+		//    `undefined`, never "no property at all" - so the spread result
+		//    must never itself contain a hole, and it must go all the way to
+		//    the array's actual `.length` rather than stopping at
+		//    `len(elements)` (e.g. `new Array(6)`, or `arr.length = 6` on a
+		//    3-element array - see ArrayObject.SetLength, which deliberately
+		//    never grows the elements slice on its own) (paserati#309).
+		//  - an own accessor installed via Object.defineProperty (at any
+		//    index, including a plain in-bounds one; DefineAccessorProperty
+		//    never touches `elements`, it only ever writes to
+		//    getters/setters/propertyDesc, so an accessor index's raw
+		//    backing slot is stale or a leftover Hole) must have its getter
+		//    invoked, exactly like plain property access (`a[i]`) or the
+		//    generic Array.prototype methods already do via arrayLikeGet
+		//    (pkg/builtins/array_generic.go - this can't call that helper
+		//    directly, since pkg/builtins imports pkg/vm, not the other way
+		//    around, so the same accessor-first precedence is duplicated
+		//    here instead). A getter that throws propagates as this
+		//    function's error, matching a thrown exception during a real
+		//    spread (paserati#314).
 		arrayObj := AsArray(iterableVal)
 		length := arrayObj.length
 		args := make([]Value, length)
+		if !arrayObj.HasAccessors() {
+			// Fast path for the common case: no own accessor anywhere on
+			// the array, so ordinary [[Get]] never needs to call into
+			// script. arrayObj.Get(i) already resolves a Hole to Undefined
+			// and returns Undefined for any out-of-slice index up to
+			// length, and re-reads the live slice on every call, so it's
+			// safe even though nothing here can mutate the array mid-loop.
+			for i := 0; i < length; i++ {
+				args[i] = arrayObj.Get(i)
+			}
+			return args, nil
+		}
+		// Slow path: the array has at least one own accessor. A getter is
+		// arbitrary script: it can shrink (or replace) `elements` out from
+		// under this loop (`a.length = 0`, `a.pop()`, ...) before a later
+		// iteration's read runs. arrayObj.Get(i) re-checks the live slice
+		// length on every non-accessor read rather than trusting a
+		// snapshot - an index the getter invalidated reads as Undefined
+		// (consistent with arr.Get/HasIndex's own out-of-bounds behavior)
+		// instead of a Go slice-bounds panic.
 		for i := 0; i < length; i++ {
+			key := strconv.Itoa(i)
+			if getter, _, _, _, ok := arrayObj.GetOwnAccessor(key); ok {
+				if getter.Type() == TypeUndefined {
+					args[i] = Undefined
+					continue
+				}
+				v, err := vm.Call(getter, iterableVal, nil)
+				if err != nil {
+					return nil, err
+				}
+				args[i] = v
+				continue
+			}
 			args[i] = arrayObj.Get(i)
 		}
 		return args, nil
