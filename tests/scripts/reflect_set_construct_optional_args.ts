@@ -44,15 +44,16 @@
 // TypeFunction/TypeClosure's synthesized-on-first-access one, which is
 // why they need the ClosureObject/FunctionObject-specific methods instead).
 //
-// Found while testing, NOT fixed here - a real, separate, pre-existing
-// runtime bug, deliberately deferred as a follow-up: Reflect.set ignores
-// a non-Proxy receiver argument distinct from target when target lacks
-// the property being set - it always writes to target regardless. Only
-// the receiver === target form (the common case, and the one this fix's
-// own type-signature change most directly unblocks) works correctly.
-// Pinned explicitly below (check 3) rather than silently left
-// undocumented - see its own comment for the repro and the reasoning for
-// deferring it. Flagged as a follow-up chip.
+// Found while testing (and flagged as a follow-up chip, task_cd1507d7) -
+// then fixed in a later PR: Reflect.set used to ignore a non-Proxy
+// receiver argument distinct from target when target lacked the property
+// being set, always writing to target regardless. Check 3 below used to
+// pin that wrong behavior explicitly; it's flipped now that
+// pkg/builtins/reflect_init.go's "set" closure implements the real
+// ECMA-262 10.1.9/10.1.9.2 OrdinarySet(WithOwnDescriptor) algorithm
+// (reflectOrdinarySet), which also fixed a second bug found in the same
+// pass: Reflect.set never invoked an own or inherited accessor's setter
+// at all, even for the common receiver === target case (see check 3a).
 
 const checks: boolean[] = [];
 
@@ -77,20 +78,45 @@ const checks: boolean[] = [];
   checks.push(ok === true && target2.z === undefined);
 }
 
-// --- 3. KNOWN, PRE-EXISTING GAP (not fixed here, flagged as a follow-up):
-// Reflect.set with a receiver DISTINCT from target, where target lacks
-// the property, should write to the RECEIVER per ECMA-262 10.1.9.2
-// OrdinarySetWithOwnDescriptor - paserati instead writes to target. This
-// assertion pins TODAY's wrong behavior explicitly (matching the
-// established pattern for a still-open gap - see in_symbol_proxy.ts's
-// history) so a future fix has to touch this file instead of silently
-// leaving stale documentation. Node: ok === true, receiver3.y === 5,
-// "y" in target3 === false. ---
+// --- 3. Reflect.set with a receiver DISTINCT from target, where target
+// lacks the property: writes to the RECEIVER per ECMA-262 10.1.9.2
+// OrdinarySetWithOwnDescriptor's final CreateDataProperty(Receiver, ...)
+// step - flipped from pinning the pre-existing wrong (writes-to-target)
+// behavior once reflectOrdinarySet fixed it (mirrors the
+// in_symbol_proxy.ts check-11 precedent: pin a known gap explicitly, flip
+// the assertion in the same test file once it closes). Verified against
+// Node: ok === true, receiver3.y === 5, "y" in target3 === false. ---
 {
   const target3: any = {};
   const receiver3: any = {};
   const ok = Reflect.set(target3, "y", 5, receiver3);
-  checks.push(ok === true && target3.y === 5 && receiver3.y === undefined);
+  checks.push(ok === true && receiver3.y === 5 && !("y" in target3));
+}
+
+// --- 3a. The second bug found alongside check 3's: Reflect.set didn't
+// invoke an own accessor's setter at all, even for the common
+// receiver === target form - it silently clobbered/no-opped instead of
+// calling the setter (verified against Node, which does call it, with
+// `this` bound to the receiver). Fixing the general-receiver case
+// required walking descriptors either way, so this shares the same fix. ---
+{
+  const obj: any = {};
+  let setterCalled = false;
+  let receivedValue: any = null;
+  let receivedThisIsObj = false;
+  Object.defineProperty(obj, "y", {
+    get() {
+      return 1;
+    },
+    set(v: any) {
+      setterCalled = true;
+      receivedValue = v;
+      receivedThisIsObj = this === obj;
+    },
+    configurable: true,
+  });
+  const ok = Reflect.set(obj, "y", 99);
+  checks.push(ok === true && setterCalled && receivedValue === 99 && receivedThisIsObj);
 }
 
 // --- 4. Reflect.construct with 2 arguments (newTarget defaults to

@@ -41,6 +41,212 @@ func isConstructor(v vm.Value) bool {
 	}
 }
 
+// reflectGetOwnAccessorGeneric returns the getter/setter pair for v's own
+// accessor property named propKey, covering PlainObject's and
+// ArrayObject's own accessor support plus the shared side-table
+// (*PlainObject) the nine ownPropertiesSlot kinds (Function/Closure/
+// NativeFunction/NativeFunctionWithProps/BoundFunction/RegExp/Map/Set/
+// Promise) keep under OwnPropertiesTable, via the `default` branch.
+// DictObject doesn't support accessors at all (pre-existing, matches
+// every other DictObject case in this file). Any OTHER kind (e.g.
+// TypeArguments, TypeTypedArray) that OwnPropertiesTable doesn't cover
+// falls through the same `default` branch to isAccessor=false, not found
+// - reflectOrdinarySet's walk treats that as "no own property here" and
+// continues up the chain, so an exotic kind sitting as a link in a
+// prototype chain (rare, and not exercised by this fix's own tests) is
+// silently skipped rather than mishandled. Callers still need to
+// separately check for a data property when isAccessor is false.
+func reflectGetOwnAccessorGeneric(v vm.Value, propKey string) (getter vm.Value, setter vm.Value, isAccessor bool) {
+	switch v.Type() {
+	case vm.TypeObject:
+		g, s, _, _, ok := v.AsPlainObject().GetOwnAccessor(propKey)
+		return g, s, ok
+	case vm.TypeArray:
+		g, s, _, _, ok := v.AsArray().GetOwnAccessor(propKey)
+		return g, s, ok
+	case vm.TypeDictObject:
+		return vm.Undefined, vm.Undefined, false
+	default:
+		if props := vm.OwnPropertiesTable(v); props != nil {
+			g, s, _, _, ok := props.GetOwnAccessor(propKey)
+			return g, s, ok
+		}
+		return vm.Undefined, vm.Undefined, false
+	}
+}
+
+// reflectGetOwnDataDescriptorGeneric returns the value and writability of
+// v's own DATA property named propKey (call reflectGetOwnAccessorGeneric
+// first to rule out an accessor - this function doesn't check for one).
+// Mirrors reflectGetOwnAccessorGeneric's kind coverage, plus TypeArray's
+// own index/"length"/named-property shapes (an array has no side-table
+// analog for these - they're modeled directly on ArrayObject).
+func reflectGetOwnDataDescriptorGeneric(v vm.Value, propKey string) (value vm.Value, writable bool, found bool) {
+	switch v.Type() {
+	case vm.TypeObject:
+		val, w, _, _, ok := v.AsPlainObject().GetOwnDescriptor(propKey)
+		return val, w, ok
+	case vm.TypeDictObject:
+		val, w, _, _, ok := v.AsDictObject().GetOwnDescriptor(propKey)
+		return val, w, ok
+	case vm.TypeArray:
+		arr := v.AsArray()
+		if propKey == "length" {
+			return vm.Number(float64(arr.Length())), true, true
+		}
+		if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 {
+			if arr.HasOwnIndexProperty(propKey, idx) {
+				return arr.Get(idx), true, true
+			}
+			return vm.Undefined, false, false
+		}
+		if val, ok := arr.GetOwn(propKey); ok {
+			return val, true, true
+		}
+		return vm.Undefined, false, false
+	default:
+		if props := vm.OwnPropertiesTable(v); props != nil {
+			val, w, _, _, ok := props.GetOwnDescriptor(propKey)
+			return val, w, ok
+		}
+		return vm.Undefined, false, false
+	}
+}
+
+// reflectOrdinarySet implements ECMA-262 10.1.9 OrdinarySet /
+// 10.1.9.2 OrdinarySetWithOwnDescriptor for Reflect.set's non-Proxy-target
+// path: walk `target`'s own property, then its whole [[Prototype]] chain,
+// for the first applicable descriptor. An accessor's setter is invoked
+// with `receiver` as `this` regardless of where in the chain it was found
+// (accessors don't write data anywhere, so `target` vs `receiver` doesn't
+// matter for this branch). A data descriptor - found on target itself, an
+// ancestor, or nowhere at all (the implicit "value: undefined, writable:
+// true" default per 10.1.9 step 4) - always has its actual write land on
+// `receiver`, never on whichever object in the chain the descriptor was
+// found on: this is the exact distinction the pre-existing "Simple
+// property set on target" fallback got wrong, unconditionally writing to
+// `target` regardless of `receiver`.
+//
+// Before this fix, `target`'s OWN accessor wasn't invoked at all either -
+// the old fallback went straight to a raw SetOwn/Set call with no
+// descriptor awareness whatsoever, for every case including
+// receiver === target (verified against Node: Reflect.set on an object
+// with its own setter silently no-opped the setter instead of calling
+// it). Fixing the general-receiver case required walking descriptors
+// anyway, so both bugs share one fix.
+func reflectOrdinarySet(vmInstance *vm.VM, target vm.Value, propKey string, value vm.Value, receiver vm.Value) (bool, error) {
+	current := target
+	for i := 0; i < 200 && current.Type() != vm.TypeNull && current.Type() != vm.TypeUndefined; i++ {
+		if _, setter, isAccessor := reflectGetOwnAccessorGeneric(current, propKey); isAccessor {
+			// Per 10.1.9.2 step 3: an accessor descriptor with no setter
+			// means the property is effectively read-only - Set fails
+			// (verified against Node: returns false, doesn't throw here
+			// since Reflect.set never throws for an ordinary failure).
+			if setter.Type() == vm.TypeUndefined {
+				return false, nil
+			}
+			_, err := vmInstance.Call(setter, receiver, []vm.Value{value})
+			return err == nil, err
+		}
+		if _, writable, found := reflectGetOwnDataDescriptorGeneric(current, propKey); found {
+			if !writable {
+				return false, nil
+			}
+			// A writable data descriptor exists somewhere in target's own
+			// chain - per 10.1.9.2 step 4, the actual write still targets
+			// Receiver, not wherever this descriptor was found (which may
+			// be `target` itself, or an ancestor `target` inherits from).
+			return reflectCreateOrUpdateDataProperty(receiver, propKey, value)
+		}
+		current = vmInstance.PrototypeOf(current)
+	}
+	// Not found anywhere in target's chain - 10.1.9 step 4's implicit
+	// {value: undefined, writable: true, enumerable: true, configurable:
+	// true} default takes the same data-write path.
+	return reflectCreateOrUpdateDataProperty(receiver, propKey, value)
+}
+
+// reflectCreateOrUpdateDataProperty implements the receiver-side half of
+// 10.1.9.2 OrdinarySetWithOwnDescriptor once target's chain has determined
+// a data write is called for: consult receiver's OWN descriptor for the
+// same key (an accessor or non-writable data property there refuses the
+// write - verified against Node for both), and otherwise create or
+// overwrite receiver's own data property with the new value.
+func reflectCreateOrUpdateDataProperty(receiver vm.Value, propKey string, value vm.Value) (bool, error) {
+	// Per 10.1.9.2 step 4.a: if Receiver is not an object, return false -
+	// verified against Node: Reflect.set({}, "y", 5, 42) is false, not a
+	// throw.
+	if !receiver.IsObject() && !receiver.IsCallable() {
+		return false, nil
+	}
+
+	if _, _, isAccessor := reflectGetOwnAccessorGeneric(receiver, propKey); isAccessor {
+		return false, nil
+	}
+	if _, writable, found := reflectGetOwnDataDescriptorGeneric(receiver, propKey); found && !writable {
+		return false, nil
+	}
+
+	switch receiver.Type() {
+	case vm.TypeObject:
+		receiver.AsPlainObject().SetOwn(propKey, value)
+		return true, nil
+	case vm.TypeDictObject:
+		receiver.AsDictObject().SetOwn(propKey, value)
+		return true, nil
+	case vm.TypeArray:
+		arr := receiver.AsArray()
+		if propKey == "length" {
+			// The old "Simple property set on target" fallback this
+			// function replaces had an explicit "Setting length is
+			// complex, skip for now" no-op stub here - meaning
+			// Reflect.set(arr, "length", n) already silently failed to
+			// resize before this fix (verified against Node, which does
+			// resize). Since this generic data-write path would otherwise
+			// treat "length" as an ordinary named property and stash a
+			// bogus one via arr.SetOwn - worse than the prior no-op,
+			// since it'd shadow/corrupt the array's real length concept -
+			// it needs its own case, not silence, now that this path
+			// handles it at all.
+			arr.SetLength(reflectToArrayLength(value))
+			return true, nil
+		}
+		if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 {
+			arr.Set(idx, value)
+			return true, nil
+		}
+		arr.SetOwn(propKey, value)
+		return true, nil
+	default:
+		// A callable or other exotic receiver kind (Function/Closure/
+		// NativeFunction/.../Promise) - use its shared side-table, the
+		// same mechanism Object.defineProperty and friends already use
+		// for these kinds elsewhere in this codebase.
+		if props := vm.EnsureOwnPropertiesTable(receiver); props != nil {
+			props.SetOwn(propKey, value)
+			return true, nil
+		}
+		return false, nil
+	}
+}
+
+// reflectToArrayLength mirrors pkg/vm/vm_init.go's unexported
+// toLengthIntForSetProperty (ToLength clamping for an array's "length"
+// property) - duplicated rather than imported since that helper is
+// unexported and this is the one place in package builtins that needs the
+// exact same clamp.
+func reflectToArrayLength(v vm.Value) int {
+	n := v.ToFloat()
+	if n != n || n <= 0 {
+		return 0
+	}
+	const maxSafeInteger = 9007199254740991
+	if n > maxSafeInteger {
+		n = maxSafeInteger
+	}
+	return int(n)
+}
+
 type ReflectInitializer struct{}
 
 func (r *ReflectInitializer) Name() string  { return "Reflect" }
@@ -241,26 +447,28 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// Simple property set on target
+		// Property set on target, implementing the real ECMA-262 10.1.9
+		// OrdinarySet / 10.1.9.2 OrdinarySetWithOwnDescriptor algorithm -
+		// see reflectOrdinarySet's own comment for the full rationale.
+		// This used to be a "just SetOwn/Set directly on target" fallback
+		// that ignored `receiver` entirely (writing to target even when a
+		// distinct receiver was given - the exact bug this fix closes)
+		// and never checked for an own or inherited accessor at all (so
+		// even the receiver === target case silently clobbered an
+		// existing setter instead of calling it - found while fixing the
+		// receiver bug, since walking descriptors is required for either
+		// fix).
 		switch target.Type() {
-		case vm.TypeObject:
-			target.AsPlainObject().SetOwn(propKey, value)
-			return vm.BooleanValue(true), nil
-		case vm.TypeDictObject:
-			target.AsDictObject().SetOwn(propKey, value)
-			return vm.BooleanValue(true), nil
-		case vm.TypeArray:
-			arr := target.AsArray()
-			if propKey == "length" {
-				// Setting length is complex, skip for now
-				return vm.BooleanValue(true), nil
-			}
-			if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 {
-				arr.Set(idx, value)
-				return vm.BooleanValue(true), nil
-			}
+		case vm.TypeObject, vm.TypeDictObject, vm.TypeArray:
+			ok, err := reflectOrdinarySet(vmInstance, target, propKey, value, receiver)
+			return vm.BooleanValue(ok), err
 		}
 
+		// target is some other kind this function doesn't model a set for
+		// (e.g. a Proxy - Reflect.set(someProxy, ...) has its own,
+		// separate, larger pre-existing gap: unrelated to the receiver
+		// bug this fix closes, not touched here). Matches this function's
+		// prior behavior for every kind it didn't have a case for.
 		return vm.BooleanValue(false), nil
 	}))
 
