@@ -1,4 +1,4 @@
-// expect: 1,2|1,2,3|1,2|1,2|10,20|10,undefined|10,20|10,20|10,20|1,2|1,2|1,2,3|1,[2,3],9|1,{"b":2},9|5,1|7,1
+// expect: 1,2|1,2,3|1,2|1,2|10,20|10,|10,20|10,20|10,20|1,2|1,2|1,2,3|1,[2,3],9|1,{"b":2},9|5,1|7,1
 // A binding pattern is legal in ANY declarator position, not just the first.
 // Both halves of that were broken:
 //

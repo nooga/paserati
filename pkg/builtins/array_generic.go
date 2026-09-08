@@ -215,6 +215,21 @@ func arrayIndexGetFromProto(vmInstance *vm.VM, arr *vm.ArrayObject, receiver vm.
 	return vm.Undefined, false, nil
 }
 
+// joinElementToString implements ECMA-262 23.1.3.16 (Array.prototype.join)
+// step 6: "If element is undefined or null, let next be the empty String;
+// otherwise, let next be ? ToString(element)." Array.prototype.toString
+// (23.1.3.36) defers to join, so it shares this. A hole read via
+// arrayLikeGet's [[Get]] semantics already comes back as plain Undefined
+// (see arrayLikeGet's doc comment), so this one helper covers holes,
+// `delete`d slots, and a real `undefined`/`null` element alike - all must
+// join as an empty string, never the literal text "undefined"/"null".
+func joinElementToString(v vm.Value) string {
+	if v.Type() == vm.TypeUndefined || v.Type() == vm.TypeNull {
+		return ""
+	}
+	return v.ToString()
+}
+
 // arrayLikeGet returns (value, exists, error) for index i of an array-like
 // `this`. "exists" mirrors HasProperty so callers can skip holes in a sparse
 // Array or a PlainObject missing that key, matching spec semantics for
