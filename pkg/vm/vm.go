@@ -3408,6 +3408,44 @@ startExecution:
 							cur = pv.AsPlainObject()
 						}
 					}
+				case TypeBoundFunction, TypeNativeFunction, TypeNativeFunctionWithProps:
+					// Same shape as TypeFunction/TypeClosure above: all three
+					// carry their own lazily-allocated Properties side table
+					// (pkg/vm/function.go - BoundFunctionObject,
+					// NativeFunctionObject, NativeFunctionObjectWithProps all
+					// have a Properties *PlainObject field), so a symbol-keyed
+					// bracket assignment (bound[sym] = v, Array[sym] = v) is
+					// findable the same way a Function's is - own table
+					// first, then walk Function.prototype for an inherited
+					// symbol property (e.g. Symbol.hasInstance).
+					//
+					// Before this case existed, these three fell to the
+					// default below and always answered false here even
+					// though Reflect.has (pkg/builtins/reflect_has.go) and
+					// the own table itself already agreed the property was
+					// there - the same "in disagrees with Reflect.has"
+					// pattern fixed for Promise (see the TypePromise case's
+					// history) and for RegExp/Map/Set's own cases above.
+					symKey := NewSymbolKey(propVal)
+					if props := OwnPropertiesTable(objVal); props != nil {
+						if _, ok := props.GetOwnByKey(symKey); ok {
+							hasProperty = true
+							break
+						}
+					}
+					if vm.FunctionPrototype.IsObject() {
+						for cur := vm.FunctionPrototype.AsPlainObject(); cur != nil; {
+							if _, ok := cur.GetOwnByKey(symKey); ok {
+								hasProperty = true
+								break
+							}
+							pv := cur.GetPrototype()
+							if !pv.IsObject() {
+								break
+							}
+							cur = pv.AsPlainObject()
+						}
+					}
 				default:
 					hasProperty = false
 				}
