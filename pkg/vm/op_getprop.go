@@ -102,6 +102,62 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 	if objVal.Type() == TypeNativeFunction {
 		nf := objVal.AsNativeFunction()
 		if nf != nil && nf.Properties != nil {
+			// Check for an accessor property first (getters/setters) -
+			// mirrors TypeBoundFunction's equivalent check in
+			// handleCallableProperty (property_helpers.go). Without this,
+			// an accessor defined via Object.defineProperty(nf, "custom",
+			// {get(){...}}) fell straight to GetOwn below, which - for an
+			// accessor field - returns (Undefined, true) (DefineAccessorProperty
+			// appends a placeholder Undefined properties slot for it), so
+			// `nf.custom` silently answered undefined instead of calling
+			// the getter, even though the same accessor's *setter* already
+			// ran correctly via `nf.custom = v` (pkg/vm/op_setprop.go).
+			if g, _, _, _, ok := nf.Properties.GetOwnAccessor(propName); ok {
+				if g.Type() != TypeUndefined {
+					res, err := vm.Call(g, *objVal, nil)
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							if frame != nil && !frameWasNil {
+								frame.ip = ip - 4
+							}
+							vm.throwException(ee.GetExceptionValue())
+							if !vm.unwinding {
+								return false, InterpretOK, Undefined
+							}
+							return false, InterpretRuntimeError, Undefined
+						}
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						if frame != nil && !frameWasNil {
+							frame.ip = ip - 4
+						}
+						vm.throwException(excVal)
+						if !vm.unwinding {
+							return false, InterpretOK, Undefined
+						}
+						return false, InterpretRuntimeError, Undefined
+					}
+					*dest = res
+					return true, InterpretOK, *dest
+				}
+				// Setter-only accessor (no getter): reads as undefined per spec.
+				*dest = Undefined
+				return true, InterpretOK, *dest
+			}
 			if prop, exists := nf.Properties.GetOwn(propName); exists {
 				*dest = prop
 				return true, InterpretOK, *dest
@@ -2182,6 +2238,91 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 				*dest = v
 				return true, InterpretOK, *dest
 			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// NativeFunction: check own symbol properties (accessor first, mirroring
+	// TypeObject's GetOwnAccessorByKey-then-GetOwnByKey pattern above and
+	// this same TypeNativeFunction kind's string-key equivalent in
+	// opGetProp's block 3b), then Function.prototype chain.
+	//
+	// This case didn't exist at all before this fix, so a symbol-keyed own
+	// property - even a plain data one - set via bracket-notation
+	// assignment or Object.defineProperty always fell through to the
+	// DictObject default below and read back as undefined, even though
+	// Object.getOwnPropertyDescriptor already showed it existed correctly.
+	//
+	// The accessor check specifically was added after review flagged an
+	// asymmetry a first pass introduced: opGetProp's block 3b (string keys,
+	// same TypeNativeFunction kind) invokes an own accessor's getter, so
+	// leaving this symbol-key sibling without one would have made
+	// `nf.custom` call the getter while `nf[sym]` did not, on the very
+	// same value in the same commit - worse than the pre-fix state of
+	// "symbol keys don't work at all". TypeFunction/TypeClosure/
+	// TypeBoundFunction/TypeNativeFunctionWithProps above still lack this
+	// (none of those four invoke a symbol-key accessor's getter; TypeObject,
+	// separately, already does - see its own case earlier in this
+	// function), so that remains a real, separate, still-open gap.
+	if base.Type() == TypeNativeFunction {
+		nf := base.AsNativeFunction()
+		key := NewSymbolKey(symKey)
+		if nf.Properties != nil {
+			if g, _, _, _, ok := nf.Properties.GetOwnAccessorByKey(key); ok {
+				if g.Type() != TypeUndefined {
+					res, err := vm.Call(g, base, nil)
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							if frame != nil && !frameWasNil {
+								frame.ip = ip - 4
+							}
+							vm.throwException(ee.GetExceptionValue())
+							if !vm.unwinding {
+								return false, InterpretOK, Undefined
+							}
+							return false, InterpretRuntimeError, Undefined
+						}
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res2, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res2
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						if frame != nil && !frameWasNil {
+							frame.ip = ip - 4
+						}
+						vm.throwException(excVal)
+						if !vm.unwinding {
+							return false, InterpretOK, Undefined
+						}
+						return false, InterpretRuntimeError, Undefined
+					}
+					*dest = res
+					return true, InterpretOK, *dest
+				}
+				// Setter-only accessor (no getter): reads as undefined per spec.
+				*dest = Undefined
+				return true, InterpretOK, *dest
+			}
+			if v, ok := nf.Properties.GetOwnByKey(key); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+		}
+		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
+			*dest = v
+			return true, InterpretOK, *dest
 		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
