@@ -3454,7 +3454,8 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		obj.Type() == vm.TypeFunction ||
 		obj.Type() == vm.TypeClosure ||
 		obj.Type() == vm.TypeNativeFunctionWithProps ||
-		obj.Type() == vm.TypeBoundFunction
+		obj.Type() == vm.TypeBoundFunction ||
+		obj.Type() == vm.TypeNativeFunction
 	if !isObjectLike {
 		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperty called on non-object")
 	}
@@ -4009,6 +4010,39 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 					defined = nfp.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
 				} else {
 					defined = nfp.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+				}
+			}
+			if !defined {
+				return vm.Undefined, definePropertyRejected(vmInstance, propName, propSym, keyIsSymbol)
+			}
+		}
+	} else if obj.Type() == vm.TypeNativeFunction {
+		// Plain native functions (e.g. Array.prototype.push) store additional
+		// properties in Properties exactly like TypeNativeFunctionWithProps
+		// above - the isObjectLike gate near the top of this function used to
+		// exclude TypeNativeFunction entirely, so Object.defineProperty on
+		// one of these threw "called on non-object" even though a
+		// bracket-notation assignment on the exact same value already wrote
+		// into this same table fine (pkg/vm/properties_table.go's
+		// ownPropertiesSlot has always listed TypeNativeFunction alongside
+		// the other four callable kinds).
+		nf := obj.AsNativeFunction()
+		if nf != nil {
+			if nf.Properties == nil {
+				nf.Properties = vm.EnsureOwnPropertiesTable(obj)
+			}
+			var defined bool
+			if hasGetter || hasSetter {
+				if keyIsSymbol {
+					defined = nf.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				} else {
+					defined = nf.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				}
+			} else {
+				if keyIsSymbol {
+					defined = nf.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+				} else {
+					defined = nf.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
 				}
 			}
 			if !defined {
@@ -4786,6 +4820,36 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		}
 	case vm.TypeNativeFunction:
 		nf := obj.AsNativeFunction()
+		// A symbol key is never "name"/"length" (a symbol never equals a
+		// string), so it skips straight to the side-table lookup - mirroring
+		// the TypeBoundFunction block below (accessor first, then data).
+		// Before this, TypeNativeFunction never checked nf.Properties at
+		// all here, symbol or string key: Object.defineProperty on a plain
+		// native function (e.g. Array.prototype.push) now writes into that
+		// table (a separate, sibling fix), but this getter still answered
+		// undefined for what it had just written.
+		if keyIsSymbol {
+			if nf.Properties != nil {
+				symKey := vm.NewSymbolKey(propSym)
+				if g, s, e, c, ok := nf.Properties.GetOwnAccessorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("get", g)
+					descriptor.SetOwn("set", s)
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				if v, w, e, c, ok := nf.Properties.GetOwnDescriptorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", v)
+					descriptor.SetOwn("writable", vm.BooleanValue(w))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+			}
+			return vm.Undefined, nil
+		}
 		if propName == "name" && !nf.DeletedName {
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", vm.NewString(nf.Name))
@@ -4801,6 +4865,27 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
 			descriptor.SetOwn("configurable", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		// Any other own property (set via bracket-notation assignment or
+		// Object.defineProperty on this same table) - accessor first, then
+		// data, mirroring the symbol-key check above.
+		if nf.Properties != nil {
+			if g, s, e, c, ok := nf.Properties.GetOwnAccessor(propName); ok {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				descriptor.SetOwn("get", g)
+				descriptor.SetOwn("set", s)
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+			if v, w, e, c, ok := nf.Properties.GetOwnDescriptor(propName); ok {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				descriptor.SetOwn("value", v)
+				descriptor.SetOwn("writable", vm.BooleanValue(w))
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
 		}
 	case vm.TypeNativeFunctionWithProps:
 		nfp := obj.AsNativeFunctionWithProps()
