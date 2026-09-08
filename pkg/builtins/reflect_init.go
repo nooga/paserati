@@ -277,8 +277,14 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			arr := target.AsArray()
 			if propKey == "length" {
 				hasProperty = true
-			} else if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 && idx < arr.Length() {
-				hasProperty = true
+			} else if idx, ok := vm.ParseArrayIndex(propKey); ok {
+				// A numerically-in-range index is NOT necessarily an own
+				// property: `.length` can be inflated by an unrelated
+				// defineProperty call at a different, possibly huge, index
+				// (paserati#176/#178) without this index itself ever
+				// being set. Check real presence instead of
+				// `idx < arr.Length()`.
+				hasProperty = vm.ArrayHasOwnIndex(arr, idx)
 			}
 		case vm.TypeFunction:
 			// Functions have properties like name, length, prototype

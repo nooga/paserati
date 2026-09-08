@@ -2495,6 +2495,37 @@ func (a *ArrayObject) HasIndex(index int) bool {
 	return a.elements[index].typ != TypeHole
 }
 
+// ArrayHasOwnIndex reports whether an array genuinely has an own property
+// at the given index - the correct check for `index in arr` / Reflect.has,
+// as opposed to `index < arr.Length()` (a bug that shipped in both: an
+// index numerically less than `.length` is NOT necessarily an own
+// property - `.length` can be inflated by an unrelated defineProperty call
+// at a completely different, possibly huge, index - see paserati#176/#178
+// and array_props.go's maxDenseArrayDefineIndex).
+//
+// Three cases, in order: a dense-range index with a real (non-hole) value
+// (HasIndex); an own accessor at that index (DefineAccessorProperty never
+// touches `elements` at all - not even for a plain in-bounds index - so
+// this must be checked regardless of whether idx is in the dense range);
+// and finally a sparse own data property tracked in the properties map for
+// an index past the dense range (GetOwnPropertyDescriptor).
+func ArrayHasOwnIndex(a *ArrayObject, idx int) bool {
+	if idx < 0 {
+		return false
+	}
+	if a.HasIndex(idx) {
+		return true
+	}
+	key := strconv.Itoa(idx)
+	if _, _, _, _, isAccessor := a.GetOwnAccessor(key); isAccessor {
+		return true
+	}
+	if _, _, ok := a.GetOwnPropertyDescriptor(key); ok {
+		return true
+	}
+	return false
+}
+
 // SetExecMeta stores exec result metadata for lazy property access.
 // This avoids allocating a map for index/input/groups on every exec call.
 func (a *ArrayObject) SetExecMeta(index int, input string) {
