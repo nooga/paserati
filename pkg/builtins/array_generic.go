@@ -236,10 +236,12 @@ func joinElementToString(v vm.Value) string {
 // every/filter/forEach/etc. Real Arrays check for an own accessor at that
 // index first (set via Object.defineProperty - see ArrayDefineOwnProperty)
 // before falling back to the exact hole-checking the previous fast path
-// did; PlainObjects go through getOwnPlainObjectProperty for correct
-// accessor handling (see its comment); every other type (TypedArray,
-// Arguments, Proxy, boxed primitives, Map/Set/...) has no holes to speak
-// of, so a plain Get is both correct and simpler.
+// did, then arr.GetOwn for a plain data property tracked past the dense
+// elements slice (see maxDenseArrayDefineIndex); PlainObjects go through
+// getOwnPlainObjectProperty for correct accessor handling (see its
+// comment); every other type (TypedArray, Arguments, Proxy, boxed
+// primitives, Map/Set/...) has no holes to speak of, so a plain Get is
+// both correct and simpler.
 func arrayLikeGet(vmInstance *vm.VM, thisVal vm.Value, i int) (vm.Value, bool, error) {
 	switch thisVal.Type() {
 	case vm.TypeArray:
@@ -259,12 +261,27 @@ func arrayLikeGet(vmInstance *vm.VM, thisVal vm.Value, i int) (vm.Value, bool, e
 		if arr.HasIndex(i) {
 			return arr.Get(i), true, nil
 		}
-		// Own slot is a hole (or absent, or was `delete`d): [[HasProperty]]
-		// (7.3.11 -> OrdinaryHasProperty 9.1.7) doesn't stop at "no own
-		// property" - it walks the prototype chain. Array.prototype[i] is
-		// rarely set, so only pay for the walk once the fast own-value path
-		// above has already missed.
-		return arrayIndexGetFromProto(vmInstance, arr, thisVal, strconv.Itoa(i))
+		// Own slot is a hole (or absent, or was `delete`d, or never
+		// materialized): everything past this point needs the string key,
+		// computed once and shared by both checks below.
+		key := strconv.Itoa(i)
+		// Beyond the dense elements slice (or never grown into it) is not
+		// automatically a hole: an index past maxDenseArrayDefineIndex
+		// (see pkg/vm/array_props.go) that was set via
+		// Object.defineProperty is tracked as a plain named property in
+		// arr.properties instead of materializing `elements` up to idx -
+		// still a genuine own data property, just one HasIndex/Get can't
+		// see. Check it before falling through to the prototype chain (an
+		// own property always shadows one inherited from Array.prototype,
+		// same as the dense-element case just above).
+		if v, ok := arr.GetOwn(key); ok {
+			return v, true, nil
+		}
+		// [[HasProperty]] (7.3.11 -> OrdinaryHasProperty 9.1.7) doesn't
+		// stop at "no own property" - it walks the prototype chain.
+		// Array.prototype[i] is rarely set, so only pay for the walk once
+		// the fast own-value paths above have already missed.
+		return arrayIndexGetFromProto(vmInstance, arr, thisVal, key)
 	case vm.TypeObject:
 		return getOwnPlainObjectProperty(vmInstance, thisVal.AsPlainObject(), thisVal, strconv.Itoa(i))
 	case vm.TypeProxy:
