@@ -2526,6 +2526,25 @@ func ArrayHasOwnIndex(a *ArrayObject, idx int) bool {
 	return false
 }
 
+// ArrayHasOwnNamedProperty reports whether an array has an own NAMED
+// (non-index) property under the given key - a plain data property
+// (`arr.foo = 1`, tracked in the properties map, checked via GetOwn) or an
+// own accessor (get/set installed via Object.defineProperty). The latter
+// needs its own check: DefineAccessorProperty never writes to `properties`
+// at all, for a named key exactly as much as for a numeric one (see
+// ArrayHasOwnIndex's identical reasoning) - so GetOwn alone silently
+// drops a named accessor property (`Object.defineProperty(arr, "foo",
+// {get(){...}})` would report as absent without this).
+func ArrayHasOwnNamedProperty(a *ArrayObject, name string) bool {
+	if _, ok := a.GetOwn(name); ok {
+		return true
+	}
+	if _, _, _, _, isAccessor := a.GetOwnAccessor(name); isAccessor {
+		return true
+	}
+	return false
+}
+
 // SetExecMeta stores exec result metadata for lazy property access.
 // This avoids allocating a map for index/input/groups on every exec call.
 func (a *ArrayObject) SetExecMeta(index int, input string) {

@@ -950,6 +950,22 @@ func (vm *VM) hasPropertyByKeyFromPrototypeChain(proto Value, key PropertyKey) b
 	return ok
 }
 
+// HasPropertyOnPrototypeChain reports whether key is found somewhere on
+// objVal's prototype chain (e.g. Array.prototype and beyond, for a
+// TypeArray objVal - see effectiveBuiltinPrototype for every builtin type
+// this resolves a starting prototype for) - the "or inherited" half of
+// HasProperty (`in`, Reflect.has), which an own-property-only check like
+// ArrayHasOwnIndex/ArrayHasOwnNamedProperty deliberately does not cover.
+// Exported so pkg/builtins (which cannot reach the unexported
+// effectiveBuiltinPrototype/hasPropertyByKeyFromPrototypeChain/
+// keyFromString directly - pkg/builtins imports pkg/vm, not the other way
+// around) can implement the same "own property, else walk the prototype
+// chain" precedence OpIn already uses, instead of silently treating every
+// object type's own-property check as the complete answer.
+func (vm *VM) HasPropertyOnPrototypeChain(objVal Value, key PropertyKey) bool {
+	return vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(objVal), key)
+}
+
 // handleSpecialProperties handles special properties like .length
 func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, bool) {
 	// Handle undefined/null objects

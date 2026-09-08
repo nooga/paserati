@@ -275,16 +275,53 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			hasProperty = target.AsDictObject().Has(propKey)
 		case vm.TypeArray:
 			arr := target.AsArray()
-			if propKey == "length" {
-				hasProperty = true
+			if isSymbol {
+				// Mirrors OpIn's TypeArray symbol branch (pkg/vm/vm.go):
+				// an own symbol-keyed property (e.g. a custom
+				// Symbol.iterator override), else walk the prototype
+				// chain (Array.prototype carries the real
+				// Symbol.iterator, Symbol.toStringTag if ever set, ...).
+				// Reflect.has previously stringified every key
+				// (propKeyArg.ToString()) and fell through this entire
+				// switch with hasProperty left at its zero value, so
+				// `Reflect.has(arr, Symbol.iterator)` was unconditionally
+				// false even though `Symbol.iterator in arr` is true.
+				if arr.HasOwnSymbolProp(propKeyArg.AsSymbolObject()) {
+					hasProperty = true
+				} else {
+					hasProperty = vmInstance.HasPropertyOnPrototypeChain(target, vm.NewSymbolKey(propKeyArg))
+				}
 			} else if idx, ok := vm.ParseArrayIndex(propKey); ok {
 				// A numerically-in-range index is NOT necessarily an own
 				// property: `.length` can be inflated by an unrelated
 				// defineProperty call at a different, possibly huge, index
 				// (paserati#176/#178) without this index itself ever
 				// being set. Check real presence instead of
-				// `idx < arr.Length()`.
-				hasProperty = vm.ArrayHasOwnIndex(arr, idx)
+				// `idx < arr.Length()` - and, per Reflect.has implementing
+				// HasProperty (not HasOwnProperty), an index that isn't an
+				// own property still needs the prototype-chain walk below
+				// rather than reporting absent outright.
+				if vm.ArrayHasOwnIndex(arr, idx) {
+					hasProperty = true
+				} else {
+					hasProperty = vmInstance.HasPropertyOnPrototypeChain(target, vm.NewStringKey(propKey))
+				}
+			} else if propKey == "length" {
+				hasProperty = true
+			} else if vm.ArrayHasOwnNamedProperty(arr, propKey) {
+				// An own named (non-index) property - a plain data
+				// property (`arr.foo = 1`) or an own accessor - was
+				// never checked at all before this: only "length" and a
+				// numeric index were, so `Reflect.has(arr, "foo")` was
+				// unconditionally false regardless of whether `arr.foo`
+				// existed, even though `"foo" in arr` correctly found it.
+				hasProperty = true
+			} else {
+				// Neither an own index/named property nor "length" -
+				// still need the prototype-chain walk before reporting
+				// absent (inherited methods like Array.prototype.map,
+				// or anything else stored on Array.prototype).
+				hasProperty = vmInstance.HasPropertyOnPrototypeChain(target, vm.NewStringKey(propKey))
 			}
 		case vm.TypeFunction:
 			// Functions have properties like name, length, prototype
