@@ -2378,6 +2378,25 @@ func (a *ArrayObject) Length() int {
 	return a.length
 }
 
+// DenseLength returns the length of the backing elements slice - the bound
+// for an O(1)-per-slot dense-index scan (arr[0], arr[1], ... arr[n-1]).
+// Unlike Length(), which reports the array's `.length` property, this can
+// be far smaller: a huge sparse index defined past maxDenseArrayDefineIndex
+// (paserati#176/#178 - see array_props.go) extends `.length` without
+// growing `elements` at all, and is tracked in the properties map instead
+// (NamedPropertyKeys). Any own-key enumeration (Object.keys/values/
+// entries/getOwnPropertyNames, Reflect.ownKeys, Object.assign's array
+// source, ...) that iterated `0..Length()` to visit every dense index was
+// therefore actually iterating `0..the array's declared length`, an
+// attacker- or test262-controllable value up to 2^32-2 - a multi-billion-
+// iteration hang for an array that otherwise holds a handful of elements.
+// Bound that iteration by DenseLength() instead, and separately walk
+// NamedPropertyKeys() for whatever sparse indices (and true named
+// properties) live beyond it.
+func (a *ArrayObject) DenseLength() int {
+	return len(a.elements)
+}
+
 // SetLength sets the length of the array, expanding or truncating as needed
 func (a *ArrayObject) SetLength(newLength int) {
 	if newLength < 0 {
@@ -2872,6 +2891,83 @@ func (a *ArrayObject) GetOwnAccessor(name string) (Value, Value, bool, bool, boo
 	}
 
 	return getter, setter, enumerable, configurable, true
+}
+
+// AccessorKeys returns every property name this array has an own accessor
+// (getter and/or setter) tracked for - the union of the getters and
+// setters maps' keys, deduplicated. An accessor property (however it was
+// defined - a plain named key, or a numeric index at any position, dense
+// or sparse) is never written into `properties` (see DefineAccessorProperty:
+// it only ever touches getters/setters/propertyDesc), so NamedPropertyKeys
+// alone - which only reads `properties` - misses it entirely. A caller
+// enumerating every own key an array has (Object.keys/getOwnPropertyNames,
+// Reflect.ownKeys, ...) needs both this and NamedPropertyKeys to see the
+// complete set.
+func (a *ArrayObject) AccessorKeys() []string {
+	if a.getters == nil && a.setters == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(a.getters)+len(a.setters))
+	var keys []string
+	for k := range a.getters {
+		if !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	for k := range a.setters {
+		if !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+// arraySparseIndices returns, ascending, every own array-index property this
+// array holds beyond DenseLength() - i.e. entries too far past
+// maxDenseArrayDefineIndex to live in the dense elements slice, tracked
+// instead in the properties map (data) or the getters/setters maps
+// (accessor) - see ArrayDefineOwnProperty in array_props.go and
+// paserati#176/#178. Walking these two maps directly is O(number of sparse
+// entries), never O(index value), which is what makes it safe to call from
+// a for-in/Object.keys/Reflect.ownKeys style enumeration that would
+// otherwise loop 0..Length() and hang for a huge sparse index.
+//
+// When enumerableOnly is true, only keys whose tracked descriptor reports
+// Enumerable are included (for-in, Object.keys/values/entries, Object.
+// assign's own-enumerable-properties rule); pass false for an operation
+// that wants every own index key regardless of enumerability (Object.
+// getOwnPropertyNames, Reflect.ownKeys).
+func arraySparseIndices(a *ArrayObject, enumerableOnly bool) []int {
+	dense := a.DenseLength()
+	seen := make(map[int]bool)
+	var idxs []int
+	consider := func(key string) {
+		idx, isIndex := tryParseArrayIndex(key)
+		if !isIndex || idx < dense || seen[idx] {
+			return
+		}
+		if enumerableOnly {
+			if _, _, enumerable, _, isAccessor := a.GetOwnAccessor(key); isAccessor {
+				if !enumerable {
+					return
+				}
+			} else if _, desc, ok := a.GetOwnPropertyDescriptor(key); !ok || !desc.Enumerable {
+				return
+			}
+		}
+		seen[idx] = true
+		idxs = append(idxs, idx)
+	}
+	for _, key := range a.NamedPropertyKeys() {
+		consider(key)
+	}
+	for _, key := range a.AccessorKeys() {
+		consider(key)
+	}
+	sort.Ints(idxs)
+	return idxs
 }
 
 // NamedPropertyKeys returns all named (non-numeric) property keys on the array

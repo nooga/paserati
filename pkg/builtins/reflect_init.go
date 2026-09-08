@@ -435,12 +435,23 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Add numeric indices - skipping holes (paserati#300): a hole
 			// from `delete arr[i]`, a literal elision, or `new Array(n)` is
 			// not an own property at all.
-			for i := 0; i < arrayObj.Length(); i++ {
+			for i := 0; i < arrayObj.DenseLength(); i++ {
 				key := strconv.Itoa(i)
 				if !arrayObj.HasOwnIndexProperty(key, i) {
 					continue
 				}
 				arr.Append(vm.NewString(key))
+			}
+			// A sparse index beyond the dense range (paserati#176/#178 -
+			// see arraySparseIndices in object_init.go) is an integer-
+			// indexed own key too, so per OrdinaryOwnPropertyKeys it
+			// belongs here, in ascending numeric order, before "length" -
+			// not visited by iterating up to it, which is exactly the
+			// multi-billion-iteration hang this fixes. Reflect.ownKeys
+			// wants every own key regardless of enumerability, hence
+			// enumerableOnly=false.
+			for _, idx := range arraySparseIndices(arrayObj, false) {
+				arr.Append(vm.NewString(strconv.Itoa(idx)))
 			}
 			// Add "length"
 			arr.Append(vm.NewString("length"))

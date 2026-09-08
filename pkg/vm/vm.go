@@ -14199,7 +14199,20 @@ startExecution:
 				// (see ArrayDefineOwnProperty) - mirrors the TypeArguments
 				// case just below for the same reason (propertyHelper.js's
 				// for-in-based isEnumerable() check relies on this).
-				for i := 0; i < arr.Length(); i++ {
+				//
+				// Only the dense range is worth a per-index scan
+				// (paserati#176/#178): a huge sparse index defined past
+				// maxDenseArrayDefineIndex extends arr.Length() (the
+				// `.length` property) without growing `elements` at all, so
+				// looping to Length() here was a multi-billion-iteration
+				// hang for an array that otherwise holds a handful of
+				// elements. Bound the scan to DenseLength() instead, and
+				// separately walk whatever sparse index/accessor entries
+				// exist beyond it via arraySparseIndices (O(number of
+				// entries), not O(index value)) - ascending, per
+				// OrdinaryOwnPropertyKeys.
+				denseLen := arr.DenseLength()
+				for i := 0; i < denseLen; i++ {
 					key := strconv.Itoa(i)
 					if arr.HasAccessors() {
 						if _, _, e, _, ok := arr.GetOwnAccessor(key); ok {
@@ -14220,10 +14233,13 @@ startExecution:
 						}
 					}
 				}
+				for _, idx := range arraySparseIndices(arr, true) {
+					keys = append(keys, strconv.Itoa(idx))
+				}
 				// Then the named (non-index) own properties: an exec result's
 				// index/input/groups/indices, or anything a program stored on
-				// the array. Sparse indices living in the named store were
-				// already handled by the index loop above.
+				// the array. Sparse indices living in the named/accessor
+				// stores were already handled above.
 				for _, key := range arr.NamedPropertyKeys() {
 					if LooksLikeArrayIndex(key) {
 						continue
