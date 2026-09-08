@@ -3444,27 +3444,51 @@ startExecution:
 						hasProperty = vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(objVal), keyFromString(propKey))
 					}
 				case TypeFunction:
-					// Functions are objects and can have properties
+					// Functions are objects and can have properties. "name"/
+					// "length"/"prototype" are own intrinsics synthesized
+					// lazily rather than stored in Properties - see
+					// HasOwnFunctionIntrinsic (which correctly excludes
+					// "prototype" for an arrow function, unlike a bare
+					// `propKey == "prototype"` check would). Reflect.has
+					// (pkg/builtins/reflect_has.go) already handled these;
+					// `in` did not, so `"name" in function(){}` was false
+					// while Reflect.has(function(){}, "name") was true.
 					fn := objVal.AsFunction()
-					if fn.Properties != nil && fn.Properties.Has(propKey) {
+					if HasOwnFunctionIntrinsic(objVal, propKey) {
+						hasProperty = true
+					} else if fn.Properties != nil && fn.Properties.Has(propKey) {
 						hasProperty = true
 					} else {
 						// Check FunctionPrototype for inherited properties (call, apply, bind)
 						hasProperty = vm.hasFunctionPrototypeProperty(propKey)
 					}
 				case TypeNativeFunctionWithProps:
-					// Native functions with properties (like Number, String, etc.)
+					// Native functions with properties (like Number, String, etc.).
+					// Same "name"/"length" own-intrinsic gap as TypeFunction
+					// above - see its comment. Unlike TypeFunction/
+					// TypeClosure, "prototype" here is never a synthesized
+					// intrinsic (HasOwnFunctionIntrinsic correctly says so) -
+					// a native constructor's own "prototype" (Array, Object,
+					// Map, ...) is a REAL entry in nf.Properties instead, so
+					// the fn.Properties.Has(propKey) check below already
+					// covers it.
 					nf := objVal.AsNativeFunctionWithProps()
-					if nf.Properties != nil && nf.Properties.Has(propKey) {
+					if HasOwnFunctionIntrinsic(objVal, propKey) {
+						hasProperty = true
+					} else if nf.Properties != nil && nf.Properties.Has(propKey) {
 						hasProperty = true
 					} else {
 						// Check FunctionPrototype for inherited properties (call, apply, bind)
 						hasProperty = vm.hasFunctionPrototypeProperty(propKey)
 					}
 				case TypeClosure:
-					// Closures can have their own properties (in cl.Properties) or inherit from FunctionObject
+					// Closures can have their own properties (in cl.Properties) or inherit from FunctionObject.
+					// Same "name"/"length"/"prototype" own-intrinsic gap as
+					// TypeFunction above - see its comment.
 					cl := objVal.AsClosure()
-					if cl.Properties != nil && cl.Properties.Has(propKey) {
+					if HasOwnFunctionIntrinsic(objVal, propKey) {
+						hasProperty = true
+					} else if cl.Properties != nil && cl.Properties.Has(propKey) {
 						hasProperty = true
 					} else if cl.Fn != nil && cl.Fn.Properties != nil && cl.Fn.Properties.Has(propKey) {
 						hasProperty = true
@@ -3473,8 +3497,17 @@ startExecution:
 						hasProperty = vm.hasFunctionPrototypeProperty(propKey)
 					}
 				case TypeNativeFunction:
-					// Native functions don't have custom properties but inherit from FunctionPrototype
-					hasProperty = vm.hasFunctionPrototypeProperty(propKey)
+					// Native functions don't have custom properties, but do
+					// carry the same "name"/"length" own intrinsics as any
+					// other callable (see TypeFunction's comment above,
+					// and TypeNativeFunctionWithProps's for why "prototype"
+					// is correctly excluded - a native method is never a
+					// constructor) before falling back to FunctionPrototype.
+					if HasOwnFunctionIntrinsic(objVal, propKey) {
+						hasProperty = true
+					} else {
+						hasProperty = vm.hasFunctionPrototypeProperty(propKey)
+					}
 				case TypeBoundFunction:
 					// Bound functions can have their own properties (in
 					// bf.Properties, e.g. from direct assignment or
