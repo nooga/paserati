@@ -14519,6 +14519,51 @@ startExecution:
 						cur = pv.AsPlainObject()
 					}
 				}
+			case TypeRegExp:
+				// Enumerate own enumerable properties on the RegExp's side
+				// table (OwnPropertiesTable, pkg/vm/properties_table.go -
+				// the same lazily-allocated PlainObject Function/Closure/
+				// Map/Set/Promise use) - mirrors the identical TypeFunction/
+				// TypeClosure/TypeBoundFunction cases above. This case was
+				// missing entirely, so `for (k in regex)` came back with
+				// nothing even after `regex.x = 1`. "lastIndex" never
+				// appears here: it's a real Go field on RegExpObject, not a
+				// side-table entry, and it's {enumerable: false} in any
+				// case (see reflectDeleteProperty's TypeRegExp case and
+				// Object.getOwnPropertyDescriptor's TypeRegExp handling,
+				// both in pkg/builtins). Nothing from RegExp.prototype
+				// surfaces either - its own methods are all non-enumerable,
+				// same as Function.prototype's for the cases above. The
+				// `cur.GetPrototype()` walk below only *looks* like it
+				// continues into the real prototype chain: a side table's
+				// own prototype field is always Undefined (see
+				// newPropertiesTable's doc comment), so the loop never
+				// actually advances past the table itself - an enumerable
+				// property defined directly on a RegExp subclass's
+				// prototype (rather than RegExp.prototype, which has none)
+				// is therefore not enumerated, same pre-existing structural
+				// gap the TypeFunction/TypeClosure/TypeBoundFunction cases
+				// above already have for a subclassed callable.
+				regexObj := objValue.AsRegExpObject()
+				if regexObj != nil && regexObj.Properties != nil {
+					seen := make(map[string]bool)
+					cur := regexObj.Properties
+					for cur != nil {
+						for _, k := range cur.OwnKeys() {
+							if !seen[k] {
+								keys = append(keys, k)
+							}
+						}
+						for _, k := range cur.OwnPropertyNames() {
+							seen[k] = true
+						}
+						pv := cur.GetPrototype()
+						if !pv.IsObject() {
+							break
+						}
+						cur = pv.AsPlainObject()
+					}
+				}
 			default:
 				// For primitive types, return empty array
 				keys = []string{}
