@@ -17,13 +17,11 @@
 // 10.5.7 step 11 invariant checks (non-configurable own property /
 // non-extensible target), and - when no trap is present - a fallback to
 // target.[[HasProperty]] via a new proxyHasSymbolPropertyFallback,
-// mirroring the existing string-key proxyHasPropertyFallback's exact
-// type coverage (TypeProxy/TypeObject/TypeDictObject/TypeArray/TypeRegExp/
-// TypeFunction/TypeClosure, default false) rather than OpIn's fuller
-// direct-target coverage (which also handles Map/Set/Promise/
-// BoundFunction/NativeFunction/NativeFunctionWithProps/Arguments) - see
-// check 11 below for the resulting, pre-existing, shared gap this
-// intentionally leaves in place for both key kinds.
+// which at the time only mirrored the existing string-key
+// proxyHasPropertyFallback's then-narrower type coverage (TypeObject/
+// TypeArray/TypeRegExp/TypeFunction/TypeClosure) rather than OpIn's fuller
+// direct-target coverage - see check 11 below, updated by a follow-up fix
+// (task_125640b9) once that gap was closed for both key paths together.
 //
 // While implementing the trap lookup, found and fixed two spec
 // conformance bugs in the process (not present in the task description,
@@ -37,14 +35,11 @@
 //     namespace or TS enum passed as the handler - not reachable through
 //     ordinary object-literal syntax, so not itself exercised here) would
 //     otherwise panic in Value.AsPlainObject().
-// Both of these bugs equally affect the pre-existing STRING-key TypeProxy
-// case just below the new one - deliberately left alone here (fixing it
-// changes established behavior on a path this task didn't ask about) and
-// flagged as a separate follow-up task alongside check 11's fallback-
-// coverage gap (one task, three bullets: the string-key case's own-only
-// trap lookup, its unguarded AsPlainObject panic on a TypeDictObject
-// handler, and the Map/Set/Promise/callable fallback coverage gap shared
-// by both key paths).
+// Both of these bugs equally affected the pre-existing STRING-key
+// TypeProxy case just below this one at the time - flagged as a follow-up
+// (task_125640b9) rather than fixed as a drive-by here, and since fixed
+// there (same trap-lookup helper, proxyGetTrap, now shared by both key
+// paths' TypeProxy cases) - see check 11 below.
 
 const checks: boolean[] = [];
 
@@ -156,29 +151,30 @@ const checks: boolean[] = [];
   checks.push(Reflect.has(p10, Symbol("inherited")) === true);
 }
 
-// --- 11. KNOWN, PRE-EXISTING, SHARED GAP (both key kinds) - pinned, not
-// fixed here: a Proxy with no trap wrapping a Map target disagrees with
-// Reflect.has, because proxyHasSymbolPropertyFallback (and its
-// pre-existing string-key sibling, proxyHasPropertyFallback) only covers
-// TypeObject/TypeArray/TypeRegExp/TypeFunction/TypeClosure as fallback
-// target kinds, not OpIn's fuller direct-target switch (which also
-// handles Map/Set/Promise/BoundFunction/NativeFunction/
-// NativeFunctionWithProps/Arguments). Verified here for Map specifically;
-// by inspection (not individually asserted) the same fallback gap applies
-// to the other six kinds too, for the identical reason. Node agrees `in`
-// and Reflect.has here; paserati does not yet. This assertion pins
-// TODAY's divergence explicitly (matching the established pattern for a
-// still-open gap - see the history of the now-fixed pinned assertion in
-// in_symbol_boundfn_nativefn.ts) so a future fix has to touch this file
-// instead of silently leaving stale documentation.
+// --- 11. FIXED (was a known, pinned divergence): a Proxy with no trap
+// wrapping a Map target now agrees with Reflect.has. proxyHasSymbolPropertyFallback
+// (and its string-key sibling, proxyHasPropertyFallback) originally only
+// covered TypeObject/TypeArray/TypeRegExp/TypeFunction/TypeClosure as
+// fallback target kinds, unlike OpIn's fuller direct-target switch (which
+// also handles Map/Set/Promise/BoundFunction/NativeFunction/
+// NativeFunctionWithProps/Arguments) - task_125640b9 extended both
+// fallback functions with all seven of those kinds, mirroring the
+// existing own-table-then-prototype-chain logic OpIn's direct-target
+// cases already had for each. This assertion originally pinned the
+// pre-fix divergence explicitly (`inCheck === false && reflectCheck ===
+// true`) and is flipped here to assert genuine agreement instead - same
+// history as in_symbol_boundfn_nativefn.ts's own pinned-then-flipped
+// assertion (PR #338). See proxy_has_string_key_fixes.ts for per-kind
+// coverage of the other six kinds this same fix closed, plus the two
+// spec-conformance bugs shared with the string-key TypeProxy case. ---
 {
   const m: any = new Map();
   const sym = Symbol("m");
   Object.defineProperty(m, sym, { value: 1, configurable: true });
   const p11: any = new Proxy(m, {});
-  const inCheck = sym in p11; // paserati: false (gap) - Node: true
-  const reflectCheck = Reflect.has(p11, sym); // true on both
-  checks.push(inCheck === false && reflectCheck === true);
+  const inCheck = sym in p11;
+  const reflectCheck = Reflect.has(p11, sym);
+  checks.push(inCheck === true && reflectCheck === true);
 }
 
 checks.every((c) => c === true);

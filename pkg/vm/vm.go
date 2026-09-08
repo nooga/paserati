@@ -3553,8 +3553,19 @@ startExecution:
 						return InterpretRuntimeError, Undefined
 					}
 
-					// Check if handler has a 'has' trap (per spec: GetMethod treats null/undefined as absent)
-					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
+					// Check if handler has a 'has' trap. proxyGetTrap (not a
+					// bare proxy.handler.AsPlainObject().GetOwn("has")) for
+					// two reasons found while adding the symbol-key sibling
+					// of this exact case (see task_125640b9's PR body):
+					// GetMethod semantics (10.5.7 step 4) mean an INHERITED
+					// "has" trap counts too, not just an own one; and a
+					// handler that happens to be a TypeDictObject (a TS
+					// enum/module namespace value) must not panic
+					// AsPlainObject(). Both bugs were real here before this
+					// fix - confirmed via `"x" in new Proxy({}, Object.create({has(){return true}}))`
+					// (false instead of true) and `"x" in new Proxy({}, someEnum)`
+					// (a process-crashing panic, not a catchable exception).
+					if hasTrap, ok := proxyGetTrap(proxy.handler, "has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 						// Validate trap is callable
 						if !hasTrap.IsCallable() {
 							vm.ThrowTypeError("'has' on proxy: trap is not a function")
@@ -21498,8 +21509,11 @@ func (vm *VM) proxyHasPropertyFallback(target Value, propKey string) bool {
 		if proxy.Revoked {
 			return false
 		}
-		// Check if the proxy's handler has a 'has' trap
-		if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
+		// Check if the proxy's handler has a 'has' trap - proxyGetTrap, not
+		// a bare GetOwn, for the same two reasons as OpIn's own TypeProxy
+		// case above (GetMethod's inherited-trap semantics, and a
+		// TypeDictObject handler panicking AsPlainObject()).
+		if hasTrap, ok := proxyGetTrap(proxy.handler, "has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 			if hasTrap.IsCallable() {
 				trapArgs := []Value{proxy.target, NewString(propKey)}
 				result, err := vm.Call(hasTrap, proxy.handler, trapArgs)
@@ -21517,6 +21531,18 @@ func (vm *VM) proxyHasPropertyFallback(target Value, propKey string) bool {
 	case TypeDictObject:
 		return target.AsDictObject().Has(propKey)
 	case TypeArray:
+		// NOT fixed here (pre-existing, out of this task's scope): unlike
+		// OpIn's own direct-target TypeArray case, which checks
+		// ArrayHasOwnIndex (paserati#176/#178 - a numerically-in-range
+		// index is NOT necessarily an own property, e.g. after a distant
+		// defineProperty inflates .length) before falling to the
+		// prototype chain, this still uses the simpler, wrong
+		// `index < arrayObj.Length()` test. Left alone since this task's
+		// three fixes are the trap-lookup bugs and the seven-kind
+		// fallback-coverage gap, not this unrelated pre-existing
+		// correctness issue - flagged as a third bullet on the same
+		// follow-up as the other unfixed trap-lookup sites this task's
+		// review turned up (see task's PR body).
 		arrayObj := target.AsArray()
 		if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
 			return index < arrayObj.Length()
@@ -21595,6 +21621,84 @@ func (vm *VM) proxyHasPropertyFallback(target Value, propKey string) bool {
 			}
 		}
 		return vm.hasFunctionPrototypeProperty(propKey)
+	case TypeNativeFunctionWithProps:
+		// Same own-table-then-FunctionPrototype shape as TypeFunction/
+		// TypeClosure above - mirrors OpIn's own direct-target
+		// TypeNativeFunctionWithProps case (pkg/vm/vm.go) exactly.
+		nf := target.AsNativeFunctionWithProps()
+		if HasOwnFunctionIntrinsic(target, propKey) {
+			return true
+		}
+		if nf.Properties != nil && nf.Properties.Has(propKey) {
+			return true
+		}
+		return vm.hasFunctionPrototypeProperty(propKey)
+	case TypeNativeFunction:
+		// Mirrors OpIn's own direct-target TypeNativeFunction case.
+		nf := target.AsNativeFunction()
+		if HasOwnFunctionIntrinsic(target, propKey) {
+			return true
+		}
+		if nf.Properties != nil && nf.Properties.Has(propKey) {
+			return true
+		}
+		return vm.hasFunctionPrototypeProperty(propKey)
+	case TypeBoundFunction:
+		// Mirrors OpIn's own direct-target TypeBoundFunction case.
+		bf := target.AsBoundFunction()
+		if bf.Properties != nil && bf.Properties.Has(propKey) {
+			return true
+		}
+		return vm.hasFunctionPrototypeProperty(propKey)
+	case TypeSet:
+		// Mirrors OpIn's own direct-target TypeSet case: own "size", then
+		// the side table, then Set.prototype and beyond.
+		if propKey == "size" {
+			return true
+		}
+		setObj := target.AsSet()
+		if setObj.Properties != nil && setObj.Properties.HasOwn(propKey) {
+			return true
+		}
+		return vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(target), keyFromString(propKey))
+	case TypeMap:
+		// Mirrors OpIn's own direct-target TypeMap case.
+		if propKey == "size" {
+			return true
+		}
+		mapObj := target.AsMap()
+		if mapObj.Properties != nil && mapObj.Properties.HasOwn(propKey) {
+			return true
+		}
+		return vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(target), keyFromString(propKey))
+	case TypePromise:
+		// Mirrors OpIn's own direct-target TypePromise case: the side
+		// table (a Promise exposes no intrinsic own state, but a plain
+		// assignment can still add one), then Promise.prototype.
+		promiseObj := target.AsPromise()
+		if promiseObj.Properties != nil && promiseObj.Properties.HasOwn(propKey) {
+			return true
+		}
+		if vm.PromisePrototype.IsObject() {
+			return vm.PromisePrototype.AsPlainObject().Has(propKey)
+		}
+		return false
+	case TypeArguments:
+		// Mirrors OpIn's own direct-target TypeArguments case.
+		argObj := target.AsArguments()
+		if propKey == "length" {
+			return true
+		}
+		if propKey == "callee" && !argObj.IsStrict() {
+			return true
+		}
+		if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
+			return index < argObj.Length()
+		}
+		if vm.ObjectPrototype.IsObject() {
+			return vm.ObjectPrototype.AsPlainObject().Has(propKey)
+		}
+		return false
 	default:
 		return false
 	}
@@ -21733,6 +21837,60 @@ func (vm *VM) proxyHasSymbolPropertyFallback(target Value, propVal Value) bool {
 			}
 		}
 		return vm.hasFunctionPrototypeSymbolProperty(key)
+	case TypeBoundFunction, TypeNativeFunction, TypeNativeFunctionWithProps:
+		// Same shape as TypeFunction/TypeClosure above - mirrors OpIn's own
+		// symbol-key direct-target case for these three kinds (pkg/vm/vm.go).
+		if props := OwnPropertiesTable(target); props != nil {
+			if _, ok := props.GetOwnByKey(key); ok {
+				return true
+			}
+		}
+		return vm.hasFunctionPrototypeSymbolProperty(key)
+	case TypeSet:
+		// Mirrors OpIn's own symbol-key direct-target TypeSet case: own
+		// table, then Set.prototype and beyond.
+		setObj := target.AsSet()
+		if setObj.Properties != nil && setObj.Properties.HasOwnByKey(key) {
+			return true
+		}
+		return vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(target), key)
+	case TypeMap:
+		// Mirrors OpIn's own symbol-key direct-target TypeMap case.
+		mapObj := target.AsMap()
+		if mapObj.Properties != nil && mapObj.Properties.HasOwnByKey(key) {
+			return true
+		}
+		return vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(target), key)
+	case TypePromise:
+		// Mirrors OpIn's own symbol-key direct-target TypePromise case:
+		// own table first, then Promise.prototype's chain.
+		promiseObj := target.AsPromise()
+		if promiseObj.Properties != nil && promiseObj.Properties.HasOwnByKey(key) {
+			return true
+		}
+		if vm.PromisePrototype.IsObject() {
+			return vm.hasPropertyByKeyFromPrototypeChain(vm.PromisePrototype, key)
+		}
+		return false
+	case TypeArguments:
+		// Mirrors OpIn's own symbol-key direct-target TypeArguments case:
+		// Array.prototype first (for Symbol.iterator), then Object.prototype.
+		// Deliberately does NOT check argObj.HasOwnSymbolProp(...) first
+		// (every other kind's case here does check its own table before
+		// falling to a prototype) - this matches OpIn's own symbol-key
+		// TypeArguments case and reflectHas's explicit comment that "a
+		// symbol key on an Arguments object isn't handled by either" - a
+		// pre-existing, consistent gap across all three, not a new
+		// asymmetry introduced here.
+		if vm.ArrayPrototype.IsObject() {
+			if vm.hasPropertyByKeyFromPrototypeChain(vm.ArrayPrototype, key) {
+				return true
+			}
+		}
+		if vm.ObjectPrototype.IsObject() {
+			return vm.hasPropertyByKeyFromPrototypeChain(vm.ObjectPrototype, key)
+		}
+		return false
 	default:
 		return false
 	}
