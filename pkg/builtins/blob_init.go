@@ -172,7 +172,7 @@ func createBlobObject(vmInstance *vm.VM, blob *Blob, _ *vm.PlainObject) vm.Value
 	obj.SetOwnNonEnumerable("slice", vm.NewNativeFunction(3, false, "slice", func(args []vm.Value) (vm.Value, error) {
 		start := 0
 		end := len(blob.data)
-		contentType := blob.mimeType
+		contentType := ""
 
 		if len(args) > 0 && args[0].IsNumber() {
 			start = int(args[0].ToFloat())
