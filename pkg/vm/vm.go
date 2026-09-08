@@ -3445,7 +3445,7 @@ startExecution:
 						return InterpretRuntimeError, Undefined
 					}
 
-					if hasTrap, ok := proxyGetHasTrap(proxy.handler); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
+					if hasTrap, ok := proxyGetTrap(proxy.handler, "has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 						if !hasTrap.IsCallable() {
 							vm.ThrowTypeError("'has' on proxy: trap is not a function")
 							if !vm.unwinding {
@@ -21600,29 +21600,34 @@ func (vm *VM) proxyHasPropertyFallback(target Value, propKey string) bool {
 	}
 }
 
-// proxyGetHasTrap looks up a Proxy handler's "has" trap the way
-// GetMethod(handler, "has") does per spec (10.5.7 step 4): an inherited
-// trap counts, not just an own one, and the handler can be a TypeDictObject
-// (a module namespace or enum value, pkg/vm/object.go's NewDictObject) as
-// well as an ordinary TypeObject - AsPlainObject() on the former panics.
+// proxyGetTrap looks up a Proxy handler's trap (e.g. "has", "get") the way
+// GetMethod(handler, trapName) does per spec: an inherited trap counts,
+// not just an own one, and the handler can be a TypeDictObject (a module
+// namespace or enum value, pkg/vm/object.go's NewDictObject) as well as an
+// ordinary TypeObject - AsPlainObject() on the former panics.
 //
-// This exists because both of this function's callers (OpIn's symbol-key
-// TypeProxy case above and proxyHasSymbolPropertyFallback below) used to
-// inline `proxy.handler.AsPlainObject().GetOwn("has")` directly, copied
+// Originally added (as the "has"-only proxyGetHasTrap) because OpIn's
+// symbol-key TypeProxy case and proxyHasSymbolPropertyFallback below used
+// to inline `proxy.handler.AsPlainObject().GetOwn("has")` directly, copied
 // from the pre-existing string-key TypeProxy case's identical shape a few
 // lines below - itself not spec-correct on either count (own-only, and an
 // unguarded AsPlainObject that panics for a TypeDictObject handler; try
-// `new Proxy({}, someEnum)` on either the string- or symbol-key path
-// before this fix). That pre-existing gap was left alone here rather than
-// silently fixed as a drive-by - it's flagged as a shared follow-up
-// instead (see this branch's PR body) since fixing it changes the
-// string-key path's behavior too and deserves its own verification.
-func proxyGetHasTrap(handler Value) (Value, bool) {
+// `new Proxy({}, someEnum)` on either the string- or symbol-key `in` path).
+// That pre-existing `in`-path gap was left alone rather than silently
+// fixed as a drive-by (see task_125640b9's PR body) since fixing it
+// changes established `in`/Reflect.has behavior on a path that fix wasn't
+// scoped to touch.
+//
+// Generalized to take a trap name so getPropertyWithReceiver's Proxy case
+// (pkg/vm/vm_init.go, backing Reflect.get) can reuse it for the "get"
+// trap instead of carrying its own copy of the same two bugs forward a
+// third time.
+func proxyGetTrap(handler Value, trapName string) (Value, bool) {
 	switch handler.Type() {
 	case TypeObject:
-		return handler.AsPlainObject().Get("has")
+		return handler.AsPlainObject().Get(trapName)
 	case TypeDictObject:
-		return handler.AsDictObject().Get("has")
+		return handler.AsDictObject().Get(trapName)
 	default:
 		return Undefined, false
 	}
@@ -21653,7 +21658,7 @@ func (vm *VM) proxyHasSymbolPropertyFallback(target Value, propVal Value) bool {
 		if proxy.Revoked {
 			return false
 		}
-		if hasTrap, ok := proxyGetHasTrap(proxy.handler); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
+		if hasTrap, ok := proxyGetTrap(proxy.handler, "has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 			if hasTrap.IsCallable() {
 				trapArgs := []Value{proxy.target, propVal}
 				result, err := vm.Call(hasTrap, proxy.handler, trapArgs)

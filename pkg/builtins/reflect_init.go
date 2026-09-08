@@ -53,7 +53,16 @@ func (r *ReflectInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Reflect object type with all 13 methods
 	reflectType := types.NewObjectType().
 		// Property operations
-		WithProperty("get", types.NewSimpleFunction([]types.Type{types.Any, keyType}, types.Any)).
+		//
+		// "get" takes an optional third `receiver` argument (used as the
+		// `this` an accessor's getter is called with - the runtime
+		// implementation now actually reads it, see reflectObj's "get"
+		// closure below). Reflect.set/Reflect.construct have the exact
+		// same "optional trailing argument the runtime accepts but the
+		// declared signature doesn't" gap for their own optional
+		// receiver/newTarget parameters - left alone here (out of this
+		// fix's scope) and flagged as a separate follow-up.
+		WithProperty("get", types.NewOptionalFunction([]types.Type{types.Any, keyType, types.Any}, types.Any, []bool{false, false, true})).
 		WithProperty("set", types.NewSimpleFunction([]types.Type{types.Any, keyType, types.Any}, types.Boolean)).
 		WithProperty("has", types.NewSimpleFunction([]types.Type{types.Any, keyType}, types.Boolean)).
 		WithProperty("deleteProperty", types.NewSimpleFunction([]types.Type{types.Any, keyType}, types.Boolean)).
@@ -94,39 +103,40 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Reflect.get(target, propertyKey [, receiver])
+	// Per ECMAScript spec, this invokes [[Get]] and returns the result -
+	// receiver defaults to target, and is what any accessor's getter along
+	// the way is called with as `this` (10.1.8 [[Get]] step 5/6). The
+	// actual per-kind dispatch (own-accessor-then-data, prototype-chain
+	// walk, Proxy trap invocation and invariant checks, both string and
+	// Symbol keys) lives in pkg/vm/vm_init.go's
+	// GetPropertyWithReceiver/ReflectGetSymbolPropertyWithReceiver, which
+	// this used to duplicate a much narrower, TypeObject/TypeDictObject/
+	// TypeArray-only, string-key-only version of inline - silently
+	// returning undefined for every other kind (Function, Map, Set,
+	// RegExp, BoundFunction, NativeFunction, NativeFunctionWithProps,
+	// Promise, TypedArray, Proxy, ...) and unconditionally stringifying
+	// even a Symbol key.
 	reflectObj.SetOwnNonEnumerable("get", vm.NewNativeFunction(2, false, "get", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.get requires at least 2 arguments")
 		}
 		target := args[0]
-		propKey := args[1].ToString()
+		key := args[1]
 
 		if !target.IsObject() && !target.IsCallable() {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.get called on non-object")
 		}
 
-		// Perform simple property get
-		switch target.Type() {
-		case vm.TypeObject:
-			if val, ok := target.AsPlainObject().Get(propKey); ok {
-				return val, nil
-			}
-		case vm.TypeDictObject:
-			if val, ok := target.AsDictObject().Get(propKey); ok {
-				return val, nil
-			}
-		case vm.TypeArray:
-			arr := target.AsArray()
-			if propKey == "length" {
-				return vm.Number(float64(arr.Length())), nil
-			}
-			// Try numeric index using strconv
-			if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 && idx < arr.Length() {
-				return arr.Get(idx), nil
-			}
+		// Receiver defaults to target if not provided (ECMA-262 28.1.7).
+		receiver := target
+		if len(args) >= 3 {
+			receiver = args[2]
 		}
 
-		return vm.Undefined, nil
+		if key.Type() == vm.TypeSymbol {
+			return vmInstance.ReflectGetSymbolPropertyWithReceiver(target, key, receiver)
+		}
+		return vmInstance.GetPropertyWithReceiver(target, key.ToString(), receiver)
 	}))
 
 	// Reflect.set(target, propertyKey [, value [, receiver]])
