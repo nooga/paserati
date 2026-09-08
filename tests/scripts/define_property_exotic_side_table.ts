@@ -94,16 +94,17 @@ Object.preventExtensions(m3);
 Object.defineProperty(m3, "already", { value: 2 });
 checks.push(m3.already === 2);
 
-// --- pin the known, separately-tracked `in`-on-Promise gap explicitly
-// (rather than the roundTrips helper above silently skipping it): `in`
-// never checks a Promise's own side table at all, only Reflect.has does -
-// reproduces with plain assignment too, so it's unrelated to this fix. If
-// that gap gets fixed later, this assertion should fail and point
-// whoever's fixing it at updating checkIn above instead of it going
-// unnoticed. ---
+// --- Reflect.has finds a plain own property assigned onto a Promise
+// (unrelated to defineProperty itself, but worth pinning here since the
+// roundTrips helper above skips `in` for Promise entirely). `in` used to
+// disagree with Reflect.has here - it never checked a Promise's own side
+// table at all - but that was a separate bug in the `in` operator itself
+// (OpIn, pkg/vm/vm.go), not this defineProperty fix, so it's fixed in a
+// sibling PR (#332) instead of asserted on in this file: an assertion
+// here would flip depending on merge order between the two PRs. ---
 const pIn: any = Promise.resolve(3);
 pIn.viaAssign = 1;
-checks.push(Reflect.has(pIn, "viaAssign") && !("viaAssign" in pIn));
+checks.push(Reflect.has(pIn, "viaAssign"));
 
 // --- RegExp's "lastIndex" is excluded from the generic side-table write
 // (it's a real Go field, not a table entry) - defineProperty on it stays
