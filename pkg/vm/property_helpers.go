@@ -966,6 +966,97 @@ func (vm *VM) HasPropertyOnPrototypeChain(objVal Value, key PropertyKey) bool {
 	return vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(objVal), key)
 }
 
+// HasPropertyOnGivenPrototypeChain is HasPropertyOnPrototypeChain for a
+// caller that already knows which prototype value to start walking from
+// (e.g. PromisePrototype or ObjectPrototype), rather than one
+// effectiveBuiltinPrototype can derive purely from an object's own
+// runtime type - effectiveBuiltinPrototype only resolves a starting
+// prototype for Array/Map/Set/WeakRef/FinalizationRegistry, so it cannot
+// serve every builtin kind a caller like Reflect.has needs to walk.
+func (vm *VM) HasPropertyOnGivenPrototypeChain(proto Value, key PropertyKey) bool {
+	return vm.hasPropertyByKeyFromPrototypeChain(proto, key)
+}
+
+// HasOwnFunctionIntrinsic reports whether a callable (Function, Closure,
+// NativeFunction, NativeFunctionWithProps) has "name", "length", or
+// "prototype" as an own property right now. name/length are synthesized
+// lazily rather than stored in a Properties table, and tracked as deleted
+// via DeletedName/DeletedLength rather than actually removed from
+// anywhere (see MaterializeIntrinsicOwnProperties and
+// object_init.go's GetOwnPropertyDescriptor, which this mirrors exactly).
+//
+// "prototype" is own only for TypeFunction/TypeClosure, and only when the
+// function is not an arrow function (arrow functions are never
+// constructible and never get a synthesized own "prototype" - see
+// FunctionObject.IsArrowFunction). TypeNativeFunction never has one at
+// all (a native method isn't a constructor); TypeNativeFunctionWithProps
+// (a native CONSTRUCTOR like Array, Object, Map, ...) can have a real own
+// "prototype", but as an actual entry in its own Properties table set at
+// setup time, not a synthesized intrinsic - callers need to check that
+// table themselves rather than treat "prototype" as automatically true
+// for every callable kind (a real, previously-shipped bug: `"prototype"
+// in nativeMethod` would incorrectly answer true for a plain native
+// method that never had one).
+//
+// Returns false for name/length/prototype when the callable kind doesn't
+// synthesize that particular one, and for any OTHER key entirely - a
+// caller must still fall back to its own Properties-table and
+// prototype-chain checks for those.
+func HasOwnFunctionIntrinsic(target Value, name string) bool {
+	switch target.Type() {
+	case TypeFunction:
+		fn := target.AsFunction()
+		switch name {
+		case "name":
+			return !fn.DeletedName
+		case "length":
+			return !fn.DeletedLength
+		case "prototype":
+			return !fn.IsArrowFunction
+		}
+	case TypeClosure:
+		fn := target.AsClosure().Fn
+		switch name {
+		case "name":
+			return !fn.DeletedName
+		case "length":
+			return !fn.DeletedLength
+		case "prototype":
+			return !fn.IsArrowFunction
+		}
+	case TypeNativeFunction:
+		nf := target.AsNativeFunction()
+		switch name {
+		case "name":
+			return !nf.DeletedName
+		case "length":
+			return !nf.DeletedLength
+		}
+	case TypeNativeFunctionWithProps:
+		nfp := target.AsNativeFunctionWithProps()
+		switch name {
+		case "name":
+			return !nfp.DeletedName
+		case "length":
+			return !nfp.DeletedLength
+		}
+	}
+	return false
+}
+
+// HasFunctionPrototypeProperty is hasFunctionPrototypeProperty, exported
+// for pkg/builtins: Reflect.has's callable cases (Function, Closure,
+// NativeFunction, NativeFunctionWithProps, BoundFunction) need the exact
+// same "own side table, then FunctionPrototype" fallback OpIn's own
+// callable cases already use internally, for a string key (this does not
+// handle a symbol key - FunctionPrototype's own representation, a
+// PlainObject in the common case but possibly a NativeFunctionWithProps,
+// needs a manual walk to support that correctly; see OpIn's
+// TypeFunction/TypeClosure symbol branches in vm.go for the pattern).
+func (vm *VM) HasFunctionPrototypeProperty(propKey string) bool {
+	return vm.hasFunctionPrototypeProperty(propKey)
+}
+
 // handleSpecialProperties handles special properties like .length
 func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, bool) {
 	// Handle undefined/null objects
