@@ -31,7 +31,7 @@ func (a *AbortControllerInitializer) InitTypes(ctx *TypeContext) error {
 
 	// AbortSignal static methods
 	abortSignalConstructorType := types.NewObjectType().
-		WithProperty("abort", types.NewSimpleFunction([]types.Type{}, abortSignalType)).
+		WithProperty("abort", types.NewOptionalFunction([]types.Type{types.Any}, abortSignalType, []bool{true})).
 		WithProperty("timeout", types.NewSimpleFunction([]types.Type{types.Number}, abortSignalType)).
 		WithProperty("any", types.NewSimpleFunction([]types.Type{types.Any}, abortSignalType)). // signals array
 		WithProperty("prototype", abortSignalType)
@@ -43,7 +43,7 @@ func (a *AbortControllerInitializer) InitTypes(ctx *TypeContext) error {
 	// AbortController type
 	abortControllerType := types.NewObjectType().
 		WithProperty("signal", abortSignalType).
-		WithProperty("abort", types.NewSimpleFunction([]types.Type{}, types.Undefined))
+		WithProperty("abort", types.NewOptionalFunction([]types.Type{types.Any}, types.Undefined, []bool{true}))
 
 	// AbortController constructor
 	abortControllerConstructorType := types.NewObjectType().
@@ -65,7 +65,7 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// AbortSignal.abort(reason?) - creates an already-aborted signal
 	signalConstructor.SetOwnNonEnumerable("abort", vm.NewNativeFunction(1, false, "abort", func(args []vm.Value) (vm.Value, error) {
 		var reason vm.Value
-		if len(args) > 0 {
+		if len(args) > 0 && !args[0].IsUndefined() {
 			reason = args[0]
 		} else {
 			// Default reason is DOMException with name "AbortError"
@@ -245,7 +245,7 @@ func createAbortControllerObject(vmInstance *vm.VM, controller *AbortController,
 	// abort(reason?) method
 	obj.SetOwnNonEnumerable("abort", vm.NewNativeFunction(1, false, "abort", func(args []vm.Value) (vm.Value, error) {
 		var reason vm.Value
-		if len(args) > 0 {
+		if len(args) > 0 && !args[0].IsUndefined() {
 			reason = args[0]
 		} else {
 			reason = vm.NewString("AbortError: signal is aborted without reason")
