@@ -1,6 +1,9 @@
 package vm
 
-import "strconv"
+import (
+	"strconv"
+	"unsafe"
+)
 
 // BuiltinIterState is the shared mutable state behind the built-in
 // closure-based iterators (array values/keys/entries, array-likes,
@@ -75,6 +78,21 @@ func resolveFastIterState(iterVal, nextVal Value) *BuiltinIterState {
 	}
 	st := nf.IterState
 	if st.Kind != IterKindStateOnIterator {
+		if (st.Kind == IterKindArrayValues || st.Kind == IterKindArrayEntries) && st.Arr != nil && st.Arr.HasAccessors() {
+			// An own accessor property on the source array (get/set installed
+			// via Object.defineProperty) must have its getter called - ordinary
+			// [[Get]] semantics, same as plain property access. Step() can't do
+			// that: it has no VM to call the getter with and no channel to
+			// report a thrown exception, which is exactly why it stays the fast,
+			// error-free primitive OpFastIterNext depends on. So bail to the
+			// generic iterator.next() call path here instead, which goes
+			// through the native `next` closure and StepVM (below) - that path
+			// already has both. Checked once per for-of loop (OpIterFastCheck
+			// runs before the loop, not per iteration), matching the "checked
+			// once, cached" semantics this whole fast-path scheme already uses
+			// for the next-method identity check itself.
+			return nil
+		}
 		return st
 	}
 	if iterVal.typ == TypeObject {
@@ -301,4 +319,93 @@ func (st *BuiltinIterState) Step() (Value, bool) {
 		return Undefined, true
 	}
 	return Undefined, true
+}
+
+// getOwnIndexed reads the array's index i via ordinary [[Get]]: an own
+// accessor property at that index (get/set installed via
+// Object.defineProperty, at any index - DefineAccessorProperty never touches
+// `elements`, so an accessor index's raw slot is stale or a leftover Hole,
+// not the value [[Get]] must produce) has its getter called with the array
+// itself as `this` (a setter-only accessor reads as undefined, matching
+// ordinary [[Get]] on an accessor with no getter, without calling anything);
+// otherwise falls back to the raw element via Get, which is already
+// bounds/hole safe. Mirrors the accessor-first-then-raw-element precedence
+// arrayLikeGet (pkg/builtins/array_generic.go) uses for the generic
+// Array.prototype methods, applied here for the shared array values/entries
+// iterator state that backs for-of, spread's generic iterator-protocol
+// fallback, and iterator-protocol destructuring - including rest
+// (`const [x, ...rest] = arr`), which always takes the full generic path
+// since a rest element disables the destructuring fast path
+// (arrayDeclPatternFastEligible).
+func (a *ArrayObject) getOwnIndexed(vmInstance *VM, i int) (Value, error) {
+	key := strconv.Itoa(i)
+	if getter, _, _, _, ok := a.GetOwnAccessor(key); ok {
+		if getter.Type() == TypeUndefined {
+			return Undefined, nil
+		}
+		return vmInstance.Call(getter, Value{typ: TypeArray, obj: unsafe.Pointer(a)}, nil)
+	}
+	return a.Get(i), nil
+}
+
+// StepVM behaves exactly like Step, except for IterKindArrayValues and
+// IterKindArrayEntries when the source array has at least one own accessor
+// property: those two kinds read an element via getOwnIndexed instead of
+// Step()'s raw Arr.Get, so an own accessor's getter runs. Step() itself
+// can't do this - it has no VM to call the getter with and no way to report
+// a thrown exception - which is exactly why callers that can only tolerate
+// the fast, error-free Step() (the OpFastIterNext dispatch-loop opcode) bail
+// to the generic iterator-protocol call path up front instead, via
+// resolveFastIterState's own HasAccessors check. StepVM is for the one
+// caller that already goes through a real call and has an error channel to
+// use: the native `next` closure (makeBuiltinIterNext).
+//
+// A getter is arbitrary script: it can shrink the array's own backing
+// storage mid-loop (`a.length = 0`, `a.pop()`, ...). No extra guard is
+// needed for that here, the same way Step()'s own IterKindArrayValues case
+// needs none - Length() and getOwnIndexed's Get fallback are both re-read
+// live on every step, so a shrunk array simply reports done sooner instead
+// of a Go slice-bounds panic.
+func (st *BuiltinIterState) StepVM(vmInstance *VM) (Value, bool, error) {
+	switch st.Kind {
+	case IterKindArrayValues:
+		if st.Arr == nil || !st.Arr.HasAccessors() {
+			v, done := st.Step()
+			return v, done, nil
+		}
+		if st.Index >= st.Arr.Length() {
+			return Undefined, true, nil
+		}
+		idx := st.Index
+		st.Index++
+		v, err := st.Arr.getOwnIndexed(vmInstance, idx)
+		if err != nil {
+			return Undefined, false, err
+		}
+		return v, false, nil
+
+	case IterKindArrayEntries:
+		if st.Arr == nil || !st.Arr.HasAccessors() {
+			v, done := st.Step()
+			return v, done, nil
+		}
+		if st.Index >= st.Arr.Length() {
+			return Undefined, true, nil
+		}
+		idx := st.Index
+		st.Index++
+		elem, err := st.Arr.getOwnIndexed(vmInstance, idx)
+		if err != nil {
+			return Undefined, false, err
+		}
+		pair := NewArray()
+		pairArr := pair.AsArray()
+		pairArr.Append(Number(float64(idx)))
+		pairArr.Append(elem)
+		return pair, false, nil
+
+	default:
+		v, done := st.Step()
+		return v, done, nil
+	}
 }
