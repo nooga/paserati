@@ -5023,6 +5023,31 @@ func objectGetOwnPropertyDescriptorsWithVM(vmInstance *vm.VM, args []vm.Value) (
 				}
 			}
 		}
+	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise:
+		// These exotic kinds keep their ordinary own properties in the same
+		// lazily-allocated side table (OwnPropertiesTable, pkg/vm/
+		// properties_table.go) as Function/Closure/NativeFunctionWithProps
+		// above - this case was missing entirely, so
+		// Object.getOwnPropertyDescriptors always returned {} for one of
+		// these four kinds even after a real own property had been defined
+		// or assigned on it, despite the single-key
+		// Object.getOwnPropertyDescriptor already answering correctly for
+		// the exact same property.
+		//
+		// RegExp's "lastIndex" is its own case: like TypeFunction's
+		// synthesized "length"/"name"/"prototype" intrinsics above, it is a
+		// real own property that isn't stored in the side table at all (a
+		// Go field on RegExpObject instead - see
+		// objectGetOwnPropertyDescriptorWithVM's TypeRegExp handling, same
+		// file), so it has to be added explicitly rather than falling out
+		// of OwnPropertyNames().
+		if obj.Type() == vm.TypeRegExp {
+			stringKeys = append(stringKeys, "lastIndex")
+		}
+		if props := vm.OwnPropertiesTable(obj); props != nil {
+			stringKeys = append(stringKeys, props.OwnPropertyNames()...)
+			symbolKeys = append(symbolKeys, props.OwnSymbolKeys()...)
+		}
 	}
 
 	// Get descriptor for each string key
