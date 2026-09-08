@@ -2327,7 +2327,32 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			sourceArray := arrayLike.AsArray()
 			result := vm.NewArray()
 			for i := 0; i < sourceArray.Length(); i++ {
-				element := sourceArray.Get(i)
+				// Read each source index through arrayLikeGet rather than
+				// sourceArray.Get(i) directly: Get(i) only ever reads the
+				// raw backing slot, but an own accessor property (get/set
+				// installed via Object.defineProperty, at any index)
+				// must have its getter invoked instead - exactly the
+				// accessor-first-then-raw-element precedence arrayLikeGet
+				// already uses for every other generic Array.prototype
+				// method (forEach/map/filter/...), and the same gap the
+				// array spread fix (extractSpreadArguments, pkg/vm/vm.go)
+				// closed for `[...arr]`. Both files live in package
+				// builtins, so arrayLikeGet can be called directly here
+				// rather than duplicating its accessor-check logic.
+				//
+				// A getter is arbitrary script and can shrink the array's
+				// own backing storage mid-loop (`sourceArray.length = 0`,
+				// `.pop()`, ...): arrayLikeGet's non-accessor fallback
+				// goes through ArrayObject.Get, which bounds-checks
+				// against the live elements slice on every call, and the
+				// loop condition itself re-reads sourceArray.Length()
+				// every iteration - so a shrink is observed immediately
+				// (as Undefined for an invalidated index, or the loop
+				// simply ending early) instead of risking a stale read.
+				element, _, err := arrayLikeGet(vmInstance, arrayLike, i)
+				if err != nil {
+					return vm.NewArray(), err
+				}
 				// Apply mapping function if provided
 				if mapFn.Type() != vm.TypeUndefined {
 					vmInstance.EnterHelperCall()
