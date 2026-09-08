@@ -124,7 +124,7 @@ func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Registe
 		return c.compileSpreadNewExpression(node, hint, &tempRegs)
 	}
 
-	// 1. Determine total argument count needed (including optional parameter padding)
+	// 1. Determine total argument count needed
 	totalArgCount := c.determineTotalArgCountForNew(node)
 
 	// 2. For OpNew, we need constructor + arguments in contiguous registers
@@ -2225,67 +2225,32 @@ func (c *Compiler) hasSpreadArgument(arguments []parser.Expression) bool {
 	return false
 }
 
-// Helper function to determine total argument count including optional parameters
+// determineTotalArgCount returns the number of argument registers a call
+// site needs, expanding spread elements where their length is known at
+// compile time (see calculateEffectiveArgCount).
+//
+// This used to also pad the count up to the callee's declared parameter
+// count whenever the checker resolved a static function/signature type
+// with trailing optional parameters the call omitted - e.g. `f()` against
+// `function f(a?: string) {}` reported 1 argument, not 0, and emitted an
+// explicit Undefined into that phantom slot (see the sibling
+// compileArgumentsWithOptionalHandling, which had the identical padding
+// logic and has been simplified the same way). That padding was entirely
+// redundant for its actual purpose (making a default parameter value like
+// `function f(a = 5) {}` apply when the argument is omitted): prepareCall
+// (pkg/vm/call.go), OpNew's constructor setup, and OpTailCall/
+// OpTailCallMethod's frame-reuse path all ALREADY independently fill every
+// declared parameter register from the real argument count up to the
+// callee's Arity with Undefined, regardless of what count the call site
+// passes - which is exactly why default values already worked correctly
+// under --no-typecheck, where this padding never ran (no static function
+// type to consult there). The padding's only observable effect was
+// corrupting `arguments.length` (and the arguments object's own contents)
+// with a phantom argument the caller never actually passed. Removing it
+// makes a type-checked call site match the untyped one it already agreed
+// with for every other case.
 func (c *Compiler) determineTotalArgCount(node *parser.CallExpression) int {
-	// Calculate effective argument count, expanding spread elements
-	providedArgCount := c.calculateEffectiveArgCount(node.Arguments)
-
-	// Get function type to check for optional parameters
-	functionType := node.Function.GetComputedType()
-	var expectedParamCount int
-	var optionalParams []bool
-
-	if functionType != nil {
-		if objType, ok := functionType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 {
-			// TODO: This is a temporary solution. The checker should resolve overloads during type checking
-			// and attach the specific selected signature to the call expression.
-			// For now, try to pick the best matching signature based on argument count
-			sig := objType.CallSignatures[0] // Default to first signature
-			bestMatch := sig
-			bestScore := -1
-
-			for _, candidateSig := range objType.CallSignatures {
-				score := 0
-				// Prefer exact parameter count match
-				if len(candidateSig.ParameterTypes) == providedArgCount {
-					score += 10
-				}
-				// Or compatible with optional parameters
-				requiredParams := 0
-				for i, isOptional := range candidateSig.OptionalParams {
-					if i < len(candidateSig.ParameterTypes) && !isOptional {
-						requiredParams++
-					}
-				}
-				if providedArgCount >= requiredParams && providedArgCount <= len(candidateSig.ParameterTypes) {
-					score += 5
-				}
-
-				if score > bestScore {
-					bestScore = score
-					bestMatch = candidateSig
-				}
-			}
-
-			expectedParamCount = len(bestMatch.ParameterTypes)
-			optionalParams = bestMatch.OptionalParams
-		}
-	}
-
-	// Determine final argument count (provided args + undefined padding for optional params)
-	finalArgCount := providedArgCount
-	if len(optionalParams) == expectedParamCount && providedArgCount < expectedParamCount {
-		// Count how many optional parameters we need to pad
-		for i := providedArgCount; i < expectedParamCount; i++ {
-			if i < len(optionalParams) && optionalParams[i] {
-				finalArgCount++
-			} else {
-				break // Stop at first required parameter
-			}
-		}
-	}
-
-	return finalArgCount
+	return c.calculateEffectiveArgCount(node.Arguments)
 }
 
 func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Register) (Register, errors.PaseratiError) {
@@ -2493,7 +2458,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 			return BadRegister, err
 		}
 
-		// 2. Allocate contiguous block for function + all arguments (including optional parameters)
+		// 2. Allocate contiguous block for function + all arguments
 		totalArgCount := c.determineTotalArgCount(node)
 		blockSize := 1 + totalArgCount // funcReg + arguments
 		funcReg := c.regAlloc.AllocContiguous(blockSize)
@@ -2674,7 +2639,7 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 	}
 
 	// --- Regular function call ---
-	// 1. Allocate contiguous block for function + all arguments (including optional parameters)
+	// 1. Allocate contiguous block for function + all arguments
 	totalArgCount := c.determineTotalArgCount(node)
 	blockSize := 1 + totalArgCount // funcReg + arguments
 	funcReg := c.regAlloc.AllocContiguous(blockSize)
@@ -3245,96 +3210,25 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 	return BadRegister, nil
 }
 
-// Helper function to determine total argument count for NewExpression including optional parameters
+// determineTotalArgCountForNew is the `new` expression counterpart of
+// determineTotalArgCount - see that function's comment for why it no
+// longer pads the count up to the constructor's declared parameter count
+// for omitted trailing optional parameters. OpNew's own constructor-frame
+// setup (pkg/vm/vm.go, the "Copy fixed arguments (up to Arity)" loop)
+// already independently fills every declared parameter register up to
+// Arity with Undefined regardless of the real argument count, so the
+// padding here was equally redundant and had the same
+// arguments.length-corrupting effect.
 func (c *Compiler) determineTotalArgCountForNew(node *parser.NewExpression) int {
-	// Calculate effective argument count, expanding spread elements
-	providedArgCount := c.calculateEffectiveArgCount(node.Arguments)
-
-	// Get constructor type to check for optional parameters
-	constructorType := node.Constructor.GetComputedType()
-	var expectedParamCount int
-	var optionalParams []bool
-
-	if constructorType != nil {
-		if objType, ok := constructorType.(*types.ObjectType); ok && objType.IsConstructable() && len(objType.ConstructSignatures) > 0 {
-			// For constructors, use construct signatures instead of call signatures
-			sig := objType.ConstructSignatures[0] // Default to first signature
-			bestMatch := sig
-			bestScore := -1
-
-			for _, candidateSig := range objType.ConstructSignatures {
-				score := 0
-				// Prefer exact parameter count match
-				if len(candidateSig.ParameterTypes) == providedArgCount {
-					score += 10
-				}
-				// Or compatible with optional parameters
-				requiredParams := 0
-				for i, isOptional := range candidateSig.OptionalParams {
-					if i < len(candidateSig.ParameterTypes) && !isOptional {
-						requiredParams++
-					}
-				}
-				if providedArgCount >= requiredParams && providedArgCount <= len(candidateSig.ParameterTypes) {
-					score += 5
-				}
-
-				if score > bestScore {
-					bestScore = score
-					bestMatch = candidateSig
-				}
-			}
-
-			expectedParamCount = len(bestMatch.ParameterTypes)
-			optionalParams = bestMatch.OptionalParams
-		}
-	}
-
-	// Determine final argument count (provided args + undefined padding for optional params)
-	finalArgCount := providedArgCount
-	if len(optionalParams) == expectedParamCount && providedArgCount < expectedParamCount {
-		// Count how many optional parameters we need to pad
-		for i := providedArgCount; i < expectedParamCount; i++ {
-			if i < len(optionalParams) && optionalParams[i] {
-				finalArgCount++
-			} else {
-				break // Stop at first required parameter
-			}
-		}
-	}
-
-	return finalArgCount
+	return c.calculateEffectiveArgCount(node.Arguments)
 }
 
-// Helper function to compile arguments for NewExpression with optional parameter handling
+// compileArgumentsWithOptionalHandlingForNew compiles `new` expression
+// arguments - see determineTotalArgCountForNew for why it no longer pads
+// the count for omitted trailing optional constructor parameters.
 func (c *Compiler) compileArgumentsWithOptionalHandlingForNew(node *parser.NewExpression, firstArgReg Register) ([]Register, int, errors.PaseratiError) {
-	// Get constructor type information for optional parameter analysis
-	constructorType := node.Constructor.GetComputedType()
-	var expectedParamCount int
-	var optionalParams []bool
-
-	if constructorType != nil {
-		if objType, ok := constructorType.(*types.ObjectType); ok && objType.IsConstructable() && len(objType.ConstructSignatures) > 0 {
-			sig := objType.ConstructSignatures[0] // Use first construct signature for now
-			expectedParamCount = len(sig.ParameterTypes)
-			optionalParams = sig.OptionalParams
-		}
-	}
-
-	// Determine final argument count (with padding for optional parameters)
 	providedArgCount := len(node.Arguments)
 	finalArgCount := providedArgCount
-
-	if len(optionalParams) == expectedParamCount && providedArgCount < expectedParamCount {
-		// Count how many optional parameters we need to pad
-		for i := providedArgCount; i < expectedParamCount; i++ {
-			if i < len(optionalParams) && optionalParams[i] {
-				finalArgCount++
-			} else {
-				break // Stop at first required parameter
-			}
-		}
-	}
 
 	// Ensure argument registers exist (same fix as compileArgumentsWithOptionalHandling)
 	if finalArgCount > 0 {
@@ -3367,12 +3261,6 @@ func (c *Compiler) compileArgumentsWithOptionalHandlingForNew(node *parser.NewEx
 				return nil, 0, err
 			}
 		}
-	}
-
-	// Pad missing optional parameters with undefined
-	for i := providedArgCount; i < finalArgCount; i++ {
-		targetReg := argRegs[i]
-		c.emitLoadUndefined(targetReg, node.Token.Line)
 	}
 
 	return argRegs, finalArgCount, nil
@@ -3602,7 +3490,7 @@ func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint
 	*tempRegs = append(*tempRegs, superConstructorReg)
 	c.emitGetSuperConstructor(superConstructorReg, node.Token.Line)
 
-	// Determine total argument count including optional parameters
+	// Determine total argument count
 	totalArgCount := c.determineTotalArgCount(node)
 
 	// Allocate contiguous registers for the call: [function, arg1, arg2, ...]

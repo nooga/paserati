@@ -2988,66 +2988,26 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 	return constIdx, freeSymbols, nil
 }
 
-// compileArgumentsWithOptionalHandling compiles the provided arguments and pads missing optional
-// parameters with undefined values. Uses contiguous allocation to place arguments in their final positions.
+// compileArgumentsWithOptionalHandling compiles the provided call arguments
+// using contiguous allocation to place them in their final positions.
+//
+// It used to also pad the argument count up to the callee's declared
+// parameter count when the checker resolved a static function type with
+// trailing optional parameters the call omitted, emitting an explicit
+// OpLoadUndefined into each padded slot - see determineTotalArgCount
+// (compile_expression.go) for the full explanation of why that padding
+// was removed: the VM's own call setup (prepareCall, OpNew, and
+// OpTailCall/OpTailCallMethod's frame-reuse path) already independently
+// fills every declared parameter register up to Arity with Undefined
+// regardless of how many arguments the call site actually passed, so the
+// padding was redundant for default-parameter application and only
+// corrupted `arguments.length`/the arguments object's contents with a
+// phantom argument. finalArgCount is now simply the number of arguments
+// the caller actually wrote (spread elements expanded where their length
+// is known - see calculateEffectiveArgCount).
 func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpression, firstTargetReg Register) ([]Register, int, errors.PaseratiError) {
-	// 1. Determine the expected argument count including optional parameters
 	providedArgCount := len(node.Arguments)
-
-	// Get function type to check for optional parameters
-	functionType := node.Function.GetComputedType()
-	var expectedParamCount int
-	var optionalParams []bool
-
-	if functionType != nil {
-		if objType, ok := functionType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 {
-			// TODO: This is a temporary solution. The checker should resolve overloads during type checking
-			// and attach the specific selected signature to the call expression.
-			// For now, try to pick the best matching signature based on argument count
-			sig := objType.CallSignatures[0] // Default to first signature
-			bestMatch := sig
-			bestScore := -1
-
-			for _, candidateSig := range objType.CallSignatures {
-				score := 0
-				// Prefer exact parameter count match
-				if len(candidateSig.ParameterTypes) == providedArgCount {
-					score += 10
-				}
-				// Or compatible with optional parameters
-				requiredParams := 0
-				for i, isOptional := range candidateSig.OptionalParams {
-					if i < len(candidateSig.ParameterTypes) && !isOptional {
-						requiredParams++
-					}
-				}
-				if providedArgCount >= requiredParams && providedArgCount <= len(candidateSig.ParameterTypes) {
-					score += 5
-				}
-
-				if score > bestScore {
-					bestScore = score
-					bestMatch = candidateSig
-				}
-			}
-
-			expectedParamCount = len(bestMatch.ParameterTypes)
-			optionalParams = bestMatch.OptionalParams
-		}
-	}
-
-	// Determine final argument count (provided args + undefined padding for optional params)
 	finalArgCount := providedArgCount
-	if len(optionalParams) == expectedParamCount && providedArgCount < expectedParamCount {
-		// Count how many optional parameters we need to pad
-		for i := providedArgCount; i < expectedParamCount; i++ {
-			if i < len(optionalParams) && optionalParams[i] {
-				finalArgCount++
-			} else {
-				break // Stop at first required parameter
-			}
-		}
-	}
 
 	// 2. Ensure argument registers exist and build register list
 	// CRITICAL: Arguments must be at funcReg+1, funcReg+2, ... (VM calling convention)
@@ -3115,12 +3075,6 @@ func (c *Compiler) compileArgumentsWithOptionalHandling(node *parser.CallExpress
 			}
 			effectiveArgIndex++
 		}
-	}
-
-	// 4. Pad missing optional parameters with undefined
-	for i := providedArgCount; i < finalArgCount; i++ {
-		targetReg := argRegs[i]
-		c.emitLoadUndefined(targetReg, node.Token.Line)
 	}
 
 	return argRegs, finalArgCount, nil
