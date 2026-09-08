@@ -765,8 +765,23 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		str := args[0].ToString()
 		radix := 10
+		// Per spec (18.2.5 parseInt, which Number.parseInt is required to be
+		// the same function object as), radix goes through ToInt32 - which
+		// spec-mandates +0 for NaN and either Infinity (see toInt32/toUint32
+		// in math_init.go: NaN/±Infinity/±0 all map to 0). A radix of 0 is
+		// then treated as "unspecified" and defaults to 10 below. The
+		// previous code did an unconditional `int(args[1].ToFloat())`, which
+		// for a non-finite radix (an omitted argument padded to `undefined`
+		// by the compiler before paserati#310, or a real `Infinity`/NaN the
+		// caller wrote) relies on Go's implementation-defined float64->int
+		// conversion of a non-finite value - happens to yield 0 on this
+		// platform (coincidentally falling into the `radix == 0` default
+		// below), but is not portable and doesn't cover every non-finite
+		// input (Infinity, -Infinity, 1e20 all reproduced the same bug
+		// empirically, not just NaN). Route through the real ToInt32
+		// instead.
 		if len(args) > 1 {
-			radix = int(args[1].ToFloat())
+			radix = int(toInt32(args[1].ToFloat()))
 		}
 
 		if radix == 0 {
