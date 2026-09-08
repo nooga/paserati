@@ -5,7 +5,7 @@
 // holes -> undefined, defaults, elisions, nested patterns, rest (which stays on
 // the generic path), for-of element patterns, and deopt to the generic protocol
 // when Symbol.iterator is customized on the prototype or on an Array subclass.
-// expect: 1,2|10,undefined,undefined|5,20|1,undefined,3|2,4|7,8,9|1;2,3,4|a=1,b=2|100,200|1000,2000,3000/1000,2000,3000
+// expect: 1,2|10,,|5,20|1,,3|2,4|7,8,9|1;2,3,4|a=1,b=2|100,200|1000,2000,3000/1000,2000,3000
 let out: string[] = [];
 
 // basic + fewer-than-pattern tail

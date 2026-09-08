@@ -701,13 +701,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		result := first.ToString()
+		result := joinElementToString(first)
 		for i := 1; i < length; i++ {
 			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
 			if err != nil {
 				return vm.Undefined, err
 			}
-			result += separator + v.ToString()
+			result += separator + joinElementToString(v)
 		}
 		return vm.NewString(wtf8.JoinSurrogatePairs(result)), nil
 	}))
@@ -729,13 +729,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		result := first.ToString()
+		result := joinElementToString(first)
 		for i := 1; i < length; i++ {
 			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
 			if err != nil {
 				return vm.Undefined, err
 			}
-			result += "," + v.ToString()
+			result += "," + joinElementToString(v)
 		}
 		return vm.NewString(wtf8.JoinSurrogatePairs(result)), nil
 	}))
