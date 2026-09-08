@@ -115,7 +115,15 @@ func (t *TextDecoderInitializer) InitRuntime(ctx *RuntimeContext) error {
 	decoderProto.SetOwnNonEnumerable("ignoreBOM", vm.BooleanValue(false))
 
 	decoderProto.SetOwnNonEnumerable("decode", vm.NewNativeFunction(1, false, "decode", func(args []vm.Value) (vm.Value, error) {
-		if len(args) == 0 {
+		// input is a WebIDL optional BufferSource with no explicit default -
+		// per the WHATWG WebIDL ECMAScript binding, an omitted argument and
+		// one explicitly passed as `undefined` are equivalent for such a
+		// parameter (unlike an ECMA-262 native whose spec text says "if X is
+		// not present", e.g. Array.prototype.reduce's initialValue - see
+		// arguments_length_optional_params.ts for that distinction), so
+		// `decoder.decode(undefined)` must return "" exactly like
+		// `decoder.decode()` does, not stringify the value to "undefined".
+		if len(args) == 0 || args[0].IsUndefined() {
 			return vm.NewString(""), nil
 		}
 		input := args[0]

@@ -181,7 +181,13 @@ func (p *PerformanceInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		name := args[0].ToString()
 		var entryType string
-		if len(args) >= 2 {
+		// type is a WebIDL optional DOMString with no explicit default - per
+		// the WHATWG WebIDL ECMAScript binding, an omitted argument and one
+		// explicitly passed as `undefined` are equivalent for such a
+		// parameter, so getEntriesByName(name, undefined) must match all
+		// entry types exactly like getEntriesByName(name) does, not filter
+		// by the literal string "undefined" (which matches nothing).
+		if len(args) >= 2 && !args[1].IsUndefined() {
 			entryType = args[1].ToString()
 		}
 
