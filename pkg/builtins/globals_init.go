@@ -592,7 +592,22 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 			result, evalErrs = driver.IndirectEvalCode(codeStr)
 		})
 		if len(evalErrs) > 0 {
-			// Error (parse/compile/runtime) - throw SyntaxError for compile errors
+			// A genuine runtime exception from the evaluated code (as opposed
+			// to a parse/compile failure) comes back wrapped so the original
+			// thrown value survives - see vm.Interpret's InterpretRuntimeError
+			// handling. Unwrap and re-throw that value as-is, so e.g. a
+			// ReferenceError thrown by eval'd code is still a ReferenceError
+			// (and catchable by the caller's try/catch) rather than every
+			// eval failure - parse, compile, or runtime alike - collapsing
+			// into a SyntaxError.
+			if unwrapper, ok := evalErrs[0].(interface{ Unwrap() error }); ok {
+				if cause := unwrapper.Unwrap(); cause != nil {
+					if exc, ok := cause.(vm.ExceptionError); ok {
+						return vm.Undefined, ctx.VM.NewExceptionError(exc.GetExceptionValue())
+					}
+				}
+			}
+			// Parse/compile error - throw SyntaxError
 			return vm.Undefined, ctx.VM.NewSyntaxError(evalErrs[0].Error())
 		}
 
