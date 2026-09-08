@@ -3418,16 +3418,16 @@ startExecution:
 				case TypeArray:
 					// For arrays, check if the property is a valid index or known property
 					arrayObj := objVal.AsArray()
-					if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
-						if arrayObj.HasOwnIndexProperty(propKey, index) {
-							hasProperty = true
-						} else {
-							// A hole (from `delete arr[i]`, a literal elision,
-							// or `new Array(n)`) is not an own property at
-							// all - fall through to the prototype chain like
-							// any other absent index (paserati#300).
-							hasProperty = vm.hasPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(objVal), keyFromString(propKey))
-						}
+					if index, ok := tryParseArrayIndex(propKey); ok {
+						// A numerically-in-range index is NOT necessarily an
+						// own property: `.length` can be inflated by an
+						// unrelated defineProperty call at a different,
+						// possibly huge, index (paserati#176/#178) without
+						// this index itself ever being set. Check real
+						// presence (dense value, or an own accessor/sparse
+						// data property at this exact index) instead of
+						// `index < arrayObj.Length()`.
+						hasProperty = ArrayHasOwnIndex(arrayObj, index)
 					} else if _, ok := arrayObj.GetOwn(propKey); ok {
 						hasProperty = true
 					} else if propKey == "length" {
