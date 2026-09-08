@@ -116,6 +116,46 @@ func reflectHas(vmInstance *vm.VM, target vm.Value, key vm.Value) (bool, error) 
 		}
 		return false, nil
 
+	case vm.TypeRegExp:
+		// RegExp: "lastIndex" lives on the RegExpObject itself (writable,
+		// non-configurable - see reflectDeleteProperty's TypeRegExp case),
+		// not in the side table. Then the side table (OwnPropertiesTable -
+		// user-assigned own properties), then this instance's own
+		// [[Prototype]] chain - a subclass's RegExp.prototype
+		// (RegExpObject.prototype, set "for subclassing" per its field
+		// comment) when overridden, or vmInstance.RegExpPrototype itself
+		// otherwise - for inherited methods (test/exec) and accessors
+		// (source/flags/global/...), and (for a symbol key)
+		// @@match/@@matchAll/@@replace/@@search/@@split (pkg/builtins/
+		// regexp_init.go) - mirrors OpIn's TypeRegExp case (pkg/vm/vm.go).
+		re := target.AsRegExpObject()
+		if !isSym && name == "lastIndex" {
+			return true, nil
+		}
+		if props := vm.OwnPropertiesTable(target); props != nil {
+			if isSym {
+				if props.HasOwnByKey(propKey) {
+					return true, nil
+				}
+			} else if props.HasOwn(name) {
+				return true, nil
+			}
+		}
+		proto := vm.Undefined
+		if re != nil {
+			proto = re.GetPrototype()
+		}
+		if !proto.IsObject() {
+			proto = vmInstance.RegExpPrototype
+		}
+		if !proto.IsObject() {
+			return false, nil
+		}
+		if isSym {
+			return vmInstance.HasPropertyOnGivenPrototypeChain(proto, propKey), nil
+		}
+		return proto.AsPlainObject().Has(name), nil
+
 	case vm.TypeArguments:
 		// Mirrors OpIn's own TypeArguments case (pkg/vm/vm.go) exactly -
 		// including its non-symbol-only scope; a symbol key on an
@@ -184,9 +224,7 @@ func reflectHas(vmInstance *vm.VM, target vm.Value, key vm.Value) (bool, error) 
 		return vmInstance.HasFunctionPrototypeProperty(name), nil
 	}
 
-	// Not (yet) handled: RegExp (an own side-table property exists via
-	// OwnPropertiesTable, but RegExpPrototype's fallback isn't wired up
-	// here), WeakMap/WeakSet/WeakRef/FinalizationRegistry,
+	// Not (yet) handled: WeakMap/WeakSet/WeakRef/FinalizationRegistry,
 	// Generator/AsyncGenerator. Each answers false unconditionally, same
 	// as before this fix - a real gap, not silently implied covered by a
 	// blanket default (effectiveBuiltinPrototype, the obvious-looking

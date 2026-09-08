@@ -2782,8 +2782,13 @@ func (c *Checker) isObjectType(t types.Type) bool {
 		// Type parameters could be objects, allow them (this might need refinement)
 		return true
 	default:
-		// Check for any type that could represent an object
-		return t == types.Any
+		// RegExp is a real ordinary object at runtime, but the checker
+		// models it as a distinct *types.Primitive marker (see
+		// pkg/types/primitive.go) rather than an *types.ObjectType, so it
+		// needs its own case here - otherwise `"test" in /x/` was rejected
+		// at check time before the 'in' operator's own object-ness fix in
+		// the VM (OpIn, pkg/vm/vm.go) ever ran.
+		return t == types.Any || t == types.RegExp
 	}
 }
 

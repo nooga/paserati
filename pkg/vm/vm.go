@@ -3124,7 +3124,8 @@ startExecution:
 			if objType != TypeObject && objType != TypeDictObject && objType != TypeArray &&
 				objType != TypeFunction && objType != TypeNativeFunctionWithProps && objType != TypeProxy &&
 				objType != TypeClosure && objType != TypeNativeFunction && objType != TypeBoundFunction &&
-				objType != TypeSet && objType != TypeMap && objType != TypeArguments && objType != TypePromise {
+				objType != TypeSet && objType != TypeMap && objType != TypeArguments && objType != TypePromise &&
+				objType != TypeRegExp {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot use 'in' operator to search for '%s' in %s", propVal.ToString(), objVal.Type().String()))
 				if vm.frameCount == 0 || vm.unwindingCrossedNative {
@@ -3218,6 +3219,44 @@ startExecution:
 					if proto.IsObject() {
 						for cur := proto.AsPlainObject(); cur != nil; {
 							if _, ok := cur.GetOwnByKey(NewSymbolKey(propVal)); ok {
+								hasProperty = true
+								break
+							}
+							pv := cur.GetPrototype()
+							if !pv.IsObject() {
+								break
+							}
+							cur = pv.AsPlainObject()
+						}
+					}
+				case TypeRegExp:
+					// Own side-table symbol property first, then walk the
+					// prototype chain starting from this instance's own
+					// [[Prototype]] (a subclass's RegExp.prototype, set via
+					// RegExpObject.prototype - "Per-instance [[Prototype]]
+					// override for subclassing" per its field comment - or
+					// vm.RegExpPrototype itself when unset). RegExp.prototype
+					// carries @@match/@@matchAll/@@replace/@@search/@@split
+					// (pkg/builtins/regexp_init.go), so `Symbol.match in /x/`
+					// must find them the same way Node does.
+					symKey := NewSymbolKey(propVal)
+					regexObj := objVal.AsRegExpObject()
+					if regexObj != nil && regexObj.Properties != nil {
+						if _, ok := regexObj.Properties.GetOwnByKey(symKey); ok {
+							hasProperty = true
+							break
+						}
+					}
+					proto := Undefined
+					if regexObj != nil {
+						proto = regexObj.GetPrototype()
+					}
+					if !proto.IsObject() {
+						proto = vm.RegExpPrototype
+					}
+					if proto.IsObject() {
+						for cur := proto.AsPlainObject(); cur != nil; {
+							if _, ok := cur.GetOwnByKey(symKey); ok {
 								hasProperty = true
 								break
 							}
@@ -3558,6 +3597,35 @@ startExecution:
 					// Promises don't have user-accessible own properties, only internal state
 					if vm.PromisePrototype.IsObject() {
 						hasProperty = vm.PromisePrototype.AsPlainObject().Has(propKey)
+					}
+				case TypeRegExp:
+					// RegExp: "lastIndex" is a real own property that lives on
+					// the RegExpObject itself (writable, non-configurable - see
+					// reflectDeleteProperty's TypeRegExp case), not in the
+					// side table. Then the side table (user-assigned own
+					// properties, the same one Object.freeze/seal use), then
+					// this instance's own [[Prototype]] chain - a subclass's
+					// RegExp.prototype (RegExpObject.prototype, set "for
+					// subclassing" per its field comment) when overridden, or
+					// vm.RegExpPrototype itself otherwise - for inherited
+					// methods (test/exec) and accessors (source/flags/
+					// global/...).
+					regexObj := objVal.AsRegExpObject()
+					if propKey == "lastIndex" {
+						hasProperty = true
+					} else if regexObj != nil && regexObj.Properties != nil && regexObj.Properties.HasOwn(propKey) {
+						hasProperty = true
+					} else {
+						proto := Undefined
+						if regexObj != nil {
+							proto = regexObj.GetPrototype()
+						}
+						if !proto.IsObject() {
+							proto = vm.RegExpPrototype
+						}
+						if proto.IsObject() {
+							hasProperty = proto.AsPlainObject().Has(propKey)
+						}
 					}
 				default:
 					// Non-object RHS - shouldn't reach here due to check above
@@ -21026,8 +21094,24 @@ func (vm *VM) proxyHasPropertyFallback(target Value, propKey string) bool {
 				return true
 			}
 		}
-		if vm.RegExpPrototype.Type() == TypeObject {
-			return vm.RegExpPrototype.AsPlainObject().Has(propKey)
+		// Walk this instance's own [[Prototype]] chain - a subclass's
+		// RegExp.prototype (RegExpObject.prototype, "for subclassing" per
+		// its field comment) when overridden, or vm.RegExpPrototype
+		// otherwise - matching OpIn's TypeRegExp case above and
+		// reflectHas's (pkg/builtins/reflect_has.go), which recurses back
+		// into this same fallback via proxyReflectHas. Hardcoding
+		// vm.RegExpPrototype here (as this used to) made a Proxy wrapping
+		// a RegExp subclass disagree with a direct `in`/Reflect.has on the
+		// same subclass instance for a method the subclass itself adds.
+		proto := Undefined
+		if regexObj != nil {
+			proto = regexObj.GetPrototype()
+		}
+		if !proto.IsObject() {
+			proto = vm.RegExpPrototype
+		}
+		if proto.IsObject() {
+			return proto.AsPlainObject().Has(propKey)
 		}
 		return false
 	case TypeFunction:
