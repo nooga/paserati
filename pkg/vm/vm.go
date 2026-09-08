@@ -8783,8 +8783,21 @@ startExecution:
 				if !isValidArrayIndex {
 					// Handle Symbol keys directly
 					if indexVal.Type() == TypeSymbol {
+						frame.ip = ip
 						if ok, status, res := vm.opSetPropSymbol(ip, &registers[baseReg], indexVal, &valueVal); !ok {
-							return status, res
+							// A thrown exception a handler caught leaves
+							// vm.unwinding false - reload the frame and keep
+							// going rather than aborting the whole run (see
+							// OpSetProp's dot-notation dispatch, and the
+							// TypeObject/callable branch below, for the same
+							// pattern). Without this check, e.g. assigning
+							// through a getter-only accessor on a Function's
+							// symbol-keyed property in strict mode threw
+							// uncatchably even from inside a try/catch.
+							if status != InterpretOK && vm.unwinding {
+								return status, res
+							}
+							goto reloadFrame
 						}
 						continue
 					}
@@ -8804,8 +8817,12 @@ startExecution:
 						}
 						// Per ECMAScript ToPropertyKey: if ToPrimitive returns a Symbol, use it directly
 						if primitiveVal.Type() == TypeSymbol {
+							frame.ip = ip
 							if ok, status, res := vm.opSetPropSymbol(ip, &registers[baseReg], primitiveVal, &valueVal); !ok {
-								return status, res
+								if status != InterpretOK && vm.unwinding {
+									return status, res
+								}
+								goto reloadFrame
 							}
 							continue
 						}
@@ -8813,8 +8830,9 @@ startExecution:
 					} else {
 						key = indexVal.ToString()
 					}
+					frame.ip = ip
 					if ok, status, res := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
-						if status != InterpretOK {
+						if status != InterpretOK && vm.unwinding {
 							return status, res
 						}
 						goto reloadFrame
@@ -8912,8 +8930,9 @@ startExecution:
 						// Convert index to string for property key
 						key := fmt.Sprintf("%d", idx)
 						// Use opSetProp to handle property setting with accessor awareness
+						frame.ip = ip
 						if ok, status, res := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
-							if status != InterpretOK {
+							if status != InterpretOK && vm.unwinding {
 								return status, res
 							}
 							goto reloadFrame
@@ -8950,8 +8969,17 @@ startExecution:
 						// Skip setting silently (spec-incomplete structure)
 						continue
 					}
+					frame.ip = ip
 					if ok, status, res := vm.opSetPropSymbol(ip, &registers[baseReg], indexVal, &valueVal); !ok {
-						return status, res
+						// Same unwinding check as the callable branch below -
+						// without it, a thrown exception (e.g. strict-mode
+						// assignment through a getter-only symbol-keyed
+						// accessor) aborted the whole run even from inside a
+						// try/catch that should have caught it.
+						if status != InterpretOK && vm.unwinding {
+							return status, res
+						}
+						goto reloadFrame
 					}
 					continue
 				default:
@@ -8973,8 +9001,12 @@ startExecution:
 						}
 						// Per ECMAScript ToPropertyKey: if ToPrimitive returns a Symbol, use it directly
 						if primitiveVal.Type() == TypeSymbol {
+							frame.ip = ip
 							if ok, status, res := vm.opSetPropSymbol(ip, &registers[baseReg], primitiveVal, &valueVal); !ok {
-								return status, res
+								if status != InterpretOK && vm.unwinding {
+									return status, res
+								}
+								goto reloadFrame
 							}
 							continue
 						}
@@ -9007,8 +9039,9 @@ startExecution:
 				} else {
 					// Route through opSetProp which handles extensibility, writable,
 					// prototype chain accessors, and global object sync
+					frame.ip = ip
 					if ok, status, res := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
-						if status != InterpretOK {
+						if status != InterpretOK && vm.unwinding {
 							return status, res
 						}
 						goto reloadFrame
@@ -9025,19 +9058,33 @@ startExecution:
 					// Non-numeric index (Symbol, string, etc.) - set property via prototype chain
 					switch indexVal.Type() {
 					case TypeSymbol:
+						frame.ip = ip
 						if ok, status, value := vm.opSetPropSymbol(ip, &registers[baseReg], indexVal, &valueVal); !ok {
-							return status, value
+							// Same unwinding check as the TypeObject/callable
+							// case above - see its comment.
+							if status != InterpretOK && vm.unwinding {
+								return status, value
+							}
+							goto reloadFrame
 						}
 					case TypeString:
 						key := AsString(indexVal)
+						frame.ip = ip
 						if ok, status, value := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
-							return status, value
+							if status != InterpretOK && vm.unwinding {
+								return status, value
+							}
+							goto reloadFrame
 						}
 					default:
 						// Convert to string for property access
 						key := indexVal.ToString()
+						frame.ip = ip
 						if ok, status, value := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
-							return status, value
+							if status != InterpretOK && vm.unwinding {
+								return status, value
+							}
+							goto reloadFrame
 						}
 					}
 				}
@@ -9046,18 +9093,30 @@ startExecution:
 				// Proxy objects: route all property setting through the proxy protocol via opSetProp
 				switch indexVal.Type() {
 				case TypeSymbol:
+					frame.ip = ip
 					if ok, status, value := vm.opSetPropSymbol(ip, &registers[baseReg], indexVal, &valueVal); !ok {
-						return status, value
+						if status != InterpretOK && vm.unwinding {
+							return status, value
+						}
+						goto reloadFrame
 					}
 				case TypeString:
 					key := AsString(indexVal)
+					frame.ip = ip
 					if ok, status, value := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
-						return status, value
+						if status != InterpretOK && vm.unwinding {
+							return status, value
+						}
+						goto reloadFrame
 					}
 				default:
 					key := indexVal.ToString()
+					frame.ip = ip
 					if ok, status, value := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
-						return status, value
+						if status != InterpretOK && vm.unwinding {
+							return status, value
+						}
+						goto reloadFrame
 					}
 				}
 

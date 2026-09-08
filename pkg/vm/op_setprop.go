@@ -337,7 +337,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			fn.Properties.DefineOwnProperty("prototype", *valueToSet, &w, &e, &c)
 			return true, InterpretOK, *valueToSet
 		}
-		return vm.setOwnChecked(fn.Properties, propName, *valueToSet)
+		return vm.setOwnChecked(fn.Properties, propName, *objVal, *valueToSet)
 	case TypeClosure:
 		closure := AsClosure(*objVal)
 		// Use closure's own Properties to avoid sharing with other closures using same FunctionObject
@@ -429,7 +429,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			closure.Properties.DefineOwnProperty("prototype", *valueToSet, &w, &e, &c)
 			return true, InterpretOK, *valueToSet
 		}
-		return vm.setOwnChecked(closure.Properties, propName, *valueToSet)
+		return vm.setOwnChecked(closure.Properties, propName, *objVal, *valueToSet)
 	case TypeNativeFunctionWithProps:
 		nfp := objVal.AsNativeFunctionWithProps()
 		if nfp != nil {
@@ -444,7 +444,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			if nfp.Properties == nil {
 				nfp.Properties = newPropertiesTable()
 			}
-			return vm.setOwnChecked(nfp.Properties, propName, *valueToSet)
+			return vm.setOwnChecked(nfp.Properties, propName, *objVal, *valueToSet)
 		}
 	case TypeNativeFunction:
 		nf := objVal.AsNativeFunction()
@@ -459,7 +459,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			if nf.Properties == nil {
 				nf.Properties = newPropertiesTable()
 			}
-			return vm.setOwnChecked(nf.Properties, propName, *valueToSet)
+			return vm.setOwnChecked(nf.Properties, propName, *objVal, *valueToSet)
 		}
 	}
 
@@ -470,7 +470,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		}
 		bf := objVal.AsBoundFunction()
 		if bf.Properties != nil {
-			return vm.setOwnChecked(bf.Properties, propName, *valueToSet)
+			return vm.setOwnChecked(bf.Properties, propName, *objVal, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	}
@@ -951,7 +951,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			if regex.Properties == nil {
 				regex.Properties = newPropertiesTable()
 			}
-			return vm.setOwnChecked(regex.Properties, propName, *valueToSet)
+			return vm.setOwnChecked(regex.Properties, propName, *objVal, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	case TypeMap:
@@ -961,7 +961,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			if mapObj.Properties == nil {
 				mapObj.Properties = newPropertiesTable()
 			}
-			return vm.setOwnChecked(mapObj.Properties, propName, *valueToSet)
+			return vm.setOwnChecked(mapObj.Properties, propName, *objVal, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	case TypeSet:
@@ -971,7 +971,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			if setObj.Properties == nil {
 				setObj.Properties = newPropertiesTable()
 			}
-			return vm.setOwnChecked(setObj.Properties, propName, *valueToSet)
+			return vm.setOwnChecked(setObj.Properties, propName, *objVal, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	case TypePromise:
@@ -982,7 +982,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			if promiseObj.Properties == nil {
 				promiseObj.Properties = newPropertiesTable()
 			}
-			return vm.setOwnChecked(promiseObj.Properties, propName, *valueToSet)
+			return vm.setOwnChecked(promiseObj.Properties, propName, *objVal, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	case TypeArrayBuffer:
@@ -1168,7 +1168,7 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 			if regex.Properties == nil {
 				regex.Properties = newPropertiesTable()
 			}
-			return vm.setOwnCheckedByKey(regex.Properties, NewSymbolKey(symKey), *valueToSet)
+			return vm.setOwnCheckedByKey(regex.Properties, NewSymbolKey(symKey), *objVal, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	}
@@ -1179,7 +1179,7 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 		if funcObj.Properties == nil {
 			funcObj.Properties = newPropertiesTable()
 		}
-		return vm.setOwnCheckedByKey(funcObj.Properties, NewSymbolKey(symKey), *valueToSet)
+		return vm.setOwnCheckedByKey(funcObj.Properties, NewSymbolKey(symKey), *objVal, *valueToSet)
 	}
 
 	// Closure objects: store symbol properties on their Properties object
@@ -1188,7 +1188,7 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 		if closure.Properties == nil {
 			closure.Properties = newPropertiesTable()
 		}
-		return vm.setOwnCheckedByKey(closure.Properties, NewSymbolKey(symKey), *valueToSet)
+		return vm.setOwnCheckedByKey(closure.Properties, NewSymbolKey(symKey), *objVal, *valueToSet)
 	}
 
 	// Array objects: store symbol properties directly on the array
@@ -1217,7 +1217,7 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 	switch objVal.Type() {
 	case TypeMap, TypeSet, TypePromise, TypeBoundFunction, TypeNativeFunctionWithProps, TypeNativeFunction:
 		if props := EnsureOwnPropertiesTable(*objVal); props != nil {
-			return vm.setOwnCheckedByKey(props, NewSymbolKey(symKey), *valueToSet)
+			return vm.setOwnCheckedByKey(props, NewSymbolKey(symKey), *objVal, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	}
