@@ -2089,6 +2089,23 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				}
 			}
 		}
+	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise:
+		// Same side table as the exotic kinds above (OwnPropertiesTable,
+		// pkg/vm/properties_table.go) - this case was missing entirely, so
+		// Object.keys always came back empty for these four kinds even
+		// after a custom own property was defined on one (e.g. r.custom =
+		// 42, or Object.defineProperty once that gap is fixed too).
+		// RegExp's "lastIndex" never appears here: it's a real Go field on
+		// RegExpObject, not a side-table entry, and it's non-enumerable in
+		// any case (Object.getOwnPropertyDescriptor's TypeRegExp case,
+		// same file).
+		if props := vm.OwnPropertiesTable(obj); props != nil {
+			for _, key := range props.OwnKeys() {
+				if _, _, en, _, ok := props.GetOwnDescriptor(key); ok && en {
+					keysArray.Append(vm.NewString(key))
+				}
+			}
+		}
 	}
 
 	return keys, nil
@@ -4050,6 +4067,67 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 				return vm.Undefined, definePropertyRejected(vmInstance, propName, propSym, keyIsSymbol)
 			}
 		}
+	} else if obj.Type() == vm.TypeRegExp || obj.Type() == vm.TypeMap || obj.Type() == vm.TypeSet || obj.Type() == vm.TypePromise {
+		// These exotic kinds keep their ordinary own properties in the same
+		// lazily-allocated side table Function/Closure use above
+		// (OwnPropertiesTable/EnsureOwnPropertiesTable, pkg/vm/
+		// properties_table.go, shared by ownPropertiesSlot's switch) - this
+		// branch was missing entirely, so a fresh RegExp/Map/Set/Promise
+		// (no table yet - the common case, since nothing else forces one
+		// into existence first) made Object.defineProperty/
+		// Reflect.defineProperty silently do nothing while still returning
+		// the object as if it had succeeded.
+		//
+		// RegExp's "lastIndex" is excluded: it is a real Go field on
+		// RegExpObject (see reflectDeleteProperty's TypeRegExp case -
+		// {writable: true, configurable: false}), not a side-table entry -
+		// a table write here would create a second, disconnected
+		// "lastIndex" that shadows nothing real. Redefining lastIndex
+		// through defineProperty remains a pre-existing, untouched gap
+		// (still the same no-op it already was, not a new regression).
+		if obj.Type() == vm.TypeRegExp && !keyIsSymbol && propName == "lastIndex" {
+			// no-op - see comment above.
+		} else if props := vm.EnsureOwnPropertiesTable(obj); props != nil {
+			isAccessor0 := false
+			if keyIsSymbol {
+				if _, _, _, _, ok := props.GetOwnAccessorByKey(vm.NewSymbolKey(propSym)); ok {
+					isAccessor0 = true
+				}
+			} else if _, _, _, _, ok := props.GetOwnAccessor(propName); ok {
+				isAccessor0 = true
+			}
+			// Preserve the existing value when the descriptor doesn't
+			// specify one and isn't converting to/from an accessor -
+			// DefineOwnProperty otherwise overwrites an existing data
+			// property's value with the zero Value{} passed here (mirrors
+			// the TypeObject branch above).
+			if !hasValue && !isAccessor0 && !(hasGetter || hasSetter) {
+				if keyIsSymbol {
+					if existingVal, ok := props.GetOwnByKey(vm.NewSymbolKey(propSym)); ok {
+						value = existingVal
+					}
+				} else if existingVal, ok := props.GetOwn(propName); ok {
+					value = existingVal
+				}
+			}
+			var defined bool
+			if hasGetter || hasSetter {
+				if keyIsSymbol {
+					defined = props.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				} else {
+					defined = props.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				}
+			} else {
+				if keyIsSymbol {
+					defined = props.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+				} else {
+					defined = props.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+				}
+			}
+			if !defined {
+				return vm.Undefined, definePropertyRejected(vmInstance, propName, propSym, keyIsSymbol)
+			}
+		}
 	}
 
 	return obj, nil
@@ -4795,6 +4873,53 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
 				descriptor.SetOwn("configurable", vm.BooleanValue(c))
 				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+		}
+	}
+
+	// Map/Set/Promise have no intrinsic own properties of their own (unlike
+	// RegExp's "lastIndex" above) - only whatever a program has defined on
+	// the same side table via Object/Reflect.defineProperty or a plain
+	// assignment (OwnPropertiesTable, pkg/vm/properties_table.go). This case
+	// was missing entirely, so Object.getOwnPropertyDescriptor always
+	// answered undefined for a custom property on one of these three kinds.
+	if obj.Type() == vm.TypeMap || obj.Type() == vm.TypeSet || obj.Type() == vm.TypePromise {
+		if props := vm.OwnPropertiesTable(obj); props != nil {
+			if keyIsSymbol {
+				symKey := vm.NewSymbolKey(propSym)
+				if g, s, e, c, ok := props.GetOwnAccessorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("get", g)
+					descriptor.SetOwn("set", s)
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				if v, w, e, c, ok := props.GetOwnDescriptorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", v)
+					descriptor.SetOwn("writable", vm.BooleanValue(w))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+			} else {
+				if g, s, e, c, ok := props.GetOwnAccessor(propName); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("get", g)
+					descriptor.SetOwn("set", s)
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				if v, w, e, c, ok := props.GetOwnDescriptor(propName); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", v)
+					descriptor.SetOwn("writable", vm.BooleanValue(w))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
 			}
 		}
 	}
