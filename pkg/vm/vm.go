@@ -5015,8 +5015,17 @@ startExecution:
 							}
 							hasProperty = result.IsTruthy()
 						} else {
-							// No has trap, fallback to target
-							hasProperty = checkNonProxyWithObj(proxy.target)
+							// No has trap, fallback to target.[[HasProperty]] -
+							// proxyHasPropertyFallback (not
+							// checkNonProxyWithObj, which - true to its
+							// name - stops at a TypeObject/TypeDictObject/
+							// TypePromise target and answers false for
+							// anything else, including a further-nested
+							// Proxy) so that inner proxy's own trap or
+							// fallback gets consulted instead of the
+							// with-object being treated as "doesn't have
+							// this property" outright.
+							hasProperty = vm.proxyHasPropertyFallback(proxy.target, propName)
 						}
 					} else {
 						hasProperty = checkNonProxyWithObj(withObj)
@@ -5079,13 +5088,15 @@ startExecution:
 									stillExists = result.IsTruthy()
 								}
 							} else {
-								// No has trap, check target
-								switch proxy.target.Type() {
-								case TypeObject:
-									stillExists = proxy.target.AsPlainObject().Has(propName)
-								case TypeDictObject:
-									stillExists = proxy.target.AsDictObject().Has(propName)
-								}
+								// No has trap, check target.[[HasProperty]] -
+								// proxyHasPropertyFallback (not a hand-rolled
+								// TypeObject/TypeDictObject-only switch) so a target
+								// that is itself a Proxy resolves correctly instead of
+								// being treated as "not present" outright, and so does
+								// every other target kind proxyHasPropertyFallback
+								// already covers (TypeArray, TypeMap, TypeSet,
+								// TypeRegExp, ... - see its own definition).
+								stillExists = vm.proxyHasPropertyFallback(proxy.target, propName)
 							}
 						}
 					}
@@ -5265,13 +5276,15 @@ startExecution:
 											hasProperty = result.IsTruthy()
 										}
 									} else {
-										// No has trap, check target
-										switch proxy.target.Type() {
-										case TypeObject:
-											hasProperty = proxy.target.AsPlainObject().Has(propName)
-										case TypeDictObject:
-											hasProperty = proxy.target.AsDictObject().Has(propName)
-										}
+									// No has trap, check target.[[HasProperty]] -
+									// proxyHasPropertyFallback (not a hand-rolled
+									// TypeObject/TypeDictObject-only switch) so a target
+									// that is itself a Proxy resolves correctly instead of
+									// being treated as "not present" outright, and so does
+									// every other target kind proxyHasPropertyFallback
+									// already covers (TypeArray, TypeMap, TypeSet,
+									// TypeRegExp, ... - see its own definition).
+									hasProperty = vm.proxyHasPropertyFallback(proxy.target, propName)
 									}
 								}
 							}
@@ -5461,16 +5474,13 @@ startExecution:
 							}
 							hasProperty = result.IsTruthy()
 						} else {
-							// No has trap, fallback to target
-							target := proxy.target
-							switch target.Type() {
-							case TypeObject:
-								hasProperty = target.AsPlainObject().Has(propName)
-							case TypeDictObject:
-								hasProperty = target.AsDictObject().Has(propName)
-							default:
-								hasProperty = false
-							}
+							// No has trap, fallback to target.[[HasProperty]] -
+							// proxyHasPropertyFallback (not a
+							// TypeObject/TypeDictObject-only switch) so a
+							// target that is itself a Proxy resolves
+							// correctly instead of being treated as "not
+							// present" outright.
+							hasProperty = vm.proxyHasPropertyFallback(proxy.target, propName)
 						}
 
 					case TypeObject:
@@ -5655,11 +5665,16 @@ startExecution:
 							}
 							hasProperty = result.IsTruthy()
 						} else {
-							// No has trap, check target
-							target := proxy.target
-							if target.Type() == TypeObject {
-								hasProperty = target.AsPlainObject().Has(propName)
-							}
+							// No has trap, check target.[[HasProperty]] -
+							// proxyHasPropertyFallback (not a bare
+							// TypeObject-only check) so a target that is itself a
+							// Proxy resolves correctly instead of being treated as
+							// "not present" outright, and so does every other
+							// target kind proxyHasPropertyFallback already covers
+							// (TypeDictObject, TypeArray, TypeMap, TypeSet,
+							// TypeRegExp, ... - see its own definition), not just
+							// TypeObject.
+							hasProperty = vm.proxyHasPropertyFallback(proxy.target, propName)
 						}
 					} else if withObj.Type() == TypeObject {
 						obj := withObj.AsPlainObject()
@@ -5775,10 +5790,18 @@ startExecution:
 						}
 						return result.IsTruthy(), false
 					} else {
-						// No has trap, fallback to target
-						if proxy.target.Type() == TypeObject {
-							return proxy.target.AsPlainObject().Has(propName), false
-						}
+						// No has trap, fallback to target.[[HasProperty]] -
+						// proxyHasPropertyFallback (not a bare `if
+						// target.Type() == TypeObject { ...Has... }`) so a
+						// target that is itself a Proxy (checking that inner
+						// proxy own has trap first) resolves correctly
+						// instead of being treated as "not present" outright,
+						// and so does every other target kind
+						// proxyHasPropertyFallback already covers
+						// (TypeDictObject, TypeArray, TypeMap, TypeSet,
+						// TypeRegExp, ... - see its own definition), not just
+						// TypeObject.
+						return vm.proxyHasPropertyFallback(proxy.target, propName), false
 					}
 				}
 				return false, false
@@ -5958,12 +5981,22 @@ startExecution:
 							}
 							stillExists = result.IsTruthy()
 						} else {
-							// No has trap, check on target
+							// No has trap, check on target - a TypeProxy
+							// target gets proxyHasPropertyFallback (which
+							// itself recurses into that inner proxy's own
+							// trap or fallback) instead of falling into the
+							// same "default: true" this switch's other
+							// unhandled kinds deliberately keep, so this
+							// step 2 check isn't left assuming a
+							// nested-Proxy binding is unconditionally
+							// "still there" without ever actually asking it.
 							switch proxy.target.Type() {
 							case TypeObject:
 								stillExists = proxy.target.AsPlainObject().Has(propName)
 							case TypeDictObject:
 								stillExists = proxy.target.AsDictObject().Has(propName)
+							case TypeProxy:
+								stillExists = vm.proxyHasPropertyFallback(proxy.target, propName)
 							default:
 								stillExists = true
 							}
@@ -6081,12 +6114,19 @@ startExecution:
 							}
 							stillExists = result.IsTruthy()
 						} else {
-							// No has trap, check on target
+							// No has trap, check on target - a TypeProxy
+							// target gets proxyHasPropertyFallback (which
+							// itself recurses into that inner proxy's own
+							// trap or fallback) instead of falling into the
+							// same "default: true" this switch's other
+							// unhandled kinds deliberately keep.
 							switch proxy.target.Type() {
 							case TypeObject:
 								stillExists = proxy.target.AsPlainObject().Has(propName)
 							case TypeDictObject:
 								stillExists = proxy.target.AsDictObject().Has(propName)
+							case TypeProxy:
+								stillExists = vm.proxyHasPropertyFallback(proxy.target, propName)
 							default:
 								stillExists = true
 							}
@@ -16649,16 +16689,13 @@ startExecution:
 						}
 					}
 				} else {
-					// No delete trap, fallback to target
-					if proxy.target.IsObject() {
-						if proxy.target.Type() == TypeObject {
-							po := proxy.target.AsPlainObject()
-							success = po.DeleteOwn(propName)
-						} else if proxy.target.Type() == TypeDictObject {
-							d := proxy.target.AsDictObject()
-							success = d.DeleteOwn(propName)
-						}
-					}
+					// No delete trap, fallback to target.[[Delete]] -
+					// proxyDeleteFallback (not a bare TypeObject/
+					// TypeDictObject-only check) so a target that is
+					// itself a Proxy (checking that inner proxy's own
+					// deleteProperty trap first) resolves correctly
+					// instead of `delete` silently doing nothing.
+					success = vm.proxyDeleteFallback(proxy.target, propName)
 				}
 			} else if obj.IsObject() {
 				if obj.Type() == TypeObject {
@@ -18039,17 +18076,31 @@ func (vm *VM) isUnscopable(withObj Value, propName string) (bool, bool) {
 			unscopablesVal = result
 			hasUnscopables = result.Type() != TypeUndefined
 		} else {
-			// No get trap, fallback to target
-			if proxy.target.Type() == TypeObject {
-				var err error
-				unscopablesVal, hasUnscopables, err = vm.GetSymbolPropertyWithGetter(proxy.target, vm.SymbolUnscopables)
-				if err != nil {
-					return false, true
-				}
-				if vm.unwinding {
-					return false, true
-				}
+			// No get trap, fallback to target.[[Get]] - via
+			// getSymbolPropertyWithReceiver (pkg/vm/vm_init.go, the
+			// symbol-key twin of getPropertyWithReceiver), not
+			// GetSymbolPropertyWithGetter, which - despite its name
+			// suggesting general symbol-property support - only ever
+			// handles a TypeObject or TypeRegExp obj directly and falls
+			// to "For non-objects, just return undefined" for anything
+			// else, TypeProxy included; it was ALSO wrongly assumed
+			// (by an earlier version of this fix, based on misreading an
+			// unrelated function's switch case while grepping the whole
+			// file) to already have Proxy support, so simply dropping the
+			// old `if proxy.target.Type() == TypeObject` guard here
+			// wasn't enough on its own - it still needed a helper that
+			// actually recurses through a further-nested Proxy target,
+			// which getSymbolPropertyWithReceiver already does (mirrors
+			// getPropertyWithReceiver's own TypeProxy case).
+			result, err := vm.getSymbolPropertyWithReceiver(proxy.target, vm.SymbolUnscopables, withObj)
+			if err != nil {
+				return false, true
 			}
+			if vm.unwinding {
+				return false, true
+			}
+			unscopablesVal = result
+			hasUnscopables = result.Type() != TypeUndefined
 		}
 
 	default:
@@ -21821,6 +21872,49 @@ func (vm *VM) proxyHasPropertyFallback(target Value, propKey string) bool {
 			return vm.ObjectPrototype.AsPlainObject().Has(propKey)
 		}
 		return false
+	default:
+		return false
+	}
+}
+
+// proxyDeleteFallback implements [[Delete]]'s fallback for a proxy target
+// when the outer proxy's own handler has no deleteProperty trap: per
+// ECMA-262 10.5.10 step 10, this delegates to target.[[Delete]](P) -
+// recursing if the target is itself a Proxy (checking that inner proxy's
+// own deleteProperty trap first, not just falling through further, the
+// same way proxyHasPropertyFallback just above already recurses for its
+// own analogous "has" case). Used by OpDeleteProp's Proxy case, which
+// used to only handle a TypeObject/TypeDictObject target directly - a
+// nested trap-less Proxy target (or any other kind) silently did nothing
+// (`delete` reporting whatever `success` defaulted to) instead of
+// resolving through it. Mirrors proxyHasPropertyFallback's own choice of
+// silently treating a thrown trap error as "did nothing" rather than
+// propagating it - an existing, established convention in this file for
+// this class of best-effort fallback helper, not something introduced
+// here.
+func (vm *VM) proxyDeleteFallback(target Value, propKey string) bool {
+	switch target.Type() {
+	case TypeProxy:
+		proxy := target.AsProxy()
+		if proxy.Revoked {
+			return false
+		}
+		if deleteTrap, ok := proxyGetTrap(proxy.handler, "deleteProperty"); ok && deleteTrap.Type() != TypeUndefined && deleteTrap.Type() != TypeNull {
+			if deleteTrap.IsCallable() {
+				trapArgs := []Value{proxy.target, NewString(propKey)}
+				result, err := vm.Call(deleteTrap, proxy.handler, trapArgs)
+				if err != nil {
+					return false
+				}
+				return result.IsTruthy()
+			}
+			return false
+		}
+		return vm.proxyDeleteFallback(proxy.target, propKey)
+	case TypeObject:
+		return target.AsPlainObject().DeleteOwn(propKey)
+	case TypeDictObject:
+		return target.AsDictObject().DeleteOwn(propKey)
 	default:
 		return false
 	}

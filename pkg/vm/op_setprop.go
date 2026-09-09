@@ -1116,8 +1116,18 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 			}
 			return true, InterpretOK, result
 		} else {
-			// No set trap, fallback to target - implement directly to avoid recursion
+			// No set trap: per spec, return target.[[Set]](P, V, Receiver) -
+			// mirrors opSetProp's own string-key TypeProxy recursion just
+			// above in this file (this symbol-key sibling never got the
+			// same fix): a target that is itself a Proxy used to fall
+			// straight to the `else { return true, InterpretOK,
+			// *valueToSet }` below and silently do nothing (not even
+			// write), instead of resolving through that inner proxy's own
+			// trap-or-fallback.
 			target := proxy.target
+			if target.Type() == TypeProxy {
+				return vm.opSetPropSymbol(ip, &target, symKey, valueToSet)
+			}
 			if target.Type() == TypeObject {
 				po := target.AsPlainObject()
 				key := NewSymbolKey(symKey)
