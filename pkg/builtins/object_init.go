@@ -2395,8 +2395,11 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return vmInstance.TypedArrayPrototype, nil
 		}
 	case vm.TypeArrayBuffer:
-		// For ArrayBuffers, return Object.prototype (ArrayBuffer doesn't have its own stored prototype)
-		return vmInstance.ObjectPrototype, nil
+		// For ArrayBuffers, return ArrayBuffer.prototype
+		return vmInstance.ArrayBufferPrototype, nil
+	case vm.TypeDataView:
+		// For DataViews, return DataView.prototype
+		return vmInstance.DataViewPrototype, nil
 	case vm.TypeSharedArrayBuffer:
 		// For SharedArrayBuffers, return SharedArrayBuffer.prototype
 		return vmInstance.SharedArrayBufferPrototype, nil

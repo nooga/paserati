@@ -4036,79 +4036,12 @@ startExecution:
 					ip = frame.ip
 					continue
 				}
-				var current Value
-
-				// Get the initial prototype based on type
-				// For built-in types, use the VM's prototype values
-				switch objVal.Type() {
-				case TypeObject:
-					current = objVal.AsPlainObject().GetPrototype()
-				case TypeDictObject:
-					current = objVal.AsDictObject().GetPrototype()
-				case TypeArray:
-					if p := objVal.AsArray().prototype; p.IsObject() {
-						current = p
-					} else {
-						current = vm.ArrayPrototype
-					}
-				case TypeRegExp:
-					current = vm.RegExpPrototype
-				case TypeMap:
-					if p := objVal.AsMap().prototype; p.IsObject() {
-						current = p
-					} else {
-						current = vm.MapPrototype
-					}
-				case TypeSet:
-					if p := objVal.AsSet().prototype; p.IsObject() {
-						current = p
-					} else {
-						current = vm.SetPrototype
-					}
-				case TypeWeakRef:
-					if p := objVal.AsWeakRef().GetPrototype(); p.IsObject() {
-						current = p
-					} else {
-						current = vm.WeakRefPrototype
-					}
-				case TypeFinalizationRegistry:
-					if p := objVal.AsFinalizationRegistry().GetPrototype(); p.IsObject() {
-						current = p
-					} else {
-						current = vm.FinalizationRegistryPrototype
-					}
-				case TypeArguments:
-					current = vm.ObjectPrototype // Arguments objects inherit from Object.prototype
-				case TypePromise:
-					current = vm.PromisePrototype
-				case TypeFunction:
-					current = vm.FunctionPrototype
-				case TypeClosure:
-					current = vm.FunctionPrototype
-				case TypeGenerator:
-					genObj := objVal.AsGenerator()
-					if genObj.Prototype != nil {
-						current = NewValueFromPlainObject(genObj.Prototype)
-					} else {
-						current = vm.GeneratorPrototype
-					}
-				case TypeAsyncGenerator:
-					asyncGenObj := objVal.AsAsyncGenerator()
-					if asyncGenObj.Prototype != nil {
-						current = NewValueFromPlainObject(asyncGenObj.Prototype)
-					} else {
-						current = vm.AsyncGeneratorPrototype
-					}
-				default:
-					current = Undefined
-				}
-
-				// Subclass-of-native instances carry a per-instance [[Prototype]]
-				// override (e.g. `class S extends Int8Array {}`); honor it over the
-				// type-based intrinsic default chosen above.
-				if ov, ok := vm.InstancePrototypeOverride(objVal); ok {
-					current = ov
-				}
+				// [[Prototype]] of the operand, honoring any per-instance override
+				// from subclassing a native constructor. vm.prototypeOf is the single
+				// place that knows every object kind's intrinsic prototype; a local
+				// type switch here previously omitted ArrayBuffer/SharedArrayBuffer/
+				// DataView/TypedArray/WeakMap/WeakSet and answered false for them.
+				current := vm.prototypeOf(objVal)
 
 				// Walk the prototype chain
 				for current.typ != TypeNull && current.typ != TypeUndefined {
