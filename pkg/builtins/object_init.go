@@ -3368,6 +3368,64 @@ func setObjectAssignTargetProperty(vmInstance *vm.VM, target vm.Value, key strin
 	return nil
 }
 
+// setObjectAssignTargetPropertyByKey is setObjectAssignTargetProperty for a
+// symbol key - backing Object.assign's own symbol-key copy loops below
+// (previously nonexistent: no source branch ever walked a symbol key at
+// all, so there was nothing to write here either - see objectAssignWithVM's
+// doc comment). Mirrors the string-key version's exact per-target-kind
+// scope: an accessor is only checked for a TypeObject target (the
+// string-key version doesn't check one for TypeArray or the callable
+// side-table kinds either - a separate, narrower, pre-existing limitation
+// this function deliberately doesn't widen).
+//
+// There is no PlainObject.SetOwnByKey (only the string-keyed SetOwn, which
+// itself implements "preserve existing writable/enumerable/configurable,
+// default a brand-new key to true/true/true"), so the TypeObject and
+// callable-side-table branches reproduce that same rule explicitly via
+// HasOwnByKey + DefineOwnPropertyByKey, matching vm.setOwnCheckedByKey's
+// identical pattern (pkg/vm/properties_table.go) for the same "ordinary
+// [[Set]], not Object.defineProperty" distinction that function's own doc
+// comment explains - and the identical pattern this session's Reflect.set
+// symbol-key fix (reflectCreateOrUpdateDataPropertyByKey) already used for
+// the same reason.
+func setObjectAssignTargetPropertyByKey(vmInstance *vm.VM, target vm.Value, sym vm.Value, value vm.Value) error {
+	key := vm.NewSymbolKey(sym)
+	switch target.Type() {
+	case vm.TypeObject:
+		plainTarget := target.AsPlainObject()
+		if _, setter, _, _, isAccessor := plainTarget.GetOwnAccessorByKey(key); isAccessor {
+			if setter.Type() == vm.TypeUndefined {
+				return nil // accessor with no setter: [[Set]] silently no-ops (non-strict)
+			}
+			_, err := vmInstance.Call(setter, target, []vm.Value{value})
+			return err
+		}
+		if plainTarget.HasOwnByKey(key) {
+			plainTarget.DefineOwnPropertyByKey(key, value, nil, nil, nil)
+		} else {
+			w, e, c := true, true, true
+			plainTarget.DefineOwnPropertyByKey(key, value, &w, &e, &c)
+		}
+	case vm.TypeDictObject:
+		// DictObjects have no symbol-keyed storage at all - matches every
+		// other DictObject-and-symbols case in this codebase.
+	case vm.TypeArray:
+		if symObj := sym.AsSymbolObject(); symObj != nil {
+			target.AsArray().SetSymbolProp(symObj, value)
+		}
+	case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
+		if props := vm.EnsureOwnPropertiesTable(target); props != nil {
+			if props.HasOwnByKey(key) {
+				props.DefineOwnPropertyByKey(key, value, nil, nil, nil)
+			} else {
+				w, e, c := true, true, true
+				props.DefineOwnPropertyByKey(key, value, &w, &e, &c)
+			}
+		}
+	}
+	return nil
+}
+
 func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
 		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
@@ -3439,6 +3497,49 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 					return vm.Undefined, err
 				}
 			}
+			// Symbol-keyed own properties - this loop never existed at all,
+			// so Object.assign silently dropped every symbol property a
+			// TypeObject source had, plain or accessor, regardless of
+			// enumerability (verified against Node, which copies an
+			// enumerable one and skips a non-enumerable one, exactly like
+			// the string-key loop just above):
+			//
+			//   const o = {}; const s = Symbol("x"); o[s] = "v";
+			//   Object.assign({}, o)[s]; // before: undefined - Node: "v"
+			//
+			// Same accessor-invokes-getter rule as the string-key loop
+			// (paserati#274) - OwnSymbolKeys() (unlike OwnKeys()) isn't
+			// pre-filtered to enumerable-only, since a symbol key can only
+			// become non-enumerable via an explicit Object.defineProperty,
+			// which is comparatively rare - so this filters explicitly per
+			// key instead.
+			for _, symVal := range plainObj.OwnSymbolKeys() {
+				symKey := vm.NewSymbolKey(symVal)
+				var value vm.Value
+				if getter, _, enumerable, _, isAccessor := plainObj.GetOwnAccessorByKey(symKey); isAccessor {
+					if !enumerable {
+						continue
+					}
+					if getter.Type() == vm.TypeUndefined {
+						value = vm.Undefined
+					} else {
+						var err error
+						value, err = vmInstance.Call(getter, source, nil)
+						if err != nil {
+							return vm.Undefined, err
+						}
+					}
+				} else {
+					v, _, enumerable, _, ok := plainObj.GetOwnDescriptorByKey(symKey)
+					if !ok || !enumerable {
+						continue
+					}
+					value = v
+				}
+				if err := setObjectAssignTargetPropertyByKey(vmInstance, target, symVal, value); err != nil {
+					return vm.Undefined, err
+				}
+			}
 		} else if source.Type() == vm.TypeDictObject {
 			dictObj := source.AsDictObject()
 			for _, key := range dictObj.OwnKeys() {
@@ -3478,6 +3579,113 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				}
 				key := strconv.Itoa(idx)
 				if err := setObjectAssignTargetProperty(vmInstance, target, key, value); err != nil {
+					return vm.Undefined, err
+				}
+			}
+			// Named (non-index) accessor properties, e.g.
+			// Object.defineProperty(arr, "foo", {get, set, enumerable}) -
+			// stored in getters/setters, never in `properties` (see
+			// ArrayObject.DefineAccessorProperty's own doc comment), so the
+			// named-data loop just below can't see these at all. This whole
+			// branch - named string properties on an array source, accessor
+			// or plain - never existed prior to this fix: Object.assign(
+			// {}, arr) only ever copied indexed elements, silently dropping
+			// anything set via `arr.foo = ...` or Object.defineProperty:
+			//
+			//   const arr = [1, 2]; arr.foo = "bar";
+			//   Object.assign({}, arr).foo; // before: undefined - Node: "bar"
+			//
+			// AccessorKeys() can also report a numeric-index key (an
+			// accessor installed AT an array index via Object.defineProperty
+			// - ParseArrayIndex skips those here since the dense/sparse
+			// index loops above already own that key space (though neither
+			// of those loops actually invokes an index accessor's getter
+			// today - a separate, narrower, pre-existing gap not touched by
+			// this fix; see arraySparseIndexValue's own accessor handling
+			// for the sparse-index case, which DOES get this right - the
+			// gap is specific to the DENSE-range loop above, whose
+			// arrObj.Get(i) reads straight from `elements` with no accessor
+			// check at all). Deliberately vm.ParseArrayIndex, NOT
+			// vm.LooksLikeArrayIndex: the latter has no upper bound, so a key
+			// like "4294967295" (past the 2^32-2 array-index ceiling) would
+			// look like an index here and get skipped, while arraySparseIndices'
+			// own vm.ParseArrayIndex-based filter (used below) also rejects it
+			// as too big - the two filters must use the SAME predicate or a
+			// key can fall in the gap between them and vanish entirely.
+			for _, name := range arrObj.AccessorKeys() {
+				if _, isIndex := vm.ParseArrayIndex(name); isIndex {
+					continue
+				}
+				getter, _, enumerable, _, isAccessor := arrObj.GetOwnAccessor(name)
+				if !isAccessor || !enumerable {
+					continue
+				}
+				var value vm.Value
+				if getter.Type() == vm.TypeUndefined {
+					value = vm.Undefined
+				} else {
+					var err error
+					value, err = vmInstance.Call(getter, source, nil)
+					if err != nil {
+						return vm.Undefined, err
+					}
+				}
+				if err := setObjectAssignTargetProperty(vmInstance, target, name, value); err != nil {
+					return vm.Undefined, err
+				}
+			}
+			// Named (non-index) plain data properties, e.g. `arr.foo = "bar"`.
+			// NamedPropertyKeys() (despite its doc comment) also returns any
+			// sparse-index key sharing the same `properties` map - already
+			// handled above via arraySparseIndices - so vm.ParseArrayIndex
+			// filters those back out here, the exact same predicate
+			// arraySparseIndices itself uses to find only the ones that ARE
+			// indices (not vm.LooksLikeArrayIndex, which has no upper bound
+			// and would leave an out-of-range numeric key like
+			// "4294967295" matched by neither filter - see the AccessorKeys
+			// loop above for the full explanation).
+			for _, name := range arrObj.NamedPropertyKeys() {
+				if _, isIndex := vm.ParseArrayIndex(name); isIndex {
+					continue
+				}
+				value, enumerable, ok := arrObj.GetNamedPropertyDescriptor(name)
+				if !ok || !enumerable {
+					continue
+				}
+				if err := setObjectAssignTargetProperty(vmInstance, target, name, value); err != nil {
+					return vm.Undefined, err
+				}
+			}
+			// Symbol-keyed properties, plain or accessor (see
+			// ArrayDefineOwnSymbolProperty, pkg/vm/array_props.go) - same
+			// gap and same fix shape as the TypeObject source branch's own
+			// symbol loop above, just against ArrayObject's own symbol
+			// storage (GetOwnSymbolAccessor/GetSymbolPropertyDescriptor)
+			// instead of PlainObject's.
+			for _, symVal := range arrObj.OwnSymbolKeys() {
+				symObj := symVal.AsSymbolObject()
+				var value vm.Value
+				if getter, _, enumerable, _, isAccessor := arrObj.GetOwnSymbolAccessor(symObj); isAccessor {
+					if !enumerable {
+						continue
+					}
+					if getter.Type() == vm.TypeUndefined {
+						value = vm.Undefined
+					} else {
+						var err error
+						value, err = vmInstance.Call(getter, source, nil)
+						if err != nil {
+							return vm.Undefined, err
+						}
+					}
+				} else {
+					v, desc, ok := arrObj.GetSymbolPropertyDescriptor(symObj)
+					if !ok || !desc.Enumerable {
+						continue
+					}
+					value = v
+				}
+				if err := setObjectAssignTargetPropertyByKey(vmInstance, target, symVal, value); err != nil {
 					return vm.Undefined, err
 				}
 			}
