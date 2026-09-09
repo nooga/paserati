@@ -156,14 +156,14 @@ func reflectOrdinarySet(vmInstance *vm.VM, target vm.Value, propKey string, valu
 			// chain - per 10.1.9.2 step 4, the actual write still targets
 			// Receiver, not wherever this descriptor was found (which may
 			// be `target` itself, or an ancestor `target` inherits from).
-			return reflectCreateOrUpdateDataProperty(receiver, propKey, value)
+			return reflectCreateOrUpdateDataProperty(vmInstance, receiver, propKey, value)
 		}
 		current = vmInstance.PrototypeOf(current)
 	}
 	// Not found anywhere in target's chain - 10.1.9 step 4's implicit
 	// {value: undefined, writable: true, enumerable: true, configurable:
 	// true} default takes the same data-write path.
-	return reflectCreateOrUpdateDataProperty(receiver, propKey, value)
+	return reflectCreateOrUpdateDataProperty(vmInstance, receiver, propKey, value)
 }
 
 // reflectCreateOrUpdateDataProperty implements the receiver-side half of
@@ -172,7 +172,23 @@ func reflectOrdinarySet(vmInstance *vm.VM, target vm.Value, propKey string, valu
 // same key (an accessor or non-writable data property there refuses the
 // write - verified against Node for both), and otherwise create or
 // overwrite receiver's own data property with the new value.
-func reflectCreateOrUpdateDataProperty(receiver vm.Value, propKey string, value vm.Value) (bool, error) {
+//
+// A TypeProxy receiver is real, common code here, not a rare edge case:
+// Reflect.set defaults `receiver` to `target`, so
+// Reflect.set(someProxy, key, value) - the single most natural way to call
+// Reflect.set on a Proxy at all - reaches this function with a Proxy
+// receiver on its very first, simplest invocation. reflectGetOwnAccessorGeneric
+// and reflectGetOwnDataDescriptorGeneric don't special-case TypeProxy (their
+// `default` branch reports "not found", since OwnPropertiesTable doesn't
+// cover Proxy), so those two pre-checks above the switch are a no-op for a
+// Proxy receiver rather than a real 10.1.9.2 step 4.c
+// Receiver.[[GetOwnProperty]](P) check - verified against Node that this
+// doesn't change the outcome for the common "receiver has no existing
+// descriptor" case, which is what reflectProxyDefineDataProperty's own
+// getOwnPropertyDescriptor trap invocation (for side-effect parity, not
+// result-branching - matching this file's pre-existing level of rigor for
+// that trap) also confirms.
+func reflectCreateOrUpdateDataProperty(vmInstance *vm.VM, receiver vm.Value, propKey string, value vm.Value) (bool, error) {
 	// Per 10.1.9.2 step 4.a: if Receiver is not an object, return false -
 	// verified against Node: Reflect.set({}, "y", 5, 42) is false, not a
 	// throw.
@@ -217,6 +233,8 @@ func reflectCreateOrUpdateDataProperty(receiver vm.Value, propKey string, value 
 		}
 		arr.SetOwn(propKey, value)
 		return true, nil
+	case vm.TypeProxy:
+		return reflectProxyDefineDataProperty(vmInstance, receiver, propKey, value)
 	default:
 		// A callable or other exotic receiver kind (Function/Closure/
 		// NativeFunction/.../Promise) - use its shared side-table, the
@@ -228,6 +246,215 @@ func reflectCreateOrUpdateDataProperty(receiver vm.Value, propKey string, value 
 		}
 		return false, nil
 	}
+}
+
+// reflectProxyDefineDataProperty implements the receiver-side write
+// (10.1.9.2's CreateDataProperty(Receiver, ...) step, generalized to an
+// "update or create" per reflectCreateOrUpdateDataProperty's own contract)
+// when `receiver` turns out to be a Proxy - i.e. Receiver.[[DefineOwnProperty]]
+// (10.5.6): the handler's `defineProperty` trap if present, else delegate
+// straight to CreateDataProperty on the proxy's own target (which may
+// itself be another Proxy, handled by the recursive call into
+// reflectCreateOrUpdateDataProperty below).
+//
+// Also invokes the handler's `getOwnPropertyDescriptor` trap first, if
+// present, purely for spec/side-effect parity with what this function
+// supersedes (the old inline "receiver is a distinct Proxy" block this
+// commit removes from the "set" closure) - verified against Node that its
+// result doesn't change the outcome for the common case of a receiver with
+// no pre-existing descriptor for this key, which is the only case this
+// function (and its predecessor) actually handles; a receiver-Proxy with a
+// genuinely conflicting existing descriptor is not modeled here, matching
+// the prior code's own scope.
+func reflectProxyDefineDataProperty(vmInstance *vm.VM, proxyVal vm.Value, propKey string, value vm.Value) (bool, error) {
+	proxy := proxyVal.AsProxy()
+	if proxy.Revoked {
+		return false, vmInstance.NewTypeError("Cannot perform 'defineProperty' on a revoked Proxy")
+	}
+	handler := proxy.Handler()
+	target := proxy.Target()
+
+	// GetMethod(handler, "getOwnPropertyDescriptor"): side-effect-only call,
+	// matching the block this supersedes - its result isn't consulted.
+	var getOwnPropDescTrap vm.Value
+	var hasGetOwnPropDesc bool
+	switch handler.Type() {
+	case vm.TypeObject:
+		getOwnPropDescTrap, hasGetOwnPropDesc = handler.AsPlainObject().Get("getOwnPropertyDescriptor")
+	case vm.TypeDictObject:
+		getOwnPropDescTrap, hasGetOwnPropDesc = handler.AsDictObject().Get("getOwnPropertyDescriptor")
+	}
+	if hasGetOwnPropDesc && getOwnPropDescTrap.Type() != vm.TypeUndefined && getOwnPropDescTrap.Type() != vm.TypeNull {
+		if !getOwnPropDescTrap.IsCallable() {
+			return false, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap is not a function")
+		}
+		if _, err := vmInstance.Call(getOwnPropDescTrap, handler, []vm.Value{target, vm.NewString(propKey)}); err != nil {
+			return false, err
+		}
+	}
+
+	// GetMethod(handler, "defineProperty"): an inherited trap counts,
+	// undefined/null mean "no trap" - mirrors reflectHas's proxyReflectHas
+	// (reflect_has.go), since proxyGetTrap (pkg/vm) is unexported and
+	// unreachable from this package.
+	var defineTrap vm.Value
+	var hasDefineTrap bool
+	switch handler.Type() {
+	case vm.TypeObject:
+		defineTrap, hasDefineTrap = handler.AsPlainObject().Get("defineProperty")
+	case vm.TypeDictObject:
+		defineTrap, hasDefineTrap = handler.AsDictObject().Get("defineProperty")
+	}
+	if !hasDefineTrap || defineTrap.Type() == vm.TypeUndefined || defineTrap.Type() == vm.TypeNull {
+		// No trap: delegate straight to CreateDataProperty on the
+		// underlying target - recurses through this same generic function
+		// for whatever kind `target` turns out to be, including yet
+		// another Proxy.
+		return reflectCreateOrUpdateDataProperty(vmInstance, target, propKey, value)
+	}
+	if !defineTrap.IsCallable() {
+		return false, vmInstance.NewTypeError("'defineProperty' on proxy: trap is not a function")
+	}
+
+	// CreateDataProperty's descriptor is always {value: V, writable: true,
+	// enumerable: true, configurable: true} (7.3.5) - not whatever
+	// descriptor `target`'s own property (if any) already had, since this
+	// function models the "property doesn't exist on receiver yet" case.
+	descObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	descObj.SetOwn("value", value)
+	descObj.SetOwn("writable", vm.BooleanValue(true))
+	descObj.SetOwn("enumerable", vm.BooleanValue(true))
+	descObj.SetOwn("configurable", vm.BooleanValue(true))
+	result, err := vmInstance.Call(defineTrap, handler, []vm.Value{target, vm.NewString(propKey), vm.NewValueFromPlainObject(descObj)})
+	if err != nil {
+		return false, err
+	}
+	return result.IsTruthy(), nil
+}
+
+// reflectProxySet implements Reflect.set's Proxy-TARGET path - ECMA-262
+// 10.5.9 [[Set]] - which this function previously had no case for at all:
+// `target.Type() == TypeProxy` passed the "set" closure's object gate
+// (Value.IsObject() is a contiguous [TypeObject, TypeProxy] range check, so
+// it's true for a Proxy), but neither the removed isDataProp computation
+// nor the final target-kind switch had a case for TypeProxy, so it fell
+// through to an unconditional `return false` for ANY Proxy target, with or
+// without a `set` trap:
+//
+//	const target = {};
+//	const p = new Proxy(target, {});
+//	Reflect.set(p, "x", 5); // before: false, target.x stayed undefined - Node: true, target.x === 5
+//
+// Mirrors op_setprop.go's opSetProp TypeProxy handling (the bytecode
+// `obj.x = v` path, which already gets this right for that narrower case),
+// but forwards Reflect.set's own `receiver` argument to the trap - NOT
+// necessarily the proxy itself, unlike ordinary assignment where the
+// receiver is always the object the property access happened on. Also
+// deliberately does NOT copy opSetProp's own no-trap fallback shape (it
+// writes directly to `target` instead of `Receiver` in the "property
+// absent everywhere" case - the same class of bug task_cd1507d7 fixed for
+// Reflect.set's non-Proxy path) - the no-trap branch here instead recurses
+// into reflectSetDispatch, reusing the already-correct
+// reflectOrdinarySet/reflectCreateOrUpdateDataProperty pair.
+func reflectProxySet(vmInstance *vm.VM, proxyVal vm.Value, propKey string, value vm.Value, receiver vm.Value) (bool, error) {
+	proxy := proxyVal.AsProxy()
+	if proxy.Revoked {
+		return false, vmInstance.NewTypeError("Cannot perform 'set' on a revoked Proxy")
+	}
+	handler := proxy.Handler()
+	target := proxy.Target()
+
+	// GetMethod(handler, "set"): an inherited trap counts, undefined/null
+	// mean "no trap" - mirrors reflectHas's proxyReflectHas (reflect_has.go).
+	var trap vm.Value
+	var hasTrap bool
+	switch handler.Type() {
+	case vm.TypeObject:
+		trap, hasTrap = handler.AsPlainObject().Get("set")
+	case vm.TypeDictObject:
+		trap, hasTrap = handler.AsDictObject().Get("set")
+	}
+	if !hasTrap || trap.Type() == vm.TypeUndefined || trap.Type() == vm.TypeNull {
+		// No trap: per spec, return target.[[Set]](P, V, Receiver) -
+		// recurse into Reflect.set's own general dispatch for whatever
+		// kind `target` (the proxy's own target, which may itself be
+		// another Proxy) turns out to be, with the SAME receiver
+		// Reflect.set was originally called with (not necessarily this
+		// proxy).
+		return reflectSetDispatch(vmInstance, target, propKey, value, receiver)
+	}
+	if !trap.IsCallable() {
+		return false, vmInstance.NewTypeError("'set' on proxy: trap is not a function")
+	}
+
+	// Trap args per 10.5.9 step 8: (target, propertyKey, V, Receiver) -
+	// propKey is passed as a plain string here (pre-existing, unrelated to
+	// this fix: Reflect.set's own args[1].ToString() up in the "set"
+	// closure already stringifies a Symbol key before it ever reaches this
+	// function - so Reflect.set(proxy, Symbol.iterator, v) hands the trap
+	// "Symbol(Symbol.iterator)" as a string rather than the real Symbol.
+	// Not fixed here - see the PR body for why - but flagged, since this
+	// is the first place that mangled key becomes externally observable to
+	// user code (a trap function), not just internally wrong).
+	result, err := vmInstance.Call(trap, handler, []vm.Value{target, vm.NewString(propKey), value, receiver})
+	if err != nil {
+		return false, err
+	}
+	if result.IsFalsey() {
+		return false, nil
+	}
+
+	// ECMAScript 10.5.9 invariant validation (steps 13-15): a truish trap
+	// result is rejected if target has a non-configurable property whose
+	// invariant the trap tried to silently violate. Mirrors opSetProp's own
+	// TypeObject-only version of this check (pkg/vm/op_setprop.go) - not
+	// generalized to every VM kind here, matching that existing precedent
+	// and this file's own established scope (a Proxy's real-world target is
+	// overwhelmingly a plain object in practice).
+	if target.Type() == vm.TypeObject {
+		targetObj := target.AsPlainObject()
+		if _, s, _, c, isAccessor := targetObj.GetOwnAccessor(propKey); isAccessor {
+			if !c && s.Type() == vm.TypeUndefined {
+				return false, vmInstance.NewTypeError("'set' on proxy: trap returned truish for property '" + propKey + "' which exists in the proxy target as a non-configurable accessor without a setter")
+			}
+		} else if v, w, _, c, found := targetObj.GetOwnDescriptor(propKey); found {
+			if !c && !w {
+				if !v.StrictlyEquals(value) {
+					return false, vmInstance.NewTypeError("'set' on proxy: trap returned truish for property '" + propKey + "' which exists in the proxy target as a non-configurable and non-writable data property with a different value")
+				}
+			}
+		}
+	}
+
+	return true, nil
+}
+
+// reflectSetDispatch is Reflect.set's core dispatch, shared by the "set"
+// NativeFunction closure itself and every recursive delegation site above
+// (a Proxy target with no trap, a Proxy receiver with no trap) that needs
+// to re-enter the same logic for a different target/receiver pair.
+func reflectSetDispatch(vmInstance *vm.VM, target vm.Value, propKey string, value vm.Value, receiver vm.Value) (bool, error) {
+	if target.Type() == vm.TypeProxy {
+		return reflectProxySet(vmInstance, target, propKey, value, receiver)
+	}
+
+	// Module Namespace Exotic Object [[Set]] behavior (ECMAScript 10.4.6.9)
+	// [[Set]] on a namespace always returns false
+	if target.Type() == vm.TypeObject {
+		if po := target.AsPlainObject(); po.IsModuleNamespace() {
+			return false, nil
+		}
+	}
+
+	switch target.Type() {
+	case vm.TypeObject, vm.TypeDictObject, vm.TypeArray:
+		return reflectOrdinarySet(vmInstance, target, propKey, value, receiver)
+	}
+
+	// target is some other kind this function doesn't model a set for.
+	// Matches this function's prior behavior for every kind it didn't have
+	// a case for.
+	return false, nil
 }
 
 // reflectToArrayLength mirrors pkg/vm/vm_init.go's unexported
@@ -381,95 +608,29 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.set called on non-object")
 		}
 
-		// Module Namespace Exotic Object [[Set]] behavior (ECMAScript 10.4.6.9)
-		// [[Set]] on a namespace always returns false
-		if target.Type() == vm.TypeObject {
-			if po := target.AsPlainObject(); po.IsModuleNamespace() {
-				return vm.BooleanValue(false), nil
-			}
-		}
-
-		// For Proxy targets, we need to use the set trap differently
-		// The set trap was already called by the caller (opSetProp), so here we
-		// are implementing the actual Set algorithm that Reflect.set uses internally
-		// when called from a Proxy set trap
-
-		// Check if the property is a data property on the target
-		isDataProp := false
-		switch target.Type() {
-		case vm.TypeObject:
-			obj := target.AsPlainObject()
-			if _, _, _, _, isAccessor := obj.GetOwnAccessor(propKey); !isAccessor {
-				isDataProp = true
-			}
-		case vm.TypeDictObject:
-			isDataProp = true // DictObject doesn't support accessors
-		case vm.TypeArray:
-			isDataProp = true
-		}
-
-		// If receiver is different from target (e.g., receiver is a Proxy),
-		// we need to call receiver's [[GetOwnProperty]] and [[DefineOwnProperty]]
-		// per ECMAScript 10.1.9.2 OrdinarySetWithOwnDescriptor
-		if isDataProp && receiver.Type() == vm.TypeProxy && receiver != target {
-			proxy := receiver.AsProxy()
-			if proxy.Revoked {
-				return vm.BooleanValue(false), vmInstance.NewTypeError("Cannot perform 'set' on a revoked Proxy")
-			}
-
-			handler := proxy.Handler()
-			proxyTarget := proxy.Target()
-
-			// Step 2.c: Let existingDescriptor be ? Receiver.[[GetOwnProperty]](P).
-			// This triggers the getOwnPropertyDescriptor trap on the receiver Proxy
-			getOwnPropDescTrap, hasGetOwnPropDesc := handler.AsPlainObject().GetOwn("getOwnPropertyDescriptor")
-			if hasGetOwnPropDesc && getOwnPropDescTrap.IsCallable() {
-				trapArgs := []vm.Value{proxyTarget, vm.NewString(propKey)}
-				_, err := vmInstance.Call(getOwnPropDescTrap, handler, trapArgs)
-				if err != nil {
-					return vm.BooleanValue(false), err
-				}
-			}
-
-			// Step 2.d.iv: Return ? Receiver.[[DefineOwnProperty]](P, valueDesc).
-			// This triggers the defineProperty trap on the receiver Proxy
-			definePropertyTrap, hasDefineProperty := handler.AsPlainObject().GetOwn("defineProperty")
-			if hasDefineProperty && definePropertyTrap.IsCallable() {
-				// Create a property descriptor with just the value
-				valueDesc := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				valueDesc.SetOwn("value", value)
-				trapArgs := []vm.Value{proxyTarget, vm.NewString(propKey), vm.NewValueFromPlainObject(valueDesc)}
-				result, err := vmInstance.Call(definePropertyTrap, handler, trapArgs)
-				if err != nil {
-					return vm.BooleanValue(false), err
-				}
-				return vm.BooleanValue(result.IsTruthy()), nil
-			}
-		}
-
-		// Property set on target, implementing the real ECMA-262 10.1.9
-		// OrdinarySet / 10.1.9.2 OrdinarySetWithOwnDescriptor algorithm -
-		// see reflectOrdinarySet's own comment for the full rationale.
-		// This used to be a "just SetOwn/Set directly on target" fallback
-		// that ignored `receiver` entirely (writing to target even when a
-		// distinct receiver was given - the exact bug this fix closes)
-		// and never checked for an own or inherited accessor at all (so
-		// even the receiver === target case silently clobbered an
-		// existing setter instead of calling it - found while fixing the
-		// receiver bug, since walking descriptors is required for either
-		// fix).
-		switch target.Type() {
-		case vm.TypeObject, vm.TypeDictObject, vm.TypeArray:
-			ok, err := reflectOrdinarySet(vmInstance, target, propKey, value, receiver)
-			return vm.BooleanValue(ok), err
-		}
-
-		// target is some other kind this function doesn't model a set for
-		// (e.g. a Proxy - Reflect.set(someProxy, ...) has its own,
-		// separate, larger pre-existing gap: unrelated to the receiver
-		// bug this fix closes, not touched here). Matches this function's
-		// prior behavior for every kind it didn't have a case for.
-		return vm.BooleanValue(false), nil
+		// The actual algorithm - ECMA-262 10.1.9/10.1.9.2 OrdinarySet(WithOwnDescriptor)
+		// for a plain target, or 10.5.9 [[Set]] when target is a Proxy -
+		// lives in reflectSetDispatch, shared with the recursive delegation
+		// sites a Proxy target or a Proxy receiver without the relevant
+		// trap need to re-enter.
+		//
+		// This used to inline a "receiver is a distinct Proxy" special case
+		// right here (checking isDataProp on `target` first) that only
+		// handled a receiver-Proxy WITH a defineProperty trap present, and
+		// otherwise silently fell through to a "Simple property set on
+		// target" fallback that ignored `receiver` entirely - the bug
+		// task_cd1507d7 fixed for every OTHER receiver kind, but this
+		// Proxy-receiver special case sat upstream of that fix and kept
+		// intercepting before it could run. It's superseded now, not
+		// patched: reflectCreateOrUpdateDataProperty's own TypeProxy case
+		// (reflectProxyDefineDataProperty) handles a Proxy receiver
+		// completely - trap present or not - so this closure no longer
+		// needs a separate inline special case for it, and `target` never
+		// had a Proxy case here at all (task_18cd4923 - `target` itself
+		// being a Proxy fell through to an unconditional `false` for ANY
+		// Proxy target, trap or no trap).
+		ok, err := reflectSetDispatch(vmInstance, target, propKey, value, receiver)
+		return vm.BooleanValue(ok), err
 	}))
 
 	// Reflect.has(target, propertyKey)
