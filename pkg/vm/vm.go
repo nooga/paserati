@@ -8573,8 +8573,38 @@ startExecution:
 								}
 							}
 						}
-					case TypeObject, TypeDictObject:
-						// Handle object indexing on target
+					default:
+						// Every other target kind (TypeObject, TypeDictObject,
+						// TypeMap, TypeSet, TypePromise, TypeRegExp,
+						// TypeGenerator, TypeArguments, TypeBoundFunction,
+						// TypeNativeFunction, TypeNativeFunctionWithProps, a
+						// further-nested TypeProxy, ...) - used to be a bare
+						// `registers[destReg] = Undefined` for anything besides
+						// TypeObject/TypeDictObject (which got a delegation to
+						// opGetProp), so e.g. `new Proxy(arguments, {})[0]`
+						// silently read undefined even though the identical
+						// key read via dot notation (opGetProp's own no-trap
+						// fallback, already fixed for this same shape of bug)
+						// worked fine. Delegating to opGetProp here too (an
+						// earlier version of this fix did) would have been
+						// wrong for exactly that TypeArguments case: opGetProp
+						// only ever handles "length"/"callee"/named overflow
+						// properties for a TypeArguments objVal, never a plain
+						// numeric index like "0" - that resolution lives
+						// separately, in OpGetIndex's own direct (non-Proxy)
+						// TypeArguments case a few thousand lines up in this
+						// same function, via vm.argumentsGet. Rather than a
+						// FOURTH copy of that per-kind logic, delegate to
+						// getPropertyWithReceiver (pkg/vm/vm_init.go) instead -
+						// the same helper vm.GetProperty and opGetProp's own
+						// fallback are already built on, and unlike opGetProp
+						// it already handles every one of these kinds
+						// completely (TypeArguments included: length, callee,
+						// and numeric index via argumentsGet - see its own
+						// TypeArguments case for the full rationale). receiver
+						// is baseVal (the proxy itself), matching the
+						// get-trap-call branch above, which passes the same
+						// baseVal as the trap's own receiver argument.
 						var key string
 						switch indexVal.Type() {
 						case TypeString:
@@ -8585,17 +8615,41 @@ startExecution:
 							registers[destReg] = Undefined
 						}
 						if key != "" {
-							if ok, status, value := vm.opGetProp(frame, ip, &targetBase, key, &registers[destReg]); !ok {
-								if status != InterpretOK {
-									return status, value
+							result, err := vm.getPropertyWithReceiver(targetBase, key, baseVal)
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+									if !vm.unwinding {
+										// Exception was caught by a handler, reload frame and continue
+										frame = &vm.frames[vm.frameCount-1]
+										closure = frame.closure
+										function = closure.Fn
+										code = function.Chunk.Code
+										constants = function.Chunk.Constants
+										registers = frame.registers
+										ip = frame.ip
+										continue
+									}
+									return InterpretRuntimeError, Undefined
 								}
-								goto reloadFrame
+								vm.ThrowTypeError(err.Error())
+								if !vm.unwinding {
+									// Exception was caught by a handler, reload frame and continue
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
+								return InterpretRuntimeError, Undefined
 							}
+							registers[destReg] = result
 						} else {
 							registers[destReg] = Undefined
 						}
-					default:
-						registers[destReg] = Undefined
 					}
 				}
 
