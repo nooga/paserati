@@ -14878,10 +14878,29 @@ startExecution:
 				}
 				// Then the named (non-index) own properties: an exec result's
 				// index/input/groups/indices, or anything a program stored on
-				// the array. Sparse indices living in the named/accessor
-				// stores were already handled above.
+				// the array - accessor properties (AccessorKeys(), e.g. an
+				// Object.defineProperty(arr, "foo", {get, enumerable}) -
+				// stored in getters/setters, never in `properties`, so
+				// NamedPropertyKeys() alone can't see it) first, then plain
+				// data properties. Sparse indices living in either store were
+				// already handled above via arraySparseIndices, so both loops
+				// filter them out with tryParseArrayIndex - not
+				// LooksLikeArrayIndex, which has no upper bound and would let
+				// an out-of-range numeric key like "4294967295" slip past
+				// both this filter and arraySparseIndices' own filter,
+				// vanishing from enumeration entirely (see the matching
+				// object-spread TypeArray case above for the full
+				// explanation of that predicate mismatch).
+				for _, key := range arr.AccessorKeys() {
+					if _, isIndex := tryParseArrayIndex(key); isIndex {
+						continue
+					}
+					if _, _, enumerable, _, isAccessor := arr.GetOwnAccessor(key); isAccessor && enumerable {
+						keys = append(keys, key)
+					}
+				}
 				for _, key := range arr.NamedPropertyKeys() {
-					if LooksLikeArrayIndex(key) {
+					if _, isIndex := tryParseArrayIndex(key); isIndex {
 						continue
 					}
 					if _, enumerable, ok := arr.GetNamedPropertyDescriptor(key); ok && enumerable {

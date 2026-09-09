@@ -1816,6 +1816,103 @@ func arraySparseIndexValue(vmInstance *vm.VM, a *vm.ArrayObject, receiver vm.Val
 	return vm.Undefined, nil
 }
 
+// arrayDenseIndexValue reads the value at a dense-range array index (i <
+// DenseLength()), calling its getter if Object.defineProperty installed
+// an accessor there instead of blindly trusting arrObj.Get(i), which reads
+// `elements` directly with no accessor check at all. An index accessor is
+// never written into elements in the first place - see
+// ArrayDefineOwnProperty's own doc comment ("Every read path that knows
+// about per-index accessors ... checks GetOwnAccessor before ever
+// consulting the elements slice, so nothing needs to be written there") -
+// this is exactly one of those read paths, previously missed:
+//
+//	const arr = [1, 2, 3];
+//	Object.defineProperty(arr, "1", { get() { return 99; }, enumerable: true });
+//	arr[1];                    // 99 - the index-access path already checks
+//	Object.assign({}, arr)[1]; // before: 2 (stale element) - Node: 99
+//
+// The sparse half of this same read (arraySparseIndexValue, above) already
+// gets it right; this is its dense-range counterpart.
+func arrayDenseIndexValue(vmInstance *vm.VM, a *vm.ArrayObject, receiver vm.Value, i int) (vm.Value, error) {
+	key := strconv.Itoa(i)
+	if getter, _, _, _, isAccessor := a.GetOwnAccessor(key); isAccessor {
+		if getter.Type() == vm.TypeUndefined {
+			return vm.Undefined, nil
+		}
+		return vmInstance.Call(getter, receiver, nil)
+	}
+	return a.Get(i), nil
+}
+
+// arrayNamedKeys returns an array's own named (non-index) property keys:
+// AccessorKeys() (an accessor installed via Object.defineProperty lives in
+// getters/setters, never in `properties` - see ArrayObject.
+// DefineAccessorProperty's own doc comment, which explicitly deletes the
+// properties entry when converting a plain property to an accessor, so a
+// given name lives in at most one of the two stores at a time) followed by
+// NamedPropertyKeys() (plain data). Both are filtered with
+// vm.ParseArrayIndex - not vm.LooksLikeArrayIndex, which has no upper
+// bound and would let an out-of-range numeric key like "4294967295" slip
+// past both this filter and arraySparseIndices' own vm.ParseArrayIndex
+// filter, vanishing from enumeration entirely - to exclude a sparse index
+// sharing either map, which arraySparseIndices already covers.
+//
+// Before this, a named ACCESSOR property was invisible to every array
+// enumeration/collection operation that walked NamedPropertyKeys() alone:
+//
+//	const arr = [1, 2];
+//	Object.defineProperty(arr, "foo", { get() { return 5; }, enumerable: true });
+//	Object.keys(arr); // before: ["0","1"] - Node: ["0","1","foo"]
+//
+// enumerableOnly mirrors arraySparseIndices' own parameter: true for
+// for-in/Object.keys/values/entries/Object.assign (own-ENUMERABLE-
+// properties only, per CopyDataProperties/EnumerableOwnPropertyNames),
+// false for Object.getOwnPropertyNames/Reflect.ownKeys (every own key
+// regardless of enumerability).
+func arrayNamedKeys(a *vm.ArrayObject, enumerableOnly bool) []string {
+	var keys []string
+	for _, name := range a.AccessorKeys() {
+		if _, isIndex := vm.ParseArrayIndex(name); isIndex {
+			continue
+		}
+		if enumerableOnly {
+			if _, _, enumerable, _, isAccessor := a.GetOwnAccessor(name); !isAccessor || !enumerable {
+				continue
+			}
+		}
+		keys = append(keys, name)
+	}
+	for _, name := range a.NamedPropertyKeys() {
+		if _, isIndex := vm.ParseArrayIndex(name); isIndex {
+			continue
+		}
+		if enumerableOnly {
+			if _, enumerable, ok := a.GetNamedPropertyDescriptor(name); !ok || !enumerable {
+				continue
+			}
+		}
+		keys = append(keys, name)
+	}
+	return keys
+}
+
+// arrayNamedKeyValue reads the value of a named (non-index) own property
+// arrayNamedKeys already found, calling its getter if it's an accessor -
+// the named-key counterpart to arrayDenseIndexValue/arraySparseIndexValue,
+// for Object.values/entries.
+func arrayNamedKeyValue(vmInstance *vm.VM, a *vm.ArrayObject, receiver vm.Value, name string) (vm.Value, error) {
+	if getter, _, _, _, isAccessor := a.GetOwnAccessor(name); isAccessor {
+		if getter.Type() == vm.TypeUndefined {
+			return vm.Undefined, nil
+		}
+		return vmInstance.Call(getter, receiver, nil)
+	}
+	if v, _, ok := a.GetNamedPropertyDescriptor(name); ok {
+		return v, nil
+	}
+	return vm.Undefined, nil
+}
+
 func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) == 0 {
 		return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined to object")
@@ -2042,14 +2139,11 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			keysArray.Append(vm.NewString(strconv.Itoa(idx)))
 		}
 		// Named own properties (an exec result's index/input/groups/indices,
-		// or anything stored on the array) follow the indices.
-		for _, key := range arrObj.NamedPropertyKeys() {
-			if vm.LooksLikeArrayIndex(key) {
-				continue
-			}
-			if _, enumerable, ok := arrObj.GetNamedPropertyDescriptor(key); ok && enumerable {
-				keysArray.Append(vm.NewString(key))
-			}
+		// or anything stored on the array, accessor or plain) follow the
+		// indices - see arrayNamedKeys' own doc comment for why this can't
+		// be NamedPropertyKeys() alone.
+		for _, key := range arrayNamedKeys(arrObj, true) {
+			keysArray.Append(vm.NewString(key))
 		}
 	case vm.TypeArguments:
 		argsObj := obj.AsArguments()
@@ -2476,7 +2570,14 @@ func objectValuesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			if !arrObj.HasOwnIndexProperty(key, i) {
 				continue // hole - not an own property at all (paserati#300)
 			}
-			valuesArray.Append(arrObj.Get(i))
+			// arrayDenseIndexValue, not arrObj.Get(i) - see that function's
+			// own doc comment for why a plain element read misses an index
+			// accessor installed via Object.defineProperty.
+			value, err := arrayDenseIndexValue(vmInstance, arrObj, obj, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			valuesArray.Append(value)
 		}
 		// A sparse index beyond the dense range (paserati#176/#178 - see
 		// arraySparseIndices) lives in the properties map (or, for an
@@ -2486,6 +2587,17 @@ func objectValuesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		// calling the getter for an accessor index.
 		for _, idx := range arraySparseIndices(arrObj, true) {
 			value, err := arraySparseIndexValue(vmInstance, arrObj, obj, idx)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			valuesArray.Append(value)
+		}
+		// Named (non-index) own properties, accessor or plain - see
+		// arrayNamedKeys' own doc comment. Before this, Object.values(arr)
+		// never returned a value for `arr.foo = ...` at all, regardless of
+		// whether foo was a plain property or an accessor.
+		for _, key := range arrayNamedKeys(arrObj, true) {
+			value, err := arrayNamedKeyValue(vmInstance, arrObj, obj, key)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -2611,9 +2723,16 @@ func objectEntriesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			if !arrObj.HasOwnIndexProperty(key, i) {
 				continue // hole - not an own property at all (paserati#300)
 			}
+			// arrayDenseIndexValue, not arrObj.Get(i) - see that function's
+			// own doc comment for why a plain element read misses an index
+			// accessor installed via Object.defineProperty.
+			value, err := arrayDenseIndexValue(vmInstance, arrObj, obj, i)
+			if err != nil {
+				return vm.Undefined, err
+			}
 			entry := vm.NewArray()
 			entry.AsArray().Append(vm.NewString(key))
-			entry.AsArray().Append(arrObj.Get(i))
+			entry.AsArray().Append(value)
 			entriesArray.Append(entry)
 		}
 		// A sparse index beyond the dense range (paserati#176/#178 - see
@@ -2629,6 +2748,20 @@ func objectEntriesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			}
 			entry := vm.NewArray()
 			entry.AsArray().Append(vm.NewString(strconv.Itoa(idx)))
+			entry.AsArray().Append(value)
+			entriesArray.Append(entry)
+		}
+		// Named (non-index) own properties, accessor or plain - see
+		// arrayNamedKeys' own doc comment. Before this, Object.entries(arr)
+		// never produced an entry for `arr.foo = ...` at all, regardless of
+		// whether foo was a plain property or an accessor.
+		for _, key := range arrayNamedKeys(arrObj, true) {
+			value, err := arrayNamedKeyValue(vmInstance, arrObj, obj, key)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			entry := vm.NewArray()
+			entry.AsArray().Append(vm.NewString(key))
 			entry.AsArray().Append(value)
 			entriesArray.Append(entry)
 		}
@@ -2761,10 +2894,13 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 			arrObj.Append(vm.NewString(strconv.Itoa(idx)))
 		}
 		arrObj.Append(vm.NewString("length"))
-		for _, key := range a.NamedPropertyKeys() {
-			if !vm.LooksLikeArrayIndex(key) {
-				arrObj.Append(vm.NewString(key))
-			}
+		// Named own properties (accessor or plain) - see arrayNamedKeys'
+		// own doc comment for why NamedPropertyKeys() alone missed a named
+		// accessor property here. enumerableOnly=false: getOwnPropertyNames
+		// wants every own key regardless of enumerability, same as the
+		// sparse-index loop above.
+		for _, key := range arrayNamedKeys(a, false) {
+			arrObj.Append(vm.NewString(key))
 		}
 	case vm.TypeFunction:
 		fn := obj.AsFunction()
@@ -3550,13 +3686,22 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			}
 		} else if source.Type() == vm.TypeArray {
 			arrObj := source.AsArray()
-			// For arrays, copy indexed properties
+			// For arrays, copy indexed properties. arrayDenseIndexValue, not
+			// arrObj.Get(i): HasOwnIndexProperty above correctly treats an
+			// index accessor (installed via Object.defineProperty) as
+			// existing, but a bare arrObj.Get(i) reads `elements` directly
+			// with no accessor check, so it would copy the stale
+			// underlying element instead of calling the getter - see
+			// arrayDenseIndexValue's own doc comment.
 			for i := 0; i < arrObj.DenseLength(); i++ {
 				key := strconv.Itoa(i)
 				if !arrObj.HasOwnIndexProperty(key, i) {
 					continue // hole - not an own property at all, nothing to copy (paserati#300)
 				}
-				value := arrObj.Get(i)
+				value, err := arrayDenseIndexValue(vmInstance, arrObj, source, i)
+				if err != nil {
+					return vm.Undefined, err
+				}
 				if err := setObjectAssignTargetProperty(vmInstance, target, key, value); err != nil {
 					return vm.Undefined, err
 				}
@@ -5706,10 +5851,35 @@ func objectGetOwnPropertyDescriptorsWithVM(vmInstance *vm.VM, args []vm.Value) (
 		}
 	case vm.TypeArray:
 		arr := obj.AsArray()
-		for i := 0; i < arr.Length(); i++ {
-			stringKeys = append(stringKeys, strconv.Itoa(i))
+		// This used to loop `i := 0; i < arr.Length()` - arr.Length() is
+		// the array's .length property, which a huge sparse index (one
+		// defined past maxDenseArrayDefineIndex via Object.defineProperty,
+		// see ArrayDefineOwnProperty) extends without growing `elements`
+		// at all, making this a multi-billion-iteration hang for an array
+		// that otherwise holds a handful of elements - the exact
+		// paserati#176/#178 shape every other array-key-collecting
+		// operation in this file already guards against by bounding the
+		// per-index scan to DenseLength() and walking arraySparseIndices
+		// separately (O(number of sparse entries), not O(index value)).
+		// It also never collected any NAMED (non-index) key at all -
+		// plain or accessor - so `arr.foo = "bar"` and an
+		// Object.defineProperty(arr, "foo", {get, ...}) accessor were
+		// both silently dropped, on top of the loop's own hang risk.
+		for i := 0; i < arr.DenseLength(); i++ {
+			key := strconv.Itoa(i)
+			if !arr.HasOwnIndexProperty(key, i) {
+				continue // hole - not an own property at all (paserati#300)
+			}
+			stringKeys = append(stringKeys, key)
+		}
+		// getOwnPropertyDescriptors wants every own key regardless of
+		// enumerability, hence enumerableOnly=false for both helpers below
+		// - matching Object.getOwnPropertyNames' own TypeArray case.
+		for _, idx := range arraySparseIndices(arr, false) {
+			stringKeys = append(stringKeys, strconv.Itoa(idx))
 		}
 		stringKeys = append(stringKeys, "length")
+		stringKeys = append(stringKeys, arrayNamedKeys(arr, false)...)
 		// This case never collected symbol keys at all, so
 		// Object.getOwnPropertyDescriptors(arr) silently dropped a symbol
 		// property entirely (whether a plain `arr[sym] = v` or one defined
