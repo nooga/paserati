@@ -9418,6 +9418,8 @@ startExecution:
 				// avoids AsPlainObject() panicking for a TypeDictObject
 				// handler (a TS enum or module namespace value at runtime).
 				ownKeysTrap, hasOwnKeysTrap := proxyGetTrap(proxy.Handler(), "ownKeys")
+
+				var keys []Value
 				if hasOwnKeysTrap && ownKeysTrap.IsCallable() {
 					// Call ownKeys trap: handler.ownKeys(target)
 					trapArgs := []Value{proxy.Target()}
@@ -9443,15 +9445,52 @@ startExecution:
 					}
 
 					arr := keysResult.AsArray()
+					keys = make([]Value, arr.Length())
+					for i := 0; i < arr.Length(); i++ {
+						keys[i] = arr.Get(i)
+					}
+				} else {
+					// No ownKeys trap: per ECMA-262 10.5.11 step 5,
+					// [[OwnPropertyKeys]] delegates to
+					// target.[[OwnPropertyKeys]]() instead of contributing
+					// no properties at all - proxyOwnKeysFallback recurses
+					// through a further-nested Proxy target the same way
+					// pkg/builtins' getProxyOwnKeys/proxyOwnPropertyKeys
+					// already do (checking each inner proxy's own ownKeys
+					// trap first). This proxy's OWN
+					// getOwnPropertyDescriptor/get traps below still apply
+					// to each resulting key regardless of where the key
+					// list came from - GetMethod([[OwnPropertyKeys]]) and
+					// GetMethod([[Get]]) are independent per spec
+					// (confirmed against Node).
+					keyStrs, err := vm.proxyOwnKeysFallback(proxy.Target())
+					if err != nil {
+						frame.ip = ip
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+						} else {
+							vm.runtimeError("ownKeys trap error: %v", err)
+						}
+						if !vm.unwinding {
+							continue
+						}
+						return InterpretRuntimeError, Undefined
+					}
+					keys = make([]Value, len(keyStrs))
+					for i, k := range keyStrs {
+						keys[i] = NewString(k)
+					}
+				}
 
+				{
 					// Get traps from handler - proxyGetTrap for both, same
 					// reasons as the ownKeys trap lookup just above.
 					getOwnPropDescTrap, hasGetOwnPropDescTrap := proxyGetTrap(proxy.Handler(), "getOwnPropertyDescriptor")
 					getTrap, hasGetTrap := proxyGetTrap(proxy.Handler(), "get")
 
 					// Process each key in order returned by ownKeys
-					for i := 0; i < arr.Length(); i++ {
-						keyVal := arr.Get(i)
+					for i := 0; i < len(keys); i++ {
+						keyVal := keys[i]
 						var keyStr string
 						isSymbolKey := keyVal.Type() == TypeSymbol
 
@@ -21749,6 +21788,72 @@ func proxyGetTrap(handler Value, trapName string) (Value, bool) {
 // reach it as vmInstance.ProxyGetTrap(...).
 func (vm *VM) ProxyGetTrap(handler Value, trapName string) (Value, bool) {
 	return proxyGetTrap(handler, trapName)
+}
+
+// proxyOwnKeysFallback implements [[OwnPropertyKeys]] for a Proxy whose
+// handler has no ownKeys trap: per ECMA-262 10.5.11 step 5, this delegates
+// to target.[[OwnPropertyKeys]](), which recurses if the target is itself
+// a Proxy (checking that inner proxy's own ownKeys trap first, not just
+// falling through further) - mirrors pkg/builtins/json_init.go's
+// getProxyOwnKeys and object_init.go's proxyOwnPropertyKeys, which already
+// do the same recursion for their own no-ownKeys-trap case; this is the
+// pkg/vm-local twin OpObjectSpread needs (pkg/vm can't import
+// pkg/builtins). String keys only, matching OpObjectSpread's existing
+// per-key loop, which already only spreads string keys even when a
+// ownKeys trap enumerates symbols too (a real, pre-existing,
+// out-of-scope-here gap the CopyDataProperties comment on that loop package
+// documents separately).
+//
+// Only called when the caller has already confirmed proxy's own handler
+// has no ownKeys trap; a trap found on a NESTED proxy target, however, is
+// used (matching getProxyOwnKeys/proxyOwnPropertyKeys) - the caller's own
+// getOwnPropertyDescriptor/get trap consultation for each returned key
+// still runs against the ORIGINAL top-level proxy's handler regardless of
+// where the key list came from, since GetMethod([[OwnPropertyKeys]]) and
+// GetMethod([[Get]]) are independent per spec (confirmed against Node: a
+// no-ownKeys-trap Proxy's get trap still runs during a spread).
+func (vm *VM) proxyOwnKeysFallback(target Value) ([]string, error) {
+	for target.Type() == TypeProxy {
+		proxy := target.AsProxy()
+		if proxy.Revoked {
+			return nil, vm.NewTypeError("Cannot perform 'ownKeys' on a revoked Proxy")
+		}
+		handler := proxy.Handler()
+		trap, hasTrap := proxyGetTrap(handler, "ownKeys")
+		if hasTrap && trap.IsCallable() {
+			result, err := vm.Call(trap, handler, []Value{proxy.Target()})
+			if err != nil {
+				return nil, err
+			}
+			if result.Type() != TypeArray {
+				return nil, vm.NewTypeError("ownKeys trap must return an array-like object")
+			}
+			arr := result.AsArray()
+			keys := make([]string, 0, arr.Length())
+			for i := 0; i < arr.Length(); i++ {
+				if keyVal := arr.Get(i); keyVal.Type() == TypeString {
+					keys = append(keys, keyVal.ToString())
+				}
+			}
+			return keys, nil
+		}
+		target = proxy.Target()
+	}
+	switch target.Type() {
+	case TypeObject:
+		return target.AsPlainObject().OwnKeys(), nil
+	case TypeDictObject:
+		return target.AsDictObject().OwnKeys(), nil
+	case TypeArray:
+		arr := target.AsArray()
+		keys := make([]string, arr.Length())
+		for i := range keys {
+			keys[i] = strconv.Itoa(i)
+		}
+		return keys, nil
+	default:
+		return nil, nil
+	}
 }
 
 // proxyHasSymbolPropertyFallback is proxyHasPropertyFallback's symbol-key
