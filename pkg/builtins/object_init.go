@@ -691,12 +691,14 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, vmInstance.NewTypeError("Cannot set prototype of revoked Proxy")
 			}
 			handler := proxy.Handler()
-			var setProtoTrap vm.Value
-			var hasTrap bool
-			if handler.Type() == vm.TypeObject {
-				po := handler.AsPlainObject()
-				setProtoTrap, hasTrap = po.GetOwn("setPrototypeOf")
-			}
+			// GetMethod(handler, "setPrototypeOf") per spec: an inherited
+			// trap counts, not just an own one, and a TypeDictObject
+			// handler (a TS enum or module namespace value at runtime)
+			// must still be checked for the trap instead of being treated
+			// as trap-less outright - vmInstance.ProxyGetTrap, not the
+			// previous `if handler.Type() == vm.TypeObject { ...GetOwn... }`
+			// which silently answered "no trap" for any other handler kind.
+			setProtoTrap, hasTrap := vmInstance.ProxyGetTrap(handler, "setPrototypeOf")
 			if hasTrap && setProtoTrap.IsCallable() {
 				result, err := vmInstance.CallArgs2(setProtoTrap, handler, proxy.Target(), protoArg)
 				if err != nil {
@@ -1262,14 +1264,11 @@ func lookupSymbolProp(vmInstance *vm.VM, val vm.Value, symKey vm.PropertyKey, sy
 			return vm.Undefined, vmInstance.NewTypeError("Cannot perform 'get' on a proxy that has been revoked")
 		}
 		handler := proxy.Handler()
-		var getTrap vm.Value
-		var hasGetTrap bool
-		switch handler.Type() {
-		case vm.TypeObject:
-			getTrap, hasGetTrap = handler.AsPlainObject().GetOwn("get")
-		case vm.TypeDictObject:
-			getTrap, hasGetTrap = handler.AsDictObject().GetOwn("get")
-		}
+		// GetMethod(handler, "get") per spec: an inherited trap counts, not
+		// just an own one - vmInstance.ProxyGetTrap (not a bare
+		// handler.AsPlainObject().GetOwn("get")) for the same reason
+		// documented on its pkg/vm definition.
+		getTrap, hasGetTrap := vmInstance.ProxyGetTrap(handler, "get")
 		if hasGetTrap && getTrap.IsCallable() {
 			return vmInstance.CallArgs3(getTrap, handler, proxy.Target(), vmInstance.SymbolToStringTag, val)
 		}
@@ -2089,16 +2088,19 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				}
 			}
 		}
-	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise:
+	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps:
 		// Same side table as the exotic kinds above (OwnPropertiesTable,
 		// pkg/vm/properties_table.go) - this case was missing entirely, so
-		// Object.keys always came back empty for these four kinds even
+		// Object.keys always came back empty for these six kinds even
 		// after a custom own property was defined on one (e.g. r.custom =
 		// 42, or Object.defineProperty once that gap is fixed too).
 		// RegExp's "lastIndex" never appears here: it's a real Go field on
 		// RegExpObject, not a side-table entry, and it's non-enumerable in
 		// any case (Object.getOwnPropertyDescriptor's TypeRegExp case,
-		// same file).
+		// same file). TypeNativeFunction/TypeNativeFunctionWithProps'
+		// "name"/"length" intrinsics are non-enumerable synthesized
+		// properties, not side-table entries either, so they're correctly
+		// excluded here the same way.
 		if props := vm.OwnPropertiesTable(obj); props != nil {
 			for _, key := range props.OwnKeys() {
 				if _, _, en, _, ok := props.GetOwnDescriptor(key); ok && en {
@@ -2232,8 +2234,12 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return vm.Undefined, vmInstance.NewTypeError("Cannot get prototype of revoked Proxy")
 		}
 
-		// Check if handler has a getPrototypeOf trap (per spec: GetMethod treats null/undefined as absent)
-		if trap, ok := proxy.Handler().AsPlainObject().GetOwn("getPrototypeOf"); ok && !trap.IsUndefined() && trap.Type() != vm.TypeNull {
+		// Check if handler has a getPrototypeOf trap. GetMethod(handler,
+		// "getPrototypeOf") per spec: an inherited trap counts, not just
+		// an own one - vmInstance.ProxyGetTrap (not a bare
+		// proxy.Handler().AsPlainObject().GetOwn("getPrototypeOf")) for
+		// the same reason documented on its pkg/vm definition.
+		if trap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "getPrototypeOf"); ok && !trap.IsUndefined() && trap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !trap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'getPrototypeOf' on proxy: trap is not a function")
@@ -2333,8 +2339,12 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return vm.Undefined, vmInstance.NewTypeError("Cannot set prototype of revoked Proxy")
 		}
 
-		// Check for setPrototypeOf trap (per spec: GetMethod treats null/undefined as absent)
-		if setProtoTrap, ok := proxy.Handler().AsPlainObject().GetOwn("setPrototypeOf"); ok && !setProtoTrap.IsUndefined() && setProtoTrap.Type() != vm.TypeNull {
+		// Check for setPrototypeOf trap. GetMethod(handler, "setPrototypeOf")
+		// per spec: an inherited trap counts, not just an own one -
+		// vmInstance.ProxyGetTrap (not a bare
+		// proxy.Handler().AsPlainObject().GetOwn("setPrototypeOf")) for
+		// the same reason documented on its pkg/vm definition.
+		if setProtoTrap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "setPrototypeOf"); ok && !setProtoTrap.IsUndefined() && setProtoTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !setProtoTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'setPrototypeOf' on proxy: trap is not a function")
@@ -2715,18 +2725,28 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 		arrObj.Append(vm.NewString("length"))
 		return arr, nil
 	case vm.TypeObject:
-		if obj.Type() == vm.TypeObject {
-			po := obj.AsPlainObject()
-			// OwnPropertyNames returns ALL own string property names including non-enumerable
-			for _, k := range po.OwnPropertyNames() {
-				arrObj.Append(vm.NewString(k))
-			}
-		} else if obj.Type() == vm.TypeDictObject {
-			d := obj.AsDictObject()
-			// DictObject.OwnPropertyNames returns all property names
-			for _, k := range d.OwnPropertyNames() {
-				arrObj.Append(vm.NewString(k))
-			}
+		po := obj.AsPlainObject()
+		// OwnPropertyNames returns ALL own string property names including non-enumerable
+		for _, k := range po.OwnPropertyNames() {
+			arrObj.Append(vm.NewString(k))
+		}
+	case vm.TypeDictObject:
+		// This used to be an unreachable `else if` nested inside the
+		// `case vm.TypeObject:` body above (dead code - within that case,
+		// obj.Type() is always TypeObject, so the else-if branch could
+		// never run) - meaning Object.getOwnPropertyNames on a DictObject
+		// (a TypeScript `enum`, or a module namespace object - both
+		// reachable from user code, see pkg/compiler/compile_enum.go and
+		// module_bindings.go) fell all the way through to this function's
+		// `default: return arr, nil` and answered [] instead of listing
+		// the enum's real own properties. Found while adding this
+		// function's new TypeProxy case, since a Proxy wrapping a
+		// DictObject target would otherwise silently inherit the exact
+		// same bug through the new delegation.
+		d := obj.AsDictObject()
+		// DictObject.OwnPropertyNames returns all property names
+		for _, k := range d.OwnPropertyNames() {
+			arrObj.Append(vm.NewString(k))
 		}
 	case vm.TypeArray:
 		a := obj.AsArray()
@@ -2791,8 +2811,19 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 			}
 		}
 
-		// If no prototype was found in Properties, add it at the end
-		if !hasPrototype {
+		// If no prototype was found in Properties, only synthesize one when
+		// this function is actually constructible - an arrow function or a
+		// plain (non-generator) async function has NO "prototype" own
+		// property at all per spec, unlike an ordinary function, a
+		// generator function, or an async generator function, which all
+		// have one. This used to append "prototype" here unconditionally,
+		// which was wrong for exactly those two kinds (verified against
+		// Node: Object.getOwnPropertyNames(() => {}) is ["length","name"],
+		// no "prototype"). vm.IsConstructor already implements this exact
+		// rule for TypeFunction/TypeClosure
+		// (!IsArrowFunction && !(IsAsync && !IsGenerator)) - reused here
+		// rather than duplicated.
+		if !hasPrototype && vmInstance.IsConstructor(obj) {
 			arrObj.Append(vm.NewString("prototype"))
 		}
 	case vm.TypeClosure:
@@ -2837,7 +2868,9 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 			}
 		}
 
-		if !hasPrototype {
+		// Same guard as the TypeFunction case above - see its comment for
+		// the full rationale and Node verification.
+		if !hasPrototype && vmInstance.IsConstructor(obj) {
 			arrObj.Append(vm.NewString("prototype"))
 		}
 	case vm.TypeNativeFunctionWithProps:
@@ -2859,6 +2892,106 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 		for _, k := range propNames {
 			if k != "length" && k != "name" && !isIntegerIndex(k) {
 				arrObj.Append(vm.NewString(k))
+			}
+		}
+	case vm.TypeNativeFunction:
+		// A plain (non-Props) native function - this switch never had a case
+		// for it at all, so Object.getOwnPropertyNames fell to the
+		// default/"non-object types" branch and answered [] even for a
+		// function with real own properties (Object.defineProperty already
+		// let you add one - Object.getOwnPropertyDescriptor(s) already
+		// listed it correctly, PR #339). Mirrors the
+		// TypeNativeFunctionWithProps case above - "length"/"name" are
+		// synthesized (not real own properties for this kind either), and
+		// "prototype" is included only when this native function is
+		// actually a constructor (checked here since, unlike
+		// TypeFunction/TypeClosure below, every TypeNativeFunction defined
+		// in this codebase today is IsConstructor==false in practice, so
+		// this guard is what correctly keeps "prototype" OFF a plain
+		// native function like Array.prototype.slice - verified against
+		// Node, which agrees: no "prototype" there).
+		nf := obj.AsNativeFunction()
+		var propNames []string
+		if props := vm.OwnPropertiesTable(obj); props != nil {
+			propNames = props.OwnPropertyNames()
+		}
+
+		for _, k := range propNames {
+			if isIntegerIndex(k) {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
+
+		arrObj.Append(vm.NewString("length"))
+		arrObj.Append(vm.NewString("name"))
+
+		hasPrototype := false
+		for _, k := range propNames {
+			if k == "prototype" {
+				hasPrototype = true
+				break
+			}
+		}
+		if hasPrototype {
+			arrObj.Append(vm.NewString("prototype"))
+		}
+
+		for _, k := range propNames {
+			if k != "length" && k != "name" && k != "prototype" && !isIntegerIndex(k) {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
+
+		if !hasPrototype && nf.IsConstructor {
+			arrObj.Append(vm.NewString("prototype"))
+		}
+	case vm.TypeBoundFunction:
+		// Another kind this switch never had a case for at all - fell to
+		// the default/empty branch. Unlike every other callable kind
+		// above, a bound function needs NO synthesis whatsoever: "name"
+		// (bound " + original) and "length" are REAL own properties
+		// written directly into bf.Properties at bind time (PR #343's
+		// "Bound functions: 'name'/'length' is a real own property set at
+		// bind time" precedent - re-synthesizing them here would just
+		// duplicate them), and a bound function exotic object never has
+		// its own "prototype" property at all, regardless of whether its
+		// target is a constructor (verified against Node:
+		// `Reflect.ownKeys(SomeClass.bind(null))` is `["length","name"]`,
+		// no "prototype", even though SomeClass itself has one). So the
+		// stored table's own names, already integer-indices-first per
+		// OwnPropertyNames(), are the complete, correctly-ordered answer.
+		bf := obj.AsBoundFunction()
+		if bf.Properties != nil {
+			for _, k := range bf.Properties.OwnPropertyNames() {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
+	case vm.TypeProxy:
+		// This switch never had a case for TypeProxy at all - it fell
+		// through to `default: return arr, nil` and answered [] for ANY
+		// Proxy, regardless of what its target actually has:
+		//
+		//   const target = { a: 1 };
+		//   Object.getOwnPropertyNames(new Proxy(target, {})); // before: [] - Node: ["a"]
+		//
+		// proxyOwnPropertyKeys implements the shared ECMA-262 10.5.11
+		// [[OwnPropertyKeys]] machinery (also used by
+		// objectGetOwnPropertySymbolsWithVM's own new TypeProxy case below
+		// and by Reflect.ownKeys, reflect_init.go) - one trap invocation
+		// (or delegation) producing the full mixed string+symbol key list,
+		// which each of those three callers then filters differently, per
+		// spec (they all call the same internal method and filter its
+		// result, rather than each doing its own separate trap
+		// invocation - calling a possibly-side-effecting trap twice for
+		// what should be one [[OwnPropertyKeys]] call would itself be a
+		// bug).
+		keys, err := proxyOwnPropertyKeys(vmInstance, obj)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		for _, k := range keys {
+			if k.Type() != vm.TypeSymbol {
+				arrObj.Append(k)
 			}
 		}
 	default:
@@ -2890,6 +3023,26 @@ func objectGetOwnPropertySymbolsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.V
 		for _, s := range po.OwnSymbolKeys() {
 			arrObj.Append(s)
 		}
+	} else if obj.Type() == vm.TypeArray {
+		// ArrayObject already stores symbol-keyed properties
+		// (GetSymbolProp/SetSymbolProp/HasOwnSymbolProp - that's how
+		// `arr[sym] = v` works at all), but this function never had a
+		// case for TypeArray at all, so Object.getOwnPropertySymbols on
+		// an array with a real symbol property silently answered []
+		// (verified against Node, which lists it):
+		//
+		//   const arr = [1, 2, 3];
+		//   arr[Symbol("s")] = 42;
+		//   Object.getOwnPropertySymbols(arr).length; // before: 0 - Node: 1
+		//
+		// ArrayObject.OwnSymbolKeys() (pkg/vm/value.go) is the new
+		// enumerator this case needed - it didn't exist at all before
+		// this fix, unlike PlainObject's own OwnSymbolKeys the TypeObject
+		// case above already used.
+		a := obj.AsArray()
+		for _, s := range a.OwnSymbolKeys() {
+			arrObj.Append(s)
+		}
 	} else if obj.Type() == vm.TypeFunction {
 		// Functions store properties in their Properties field
 		fn := obj.AsFunction()
@@ -2910,9 +3063,197 @@ func objectGetOwnPropertySymbolsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.V
 				arrObj.Append(s)
 			}
 		}
+	} else if obj.Type() == vm.TypeNativeFunction || obj.Type() == vm.TypeNativeFunctionWithProps || obj.Type() == vm.TypeBoundFunction {
+		// These three callable kinds keep their own properties in the same
+		// lazily-allocated *PlainObject side table shape as TypeFunction/
+		// TypeClosure above (OwnPropertiesTable, pkg/vm/properties_table.go),
+		// but this function never had a case for any of them at all - so
+		// Object.getOwnPropertySymbols always answered [] even after
+		// Object.defineProperty had just added a symbol-keyed own property,
+		// even though Object.getOwnPropertyDescriptor(obj, sym) already
+		// correctly reported that same property existing (and, for
+		// TypeNativeFunction/TypeNativeFunctionWithProps,
+		// Object.getOwnPropertyDescriptors already lists it correctly too -
+		// PR #339 fixed that plural function's own equivalent gap for these
+		// same three kinds without this singular-purpose function being
+		// touched, which is what let this one lag behind unnoticed).
+		if props := vm.OwnPropertiesTable(obj); props != nil {
+			for _, s := range props.OwnSymbolKeys() {
+				arrObj.Append(s)
+			}
+		}
+	} else if obj.Type() == vm.TypeProxy {
+		// Same gap, same fix, as objectGetOwnPropertyNamesWithVM's new
+		// TypeProxy case above (see its comment for the full rationale) -
+		// this function had no case for TypeProxy at all either, so
+		// Object.getOwnPropertySymbols(new Proxy(target, {})) always
+		// answered [] regardless of what symbol-keyed properties `target`
+		// actually had. Filters proxyOwnPropertyKeys's shared mixed-key
+		// result down to symbols, the mirror image of the string-only
+		// filter in objectGetOwnPropertyNamesWithVM.
+		keys, err := proxyOwnPropertyKeys(vmInstance, obj)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		for _, k := range keys {
+			if k.Type() == vm.TypeSymbol {
+				arrObj.Append(k)
+			}
+		}
 	}
 	// DictObject does not support symbols; returns empty array
 	return arr, nil
+}
+
+// proxyOwnPropertyKeys implements ECMA-262 10.5.11 [[OwnPropertyKeys]] for a
+// Proxy exotic object - the single shared entry point objectGetOwnPropertyNamesWithVM,
+// objectGetOwnPropertySymbolsWithVM, and Reflect.ownKeys (reflect_init.go)
+// all delegate to and then filter differently, per spec (all three call the
+// same internal method and filter its result - not each doing its own
+// separate trap invocation, which would invoke a possibly-side-effecting
+// trap more than once for what should be a single [[OwnPropertyKeys]] call).
+//
+// Implements spec steps 1-7 (revoked check, GetMethod(handler, "ownKeys"),
+// CreateListFromArrayLike with its String|Symbol element-type restriction,
+// and the unconditional "no duplicate entries" check) plus the "no trap"
+// delegation (step 4's `return ? target.[[OwnPropertyKeys]]()`).
+//
+// Deliberately DOES NOT implement steps 8-16 (the [[Extensible]]/
+// configurable-key invariant validation a well-behaved trap must satisfy) -
+// a trap's raw result is returned as-is once past the checks above. This is
+// right for a well-behaved trap (verified against Node: a trap that simply
+// returns a different key list gets that list back verbatim) and wrong only
+// for one that violates those invariants (Node throws a TypeError there;
+// this returns the trap's result instead) - a real, narrower, deliberately
+// deferred gap (see the follow-up chip this was flagged with) rather than
+// the wrong tradeoff of delegating to the target's own keys instead, which
+// would produce an equally wrong but LESS plausible-looking answer for the
+// overwhelmingly common "trap just returns its own list" case.
+func proxyOwnPropertyKeys(vmInstance *vm.VM, proxyVal vm.Value) ([]vm.Value, error) {
+	proxy := proxyVal.AsProxy()
+	if proxy.Revoked {
+		return nil, vmInstance.NewTypeError("Cannot perform 'ownKeys' on a revoked Proxy")
+	}
+	handler := proxy.Handler()
+	target := proxy.Target()
+
+	// GetMethod(handler, "ownKeys"): an inherited trap counts, undefined/
+	// null mean "no trap" - mirrors reflect_has.go's proxyReflectHas and
+	// reflect_init.go's reflectProxySet/reflectProxyDefineDataProperty,
+	// since proxyGetTrap (pkg/vm) is unexported and unreachable from this
+	// package.
+	var trap vm.Value
+	var hasTrap bool
+	switch handler.Type() {
+	case vm.TypeObject:
+		trap, hasTrap = handler.AsPlainObject().Get("ownKeys")
+	case vm.TypeDictObject:
+		trap, hasTrap = handler.AsDictObject().Get("ownKeys")
+	}
+	if !hasTrap || trap.Type() == vm.TypeUndefined || trap.Type() == vm.TypeNull {
+		// No trap: delegate to target.[[OwnPropertyKeys]]() - concatenate
+		// the string-key and symbol-key halves, which for a plain
+		// (non-Proxy) target is exactly ECMA-262 10.1.11
+		// OrdinaryOwnPropertyKeys's required order (integer indices, then
+		// string keys, then symbol keys, all in creation order) - and
+		// recurses correctly for a nested Proxy target via this same
+		// function, through objectGetOwnPropertyNamesWithVM's own
+		// TypeProxy case calling back into this one.
+		namesVal, err := objectGetOwnPropertyNamesWithVM(vmInstance, []vm.Value{target})
+		if err != nil {
+			return nil, err
+		}
+		symsVal, err := objectGetOwnPropertySymbolsWithVM(vmInstance, []vm.Value{target})
+		if err != nil {
+			return nil, err
+		}
+		var keys []vm.Value
+		if namesVal.Type() == vm.TypeArray {
+			namesArr := namesVal.AsArray()
+			for i := 0; i < namesArr.Length(); i++ {
+				keys = append(keys, namesArr.Get(i))
+			}
+		}
+		if symsVal.Type() == vm.TypeArray {
+			symsArr := symsVal.AsArray()
+			for i := 0; i < symsArr.Length(); i++ {
+				keys = append(keys, symsArr.Get(i))
+			}
+		}
+		return keys, nil
+	}
+	if !trap.IsCallable() {
+		return nil, vmInstance.NewTypeError("'ownKeys' on proxy: trap is not a function")
+	}
+
+	trapResultArray, err := vmInstance.Call(trap, handler, []vm.Value{target})
+	if err != nil {
+		return nil, err
+	}
+
+	// CreateListFromArrayLike(trapResultArray, « String, Symbol »): accept
+	// a real array (the overwhelmingly common case) via a fast path, or
+	// any array-like object via .length + indexed access (mirrors the
+	// CreateListFromArrayLike pattern already inlined at reflect_init.go's
+	// "apply"/"construct" closures for their own argumentsList parameter).
+	var rawElements []vm.Value
+	if trapResultArray.Type() == vm.TypeArray {
+		trapArr := trapResultArray.AsArray()
+		for i := 0; i < trapArr.Length(); i++ {
+			rawElements = append(rawElements, trapArr.Get(i))
+		}
+	} else if trapResultArray.IsObject() {
+		lengthVal, err := vmInstance.GetProperty(trapResultArray, "length")
+		if err != nil {
+			return nil, err
+		}
+		length := int(lengthVal.ToFloat())
+		if length < 0 {
+			length = 0
+		}
+		for i := 0; i < length; i++ {
+			val, err := vmInstance.GetProperty(trapResultArray, strconv.Itoa(i))
+			if err != nil {
+				return nil, err
+			}
+			rawElements = append(rawElements, val)
+		}
+	} else {
+		return nil, vmInstance.NewTypeError("'ownKeys' on proxy: trap result is not an object")
+	}
+
+	// Dedup by CONTENT for a string (its `.ToString()`) and by IDENTITY for
+	// a symbol (its underlying *SymbolObject pointer) - NOT by vm.Value
+	// equality directly: two runtime-built TypeString values holding the
+	// same text are not guaranteed to compare equal via Go's `==` on
+	// vm.Value (verified: a literal "a" and a runtime-concatenated
+	// "a" + "" trap result failed to dedup when keyed on the raw Value,
+	// silently letting Node's genuine duplicate-entries TypeError through
+	// as if the list were fine).
+	type ownKeyDedupKey struct {
+		str string
+		sym *vm.SymbolObject
+	}
+	seen := make(map[ownKeyDedupKey]bool, len(rawElements))
+	trapResult := make([]vm.Value, 0, len(rawElements))
+	for _, el := range rawElements {
+		if el.Type() != vm.TypeString && el.Type() != vm.TypeSymbol {
+			return nil, vmInstance.NewTypeError(el.ToString() + " is not a valid property name")
+		}
+		var dedupKey ownKeyDedupKey
+		if el.Type() == vm.TypeSymbol {
+			dedupKey = ownKeyDedupKey{sym: el.AsSymbolObject()}
+		} else {
+			dedupKey = ownKeyDedupKey{str: el.ToString()}
+		}
+		if seen[dedupKey] {
+			return nil, vmInstance.NewTypeError("'ownKeys' on proxy: trap returned duplicate entries")
+		}
+		seen[dedupKey] = true
+		trapResult = append(trapResult, el)
+	}
+
+	return trapResult, nil
 }
 
 // reflectOwnKeysImpl returns own property keys: string names first (any enumerability), then symbols
@@ -3330,8 +3671,12 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return vm.Undefined, vmInstance.NewTypeError("Cannot define property on revoked Proxy")
 		}
 
-		// Check for defineProperty trap (per spec: GetMethod treats null/undefined as absent)
-		if defineTrap, ok := proxy.Handler().AsPlainObject().GetOwn("defineProperty"); ok && !defineTrap.IsUndefined() && defineTrap.Type() != vm.TypeNull {
+		// Check for defineProperty trap. GetMethod(handler, "defineProperty")
+		// per spec: an inherited trap counts, not just an own one -
+		// vmInstance.ProxyGetTrap (not a bare
+		// proxy.Handler().AsPlainObject().GetOwn("defineProperty")) for
+		// the same reason documented on its pkg/vm definition.
+		if defineTrap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "defineProperty"); ok && !defineTrap.IsUndefined() && defineTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !defineTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap is not a function")
@@ -3454,7 +3799,8 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		obj.Type() == vm.TypeFunction ||
 		obj.Type() == vm.TypeClosure ||
 		obj.Type() == vm.TypeNativeFunctionWithProps ||
-		obj.Type() == vm.TypeBoundFunction
+		obj.Type() == vm.TypeBoundFunction ||
+		obj.Type() == vm.TypeNativeFunction
 	if !isObjectLike {
 		return vm.Undefined, vmInstance.NewTypeError("Object.defineProperty called on non-object")
 	}
@@ -4015,6 +4361,39 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 				return vm.Undefined, definePropertyRejected(vmInstance, propName, propSym, keyIsSymbol)
 			}
 		}
+	} else if obj.Type() == vm.TypeNativeFunction {
+		// Plain native functions (e.g. Array.prototype.push) store additional
+		// properties in Properties exactly like TypeNativeFunctionWithProps
+		// above - the isObjectLike gate near the top of this function used to
+		// exclude TypeNativeFunction entirely, so Object.defineProperty on
+		// one of these threw "called on non-object" even though a
+		// bracket-notation assignment on the exact same value already wrote
+		// into this same table fine (pkg/vm/properties_table.go's
+		// ownPropertiesSlot has always listed TypeNativeFunction alongside
+		// the other four callable kinds).
+		nf := obj.AsNativeFunction()
+		if nf != nil {
+			if nf.Properties == nil {
+				nf.Properties = vm.EnsureOwnPropertiesTable(obj)
+			}
+			var defined bool
+			if hasGetter || hasSetter {
+				if keyIsSymbol {
+					defined = nf.Properties.DefineAccessorPropertyByKey(vm.NewSymbolKey(propSym), getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				} else {
+					defined = nf.Properties.DefineAccessorProperty(propName, getter, hasGetter, setter, hasSetter, enumerablePtr, configurablePtr)
+				}
+			} else {
+				if keyIsSymbol {
+					defined = nf.Properties.DefineOwnPropertyByKey(vm.NewSymbolKey(propSym), value, writablePtr, enumerablePtr, configurablePtr)
+				} else {
+					defined = nf.Properties.DefineOwnProperty(propName, value, writablePtr, enumerablePtr, configurablePtr)
+				}
+			}
+			if !defined {
+				return vm.Undefined, definePropertyRejected(vmInstance, propName, propSym, keyIsSymbol)
+			}
+		}
 	} else if obj.Type() == vm.TypeFunction {
 		// Functions store additional properties in Properties field
 		fn := obj.AsFunction()
@@ -4208,8 +4587,12 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			return vm.Undefined, vmInstance.NewTypeError("Cannot get property descriptor on revoked Proxy")
 		}
 
-		// Check for getOwnPropertyDescriptor trap (per spec: GetMethod treats null/undefined as absent)
-		if getTrap, ok := proxy.Handler().AsPlainObject().GetOwn("getOwnPropertyDescriptor"); ok && !getTrap.IsUndefined() && getTrap.Type() != vm.TypeNull {
+		// Check for getOwnPropertyDescriptor trap. GetMethod(handler,
+		// "getOwnPropertyDescriptor") per spec: an inherited trap counts,
+		// not just an own one - vmInstance.ProxyGetTrap (not a bare
+		// proxy.Handler().AsPlainObject().GetOwn("getOwnPropertyDescriptor"))
+		// for the same reason documented on its pkg/vm definition.
+		if getTrap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "getOwnPropertyDescriptor"); ok && !getTrap.IsUndefined() && getTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !getTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap is not a function")
@@ -4482,6 +4865,51 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	// Check arrays first before plainObj (arrays can also be AsPlainObject but their indices are stored separately)
 	if obj.Type() == vm.TypeArray {
 		arrObj := obj.AsArray()
+		// Symbol-keyed own properties (arr[sym] = v) live in ArrayObject's
+		// own symbolProps map (GetSymbolProp/SetSymbolProp/HasOwnSymbolProp,
+		// pkg/vm/value.go) - completely separate from the propName-based
+		// index/"length"/named-property checks below, all of which are
+		// meaningless for a symbol key (propName is "" here). This function
+		// never had a symbol-key branch for TypeArray at all, so it fell
+		// through the propName checks (none matched an empty propName) and
+		// then the switch below (which also has no TypeArray case), landing
+		// on the final default and reporting undefined even for a symbol
+		// property that demonstrably exists - Object.getOwnPropertySymbols
+		// lists it (task_778749f8) and `arr[sym]`/Reflect.get both read it
+		// back correctly, but Object.getOwnPropertyDescriptor claimed no
+		// such property existed:
+		//
+		//   const arr = [1, 2, 3]; const s = Symbol("x"); arr[s] = 42;
+		//   Object.getOwnPropertyDescriptor(arr, s);
+		//   // before: undefined
+		//   // Node:   {value: 42, writable: true, enumerable: true, configurable: true}
+		//
+		// Symbol properties on arrays have no separate attribute-override
+		// tracking (unlike named string properties' propertyDesc map), so -
+		// verified against Node - the descriptor is always the plain
+		// ordinary-property default: writable/enumerable/configurable all
+		// true. This is only safe because Object.defineProperty(arr, sym,
+		// {...}) is ITSELF currently a no-op for arrays (verified: it
+		// neither stores into symbolProps nor throws, so no non-default
+		// attribute combination or accessor can exist to misreport here) -
+		// a separate, pre-existing gap, not fixed by this branch. If a
+		// future fix adds symbol-keyed defineProperty support for arrays,
+		// this hardcoded true/true/true (and the early `return
+		// vm.Undefined, nil` for an absent key just below) will need to
+		// consult whatever attribute storage that fix introduces instead.
+		if keyIsSymbol {
+			if sym := propSym.AsSymbolObject(); sym != nil {
+				if v, ok := arrObj.GetSymbolProp(sym); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", v)
+					descriptor.SetOwn("writable", vm.BooleanValue(true))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(true))
+					descriptor.SetOwn("configurable", vm.BooleanValue(true))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+			}
+			return vm.Undefined, nil
+		}
 		isFrozen := arrObj.IsFrozen()
 		// An index (or named key) explicitly turned into an accessor via
 		// Object.defineProperty takes priority over the plain-element read
@@ -4786,6 +5214,36 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		}
 	case vm.TypeNativeFunction:
 		nf := obj.AsNativeFunction()
+		// A symbol key is never "name"/"length" (a symbol never equals a
+		// string), so it skips straight to the side-table lookup - mirroring
+		// the TypeBoundFunction block below (accessor first, then data).
+		// Before this, TypeNativeFunction never checked nf.Properties at
+		// all here, symbol or string key: Object.defineProperty on a plain
+		// native function (e.g. Array.prototype.push) now writes into that
+		// table (a separate, sibling fix), but this getter still answered
+		// undefined for what it had just written.
+		if keyIsSymbol {
+			if nf.Properties != nil {
+				symKey := vm.NewSymbolKey(propSym)
+				if g, s, e, c, ok := nf.Properties.GetOwnAccessorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("get", g)
+					descriptor.SetOwn("set", s)
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				if v, w, e, c, ok := nf.Properties.GetOwnDescriptorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", v)
+					descriptor.SetOwn("writable", vm.BooleanValue(w))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+			}
+			return vm.Undefined, nil
+		}
 		if propName == "name" && !nf.DeletedName {
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", vm.NewString(nf.Name))
@@ -4801,6 +5259,27 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
 			descriptor.SetOwn("configurable", vm.BooleanValue(true))
 			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+		// Any other own property (set via bracket-notation assignment or
+		// Object.defineProperty on this same table) - accessor first, then
+		// data, mirroring the symbol-key check above.
+		if nf.Properties != nil {
+			if g, s, e, c, ok := nf.Properties.GetOwnAccessor(propName); ok {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				descriptor.SetOwn("get", g)
+				descriptor.SetOwn("set", s)
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
+			if v, w, e, c, ok := nf.Properties.GetOwnDescriptor(propName); ok {
+				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				descriptor.SetOwn("value", v)
+				descriptor.SetOwn("writable", vm.BooleanValue(w))
+				descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+				descriptor.SetOwn("configurable", vm.BooleanValue(c))
+				return vm.NewValueFromPlainObject(descriptor), nil
+			}
 		}
 	case vm.TypeNativeFunctionWithProps:
 		nfp := obj.AsNativeFunctionWithProps()
@@ -4822,9 +5301,37 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		}
 	case vm.TypeBoundFunction:
 		bf := obj.AsBoundFunction()
-		// Bound function name/length are real own properties in bf.Properties
-		// They can be deleted (configurable:true) or redefined via Object.defineProperty
 		if bf.Properties != nil {
+			// A symbol key never names the synthesized "name"/"length"
+			// intrinsics above, so it skips straight to the side-table
+			// lookup - mirroring the TypeMap/TypeSet/TypePromise block
+			// below (accessor first, then data), which this case never
+			// had at all: it only ever looked up `propName`, a string, so
+			// `Object.getOwnPropertyDescriptor(boundFn, sym)` answered
+			// undefined even for a real own symbol property that
+			// Reflect.has/`in` already found correctly.
+			if keyIsSymbol {
+				symKey := vm.NewSymbolKey(propSym)
+				if g, s, e, c, ok := bf.Properties.GetOwnAccessorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("get", g)
+					descriptor.SetOwn("set", s)
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				if v, w, e, c, ok := bf.Properties.GetOwnDescriptorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", v)
+					descriptor.SetOwn("writable", vm.BooleanValue(w))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				return vm.Undefined, nil
+			}
+			// Bound function name/length are real own properties in bf.Properties
+			// They can be deleted (configurable:true) or redefined via Object.defineProperty
 			if propName == "name" || propName == "length" {
 				if val, ok := bf.Properties.GetOwn(propName); ok {
 					_, w, e, c, _ := bf.Properties.GetOwnDescriptor(propName)
@@ -4854,6 +5361,38 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	// Handle RegExp intrinsic property: lastIndex
 	// Per ECMAScript spec: {value: 0, writable: true, enumerable: false, configurable: false}
 	if obj.Type() == vm.TypeRegExp {
+		// A symbol key is never "lastIndex" (a symbol never equals a
+		// string), so that intrinsic check stays string-only and this
+		// skips straight to the side-table lookup - mirroring the
+		// TypeMap/TypeSet/TypePromise block above (accessor first, then
+		// data), which the "custom properties on the regex" check just
+		// below never had at all: it only ever looked up `propName`, a
+		// string, so `Object.getOwnPropertyDescriptor(regex, sym)`
+		// answered undefined even for a real own symbol property that
+		// Reflect.has/`in` already found correctly.
+		if keyIsSymbol {
+			regexObj := obj.AsRegExpObject()
+			if regexObj != nil && regexObj.Properties != nil {
+				symKey := vm.NewSymbolKey(propSym)
+				if g, s, e, c, ok := regexObj.Properties.GetOwnAccessorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("get", g)
+					descriptor.SetOwn("set", s)
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				if v, w, e, c, ok := regexObj.Properties.GetOwnDescriptorByKey(symKey); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", v)
+					descriptor.SetOwn("writable", vm.BooleanValue(w))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+			}
+			return vm.Undefined, nil
+		}
 		if propName == "lastIndex" {
 			regexObj := obj.AsRegExpObject()
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
@@ -5021,7 +5560,77 @@ func objectGetOwnPropertyDescriptorsWithVM(vmInstance *vm.VM, args []vm.Value) (
 						stringKeys = append(stringKeys, k)
 					}
 				}
+				// Symbol keys were missing here too (e.g. a symbol property
+				// defined on a native constructor like Boolean/Number) -
+				// same gap as the TypeNativeFunction branch below, fixed
+				// alongside it since it's the identical one-line fix on the
+				// identical *PlainObject side table.
+				symbolKeys = append(symbolKeys, nfp.Properties.OwnSymbolKeys()...)
 			}
+		} else {
+			// TypeNativeFunction: a plain native method's own custom
+			// properties - this branch never existed at all, so
+			// Object.getOwnPropertyDescriptors(nf) only ever reported
+			// "length"/"name", silently dropping anything just defined via
+			// Object.defineProperty or bracket-notation assignment (the
+			// single-key Object.getOwnPropertyDescriptor already answered
+			// correctly for the exact same property).
+			nf := obj.AsNativeFunction()
+			if nf.Properties != nil {
+				for _, k := range nf.Properties.OwnPropertyNames() {
+					if k != "length" && k != "name" {
+						stringKeys = append(stringKeys, k)
+					}
+				}
+				symbolKeys = append(symbolKeys, nf.Properties.OwnSymbolKeys()...)
+			}
+		}
+	case vm.TypeBoundFunction:
+		// This case didn't exist at all before this fix, so
+		// Object.getOwnPropertyDescriptors(boundFn) always returned {}
+		// entirely - missing even "name"/"length", unlike every other
+		// callable kind's branch in this same switch (which all
+		// synthesize those two explicitly, since for THEM name/length
+		// aren't real entries in the side table). A bound function is the
+		// one callable kind where "name" ("bound " + original name) and
+		// "length" (computed at bind time) genuinely ARE real own
+		// properties set directly into bf.Properties (see
+		// pkg/vm/property_helpers.go's "Bound functions: 'name'/'length'
+		// is a real own property set at bind time" comments), so unlike
+		// TypeFunction/TypeNativeFunction*/TypeClosure above, no special
+		// synthesis is needed here - a plain OwnPropertyNames()/
+		// OwnSymbolKeys() walk already includes them alongside any other
+		// custom own property (Object.defineProperty, bracket-notation
+		// assignment).
+		bf := obj.AsBoundFunction()
+		if bf.Properties != nil {
+			stringKeys = append(stringKeys, bf.Properties.OwnPropertyNames()...)
+			symbolKeys = append(symbolKeys, bf.Properties.OwnSymbolKeys()...)
+		}
+	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise:
+		// These exotic kinds keep their ordinary own properties in the same
+		// lazily-allocated side table (OwnPropertiesTable, pkg/vm/
+		// properties_table.go) as Function/Closure/NativeFunctionWithProps
+		// above - this case was missing entirely, so
+		// Object.getOwnPropertyDescriptors always returned {} for one of
+		// these four kinds even after a real own property had been defined
+		// or assigned on it, despite the single-key
+		// Object.getOwnPropertyDescriptor already answering correctly for
+		// the exact same property.
+		//
+		// RegExp's "lastIndex" is its own case: like TypeFunction's
+		// synthesized "length"/"name"/"prototype" intrinsics above, it is a
+		// real own property that isn't stored in the side table at all (a
+		// Go field on RegExpObject instead - see
+		// objectGetOwnPropertyDescriptorWithVM's TypeRegExp handling, same
+		// file), so it has to be added explicitly rather than falling out
+		// of OwnPropertyNames().
+		if obj.Type() == vm.TypeRegExp {
+			stringKeys = append(stringKeys, "lastIndex")
+		}
+		if props := vm.OwnPropertiesTable(obj); props != nil {
+			stringKeys = append(stringKeys, props.OwnPropertyNames()...)
+			symbolKeys = append(symbolKeys, props.OwnSymbolKeys()...)
 		}
 	}
 
@@ -5066,8 +5675,12 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 			return vm.Undefined, vmInstance.NewTypeError("Cannot check extensibility of revoked Proxy")
 		}
 
-		// Check for isExtensible trap (per spec: GetMethod treats null/undefined as absent)
-		if extTrap, ok := proxy.Handler().AsPlainObject().GetOwn("isExtensible"); ok && !extTrap.IsUndefined() && extTrap.Type() != vm.TypeNull {
+		// Check for isExtensible trap. GetMethod(handler, "isExtensible")
+		// per spec: an inherited trap counts, not just an own one -
+		// vmInstance.ProxyGetTrap (not a bare
+		// proxy.Handler().AsPlainObject().GetOwn("isExtensible")) for the
+		// same reason documented on its pkg/vm definition.
+		if extTrap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "isExtensible"); ok && !extTrap.IsUndefined() && extTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !extTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'isExtensible' on proxy: trap is not a function")
@@ -5155,8 +5768,12 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 			return vm.Undefined, vmInstance.NewTypeError("Cannot prevent extensions on revoked Proxy")
 		}
 
-		// Check for preventExtensions trap (per spec: GetMethod treats null/undefined as absent)
-		if prevTrap, ok := proxy.Handler().AsPlainObject().GetOwn("preventExtensions"); ok && !prevTrap.IsUndefined() && prevTrap.Type() != vm.TypeNull {
+		// Check for preventExtensions trap. GetMethod(handler,
+		// "preventExtensions") per spec: an inherited trap counts, not
+		// just an own one - vmInstance.ProxyGetTrap (not a bare
+		// proxy.Handler().AsPlainObject().GetOwn("preventExtensions")) for
+		// the same reason documented on its pkg/vm definition.
+		if prevTrap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "preventExtensions"); ok && !prevTrap.IsUndefined() && prevTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !prevTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'preventExtensions' on proxy: trap is not a function")

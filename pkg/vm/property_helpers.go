@@ -1048,13 +1048,22 @@ func HasOwnFunctionIntrinsic(target Value, name string) bool {
 // for pkg/builtins: Reflect.has's callable cases (Function, Closure,
 // NativeFunction, NativeFunctionWithProps, BoundFunction) need the exact
 // same "own side table, then FunctionPrototype" fallback OpIn's own
-// callable cases already use internally, for a string key (this does not
-// handle a symbol key - FunctionPrototype's own representation, a
-// PlainObject in the common case but possibly a NativeFunctionWithProps,
-// needs a manual walk to support that correctly; see OpIn's
-// TypeFunction/TypeClosure symbol branches in vm.go for the pattern).
+// callable cases already use internally, for a string key.
 func (vm *VM) HasFunctionPrototypeProperty(propKey string) bool {
 	return vm.hasFunctionPrototypeProperty(propKey)
+}
+
+// HasFunctionPrototypeSymbolProperty is HasFunctionPrototypeProperty for a
+// symbol key (e.g. Symbol.hasInstance), exported for pkg/builtins so
+// Reflect.has's callable case can use the exact same walk OpIn's own
+// callable cases use internally (vm.go's hasFunctionPrototypeSymbolProperty)
+// instead of unconditionally answering false for any symbol key beyond a
+// callable's own side table - which would otherwise have `in` (which does
+// walk this chain) disagree with Reflect.has for an inherited symbol
+// property, the same "in disagrees with Reflect.has" bug class fixed
+// elsewhere in this function for string keys.
+func (vm *VM) HasFunctionPrototypeSymbolProperty(key PropertyKey) bool {
+	return vm.hasFunctionPrototypeSymbolProperty(key)
 }
 
 // handleSpecialProperties handles special properties like .length

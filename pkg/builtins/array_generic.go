@@ -329,7 +329,11 @@ func arrayLikeGetProxy(vmInstance *vm.VM, proxyVal vm.Value, i int) (vm.Value, b
 		return vm.Undefined, false, vmInstance.NewTypeError("Cannot perform 'has' on a proxy that has been revoked")
 	}
 	key := strconv.Itoa(i)
-	if hasTrap, ok := proxy.Handler().AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != vm.TypeUndefined && hasTrap.Type() != vm.TypeNull {
+	// GetMethod(handler, "has") per spec: an inherited trap counts, not
+	// just an own one - vmInstance.ProxyGetTrap (not a bare
+	// proxy.Handler().AsPlainObject().GetOwn("has")) for the same reason
+	// documented on its pkg/vm definition.
+	if hasTrap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "has"); ok && hasTrap.Type() != vm.TypeUndefined && hasTrap.Type() != vm.TypeNull {
 		if !hasTrap.IsCallable() {
 			return vm.Undefined, false, vmInstance.NewTypeError("'has' on proxy: trap is not a function")
 		}
@@ -559,7 +563,11 @@ func proxyDeleteProperty(vmInstance *vm.VM, proxyVal vm.Value, i int, key string
 	if proxy.Revoked {
 		return vmInstance.NewTypeError("Cannot delete property from a revoked Proxy")
 	}
-	deleteTrap, ok := proxy.Handler().AsPlainObject().GetOwn("deleteProperty")
+	// GetMethod(handler, "deleteProperty") per spec: an inherited trap
+	// counts, not just an own one - vmInstance.ProxyGetTrap (not a bare
+	// proxy.Handler().AsPlainObject().GetOwn("deleteProperty")) for the
+	// same reason documented on its pkg/vm definition.
+	deleteTrap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "deleteProperty")
 	if !ok || deleteTrap.Type() == vm.TypeUndefined || deleteTrap.Type() == vm.TypeNull {
 		return arrayLikeDelete(vmInstance, proxy.Target(), i)
 	}

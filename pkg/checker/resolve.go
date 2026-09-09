@@ -2312,22 +2312,6 @@ func (c *Checker) isAssignableWithExpansion(source, target types.Type) bool {
 	return result
 }
 
-// isArgumentAssignableWithExpansion is like isAssignableWithExpansion, but
-// used specifically for checking a value passed as a call argument against
-// its parameter type. It additionally tolerates a `void`-returning function
-// argument wherever the parameter's declared type is itself a function type
-// (see types.IsAssignableForCallArgument for why this is scoped to call
-// arguments rather than general assignability).
-func (c *Checker) isArgumentAssignableWithExpansion(source, target types.Type) bool {
-	source = c.resolveTypeofTypeIfNeeded(source)
-	target = c.resolveTypeofTypeIfNeeded(target)
-
-	expandedTarget := c.expandIfMappedType(target)
-	expandedSource := c.expandIfMappedType(source)
-
-	return types.IsAssignableForCallArgument(expandedSource, expandedTarget)
-}
-
 // expandIfMappedType expands a type if it's a mapped type or contains a mapped type
 func (c *Checker) expandIfMappedType(typ types.Type) types.Type {
 	if typ == nil {

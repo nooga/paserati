@@ -102,6 +102,62 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 	if objVal.Type() == TypeNativeFunction {
 		nf := objVal.AsNativeFunction()
 		if nf != nil && nf.Properties != nil {
+			// Check for an accessor property first (getters/setters) -
+			// mirrors TypeBoundFunction's equivalent check in
+			// handleCallableProperty (property_helpers.go). Without this,
+			// an accessor defined via Object.defineProperty(nf, "custom",
+			// {get(){...}}) fell straight to GetOwn below, which - for an
+			// accessor field - returns (Undefined, true) (DefineAccessorProperty
+			// appends a placeholder Undefined properties slot for it), so
+			// `nf.custom` silently answered undefined instead of calling
+			// the getter, even though the same accessor's *setter* already
+			// ran correctly via `nf.custom = v` (pkg/vm/op_setprop.go).
+			if g, _, _, _, ok := nf.Properties.GetOwnAccessor(propName); ok {
+				if g.Type() != TypeUndefined {
+					res, err := vm.Call(g, *objVal, nil)
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							if frame != nil && !frameWasNil {
+								frame.ip = ip - 4
+							}
+							vm.throwException(ee.GetExceptionValue())
+							if !vm.unwinding {
+								return false, InterpretOK, Undefined
+							}
+							return false, InterpretRuntimeError, Undefined
+						}
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						if frame != nil && !frameWasNil {
+							frame.ip = ip - 4
+						}
+						vm.throwException(excVal)
+						if !vm.unwinding {
+							return false, InterpretOK, Undefined
+						}
+						return false, InterpretRuntimeError, Undefined
+					}
+					*dest = res
+					return true, InterpretOK, *dest
+				}
+				// Setter-only accessor (no getter): reads as undefined per spec.
+				*dest = Undefined
+				return true, InterpretOK, *dest
+			}
 			if prop, exists := nf.Properties.GetOwn(propName); exists {
 				*dest = prop
 				return true, InterpretOK, *dest
@@ -1130,15 +1186,11 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			return false, InterpretRuntimeError, Undefined
 		}
 
-		// Check if handler has a get trap (handler can be PlainObject or DictObject)
-		var getTrap Value
-		var hasGetTrap bool
-		switch proxy.handler.Type() {
-		case TypeObject:
-			getTrap, hasGetTrap = proxy.handler.AsPlainObject().GetOwn("get")
-		case TypeDictObject:
-			getTrap, hasGetTrap = proxy.handler.AsDictObject().GetOwn("get")
-		}
+		// Check if handler has a get trap. GetMethod(handler, "get") per
+		// spec: an inherited trap counts, not just an own one - proxyGetTrap
+		// (not a bare proxy.handler.AsPlainObject().GetOwn("get")) for the
+		// same reason documented on its own definition.
+		getTrap, hasGetTrap := proxyGetTrap(proxy.handler, "get")
 		if hasGetTrap && getTrap.Type() != TypeUndefined && getTrap.Type() != TypeNull {
 			// Validate trap is callable
 			if !getTrap.IsCallable() {
@@ -1234,134 +1286,70 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			*dest = result
 			return true, InterpretOK, *dest
 		} else {
-			// No get trap, fallback to target - implement directly to avoid recursion
-			target := proxy.target
-			if target.Type() == TypeObject {
-				if result, handled := vm.handleSpecialProperties(target, propName); handled {
-					*dest = result
-					return true, InterpretOK, *dest
+			// No get trap: fall back to target.[[Get]] via
+			// getPropertyWithReceiver, not a hand-rolled reimplementation
+			// (what used to live here, added to "avoid recursion" - but
+			// it only ever handled a TypeObject/TypeDictObject/callable
+			// target; every other legal proxy.target kind (TypeArray,
+			// TypeMap, TypeSet, TypePromise, TypeRegExp, TypeGenerator,
+			// TypeBoundFunction, TypeNativeFunction,
+			// TypeNativeFunctionWithProps, TypeArguments, a further-nested
+			// Proxy, ...) fell through to a bare `*dest = Undefined`
+			// instead - e.g. `new Proxy(someArray, {})` (no get trap, a
+			// real Array target) silently read `undefined` for EVERY
+			// property, including "length": handleSpecialProperties and
+			// handlePrimitiveMethod, both called here, switch on the
+			// TARGET's kind (TypeArray/TypeMap/TypeSet/... for the
+			// former, TypeString/TypeArray/TypeMap/... for the latter)
+			// but were only ever reached when target.Type() == TypeObject
+			// was already true - so neither call could ever actually
+			// match anything; both were dead code at this specific call
+			// site. getPropertyWithReceiver already handles every kind
+			// (including recursing through a further-nested Proxy) and
+			// already threads a receiver through any accessor/trap found
+			// along the way, exactly like the get-trap-call branch above
+			// does with *objVal - so this isn't a behavior change for the
+			// TypeObject/TypeDictObject/callable kinds that WERE already
+			// handled here, only an extension to the kinds that weren't.
+			result, err := vm.getPropertyWithReceiver(proxy.target, propName, *objVal)
+			if err != nil {
+				if ee, ok := err.(ExceptionError); ok {
+					if frame != nil && !frameWasNil {
+						frame.ip = ip - 4
+					}
+					vm.throwException(ee.GetExceptionValue())
+					if !vm.unwinding {
+						return false, InterpretOK, Undefined
+					}
+					return false, InterpretRuntimeError, Undefined
 				}
-				if result, handled := vm.handlePrimitiveMethod(target, propName); handled {
-					*dest = result
-					return true, InterpretOK, *dest
-				}
-				// Use enhanced property resolution with prototype caching and metadata
-				if holder, offset, isAccessor, found := vm.resolvePropertyMeta(target, propName, nil, 0); found {
-					if isAccessor {
-						if g, _, _, _, ok := holder.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
-							res, err := vm.Call(g, target, nil)
-							if err != nil {
-								if ee, ok := err.(ExceptionError); ok {
-									if frame != nil && !frameWasNil {
-										frame.ip = ip - 4
-									}
-									vm.throwException(ee.GetExceptionValue())
-									if !vm.unwinding {
-										return false, InterpretOK, Undefined
-									}
-									return false, InterpretRuntimeError, Undefined
-								}
-								var excVal Value
-								if errCtor, ok := vm.GetGlobal("Error"); ok {
-									if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-										excVal = res
-									} else {
-										eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-										eo.SetOwn("name", NewString("Error"))
-										eo.SetOwn("message", NewString(err.Error()))
-										excVal = NewValueFromPlainObject(eo)
-									}
-								} else {
-									eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-									eo.SetOwn("name", NewString("Error"))
-									eo.SetOwn("message", NewString(err.Error()))
-									excVal = NewValueFromPlainObject(eo)
-								}
-								if frame != nil && !frameWasNil {
-									frame.ip = ip - 4
-								}
-								vm.throwException(excVal)
-								if !vm.unwinding {
-									return false, InterpretOK, Undefined
-								}
-								return false, InterpretRuntimeError, Undefined
-							}
-							*dest = res
-						} else {
-							*dest = Undefined
-						}
+				var excVal Value
+				if errCtor, ok := vm.GetGlobal("Error"); ok {
+					if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+						excVal = res
 					} else {
-						*dest = holder.properties[offset]
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
 					}
-					return true, InterpretOK, *dest
-				}
-			} else if target.Type() == TypeDictObject {
-				dict := target.AsDictObject()
-				if fv, ok := dict.Get(propName); ok {
-					*dest = fv
 				} else {
-					*dest = Undefined
+					eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+					eo.SetOwn("name", NewString("Error"))
+					eo.SetOwn("message", NewString(err.Error()))
+					excVal = NewValueFromPlainObject(eo)
 				}
-				return true, InterpretOK, *dest
-			} else if target.IsCallable() {
-				// Function target - look up properties from Function.prototype
-				// Function.prototype can be TypeNativeFunctionWithProps (common case)
-				// or TypeObject (less common)
-				if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
-					funcProto := vm.FunctionPrototype.AsNativeFunctionWithProps()
-					if v, ok := funcProto.Properties.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					// Walk prototype chain from Function.prototype.Properties
-					current := funcProto.Properties.GetPrototype()
-					for current.typ != TypeNull && current.typ != TypeUndefined {
-						if current.IsObject() {
-							if current.Type() == TypeObject {
-								proto := current.AsPlainObject()
-								if v, ok := proto.GetOwn(propName); ok {
-									*dest = v
-									return true, InterpretOK, *dest
-								}
-								current = proto.prototype
-							} else {
-								break
-							}
-						} else {
-							break
-						}
-					}
-				} else if vm.FunctionPrototype.IsObject() {
-					funcProto := vm.FunctionPrototype.AsPlainObject()
-					if v, ok := funcProto.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					// Walk prototype chain from Function.prototype
-					current := funcProto.prototype
-					for current.typ != TypeNull && current.typ != TypeUndefined {
-						if current.IsObject() {
-							if current.Type() == TypeObject {
-								proto := current.AsPlainObject()
-								if v, ok := proto.GetOwn(propName); ok {
-									*dest = v
-									return true, InterpretOK, *dest
-								}
-								current = proto.prototype
-							} else {
-								break
-							}
-						} else {
-							break
-						}
-					}
+				if frame != nil && !frameWasNil {
+					frame.ip = ip - 4
 				}
-				*dest = Undefined
-				return true, InterpretOK, *dest
-			} else {
-				*dest = Undefined
-				return true, InterpretOK, *dest
+				vm.throwException(excVal)
+				if !vm.unwinding {
+					return false, InterpretOK, Undefined
+				}
+				return false, InterpretRuntimeError, Undefined
 			}
+			*dest = result
+			return true, InterpretOK, *dest
 		}
 	}
 
@@ -1426,9 +1414,33 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	case TypeArray:
+		// Arrays: consult the array's OWN symbol-keyed properties first -
+		// opSetPropSymbol's TypeArray case (pkg/vm/op_setprop.go) already
+		// writes `arr[sym] = v` into ArrayObject.symbolProps via
+		// SetSymbolProp, but this case used to skip straight to the
+		// prototype chain without ever checking it, so the read half of
+		// the exact same feature silently returned undefined - or, worse,
+		// a same-named symbol property inherited from Array.prototype -
+		// instead of the array's own value:
+		//
+		//   const arr = [1, 2, 3];
+		//   const sym = Symbol("s");
+		//   arr[sym] = 42;
+		//   arr[sym]; // before: undefined - Node: 42
+		//
+		// GetSymbolProp already existed and worked (that's how
+		// HasOwnSymbolProp/Object.getOwnPropertySymbols's new TypeArray
+		// case can see it) - this case just never called it.
+		arrObj := base.AsArray()
+		if sym := symKey.AsSymbolObject(); sym != nil {
+			if v, ok := arrObj.GetSymbolProp(sym); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+		}
 		// Arrays: consult the per-instance prototype override (subclassing)
 		// before falling back to the realm's intrinsic Array.prototype.
-		proto := base.AsArray().prototype
+		proto := arrObj.prototype
 		if !proto.IsObject() {
 			proto = vm.ArrayPrototype
 		}
@@ -2182,6 +2194,91 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 				*dest = v
 				return true, InterpretOK, *dest
 			}
+		}
+		*dest = Undefined
+		return true, InterpretOK, *dest
+	}
+
+	// NativeFunction: check own symbol properties (accessor first, mirroring
+	// TypeObject's GetOwnAccessorByKey-then-GetOwnByKey pattern above and
+	// this same TypeNativeFunction kind's string-key equivalent in
+	// opGetProp's block 3b), then Function.prototype chain.
+	//
+	// This case didn't exist at all before this fix, so a symbol-keyed own
+	// property - even a plain data one - set via bracket-notation
+	// assignment or Object.defineProperty always fell through to the
+	// DictObject default below and read back as undefined, even though
+	// Object.getOwnPropertyDescriptor already showed it existed correctly.
+	//
+	// The accessor check specifically was added after review flagged an
+	// asymmetry a first pass introduced: opGetProp's block 3b (string keys,
+	// same TypeNativeFunction kind) invokes an own accessor's getter, so
+	// leaving this symbol-key sibling without one would have made
+	// `nf.custom` call the getter while `nf[sym]` did not, on the very
+	// same value in the same commit - worse than the pre-fix state of
+	// "symbol keys don't work at all". TypeFunction/TypeClosure/
+	// TypeBoundFunction/TypeNativeFunctionWithProps above still lack this
+	// (none of those four invoke a symbol-key accessor's getter; TypeObject,
+	// separately, already does - see its own case earlier in this
+	// function), so that remains a real, separate, still-open gap.
+	if base.Type() == TypeNativeFunction {
+		nf := base.AsNativeFunction()
+		key := NewSymbolKey(symKey)
+		if nf.Properties != nil {
+			if g, _, _, _, ok := nf.Properties.GetOwnAccessorByKey(key); ok {
+				if g.Type() != TypeUndefined {
+					res, err := vm.Call(g, base, nil)
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							if frame != nil && !frameWasNil {
+								frame.ip = ip - 4
+							}
+							vm.throwException(ee.GetExceptionValue())
+							if !vm.unwinding {
+								return false, InterpretOK, Undefined
+							}
+							return false, InterpretRuntimeError, Undefined
+						}
+						var excVal Value
+						if errCtor, ok := vm.GetGlobal("Error"); ok {
+							if res2, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+								excVal = res2
+							} else {
+								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+								eo.SetOwn("name", NewString("Error"))
+								eo.SetOwn("message", NewString(err.Error()))
+								excVal = NewValueFromPlainObject(eo)
+							}
+						} else {
+							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+							eo.SetOwn("name", NewString("Error"))
+							eo.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(eo)
+						}
+						if frame != nil && !frameWasNil {
+							frame.ip = ip - 4
+						}
+						vm.throwException(excVal)
+						if !vm.unwinding {
+							return false, InterpretOK, Undefined
+						}
+						return false, InterpretRuntimeError, Undefined
+					}
+					*dest = res
+					return true, InterpretOK, *dest
+				}
+				// Setter-only accessor (no getter): reads as undefined per spec.
+				*dest = Undefined
+				return true, InterpretOK, *dest
+			}
+			if v, ok := nf.Properties.GetOwnByKey(key); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+		}
+		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
+			*dest = v
+			return true, InterpretOK, *dest
 		}
 		*dest = Undefined
 		return true, InterpretOK, *dest

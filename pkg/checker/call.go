@@ -249,7 +249,7 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 				if paramIsOptional {
 					paramType = types.NewUnionType(paramType, types.Undefined)
 				}
-				if argType != nil && !c.isArgumentAssignableWithExpansion(argType, paramType) {
+				if argType != nil && !c.isAssignableWithExpansion(argType, paramType) {
 					c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), paramType.String()))
 					allOk = false
 				}
