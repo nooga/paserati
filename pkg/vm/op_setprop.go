@@ -1203,6 +1203,25 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 		return true, InterpretOK, *valueToSet
 	}
 
+	// Every remaining exotic kind that keeps its ordinary own properties in
+	// a lazily-allocated side table (OwnPropertiesTable/
+	// EnsureOwnPropertiesTable, pkg/vm/properties_table.go, via
+	// ownPropertiesSlot) shares this one branch - Map/Set/Promise here
+	// alongside BoundFunction/NativeFunctionWithProps/NativeFunction, which
+	// (unlike TypeFunction/TypeClosure/TypeRegExp just above) had no
+	// explicit case at all. A symbol-keyed bracket assignment
+	// (obj[sym] = v) on any of these silently did nothing - falling all
+	// the way through to the "ignore symbol set" branch below - even
+	// though the equivalent string-keyed assignment (opSetProp, called by
+	// OpSetIndex's outer switch) already writes into the exact same table.
+	switch objVal.Type() {
+	case TypeMap, TypeSet, TypePromise, TypeBoundFunction, TypeNativeFunctionWithProps, TypeNativeFunction:
+		if props := EnsureOwnPropertiesTable(*objVal); props != nil {
+			return vm.setOwnCheckedByKey(props, NewSymbolKey(symKey), *valueToSet)
+		}
+		return true, InterpretOK, *valueToSet
+	}
+
 	// Only PlainObject supports symbol keys for now
 	if objVal.Type() != TypeObject {
 		// DictObject or others: ignore symbol set (non-strict semantics)

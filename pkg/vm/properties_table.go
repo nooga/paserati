@@ -127,12 +127,42 @@ func (vm *VM) setOwnChecked(props *PlainObject, name string, v Value) (bool, Int
 
 // setOwnCheckedByKey is setOwnChecked for a symbol (or otherwise non-string)
 // key. It stores through DefineOwnPropertyByKey because that is what the
-// symbol-set paths already did.
+// symbol-set paths already did - but a plain assignment (obj[sym] = v) is
+// ordinary [[Set]], not Object.defineProperty: a brand-new property must
+// come out {writable: true, enumerable: true, configurable: true} ("regular
+// assignment semantics", per SetOwn's comment for the string-key path,
+// pkg/vm/object.go), not DefineOwnPropertyByKey's own default of false for
+// every attribute a nil pointer leaves unspecified. Passing nil for all
+// three - as this used to unconditionally do - silently created every
+// symbol property from a plain assignment as non-writable, non-enumerable,
+// non-configurable. Redefining an *existing* property still passes nil
+// throughout, so DefineOwnPropertyByKey's own already-correct
+// attribute-preserving behavior for that case is untouched.
 func (vm *VM) setOwnCheckedByKey(props *PlainObject, key PropertyKey, v Value) (bool, InterpretResult, Value) {
 	if allowed, threw := vm.tableSetAllowed(props, key, key.debugName()); !allowed {
 		if threw {
 			return false, InterpretRuntimeError, Undefined
 		}
+		return true, InterpretOK, v
+	}
+	// HasOwnByKey re-derives existence tableSetAllowed already checked
+	// (GetOwnAccessorByKey/GetOwnDescriptorByKey) - a third linear scan
+	// over the same shape, not a different question. Left as its own call
+	// rather than threading a result out of tableSetAllowed, since that
+	// function's signature is shared with the string-key path.
+	//
+	// Note: if key already names an accessor, tableSetAllowed's
+	// isAccessor check reports allowed=true, and this falls into the
+	// "existing" branch below with nil attribute pointers -
+	// DefineOwnPropertyByKey's accessor-to-data conversion then silently
+	// clobbers the accessor into a plain data property instead of calling
+	// its setter (or, getter-only, leaving it untouched). That is a
+	// distinct, pre-existing bug in its own right (reproduces identically
+	// for a plain function's symbol accessor, unaffected by this specific
+	// existence check) - not introduced or fixed here.
+	if !props.HasOwnByKey(key) {
+		w, e, c := true, true, true
+		props.DefineOwnPropertyByKey(key, v, &w, &e, &c)
 		return true, InterpretOK, v
 	}
 	props.DefineOwnPropertyByKey(key, v, nil, nil, nil)

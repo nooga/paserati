@@ -8936,7 +8936,7 @@ startExecution:
 					}
 				}
 
-			case TypeObject, TypeDictObject, TypeFunction, TypeClosure, TypeRegExp, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeAsyncNativeFunction: // Functions, closures, RegExps, and native functions can have properties
+			case TypeObject, TypeDictObject, TypeFunction, TypeClosure, TypeRegExp, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeAsyncNativeFunction, TypeMap, TypeSet, TypePromise: // Functions, closures, RegExps, native functions, and Map/Set/Promise can have properties
 				var key string
 				switch indexVal.Type() {
 				case TypeString:
