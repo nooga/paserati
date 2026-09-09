@@ -14666,21 +14666,23 @@ startExecution:
 						cur = pv.AsPlainObject()
 					}
 				}
-			case TypeMap, TypeSet, TypePromise:
+			case TypeMap, TypeSet, TypePromise, TypeNativeFunction, TypeNativeFunctionWithProps:
 				// Same side table as TypeRegExp just above (OwnPropertiesTable,
 				// pkg/vm/properties_table.go) - this case was missing
 				// entirely, so `for (k in map)`/`for (k in set)`/
-				// `for (k in promise)` came back with nothing even after a
-				// plain assignment onto the value. Map/Set's own "size" is
-				// never an own property (it's a getter on Map.prototype/
-				// Set.prototype - Object.getOwnPropertyDescriptor(new Map(),
-				// "size") is undefined in Node), and Promise exposes no
-				// user-accessible own state, so only the side table matters
+				// `for (k in promise)`/`for (k in nativeFn)` came back with
+				// nothing even after a plain assignment onto the value.
+				// Map/Set's own "size" is never an own property (it's a
+				// getter on Map.prototype/Set.prototype -
+				// Object.getOwnPropertyDescriptor(new Map(), "size") is
+				// undefined in Node), Promise exposes no user-accessible own
+				// state, and TypeNativeFunction/TypeNativeFunctionWithProps'
+				// "name"/"length" are non-enumerable synthesized intrinsics,
+				// not side-table entries - so only the side table matters
 				// here, same as RegExp's "lastIndex" staying excluded above.
-				// OwnPropertiesTable abstracts over the three kinds' actual
-				// field names (MapObject/SetObject/PromiseObject.Properties)
-				// via ownPropertiesSlot, so one case covers all three
-				// instead of duplicating the TypeRegExp case's body three
+				// OwnPropertiesTable abstracts over all five kinds' actual
+				// field names via ownPropertiesSlot, so one case covers them
+				// instead of duplicating the TypeRegExp case's body five
 				// times.
 				if props := OwnPropertiesTable(objValue); props != nil {
 					seen := make(map[string]bool)

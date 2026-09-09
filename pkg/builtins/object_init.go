@@ -2089,16 +2089,19 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				}
 			}
 		}
-	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise:
+	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps:
 		// Same side table as the exotic kinds above (OwnPropertiesTable,
 		// pkg/vm/properties_table.go) - this case was missing entirely, so
-		// Object.keys always came back empty for these four kinds even
+		// Object.keys always came back empty for these six kinds even
 		// after a custom own property was defined on one (e.g. r.custom =
 		// 42, or Object.defineProperty once that gap is fixed too).
 		// RegExp's "lastIndex" never appears here: it's a real Go field on
 		// RegExpObject, not a side-table entry, and it's non-enumerable in
 		// any case (Object.getOwnPropertyDescriptor's TypeRegExp case,
-		// same file).
+		// same file). TypeNativeFunction/TypeNativeFunctionWithProps'
+		// "name"/"length" intrinsics are non-enumerable synthesized
+		// properties, not side-table entries either, so they're correctly
+		// excluded here the same way.
 		if props := vm.OwnPropertiesTable(obj); props != nil {
 			for _, key := range props.OwnKeys() {
 				if _, _, en, _, ok := props.GetOwnDescriptor(key); ok && en {
@@ -5166,6 +5169,29 @@ func objectGetOwnPropertyDescriptorsWithVM(vmInstance *vm.VM, args []vm.Value) (
 						stringKeys = append(stringKeys, k)
 					}
 				}
+				// Symbol keys were missing here too (e.g. a symbol property
+				// defined on a native constructor like Boolean/Number) -
+				// same gap as the TypeNativeFunction branch below, fixed
+				// alongside it since it's the identical one-line fix on the
+				// identical *PlainObject side table.
+				symbolKeys = append(symbolKeys, nfp.Properties.OwnSymbolKeys()...)
+			}
+		} else {
+			// TypeNativeFunction: a plain native method's own custom
+			// properties - this branch never existed at all, so
+			// Object.getOwnPropertyDescriptors(nf) only ever reported
+			// "length"/"name", silently dropping anything just defined via
+			// Object.defineProperty or bracket-notation assignment (the
+			// single-key Object.getOwnPropertyDescriptor already answered
+			// correctly for the exact same property).
+			nf := obj.AsNativeFunction()
+			if nf.Properties != nil {
+				for _, k := range nf.Properties.OwnPropertyNames() {
+					if k != "length" && k != "name" {
+						stringKeys = append(stringKeys, k)
+					}
+				}
+				symbolKeys = append(symbolKeys, nf.Properties.OwnSymbolKeys()...)
 			}
 		}
 	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise:
