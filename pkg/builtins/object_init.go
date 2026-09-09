@@ -691,12 +691,14 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, vmInstance.NewTypeError("Cannot set prototype of revoked Proxy")
 			}
 			handler := proxy.Handler()
-			var setProtoTrap vm.Value
-			var hasTrap bool
-			if handler.Type() == vm.TypeObject {
-				po := handler.AsPlainObject()
-				setProtoTrap, hasTrap = po.GetOwn("setPrototypeOf")
-			}
+			// GetMethod(handler, "setPrototypeOf") per spec: an inherited
+			// trap counts, not just an own one, and a TypeDictObject
+			// handler (a TS enum or module namespace value at runtime)
+			// must still be checked for the trap instead of being treated
+			// as trap-less outright - vmInstance.ProxyGetTrap, not the
+			// previous `if handler.Type() == vm.TypeObject { ...GetOwn... }`
+			// which silently answered "no trap" for any other handler kind.
+			setProtoTrap, hasTrap := vmInstance.ProxyGetTrap(handler, "setPrototypeOf")
 			if hasTrap && setProtoTrap.IsCallable() {
 				result, err := vmInstance.CallArgs2(setProtoTrap, handler, proxy.Target(), protoArg)
 				if err != nil {
@@ -1262,14 +1264,11 @@ func lookupSymbolProp(vmInstance *vm.VM, val vm.Value, symKey vm.PropertyKey, sy
 			return vm.Undefined, vmInstance.NewTypeError("Cannot perform 'get' on a proxy that has been revoked")
 		}
 		handler := proxy.Handler()
-		var getTrap vm.Value
-		var hasGetTrap bool
-		switch handler.Type() {
-		case vm.TypeObject:
-			getTrap, hasGetTrap = handler.AsPlainObject().GetOwn("get")
-		case vm.TypeDictObject:
-			getTrap, hasGetTrap = handler.AsDictObject().GetOwn("get")
-		}
+		// GetMethod(handler, "get") per spec: an inherited trap counts, not
+		// just an own one - vmInstance.ProxyGetTrap (not a bare
+		// handler.AsPlainObject().GetOwn("get")) for the same reason
+		// documented on its pkg/vm definition.
+		getTrap, hasGetTrap := vmInstance.ProxyGetTrap(handler, "get")
 		if hasGetTrap && getTrap.IsCallable() {
 			return vmInstance.CallArgs3(getTrap, handler, proxy.Target(), vmInstance.SymbolToStringTag, val)
 		}
@@ -2235,8 +2234,12 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return vm.Undefined, vmInstance.NewTypeError("Cannot get prototype of revoked Proxy")
 		}
 
-		// Check if handler has a getPrototypeOf trap (per spec: GetMethod treats null/undefined as absent)
-		if trap, ok := proxy.Handler().AsPlainObject().GetOwn("getPrototypeOf"); ok && !trap.IsUndefined() && trap.Type() != vm.TypeNull {
+		// Check if handler has a getPrototypeOf trap. GetMethod(handler,
+		// "getPrototypeOf") per spec: an inherited trap counts, not just
+		// an own one - vmInstance.ProxyGetTrap (not a bare
+		// proxy.Handler().AsPlainObject().GetOwn("getPrototypeOf")) for
+		// the same reason documented on its pkg/vm definition.
+		if trap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "getPrototypeOf"); ok && !trap.IsUndefined() && trap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !trap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'getPrototypeOf' on proxy: trap is not a function")
@@ -2336,8 +2339,12 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return vm.Undefined, vmInstance.NewTypeError("Cannot set prototype of revoked Proxy")
 		}
 
-		// Check for setPrototypeOf trap (per spec: GetMethod treats null/undefined as absent)
-		if setProtoTrap, ok := proxy.Handler().AsPlainObject().GetOwn("setPrototypeOf"); ok && !setProtoTrap.IsUndefined() && setProtoTrap.Type() != vm.TypeNull {
+		// Check for setPrototypeOf trap. GetMethod(handler, "setPrototypeOf")
+		// per spec: an inherited trap counts, not just an own one -
+		// vmInstance.ProxyGetTrap (not a bare
+		// proxy.Handler().AsPlainObject().GetOwn("setPrototypeOf")) for
+		// the same reason documented on its pkg/vm definition.
+		if setProtoTrap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "setPrototypeOf"); ok && !setProtoTrap.IsUndefined() && setProtoTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !setProtoTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'setPrototypeOf' on proxy: trap is not a function")
@@ -3664,8 +3671,12 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 			return vm.Undefined, vmInstance.NewTypeError("Cannot define property on revoked Proxy")
 		}
 
-		// Check for defineProperty trap (per spec: GetMethod treats null/undefined as absent)
-		if defineTrap, ok := proxy.Handler().AsPlainObject().GetOwn("defineProperty"); ok && !defineTrap.IsUndefined() && defineTrap.Type() != vm.TypeNull {
+		// Check for defineProperty trap. GetMethod(handler, "defineProperty")
+		// per spec: an inherited trap counts, not just an own one -
+		// vmInstance.ProxyGetTrap (not a bare
+		// proxy.Handler().AsPlainObject().GetOwn("defineProperty")) for
+		// the same reason documented on its pkg/vm definition.
+		if defineTrap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "defineProperty"); ok && !defineTrap.IsUndefined() && defineTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !defineTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'defineProperty' on proxy: trap is not a function")
@@ -4576,8 +4587,12 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			return vm.Undefined, vmInstance.NewTypeError("Cannot get property descriptor on revoked Proxy")
 		}
 
-		// Check for getOwnPropertyDescriptor trap (per spec: GetMethod treats null/undefined as absent)
-		if getTrap, ok := proxy.Handler().AsPlainObject().GetOwn("getOwnPropertyDescriptor"); ok && !getTrap.IsUndefined() && getTrap.Type() != vm.TypeNull {
+		// Check for getOwnPropertyDescriptor trap. GetMethod(handler,
+		// "getOwnPropertyDescriptor") per spec: an inherited trap counts,
+		// not just an own one - vmInstance.ProxyGetTrap (not a bare
+		// proxy.Handler().AsPlainObject().GetOwn("getOwnPropertyDescriptor"))
+		// for the same reason documented on its pkg/vm definition.
+		if getTrap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "getOwnPropertyDescriptor"); ok && !getTrap.IsUndefined() && getTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !getTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap is not a function")
@@ -5660,8 +5675,12 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 			return vm.Undefined, vmInstance.NewTypeError("Cannot check extensibility of revoked Proxy")
 		}
 
-		// Check for isExtensible trap (per spec: GetMethod treats null/undefined as absent)
-		if extTrap, ok := proxy.Handler().AsPlainObject().GetOwn("isExtensible"); ok && !extTrap.IsUndefined() && extTrap.Type() != vm.TypeNull {
+		// Check for isExtensible trap. GetMethod(handler, "isExtensible")
+		// per spec: an inherited trap counts, not just an own one -
+		// vmInstance.ProxyGetTrap (not a bare
+		// proxy.Handler().AsPlainObject().GetOwn("isExtensible")) for the
+		// same reason documented on its pkg/vm definition.
+		if extTrap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "isExtensible"); ok && !extTrap.IsUndefined() && extTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !extTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'isExtensible' on proxy: trap is not a function")
@@ -5749,8 +5768,12 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 			return vm.Undefined, vmInstance.NewTypeError("Cannot prevent extensions on revoked Proxy")
 		}
 
-		// Check for preventExtensions trap (per spec: GetMethod treats null/undefined as absent)
-		if prevTrap, ok := proxy.Handler().AsPlainObject().GetOwn("preventExtensions"); ok && !prevTrap.IsUndefined() && prevTrap.Type() != vm.TypeNull {
+		// Check for preventExtensions trap. GetMethod(handler,
+		// "preventExtensions") per spec: an inherited trap counts, not
+		// just an own one - vmInstance.ProxyGetTrap (not a bare
+		// proxy.Handler().AsPlainObject().GetOwn("preventExtensions")) for
+		// the same reason documented on its pkg/vm definition.
+		if prevTrap, ok := vmInstance.ProxyGetTrap(proxy.Handler(), "preventExtensions"); ok && !prevTrap.IsUndefined() && prevTrap.Type() != vm.TypeNull {
 			// Validate trap is callable
 			if !prevTrap.IsFunction() {
 				return vm.Undefined, vmInstance.NewTypeError("'preventExtensions' on proxy: trap is not a function")

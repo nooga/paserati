@@ -9410,8 +9410,14 @@ startExecution:
 					return InterpretRuntimeError, Undefined
 				}
 
-				// Check if handler has ownKeys trap
-				ownKeysTrap, hasOwnKeysTrap := proxy.Handler().AsPlainObject().GetOwn("ownKeys")
+				// Check if handler has ownKeys trap. GetMethod(handler,
+				// "ownKeys") per spec: an inherited trap counts, not just
+				// an own one - proxyGetTrap (not a bare
+				// proxy.Handler().AsPlainObject().GetOwn("ownKeys")) for
+				// the same reason documented on its own definition; also
+				// avoids AsPlainObject() panicking for a TypeDictObject
+				// handler (a TS enum or module namespace value at runtime).
+				ownKeysTrap, hasOwnKeysTrap := proxyGetTrap(proxy.Handler(), "ownKeys")
 				if hasOwnKeysTrap && ownKeysTrap.IsCallable() {
 					// Call ownKeys trap: handler.ownKeys(target)
 					trapArgs := []Value{proxy.Target()}
@@ -9438,9 +9444,10 @@ startExecution:
 
 					arr := keysResult.AsArray()
 
-					// Get traps from handler
-					getOwnPropDescTrap, hasGetOwnPropDescTrap := proxy.Handler().AsPlainObject().GetOwn("getOwnPropertyDescriptor")
-					getTrap, hasGetTrap := proxy.Handler().AsPlainObject().GetOwn("get")
+					// Get traps from handler - proxyGetTrap for both, same
+					// reasons as the ownKeys trap lookup just above.
+					getOwnPropDescTrap, hasGetOwnPropDescTrap := proxyGetTrap(proxy.Handler(), "getOwnPropertyDescriptor")
+					getTrap, hasGetTrap := proxyGetTrap(proxy.Handler(), "get")
 
 					// Process each key in order returned by ownKeys
 					for i := 0; i < arr.Length(); i++ {
@@ -11289,15 +11296,12 @@ startExecution:
 					return InterpretRuntimeError, Undefined
 				}
 
-				// Check for construct trap (handler can be PlainObject or DictObject)
-				var constructTrap Value
-				var hasConstructTrap bool
-				switch proxy.Handler().Type() {
-				case TypeObject:
-					constructTrap, hasConstructTrap = proxy.Handler().AsPlainObject().GetOwn("construct")
-				case TypeDictObject:
-					constructTrap, hasConstructTrap = proxy.Handler().AsDictObject().GetOwn("construct")
-				}
+				// Check for construct trap. GetMethod(handler, "construct")
+				// per spec: an inherited trap counts, not just an own one -
+				// proxyGetTrap (not a bare
+				// proxy.Handler().AsPlainObject().GetOwn("construct")) for
+				// the same reason documented on its own definition.
+				constructTrap, hasConstructTrap := proxyGetTrap(proxy.Handler(), "construct")
 
 				if hasConstructTrap && constructTrap.Type() != TypeUndefined && constructTrap.Type() != TypeNull {
 					// Validate trap is callable

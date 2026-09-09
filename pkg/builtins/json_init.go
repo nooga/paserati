@@ -984,28 +984,32 @@ func getProxyOwnKeys(vmInstance *vm.VM, proxy *vm.ProxyObject) ([]string, error)
 	}
 
 	handler := proxy.Handler()
-	if handler.Type() == vm.TypeObject {
-		handlerObj := handler.AsPlainObject()
-		ownKeysTrap, hasOwnKeysTrap := handlerObj.GetOwn("ownKeys")
-		if hasOwnKeysTrap && ownKeysTrap.IsCallable() {
-			// Call ownKeys trap: handler.ownKeys(target)
-			keysResult, err := vmInstance.Call(ownKeysTrap, handler, []vm.Value{proxy.Target()})
-			if err != nil {
-				return nil, err
-			}
-			// Extract keys from result array
-			var keys []string
-			if keysResult.Type() == vm.TypeArray {
-				arr := keysResult.AsArray()
-				for i := 0; i < arr.Length(); i++ {
-					keyVal := arr.Get(i)
-					if keyVal.Type() == vm.TypeString {
-						keys = append(keys, keyVal.ToString())
-					}
+	// GetMethod(handler, "ownKeys") per spec: an inherited trap counts, not
+	// just an own one, and a TypeDictObject handler (a TS enum or module
+	// namespace value at runtime) must still be checked for the trap
+	// instead of being treated as trap-less outright -
+	// vmInstance.ProxyGetTrap, not the previous
+	// `if handler.Type() == vm.TypeObject { ...GetOwn... }` which silently
+	// answered "no trap" for any other handler kind.
+	ownKeysTrap, hasOwnKeysTrap := vmInstance.ProxyGetTrap(handler, "ownKeys")
+	if hasOwnKeysTrap && ownKeysTrap.IsCallable() {
+		// Call ownKeys trap: handler.ownKeys(target)
+		keysResult, err := vmInstance.Call(ownKeysTrap, handler, []vm.Value{proxy.Target()})
+		if err != nil {
+			return nil, err
+		}
+		// Extract keys from result array
+		var keys []string
+		if keysResult.Type() == vm.TypeArray {
+			arr := keysResult.AsArray()
+			for i := 0; i < arr.Length(); i++ {
+				keyVal := arr.Get(i)
+				if keyVal.Type() == vm.TypeString {
+					keys = append(keys, keyVal.ToString())
 				}
 			}
-			return keys, nil
 		}
+		return keys, nil
 	}
 
 	// No ownKeys trap - recurse into target
