@@ -282,6 +282,105 @@ func (vm *VM) ArrayDefineOwnProperty(
 	return nil
 }
 
+// ArrayDefineOwnSymbolProperty implements the Array exotic object's
+// [[DefineOwnProperty]] (ECMA-262 10.4.2.1 -> OrdinaryDefineOwnProperty
+// 10.1.6.3) for a symbol-keyed property. This is the symbol-keyed
+// counterpart of ArrayDefineOwnProperty above, backing
+// Object.defineProperty(arr, sym, {...}) - previously a silent no-op for
+// arrays: a symbol key never matched any of ArrayDefineOwnProperty's
+// callers' branches (all gated on a non-symbol propName), and there was no
+// storage to hold a non-default attribute combination or an accessor even if
+// one had been dispatched here. A symbol key never aliases a numeric index
+// or "length" the way a named key can, so none of ArrayDefineOwnProperty's
+// index/length-specific machinery (dense-element growth, sparse-index
+// tracking, tryParseArrayIndex) applies - this mirrors only that function's
+// plain named-property tail (the non-index path).
+func (vm *VM) ArrayDefineOwnSymbolProperty(
+	a *ArrayObject, sym *SymbolObject,
+	hasValue bool, value Value,
+	writablePtr, enumerablePtr, configurablePtr *bool,
+	hasGetter bool, getter Value,
+	hasSetter bool, setter Value,
+) error {
+	becomingAccessor := hasGetter || hasSetter
+
+	var exists, isAccessor, curWritable, curEnumerable, curConfigurable bool
+	if _, _, e, c, ok := a.GetOwnSymbolAccessor(sym); ok {
+		exists, isAccessor, curEnumerable, curConfigurable = true, true, e, c
+	} else if _, desc, ok := a.GetSymbolPropertyDescriptor(sym); ok {
+		exists, curWritable, curEnumerable, curConfigurable = true, desc.Writable, desc.Enumerable, desc.Configurable
+	}
+
+	// OrdinaryDefineOwnProperty 10.1.6.3 steps 3-4: reject on a
+	// non-configurable existing property whose descriptor the caller is
+	// trying to widen or whose kind/writability it's trying to narrow.
+	if exists && !curConfigurable {
+		if configurablePtr != nil && *configurablePtr {
+			return vm.NewTypeError("Cannot redefine property: Symbol()")
+		}
+		if enumerablePtr != nil && *enumerablePtr != curEnumerable {
+			return vm.NewTypeError("Cannot redefine property: Symbol()")
+		}
+		if isAccessor && (hasValue || writablePtr != nil) {
+			return vm.NewTypeError("Cannot redefine property: Symbol()")
+		}
+		if !isAccessor && becomingAccessor {
+			return vm.NewTypeError("Cannot redefine property: Symbol()")
+		}
+		if !isAccessor && !becomingAccessor && !curWritable && writablePtr != nil && *writablePtr {
+			return vm.NewTypeError("Cannot redefine property: Symbol()")
+		}
+		// NOT checked here, matching ArrayDefineOwnProperty's identical
+		// pre-existing gap for named keys (10.1.6.3 step 4e-ii): redefining
+		// a non-configurable, non-writable data property with a *different*
+		// [[Value]] should also throw, but doesn't - it's silently accepted
+		// as a no-op-that-isn't since the write below still updates the
+		// value if hasValue is true. Left this way for parity with the
+		// named-key path rather than fixing only the symbol-key side.
+	} else if !exists && !a.IsExtensible() {
+		return vm.NewTypeError("Cannot define property Symbol(), object is not extensible")
+	}
+
+	enumerable := curEnumerable
+	if !exists {
+		enumerable = false
+	}
+	if enumerablePtr != nil {
+		enumerable = *enumerablePtr
+	}
+	configurable := curConfigurable
+	if !exists {
+		configurable = false
+	}
+	if configurablePtr != nil {
+		configurable = *configurablePtr
+	}
+
+	if becomingAccessor {
+		a.DefineSymbolAccessorProperty(sym, getter, hasGetter, setter, hasSetter, &enumerable, &configurable)
+		return nil
+	}
+
+	writable := curWritable
+	if !exists {
+		writable = false
+	}
+	if writablePtr != nil {
+		writable = *writablePtr
+	}
+	newValue := value
+	if !hasValue {
+		if v, ok := a.GetSymbolProp(sym); ok {
+			newValue = v
+		} else {
+			newValue = Undefined
+		}
+	}
+
+	a.DefineSymbolProperty(sym, newValue, writable, enumerable, configurable)
+	return nil
+}
+
 // DeleteIndex implements [[Delete]] (ECMA-262 10.4.2.1 -> OrdinaryDelete
 // 10.1.7) for a numeric array index, clearing the slot (and any tracked
 // accessor/descriptor state for it) and reporting success. A plain element

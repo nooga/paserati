@@ -227,10 +227,23 @@ type ArrayObject struct {
 	// Reflect.ownKeys, and stay after every string key regardless of when
 	// each was added relative to the symbols). See OwnSymbolKeys.
 	symbolPropOrder []*SymbolObject
-	getters         map[string]Value // Accessor getters for named properties
-	setters         map[string]Value // Accessor setters for named properties
-	extensible      bool             // When false, no new properties can be added (for Object.freeze/seal)
-	frozen          bool             // When true, elements are also non-writable and non-configurable
+	// symbolPropertyDesc/symbolGetters/symbolSetters are the symbol-keyed
+	// counterparts of propertyDesc/getters/setters above, backing
+	// Object.defineProperty(arr, sym, {...}) - previously a silent no-op for
+	// arrays (paserati task_778749f8 follow-up): symbolProps only ever held a
+	// bare value with no attribute tracking and no accessor storage at all, so
+	// a non-default writable/enumerable/configurable combination, or a
+	// get/set pair, defined via Object.defineProperty on a symbol key
+	// couldn't be represented and defineProperty quietly dropped it. See
+	// DefineSymbolProperty/DefineSymbolAccessorProperty/GetOwnSymbolAccessor
+	// and ArrayDefineOwnSymbolProperty (array_props.go).
+	symbolPropertyDesc map[*SymbolObject]PropertyDesc
+	symbolGetters      map[*SymbolObject]Value
+	symbolSetters      map[*SymbolObject]Value
+	getters            map[string]Value // Accessor getters for named properties
+	setters            map[string]Value // Accessor setters for named properties
+	extensible         bool             // When false, no new properties can be added (for Object.freeze/seal)
+	frozen             bool             // When true, elements are also non-writable and non-configurable
 	// lengthNonWritable tracks Object.defineProperty(arr, "length",
 	// {writable: false}) - stored inverted (zero value = writable, the ES
 	// default) so every existing ArrayObject construction site, which
@@ -2847,27 +2860,46 @@ func (a *ArrayObject) GetSymbolProp(sym *SymbolObject) (Value, bool) {
 	return v, ok
 }
 
-// SetSymbolProp sets a symbol-keyed property on the array object
+// SetSymbolProp sets a symbol-keyed property on the array object. Uses
+// noteSymbolPropOrder (which checks all of symbolProps/symbolGetters/
+// symbolSetters via HasOwnSymbolProp) rather than a bare `_, existed :=
+// a.symbolProps[sym]` check: since DefineSymbolAccessorProperty added a
+// second place a symbol key can already "exist" without an entry in
+// symbolProps (an accessor-only symbol has its data entry deleted - see
+// that method), the bare check alone would have missed that case and
+// appended a second symbolPropOrder entry for the same symbol, making
+// Object.getOwnPropertySymbols list it twice.
 func (a *ArrayObject) SetSymbolProp(sym *SymbolObject, val Value) {
 	if a.symbolProps == nil {
 		a.symbolProps = make(map[*SymbolObject]Value)
 	}
-	if _, existed := a.symbolProps[sym]; !existed {
-		// New key - record its creation-order position. An overwrite of an
-		// already-present key keeps its original position, matching
-		// ordinary property semantics (redefining a value doesn't move it).
-		a.symbolPropOrder = append(a.symbolPropOrder, sym)
-	}
+	a.noteSymbolPropOrder(sym)
 	a.symbolProps[sym] = val
 }
 
-// HasOwnSymbolProp checks if the array object has an own symbol property
+// HasOwnSymbolProp checks if the array object has an own symbol property -
+// either a plain data value (symbolProps) or an accessor defined via
+// Object.defineProperty (symbolGetters/symbolSetters). Callers like `in`,
+// Reflect.has, and hasOwnProperty must see an accessor-only symbol (one
+// whose value was replaced entirely by DefineSymbolAccessorProperty, which
+// deletes the symbolProps entry) as present too.
 func (a *ArrayObject) HasOwnSymbolProp(sym *SymbolObject) bool {
-	if a.symbolProps == nil {
-		return false
+	if a.symbolProps != nil {
+		if _, ok := a.symbolProps[sym]; ok {
+			return true
+		}
 	}
-	_, ok := a.symbolProps[sym]
-	return ok
+	if a.symbolGetters != nil {
+		if _, ok := a.symbolGetters[sym]; ok {
+			return true
+		}
+	}
+	if a.symbolSetters != nil {
+		if _, ok := a.symbolSetters[sym]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // OwnSymbolKeys returns every symbol this array has an own property for, in
@@ -2883,6 +2915,157 @@ func (a *ArrayObject) OwnSymbolKeys() []Value {
 		symbols = append(symbols, Value{typ: TypeSymbol, obj: unsafe.Pointer(sym)})
 	}
 	return symbols
+}
+
+// noteSymbolPropOrder records sym's creation-order position the first time
+// it becomes an own property by any means (plain value, attributed data
+// property, or accessor) - shared by SetSymbolProp and
+// DefineSymbolAccessorProperty so a symbol that starts as one kind and is
+// later redefined as the other (Object.defineProperty converting a data
+// property to an accessor or back) keeps its original position instead of
+// moving to the end, matching ordinary property semantics (redefining a key
+// doesn't move it) - the same rule ArrayDefineOwnProperty's named-property
+// path already follows.
+func (a *ArrayObject) noteSymbolPropOrder(sym *SymbolObject) {
+	if a.HasOwnSymbolProp(sym) {
+		return
+	}
+	a.symbolPropOrder = append(a.symbolPropOrder, sym)
+}
+
+// DefineSymbolProperty sets a symbol-keyed data property with an explicit
+// writable/enumerable/configurable combination - the symbol-keyed
+// counterpart of DefineOwnProperty, backing
+// Object.defineProperty(arr, sym, {value, writable, enumerable, configurable}).
+// Converts an existing accessor at this key back into a data property,
+// mirroring DefineOwnProperty's/ArrayDefineOwnProperty's handling of the
+// same conversion for named keys.
+func (a *ArrayObject) DefineSymbolProperty(sym *SymbolObject, value Value, writable, enumerable, configurable bool) {
+	if a.symbolGetters != nil {
+		delete(a.symbolGetters, sym)
+	}
+	if a.symbolSetters != nil {
+		delete(a.symbolSetters, sym)
+	}
+	a.noteSymbolPropOrder(sym)
+	if a.symbolProps == nil {
+		a.symbolProps = make(map[*SymbolObject]Value)
+	}
+	a.symbolProps[sym] = value
+	if a.symbolPropertyDesc == nil {
+		a.symbolPropertyDesc = make(map[*SymbolObject]PropertyDesc)
+	}
+	a.symbolPropertyDesc[sym] = PropertyDesc{
+		Writable:     writable,
+		Enumerable:   enumerable,
+		Configurable: configurable,
+	}
+}
+
+// GetSymbolPropertyDescriptor returns the descriptor for a symbol-keyed data
+// property - the symbol-keyed counterpart of GetOwnPropertyDescriptor. A
+// symbol whose value was set via the plain SetSymbolProp path (`arr[sym] =
+// v`, never touched by Object.defineProperty) has no entry in
+// symbolPropertyDesc and reports the ES ordinary-property default
+// (writable/enumerable/configurable all true), same as GetOwnPropertyDescriptor
+// does for a plain named property.
+func (a *ArrayObject) GetSymbolPropertyDescriptor(sym *SymbolObject) (Value, PropertyDesc, bool) {
+	v, ok := a.GetSymbolProp(sym)
+	if !ok {
+		return Undefined, PropertyDesc{}, false
+	}
+	if a.symbolPropertyDesc != nil {
+		if desc, hasDesc := a.symbolPropertyDesc[sym]; hasDesc {
+			return v, desc, true
+		}
+	}
+	return v, PropertyDesc{Writable: true, Enumerable: true, Configurable: true}, true
+}
+
+// DefineSymbolAccessorProperty defines a symbol-keyed accessor property - the
+// symbol-keyed counterpart of DefineAccessorProperty, backing
+// Object.defineProperty(arr, sym, {get, set, ...}).
+func (a *ArrayObject) DefineSymbolAccessorProperty(sym *SymbolObject, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) {
+	a.noteSymbolPropOrder(sym)
+	if a.symbolGetters == nil {
+		a.symbolGetters = make(map[*SymbolObject]Value)
+	}
+	if a.symbolSetters == nil {
+		a.symbolSetters = make(map[*SymbolObject]Value)
+	}
+	if hasGetter {
+		a.symbolGetters[sym] = getter
+	}
+	if hasSetter {
+		a.symbolSetters[sym] = setter
+	}
+
+	desc := PropertyDesc{
+		Writable:     false, // accessors don't have writable
+		Enumerable:   false,
+		Configurable: true,
+	}
+	if enumerable != nil {
+		desc.Enumerable = *enumerable
+	}
+	if configurable != nil {
+		desc.Configurable = *configurable
+	}
+	if a.symbolPropertyDesc == nil {
+		a.symbolPropertyDesc = make(map[*SymbolObject]PropertyDesc)
+	}
+	a.symbolPropertyDesc[sym] = desc
+
+	// Converting a data property into an accessor: drop the plain value,
+	// mirroring DefineAccessorProperty's delete(a.properties, name).
+	if a.symbolProps != nil {
+		delete(a.symbolProps, sym)
+	}
+}
+
+// HasSymbolAccessors reports whether this array has ever had a symbol-keyed
+// accessor property defined on it - the symbol-keyed counterpart of
+// HasAccessors, letting hot per-symbol paths (opGetPropSymbol/opSetPropSymbol)
+// skip the GetOwnSymbolAccessor map probe on the overwhelmingly common array
+// that has never had one.
+func (a *ArrayObject) HasSymbolAccessors() bool {
+	return a.symbolGetters != nil || a.symbolSetters != nil
+}
+
+// GetOwnSymbolAccessor returns the getter and setter for a symbol-keyed
+// accessor property - the symbol-keyed counterpart of GetOwnAccessor.
+// Returns (getter, setter, enumerable, configurable, isAccessor).
+func (a *ArrayObject) GetOwnSymbolAccessor(sym *SymbolObject) (Value, Value, bool, bool, bool) {
+	hasGetter := a.symbolGetters != nil && a.symbolGetters[sym].Type() != 0
+	hasSetter := a.symbolSetters != nil && a.symbolSetters[sym].Type() != 0
+
+	if !hasGetter && !hasSetter {
+		return Undefined, Undefined, false, false, false
+	}
+
+	getter := Undefined
+	setter := Undefined
+	if a.symbolGetters != nil {
+		if g, ok := a.symbolGetters[sym]; ok {
+			getter = g
+		}
+	}
+	if a.symbolSetters != nil {
+		if s, ok := a.symbolSetters[sym]; ok {
+			setter = s
+		}
+	}
+
+	enumerable := false
+	configurable := true
+	if a.symbolPropertyDesc != nil {
+		if desc, ok := a.symbolPropertyDesc[sym]; ok {
+			enumerable = desc.Enumerable
+			configurable = desc.Configurable
+		}
+	}
+
+	return getter, setter, enumerable, configurable, true
 }
 
 // DefineAccessorProperty defines an accessor property on the array object
@@ -3683,26 +3866,47 @@ func formatDateTimestamp(timestamp float64) string {
 	return t.Format("Mon Jan 02 2006 15:04:05 GMT-0700 (MST)")
 }
 
-// DeleteSymbolProp removes a symbol-keyed own property from the array object
-// and reports whether it was present. Symbol-keyed array properties are
-// ordinary configurable properties, so removal always succeeds.
+// DeleteSymbolProp removes a symbol-keyed own property from the array
+// object and reports whether the delete succeeded. A symbol with no own
+// property at all trivially succeeds (OrdinaryDelete 10.1.7 step 2: nothing
+// to reject). A symbol-keyed property with no tracked descriptor (a plain
+// `arr[sym] = v` assignment, never touched by Object.defineProperty) is an
+// ordinary configurable property and always comes off; one explicitly
+// defined non-configurable via Object.defineProperty(arr, sym,
+// {configurable: false, ...}) - now representable via symbolPropertyDesc,
+// see ArrayDefineOwnSymbolProperty (array_props.go) - must be left alone and
+// report failure instead, matching OrdinaryDelete's [[Configurable]] check
+// the same way DeleteOwn already does for named properties.
 func (a *ArrayObject) DeleteSymbolProp(sym *SymbolObject) bool {
-	if a.symbolProps == nil {
-		return false
+	if !a.HasOwnSymbolProp(sym) {
+		return true
 	}
-	_, existed := a.symbolProps[sym]
-	delete(a.symbolProps, sym)
-	if existed {
-		// Keep symbolPropOrder in sync - a re-added key after deletion
-		// gets a fresh, later creation-order position via SetSymbolProp's
-		// own "not already present" check, matching how deleting then
-		// redefining an ordinary property moves it to the end too.
-		for i, s := range a.symbolPropOrder {
-			if s == sym {
-				a.symbolPropOrder = append(a.symbolPropOrder[:i], a.symbolPropOrder[i+1:]...)
-				break
-			}
+	if a.symbolPropertyDesc != nil {
+		if desc, ok := a.symbolPropertyDesc[sym]; ok && !desc.Configurable {
+			return false
 		}
 	}
-	return existed
+	if a.symbolProps != nil {
+		delete(a.symbolProps, sym)
+	}
+	if a.symbolGetters != nil {
+		delete(a.symbolGetters, sym)
+	}
+	if a.symbolSetters != nil {
+		delete(a.symbolSetters, sym)
+	}
+	if a.symbolPropertyDesc != nil {
+		delete(a.symbolPropertyDesc, sym)
+	}
+	// Keep symbolPropOrder in sync - a re-added key after deletion gets a
+	// fresh, later creation-order position via noteSymbolPropOrder's own
+	// "not already present" check, matching how deleting then redefining an
+	// ordinary property moves it to the end too.
+	for i, s := range a.symbolPropOrder {
+		if s == sym {
+			a.symbolPropOrder = append(a.symbolPropOrder[:i], a.symbolPropOrder[i+1:]...)
+			break
+		}
+	}
+	return true
 }

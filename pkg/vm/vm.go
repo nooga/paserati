@@ -9733,8 +9733,10 @@ startExecution:
 				continue
 			}
 
-			// Only process actual objects (non-Proxy)
-			if sourceVal.Type() != TypeObject && sourceVal.Type() != TypeDictObject {
+			// Only process actual objects (non-Proxy). TypeArray used to be
+			// excluded here too - see the TypeArray case in the switch
+			// below for what that silently dropped.
+			if sourceVal.Type() != TypeObject && sourceVal.Type() != TypeDictObject && sourceVal.Type() != TypeArray {
 				// For other primitive types, they should be converted to objects first
 				// But for now, skip them as they typically have no enumerable properties
 				continue
@@ -9870,6 +9872,231 @@ startExecution:
 									destObj.DefineOwnPropertyByKey(key, value, &w, &e, &c)
 								}
 							}
+						}
+					}
+					// DictObject doesn't support symbol keys, so skip for DictObject destination
+				}
+			case TypeArray:
+				// A TypeArray source used to fall straight into the
+				// `sourceVal.Type() != TypeObject && sourceVal.Type() !=
+				// TypeDictObject` skip above and contribute NOTHING to the
+				// destination - not just missing named/symbol properties
+				// (the gap this case exists to close), but missing even the
+				// array's own indexed elements:
+				//
+				//   const arr = [1, 2, 3]; arr.foo = "bar";
+				//   const s = Symbol("s"); arr[s] = "v";
+				//   ({...arr});
+				//   // before: {} (nothing copied at all)
+				//   // Node:   {0: 1, 1: 2, 2: 3, foo: "bar"} (plus the
+				//   //         symbol, invisible to a plain {} print but
+				//   //         present - see this file's Object.assign
+				//   //         equivalent, pkg/builtins/object_init.go,
+				//   //         which this case is built to match: object
+				//   //         spread and Object.assign both implement
+				//   //         ECMAScript's CopyDataProperties abstract
+				//   //         operation, so they must copy the same set of
+				//   //         properties).
+				//
+				// Mirrors the TypeObject case just above: dense indices,
+				// then sparse indices beyond DenseLength() (paserati#176/
+				// #178 - see arraySparseIndices's own doc comment for why a
+				// naive 0..Length() loop would hang), then named (non-index)
+				// properties - accessor first since DefineAccessorProperty
+				// removes a converted key from `properties` entirely, then
+				// plain data - then symbol-keyed properties, accessor or
+				// plain, via ArrayObject's own symbol storage (see
+				// ArrayDefineOwnSymbolProperty, array_props.go).
+				arr := AsArray(sourceVal)
+				denseLen := arr.DenseLength()
+				for i := 0; i < denseLen; i++ {
+					key := strconv.Itoa(i)
+					if getter, _, enumerable, _, isAccessor := arr.GetOwnAccessor(key); isAccessor {
+						if !enumerable {
+							continue
+						}
+						var value Value
+						if getter.Type() != TypeUndefined {
+							frame.ip = ip
+							res, err := vm.Call(getter, sourceVal, nil)
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+								} else {
+									vm.runtimeError("Error calling getter for index '%s': %v", key, err)
+								}
+								if !vm.unwinding {
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									registers = frame.registers
+									ip = frame.ip
+									goto reloadFrame
+								}
+								return InterpretRuntimeError, Undefined
+							}
+							value = res
+						} else {
+							value = Undefined
+						}
+						if destVal.Type() == TypeDictObject {
+							AsDictObject(destVal).SetOwn(key, value)
+						} else {
+							AsPlainObject(destVal).SetOwn(key, value)
+						}
+						continue
+					}
+					if !arr.HasIndex(i) {
+						continue // hole - not an own property at all (paserati#300)
+					}
+					value := arr.Get(i)
+					if destVal.Type() == TypeDictObject {
+						AsDictObject(destVal).SetOwn(key, value)
+					} else {
+						AsPlainObject(destVal).SetOwn(key, value)
+					}
+				}
+				for _, idx := range arraySparseIndices(arr, true) {
+					key := strconv.Itoa(idx)
+					var value Value
+					if getter, _, _, _, isAccessor := arr.GetOwnAccessor(key); isAccessor {
+						if getter.Type() != TypeUndefined {
+							frame.ip = ip
+							res, err := vm.Call(getter, sourceVal, nil)
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+								} else {
+									vm.runtimeError("Error calling getter for index '%s': %v", key, err)
+								}
+								if !vm.unwinding {
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									registers = frame.registers
+									ip = frame.ip
+									goto reloadFrame
+								}
+								return InterpretRuntimeError, Undefined
+							}
+							value = res
+						} else {
+							value = Undefined
+						}
+					} else if v, ok := arr.GetOwn(key); ok {
+						value = v
+					}
+					if destVal.Type() == TypeDictObject {
+						AsDictObject(destVal).SetOwn(key, value)
+					} else {
+						AsPlainObject(destVal).SetOwn(key, value)
+					}
+				}
+				for _, name := range arr.AccessorKeys() {
+					// tryParseArrayIndex, not LooksLikeArrayIndex: the latter has
+					// no upper bound, so an out-of-range numeric key like
+					// "4294967295" would look like an index here and get
+					// skipped, while the dense/sparse loops above (which use
+					// tryParseArrayIndex, via arraySparseIndices) would also
+					// reject it as too big to be an index - leaving it matched
+					// by neither loop and silently dropped. Both filters must
+					// use the same predicate so they partition the key space
+					// exactly.
+					if _, isIndex := tryParseArrayIndex(name); isIndex {
+						continue // an index accessor - already handled above
+					}
+					getter, _, enumerable, _, isAccessor := arr.GetOwnAccessor(name)
+					if !isAccessor || !enumerable {
+						continue
+					}
+					var value Value
+					if getter.Type() != TypeUndefined {
+						frame.ip = ip
+						res, err := vm.Call(getter, sourceVal, nil)
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+							} else {
+								vm.runtimeError("Error calling getter for property '%s': %v", name, err)
+							}
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								registers = frame.registers
+								ip = frame.ip
+								goto reloadFrame
+							}
+							return InterpretRuntimeError, Undefined
+						}
+						value = res
+					} else {
+						value = Undefined
+					}
+					if destVal.Type() == TypeDictObject {
+						AsDictObject(destVal).SetOwn(name, value)
+					} else {
+						AsPlainObject(destVal).SetOwn(name, value)
+					}
+				}
+				for _, name := range arr.NamedPropertyKeys() {
+					// tryParseArrayIndex - see the matching comment on the
+					// AccessorKeys loop above for why this can't be
+					// LooksLikeArrayIndex.
+					if _, isIndex := tryParseArrayIndex(name); isIndex {
+						continue // a sparse index sharing this map - already handled above
+					}
+					value, enumerable, ok := arr.GetNamedPropertyDescriptor(name)
+					if !ok || !enumerable {
+						continue
+					}
+					if destVal.Type() == TypeDictObject {
+						AsDictObject(destVal).SetOwn(name, value)
+					} else {
+						AsPlainObject(destVal).SetOwn(name, value)
+					}
+				}
+				for _, sym := range arr.OwnSymbolKeys() {
+					symKey := NewSymbolKey(sym)
+					symObj := sym.AsSymbolObject()
+					if getter, _, enumerable, _, isAccessor := arr.GetOwnSymbolAccessor(symObj); isAccessor {
+						if !enumerable {
+							continue
+						}
+						var value Value
+						if getter.Type() != TypeUndefined {
+							frame.ip = ip
+							res, err := vm.Call(getter, sourceVal, nil)
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+								} else {
+									vm.runtimeError("Error calling getter for symbol property: %v", err)
+								}
+								if !vm.unwinding {
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									registers = frame.registers
+									ip = frame.ip
+									goto reloadFrame
+								}
+								return InterpretRuntimeError, Undefined
+							}
+							value = res
+						} else {
+							value = Undefined
+						}
+						if destVal.Type() == TypeObject {
+							destObj := AsPlainObject(destVal)
+							w, e, c := true, true, true
+							destObj.DefineOwnPropertyByKey(symKey, value, &w, &e, &c)
+						}
+					} else if value, desc, ok := arr.GetSymbolPropertyDescriptor(symObj); ok && desc.Enumerable {
+						if destVal.Type() == TypeObject {
+							destObj := AsPlainObject(destVal)
+							w, e, c := true, true, true
+							destObj.DefineOwnPropertyByKey(symKey, value, &w, &e, &c)
 						}
 					}
 					// DictObject doesn't support symbol keys, so skip for DictObject destination
@@ -14840,10 +15067,29 @@ startExecution:
 				}
 				// Then the named (non-index) own properties: an exec result's
 				// index/input/groups/indices, or anything a program stored on
-				// the array. Sparse indices living in the named/accessor
-				// stores were already handled above.
+				// the array - accessor properties (AccessorKeys(), e.g. an
+				// Object.defineProperty(arr, "foo", {get, enumerable}) -
+				// stored in getters/setters, never in `properties`, so
+				// NamedPropertyKeys() alone can't see it) first, then plain
+				// data properties. Sparse indices living in either store were
+				// already handled above via arraySparseIndices, so both loops
+				// filter them out with tryParseArrayIndex - not
+				// LooksLikeArrayIndex, which has no upper bound and would let
+				// an out-of-range numeric key like "4294967295" slip past
+				// both this filter and arraySparseIndices' own filter,
+				// vanishing from enumeration entirely (see the matching
+				// object-spread TypeArray case above for the full
+				// explanation of that predicate mismatch).
+				for _, key := range arr.AccessorKeys() {
+					if _, isIndex := tryParseArrayIndex(key); isIndex {
+						continue
+					}
+					if _, _, enumerable, _, isAccessor := arr.GetOwnAccessor(key); isAccessor && enumerable {
+						keys = append(keys, key)
+					}
+				}
 				for _, key := range arr.NamedPropertyKeys() {
-					if LooksLikeArrayIndex(key) {
+					if _, isIndex := tryParseArrayIndex(key); isIndex {
 						continue
 					}
 					if _, enumerable, ok := arr.GetNamedPropertyDescriptor(key); ok && enumerable {
@@ -17282,13 +17528,24 @@ startExecution:
 				// numeric index's configurability comes from the array-wide
 				// `frozen` flag rather than a per-element bit.
 				arr := obj.AsArray()
-				keyStr := key.ToString()
-				if idx, isNumeric := tryParseArrayIndex(keyStr); isNumeric {
-					success = arr.DeleteIndex(idx)
-				} else if key.Type() != TypeSymbol {
-					success = arr.DeleteOwn(keyStr)
+				if key.Type() == TypeSymbol {
+					// Symbol-keyed properties can now be explicitly defined
+					// non-configurable via Object.defineProperty (see
+					// ArrayDefineOwnSymbolProperty, array_props.go) - route
+					// through DeleteSymbolProp so a `delete arr[sym]` both
+					// respects that and actually removes the entry (data,
+					// accessor, and descriptor alike) rather than
+					// unconditionally reporting success while leaving the
+					// property in place, which used to be safe only because
+					// every symbol property was implicitly configurable.
+					success = arr.DeleteSymbolProp(key.AsSymbolObject())
 				} else {
-					success = true
+					keyStr := key.ToString()
+					if idx, isNumeric := tryParseArrayIndex(keyStr); isNumeric {
+						success = arr.DeleteIndex(idx)
+					} else {
+						success = arr.DeleteOwn(keyStr)
+					}
 				}
 			} else if obj.Type() == TypeString {
 				// String primitives: indices within length are non-configurable

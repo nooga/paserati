@@ -79,8 +79,12 @@ func reflectDeleteProperty(vmInstance *vm.VM, target vm.Value, key vm.Value) (bo
 	case vm.TypeArray:
 		arr := target.AsArray()
 		if isSym {
-			arr.DeleteSymbolProp(key.AsSymbolObject())
-			return true, nil
+			// A symbol property can now be explicitly non-configurable via
+			// Object.defineProperty (see ArrayDefineOwnSymbolProperty,
+			// pkg/vm/array_props.go) - propagate DeleteSymbolProp's actual
+			// result instead of hardcoding success, matching every other
+			// case in this function.
+			return arr.DeleteSymbolProp(key.AsSymbolObject()), nil
 		}
 		if idx, isIndex := vm.ParseArrayIndex(name); isIndex {
 			return arr.DeleteIndex(idx), nil
