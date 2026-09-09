@@ -1186,15 +1186,11 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			return false, InterpretRuntimeError, Undefined
 		}
 
-		// Check if handler has a get trap (handler can be PlainObject or DictObject)
-		var getTrap Value
-		var hasGetTrap bool
-		switch proxy.handler.Type() {
-		case TypeObject:
-			getTrap, hasGetTrap = proxy.handler.AsPlainObject().GetOwn("get")
-		case TypeDictObject:
-			getTrap, hasGetTrap = proxy.handler.AsDictObject().GetOwn("get")
-		}
+		// Check if handler has a get trap. GetMethod(handler, "get") per
+		// spec: an inherited trap counts, not just an own one - proxyGetTrap
+		// (not a bare proxy.handler.AsPlainObject().GetOwn("get")) for the
+		// same reason documented on its own definition.
+		getTrap, hasGetTrap := proxyGetTrap(proxy.handler, "get")
 		if hasGetTrap && getTrap.Type() != TypeUndefined && getTrap.Type() != TypeNull {
 			// Validate trap is callable
 			if !getTrap.IsCallable() {
