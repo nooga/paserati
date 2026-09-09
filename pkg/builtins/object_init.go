@@ -2794,8 +2794,19 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 			}
 		}
 
-		// If no prototype was found in Properties, add it at the end
-		if !hasPrototype {
+		// If no prototype was found in Properties, only synthesize one when
+		// this function is actually constructible - an arrow function or a
+		// plain (non-generator) async function has NO "prototype" own
+		// property at all per spec, unlike an ordinary function, a
+		// generator function, or an async generator function, which all
+		// have one. This used to append "prototype" here unconditionally,
+		// which was wrong for exactly those two kinds (verified against
+		// Node: Object.getOwnPropertyNames(() => {}) is ["length","name"],
+		// no "prototype"). vm.IsConstructor already implements this exact
+		// rule for TypeFunction/TypeClosure
+		// (!IsArrowFunction && !(IsAsync && !IsGenerator)) - reused here
+		// rather than duplicated.
+		if !hasPrototype && vmInstance.IsConstructor(obj) {
 			arrObj.Append(vm.NewString("prototype"))
 		}
 	case vm.TypeClosure:
@@ -2840,7 +2851,9 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 			}
 		}
 
-		if !hasPrototype {
+		// Same guard as the TypeFunction case above - see its comment for
+		// the full rationale and Node verification.
+		if !hasPrototype && vmInstance.IsConstructor(obj) {
 			arrObj.Append(vm.NewString("prototype"))
 		}
 	case vm.TypeNativeFunctionWithProps:
