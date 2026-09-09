@@ -792,9 +792,21 @@ func getPrototypeOfValue(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
 	case vm.TypeAsyncGenerator:
 		return vmInstance.AsyncGeneratorPrototype, nil
 	case vm.TypeArrayBuffer:
-		return vmInstance.ObjectPrototype, nil
+		return vmInstance.ArrayBufferPrototype, nil
 	case vm.TypeSharedArrayBuffer:
 		return vmInstance.SharedArrayBufferPrototype, nil
+	case vm.TypeDataView:
+		return vmInstance.DataViewPrototype, nil
+	case vm.TypeTypedArray:
+		return vmInstance.TypedArrayPrototypeForKind(val.AsTypedArray().GetElementType()), nil
+	case vm.TypeWeakMap:
+		return vmInstance.WeakMapPrototype, nil
+	case vm.TypeWeakSet:
+		return vmInstance.WeakSetPrototype, nil
+	case vm.TypeWeakRef:
+		return vmInstance.WeakRefPrototype, nil
+	case vm.TypeFinalizationRegistry:
+		return vmInstance.FinalizationRegistryPrototype, nil
 	case vm.TypeProxy:
 		proxy := val.AsProxy()
 		if proxy.Revoked {

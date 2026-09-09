@@ -52,7 +52,7 @@ func (vm *VM) prototypeOf(v Value) Value {
 	case TypeDataView:
 		return vm.DataViewPrototype
 	case TypeTypedArray:
-		return vm.TypedArrayPrototype
+		return vm.TypedArrayPrototypeForKind(v.AsTypedArray().elementType)
 	case TypeArguments:
 		return vm.ObjectPrototype
 	case TypePromise:
@@ -189,4 +189,42 @@ func (vm *VM) getInheritedGeneric(start Value, propName string) (Value, bool) {
 		current = vm.prototypeOf(current)
 	}
 	return Undefined, false
+}
+
+// TypedArrayPrototypeForKind returns the intrinsic per-kind prototype for a
+// typed array element type (%Uint8Array.prototype%, ...). Typed arrays created
+// by a constructor carry the right prototype in their per-instance override,
+// but ones the runtime builds directly (subarray, slice, %TypedArray%.from, ...)
+// leave it Undefined and must be resolved from the element type — falling back
+// to the abstract %TypedArray%.prototype makes `u.subarray(0,2) instanceof
+// Uint8Array` false.
+func (vm *VM) TypedArrayPrototypeForKind(kind TypedArrayKind) Value {
+	switch kind {
+	case TypedArrayInt8:
+		return vm.Int8ArrayPrototype
+	case TypedArrayUint8:
+		return vm.Uint8ArrayPrototype
+	case TypedArrayUint8Clamped:
+		return vm.Uint8ClampedArrayPrototype
+	case TypedArrayInt16:
+		return vm.Int16ArrayPrototype
+	case TypedArrayUint16:
+		return vm.Uint16ArrayPrototype
+	case TypedArrayInt32:
+		return vm.Int32ArrayPrototype
+	case TypedArrayUint32:
+		return vm.Uint32ArrayPrototype
+	case TypedArrayFloat16:
+		return vm.Float16ArrayPrototype
+	case TypedArrayFloat32:
+		return vm.Float32ArrayPrototype
+	case TypedArrayFloat64:
+		return vm.Float64ArrayPrototype
+	case TypedArrayBigInt64:
+		return vm.BigInt64ArrayPrototype
+	case TypedArrayBigUint64:
+		return vm.BigUint64ArrayPrototype
+	default:
+		return vm.TypedArrayPrototype
+	}
 }
