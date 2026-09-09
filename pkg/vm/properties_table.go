@@ -110,11 +110,19 @@ func ownPropertiesSlot(v Value) **PlainObject {
 //
 // A rejection is silent in sloppy mode and a TypeError in strict mode, which is
 // what makes Object.freeze / Object.seal / Object.preventExtensions on a
-// function, RegExp, Map or Set actually bite. Accessor properties are left to
-// the callers that dispatch to setters before they get here.
+// function, RegExp, Map or Set actually bite. An existing accessor is handled
+// first, by setOwnAccessorSetter - see that function's comment for why this
+// can no longer be left to "the callers that dispatch to setters before they
+// get here", which most callers never actually did.
+//
+// receiver is the `this` an existing accessor's setter is invoked with - the
+// exotic value itself (the function, RegExp, Map, ...), not props.
 //
 // Returns the opcode-shaped triple, so call sites can `return` it directly.
-func (vm *VM) setOwnChecked(props *PlainObject, name string, v Value) (bool, InterpretResult, Value) {
+func (vm *VM) setOwnChecked(props *PlainObject, name string, receiver Value, v Value) (bool, InterpretResult, Value) {
+	if handled, ok, status, result := vm.setOwnAccessorSetter(props, keyFromString(name), name, receiver, v); handled {
+		return ok, status, result
+	}
 	if allowed, threw := vm.tableSetAllowed(props, keyFromString(name), name); !allowed {
 		if threw {
 			return false, InterpretRuntimeError, Undefined
@@ -138,7 +146,23 @@ func (vm *VM) setOwnChecked(props *PlainObject, name string, v Value) (bool, Int
 // non-configurable. Redefining an *existing* property still passes nil
 // throughout, so DefineOwnPropertyByKey's own already-correct
 // attribute-preserving behavior for that case is untouched.
-func (vm *VM) setOwnCheckedByKey(props *PlainObject, key PropertyKey, v Value) (bool, InterpretResult, Value) {
+//
+// receiver is the `this` an existing accessor's setter is invoked with - see
+// setOwnChecked.
+func (vm *VM) setOwnCheckedByKey(props *PlainObject, key PropertyKey, receiver Value, v Value) (bool, InterpretResult, Value) {
+	// An existing accessor must go through setOwnAccessorSetter, which calls
+	// its setter (or no-ops / throws for a getter-only one) - never through
+	// the "existing property" branch below. That branch used to be reached
+	// for an accessor too (tableSetAllowed's isAccessor check reports
+	// allowed=true for one), landing on
+	// `props.DefineOwnPropertyByKey(key, v, nil, nil, nil)`, whose
+	// accessor-to-data conversion silently clobbered the accessor into a
+	// plain data property instead of calling its setter. Reproduced
+	// identically for a plain function's symbol accessor - see
+	// https://github.com/nooga/paserati/pull/333 "Found, not fixed".
+	if handled, ok, status, result := vm.setOwnAccessorSetter(props, key, key.debugName(), receiver, v); handled {
+		return ok, status, result
+	}
 	if allowed, threw := vm.tableSetAllowed(props, key, key.debugName()); !allowed {
 		if threw {
 			return false, InterpretRuntimeError, Undefined
@@ -146,20 +170,11 @@ func (vm *VM) setOwnCheckedByKey(props *PlainObject, key PropertyKey, v Value) (
 		return true, InterpretOK, v
 	}
 	// HasOwnByKey re-derives existence tableSetAllowed already checked
-	// (GetOwnAccessorByKey/GetOwnDescriptorByKey) - a third linear scan
-	// over the same shape, not a different question. Left as its own call
-	// rather than threading a result out of tableSetAllowed, since that
-	// function's signature is shared with the string-key path.
-	//
-	// Note: if key already names an accessor, tableSetAllowed's
-	// isAccessor check reports allowed=true, and this falls into the
-	// "existing" branch below with nil attribute pointers -
-	// DefineOwnPropertyByKey's accessor-to-data conversion then silently
-	// clobbers the accessor into a plain data property instead of calling
-	// its setter (or, getter-only, leaving it untouched). That is a
-	// distinct, pre-existing bug in its own right (reproduces identically
-	// for a plain function's symbol accessor, unaffected by this specific
-	// existence check) - not introduced or fixed here.
+	// (GetOwnDescriptorByKey, now that the accessor case above already
+	// consumed GetOwnAccessorByKey's answer) - a second linear scan over the
+	// same shape, not a different question. Left as its own call rather than
+	// threading a result out of tableSetAllowed, since that function's
+	// signature is shared with the string-key path.
 	if !props.HasOwnByKey(key) {
 		w, e, c := true, true, true
 		props.DefineOwnPropertyByKey(key, v, &w, &e, &c)
@@ -167,6 +182,75 @@ func (vm *VM) setOwnCheckedByKey(props *PlainObject, key PropertyKey, v Value) (
 	}
 	props.DefineOwnPropertyByKey(key, v, nil, nil, nil)
 	return true, InterpretOK, v
+}
+
+// setOwnAccessorSetter is the accessor half of ordinary [[Set]] (ECMAScript
+// OrdinarySetWithOwnDescriptor), shared by setOwnChecked and
+// setOwnCheckedByKey so every side-table kind (Function, Closure, RegExp,
+// Map, Set, Promise, BoundFunction, NativeFunction(WithProps)) gets it once
+// instead of each opSetProp/opSetPropSymbol call site reimplementing it (or,
+// for most of them, not implementing it at all - see below).
+//
+// When key names an existing accessor, this fully handles the assignment:
+// calls the setter with receiver as `this` if one exists, or - for a
+// getter-only accessor - silently no-ops in sloppy mode and throws a
+// TypeError in strict mode, per spec. It must never fall through to writing
+// a data property over an accessor. handled is false when key does not name
+// an accessor at all, in which case the caller proceeds with its own
+// data-property logic.
+//
+// Before this existed, an existing accessor's setter was only ever invoked
+// by two of the nine call sites (TypeFunction/TypeClosure in opSetProp,
+// which each pre-checked GetOwnAccessor before reaching setOwnChecked) - the
+// other seven (RegExp/Map/Set/Promise/BoundFunction/NativeFunction(WithProps),
+// for both string and symbol keys) called straight into setOwnChecked /
+// setOwnCheckedByKey, whose only accessor awareness was tableSetAllowed's
+// isAccessor check reporting the write as merely "allowed": for the
+// string-key path that reached PlainObject.SetOwn, which silently no-ops on
+// an accessor field (writable defaults to false for one) without ever
+// calling its setter; for the symbol-key path that reached
+// DefineOwnPropertyByKey with nil attributes, which clobbered the accessor
+// into a data property instead (the bug this function was written to fix).
+func (vm *VM) setOwnAccessorSetter(props *PlainObject, key PropertyKey, display string, receiver Value, v Value) (handled, ok bool, status InterpretResult, result Value) {
+	_, setter, _, _, isAccessor := props.GetOwnAccessorByKey(key)
+	if !isAccessor {
+		return false, true, InterpretOK, Undefined
+	}
+	if setter.Type() != TypeUndefined {
+		_, err := vm.Call(setter, receiver, []Value{v})
+		if err != nil {
+			if ee, eok := err.(ExceptionError); eok {
+				vm.throwException(ee.GetExceptionValue())
+				return true, false, InterpretRuntimeError, Undefined
+			}
+			var excVal Value
+			if errCtor, gok := vm.GetGlobal("Error"); gok {
+				if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+					excVal = res
+				} else {
+					eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+					eo.SetOwn("name", NewString("Error"))
+					eo.SetOwn("message", NewString(err.Error()))
+					excVal = NewValueFromPlainObject(eo)
+				}
+			} else {
+				eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+				eo.SetOwn("name", NewString("Error"))
+				eo.SetOwn("message", NewString(err.Error()))
+				excVal = NewValueFromPlainObject(eo)
+			}
+			vm.throwException(excVal)
+			return true, false, InterpretRuntimeError, Undefined
+		}
+		return true, true, InterpretOK, v
+	}
+	// Getter-only: silent no-op in sloppy mode, TypeError in strict mode -
+	// mirrors opSetProp's TypeObject prototype-chain accessor-setter check.
+	if vm.IsInStrictMode() {
+		vm.ThrowTypeError("Cannot set property '" + display + "' which has only a getter")
+		return true, false, InterpretRuntimeError, Undefined
+	}
+	return true, true, InterpretOK, v
 }
 
 // tableSetAllowed applies setOwnChecked's rejections. threw is true when a
