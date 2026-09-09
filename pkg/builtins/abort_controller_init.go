@@ -86,21 +86,38 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// AbortSignal.timeout(ms) - creates a signal that aborts after timeout.
 	//
-	// FIXME: kept as a non-firing stub rather than wired to
-	// rt.ScheduleTimer. The VM's drain loop blocks on AsyncRuntime.
-	// HasPendingTimers()/WaitForIdleProgress() (see pkg/vm/vm.go), and
-	// AsyncRuntime has no "unref" concept - a real timer here would keep
-	// every script alive for the full timeout duration even after
-	// everything else finished, turning `AbortSignal.timeout(30000)` into
-	// an accidental 30s hang. Needs an unref-able timer before this can
-	// actually fire.
+	// Scheduled via ScheduleUnrefTimer (#374), not ScheduleTimer: the VM's
+	// drain loop blocks on AsyncRuntime.HasPendingTimers()/
+	// WaitForIdleProgress() (see pkg/vm/vm.go), so a plain timer here would
+	// keep every script alive for the full timeout duration even after
+	// everything else finished - turning `AbortSignal.timeout(30000)` into
+	// an accidental 30s hang. An unref'd timer doesn't by itself justify
+	// waiting, but still fires normally once due if something else (e.g.
+	// the fetch() it's guarding) is keeping the loop alive anyway - which
+	// is the only situation in which anything is listening for it.
 	signalConstructor.SetOwnNonEnumerable("timeout", vm.NewNativeFunction(1, false, "timeout", func(args []vm.Value) (vm.Value, error) {
+		ms := 0.0
+		if len(args) > 0 {
+			ms = args[0].ToFloat()
+		}
+		if ms < 0 {
+			ms = 0
+		}
+
 		signal := &AbortSignal{
 			aborted: false,
 			reason:  vm.Undefined,
 			onabort: vm.Null,
 		}
-		return createAbortSignalObject(vmInstance, signal, signalProto), nil
+		signalValue := createAbortSignalObject(vmInstance, signal, signalProto)
+
+		rt := vmInstance.GetAsyncRuntime()
+		rt.ScheduleUnrefTimer(time.Duration(ms)*time.Millisecond, func() {
+			reason := newErrorValueWithPrototype(vmInstance.ErrorPrototype, "TimeoutError", "signal timed out")
+			triggerAbort(vmInstance, signal, reason)
+		})
+
+		return signalValue, nil
 	}))
 
 	// AbortSignal.any(signals) - creates a signal that aborts when any input
