@@ -9565,14 +9565,40 @@ startExecution:
 								return InterpretRuntimeError, Undefined
 							}
 						} else {
-							// No get trap - fallback to target
-							target := proxy.Target()
-							if target.Type() == TypeObject {
-								value, _ = target.AsPlainObject().GetOwn(keyStr)
-							} else if target.Type() == TypeDictObject {
-								value, _ = target.AsDictObject().GetOwn(keyStr)
-							} else {
-								value = Undefined
+							// No get trap - fallback to target.[[Get]] via
+							// GetPropertyWithReceiver (pkg/vm/vm_init.go,
+							// the same helper vm.GetProperty and
+							// opGetProp's own no-get-trap fallback are
+							// built on - see PR #360), not a bare
+							// GetOwn(keyStr) that only handled a
+							// TypeObject/TypeDictObject target directly.
+							// A target that is itself a Proxy (neither
+							// level with a get trap) silently answered
+							// Undefined for every key instead of
+							// recursing into that inner proxy's own
+							// [[Get]] - GetPropertyWithReceiver already
+							// does that recursion (and covers every other
+							// Value kind besides Object/DictObject a
+							// target can legally be, same rationale as
+							// #360's opGetProp fix). receiver stays
+							// sourceVal (the ORIGINAL top-level proxy this
+							// spread started from, not the intermediate
+							// `target`), matching the get-trap branch
+							// just above, which passes the same sourceVal
+							// as the trap's own receiver argument.
+							var err error
+							value, err = vm.GetPropertyWithReceiver(proxy.Target(), keyStr, sourceVal)
+							if err != nil {
+								frame.ip = ip
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+								} else {
+									vm.runtimeError("get error: %v", err)
+								}
+								if !vm.unwinding {
+									continue
+								}
+								return InterpretRuntimeError, Undefined
 							}
 						}
 
