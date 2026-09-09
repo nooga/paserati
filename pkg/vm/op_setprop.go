@@ -1214,12 +1214,36 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 		return vm.setOwnCheckedByKey(closure.Properties, NewSymbolKey(symKey), *objVal, *valueToSet)
 	}
 
-	// Array objects: store symbol properties directly on the array
+	// Array objects: store symbol properties directly on the array. A
+	// symbol-keyed accessor defined via Object.defineProperty(arr, sym,
+	// {get, set}) takes priority over the plain symbolProps slot, mirroring
+	// the named-property write path and this function's own RegExp/Proxy
+	// branches above - see ArrayObject.GetOwnSymbolAccessor and
+	// ArrayDefineOwnSymbolProperty (array_props.go).
 	if objVal.Type() == TypeArray {
 		arr := objVal.AsArray()
 		if arr != nil {
 			sym := symKey.AsSymbolObject()
 			if sym != nil {
+				if arr.HasSymbolAccessors() {
+					if _, setter, _, _, ok := arr.GetOwnSymbolAccessor(sym); ok {
+						if setter.Type() != TypeUndefined {
+							_, err := vm.Call(setter, *objVal, []Value{*valueToSet})
+							if err != nil {
+								if ee, ok := err.(ExceptionError); ok {
+									vm.throwException(ee.GetExceptionValue())
+									return false, InterpretRuntimeError, Undefined
+								}
+								vm.ThrowTypeError(err.Error())
+								return false, InterpretRuntimeError, Undefined
+							}
+						}
+						// A getter-only accessor silently swallows the write in
+						// sloppy mode, matching ArrayPrototypeSetterFor's
+						// identical rule for a named-property accessor.
+						return true, InterpretOK, *valueToSet
+					}
+				}
 				arr.SetSymbolProp(sym, *valueToSet)
 			}
 		}
