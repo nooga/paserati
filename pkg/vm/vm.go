@@ -4976,7 +4976,7 @@ startExecution:
 						}
 
 						// Check if handler has a 'has' trap (per spec: GetMethod treats null/undefined as absent)
-						if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
+						if hasTrap, ok := proxyGetTrap(proxy.handler, "has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 							if !hasTrap.IsCallable() {
 								frame.ip = ip
 								status := vm.runtimeError("'has' on proxy: trap is not a function")
@@ -5062,7 +5062,7 @@ startExecution:
 						// For Proxy, use has trap
 						proxy := withObj.AsProxy()
 						if !proxy.Revoked {
-							if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.IsCallable() {
+							if hasTrap, ok := proxyGetTrap(proxy.handler, "has"); ok && hasTrap.IsCallable() {
 								trapArgs := []Value{proxy.target, NewString(propName)}
 								frame.ip = ip
 								vm.helperCallDepth++
@@ -5121,7 +5121,7 @@ startExecution:
 						// For Proxy, use get trap
 						proxy := withObj.AsProxy()
 						if !proxy.Revoked {
-							if getTrap, ok := proxy.handler.AsPlainObject().GetOwn("get"); ok && getTrap.IsCallable() {
+							if getTrap, ok := proxyGetTrap(proxy.handler, "get"); ok && getTrap.IsCallable() {
 								trapArgs := []Value{proxy.target, NewString(propName), withObj}
 								frame.ip = ip
 								vm.helperCallDepth++
@@ -5248,7 +5248,7 @@ startExecution:
 								// Use has trap for Proxy
 								proxy := withObj.AsProxy()
 								if !proxy.Revoked {
-									if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.IsCallable() {
+									if hasTrap, ok := proxyGetTrap(proxy.handler, "has"); ok && hasTrap.IsCallable() {
 										trapArgs := []Value{proxy.target, NewString(propName)}
 										frame.ip = ip
 										vm.helperCallDepth++
@@ -5304,7 +5304,7 @@ startExecution:
 									case TypeProxy:
 										proxy := withObj.AsProxy()
 										if !proxy.Revoked {
-											if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.IsCallable() {
+											if hasTrap, ok := proxyGetTrap(proxy.handler, "has"); ok && hasTrap.IsCallable() {
 												trapArgs := []Value{proxy.target, NewString(propName)}
 												frame.ip = ip
 												vm.helperCallDepth++
@@ -5421,7 +5421,7 @@ startExecution:
 						}
 
 						// Check if handler has a 'has' trap (per spec: GetMethod treats null/undefined as absent)
-						if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
+						if hasTrap, ok := proxyGetTrap(proxy.handler, "has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 							if !hasTrap.IsCallable() {
 								frame.ip = ip
 								status := vm.runtimeError("'has' on proxy: trap is not a function")
@@ -5617,7 +5617,7 @@ startExecution:
 							return status, Undefined
 						}
 
-						if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
+						if hasTrap, ok := proxyGetTrap(proxy.handler, "has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 							if !hasTrap.IsCallable() {
 								frame.ip = ip
 								status := vm.runtimeError("'has' on proxy: trap is not a function")
@@ -5749,7 +5749,7 @@ startExecution:
 					}
 
 					// Check if handler has a 'has' trap (per spec: GetMethod treats null/undefined as absent)
-					if hasTrap, ok := proxy.handler.AsPlainObject().GetOwn("has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
+					if hasTrap, ok := proxyGetTrap(proxy.handler, "has"); ok && hasTrap.Type() != TypeUndefined && hasTrap.Type() != TypeNull {
 						if !hasTrap.IsCallable() {
 							frame.ip = ip
 							vm.runtimeError("'has' on proxy: trap is not a function")
@@ -5943,7 +5943,7 @@ startExecution:
 					// For Proxy, call the 'has' trap per SetMutableBinding step 2
 					proxy := withObj.AsProxy()
 					if !proxy.Revoked {
-						hasTrap, hasHasTrap := proxy.handler.AsPlainObject().GetOwn("has")
+						hasTrap, hasHasTrap := proxyGetTrap(proxy.handler, "has")
 						if hasHasTrap && hasTrap.IsCallable() {
 							trapArgs := []Value{proxy.target, NewString(propName)}
 							vm.helperCallDepth++
@@ -6066,7 +6066,7 @@ startExecution:
 					// For Proxy, call the 'has' trap per GetBindingValue step 2
 					proxy := withObj.AsProxy()
 					if !proxy.Revoked {
-						hasTrap, hasHasTrap := proxy.handler.AsPlainObject().GetOwn("has")
+						hasTrap, hasHasTrap := proxyGetTrap(proxy.handler, "has")
 						if hasHasTrap && hasTrap.IsCallable() {
 							trapArgs := []Value{proxy.target, NewString(propName)}
 							vm.helperCallDepth++
@@ -8441,7 +8441,7 @@ startExecution:
 				}
 
 				// Check if handler has a get trap (per spec: GetMethod treats null/undefined as absent)
-				getTrap, ok := proxy.handler.AsPlainObject().GetOwn("get")
+				getTrap, ok := proxyGetTrap(proxy.handler, "get")
 				if ok && getTrap.Type() != TypeUndefined && getTrap.Type() != TypeNull {
 					// Validate trap is callable
 					if !getTrap.IsCallable() {
@@ -16450,7 +16450,7 @@ startExecution:
 				}
 
 				// Check if handler has a delete trap (per spec: GetMethod treats null/undefined as absent)
-				deleteTrap, ok := proxy.handler.AsPlainObject().GetOwn("deleteProperty")
+				deleteTrap, ok := proxyGetTrap(proxy.handler, "deleteProperty")
 				if ok && deleteTrap.Type() != TypeUndefined && deleteTrap.Type() != TypeNull {
 					// Validate trap is callable
 					if !deleteTrap.IsCallable() {
@@ -17897,7 +17897,7 @@ func (vm *VM) isUnscopable(withObj Value, propName string) (bool, bool) {
 		}
 
 		// Check if handler has a 'get' trap
-		getTrap, hasGetTrap := proxy.handler.AsPlainObject().GetOwn("get")
+		getTrap, hasGetTrap := proxyGetTrap(proxy.handler, "get")
 		if hasGetTrap && getTrap.IsCallable() {
 			// Call handler.get(target, Symbol.unscopables, receiver)
 			trapArgs := []Value{proxy.target, vm.SymbolUnscopables, withObj}
@@ -21531,26 +21531,25 @@ func (vm *VM) proxyHasPropertyFallback(target Value, propKey string) bool {
 	case TypeDictObject:
 		return target.AsDictObject().Has(propKey)
 	case TypeArray:
-		// NOT fixed here (pre-existing, out of this task's scope): unlike
-		// OpIn's own direct-target TypeArray case, which checks
-		// ArrayHasOwnIndex (paserati#176/#178 - a numerically-in-range
-		// index is NOT necessarily an own property, e.g. after a distant
-		// defineProperty inflates .length) before falling to the
-		// prototype chain, this still uses the simpler, wrong
-		// `index < arrayObj.Length()` test. Left alone since this task's
-		// three fixes are the trap-lookup bugs and the seven-kind
-		// fallback-coverage gap, not this unrelated pre-existing
-		// correctness issue - flagged as a third bullet on the same
-		// follow-up as the other unfixed trap-lookup sites this task's
-		// review turned up (see task's PR body).
+		// Now fixed to match OpIn's own direct-target TypeArray case:
+		// a numerically-in-range index is NOT necessarily an own property
+		// (paserati#176/#178 - e.g. after a distant defineProperty inflates
+		// .length without that index itself ever being set), so check real
+		// presence via ArrayHasOwnIndex instead of the simpler, wrong
+		// `index < arrayObj.Length()` test - falling through to the
+		// prototype-chain check below (ArrayPrototype.Has) on a miss,
+		// same as the non-index path already did, rather than answering
+		// false outright. tryParseArrayIndex (not strconv.Atoi) also
+		// rejects non-canonical numeric strings like "007", matching
+		// OpIn's own parsing.
 		arrayObj := target.AsArray()
-		if index, err := strconv.Atoi(propKey); err == nil && index >= 0 {
-			return index < arrayObj.Length()
-		}
-		if propKey == "length" {
+		if index, ok := tryParseArrayIndex(propKey); ok {
+			if ArrayHasOwnIndex(arrayObj, index) {
+				return true
+			}
+		} else if propKey == "length" {
 			return true
-		}
-		if _, ok := arrayObj.GetOwn(propKey); ok {
+		} else if _, ok := arrayObj.GetOwn(propKey); ok {
 			return true
 		}
 		if vm.ArrayPrototype.Type() == TypeObject {
@@ -21735,6 +21734,17 @@ func proxyGetTrap(handler Value, trapName string) (Value, bool) {
 	default:
 		return Undefined, false
 	}
+}
+
+// ProxyGetTrap is proxyGetTrap exported for pkg/builtins, which imports
+// pkg/vm but not vice versa, so cannot call the unexported package-level
+// function directly - mirrors the (*VM) HasPropertyOnPrototypeChain /
+// HasFunctionPrototypeSymbolProperty pattern used elsewhere for the same
+// cross-package need. Takes no *VM state (proxyGetTrap doesn't either);
+// the method receiver exists only so callers outside this package can
+// reach it as vmInstance.ProxyGetTrap(...).
+func (vm *VM) ProxyGetTrap(handler Value, trapName string) (Value, bool) {
+	return proxyGetTrap(handler, trapName)
 }
 
 // proxyHasSymbolPropertyFallback is proxyHasPropertyFallback's symbol-key

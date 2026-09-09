@@ -2141,17 +2141,12 @@ func (vm *VM) Call(fn Value, thisValue Value, args []Value) (Value, error) {
 			return Undefined, vm.NewTypeError("Cannot perform 'apply' on a proxy that has been revoked")
 		}
 
-		// Get the apply trap from handler (handler can be PlainObject or DictObject)
+		// Get the apply trap from handler. GetMethod(handler, "apply") per
+		// spec: an inherited trap counts, not just an own one - proxyGetTrap
+		// (not a bare handler.AsPlainObject().GetOwn("apply")) for the same
+		// reason documented on its own definition.
 		handler := proxy.Handler()
-		var applyTrap Value
-		var hasApplyTrap bool
-
-		switch handler.Type() {
-		case TypeObject:
-			applyTrap, hasApplyTrap = handler.AsPlainObject().GetOwn("apply")
-		case TypeDictObject:
-			applyTrap, hasApplyTrap = handler.AsDictObject().GetOwn("apply")
-		}
+		applyTrap, hasApplyTrap := proxyGetTrap(handler, "apply")
 
 		// Check for apply trap
 		if hasApplyTrap && applyTrap.Type() != TypeUndefined && applyTrap.Type() != TypeNull {

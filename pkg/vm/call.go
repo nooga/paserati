@@ -96,21 +96,21 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			return false, nil
 		}
 
-		// Get the apply trap from handler (handler can be PlainObject or DictObject)
+		// Get the apply trap from handler. GetMethod(handler, "apply") per
+		// spec: an inherited trap counts, not just an own one - proxyGetTrap
+		// (not a bare handler.AsPlainObject().GetOwn("apply")) for the same
+		// reason documented on its own definition. This also drops the
+		// `default: throw "Proxy handler is not an object"` the inline
+		// switch used to have for any handler.Type() besides TypeObject/
+		// TypeDictObject (a Map, Array, RegExp, ... - anything IsObject()
+		// besides those two, all legal per the Proxy constructor's own
+		// validation): that path disagreed with vm.Call's TypeProxy case
+		// (pkg/vm/vm_init.go, backing e.g. Reflect.apply on the same kind
+		// of proxy), which has never thrown here and instead silently
+		// falls through to "no apply trap" below - matching that instead
+		// of inventing a third answer.
 		handler := proxy.Handler()
-		var applyTrap Value
-		var hasApplyTrap bool
-
-		switch handler.Type() {
-		case TypeObject:
-			applyTrap, hasApplyTrap = handler.AsPlainObject().GetOwn("apply")
-		case TypeDictObject:
-			applyTrap, hasApplyTrap = handler.AsDictObject().GetOwn("apply")
-		default:
-			// Handler is not an object - should not happen if proxy was constructed correctly
-			vm.ThrowTypeError("Proxy handler is not an object")
-			return false, nil
-		}
+		applyTrap, hasApplyTrap := proxyGetTrap(handler, "apply")
 
 		// Check for apply trap
 		if hasApplyTrap && applyTrap.Type() != TypeUndefined && applyTrap.Type() != TypeNull {

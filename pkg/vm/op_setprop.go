@@ -63,8 +63,15 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			return false, InterpretRuntimeError, Undefined
 		}
 
-		// Check if handler has a set trap (per spec: GetMethod returns undefined for null/undefined)
-		setTrap, ok := vm.getOwnGeneric(proxy.handler, "set")
+		// Check if handler has a set trap. GetMethod(handler, "set") per
+		// spec: an inherited trap counts, not just an own one -
+		// getInheritedGeneric (not getOwnGeneric) for the same reason
+		// proxyGetTrap replaced a bare handler.AsPlainObject().GetOwn(...)
+		// at the other trap call sites in this package; unlike proxyGetTrap,
+		// getInheritedGeneric also covers the full range of handler kinds
+		// getOwnGeneric already did (Array, Closure, Function, ...), not
+		// just TypeObject/TypeDictObject.
+		setTrap, ok := vm.getInheritedGeneric(proxy.handler, "set")
 		if ok && setTrap.Type() != TypeUndefined && setTrap.Type() != TypeNull {
 			// Validate trap is callable
 			if !setTrap.IsCallable() {
@@ -511,7 +518,11 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				// Found a proxy in the chain - invoke its set trap
 				proxy := current.AsProxy()
 				if !proxy.Revoked {
-					if setTrap, ok := vm.getOwnGeneric(proxy.handler, "set"); ok && setTrap.IsCallable() {
+					// getInheritedGeneric (not getOwnGeneric): GetMethod(handler,
+					// "set") per spec counts an inherited trap too - see the
+					// other "set" trap sites in this file for the full
+					// rationale.
+					if setTrap, ok := vm.getInheritedGeneric(proxy.handler, "set"); ok && setTrap.IsCallable() {
 						// Call the set trap: trap(target, property, value, receiver)
 						// receiver is the original primitive coerced to object
 						trapArgs := []Value{proxy.Target(), NewString(propName), *valueToSet, *objVal}
@@ -1070,8 +1081,10 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 			return false, InterpretRuntimeError, Undefined
 		}
 
-		// Check if handler has a set trap
-		setTrap, ok := vm.getOwnGeneric(proxy.handler, "set")
+		// Check if handler has a set trap. getInheritedGeneric (not
+		// getOwnGeneric): GetMethod(handler, "set") per spec counts an
+		// inherited trap too.
+		setTrap, ok := vm.getInheritedGeneric(proxy.handler, "set")
 		if ok && setTrap.IsCallable() {
 			// Call the set trap: handler.set(target, propertyKey, value, receiver)
 			trapArgs := []Value{proxy.target, symKey, *valueToSet, *objVal}
