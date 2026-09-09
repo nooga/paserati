@@ -331,6 +331,32 @@ func (vm *VM) GetFrameCount() int {
 // GetProperty gets a property from an object value, properly handling getters and prototype chain
 // This is safe to call from native functions and will trigger property getters/throw exceptions
 func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
+	return vm.getPropertyWithReceiver(obj, propName, obj)
+}
+
+// GetPropertyWithReceiver is GetProperty with an explicit receiver for any
+// own or inherited accessor's getter to be called with as `this`, instead
+// of always the object the property was actually found on/started from.
+// Added for Reflect.get(target, key[, receiver]) (pkg/builtins/
+// reflect_init.go), whose optional third argument is exactly this - per
+// ECMA-262 10.1.8 [[Get]], an accessor's getter is invoked with Receiver
+// as its this value, which can legitimately differ from the object
+// [[Get]] started walking from (e.g. Reflect.get(proto, "x", instance)
+// calls proto's getter for "x" with `this = instance`).
+func (vm *VM) GetPropertyWithReceiver(obj Value, propName string, receiver Value) (Value, error) {
+	return vm.getPropertyWithReceiver(obj, propName, receiver)
+}
+
+// getPropertyWithReceiver is GetProperty/GetPropertyWithReceiver's shared
+// implementation. receiver is threaded through every accessor-getter
+// vm.Call and every recursive self-call (walking a [[Prototype]] set via
+// Object.setPrototypeOf, a Proxy's target when no trap is present, ...) so
+// a getter anywhere on the chain is always invoked with the ORIGINAL
+// receiver, not whichever intermediate object it was actually found on -
+// GetProperty's plain callers (which don't have a distinct receiver
+// concept) get receiver == obj, matching this function's behavior before
+// receiver support existed.
+func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value) (Value, error) {
 	// Simple implementation that doesn't use opGetProp to avoid unwinding issues
 	// Check for getter (including prototype chain) and call it, or return the property value
 
@@ -340,7 +366,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		// Check own accessor first
 		if g, _, _, _, ok := po.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
 			// Call the getter with this=obj
-			result, err := vm.Call(g, obj, nil)
+			result, err := vm.Call(g, receiver, nil)
 			if err != nil {
 				return Undefined, err
 			}
@@ -353,29 +379,60 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		// Walk prototype chain for accessor or data properties
 		current := po.GetPrototype()
 		for current.typ != TypeNull && current.typ != TypeUndefined {
-			if current.IsObject() {
-				if current.Type() == TypeObject {
-					proto := current.AsPlainObject()
-					// Check for accessor in prototype
-					if g, _, _, _, ok := proto.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
-						// Call the getter with this=original obj (not proto)
-						result, err := vm.Call(g, obj, nil)
-						if err != nil {
-							return Undefined, err
-						}
-						return result, nil
+			if current.Type() == TypeObject {
+				proto := current.AsPlainObject()
+				// Check for accessor in prototype
+				if g, _, _, _, ok := proto.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
+					// Call the getter with this=original obj (not proto)
+					result, err := vm.Call(g, receiver, nil)
+					if err != nil {
+						return Undefined, err
 					}
-					// Check for data property in prototype
-					if value, exists := proto.GetOwn(propName); exists {
-						return value, nil
-					}
-					current = proto.GetPrototype()
-				} else {
-					break
+					return result, nil
 				}
-			} else {
-				break
+				// Check for data property in prototype
+				if value, exists := proto.GetOwn(propName); exists {
+					return value, nil
+				}
+				current = proto.GetPrototype()
+				continue
 			}
+			// The chain leaves plain-TypeObject territory (a callable or
+			// other exotic kind used as a [[Prototype]] via
+			// Object.create(fn)/Object.setPrototypeOf, or a class
+			// extending a native constructor) - recurse into the full
+			// per-kind dispatch instead of silently stopping, so an own
+			// property on THAT value's own table (a Function's
+			// Properties, say) is still found. NOT gated on
+			// current.IsObject(): every callable kind (TypeFunction,
+			// TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps,
+			// TypeBoundFunction) sorts BEFORE TypeObject in the ValueType
+			// enum (pkg/vm/value.go), so IsObject() - a contiguous
+			// [TypeObject, TypeProxy] range check - is FALSE for exactly
+			// the values this branch exists to handle; gating on it here
+			// (an earlier version of this fix did) silently reintroduced
+			// the very "stops early" bug this comment describes fixing.
+			// Found via the symbol-key sibling of this exact case
+			// (getSymbolPropertyWithReceiver) needing the identical fix
+			// for Reflect.get(Object.create(fn), sym) to work - this is
+			// the same gap for a string key, fixed alongside it in the
+			// same commit rather than left silently asymmetric between
+			// key kinds.
+			return vm.getPropertyWithReceiver(current, propName, receiver)
+		}
+		return Undefined, nil
+
+	case TypeDictObject:
+		// DictObject (a module namespace or TS enum value at runtime,
+		// pkg/vm/object.go's NewDictObject) - own properties only.
+		// DictObject doesn't support accessors (its own .Get comment says
+		// so) and has no user-facing prototype chain of its own, so this
+		// is just a direct own-table lookup. This case didn't exist at all
+		// before this fix, so Reflect.get on a module namespace or enum
+		// always answered undefined - found while implementing Reflect.get's
+		// general property support, not previously reported.
+		if v, ok := obj.AsDictObject().Get(propName); ok {
+			return v, nil
 		}
 		return Undefined, nil
 
@@ -449,14 +506,25 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		if proxy.Revoked {
 			return Undefined, vm.NewTypeError("Cannot perform 'get' on a revoked Proxy")
 		}
-		getTrap, hasGetTrap := proxy.handler.AsPlainObject().GetOwn("get")
+		// proxyGetTrap (not a bare proxy.handler.AsPlainObject().GetOwn("get"))
+		// for the same two reasons documented on its own definition: GetMethod
+		// semantics mean an INHERITED "get" trap counts too, and a handler
+		// that happens to be a TypeDictObject (a TS enum/module namespace
+		// value) must not panic AsPlainObject().
+		getTrap, hasGetTrap := proxyGetTrap(proxy.handler, "get")
 		if hasGetTrap && getTrap.Type() != TypeUndefined && getTrap.Type() != TypeNull {
 			// Validate trap is callable
 			if !getTrap.IsCallable() {
 				return Undefined, vm.NewTypeError("'get' on proxy: trap is not a function")
 			}
-			// Call the get trap: handler.get(target, propertyKey, receiver)
-			trapArgs := []Value{proxy.target, NewString(propName), obj}
+			// Call the get trap: handler.get(target, propertyKey, receiver) -
+			// receiver, not obj: obj is whichever value this switch is
+			// currently examining (which can be a Proxy reached partway
+			// through a longer chain), while receiver is the ORIGINAL
+			// object/value the caller's property access started from -
+			// exactly what ECMA-262 10.5.8 step 8 passes as the trap's
+			// third argument.
+			trapArgs := []Value{proxy.target, NewString(propName), receiver}
 			result, err := vm.Call(getTrap, proxy.handler, trapArgs)
 			if err != nil {
 				return Undefined, err
@@ -481,11 +549,31 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			}
 			return result, nil
 		}
-		// No get trap, fall through to target
-		return vm.GetProperty(proxy.target, propName)
+		// No get trap, fall through to target - still threading the
+		// original receiver through, not proxy.target, so a getter found
+		// further down the chain still sees the right `this`.
+		return vm.getPropertyWithReceiver(proxy.target, propName, receiver)
 
 	case TypePromise:
-		// Promise objects: check Promise.prototype chain
+		// Promise objects: own side-table property first (same table/gap
+		// as TypeSet/TypeMap above - Promises don't expose own state as
+		// ordinary properties, but a plain assignment or
+		// Object.defineProperty can still add one), then Promise.prototype.
+		if props := OwnPropertiesTable(obj); props != nil {
+			if g, _, _, _, ok := props.GetOwnAccessor(propName); ok {
+				if g.Type() != TypeUndefined {
+					result, err := vm.Call(g, receiver, nil)
+					if err != nil {
+						return Undefined, err
+					}
+					return result, nil
+				}
+				return Undefined, nil
+			}
+			if v, ok := props.GetOwn(propName); ok {
+				return v, nil
+			}
+		}
 		if vm.PromisePrototype.IsObject() {
 			proto := vm.PromisePrototype.AsPlainObject()
 			if v, ok := proto.Get(propName); ok {
@@ -515,7 +603,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 					// Check for accessor property (getter) on prototype
 					if g, _, _, _, ok := proto.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
 						// Call the getter with this=original RegExp object
-						result, err := vm.Call(g, obj, nil)
+						result, err := vm.Call(g, receiver, nil)
 						if err != nil {
 							return Undefined, err
 						}
@@ -532,7 +620,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 							if current.Type() == TypeObject {
 								grandProto := current.AsPlainObject()
 								if g, _, _, _, ok := grandProto.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
-									result, err := vm.Call(g, obj, nil)
+									result, err := vm.Call(g, receiver, nil)
 									if err != nil {
 										return Undefined, err
 									}
@@ -620,7 +708,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 					if getter, _, _, _, ok := cur.GetOwnAccessor(propName); ok {
 						if getter.Type() != TypeUndefined {
 							// Call the getter with this=obj (the TypedArray)
-							result, err := vm.Call(getter, obj, nil)
+							result, err := vm.Call(getter, receiver, nil)
 							if err != nil {
 								return Undefined, err
 							}
@@ -645,14 +733,37 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		return Undefined, nil
 
 	case TypeSet:
-		// Set objects: check prototype chain (especially for accessor properties like size)
+		// Set objects: own side-table property first (the same lazily-
+		// allocated table a plain `set.foo = 1`/Object.defineProperty
+		// assignment writes into - OwnPropertiesTable,
+		// pkg/vm/properties_table.go), THEN the prototype chain (for
+		// accessor properties like size). Before this, a Set's own custom
+		// property was invisible here even though Object.getOwnPropertyDescriptor/
+		// `in`/Reflect.has already agreed it existed - same "kind missing a
+		// side-table check" gap already fixed elsewhere in this switch
+		// (RegExp) and across OpIn/Object.keys/etc. in prior PRs.
+		if props := OwnPropertiesTable(obj); props != nil {
+			if g, _, _, _, ok := props.GetOwnAccessor(propName); ok {
+				if g.Type() != TypeUndefined {
+					result, err := vm.Call(g, receiver, nil)
+					if err != nil {
+						return Undefined, err
+					}
+					return result, nil
+				}
+				return Undefined, nil
+			}
+			if v, ok := props.GetOwn(propName); ok {
+				return v, nil
+			}
+		}
 		if vm.SetPrototype.IsObject() {
 			proto := vm.SetPrototype.AsPlainObject()
 			// Check for accessor (getter) first
 			if getter, _, _, _, ok := proto.GetOwnAccessor(propName); ok {
 				if getter.Type() != TypeUndefined {
-					// Call the getter with this=obj (the Set)
-					result, err := vm.Call(getter, obj, nil)
+					// Call the getter with this=receiver (the Set)
+					result, err := vm.Call(getter, receiver, nil)
 					if err != nil {
 						return Undefined, err
 					}
@@ -668,14 +779,30 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 		return Undefined, nil
 
 	case TypeMap:
-		// Map objects: check prototype chain (especially for accessor properties like size)
+		// Map objects: same own-side-table-then-prototype-chain shape as
+		// TypeSet just above - see its comment.
+		if props := OwnPropertiesTable(obj); props != nil {
+			if g, _, _, _, ok := props.GetOwnAccessor(propName); ok {
+				if g.Type() != TypeUndefined {
+					result, err := vm.Call(g, receiver, nil)
+					if err != nil {
+						return Undefined, err
+					}
+					return result, nil
+				}
+				return Undefined, nil
+			}
+			if v, ok := props.GetOwn(propName); ok {
+				return v, nil
+			}
+		}
 		if vm.MapPrototype.IsObject() {
 			proto := vm.MapPrototype.AsPlainObject()
 			// Check for accessor (getter) first
 			if getter, _, _, _, ok := proto.GetOwnAccessor(propName); ok {
 				if getter.Type() != TypeUndefined {
-					// Call the getter with this=obj (the Map)
-					result, err := vm.Call(getter, obj, nil)
+					// Call the getter with this=receiver (the Map)
+					result, err := vm.Call(getter, receiver, nil)
 					if err != nil {
 						return Undefined, err
 					}
@@ -699,7 +826,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 				// Check for accessor (getter) on own properties
 				if getter, _, _, _, ok := fn.Properties.GetOwnAccessor(propName); ok {
 					if getter.Type() != TypeUndefined {
-						result, err := vm.Call(getter, obj, nil)
+						result, err := vm.Call(getter, receiver, nil)
 						if err != nil {
 							return Undefined, err
 						}
@@ -720,7 +847,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			}
 			// Walk [[Prototype]] chain (set by Object.setPrototypeOf)
 			if fn.Prototype.Type() != TypeUndefined && fn.Prototype.Type() != TypeNull {
-				return vm.GetProperty(fn.Prototype, propName)
+				return vm.getPropertyWithReceiver(fn.Prototype, propName, receiver)
 			}
 			// Fall back to Function.prototype - use function's own realm if available (cross-realm)
 			funcProto := vm.FunctionPrototype
@@ -733,7 +860,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 					// Check for accessor first
 					if getter, _, _, _, ok := nfp.Properties.GetOwnAccessor(propName); ok {
 						if getter.Type() != TypeUndefined {
-							result, err := vm.Call(getter, obj, nil)
+							result, err := vm.Call(getter, receiver, nil)
 							if err != nil {
 								return Undefined, err
 							}
@@ -758,7 +885,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 				// Check for accessor (getter) on own properties
 				if getter, _, _, _, ok := cl.Properties.GetOwnAccessor(propName); ok {
 					if getter.Type() != TypeUndefined {
-						result, err := vm.Call(getter, obj, nil)
+						result, err := vm.Call(getter, receiver, nil)
 						if err != nil {
 							return Undefined, err
 						}
@@ -780,7 +907,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 				}
 				// Walk [[Prototype]] chain (set by Object.setPrototypeOf)
 				if cl.Fn.Prototype.Type() != TypeUndefined && cl.Fn.Prototype.Type() != TypeNull {
-					return vm.GetProperty(cl.Fn.Prototype, propName)
+					return vm.getPropertyWithReceiver(cl.Fn.Prototype, propName, receiver)
 				}
 			}
 			// Fall back to Function.prototype (which is a NativeFunctionWithProps)
@@ -790,7 +917,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 					// Check for accessor first
 					if getter, _, _, _, ok := nfp.Properties.GetOwnAccessor(propName); ok {
 						if getter.Type() != TypeUndefined {
-							result, err := vm.Call(getter, obj, nil)
+							result, err := vm.Call(getter, receiver, nil)
 							if err != nil {
 								return Undefined, err
 							}
@@ -813,7 +940,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			// Check for accessor (getter) on own properties
 			if getter, _, _, _, ok := nfp.Properties.GetOwnAccessor(propName); ok {
 				if getter.Type() != TypeUndefined {
-					result, err := vm.Call(getter, obj, nil)
+					result, err := vm.Call(getter, receiver, nil)
 					if err != nil {
 						return Undefined, err
 					}
@@ -845,7 +972,70 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 				// Check for accessor first
 				if getter, _, _, _, ok := fpNfp.Properties.GetOwnAccessor(propName); ok {
 					if getter.Type() != TypeUndefined {
-						result, err := vm.Call(getter, obj, nil)
+						result, err := vm.Call(getter, receiver, nil)
+						if err != nil {
+							return Undefined, err
+						}
+						return result, nil
+					}
+					return Undefined, nil
+				}
+				if v, ok := fpNfp.Properties.Get(propName); ok {
+					return v, nil
+				}
+			}
+		}
+		return Undefined, nil
+
+	case TypeNativeFunction:
+		// A plain native function (e.g. Array.prototype.push) - same shape
+		// as TypeNativeFunctionWithProps just above, except its own
+		// intrinsics live directly on the value's own fields rather than
+		// under a *PlainObject with a IsConstructor flag. This case didn't
+		// exist at all before this fix (found while implementing
+		// Reflect.get's general property support, but this function -
+		// GetProperty/GetPropertyWithReceiver - is also used elsewhere,
+		// e.g. Reflect.apply/construct's generic array-like .length
+		// access), so Reflect.get(Array.prototype.push, "name") and
+		// friends always answered undefined, and any custom own property
+		// (Object.defineProperty, bracket-notation assignment) was
+		// invisible too - even though `in`/Reflect.has/
+		// Object.getOwnPropertyDescriptor already agreed those exist
+		// (fixed for THEM in earlier PRs in this stack).
+		nf := obj.AsNativeFunction()
+		if nf != nil && nf.Properties != nil {
+			if getter, _, _, _, ok := nf.Properties.GetOwnAccessor(propName); ok {
+				if getter.Type() != TypeUndefined {
+					result, err := vm.Call(getter, receiver, nil)
+					if err != nil {
+						return Undefined, err
+					}
+					return result, nil
+				}
+				return Undefined, nil
+			}
+			if v, ok := nf.Properties.GetOwn(propName); ok {
+				return v, nil
+			}
+		}
+		if nf != nil {
+			switch propName {
+			case "name":
+				if !nf.DeletedName {
+					return NewString(nf.Name), nil
+				}
+			case "length":
+				if !nf.DeletedLength {
+					return NumberValue(float64(nf.Arity)), nil
+				}
+			}
+		}
+		if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
+			fpNfp := vm.FunctionPrototype.AsNativeFunctionWithProps()
+			if fpNfp != nil && fpNfp.Properties != nil {
+				if getter, _, _, _, ok := fpNfp.Properties.GetOwnAccessor(propName); ok {
+					if getter.Type() != TypeUndefined {
+						result, err := vm.Call(getter, receiver, nil)
 						if err != nil {
 							return Undefined, err
 						}
@@ -867,7 +1057,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			// Check for accessor (getter) on own properties
 			if getter, _, _, _, ok := bf.Properties.GetOwnAccessor(propName); ok {
 				if getter.Type() != TypeUndefined {
-					result, err := vm.Call(getter, obj, nil)
+					result, err := vm.Call(getter, receiver, nil)
 					if err != nil {
 						return Undefined, err
 					}
@@ -886,7 +1076,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 				// Check for accessor first
 				if getter, _, _, _, ok := nfp.Properties.GetOwnAccessor(propName); ok {
 					if getter.Type() != TypeUndefined {
-						result, err := vm.Call(getter, obj, nil)
+						result, err := vm.Call(getter, receiver, nil)
 						if err != nil {
 							return Undefined, err
 						}
@@ -954,7 +1144,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			if getter, _, _, _, ok := proto.GetOwnAccessor(propName); ok {
 				if getter.Type() != TypeUndefined {
 					// Call the getter with this=obj (the BigInt)
-					result, err := vm.Call(getter, obj, nil)
+					result, err := vm.Call(getter, receiver, nil)
 					if err != nil {
 						return Undefined, err
 					}
@@ -988,7 +1178,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 			po := proto.AsPlainObject()
 			// Check for accessor (getter) first
 			if g, _, _, _, ok := po.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
-				result, err := vm.Call(g, obj, nil)
+				result, err := vm.Call(g, receiver, nil)
 				if err != nil {
 					return Undefined, err
 				}
@@ -1004,7 +1194,7 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 					if current.Type() == TypeObject {
 						cur := current.AsPlainObject()
 						if g, _, _, _, ok := cur.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
-							result, err := vm.Call(g, obj, nil)
+							result, err := vm.Call(g, receiver, nil)
 							if err != nil {
 								return Undefined, err
 							}
@@ -1021,6 +1211,429 @@ func (vm *VM) GetProperty(obj Value, propName string) (Value, error) {
 					break
 				}
 			}
+		}
+		return Undefined, nil
+	}
+}
+
+// getOwnFromTableByKey checks one *PlainObject-backed own-property table
+// (a plain object's own fields, or an exotic kind's lazily-allocated
+// Properties side table - Function/Closure/NativeFunction/
+// NativeFunctionWithProps/BoundFunction/RegExp/Map/Set/Promise all keep
+// one, see pkg/vm/properties_table.go) for key, invoking an accessor's
+// getter with `this = receiver` if key names one. Returns (value, found,
+// error) - found is false and error is nil when key simply isn't there,
+// so callers can fall through to whatever comes next (a prototype chain,
+// a different table) without misreading "not found" as "found undefined".
+func (vm *VM) getOwnFromTableByKey(table *PlainObject, key PropertyKey, receiver Value) (Value, bool, error) {
+	if table == nil {
+		return Undefined, false, nil
+	}
+	if g, _, _, _, ok := table.GetOwnAccessorByKey(key); ok {
+		if g.Type() != TypeUndefined {
+			res, err := vm.Call(g, receiver, nil)
+			if err != nil {
+				return Undefined, true, err
+			}
+			return res, true, nil
+		}
+		// Setter-only accessor (no getter): reads as undefined per spec,
+		// but IS present, so still reported as found - a caller falling
+		// through to a lower-priority table/prototype for this key would
+		// otherwise incorrectly resurrect a shadowed property from there.
+		return Undefined, true, nil
+	}
+	if v, ok := table.GetOwnByKey(key); ok {
+		return v, true, nil
+	}
+	return Undefined, false, nil
+}
+
+// walkPlainObjectChainForKey walks a chain of ordinary (TypeObject)
+// prototypes starting at start, checking each level's own table via
+// getOwnFromTableByKey - the same accessor-then-data, getter-invoking
+// shape opGetPropSymbol's own TypeObject case (pkg/vm/op_getprop.go)
+// already uses for a direct property access, reused here so
+// GetPropertyWithReceiver (backing Reflect.get) gets the same fidelity
+// instead of a second, weaker, hand-rolled walk. Stops (found=false) as
+// soon as the chain reaches a non-TypeObject value (Null, a Proxy, or any
+// other exotic kind) - every concrete built-in prototype this is called
+// with (Array.prototype, Map.prototype, RegExp.prototype, the primitive
+// wrapper prototypes, ...) terminates in Object.prototype, itself a plain
+// TypeObject, so this is not a real limitation for those callers.
+func (vm *VM) walkPlainObjectChainForKey(start Value, key PropertyKey, receiver Value) (Value, bool, error) {
+	current := start
+	for current.IsObject() {
+		if current.Type() != TypeObject {
+			break
+		}
+		po := current.AsPlainObject()
+		if v, found, err := vm.getOwnFromTableByKey(po, key, receiver); found || err != nil {
+			return v, found, err
+		}
+		current = po.GetPrototype()
+	}
+	return Undefined, false, nil
+}
+
+// ReflectGetSymbolProperty is GetProperty for a Symbol-keyed property
+// (rather than a string-keyed one) - see GetPropertyWithReceiver's doc
+// comment for the receiver parameter's meaning. sym must be a Value of
+// TypeSymbol. Named distinctly from the pre-existing, narrower
+// GetSymbolProperty (obj, symbol) (Value, bool) below (RegExp/TypeObject
+// only, no getter invocation on non-RegExp/TypeObject kinds, no error
+// return) rather than overloading that name for a wider, error-returning
+// implementation an existing caller of the old one isn't expecting.
+func (vm *VM) ReflectGetSymbolProperty(obj Value, sym Value) (Value, error) {
+	return vm.getSymbolPropertyWithReceiver(obj, sym, obj)
+}
+
+// ReflectGetSymbolPropertyWithReceiver is ReflectGetSymbolProperty with an
+// explicit receiver - the symbol-key counterpart of
+// GetPropertyWithReceiver, added for the same reason
+// (Reflect.get(target, someSymbol[, receiver]), pkg/builtins/reflect_init.go).
+func (vm *VM) ReflectGetSymbolPropertyWithReceiver(obj Value, sym Value, receiver Value) (Value, error) {
+	return vm.getSymbolPropertyWithReceiver(obj, sym, receiver)
+}
+
+// getSymbolPropertyWithReceiver mirrors getPropertyWithReceiver's per-kind
+// switch (same case list, same comments' reasoning) with the string-keyed
+// PlainObject methods (GetOwn/GetOwnAccessor/Get) replaced by their
+// *ByKey counterparts, i.e. using key := NewSymbolKey(sym) throughout
+// instead of propName. Where getPropertyWithReceiver open-codes its own
+// per-kind accessor/data check and hand-rolled prototype walk inline,
+// this uses the two shared helpers above instead - written once, for the
+// new symbol path, rather than reproducing that duplication a second
+// time; getPropertyWithReceiver's already-tested string-key logic is left
+// exactly as it was, not retrofitted onto the same helpers, to avoid
+// risking a regression there for this task's sake.
+//
+// The FunctionPrototype fallback used by every callable kind
+// (TypeFunction/TypeClosure/TypeNativeFunction/TypeNativeFunctionWithProps/
+// TypeBoundFunction) reuses the existing lookupSymbolOnProtoChain
+// (pkg/vm/op_getprop.go) rather than walkPlainObjectChainForKey, since
+// Function.prototype itself can be a TypeNativeFunctionWithProps at
+// runtime (see that function's own doc comment) - walkPlainObjectChainForKey
+// only handles a TypeObject chain. Matching lookupSymbolOnProtoChain's
+// existing behavior, this does NOT invoke an accessor's getter found on
+// the FunctionPrototype chain - a real, separate, still-open gap already
+// documented where it was first found (pkg/vm/op_getprop.go's
+// opGetPropSymbol, TypeNativeFunction case), not introduced or widened
+// here.
+func (vm *VM) getSymbolPropertyWithReceiver(obj Value, sym Value, receiver Value) (Value, error) {
+	key := NewSymbolKey(sym)
+
+	switch obj.Type() {
+	case TypeObject:
+		// Not walkPlainObjectChainForKey directly: that helper stops the
+		// instant the chain reaches a non-TypeObject value, which is fine
+		// for the built-in-prototype walks below (Array.prototype and
+		// siblings always terminate in Object.prototype, itself a plain
+		// TypeObject) but wrong here - obj's own [[Prototype]] chain can
+		// legitimately pass through a callable (`Object.create(someFn)`,
+		// or a class extending a native constructor), and a symbol
+		// property can live in THAT value's own Properties side table,
+		// not a PlainObject's fields. Recursing into the full per-kind
+		// dispatch (this same function) once the chain leaves TypeObject
+		// picks that up, instead of silently answering "not found":
+		//
+		//   const sym = Symbol("s");
+		//   function base() {}
+		//   base[sym] = "found";
+		//   Reflect.get(Object.create(base), sym); // Node: "found"
+		current := obj
+		for current.Type() == TypeObject {
+			po := current.AsPlainObject()
+			if v, found, err := vm.getOwnFromTableByKey(po, key, receiver); found || err != nil {
+				return v, err
+			}
+			current = po.GetPrototype()
+		}
+		if current.typ == TypeNull || current.typ == TypeUndefined {
+			return Undefined, nil
+		}
+		// NOT gated on current.IsObject(): every callable kind sorts
+		// BEFORE TypeObject in the ValueType enum (pkg/vm/value.go), so
+		// IsObject() - a contiguous [TypeObject, TypeProxy] range check -
+		// is FALSE for exactly the values (TypeFunction, TypeClosure,
+		// TypeNativeFunction, TypeNativeFunctionWithProps,
+		// TypeBoundFunction) this branch exists to reach. Gating on it
+		// (an earlier version of this fix did) silently reintroduced the
+		// "stops early, answers not-found" bug the comment above
+		// describes fixing - see getPropertyWithReceiver's TypeObject
+		// case (the string-key sibling of this one) for the same mistake
+		// caught and fixed the same way.
+		return vm.getSymbolPropertyWithReceiver(current, sym, receiver)
+
+	case TypeDictObject:
+		// DictObject ignores symbols entirely - matches OpIn's own
+		// symbol-key TypeDictObject case (pkg/vm/vm.go).
+		return Undefined, nil
+
+	case TypeArray:
+		arr := obj.AsArray()
+		if arr != nil {
+			if v, ok := arr.GetSymbolProp(sym.AsSymbolObject()); ok {
+				return v, nil
+			}
+			if vm.ArrayPrototype.IsObject() {
+				v, _, err := vm.walkPlainObjectChainForKey(vm.ArrayPrototype, key, receiver)
+				return v, err
+			}
+		}
+		return Undefined, nil
+
+	case TypeGenerator:
+		if vm.GeneratorPrototype.IsObject() {
+			v, _, err := vm.walkPlainObjectChainForKey(vm.GeneratorPrototype, key, receiver)
+			return v, err
+		}
+		return Undefined, nil
+
+	case TypeProxy:
+		proxy := obj.AsProxy()
+		if proxy.Revoked {
+			return Undefined, vm.NewTypeError("Cannot perform 'get' on a revoked Proxy")
+		}
+		getTrap, hasGetTrap := proxyGetTrap(proxy.handler, "get")
+		if hasGetTrap && getTrap.Type() != TypeUndefined && getTrap.Type() != TypeNull {
+			if !getTrap.IsCallable() {
+				return Undefined, vm.NewTypeError("'get' on proxy: trap is not a function")
+			}
+			trapArgs := []Value{proxy.target, sym, receiver}
+			result, err := vm.Call(getTrap, proxy.handler, trapArgs)
+			if err != nil {
+				return Undefined, err
+			}
+			// ECMAScript 10.5.8 invariant validation, symbol-key version
+			// of getPropertyWithReceiver's TypeProxy case above.
+			if proxy.target.Type() == TypeObject {
+				targetObj := proxy.target.AsPlainObject()
+				if g, _, _, c, isAccessor := targetObj.GetOwnAccessorByKey(key); isAccessor && !c {
+					if g.Type() == TypeUndefined && !result.IsUndefined() {
+						return Undefined, vm.NewTypeError("'get' on proxy: property is a non-configurable accessor property on the proxy target and does not have a getter function, but the trap returned a non-undefined value")
+					}
+				} else if v, w, _, c, found := targetObj.GetOwnDescriptorByKey(key); found && !c && !w {
+					if !v.StrictlyEquals(result) {
+						return Undefined, vm.NewTypeError("'get' on proxy: property is a read-only and non-configurable data property on the proxy target but the proxy did not return its actual value")
+					}
+				}
+			}
+			return result, nil
+		}
+		return vm.getSymbolPropertyWithReceiver(proxy.target, sym, receiver)
+
+	case TypePromise:
+		if props := OwnPropertiesTable(obj); props != nil {
+			if v, found, err := vm.getOwnFromTableByKey(props, key, receiver); found || err != nil {
+				return v, err
+			}
+		}
+		if vm.PromisePrototype.IsObject() {
+			v, _, err := vm.walkPlainObjectChainForKey(vm.PromisePrototype, key, receiver)
+			return v, err
+		}
+		return Undefined, nil
+
+	case TypeRegExp:
+		regexObj := obj.AsRegExpObject()
+		if regexObj != nil {
+			if regexObj.Properties != nil {
+				if v, found, err := vm.getOwnFromTableByKey(regexObj.Properties, key, receiver); found || err != nil {
+					return v, err
+				}
+			}
+			proto := Undefined
+			proto = regexObj.GetPrototype()
+			if !proto.IsObject() {
+				proto = vm.RegExpPrototype
+			}
+			if proto.IsObject() {
+				v, _, err := vm.walkPlainObjectChainForKey(proto, key, receiver)
+				return v, err
+			}
+		}
+		return Undefined, nil
+
+	case TypeTypedArray:
+		// TypedArrays don't expose own symbol-keyed properties (only
+		// indices and the fixed set of string built-ins) - straight to
+		// the element-type-specific prototype, same selection as
+		// getPropertyWithReceiver's TypeTypedArray case.
+		ta := obj.AsTypedArray()
+		if ta != nil {
+			var proto Value
+			switch ta.GetElementType() {
+			case TypedArrayInt8:
+				proto = vm.Int8ArrayPrototype
+			case TypedArrayUint8:
+				proto = vm.Uint8ArrayPrototype
+			case TypedArrayUint8Clamped:
+				proto = vm.Uint8ClampedArrayPrototype
+			case TypedArrayInt16:
+				proto = vm.Int16ArrayPrototype
+			case TypedArrayUint16:
+				proto = vm.Uint16ArrayPrototype
+			case TypedArrayInt32:
+				proto = vm.Int32ArrayPrototype
+			case TypedArrayUint32:
+				proto = vm.Uint32ArrayPrototype
+			case TypedArrayFloat16:
+				proto = vm.Float16ArrayPrototype
+			case TypedArrayFloat32:
+				proto = vm.Float32ArrayPrototype
+			case TypedArrayFloat64:
+				proto = vm.Float64ArrayPrototype
+			case TypedArrayBigInt64:
+				proto = vm.BigInt64ArrayPrototype
+			case TypedArrayBigUint64:
+				proto = vm.BigUint64ArrayPrototype
+			default:
+				proto = vm.TypedArrayPrototype
+			}
+			if proto.IsObject() {
+				v, _, err := vm.walkPlainObjectChainForKey(proto, key, receiver)
+				return v, err
+			}
+		}
+		return Undefined, nil
+
+	case TypeSet:
+		if props := OwnPropertiesTable(obj); props != nil {
+			if v, found, err := vm.getOwnFromTableByKey(props, key, receiver); found || err != nil {
+				return v, err
+			}
+		}
+		if vm.SetPrototype.IsObject() {
+			v, _, err := vm.walkPlainObjectChainForKey(vm.SetPrototype, key, receiver)
+			return v, err
+		}
+		return Undefined, nil
+
+	case TypeMap:
+		if props := OwnPropertiesTable(obj); props != nil {
+			if v, found, err := vm.getOwnFromTableByKey(props, key, receiver); found || err != nil {
+				return v, err
+			}
+		}
+		if vm.MapPrototype.IsObject() {
+			v, _, err := vm.walkPlainObjectChainForKey(vm.MapPrototype, key, receiver)
+			return v, err
+		}
+		return Undefined, nil
+
+	case TypeFunction:
+		fn := obj.AsFunction()
+		if fn != nil && fn.Properties != nil {
+			if v, found, err := vm.getOwnFromTableByKey(fn.Properties, key, receiver); found || err != nil {
+				return v, err
+			}
+		}
+		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
+			return v, nil
+		}
+		return Undefined, nil
+
+	case TypeClosure:
+		cl := obj.AsClosure()
+		if cl != nil {
+			if cl.Properties != nil {
+				if v, found, err := vm.getOwnFromTableByKey(cl.Properties, key, receiver); found || err != nil {
+					return v, err
+				}
+			}
+			if cl.Fn != nil && cl.Fn.Properties != nil {
+				if v, found, err := vm.getOwnFromTableByKey(cl.Fn.Properties, key, receiver); found || err != nil {
+					return v, err
+				}
+			}
+		}
+		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
+			return v, nil
+		}
+		return Undefined, nil
+
+	case TypeNativeFunction:
+		nf := obj.AsNativeFunction()
+		if nf != nil && nf.Properties != nil {
+			if v, found, err := vm.getOwnFromTableByKey(nf.Properties, key, receiver); found || err != nil {
+				return v, err
+			}
+		}
+		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
+			return v, nil
+		}
+		return Undefined, nil
+
+	case TypeNativeFunctionWithProps:
+		nfp := obj.AsNativeFunctionWithProps()
+		if nfp != nil && nfp.Properties != nil {
+			if v, found, err := vm.getOwnFromTableByKey(nfp.Properties, key, receiver); found || err != nil {
+				return v, err
+			}
+		}
+		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
+			return v, nil
+		}
+		return Undefined, nil
+
+	case TypeBoundFunction:
+		bf := obj.AsBoundFunction()
+		if bf != nil && bf.Properties != nil {
+			if v, found, err := vm.getOwnFromTableByKey(bf.Properties, key, receiver); found || err != nil {
+				return v, err
+			}
+		}
+		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
+			return v, nil
+		}
+		return Undefined, nil
+
+	case TypeArguments:
+		args := obj.AsArguments()
+		if args != nil {
+			if v, ok := args.GetSymbolProp(sym.AsSymbolObject()); ok {
+				return v, nil
+			}
+			// Symbol.iterator is inherited from Array.prototype - check
+			// that first, then Object.prototype, matching OpIn's own
+			// symbol-key TypeArguments case (pkg/vm/vm.go).
+			if vm.ArrayPrototype.IsObject() {
+				if v, found, err := vm.walkPlainObjectChainForKey(vm.ArrayPrototype, key, receiver); found || err != nil {
+					return v, err
+				}
+			}
+			if vm.ObjectPrototype.IsObject() {
+				v, _, err := vm.walkPlainObjectChainForKey(vm.ObjectPrototype, key, receiver)
+				return v, err
+			}
+		}
+		return Undefined, nil
+
+	case TypeBigInt:
+		if vm.BigIntPrototype.IsObject() {
+			v, _, err := vm.walkPlainObjectChainForKey(vm.BigIntPrototype, key, receiver)
+			return v, err
+		}
+		return Undefined, nil
+
+	default:
+		var proto Value
+		switch obj.Type() {
+		case TypeBoolean:
+			proto = vm.BooleanPrototype
+		case TypeFloatNumber, TypeIntegerNumber:
+			proto = vm.NumberPrototype
+		case TypeString:
+			proto = vm.StringPrototype
+		case TypeSymbol:
+			proto = vm.SymbolPrototype
+		case TypeBigInt:
+			proto = vm.BigIntPrototype
+		}
+		if proto.IsObject() {
+			v, _, err := vm.walkPlainObjectChainForKey(proto, key, receiver)
+			return v, err
 		}
 		return Undefined, nil
 	}
