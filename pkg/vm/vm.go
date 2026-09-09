@@ -5199,13 +5199,39 @@ startExecution:
 						registers[destReg] = val
 					} else {
 						frame.ip = ip
-						status := vm.runtimeError("%s is not defined", propName)
-						return status, Undefined
+						vm.ThrowReferenceError(fmt.Sprintf("%s is not defined", propName))
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
+						}
+						if !vm.unwinding {
+							// Exception was caught by a handler, reload frame and continue
+							frame = &vm.frames[vm.frameCount-1]
+							closure = frame.closure
+							function = closure.Fn
+							registers = frame.registers
+							ip = frame.ip
+							goto reloadFrame
+						}
+						return InterpretRuntimeError, Undefined
 					}
 				} else {
 					frame.ip = ip
-					status := vm.runtimeError("%s is not defined", propName)
-					return status, Undefined
+					vm.ThrowReferenceError(fmt.Sprintf("%s is not defined", propName))
+					if vm.handlerFound {
+						vm.handlerFound = false
+						goto reloadFrame
+					}
+					if !vm.unwinding {
+						// Exception was caught by a handler, reload frame and continue
+						frame = &vm.frames[vm.frameCount-1]
+						closure = frame.closure
+						function = closure.Fn
+						registers = frame.registers
+						ip = frame.ip
+						goto reloadFrame
+					}
+					return InterpretRuntimeError, Undefined
 				}
 			}
 

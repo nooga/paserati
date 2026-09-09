@@ -705,7 +705,43 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 	var canNarrow bool
 	var narrowedType types.Type
 
-	if originalType == types.Unknown && guard.NarrowedType != nil {
+	_, originalIsUnion := originalType.(*types.UnionType)
+	if _, isPropMarker := guard.NarrowedType.(*types.PropertyExistenceMarker); isPropMarker && !originalIsUnion {
+		// A PropertyExistenceMarker ("prop" in x, or a symbol-key `in`
+		// check - see detectTypeGuard's Pattern 4) is a filter for UNION
+		// members (consumed by the UnionType branch below via
+		// typeHasProperty/filterUnionByProperty), not a real standalone
+		// type - "x has property p" doesn't by itself refine what x IS
+		// when x isn't already a union of candidates to narrow among.
+		//
+		// Falling through to the generic types.IsAssignable(guard.
+		// NarrowedType, originalType) branch below used to let this marker
+		// get assigned as x's actual narrowed type whenever originalType
+		// was Any or Unknown - IsAssignable trivially succeeds for
+		// "anything is assignable to Any/from Unknown" - silently
+		// replacing a plain `any`/`unknown` variable's real type with the
+		// bare marker for the rest of the enclosing narrowed scope
+		// (notably the remainder of a `&&` chain - see
+		// applyTypeNarrowingFromCondition, which composes each operand's
+		// narrowing into the next). A later index/member access on that
+		// variable then type-checked against the marker's synthetic
+		// "has-property-[[Symbol]]"/"has-property-<name>" pseudo-type
+		// instead of its real one:
+		//
+		//   const arr: any = [1, 2]; const s = Symbol("x");
+		//   true && s in arr && arr[s] === 1;
+		//   // before: PS2001 "cannot apply index operator to type has-property-[[Symbol]]"
+		//   // Node:   type-checks fine (arr stays `any` throughout)
+		//
+		// For a concrete non-union, non-Any/Unknown original type (e.g. an
+		// interface), this was already effectively a no-op - IsAssignable
+		// rejects the marker against anything but Any/Unknown - so this
+		// branch doesn't change observable behavior there, only for the
+		// two universal types where it was silently wrong. canNarrow stays
+		// false, same as the "cannot narrow" fallback below.
+		debugPrintf("// [TypeNarrowing] Property-existence guard on non-union '%s' (%s) - marker has nothing to filter, leaving type unchanged\n",
+			guard.VariableName, originalType.String())
+	} else if originalType == types.Unknown && guard.NarrowedType != nil {
 		// Unknown can be narrowed to any specific type
 		canNarrow = true
 		narrowedType = guard.NarrowedType

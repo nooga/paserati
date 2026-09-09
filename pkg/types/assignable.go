@@ -39,6 +39,69 @@ func IsAssignable(source, target Type) bool {
 	return isAssignable(source, target)
 }
 
+// IsAssignableForCallArgument checks assignability like IsAssignable, but
+// additionally accepts a `void`-returning function argument wherever the
+// parameter's declared type is itself a function type, regardless of the
+// specific return type that function type declares. This matches
+// TypeScript's special-casing of void-returning callbacks (see the TS
+// handbook's discussion of `void`): a callback written without an explicit
+// return (e.g. `(v, i) => { console.log(v, i); }`) is assignable to a
+// callback parameter typed as returning `undefined` or any other type,
+// because the return value is ignored by the caller (e.g.
+// Array.prototype.forEach).
+//
+// This is intentionally narrower than IsAssignable: it only kicks in when
+// both source and target are callable function types, and it is meant to be
+// used specifically when checking values passed as call arguments — not for
+// general variable/property assignability, where a mismatched return type
+// should still be reported.
+func IsAssignableForCallArgument(source, target Type) bool {
+	if isAssignable(source, target) {
+		return true
+	}
+
+	// An optional callback parameter (e.g. `sort(comparefn?: (a, b) => number)`)
+	// is represented as `T | undefined` at the call site. Unwrap the union and
+	// try each member so the void-tolerant check still applies to the
+	// function-typed member.
+	if targetUnion, ok := target.(*UnionType); ok {
+		for _, member := range targetUnion.Types {
+			if IsAssignableForCallArgument(source, member) {
+				return true
+			}
+		}
+		return false
+	}
+
+	sourceObj, sourceOk := source.(*ObjectType)
+	targetObj, targetOk := target.(*ObjectType)
+	if !sourceOk || !targetOk || !sourceObj.IsCallable() || !targetObj.IsCallable() {
+		return false
+	}
+
+	// Only the call-signature return type gets the void-tolerant treatment;
+	// a target that also declares required properties must still have those
+	// checked normally, so don't take the lenient path for it.
+	if len(targetObj.Properties) > 0 {
+		return false
+	}
+
+	sourceSigs := sourceObj.GetCallSignatures()
+	targetSigs := targetObj.GetCallSignatures()
+	if len(sourceSigs) == 0 || len(targetSigs) == 0 {
+		return false
+	}
+
+	for _, targetSig := range targetSigs {
+		for _, sourceSig := range sourceSigs {
+			if isSignatureAssignableForCallbackArgument(sourceSig, targetSig) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func isAssignable(source, target Type) bool {
 	if source == nil || target == nil {
 		return false
@@ -519,6 +582,23 @@ func isAssignable(source, target Type) bool {
 
 // Helper function to check signature assignability
 func isSignatureAssignable(source, target *Signature) bool {
+	return isSignatureAssignableImpl(source, target, false)
+}
+
+// isSignatureAssignableForCallbackArgument is like isSignatureAssignable but
+// additionally tolerates a `void` actual return type on the source signature,
+// matching TypeScript's special-casing of void-returning callbacks: "a
+// void-returning function can have any other return type in its actual
+// implementation... calling it without using the return value is common."
+// (see the TS handbook section on the void type). This is only used when
+// checking a function literal/value used as a call argument (e.g. the
+// callback passed to Array.prototype.forEach), not for general function-type
+// assignability, so it doesn't loosen plain variable/property assignments.
+func isSignatureAssignableForCallbackArgument(source, target *Signature) bool {
+	return isSignatureAssignableImpl(source, target, true)
+}
+
+func isSignatureAssignableImpl(source, target *Signature, tolerateVoidSourceReturn bool) bool {
 	if source == nil || target == nil {
 		return source == target
 	}
@@ -551,6 +631,13 @@ func isSignatureAssignable(source, target *Signature) bool {
 		if !isAssignable(targetParam, sourceParam) && !isAssignable(sourceParam, targetParam) {
 			return false
 		}
+	}
+
+	// A void-returning callback argument is assignable regardless of what
+	// specific return type the parameter's function type declares, since the
+	// caller (e.g. forEach) ignores the return value.
+	if tolerateVoidSourceReturn && source.ReturnType == Void {
+		return true
 	}
 
 	// Check return type (covariant)
