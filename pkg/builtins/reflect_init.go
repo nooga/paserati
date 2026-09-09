@@ -113,6 +113,70 @@ func reflectGetOwnDataDescriptorGeneric(v vm.Value, propKey string) (value vm.Va
 	}
 }
 
+// reflectGetOwnAccessorGenericByKey is reflectGetOwnAccessorGeneric for a
+// symbol key (sym must be a TypeSymbol value) - the symbol-key counterpart
+// backing Reflect.set's own symbol-key path (reflectSetDispatchByKey and
+// below), which used to have none at all: Reflect.set(target, key, ...)
+// stringified any key - Symbol included - via key.ToString() before it ever
+// reached this file's dispatch, so a symbol-keyed accessor on target was
+// never even looked for, let alone invoked.
+func reflectGetOwnAccessorGenericByKey(v vm.Value, sym vm.Value) (getter vm.Value, setter vm.Value, isAccessor bool) {
+	switch v.Type() {
+	case vm.TypeObject:
+		g, s, _, _, ok := v.AsPlainObject().GetOwnAccessorByKey(vm.NewSymbolKey(sym))
+		return g, s, ok
+	case vm.TypeArray:
+		symObj := sym.AsSymbolObject()
+		if symObj == nil {
+			return vm.Undefined, vm.Undefined, false
+		}
+		g, s, _, _, ok := v.AsArray().GetOwnSymbolAccessor(symObj)
+		return g, s, ok
+	case vm.TypeDictObject:
+		// DictObjects have no symbol-keyed storage at all - matches every
+		// other DictObject-and-symbols case in this codebase (see
+		// reflectDeleteProperty, pkg/builtins/reflect_delete.go, for the
+		// identical rule applied to delete).
+		return vm.Undefined, vm.Undefined, false
+	default:
+		if props := vm.OwnPropertiesTable(v); props != nil {
+			g, s, _, _, ok := props.GetOwnAccessorByKey(vm.NewSymbolKey(sym))
+			return g, s, ok
+		}
+		return vm.Undefined, vm.Undefined, false
+	}
+}
+
+// reflectGetOwnDataDescriptorGenericByKey is reflectGetOwnDataDescriptorGeneric
+// for a symbol key. Unlike the string-key version, TypeArray has no
+// index/"length" special case here - a symbol can never equal a numeric
+// index or the string "length", so an array's own symbol-keyed data
+// property (plain `arr[sym] = v`, or one defined with explicit attributes
+// via Object.defineProperty - see ArrayObject.GetSymbolPropertyDescriptor)
+// is the only shape to check.
+func reflectGetOwnDataDescriptorGenericByKey(v vm.Value, sym vm.Value) (value vm.Value, writable bool, found bool) {
+	switch v.Type() {
+	case vm.TypeObject:
+		val, w, _, _, ok := v.AsPlainObject().GetOwnDescriptorByKey(vm.NewSymbolKey(sym))
+		return val, w, ok
+	case vm.TypeDictObject:
+		return vm.Undefined, false, false
+	case vm.TypeArray:
+		symObj := sym.AsSymbolObject()
+		if symObj == nil {
+			return vm.Undefined, false, false
+		}
+		val, desc, ok := v.AsArray().GetSymbolPropertyDescriptor(symObj)
+		return val, desc.Writable, ok
+	default:
+		if props := vm.OwnPropertiesTable(v); props != nil {
+			val, w, _, _, ok := props.GetOwnDescriptorByKey(vm.NewSymbolKey(sym))
+			return val, w, ok
+		}
+		return vm.Undefined, false, false
+	}
+}
+
 // reflectOrdinarySet implements ECMA-262 10.1.9 OrdinarySet /
 // 10.1.9.2 OrdinarySetWithOwnDescriptor for Reflect.set's non-Proxy-target
 // path: walk `target`'s own property, then its whole [[Prototype]] chain,
@@ -164,6 +228,32 @@ func reflectOrdinarySet(vmInstance *vm.VM, target vm.Value, propKey string, valu
 	// {value: undefined, writable: true, enumerable: true, configurable:
 	// true} default takes the same data-write path.
 	return reflectCreateOrUpdateDataProperty(vmInstance, receiver, propKey, value)
+}
+
+// reflectOrdinarySetByKey is reflectOrdinarySet for a symbol key - same
+// chain walk, same accessor-then-data priority, same "invoke the setter
+// with receiver as `this` regardless of where in the chain it was found,
+// but a data write always lands on receiver" rule (see reflectOrdinarySet's
+// own doc comment for the full spec citation).
+func reflectOrdinarySetByKey(vmInstance *vm.VM, target vm.Value, sym vm.Value, value vm.Value, receiver vm.Value) (bool, error) {
+	current := target
+	for i := 0; i < 200 && current.Type() != vm.TypeNull && current.Type() != vm.TypeUndefined; i++ {
+		if _, setter, isAccessor := reflectGetOwnAccessorGenericByKey(current, sym); isAccessor {
+			if setter.Type() == vm.TypeUndefined {
+				return false, nil
+			}
+			_, err := vmInstance.Call(setter, receiver, []vm.Value{value})
+			return err == nil, err
+		}
+		if _, writable, found := reflectGetOwnDataDescriptorGenericByKey(current, sym); found {
+			if !writable {
+				return false, nil
+			}
+			return reflectCreateOrUpdateDataPropertyByKey(vmInstance, receiver, sym, value)
+		}
+		current = vmInstance.PrototypeOf(current)
+	}
+	return reflectCreateOrUpdateDataPropertyByKey(vmInstance, receiver, sym, value)
 }
 
 // reflectCreateOrUpdateDataProperty implements the receiver-side half of
@@ -248,6 +338,80 @@ func reflectCreateOrUpdateDataProperty(vmInstance *vm.VM, receiver vm.Value, pro
 	}
 }
 
+// reflectCreateOrUpdateDataPropertyByKey is reflectCreateOrUpdateDataProperty
+// for a symbol key. A symbol can never equal "length" or a numeric index
+// string, so the TypeArray case here is simpler than the string-key
+// version's: just the array's own symbol-keyed data slot (ArrayObject.
+// SetSymbolProp - the same storage `arr[sym] = v` already writes into, so a
+// brand-new key naturally comes out {writable: true, enumerable: true,
+// configurable: true} the same way a plain assignment does, since nothing
+// records an explicit descriptor for it unless Object.defineProperty
+// later does).
+//
+// For TypeObject and the shared side-table (`default`) cases, unlike the
+// string-key version's single receiver.AsPlainObject().SetOwn(propKey,
+// value) call (whose PlainObject.SetOwn already implements "preserve
+// existing writable/enumerable/configurable, default new key to
+// true/true/true" internally for a string key), there is no equivalent
+// SetOwnByKey - so this reproduces that same rule explicitly via
+// HasOwnByKey + DefineOwnPropertyByKey, mirroring vm.setOwnCheckedByKey's
+// identical pattern (pkg/vm/properties_table.go) for the exact same
+// "ordinary [[Set]], not Object.defineProperty" distinction that
+// function's own doc comment explains.
+func reflectCreateOrUpdateDataPropertyByKey(vmInstance *vm.VM, receiver vm.Value, sym vm.Value, value vm.Value) (bool, error) {
+	if !receiver.IsObject() && !receiver.IsCallable() {
+		return false, nil
+	}
+
+	if _, _, isAccessor := reflectGetOwnAccessorGenericByKey(receiver, sym); isAccessor {
+		return false, nil
+	}
+	if _, writable, found := reflectGetOwnDataDescriptorGenericByKey(receiver, sym); found && !writable {
+		return false, nil
+	}
+
+	key := vm.NewSymbolKey(sym)
+	switch receiver.Type() {
+	case vm.TypeObject:
+		plainObj := receiver.AsPlainObject()
+		if plainObj.HasOwnByKey(key) {
+			plainObj.DefineOwnPropertyByKey(key, value, nil, nil, nil)
+		} else {
+			w, e, c := true, true, true
+			plainObj.DefineOwnPropertyByKey(key, value, &w, &e, &c)
+		}
+		return true, nil
+	case vm.TypeDictObject:
+		// DictObjects have no symbol-keyed storage at all - see
+		// reflectGetOwnAccessorGenericByKey's identical case.
+		return false, nil
+	case vm.TypeArray:
+		arr := receiver.AsArray()
+		symObj := sym.AsSymbolObject()
+		if symObj == nil {
+			return false, nil
+		}
+		arr.SetSymbolProp(symObj, value)
+		return true, nil
+	case vm.TypeProxy:
+		return reflectProxyDefineDataPropertyByKey(vmInstance, receiver, sym, value)
+	default:
+		// A callable or other exotic receiver kind (Function/Closure/
+		// NativeFunction/.../Promise) - use its shared side-table, same as
+		// the string-key version.
+		if props := vm.EnsureOwnPropertiesTable(receiver); props != nil {
+			if props.HasOwnByKey(key) {
+				props.DefineOwnPropertyByKey(key, value, nil, nil, nil)
+			} else {
+				w, e, c := true, true, true
+				props.DefineOwnPropertyByKey(key, value, &w, &e, &c)
+			}
+			return true, nil
+		}
+		return false, nil
+	}
+}
+
 // reflectProxyDefineDataProperty implements the receiver-side write
 // (10.1.9.2's CreateDataProperty(Receiver, ...) step, generalized to an
 // "update or create" per reflectCreateOrUpdateDataProperty's own contract)
@@ -326,6 +490,63 @@ func reflectProxyDefineDataProperty(vmInstance *vm.VM, proxyVal vm.Value, propKe
 	descObj.SetOwn("enumerable", vm.BooleanValue(true))
 	descObj.SetOwn("configurable", vm.BooleanValue(true))
 	result, err := vmInstance.Call(defineTrap, handler, []vm.Value{target, vm.NewString(propKey), vm.NewValueFromPlainObject(descObj)})
+	if err != nil {
+		return false, err
+	}
+	return result.IsTruthy(), nil
+}
+
+// reflectProxyDefineDataPropertyByKey is reflectProxyDefineDataProperty for
+// a symbol key - identical shape, but passes the real Symbol value to both
+// traps (their "getOwnPropertyDescriptor"/"defineProperty" handler
+// signatures take the actual property key per ECMA-262, not a stringified
+// form) instead of vm.NewString(propKey).
+func reflectProxyDefineDataPropertyByKey(vmInstance *vm.VM, proxyVal vm.Value, sym vm.Value, value vm.Value) (bool, error) {
+	proxy := proxyVal.AsProxy()
+	if proxy.Revoked {
+		return false, vmInstance.NewTypeError("Cannot perform 'defineProperty' on a revoked Proxy")
+	}
+	handler := proxy.Handler()
+	target := proxy.Target()
+
+	var getOwnPropDescTrap vm.Value
+	var hasGetOwnPropDesc bool
+	switch handler.Type() {
+	case vm.TypeObject:
+		getOwnPropDescTrap, hasGetOwnPropDesc = handler.AsPlainObject().Get("getOwnPropertyDescriptor")
+	case vm.TypeDictObject:
+		getOwnPropDescTrap, hasGetOwnPropDesc = handler.AsDictObject().Get("getOwnPropertyDescriptor")
+	}
+	if hasGetOwnPropDesc && getOwnPropDescTrap.Type() != vm.TypeUndefined && getOwnPropDescTrap.Type() != vm.TypeNull {
+		if !getOwnPropDescTrap.IsCallable() {
+			return false, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap is not a function")
+		}
+		if _, err := vmInstance.Call(getOwnPropDescTrap, handler, []vm.Value{target, sym}); err != nil {
+			return false, err
+		}
+	}
+
+	var defineTrap vm.Value
+	var hasDefineTrap bool
+	switch handler.Type() {
+	case vm.TypeObject:
+		defineTrap, hasDefineTrap = handler.AsPlainObject().Get("defineProperty")
+	case vm.TypeDictObject:
+		defineTrap, hasDefineTrap = handler.AsDictObject().Get("defineProperty")
+	}
+	if !hasDefineTrap || defineTrap.Type() == vm.TypeUndefined || defineTrap.Type() == vm.TypeNull {
+		return reflectCreateOrUpdateDataPropertyByKey(vmInstance, target, sym, value)
+	}
+	if !defineTrap.IsCallable() {
+		return false, vmInstance.NewTypeError("'defineProperty' on proxy: trap is not a function")
+	}
+
+	descObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	descObj.SetOwn("value", value)
+	descObj.SetOwn("writable", vm.BooleanValue(true))
+	descObj.SetOwn("enumerable", vm.BooleanValue(true))
+	descObj.SetOwn("configurable", vm.BooleanValue(true))
+	result, err := vmInstance.Call(defineTrap, handler, []vm.Value{target, sym, vm.NewValueFromPlainObject(descObj)})
 	if err != nil {
 		return false, err
 	}
@@ -429,6 +650,64 @@ func reflectProxySet(vmInstance *vm.VM, proxyVal vm.Value, propKey string, value
 	return true, nil
 }
 
+// reflectProxySetByKey is reflectProxySet for a symbol key. Unlike
+// reflectProxySet's own string-key path - which has always stringified a
+// Symbol key into "Symbol(...)" before handing it to a `set` trap, a
+// pre-existing bug noted but deliberately not fixed there (see that
+// function's doc comment) - this path was built alongside a proper
+// symbol-key Reflect.set from the start, so it passes the real Symbol
+// value straight through to the trap, matching ECMA-262 10.5.9 step 8
+// (the trap receives the actual property key, never a stringified form).
+func reflectProxySetByKey(vmInstance *vm.VM, proxyVal vm.Value, sym vm.Value, value vm.Value, receiver vm.Value) (bool, error) {
+	proxy := proxyVal.AsProxy()
+	if proxy.Revoked {
+		return false, vmInstance.NewTypeError("Cannot perform 'set' on a revoked Proxy")
+	}
+	handler := proxy.Handler()
+	target := proxy.Target()
+
+	var trap vm.Value
+	var hasTrap bool
+	switch handler.Type() {
+	case vm.TypeObject:
+		trap, hasTrap = handler.AsPlainObject().Get("set")
+	case vm.TypeDictObject:
+		trap, hasTrap = handler.AsDictObject().Get("set")
+	}
+	if !hasTrap || trap.Type() == vm.TypeUndefined || trap.Type() == vm.TypeNull {
+		return reflectSetDispatchByKey(vmInstance, target, sym, value, receiver)
+	}
+	if !trap.IsCallable() {
+		return false, vmInstance.NewTypeError("'set' on proxy: trap is not a function")
+	}
+
+	result, err := vmInstance.Call(trap, handler, []vm.Value{target, sym, value, receiver})
+	if err != nil {
+		return false, err
+	}
+	if result.IsFalsey() {
+		return false, nil
+	}
+
+	if target.Type() == vm.TypeObject {
+		targetObj := target.AsPlainObject()
+		key := vm.NewSymbolKey(sym)
+		if _, s, _, c, isAccessor := targetObj.GetOwnAccessorByKey(key); isAccessor {
+			if !c && s.Type() == vm.TypeUndefined {
+				return false, vmInstance.NewTypeError("'set' on proxy: trap returned truish for a Symbol property which exists in the proxy target as a non-configurable accessor without a setter")
+			}
+		} else if v, w, _, c, found := targetObj.GetOwnDescriptorByKey(key); found {
+			if !c && !w {
+				if !v.StrictlyEquals(value) {
+					return false, vmInstance.NewTypeError("'set' on proxy: trap returned truish for a Symbol property which exists in the proxy target as a non-configurable and non-writable data property with a different value")
+				}
+			}
+		}
+	}
+
+	return true, nil
+}
+
 // reflectSetDispatch is Reflect.set's core dispatch, shared by the "set"
 // NativeFunction closure itself and every recursive delegation site above
 // (a Proxy target with no trap, a Proxy receiver with no trap) that needs
@@ -454,6 +733,44 @@ func reflectSetDispatch(vmInstance *vm.VM, target vm.Value, propKey string, valu
 	// target is some other kind this function doesn't model a set for.
 	// Matches this function's prior behavior for every kind it didn't have
 	// a case for.
+	return false, nil
+}
+
+// reflectSetDispatchByKey is reflectSetDispatch for a symbol key - the
+// entry point Reflect.set's "set" closure and every recursive symbol-key
+// delegation site above (a Proxy target or receiver with no trap) re-enter.
+// This whole symbol-key chain (reflectSetDispatchByKey ->
+// reflectProxySetByKey / reflectOrdinarySetByKey ->
+// reflectCreateOrUpdateDataPropertyByKey / reflectProxyDefineDataPropertyByKey)
+// used to not exist at all: Reflect.set(target, key, value) stringified
+// ANY key via key.ToString() before it ever reached this file's dispatch,
+// so a Symbol key silently became its string form ("Symbol(...)") on every
+// target kind - plain object, array, Map/Set/RegExp/callable side-tables,
+// and Proxy alike:
+//
+//	const o = {}; const s = Symbol("k");
+//	Reflect.set(o, s, 5); // before: true, but o[s] stayed undefined - Node: true, o[s] === 5
+func reflectSetDispatchByKey(vmInstance *vm.VM, target vm.Value, sym vm.Value, value vm.Value, receiver vm.Value) (bool, error) {
+	if target.Type() == vm.TypeProxy {
+		return reflectProxySetByKey(vmInstance, target, sym, value, receiver)
+	}
+
+	// Module Namespace Exotic Object [[Set]] behavior (ECMAScript 10.4.6.9)
+	// [[Set]] on a namespace always returns false - matches the string-key
+	// version. A module namespace's own exports are always string-named,
+	// so this is here purely for symmetry with reflectSetDispatch rather
+	// than because a namespace can hold a symbol-keyed export.
+	if target.Type() == vm.TypeObject {
+		if po := target.AsPlainObject(); po.IsModuleNamespace() {
+			return false, nil
+		}
+	}
+
+	switch target.Type() {
+	case vm.TypeObject, vm.TypeDictObject, vm.TypeArray:
+		return reflectOrdinarySetByKey(vmInstance, target, sym, value, receiver)
+	}
+
 	return false, nil
 }
 
@@ -590,7 +907,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.set requires at least 2 arguments")
 		}
 		target := args[0]
-		propKey := args[1].ToString()
+		key := args[1]
 
 		// Value defaults to undefined if not provided
 		value := vm.Undefined
@@ -610,9 +927,10 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// The actual algorithm - ECMA-262 10.1.9/10.1.9.2 OrdinarySet(WithOwnDescriptor)
 		// for a plain target, or 10.5.9 [[Set]] when target is a Proxy -
-		// lives in reflectSetDispatch, shared with the recursive delegation
-		// sites a Proxy target or a Proxy receiver without the relevant
-		// trap need to re-enter.
+		// lives in reflectSetDispatch (string keys) / reflectSetDispatchByKey
+		// (symbol keys), shared with the recursive delegation sites a Proxy
+		// target or a Proxy receiver without the relevant trap need to
+		// re-enter.
 		//
 		// This used to inline a "receiver is a distinct Proxy" special case
 		// right here (checking isDataProp on `target` first) that only
@@ -629,7 +947,21 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// had a Proxy case here at all (task_18cd4923 - `target` itself
 		// being a Proxy fell through to an unconditional `false` for ANY
 		// Proxy target, trap or no trap).
-		ok, err := reflectSetDispatch(vmInstance, target, propKey, value, receiver)
+		//
+		// A Symbol key used to be unconditionally stringified via
+		// key.ToString() before reaching any of this - Reflect.set(target,
+		// someSymbol, v) silently coerced the symbol to a string key on
+		// EVERY target kind (plain object, array, Map/Set/RegExp/callable
+		// side-tables, Proxy), unlike Reflect.get and Reflect.has just
+		// above/below this closure, which both already dispatched on
+		// key.Type() == vm.TypeSymbol. See reflectSetDispatchByKey's doc
+		// comment for the full symbol-key call chain this now threads
+		// through, mirroring the one Reflect.get already had.
+		if key.Type() == vm.TypeSymbol {
+			ok, err := reflectSetDispatchByKey(vmInstance, target, key, value, receiver)
+			return vm.BooleanValue(ok), err
+		}
+		ok, err := reflectSetDispatch(vmInstance, target, key.ToString(), value, receiver)
 		return vm.BooleanValue(ok), err
 	}))
 
