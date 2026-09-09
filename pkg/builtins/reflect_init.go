@@ -867,23 +867,25 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Add "length"
 			arr.Append(vm.NewString("length"))
 		case vm.TypeProxy:
-			// For proxies, this should invoke the ownKeys trap
-			// For now, delegate to Object.getOwnPropertyNames + getOwnPropertySymbols
-			// This is a simplification
-			if objCtor, ok := vmInstance.GetGlobal("Object"); ok {
-				if objCtor.Type() == vm.TypeNativeFunctionWithProps {
-					nfp := objCtor.AsNativeFunctionWithProps()
-					if f, ok := nfp.Properties.GetOwn("getOwnPropertyNames"); ok {
-						if names, err := vmInstance.Call(f, vm.Undefined, []vm.Value{target}); err == nil {
-							if names.Type() == vm.TypeArray {
-								namesArr := names.AsArray()
-								for i := 0; i < namesArr.Length(); i++ {
-									arr.Append(namesArr.Get(i))
-								}
-							}
-						}
-					}
-				}
+			// This used to claim (inaccurately) to "delegate to
+			// Object.getOwnPropertyNames + getOwnPropertySymbols as a
+			// simplification" - but the delegation target itself had no
+			// TypeProxy case at all (objectGetOwnPropertyNamesWithVM,
+			// object_init.go), so the "simplification" was a complete
+			// no-op: Reflect.ownKeys on ANY Proxy, trap or no trap,
+			// always answered [] before this fix. proxyOwnPropertyKeys
+			// (object_init.go) is the real, shared ECMA-262 10.5.11
+			// [[OwnPropertyKeys]] implementation - see its own comment for
+			// what it does and doesn't validate - used here directly
+			// rather than through Object.getOwnPropertyNames, since this
+			// caller wants the FULL mixed string+symbol result, not one
+			// filtered half of it.
+			keys, err := proxyOwnPropertyKeys(vmInstance, target)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			for _, k := range keys {
+				arr.Append(k)
 			}
 		}
 
