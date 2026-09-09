@@ -3660,13 +3660,26 @@ startExecution:
 						hasProperty = vm.hasFunctionPrototypeProperty(propKey)
 					}
 				case TypeNativeFunction:
-					// Native functions don't have custom properties, but do
-					// carry the same "name"/"length" own intrinsics as any
-					// other callable (see TypeFunction's comment above,
-					// and TypeNativeFunctionWithProps's for why "prototype"
-					// is correctly excluded - a native method is never a
-					// constructor) before falling back to FunctionPrototype.
+					// A plain native function CAN have custom own properties -
+					// set via bracket-notation assignment, or (as of a recent
+					// fix to Object.defineProperty's target-type gate) via
+					// Object.defineProperty - stored in nf.Properties exactly
+					// like TypeBoundFunction below. This case used to claim
+					// "native functions don't have custom properties" and
+					// skip straight to FunctionPrototype, so `"x" in nf` was
+					// false right after `nf.x = 1`/`Object.defineProperty(nf,
+					// "x", ...)` even though Reflect.has(nf, "x") (and the
+					// table itself) already agreed it existed - the same
+					// "in disagrees with Reflect.has" gap already fixed here
+					// for TypeFunction/TypeNativeFunctionWithProps/TypeClosure/
+					// TypeBoundFunction above. Also carries the same
+					// "name"/"length" own intrinsics as any other callable
+					// (see TypeFunction's comment above) before falling back
+					// to FunctionPrototype.
+					nf := objVal.AsNativeFunction()
 					if HasOwnFunctionIntrinsic(objVal, propKey) {
+						hasProperty = true
+					} else if nf.Properties != nil && nf.Properties.Has(propKey) {
 						hasProperty = true
 					} else {
 						hasProperty = vm.hasFunctionPrototypeProperty(propKey)
