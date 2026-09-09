@@ -475,10 +475,60 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("fetch requires at least 1 argument")
 		}
 
-		url := args[0].ToString()
-		var init vm.Value = vm.Undefined
+		var explicitInit vm.Value = vm.Undefined
 		if len(args) > 1 {
-			init = args[1]
+			explicitInit = args[1]
+		}
+
+		// fetch(input, init) is spec'd as effectively `new Request(input,
+		// init)` followed by sending that request - so when input is itself
+		// a Request instance (recovered via the internal slot
+		// createRequestObject stashes on it, the same pattern
+		// mergeHeadersFrom uses for Headers), pull url/method/headers/body/
+		// signal/redirect off of it as defaults, then let an explicit init
+		// argument's own properties override them. Without this, args[0]
+		// was stringified unconditionally below (ToString() on a Request
+		// object produces "[object Object]", which then fails as an
+		// unsupported protocol) and any options carried on the Request
+		// (method, body, signal, ...) were silently dropped.
+		url := args[0].ToString()
+		init := explicitInit
+		if args[0].Type() == vm.TypeObject {
+			if req, ok := args[0].AsPlainObject().InternalSlots().(*FetchRequest); ok && req != nil {
+				url = req.URL
+
+				merged := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+				merged.SetOwn("method", vm.NewString(req.Method))
+				merged.SetOwn("headers", createHeadersObject(vmInstance, &FetchHeaders{headers: req.Headers.headers.Clone()}))
+				if req.body != nil {
+					merged.SetOwn("body", vm.NewString(string(req.body)))
+				}
+				merged.SetOwn("redirect", vm.NewString(req.Redirect))
+				if req.Signal.Type() != vm.TypeUndefined {
+					merged.SetOwn("signal", req.Signal)
+				}
+
+				// Let an explicit init argument override any of the above,
+				// per fetch(request, init) / new Request(request, init)
+				// semantics.
+				if explicitInit.Type() == vm.TypeObject {
+					explicitObj := explicitInit.AsPlainObject()
+					for _, key := range explicitObj.OwnKeys() {
+						if val, exists := explicitObj.GetOwn(key); exists {
+							merged.SetOwn(key, val)
+						}
+					}
+				} else if explicitInit.Type() == vm.TypeDictObject {
+					explicitObj := explicitInit.AsDictObject()
+					for _, key := range explicitObj.OwnKeys() {
+						if val, exists := explicitObj.GetOwn(key); exists {
+							merged.SetOwn(key, val)
+						}
+					}
+				}
+
+				init = vm.NewValueFromPlainObject(merged)
+			}
 		}
 
 		// Check for pre-aborted signal synchronously before spawning goroutine
@@ -1557,6 +1607,16 @@ func parseRequestInitDict(req *FetchRequest, initObj *vm.DictObject) {
 // createRequestObject creates a Request object for the VM
 func createRequestObject(vmInstance *vm.VM, req *FetchRequest, _ *vm.PlainObject) vm.Value {
 	obj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+
+	// Stash the underlying *FetchRequest behind an internal slot (same
+	// pattern createHeadersObject uses for *FetchHeaders) so fetch() can
+	// recover the full request - including its body bytes and Signal,
+	// neither of which round-trip through the JS-visible properties below
+	// ("body" is always exposed as null; "signal" here is whatever value
+	// was passed in, but reading it back this way is more direct and
+	// matches how mergeHeadersFrom already prefers internal state) -
+	// instead of stringifying the Request object itself into a URL.
+	obj.SetInternalSlots(req)
 
 	// Read-only properties
 	obj.SetOwn("method", vm.NewString(req.Method))
