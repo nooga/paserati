@@ -219,10 +219,18 @@ type ArrayObject struct {
 	properties   map[string]Value        // Named properties (e.g., "index", "input" for match results)
 	propertyDesc map[string]PropertyDesc // Property descriptors for named properties
 	symbolProps  map[*SymbolObject]Value // Symbol-keyed properties (e.g., Symbol.iterator override)
-	getters      map[string]Value        // Accessor getters for named properties
-	setters      map[string]Value        // Accessor setters for named properties
-	extensible   bool                    // When false, no new properties can be added (for Object.freeze/seal)
-	frozen       bool                    // When true, elements are also non-writable and non-configurable
+	// symbolPropOrder tracks symbolProps' keys in creation order - a Go map
+	// has none, but ECMA-262 10.1.11 OrdinaryOwnPropertyKeys requires
+	// symbol-keyed own properties to enumerate in the order they were
+	// created (verified against Node: two symbols added to an array
+	// enumerate in insertion order via Object.getOwnPropertySymbols and
+	// Reflect.ownKeys, and stay after every string key regardless of when
+	// each was added relative to the symbols). See OwnSymbolKeys.
+	symbolPropOrder []*SymbolObject
+	getters         map[string]Value // Accessor getters for named properties
+	setters         map[string]Value // Accessor setters for named properties
+	extensible      bool             // When false, no new properties can be added (for Object.freeze/seal)
+	frozen          bool             // When true, elements are also non-writable and non-configurable
 	// lengthNonWritable tracks Object.defineProperty(arr, "length",
 	// {writable: false}) - stored inverted (zero value = writable, the ES
 	// default) so every existing ArrayObject construction site, which
@@ -2844,6 +2852,12 @@ func (a *ArrayObject) SetSymbolProp(sym *SymbolObject, val Value) {
 	if a.symbolProps == nil {
 		a.symbolProps = make(map[*SymbolObject]Value)
 	}
+	if _, existed := a.symbolProps[sym]; !existed {
+		// New key - record its creation-order position. An overwrite of an
+		// already-present key keeps its original position, matching
+		// ordinary property semantics (redefining a value doesn't move it).
+		a.symbolPropOrder = append(a.symbolPropOrder, sym)
+	}
 	a.symbolProps[sym] = val
 }
 
@@ -2854,6 +2868,21 @@ func (a *ArrayObject) HasOwnSymbolProp(sym *SymbolObject) bool {
 	}
 	_, ok := a.symbolProps[sym]
 	return ok
+}
+
+// OwnSymbolKeys returns every symbol this array has an own property for, in
+// creation order - mirrors PlainObject.OwnSymbolKeys's shape/contract
+// (pkg/vm/object.go), used by Object.getOwnPropertySymbols and
+// Reflect.ownKeys (pkg/builtins). Array symbol-keyed properties previously
+// had no enumerator at all despite genuinely being stored (GetSymbolProp/
+// SetSymbolProp/HasOwnSymbolProp already worked) - Object.getOwnPropertySymbols
+// on an array with a real symbol property silently answered [] before this.
+func (a *ArrayObject) OwnSymbolKeys() []Value {
+	symbols := make([]Value, 0, len(a.symbolPropOrder))
+	for _, sym := range a.symbolPropOrder {
+		symbols = append(symbols, Value{typ: TypeSymbol, obj: unsafe.Pointer(sym)})
+	}
+	return symbols
 }
 
 // DefineAccessorProperty defines an accessor property on the array object
@@ -3663,5 +3692,17 @@ func (a *ArrayObject) DeleteSymbolProp(sym *SymbolObject) bool {
 	}
 	_, existed := a.symbolProps[sym]
 	delete(a.symbolProps, sym)
+	if existed {
+		// Keep symbolPropOrder in sync - a re-added key after deletion
+		// gets a fresh, later creation-order position via SetSymbolProp's
+		// own "not already present" check, matching how deleting then
+		// redefining an ordinary property moves it to the end too.
+		for i, s := range a.symbolPropOrder {
+			if s == sym {
+				a.symbolPropOrder = append(a.symbolPropOrder[:i], a.symbolPropOrder[i+1:]...)
+				break
+			}
+		}
+	}
 	return existed
 }

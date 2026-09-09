@@ -801,14 +801,11 @@ func getPrototypeOfValue(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot perform 'getPrototypeOf' on a proxy that has been revoked")
 		}
 		handler := proxy.Handler()
-		var trap vm.Value
-		var hasTrap bool
-		switch handler.Type() {
-		case vm.TypeObject:
-			trap, hasTrap = handler.AsPlainObject().GetOwn("getPrototypeOf")
-		case vm.TypeDictObject:
-			trap, hasTrap = handler.AsDictObject().GetOwn("getPrototypeOf")
-		}
+		// GetMethod(handler, "getPrototypeOf") per spec: an inherited trap
+		// counts, not just an own one - vmInstance.ProxyGetTrap (not a bare
+		// handler.AsPlainObject().GetOwn("getPrototypeOf")) for the same
+		// reason documented on its pkg/vm definition.
+		trap, hasTrap := vmInstance.ProxyGetTrap(handler, "getPrototypeOf")
 		if hasTrap && trap.IsCallable() {
 			result, err := vmInstance.Call(trap, handler, []vm.Value{proxy.Target()})
 			if err != nil {

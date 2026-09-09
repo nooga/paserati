@@ -41,6 +41,439 @@ func isConstructor(v vm.Value) bool {
 	}
 }
 
+// reflectGetOwnAccessorGeneric returns the getter/setter pair for v's own
+// accessor property named propKey, covering PlainObject's and
+// ArrayObject's own accessor support plus the shared side-table
+// (*PlainObject) the nine ownPropertiesSlot kinds (Function/Closure/
+// NativeFunction/NativeFunctionWithProps/BoundFunction/RegExp/Map/Set/
+// Promise) keep under OwnPropertiesTable, via the `default` branch.
+// DictObject doesn't support accessors at all (pre-existing, matches
+// every other DictObject case in this file). Any OTHER kind (e.g.
+// TypeArguments, TypeTypedArray) that OwnPropertiesTable doesn't cover
+// falls through the same `default` branch to isAccessor=false, not found
+// - reflectOrdinarySet's walk treats that as "no own property here" and
+// continues up the chain, so an exotic kind sitting as a link in a
+// prototype chain (rare, and not exercised by this fix's own tests) is
+// silently skipped rather than mishandled. Callers still need to
+// separately check for a data property when isAccessor is false.
+func reflectGetOwnAccessorGeneric(v vm.Value, propKey string) (getter vm.Value, setter vm.Value, isAccessor bool) {
+	switch v.Type() {
+	case vm.TypeObject:
+		g, s, _, _, ok := v.AsPlainObject().GetOwnAccessor(propKey)
+		return g, s, ok
+	case vm.TypeArray:
+		g, s, _, _, ok := v.AsArray().GetOwnAccessor(propKey)
+		return g, s, ok
+	case vm.TypeDictObject:
+		return vm.Undefined, vm.Undefined, false
+	default:
+		if props := vm.OwnPropertiesTable(v); props != nil {
+			g, s, _, _, ok := props.GetOwnAccessor(propKey)
+			return g, s, ok
+		}
+		return vm.Undefined, vm.Undefined, false
+	}
+}
+
+// reflectGetOwnDataDescriptorGeneric returns the value and writability of
+// v's own DATA property named propKey (call reflectGetOwnAccessorGeneric
+// first to rule out an accessor - this function doesn't check for one).
+// Mirrors reflectGetOwnAccessorGeneric's kind coverage, plus TypeArray's
+// own index/"length"/named-property shapes (an array has no side-table
+// analog for these - they're modeled directly on ArrayObject).
+func reflectGetOwnDataDescriptorGeneric(v vm.Value, propKey string) (value vm.Value, writable bool, found bool) {
+	switch v.Type() {
+	case vm.TypeObject:
+		val, w, _, _, ok := v.AsPlainObject().GetOwnDescriptor(propKey)
+		return val, w, ok
+	case vm.TypeDictObject:
+		val, w, _, _, ok := v.AsDictObject().GetOwnDescriptor(propKey)
+		return val, w, ok
+	case vm.TypeArray:
+		arr := v.AsArray()
+		if propKey == "length" {
+			return vm.Number(float64(arr.Length())), true, true
+		}
+		if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 {
+			if arr.HasOwnIndexProperty(propKey, idx) {
+				return arr.Get(idx), true, true
+			}
+			return vm.Undefined, false, false
+		}
+		if val, ok := arr.GetOwn(propKey); ok {
+			return val, true, true
+		}
+		return vm.Undefined, false, false
+	default:
+		if props := vm.OwnPropertiesTable(v); props != nil {
+			val, w, _, _, ok := props.GetOwnDescriptor(propKey)
+			return val, w, ok
+		}
+		return vm.Undefined, false, false
+	}
+}
+
+// reflectOrdinarySet implements ECMA-262 10.1.9 OrdinarySet /
+// 10.1.9.2 OrdinarySetWithOwnDescriptor for Reflect.set's non-Proxy-target
+// path: walk `target`'s own property, then its whole [[Prototype]] chain,
+// for the first applicable descriptor. An accessor's setter is invoked
+// with `receiver` as `this` regardless of where in the chain it was found
+// (accessors don't write data anywhere, so `target` vs `receiver` doesn't
+// matter for this branch). A data descriptor - found on target itself, an
+// ancestor, or nowhere at all (the implicit "value: undefined, writable:
+// true" default per 10.1.9 step 4) - always has its actual write land on
+// `receiver`, never on whichever object in the chain the descriptor was
+// found on: this is the exact distinction the pre-existing "Simple
+// property set on target" fallback got wrong, unconditionally writing to
+// `target` regardless of `receiver`.
+//
+// Before this fix, `target`'s OWN accessor wasn't invoked at all either -
+// the old fallback went straight to a raw SetOwn/Set call with no
+// descriptor awareness whatsoever, for every case including
+// receiver === target (verified against Node: Reflect.set on an object
+// with its own setter silently no-opped the setter instead of calling
+// it). Fixing the general-receiver case required walking descriptors
+// anyway, so both bugs share one fix.
+func reflectOrdinarySet(vmInstance *vm.VM, target vm.Value, propKey string, value vm.Value, receiver vm.Value) (bool, error) {
+	current := target
+	for i := 0; i < 200 && current.Type() != vm.TypeNull && current.Type() != vm.TypeUndefined; i++ {
+		if _, setter, isAccessor := reflectGetOwnAccessorGeneric(current, propKey); isAccessor {
+			// Per 10.1.9.2 step 3: an accessor descriptor with no setter
+			// means the property is effectively read-only - Set fails
+			// (verified against Node: returns false, doesn't throw here
+			// since Reflect.set never throws for an ordinary failure).
+			if setter.Type() == vm.TypeUndefined {
+				return false, nil
+			}
+			_, err := vmInstance.Call(setter, receiver, []vm.Value{value})
+			return err == nil, err
+		}
+		if _, writable, found := reflectGetOwnDataDescriptorGeneric(current, propKey); found {
+			if !writable {
+				return false, nil
+			}
+			// A writable data descriptor exists somewhere in target's own
+			// chain - per 10.1.9.2 step 4, the actual write still targets
+			// Receiver, not wherever this descriptor was found (which may
+			// be `target` itself, or an ancestor `target` inherits from).
+			return reflectCreateOrUpdateDataProperty(vmInstance, receiver, propKey, value)
+		}
+		current = vmInstance.PrototypeOf(current)
+	}
+	// Not found anywhere in target's chain - 10.1.9 step 4's implicit
+	// {value: undefined, writable: true, enumerable: true, configurable:
+	// true} default takes the same data-write path.
+	return reflectCreateOrUpdateDataProperty(vmInstance, receiver, propKey, value)
+}
+
+// reflectCreateOrUpdateDataProperty implements the receiver-side half of
+// 10.1.9.2 OrdinarySetWithOwnDescriptor once target's chain has determined
+// a data write is called for: consult receiver's OWN descriptor for the
+// same key (an accessor or non-writable data property there refuses the
+// write - verified against Node for both), and otherwise create or
+// overwrite receiver's own data property with the new value.
+//
+// A TypeProxy receiver is real, common code here, not a rare edge case:
+// Reflect.set defaults `receiver` to `target`, so
+// Reflect.set(someProxy, key, value) - the single most natural way to call
+// Reflect.set on a Proxy at all - reaches this function with a Proxy
+// receiver on its very first, simplest invocation. reflectGetOwnAccessorGeneric
+// and reflectGetOwnDataDescriptorGeneric don't special-case TypeProxy (their
+// `default` branch reports "not found", since OwnPropertiesTable doesn't
+// cover Proxy), so those two pre-checks above the switch are a no-op for a
+// Proxy receiver rather than a real 10.1.9.2 step 4.c
+// Receiver.[[GetOwnProperty]](P) check - verified against Node that this
+// doesn't change the outcome for the common "receiver has no existing
+// descriptor" case, which is what reflectProxyDefineDataProperty's own
+// getOwnPropertyDescriptor trap invocation (for side-effect parity, not
+// result-branching - matching this file's pre-existing level of rigor for
+// that trap) also confirms.
+func reflectCreateOrUpdateDataProperty(vmInstance *vm.VM, receiver vm.Value, propKey string, value vm.Value) (bool, error) {
+	// Per 10.1.9.2 step 4.a: if Receiver is not an object, return false -
+	// verified against Node: Reflect.set({}, "y", 5, 42) is false, not a
+	// throw.
+	if !receiver.IsObject() && !receiver.IsCallable() {
+		return false, nil
+	}
+
+	if _, _, isAccessor := reflectGetOwnAccessorGeneric(receiver, propKey); isAccessor {
+		return false, nil
+	}
+	if _, writable, found := reflectGetOwnDataDescriptorGeneric(receiver, propKey); found && !writable {
+		return false, nil
+	}
+
+	switch receiver.Type() {
+	case vm.TypeObject:
+		receiver.AsPlainObject().SetOwn(propKey, value)
+		return true, nil
+	case vm.TypeDictObject:
+		receiver.AsDictObject().SetOwn(propKey, value)
+		return true, nil
+	case vm.TypeArray:
+		arr := receiver.AsArray()
+		if propKey == "length" {
+			// The old "Simple property set on target" fallback this
+			// function replaces had an explicit "Setting length is
+			// complex, skip for now" no-op stub here - meaning
+			// Reflect.set(arr, "length", n) already silently failed to
+			// resize before this fix (verified against Node, which does
+			// resize). Since this generic data-write path would otherwise
+			// treat "length" as an ordinary named property and stash a
+			// bogus one via arr.SetOwn - worse than the prior no-op,
+			// since it'd shadow/corrupt the array's real length concept -
+			// it needs its own case, not silence, now that this path
+			// handles it at all.
+			arr.SetLength(reflectToArrayLength(value))
+			return true, nil
+		}
+		if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 {
+			arr.Set(idx, value)
+			return true, nil
+		}
+		arr.SetOwn(propKey, value)
+		return true, nil
+	case vm.TypeProxy:
+		return reflectProxyDefineDataProperty(vmInstance, receiver, propKey, value)
+	default:
+		// A callable or other exotic receiver kind (Function/Closure/
+		// NativeFunction/.../Promise) - use its shared side-table, the
+		// same mechanism Object.defineProperty and friends already use
+		// for these kinds elsewhere in this codebase.
+		if props := vm.EnsureOwnPropertiesTable(receiver); props != nil {
+			props.SetOwn(propKey, value)
+			return true, nil
+		}
+		return false, nil
+	}
+}
+
+// reflectProxyDefineDataProperty implements the receiver-side write
+// (10.1.9.2's CreateDataProperty(Receiver, ...) step, generalized to an
+// "update or create" per reflectCreateOrUpdateDataProperty's own contract)
+// when `receiver` turns out to be a Proxy - i.e. Receiver.[[DefineOwnProperty]]
+// (10.5.6): the handler's `defineProperty` trap if present, else delegate
+// straight to CreateDataProperty on the proxy's own target (which may
+// itself be another Proxy, handled by the recursive call into
+// reflectCreateOrUpdateDataProperty below).
+//
+// Also invokes the handler's `getOwnPropertyDescriptor` trap first, if
+// present, purely for spec/side-effect parity with what this function
+// supersedes (the old inline "receiver is a distinct Proxy" block this
+// commit removes from the "set" closure) - verified against Node that its
+// result doesn't change the outcome for the common case of a receiver with
+// no pre-existing descriptor for this key, which is the only case this
+// function (and its predecessor) actually handles; a receiver-Proxy with a
+// genuinely conflicting existing descriptor is not modeled here, matching
+// the prior code's own scope.
+func reflectProxyDefineDataProperty(vmInstance *vm.VM, proxyVal vm.Value, propKey string, value vm.Value) (bool, error) {
+	proxy := proxyVal.AsProxy()
+	if proxy.Revoked {
+		return false, vmInstance.NewTypeError("Cannot perform 'defineProperty' on a revoked Proxy")
+	}
+	handler := proxy.Handler()
+	target := proxy.Target()
+
+	// GetMethod(handler, "getOwnPropertyDescriptor"): side-effect-only call,
+	// matching the block this supersedes - its result isn't consulted.
+	var getOwnPropDescTrap vm.Value
+	var hasGetOwnPropDesc bool
+	switch handler.Type() {
+	case vm.TypeObject:
+		getOwnPropDescTrap, hasGetOwnPropDesc = handler.AsPlainObject().Get("getOwnPropertyDescriptor")
+	case vm.TypeDictObject:
+		getOwnPropDescTrap, hasGetOwnPropDesc = handler.AsDictObject().Get("getOwnPropertyDescriptor")
+	}
+	if hasGetOwnPropDesc && getOwnPropDescTrap.Type() != vm.TypeUndefined && getOwnPropDescTrap.Type() != vm.TypeNull {
+		if !getOwnPropDescTrap.IsCallable() {
+			return false, vmInstance.NewTypeError("'getOwnPropertyDescriptor' on proxy: trap is not a function")
+		}
+		if _, err := vmInstance.Call(getOwnPropDescTrap, handler, []vm.Value{target, vm.NewString(propKey)}); err != nil {
+			return false, err
+		}
+	}
+
+	// GetMethod(handler, "defineProperty"): an inherited trap counts,
+	// undefined/null mean "no trap" - mirrors reflectHas's proxyReflectHas
+	// (reflect_has.go), since proxyGetTrap (pkg/vm) is unexported and
+	// unreachable from this package.
+	var defineTrap vm.Value
+	var hasDefineTrap bool
+	switch handler.Type() {
+	case vm.TypeObject:
+		defineTrap, hasDefineTrap = handler.AsPlainObject().Get("defineProperty")
+	case vm.TypeDictObject:
+		defineTrap, hasDefineTrap = handler.AsDictObject().Get("defineProperty")
+	}
+	if !hasDefineTrap || defineTrap.Type() == vm.TypeUndefined || defineTrap.Type() == vm.TypeNull {
+		// No trap: delegate straight to CreateDataProperty on the
+		// underlying target - recurses through this same generic function
+		// for whatever kind `target` turns out to be, including yet
+		// another Proxy.
+		return reflectCreateOrUpdateDataProperty(vmInstance, target, propKey, value)
+	}
+	if !defineTrap.IsCallable() {
+		return false, vmInstance.NewTypeError("'defineProperty' on proxy: trap is not a function")
+	}
+
+	// CreateDataProperty's descriptor is always {value: V, writable: true,
+	// enumerable: true, configurable: true} (7.3.5) - not whatever
+	// descriptor `target`'s own property (if any) already had, since this
+	// function models the "property doesn't exist on receiver yet" case.
+	descObj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	descObj.SetOwn("value", value)
+	descObj.SetOwn("writable", vm.BooleanValue(true))
+	descObj.SetOwn("enumerable", vm.BooleanValue(true))
+	descObj.SetOwn("configurable", vm.BooleanValue(true))
+	result, err := vmInstance.Call(defineTrap, handler, []vm.Value{target, vm.NewString(propKey), vm.NewValueFromPlainObject(descObj)})
+	if err != nil {
+		return false, err
+	}
+	return result.IsTruthy(), nil
+}
+
+// reflectProxySet implements Reflect.set's Proxy-TARGET path - ECMA-262
+// 10.5.9 [[Set]] - which this function previously had no case for at all:
+// `target.Type() == TypeProxy` passed the "set" closure's object gate
+// (Value.IsObject() is a contiguous [TypeObject, TypeProxy] range check, so
+// it's true for a Proxy), but neither the removed isDataProp computation
+// nor the final target-kind switch had a case for TypeProxy, so it fell
+// through to an unconditional `return false` for ANY Proxy target, with or
+// without a `set` trap:
+//
+//	const target = {};
+//	const p = new Proxy(target, {});
+//	Reflect.set(p, "x", 5); // before: false, target.x stayed undefined - Node: true, target.x === 5
+//
+// Mirrors op_setprop.go's opSetProp TypeProxy handling (the bytecode
+// `obj.x = v` path, which already gets this right for that narrower case),
+// but forwards Reflect.set's own `receiver` argument to the trap - NOT
+// necessarily the proxy itself, unlike ordinary assignment where the
+// receiver is always the object the property access happened on. Also
+// deliberately does NOT copy opSetProp's own no-trap fallback shape (it
+// writes directly to `target` instead of `Receiver` in the "property
+// absent everywhere" case - the same class of bug task_cd1507d7 fixed for
+// Reflect.set's non-Proxy path) - the no-trap branch here instead recurses
+// into reflectSetDispatch, reusing the already-correct
+// reflectOrdinarySet/reflectCreateOrUpdateDataProperty pair.
+func reflectProxySet(vmInstance *vm.VM, proxyVal vm.Value, propKey string, value vm.Value, receiver vm.Value) (bool, error) {
+	proxy := proxyVal.AsProxy()
+	if proxy.Revoked {
+		return false, vmInstance.NewTypeError("Cannot perform 'set' on a revoked Proxy")
+	}
+	handler := proxy.Handler()
+	target := proxy.Target()
+
+	// GetMethod(handler, "set"): an inherited trap counts, undefined/null
+	// mean "no trap" - mirrors reflectHas's proxyReflectHas (reflect_has.go).
+	var trap vm.Value
+	var hasTrap bool
+	switch handler.Type() {
+	case vm.TypeObject:
+		trap, hasTrap = handler.AsPlainObject().Get("set")
+	case vm.TypeDictObject:
+		trap, hasTrap = handler.AsDictObject().Get("set")
+	}
+	if !hasTrap || trap.Type() == vm.TypeUndefined || trap.Type() == vm.TypeNull {
+		// No trap: per spec, return target.[[Set]](P, V, Receiver) -
+		// recurse into Reflect.set's own general dispatch for whatever
+		// kind `target` (the proxy's own target, which may itself be
+		// another Proxy) turns out to be, with the SAME receiver
+		// Reflect.set was originally called with (not necessarily this
+		// proxy).
+		return reflectSetDispatch(vmInstance, target, propKey, value, receiver)
+	}
+	if !trap.IsCallable() {
+		return false, vmInstance.NewTypeError("'set' on proxy: trap is not a function")
+	}
+
+	// Trap args per 10.5.9 step 8: (target, propertyKey, V, Receiver) -
+	// propKey is passed as a plain string here (pre-existing, unrelated to
+	// this fix: Reflect.set's own args[1].ToString() up in the "set"
+	// closure already stringifies a Symbol key before it ever reaches this
+	// function - so Reflect.set(proxy, Symbol.iterator, v) hands the trap
+	// "Symbol(Symbol.iterator)" as a string rather than the real Symbol.
+	// Not fixed here - see the PR body for why - but flagged, since this
+	// is the first place that mangled key becomes externally observable to
+	// user code (a trap function), not just internally wrong).
+	result, err := vmInstance.Call(trap, handler, []vm.Value{target, vm.NewString(propKey), value, receiver})
+	if err != nil {
+		return false, err
+	}
+	if result.IsFalsey() {
+		return false, nil
+	}
+
+	// ECMAScript 10.5.9 invariant validation (steps 13-15): a truish trap
+	// result is rejected if target has a non-configurable property whose
+	// invariant the trap tried to silently violate. Mirrors opSetProp's own
+	// TypeObject-only version of this check (pkg/vm/op_setprop.go) - not
+	// generalized to every VM kind here, matching that existing precedent
+	// and this file's own established scope (a Proxy's real-world target is
+	// overwhelmingly a plain object in practice).
+	if target.Type() == vm.TypeObject {
+		targetObj := target.AsPlainObject()
+		if _, s, _, c, isAccessor := targetObj.GetOwnAccessor(propKey); isAccessor {
+			if !c && s.Type() == vm.TypeUndefined {
+				return false, vmInstance.NewTypeError("'set' on proxy: trap returned truish for property '" + propKey + "' which exists in the proxy target as a non-configurable accessor without a setter")
+			}
+		} else if v, w, _, c, found := targetObj.GetOwnDescriptor(propKey); found {
+			if !c && !w {
+				if !v.StrictlyEquals(value) {
+					return false, vmInstance.NewTypeError("'set' on proxy: trap returned truish for property '" + propKey + "' which exists in the proxy target as a non-configurable and non-writable data property with a different value")
+				}
+			}
+		}
+	}
+
+	return true, nil
+}
+
+// reflectSetDispatch is Reflect.set's core dispatch, shared by the "set"
+// NativeFunction closure itself and every recursive delegation site above
+// (a Proxy target with no trap, a Proxy receiver with no trap) that needs
+// to re-enter the same logic for a different target/receiver pair.
+func reflectSetDispatch(vmInstance *vm.VM, target vm.Value, propKey string, value vm.Value, receiver vm.Value) (bool, error) {
+	if target.Type() == vm.TypeProxy {
+		return reflectProxySet(vmInstance, target, propKey, value, receiver)
+	}
+
+	// Module Namespace Exotic Object [[Set]] behavior (ECMAScript 10.4.6.9)
+	// [[Set]] on a namespace always returns false
+	if target.Type() == vm.TypeObject {
+		if po := target.AsPlainObject(); po.IsModuleNamespace() {
+			return false, nil
+		}
+	}
+
+	switch target.Type() {
+	case vm.TypeObject, vm.TypeDictObject, vm.TypeArray:
+		return reflectOrdinarySet(vmInstance, target, propKey, value, receiver)
+	}
+
+	// target is some other kind this function doesn't model a set for.
+	// Matches this function's prior behavior for every kind it didn't have
+	// a case for.
+	return false, nil
+}
+
+// reflectToArrayLength mirrors pkg/vm/vm_init.go's unexported
+// toLengthIntForSetProperty (ToLength clamping for an array's "length"
+// property) - duplicated rather than imported since that helper is
+// unexported and this is the one place in package builtins that needs the
+// exact same clamp.
+func reflectToArrayLength(v vm.Value) int {
+	n := v.ToFloat()
+	if n != n || n <= 0 {
+		return 0
+	}
+	const maxSafeInteger = 9007199254740991
+	if n > maxSafeInteger {
+		n = maxSafeInteger
+	}
+	return int(n)
+}
+
 type ReflectInitializer struct{}
 
 func (r *ReflectInitializer) Name() string  { return "Reflect" }
@@ -53,8 +486,28 @@ func (r *ReflectInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Reflect object type with all 13 methods
 	reflectType := types.NewObjectType().
 		// Property operations
-		WithProperty("get", types.NewSimpleFunction([]types.Type{types.Any, keyType}, types.Any)).
-		WithProperty("set", types.NewSimpleFunction([]types.Type{types.Any, keyType, types.Any}, types.Boolean)).
+		//
+		// "get" takes an optional third `receiver` argument (used as the
+		// `this` an accessor's getter is called with - the runtime
+		// implementation now actually reads it, see reflectObj's "get"
+		// closure below). "set"/"construct" have the same shape of gap for
+		// their own optional trailing arguments - fixed alongside "get"
+		// here rather than left as a separate follow-up, since the runtime
+		// already accepted a 4th/3rd argument for both before this fix
+		// (Reflect.set(t, k, v, receiver) already worked under
+		// --no-typecheck; Reflect.construct(t, args, newTarget) did NOT -
+		// see the "construct" closure below for the real, causally-coupled
+		// runtime bug this surfaced and fixed in the same commit).
+		//
+		// "set"'s spec signature (ECMA-262, and lib.es2015.reflect.d.ts in
+		// the pinned TypeScript v6.0.3 tree) is
+		// `set(target, propertyKey, value, receiver?)` - only the trailing
+		// `receiver` is optional, `value` is required (it legitimately
+		// defaults to `undefined` at the VALUE level when omitted, same as
+		// any other required `any`-typed parameter given `undefined` -
+		// that's not the same as the parameter itself being optional).
+		WithProperty("get", types.NewOptionalFunction([]types.Type{types.Any, keyType, types.Any}, types.Any, []bool{false, false, true})).
+		WithProperty("set", types.NewOptionalFunction([]types.Type{types.Any, keyType, types.Any, types.Any}, types.Boolean, []bool{false, false, false, true})).
 		WithProperty("has", types.NewSimpleFunction([]types.Type{types.Any, keyType}, types.Boolean)).
 		WithProperty("deleteProperty", types.NewSimpleFunction([]types.Type{types.Any, keyType}, types.Boolean)).
 		// Prototype operations
@@ -70,7 +523,7 @@ func (r *ReflectInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("preventExtensions", types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)).
 		// Function operations
 		WithProperty("apply", types.NewSimpleFunction([]types.Type{types.Any, types.Any, types.Any}, types.Any)).
-		WithProperty("construct", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Any))
+		WithProperty("construct", types.NewOptionalFunction([]types.Type{types.Any, types.Any, types.Any}, types.Any, []bool{false, false, true}))
 
 	return ctx.DefineGlobal("Reflect", reflectType)
 }
@@ -94,39 +547,40 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Reflect.get(target, propertyKey [, receiver])
+	// Per ECMAScript spec, this invokes [[Get]] and returns the result -
+	// receiver defaults to target, and is what any accessor's getter along
+	// the way is called with as `this` (10.1.8 [[Get]] step 5/6). The
+	// actual per-kind dispatch (own-accessor-then-data, prototype-chain
+	// walk, Proxy trap invocation and invariant checks, both string and
+	// Symbol keys) lives in pkg/vm/vm_init.go's
+	// GetPropertyWithReceiver/ReflectGetSymbolPropertyWithReceiver, which
+	// this used to duplicate a much narrower, TypeObject/TypeDictObject/
+	// TypeArray-only, string-key-only version of inline - silently
+	// returning undefined for every other kind (Function, Map, Set,
+	// RegExp, BoundFunction, NativeFunction, NativeFunctionWithProps,
+	// Promise, TypedArray, Proxy, ...) and unconditionally stringifying
+	// even a Symbol key.
 	reflectObj.SetOwnNonEnumerable("get", vm.NewNativeFunction(2, false, "get", func(args []vm.Value) (vm.Value, error) {
 		if len(args) < 2 {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.get requires at least 2 arguments")
 		}
 		target := args[0]
-		propKey := args[1].ToString()
+		key := args[1]
 
 		if !target.IsObject() && !target.IsCallable() {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.get called on non-object")
 		}
 
-		// Perform simple property get
-		switch target.Type() {
-		case vm.TypeObject:
-			if val, ok := target.AsPlainObject().Get(propKey); ok {
-				return val, nil
-			}
-		case vm.TypeDictObject:
-			if val, ok := target.AsDictObject().Get(propKey); ok {
-				return val, nil
-			}
-		case vm.TypeArray:
-			arr := target.AsArray()
-			if propKey == "length" {
-				return vm.Number(float64(arr.Length())), nil
-			}
-			// Try numeric index using strconv
-			if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 && idx < arr.Length() {
-				return arr.Get(idx), nil
-			}
+		// Receiver defaults to target if not provided (ECMA-262 28.1.7).
+		receiver := target
+		if len(args) >= 3 {
+			receiver = args[2]
 		}
 
-		return vm.Undefined, nil
+		if key.Type() == vm.TypeSymbol {
+			return vmInstance.ReflectGetSymbolPropertyWithReceiver(target, key, receiver)
+		}
+		return vmInstance.GetPropertyWithReceiver(target, key.ToString(), receiver)
 	}))
 
 	// Reflect.set(target, propertyKey [, value [, receiver]])
@@ -154,93 +608,29 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.BooleanValue(false), vmInstance.NewTypeError("Reflect.set called on non-object")
 		}
 
-		// Module Namespace Exotic Object [[Set]] behavior (ECMAScript 10.4.6.9)
-		// [[Set]] on a namespace always returns false
-		if target.Type() == vm.TypeObject {
-			if po := target.AsPlainObject(); po.IsModuleNamespace() {
-				return vm.BooleanValue(false), nil
-			}
-		}
-
-		// For Proxy targets, we need to use the set trap differently
-		// The set trap was already called by the caller (opSetProp), so here we
-		// are implementing the actual Set algorithm that Reflect.set uses internally
-		// when called from a Proxy set trap
-
-		// Check if the property is a data property on the target
-		isDataProp := false
-		switch target.Type() {
-		case vm.TypeObject:
-			obj := target.AsPlainObject()
-			if _, _, _, _, isAccessor := obj.GetOwnAccessor(propKey); !isAccessor {
-				isDataProp = true
-			}
-		case vm.TypeDictObject:
-			isDataProp = true // DictObject doesn't support accessors
-		case vm.TypeArray:
-			isDataProp = true
-		}
-
-		// If receiver is different from target (e.g., receiver is a Proxy),
-		// we need to call receiver's [[GetOwnProperty]] and [[DefineOwnProperty]]
-		// per ECMAScript 10.1.9.2 OrdinarySetWithOwnDescriptor
-		if isDataProp && receiver.Type() == vm.TypeProxy && receiver != target {
-			proxy := receiver.AsProxy()
-			if proxy.Revoked {
-				return vm.BooleanValue(false), vmInstance.NewTypeError("Cannot perform 'set' on a revoked Proxy")
-			}
-
-			handler := proxy.Handler()
-			proxyTarget := proxy.Target()
-
-			// Step 2.c: Let existingDescriptor be ? Receiver.[[GetOwnProperty]](P).
-			// This triggers the getOwnPropertyDescriptor trap on the receiver Proxy
-			getOwnPropDescTrap, hasGetOwnPropDesc := handler.AsPlainObject().GetOwn("getOwnPropertyDescriptor")
-			if hasGetOwnPropDesc && getOwnPropDescTrap.IsCallable() {
-				trapArgs := []vm.Value{proxyTarget, vm.NewString(propKey)}
-				_, err := vmInstance.Call(getOwnPropDescTrap, handler, trapArgs)
-				if err != nil {
-					return vm.BooleanValue(false), err
-				}
-			}
-
-			// Step 2.d.iv: Return ? Receiver.[[DefineOwnProperty]](P, valueDesc).
-			// This triggers the defineProperty trap on the receiver Proxy
-			definePropertyTrap, hasDefineProperty := handler.AsPlainObject().GetOwn("defineProperty")
-			if hasDefineProperty && definePropertyTrap.IsCallable() {
-				// Create a property descriptor with just the value
-				valueDesc := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				valueDesc.SetOwn("value", value)
-				trapArgs := []vm.Value{proxyTarget, vm.NewString(propKey), vm.NewValueFromPlainObject(valueDesc)}
-				result, err := vmInstance.Call(definePropertyTrap, handler, trapArgs)
-				if err != nil {
-					return vm.BooleanValue(false), err
-				}
-				return vm.BooleanValue(result.IsTruthy()), nil
-			}
-		}
-
-		// Simple property set on target
-		switch target.Type() {
-		case vm.TypeObject:
-			target.AsPlainObject().SetOwn(propKey, value)
-			return vm.BooleanValue(true), nil
-		case vm.TypeDictObject:
-			target.AsDictObject().SetOwn(propKey, value)
-			return vm.BooleanValue(true), nil
-		case vm.TypeArray:
-			arr := target.AsArray()
-			if propKey == "length" {
-				// Setting length is complex, skip for now
-				return vm.BooleanValue(true), nil
-			}
-			if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 {
-				arr.Set(idx, value)
-				return vm.BooleanValue(true), nil
-			}
-		}
-
-		return vm.BooleanValue(false), nil
+		// The actual algorithm - ECMA-262 10.1.9/10.1.9.2 OrdinarySet(WithOwnDescriptor)
+		// for a plain target, or 10.5.9 [[Set]] when target is a Proxy -
+		// lives in reflectSetDispatch, shared with the recursive delegation
+		// sites a Proxy target or a Proxy receiver without the relevant
+		// trap need to re-enter.
+		//
+		// This used to inline a "receiver is a distinct Proxy" special case
+		// right here (checking isDataProp on `target` first) that only
+		// handled a receiver-Proxy WITH a defineProperty trap present, and
+		// otherwise silently fell through to a "Simple property set on
+		// target" fallback that ignored `receiver` entirely - the bug
+		// task_cd1507d7 fixed for every OTHER receiver kind, but this
+		// Proxy-receiver special case sat upstream of that fix and kept
+		// intercepting before it could run. It's superseded now, not
+		// patched: reflectCreateOrUpdateDataProperty's own TypeProxy case
+		// (reflectProxyDefineDataProperty) handles a Proxy receiver
+		// completely - trap present or not - so this closure no longer
+		// needs a separate inline special case for it, and `target` never
+		// had a Proxy case here at all (task_18cd4923 - `target` itself
+		// being a Proxy fell through to an unconditional `false` for ANY
+		// Proxy target, trap or no trap).
+		ok, err := reflectSetDispatch(vmInstance, target, propKey, value, receiver)
+		return vm.BooleanValue(ok), err
 	}))
 
 	// Reflect.has(target, propertyKey)
@@ -370,7 +760,15 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		target := args[0]
 
-		if !target.IsObject() {
+		// Every sibling Reflect method in this file (get/set/has/apply/
+		// construct/...) gates on "!IsObject() && !IsCallable()" - this one
+		// used to gate on "!IsObject()" alone, so it threw a TypeError
+		// outright for a plain function, a class, a native function, a
+		// native constructor, or a bound function - values every other
+		// Reflect method here already accepts. Confirmed against Node:
+		// Reflect.ownKeys(Array.prototype.slice) is ["length","name"]
+		// there, not a throw.
+		if !target.IsObject() && !target.IsCallable() {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.ownKeys called on non-object")
 		}
 
@@ -379,6 +777,55 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		arr := keysArray.AsArray()
 
 		switch target.Type() {
+		case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
+			// Fixing the gate above just made these five kinds reach this
+			// switch instead of throwing - but the switch itself had no
+			// case for any of them, so they'd have fallen through to
+			// "return keysArray, nil" and answered [] instead of actually
+			// throwing OR actually working (silently wrong either way).
+			//
+			// Rather than hand-rolling a THIRD independent per-kind
+			// name/length/prototype synthesis switch alongside
+			// objectGetOwnPropertyNamesWithVM's (Object.getOwnPropertyNames)
+			// and objectGetOwnPropertySymbolsWithVM's (Object.
+			// getOwnPropertySymbols) own already-correct ones - the exact
+			// "N independent copies of the same per-kind dispatch slowly
+			// drift apart" pattern behind most of this session's bug
+			// fixes - delegate straight to those two for these five kinds
+			// only (TypeObject/TypeDictObject/TypeArray/TypeProxy below
+			// keep their own existing, already-correct logic exactly as
+			// it was; TypeNativeFunction/TypeBoundFunction were just added
+			// to objectGetOwnPropertyNamesWithVM as part of this same fix,
+			// since it had no case for either of them either - the same
+			// gap, just one level down).
+			//
+			// Per ECMAScript 10.1.11 OrdinaryOwnPropertyKeys, Reflect.
+			// ownKeys's required order - integer indices ascending, then
+			// string keys in creation order, then symbol keys in creation
+			// order - is exactly what concatenating these two functions'
+			// own outputs already produces, so no reordering is needed
+			// here.
+			namesVal, err := objectGetOwnPropertyNamesWithVM(vmInstance, []vm.Value{target})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if namesVal.Type() == vm.TypeArray {
+				namesArr := namesVal.AsArray()
+				for i := 0; i < namesArr.Length(); i++ {
+					arr.Append(namesArr.Get(i))
+				}
+			}
+			symsVal, err := objectGetOwnPropertySymbolsWithVM(vmInstance, []vm.Value{target})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if symsVal.Type() == vm.TypeArray {
+				symsArr := symsVal.AsArray()
+				for i := 0; i < symsArr.Length(); i++ {
+					arr.Append(symsArr.Get(i))
+				}
+			}
+			return keysArray, nil
 		case vm.TypeObject:
 			obj := target.AsPlainObject()
 			// 1. String keys (all, including non-enumerable)
@@ -395,48 +842,71 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				arr.Append(vm.NewString(key))
 			}
 		case vm.TypeArray:
-			arrayObj := target.AsArray()
-			// Add numeric indices - skipping holes (paserati#300): a hole
-			// from `delete arr[i]`, a literal elision, or `new Array(n)` is
-			// not an own property at all.
-			for i := 0; i < arrayObj.DenseLength(); i++ {
-				key := strconv.Itoa(i)
-				if !arrayObj.HasOwnIndexProperty(key, i) {
-					continue
+			// This used to hand-roll its own index/sparse-index/"length"
+			// logic - byte-for-byte identical to
+			// objectGetOwnPropertyNamesWithVM's own TypeArray case except
+			// for one thing: it never appended NAMED (non-index) string
+			// properties at all, so an array with an ad-hoc property like
+			// `arr.foo = "bar"` was missing "foo" from Reflect.ownKeys even
+			// though Object.getOwnPropertyNames(arr) correctly included it
+			// (verified against Node, which lists it in both). It also had
+			// no symbol-key coverage whatsoever - ArrayObject.OwnSymbolKeys
+			// (pkg/vm/value.go) is a brand-new method this exact fix added,
+			// since Object.getOwnPropertySymbols had no TypeArray case
+			// either before this.
+			//
+			// Rather than hand-rolling BOTH gaps' worth of duplicate logic
+			// a second time in a second independent switch - the "N
+			// independent copies of the same per-kind dispatch slowly
+			// drift apart" pattern behind most of this session's bug
+			// fixes, and exactly how this array case ended up missing
+			// named properties while its sibling function didn't - this
+			// now delegates to objectGetOwnPropertyNamesWithVM +
+			// objectGetOwnPropertySymbolsWithVM, mirroring the five
+			// callable kinds' own delegation above (task_06547fb2). Their
+			// index/sparse-index/"length" handling is already identical to
+			// what this case had, so this is a pure superset: same output
+			// for everything that already worked, plus the two gaps closed.
+			namesVal, err := objectGetOwnPropertyNamesWithVM(vmInstance, []vm.Value{target})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if namesVal.Type() == vm.TypeArray {
+				namesArr := namesVal.AsArray()
+				for i := 0; i < namesArr.Length(); i++ {
+					arr.Append(namesArr.Get(i))
 				}
-				arr.Append(vm.NewString(key))
 			}
-			// A sparse index beyond the dense range (paserati#176/#178 -
-			// see arraySparseIndices in object_init.go) is an integer-
-			// indexed own key too, so per OrdinaryOwnPropertyKeys it
-			// belongs here, in ascending numeric order, before "length" -
-			// not visited by iterating up to it, which is exactly the
-			// multi-billion-iteration hang this fixes. Reflect.ownKeys
-			// wants every own key regardless of enumerability, hence
-			// enumerableOnly=false.
-			for _, idx := range arraySparseIndices(arrayObj, false) {
-				arr.Append(vm.NewString(strconv.Itoa(idx)))
+			symsVal, err := objectGetOwnPropertySymbolsWithVM(vmInstance, []vm.Value{target})
+			if err != nil {
+				return vm.Undefined, err
 			}
-			// Add "length"
-			arr.Append(vm.NewString("length"))
+			if symsVal.Type() == vm.TypeArray {
+				symsArr := symsVal.AsArray()
+				for i := 0; i < symsArr.Length(); i++ {
+					arr.Append(symsArr.Get(i))
+				}
+			}
 		case vm.TypeProxy:
-			// For proxies, this should invoke the ownKeys trap
-			// For now, delegate to Object.getOwnPropertyNames + getOwnPropertySymbols
-			// This is a simplification
-			if objCtor, ok := vmInstance.GetGlobal("Object"); ok {
-				if objCtor.Type() == vm.TypeNativeFunctionWithProps {
-					nfp := objCtor.AsNativeFunctionWithProps()
-					if f, ok := nfp.Properties.GetOwn("getOwnPropertyNames"); ok {
-						if names, err := vmInstance.Call(f, vm.Undefined, []vm.Value{target}); err == nil {
-							if names.Type() == vm.TypeArray {
-								namesArr := names.AsArray()
-								for i := 0; i < namesArr.Length(); i++ {
-									arr.Append(namesArr.Get(i))
-								}
-							}
-						}
-					}
-				}
+			// This used to claim (inaccurately) to "delegate to
+			// Object.getOwnPropertyNames + getOwnPropertySymbols as a
+			// simplification" - but the delegation target itself had no
+			// TypeProxy case at all (objectGetOwnPropertyNamesWithVM,
+			// object_init.go), so the "simplification" was a complete
+			// no-op: Reflect.ownKeys on ANY Proxy, trap or no trap,
+			// always answered [] before this fix. proxyOwnPropertyKeys
+			// (object_init.go) is the real, shared ECMA-262 10.5.11
+			// [[OwnPropertyKeys]] implementation - see its own comment for
+			// what it does and doesn't validate - used here directly
+			// rather than through Object.getOwnPropertyNames, since this
+			// caller wants the FULL mixed string+symbol result, not one
+			// filtered half of it.
+			keys, err := proxyOwnPropertyKeys(vmInstance, target)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			for _, k := range keys {
+				arr.Append(k)
 			}
 		}
 
