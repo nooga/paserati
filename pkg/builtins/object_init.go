@@ -2718,18 +2718,28 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 		arrObj.Append(vm.NewString("length"))
 		return arr, nil
 	case vm.TypeObject:
-		if obj.Type() == vm.TypeObject {
-			po := obj.AsPlainObject()
-			// OwnPropertyNames returns ALL own string property names including non-enumerable
-			for _, k := range po.OwnPropertyNames() {
-				arrObj.Append(vm.NewString(k))
-			}
-		} else if obj.Type() == vm.TypeDictObject {
-			d := obj.AsDictObject()
-			// DictObject.OwnPropertyNames returns all property names
-			for _, k := range d.OwnPropertyNames() {
-				arrObj.Append(vm.NewString(k))
-			}
+		po := obj.AsPlainObject()
+		// OwnPropertyNames returns ALL own string property names including non-enumerable
+		for _, k := range po.OwnPropertyNames() {
+			arrObj.Append(vm.NewString(k))
+		}
+	case vm.TypeDictObject:
+		// This used to be an unreachable `else if` nested inside the
+		// `case vm.TypeObject:` body above (dead code - within that case,
+		// obj.Type() is always TypeObject, so the else-if branch could
+		// never run) - meaning Object.getOwnPropertyNames on a DictObject
+		// (a TypeScript `enum`, or a module namespace object - both
+		// reachable from user code, see pkg/compiler/compile_enum.go and
+		// module_bindings.go) fell all the way through to this function's
+		// `default: return arr, nil` and answered [] instead of listing
+		// the enum's real own properties. Found while adding this
+		// function's new TypeProxy case, since a Proxy wrapping a
+		// DictObject target would otherwise silently inherit the exact
+		// same bug through the new delegation.
+		d := obj.AsDictObject()
+		// DictObject.OwnPropertyNames returns all property names
+		for _, k := range d.OwnPropertyNames() {
+			arrObj.Append(vm.NewString(k))
 		}
 	case vm.TypeArray:
 		a := obj.AsArray()
@@ -2949,6 +2959,34 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 				arrObj.Append(vm.NewString(k))
 			}
 		}
+	case vm.TypeProxy:
+		// This switch never had a case for TypeProxy at all - it fell
+		// through to `default: return arr, nil` and answered [] for ANY
+		// Proxy, regardless of what its target actually has:
+		//
+		//   const target = { a: 1 };
+		//   Object.getOwnPropertyNames(new Proxy(target, {})); // before: [] - Node: ["a"]
+		//
+		// proxyOwnPropertyKeys implements the shared ECMA-262 10.5.11
+		// [[OwnPropertyKeys]] machinery (also used by
+		// objectGetOwnPropertySymbolsWithVM's own new TypeProxy case below
+		// and by Reflect.ownKeys, reflect_init.go) - one trap invocation
+		// (or delegation) producing the full mixed string+symbol key list,
+		// which each of those three callers then filters differently, per
+		// spec (they all call the same internal method and filter its
+		// result, rather than each doing its own separate trap
+		// invocation - calling a possibly-side-effecting trap twice for
+		// what should be one [[OwnPropertyKeys]] call would itself be a
+		// bug).
+		keys, err := proxyOwnPropertyKeys(vmInstance, obj)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		for _, k := range keys {
+			if k.Type() != vm.TypeSymbol {
+				arrObj.Append(k)
+			}
+		}
 	default:
 		// Non-object types return empty array
 		return arr, nil
@@ -3017,9 +3055,178 @@ func objectGetOwnPropertySymbolsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.V
 				arrObj.Append(s)
 			}
 		}
+	} else if obj.Type() == vm.TypeProxy {
+		// Same gap, same fix, as objectGetOwnPropertyNamesWithVM's new
+		// TypeProxy case above (see its comment for the full rationale) -
+		// this function had no case for TypeProxy at all either, so
+		// Object.getOwnPropertySymbols(new Proxy(target, {})) always
+		// answered [] regardless of what symbol-keyed properties `target`
+		// actually had. Filters proxyOwnPropertyKeys's shared mixed-key
+		// result down to symbols, the mirror image of the string-only
+		// filter in objectGetOwnPropertyNamesWithVM.
+		keys, err := proxyOwnPropertyKeys(vmInstance, obj)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		for _, k := range keys {
+			if k.Type() == vm.TypeSymbol {
+				arrObj.Append(k)
+			}
+		}
 	}
 	// DictObject does not support symbols; returns empty array
 	return arr, nil
+}
+
+// proxyOwnPropertyKeys implements ECMA-262 10.5.11 [[OwnPropertyKeys]] for a
+// Proxy exotic object - the single shared entry point objectGetOwnPropertyNamesWithVM,
+// objectGetOwnPropertySymbolsWithVM, and Reflect.ownKeys (reflect_init.go)
+// all delegate to and then filter differently, per spec (all three call the
+// same internal method and filter its result - not each doing its own
+// separate trap invocation, which would invoke a possibly-side-effecting
+// trap more than once for what should be a single [[OwnPropertyKeys]] call).
+//
+// Implements spec steps 1-7 (revoked check, GetMethod(handler, "ownKeys"),
+// CreateListFromArrayLike with its String|Symbol element-type restriction,
+// and the unconditional "no duplicate entries" check) plus the "no trap"
+// delegation (step 4's `return ? target.[[OwnPropertyKeys]]()`).
+//
+// Deliberately DOES NOT implement steps 8-16 (the [[Extensible]]/
+// configurable-key invariant validation a well-behaved trap must satisfy) -
+// a trap's raw result is returned as-is once past the checks above. This is
+// right for a well-behaved trap (verified against Node: a trap that simply
+// returns a different key list gets that list back verbatim) and wrong only
+// for one that violates those invariants (Node throws a TypeError there;
+// this returns the trap's result instead) - a real, narrower, deliberately
+// deferred gap (see the follow-up chip this was flagged with) rather than
+// the wrong tradeoff of delegating to the target's own keys instead, which
+// would produce an equally wrong but LESS plausible-looking answer for the
+// overwhelmingly common "trap just returns its own list" case.
+func proxyOwnPropertyKeys(vmInstance *vm.VM, proxyVal vm.Value) ([]vm.Value, error) {
+	proxy := proxyVal.AsProxy()
+	if proxy.Revoked {
+		return nil, vmInstance.NewTypeError("Cannot perform 'ownKeys' on a revoked Proxy")
+	}
+	handler := proxy.Handler()
+	target := proxy.Target()
+
+	// GetMethod(handler, "ownKeys"): an inherited trap counts, undefined/
+	// null mean "no trap" - mirrors reflect_has.go's proxyReflectHas and
+	// reflect_init.go's reflectProxySet/reflectProxyDefineDataProperty,
+	// since proxyGetTrap (pkg/vm) is unexported and unreachable from this
+	// package.
+	var trap vm.Value
+	var hasTrap bool
+	switch handler.Type() {
+	case vm.TypeObject:
+		trap, hasTrap = handler.AsPlainObject().Get("ownKeys")
+	case vm.TypeDictObject:
+		trap, hasTrap = handler.AsDictObject().Get("ownKeys")
+	}
+	if !hasTrap || trap.Type() == vm.TypeUndefined || trap.Type() == vm.TypeNull {
+		// No trap: delegate to target.[[OwnPropertyKeys]]() - concatenate
+		// the string-key and symbol-key halves, which for a plain
+		// (non-Proxy) target is exactly ECMA-262 10.1.11
+		// OrdinaryOwnPropertyKeys's required order (integer indices, then
+		// string keys, then symbol keys, all in creation order) - and
+		// recurses correctly for a nested Proxy target via this same
+		// function, through objectGetOwnPropertyNamesWithVM's own
+		// TypeProxy case calling back into this one.
+		namesVal, err := objectGetOwnPropertyNamesWithVM(vmInstance, []vm.Value{target})
+		if err != nil {
+			return nil, err
+		}
+		symsVal, err := objectGetOwnPropertySymbolsWithVM(vmInstance, []vm.Value{target})
+		if err != nil {
+			return nil, err
+		}
+		var keys []vm.Value
+		if namesVal.Type() == vm.TypeArray {
+			namesArr := namesVal.AsArray()
+			for i := 0; i < namesArr.Length(); i++ {
+				keys = append(keys, namesArr.Get(i))
+			}
+		}
+		if symsVal.Type() == vm.TypeArray {
+			symsArr := symsVal.AsArray()
+			for i := 0; i < symsArr.Length(); i++ {
+				keys = append(keys, symsArr.Get(i))
+			}
+		}
+		return keys, nil
+	}
+	if !trap.IsCallable() {
+		return nil, vmInstance.NewTypeError("'ownKeys' on proxy: trap is not a function")
+	}
+
+	trapResultArray, err := vmInstance.Call(trap, handler, []vm.Value{target})
+	if err != nil {
+		return nil, err
+	}
+
+	// CreateListFromArrayLike(trapResultArray, « String, Symbol »): accept
+	// a real array (the overwhelmingly common case) via a fast path, or
+	// any array-like object via .length + indexed access (mirrors the
+	// CreateListFromArrayLike pattern already inlined at reflect_init.go's
+	// "apply"/"construct" closures for their own argumentsList parameter).
+	var rawElements []vm.Value
+	if trapResultArray.Type() == vm.TypeArray {
+		trapArr := trapResultArray.AsArray()
+		for i := 0; i < trapArr.Length(); i++ {
+			rawElements = append(rawElements, trapArr.Get(i))
+		}
+	} else if trapResultArray.IsObject() {
+		lengthVal, err := vmInstance.GetProperty(trapResultArray, "length")
+		if err != nil {
+			return nil, err
+		}
+		length := int(lengthVal.ToFloat())
+		if length < 0 {
+			length = 0
+		}
+		for i := 0; i < length; i++ {
+			val, err := vmInstance.GetProperty(trapResultArray, strconv.Itoa(i))
+			if err != nil {
+				return nil, err
+			}
+			rawElements = append(rawElements, val)
+		}
+	} else {
+		return nil, vmInstance.NewTypeError("'ownKeys' on proxy: trap result is not an object")
+	}
+
+	// Dedup by CONTENT for a string (its `.ToString()`) and by IDENTITY for
+	// a symbol (its underlying *SymbolObject pointer) - NOT by vm.Value
+	// equality directly: two runtime-built TypeString values holding the
+	// same text are not guaranteed to compare equal via Go's `==` on
+	// vm.Value (verified: a literal "a" and a runtime-concatenated
+	// "a" + "" trap result failed to dedup when keyed on the raw Value,
+	// silently letting Node's genuine duplicate-entries TypeError through
+	// as if the list were fine).
+	type ownKeyDedupKey struct {
+		str string
+		sym *vm.SymbolObject
+	}
+	seen := make(map[ownKeyDedupKey]bool, len(rawElements))
+	trapResult := make([]vm.Value, 0, len(rawElements))
+	for _, el := range rawElements {
+		if el.Type() != vm.TypeString && el.Type() != vm.TypeSymbol {
+			return nil, vmInstance.NewTypeError(el.ToString() + " is not a valid property name")
+		}
+		var dedupKey ownKeyDedupKey
+		if el.Type() == vm.TypeSymbol {
+			dedupKey = ownKeyDedupKey{sym: el.AsSymbolObject()}
+		} else {
+			dedupKey = ownKeyDedupKey{str: el.ToString()}
+		}
+		if seen[dedupKey] {
+			return nil, vmInstance.NewTypeError("'ownKeys' on proxy: trap returned duplicate entries")
+		}
+		seen[dedupKey] = true
+		trapResult = append(trapResult, el)
+	}
+
+	return trapResult, nil
 }
 
 // reflectOwnKeysImpl returns own property keys: string names first (any enumerability), then symbols
