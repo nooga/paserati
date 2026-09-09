@@ -3016,6 +3016,26 @@ func objectGetOwnPropertySymbolsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.V
 		for _, s := range po.OwnSymbolKeys() {
 			arrObj.Append(s)
 		}
+	} else if obj.Type() == vm.TypeArray {
+		// ArrayObject already stores symbol-keyed properties
+		// (GetSymbolProp/SetSymbolProp/HasOwnSymbolProp - that's how
+		// `arr[sym] = v` works at all), but this function never had a
+		// case for TypeArray at all, so Object.getOwnPropertySymbols on
+		// an array with a real symbol property silently answered []
+		// (verified against Node, which lists it):
+		//
+		//   const arr = [1, 2, 3];
+		//   arr[Symbol("s")] = 42;
+		//   Object.getOwnPropertySymbols(arr).length; // before: 0 - Node: 1
+		//
+		// ArrayObject.OwnSymbolKeys() (pkg/vm/value.go) is the new
+		// enumerator this case needed - it didn't exist at all before
+		// this fix, unlike PlainObject's own OwnSymbolKeys the TypeObject
+		// case above already used.
+		a := obj.AsArray()
+		for _, s := range a.OwnSymbolKeys() {
+			arrObj.Append(s)
+		}
 	} else if obj.Type() == vm.TypeFunction {
 		// Functions store properties in their Properties field
 		fn := obj.AsFunction()
@@ -4830,6 +4850,51 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	// Check arrays first before plainObj (arrays can also be AsPlainObject but their indices are stored separately)
 	if obj.Type() == vm.TypeArray {
 		arrObj := obj.AsArray()
+		// Symbol-keyed own properties (arr[sym] = v) live in ArrayObject's
+		// own symbolProps map (GetSymbolProp/SetSymbolProp/HasOwnSymbolProp,
+		// pkg/vm/value.go) - completely separate from the propName-based
+		// index/"length"/named-property checks below, all of which are
+		// meaningless for a symbol key (propName is "" here). This function
+		// never had a symbol-key branch for TypeArray at all, so it fell
+		// through the propName checks (none matched an empty propName) and
+		// then the switch below (which also has no TypeArray case), landing
+		// on the final default and reporting undefined even for a symbol
+		// property that demonstrably exists - Object.getOwnPropertySymbols
+		// lists it (task_778749f8) and `arr[sym]`/Reflect.get both read it
+		// back correctly, but Object.getOwnPropertyDescriptor claimed no
+		// such property existed:
+		//
+		//   const arr = [1, 2, 3]; const s = Symbol("x"); arr[s] = 42;
+		//   Object.getOwnPropertyDescriptor(arr, s);
+		//   // before: undefined
+		//   // Node:   {value: 42, writable: true, enumerable: true, configurable: true}
+		//
+		// Symbol properties on arrays have no separate attribute-override
+		// tracking (unlike named string properties' propertyDesc map), so -
+		// verified against Node - the descriptor is always the plain
+		// ordinary-property default: writable/enumerable/configurable all
+		// true. This is only safe because Object.defineProperty(arr, sym,
+		// {...}) is ITSELF currently a no-op for arrays (verified: it
+		// neither stores into symbolProps nor throws, so no non-default
+		// attribute combination or accessor can exist to misreport here) -
+		// a separate, pre-existing gap, not fixed by this branch. If a
+		// future fix adds symbol-keyed defineProperty support for arrays,
+		// this hardcoded true/true/true (and the early `return
+		// vm.Undefined, nil` for an absent key just below) will need to
+		// consult whatever attribute storage that fix introduces instead.
+		if keyIsSymbol {
+			if sym := propSym.AsSymbolObject(); sym != nil {
+				if v, ok := arrObj.GetSymbolProp(sym); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("value", v)
+					descriptor.SetOwn("writable", vm.BooleanValue(true))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(true))
+					descriptor.SetOwn("configurable", vm.BooleanValue(true))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+			}
+			return vm.Undefined, nil
+		}
 		isFrozen := arrObj.IsFrozen()
 		// An index (or named key) explicitly turned into an accessor via
 		// Object.defineProperty takes priority over the plain-element read

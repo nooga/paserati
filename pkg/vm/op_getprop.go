@@ -1482,9 +1482,33 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	case TypeArray:
+		// Arrays: consult the array's OWN symbol-keyed properties first -
+		// opSetPropSymbol's TypeArray case (pkg/vm/op_setprop.go) already
+		// writes `arr[sym] = v` into ArrayObject.symbolProps via
+		// SetSymbolProp, but this case used to skip straight to the
+		// prototype chain without ever checking it, so the read half of
+		// the exact same feature silently returned undefined - or, worse,
+		// a same-named symbol property inherited from Array.prototype -
+		// instead of the array's own value:
+		//
+		//   const arr = [1, 2, 3];
+		//   const sym = Symbol("s");
+		//   arr[sym] = 42;
+		//   arr[sym]; // before: undefined - Node: 42
+		//
+		// GetSymbolProp already existed and worked (that's how
+		// HasOwnSymbolProp/Object.getOwnPropertySymbols's new TypeArray
+		// case can see it) - this case just never called it.
+		arrObj := base.AsArray()
+		if sym := symKey.AsSymbolObject(); sym != nil {
+			if v, ok := arrObj.GetSymbolProp(sym); ok {
+				*dest = v
+				return true, InterpretOK, *dest
+			}
+		}
 		// Arrays: consult the per-instance prototype override (subclassing)
 		// before falling back to the realm's intrinsic Array.prototype.
-		proto := base.AsArray().prototype
+		proto := arrObj.prototype
 		if !proto.IsObject() {
 			proto = vm.ArrayPrototype
 		}

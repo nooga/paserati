@@ -842,30 +842,51 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 				arr.Append(vm.NewString(key))
 			}
 		case vm.TypeArray:
-			arrayObj := target.AsArray()
-			// Add numeric indices - skipping holes (paserati#300): a hole
-			// from `delete arr[i]`, a literal elision, or `new Array(n)` is
-			// not an own property at all.
-			for i := 0; i < arrayObj.DenseLength(); i++ {
-				key := strconv.Itoa(i)
-				if !arrayObj.HasOwnIndexProperty(key, i) {
-					continue
+			// This used to hand-roll its own index/sparse-index/"length"
+			// logic - byte-for-byte identical to
+			// objectGetOwnPropertyNamesWithVM's own TypeArray case except
+			// for one thing: it never appended NAMED (non-index) string
+			// properties at all, so an array with an ad-hoc property like
+			// `arr.foo = "bar"` was missing "foo" from Reflect.ownKeys even
+			// though Object.getOwnPropertyNames(arr) correctly included it
+			// (verified against Node, which lists it in both). It also had
+			// no symbol-key coverage whatsoever - ArrayObject.OwnSymbolKeys
+			// (pkg/vm/value.go) is a brand-new method this exact fix added,
+			// since Object.getOwnPropertySymbols had no TypeArray case
+			// either before this.
+			//
+			// Rather than hand-rolling BOTH gaps' worth of duplicate logic
+			// a second time in a second independent switch - the "N
+			// independent copies of the same per-kind dispatch slowly
+			// drift apart" pattern behind most of this session's bug
+			// fixes, and exactly how this array case ended up missing
+			// named properties while its sibling function didn't - this
+			// now delegates to objectGetOwnPropertyNamesWithVM +
+			// objectGetOwnPropertySymbolsWithVM, mirroring the five
+			// callable kinds' own delegation above (task_06547fb2). Their
+			// index/sparse-index/"length" handling is already identical to
+			// what this case had, so this is a pure superset: same output
+			// for everything that already worked, plus the two gaps closed.
+			namesVal, err := objectGetOwnPropertyNamesWithVM(vmInstance, []vm.Value{target})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if namesVal.Type() == vm.TypeArray {
+				namesArr := namesVal.AsArray()
+				for i := 0; i < namesArr.Length(); i++ {
+					arr.Append(namesArr.Get(i))
 				}
-				arr.Append(vm.NewString(key))
 			}
-			// A sparse index beyond the dense range (paserati#176/#178 -
-			// see arraySparseIndices in object_init.go) is an integer-
-			// indexed own key too, so per OrdinaryOwnPropertyKeys it
-			// belongs here, in ascending numeric order, before "length" -
-			// not visited by iterating up to it, which is exactly the
-			// multi-billion-iteration hang this fixes. Reflect.ownKeys
-			// wants every own key regardless of enumerability, hence
-			// enumerableOnly=false.
-			for _, idx := range arraySparseIndices(arrayObj, false) {
-				arr.Append(vm.NewString(strconv.Itoa(idx)))
+			symsVal, err := objectGetOwnPropertySymbolsWithVM(vmInstance, []vm.Value{target})
+			if err != nil {
+				return vm.Undefined, err
 			}
-			// Add "length"
-			arr.Append(vm.NewString("length"))
+			if symsVal.Type() == vm.TypeArray {
+				symsArr := symsVal.AsArray()
+				for i := 0; i < symsArr.Length(); i++ {
+					arr.Append(symsArr.Get(i))
+				}
+			}
 		case vm.TypeProxy:
 			// This used to claim (inaccurately) to "delegate to
 			// Object.getOwnPropertyNames + getOwnPropertySymbols as a
