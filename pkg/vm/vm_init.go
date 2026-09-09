@@ -1373,7 +1373,25 @@ func (vm *VM) getSymbolPropertyWithReceiver(obj Value, sym Value, receiver Value
 	case TypeArray:
 		arr := obj.AsArray()
 		if arr != nil {
-			if v, ok := arr.GetSymbolProp(sym.AsSymbolObject()); ok {
+			symObj := sym.AsSymbolObject()
+			// A symbol-keyed accessor defined via Object.defineProperty(arr,
+			// sym, {get, set}) takes priority over the plain symbolProps
+			// value - mirrors getOwnFromTableByKey's accessor-then-data
+			// order just above, and opGetPropSymbol's own TypeArray case
+			// (pkg/vm/op_getprop.go), which this function must agree with
+			// per PR #350's own invariant (arr[sym] === Reflect.get(arr,
+			// sym)) - Object.defineProperty on a symbol key was itself
+			// still a no-op when that invariant was written, so this
+			// couldn't yet be tested there. See ArrayObject.GetOwnSymbolAccessor.
+			if arr.HasSymbolAccessors() {
+				if g, _, _, _, ok := arr.GetOwnSymbolAccessor(symObj); ok {
+					if g.Type() == TypeUndefined {
+						return Undefined, nil
+					}
+					return vm.Call(g, receiver, nil)
+				}
+			}
+			if v, ok := arr.GetSymbolProp(symObj); ok {
 				return v, nil
 			}
 			if vm.ArrayPrototype.IsObject() {

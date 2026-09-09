@@ -4195,6 +4195,26 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		}
 	}
 
+	// Array objects, symbol key: ES 10.4.2.1 Array exotic [[DefineOwnProperty]]
+	// defers to OrdinaryDefineOwnProperty for any key that "length" doesn't
+	// intercept - true for every symbol key, since a symbol can never equal
+	// the string "length". This used to have no branch at all: a symbol key
+	// on an array fell through every propName-gated check above (all of them
+	// meaningless for a symbol, since propName is "" here) and reached the
+	// `obj.Type() == vm.TypeObject` block below, which a TypeArray value
+	// never satisfies - so Object.defineProperty(arr, sym, {...}) silently
+	// did nothing: it neither stored anything nor threw, for both data and
+	// accessor descriptors alike.
+	if obj.Type() == vm.TypeArray && keyIsSymbol {
+		arr := obj.AsArray()
+		if arr != nil && propSym.AsSymbolObject() != nil {
+			if err := vmInstance.ArrayDefineOwnSymbolProperty(arr, propSym.AsSymbolObject(), hasValue, value, writablePtr, enumerablePtr, configurablePtr, hasGetter, getter, hasSetter, setter); err != nil {
+				return vm.Undefined, err
+			}
+			return obj, nil
+		}
+	}
+
 	// Define the property with attributes (on plain objects only for now)
 	if obj.Type() == vm.TypeObject {
 		if obj.Type() == vm.TypeObject {
@@ -4850,46 +4870,40 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	// Check arrays first before plainObj (arrays can also be AsPlainObject but their indices are stored separately)
 	if obj.Type() == vm.TypeArray {
 		arrObj := obj.AsArray()
-		// Symbol-keyed own properties (arr[sym] = v) live in ArrayObject's
-		// own symbolProps map (GetSymbolProp/SetSymbolProp/HasOwnSymbolProp,
-		// pkg/vm/value.go) - completely separate from the propName-based
-		// index/"length"/named-property checks below, all of which are
-		// meaningless for a symbol key (propName is "" here). This function
-		// never had a symbol-key branch for TypeArray at all, so it fell
-		// through the propName checks (none matched an empty propName) and
-		// then the switch below (which also has no TypeArray case), landing
-		// on the final default and reporting undefined even for a symbol
-		// property that demonstrably exists - Object.getOwnPropertySymbols
-		// lists it (task_778749f8) and `arr[sym]`/Reflect.get both read it
-		// back correctly, but Object.getOwnPropertyDescriptor claimed no
-		// such property existed:
+		// Symbol-keyed own properties (arr[sym] = v, or an explicit
+		// Object.defineProperty(arr, sym, {...})) live in ArrayObject's own
+		// symbol-keyed storage (GetSymbolProp/SetSymbolProp/HasOwnSymbolProp
+		// for a plain value; symbolPropertyDesc/symbolGetters/symbolSetters
+		// for an explicit descriptor - see ArrayDefineOwnSymbolProperty,
+		// pkg/vm/array_props.go) - completely separate from the
+		// propName-based index/"length"/named-property checks below, all of
+		// which are meaningless for a symbol key (propName is "" here). This
+		// function used to have no symbol-key branch for TypeArray at all
+		// (task_778749f8's fix here only handled the plain-value case, since
+		// Object.defineProperty on a symbol key was itself still a no-op at
+		// the time - see ArrayDefineOwnSymbolProperty's doc comment):
 		//
-		//   const arr = [1, 2, 3]; const s = Symbol("x"); arr[s] = 42;
+		//   const arr = [1, 2]; const s = Symbol("d");
+		//   Object.defineProperty(arr, s, {value: 7, writable: false, enumerable: false, configurable: false});
 		//   Object.getOwnPropertyDescriptor(arr, s);
-		//   // before: undefined
-		//   // Node:   {value: 42, writable: true, enumerable: true, configurable: true}
-		//
-		// Symbol properties on arrays have no separate attribute-override
-		// tracking (unlike named string properties' propertyDesc map), so -
-		// verified against Node - the descriptor is always the plain
-		// ordinary-property default: writable/enumerable/configurable all
-		// true. This is only safe because Object.defineProperty(arr, sym,
-		// {...}) is ITSELF currently a no-op for arrays (verified: it
-		// neither stores into symbolProps nor throws, so no non-default
-		// attribute combination or accessor can exist to misreport here) -
-		// a separate, pre-existing gap, not fixed by this branch. If a
-		// future fix adds symbol-keyed defineProperty support for arrays,
-		// this hardcoded true/true/true (and the early `return
-		// vm.Undefined, nil` for an absent key just below) will need to
-		// consult whatever attribute storage that fix introduces instead.
+		//   // before: {value: 7, writable: true, enumerable: true, configurable: true} (hardcoded default)
+		//   // Node:   {value: 7, writable: false, enumerable: false, configurable: false}
 		if keyIsSymbol {
 			if sym := propSym.AsSymbolObject(); sym != nil {
-				if v, ok := arrObj.GetSymbolProp(sym); ok {
+				if g, s, e, c, ok := arrObj.GetOwnSymbolAccessor(sym); ok {
+					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+					descriptor.SetOwn("get", g)
+					descriptor.SetOwn("set", s)
+					descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+					descriptor.SetOwn("configurable", vm.BooleanValue(c))
+					return vm.NewValueFromPlainObject(descriptor), nil
+				}
+				if v, desc, ok := arrObj.GetSymbolPropertyDescriptor(sym); ok {
 					descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 					descriptor.SetOwn("value", v)
-					descriptor.SetOwn("writable", vm.BooleanValue(true))
-					descriptor.SetOwn("enumerable", vm.BooleanValue(true))
-					descriptor.SetOwn("configurable", vm.BooleanValue(true))
+					descriptor.SetOwn("writable", vm.BooleanValue(desc.Writable))
+					descriptor.SetOwn("enumerable", vm.BooleanValue(desc.Enumerable))
+					descriptor.SetOwn("configurable", vm.BooleanValue(desc.Configurable))
 					return vm.NewValueFromPlainObject(descriptor), nil
 				}
 			}
@@ -5488,6 +5502,15 @@ func objectGetOwnPropertyDescriptorsWithVM(vmInstance *vm.VM, args []vm.Value) (
 			stringKeys = append(stringKeys, strconv.Itoa(i))
 		}
 		stringKeys = append(stringKeys, "length")
+		// This case never collected symbol keys at all, so
+		// Object.getOwnPropertyDescriptors(arr) silently dropped a symbol
+		// property entirely (whether a plain `arr[sym] = v` or one defined
+		// via Object.defineProperty - see ArrayDefineOwnSymbolProperty,
+		// pkg/vm/array_props.go) despite the single-key
+		// Object.getOwnPropertyDescriptor already answering correctly for
+		// the exact same property - same gap this switch's other
+		// branches' doc comments describe fixing for their own kinds.
+		symbolKeys = append(symbolKeys, arr.OwnSymbolKeys()...)
 	case vm.TypeFunction:
 		fn := obj.AsFunction()
 		// Function intrinsics: length, name, prototype
