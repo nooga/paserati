@@ -1707,6 +1707,51 @@ func (vm *VM) SetProperty(obj Value, propName string, value Value) error {
 		}
 		return nil
 
+	case TypeProxy:
+		// This case didn't exist at all before this fix - obj.Type() ==
+		// TypeProxy fell to the `default: return nil` no-op below, so
+		// every native Go caller of SetProperty (e.g.
+		// pkg/builtins/array_generic.go's arrayLikeSetLength, which
+		// Array.prototype.pop/shift/... use to shrink .length) silently
+		// did nothing when writing to a Proxy - `Array.prototype.pop.call(
+		// new Proxy(realArray, {}))` deleted the right element but never
+		// actually updated realArray.length, even though ordinary
+		// `proxy.length = n` assignment syntax (the bytecode OpSetProp
+		// path, op_setprop.go) already handled this correctly. Mirrors
+		// op_setprop.go's own TypeProxy case: GetMethod(handler, "set")
+		// via getInheritedGeneric (an inherited trap counts, and this
+		// covers the same wider range of legal handler kinds
+		// proxyGetTrap's TypeObject/TypeDictObject-only switch doesn't -
+		// Array, Closure, Function, ...), and a no-trap fallback that
+		// recurses into SetProperty on the target - covering the same
+		// TypeArray/TypeObject/TypeDictObject/TypeArguments/TypeRegExp
+		// cases above (including "length" on a real Array) plus a
+		// further-nested Proxy target automatically, since this same
+		// switch runs again for it.
+		proxy := obj.AsProxy()
+		if proxy.Revoked {
+			return vm.NewTypeError("Cannot set property on a revoked Proxy")
+		}
+		setTrap, hasSetTrap := vm.getInheritedGeneric(proxy.Handler(), "set")
+		if hasSetTrap && setTrap.Type() != TypeUndefined && setTrap.Type() != TypeNull {
+			if !setTrap.IsCallable() {
+				return vm.NewTypeError("'set' on proxy: trap is not a function")
+			}
+			// handler.set(target, propertyKey, value, receiver) - receiver
+			// is the proxy itself, per ECMA-262 10.5.9 step 8.
+			result, err := vm.Call(setTrap, proxy.Handler(), []Value{proxy.Target(), NewString(propName), value, obj})
+			if err != nil {
+				return err
+			}
+			if result.IsFalsey() {
+				return vm.NewTypeError("'set' on proxy: trap returned falsish for property '" + propName + "'")
+			}
+			return nil
+		}
+		// No set trap: delegate to target.[[Set]]() - recursing through
+		// this same switch handles a further-nested Proxy target too.
+		return vm.SetProperty(proxy.Target(), propName, value)
+
 	default:
 		// For non-objects, this is a no-op (or could throw in strict mode)
 		return nil

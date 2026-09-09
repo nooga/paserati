@@ -1286,134 +1286,70 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			*dest = result
 			return true, InterpretOK, *dest
 		} else {
-			// No get trap, fallback to target - implement directly to avoid recursion
-			target := proxy.target
-			if target.Type() == TypeObject {
-				if result, handled := vm.handleSpecialProperties(target, propName); handled {
-					*dest = result
-					return true, InterpretOK, *dest
+			// No get trap: fall back to target.[[Get]] via
+			// getPropertyWithReceiver, not a hand-rolled reimplementation
+			// (what used to live here, added to "avoid recursion" - but
+			// it only ever handled a TypeObject/TypeDictObject/callable
+			// target; every other legal proxy.target kind (TypeArray,
+			// TypeMap, TypeSet, TypePromise, TypeRegExp, TypeGenerator,
+			// TypeBoundFunction, TypeNativeFunction,
+			// TypeNativeFunctionWithProps, TypeArguments, a further-nested
+			// Proxy, ...) fell through to a bare `*dest = Undefined`
+			// instead - e.g. `new Proxy(someArray, {})` (no get trap, a
+			// real Array target) silently read `undefined` for EVERY
+			// property, including "length": handleSpecialProperties and
+			// handlePrimitiveMethod, both called here, switch on the
+			// TARGET's kind (TypeArray/TypeMap/TypeSet/... for the
+			// former, TypeString/TypeArray/TypeMap/... for the latter)
+			// but were only ever reached when target.Type() == TypeObject
+			// was already true - so neither call could ever actually
+			// match anything; both were dead code at this specific call
+			// site. getPropertyWithReceiver already handles every kind
+			// (including recursing through a further-nested Proxy) and
+			// already threads a receiver through any accessor/trap found
+			// along the way, exactly like the get-trap-call branch above
+			// does with *objVal - so this isn't a behavior change for the
+			// TypeObject/TypeDictObject/callable kinds that WERE already
+			// handled here, only an extension to the kinds that weren't.
+			result, err := vm.getPropertyWithReceiver(proxy.target, propName, *objVal)
+			if err != nil {
+				if ee, ok := err.(ExceptionError); ok {
+					if frame != nil && !frameWasNil {
+						frame.ip = ip - 4
+					}
+					vm.throwException(ee.GetExceptionValue())
+					if !vm.unwinding {
+						return false, InterpretOK, Undefined
+					}
+					return false, InterpretRuntimeError, Undefined
 				}
-				if result, handled := vm.handlePrimitiveMethod(target, propName); handled {
-					*dest = result
-					return true, InterpretOK, *dest
-				}
-				// Use enhanced property resolution with prototype caching and metadata
-				if holder, offset, isAccessor, found := vm.resolvePropertyMeta(target, propName, nil, 0); found {
-					if isAccessor {
-						if g, _, _, _, ok := holder.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
-							res, err := vm.Call(g, target, nil)
-							if err != nil {
-								if ee, ok := err.(ExceptionError); ok {
-									if frame != nil && !frameWasNil {
-										frame.ip = ip - 4
-									}
-									vm.throwException(ee.GetExceptionValue())
-									if !vm.unwinding {
-										return false, InterpretOK, Undefined
-									}
-									return false, InterpretRuntimeError, Undefined
-								}
-								var excVal Value
-								if errCtor, ok := vm.GetGlobal("Error"); ok {
-									if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-										excVal = res
-									} else {
-										eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-										eo.SetOwn("name", NewString("Error"))
-										eo.SetOwn("message", NewString(err.Error()))
-										excVal = NewValueFromPlainObject(eo)
-									}
-								} else {
-									eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-									eo.SetOwn("name", NewString("Error"))
-									eo.SetOwn("message", NewString(err.Error()))
-									excVal = NewValueFromPlainObject(eo)
-								}
-								if frame != nil && !frameWasNil {
-									frame.ip = ip - 4
-								}
-								vm.throwException(excVal)
-								if !vm.unwinding {
-									return false, InterpretOK, Undefined
-								}
-								return false, InterpretRuntimeError, Undefined
-							}
-							*dest = res
-						} else {
-							*dest = Undefined
-						}
+				var excVal Value
+				if errCtor, ok := vm.GetGlobal("Error"); ok {
+					if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+						excVal = res
 					} else {
-						*dest = holder.properties[offset]
+						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+						eo.SetOwn("name", NewString("Error"))
+						eo.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(eo)
 					}
-					return true, InterpretOK, *dest
-				}
-			} else if target.Type() == TypeDictObject {
-				dict := target.AsDictObject()
-				if fv, ok := dict.Get(propName); ok {
-					*dest = fv
 				} else {
-					*dest = Undefined
+					eo := NewObject(vm.ErrorPrototype).AsPlainObject()
+					eo.SetOwn("name", NewString("Error"))
+					eo.SetOwn("message", NewString(err.Error()))
+					excVal = NewValueFromPlainObject(eo)
 				}
-				return true, InterpretOK, *dest
-			} else if target.IsCallable() {
-				// Function target - look up properties from Function.prototype
-				// Function.prototype can be TypeNativeFunctionWithProps (common case)
-				// or TypeObject (less common)
-				if vm.FunctionPrototype.Type() == TypeNativeFunctionWithProps {
-					funcProto := vm.FunctionPrototype.AsNativeFunctionWithProps()
-					if v, ok := funcProto.Properties.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					// Walk prototype chain from Function.prototype.Properties
-					current := funcProto.Properties.GetPrototype()
-					for current.typ != TypeNull && current.typ != TypeUndefined {
-						if current.IsObject() {
-							if current.Type() == TypeObject {
-								proto := current.AsPlainObject()
-								if v, ok := proto.GetOwn(propName); ok {
-									*dest = v
-									return true, InterpretOK, *dest
-								}
-								current = proto.prototype
-							} else {
-								break
-							}
-						} else {
-							break
-						}
-					}
-				} else if vm.FunctionPrototype.IsObject() {
-					funcProto := vm.FunctionPrototype.AsPlainObject()
-					if v, ok := funcProto.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					// Walk prototype chain from Function.prototype
-					current := funcProto.prototype
-					for current.typ != TypeNull && current.typ != TypeUndefined {
-						if current.IsObject() {
-							if current.Type() == TypeObject {
-								proto := current.AsPlainObject()
-								if v, ok := proto.GetOwn(propName); ok {
-									*dest = v
-									return true, InterpretOK, *dest
-								}
-								current = proto.prototype
-							} else {
-								break
-							}
-						} else {
-							break
-						}
-					}
+				if frame != nil && !frameWasNil {
+					frame.ip = ip - 4
 				}
-				*dest = Undefined
-				return true, InterpretOK, *dest
-			} else {
-				*dest = Undefined
-				return true, InterpretOK, *dest
+				vm.throwException(excVal)
+				if !vm.unwinding {
+					return false, InterpretOK, Undefined
+				}
+				return false, InterpretRuntimeError, Undefined
 			}
+			*dest = result
+			return true, InterpretOK, *dest
 		}
 	}
 
