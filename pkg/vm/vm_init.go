@@ -1461,8 +1461,7 @@ func (vm *VM) getSymbolPropertyWithReceiver(obj Value, sym Value, receiver Value
 					return v, err
 				}
 			}
-			proto := Undefined
-			proto = regexObj.GetPrototype()
+			proto := regexObj.GetPrototype()
 			if !proto.IsObject() {
 				proto = vm.RegExpPrototype
 			}
