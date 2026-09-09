@@ -17460,6 +17460,43 @@ startExecution:
 						}
 					} else {
 						propName := key.ToString()
+						// Module Namespace Exotic Object [[Delete]] behavior (ECMAScript
+						// 10.4.6.8), string-key path. Mirrors OpDeleteProp's dot-notation
+						// dispatch (which had this check) - OpDeleteIndex's computed
+						// `delete ns[key]` lacked it entirely, so a non-configurable
+						// exported binding's delete silently "succeeded" instead of
+						// throwing TypeError (namespaces only exist in module context,
+						// which is always strict).
+						if po.IsModuleNamespace() {
+							if _, exists := po.GetOwn(propName); exists {
+								frame.ip = ip
+								vm.ThrowTypeError("Cannot delete property '" + propName + "' of [object Module]")
+								if !vm.unwinding {
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
+								if vm.unwindingCrossedNative || vm.frameCount == 0 {
+									return InterpretRuntimeError, vm.currentException
+								}
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							// Property doesn't exist in exports - delete succeeds
+							registers[destReg] = BooleanValue(true)
+							continue
+						}
 						// For GlobalObject, check the heap's configurable flag first
 						// Global var declarations are non-configurable (DontDelete) per ECMAScript
 						if po == vm.GlobalObject {
@@ -17496,6 +17533,37 @@ startExecution:
 									registers[destReg] = BooleanValue(false)
 									continue
 								}
+							}
+						}
+						// In strict mode, throw TypeError for non-configurable properties
+						// on regular objects. Mirrors OpDeleteProp's dot-notation dispatch,
+						// which already had this check for the computed-index path.
+						if function.Chunk.IsStrict {
+							exists, nonConfig := po.IsOwnPropertyNonConfigurable(propName)
+							if exists && nonConfig {
+								frame.ip = ip
+								vm.ThrowTypeError("Cannot delete property '" + propName + "' of #<Object>")
+								if !vm.unwinding {
+									frame = &vm.frames[vm.frameCount-1]
+									closure = frame.closure
+									function = closure.Fn
+									code = function.Chunk.Code
+									constants = function.Chunk.Constants
+									registers = frame.registers
+									ip = frame.ip
+									continue
+								}
+								if vm.unwindingCrossedNative || vm.frameCount == 0 {
+									return InterpretRuntimeError, vm.currentException
+								}
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
 							}
 						}
 						success = po.DeleteOwn(propName)
