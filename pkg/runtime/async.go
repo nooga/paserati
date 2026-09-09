@@ -55,6 +55,16 @@ type AsyncRuntime interface {
 	// Timer expiry goroutines only mark the timer due; callbacks run on the drain thread.
 	ScheduleTimer(delay time.Duration, callback func()) (id uint64)
 
+	// ScheduleUnrefTimer is ScheduleTimer's "doesn't keep the process alive"
+	// counterpart (mirrors Node's timer.unref()). While it's pending (not
+	// yet due), HasPendingTimers/HasPendingWork ignore it, so a drain loop
+	// with nothing else outstanding exits without waiting out its delay.
+	// If something else IS keeping the loop running when it becomes due
+	// (a pending external op, another ref'd timer, ...), it still fires
+	// normally - the exclusion only affects whether it can, by itself,
+	// justify waiting.
+	ScheduleUnrefTimer(delay time.Duration, callback func()) (id uint64)
+
 	// CancelTimer cancels a scheduled timer before it fires.
 	CancelTimer(id uint64)
 
@@ -78,6 +88,10 @@ type timerEntry struct {
 	id       uint64
 	deadline time.Time
 	callback func()
+	// unref: see ScheduleUnrefTimer. Only affects whether this entry counts
+	// toward hasPendingWorkLocked/HasPendingTimers while still pending -
+	// once it's due, it runs like any other timer regardless of this flag.
+	unref bool
 }
 
 // DefaultAsyncRuntime is a simple Go-based runtime with a microtask queue
@@ -243,6 +257,16 @@ func (rt *DefaultAsyncRuntime) RunMacrotasks() bool {
 
 // ScheduleTimer schedules a timer callback after delay.
 func (rt *DefaultAsyncRuntime) ScheduleTimer(delay time.Duration, callback func()) uint64 {
+	return rt.scheduleTimer(delay, callback, false)
+}
+
+// ScheduleUnrefTimer schedules a timer callback after delay that doesn't by
+// itself count as pending work. See the interface doc comment.
+func (rt *DefaultAsyncRuntime) ScheduleUnrefTimer(delay time.Duration, callback func()) uint64 {
+	return rt.scheduleTimer(delay, callback, true)
+}
+
+func (rt *DefaultAsyncRuntime) scheduleTimer(delay time.Duration, callback func(), unref bool) uint64 {
 	if delay < 0 {
 		delay = 0
 	}
@@ -255,6 +279,7 @@ func (rt *DefaultAsyncRuntime) ScheduleTimer(delay time.Duration, callback func(
 		id:       id,
 		deadline: deadline,
 		callback: callback,
+		unref:    unref,
 	}
 	rt.signalWaitersLocked()
 	rt.mu.Unlock()
@@ -316,11 +341,28 @@ func (rt *DefaultAsyncRuntime) RunDueTimers() bool {
 	return true
 }
 
-// HasPendingTimers returns true if timers are scheduled or due but not yet run.
+// HasPendingTimers returns true if a ref'd timer is scheduled or due but
+// not yet run. A still-pending unref'd timer (see ScheduleUnrefTimer) does
+// not count - once due, it's in dueTimers either way and counts there.
 func (rt *DefaultAsyncRuntime) HasPendingTimers() bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	return len(rt.timers) > 0 || len(rt.dueTimers) > 0
+	return rt.hasPendingRefTimersLocked()
+}
+
+// hasPendingRefTimersLocked reports whether there's a timer worth waiting
+// for: any due timer (ref'd or unref'd - it's ready now, no more waiting
+// needed to run it), or a not-yet-due timer that isn't unref'd.
+func (rt *DefaultAsyncRuntime) hasPendingRefTimersLocked() bool {
+	if len(rt.dueTimers) > 0 {
+		return true
+	}
+	for _, e := range rt.timers {
+		if !e.unref {
+			return true
+		}
+	}
+	return false
 }
 
 // HasPendingWork returns true if any async work remains.
@@ -334,8 +376,7 @@ func (rt *DefaultAsyncRuntime) hasPendingWorkLocked() bool {
 	return len(rt.nextTicks) > 0 ||
 		len(rt.microtasks) > 0 ||
 		len(rt.macrotasks) > 0 ||
-		len(rt.timers) > 0 ||
-		len(rt.dueTimers) > 0 ||
+		rt.hasPendingRefTimersLocked() ||
 		rt.pendingExternal > 0
 }
 

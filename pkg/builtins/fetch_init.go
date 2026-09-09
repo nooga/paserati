@@ -500,7 +500,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 							// Signal is already aborted - reject immediately without async
 							reason := "signal is aborted without reason"
 							if r, exists := signalObj.GetOwn("reason"); exists && r.Type() != vm.TypeUndefined {
-								reason = r.ToString()
+								reason = reasonToMessage(r)
 							}
 							promise := vmInstance.NewPendingPromise()
 							promiseObj := promise.AsPromise()
@@ -527,6 +527,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Extract signal for abort monitoring
 		var signalObj *vm.PlainObject
+		var signalValue vm.Value
 		if init.Type() != vm.TypeUndefined && init.Type() != vm.TypeNull {
 			var initObj interface {
 				GetOwn(string) (vm.Value, bool)
@@ -539,35 +540,37 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if initObj != nil {
 				if s, exists := initObj.GetOwn("signal"); exists && s.Type() == vm.TypeObject {
 					signalObj = s.AsPlainObject()
+					signalValue = s
 				}
 			}
 		}
 
-		// If we have a signal, set up abort monitoring
-		var abortOnce sync.Once
+		// If we have a signal, cancel the request's context the moment it
+		// fires "abort" - registered through the signal's own
+		// addEventListener, the same path user code would use, right here
+		// on this native call's own goroutine (fetch() itself always runs
+		// on the VM's goroutine; only the request below is backgrounded).
+		// abort() dispatches synchronously and always from that same VM
+		// goroutine too - directly from a script's controller.abort() call,
+		// or from a due timer's RunDueTimers callback (AbortSignal.timeout(),
+		// #374) - so this callback firing, and the SetOwn writes it
+		// triggers, never race this function's own background request
+		// goroutine. That's why this isn't a 10ms-poll of signalObj's
+		// properties from that goroutine like it used to be: GetOwn/SetOwn
+		// aren't synchronized for concurrent access, and polling from a
+		// second goroutine while abort() writes from this one was a real
+		// (if narrow) data race - `go test -race` catches it as soon as an
+		// abort can happen without user code on the VM goroutine ever
+		// observing it first, which is exactly what an async timer fire
+		// looks like.
 		if signalObj != nil {
-			// Start a goroutine to poll for abort
-			// This is a simple polling approach - a more sophisticated approach
-			// would use event listeners on the signal
-			go func() {
-				ticker := time.NewTicker(10 * time.Millisecond)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case <-ticker.C:
-						if aborted, exists := signalObj.GetOwn("aborted"); exists {
-							if aborted.IsBoolean() && aborted.AsBoolean() {
-								abortOnce.Do(func() {
-									cancel()
-								})
-								return
-							}
-						}
-					}
-				}
-			}()
+			if addListenerFn, exists := signalObj.GetOwn("addEventListener"); exists && addListenerFn.IsCallable() {
+				onAbort := vm.NewNativeFunction(1, false, "", func(_ []vm.Value) (vm.Value, error) {
+					cancel() // context.CancelFunc is idempotent; abort() itself only ever fires once anyway.
+					return vm.Undefined, nil
+				})
+				_, _ = vmInstance.Call(addListenerFn, signalValue, []vm.Value{vm.NewString("abort"), onAbort})
+			}
 		}
 
 		// Perform HTTP request asynchronously in a goroutine. On a response
@@ -599,7 +602,7 @@ func (f *FetchInitializer) InitRuntime(ctx *RuntimeContext) error {
 					reason := "The operation was aborted"
 					if signalObj != nil {
 						if r, exists := signalObj.GetOwn("reason"); exists && r.Type() != vm.TypeUndefined {
-							reason = r.ToString()
+							reason = reasonToMessage(r)
 						}
 					}
 					vmInstance.RejectPromise(promiseObj, newAbortErrorValue(vmInstance, reason))
@@ -1092,6 +1095,38 @@ func newErrorValueWithPrototype(proto vm.Value, name, message string) vm.Value {
 	return errVal
 }
 
+// reasonToMessage renders an AbortSignal's `reason` as a message string for
+// fetch()'s own synthesized AbortError. Every call site here runs off the
+// main VM goroutine (see newErrorValueWithPrototype above for why), which
+// rules out invoking a JS-level toString() to stringify an arbitrary
+// object reason - so an Error-shaped reason (an own "name"/"message" pair
+// of *data* properties, exactly what newErrorValueWithPrototype itself
+// builds - AbortController's default reason, AbortSignal.timeout()'s
+// TimeoutError, etc.) is rendered the way Error.prototype.toString would
+// ("name: message"), read directly via GetOwn rather than a getter call.
+// A string reason is used as-is; anything else falls back to
+// Value.ToString(), which degrades to "[object Object]" for an arbitrary
+// non-Error object reason - the same unhelpful-but-harmless default a bare
+// Error()'s toString would give for a message that isn't a string.
+func reasonToMessage(reason vm.Value) string {
+	if reason.Type() == vm.TypeObject {
+		obj := reason.AsPlainObject()
+		nameVal, hasName := obj.GetOwn("name")
+		msgVal, hasMsg := obj.GetOwn("message")
+		if hasName || hasMsg {
+			name := "Error"
+			if hasName && nameVal.Type() == vm.TypeString {
+				name = nameVal.ToString()
+			}
+			if hasMsg && msgVal.Type() == vm.TypeString && msgVal.ToString() != "" {
+				return name + ": " + msgVal.ToString()
+			}
+			return name
+		}
+	}
+	return reason.ToString()
+}
+
 // newAbortErrorValue builds a real Error instance (name "AbortError") so a
 // fetch() abort rejects with an actual Error object rather than a bare
 // string (#214) - there is no DOMException in this runtime to construct
@@ -1159,7 +1194,6 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 	method := "GET"
 	headers := &FetchHeaders{headers: make(http.Header)}
 	var body io.Reader
-	var abortSignal *AbortSignal
 	redirectMode := "follow" // "follow", "error", "manual"
 
 	// Parse init options if provided
@@ -1213,23 +1247,19 @@ func doFetchRequestWithContext(ctx context.Context, cancel context.CancelFunc, r
 				}
 			}
 
-			// Signal (AbortSignal)
-			if s, exists := initObj.GetOwn("signal"); exists && s.Type() == vm.TypeObject {
-				signalObj := s.AsPlainObject()
-				// Check if signal is already aborted
-				if aborted, exists := signalObj.GetOwn("aborted"); exists {
-					if aborted.IsBoolean() && aborted.AsBoolean() {
-						reason := vm.NewString("AbortError: signal is aborted without reason")
-						if r, exists := signalObj.GetOwn("reason"); exists && r.Type() != vm.TypeUndefined {
-							reason = r
-						}
-						return &AbortError{Message: reason.ToString()}
-					}
-				}
-				// Store reference for potential future abort (would need more infrastructure)
-				abortSignal = &AbortSignal{aborted: false}
-				_ = abortSignal // Avoid unused variable warning
-			}
+			// Signal (AbortSignal): deliberately *not* re-checked here. This
+			// function runs on its own background goroutine (see the call
+			// site's doc comment), and "signal" is one of the exposed
+			// AbortSignal JS properties fetchFn's own addEventListener
+			// registration (in InitRuntime, before this goroutine was even
+			// started) already races safely - re-reading signalObj.GetOwn
+			// here instead, unsynchronized against a concurrent abort()'s
+			// SetOwn, used to be a real (if narrow) data race (#374).
+			// Both cases are already handled correctly elsewhere: an
+			// already-aborted signal is caught synchronously before this
+			// goroutine is ever spawned, and a concurrent/later abort
+			// cancels ctx (via that addEventListener registration), which
+			// client.Do below turns into an AbortError through ctx.Err().
 
 			// Redirect mode
 			if r, exists := initObj.GetOwn("redirect"); exists && r.Type() == vm.TypeString {
