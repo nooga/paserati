@@ -1501,6 +1501,31 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 		// case can see it) - this case just never called it.
 		arrObj := base.AsArray()
 		if sym := symKey.AsSymbolObject(); sym != nil {
+			// A symbol-keyed accessor defined via Object.defineProperty(arr,
+			// sym, {get, set}) takes priority over the plain symbolProps
+			// value, mirroring the named-property read path (GetOwnAccessor
+			// consulted before a plain element/property) - see
+			// ArrayObject.GetOwnSymbolAccessor and
+			// ArrayDefineOwnSymbolProperty (array_props.go).
+			if arrObj.HasSymbolAccessors() {
+				if getter, _, _, _, ok := arrObj.GetOwnSymbolAccessor(sym); ok {
+					if getter.Type() == TypeUndefined {
+						*dest = Undefined
+						return true, InterpretOK, *dest
+					}
+					res, err := vm.Call(getter, base, nil)
+					if err != nil {
+						if ee, ok := err.(ExceptionError); ok {
+							vm.throwException(ee.GetExceptionValue())
+							return false, InterpretRuntimeError, Undefined
+						}
+						vm.ThrowTypeError(err.Error())
+						return false, InterpretRuntimeError, Undefined
+					}
+					*dest = res
+					return true, InterpretOK, *dest
+				}
+			}
 			if v, ok := arrObj.GetSymbolProp(sym); ok {
 				*dest = v
 				return true, InterpretOK, *dest

@@ -17096,13 +17096,24 @@ startExecution:
 				// numeric index's configurability comes from the array-wide
 				// `frozen` flag rather than a per-element bit.
 				arr := obj.AsArray()
-				keyStr := key.ToString()
-				if idx, isNumeric := tryParseArrayIndex(keyStr); isNumeric {
-					success = arr.DeleteIndex(idx)
-				} else if key.Type() != TypeSymbol {
-					success = arr.DeleteOwn(keyStr)
+				if key.Type() == TypeSymbol {
+					// Symbol-keyed properties can now be explicitly defined
+					// non-configurable via Object.defineProperty (see
+					// ArrayDefineOwnSymbolProperty, array_props.go) - route
+					// through DeleteSymbolProp so a `delete arr[sym]` both
+					// respects that and actually removes the entry (data,
+					// accessor, and descriptor alike) rather than
+					// unconditionally reporting success while leaving the
+					// property in place, which used to be safe only because
+					// every symbol property was implicitly configurable.
+					success = arr.DeleteSymbolProp(key.AsSymbolObject())
 				} else {
-					success = true
+					keyStr := key.ToString()
+					if idx, isNumeric := tryParseArrayIndex(keyStr); isNumeric {
+						success = arr.DeleteIndex(idx)
+					} else {
+						success = arr.DeleteOwn(keyStr)
+					}
 				}
 			} else if obj.Type() == TypeString {
 				// String primitives: indices within length are non-configurable
