@@ -83,7 +83,7 @@ func (f *FetchInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("type", types.String).
 		WithProperty("text", types.NewSimpleFunction([]types.Type{}, types.Any)).        // Returns Promise<string>
 		WithProperty("json", types.NewSimpleFunction([]types.Type{}, types.Any)).        // Returns Promise<any>
-		WithProperty("blob", types.NewSimpleFunction([]types.Type{}, types.Any)).        // Returns Promise<Uint8Array>
+		WithProperty("blob", types.NewSimpleFunction([]types.Type{}, types.Any)).        // Returns Promise<Blob>
 		WithProperty("arrayBuffer", types.NewSimpleFunction([]types.Type{}, types.Any)). // Returns Promise<ArrayBuffer>
 		WithProperty("bytes", types.NewSimpleFunction([]types.Type{}, types.Any)).       // Returns Promise<Uint8Array>
 		WithProperty("clone", types.NewSimpleFunction([]types.Type{}, types.Any))        // Returns Response
@@ -1058,15 +1058,16 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 		}), nil
 	}))
 
-	// blob() -> Promise<Uint8Array>
+	// blob() -> Promise<Blob>
 	obj.SetOwnNonEnumerable("blob", vm.NewNativeFunction(0, false, "blob", func(args []vm.Value) (vm.Value, error) {
 		if r.bodyUsed {
 			return vmInstance.NewRejectedPromise(vm.NewString("body already used")), nil
 		}
 		r.bodyUsed = true
 		obj.SetOwn("bodyUsed", vm.True)
+		mimeType := blobTypeFromContentType(r.Headers.headers.Get("Content-Type"))
 		return drainBody(func(data []byte) (vm.Value, error) {
-			return bytesToValue(data), nil
+			return NewBlobValue(vmInstance, data, mimeType), nil
 		}), nil
 	}))
 
@@ -1204,13 +1205,25 @@ func newTypeError(vmInstance *vm.VM, message string) error {
 	return vmInstance.NewExceptionError(newTypeErrorValue(vmInstance, message))
 }
 
-// bytesToValue wraps raw bytes as a Uint8Array, the representation blob()/
-// bytes() resolve to.
+// bytesToValue wraps raw bytes as a Uint8Array, the representation bytes()
+// resolves to (blob() resolves to a real Blob - see NewBlobValue).
 func bytesToValue(data []byte) vm.Value {
 	arrayBufferValue := vm.NewArrayBuffer(len(data))
 	buffer := arrayBufferValue.AsArrayBuffer()
 	copy(buffer.GetData(), data)
 	return vm.NewTypedArray(vm.TypedArrayUint8, buffer, 0, -1)
+}
+
+// blobTypeFromContentType approximates the Fetch spec's Body.blob() "get the
+// MIME type" step: the MIME essence - type/subtype, without any
+// ";charset=..." parameters - lowercased, or "" if the header is absent.
+// Unlike the spec, this doesn't validate the essence as a real MIME type
+// (e.g. a garbage header like "not-a-mime-type" passes through unchanged
+// instead of yielding ""); good enough for undici's instanceof-based
+// Blob-shape checks without a full MIME parser.
+func blobTypeFromContentType(contentType string) string {
+	essence := strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])
+	return strings.ToLower(essence)
 }
 
 // doFetchRequestWithContext performs the HTTP request with context support
@@ -1686,15 +1699,12 @@ func createRequestObject(vmInstance *vm.VM, req *FetchRequest, _ *vm.PlainObject
 		req.bodyUsed = true
 		obj.SetOwn("bodyUsed", vm.True)
 
+		mimeType := blobTypeFromContentType(req.Headers.headers.Get("Content-Type"))
 		if req.body == nil {
-			return vmInstance.NewResolvedPromise(vm.NewArrayBuffer(0)), nil
+			return vmInstance.NewResolvedPromise(NewBlobValue(vmInstance, nil, mimeType)), nil
 		}
 
-		arrayBuffer := vm.NewArrayBuffer(len(req.body))
-		buf := arrayBuffer.AsArrayBuffer()
-		copy(buf.GetData(), req.body)
-		uint8Array := vm.NewTypedArray(vm.TypedArrayUint8, buf, 0, -1)
-		return vmInstance.NewResolvedPromise(uint8Array), nil
+		return vmInstance.NewResolvedPromise(NewBlobValue(vmInstance, req.body, mimeType)), nil
 	}))
 
 	// json() -> Promise<any>
