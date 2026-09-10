@@ -30,7 +30,8 @@ func (f *FormDataInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithProperty("values", types.NewSimpleFunction([]types.Type{}, types.Any)).
-		WithProperty("forEach", types.NewSimpleFunction([]types.Type{types.Any}, types.Undefined))
+		WithProperty("forEach", types.NewSimpleFunction([]types.Type{types.Any}, types.Undefined)).
+		WithProperty("constructor", types.Any) // Avoid circular reference, use Any for constructor property
 
 	// FormData constructor type
 	formDataConstructorType := types.NewObjectType().
@@ -51,7 +52,7 @@ func (f *FormDataInitializer) InitRuntime(ctx *RuntimeContext) error {
 		fd := &FormData{
 			entries: make([]FormDataEntry, 0),
 		}
-		return createFormDataObject(vmInstance, fd, formDataProto), nil
+		return createFormDataObject(vmInstance, fd, vm.NewValueFromPlainObject(formDataProto)), nil
 	}
 
 	formDataConstructor := vm.NewConstructorWithProps(0, false, "FormData", formDataConstructorFn)
@@ -77,8 +78,23 @@ type FormData struct {
 	entries []FormDataEntry
 }
 
-func createFormDataObject(vmInstance *vm.VM, fd *FormData, _ *vm.PlainObject) vm.Value {
-	obj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+// NewFormDataValue constructs a real FormData instance - correct
+// instanceof/constructor/prototype chain (mirrors NewBlobValue, #395) -
+// from an already-populated *FormData. Other builtins that need to hand
+// back a spec-correct FormData (e.g. Request/Response.formData(), #397)
+// should use this instead of building the object by hand.
+func NewFormDataValue(vmInstance *vm.VM, fd *FormData) vm.Value {
+	proto := vmInstance.ObjectPrototype
+	if ctor, ok := vmInstance.GetGlobal("FormData"); ok && ctor.Type() == vm.TypeNativeFunctionWithProps {
+		if p, exists := ctor.AsNativeFunctionWithProps().Properties.GetOwn("prototype"); exists {
+			proto = p
+		}
+	}
+	return createFormDataObject(vmInstance, fd, proto)
+}
+
+func createFormDataObject(vmInstance *vm.VM, fd *FormData, proto vm.Value) vm.Value {
+	obj := vm.NewObject(proto).AsPlainObject()
 
 	// append(name, value) or append(name, blob, filename)
 	obj.SetOwnNonEnumerable("append", vm.NewNativeFunction(3, false, "append", func(args []vm.Value) (vm.Value, error) {
