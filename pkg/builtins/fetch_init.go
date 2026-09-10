@@ -86,6 +86,7 @@ func (f *FetchInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("blob", types.NewSimpleFunction([]types.Type{}, types.Any)).        // Returns Promise<Blob>
 		WithProperty("arrayBuffer", types.NewSimpleFunction([]types.Type{}, types.Any)). // Returns Promise<ArrayBuffer>
 		WithProperty("bytes", types.NewSimpleFunction([]types.Type{}, types.Any)).       // Returns Promise<Uint8Array>
+		WithProperty("formData", types.NewSimpleFunction([]types.Type{}, types.Any)).    // Returns Promise<FormData>
 		WithProperty("clone", types.NewSimpleFunction([]types.Type{}, types.Any))        // Returns Response
 
 	// ResponseInit type
@@ -1085,6 +1086,19 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 		}), nil
 	}))
 
+	// formData() -> Promise<FormData> (#397)
+	obj.SetOwnNonEnumerable("formData", vm.NewNativeFunction(0, false, "formData", func(args []vm.Value) (vm.Value, error) {
+		if r.bodyUsed {
+			return vmInstance.NewRejectedPromise(vm.NewString("body already used")), nil
+		}
+		r.bodyUsed = true
+		obj.SetOwn("bodyUsed", vm.True)
+		contentType := r.Headers.headers.Get("Content-Type")
+		return drainBody(func(data []byte) (vm.Value, error) {
+			return parseMultipartFormData(vmInstance, contentType, data)
+		}), nil
+	}))
+
 	// bytes() -> Promise<Uint8Array> (same as blob, but standard name)
 	obj.SetOwnNonEnumerable("bytes", vm.NewNativeFunction(0, false, "bytes", func(args []vm.Value) (vm.Value, error) {
 		if r.bodyUsed {
@@ -1740,9 +1754,19 @@ func createRequestObject(vmInstance *vm.VM, req *FetchRequest, _ *vm.PlainObject
 		return vmInstance.NewResolvedPromise(vm.NewString(string(req.body))), nil
 	}))
 
-	// formData() -> Promise<FormData> (stub - would need FormData parsing)
+	// formData() -> Promise<FormData> (#397)
 	obj.SetOwnNonEnumerable("formData", vm.NewNativeFunction(0, false, "formData", func(args []vm.Value) (vm.Value, error) {
-		return vmInstance.NewRejectedPromise(vm.NewString("formData() parsing not yet implemented")), nil
+		if req.bodyUsed {
+			return vmInstance.NewRejectedPromise(vm.NewString("body already used")), nil
+		}
+		req.bodyUsed = true
+		obj.SetOwn("bodyUsed", vm.True)
+
+		fdValue, err := parseMultipartFormData(vmInstance, req.Headers.headers.Get("Content-Type"), req.body)
+		if err != nil {
+			return vmInstance.NewRejectedPromise(vm.NewString(err.Error())), nil
+		}
+		return vmInstance.NewResolvedPromise(fdValue), nil
 	}))
 
 	return vm.NewValueFromPlainObject(obj)
