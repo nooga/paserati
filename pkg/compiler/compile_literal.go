@@ -1272,7 +1272,12 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	// If node.Name differs from nameHint or nameHint is empty, it's a named expression
 	var funcNameForInnerBinding string
 	var needsInnerNameBinding bool
-	if node.Name != nil {
+	// Methods (isMethod=true) never get an inner self-binding: node.Name for a method
+	// is a display name synthesized from its PropertyName for the function's own .name
+	// property, not a real BindingIdentifier (#204, #389). Only genuine named function
+	// expressions create the "the name refers to the function itself inside its body"
+	// binding.
+	if node.Name != nil && !isMethod {
 		// Check if this is a named function expression (not a declaration)
 		if nameHint == "" || nameHint != node.Name.Value {
 			// This is a named function expression - create inner binding
