@@ -52,12 +52,15 @@ func (t *TextEncoderInitializer) InitRuntime(ctx *RuntimeContext) error {
 			input = args[0].ToString()
 		}
 		data := []byte(input)
-		arr := vm.NewArray()
-		arrObj := arr.AsArray()
-		for _, b := range data {
-			arrObj.Append(vm.NumberValue(float64(b)))
-		}
-		return arr, nil
+		// Per spec, TextEncoder.prototype.encode() returns a real Uint8Array,
+		// not a plain array of byte values - callers routinely branch on
+		// .byteLength (e.g. undici's extractBody guards enqueue() with
+		// `if (buffer.byteLength)`), which is undefined (falsy) on a plain
+		// Array and silently drops/hangs every such stream (#393).
+		bufVal := vm.NewArrayBuffer(len(data))
+		backing := bufVal.AsArrayBuffer()
+		copy(backing.GetData(), data)
+		return vm.NewTypedArray(vm.TypedArrayUint8, backing, 0, -1), nil
 	}))
 
 	ctor := vm.NewNativeFunction(0, true, "TextEncoder", func(args []vm.Value) (vm.Value, error) {
@@ -152,8 +155,10 @@ func (t *TextDecoderInitializer) InitRuntime(ctx *RuntimeContext) error {
 			ab := input.AsArrayBuffer()
 			return vm.NewString(string(ab.GetData())), nil
 		case vm.TypeArray:
-			// Not a real BufferSource, but TextEncoder.encode() here still
-			// returns a plain array of byte values - keep decoding those.
+			// Not a real BufferSource. TextEncoder.encode() no longer returns
+			// one of these (#393 - it returns a real Uint8Array now), but
+			// decode() stays lenient for any other plain array of byte values
+			// a caller might hand it.
 			arrObj := input.AsArray()
 			bytes := make([]byte, arrObj.Length())
 			for i := 0; i < arrObj.Length(); i++ {
