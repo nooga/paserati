@@ -1267,7 +1267,7 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 
 	// Step 1: Handle toJSON method if present (objects, arrays, proxies, and BigInt)
 	// Per ECMAScript spec: If Type(value) is Object or BigInt, check for toJSON
-	if value.Type() == vm.TypeObject || value.Type() == vm.TypeDictObject || value.Type() == vm.TypeArray || value.Type() == vm.TypeProxy || value.Type() == vm.TypeBigInt {
+	if value.Type() == vm.TypeObject || value.Type() == vm.TypeDictObject || value.Type() == vm.TypeArray || value.Type() == vm.TypeProxy || value.Type() == vm.TypeBigInt || value.Type() == vm.TypeTypedArray {
 		var toJSON vm.Value
 		var err error
 
@@ -1450,6 +1450,83 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 			result += elemJSON
 		}
 		result += "]"
+		return result, nil
+	case vm.TypeTypedArray:
+		// TypedArrays are Integer-Indexed exotic objects: serialize like a
+		// plain object keyed by their indices ({"0":1,"1":2,...}), per spec
+		// SerializeJSONObject over [[OwnPropertyKeys]] (toJSON is handled
+		// above). A replacer's propertyList (if given) picks the key set,
+		// same as for a plain object - it is not limited to valid indices.
+		ta := value.AsTypedArray()
+		if ta == nil {
+			return "null", nil
+		}
+
+		var keys []string
+		if propertyList != nil {
+			keys = propertyList
+		} else {
+			length := ta.GetLength()
+			keys = make([]string, length)
+			for i := 0; i < length; i++ {
+				keys[i] = strconv.Itoa(i)
+			}
+		}
+
+		getElem := func(key string) vm.Value {
+			if vmInstance != nil {
+				v, err := vmInstance.GetProperty(value, key)
+				if err == nil {
+					return v
+				}
+				return vm.Undefined
+			}
+			if idx, err := strconv.Atoi(key); err == nil && idx >= 0 && idx < ta.GetLength() {
+				return ta.GetElement(idx)
+			}
+			return vm.Undefined
+		}
+
+		if gap != "" {
+			stepIndent := indent + gap
+			result := "{"
+			first := true
+			for _, elemKey := range keys {
+				elemJSON, err := stringifyValueToJSONWithVisited(vmInstance, getElem(elemKey), visited, gap, stepIndent, elemKey, value, replacerFunc, propertyList)
+				if err != nil {
+					return "", err
+				}
+				if elemJSON != "" {
+					if !first {
+						result += ","
+					}
+					first = false
+					result += "\n" + stepIndent + "\"" + elemKey + "\": " + elemJSON
+				}
+			}
+			if !first {
+				result += "\n" + indent
+			}
+			result += "}"
+			return result, nil
+		}
+
+		result := "{"
+		first := true
+		for _, elemKey := range keys {
+			elemJSON, err := stringifyValueToJSONWithVisited(vmInstance, getElem(elemKey), visited, gap, indent, elemKey, value, replacerFunc, propertyList)
+			if err != nil {
+				return "", err
+			}
+			if elemJSON != "" {
+				if !first {
+					result += ","
+				}
+				first = false
+				result += "\"" + elemKey + "\":" + elemJSON
+			}
+		}
+		result += "}"
 		return result, nil
 	case vm.TypeRegExp:
 		// RegExp objects serialize as empty objects {}
