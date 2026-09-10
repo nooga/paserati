@@ -101,6 +101,24 @@ func (b *BlobInitializer) InitRuntime(ctx *RuntimeContext) error {
 	return ctx.DefineGlobal("Blob", blobConstructor)
 }
 
+// NewBlobValue constructs a real Blob instance - correct instanceof,
+// constructor, and prototype chain (#395) - from raw bytes. Other builtins
+// that need to hand back a spec-correct Blob rather than a bare
+// Uint8Array/ArrayBuffer (e.g. fetch's Body.blob()) should use this instead
+// of building the object by hand.
+func NewBlobValue(vmInstance *vm.VM, data []byte, mimeType string) vm.Value {
+	blob := &Blob{data: data, mimeType: mimeType}
+
+	proto := vmInstance.ObjectPrototype
+	if ctor, ok := vmInstance.GetGlobal("Blob"); ok && ctor.Type() == vm.TypeNativeFunctionWithProps {
+		if p, exists := ctor.AsNativeFunctionWithProps().Properties.GetOwn("prototype"); exists {
+			proto = p
+		}
+	}
+
+	return createBlobObject(vmInstance, blob, proto)
+}
+
 // Blob represents binary data with a MIME type
 type Blob struct {
 	data     []byte
