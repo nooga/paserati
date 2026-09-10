@@ -512,6 +512,26 @@ func NumericTypedArrayCtorBody(vmInstance *vm.VM, ek TypedArrayElementKind) func
 			}
 			return applyGPFCPrototype(vm.NewTypedArray(kind, vals, 0, 0), proto), nil
 		}
+		if srcTA := arg.AsTypedArray(); srcTA != nil {
+			// %TypedArray%(typedArray): copy/reinterpret the source's
+			// elements into a freshly allocated typed array of this kind.
+			// Per InitializeTypedArrayFromTypedArray: source and target must
+			// agree on BigInt-ness (Number and BigInt content types never mix).
+			srcIsBigInt := srcTA.GetElementType() == vm.TypedArrayBigInt64 || srcTA.GetElementType() == vm.TypedArrayBigUint64
+			if srcIsBigInt != ek.IsBigInt {
+				return vm.Undefined, vmInstance.NewTypeError("Cannot mix BigInt and other types, use explicit conversions")
+			}
+			proto, err := TypedArrayGPFC(vmInstance, protoName)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			srcLen := srcTA.GetLength()
+			vals := make([]vm.Value, srcLen)
+			for i := 0; i < srcLen; i++ {
+				vals[i] = ek.coerceElement(srcTA.GetElement(i))
+			}
+			return applyGPFCPrototype(vm.NewTypedArray(kind, vals, 0, 0), proto), nil
+		}
 		if arg.IsObject() {
 			proto, err := TypedArrayGPFC(vmInstance, protoName)
 			if err != nil {
