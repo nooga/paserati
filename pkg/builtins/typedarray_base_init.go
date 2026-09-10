@@ -156,6 +156,8 @@ func (i *TypedArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance.TypedArrayConstructor = typedArrayCtor
 
 	// Register TypedArray constructor as global
+	defineSpeciesAccessor(vmInstance, typedArrayCtor.AsNativeFunctionWithProps().Properties)
+
 	return ctx.DefineGlobal("TypedArray", typedArrayCtor)
 }
 

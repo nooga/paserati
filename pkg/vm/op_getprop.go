@@ -825,58 +825,22 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 
 	// 10a. WeakMap objects - consult WeakMap.prototype chain for properties like get, set, has, delete
 	if objVal.Type() == TypeWeakMap {
-		proto := vm.WeakMapPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk the prototype chain
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					cpo := current.AsPlainObject()
-					if v, ok := cpo.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					current = cpo.prototype
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// The instance's own [[Prototype]] (a subclass's, when one was
+		// installed) rather than the hardcoded intrinsic, and a walk that
+		// invokes accessors - see finishProtoChainGet. The hand-rolled walk
+		// this replaces did neither, so `class S extends WeakMap {}` could reach
+		// none of S.prototype's methods or getters.
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 10b. WeakSet objects - consult WeakSet.prototype chain for properties like add, has, delete
 	if objVal.Type() == TypeWeakSet {
-		proto := vm.WeakSetPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk the prototype chain
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					cpo := current.AsPlainObject()
-					if v, ok := cpo.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					current = cpo.prototype
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// The instance's own [[Prototype]] (a subclass's, when one was
+		// installed) rather than the hardcoded intrinsic, and a walk that
+		// invokes accessors - see finishProtoChainGet. The hand-rolled walk
+		// this replaces did neither, so `class S extends WeakSet {}` could reach
+		// none of S.prototype's methods or getters.
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 10b'. WeakRef objects - consult the instance's stored prototype (set by
@@ -956,30 +920,12 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			}
 		}
 		// Then check prototype chain
-		proto := vm.SharedArrayBufferPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk the prototype chain
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					cpo := current.AsPlainObject()
-					if v, ok := cpo.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					current = cpo.prototype
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// The instance's own [[Prototype]] (a subclass's, when one was
+		// installed) rather than the hardcoded intrinsic, and a walk that
+		// invokes accessors - see finishProtoChainGet. The hand-rolled walk
+		// this replaces did neither, so `class S extends SharedArrayBuffer {}` could reach
+		// none of S.prototype's methods or getters.
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 10d. ArrayBuffer objects - check own properties first, then prototype chain
@@ -993,59 +939,23 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			}
 		}
 		// Then check prototype chain
-		proto := vm.ArrayBufferPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk the prototype chain
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					cpo := current.AsPlainObject()
-					if v, ok := cpo.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					current = cpo.prototype
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// The instance's own [[Prototype]] (a subclass's, when one was
+		// installed) rather than the hardcoded intrinsic, and a walk that
+		// invokes accessors - see finishProtoChainGet. The hand-rolled walk
+		// this replaces did neither, so `class S extends ArrayBuffer {}` could reach
+		// none of S.prototype's methods or getters.
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 10e. DataView objects - check own properties first, then prototype chain
 	if objVal.Type() == TypeDataView {
 		// Then check prototype chain
-		proto := vm.DataViewPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk the prototype chain
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					cpo := current.AsPlainObject()
-					if v, ok := cpo.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					current = cpo.prototype
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// The instance's own [[Prototype]] (a subclass's, when one was
+		// installed) rather than the hardcoded intrinsic, and a walk that
+		// invokes accessors - see finishProtoChainGet. The hand-rolled walk
+		// this replaces did neither, so `class S extends DataView {}` could reach
+		// none of S.prototype's methods or getters.
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 11. Generator objects
@@ -1129,34 +1039,13 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				return true, InterpretOK, *dest
 			}
 		}
-		// Check RegExp.prototype for inherited methods
-		if vm.RegExpPrototype.Type() == TypeObject {
-			proto := vm.RegExpPrototype.AsPlainObject()
-			if v, ok := proto.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk prototype chain to Object.prototype
-			current := proto.GetPrototype()
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						p := current.AsPlainObject()
-						if v, ok := p.GetOwn(propName); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = p.GetPrototype()
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// The instance's own [[Prototype]] rather than the hardcoded
+		// RegExp.prototype, and a walk that invokes accessors - see
+		// finishProtoChainGet. This is what makes `class S extends RegExp {}`
+		// reach S.prototype's methods, and (per spec) lets
+		// String.prototype.replace/match/split dispatch through a subclass's
+		// own `exec` override.
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 13. Proxy objects - delegate to handler
@@ -1508,38 +1397,15 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	case TypeTypedArray:
-		// TypedArrays: consult appropriate TypedArray.prototype chain for symbol properties
-		var proto Value
-		ta := base.AsTypedArray()
-		switch ta.GetElementType() {
-		case TypedArrayInt8:
-			proto = vm.Int8ArrayPrototype
-		case TypedArrayUint8:
-			proto = vm.Uint8ArrayPrototype
-		case TypedArrayUint8Clamped:
-			proto = vm.Uint8ClampedArrayPrototype
-		case TypedArrayInt16:
-			proto = vm.Int16ArrayPrototype
-		case TypedArrayUint16:
-			proto = vm.Uint16ArrayPrototype
-		case TypedArrayInt32:
-			proto = vm.Int32ArrayPrototype
-		case TypedArrayUint32:
-			proto = vm.Uint32ArrayPrototype
-		case TypedArrayFloat16:
-			proto = vm.Float16ArrayPrototype
-		case TypedArrayFloat32:
-			proto = vm.Float32ArrayPrototype
-		case TypedArrayFloat64:
-			proto = vm.Float64ArrayPrototype
-		case TypedArrayBigInt64:
-			proto = vm.BigInt64ArrayPrototype
-		case TypedArrayBigUint64:
-			proto = vm.BigUint64ArrayPrototype
-		default:
-			proto = vm.TypedArrayPrototype // fallback to base TypedArray prototype
-		}
-		if proto.IsObject() {
+		// TypedArrays: consult the TypedArray.prototype chain for symbol
+		// properties. vm.PrototypeOf rather than a local element-type switch so
+		// a subclass instance's per-instance [[Prototype]] override wins - see
+		// getPropertyWithReceiver's TypeTypedArray case (pkg/vm/vm_init.go).
+		proto := vm.PrototypeOf(base)
+		// Type() == TypeObject, not IsObject(): the latter admits Proxy and
+		// DictObject, which AsPlainObject cannot represent - see
+		// getPropertyWithReceiver's TypePromise case (pkg/vm/vm_init.go).
+		if proto.Type() == TypeObject {
 			po := proto.AsPlainObject()
 			symKeyVal := NewSymbolKey(symKey)
 			// Check for accessor property first
@@ -2164,206 +2030,24 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 		return true, InterpretOK, *dest
 	}
 
-	// Function objects: check own symbol properties, then Function.prototype chain
-	if base.Type() == TypeFunction {
-		funcObj := base.AsFunction()
-		key := NewSymbolKey(symKey)
-		// Check own properties first
-		if funcObj.Properties != nil {
-			if v, ok := funcObj.Properties.GetOwnByKey(key); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-		}
-		// Walk Function.prototype chain
-		// Function.prototype is TypeNativeFunctionWithProps, so handle that type too
-		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
-			*dest = v
-			return true, InterpretOK, *dest
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	}
-
-	// Closure objects: check own symbol properties, then Function.prototype chain
-	if base.Type() == TypeClosure {
-		closure := base.AsClosure()
-		key := NewSymbolKey(symKey)
-		// Check own properties first
-		if closure.Properties != nil {
-			if v, ok := closure.Properties.GetOwnByKey(key); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-		}
-		// Walk Function.prototype chain
-		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
-			*dest = v
-			return true, InterpretOK, *dest
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	}
-
-	// NativeFunctionWithProps: check own symbol properties, then prototype chain
-	if base.Type() == TypeNativeFunctionWithProps {
-		nfp := base.AsNativeFunctionWithProps()
-		key := NewSymbolKey(symKey)
-		if nfp.Properties != nil {
-			if v, ok := nfp.Properties.GetOwnByKey(key); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk prototype chain from Properties
-			if found, v := vm.lookupSymbolOnProtoChain(nfp.Properties.GetPrototype(), key); found {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	}
-
-	// NativeFunction: check own symbol properties (accessor first, mirroring
-	// TypeObject's GetOwnAccessorByKey-then-GetOwnByKey pattern above and
-	// this same TypeNativeFunction kind's string-key equivalent in
-	// opGetProp's block 3b), then Function.prototype chain.
+	// Callable objects (plain functions, closures, native functions, bound
+	// functions and the property-carrying built-in constructors) all resolve a
+	// symbol key the same way: own properties first, then the real
+	// [[Prototype]] chain, invoking any accessor's getter with this = base.
 	//
-	// This case didn't exist at all before this fix, so a symbol-keyed own
-	// property - even a plain data one - set via bracket-notation
-	// assignment or Object.defineProperty always fell through to the
-	// DictObject default below and read back as undefined, even though
-	// Object.getOwnPropertyDescriptor already showed it existed correctly.
-	//
-	// The accessor check specifically was added after review flagged an
-	// asymmetry a first pass introduced: opGetProp's block 3b (string keys,
-	// same TypeNativeFunction kind) invokes an own accessor's getter, so
-	// leaving this symbol-key sibling without one would have made
-	// `nf.custom` call the getter while `nf[sym]` did not, on the very
-	// same value in the same commit - worse than the pre-fix state of
-	// "symbol keys don't work at all". TypeFunction/TypeClosure/
-	// TypeBoundFunction/TypeNativeFunctionWithProps above still lack this
-	// (none of those four invoke a symbol-key accessor's getter; TypeObject,
-	// separately, already does - see its own case earlier in this
-	// function), so that remains a real, separate, still-open gap.
-	if base.Type() == TypeNativeFunction {
-		nf := base.AsNativeFunction()
-		key := NewSymbolKey(symKey)
-		if nf.Properties != nil {
-			if g, _, _, _, ok := nf.Properties.GetOwnAccessorByKey(key); ok {
-				if g.Type() != TypeUndefined {
-					res, err := vm.Call(g, base, nil)
-					if err != nil {
-						if ee, ok := err.(ExceptionError); ok {
-							if frame != nil && !frameWasNil {
-								frame.ip = ip - 4
-							}
-							vm.throwException(ee.GetExceptionValue())
-							if !vm.unwinding {
-								return false, InterpretOK, Undefined
-							}
-							return false, InterpretRuntimeError, Undefined
-						}
-						var excVal Value
-						if errCtor, ok := vm.GetGlobal("Error"); ok {
-							if res2, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-								excVal = res2
-							} else {
-								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-								eo.SetOwn("name", NewString("Error"))
-								eo.SetOwn("message", NewString(err.Error()))
-								excVal = NewValueFromPlainObject(eo)
-							}
-						} else {
-							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-							eo.SetOwn("name", NewString("Error"))
-							eo.SetOwn("message", NewString(err.Error()))
-							excVal = NewValueFromPlainObject(eo)
-						}
-						if frame != nil && !frameWasNil {
-							frame.ip = ip - 4
-						}
-						vm.throwException(excVal)
-						if !vm.unwinding {
-							return false, InterpretOK, Undefined
-						}
-						return false, InterpretRuntimeError, Undefined
-					}
-					*dest = res
-					return true, InterpretOK, *dest
-				}
-				// Setter-only accessor (no getter): reads as undefined per spec.
-				*dest = Undefined
-				return true, InterpretOK, *dest
-			}
-			if v, ok := nf.Properties.GetOwnByKey(key); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-		}
-		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
-			*dest = v
-			return true, InterpretOK, *dest
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	}
-
-	// BoundFunction: check own properties, then Function.prototype chain
-	if base.Type() == TypeBoundFunction {
-		bf := base.AsBoundFunction()
-		key := NewSymbolKey(symKey)
-		if bf.Properties != nil {
-			if v, ok := bf.Properties.GetOwnByKey(key); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-		}
-		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
-			*dest = v
-			return true, InterpretOK, *dest
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+	// Before this was unified, each flavour had its own copy of the walk and
+	// only TypeNativeFunction invoked a getter - and even that only for an OWN
+	// accessor. Inherited accessors were unreachable because the shared
+	// lookupSymbolOnProtoChain took no receiver, and TypeFunction/TypeClosure
+	// hardcoded Function.prototype as the parent instead of the constructor's
+	// actual [[Prototype]], so `class Foo extends Uint8Array {}` could never
+	// see anything Uint8Array or %TypedArray% defined.
+	switch base.Type() {
+	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction:
+		return vm.resolveSymbolSlot(frame, ip, frameWasNil, base, NewSymbolKey(symKey), dest)
 	}
 
 	// DictObject: no symbol identity support yet
 	*dest = Undefined
 	return true, InterpretOK, *dest
-}
-
-// lookupSymbolOnProtoChain walks a prototype chain starting from proto,
-// looking for a symbol-keyed property. Handles PlainObject, NativeFunctionWithProps,
-// and DictObject prototype types.
-func (vm *VM) lookupSymbolOnProtoChain(proto Value, key PropertyKey) (bool, Value) {
-	current := proto
-	for i := 0; i < 100; i++ { // safety limit
-		switch current.Type() {
-		case TypeObject:
-			po := current.AsPlainObject()
-			if v, ok := po.GetOwnByKey(key); ok {
-				return true, v
-			}
-			current = po.prototype
-		case TypeNativeFunctionWithProps:
-			nfp := current.AsNativeFunctionWithProps()
-			if nfp.Properties != nil {
-				if v, ok := nfp.Properties.GetOwnByKey(key); ok {
-					return true, v
-				}
-				current = nfp.Properties.GetPrototype()
-			} else {
-				return false, Undefined
-			}
-		case TypeDictObject:
-			dict := current.AsDictObject()
-			current = dict.GetPrototype()
-		default:
-			return false, Undefined
-		}
-		if current.typ == TypeNull || current.typ == TypeUndefined {
-			break
-		}
-	}
-	return false, Undefined
 }

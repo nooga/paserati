@@ -826,5 +826,7 @@ func (s *SetInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}
 
 	// Define Set constructor in global scope
+	defineSpeciesAccessor(vmInstance, setConstructor.AsNativeFunctionWithProps().Properties)
+
 	return ctx.DefineGlobal("Set", setConstructor)
 }

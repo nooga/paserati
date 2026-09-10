@@ -959,6 +959,16 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 				regex.SetLastIndex(int(valueToSet.ToFloat()))
 				return true, InterpretOK, *valueToSet
 			}
+			// An inherited accessor on the [[Prototype]] chain wins over
+			// creating an own property: without this, `re.global = x` (whose
+			// accessor on RegExp.prototype is getter-only) silently stored a
+			// shadowing own data property, which test262's
+			// verifyNotWritable checks reject. TypeObject's set path has
+			// always done this walk; the side-table kinds went straight to
+			// setOwnChecked, whose only accessor awareness is the OWN table's.
+			if handled, ok, status, val := vm.checkCustomProtoChainAccessorSetter(vm.PrototypeOf(*objVal), propName, objVal, valueToSet); handled {
+				return ok, status, val
+			}
 			if regex.Properties == nil {
 				regex.Properties = newPropertiesTable()
 			}
@@ -969,6 +979,10 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		// Map objects can have user-defined properties
 		mapObj := objVal.AsMap()
 		if mapObj != nil {
+			// Same inherited-accessor precedence as the RegExp case above.
+			if handled, ok, status, val := vm.checkCustomProtoChainAccessorSetter(vm.PrototypeOf(*objVal), propName, objVal, valueToSet); handled {
+				return ok, status, val
+			}
 			if mapObj.Properties == nil {
 				mapObj.Properties = newPropertiesTable()
 			}
@@ -979,6 +993,10 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		// Set objects can have user-defined properties
 		setObj := objVal.AsSet()
 		if setObj != nil {
+			// Same inherited-accessor precedence as the RegExp case above.
+			if handled, ok, status, val := vm.checkCustomProtoChainAccessorSetter(vm.PrototypeOf(*objVal), propName, objVal, valueToSet); handled {
+				return ok, status, val
+			}
 			if setObj.Properties == nil {
 				setObj.Properties = newPropertiesTable()
 			}
@@ -990,6 +1008,10 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		// constructor doing `this.foo = 1` after super()).
 		promiseObj := objVal.AsPromise()
 		if promiseObj != nil {
+			// Same inherited-accessor precedence as the RegExp case above.
+			if handled, ok, status, val := vm.checkCustomProtoChainAccessorSetter(vm.PrototypeOf(*objVal), propName, objVal, valueToSet); handled {
+				return ok, status, val
+			}
 			if promiseObj.Properties == nil {
 				promiseObj.Properties = newPropertiesTable()
 			}

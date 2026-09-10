@@ -1,14 +1,32 @@
 package vm
 
-import "github.com/nooga/paserati/pkg/runtime"
+import (
+	"sync"
+
+	"github.com/nooga/paserati/pkg/runtime"
+)
+
+// asyncRuntimeMu guards the lazy initialization in GetAsyncRuntime.
+//
+// GetAsyncRuntime is reached from host goroutines - anything that settles a
+// Promise off the VM's own goroutine ends up scheduling a microtask through it
+// (fetch's HTTP goroutine, ReadableStream's pump, and now ResolvePromise's
+// thenable branch). Its "create one if nil" write raced against the VM
+// goroutine's own first call, which -race reports as a plain unsynchronized
+// read/write on vm.asyncRuntime.
+var asyncRuntimeMu sync.Mutex
 
 // SetAsyncRuntime sets the async execution runtime
 func (vm *VM) SetAsyncRuntime(rt runtime.AsyncRuntime) {
+	asyncRuntimeMu.Lock()
+	defer asyncRuntimeMu.Unlock()
 	vm.asyncRuntime = rt
 }
 
 // GetAsyncRuntime returns the current async runtime (or default)
 func (vm *VM) GetAsyncRuntime() runtime.AsyncRuntime {
+	asyncRuntimeMu.Lock()
+	defer asyncRuntimeMu.Unlock()
 	if vm.asyncRuntime == nil {
 		vm.asyncRuntime = runtime.NewDefaultAsyncRuntime()
 	}

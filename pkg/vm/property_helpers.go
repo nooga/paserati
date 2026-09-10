@@ -106,6 +106,16 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		}
 	}
 
+	// An async function's `constructor` is %AsyncFunction%. This VM does not
+	// give async functions the %AsyncFunction.prototype% intrinsic - their
+	// [[Prototype]] is plain Function.prototype - so the chain walk below,
+	// which now continues into built-in constructors, would answer Function.
+	// Resolved here, ahead of the walk, to keep the answer it had when the
+	// walk stopped at the first NativeFunctionWithProps.
+	if propName == "constructor" && fn != nil && fn.IsAsync && !fn.IsGenerator && vm.AsyncFunctionConstructor.IsCallable() {
+		return vm.AsyncFunctionConstructor, true
+	}
+
 	// Walk the closure's [[Prototype]] chain for inherited static properties (class inheritance)
 	// This handles `class C extends B { }` where C.staticMethod should find B.staticMethod
 	// Only walk user-defined class constructors (Closure/Function), stop at built-in prototypes
@@ -196,9 +206,54 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 					return prop, true
 				}
 				proto = po.GetPrototype()
+			case TypeNativeFunctionWithProps, TypeNativeFunction:
+				// `caller` and `arguments` are modelled only as
+				// Function.prototype's %ThrowTypeError% poison-pill accessors
+				// here; ordinary non-strict functions carry no own legacy
+				// versions to shadow them. Reaching the pill through this new
+				// link would turn every legacy `f.caller` read into a throw,
+				// where both this VM (undefined) and V8 (null) answer with a
+				// value - so leave those two to the handling further down.
+				if propName == "caller" || propName == "arguments" {
+					proto = Null
+					break
+				}
+				// A built-in constructor standing in the chain, i.e.
+				// `class P extends Promise {}`. This used to hit the default
+				// below and stop dead, so a class extending a native
+				// constructor inherited none of its statics - Promise.resolve,
+				// Uint8Array.from, Map.groupBy and friends were all undefined
+				// on the subclass. Function.prototype is itself one of these
+				// and is reached the same way, which is what the old comment
+				// meant by "handled by the FunctionPrototype lookup below";
+				// finding call/apply/bind here instead gives the same answer.
+				props := OwnPropertiesTable(proto)
+				if props == nil {
+					proto = Null
+					break
+				}
+				if getter, _, _, _, exists := props.GetOwnAccessor(propName); exists {
+					if getter.Type() != TypeUndefined {
+						res, err := vm.Call(getter, objVal, nil)
+						if err != nil {
+							if ee, ok := err.(ExceptionError); ok {
+								vm.throwException(ee.GetExceptionValue())
+							} else {
+								vm.throwException(NewString(err.Error()))
+							}
+							return Undefined, false
+						}
+						return res, true
+					}
+					return Undefined, true
+				}
+				if prop, exists := props.GetOwn(propName); exists {
+					return prop, true
+				}
+				proto = props.GetPrototype()
 			default:
-				// Stop at built-in prototypes (NativeFunctionWithProps like Function.prototype)
-				// These are handled by the FunctionPrototype lookup below
+				// Any other kind can't carry static properties in this VM's
+				// model; stop rather than spin.
 				proto = Null
 			}
 		}
@@ -836,6 +891,18 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		}
 	default:
 		return Undefined, false
+	}
+
+	// [[Get]] checks the object's own properties before its prototype's. Only
+	// the TypeTypedArray case above did that; every other exotic kind walked
+	// straight to the prototype, so a property the instance genuinely owned was
+	// shadowed whenever the prototype happened to have one of the same name -
+	// most visibly `constructor`, which made
+	// `p.constructor = C; p.constructor` answer the intrinsic (and left
+	// test262's built-ins/Promise/prototype/then/ctor-custom.js unreachable
+	// even with correct SpeciesConstructor support).
+	if v, ok := vm.getOwnInstanceProperty(objVal, propName); ok {
+		return v, true
 	}
 
 	if prototype != nil {
