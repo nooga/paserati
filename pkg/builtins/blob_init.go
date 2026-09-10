@@ -27,7 +27,8 @@ func (b *BlobInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("bytes", types.NewSimpleFunction([]types.Type{}, types.Any)).       // Returns Promise<Uint8Array>
 		WithProperty("text", types.NewSimpleFunction([]types.Type{}, types.Any)).        // Returns Promise<string>
 		WithProperty("slice", types.NewSimpleFunction([]types.Type{types.Number, types.Number, types.String}, types.Any)).
-		WithProperty("stream", types.NewSimpleFunction([]types.Type{}, types.Any)) // Returns ReadableStream (stub)
+		WithProperty("stream", types.NewSimpleFunction([]types.Type{}, types.Any)). // Returns ReadableStream (stub)
+		WithProperty("constructor", types.Any)                                     // Avoid circular reference, use Any for constructor property
 
 	// BlobPropertyBag type
 	blobOptionsType := types.NewObjectType().
