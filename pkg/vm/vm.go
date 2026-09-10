@@ -6225,9 +6225,38 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 			if err != nil {
+				// Same class of bug as #384 (OpSpreadCall/OpSpreadCallMethod): a
+				// native callee resolved from a with object (e.g. `with (obj) {
+				// fn.call(...) }`) may recursively throw from JS, returning a Go
+				// error here instead of going through vm.throwException. Route it
+				// through the exception table rather than escaping past any
+				// enclosing try/catch.
 				frame.ip = ip
-				vm.runtimeError("%s", err.Error())
-				return InterpretRuntimeError, Undefined
+				var excVal Value
+				if exceptionErr, ok := err.(ExceptionError); ok {
+					excVal = exceptionErr.GetExceptionValue()
+				} else {
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							excVal = res
+						} else {
+							errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+							errObj.SetOwn("name", NewString("Error"))
+							errObj.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(errObj)
+						}
+					} else {
+						errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+						errObj.SetOwn("name", NewString("Error"))
+						errObj.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(errObj)
+					}
+				}
+				vm.throwException(excVal)
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
+				}
+				goto reloadFrame
 			}
 
 			if shouldSwitch {
@@ -6915,6 +6944,7 @@ startExecution:
 
 				// Generator functions have GeneratorFunction.prototype as their [[Prototype]]
 				// Async generator functions have AsyncGeneratorFunction.prototype
+				// Async functions have AsyncFunction.prototype
 				// Regular functions have Function.prototype
 				if cl.Fn.IsGenerator && cl.Fn.IsAsync {
 					if !vm.AsyncGeneratorFunctionPrototype.IsUndefined() {
@@ -6925,6 +6955,12 @@ startExecution:
 				} else if cl.Fn.IsGenerator {
 					if !vm.GeneratorFunctionPrototype.IsUndefined() {
 						cl.Fn.Prototype = vm.GeneratorFunctionPrototype
+					} else {
+						cl.Fn.Prototype = vm.FunctionPrototype
+					}
+				} else if cl.Fn.IsAsync {
+					if !vm.AsyncFunctionPrototype.IsUndefined() {
+						cl.Fn.Prototype = vm.AsyncFunctionPrototype
 					} else {
 						cl.Fn.Prototype = vm.FunctionPrototype
 					}
@@ -7073,6 +7109,7 @@ startExecution:
 
 				// Generator functions have GeneratorFunction.prototype as their [[Prototype]]
 				// Async generator functions have AsyncGeneratorFunction.prototype
+				// Async functions have AsyncFunction.prototype
 				// Regular functions have Function.prototype
 				if cl.Fn.IsGenerator && cl.Fn.IsAsync {
 					if !vm.AsyncGeneratorFunctionPrototype.IsUndefined() {
@@ -7083,6 +7120,12 @@ startExecution:
 				} else if cl.Fn.IsGenerator {
 					if !vm.GeneratorFunctionPrototype.IsUndefined() {
 						cl.Fn.Prototype = vm.GeneratorFunctionPrototype
+					} else {
+						cl.Fn.Prototype = vm.FunctionPrototype
+					}
+				} else if cl.Fn.IsAsync {
+					if !vm.AsyncFunctionPrototype.IsUndefined() {
+						cl.Fn.Prototype = vm.AsyncFunctionPrototype
 					} else {
 						cl.Fn.Prototype = vm.FunctionPrototype
 					}
@@ -14807,8 +14850,44 @@ startExecution:
 
 			shouldSwitch, err := vm.prepareCall(calleeVal, Undefined, spreadArgs, destReg, callerRegisters, callerIP)
 			if err != nil {
-				status := vm.runtimeError("%s", err.Error())
-				return status, Undefined
+				// A native callee (e.g. Function.prototype.call/apply invoked via
+				// spread) may recursively invoke a JS closure that throws; that
+				// throw comes back here as a Go error rather than being routed
+				// through vm.throwException by the nested call. Without this,
+				// the error escaped straight out of vm.run() past any enclosing
+				// try/catch (#384). Mirrors OpCallMethod's err handling below.
+				var excVal Value
+				if exceptionErr, ok := err.(ExceptionError); ok {
+					excVal = exceptionErr.GetExceptionValue()
+				} else {
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							excVal = res
+						} else {
+							errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+							errObj.SetOwn("name", NewString("Error"))
+							errObj.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(errObj)
+						}
+					} else {
+						errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+						errObj.SetOwn("name", NewString("Error"))
+						errObj.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(errObj)
+					}
+				}
+				vm.throwException(excVal)
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
 			}
 
 			if shouldSwitch {
@@ -14874,8 +14953,43 @@ startExecution:
 
 			shouldSwitch, err := vm.prepareMethodCall(calleeVal, thisVal, spreadArgs, destReg, callerRegisters, callerIP)
 			if err != nil {
-				status := vm.runtimeError("%s", err.Error())
-				return status, Undefined
+				// See the matching comment in OpSpreadCall above (#384): a native
+				// callee reached via spread (e.g. fn.call(recv, ...args)) may
+				// recursively throw from JS; route that through the exception
+				// table the same way OpCallMethod does instead of escaping past
+				// every enclosing try/catch.
+				var excVal Value
+				if exceptionErr, ok := err.(ExceptionError); ok {
+					excVal = exceptionErr.GetExceptionValue()
+				} else {
+					if errCtor, ok := vm.GetGlobal("Error"); ok {
+						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
+							excVal = res
+						} else {
+							errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+							errObj.SetOwn("name", NewString("Error"))
+							errObj.SetOwn("message", NewString(err.Error()))
+							excVal = NewValueFromPlainObject(errObj)
+						}
+					} else {
+						errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+						errObj.SetOwn("name", NewString("Error"))
+						errObj.SetOwn("message", NewString(err.Error()))
+						excVal = NewValueFromPlainObject(errObj)
+					}
+				}
+				vm.throwException(excVal)
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
+				}
+				frame = &vm.frames[vm.frameCount-1]
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
+				continue
 			}
 
 			if shouldSwitch {

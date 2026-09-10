@@ -106,16 +106,6 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 		}
 	}
 
-	// An async function's `constructor` is %AsyncFunction%. This VM does not
-	// give async functions the %AsyncFunction.prototype% intrinsic - their
-	// [[Prototype]] is plain Function.prototype - so the chain walk below,
-	// which now continues into built-in constructors, would answer Function.
-	// Resolved here, ahead of the walk, to keep the answer it had when the
-	// walk stopped at the first NativeFunctionWithProps.
-	if propName == "constructor" && fn != nil && fn.IsAsync && !fn.IsGenerator && vm.AsyncFunctionConstructor.IsCallable() {
-		return vm.AsyncFunctionConstructor, true
-	}
-
 	// Walk the closure's [[Prototype]] chain for inherited static properties (class inheritance)
 	// This handles `class C extends B { }` where C.staticMethod should find B.staticMethod
 	// Only walk user-defined class constructors (Closure/Function), stop at built-in prototypes
