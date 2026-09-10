@@ -78,6 +78,17 @@ func (g *GlobalsInitializer) InitTypes(ctx *TypeContext) error {
 		return err
 	}
 
+	// Add queueMicrotask(callback) - queues callback as a microtask (#393:
+	// real-world host code, e.g. undici's ReadableStream sources, routinely
+	// closes a controller via `queueMicrotask(() => controller.close())`).
+	queueMicrotaskFunctionType := types.NewSimpleFunction(
+		[]types.Type{types.NewSimpleFunction([]types.Type{}, types.Void)},
+		types.Void,
+	)
+	if err := ctx.DefineGlobal("queueMicrotask", queueMicrotaskFunctionType); err != nil {
+		return err
+	}
+
 	// Add parseFloat function
 	parseFloatFunctionType := types.NewSimpleFunction([]types.Type{types.String}, types.Number)
 	if err := ctx.DefineGlobal("parseFloat", parseFloatFunctionType); err != nil {
@@ -136,6 +147,29 @@ func (g *GlobalsInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	if err := ctx.DefineGlobal("clock", clockFunc); err != nil {
+		return err
+	}
+
+	// Add queueMicrotask(callback): per spec it throws synchronously if
+	// callback isn't callable, otherwise queues it to run as a microtask on
+	// a later tick. An exception the callback itself throws is reported the
+	// same way an unhandled event-listener exception is elsewhere in this
+	// codebase (e.g. abort_controller_init.go's dispatchEvent) - swallowed
+	// rather than propagated, since there is no promise or caller left to
+	// deliver it to by the time the microtask runs.
+	queueMicrotaskFunc := vm.NewNativeFunction(1, false, "queueMicrotask", func(args []vm.Value) (vm.Value, error) {
+		if len(args) == 0 || !args[0].IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("The callback provided as parameter 1 is not a function.")
+		}
+		callback := args[0]
+		rt := vmInstance.GetAsyncRuntime()
+		rt.ScheduleMicrotask(func() {
+			_, _ = vmInstance.Call(callback, vm.Undefined, nil)
+		})
+		return vm.Undefined, nil
+	})
+
+	if err := ctx.DefineGlobal("queueMicrotask", queueMicrotaskFunc); err != nil {
 		return err
 	}
 

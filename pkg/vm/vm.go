@@ -16607,24 +16607,67 @@ startExecution:
 
 			// Check if we're in top-level await (no async function context)
 			if frame.promiseObj == nil {
-				// Top-level await - drain microtasks until settled for pending
-				// promises. Every check of the promise's disposition below
-				// goes through snapshot() rather than direct field access:
-				// awaitedPromise may be settled from a goroutine other than
-				// this one (e.g. fetch()'s own request goroutine calling
-				// vm.ResolvePromise once its HTTP round-trip completes), and
-				// a raw `awaitedPromise.State` read here is exactly the
-				// unsynchronized access `go test -race` catches racing
-				// against that goroutine's write.
-				tlaState, tlaResult := awaitedPromise.snapshot()
-				if tlaState == PromisePending {
+				// Top-level await must resume only via a proper microtask
+				// hop, even when awaitedPromise is ALREADY settled - the
+				// comment above ("await ALWAYS suspends and schedules
+				// resumption as microtask even when the promise is already
+				// settled") is exactly what this used to violate: it used
+				// to read snapshot() directly and, if not Pending, resume
+				// immediately inline. That let an earlier-queued microtask
+				// (e.g. a ReadableStream pull() that defers
+				// controller.close() via queueMicrotask(), scheduled just
+				// before this await runs) get skipped over entirely,
+				// because nothing here ever drained the microtask queue for
+				// the "already settled" case - so this await's own
+				// resumption jumped the FIFO line ahead of jobs queued
+				// before it (#393: a ReadableStream source deferring its
+				// close() this way saw pull() invoked again before that
+				// close() had a chance to run).
+				//
+				// addAwaitReactions+triggerPromiseReactions is exactly the
+				// mechanism the async-function branch below already uses to
+				// get this right (registering interest and dispatching
+				// through rt.ScheduleMicrotask even for an already-settled
+				// promise) - reused here instead of resuming from a direct
+				// snapshot() read. resumed/tlaState/tlaResult are plain
+				// closures with no lock of their own: the reactions that
+				// write them only ever run inside a scheduled microtask,
+				// which - like every microtask - executes exclusively on
+				// this same goroutine as the drain loop below that reads
+				// them, never concurrently with it (see PromiseObject's own
+				// mu doc comment for why settling itself, from another
+				// goroutine, stays safe regardless).
+				resumed := false
+				var tlaState PromiseState
+				var tlaResult Value
+				awaitDisposition := awaitedPromise.addAwaitReactions(
+					PromiseReaction{
+						Handler: Undefined,
+						Resolve: func(value Value) {
+							tlaState, tlaResult = PromiseFulfilled, value
+							resumed = true
+						},
+						Reject: func(Value) {},
+					},
+					PromiseReaction{
+						Handler: Undefined,
+						Resolve: func(Value) {},
+						Reject: func(reason Value) {
+							tlaState, tlaResult = PromiseRejected, reason
+							resumed = true
+						},
+					},
+				)
+				switch awaitDisposition {
+				case PromiseFulfilled:
+					vm.triggerPromiseReactions(awaitedPromise, true)
+				case PromiseRejected:
+					vm.triggerPromiseReactions(awaitedPromise, false)
+				}
+				if !resumed {
 					rt := vm.GetAsyncRuntime()
 					deadlockRetries := 0
-					for {
-						tlaState, tlaResult = awaitedPromise.snapshot()
-						if tlaState != PromisePending {
-							break
-						}
+					for !resumed {
 						progress := false
 						if rt.RunNextTicks() {
 							progress = true
