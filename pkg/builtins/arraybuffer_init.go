@@ -220,17 +220,15 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("ArrayBuffer.prototype.slice: constructor property is not an object")
 		}
 
-		// Step 6: Get [Symbol.species] from constructor
-		var species vm.Value
-		if ctor.IsObject() {
-			if ctor.Type() == vm.TypeObject {
-				po := ctor.AsPlainObject()
-				species, _ = po.GetOwnByKey(vm.NewSymbolKey(vmInstance.SymbolSpecies))
-			}
-		}
-		if species.Type() == 0 || species.IsUndefined() {
-			// Try to get Symbol.species via GetProperty which handles symbol lookup
-			species, _ = vmInstance.GetProperty(ctor, string(vmInstance.SymbolSpecies.AsSymbol()))
+		// Step 6: Get [Symbol.species] from constructor. This used to check
+		// only an own data property and then fall back to GetProperty with the
+		// symbol's description stringized into a string key - which looked up a
+		// property literally named "Symbol.species" and so never found
+		// anything. The species property is an accessor, so it needs the
+		// symbol-aware getter path.
+		species, _, err := vmInstance.GetSymbolPropertyWithGetter(ctor, vmInstance.SymbolSpecies)
+		if err != nil {
+			return vm.Undefined, err
 		}
 
 		// Step 7: If species is null or undefined, use default constructor
@@ -397,6 +395,8 @@ func (a *ArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Set ArrayBuffer prototype in VM for proper prototype chain lookups
 	vmInstance.ArrayBufferPrototype = vm.NewValueFromPlainObject(arrayBufferProto)
+
+	defineSpeciesAccessor(vmInstance, ctorWithProps.AsNativeFunctionWithProps().Properties)
 
 	// Register ArrayBuffer constructor as global
 	return ctx.DefineGlobal("ArrayBuffer", ctorWithProps)

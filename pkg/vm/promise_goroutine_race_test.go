@@ -136,3 +136,49 @@ func TestAddAwaitReactionsDoesNotLeakOnSettledPromise(t *testing.T) {
 		}
 	})
 }
+
+// TestPromiseGoroutineResolveThenableRace covers ResolvePromise's thenable
+// branch, which is the one path where a host-goroutine resolution cannot settle
+// inline: assimilating a thenable means reading and calling JS, so the whole
+// resolution is queued as a microtask and runs on the VM's goroutine. The race
+// this guards is the queueing itself happening concurrently with the VM
+// draining that queue.
+func TestPromiseGoroutineResolveThenableRace(t *testing.T) {
+	vmInstance := NewVM()
+	p := vmInstance.NewPendingPromise()
+	promise := p.AsPromise()
+
+	// A thenable whose `then` immediately fulfills, built as a plain object so
+	// hasPotentialThen finds the slot without running anything.
+	thenable := NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	thenable.SetOwn("then", NewNativeFunction(2, false, "then", func(args []Value) (Value, error) {
+		if len(args) > 0 && args[0].IsCallable() {
+			_, _ = vmInstance.Call(args[0], Undefined, []Value{NumberValue(42)})
+		}
+		return Undefined, nil
+	}))
+
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		vmInstance.ResolvePromise(promise, NewValueFromPlainObject(thenable))
+	}()
+
+	// Drain microtasks from this goroutine, the way the VM's own loop does,
+	// while the goroutine above is enqueueing into the same runtime.
+	rt := vmInstance.GetAsyncRuntime()
+	deadline := time.Now().Add(2 * time.Second)
+	for promise.GetState() == PromisePending {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for goroutine to resolve promise with a thenable")
+		}
+		rt.RunUntilIdle()
+		time.Sleep(time.Millisecond)
+	}
+
+	if state := promise.GetState(); state != PromiseFulfilled {
+		t.Fatalf("expected PromiseFulfilled, got %v", state)
+	}
+	if result := promise.GetResult(); result.ToFloat() != 42 {
+		t.Fatalf("expected the thenable's resolution value 42, got %v", result.Inspect())
+	}
+}

@@ -3091,6 +3091,8 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set Array prototype in VM
 	vmInstance.ArrayPrototype = vm.NewValueFromPlainObject(arrayProto)
 
+	defineSpeciesAccessor(vmInstance, arrayCtor.AsNativeFunctionWithProps().Properties)
+
 	// Register Array constructor as global
 	return ctx.DefineGlobal("Array", arrayCtor)
 }

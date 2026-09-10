@@ -274,9 +274,23 @@ func (vm *VM) NewRejectedPromise(reason Value) Value {
 	return Value{typ: TypePromise, obj: promiseToUnsafe(promise)}
 }
 
-// resolvePromise fulfills a promise with a value. Safe to call from any
-// goroutine (see PromiseObject's mu doc comment).
+// resolvePromise implements the resolve half of CreateResolvingFunctions
+// (ES 27.2.1.3.2). It must run on the VM's own execution goroutine: the
+// thenable branch below reads and calls JS. Host goroutines go through the
+// exported ResolvePromise, which queues the whole thing as a microtask.
 func (vm *VM) resolvePromise(promise *PromiseObject, value Value) {
+	// Step 1: resolving a promise with itself is a chaining cycle.
+	if value.Type() == TypePromise && value.AsPromise() == promise {
+		cycleErr := vm.NewTypeError("Chaining cycle detected for promise")
+		reason := NewString(cycleErr.Error())
+		if ee, ok := cycleErr.(ExceptionError); ok {
+			reason = ee.GetExceptionValue()
+		}
+		vm.ClearUnwindingState()
+		vm.rejectPromise(promise, reason)
+		return
+	}
+
 	// Handle promise resolution with thenable chaining
 	if value.Type() == TypePromise {
 		otherPromise := value.AsPromise()
@@ -306,9 +320,66 @@ func (vm *VM) resolvePromise(promise *PromiseObject, value Value) {
 		return
 	}
 
+	// Steps 8-12: an object (functions included) with a callable `then` is a
+	// thenable and must be assimilated, not used as the fulfillment value.
+	// Reading `then` happens here, synchronously, so a plain object with no
+	// `then` still fulfills on this tick; only the CALL is deferred to a
+	// microtask, which is NewPromiseResolveThenableJob.
+	if value.IsObject() || value.IsFunction() {
+		then, err := vm.GetProperty(value, "then")
+		if err != nil {
+			// A throwing `then` getter rejects the promise rather than
+			// escaping to whoever called resolve.
+			reason := NewString(err.Error())
+			if ee, ok := err.(ExceptionError); ok {
+				reason = ee.GetExceptionValue()
+			}
+			vm.ClearUnwindingState()
+			vm.rejectPromise(promise, reason)
+			return
+		}
+		if then.IsCallable() {
+			vm.scheduleThenableJob(promise, value, then)
+			return
+		}
+	}
+
 	if promise.trySettle(PromiseFulfilled, value) {
 		vm.triggerPromiseReactions(promise, true)
 	}
+}
+
+// scheduleThenableJob is NewPromiseResolveThenableJob (ES 27.2.2.2): it calls
+// thenable.then(resolvingFunctions) on a later tick. Whichever of resolve or
+// reject runs first wins - that is what trySettle already enforces - and a
+// throw from `then` rejects, but only if nothing has settled the promise yet.
+func (vm *VM) scheduleThenableJob(promise *PromiseObject, thenable Value, then Value) {
+	vm.GetAsyncRuntime().ScheduleMicrotask(func() {
+		resolve := NewNativeFunction(1, false, "", func(args []Value) (Value, error) {
+			v := Undefined
+			if len(args) > 0 {
+				v = args[0]
+			}
+			vm.resolvePromise(promise, v)
+			return Undefined, nil
+		})
+		reject := NewNativeFunction(1, false, "", func(args []Value) (Value, error) {
+			r := Undefined
+			if len(args) > 0 {
+				r = args[0]
+			}
+			vm.rejectPromise(promise, r)
+			return Undefined, nil
+		})
+		if _, err := vm.Call(then, thenable, []Value{resolve, reject}); err != nil {
+			reason := NewString(err.Error())
+			if ee, ok := err.(ExceptionError); ok {
+				reason = ee.GetExceptionValue()
+			}
+			vm.ClearUnwindingState()
+			vm.rejectPromise(promise, reason)
+		}
+	})
 }
 
 // rejectPromise rejects a promise with a reason. Safe to call from any
@@ -417,8 +488,22 @@ func (vm *VM) addPromiseReaction(promiseVal Value, isFulfilled bool, callback fu
 	}
 }
 
-// PromiseThen implements Promise.prototype.then()
+// PromiseThen implements Promise.prototype.then() with the intrinsic %Promise%
+// as the result promise's constructor.
 func (vm *VM) PromiseThen(thisPromise Value, onFulfilled, onRejected Value) (Value, error) {
+	return vm.PromiseThenWith(thisPromise, onFulfilled, onRejected, vm.NewPromiseFromExecutor)
+}
+
+// PromiseThenWith is PromiseThen with an explicit result-promise factory.
+//
+// Per spec Promise.prototype.then does NewPromiseCapability(C) where C is
+// SpeciesConstructor(promise, %Promise%), so the chained promise is built by
+// the species constructor - that is what makes `subclassPromise.then(...)`
+// return an instance of the subclass. newPromise receives the executor the
+// reactions are wired through and must return the promise built from it;
+// pkg/builtins/promise_init.go passes a Construct(C, executor) closure when C
+// is not the intrinsic.
+func (vm *VM) PromiseThenWith(thisPromise Value, onFulfilled, onRejected Value, newPromise func(executor Value) (Value, error)) (Value, error) {
 	promise := thisPromise.AsPromise()
 	if promise == nil {
 		return Undefined, fmt.Errorf("TypeError: Promise.prototype.then called on non-Promise")
@@ -477,7 +562,7 @@ func (vm *VM) PromiseThen(thisPromise Value, onFulfilled, onRejected Value) (Val
 		return Undefined, nil
 	})
 
-	return vm.NewPromiseFromExecutor(executor)
+	return newPromise(executor)
 }
 
 // maxIterableToArrayIterations bounds how many elements IterableToArray pulls
@@ -651,8 +736,19 @@ func (vm *VM) NewPendingPromise() Value {
 	return Value{typ: TypePromise, obj: promiseToUnsafe(promise)}
 }
 
-// ResolvePromise fulfills a promise with a value (exported wrapper)
+// ResolvePromise fulfills a promise with a value. This is the entry point for
+// host goroutines (fetch, ReadableStream, timers), which must never execute JS
+// themselves - so when the value might be a thenable, the whole resolution is
+// queued as a microtask and runs on the VM's goroutine instead. Queuing still
+// happens-before the caller returns, so the runtime sees pending work and stays
+// awake (#238). Everything else settles synchronously, as it always has.
 func (vm *VM) ResolvePromise(promise *PromiseObject, value Value) {
+	if vm.hasPotentialThen(value) {
+		vm.GetAsyncRuntime().ScheduleMicrotask(func() {
+			vm.resolvePromise(promise, value)
+		})
+		return
+	}
 	vm.resolvePromise(promise, value)
 }
 
@@ -664,4 +760,56 @@ func (vm *VM) RejectPromise(promise *PromiseObject, reason Value) {
 // AddPromiseReaction adds a reaction to a promise (exported wrapper)
 func (vm *VM) AddPromiseReaction(promiseVal Value, isFulfilled bool, callback func(Value)) {
 	vm.addPromiseReaction(promiseVal, isFulfilled, callback)
+}
+
+// hasPotentialThen reports whether v could be a thenable, WITHOUT running any
+// JS: it looks for a `then` slot - data property or accessor - on v's own
+// storage and along its [[Prototype]] chain, but never invokes a getter.
+//
+// This exists for ResolvePromise, the entry point host goroutines use (fetch's
+// HTTP goroutine, ReadableStream's pump). Those must not execute JS, so they
+// cannot do the spec's Get(resolution, "then") inline; but they also must not
+// unconditionally defer, because a settle that happens after the caller's
+// EndExternalOp loses the happen-before that keeps the runtime awake (#238).
+// A conservative "no `then` anywhere" answer lets the overwhelmingly common
+// case - resolving with a Response, an iterator result, an array - settle
+// synchronously exactly as before.
+func (vm *VM) hasPotentialThen(v Value) bool {
+	if !v.IsObject() && !v.IsFunction() {
+		return false
+	}
+	current := v
+	for i := 0; i < 100; i++ {
+		if props := OwnPropertiesTable(current); props != nil {
+			if _, _, _, _, isAccessor := props.GetOwnAccessor("then"); isAccessor {
+				return true
+			}
+			if _, ok := props.GetOwn("then"); ok {
+				return true
+			}
+		}
+		switch current.Type() {
+		case TypeObject:
+			po := current.AsPlainObject()
+			if _, _, _, _, isAccessor := po.GetOwnAccessor("then"); isAccessor {
+				return true
+			}
+			if _, ok := po.GetOwn("then"); ok {
+				return true
+			}
+		case TypeDictObject:
+			if _, ok := current.AsDictObject().GetOwn("then"); ok {
+				return true
+			}
+		case TypeProxy:
+			// A proxy's get trap is arbitrary JS; assume it may produce one.
+			return true
+		}
+		next := vm.prototypeOf(current)
+		if next.Type() == TypeNull || next.Type() == TypeUndefined || next.Equals(current) {
+			return false
+		}
+		current = next
+	}
+	return false
 }

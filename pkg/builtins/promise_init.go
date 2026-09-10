@@ -132,6 +132,31 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create Promise.prototype inheriting from Object.prototype
 	promiseProto := vm.NewObject(objectProto).AsPlainObject()
 
+	// The intrinsic %Promise% constructor, needed by the prototype methods'
+	// SpeciesConstructor step below but only built further down; the closures
+	// capture the variable, which is assigned as soon as it exists.
+	var intrinsicPromise vm.Value
+
+	// speciesThen is PerformPromiseThen with the result promise built by
+	// SpeciesConstructor(promise, %Promise%) per ES 27.2.5.4 step 3 - which is
+	// what makes `class P extends Promise {}` have p.then(...) return a P.
+	// Only the prototype methods do this; the static combinators build their
+	// capability from `this` directly (see Promise.all).
+	speciesThen := func(thisVal vm.Value, onFulfilled, onRejected vm.Value) (vm.Value, error) {
+		ctor, err := promiseSpeciesConstructor(vmInstance, thisVal, intrinsicPromise)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if ctor.Type() == vm.TypeUndefined || ctor.Is(intrinsicPromise) {
+			// Intrinsic %Promise%: keep the direct path, which skips the
+			// executor round-trip through Construct.
+			return vmInstance.PromiseThen(thisVal, onFulfilled, onRejected)
+		}
+		return vmInstance.PromiseThenWith(thisVal, onFulfilled, onRejected, func(executor vm.Value) (vm.Value, error) {
+			return vmInstance.Construct(ctor, []vm.Value{executor})
+		})
+	}
+
 	// Promise.prototype.then(onFulfilled, onRejected)
 	promiseProto.SetOwnNonEnumerable("then", vm.NewNativeFunction(2, false, "then", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
@@ -145,7 +170,7 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			onRejected = args[1]
 		}
 
-		return vmInstance.PromiseThen(thisVal, onFulfilled, onRejected)
+		return speciesThen(thisVal, onFulfilled, onRejected)
 	}))
 
 	// Promise.prototype.catch(onRejected)
@@ -157,30 +182,72 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// catch(onRejected) is equivalent to then(undefined, onRejected)
-		return vmInstance.PromiseThen(thisVal, vm.Undefined, onRejected)
+		return speciesThen(thisVal, vm.Undefined, onRejected)
 	}))
 
-	// Promise.prototype.finally(onFinally)
+	// Promise.prototype.finally(onFinally) - ES 27.2.5.3.
+	//
+	// The previous implementation registered ONE wrapper for both the fulfill
+	// and the reject reaction and returned its argument, which turned every
+	// rejection into a fulfillment carrying the reason, and it discarded
+	// onFinally's return value entirely instead of awaiting it. Per spec the
+	// two reactions are distinct: each calls onFinally, wraps its result with
+	// PromiseResolve(C, result) - so a thenable is awaited - and only then
+	// replays the original outcome, re-throwing in the reject case.
 	promiseProto.SetOwnNonEnumerable("finally", vm.NewNativeFunction(1, false, "finally", func(args []vm.Value) (vm.Value, error) {
+		// Step 2: If promise is not an Object, throw a TypeError.
 		thisVal := vmInstance.GetThis()
+		if !thisVal.IsObject() && !thisVal.IsCallable() && thisVal.Type() != vm.TypePromise {
+			return vm.Undefined, vmInstance.NewTypeError("Promise.prototype.finally called on a non-object")
+		}
 		onFinally := vm.Undefined
 		if len(args) > 0 {
 			onFinally = args[0]
 		}
 
-		// finally wraps both fulfill and reject handlers
-		wrapper := vm.NewNativeFunction(1, false, "finallyWrapper", func(wrapperArgs []vm.Value) (vm.Value, error) {
-			if onFinally.IsCallable() {
-				_, _ = vmInstance.Call(onFinally, vm.Undefined, []vm.Value{})
-			}
-			// Pass through the original value
-			if len(wrapperArgs) > 0 {
-				return wrapperArgs[0], nil
-			}
-			return vm.Undefined, nil
-		})
+		// Step 3: C = SpeciesConstructor(promise, %Promise%).
+		ctor, err := promiseSpeciesConstructor(vmInstance, thisVal, intrinsicPromise)
+		if err != nil {
+			return vm.Undefined, err
+		}
 
-		return vmInstance.PromiseThen(thisVal, wrapper, wrapper)
+		// Step 5: a non-callable onFinally is installed as both handlers
+		// unchanged, so `then` applies its own "not callable" pass-through.
+		if !onFinally.IsCallable() {
+			return invokeThen(vmInstance, thisVal, onFinally, onFinally)
+		}
+
+		// Step 6: thenFinally / catchFinally. replay is what runs after
+		// PromiseResolve(C, onFinally()) settles: return the original value,
+		// or re-throw the original reason.
+		// Both handlers are anonymous per spec (built-ins/Promise/prototype/
+		// finally/invokes-then-with-function.js asserts name === "").
+		makeHandler := func(rethrow bool) vm.Value {
+			return vm.NewNativeFunction(1, false, "", func(handlerArgs []vm.Value) (vm.Value, error) {
+				outcome := vm.Undefined
+				if len(handlerArgs) > 0 {
+					outcome = handlerArgs[0]
+				}
+				result, callErr := vmInstance.Call(onFinally, vm.Undefined, nil)
+				if callErr != nil {
+					return vm.Undefined, callErr
+				}
+				wrapped, resolveErr := promiseResolveWith(vmInstance, ctor, result)
+				if resolveErr != nil {
+					return vm.Undefined, resolveErr
+				}
+				replay := vm.NewNativeFunction(0, false, "", func([]vm.Value) (vm.Value, error) {
+					if rethrow {
+						return vm.Undefined, vmInstance.NewExceptionError(outcome)
+					}
+					return outcome, nil
+				})
+				return invokeThen(vmInstance, wrapped, replay, vm.Undefined)
+			})
+		}
+
+		// Step 7: Invoke(promise, "then", thenFinally, catchFinally).
+		return invokeThen(vmInstance, thisVal, makeHandler(false), makeHandler(true))
 	}))
 
 	// Add Promise.prototype[@@toStringTag] = "Promise" (writable: false, enumerable: false, configurable: true)
@@ -218,6 +285,10 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vmInstance.NewPromiseFromExecutor(executor)
 	})
 
+	// Publish the intrinsic to the prototype methods' SpeciesConstructor step
+	// (declared above, before Promise.prototype's methods were installed).
+	intrinsicPromise = promiseCtor
+
 	// Add static methods to Promise constructor
 	props := promiseCtor.AsNativeFunctionWithProps().Properties
 
@@ -237,12 +308,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 			value = args[0]
 		}
 
-		// If value is already a promise, return it
-		if value.Type() == vm.TypePromise {
-			return value, nil
-		}
-
-		return vmInstance.NewResolvedPromise(value), nil
+		// Step 3: PromiseResolve(C, value). This used to return an
+		// already-fulfilled intrinsic promise, which got two things wrong: it
+		// ignored `this`, so Promise.resolve.call(SubPromise, v) produced a
+		// plain Promise, and it fulfilled WITH a thenable instead of
+		// assimilating it, because it never went through a resolve function.
+		return promiseResolveWith(vmInstance, thisVal, value)
 	}))
 
 	// Promise.reject(reason)
@@ -261,33 +332,11 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vmInstance.NewRejectedPromise(reason), nil
 	}))
 
-	// Promise[Symbol.species] - should be a getter that returns 'this'
-	// For now, just set it to Promise itself (simpler, covers most cases)
-	props.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolSpecies), promiseCtor, nil, nil, nil)
-
-	// Helper: Get the species constructor from 'this' or fall back to Promise
-	getSpeciesConstructor := func(thisVal vm.Value) vm.Value {
-		// Try to get this[Symbol.species]
-		if thisVal.IsObject() || thisVal.Type() == vm.TypeNativeFunctionWithProps {
-			var speciesVal vm.Value
-
-			// Try to get Symbol.species property
-			if thisVal.Type() == vm.TypeNativeFunctionWithProps {
-				nfp := thisVal.AsNativeFunctionWithProps()
-				if species, exists := nfp.Properties.GetOwnByKey(vm.NewSymbolKey(SymbolSpecies)); exists {
-					speciesVal = species
-				}
-			}
-
-			// If species is defined and not null/undefined, use it
-			if speciesVal.Type() != vm.TypeUndefined && speciesVal.Type() != vm.TypeNull {
-				return speciesVal
-			}
-		}
-
-		// Fall back to 'this' value (the constructor itself)
-		return thisVal
-	}
+	// Promise[Symbol.species] - an accessor whose getter returns 'this', so a
+	// subclass inherits it and answers itself. This used to be a plain data
+	// property holding Promise, which made `class P extends Promise {}` report
+	// Promise rather than P.
+	defineSpeciesAccessor(vmInstance, props)
 
 	// getPromiseResolve implements GetPromiseResolve(C) per ECMAScript spec.
 	// Returns C.resolve if it's callable, otherwise returns an error.
@@ -341,7 +390,12 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if !vmInstance.IsConstructor(thisVal) {
 			return vm.Undefined, vmInstance.NewTypeError("Promise.all called on non-constructor")
 		}
-		constructor := getSpeciesConstructor(thisVal)
+		// Per spec the static combinators do NewPromiseCapability(C) on the
+		// `this` value directly - they must NOT read C[Symbol.species]
+		// (built-ins/Promise/{all,allSettled,any,race}/species-get-error.js all
+		// install a throwing species getter and require it never runs). Only
+		// Promise.prototype.then/finally use SpeciesConstructor.
+		constructor := thisVal
 
 		// Convert iterable to array (before promise creation per spec)
 		arr, err := vmInstance.IterableToArray(iterable)
@@ -507,7 +561,9 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if !vmInstance.IsConstructor(thisVal) {
 			return vm.Undefined, vmInstance.NewTypeError("Promise.race called on non-constructor")
 		}
-		constructor := getSpeciesConstructor(thisVal)
+		// NewPromiseCapability(C) on `this` directly, no species read - see
+		// Promise.all above.
+		constructor := thisVal
 
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
@@ -639,7 +695,9 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if !vmInstance.IsConstructor(thisVal) {
 			return vm.Undefined, vmInstance.NewTypeError("Promise.any called on non-constructor")
 		}
-		constructor := getSpeciesConstructor(thisVal)
+		// NewPromiseCapability(C) on `this` directly, no species read - see
+		// Promise.all above.
+		constructor := thisVal
 
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
@@ -795,7 +853,9 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if !vmInstance.IsConstructor(thisVal) {
 			return vm.Undefined, vmInstance.NewTypeError("Promise.allSettled called on non-constructor")
 		}
-		constructor := getSpeciesConstructor(thisVal)
+		// NewPromiseCapability(C) on `this` directly, no species read - see
+		// Promise.all above.
+		constructor := thisVal
 
 		// Convert iterable to array
 		arr, err := vmInstance.IterableToArray(iterable)
@@ -1002,7 +1062,9 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Use the species constructor to create the result promise
 		thisVal := vmInstance.GetThis()
-		constructor := getSpeciesConstructor(thisVal)
+		// NewPromiseCapability(C) on `this` directly, no species read - see
+		// Promise.all above.
+		constructor := thisVal
 		if constructor.IsCallable() {
 			return vmInstance.Construct(constructor, []vm.Value{executor})
 		}
@@ -1014,4 +1076,96 @@ func (p *PromiseInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Register Promise constructor as global
 	return ctx.DefineGlobal("Promise", promiseCtor)
+}
+
+// promiseSpeciesConstructor implements SpeciesConstructor(O, %Promise%) for
+// Promise.prototype.then/catch/finally (ES 27.2.5.4 step 3 via 7.3.23).
+//
+//  1. C = O.constructor; if undefined, use the default.
+//  2. If C is not an Object, throw a TypeError.
+//  3. S = C[Symbol.species]; if undefined or null, use the default.
+//  4. If S is a constructor, return it; otherwise throw a TypeError.
+//
+// Returns the default (the intrinsic %Promise%) for every case the spec routes
+// there, so callers can compare against it to take the fast path.
+func promiseSpeciesConstructor(vmInstance *vm.VM, promise vm.Value, defaultCtor vm.Value) (vm.Value, error) {
+	ctor, err := vmInstance.GetProperty(promise, "constructor")
+	if err != nil {
+		return vm.Undefined, err
+	}
+	if ctor.Type() == vm.TypeUndefined {
+		return defaultCtor, nil
+	}
+	if !ctor.IsObject() && !ctor.IsCallable() {
+		return vm.Undefined, vmInstance.NewTypeError("Promise.prototype.then: constructor property is not an object")
+	}
+	species, found, err := vmInstance.GetSymbolPropertyWithGetter(ctor, vmInstance.SymbolSpecies)
+	if err != nil {
+		return vm.Undefined, err
+	}
+	if !found || species.Type() == vm.TypeUndefined || species.Type() == vm.TypeNull {
+		return defaultCtor, nil
+	}
+	if !vmInstance.IsConstructor(species) {
+		return vm.Undefined, vmInstance.NewTypeError("Promise.prototype.then: @@species is not a constructor")
+	}
+	return species, nil
+}
+
+// invokeThen implements Invoke(promise, "then", args) - it reads the actual
+// `then` property off the value rather than calling the intrinsic directly, so
+// a subclass's (or a thenable's) own override is honored, which is what
+// Promise.prototype.finally's spec steps require.
+func invokeThen(vmInstance *vm.VM, promise vm.Value, onFulfilled, onRejected vm.Value) (vm.Value, error) {
+	then, err := vmInstance.GetProperty(promise, "then")
+	if err != nil {
+		return vm.Undefined, err
+	}
+	if !then.IsCallable() {
+		return vm.Undefined, vmInstance.NewTypeError("Promise.prototype.finally: `then` is not callable")
+	}
+	return vmInstance.Call(then, promise, []vm.Value{onFulfilled, onRejected})
+}
+
+// promiseResolveWith implements PromiseResolve(C, x) (ES 27.2.4.7.1): a promise
+// whose own constructor is already C passes through untouched; anything else -
+// a plain value, a foreign promise, or a thenable - is fed through a fresh
+// NewPromiseCapability(C)'s resolve function, which is what assimilates a
+// thenable rather than fulfilling with it.
+//
+// Note this deliberately does NOT go through C.resolve: the spec operation
+// builds the capability directly, and routing through C.resolve would recurse
+// forever when C is %Promise% (whose resolve is this function's only caller).
+func promiseResolveWith(vmInstance *vm.VM, ctor vm.Value, x vm.Value) (vm.Value, error) {
+	if x.Type() == vm.TypePromise {
+		xCtor, err := vmInstance.GetProperty(x, "constructor")
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if xCtor.Is(ctor) {
+			return x, nil
+		}
+	}
+
+	capResolve := vm.Undefined
+	guard := promiseCapabilityGuard(vmInstance)
+	executor := vm.NewNativeFunction(2, false, "", func(execArgs []vm.Value) (vm.Value, error) {
+		resolve, _, guardErr := guard(execArgs)
+		if guardErr != nil {
+			return vm.Undefined, guardErr
+		}
+		capResolve = resolve
+		return vm.Undefined, nil
+	})
+	promise, err := vmInstance.Construct(ctor, []vm.Value{executor})
+	if err != nil {
+		return vm.Undefined, err
+	}
+	if !capResolve.IsCallable() {
+		return vm.Undefined, vmInstance.NewTypeError("PromiseResolve: capability's resolve function is not callable")
+	}
+	if _, err := vmInstance.Call(capResolve, vm.Undefined, []vm.Value{x}); err != nil {
+		return vm.Undefined, err
+	}
+	return promise, nil
 }

@@ -4014,9 +4014,17 @@ startExecution:
 			// Check if objVal has a prototype chain to walk (is an object)
 			// Per ECMAScript 7.3.21 OrdinaryHasInstance step 3:
 			// If Type(O) is not Object, return false.
-			if objVal.IsObject() || objVal.Type() == TypeArray || objVal.Type() == TypeRegExp ||
-				objVal.Type() == TypeMap || objVal.Type() == TypeSet || objVal.Type() == TypeArguments ||
-				objVal.Type() == TypeFunction || objVal.Type() == TypeClosure || objVal.Type() == TypePromise {
+			//
+			// IsObject() is the contiguous [TypeObject, TypeProxy] range check,
+			// so the Array/RegExp/Map/Set/Arguments/Promise arms this replaces
+			// were already redundant; what the enumeration actually left out
+			// were four of the six callable kinds - TypeNativeFunction,
+			// TypeNativeFunctionWithProps, TypeAsyncNativeFunction and
+			// TypeBoundFunction. Functions are objects, so
+			// `Map.prototype.get instanceof Function` and `Map instanceof
+			// Function` answered false purely because the operand never
+			// reached the walk below. IsFunction() covers exactly those six.
+			if objVal.IsObject() || objVal.IsFunction() {
 				// Per ECMAScript 7.3.21 OrdinaryHasInstance step 5:
 				// If Type(P) is not Object, throw a TypeError exception
 				// (This only applies when O is an object)
@@ -4043,27 +4051,26 @@ startExecution:
 				// DataView/TypedArray/WeakMap/WeakSet and answered false for them.
 				current := vm.prototypeOf(objVal)
 
-				// Walk the prototype chain
-				for current.typ != TypeNull && current.typ != TypeUndefined {
+				// Walk the prototype chain. Each step goes through
+				// vm.prototypeOf, the same helper that produced the first
+				// link, rather than a local per-kind switch: the switch this
+				// replaces stepped a NativeFunctionWithProps via
+				// nfp.Properties.GetPrototype() directly, which reports the
+				// default object prototype for a built-in that never had one
+				// installed and so lost the chain - `Uint8Array instanceof
+				// Function` (Uint8Array -> %TypedArray% -> Function.prototype)
+				// answered false. The bound also guards against a prototype
+				// cycle installed via Object.setPrototypeOf.
+				for i := 0; i < 1000 && current.typ != TypeNull && current.typ != TypeUndefined; i++ {
 					if current.Equals(constructorPrototype) {
 						result = true
 						break
 					}
-					if current.IsObject() {
-						if current.Type() == TypeObject {
-							current = current.AsPlainObject().GetPrototype()
-						} else if current.Type() == TypeDictObject {
-							current = current.AsDictObject().GetPrototype()
-						} else {
-							break
-						}
-					} else if current.Type() == TypeNativeFunctionWithProps {
-						// Handle callable Function.prototype
-						nfp := current.AsNativeFunctionWithProps()
-						current = nfp.Properties.GetPrototype()
-					} else {
+					next := vm.prototypeOf(current)
+					if next.Equals(current) {
 						break
 					}
+					current = next
 				}
 			}
 

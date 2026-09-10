@@ -490,12 +490,12 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 			if v, ok := arr.GetOwn(propName); ok {
 				return v, nil
 			}
-			// Check array prototype
-			if vm.ArrayPrototype.IsObject() {
-				proto := vm.ArrayPrototype.AsPlainObject()
-				if v, ok := proto.Get(propName); ok {
-					return v, nil
-				}
+			// vm.plainPrototypeOf(obj) rather than the hardcoded
+			// Array.prototype: a `class S extends Array {}` instance carries
+			// its own [[Prototype]], and starting from the intrinsic made
+			// every override on S.prototype unreachable from native code.
+			if v, found, err := vm.lookupOnPrototypeChain(vm.plainPrototypeOf(obj), propName, receiver); found || err != nil {
+				return v, err
 			}
 		}
 		return Undefined, nil
@@ -574,9 +574,21 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 				return v, nil
 			}
 		}
-		if vm.PromisePrototype.IsObject() {
-			proto := vm.PromisePrototype.AsPlainObject()
-			if v, ok := proto.Get(propName); ok {
+		// vm.PrototypeOf, not vm.PromisePrototype: a promise built by a
+		// subclass constructor carries a per-instance [[Prototype]] override,
+		// and hardcoding the intrinsic made every native read on such a
+		// promise - `constructor` above all, which is step 1 of
+		// SpeciesConstructor - answer as though it were a plain Promise. The
+		// bytecode read path (pkg/vm/property_helpers.go's TypePromise case)
+		// has honored the override since paserati#198.
+		// Type() == TypeObject, not IsObject(): IsObject is the contiguous
+		// [TypeObject, TypeProxy] range check, so a [[Prototype]] that is a
+		// Proxy/DictObject/Array (reachable via Reflect.construct with a
+		// newTarget whose .prototype is one) would pass it and then have its
+		// pointer reinterpreted by AsPlainObject. Same guard as
+		// property_helpers.go's per-kind cases.
+		if proto := vm.PrototypeOf(obj); proto.Type() == TypeObject {
+			if v, ok := proto.AsPlainObject().Get(propName); ok {
 				return v, nil
 			}
 		}
@@ -596,48 +608,13 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 					return v, nil
 				}
 			}
-			// Check RegExp.prototype (with accessor invocation)
-			if vm.RegExpPrototype.IsObject() {
-				proto := vm.RegExpPrototype.AsPlainObject()
-				if proto != nil {
-					// Check for accessor property (getter) on prototype
-					if g, _, _, _, ok := proto.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
-						// Call the getter with this=original RegExp object
-						result, err := vm.Call(g, receiver, nil)
-						if err != nil {
-							return Undefined, err
-						}
-						return result, nil
-					}
-					// Check for data property on prototype
-					if v, ok := proto.GetOwn(propName); ok {
-						return v, nil
-					}
-					// Walk prototype chain (Object.prototype)
-					current := proto.GetPrototype()
-					for current.typ != TypeNull && current.typ != TypeUndefined {
-						if current.IsObject() {
-							if current.Type() == TypeObject {
-								grandProto := current.AsPlainObject()
-								if g, _, _, _, ok := grandProto.GetOwnAccessor(propName); ok && g.Type() != TypeUndefined {
-									result, err := vm.Call(g, receiver, nil)
-									if err != nil {
-										return Undefined, err
-									}
-									return result, nil
-								}
-								if v, ok := grandProto.GetOwn(propName); ok {
-									return v, nil
-								}
-								current = grandProto.GetPrototype()
-							} else {
-								break
-							}
-						} else {
-							break
-						}
-					}
-				}
+			// vm.plainPrototypeOf(obj) rather than the hardcoded
+			// RegExp.prototype: a `class S extends RegExp {}` instance carries
+			// its own [[Prototype]], and starting from the intrinsic meant
+			// Symbol.replace/match/split - which read `exec` off the regexp
+			// natively - could never see a subclass's override.
+			if v, found, err := vm.lookupOnPrototypeChain(vm.plainPrototypeOf(obj), propName, receiver); found || err != nil {
+				return v, err
 			}
 		}
 		return Undefined, nil
@@ -670,38 +647,21 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 			if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < ta.GetLength() {
 				return ta.GetElement(idx), nil
 			}
-			// Get the specific TypedArray prototype based on element type
-			var proto Value
-			switch ta.GetElementType() {
-			case TypedArrayInt8:
-				proto = vm.Int8ArrayPrototype
-			case TypedArrayUint8:
-				proto = vm.Uint8ArrayPrototype
-			case TypedArrayUint8Clamped:
-				proto = vm.Uint8ClampedArrayPrototype
-			case TypedArrayInt16:
-				proto = vm.Int16ArrayPrototype
-			case TypedArrayUint16:
-				proto = vm.Uint16ArrayPrototype
-			case TypedArrayInt32:
-				proto = vm.Int32ArrayPrototype
-			case TypedArrayUint32:
-				proto = vm.Uint32ArrayPrototype
-			case TypedArrayFloat16:
-				proto = vm.Float16ArrayPrototype
-			case TypedArrayFloat32:
-				proto = vm.Float32ArrayPrototype
-			case TypedArrayFloat64:
-				proto = vm.Float64ArrayPrototype
-			case TypedArrayBigInt64:
-				proto = vm.BigInt64ArrayPrototype
-			case TypedArrayBigUint64:
-				proto = vm.BigUint64ArrayPrototype
-			default:
-				proto = vm.TypedArrayPrototype
-			}
-			// Check prototype chain - need to check for accessors (getters) first
-			if proto.IsObject() {
+			// vm.PrototypeOf, not a local element-type switch: a typed array
+			// built by a subclass constructor (`class Foo extends Uint8Array {}`)
+			// or by Reflect.construct with a custom newTarget carries a
+			// per-instance [[Prototype]] override, and only PrototypeOf consults
+			// it before falling back to the intrinsic for the element type. The
+			// bytecode read path (pkg/vm/property_helpers.go's TypeTypedArray
+			// case) has always honored the override; these native ones silently
+			// resolved every subclass instance to the intrinsic prototype, which
+			// is why TypedArraySpeciesCreate read `constructor` as Uint8Array and
+			// filter/map/subarray never produced subclass results.
+			proto := vm.PrototypeOf(obj)
+			// Check prototype chain - need to check for accessors (getters) first.
+			// Type() == TypeObject rather than IsObject() - see the TypePromise
+			// case above for why the range check is not safe before AsPlainObject.
+			if proto.Type() == TypeObject {
 				cur := proto.AsPlainObject()
 				for cur != nil {
 					// Check for accessor (getter) first
@@ -757,24 +717,13 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 				return v, nil
 			}
 		}
-		if vm.SetPrototype.IsObject() {
-			proto := vm.SetPrototype.AsPlainObject()
-			// Check for accessor (getter) first
-			if getter, _, _, _, ok := proto.GetOwnAccessor(propName); ok {
-				if getter.Type() != TypeUndefined {
-					// Call the getter with this=receiver (the Set)
-					result, err := vm.Call(getter, receiver, nil)
-					if err != nil {
-						return Undefined, err
-					}
-					return result, nil
-				}
-				return Undefined, nil
-			}
-			// Check for regular property
-			if v, ok := proto.Get(propName); ok {
-				return v, nil
-			}
+		// vm.plainPrototypeOf(obj) rather than the hardcoded intrinsic:
+		// a subclass instance carries its own [[Prototype]], and starting
+		// from Set.prototype made every override on it unreachable
+		// from native code. lookupOnPrototypeChain (pkg/vm/proto.go) walks
+		// that chain invoking accessors with this = receiver.
+		if v, found, err := vm.lookupOnPrototypeChain(vm.plainPrototypeOf(obj), propName, receiver); found || err != nil {
+			return v, err
 		}
 		return Undefined, nil
 
@@ -796,24 +745,13 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 				return v, nil
 			}
 		}
-		if vm.MapPrototype.IsObject() {
-			proto := vm.MapPrototype.AsPlainObject()
-			// Check for accessor (getter) first
-			if getter, _, _, _, ok := proto.GetOwnAccessor(propName); ok {
-				if getter.Type() != TypeUndefined {
-					// Call the getter with this=receiver (the Map)
-					result, err := vm.Call(getter, receiver, nil)
-					if err != nil {
-						return Undefined, err
-					}
-					return result, nil
-				}
-				return Undefined, nil
-			}
-			// Check for regular property
-			if v, ok := proto.Get(propName); ok {
-				return v, nil
-			}
+		// vm.plainPrototypeOf(obj) rather than the hardcoded intrinsic:
+		// a subclass instance carries its own [[Prototype]], and starting
+		// from Map.prototype made every override on it unreachable
+		// from native code. lookupOnPrototypeChain (pkg/vm/proto.go) walks
+		// that chain invoking accessors with this = receiver.
+		if v, found, err := vm.lookupOnPrototypeChain(vm.plainPrototypeOf(obj), propName, receiver); found || err != nil {
+			return v, err
 		}
 		return Undefined, nil
 
@@ -1091,6 +1029,25 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 		}
 		return Undefined, nil
 
+	case TypeArrayBuffer, TypeSharedArrayBuffer, TypeDataView,
+		TypeWeakMap, TypeWeakSet, TypeWeakRef, TypeFinalizationRegistry:
+		// These kinds had no case at all and fell through to the primitive
+		// default at the bottom of this switch, which leaves proto unset - so
+		// every native read on them answered undefined, including the
+		// `constructor` that ArrayBuffer.prototype.slice's SpeciesConstructor
+		// step depends on. Own side-table property first (the same table a
+		// plain `ab.foo = 1` writes into), then the instance's own
+		// [[Prototype]] chain so a subclass's overrides are reachable.
+		if props := OwnPropertiesTable(obj); props != nil {
+			if v, found, err := vm.getOwnFromTableByKey(props, keyFromString(propName), receiver); found || err != nil {
+				return v, err
+			}
+		}
+		if v, found, err := vm.lookupOnPrototypeChain(vm.plainPrototypeOf(obj), propName, receiver); found || err != nil {
+			return v, err
+		}
+		return Undefined, nil
+
 	case TypeArguments:
 		// Arguments objects: check length, numeric indices, and named properties
 		args := obj.AsArguments()
@@ -1308,18 +1265,18 @@ func (vm *VM) ReflectGetSymbolPropertyWithReceiver(obj Value, sym Value, receive
 // exactly as it was, not retrofitted onto the same helpers, to avoid
 // risking a regression there for this task's sake.
 //
-// The FunctionPrototype fallback used by every callable kind
+// The prototype-chain fallback used by every callable kind
 // (TypeFunction/TypeClosure/TypeNativeFunction/TypeNativeFunctionWithProps/
-// TypeBoundFunction) reuses the existing lookupSymbolOnProtoChain
-// (pkg/vm/op_getprop.go) rather than walkPlainObjectChainForKey, since
-// Function.prototype itself can be a TypeNativeFunctionWithProps at
-// runtime (see that function's own doc comment) - walkPlainObjectChainForKey
-// only handles a TypeObject chain. Matching lookupSymbolOnProtoChain's
-// existing behavior, this does NOT invoke an accessor's getter found on
-// the FunctionPrototype chain - a real, separate, still-open gap already
-// documented where it was first found (pkg/vm/op_getprop.go's
-// opGetPropSymbol, TypeNativeFunction case), not introduced or widened
-// here.
+// TypeBoundFunction) goes through lookupSymbolWithReceiver
+// (pkg/vm/symbol_lookup.go) rather than walkPlainObjectChainForKey, since a
+// callable's chain can pass through Function.prototype - itself a
+// TypeNativeFunctionWithProps at runtime - and through other constructors,
+// neither of which walkPlainObjectChainForKey's TypeObject-only walk
+// handles. That helper invokes an accessor's getter found anywhere on the
+// chain with this = receiver; an earlier version used
+// lookupSymbolOnProtoChain against a hardcoded Function.prototype and did
+// neither, which is what made an inherited `get [Symbol.species]`
+// unreadable.
 func (vm *VM) getSymbolPropertyWithReceiver(obj Value, sym Value, receiver Value) (Value, error) {
 	key := NewSymbolKey(sym)
 
@@ -1475,40 +1432,13 @@ func (vm *VM) getSymbolPropertyWithReceiver(obj Value, sym Value, receiver Value
 	case TypeTypedArray:
 		// TypedArrays don't expose own symbol-keyed properties (only
 		// indices and the fixed set of string built-ins) - straight to
-		// the element-type-specific prototype, same selection as
-		// getPropertyWithReceiver's TypeTypedArray case.
+		// the prototype, resolved the same way as
+		// getPropertyWithReceiver's TypeTypedArray case: vm.PrototypeOf so a
+		// subclass instance's per-instance override wins over the intrinsic.
 		ta := obj.AsTypedArray()
 		if ta != nil {
-			var proto Value
-			switch ta.GetElementType() {
-			case TypedArrayInt8:
-				proto = vm.Int8ArrayPrototype
-			case TypedArrayUint8:
-				proto = vm.Uint8ArrayPrototype
-			case TypedArrayUint8Clamped:
-				proto = vm.Uint8ClampedArrayPrototype
-			case TypedArrayInt16:
-				proto = vm.Int16ArrayPrototype
-			case TypedArrayUint16:
-				proto = vm.Uint16ArrayPrototype
-			case TypedArrayInt32:
-				proto = vm.Int32ArrayPrototype
-			case TypedArrayUint32:
-				proto = vm.Uint32ArrayPrototype
-			case TypedArrayFloat16:
-				proto = vm.Float16ArrayPrototype
-			case TypedArrayFloat32:
-				proto = vm.Float32ArrayPrototype
-			case TypedArrayFloat64:
-				proto = vm.Float64ArrayPrototype
-			case TypedArrayBigInt64:
-				proto = vm.BigInt64ArrayPrototype
-			case TypedArrayBigUint64:
-				proto = vm.BigUint64ArrayPrototype
-			default:
-				proto = vm.TypedArrayPrototype
-			}
-			if proto.IsObject() {
+			proto := vm.PrototypeOf(obj)
+			if proto.Type() == TypeObject {
 				v, _, err := vm.walkPlainObjectChainForKey(proto, key, receiver)
 				return v, err
 			}
@@ -1546,8 +1476,13 @@ func (vm *VM) getSymbolPropertyWithReceiver(obj Value, sym Value, receiver Value
 				return v, err
 			}
 		}
-		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
-			return v, nil
+		// Walk obj's real [[Prototype]] chain, not a hardcoded
+		// Function.prototype: a class constructor's parent is its superclass
+		// (`class Foo extends Uint8Array {}`), and a built-in constructor's is
+		// whatever its Properties table carries (Uint8Array -> %TypedArray%).
+		// Accessors found along the way are invoked with this = receiver.
+		if v, found, err := vm.lookupSymbolWithReceiver(vm.symbolProtoOf(obj), key, receiver); found || err != nil {
+			return v, err
 		}
 		return Undefined, nil
 
@@ -1565,8 +1500,10 @@ func (vm *VM) getSymbolPropertyWithReceiver(obj Value, sym Value, receiver Value
 				}
 			}
 		}
-		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
-			return v, nil
+		// obj's real [[Prototype]] chain, accessors invoked with this = receiver
+		// (see this function's doc comment).
+		if v, found, err := vm.lookupSymbolWithReceiver(vm.symbolProtoOf(obj), key, receiver); found || err != nil {
+			return v, err
 		}
 		return Undefined, nil
 
@@ -1577,8 +1514,10 @@ func (vm *VM) getSymbolPropertyWithReceiver(obj Value, sym Value, receiver Value
 				return v, err
 			}
 		}
-		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
-			return v, nil
+		// obj's real [[Prototype]] chain, accessors invoked with this = receiver
+		// (see this function's doc comment).
+		if v, found, err := vm.lookupSymbolWithReceiver(vm.symbolProtoOf(obj), key, receiver); found || err != nil {
+			return v, err
 		}
 		return Undefined, nil
 
@@ -1589,8 +1528,10 @@ func (vm *VM) getSymbolPropertyWithReceiver(obj Value, sym Value, receiver Value
 				return v, err
 			}
 		}
-		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
-			return v, nil
+		// obj's real [[Prototype]] chain, accessors invoked with this = receiver
+		// (see this function's doc comment).
+		if v, found, err := vm.lookupSymbolWithReceiver(vm.symbolProtoOf(obj), key, receiver); found || err != nil {
+			return v, err
 		}
 		return Undefined, nil
 
@@ -1601,8 +1542,10 @@ func (vm *VM) getSymbolPropertyWithReceiver(obj Value, sym Value, receiver Value
 				return v, err
 			}
 		}
-		if found, v := vm.lookupSymbolOnProtoChain(vm.FunctionPrototype, key); found {
-			return v, nil
+		// obj's real [[Prototype]] chain, accessors invoked with this = receiver
+		// (see this function's doc comment).
+		if v, found, err := vm.lookupSymbolWithReceiver(vm.symbolProtoOf(obj), key, receiver); found || err != nil {
+			return v, err
 		}
 		return Undefined, nil
 
@@ -1908,6 +1851,19 @@ func (vm *VM) GetSymbolPropertyWithGetter(obj Value, symbol Value) (Value, bool,
 			cur = protoVal.AsPlainObject()
 		}
 		return Undefined, false, nil
+	}
+
+	// Callables (constructors above all) resolve through the shared
+	// symbol-key walk: own properties, then the real [[Prototype]] chain,
+	// invoking any accessor's getter with this = obj. Without this case the
+	// function kinds fell straight through to the "non-objects" return below,
+	// so native callers such as TypedArraySpeciesCreate read every
+	// constructor's [[Symbol.species]] as absent and silently used the default
+	// constructor - invisible from the bytecode read path, which has its own
+	// implementation in opGetPropSymbol.
+	switch obj.Type() {
+	case TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction:
+		return vm.lookupSymbolWithReceiver(obj, symKey, obj)
 	}
 
 	// For non-objects, just return undefined

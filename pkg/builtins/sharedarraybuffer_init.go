@@ -222,6 +222,8 @@ func (s *SharedArrayBufferInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Set SharedArrayBuffer prototype in VM for proper prototype chain lookups
 	vmInstance.SharedArrayBufferPrototype = vm.NewValueFromPlainObject(sharedArrayBufferProto)
 
+	defineSpeciesAccessor(vmInstance, ctorWithProps.AsNativeFunctionWithProps().Properties)
+
 	// Register SharedArrayBuffer constructor as global
 	return ctx.DefineGlobal("SharedArrayBuffer", ctorWithProps)
 }

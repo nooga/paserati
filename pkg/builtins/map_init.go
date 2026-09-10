@@ -564,5 +564,7 @@ func (m *MapInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	// Define Map constructor in global scope
+	defineSpeciesAccessor(vmInstance, mapConstructor.AsNativeFunctionWithProps().Properties)
+
 	return ctx.DefineGlobal("Map", mapConstructor)
 }
