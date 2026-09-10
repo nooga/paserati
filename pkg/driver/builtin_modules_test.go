@@ -240,7 +240,9 @@ func TestGlobalFetchAutoStringify(t *testing.T) {
 	}
 }
 
-// TestGlobalFetchBlob tests the Response.blob() method which returns Uint8Array
+// TestGlobalFetchBlob tests that Response.blob() resolves to a real Blob
+// instance (see #395/#396) - not a bare Uint8Array - whose bytes and type
+// round-trip correctly.
 func TestGlobalFetchBlob(t *testing.T) {
 	// Create a test server that returns binary data
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -265,22 +267,25 @@ func TestGlobalFetchBlob(t *testing.T) {
 			const response = await fetch("%s/binary");
 			console.log("Response status:", response.status);
 
-			// Get response as binary data (should be Uint8Array)
+			// Get response body as a Blob (per spec, not a Uint8Array).
 			const blob = await response.blob();
 			console.log("Blob type:", typeof blob);
 			console.log("Blob constructor:", blob.constructor?.name);
-			console.log("Blob length:", blob.length);
-			console.log("Blob byteLength:", blob.byteLength);
-			console.log("Blob buffer:", typeof blob.buffer);
+			console.log("Blob isBlobInstance:", blob instanceof Blob);
+			console.log("Blob size:", blob.size);
+			console.log("Blob mimeType:", blob.type);
 
-			// Check if it's a proper Uint8Array
-			const hasUint8ArrayFeatures = blob.length === 6 &&
-										  blob[0] === 1 &&
-										  blob[5] === 255 &&
-										  blob.byteLength === 6 &&
-										  typeof blob.buffer === "object";
+			const bytes = new Uint8Array(await blob.arrayBuffer());
 
-			return hasUint8ArrayFeatures ? "blob_test_passed" : "blob_test_failed";
+			const hasBlobFeatures = blob instanceof Blob &&
+									 blob.constructor?.name === "Blob" &&
+									 blob.size === 6 &&
+									 blob.type === "application/octet-stream" &&
+									 bytes.length === 6 &&
+									 bytes[0] === 1 &&
+									 bytes[5] === 255;
+
+			return hasBlobFeatures ? "blob_test_passed" : "blob_test_failed";
 		}
 
 		await runTest();
