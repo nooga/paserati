@@ -87,7 +87,7 @@ func (b *BlobInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		return createBlobObject(vmInstance, blob, blobProto), nil
+		return createBlobObject(vmInstance, blob, vm.NewValueFromPlainObject(blobProto)), nil
 	}
 
 	blobConstructor := vm.NewConstructorWithProps(2, false, "Blob", blobConstructorFn)
@@ -137,8 +137,8 @@ func blobPartToBytes(part vm.Value) []byte {
 	return []byte{}
 }
 
-func createBlobObject(vmInstance *vm.VM, blob *Blob, _ *vm.PlainObject) vm.Value {
-	obj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+func createBlobObject(vmInstance *vm.VM, blob *Blob, proto vm.Value) vm.Value {
+	obj := vm.NewObject(proto).AsPlainObject()
 
 	// size property (read-only)
 	obj.SetOwn("size", vm.NumberValue(float64(len(blob.data))))
@@ -207,7 +207,7 @@ func createBlobObject(vmInstance *vm.VM, blob *Blob, _ *vm.PlainObject) vm.Value
 			mimeType: contentType,
 		}
 
-		return createBlobObject(vmInstance, newBlob, nil), nil
+		return createBlobObject(vmInstance, newBlob, proto), nil
 	}))
 
 	// stream() -> ReadableStream over the Blob's already-known bytes,
