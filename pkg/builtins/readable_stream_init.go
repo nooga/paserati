@@ -46,6 +46,9 @@ func (r *ReadableStreamInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("locked", types.Boolean).
 		WithProperty("getReader", types.NewSimpleFunction([]types.Type{}, readerType)).
 		WithProperty("cancel", types.NewOptionalFunction([]types.Type{types.Any}, types.Any, []bool{true}))
+	streamType.WithProperty("tee", types.NewSimpleFunction([]types.Type{}, &types.TupleType{
+		ElementTypes: []types.Type{streamType, streamType},
+	}))
 
 	streamCtorType := types.NewObjectType().
 		WithSimpleCallSignature([]types.Type{}, streamType).             // new ReadableStream()
@@ -129,6 +132,15 @@ type readableStreamState struct {
 	locked bool
 
 	underlyingSource vm.Value // Undefined if none was given
+
+	// goPull/goCancel let a Go-authored producer (currently just tee(), below)
+	// hook read()/cancel() without going through a JS underlyingSource object.
+	// Both are only ever invoked from the main VM goroutine - read() and
+	// cancel() are themselves main-goroutine-only (see their doc comments) -
+	// so, like the rest of this file's teeing logic, they need no locking of
+	// their own beyond s.mu guarding this struct's fields.
+	goPull   func()
+	goCancel func(reason vm.Value) vm.Value
 }
 
 func newReadableStreamState(vmInstance *vm.VM) *readableStreamState {
@@ -244,6 +256,7 @@ func (s *readableStreamState) read() vm.Value {
 	promiseVal := s.vmInstance.NewPendingPromise()
 	s.pendingReads = append(s.pendingReads, &pendingStreamRead{promise: promiseVal.AsPromise()})
 	source := s.underlyingSource
+	goPull := s.goPull
 	s.mu.Unlock()
 
 	// Best-effort backpressure signal: ask a JS-authored underlying source
@@ -255,6 +268,12 @@ func (s *readableStreamState) read() vm.Value {
 			controllerVal := createReadableStreamControllerObject(s.vmInstance, s)
 			_, _ = s.vmInstance.Call(pullFn, source, []vm.Value{controllerVal})
 		}
+	}
+
+	// Same signal, for a Go-authored producer (tee()'s branches) instead of a
+	// JS underlyingSource.
+	if goPull != nil {
+		goPull()
 	}
 
 	return promiseVal
@@ -276,10 +295,18 @@ func (s *readableStreamState) cancel(reason vm.Value) vm.Value {
 	pending := s.pendingReads
 	s.pendingReads = nil
 	source := s.underlyingSource
+	goCancel := s.goCancel
 	s.mu.Unlock()
 
 	for _, pr := range pending {
 		s.vmInstance.ResolvePromise(pr.promise, iterResultValue(s.vmInstance, vm.Undefined, true))
+	}
+
+	// A tee() branch has no JS underlyingSource to forward to - instead it
+	// tells the teeing coordinator it was cancelled, which cancels the
+	// shared original stream once both branches have been.
+	if goCancel != nil {
+		return goCancel(reason)
 	}
 
 	if source.Type() == vm.TypeObject || source.Type() == vm.TypeDictObject {
@@ -306,6 +333,101 @@ func (s *readableStreamState) release() {
 	}
 }
 
+// tee implements ReadableStream.prototype.tee(): like getReader(), it errors
+// if the stream is already locked; otherwise it locks the original stream
+// and returns two independent branch states, each fed its own copy of every
+// chunk a single shared read loop pulls from the original. Cancelling one
+// branch only closes that branch; the original is only cancelled once both
+// branches have been (per spec), via goCancel.
+//
+// Simplifications vs. the full spec: no byte-stream chunk cloning (both
+// branches share the same chunk value/reference, fine as long as consumers
+// don't mutate what they read) and no backpressure/highWaterMark
+// bookkeeping - matching the rest of this file's read()/pull scope note.
+func (s *readableStreamState) tee() (*readableStreamState, *readableStreamState, error) {
+	s.mu.Lock()
+	if s.locked {
+		s.mu.Unlock()
+		return nil, nil, s.vmInstance.NewTypeError("ReadableStream is already locked to a reader")
+	}
+	s.locked = true
+	obj := s.streamObj
+	s.mu.Unlock()
+	if obj != nil {
+		obj.SetOwn("locked", vm.True)
+	}
+
+	branch1 := newReadableStreamState(s.vmInstance)
+	branch2 := newReadableStreamState(s.vmInstance)
+
+	// All of this closure's state is only ever touched from the main VM
+	// goroutine (read()/cancel() are main-goroutine-only), so it needs no
+	// locking of its own.
+	var reading, canceled1, canceled2 bool
+	reason1, reason2 := vm.Undefined, vm.Undefined
+
+	pullAlgorithm := func() {
+		if reading {
+			return
+		}
+		reading = true
+		promiseVal := s.read()
+		s.vmInstance.AddPromiseReaction(promiseVal, true, func(result vm.Value) {
+			reading = false
+			resultObj := result.AsPlainObject()
+			if resultObj == nil {
+				return
+			}
+			doneVal, _ := resultObj.GetOwn("done")
+			chunkVal, _ := resultObj.GetOwn("value")
+			if doneVal.AsBoolean() {
+				if !canceled1 {
+					branch1.close()
+				}
+				if !canceled2 {
+					branch2.close()
+				}
+				return
+			}
+			if !canceled1 {
+				branch1.enqueue(chunkVal)
+			}
+			if !canceled2 {
+				branch2.enqueue(chunkVal)
+			}
+		})
+		s.vmInstance.AddPromiseReaction(promiseVal, false, func(reason vm.Value) {
+			reading = false
+			if !canceled1 {
+				branch1.errorOut(reason)
+			}
+			if !canceled2 {
+				branch2.errorOut(reason)
+			}
+		})
+	}
+
+	branch1.goPull = pullAlgorithm
+	branch2.goPull = pullAlgorithm
+
+	branch1.goCancel = func(reason vm.Value) vm.Value {
+		canceled1, reason1 = true, reason
+		if canceled2 {
+			return s.cancel(vm.NewArrayWithArgs([]vm.Value{reason1, reason2}))
+		}
+		return s.vmInstance.NewResolvedPromise(vm.Undefined)
+	}
+	branch2.goCancel = func(reason vm.Value) vm.Value {
+		canceled2, reason2 = true, reason
+		if canceled1 {
+			return s.cancel(vm.NewArrayWithArgs([]vm.Value{reason1, reason2}))
+		}
+		return s.vmInstance.NewResolvedPromise(vm.Undefined)
+	}
+
+	return branch1, branch2, nil
+}
+
 func createReadableStreamObject(vmInstance *vm.VM, state *readableStreamState, streamProto, readerProto *vm.PlainObject) vm.Value {
 	obj := vm.NewObject(vm.NewValueFromPlainObject(streamProto)).AsPlainObject()
 	state.streamObj = obj
@@ -329,6 +451,16 @@ func createReadableStreamObject(vmInstance *vm.VM, state *readableStreamState, s
 			reason = args[0]
 		}
 		return state.cancel(reason), nil
+	}))
+
+	obj.SetOwnNonEnumerable("tee", vm.NewNativeFunction(0, false, "tee", func(args []vm.Value) (vm.Value, error) {
+		branch1State, branch2State, err := state.tee()
+		if err != nil {
+			return vm.Undefined, err
+		}
+		branch1Val := createReadableStreamObject(vmInstance, branch1State, streamProto, readerProto)
+		branch2Val := createReadableStreamObject(vmInstance, branch2State, streamProto, readerProto)
+		return vm.NewArrayWithArgs([]vm.Value{branch1Val, branch2Val}), nil
 	}))
 
 	// [Symbol.asyncIterator] - the surface every real SDK's own
