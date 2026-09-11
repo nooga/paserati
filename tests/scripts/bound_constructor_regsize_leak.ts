@@ -2,10 +2,16 @@
 // constructor pushed its frame without setting newFrame.allocatedRegSize,
 // so that stale frame-slot leftover value (not requiredRegs) was reclaimed
 // on return - permanently leaking (or over-reclaiming) registers on every
-// construction through a bound function. Enough iterations exhausted the
-// shared register stack and crashed with "Maximum call stack size exceeded".
-// See docs/runtime-production-roadmap.md#b1.
-// expect: 60000
+// construction through a bound function. Confirmed fixed against the real
+// tsc.js/lib.dom.d.ts repro (see #399). See docs/runtime-production-roadmap.md#b1.
+//
+// A handful of iterations is enough: vm.checkRegWindowRelease (#402 B4
+// invariant checker) catches a wrong reclaim size on the very first bad
+// return, rather than needing tens of thousands of iterations to exhaust
+// the (pre-B4) fixed-size register file - this test used to need 60,000
+// iterations to overflow and fail; now one is enough, and it will keep
+// catching a regression even once B4 removes that fixed ceiling.
+// expect: 5
 let count = 0;
 
 function Big(this: any) {
@@ -18,7 +24,7 @@ function Big(this: any) {
 
 const Bound = Big.bind(null);
 
-for (let i = 0; i < 60000; i++) {
+for (let i = 0; i < 5; i++) {
   new (Bound as any)();
 }
 

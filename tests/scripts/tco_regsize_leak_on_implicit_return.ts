@@ -5,11 +5,17 @@
 // OpReturnUndefined used to reclaim function.RegisterSize (the final, small
 // function's own size) instead of frame.allocatedRegSize (the frame's actual
 // TCO-expanded allocation, which never shrinks), permanently leaking the
-// difference on every call. Enough iterations of this pattern exhausted the
-// shared register stack and crashed with "Register stack overflow" - this is
-// believed to be (part of) the root cause behind #399's tsc.js/lib.dom.d.ts
-// crash. See docs/runtime-production-roadmap.md#b1.
-// expect: 60000
+// difference on every call. This was (part of) the root cause behind #399's
+// tsc.js/lib.dom.d.ts crash, confirmed fixed there. See
+// docs/runtime-production-roadmap.md#b1.
+//
+// A handful of iterations is enough: vm.checkRegWindowRelease (#402 B4
+// invariant checker) catches a wrong reclaim size on the very first bad
+// return, rather than needing tens of thousands of iterations to exhaust
+// the (pre-B4) fixed-size register file - this test used to need 60,000
+// iterations to overflow and fail; now one is enough, and it will keep
+// catching a regression even once B4 removes that fixed ceiling.
+// expect: 5
 let counter = 0;
 
 function leaf(): void {
@@ -31,7 +37,7 @@ function driver(depth: number): void {
   return big(); // tail call into the many-locals function
 }
 
-for (let i = 0; i < 60000; i++) {
+for (let i = 0; i < 5; i++) {
   driver(0);
 }
 

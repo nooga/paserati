@@ -147,6 +147,7 @@ type CallFrame struct {
 	registers           []Value
 	spillSlots          []Value  // Spill slots for register overflow (allocated only if needed)
 	allocatedRegSize    int      // Actual allocated register window size (may differ from function.RegisterSize due to TCO expansion)
+	regSlotBeforePush   int      // vm.nextRegSlot at the moment this frame's register window was allocated (i.e. the window's base offset). Recorded by every fresh-frame push site; checkRegWindowRelease asserts that reclaiming allocatedRegSize registers restores vm.nextRegSlot to exactly this value, catching a wrong reclaim size at its call site instead of a much-later, unexplained register-stack overflow (#399/#400/#402 B4 invariant). TCO expansion updates allocatedRegSize without touching this field, since the window's base doesn't move.
 	targetRegister      byte     // Which register in the CALLER the result should go into
 	thisValue           Value    // The 'this' value for method calls (undefined for regular function calls)
 	homeObject          Value    // The [[HomeObject]] for super property access (object where method is defined)
@@ -485,6 +486,57 @@ func funcName(fn *FunctionObject) string {
 		return fn.Name
 	}
 	return "<anonymous>"
+}
+
+// StrictRegWindowChecks gates checkRegWindowRelease's panic. Off by default:
+// a broad sweep while landing the checker turned up at least one pre-existing,
+// out-of-scope register-accounting mismatch reachable from real code (derived-
+// constructor construction whose return triggers the ECMAScript 10.2.2
+// non-object/uninitialized-this TypeError/ReferenceError while unwinding
+// through an already-popped caller frame - see the linked issue), which
+// over-reclaims but never leaks, so it stayed invisible until this checker
+// went looking. Panicking on that unconditionally would turn ~80 previously-
+// passing Test262 tests into new failures for a bug outside B1/B4's scope.
+// The paserati test suite (tests/scripts_test.go's TestMain) turns this on,
+// so tco_regsize_leak_on_implicit_return.ts and bound_constructor_regsize_leak.ts
+// still catch a real B1 regression immediately instead of only via later
+// exhaustion; ordinary/production/test262 runs stay exactly as before.
+var StrictRegWindowChecks = false
+
+// checkRegWindowRelease asserts that reclaiming `amount` registers for
+// `frame` restores vm.nextRegSlot to exactly the value recorded when this
+// frame's register window was allocated (CallFrame.regSlotBeforePush). This
+// is the exact invariant that #399/#400 violated - a frame-exit path that
+// reclaimed the wrong number of registers (a stale/wrong-function's
+// RegisterSize instead of this frame's actual allocatedRegSize), silently
+// leaking or over-reclaiming until a much later, unrelated call site hit
+// "Register stack overflow" or "Maximum call stack size exceeded" with no
+// clue which return path was actually responsible. Call this immediately
+// before performing the real `vm.nextRegSlot -= amount`; it never mutates
+// state itself, so it changes no behavior when the invariant holds, and -
+// only when StrictRegWindowChecks is on (see its own comment) - panics
+// immediately, at the guilty call site, when it doesn't.
+//
+// `site` is a short label (opcode/function name) identifying the caller,
+// included in the panic message. Once B4 replaces the flat register stack
+// with segments, this same check generalizes directly: regSlotBeforePush
+// becomes a (segment, offset) pair instead of a flat int, and the
+// comparison is unchanged in spirit.
+func (vm *VM) checkRegWindowRelease(frame *CallFrame, amount int, site string) {
+	if !StrictRegWindowChecks {
+		return
+	}
+	after := vm.nextRegSlot - amount
+	if after != frame.regSlotBeforePush {
+		funcN := "<nil closure>"
+		if frame.closure != nil {
+			funcN = funcName(frame.closure.Fn)
+		}
+		panic(fmt.Sprintf(
+			"register window imbalance at %s (func=%q): reclaiming %d registers would leave nextRegSlot=%d, expected %d (off by %d - %s)",
+			site, funcN, amount, after, frame.regSlotBeforePush, after-frame.regSlotBeforePush,
+			map[bool]string{true: "leaked", false: "over-reclaimed"}[after > frame.regSlotBeforePush]))
+	}
 }
 
 // dumpFrameStack prints a compact snapshot of the current VM frame stack for debugging.
@@ -1372,7 +1424,8 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	frame.closure = mainClosureObj
 	frame.ip = 0
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+scriptRegSize]
-	frame.allocatedRegSize = scriptRegSize // Track actual allocation for proper cleanup
+	frame.allocatedRegSize = scriptRegSize   // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = vm.nextRegSlot // B4 invariant: record window base for checkRegWindowRelease
 
 	// For nested Interpret calls (eval), initialize registers to Undefined to avoid
 	// stale values from previous executions affecting the result
@@ -6393,6 +6446,7 @@ startExecution:
 			}
 
 			vm.frameCount--
+			vm.checkRegWindowRelease(frame, returningFrameRegSize, "OpReturn")
 			vm.nextRegSlot -= returningFrameRegSize // Reclaim register space
 
 			if debugVM {
@@ -6694,6 +6748,7 @@ startExecution:
 			}
 
 			vm.frameCount--
+			vm.checkRegWindowRelease(frame, returningFrameRegSize, "OpReturnUndefined")
 			vm.nextRegSlot -= returningFrameRegSize
 
 			if debugVM {
@@ -11988,7 +12043,8 @@ startExecution:
 				}
 				newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
-				newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
+				newFrame.allocatedRegSize = requiredRegs    // Track actual allocation for proper cleanup
+				newFrame.regSlotBeforePush = vm.nextRegSlot // B4 invariant: record window base for checkRegWindowRelease
 				vm.nextRegSlot += requiredRegs
 
 				// Allocate spill slots if this function needs them (for register overflow)
@@ -12223,7 +12279,8 @@ startExecution:
 				}
 				newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 				newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
-				newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
+				newFrame.allocatedRegSize = requiredRegs    // Track actual allocation for proper cleanup
+				newFrame.regSlotBeforePush = vm.nextRegSlot // B4 invariant: record window base for checkRegWindowRelease
 				vm.nextRegSlot += requiredRegs
 
 				// Allocate spill slots if this function needs them (for register overflow)
@@ -12712,7 +12769,8 @@ startExecution:
 					newFrame.args = finalArgs
 					newFrame.argumentsObject = Undefined
 					newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
-					newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
+					newFrame.allocatedRegSize = requiredRegs    // Track actual allocation for proper cleanup
+					newFrame.regSlotBeforePush = vm.nextRegSlot // B4 invariant: record window base for checkRegWindowRelease
 					vm.nextRegSlot += requiredRegs
 
 					// Copy combined args to registers
@@ -15703,6 +15761,7 @@ startExecution:
 			constructorThisValue := frame.thisValue
 
 			vm.frameCount--
+			vm.checkRegWindowRelease(frame, returningFrameRegSize, "OpReturnFinally")
 			vm.nextRegSlot -= returningFrameRegSize // Reclaim register space
 
 			if vm.frameCount == 0 {
@@ -15901,6 +15960,7 @@ startExecution:
 				isDerivedConstructor := frame.closure != nil && frame.closure.Fn.IsDerivedConstructor
 
 				vm.frameCount--
+				vm.checkRegWindowRelease(frame, returningFrameRegSize, "OpHandlePending:ActionReturn")
 				vm.nextRegSlot -= returningFrameRegSize
 
 				if vm.frameCount == 0 {
@@ -18292,6 +18352,7 @@ startExecution:
 				isDerivedConstructor := frame.closure != nil && frame.closure.Fn.IsDerivedConstructor
 
 				vm.frameCount--
+				vm.checkRegWindowRelease(frame, returningFrameRegSize, "ActionReturn-fallback")
 				vm.nextRegSlot -= returningFrameRegSize
 
 				if vm.frameCount == 0 {
@@ -18545,6 +18606,7 @@ func (vm *VM) popTopLevelScriptFrame(frame *CallFrame) {
 		vm.closeFrameUpvalues(frame)
 	}
 	vm.frameCount--
+	vm.checkRegWindowRelease(frame, frame.allocatedRegSize, "popTopLevelScriptFrame")
 	vm.nextRegSlot -= frame.allocatedRegSize
 	if vm.nextRegSlot < 0 {
 		vm.nextRegSlot = 0
@@ -20550,6 +20612,7 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
 	frame.allocatedRegSize = regSize           // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = vm.nextRegSlot   // B4 invariant: record window base for checkRegWindowRelease
 	frame.ip = genObj.Frame.pc                 // Resume from saved PC
 	frame.targetRegister = destReg             // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue   // Restore the saved 'this' value
@@ -20758,11 +20821,13 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 				// it tracks actual allocation, which may exceed the frame's current
 				// function's own RegisterSize because of TCO expansion earlier in a
 				// tail-call chain (see the matching OpReturn* comments, and #399/B1).
+				vm.checkRegWindowRelease(f, f.allocatedRegSize, "resumeGeneratorWithException:staleDirectCall")
 				vm.nextRegSlot -= f.allocatedRegSize
 				vm.frameCount--
 				break
 			}
 			// Pop non-sentinel, non-direct frames (shouldn't happen normally)
+			vm.checkRegWindowRelease(f, f.allocatedRegSize, "resumeGeneratorWithException:staleNonDirect")
 			vm.nextRegSlot -= f.allocatedRegSize
 			vm.frameCount--
 		}
@@ -20825,6 +20890,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
 	frame.allocatedRegSize = regSize           // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = vm.nextRegSlot   // B4 invariant: record window base for checkRegWindowRelease
 	frame.ip = genObj.Frame.pc                 // Resume from saved PC
 	frame.targetRegister = destReg             // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue   // Restore the saved 'this' value
@@ -21027,6 +21093,7 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
 	frame.allocatedRegSize = regSize           // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = vm.nextRegSlot   // B4 invariant: record window base for checkRegWindowRelease
 	frame.ip = genObj.Frame.pc                 // Resume from saved PC
 	frame.targetRegister = destReg             // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue   // Restore the saved 'this' value
@@ -21237,6 +21304,7 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
 	frame.allocatedRegSize = regSize               // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = vm.nextRegSlot       // B4 invariant: record window base for checkRegWindowRelease
 	frame.ip = promiseObj.Frame.pc                 // Resume from saved PC
 	frame.targetRegister = destReg                 // Target in sentinel frame
 	frame.thisValue = promiseObj.ThisValue         // Restore original this value
@@ -21390,6 +21458,7 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
 	frame.allocatedRegSize = regSize               // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = vm.nextRegSlot       // B4 invariant: record window base for checkRegWindowRelease
 	frame.ip = promiseObj.Frame.pc                 // Resume from saved PC
 	frame.targetRegister = destReg                 // Target in sentinel frame
 	frame.thisValue = promiseObj.ThisValue         // Restore original this value
@@ -21799,8 +21868,9 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	for i := range frame.registers {
 		frame.registers[i] = Undefined // slots above nextRegSlot hold stale values
 	}
-	frame.allocatedRegSize = scriptRegSize // Track actual allocation for proper cleanup
-	frame.targetRegister = 0               // a direct-call return writes no caller register
+	frame.allocatedRegSize = scriptRegSize   // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = vm.nextRegSlot // B4 invariant: record window base for checkRegWindowRelease
+	frame.targetRegister = 0                 // a direct-call return writes no caller register
 	frame.thisValue = Undefined
 	frame.homeObject = Undefined
 	frame.isConstructorCall = false

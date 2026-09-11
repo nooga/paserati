@@ -210,10 +210,10 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.ip = 0
 		newFrame.targetRegister = destReg
 		newFrame.thisValue = newInstance
-		newFrame.homeObject = instancePrototype  // Set [[HomeObject]] for super property access in constructors
+		newFrame.homeObject = instancePrototype // Set [[HomeObject]] for super property access in constructors
 		newFrame.isConstructorCall = true
-		newFrame.isDirectCall = false            // Not a direct call (spread new)
-		newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
+		newFrame.isDirectCall = false    // Not a direct call (spread new)
+		newFrame.isSentinelFrame = false // Clear sentinel flag when reusing frame
 		// Clear any stale open-upvalue chain left by a prior occupant of this
 		// frame slot - every other frame-setup site does this (OpNew at
 		// vm.go, prepareCall's regular path at call.go), and this one didn't.
@@ -229,7 +229,8 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.args = spreadArgs
 		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
-		newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
+		newFrame.allocatedRegSize = requiredRegs    // Track actual allocation for proper cleanup
+		newFrame.regSlotBeforePush = vm.nextRegSlot // B4 invariant: record window base for checkRegWindowRelease
 		vm.nextRegSlot += requiredRegs
 
 		// Allocate spill slots if this function needs them (for register overflow)
@@ -334,10 +335,10 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.ip = 0
 		newFrame.targetRegister = destReg
 		newFrame.thisValue = newInstance
-		newFrame.homeObject = instancePrototype  // Set [[HomeObject]] for super property access in constructors
+		newFrame.homeObject = instancePrototype // Set [[HomeObject]] for super property access in constructors
 		newFrame.isConstructorCall = true
-		newFrame.isDirectCall = false            // Not a direct call (spread new)
-		newFrame.isSentinelFrame = false         // Clear sentinel flag when reusing frame
+		newFrame.isDirectCall = false    // Not a direct call (spread new)
+		newFrame.isSentinelFrame = false // Clear sentinel flag when reusing frame
 		// Clear any stale open-upvalue chain left by a prior occupant of this
 		// frame slot - every other frame-setup site does this (OpNew at
 		// vm.go, prepareCall's regular path at call.go), and this one didn't.
@@ -352,7 +353,8 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.args = spreadArgs
 		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
 		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
-		newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
+		newFrame.allocatedRegSize = requiredRegs    // Track actual allocation for proper cleanup
+		newFrame.regSlotBeforePush = vm.nextRegSlot // B4 invariant: record window base for checkRegWindowRelease
 		vm.nextRegSlot += requiredRegs
 
 		// Allocate spill slots if this function needs them (for register overflow)
