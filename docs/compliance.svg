@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="320" viewBox="0 0 900 320" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="320" viewBox="0 0 1080 320" role="img" aria-labelledby="title desc">
   <title id="title">Paserati compliance snapshot</title>
-  <desc id="desc">Three pie charts for Test262 language, Test262 built-ins, and TypeScript conformance pass rates.</desc>
+  <desc id="desc">Pie charts for Test262 language, Test262 built-ins, and TypeScript conformance (strict error codes and loose) pass rates.</desc>
   <style>
     .bg { fill: #fbfcfe; }
     .group { font: 600 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #304050; }
@@ -9,39 +9,49 @@
     .caption { font: 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #66717f; }
     .legend { font: 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #3a4653; }
   </style>
-  <rect class="bg" x="0" y="0" width="900" height="320" rx="8" />
+  <rect class="bg" x="0" y="0" width="1080" height="320" rx="8" />
   <text x="250" y="42" text-anchor="middle" class="group">Test262 compliance</text>
-  <text x="690" y="42" text-anchor="middle" class="group">TypeScript conformance</text>
+  <text x="710" y="42" text-anchor="middle" class="group">TypeScript conformance</text>
   <line x1="470" y1="28" x2="470" y2="250" stroke="#d9e0e8" stroke-width="1" />
   <g aria-label="Test262 language">
-<path d="M 165.00 135.00 L 152.34 74.31 A 62.00 62.00 0 1 0 165.00 73.00 Z" fill="#20a060" />
-<path d="M 165.00 135.00 L 165.00 73.00 A 62.00 62.00 0 0 0 152.34 74.31 Z" fill="#d64b4b" />
+<path d="M 165.00 135.00 L 157.57 73.45 A 62.00 62.00 0 1 0 165.00 73.00 Z" fill="#20a060" />
+<path d="M 165.00 135.00 L 165.00 73.00 A 62.00 62.00 0 0 0 157.57 73.45 Z" fill="#d64b4b" />
 <circle cx="165" cy="135" r="38" fill="#ffffff" />
-<text x="165" y="131" text-anchor="middle" class="percent">96.7%</text>
+<text x="165" y="131" text-anchor="middle" class="percent">98.1%</text>
 <text x="165" y="153" text-anchor="middle" class="caption">pass</text>
 <text x="165" y="233" text-anchor="middle" class="title">Test262 language</text>
-<text x="165" y="255" text-anchor="middle" class="caption">22,753/23,523</text>
+<text x="165" y="255" text-anchor="middle" class="caption">23,073/23,523</text>
 </g>
   <g aria-label="Test262 built-ins">
-<path d="M 340.00 135.00 L 288.01 168.78 A 62.00 62.00 0 1 0 340.00 73.00 Z" fill="#20a060" />
-<path d="M 340.00 135.00 L 340.00 73.00 A 62.00 62.00 0 0 0 288.01 168.78 Z" fill="#d64b4b" />
+<path d="M 340.00 135.00 L 279.31 147.69 A 62.00 62.00 0 1 0 340.00 73.00 Z" fill="#20a060" />
+<path d="M 340.00 135.00 L 340.00 73.00 A 62.00 62.00 0 0 0 279.31 147.69 Z" fill="#d64b4b" />
 <circle cx="340" cy="135" r="38" fill="#ffffff" />
-<text x="340" y="131" text-anchor="middle" class="percent">65.8%</text>
+<text x="340" y="131" text-anchor="middle" class="percent">71.7%</text>
 <text x="340" y="153" text-anchor="middle" class="caption">pass</text>
 <text x="340" y="233" text-anchor="middle" class="title">Test262 built-ins</text>
-<text x="340" y="255" text-anchor="middle" class="caption">15,334/23,294</text>
+<text x="340" y="255" text-anchor="middle" class="caption">16,706/23,294</text>
 </g>
-  <g aria-label="TypeScript 6.0.3">
-<path d="M 690.00 135.00 L 630.18 151.29 A 62.00 62.00 0 1 0 690.00 73.00 Z" fill="#20a060" />
-<path d="M 690.00 135.00 L 654.87 83.92 A 62.00 62.00 0 0 0 630.18 151.29 Z" fill="#d64b4b" />
-<path d="M 690.00 135.00 L 690.00 73.00 A 62.00 62.00 0 0 0 654.87 83.92 Z" fill="#aeb7c2" />
-<circle cx="690" cy="135" r="38" fill="#ffffff" />
-<text x="690" y="131" text-anchor="middle" class="percent">70.8%</text>
-<text x="690" y="153" text-anchor="middle" class="caption">pass</text>
-<text x="690" y="233" text-anchor="middle" class="title">TypeScript 6.0.3</text>
-<text x="690" y="255" text-anchor="middle" class="caption">3,491/4,933</text>
+  <g aria-label="TypeScript 6.0.3 (strict error codes)">
+<path d="M 610.00 135.00 L 641.71 188.28 A 62.00 62.00 0 0 0 610.00 73.00 Z" fill="#20a060" />
+<path d="M 610.00 135.00 L 574.87 83.92 A 62.00 62.00 0 0 0 641.71 188.28 Z" fill="#d64b4b" />
+<path d="M 610.00 135.00 L 610.00 73.00 A 62.00 62.00 0 0 0 574.87 83.92 Z" fill="#aeb7c2" />
+<circle cx="610" cy="135" r="38" fill="#ffffff" />
+<text x="610" y="131" text-anchor="middle" class="percent">41.5%</text>
+<text x="610" y="153" text-anchor="middle" class="caption">pass</text>
+<text x="610" y="233" text-anchor="middle" class="title">strict error codes</text>
+<text x="610" y="255" text-anchor="middle" class="caption">2,045/4,933</text>
 </g>
-  <g transform="translate(575 278)">
+  <g aria-label="TypeScript 6.0.3 (loose)">
+<path d="M 790.00 135.00 L 730.12 151.06 A 62.00 62.00 0 1 0 790.00 73.00 Z" fill="#20a060" />
+<path d="M 790.00 135.00 L 754.87 83.92 A 62.00 62.00 0 0 0 730.12 151.06 Z" fill="#d64b4b" />
+<path d="M 790.00 135.00 L 790.00 73.00 A 62.00 62.00 0 0 0 754.87 83.92 Z" fill="#aeb7c2" />
+<circle cx="790" cy="135" r="38" fill="#ffffff" />
+<text x="790" y="131" text-anchor="middle" class="percent">70.8%</text>
+<text x="790" y="153" text-anchor="middle" class="caption">pass</text>
+<text x="790" y="233" text-anchor="middle" class="title">loose</text>
+<text x="790" y="255" text-anchor="middle" class="caption">3,494/4,933</text>
+</g>
+  <g transform="translate(584 278)">
     <rect x="0" y="-10" width="12" height="12" fill="#20a060" rx="2" /><text x="18" y="1" class="legend">Pass</text>
     <rect x="84" y="-10" width="12" height="12" fill="#d64b4b" rx="2" /><text x="102" y="1" class="legend">Fail</text>
     <rect x="162" y="-10" width="12" height="12" fill="#aeb7c2" rx="2" /><text x="180" y="1" class="legend">Skip</text>
