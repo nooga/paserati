@@ -168,6 +168,48 @@ func TestRegisterDirectoryPushExceedingBlockSizePanics(t *testing.T) {
 	d.push(registerBlockSize + 1)
 }
 
+// TestRegisterDirectoryResetClearsReserveBlocksToo guards against reset()
+// only clearing blocks up to the cursor: popTo's trim() deliberately keeps
+// a small reserve of blocks allocated *past* the cursor for reuse, and those
+// still hold whatever was last written into them. reset() must clear the
+// entire block list, not stop at d.cur.block, or those reserve blocks keep
+// retaining large objects/closures across VM reuse - defeating Reset()'s
+// purpose for exactly the blocks most likely to have just been active.
+func TestRegisterDirectoryResetClearsReserveBlocksToo(t *testing.T) {
+	d := newRegisterDirectory(1000)
+
+	// Push into several blocks, write a recognizable value into the last
+	// one, then pop back to the start - trim() will keep that block (and a
+	// few more) in the reserve rather than releasing it immediately.
+	var win []Value
+	for i := 0; i < registerDirectoryReserveBlocks+2; i++ {
+		w, _, _, ok := d.push(registerBlockSize)
+		if !ok {
+			t.Fatalf("push %d failed", i)
+		}
+		win = w
+	}
+	win[0] = IntegerValue(99)
+	blocksBeforeReset := len(d.blocks)
+
+	d.popTo(registerMark{block: 0, offset: 0})
+	if len(d.blocks) == 0 {
+		t.Fatalf("expected trim to keep at least the reserve, got 0 blocks")
+	}
+
+	d.reset()
+
+	// Every block still allocated (the reserve trim kept) must have been
+	// cleared, not just the ones up to the post-reset cursor (block 0).
+	for i, blk := range d.blocks {
+		for j, v := range blk.data {
+			if v != Undefined {
+				t.Fatalf("expected reset() to clear block %d slot %d, found %v (blocksBeforeReset=%d)", i, j, v, blocksBeforeReset)
+			}
+		}
+	}
+}
+
 func TestRegisterDirectoryTrimReleasesDeepExcursion(t *testing.T) {
 	d := newRegisterDirectory(1000)
 

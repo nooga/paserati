@@ -692,3 +692,100 @@ func TestSpreadNewDoesNotCrossCloseSuspendedAsyncUpvalues(t *testing.T) {
 		t.Errorf("expected f(\"a\")'s closure to observe its own post-await mutation (101), got %s", value.Inspect())
 	}
 }
+
+// recursionPadding returns a body that recurses `depth` times, using ~26
+// registers per level (a non-tail recursive call, so B1's TCO can't reuse a
+// single frame across levels - each level genuinely pushes its own window),
+// then invokes `atBottom` once at the deepest point. Used to drive the B4
+// register directory (pkg/vm/register_directory.go) across many blocks
+// before/while running whatever `atBottom` does, so a generator/async frame
+// created or resumed from deep inside gets a real chance at having its own
+// window carved from a block a skip landed it in - not just block 0.
+func recursionPadding(depth int, atBottom string) string {
+	return `
+		function pad(depth) {
+			if (depth <= 0) {
+				` + atBottom + `
+				return 0;
+			}
+			let a=0,b=1,c=2,d=3,e=4,f=5,g=6,h=7,i=8,j=9,k=10,l=11,m=12,n=13,o=14,p=15,q=16,r=17,s=18,t=19,u=20,v=21,w=22,x=23,y=24,z=25;
+			// Non-tail: arithmetic after the recursive call keeps this out of
+			// tail position, so each level keeps its own register window live
+			// instead of TCO reusing a single frame across all ` + strconv.Itoa(depth) + ` levels.
+			let sub = pad(depth - 1);
+			return sub + a - a + b - b + c - c + z - z;
+		}
+		pad(` + strconv.Itoa(depth) + `);
+	`
+}
+
+// TestGeneratorClosureSurvivesAcrossRegisterBlockBoundary covers the one
+// case the B4 register directory (pkg/vm/register_directory.go) can get
+// wrong that no other test here reaches: a generator's own register window,
+// or one of its resumptions, landing via a block skip rather than at block
+// 0 - open upvalues are the mechanism every other test in this file
+// exercises, but always with the whole call stack shallow enough to stay in
+// a single block. Each of the three .next() calls below runs from a
+// different recursion depth (and so a different register-directory cursor
+// position), maximizing the chance that at least one of them lands the
+// generator's window via a skip - confirmed directly via
+// RegisterDirectoryBlockCount() rather than left to chance, so this test
+// fails loudly (not silently passing) if it ever stops actually exercising
+// a multi-block state.
+func TestGeneratorClosureSurvivesAcrossRegisterBlockBoundary(t *testing.T) {
+	p := NewPaserati()
+	p.SetSkipTypeCheck(true)
+
+	if _, errs := p.RunCode(`
+		function* g() {
+			let n = 1;
+			const get = () => n;
+			yield get();
+			n = n + 10;
+			yield get();
+			n = n + 100;
+			yield get();
+		}
+		let it = g();
+		let captured = [];
+	`, RunOptions{}); len(errs) > 0 {
+		t.Fatalf("setup errors: %v", errs)
+	}
+
+	// Three separate top-level runs, each recursing to a different depth
+	// before calling it.next() - so each .next() call's own frame push
+	// happens from a different register-directory cursor position.
+	for _, depth := range []int{3, 41, 17} {
+		src := recursionPadding(depth, "captured.push(it.next().value);")
+		if _, errs := p.RunCode(src, RunOptions{Script: true}); len(errs) > 0 {
+			t.Fatalf("depth=%d: RunCode failed: %v", depth, errs[0])
+		}
+	}
+
+	// Empirically 5 (== 1 + registerDirectoryReserveBlocks) once everything
+	// unwinds back to block 0 - trim() keeps that many past the final
+	// cursor regardless of exactly how deep the excursion peaked, as long as
+	// it reached at least that many blocks at some point (see trim's own
+	// doc comment). Asserting >=3 leaves margin against reasonable retuning
+	// of the padding/reserve constants while still ruling out "never left
+	// block 0" (which would leave only 1 block allocated, never trimmed).
+	if blocks := p.GetVM().RegisterDirectoryBlockCount(); blocks < 3 {
+		t.Fatalf("expected the padding to have driven the register directory across a block boundary (>=3 blocks retained), got %d - "+
+			"this test needs re-tuning (deeper recursion, or more registers per level) to actually exercise a block skip, "+
+			"or something now trims more eagerly than expected", blocks)
+	}
+
+	captured, ok := p.GetVM().GetGlobal("captured")
+	if !ok || !captured.IsArray() {
+		t.Fatalf("expected captured array, got %v", captured)
+	}
+	arr := captured.AsArray()
+	if arr.Length() != 3 {
+		t.Fatalf("expected 3 captured values, got %d", arr.Length())
+	}
+	got := [3]string{arr.Get(0).ToString(), arr.Get(1).ToString(), arr.Get(2).ToString()}
+	want := [3]string{"1", "11", "111"}
+	if got != want {
+		t.Errorf("generator closure's captured local was corrupted across a block-boundary-spanning suspend/resume: got %v, want %v", got, want)
+	}
+}
