@@ -6678,7 +6678,11 @@ startExecution:
 			if debugVM {
 				fmt.Printf("[DBG] Popping frame...\n")
 			}
-			returningFrameRegSize := function.RegisterSize
+			// Use allocatedRegSize (not function.RegisterSize) which tracks actual
+			// allocation - may differ from the current function's own RegisterSize
+			// because of TCO expansion by an earlier link in a tail-call chain
+			// (see the matching comment on OpReturn above, and #399/B1).
+			returningFrameRegSize := frame.allocatedRegSize
 			callerTargetRegister := frame.targetRegister
 			isConstructor := frame.isConstructorCall
 			constructorThisValue := frame.thisValue
@@ -12708,6 +12712,7 @@ startExecution:
 					newFrame.args = finalArgs
 					newFrame.argumentsObject = Undefined
 					newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
+					newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
 					vm.nextRegSlot += requiredRegs
 
 					// Copy combined args to registers
@@ -15688,7 +15693,11 @@ startExecution:
 			}
 
 			// Pop the current frame (same logic as OpReturn)
-			returningFrameRegSize := function.RegisterSize
+			// Use allocatedRegSize (not function.RegisterSize): it tracks actual
+			// allocation, which may exceed the current function's own RegisterSize
+			// because of TCO expansion by an earlier link in a tail-call chain
+			// (see the matching comment on OpReturn/OpReturnUndefined, and #399/B1).
+			returningFrameRegSize := frame.allocatedRegSize
 			callerTargetRegister := frame.targetRegister
 			isConstructor := frame.isConstructorCall
 			constructorThisValue := frame.thisValue
@@ -15883,7 +15892,9 @@ startExecution:
 				}
 
 				// Pop the current frame
-				returningFrameRegSize := function.RegisterSize
+				// Use allocatedRegSize (not function.RegisterSize): see the matching
+				// comment on OpReturn/OpReturnUndefined/OpReturnFinally (#399/B1).
+				returningFrameRegSize := frame.allocatedRegSize
 				callerTargetRegister := frame.targetRegister
 				isConstructor := frame.isConstructorCall
 				constructorThisValue := frame.thisValue
@@ -18229,10 +18240,211 @@ startExecution:
 				}
 				continue // Let exception unwinding take over
 			case ActionReturn:
-				// Resume the return with saved value
+				// Resume the return with saved value. This mirrors
+				// OpHandlePending's ActionReturn arm exactly (#401/B1): that
+				// opcode is the normal, compiler-emitted way a pending return
+				// gets completed after a finally block, and this generic
+				// fallback only exists in case some compiled shape reaches
+				// finallyDepth==0 without an OpHandlePending having run first.
+				// TODO(#401): factor this and OpHandlePending's/OpReturnFinally's
+				// near-identical pop-and-resume logic into one shared helper
+				// instead of three copies.
+
+				// Check if we have more finally or iterator cleanup handlers
+				// that need to run BEFORE completing the return.
+				if nextHandler := vm.findPendingHandler(frame.ip, true); nextHandler != nil {
+					// Keep pendingAction as ActionReturn so the chain continues.
+					frame.ip = nextHandler.HandlerPC
+					ip = nextHandler.HandlerPC
+					vm.finallyDepth++
+					continue
+				}
+
+				// No more handlers - execute the pending return.
+				result := vm.pendingValue
 				vm.pendingAction = ActionNone
-				_ = vm.pendingValue // TODO: Implement return logic
 				vm.pendingValue = Undefined
+
+				// Close upvalues for the returning frame (only if this function has captured locals)
+				if frame.openUpvalues != nil {
+					vm.closeFrameUpvalues(frame)
+				}
+
+				// Check if this is a generator function returning
+				if frame.generatorObj != nil {
+					frame.generatorObj.State = GeneratorCompleted
+					frame.generatorObj.Done = true
+					frame.generatorObj.ReturnValue = result
+					frame.generatorObj.Frame = nil
+					iterResult := NewObject(vm.ObjectPrototype).AsPlainObject()
+					iterResult.SetOwn("value", result)
+					iterResult.SetOwn("done", BooleanValue(true))
+					result = NewValueFromPlainObject(iterResult)
+				}
+
+				// Pop the current frame. Use allocatedRegSize (not
+				// function.RegisterSize): see the matching comment on
+				// OpReturn/OpReturnUndefined/OpReturnFinally (#399/B1).
+				returningFrameRegSize := frame.allocatedRegSize
+				callerTargetRegister := frame.targetRegister
+				isConstructor := frame.isConstructorCall
+				constructorThisValue := frame.thisValue
+				isDerivedConstructor := frame.closure != nil && frame.closure.Fn.IsDerivedConstructor
+
+				vm.frameCount--
+				vm.nextRegSlot -= returningFrameRegSize
+
+				if vm.frameCount == 0 {
+					return InterpretOK, result
+				}
+
+				// Check if we hit a sentinel frame - if so, return immediately with the result
+				if vm.frames[vm.frameCount-1].isSentinelFrame {
+					if isConstructor {
+						if result.IsObject() || result.IsCallable() {
+							// Return the explicit object
+						} else if !isDerivedConstructor {
+							result = constructorThisValue
+						} else if result.Type() != TypeUndefined {
+							vm.ThrowTypeError("Derived constructors may only return object or undefined")
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							return InterpretRuntimeError, vm.currentException
+						} else if constructorThisValue.typ == TypeUninitialized {
+							vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							return InterpretRuntimeError, vm.currentException
+						} else {
+							result = constructorThisValue
+						}
+					}
+					sentinelFrame := &vm.frames[vm.frameCount-1]
+					if sentinelFrame.registers != nil && int(callerTargetRegister) < len(sentinelFrame.registers) {
+						sentinelFrame.registers[callerTargetRegister] = result
+					}
+					vm.frameCount--
+					if vm.finallyDepth > 0 {
+						vm.finallyDepth--
+					}
+					return InterpretOK, result
+				}
+
+				// Handle the return value in the caller frame
+				if frame.isDirectCall {
+					var finalResult Value
+					if isConstructor {
+						if result.IsObject() || result.IsCallable() {
+							finalResult = result
+						} else if !isDerivedConstructor {
+							finalResult = constructorThisValue
+						} else if result.Type() != TypeUndefined {
+							vm.ThrowTypeError("Derived constructors may only return object or undefined")
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							return InterpretRuntimeError, vm.currentException
+						} else if constructorThisValue.typ == TypeUninitialized {
+							vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+							if !vm.unwinding {
+								frame = &vm.frames[vm.frameCount-1]
+								closure = frame.closure
+								function = closure.Fn
+								code = function.Chunk.Code
+								constants = function.Chunk.Constants
+								registers = frame.registers
+								ip = frame.ip
+								continue
+							}
+							return InterpretRuntimeError, vm.currentException
+						} else {
+							finalResult = constructorThisValue
+						}
+					} else {
+						finalResult = result
+					}
+					return InterpretOK, finalResult
+				}
+
+				// Get the caller frame
+				callerFrame := &vm.frames[vm.frameCount-1]
+
+				var finalResult Value
+				if isConstructor {
+					if result.IsObject() || result.IsCallable() {
+						finalResult = result
+					} else if !isDerivedConstructor {
+						finalResult = constructorThisValue
+					} else if result.Type() != TypeUndefined {
+						vm.ThrowTypeError("Derived constructors may only return object or undefined")
+						if !vm.unwinding {
+							frame = callerFrame
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+						return InterpretRuntimeError, Undefined
+					} else if constructorThisValue.typ == TypeUninitialized {
+						vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
+						if !vm.unwinding {
+							frame = callerFrame
+							closure = frame.closure
+							function = closure.Fn
+							code = function.Chunk.Code
+							constants = function.Chunk.Constants
+							registers = frame.registers
+							ip = frame.ip
+							continue
+						}
+						return InterpretRuntimeError, Undefined
+					} else {
+						finalResult = constructorThisValue
+					}
+				} else {
+					finalResult = result
+				}
+
+				if int(callerTargetRegister) < len(callerFrame.registers) {
+					callerFrame.registers[callerTargetRegister] = finalResult
+				} else {
+					status := vm.runtimeError("Internal Error: Invalid target register %d for pending return.", callerTargetRegister)
+					return status, Undefined
+				}
+
+				frame = callerFrame
+				closure = frame.closure
+				function = closure.Fn
+				code = function.Chunk.Code
+				constants = function.Chunk.Constants
+				registers = frame.registers
+				ip = frame.ip
 				continue
 			default:
 				// Clear unknown pending action
@@ -20542,17 +20754,16 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 				if debugExceptions {
 					fmt.Printf("[DEBUG resumeGeneratorWithException] Popping stale direct call frame %d\n", vm.frameCount-1)
 				}
-				// Reclaim registers
-				if f.closure != nil && f.closure.Fn != nil {
-					vm.nextRegSlot -= f.closure.Fn.RegisterSize
-				}
+				// Reclaim registers. Use allocatedRegSize (not closure.Fn.RegisterSize):
+				// it tracks actual allocation, which may exceed the frame's current
+				// function's own RegisterSize because of TCO expansion earlier in a
+				// tail-call chain (see the matching OpReturn* comments, and #399/B1).
+				vm.nextRegSlot -= f.allocatedRegSize
 				vm.frameCount--
 				break
 			}
 			// Pop non-sentinel, non-direct frames (shouldn't happen normally)
-			if f.closure != nil && f.closure.Fn != nil {
-				vm.nextRegSlot -= f.closure.Fn.RegisterSize
-			}
+			vm.nextRegSlot -= f.allocatedRegSize
 			vm.frameCount--
 		}
 		vm.unwinding = false
