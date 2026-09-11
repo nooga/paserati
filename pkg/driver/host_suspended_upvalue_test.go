@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -787,5 +788,136 @@ func TestGeneratorClosureSurvivesAcrossRegisterBlockBoundary(t *testing.T) {
 	want := [3]string{"1", "11", "111"}
 	if got != want {
 		t.Errorf("generator closure's captured local was corrupted across a block-boundary-spanning suspend/resume: got %v, want %v", got, want)
+	}
+}
+
+// TestPlainClosureSurvivesAcrossRegisterBlockBoundary is the plain-closure
+// counterpart of the generator test above, exercising a different code path:
+// closeFrameUpvalues (ordinary return), not relocateOpenUpvalues
+// (generator/async suspend). A plain closure's upvalue is always closed
+// synchronously the instant its owning frame returns - well before popTo/
+// trim() can release or reuse that frame's block - so this is expected to
+// hold regardless of which block the frame's window came from, by
+// construction rather than by luck. This pins that invariant down directly:
+// makeClosure recurses `depth` levels deep (same non-tail, ~26-register-per-
+// level shape as recursionPadding, so it genuinely crosses block boundaries),
+// creates a closure over a local at the bottom, and returns it unchanged
+// through every one of those `depth` frames via ordinary `return sub;` (a
+// bare identifier is never tail-call-eligible - only a direct `return
+// call(...)` is - so this is never collapsed by TCO into a single reused
+// frame). The three escaped closures are only invoked afterward, once the
+// register directory has moved on and reused/trimmed the blocks their
+// upvalues originally closed over.
+func TestPlainClosureSurvivesAcrossRegisterBlockBoundary(t *testing.T) {
+	p := NewPaserati()
+	p.SetSkipTypeCheck(true)
+
+	if _, errs := p.RunCode(`
+		function makeClosure(depth) {
+			if (depth <= 0) {
+				let n = 1;
+				const get = () => n;
+				return get;
+			}
+			let a=0,b=1,c=2,d=3,e=4,f=5,g=6,h=7,i=8,j=9,k=10,l=11,m=12,n=13,o=14,p=15,q=16,r=17,s=18,t=19,u=20,v=21,w=22,x=23,y=24,z=25;
+			let sub = makeClosure(depth - 1);
+			return sub;
+		}
+		let closures = [];
+	`, RunOptions{}); len(errs) > 0 {
+		t.Fatalf("setup errors: %v", errs)
+	}
+
+	for _, depth := range []int{3, 41, 17} {
+		src := fmt.Sprintf("closures.push(makeClosure(%d));", depth)
+		if _, errs := p.RunCode(src, RunOptions{Script: true}); len(errs) > 0 {
+			t.Fatalf("depth=%d: RunCode failed: %v", depth, errs[0])
+		}
+	}
+
+	if blocks := p.GetVM().RegisterDirectoryBlockCount(); blocks < 3 {
+		t.Fatalf("expected the recursion to have driven the register directory across a block boundary (>=3 blocks retained), got %d - "+
+			"this test needs re-tuning to actually exercise a block skip", blocks)
+	}
+
+	// Call the escaped closures only now, after further recursion has moved
+	// the directory's cursor on and trimmed/reused the blocks each closure's
+	// upvalue originally closed over.
+	if _, errs := p.RunCode(`let results = closures.map(f => f());`, RunOptions{Script: true}); len(errs) > 0 {
+		t.Fatalf("RunCode failed: %v", errs[0])
+	}
+	results, ok := p.GetVM().GetGlobal("results")
+	if !ok || !results.IsArray() {
+		t.Fatalf("expected results array, got %v", results)
+	}
+	arr := results.AsArray()
+	if arr.Length() != 3 {
+		t.Fatalf("expected 3 results, got %d", arr.Length())
+	}
+	for i := 0; i < 3; i++ {
+		if arr.Get(i).ToString() != "1" {
+			t.Errorf("closure %d: expected captured n=1, got %s - plain closure corrupted across a register-block boundary", i, arr.Get(i).Inspect())
+		}
+	}
+}
+
+// TestAsyncClosureSurvivesAcrossRegisterBlockBoundary is the async
+// counterpart of TestGeneratorClosureSurvivesAcrossRegisterBlockBoundary:
+// generators and async functions share the same suspend/resume relocation
+// mechanism (relocateOpenUpvalues), but reach it through different call
+// sites (executeAsyncFunctionBody, resumeAsyncFunction*, vs.
+// startGenerator/resumeGenerator*) that were converted separately during the
+// B4 port. f() is invoked from three different recursion depths (varying the
+// register-directory cursor position each of its own initial frames is
+// carved from), and each instance suspends twice (two awaits) before
+// returning a closure's view of its own mutated local - across whatever
+// block skips that invocation and the recursion surrounding the other two
+// instances produced.
+func TestAsyncClosureSurvivesAcrossRegisterBlockBoundary(t *testing.T) {
+	p := newHostTimerPaserati()
+
+	if _, errs := p.RunCode(`
+		async function asyncF() {
+			let n = 1;
+			const get = () => n;
+			await new Promise((r) => setTimeout(r, 0));
+			n = n + 10;
+			await new Promise((r) => setTimeout(r, 0));
+			n = n + 100;
+			return get();
+		}
+		let results = [];
+	`, RunOptions{}); len(errs) > 0 {
+		t.Fatalf("setup errors: %v", errs)
+	}
+
+	// Note: recursionPadding's own pad() body declares single-letter locals
+	// a..z (including f), so the injected atBottom code below must not name
+	// its own async function `f` - it would be shadowed by pad's local `f`
+	// and hit that local's TDZ instead of the outer async function.
+	for _, depth := range []int{3, 41, 17} {
+		src := recursionPadding(depth, `asyncF().then((r) => { results.push(r); });`)
+		if _, errs := p.RunCode(src, RunOptions{Script: true}); len(errs) > 0 {
+			t.Fatalf("depth=%d: RunCode failed: %v", depth, errs[0])
+		}
+	}
+
+	if blocks := p.GetVM().RegisterDirectoryBlockCount(); blocks < 3 {
+		t.Fatalf("expected the padding to have driven the register directory across a block boundary (>=3 blocks retained), got %d - "+
+			"this test needs re-tuning to actually exercise a block skip", blocks)
+	}
+
+	results, ok := p.GetVM().GetGlobal("results")
+	if !ok || !results.IsArray() {
+		t.Fatalf("expected results array, got %v", results)
+	}
+	arr := results.AsArray()
+	if arr.Length() != 3 {
+		t.Fatalf("expected 3 results, got %d", arr.Length())
+	}
+	got := [3]string{arr.Get(0).ToString(), arr.Get(1).ToString(), arr.Get(2).ToString()}
+	want := [3]string{"111", "111", "111"}
+	if got != want {
+		t.Errorf("async closure's captured local was corrupted across a block-boundary-spanning suspend/resume: got %v, want %v", got, want)
 	}
 }
