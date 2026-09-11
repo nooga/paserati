@@ -316,14 +316,11 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			return false, fmt.Errorf("Stack overflow\nStack: %s", trace)
 		}
 
-		// Check register stack space
+		// Register stack space is checked (and actually reserved) at the real
+		// push below, once the frame's other fields are staged - nothing
+		// between here and there can invoke user code that would change how
+		// much register space is available in the meantime.
 		requiredRegs := calleeFunc.RegisterSize
-		if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
-			currentFrame.ip = callerIP
-			trace := vm.CaptureStackTrace()
-			fmt.Printf("\n=== VM Stack (register overflow) ===\n%s\n====================================\n", trace)
-			return false, fmt.Errorf("Register stack overflow\nStack: %s", trace)
-		}
 
 		// Store return IP in current frame
 		currentFrame.ip = callerIP
@@ -405,10 +402,17 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.args = args
 		newFrame.argumentsObject = Undefined  // Initialize to Undefined (will be created on first access)
 		newFrame.calleeValue = originalCallee // Store original callee for arguments.callee
-		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
-		newFrame.allocatedRegSize = requiredRegs    // Track actual allocation for proper cleanup
-		newFrame.regSlotBeforePush = vm.nextRegSlot // B4 invariant: record window base for checkRegWindowRelease
-		vm.nextRegSlot += requiredRegs
+		newWindow, windowStart, pushMark, ok := vm.regDir.push(requiredRegs)
+		if !ok {
+			currentFrame.ip = callerIP
+			trace := vm.CaptureStackTrace()
+			fmt.Printf("\n=== VM Stack (register overflow) ===\n%s\n====================================\n", trace)
+			return false, fmt.Errorf("Register stack overflow\nStack: %s", trace)
+		}
+		newFrame.registers = newWindow
+		newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
+		newFrame.regSlotBeforePush = pushMark    // B4 invariant: record window start for checkRegWindowRelease
+		newFrame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 
 		// Allocate spill slots if this function needs them (for register overflow)
 		if calleeFunc.Chunk.NumSpillSlots > 0 {

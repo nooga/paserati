@@ -158,7 +158,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 			return InterpretRuntimeError, Undefined
 		}
 		requiredRegs := constructorFunc.RegisterSize
-		if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+		if !vm.regDir.wouldFit(requiredRegs) {
 			frame.ip = callerIP
 			vm.ThrowRangeError("Maximum call stack size exceeded")
 			if !vm.unwinding {
@@ -228,10 +228,20 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		// (If `arguments` is accessed, NewArguments will allocate as needed.)
 		newFrame.args = spreadArgs
 		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
-		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
-		newFrame.allocatedRegSize = requiredRegs    // Track actual allocation for proper cleanup
-		newFrame.regSlotBeforePush = vm.nextRegSlot // B4 invariant: record window base for checkRegWindowRelease
-		vm.nextRegSlot += requiredRegs
+		newWindow, windowStart, pushMark, pushOK := vm.regDir.push(requiredRegs)
+		if !pushOK {
+			// wouldFit already checked this above; see that call's comment.
+			frame.ip = callerIP
+			vm.ThrowRangeError("Maximum call stack size exceeded")
+			if !vm.unwinding {
+				return InterpretOK, Undefined
+			}
+			return InterpretRuntimeError, Undefined
+		}
+		newFrame.registers = newWindow
+		newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
+		newFrame.regSlotBeforePush = pushMark    // B4 invariant: record window start for checkRegWindowRelease
+		newFrame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 
 		// Allocate spill slots if this function needs them (for register overflow)
 		if constructorFunc.Chunk.NumSpillSlots > 0 {
@@ -283,7 +293,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 			return InterpretRuntimeError, Undefined
 		}
 		requiredRegs := constructorFunc.RegisterSize
-		if vm.nextRegSlot+requiredRegs > len(vm.registerStack) {
+		if !vm.regDir.wouldFit(requiredRegs) {
 			frame.ip = callerIP
 			vm.ThrowRangeError("Maximum call stack size exceeded")
 			if !vm.unwinding {
@@ -352,10 +362,20 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		// Avoid per-call allocation: keep a view of spreadArgs for OpGetArguments.
 		newFrame.args = spreadArgs
 		newFrame.argumentsObject = Undefined // Initialize to Undefined (will be created on first access)
-		newFrame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+requiredRegs]
-		newFrame.allocatedRegSize = requiredRegs    // Track actual allocation for proper cleanup
-		newFrame.regSlotBeforePush = vm.nextRegSlot // B4 invariant: record window base for checkRegWindowRelease
-		vm.nextRegSlot += requiredRegs
+		newWindow, windowStart, pushMark, pushOK := vm.regDir.push(requiredRegs)
+		if !pushOK {
+			// wouldFit already checked this above; see that call's comment.
+			frame.ip = callerIP
+			vm.ThrowRangeError("Maximum call stack size exceeded")
+			if !vm.unwinding {
+				return InterpretOK, Undefined
+			}
+			return InterpretRuntimeError, Undefined
+		}
+		newFrame.registers = newWindow
+		newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
+		newFrame.regSlotBeforePush = pushMark    // B4 invariant: record window start for checkRegWindowRelease
+		newFrame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 
 		// Allocate spill slots if this function needs them (for register overflow)
 		if constructorFunc.Chunk.NumSpillSlots > 0 {
