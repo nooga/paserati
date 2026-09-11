@@ -23191,13 +23191,20 @@ func (vm *VM) ThrowSyntaxError(message string) {
 
 // newStackOverflowError builds a RangeError-shaped exception value directly,
 // without calling any constructor (built-in or user-reassigned). Used by
-// executeUserFunctionSafe's call-stack-full guard (#231): at that point
-// vm.frames has no room for another frame, so going through vm.Call - as
-// ThrowRangeError's own constructor lookup would - risks hitting that exact
-// same guard again. See ThrowRangeError below for the normal, constructor-
-// backed path used everywhere the stack has room.
+// executeUserFunctionSafe's call-stack-full guard (#231) and by prepareCall's
+// own overflow returns (#407): at that point vm.frames has no room for
+// another frame, so going through vm.Call - as ThrowRangeError's own
+// constructor lookup would - risks hitting that exact same guard again. See
+// ThrowRangeError below for the normal, constructor-backed path used
+// everywhere the stack has room.
+//
+// Built on currentRealm.RangeErrorPrototype specifically (not the generic
+// ErrorPrototype this used before #407): only that prototype chain makes
+// `instanceof RangeError` and `.constructor.name === "RangeError"` true, both
+// of which real engines guarantee for this exact error and #407 was filed
+// over.
 func (vm *VM) newStackOverflowError() Value {
-	errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
+	errObj := NewObject(vm.currentRealm.RangeErrorPrototype).AsPlainObject()
 	errObj.SetOwn("name", NewString("RangeError"))
 	errObj.SetOwn("message", NewString("Maximum call stack size exceeded"))
 	errObj.SetOwn("stack", NewString(vm.CaptureStackTrace()))

@@ -25,6 +25,46 @@ func (e exceptionError) GetExceptionValue() Value {
 	return e.exception
 }
 
+// stackOverflowExceptionError builds prepareCall's error for "the frame
+// limit or the register-directory budget is exhausted" (#407). Real engines
+// throw a catchable RangeError("Maximum call stack size exceeded") for this,
+// for both ordinary recursive calls and `new`-expression recursion - but
+// prepareCall used to return a bare fmt.Errorf that every caller's own
+// `err != nil` handling wrapped into a generic Error instead (only the
+// `new`-expression path, handled directly inside run()'s own OpNew-family
+// switch cases rather than through prepareCall, got this right).
+//
+// The obvious fix - have prepareCall call vm.ThrowRangeError itself and
+// return (false, nil) - is broken: prepareCall is a plain Go function
+// reached from deep inside run()'s dispatch (via OpCall and several other
+// call sites), and each of those callers' post-prepareCall logic only knows
+// how to resume after a same-frame IP change or an escaped direct-call/
+// native boundary - not "the unwind popped several plain bytecode frames to
+// reach a handler, with nothing native in between", which is exactly what
+// happens for ordinary non-tail recursion overflowing deep inside itself.
+// Falling into neither branch, execution silently continued with stale
+// frame/ip state pointing at an already-popped frame, swallowing the
+// exception entirely (confirmed empirically: a script with a try/catch
+// around deep recursion produced no output at all, not even the catch
+// block's own console.log).
+//
+// Returning an ExceptionError instead - carrying an already-built RangeError
+// Value - lets every existing `if exceptionErr, ok := err.(ExceptionError);
+// ok { excVal = exceptionErr.GetExceptionValue() }` call site (there are
+// several, one per prepareCall caller) pick it up completely unchanged: the
+// value is thrown via that caller's own, already-correct
+// vm.throwException(excVal) + frame-reload sequence, the same as for any
+// other exception a native call produces. No caller needs to change.
+//
+// vm.newStackOverflowError() (vm.go, #231) already builds exactly this
+// Value by hand rather than via the RangeError constructor - deliberately,
+// for the same reason this needed a fix at all: at the point of overflow,
+// vm.frames may have no room for the constructor's own frame either. Reused
+// here rather than duplicated.
+func (vm *VM) stackOverflowExceptionError() error {
+	return exceptionError{exception: vm.newStackOverflowError()}
+}
+
 // setTailCallHomeObject gives a tail-called callee its [[HomeObject]] for
 // super property access (see prepareCall below). Arrow functions read
 // their captured [[HomeObject]] (frame.closure.CapturedHomeObject) at use
@@ -311,9 +351,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		// Check frame limit
 		if vm.frameCount >= len(vm.frames) {
 			currentFrame.ip = callerIP
-			trace := vm.CaptureStackTrace()
-			fmt.Printf("\n=== VM Stack (overflow) ===\n%s\n===========================\n", trace)
-			return false, fmt.Errorf("Stack overflow\nStack: %s", trace)
+			return false, vm.stackOverflowExceptionError()
 		}
 
 		// Register stack space is checked (and actually reserved) at the real
@@ -405,9 +443,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newWindow, windowStart, pushMark, ok := vm.regDir.push(requiredRegs)
 		if !ok {
 			currentFrame.ip = callerIP
-			trace := vm.CaptureStackTrace()
-			fmt.Printf("\n=== VM Stack (register overflow) ===\n%s\n====================================\n", trace)
-			return false, fmt.Errorf("Register stack overflow\nStack: %s", trace)
+			return false, vm.stackOverflowExceptionError()
 		}
 		newFrame.registers = newWindow
 		newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
