@@ -8,29 +8,29 @@
 
 Paserati is an **experimental (mad scientist kind of experimental) TypeScript runtime**: it parses + type-checks TypeScript and compiles it **directly to bytecode** for a register VM. And then it executes the bytecode.
 
-TypeScript is a superset of JavaScript, so if you can execute TypeScript, you’re building an **ECMAScript 2025** runtime too.
+TypeScript is a superset of JavaScript, so if you can execute TypeScript, you're building an **ECMAScript 2025** runtime too.
 
-### What’s under the hood
+### What's under the hood
 
-Under the hood: **TS/JS → bytecode → register VM**, with **inline caches**, **shape-based objects** (a.k.a. "hidden classes"), and a pluggable async executor with **microtask scheduling**.
+**TS/JS → bytecode → register VM**, with **inline caches**, **shape-based objects** (a.k.a. "hidden classes"), and a pluggable async executor with **microtask scheduling**.
 
 Right now it prioritizes **correctness** over raw speed, but the architecture is designed for type-driven optimization later (specialization, monomorphization, unchecked fast paths).
 
 ### Wins
 
-- **Test262 language suite: 98.1%**, **built-ins: 71.7%**, **TypeScript 6.0.3 conformance: 41.5% strict / 70.8% loose** (see details below)
-- **Native TS execution**: no `tsc`, no TS→JS transpilation
-- **TCO**: tail call optimization (elite feature)
-- **Shapes + ICs**: fast-ish property access without a JIT
-- **Runtime type reflection**: `Paserati.reflect<T>()` (generate a type object / JSON Schema at runtime)
-- **Small-ish footprint**:
+- Test262 language suite: **98.1%**, built-ins: **71.7%**, TypeScript 6.0.3 conformance: **41.5%** strict / **70.8%** loose (see details below)
+- **Native TS execution.** No `tsc`, no TS→JS transpilation step.
+- **TCO.** Tail call optimization (elite feature).
+- **Shapes + ICs.** Fast-ish property access without a JIT.
+- **Runtime type reflection.** `Paserati.reflect<T>()` generates a type object or JSON Schema at runtime.
+- **Small-ish footprint.**
   - **~16MB static binary** (unstripped, includes lexer/parser/checker/compiler/VM/builtins)
   - **~5MB BSS idle** (approx; depends on build/OS)
   - **Pure Go**, no CGO, no WASM blobs, **two simple dependencies** (`golang.org/x/text`, `github.com/dlclark/regexp2`)
 
 ### Weird flex but okay benchmarks
 
-Paserati has a long way to go performance-wise, but it’s already at the point where it can **beat [dop251/goja](https://github.com/dop251/goja)** and **QJS** on a couple of simple microbenches.
+Paserati has a long way to go performance-wise, but it's already at the point where it can **beat [dop251/goja](https://github.com/dop251/goja)** and **QJS** on a couple of simple microbenches.
 
 Results from `hyperfine` (see `bench/hyperfine.sh`):
 
@@ -50,15 +50,15 @@ If your favorite pure Go JavaScript engine is reading this: _skill issue_.
 - **Async/await + generators**: `examples/async.ts`
 - **Classes (private fields, inheritance, statics)**: `examples/classes.ts`
 - **Typed recursion (Y combinator)**: `examples/ycomb.ts`
-- **“Look ma, generics”**: `examples/generics.ts`
+- **"Look ma, generics"**: `examples/generics.ts`
 
 Examples may or may not work at every commit, but they should work at least once in a while.
 
-### What it isn’t (non-goals)
+### What it isn't (non-goals)
 
 - **A TypeScript build toolchain replacement**: see [microsoft/typescript-go](https://github.com/microsoft/typescript-go)
-- **A JIT in Go**: I’ll stop just short of that (for now)
-- **Perfect “legacy weirdness”**: modern ES is the target; some dusty corners (like `with`) are still incomplete
+- **A JIT in Go**: I'll stop just short of that (for now)
+- **Perfect "legacy weirdness"**: modern ES is the target; some dusty corners (like `with`) are still incomplete
 
 ### Usage
 
@@ -92,7 +92,7 @@ go test ./tests/...
 | TypeScript 6.0.3 conformance (loose) | 3,494/4,933 | 966 | 473 | 0 | 70.8% |
 <!-- compliance:end -->
 
-`strict error codes` requires our diagnostics to carry the same TypeScript error code(s) the baseline expects; `loose` only requires that we raised *some* error where one was expected. Loose overcounts conformance — treat strict as the honest number.
+`strict error codes` requires our diagnostics to carry the same TypeScript error code(s) the baseline expects. `loose` only requires that we raised *some* error where one was expected, so it overcounts conformance. Treat strict as the honest number.
 
 The Test262 language and built-ins figures come from the local baseline snapshots for the checked-out ECMA-262 conformance tests. The TypeScript figures come from the single-file conformance runner against the TypeScript 6.0.3 test suite.
 
@@ -137,7 +137,7 @@ This project is licensed under the MIT License.
 
 This is a **one-person** project developed in my **free time** with the help of **AI**. It is also an experiment in large scale software engineering with AI, aimed at speedrunning a production-quality open source project.
 
-Google Gemini 2.5/3.0 Pro and Claude Sonnet/Opus 4/4.5/4.7 and GPT 5.5 wrote almost all the code so far under more or less careful direction and scrutiny - also known as "vibe coding but when you know what you're doing".
+Google Gemini 2.5/3.0 Pro and Claude Sonnet/Opus 4/4.5/4.7 and GPT 5.5 wrote almost all the code so far under more or less careful direction and scrutiny. Call it vibe coding, but the kind where you know what you're doing.
 
 That fun sticker at the top of the README? It's made with GPT-4o's image generation.
 
