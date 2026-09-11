@@ -22,6 +22,16 @@ import (
 
 const scriptsDebug = false
 
+// TestMain turns on vm.StrictRegWindowChecks for this package's whole test
+// run, so a register-window release that doesn't match what was recorded at
+// push (the #399/#400/#402 B4 invariant) panics immediately instead of
+// silently drifting - see the checker's own doc comment for why this stays
+// off outside the test suite.
+func TestMain(m *testing.M) {
+	vm.StrictRegWindowChecks = true
+	os.Exit(m.Run())
+}
+
 // Expectation represents the expected outcome of a script.
 type Expectation struct {
 	ResultType string // "value", "runtime_error", "compile_error"

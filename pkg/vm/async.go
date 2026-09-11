@@ -124,16 +124,17 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	// Set up the async function frame
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.allocatedRegSize = regSize // Track actual allocation for proper cleanup
-	frame.ip = 0                     // Start from beginning
+	frame.allocatedRegSize = regSize         // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = vm.nextRegSlot // B4 invariant: record window base for checkRegWindowRelease
+	frame.ip = 0                             // Start from beginning
 	frame.targetRegister = destReg
 	frame.thisValue = thisValue
 	frame.homeObject = funcObj.HomeObject // Set [[HomeObject]] for super property access (object literal methods)
 	frame.isConstructorCall = false
-	frame.isDirectCall = true      // Mark as direct call for proper return handling
-	frame.isSentinelFrame = false  // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
-	frame.promiseObj = promiseObj  // Link frame to promise object - critical for OpAwait!
-	frame.generatorObj = nil       // Clear generator object when reusing frame
+	frame.isDirectCall = true     // Mark as direct call for proper return handling
+	frame.isSentinelFrame = false // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
+	frame.promiseObj = promiseObj // Link frame to promise object - critical for OpAwait!
+	frame.generatorObj = nil      // Clear generator object when reusing frame
 	// frame.args is the field OpGetArguments actually reads to build the
 	// `arguments` object (frame.argCount only sizes the register-copy loop
 	// below) - see its "args were copied when the frame was created in
