@@ -117,19 +117,37 @@ func newRegisterDirectory(maxBlocks int) *registerDirectory {
 	}
 }
 
-// reset clears every Value in every block currently in use (releasing any
-// object/closure/etc. references they hold, so Reset() doesn't leak large
-// retained values across VM reuse) and returns the cursor to the very
+// reset clears every Value in every block currently allocated (releasing
+// any object/closure/etc. references they hold, so Reset() doesn't leak
+// large retained values across VM reuse) and returns the cursor to the very
 // start, trimming blocks back to the reserve exactly as popTo would from a
 // popTo(registerMark{0,0}).
+//
+// This clears the *entire* d.blocks slice, not just blocks up to d.cur.block:
+// popTo's trim() deliberately keeps up to registerDirectoryReserveBlocks
+// blocks allocated past the cursor as reuse slack (see its own doc comment),
+// and those still hold whatever Values were last written into them. Only
+// clearing up to d.cur.block would silently leave that reserve's stale
+// references reachable, defeating Reset()'s entire purpose for exactly the
+// blocks most likely to have just been in active use.
 func (d *registerDirectory) reset() {
-	for i := 0; i <= d.cur.block && i < len(d.blocks); i++ {
-		blk := d.blocks[i]
+	for _, blk := range d.blocks {
 		for j := range blk.data {
 			blk.data[j] = Undefined
 		}
 	}
 	d.popTo(registerMark{block: 0, offset: 0})
+}
+
+// RegisterDirectoryBlockCount returns the number of blocks currently
+// allocated in the VM's register directory (B4). Test-only instrumentation:
+// production code has no use for this - it exists so tests can confirm a
+// scenario actually exercised more than one block (e.g. a generator/async
+// frame suspended with its window carved from a block a skip landed it in)
+// rather than silently passing without ever touching the code path it means
+// to cover.
+func (vm *VM) RegisterDirectoryBlockCount() int {
+	return len(vm.regDir.blocks)
 }
 
 // mark returns the directory's current cursor - the position the next push

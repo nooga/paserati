@@ -24,13 +24,17 @@ import (
 const RegFileSize = 256 // Max registers per function call frame
 
 // MaxFrames is the maximum call stack depth (number of simultaneously live
-// activations) and, multiplied by RegFileSize, the size of the VM-wide register
-// file. It is a var, not a const, so embedders can tune it before creating a VM
-// (see SetMaxFrames); the backing arrays (VM.frames, VM.registerStack) are
-// allocated once in NewVM from its then-current value and never reallocated, so
-// raw *Value pointers held by open upvalues stay valid for the VM's lifetime.
+// activations) and also the hard cap on the register directory's block count
+// (see registerDirectory.maxBlocks) - i.e. the worst-case register-space
+// ceiling, matching what a flat RegFileSize*MaxFrames array would have held
+// before B4 (pkg/vm/register_directory.go). It is a var, not a const, so
+// embedders can tune it before creating a VM (see SetMaxFrames); VM.frames is
+// allocated once in NewVM from its then-current value and never reallocated,
+// so &frames[i] stays stable for the VM's lifetime - the register directory's
+// own blocks give open upvalues the equivalent guarantee (see its own doc
+// comment), just via lazy per-block allocation instead of one upfront array.
 //
-// Total register file = RegFileSize * MaxFrames * sizeof(Value) (~24B):
+// Register file, worst case = RegFileSize * MaxFrames * sizeof(Value) (~24B):
 // 4096 frames => ~24MB, allocated lazily per VM. Deep recursive workloads (e.g.
 // running tsc's binder) need more than the historical 512.
 var MaxFrames = 4096
@@ -1385,7 +1389,7 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	vm.errors = vm.errors[:0]
 
 	// --- Sanity Check: Ensure enough stack space BEFORE pushing frame ---
-	// We need space for the new frame in frames array and registers in registerStack.
+	// We need space for the new frame in the frames array and its register window in the register directory.
 	if vm.frameCount >= len(vm.frames) {
 		// Cannot add another frame.
 		placeholderToken := errors.Position{Line: 0, Column: 0} // TODO: Better position?
@@ -1584,16 +1588,17 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 		//
 		// Take ownership of the exception here, the same way a native
 		// boundary caller does: extract it, clear the VM's unwind state, and
-		// restore frameCount/nextRegSlot to exactly what they were before we
-		// pushed - the same truncateFramesTo(frameCountAtEntry) idiom
-		// executeUserFunctionSafe uses for its own native boundary, rather
-		// than assuming unwindException left exactly our one frame to pop:
-		// some run() exit paths return InterpretRuntimeError while frames
-		// above ours are still live (e.g. OpDirectEval's reassigned-eval
-		// fallback), and popping only one frame would under-restore then.
-		// truncateFramesTo closes upvalues for every frame it drops but
-		// doesn't touch nextRegSlot (its other callers' pushed frames aren't
-		// carved from vm.registerStack), so that part is ours to do here.
+		// restore frameCount/the register directory's cursor to exactly what
+		// they were before we pushed - the same truncateFramesTo(frameCountAtEntry)
+		// idiom executeUserFunctionSafe uses for its own native boundary,
+		// rather than assuming unwindException left exactly our one frame to
+		// pop: some run() exit paths return InterpretRuntimeError while
+		// frames above ours are still live (e.g. OpDirectEval's
+		// reassigned-eval fallback), and popping only one frame would
+		// under-restore then. truncateFramesTo closes upvalues for every
+		// frame it drops but doesn't touch the register directory's cursor
+		// (its other callers' pushed frames aren't carved from it), so
+		// that part is ours to do here.
 		// Report the exception via a fresh local slice rather than
 		// vm.errors: the caller's own execution keeps running after we
 		// return (this is a *nested* Interpret call), and nothing clears
