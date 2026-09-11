@@ -6506,7 +6506,9 @@ startExecution:
 			}
 
 			vm.frameCount--
-			vm.checkRegWindowRelease(frame, returningFrameRegSize, "OpReturn")
+			if StrictRegWindowChecks {
+				vm.checkRegWindowRelease(frame, returningFrameRegSize, "OpReturn")
+			}
 			vm.regDir.popTo(frame.regSlotBeforePush) // Reclaim register space
 
 			if debugVM {
@@ -6808,7 +6810,9 @@ startExecution:
 			}
 
 			vm.frameCount--
-			vm.checkRegWindowRelease(frame, returningFrameRegSize, "OpReturnUndefined")
+			if StrictRegWindowChecks {
+				vm.checkRegWindowRelease(frame, returningFrameRegSize, "OpReturnUndefined")
+			}
 			vm.regDir.popTo(frame.regSlotBeforePush)
 
 			if debugVM {
@@ -15876,7 +15880,9 @@ startExecution:
 			constructorThisValue := frame.thisValue
 
 			vm.frameCount--
-			vm.checkRegWindowRelease(frame, returningFrameRegSize, "OpReturnFinally")
+			if StrictRegWindowChecks {
+				vm.checkRegWindowRelease(frame, returningFrameRegSize, "OpReturnFinally")
+			}
 			vm.regDir.popTo(frame.regSlotBeforePush)
 
 			if vm.frameCount == 0 {
@@ -16075,7 +16081,9 @@ startExecution:
 				isDerivedConstructor := frame.closure != nil && frame.closure.Fn.IsDerivedConstructor
 
 				vm.frameCount--
-				vm.checkRegWindowRelease(frame, returningFrameRegSize, "OpHandlePending:ActionReturn")
+				if StrictRegWindowChecks {
+					vm.checkRegWindowRelease(frame, returningFrameRegSize, "OpHandlePending:ActionReturn")
+				}
 				vm.regDir.popTo(frame.regSlotBeforePush)
 
 				if vm.frameCount == 0 {
@@ -18467,7 +18475,9 @@ startExecution:
 				isDerivedConstructor := frame.closure != nil && frame.closure.Fn.IsDerivedConstructor
 
 				vm.frameCount--
-				vm.checkRegWindowRelease(frame, returningFrameRegSize, "ActionReturn-fallback")
+				if StrictRegWindowChecks {
+					vm.checkRegWindowRelease(frame, returningFrameRegSize, "ActionReturn-fallback")
+				}
 				vm.regDir.popTo(frame.regSlotBeforePush)
 
 				if vm.frameCount == 0 {
@@ -18721,7 +18731,9 @@ func (vm *VM) popTopLevelScriptFrame(frame *CallFrame) {
 		vm.closeFrameUpvalues(frame)
 	}
 	vm.frameCount--
-	vm.checkRegWindowRelease(frame, frame.allocatedRegSize, "popTopLevelScriptFrame")
+	if StrictRegWindowChecks {
+		vm.checkRegWindowRelease(frame, frame.allocatedRegSize, "popTopLevelScriptFrame")
+	}
 	vm.regDir.popTo(frame.regSlotBeforePush)
 }
 
@@ -20940,13 +20952,17 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 				// it tracks actual allocation, which may exceed the frame's current
 				// function's own RegisterSize because of TCO expansion earlier in a
 				// tail-call chain (see the matching OpReturn* comments, and #399/B1).
-				vm.checkRegWindowRelease(f, f.allocatedRegSize, "resumeGeneratorWithException:staleDirectCall")
+				if StrictRegWindowChecks {
+					vm.checkRegWindowRelease(f, f.allocatedRegSize, "resumeGeneratorWithException:staleDirectCall")
+				}
 				vm.regDir.popTo(f.regSlotBeforePush)
 				vm.frameCount--
 				break
 			}
 			// Pop non-sentinel, non-direct frames (shouldn't happen normally)
-			vm.checkRegWindowRelease(f, f.allocatedRegSize, "resumeGeneratorWithException:staleNonDirect")
+			if StrictRegWindowChecks {
+				vm.checkRegWindowRelease(f, f.allocatedRegSize, "resumeGeneratorWithException:staleNonDirect")
+			}
 			vm.regDir.popTo(f.regSlotBeforePush)
 			vm.frameCount--
 		}
