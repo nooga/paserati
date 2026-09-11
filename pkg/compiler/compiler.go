@@ -1963,8 +1963,29 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 			}
 			sort.Strings(hoistedNames)
 			// Pre-allocate registers (or spill slots) for all hoisted function names to enable mutual recursion with stable locations
+			//
+			// Must check only THIS scope chain (stopping at c.scopeBoundary), not the
+			// full Resolve() walk: Resolve() crosses straight into the enclosing
+			// compiler's symbol table (a function scope's Outer chain links directly to
+			// its enclosing compiler's currentSymbolTable - see newFunctionCompiler), so
+			// it can find a same-named binding from an OUTER function (e.g. an outer
+			// `var Foo`) and conclude this hoisted `function Foo` is "already defined"
+			// purely because of that unrelated outer binding, skipping the local
+			// register allocation below entirely. Per ECMAScript, a function
+			// declaration must always get its own binding in its own scope, shadowing
+			// any outer variable of the same name for every reference within that
+			// scope - it must never be conflated with, or skip allocation because of,
+			// an outer scope's same-named symbol. When that happened, the later emit
+			// loop's `c.currentSymbolTable.Resolve(name)` would also cross into the
+			// outer scope and reuse the OUTER function's register number as if it were
+			// local, emitting an OpClosure into a register index that could be beyond
+			// this (inner) function's own RegisterSize, causing a VM index-out-of-range
+			// panic - while every *reference* to the name elsewhere in this same scope
+			// (correctly, via isDefinedInEnclosingCompiler) resolved to an upvalue
+			// capture of the outer binding, so the two disagreed on which binding
+			// "Foo" was (#406).
 			for _, name := range hoistedNames {
-				if sym, _, found := c.currentSymbolTable.Resolve(name); !found || sym.Register == nilRegister {
+				if sym, _, found := c.currentSymbolTable.ResolveUpTo(name, c.scopeBoundary); !found || sym.Register == nilRegister {
 					reg, ok := c.regAlloc.TryAllocForVariable()
 					if ok {
 						c.currentSymbolTable.Define(name, reg)
