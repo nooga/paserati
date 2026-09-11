@@ -6683,7 +6683,7 @@ startExecution:
 					// ECMAScript 10.2.2 step 11c: derived constructor returning non-object, non-undefined
 					vm.ThrowTypeError("Derived constructors may only return object or undefined")
 					if !vm.unwinding {
-						frame = callerFrame
+						frame = &vm.frames[vm.frameCount-1]
 						closure = frame.closure
 						function = closure.Fn
 						code = function.Chunk.Code
@@ -6697,7 +6697,7 @@ startExecution:
 					// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
 					vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
 					if !vm.unwinding {
-						frame = callerFrame
+						frame = &vm.frames[vm.frameCount-1]
 						closure = frame.closure
 						function = closure.Fn
 						code = function.Chunk.Code
@@ -6725,7 +6725,7 @@ startExecution:
 			}
 
 			// Restore cached variables for the caller frame
-			frame = callerFrame // Update local frame pointer
+			frame = &vm.frames[vm.frameCount-1] // Update local frame pointer
 			closure = frame.closure
 			function = closure.Fn
 			code = function.Chunk.Code
@@ -6926,7 +6926,7 @@ startExecution:
 					// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
 					vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
 					if !vm.unwinding {
-						frame = callerFrame
+						frame = &vm.frames[vm.frameCount-1]
 						closure = frame.closure
 						function = closure.Fn
 						code = function.Chunk.Code
@@ -6952,7 +6952,7 @@ startExecution:
 			}
 
 			// Restore cached variables for the caller frame
-			frame = callerFrame // Update local frame pointer
+			frame = &vm.frames[vm.frameCount-1] // Update local frame pointer
 			closure = frame.closure
 			function = closure.Fn
 			code = function.Chunk.Code
@@ -15957,7 +15957,7 @@ startExecution:
 			}
 
 			// Restore cached variables for the caller frame
-			frame = callerFrame // Update local frame pointer
+			frame = &vm.frames[vm.frameCount-1] // Update local frame pointer
 			closure = frame.closure
 			function = closure.Fn
 			code = function.Chunk.Code
@@ -16204,7 +16204,7 @@ startExecution:
 						// ECMAScript 10.2.2 step 11c: derived constructor returning non-object, non-undefined
 						vm.ThrowTypeError("Derived constructors may only return object or undefined")
 						if !vm.unwinding {
-							frame = callerFrame
+							frame = &vm.frames[vm.frameCount-1]
 							closure = frame.closure
 							function = closure.Fn
 							code = function.Chunk.Code
@@ -16218,7 +16218,7 @@ startExecution:
 						// ECMAScript 10.2.2 step 13: derived constructor returned undefined without super()
 						vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
 						if !vm.unwinding {
-							frame = callerFrame
+							frame = &vm.frames[vm.frameCount-1]
 							closure = frame.closure
 							function = closure.Fn
 							code = function.Chunk.Code
@@ -16244,7 +16244,7 @@ startExecution:
 				}
 
 				// Restore cached variables for the caller frame
-				frame = callerFrame
+				frame = &vm.frames[vm.frameCount-1]
 				closure = frame.closure
 				function = closure.Fn
 				code = function.Chunk.Code
@@ -18587,7 +18587,7 @@ startExecution:
 					} else if result.Type() != TypeUndefined {
 						vm.ThrowTypeError("Derived constructors may only return object or undefined")
 						if !vm.unwinding {
-							frame = callerFrame
+							frame = &vm.frames[vm.frameCount-1]
 							closure = frame.closure
 							function = closure.Fn
 							code = function.Chunk.Code
@@ -18600,7 +18600,7 @@ startExecution:
 					} else if constructorThisValue.typ == TypeUninitialized {
 						vm.ThrowReferenceError("Must call super constructor in derived class before returning from derived constructor")
 						if !vm.unwinding {
-							frame = callerFrame
+							frame = &vm.frames[vm.frameCount-1]
 							closure = frame.closure
 							function = closure.Fn
 							code = function.Chunk.Code
@@ -18624,7 +18624,7 @@ startExecution:
 					return status, Undefined
 				}
 
-				frame = callerFrame
+				frame = &vm.frames[vm.frameCount-1]
 				closure = frame.closure
 				function = closure.Fn
 				code = function.Chunk.Code
