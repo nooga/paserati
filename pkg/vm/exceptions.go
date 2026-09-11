@@ -281,17 +281,25 @@ func (vm *VM) unwindException() bool {
 	return false
 }
 
-// reclaimUnwoundRegisters restores the register-file invariant after
+// reclaimUnwoundRegisters restores the register-directory invariant after
 // unwindException has popped one or more frames to reach a handler.
 //
 // unwindException's pop loop decrements vm.frameCount without giving back the
 // popped frames' register windows (doing it there risks double-counting against
-// the ad-hoc `nextRegSlot -= regSize` reclamation in the native-boundary error
-// paths - see issue #61 / the note in truncateFramesTo). Instead, once we've
-// settled on the frame that will actually resume bytecode execution, snap
-// vm.nextRegSlot back to the top of that frame's window. This only ever *lowers*
-// nextRegSlot (reclaiming leaked windows); it never raises it, and it no-ops for
-// frames whose registers are not carved from vm.registerStack (sentinel/native).
+// the ad-hoc reclamation in the native-boundary error paths - see issue #61 /
+// the note in truncateFramesTo). Instead, once we've settled on the frame that
+// will actually resume bytecode execution, snap vm.regDir's cursor back to the
+// top of that frame's window. This only ever *lowers* the cursor (reclaiming
+// leaked windows); it never raises it, and it no-ops for frames whose
+// registers aren't carved from vm.regDir (sentinel/native).
+//
+// B4 note: this used to reconstruct the frame's window base via
+// `len(vm.registerStack) - cap(frame.registers)`, a pointer-arithmetic trick
+// that made sense for one flat backing array but has no equivalent once
+// storage is split across many separately-allocated blocks. regSlotBeforePush
+// (recorded at push time for exactly this kind of reclamation - see
+// checkRegWindowRelease) already carries the same information directly and
+// unambiguously, so this is simpler now, not just adapted.
 func (vm *VM) reclaimUnwoundRegisters() {
 	if vm.frameCount == 0 {
 		return
@@ -303,15 +311,13 @@ func (vm *VM) reclaimUnwoundRegisters() {
 	if len(frame.registers) == 0 {
 		return
 	}
-	// frame.registers was formed as vm.registerStack[base : base+n] (a 2-index
-	// slice), so cap(frame.registers) == len(vm.registerStack) - base.
-	base := len(vm.registerStack) - cap(frame.registers)
-	if base < 0 || base > len(vm.registerStack) {
-		return // not a registerStack-backed window; leave nextRegSlot untouched
+	windowEnd := registerMark{
+		block:  frame.regWindowStart.block,
+		offset: frame.regWindowStart.offset + frame.allocatedRegSize,
 	}
-	top := base + frame.allocatedRegSize
-	if top >= 0 && top < vm.nextRegSlot {
-		vm.nextRegSlot = top
+	cur := vm.regDir.mark()
+	if cur.block > windowEnd.block || (cur.block == windowEnd.block && cur.offset > windowEnd.offset) {
+		vm.regDir.popTo(windowEnd)
 	}
 }
 

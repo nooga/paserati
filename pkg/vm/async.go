@@ -93,7 +93,7 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 
 	// Save current VM state so we can restore after vm.run() returns
 	savedFrameCount := vm.frameCount
-	savedNextRegSlot := vm.nextRegSlot
+	savedRegMark := vm.regDir.mark()
 
 	// Set up caller context for sentinel frame approach
 	callerRegisters := make([]Value, 1)
@@ -116,17 +116,19 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 
 	// Allocate registers for the async function
 	regSize := funcObj.RegisterSize
-	if vm.nextRegSlot+regSize > len(vm.registerStack) {
+	newWindow, windowStart, pushMark, ok := vm.regDir.push(regSize)
+	if !ok {
 		vm.frameCount = savedFrameCount // Restore
 		return Undefined, fmt.Errorf("Out of registers")
 	}
 
 	// Set up the async function frame
 	frame := &vm.frames[vm.frameCount]
-	frame.registers = vm.registerStack[vm.nextRegSlot : vm.nextRegSlot+regSize]
-	frame.allocatedRegSize = regSize         // Track actual allocation for proper cleanup
-	frame.regSlotBeforePush = vm.nextRegSlot // B4 invariant: record window base for checkRegWindowRelease
-	frame.ip = 0                             // Start from beginning
+	frame.registers = newWindow
+	frame.allocatedRegSize = regSize // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = pushMark // B4 invariant: record window start for checkRegWindowRelease
+	frame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
+	frame.ip = 0                       // Start from beginning
 	frame.targetRegister = destReg
 	frame.thisValue = thisValue
 	frame.homeObject = funcObj.HomeObject // Set [[HomeObject]] for super property access (object literal methods)
@@ -256,11 +258,10 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 
 	// Update VM state
 	vm.frameCount++
-	vm.nextRegSlot += regSize
 
 	if debugAsyncAwait {
-		fmt.Printf("[ASYNC-BODY] func=%s starting execution, regSize=%d, args=%d, frameCount=%d, nextRegSlot=%d\n",
-			funcObj.Name, regSize, len(args), vm.frameCount, vm.nextRegSlot)
+		fmt.Printf("[ASYNC-BODY] func=%s starting execution, regSize=%d, args=%d, frameCount=%d, regCursor=%+v\n",
+			funcObj.Name, regSize, len(args), vm.frameCount, vm.regDir.mark())
 		for i := 0; i < len(frame.registers) && i < 5; i++ {
 			fmt.Printf("[ASYNC-BODY]   R%d = %s\n", i, frame.registers[i].Inspect())
 		}
@@ -276,7 +277,7 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	// We can detect this by checking if frameCount is still higher than what we saved.
 	if vm.frameCount > savedFrameCount {
 		vm.frameCount = savedFrameCount
-		vm.nextRegSlot = savedNextRegSlot
+		vm.regDir.popTo(savedRegMark)
 	}
 
 	if status == InterpretRuntimeError {
