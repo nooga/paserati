@@ -8,7 +8,24 @@ import (
 func (p *Parser) parseEnumDeclarationStatement() *ExpressionStatement {
 	enumDecl := p.parseEnumDeclaration(false) // false for regular enum
 	if enumDecl == nil {
-		return nil
+		// If enum parsing failed (e.g. `enum` reached in a position that
+		// isn't actually a declaration - see paserati#426 Symptom 2, where
+		// an invalid member-access continuation like `.enum` inside a
+		// deeply nested expression re-synced the parser onto the bare
+		// `enum` token, which this function then failed to turn into a
+		// declaration), return a non-nil empty ExpressionStatement instead
+		// of a literal nil. A literal `nil` here is a *ExpressionStatement,
+		// which is a non-nil `Statement` interface value once returned
+		// through parseStatement()'s dispatch (the classic Go typed-nil-in-
+		// interface trap) - callers checking `stmt != nil` then see "true"
+		// and proceed to dereference a nil ExpressionStatement, panicking.
+		// Mirrors the same defensive pattern already used by
+		// parseFunctionDeclarationStatement/parseAsyncFunctionDeclarationStatement
+		// a few hundred lines up in parser.go, for the identical reason.
+		return &ExpressionStatement{
+			Token:      p.curToken,
+			Expression: nil,
+		}
 	}
 
 	return &ExpressionStatement{
@@ -21,7 +38,11 @@ func (p *Parser) parseEnumDeclarationStatement() *ExpressionStatement {
 func (p *Parser) parseConstEnumDeclarationStatement(constToken *lexer.Token) *ExpressionStatement {
 	enumDecl := p.parseEnumDeclaration(true) // true for const enum
 	if enumDecl == nil {
-		return nil
+		// See the identical comment in parseEnumDeclarationStatement above.
+		return &ExpressionStatement{
+			Token:      constToken,
+			Expression: nil,
+		}
 	}
 
 	// Set the const token as the main token (for error reporting)
