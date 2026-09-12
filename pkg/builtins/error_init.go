@@ -80,7 +80,7 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if thisValue.Type() == vm.TypeObject {
 			plainObj := thisValue.AsPlainObject()
 			// Step 3-4: Get name property, default to "Error"
-			if nameValue, exists := plainObj.GetOwn("name"); exists {
+			if nameValue, exists := plainObj.Get("name"); exists {
 				if nameValue.Type() == vm.TypeUndefined {
 					name = "Error"
 				} else {
@@ -88,7 +88,7 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 			}
 			// Step 5-6: Get message property, default to ""
-			if messageValue, exists := plainObj.GetOwn("message"); exists {
+			if messageValue, exists := plainObj.Get("message"); exists {
 				if messageValue.Type() == vm.TypeUndefined {
 					message = ""
 				} else {
@@ -97,14 +97,14 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		} else if thisValue.Type() == vm.TypeDictObject {
 			dictObj := thisValue.AsDictObject()
-			if nameValue, exists := dictObj.GetOwn("name"); exists {
+			if nameValue, exists := dictObj.Get("name"); exists {
 				if nameValue.Type() == vm.TypeUndefined {
 					name = "Error"
 				} else {
 					name = nameValue.ToString()
 				}
 			}
-			if messageValue, exists := dictObj.GetOwn("message"); exists {
+			if messageValue, exists := dictObj.Get("message"); exists {
 				if messageValue.Type() == vm.TypeUndefined {
 					message = ""
 				} else {
@@ -130,8 +130,10 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	errorConstructor := vm.NewNativeFunction(1, true, "Error", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
 		var message string
+		hasMessage := false
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
 			message = args[0].ToString()
+			hasMessage = true
 		}
 
 		// Create new Error instance
@@ -141,9 +143,14 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
 		errorInstancePtr.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
 
-		// Set properties
-		errorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("Error"))
-		errorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
+		// Per spec, "name" lives only on the prototype: an instance has no own
+		// "name" until user code assigns one, and that assignment must create
+		// an ordinary enumerable own property (so it survives JSON.stringify).
+		// "message" is installed via CreateNonEnumerableDataPropertyOrThrow,
+		// and only when a message argument was actually supplied.
+		if hasMessage {
+			errorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
+		}
 
 		// Handle options parameter (ES2022 InstallErrorCause): new Error(message, { cause })
 		if len(args) > 1 && args[1].IsObject() {
@@ -359,15 +366,19 @@ func (e *AggregateErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Get message (second argument)
 		var message string
+		hasMessage := false
 		if len(args) > 1 && args[1].Type() != vm.TypeUndefined {
 			message = args[1].ToString()
+			hasMessage = true
 		}
 
 		// Create instance
 		inst := vm.NewObject(vm.NewValueFromPlainObject(proto)).AsPlainObject()
 		inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
-		inst.SetOwnNonEnumerable("name", vm.NewString("AggregateError"))
-		inst.SetOwnNonEnumerable("message", vm.NewString(message))
+		// "name" lives only on the prototype (see Error constructor).
+		if hasMessage {
+			inst.SetOwnNonEnumerable("message", vm.NewString(message))
+		}
 		inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))
 
 		// Set errors property (per ECMAScript spec, this is an own data property)
@@ -513,8 +524,10 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 	// Per ECMAScript 19.5.6.2, NativeError constructors have length 1
 	ctor := vm.NewNativeFunction(1, true, name, func(args []vm.Value) (vm.Value, error) {
 		var message string
+		hasMessage := false
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
 			message = args[0].ToString()
+			hasMessage = true
 		}
 
 		// Per spec: OrdinaryCreateFromConstructor(newTarget, "%NativeErrorPrototype%")
@@ -531,8 +544,10 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 		inst := vm.NewObject(instProto).AsPlainObject()
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
 		inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
-		inst.SetOwnNonEnumerable("name", vm.NewString(name))
-		inst.SetOwnNonEnumerable("message", vm.NewString(message))
+		// "name" lives only on the prototype (see Error constructor).
+		if hasMessage {
+			inst.SetOwnNonEnumerable("message", vm.NewString(message))
+		}
 		inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))
 
 		// Per ECMAScript 20.5.8.1 InstallErrorCause:

@@ -62,8 +62,10 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	referenceErrorConstructor := vm.NewNativeFunction(1, true, "ReferenceError", func(args []vm.Value) (vm.Value, error) {
 		// Get message argument
 		var message string
+		hasMessage := false
 		if len(args) > 0 && args[0].Type() != vm.TypeUndefined {
 			message = args[0].ToString()
+			hasMessage = true
 		}
 
 		// Per spec: OrdinaryCreateFromConstructor(newTarget, "%ReferenceErrorPrototype%")
@@ -83,9 +85,14 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
 		referenceErrorInstancePtr.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
 
-		// Set properties (override name, set message and stack)
-		referenceErrorInstancePtr.SetOwnNonEnumerable("name", vm.NewString("ReferenceError"))
-		referenceErrorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
+		// Per spec, "name" lives only on the prototype: an instance has no own
+		// "name" until user code assigns one, and that assignment must create
+		// an ordinary enumerable own property (so it survives JSON.stringify).
+		// "message" is installed via CreateNonEnumerableDataPropertyOrThrow,
+		// and only when a message argument was actually supplied.
+		if hasMessage {
+			referenceErrorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
+		}
 
 		// Capture stack trace at the time of ReferenceError creation
 		stackTrace := vmInstance.CaptureStackTrace()
