@@ -821,73 +821,21 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 
 	// 11. Generator objects
 	if objVal.Type() == TypeGenerator {
-		// Generator objects: consult Generator.prototype chain for regular properties
-		proto := vm.GeneratorPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk the prototype chain
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwn(propName); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// Generator objects: consult the prototype chain via the shared,
+		// non-panicking helper - not the hardcoded vm.GeneratorPrototype
+		// this used to always use regardless of any per-instance override.
+		// handlePrimitiveMethod (called earlier, at the top of opGetProp)
+		// deliberately does NOT handle TypeGenerator any more, since its
+		// Prototype field is a plain Value now (#418, can hold any
+		// object-kind value or an explicit null) that only
+		// finishProtoChainGet -> plainPrototypeOf -> InstancePrototypeOverride
+		// walks correctly - this block is the sole real handler.
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	if objVal.Type() == TypeAsyncGenerator {
-		// AsyncGenerator objects: consult AsyncGenerator.prototype chain for regular properties
-		proto := vm.AsyncGeneratorPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk the prototype chain
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwn(propName); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// AsyncGenerator objects - see the TypeGenerator case just above.
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 12. RegExp objects (after special properties are handled)

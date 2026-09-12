@@ -19479,21 +19479,19 @@ func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 
 				current = obj.prototype
 			} else if current.Type() == TypeGenerator {
-				// Generator objects delegate to their prototype
+				// Generator objects delegate to their prototype - a plain
+				// Value now (not always a *PlainObject; see GeneratorObject's
+				// Prototype field, changed for #418), so an explicit
+				// Object.setPrototypeOf(gen, null) correctly ends the walk
+				// here via the loop's own Null/Undefined check below, rather
+				// than needing its own nil guard.
 				genObj := current.AsGenerator()
-				if genObj.Prototype != nil {
-					current = NewValueFromPlainObject(genObj.Prototype)
-				} else {
-					break
-				}
+				current = genObj.Prototype
 			} else if current.Type() == TypeAsyncGenerator {
-				// AsyncGenerator objects delegate to their prototype
+				// AsyncGenerator objects delegate to their prototype - see
+				// the TypeGenerator case just above.
 				genObj := current.AsAsyncGenerator()
-				if genObj.Prototype != nil {
-					current = NewValueFromPlainObject(genObj.Prototype)
-				} else {
-					break
-				}
+				current = genObj.Prototype
 			} else if current.Type() == TypeDictObject {
 				// DictObject support (simplified)
 				// DictObjects don't typically use Symbols or complex prototype chains in this VM

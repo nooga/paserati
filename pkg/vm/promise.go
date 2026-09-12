@@ -651,18 +651,17 @@ func (vm *VM) iterableToArrayBounded(value Value) (Value, error) {
 				continue
 			}
 		case TypeGenerator:
+			// Prototype is a plain Value now (not always a *PlainObject; see
+			// GeneratorObject's Prototype field, changed for #418) - the
+			// loop's own Null/Undefined check at the top handles both "no
+			// override" and an explicit Object.setPrototypeOf(gen, null),
+			// so no separate nil guard is needed here.
 			genObj := current.AsGenerator()
-			if genObj.Prototype == nil {
-				return Undefined, vm.NewTypeError(fmt.Sprintf("%s is not iterable", value.TypeName()))
-			}
-			current = NewValueFromPlainObject(genObj.Prototype)
+			current = genObj.Prototype
 			continue
 		case TypeAsyncGenerator:
 			genObj := current.AsAsyncGenerator()
-			if genObj.Prototype == nil {
-				return Undefined, vm.NewTypeError(fmt.Sprintf("%s is not iterable", value.TypeName()))
-			}
-			current = NewValueFromPlainObject(genObj.Prototype)
+			current = genObj.Prototype
 			continue
 		case TypeDictObject:
 			// DictObjects don't support symbol keys, so there's nothing to

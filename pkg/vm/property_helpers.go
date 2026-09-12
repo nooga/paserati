@@ -746,22 +746,14 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		if vm.BigIntPrototype.Type() == TypeObject {
 			prototype = vm.BigIntPrototype.AsPlainObject()
 		}
-	case TypeGenerator:
-		// Check if generator has a custom prototype, otherwise use default
-		genObj := objVal.AsGenerator()
-		if genObj.Prototype != nil {
-			prototype = genObj.Prototype
-		} else if vm.GeneratorPrototype.Type() == TypeObject {
-			prototype = vm.GeneratorPrototype.AsPlainObject()
-		}
-	case TypeAsyncGenerator:
-		// Check if async generator has a custom prototype, otherwise use default
-		asyncGenObj := objVal.AsAsyncGenerator()
-		if asyncGenObj.Prototype != nil {
-			prototype = asyncGenObj.Prototype
-		} else if vm.AsyncGeneratorPrototype.Type() == TypeObject {
-			prototype = vm.AsyncGeneratorPrototype.AsPlainObject()
-		}
+	// TypeGenerator/TypeAsyncGenerator are deliberately NOT handled here
+	// (unlike every other exotic kind above): their per-instance Prototype
+	// field can hold any object-kind Value or an explicit Null override
+	// since #418, which this function's *PlainObject-typed `prototype` local
+	// can't represent. opGetProp's own dedicated Generator/AsyncGenerator
+	// blocks (which run right after this function returns unhandled) use
+	// finishProtoChainGet instead, which walks correctly regardless of what
+	// kind of value is in the chain - see those blocks for the real logic.
 	case TypePromise:
 		if pr := objVal.AsPromise(); pr != nil && pr.prototype.Type() == TypeObject {
 			// Per-instance [[Prototype]] override set by a subclass ctor

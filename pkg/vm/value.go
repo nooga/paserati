@@ -387,13 +387,31 @@ type GeneratorObject struct {
 	Done                  bool            // True when generator is exhausted
 	Args                  []Value         // Arguments passed when the generator was created
 	This                  Value           // The 'this' value for the generator context
-	Prototype             *PlainObject    // Custom prototype (if set via function.prototype)
+	Prototype             Value           // Per-instance [[Prototype]]: the generator function's own .prototype property (resolved eagerly at creation time per ECMAScript 14.4.10/14.5.10), or the intrinsic Generator/AsyncGeneratorPrototype - and, since #418, an arbitrary override via Object.setPrototypeOf (any object-kind Value, or an explicit Null)
 	DelegatedIterator     Value           // Iterator being delegated to (for yield* forwarding of .return()/.throw())
 	DelegationResult      Value           // Result value when delegation completed via external throw/return with done:true
 	DelegationResultReady bool            // Flag indicating DelegationResult is set (needed because result could be undefined)
 }
 
 type AsyncGeneratorObject GeneratorObject
+
+// SetPrototype overrides the per-instance [[Prototype]] (for subclassing, or
+// an explicit Object.setPrototypeOf - #418).
+func (g *GeneratorObject) SetPrototype(prototype Value) { g.Prototype = prototype }
+
+// GetPrototype returns the per-instance prototype, or Undefined if unset
+// (callers should fall back to the realm's GeneratorPrototype) - in
+// practice always set, since call.go resolves it eagerly at creation time.
+func (g *GeneratorObject) GetPrototype() Value { return g.Prototype }
+
+// SetPrototype overrides the per-instance [[Prototype]] (for subclassing, or
+// an explicit Object.setPrototypeOf - #418).
+func (g *AsyncGeneratorObject) SetPrototype(prototype Value) { g.Prototype = prototype }
+
+// GetPrototype returns the per-instance prototype, or Undefined if unset
+// (callers should fall back to the realm's AsyncGeneratorPrototype) - in
+// practice always set, since call.go resolves it eagerly at creation time.
+func (g *AsyncGeneratorObject) GetPrototype() Value { return g.Prototype }
 
 type MapObject struct {
 	Object
@@ -2026,8 +2044,18 @@ func (v Value) Is(other Value) bool {
 	case TypeSymbol:
 		// Symbols are only equal if they are the *same* object (reference)
 		return v.obj == other.obj
-	case TypeObject, TypeArray, TypeArguments, TypeFunction, TypeClosure, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeRegExp, TypeMap, TypeSet, TypeProxy:
-		// Objects (including arrays, functions, regex, maps, sets, proxies, etc.) are equal only by reference
+	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeFunction, TypeClosure,
+		TypeNativeFunction, TypeNativeFunctionWithProps, TypeAsyncNativeFunction, TypeBoundFunction,
+		TypeRegExp, TypeMap, TypeSet, TypeWeakMap, TypeWeakSet, TypeWeakRef, TypeFinalizationRegistry,
+		TypeArrayBuffer, TypeSharedArrayBuffer, TypeTypedArray, TypeDataView, TypePromise,
+		TypeGenerator, TypeAsyncGenerator, TypeProxy:
+		// Every other object-kind ValueType (the two function-kind types plus
+		// the whole IsObject() span) is equal only by reference. This list
+		// used to cover just a handful of common kinds and panic on the
+		// rest - latent until applyExoticPrototype (#418) started calling
+		// Is() on arbitrary exotic-kind values (e.g. Object.setPrototypeOf(x,
+		// x) on a TypedArray/Promise/WeakMap/.../Generator), which is a
+		// completely ordinary thing to compare and must not crash the VM.
 		return v.obj == other.obj
 	default:
 		panic(fmt.Sprintf("Unhandled type in Is comparison: %v", v.typ)) // Should not happen

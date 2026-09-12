@@ -95,15 +95,21 @@ func (vm *VM) prototypeOf(v Value) Value {
 	case TypeNativeFunction, TypeBoundFunction, TypeAsyncNativeFunction:
 		return vm.FunctionPrototype
 	case TypeGenerator:
+		// In practice this case is unreachable: Prototype is a plain Value
+		// now (#418) and InstancePrototypeOverride's own TypeGenerator case
+		// (subclass.go) already returns it via the InstancePrototypeOverride
+		// check at the top of this function, since call.go always resolves
+		// it eagerly at creation time. Kept as a defensive fallback for the
+		// same reason the other exotic kinds above have one.
 		genObj := v.AsGenerator()
-		if genObj.Prototype != nil {
-			return NewValueFromPlainObject(genObj.Prototype)
+		if genObj.Prototype.Type() != TypeUndefined {
+			return genObj.Prototype
 		}
 		return vm.GeneratorPrototype
 	case TypeAsyncGenerator:
 		asyncGenObj := v.AsAsyncGenerator()
-		if asyncGenObj.Prototype != nil {
-			return NewValueFromPlainObject(asyncGenObj.Prototype)
+		if asyncGenObj.Prototype.Type() != TypeUndefined {
+			return asyncGenObj.Prototype
 		}
 		return vm.AsyncGeneratorPrototype
 	case TypeString:

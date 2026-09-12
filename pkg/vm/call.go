@@ -249,12 +249,9 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			// If .prototype is an object, use it as the generator's prototype
 			// Otherwise, use the default AsyncGeneratorPrototype
 			if prototypeVal.IsObject() && prototypeVal.Type() == TypeObject {
-				genObj.Prototype = prototypeVal.AsPlainObject()
+				genObj.Prototype = prototypeVal
 			} else {
-				// Use default AsyncGeneratorPrototype
-				if vm.AsyncGeneratorPrototype.Type() == TypeObject {
-					genObj.Prototype = vm.AsyncGeneratorPrototype.AsPlainObject()
-				}
+				genObj.Prototype = vm.AsyncGeneratorPrototype
 			}
 
 			callerRegisters[destReg] = genVal
@@ -305,12 +302,9 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			// If .prototype is an object, use it as the generator's prototype
 			// Otherwise, use the default GeneratorPrototype
 			if prototypeVal.IsObject() && prototypeVal.Type() == TypeObject {
-				genObj.Prototype = prototypeVal.AsPlainObject()
+				genObj.Prototype = prototypeVal
 			} else {
-				// Use default GeneratorPrototype
-				if vm.GeneratorPrototype.Type() == TypeObject {
-					genObj.Prototype = vm.GeneratorPrototype.AsPlainObject()
-				}
+				genObj.Prototype = vm.GeneratorPrototype
 			}
 
 			if debugPrepareCall {
