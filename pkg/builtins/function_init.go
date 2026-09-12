@@ -450,6 +450,52 @@ func formatNativeFunctionString(name string) string {
 	return "function () { [native code] }"
 }
 
+// compileDynamicFunctionSource parses and compiles the synthesized source for
+// a Function()/AsyncFunction() constructor call. It contains any panic from
+// the parser or compiler - e.g. an internal limit like register exhaustion
+// hit by a large generated body (paserati#426 Symptom 2, seen compiling
+// ajv's bundled meta-schema validator via `new Function(...)`) - as a
+// catchable SyntaxError instead of letting it escape as a raw Go panic and
+// crash the whole process. An internal engine limit should always surface as
+// a normal error, never an uncaught panic.
+func compileDynamicFunctionSource(vmInstance *vm.VM, driver interface{}, source string, constructorName string) (chunk *vm.Chunk, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			chunk = nil
+			err = vmInstance.NewSyntaxError(fmt.Sprintf("%s constructor: internal compiler error: %v", constructorName, r))
+		}
+	}()
+
+	// Define interface for accessing compiler without state modification
+	// Use CompileProgramAsScript which forces script mode (disallows import.meta)
+	type driverInterface interface {
+		CompileProgramAsScript(*parser.Program) (*vm.Chunk, []errors.PaseratiError)
+	}
+
+	d, ok := driver.(driverInterface)
+	if !ok {
+		return nil, vmInstance.NewSyntaxError(constructorName + " constructor - driver doesn't implement CompileProgramAsScript")
+	}
+
+	// Parse the source code
+	lx := lexer.NewLexer(source)
+	p := parser.NewParser(lx)
+	// Per ECMA-262 20.2.1.1.1 CreateDynamicFunction, the body parses with the
+	// FunctionBody goal - reject import/export declarations and import.meta.
+	p.SetDisallowModuleSyntax(true)
+	prog, parseErrs := p.ParseProgram()
+	if len(parseErrs) > 0 {
+		return nil, vmInstance.NewSyntaxError(parseErrs[0].Error())
+	}
+
+	// Compile the program as Script code (not Module) - import.meta not allowed
+	c, compileErrs := d.CompileProgramAsScript(prog)
+	if len(compileErrs) > 0 {
+		return nil, vmInstance.NewSyntaxError(compileErrs[0].Error())
+	}
+	return c, nil
+}
+
 func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Value, homeRealm *vm.Realm) (vm.Value, error) {
 	// The Function constructor has signature:
 	// Function(param1, param2, ..., paramN, body)
@@ -501,32 +547,9 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 		return vm.Undefined, vmInstance.NewSyntaxError("Function constructor - driver is nil")
 	}
 
-	// Define interface for accessing compiler without state modification
-	// Use CompileProgramAsScript which forces script mode (disallows import.meta)
-	type driverInterface interface {
-		CompileProgramAsScript(*parser.Program) (*vm.Chunk, []errors.PaseratiError)
-	}
-
-	d, ok := driver.(driverInterface)
-	if !ok {
-		return vm.Undefined, vmInstance.NewSyntaxError("Function constructor - driver doesn't implement CompileProgramAsScript")
-	}
-
-	// Parse the source code
-	lx := lexer.NewLexer(source)
-	p := parser.NewParser(lx)
-	// Per ECMA-262 20.2.1.1.1 CreateDynamicFunction, the body parses with the
-	// FunctionBody goal - reject import/export declarations and import.meta.
-	p.SetDisallowModuleSyntax(true)
-	prog, parseErrs := p.ParseProgram()
-	if len(parseErrs) > 0 {
-		return vm.Undefined, vmInstance.NewSyntaxError(parseErrs[0].Error())
-	}
-
-	// Compile the program as Script code (not Module) - import.meta not allowed
-	chunk, compileErrs := d.CompileProgramAsScript(prog)
-	if len(compileErrs) > 0 {
-		return vm.Undefined, vmInstance.NewSyntaxError(compileErrs[0].Error())
+	chunk, err := compileDynamicFunctionSource(vmInstance, driver, source, "Function")
+	if err != nil {
+		return vm.Undefined, err
 	}
 
 	if chunk == nil {
@@ -614,32 +637,9 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 		return vm.Undefined, vmInstance.NewSyntaxError("AsyncFunction constructor - driver is nil")
 	}
 
-	// Define interface for accessing compiler without state modification
-	// Use CompileProgramAsScript which forces script mode (disallows import.meta)
-	type driverInterface interface {
-		CompileProgramAsScript(*parser.Program) (*vm.Chunk, []errors.PaseratiError)
-	}
-
-	d, ok := driver.(driverInterface)
-	if !ok {
-		return vm.Undefined, vmInstance.NewSyntaxError("AsyncFunction constructor - driver doesn't implement CompileProgramAsScript")
-	}
-
-	// Parse the source code
-	lx := lexer.NewLexer(source)
-	p := parser.NewParser(lx)
-	// Per ECMA-262 20.2.1.1.1 CreateDynamicFunction, the body parses with the
-	// FunctionBody goal - reject import/export declarations and import.meta.
-	p.SetDisallowModuleSyntax(true)
-	prog, parseErrs := p.ParseProgram()
-	if len(parseErrs) > 0 {
-		return vm.Undefined, vmInstance.NewSyntaxError(parseErrs[0].Error())
-	}
-
-	// Compile the program as Script code (not Module) - import.meta not allowed
-	chunk, compileErrs := d.CompileProgramAsScript(prog)
-	if len(compileErrs) > 0 {
-		return vm.Undefined, vmInstance.NewSyntaxError(compileErrs[0].Error())
+	chunk, err := compileDynamicFunctionSource(vmInstance, driver, source, "AsyncFunction")
+	if err != nil {
+		return vm.Undefined, err
 	}
 
 	if chunk == nil {
