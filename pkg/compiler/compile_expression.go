@@ -2775,11 +2775,29 @@ func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, 
 	// Check if this is a method call (obj.fn`template` or obj[key]`template`)
 	// In this case, 'this' must be preserved as the object
 	if memberExpr, isMethodCall := node.Tag.(*parser.MemberExpression); isMethodCall {
+		// NOTE: Clear tail position while compiling the object/property and the
+		// substitutions below - matching every other call-compiling path in
+		// this file (see the super-method-call branch above). Without this,
+		// c.inTailPosition leaks into a substitution expression that's itself
+		// a call (e.g. tag`${makeValue()}` returned directly from a regular
+		// function): that inner call then gets compiled as its own tail call,
+		// which replaces the current frame and returns straight out of
+		// makeValue() - skipping the tag(...) call this whole expression was
+		// supposed to make - instead of merely supplying one of its
+		// arguments. Found chasing noderati#3 (real ajv's own bundled
+		// codegen silently losing scope-captured names): ajv's
+		// schemaRefOrVal is exactly `return tag\`${a}${b}${getProperty(c)}\`;`
+		// inside a plain function, isolated to this exact shape and filed as
+		// paserati#438.
+		oldTailPos := c.inTailPosition
+		c.inTailPosition = false
+
 		// Method call: obj.fn`template`
 		// 1. Compile the object part (this value)
 		thisReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, thisReg)
 		if _, err := c.compileNode(memberExpr.Object, thisReg); err != nil {
+			c.inTailPosition = oldTailPos
 			return BadRegister, err
 		}
 
@@ -2831,9 +2849,11 @@ func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, 
 		// 5. Compile substitutions into subsequent registers
 		for i, expr := range substitutions {
 			if _, err := c.compileNode(expr, funcBase+Register(2+i)); err != nil {
+				c.inTailPosition = oldTailPos
 				return BadRegister, err
 			}
 		}
+		c.inTailPosition = oldTailPos // Restore after object, property, and substitutions
 
 		// 6. Emit method call with 'this' binding (or tail call if in tail position)
 		if enableTCO && c.inTailPosition && c.tryDepth == 0 {
@@ -2843,6 +2863,16 @@ func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, 
 		}
 		return hint, nil
 	}
+
+	// NOTE: Clear tail position while compiling the tag and the substitutions
+	// below - see the identical comment in the method-call branch above for
+	// why (paserati#438 / noderati#3): without this, a substitution that's
+	// itself a call expression (e.g. tag`${makeValue()}` returned directly
+	// from a plain function) gets wrongly compiled as its own tail call,
+	// which replaces the current frame and returns straight out of
+	// makeValue() instead of actually invoking tag(...).
+	oldTailPos := c.inTailPosition
+	c.inTailPosition = false
 
 	// Non-method call (regular tagged template like tag`template`)
 	// Allocate contiguous block: function + [cookedStrings, ...subs]
@@ -2854,6 +2884,7 @@ func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, 
 
 	// 1) Compile tag into funcBase
 	if _, err := c.compileNode(node.Tag, funcBase); err != nil {
+		c.inTailPosition = oldTailPos
 		return BadRegister, err
 	}
 
@@ -2882,9 +2913,11 @@ func (c *Compiler) compileTaggedTemplate(node *parser.TaggedTemplateExpression, 
 	// 3) Compile substitutions into subsequent registers
 	for i, expr := range substitutions {
 		if _, err := c.compileNode(expr, funcBase+Register(2+i)); err != nil {
+			c.inTailPosition = oldTailPos
 			return BadRegister, err
 		}
 	}
+	c.inTailPosition = oldTailPos // Restore after tag and substitutions
 
 	// 4) Emit call: tag(cookedStrings, ...subs) (or tail call if in tail position)
 	// IMPORTANT: Do not reuse funcBase as the destination; use 'hint' only, leaving funcBase intact until after emit
