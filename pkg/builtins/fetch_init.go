@@ -1176,8 +1176,8 @@ func newErrorValueWithPrototype(proto vm.Value, name, message string) vm.Value {
 func reasonToMessage(reason vm.Value) string {
 	if reason.Type() == vm.TypeObject {
 		obj := reason.AsPlainObject()
-		nameVal, hasName := obj.GetOwn("name")
-		msgVal, hasMsg := obj.GetOwn("message")
+		nameVal, hasName := obj.Get("name")
+		msgVal, hasMsg := obj.Get("message")
 		if hasName || hasMsg {
 			name := "Error"
 			if hasName && nameVal.Type() == vm.TypeString {

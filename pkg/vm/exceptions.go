@@ -462,8 +462,8 @@ func (vm *VM) handleUncaughtException() {
 
 			// Check if this looks like an Error object (has name or message properties)
 			// First try to get name and message
-			nameVal, hasName := obj.GetOwn("name")
-			messageVal, hasMessage := obj.GetOwn("message")
+			nameVal, hasName := obj.Get("name")
+			messageVal, hasMessage := obj.Get("message")
 
 			if hasName || hasMessage {
 				// If we have name and/or message, format like Error.prototype.toString()
@@ -535,8 +535,8 @@ func (vm *VM) handleUncaughtException() {
 func (vm *VM) formatExceptionDisplay(exception Value) string {
 	if exception.IsObject() && exception.Type() == TypeObject {
 		obj := exception.AsPlainObject()
-		nameVal, hasName := obj.GetOwn("name")
-		messageVal, hasMessage := obj.GetOwn("message")
+		nameVal, hasName := obj.Get("name")
+		messageVal, hasMessage := obj.Get("message")
 
 		if hasName || hasMessage {
 			var name, message string

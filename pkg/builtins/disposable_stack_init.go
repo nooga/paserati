@@ -30,7 +30,6 @@ func newSuppressedError(vmInstance *vm.VM, errorVal, suppressedVal vm.Value) vm.
 	inst := vm.NewObject(proto).AsPlainObject()
 	inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
 	inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))
-	inst.SetOwnNonEnumerable("message", vm.NewString(""))
 	inst.SetOwnNonEnumerable("error", errorVal)
 	inst.SetOwnNonEnumerable("suppressed", suppressedVal)
 	return vm.NewValueFromPlainObject(inst)
