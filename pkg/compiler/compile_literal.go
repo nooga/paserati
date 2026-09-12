@@ -1344,6 +1344,46 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 		debugPrintf("// [Compiling Function Literal] %s: Parameter %s defined in R%d\n", determinedFuncName, param.Name.Value, reg)
 	}
 
+	// 2.5. Handle named function expression binding
+	// For named function expressions like: function g() { g(); }
+	// The name 'g' should be accessible inside and refer to the closure itself.
+	//
+	// This MUST happen before default-parameter/destructuring-parameter compilation
+	// (steps 3 and 3.5 below), which allocate and free temporary registers for things
+	// like the "is this param undefined?" check. If the name binding's register were
+	// allocated afterwards (as it used to be), the allocator could hand it the exact
+	// register number a temp register had just been freed from - and the VM writes
+	// the self-reference into that register number at call setup (see
+	// call.go prepareCall), before any bytecode runs. Default-parameter bytecode
+	// (which runs at function entry, ahead of the rest of the body) would then
+	// clobber the self-reference with its own temporary value before the recursive
+	// call ever executed, e.g. `function fact(n, {step=1}={}) { ...; fact(n-1, {step}); }`
+	// nested inside another function (#443).
+	if needsInnerNameBinding {
+		// Per ECMAScript spec: if a parameter has the same name as the function name,
+		// the parameter shadows the function name binding. Skip creating the inner
+		// binding in this case to avoid overriding the parameter register.
+		shadowedByParam := functionCompiler.parameterNames[funcNameForInnerBinding]
+		if !shadowedByParam && node.RestParameter != nil && node.RestParameter.Name != nil &&
+			node.RestParameter.Name.Value == funcNameForInnerBinding {
+			shadowedByParam = true
+		}
+		if shadowedByParam {
+			needsInnerNameBinding = false
+		} else {
+			// Allocate a register for the function name binding
+			nameBindingReg := functionCompiler.regAlloc.Alloc()
+			// Use DefineImmutable so assignments to the NFE name are silently ignored in non-strict mode
+			functionCompiler.currentSymbolTable.DefineImmutable(funcNameForInnerBinding, nameBindingReg)
+			functionCompiler.regAlloc.Pin(nameBindingReg) // Pin since it can be captured
+
+			// No bytecode needs to be emitted here - the VM will initialize this register
+			// when the function is called (see call.go prepareCall)
+			debugPrintf("// [Compiler] Function name binding '%s' allocated in R%d (will be initialized by VM)\n",
+				funcNameForInnerBinding, nameBindingReg)
+		}
+	}
+
 	// 3. Handle default parameters
 	// Build parameter list for TDZ checking (excluding 'this' and destructuring params)
 	functionCompiler.parameterList = make([]string, 0, len(node.Parameters))
@@ -1537,29 +1577,6 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 			// Save the pattern for generating destructuring code after function prologue
 			restParamPattern = node.RestParameter.Pattern
 			debugPrintf("// [Compiler] Rest parameter with destructuring pattern in R%d\n", restParamReg)
-		}
-	}
-
-	// 4.5. Handle named function expression binding
-	// For named function expressions like: function g() { g(); }
-	// The name 'g' should be accessible inside and refer to the closure itself
-	if needsInnerNameBinding {
-		// Per ECMAScript spec: if a parameter has the same name as the function name,
-		// the parameter shadows the function name binding. Skip creating the inner
-		// binding in this case to avoid overriding the parameter register.
-		if functionCompiler.parameterNames[funcNameForInnerBinding] {
-			needsInnerNameBinding = false
-		} else {
-			// Allocate a register for the function name binding
-			nameBindingReg := functionCompiler.regAlloc.Alloc()
-			// Use DefineImmutable so assignments to the NFE name are silently ignored in non-strict mode
-			functionCompiler.currentSymbolTable.DefineImmutable(funcNameForInnerBinding, nameBindingReg)
-			functionCompiler.regAlloc.Pin(nameBindingReg) // Pin since it can be captured
-
-			// No bytecode needs to be emitted here - the VM will initialize this register
-			// when the function is called (see call.go prepareCall)
-			debugPrintf("// [Compiler] Function name binding '%s' allocated in R%d (will be initialized by VM)\n",
-				funcNameForInnerBinding, nameBindingReg)
 		}
 	}
 
