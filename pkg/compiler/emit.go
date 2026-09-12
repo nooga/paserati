@@ -12,6 +12,18 @@ func (c *Compiler) emitOpCode(op vm.OpCode, line int) {
 	c.chunk.WriteOpCode(op, line)
 }
 
+// markPosition records that, from here on, the given column applies - keyed
+// on the current end of the chunk being emitted, in the chunk's sparse
+// Columns table (#153). Called only where the compiler already tracks the
+// current line (once per line entered during compileNode's traversal, not
+// per emitted instruction), so this stays far sparser than Lines'
+// one-entry-per-byte table while still giving a runtime error's
+// frame-synthesized position something better than a hardcoded column 1 to
+// report.
+func (c *Compiler) markPosition(column int) {
+	c.chunk.MarkColumn(len(c.chunk.Code), column)
+}
+
 func (c *Compiler) emitByte(b byte) {
 	c.chunk.EmitByte(b)
 }
