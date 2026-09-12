@@ -1090,17 +1090,23 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 
 // compileTernaryExpression compiles condition ? consequence : alternative
 func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression, hint Register) (Register, errors.PaseratiError) {
-	// Manage temporary registers with automatic cleanup
-	var tempRegs []Register
+	// conditionReg is freed immediately after its one use (the conditional
+	// jump below) instead of being held live through the consequence/
+	// alternative - without this, a chain of nested ternaries
+	// (a ? b : c ? d : e ? ...) pins one register per level for the whole
+	// nested chain, the same class of bug as the nested-if case in
+	// paserati#426. condFreed guards the fallback defer (for the
+	// early-return error path below, before the jump is even emitted)
+	// against double-freeing.
+	conditionReg := c.regAlloc.Alloc()
+	condFreed := false
 	defer func() {
-		for _, reg := range tempRegs {
-			c.regAlloc.Free(reg)
+		if !condFreed {
+			c.regAlloc.Free(conditionReg)
 		}
 	}()
 
 	// 1. Compile condition (not in tail position)
-	conditionReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, conditionReg)
 	oldTailPos := c.inTailPosition
 	c.inTailPosition = false
 	_, err := c.compileNode(node.Condition, conditionReg)
@@ -1111,6 +1117,8 @@ func (c *Compiler) compileTernaryExpression(node *parser.TernaryExpression, hint
 
 	// 2. Jump if false
 	jumpFalsePos := c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
+	c.regAlloc.Free(conditionReg)
+	condFreed = true
 
 	// --- Consequence Path ---
 	// 3. Compile consequence directly to hint (may be in tail position)
@@ -3098,17 +3106,24 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 			debugPrintf("[IfExpr][defer] Patched OpJump (over else) at pos=%d to end (offset=%d)", jumpElsePos, offset)
 		}
 	}()
-	// Manage temporary registers with automatic cleanup
-	var tempRegs []Register
+	// conditionReg is freed immediately after its one use (the conditional
+	// jump below), not deferred to this function's own return, so a deeply
+	// nested if-statement doesn't hold it live for the entire nested chain
+	// underneath it - see paserati#426, where 150+ nested ifs exhausted the
+	// 255-register budget this way even though conditionReg is dead well
+	// before the function returns. condFreed guards the fallback defer (for
+	// the early-return error path below, before the jump is even emitted)
+	// against double-freeing a register that was already freed and possibly
+	// reallocated to something else.
+	conditionReg := c.regAlloc.Alloc()
+	condFreed := false
 	defer func() {
-		for _, reg := range tempRegs {
-			c.regAlloc.Free(reg)
+		if !condFreed {
+			c.regAlloc.Free(conditionReg)
 		}
 	}()
 
 	// 1. Compile the condition
-	conditionReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, conditionReg)
 	_, err := c.compileNode(node.Condition, conditionReg)
 	if err != nil {
 		return BadRegister, err
@@ -3127,21 +3142,30 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 	debugPrintf("[IfExpr] Before OpJumpIfFalse emit: codeLen=%d", len(c.chunk.Code))
 	jumpIfFalsePos = c.emitPlaceholderJump(vm.OpJumpIfFalse, conditionReg, node.Token.Line)
 	debugPrintf("[IfExpr] Emitted OpJumpIfFalse at pos=%d; codeLen now=%d", jumpIfFalsePos, len(c.chunk.Code))
+	// conditionReg's only use was as the jump's operand above - free it now
+	// rather than holding it live through the (possibly deeply nested)
+	// consequence/alternative below.
+	c.regAlloc.Free(conditionReg)
+	condFreed = true
 
-	// 3. Compile the consequence block
-	// Allocate temporary register for consequence compilation and initialize to undefined.
-	// This is important for break/continue inside the block - they copy hint to the loop's
-	// completion register, so hint must have a defined value (undefined if no prior statement).
-	consequenceReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, consequenceReg)
-	c.emitLoadUndefined(consequenceReg, node.Token.Line)
-	consResult, err := c.compileNode(node.Consequence, consequenceReg)
+	// 3. Compile the consequence block directly into hint, rather than into a
+	// separate scratch register that gets copied to hint afterward. hint was
+	// already pre-initialized to undefined above (or is BadRegister, meaning
+	// the caller has no use for a completion value at all - the
+	// overwhelmingly common case for an if-statement not in tail/completion
+	// position), so if the consequence itself produces no completion value,
+	// hint correctly keeps holding that default - exactly the same contract
+	// the old "compile into a scratch register, then conditionally copy to
+	// hint" two-step provided, just without the scratch register. That
+	// register had to stay live for the *entire* nested compilation (a
+	// further-nested if writes into it in turn), so a chain of N nested
+	// if-statements previously pinned N live registers simultaneously for a
+	// value that was always going to end up equal to hint anyway. See
+	// paserati#426 (150+ nested ifs exhausting the 255-register budget at
+	// ~1-2 registers held per nesting level for no reason).
+	_, err = c.compileNode(node.Consequence, hint)
 	if err != nil {
 		return BadRegister, err
-	}
-	// If consequence produced a value, copy it to hint
-	if hint != BadRegister && consResult != BadRegister {
-		c.emitMove(hint, consequenceReg, node.Token.Line)
 	}
 	// Dump disassembly after consequence compilation, before any patching
 	if debugCompiler {
@@ -3167,19 +3191,11 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 			debugPrintf("[IfExpr] Disassembly after patchJumpIfFalse (else path entry):\n%s", c.chunk.DisassembleChunk("<if-else-entry>"))
 		}
 
-		// 6a. Compile the alternative block
-		// Allocate temporary register for alternative compilation and initialize to undefined.
-		// This is important for break/continue inside the block.
-		alternativeReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, alternativeReg)
-		c.emitLoadUndefined(alternativeReg, node.Token.Line)
-		altResult, err := c.compileNode(node.Alternative, alternativeReg)
+		// 6a. Compile the alternative block directly into hint - same
+		// rationale as the consequence above (paserati#426).
+		_, err := c.compileNode(node.Alternative, hint)
 		if err != nil {
 			return BadRegister, err
-		}
-		// If alternative produced a value, copy it to hint
-		if hint != BadRegister && altResult != BadRegister {
-			c.emitMove(hint, alternativeReg, node.Token.Line)
 		}
 
 		// 7a. Backpatch the OpJump to jump *here* (end of else block)
