@@ -123,6 +123,60 @@ func TestAddConstantCapacityBoundaryStrings(t *testing.T) {
 	c.AddConstant(NewString(intToDigits(constantPoolCapacity)))
 }
 
+// TestChunkGetColumn covers #153's Columns table directly: it must recover
+// the column of the latest entry at or before a given offset (binary search
+// over a table built by successive MarkColumn calls, as the compiler makes
+// them during codegen - always in non-decreasing offset order, since offset
+// is always len(chunk.Code) at the time of the call and Code only grows by
+// appending), and return 0 - not some other entry's column, not a panic -
+// when offset precedes every entry or the table is empty.
+func TestChunkGetColumn(t *testing.T) {
+	c := NewChunk()
+	if got := c.GetColumn(0); got != 0 {
+		t.Errorf("empty table: GetColumn(0) = %d, want 0", got)
+	}
+
+	c.MarkColumn(0, 3)
+	c.MarkColumn(4, 15)
+	c.MarkColumn(10, 1)
+
+	cases := []struct {
+		offset int
+		want   int
+	}{
+		{-1, 0},  // before every entry
+		{0, 3},   // exactly the first entry
+		{1, 3},   // between entry 0 and entry 1
+		{3, 3},   // still before entry 1
+		{4, 15},  // exactly the second entry
+		{9, 15},  // between entry 1 and entry 2
+		{10, 1},  // exactly the third entry
+		{100, 1}, // past every entry
+	}
+	for _, tc := range cases {
+		if got := c.GetColumn(tc.offset); got != tc.want {
+			t.Errorf("GetColumn(%d) = %d, want %d", tc.offset, got, tc.want)
+		}
+	}
+
+	// A second MarkColumn call at the *current last* offset overwrites that
+	// entry in place rather than appending a sibling one - the case the
+	// compiler actually hits when the line pointer changes twice with no
+	// code emitted in between (e.g. two statements compiled back to back
+	// with a no-op in between). MarkColumn is only ever called with
+	// len(chunk.Code) as the offset, and Code only grows by appending, so
+	// offsets across calls are non-decreasing and a repeat can only ever
+	// match the most recent entry - never an earlier one, which is why the
+	// overwrite check only looks at the table's last entry.
+	c.MarkColumn(10, 99)
+	if got := c.GetColumn(10); got != 99 {
+		t.Errorf("after overwrite: GetColumn(10) = %d, want 99", got)
+	}
+	if n := len(c.Columns); n != 3 {
+		t.Errorf("overwrite at the last offset changed the entry count to %d, want 3", n)
+	}
+}
+
 func intToDigits(i int) string {
 	// Minimal decimal formatter to avoid pulling in strconv just for test data.
 	if i == 0 {
