@@ -4963,7 +4963,21 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 	// collectExportAllNames marks each module visited as it is entered, which is
 	// enough on its own to stop a module (including this one) from being expanded
 	// more than once.
-	exportNames := c.collectExportAllNames(sourceModuleRecord, sourceModule, make(map[string]bool))
+	exportNames, collectErr := c.collectExportAllNames(sourceModuleRecord, sourceModule, make(map[string]bool), node)
+	if collectErr != nil {
+		// #433: real ESM link-time semantics fail the *whole* importing module
+		// synchronously when a re-exported ("export * from") module (direct or
+		// transitively, through a re-exported barrel) fails to load/parse -- it
+		// is not enough to just omit that module's names from the merged
+		// namespace, which is what silently happened before this check existed
+		// (LoadModule itself returns a nil `error` with the failure recorded
+		// only on the record, see moduleLoader.loadModuleSequential; a bare
+		// "export *" never called emitEvalModule/emitGetModuleExport per name,
+		// unlike a named import or "export * as ns from", so nothing ever
+		// tripped the runtime load-error check in vm.go either -- the failure
+		// had no code path left to surface through at all).
+		return BadRegister, collectErr
+	}
 
 	debugPrintf("// [Compiler] Will re-export %d names from '%s'\n", len(exportNames), sourceModule)
 
@@ -5029,35 +5043,48 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 // another barrel is the common npm shape) and treats a nested "export * as ns"
 // as contributing exactly one name, "ns", per spec. visited guards against
 // re-export cycles by resolved module path.
-func (c *Compiler) collectExportAllNames(rec vm.ModuleRecord, specifier string, visited map[string]bool) []string {
+func (c *Compiler) collectExportAllNames(rec vm.ModuleRecord, specifier string, visited map[string]bool, node parser.Node) ([]string, errors.PaseratiError) {
 	resolvedPath := rec.GetResolvedPath()
 	if resolvedPath == "" {
 		resolvedPath = specifier
 	}
 	if visited[resolvedPath] {
-		return nil
+		return nil, nil
 	}
 	visited[resolvedPath] = true
+
+	// #433: a module that failed to load/parse must fail the *importing*
+	// module's compile, not just silently contribute zero names. LoadModule
+	// reports this only on the record (its own `error` return stays nil, see
+	// moduleLoader.loadModuleSequential) precisely so a failed dependency
+	// doesn't abort the whole program by itself -- a module is allowed to
+	// `import()` a broken one dynamically and handle the rejection. But a
+	// static "export * from" is unconditional and synchronous, like a static
+	// `import`/`export * as ns from`, and must propagate here exactly as
+	// those do.
+	if loadErr := rec.GetError(); loadErr != nil {
+		return nil, NewCompileError(node, fmt.Sprintf("Failed to load module '%s' for re-export: %v", specifier, loadErr))
+	}
 
 	if exportValues := rec.GetExportValues(); len(exportValues) > 0 {
 		names := make([]string, 0, len(exportValues))
 		for name := range exportValues {
 			names = append(names, name)
 		}
-		return names
+		return names, nil
 	}
 	if exportNames := rec.GetExportNames(); len(exportNames) > 0 {
-		return exportNames
+		return exportNames, nil
 	}
 
 	// Nothing populated yet - harvest from the source module's AST.
 	if c.moduleLoader == nil {
-		return nil
+		return nil, nil
 	}
 	// rec is this very module's record; only the concrete type exposes the AST.
 	concreteRec, _ := rec.(*modules.ModuleRecord)
 	if concreteRec == nil || concreteRec.AST == nil {
-		return nil
+		return nil, nil
 	}
 
 	names := c.extractExportNamesFromAST(concreteRec.AST)
@@ -5078,9 +5105,13 @@ func (c *Compiler) collectExportAllNames(rec vm.ModuleRecord, specifier string, 
 		if err != nil {
 			continue
 		}
-		names = append(names, c.collectExportAllNames(nestedRec, all.Source.Value, visited)...)
+		nestedNames, nestedErr := c.collectExportAllNames(nestedRec, all.Source.Value, visited, node)
+		if nestedErr != nil {
+			return nil, nestedErr
+		}
+		names = append(names, nestedNames...)
 	}
-	return names
+	return names, nil
 }
 
 // extractExportNamesFromAST extracts export names from a module's AST
