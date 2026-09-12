@@ -1365,19 +1365,39 @@ func lookupSymbolProp(vmInstance *vm.VM, val vm.Value, symKey vm.PropertyKey, sy
 	case vm.TypePromise:
 		return lookupSymbolPropFromProto(vmInstance, vmInstance.PromisePrototype, symKey, symObj, depth)
 	case vm.TypeGenerator:
-		// Check the generator's own prototype chain (genFn.prototype → Generator.prototype)
+		// Check the generator's own prototype chain (genFn.prototype → Generator.prototype).
+		// Prototype is a plain vm.Value now, not always a *PlainObject (#418):
+		// TypeObject preserves the exact prior behavior (receiver=val, so an
+		// accessor defined on the subclass's own .prototype reads correct
+		// instance state); TypeUndefined means never resolved (shouldn't
+		// normally happen - call.go sets this eagerly at creation) and falls
+		// back to the intrinsic exactly as before; anything else (an
+		// explicit null, or some other object-kind override via
+		// Object.setPrototypeOf) goes through the generic proto dispatch,
+		// same as every other exotic kind's case in this switch already
+		// does - it can't preserve the original receiver, but neither do they.
 		genObj := val.AsGenerator()
-		if genObj.Prototype != nil {
-			return lookupSymbolPropInPlainObj(vmInstance, val, genObj.Prototype, symKey, symObj, depth)
+		switch genObj.Prototype.Type() {
+		case vm.TypeObject:
+			return lookupSymbolPropInPlainObj(vmInstance, val, genObj.Prototype.AsPlainObject(), symKey, symObj, depth)
+		case vm.TypeUndefined:
+			return lookupSymbolPropFromProto(vmInstance, vmInstance.GeneratorPrototype, symKey, symObj, depth)
+		default:
+			return lookupSymbolPropFromProto(vmInstance, genObj.Prototype, symKey, symObj, depth)
 		}
-		return lookupSymbolPropFromProto(vmInstance, vmInstance.GeneratorPrototype, symKey, symObj, depth)
 	case vm.TypeAsyncGenerator:
-		// Check the async generator's own prototype chain
+		// Check the async generator's own prototype chain - see the
+		// TypeGenerator case just above for why each Prototype.Type() is
+		// handled the way it is.
 		asyncGenObj := val.AsAsyncGenerator()
-		if asyncGenObj.Prototype != nil {
-			return lookupSymbolPropInPlainObj(vmInstance, val, asyncGenObj.Prototype, symKey, symObj, depth)
+		switch asyncGenObj.Prototype.Type() {
+		case vm.TypeObject:
+			return lookupSymbolPropInPlainObj(vmInstance, val, asyncGenObj.Prototype.AsPlainObject(), symKey, symObj, depth)
+		case vm.TypeUndefined:
+			return lookupSymbolPropFromProto(vmInstance, vmInstance.AsyncGeneratorPrototype, symKey, symObj, depth)
+		default:
+			return lookupSymbolPropFromProto(vmInstance, asyncGenObj.Prototype, symKey, symObj, depth)
 		}
-		return lookupSymbolPropFromProto(vmInstance, vmInstance.AsyncGeneratorPrototype, symKey, symObj, depth)
 	case vm.TypeArrayBuffer:
 		return lookupSymbolPropFromProto(vmInstance, vmInstance.ArrayBufferPrototype, symKey, symObj, depth)
 	case vm.TypeSharedArrayBuffer:
@@ -2306,21 +2326,22 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		}
 		return vmInstance.WeakMapPrototype, nil
 	case vm.TypeGenerator:
-		// For generators, return their custom prototype or GeneratorPrototype
+		// In practice unreachable: InstancePrototypeOverride's own
+		// TypeGenerator case (subclass.go) already returned above, since
+		// Prototype is a plain vm.Value now (#418) and call.go always
+		// resolves it eagerly at creation time. Kept as a defensive
+		// fallback, matching the WeakMap case just above.
 		genObj := obj.AsGenerator()
-		if genObj != nil && genObj.Prototype != nil {
-			return vm.NewValueFromPlainObject(genObj.Prototype), nil
+		if genObj != nil && genObj.Prototype.Type() != vm.TypeUndefined {
+			return genObj.Prototype, nil
 		}
-		// Return the default GeneratorPrototype
-		return vm.Null, nil // TODO: Return proper GeneratorPrototype
+		return vmInstance.GeneratorPrototype, nil
 	case vm.TypeAsyncGenerator:
-		// For async generators, return their custom prototype or AsyncGeneratorPrototype
 		asyncGenObj := obj.AsAsyncGenerator()
-		if asyncGenObj != nil && asyncGenObj.Prototype != nil {
-			return vm.NewValueFromPlainObject(asyncGenObj.Prototype), nil
+		if asyncGenObj != nil && asyncGenObj.Prototype.Type() != vm.TypeUndefined {
+			return asyncGenObj.Prototype, nil
 		}
-		// Return the default AsyncGeneratorPrototype
-		return vm.Null, nil // TODO: Return proper AsyncGeneratorPrototype
+		return vmInstance.AsyncGeneratorPrototype, nil
 	case vm.TypeProxy:
 		// For proxies, call the getPrototypeOf trap if present
 		proxy := obj.AsProxy()
@@ -2621,11 +2642,17 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsPromise().SetPrototype); err != nil {
 			return vm.Undefined, err
 		}
+	case vm.TypeGenerator:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsGenerator().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	case vm.TypeAsyncGenerator:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsAsyncGenerator().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
 	default:
-		// Generator/AsyncGenerator (and any other kind reaching here) only
-		// carry a *PlainObject prototype slot, not an arbitrary Value, so an
-		// arbitrary [[Prototype]] isn't representable there yet - leave as a
-		// no-op success rather than throwing, matching prior behavior.
+		// Any other kind reaching here is left as a no-op success, matching
+		// prior behavior.
 	}
 
 	if !success {

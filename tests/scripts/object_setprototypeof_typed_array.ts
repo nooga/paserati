@@ -121,6 +121,62 @@ Object.defineProperty(Array.prototype, "__test418Getter", {
 let test17 = ([1] as any).__test418Getter === 7;
 delete (Array.prototype as any).__test418Getter;
 
+// Self-reference on a non-Array exotic kind must also throw, not panic -
+// Value.Is() (used by the cycle/same-value checks) used to handle only a
+// handful of object-kind ValueTypes and panicked ("Unhandled type in Is
+// comparison") on any of the rest, including every type newly made
+// mutable by this fix (TypedArray, Promise, WeakMap, Generator, ...).
+function selfCycleThrows(makeInstance: () => any): boolean {
+  let instance = makeInstance();
+  try {
+    Object.setPrototypeOf(instance, instance);
+    return false;
+  } catch (e: any) {
+    return e instanceof TypeError;
+  }
+}
+let test18 = selfCycleThrows(() => new Uint8Array(3));
+let test19 = selfCycleThrows(() => Promise.resolve(1));
+let test20 = selfCycleThrows(() => new WeakMap());
+let test21 = selfCycleThrows(() => new ArrayBuffer(4));
+
+// Generator/AsyncGenerator instances: the per-instance prototype slot used
+// to be typed *PlainObject, so Object.setPrototypeOf on one was a silent
+// no-op success. Both getPrototypeOf and real method lookup must agree.
+function* genFn() {
+  yield 1;
+}
+let gen: any = genFn();
+let genProto: any = { tag: "gen-custom" };
+Object.setPrototypeOf(gen, genProto);
+let test22 =
+  Object.getPrototypeOf(gen) === genProto &&
+  gen.tag === "gen-custom" &&
+  gen.next === undefined;
+
+let genNull: any = genFn();
+Object.setPrototypeOf(genNull, null);
+let test23 = Object.getPrototypeOf(genNull) === null && genNull.next === undefined;
+
+async function* asyncGenFn() {
+  yield 1;
+}
+let asyncGen: any = asyncGenFn();
+let asyncGenProto: any = { tag: "async-gen-custom" };
+Object.setPrototypeOf(asyncGen, asyncGenProto);
+let test24 =
+  Object.getPrototypeOf(asyncGen) === asyncGenProto &&
+  asyncGen.tag === "async-gen-custom" &&
+  asyncGen.next === undefined;
+
+// An unmodified generator must still behave completely normally.
+function* plainGen() {
+  yield 1;
+  yield 2;
+}
+let pg = plainGen();
+let test25 = pg.next().value === 1 && pg.next().value === 2;
+
 test1 &&
   test2 &&
   test3 &&
@@ -138,4 +194,12 @@ test1 &&
   test14 &&
   test15 &&
   test16 &&
-  test17;
+  test17 &&
+  test18 &&
+  test19 &&
+  test20 &&
+  test21 &&
+  test22 &&
+  test23 &&
+  test24 &&
+  test25;

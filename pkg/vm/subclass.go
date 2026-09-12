@@ -10,8 +10,12 @@ package vm
 //
 // Storage: PlainObject/DictObject/Array/Map/Set/WeakRef/WeakMap and FunctionObject
 // carry their own [[Prototype]] field; the remaining exotic types (RegExp,
-// ArrayBuffer, SharedArrayBuffer, DataView, TypedArray, Promise, WeakSet) gained a
-// per-instance `prototype` field for this purpose. Undefined means "use intrinsic".
+// ArrayBuffer, SharedArrayBuffer, DataView, TypedArray, Promise, WeakSet,
+// Generator, AsyncGenerator) gained a per-instance `prototype`/`Prototype`
+// field for this purpose. Undefined means "use intrinsic" for all of them
+// except Generator/AsyncGenerator, whose field call.go resolves eagerly at
+// creation time (to the generator function's own .prototype, or the
+// intrinsic) - so Undefined effectively never occurs there in practice.
 
 // applySubclassPrototype sets instance's per-instance [[Prototype]] to
 // newTarget's "prototype" property. Callers must only invoke this for genuine
@@ -59,6 +63,10 @@ func (vm *VM) applySubclassPrototype(instance Value, newTarget Value) {
 		instance.AsFinalizationRegistry().SetPrototype(proto)
 	case TypeFunction:
 		instance.AsFunction().subclassPrototype = proto
+	case TypeGenerator:
+		instance.AsGenerator().SetPrototype(proto)
+	case TypeAsyncGenerator:
+		instance.AsAsyncGenerator().SetPrototype(proto)
 	}
 }
 
@@ -97,6 +105,10 @@ func (vm *VM) InstancePrototypeOverride(v Value) (Value, bool) {
 		p = v.AsPromise().GetPrototype()
 	case TypeFunction:
 		p = v.AsFunction().subclassPrototype
+	case TypeGenerator:
+		p = v.AsGenerator().GetPrototype()
+	case TypeAsyncGenerator:
+		p = v.AsAsyncGenerator().GetPrototype()
 	default:
 		return Undefined, false
 	}
