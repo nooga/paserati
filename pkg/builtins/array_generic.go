@@ -223,9 +223,30 @@ func arrayIndexGetFromProto(vmInstance *vm.VM, arr *vm.ArrayObject, receiver vm.
 // (see arrayLikeGet's doc comment), so this one helper covers holes,
 // `delete`d slots, and a real `undefined`/`null` element alike - all must
 // join as an empty string, never the literal text "undefined"/"null".
-func joinElementToString(v vm.Value) string {
+//
+// For an object element, the full ECMAScript ToString abstract operation
+// (7.1.17) requires going through ToPrimitive first - i.e. calling the
+// object's own toString()/Symbol.toPrimitive - not just stringifying its
+// internal representation. v.ToString() alone is a low-level Go method
+// that does the latter, producing "[object Object]" for any plain object
+// regardless of a user-defined toString() override, real Node correctly
+// prints. Found via ajv@8.17.1's own codegen (a real, popular library):
+// its `_Code`/`Name` wrapper classes override toString(), and are joined
+// via a tagged-template-built array - paserati#426's `.type`/`.enum`
+// investigation traced the "missing schema0/schema9" fragments in ajv's
+// generated code back here.
+func joinElementToString(vmInstance *vm.VM, v vm.Value) string {
 	if v.Type() == vm.TypeUndefined || v.Type() == vm.TypeNull {
 		return ""
+	}
+	if v.IsObject() {
+		vmInstance.EnterHelperCall()
+		primVal := vmInstance.ToPrimitive(v, "string")
+		vmInstance.ExitHelperCall()
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+			return ""
+		}
+		return primVal.ToString()
 	}
 	return v.ToString()
 }
