@@ -1138,12 +1138,23 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 		// Private identifier property name: get #privateName()
 		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	} else {
-		// Try to parse as property name (handles IDENT and all keywords like 'return')
-		propertyName = p.parsePropertyName()
-		if propertyName == nil {
+		// Try to parse as property name (handles IDENT and all keywords like 'return').
+		// Check the concrete *Identifier for nil BEFORE assigning into the
+		// Expression interface variable - parsePropertyName's declared
+		// return type is *Identifier, not Expression, so assigning a nil
+		// *Identifier directly into propertyName (as `propertyName =
+		// p.parsePropertyName()` used to do here) produces a non-nil
+		// Expression interface wrapping a nil pointer (Go's classic typed-
+		// nil-in-interface trap - see paserati#426, which hit the identical
+		// pattern in parseEnumDeclarationStatement). The `propertyName ==
+		// nil` check below would then never be true, silently letting a nil
+		// *Identifier through as this getter's property name.
+		ident := p.parsePropertyName()
+		if ident == nil {
 			p.addError(p.curToken, "expected identifier, string literal, number, private identifier, or computed property after 'get'")
 			return nil
 		}
+		propertyName = ident
 	}
 
 	if !p.expectPeek(lexer.LPAREN) {
@@ -1238,12 +1249,16 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 		// Private identifier property name: set #privateName()
 		propertyName = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	} else {
-		// Try to parse as property name (handles IDENT and all keywords like 'return')
-		propertyName = p.parsePropertyName()
-		if propertyName == nil {
+		// Try to parse as property name (handles IDENT and all keywords like
+		// 'return'). See the identical comment in parseGetter above for why
+		// this must check the concrete *Identifier before assigning into
+		// the Expression interface variable.
+		ident := p.parsePropertyName()
+		if ident == nil {
 			p.addError(p.curToken, "expected identifier, string literal, number, private identifier, or computed property after 'set'")
 			return nil
 		}
+		propertyName = ident
 	}
 
 	if !p.expectPeek(lexer.LPAREN) {
