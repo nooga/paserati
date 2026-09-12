@@ -2896,6 +2896,21 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 		functionCompiler.regAlloc.Pin(reg)
 	}
 
+	// 4.5. Reserve the rest parameter's register (if present) right here,
+	// before default-parameter compilation below gets a chance to allocate
+	// and free its own temporary registers - see
+	// compileFunctionLiteralWithOptions's step 2.4 for the full explanation
+	// of why this ordering matters (#443 investigation): the VM hard-codes
+	// the rest array's destination as register index `calleeFunc.Arity`,
+	// which is only correct if this is the very next register handed out
+	// after the named parameters above.
+	var restParamReg Register
+	haveRestParam := node.RestParameter != nil
+	if haveRestParam {
+		restParamReg = functionCompiler.regAlloc.Alloc()
+		functionCompiler.regAlloc.Pin(restParamReg)
+	}
+
 	// 5. Handle default parameters
 	for _, param := range node.Parameters {
 		if param.DefaultValue != nil {
@@ -2942,9 +2957,9 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 	}
 
 	// 6. Handle rest parameter (if present)
-	if node.RestParameter != nil {
-		// Define the rest parameter in the symbol table
-		restParamReg := functionCompiler.regAlloc.Alloc()
+	// The register itself was already reserved at step 4.5, before default-
+	// value temp registers could get in its way.
+	if haveRestParam {
 		// Handle both simple rest parameters (...args) and destructured (...[x, y])
 		if node.RestParameter.Name != nil {
 			functionCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
@@ -2953,8 +2968,6 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 			functionCompiler.currentSymbolTable.Define("__rest__", restParamReg)
 			debugPrintf("// [Compiler] Rest parameter (destructured) defined in R%d\n", restParamReg)
 		}
-		// Pin the register since rest parameters can be captured by inner functions
-		functionCompiler.regAlloc.Pin(restParamReg)
 	}
 
 	// 7. Compile the body using the function compiler
