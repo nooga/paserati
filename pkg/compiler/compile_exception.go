@@ -10,6 +10,31 @@ import (
 
 // --- Exception Handling Compilation ---
 
+// predefineBlockLexicals pre-defines every let/const declared directly in
+// stmts (not nested in an inner block) as a TDZ binding in
+// c.currentSymbolTable, exactly like the generic *parser.BlockStatement
+// predefine pass in compiler.go does via predefineLexicalName. try/catch
+// bodies used to reimplement this inline with a plain (non-TDZ) Define and
+// no Uninitialized marker, so a forward reference before the real
+// declaration line silently read the register's leftover/default value
+// instead of throwing "Cannot access '<name>' before initialization" - a
+// real, spec-required ReferenceError that block statements, while, and if
+// already got right (see #440 TDZ follow-up).
+func (c *Compiler) predefineBlockLexicals(stmts []parser.Statement) {
+	for _, stmt := range stmts {
+		switch s := stmt.(type) {
+		case *parser.LetStatement:
+			for _, name := range parser.DeclaredNames(s) {
+				c.predefineLexicalName(name, false, s.Token.Line)
+			}
+		case *parser.ConstStatement:
+			for _, name := range parser.DeclaredNames(s) {
+				c.predefineLexicalName(name, true, s.Token.Line)
+			}
+		}
+	}
+}
+
 // compileTryStatement compiles a try/catch/finally statement (Phase 3 design)
 func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register) (Register, errors.PaseratiError) {
 	tryStart := len(c.chunk.Code)
@@ -49,26 +74,7 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 		c.currentSymbolTable = NewEnclosedSymbolTable(previousSymbolTable)
 
 		// Pre-define let/const variables in the block scope
-		for _, stmt := range node.Body.Statements {
-			switch s := stmt.(type) {
-			case *parser.LetStatement:
-				if s.Name != nil {
-					if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-						reg := c.regAlloc.Alloc()
-						c.currentSymbolTable.Define(s.Name.Value, reg)
-						c.regAlloc.Pin(reg)
-					}
-				}
-			case *parser.ConstStatement:
-				if s.Name != nil {
-					if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-						reg := c.regAlloc.Alloc()
-						c.currentSymbolTable.Define(s.Name.Value, reg)
-						c.regAlloc.Pin(reg)
-					}
-				}
-			}
-		}
+		c.predefineBlockLexicals(node.Body.Statements)
 
 		// Increment tryDepth only for the try body - not for catch/finally
 		// This allows TCO in catch/finally blocks per ECMAScript spec
@@ -163,26 +169,7 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 				}
 
 				// Pre-define let/const in the catch scope before compiling statements
-				for _, stmt := range node.CatchClause.Body.Statements {
-					switch s := stmt.(type) {
-					case *parser.LetStatement:
-						if s.Name != nil {
-							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-								reg := c.regAlloc.Alloc()
-								c.currentSymbolTable.Define(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-							}
-						}
-					case *parser.ConstStatement:
-						if s.Name != nil {
-							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-								reg := c.regAlloc.Alloc()
-								c.currentSymbolTable.Define(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-							}
-						}
-					}
-				}
+				c.predefineBlockLexicals(node.CatchClause.Body.Statements)
 
 				// Compile catch body - track completion value in hint
 				for _, stmt := range node.CatchClause.Body.Statements {
@@ -204,26 +191,7 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 				c.currentSymbolTable = NewEnclosedSymbolTable(catchScopePrev)
 
 				// Pre-define let/const in the catch scope
-				for _, stmt := range node.CatchClause.Body.Statements {
-					switch s := stmt.(type) {
-					case *parser.LetStatement:
-						if s.Name != nil {
-							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-								reg := c.regAlloc.Alloc()
-								c.currentSymbolTable.Define(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-							}
-						}
-					case *parser.ConstStatement:
-						if s.Name != nil {
-							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-								reg := c.regAlloc.Alloc()
-								c.currentSymbolTable.Define(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-							}
-						}
-					}
-				}
+				c.predefineBlockLexicals(node.CatchClause.Body.Statements)
 
 				// Compile catch body
 				for _, stmt := range node.CatchClause.Body.Statements {
@@ -386,26 +354,7 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 				}
 
 				// Pre-define let/const in the catch scope before compiling statements
-				for _, stmt := range node.CatchClause.Body.Statements {
-					switch s := stmt.(type) {
-					case *parser.LetStatement:
-						if s.Name != nil {
-							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-								reg := c.regAlloc.Alloc()
-								c.currentSymbolTable.Define(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-							}
-						}
-					case *parser.ConstStatement:
-						if s.Name != nil {
-							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-								reg := c.regAlloc.Alloc()
-								c.currentSymbolTable.Define(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-							}
-						}
-					}
-				}
+				c.predefineBlockLexicals(node.CatchClause.Body.Statements)
 
 				// Compile catch body - track completion value in hint
 				for _, stmt := range node.CatchClause.Body.Statements {
@@ -427,26 +376,7 @@ func (c *Compiler) compileTryStatement(node *parser.TryStatement, hint Register)
 				c.currentSymbolTable = NewEnclosedSymbolTable(catchScopePrev)
 
 				// Pre-define let/const in the catch scope
-				for _, stmt := range node.CatchClause.Body.Statements {
-					switch s := stmt.(type) {
-					case *parser.LetStatement:
-						if s.Name != nil {
-							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-								reg := c.regAlloc.Alloc()
-								c.currentSymbolTable.Define(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-							}
-						}
-					case *parser.ConstStatement:
-						if s.Name != nil {
-							if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-								reg := c.regAlloc.Alloc()
-								c.currentSymbolTable.Define(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-							}
-						}
-					}
-				}
+				c.predefineBlockLexicals(node.CatchClause.Body.Statements)
 
 				// Compile catch body
 				for _, stmt := range node.CatchClause.Body.Statements {

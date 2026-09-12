@@ -14794,20 +14794,29 @@ startExecution:
 				goto reloadFrame
 			}
 
-			// Writable check: in strict mode, throw TypeError if trying to set a non-writable global
-			// This handles cases like `Infinity = 1` which should fail for read-only globals
+			// Writable check: assignment to a non-writable global (e.g. NaN,
+			// Infinity, undefined) throws TypeError in strict mode and is a
+			// silent no-op in sloppy mode, per ECMAScript Set/PutValue
+			// semantics (real Node: `NaN = 1` leaves NaN unchanged in
+			// sloppy mode but throws under "use strict" - #440 follow-up).
 			isStrictForWritable := function != nil && function.Chunk != nil && function.Chunk.IsStrict
-			if isStrictForWritable && !vm.heap.IsWritable(int(globalIdx)) {
-				frame.ip = ip
-				varName := vm.heap.GetNameByIndex(int(globalIdx))
-				if varName == "" {
-					varName = fmt.Sprintf("<index %d>", globalIdx)
+			if !vm.heap.IsWritable(int(globalIdx)) {
+				if isStrictForWritable {
+					frame.ip = ip
+					varName := vm.heap.GetNameByIndex(int(globalIdx))
+					if varName == "" {
+						varName = fmt.Sprintf("<index %d>", globalIdx)
+					}
+					vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", varName))
+					if vm.unwinding {
+						return InterpretRuntimeError, Undefined
+					}
+					goto reloadFrame
 				}
-				vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", varName))
-				if vm.unwinding {
-					return InterpretRuntimeError, Undefined
-				}
-				goto reloadFrame
+				// Sloppy mode: the RHS (register srcReg) has already been
+				// evaluated, so any side effects already happened - the
+				// store itself is simply discarded.
+				continue
 			}
 
 			// Use module-scoped global table
@@ -14881,6 +14890,14 @@ startExecution:
 
 			// NO TDZ check - this is the declaration initializing the variable
 			value := registers[srcReg]
+			// A `let`/`const`/`var` declaration establishes a brand new binding
+			// at this name, which fully replaces whatever was there before -
+			// including a pre-existing non-configurable built-in global (e.g.
+			// a top-level `let undefined = 42` shadowing the real, normally
+			// non-writable `undefined`, see #440 follow-up). Reset writability
+			// so later plain assignments to this slot aren't still governed by
+			// the shadowed binding's read-only flag.
+			_ = vm.heap.SetWritable(int(globalIdx), true) // globalIdx is always in range here
 			vm.setGlobalInTable(globalIdx, value)
 
 		// --- Register Spilling Support ---

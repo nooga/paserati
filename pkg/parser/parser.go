@@ -6469,6 +6469,14 @@ func (p *Parser) isValidLValue(expr Expression) bool {
 		return true
 	case *MemberExpression:
 		return true
+	case *UndefinedLiteral:
+		// 'undefined' is not a reserved word in ECMAScript - just an ordinary
+		// (if usually non-writable) identifier - so `undefined = x` is
+		// syntactically a plain identifier assignment, same as `NaN = x` or
+		// `Infinity = x` (#440 follow-up). Whether the store actually takes
+		// effect (a shadowing local binding) or is a no-op/TypeError (the
+		// real read-only global) is resolved later, not here.
+		return true
 	default:
 		return false
 	}
