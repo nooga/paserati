@@ -2145,9 +2145,13 @@ func (l *Lexer) readString(quote byte) (string, bool, bool) {
 						return "", hasEscape, false // Invalid or incomplete \xXX
 					}
 				}
-				// Use ParseUint with 32 bits to handle full byte range (0x00-0xFF)
+				// Use ParseUint with 32 bits to handle full byte range (0x00-0xFF).
+				// \xXX names a *code point* (U+0000-U+00FF), not a raw byte - for
+				// 0x80-0xFF that needs a 2-byte UTF-8 encoding (WriteRune), not a
+				// single raw byte (WriteByte), which produces invalid UTF-8/WTF-8
+				// (a lone continuation-range byte). See paserati#425.
 				if codePoint, err := strconv.ParseUint(hexStr, 16, 32); err == nil && codePoint <= 255 {
-					builder.WriteByte(byte(codePoint))
+					builder.WriteRune(rune(codePoint))
 				} else {
 					return "", hasEscape, false // Invalid code point
 				}
@@ -3060,8 +3064,12 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 						}
 					}
 					if len(hexStr) == 2 {
+						// \xXX names a *code point* (U+0000-U+00FF), not a raw byte -
+						// for 0x80-0xFF that needs a 2-byte UTF-8 encoding (WriteRune),
+						// not a single raw byte (WriteByte), which produces invalid
+						// UTF-8/WTF-8. See paserati#425.
 						if val, err := strconv.ParseUint(hexStr, 16, 32); err == nil && val <= 255 {
-							cooked.WriteByte(byte(val))
+							cooked.WriteRune(rune(val))
 						}
 					} else {
 						// Incomplete escape - cooked is undefined
