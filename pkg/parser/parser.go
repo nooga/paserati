@@ -7013,12 +7013,22 @@ func (p *Parser) parseObjectLiteral() Expression {
 			} else if p.curTokenIs(lexer.BIGINT) {
 				key = p.parseBigIntLiteral()
 			} else {
-				// Try to parse as property name (handles IDENT and all keywords)
-				key = p.parsePropertyName()
-				if key == nil {
+				// Try to parse as property name (handles IDENT and all
+				// keywords). Check the concrete *Identifier for nil BEFORE
+				// assigning into the Expression interface variable `key` -
+				// parsePropertyName's declared return type is *Identifier,
+				// not Expression, so assigning a nil *Identifier directly
+				// into `key` produces a non-nil Expression interface
+				// wrapping a nil pointer (Go's classic typed-nil-in-
+				// interface trap - see paserati#426, which hit the
+				// identical pattern in parseEnumDeclarationStatement). The
+				// `key == nil` check below would then never be true.
+				ident := p.parsePropertyName()
+				if ident == nil {
 					p.addError(p.curToken, "expected identifier, string literal, number, computed property, or keyword after 'get'")
 					return nil
 				}
+				key = ident
 			}
 
 			// Expect '(' for getter function
@@ -7106,12 +7116,16 @@ func (p *Parser) parseObjectLiteral() Expression {
 			} else if p.curTokenIs(lexer.BIGINT) {
 				key = p.parseBigIntLiteral()
 			} else {
-				// Try to parse as property name (handles IDENT and all keywords)
-				key = p.parsePropertyName()
-				if key == nil {
+				// Try to parse as property name (handles IDENT and all
+				// keywords). See the identical comment in the getter branch
+				// above for why this must check the concrete *Identifier
+				// before assigning into the Expression interface variable.
+				ident := p.parsePropertyName()
+				if ident == nil {
 					p.addError(p.curToken, "expected identifier, string literal, number, computed property, or keyword after 'set'")
 					return nil
 				}
+				key = ident
 			}
 
 			// Expect '(' for setter function
@@ -9136,10 +9150,13 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 				varStmt = p.parseArrayDestructuringDeclaration(letToken, false, false)
 				varName = "" // Destructuring doesn't have a single name
 
-				// If parsing failed (e.g., invalid syntax), varStmt will be a typed nil
-				// In Go, when a function returns a typed nil pointer (*T)(nil) and it's assigned
-				// to an interface variable, the interface is not nil even though the value is nil
-				if varStmt == nil || varStmt.(*ArrayDestructuringDeclaration) == nil {
+				// If parsing failed (e.g., invalid syntax), varStmt holds a
+				// typed nil - a *ArrayDestructuringDeclaration(nil) wrapped
+				// in the Statement interface is itself non-nil (Go's
+				// classic typed-nil-in-interface trap - see paserati#426),
+				// so the check must type-assert back to the concrete
+				// pointer, not compare the interface to nil directly.
+				if varStmt.(*ArrayDestructuringDeclaration) == nil {
 					return nil
 				}
 
@@ -9156,10 +9173,9 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 				varStmt = p.parseObjectDestructuringDeclaration(letToken, false, false)
 				varName = "" // Destructuring doesn't have a single name
 
-				// If parsing failed (e.g., invalid syntax), varStmt will be a typed nil
-				// In Go, when a function returns a typed nil pointer (*T)(nil) and it's assigned
-				// to an interface variable, the interface is not nil even though the value is nil
-				if varStmt == nil || varStmt.(*ObjectDestructuringDeclaration) == nil {
+				// See the identical comment for the ArrayDestructuringDeclaration
+				// case above - the same typed-nil-in-interface concern applies.
+				if varStmt.(*ObjectDestructuringDeclaration) == nil {
 					return nil
 				}
 
@@ -9232,10 +9248,9 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 			varStmt = p.parseArrayDestructuringDeclaration(constToken, true, false)
 			varName = "" // Destructuring doesn't have a single name
 
-			// If parsing failed (e.g., invalid syntax), varStmt will be a typed nil
-			// In Go, when a function returns a typed nil pointer (*T)(nil) and it's assigned
-			// to an interface variable, the interface is not nil even though the value is nil
-			if varStmt == nil || varStmt.(*ArrayDestructuringDeclaration) == nil {
+			// See the identical comment in the `let` branch above (the
+			// typed-nil-in-interface concern applies here too).
+			if varStmt.(*ArrayDestructuringDeclaration) == nil {
 				return nil
 			}
 
@@ -9252,10 +9267,9 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 			varStmt = p.parseObjectDestructuringDeclaration(constToken, true, false)
 			varName = "" // Destructuring doesn't have a single name
 
-			// If parsing failed (e.g., invalid syntax), varStmt will be a typed nil
-			// In Go, when a function returns a typed nil pointer (*T)(nil) and it's assigned
-			// to an interface variable, the interface is not nil even though the value is nil
-			if varStmt == nil || varStmt.(*ObjectDestructuringDeclaration) == nil {
+			// See the identical comment in the `let` branch above (the
+			// typed-nil-in-interface concern applies here too).
+			if varStmt.(*ObjectDestructuringDeclaration) == nil {
 				return nil
 			}
 
