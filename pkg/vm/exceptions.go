@@ -93,8 +93,7 @@ func (vm *VM) throwException(value Value) {
 		vm.unwindingCrossedNative = false
 		// Capture throw location from current frame before unwinding starts
 		if vm.frameCount > 0 {
-			vm.lastThrowLine, vm.lastThrowFuncName = vm.getFrameLineInfo(&vm.frames[vm.frameCount-1])
-			vm.lastThrowColumn = 1 // Column tracking not implemented yet
+			vm.lastThrowLine, vm.lastThrowColumn, vm.lastThrowFuncName = vm.getFrameLineAndColumnInfo(&vm.frames[vm.frameCount-1])
 			// Capture the file too, not just the line. lastThrowLine is a line
 			// in the *throwing* frame's own source, which for a throw inside an
 			// imported module is not the entry script - reporting the one
@@ -398,11 +397,15 @@ func frameSource(frame *CallFrame) *source.SourceFile {
 	return frame.closure.Fn.Chunk.Source
 }
 
-// getFrameLineInfo extracts the line number from a frame at the current instruction position
-// Returns (line, functionName) where line is 1 if no info available
-func (vm *VM) getFrameLineInfo(frame *CallFrame) (int, string) {
+// getFrameLineAndColumnInfo extracts the line and column a frame's current
+// instruction position maps to (line, functionName) where line is 1 if no
+// info is available. The column comes from the chunk's sparse Columns table
+// (#153) at whichever offset actually supplied the line - approximate, like
+// runtimeError's frame-synthesized column, but real position data beats the
+// hardcoded column 1 a fresh throw used to report unconditionally.
+func (vm *VM) getFrameLineAndColumnInfo(frame *CallFrame) (int, int, string) {
 	if frame == nil || frame.closure == nil || frame.closure.Fn == nil {
-		return 1, "<script>"
+		return 1, 1, "<script>"
 	}
 
 	fn := frame.closure.Fn
@@ -412,26 +415,33 @@ func (vm *VM) getFrameLineInfo(frame *CallFrame) (int, string) {
 	}
 
 	if fn.Chunk == nil {
-		return 1, funcName
+		return 1, 1, funcName
 	}
 
 	chunk := fn.Chunk
 	// IP points to the NEXT instruction, error occurred at ip-1
 	instructionPos := frame.ip - 1
 
+	lineOffset := -1
+	line := 1
 	if instructionPos >= 0 && instructionPos < len(chunk.Lines) {
-		return chunk.GetLine(instructionPos), funcName
-	}
-	// Fallback to ip itself if ip-1 is invalid
-	if frame.ip >= 0 && frame.ip < len(chunk.Lines) {
-		return chunk.GetLine(frame.ip), funcName
-	}
-	// Last resort: first line in chunk
-	if len(chunk.Lines) > 0 {
-		return chunk.Lines[0], funcName
+		line, lineOffset = chunk.GetLine(instructionPos), instructionPos
+	} else if frame.ip >= 0 && frame.ip < len(chunk.Lines) {
+		// Fallback to ip itself if ip-1 is invalid
+		line, lineOffset = chunk.GetLine(frame.ip), frame.ip
+	} else if len(chunk.Lines) > 0 {
+		// Last resort: first line in chunk
+		line, lineOffset = chunk.Lines[0], 0
 	}
 
-	return 1, funcName
+	column := 0
+	if lineOffset >= 0 {
+		column = chunk.GetColumn(lineOffset)
+	}
+	if column == 0 {
+		column = 1
+	}
+	return line, column, funcName
 }
 
 // handleUncaughtException handles uncaught exceptions by terminating execution

@@ -802,11 +802,29 @@ type ScopeDescriptor struct {
 	CurrentPrivateBrandInfo *PrivateBrandInfoVM
 }
 
+// ColumnEntry records the source column in effect starting at Offset, in a
+// Chunk's sparse Columns table. See Chunk.Columns.
+type ColumnEntry struct {
+	Offset int // Byte offset into Chunk.Code where this column starts applying
+	Column int // 1-based column number (rune index within the line)
+}
+
 // Chunk represents a sequence of bytecode instructions and associated data.
 type Chunk struct {
 	Code      []byte  // The bytecode instructions (OpCodes and operands)
 	Constants []Value // Constant pool (Now uses Value from vm package)
 	Lines     []int   // Line number for each byte in Code (parallel array)
+	// Columns is a sparse, offset-ordered side table of column numbers, unlike
+	// Lines: recording one entry per source line the compiler crosses while
+	// emitting this chunk (see Compiler.markPosition) rather than one per byte
+	// of Code. GetColumn recovers the column in effect at a given offset by
+	// finding the latest entry at or before it - approximate (the start of
+	// whatever line was most recently entered, not necessarily the exact
+	// token at that offset) but enough to point a runtime error's caret at
+	// more than column 1 (#153). Empty for chunks compiled before this table
+	// existed and for hand-assembled chunks; GetColumn degrades to 0 (caller
+	// falls back to column 1) in that case.
+	Columns []ColumnEntry
 	// Source is the file this chunk was compiled from, so a runtime error can
 	// name and quote the right file. Without it every VM-raised error's
 	// Position.Source stayed nil and errors.DisplayErrors fell back to whatever
@@ -867,6 +885,47 @@ func (c *Chunk) GetLine(offset int) int {
 		return 0
 	}
 	return c.Lines[offset]
+}
+
+// GetColumn returns the column in effect at a given bytecode offset, per the
+// sparse Columns table (see Chunk.Columns) - the column of the latest entry
+// at or before offset. Returns 0 (not a valid 1-based column) when Columns is
+// empty or offset precedes every entry, so callers can tell "no data" apart
+// from a genuine column and fall back accordingly.
+func (c *Chunk) GetColumn(offset int) int {
+	entries := c.Columns
+	lo, hi := 0, len(entries)-1
+	result := 0
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		if entries[mid].Offset <= offset {
+			result = entries[mid].Column
+			lo = mid + 1
+		} else {
+			hi = mid - 1
+		}
+	}
+	return result
+}
+
+// MarkColumn records that, starting at the given bytecode offset, source
+// column applies. Called by the compiler at the same points it tracks the
+// current line (Compiler.markPosition) with offset always len(chunk.Code) at
+// that moment, so across the calls building up one chunk, offset is always
+// non-decreasing (Code only grows by appending, never truncated) and can
+// repeat only immediately - GetColumn's binary search relies on that
+// ordering. A call at the same offset as the table's current last entry
+// (e.g. two line changes with no code emitted between them) overwrites that
+// entry rather than appending a sibling one, so the table never carries two
+// entries for the same offset; only the last entry is ever checked for a
+// repeat; an out-of-order offset older than the last entry is a caller bug,
+// not something this method can safely paper over.
+func (c *Chunk) MarkColumn(offset, column int) {
+	if n := len(c.Columns); n > 0 && c.Columns[n-1].Offset == offset {
+		c.Columns[n-1].Column = column
+		return
+	}
+	c.Columns = append(c.Columns, ColumnEntry{Offset: offset, Column: column})
 }
 
 // NewChunk creates a new, empty Chunk.

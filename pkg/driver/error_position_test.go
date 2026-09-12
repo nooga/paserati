@@ -104,6 +104,85 @@ func TestRuntimeErrorInsideModuleReportsThatModulesSource(t *testing.T) {
 	}
 }
 
+// TestRuntimeErrorFrameSyntheticPositionHasRealColumn covers #153's other
+// manifestation: an uncaught JS exception's reported position is captured by
+// throwException (via getFrameLineAndColumnInfo) from the executing frame's
+// own bytecode, and used to hardcode Column to 1 unconditionally with the
+// comment "Column tracking not implemented yet" - because Chunk had no
+// column data to recover at all, only a Lines table. The compiler now also
+// populates a sparse Columns table (Chunk.Columns, Compiler.markPosition)
+// that this path consults, so the reported column should be the real one -
+// even though "return x.bar;" is indented well past column 1. (The sibling
+// case - vm.runtimeError()'s own frame-synthesized position, the function
+// named directly in #153 - is covered at the unit level in
+// pkg/vm/runtime_error_report_test.go, since every runtimeError call site
+// reachable from real JS turns out to get wrapped into a catchable
+// TypeError first, same as this one.)
+func TestRuntimeErrorFrameSyntheticPositionHasRealColumn(t *testing.T) {
+	p := NewPaserati()
+	p.SetSkipTypeCheck(true)
+	script := "function foo() {\n    let x = null;\n    return x.bar;\n}\nfoo();\n"
+	_, errs := p.RunCode(script, RunOptions{})
+	if len(errs) == 0 {
+		t.Fatal("expected a runtime diagnostic, got none")
+	}
+	pos, ok := positionOfDiagnostic(errs[0])
+	if !ok {
+		t.Fatalf("diagnostic carries no position: %v", errs[0])
+	}
+	if pos.Line != 3 {
+		t.Errorf("position is line %d, want 3 (`return x.bar;`)", pos.Line)
+	}
+	if pos.Column <= 1 {
+		t.Errorf("position is column %d, want the real column of `x.bar` (>1) - looks like the old hardcoded-to-1 fallback", pos.Column)
+	}
+	// "    return x.bar;" - Columns records an entry each time the compiler
+	// crosses onto a new source line (Compiler.markPosition, hooked into
+	// compileNode's existing per-line tracking), keyed on whichever node it
+	// happens to be visiting at that moment - here, `return x.bar;` is the
+	// only statement on line 3, so that's its own `return` keyword, at
+	// column 5. This pins that observed, deliberately-approximate value
+	// rather than demanding token-exact precision (see Chunk.Columns' doc
+	// comment) - see
+	// TestRuntimeErrorFrameSyntheticPositionColumnIsPerLineNotPerStatement
+	// below for the sharper edge of that approximation.
+	if pos.Column != 5 {
+		t.Errorf("position is column %d, want 5 (the `return` keyword starting the failing statement)", pos.Column)
+	}
+}
+
+// TestRuntimeErrorFrameSyntheticPositionColumnIsPerLineNotPerStatement pins
+// down the coarser edge of #153's approximation: Columns records one entry
+// per source *line* the compiler crosses while emitting a chunk, not one per
+// statement. When several statements share a line, a failure in a later one
+// still resolves to whichever entry precedes it in the table - the earlier
+// statement's own column, not the failing statement's. This isn't a bug to
+// fix here (see Chunk.Columns' doc comment on the offset/column trade-off);
+// it exists so a future change to the granularity has something concrete to
+// compare against instead of rediscovering this by surprise.
+func TestRuntimeErrorFrameSyntheticPositionColumnIsPerLineNotPerStatement(t *testing.T) {
+	p := NewPaserati()
+	p.SetSkipTypeCheck(true)
+	// "  let a = 1; let b = null; return b.z;" - three statements, one line.
+	script := "function q() {\n  let a = 1; let b = null; return b.z;\n}\nq();\n"
+	_, errs := p.RunCode(script, RunOptions{})
+	if len(errs) == 0 {
+		t.Fatal("expected a runtime diagnostic, got none")
+	}
+	pos, ok := positionOfDiagnostic(errs[0])
+	if !ok {
+		t.Fatalf("diagnostic carries no position: %v", errs[0])
+	}
+	if pos.Line != 2 {
+		t.Errorf("position is line %d, want 2", pos.Line)
+	}
+	// Column 3 is `let` (the *first* statement on the line), not `return b.z`
+	// where the failure actually is - the documented approximation.
+	if pos.Column != 3 {
+		t.Errorf("position is column %d, want 3 (the line's first statement, `let a = 1`) - if this changed, Columns' granularity did too; update the doc comments alongside it", pos.Column)
+	}
+}
+
 // TestEvalSourceStaysAnonymous guards the other direction: a caller with no
 // file (the REPL, paserati -e) must keep the "<eval>" identity rather than
 // borrowing a name from ModuleName, which is often a synthetic specifier.

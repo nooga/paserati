@@ -19076,6 +19076,7 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	// ip points to the *next* instruction, error occurred at ip-1
 	instructionPos := frame.ip - 1
 	line := 0
+	column := 0
 	funcName := "<script>"
 
 	// Safety check for chunk and bounds before calling GetLine
@@ -19090,20 +19091,39 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 			funcName = "<anonymous>"
 		}
 
-		// Ensure instructionPos is valid (non-negative and within bounds)
+		// Ensure instructionPos is valid (non-negative and within bounds).
+		// lineOffset tracks whichever offset actually supplied the line, so
+		// the column lookup below (#153) points at the same instruction
+		// rather than possibly-mismatched fallback offsets.
+		lineOffset := -1
 		if instructionPos >= 0 && instructionPos < len(chunk.Lines) {
 			line = chunk.GetLine(instructionPos)
+			lineOffset = instructionPos
 		} else if frame.ip >= 0 && frame.ip < len(chunk.Lines) {
 			// If ip-1 is invalid, try using ip itself
 			line = chunk.GetLine(frame.ip)
+			lineOffset = frame.ip
 		} else if len(chunk.Lines) > 0 {
 			// Fallback: use the first line if available
 			line = chunk.Lines[0]
+			lineOffset = 0
 		}
 		// If line is still 0 and we have code, default to line 1
 		if line == 0 && len(chunk.Code) > 0 {
 			line = 1
 		}
+		// Column comes from the chunk's sparse Columns table (#153) - only
+		// approximate (the start of whichever source line the compiler most
+		// recently entered at or before lineOffset, not necessarily the exact
+		// token), but real position data beats a hardcoded column 1. Chunks
+		// compiled before this table existed, or with no line data at all,
+		// leave column at 0 and fall through to the column-1 default below.
+		if lineOffset >= 0 {
+			column = chunk.GetColumn(lineOffset)
+		}
+	}
+	if column == 0 {
+		column = 1
 	}
 
 	msg := fmt.Sprintf(format, args...)
@@ -19112,9 +19132,9 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	// that frame's line table, so reporting it against any other file - which is
 	// what a nil Source does, since DisplayErrors then falls back to whatever
 	// the embedder passed, i.e. the entry script - underlines an unrelated line
-	// of an unrelated file (#148). Column stays 1: the bytecode line table has
-	// no column information to recover, and inventing one is worse than
-	// admitting the line is all we know.
+	// of an unrelated file (#148). column above came out of the chunk's sparse
+	// Columns table (#153); it's only approximate, and falls back to 1 for
+	// chunks with no recorded column data.
 	src := frameSource(frame)
 	fileName := "<script>" // TODO: name host-built chunks better
 	if src != nil {
@@ -19123,7 +19143,7 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 	runtimeErr := &errors.RuntimeError{
 		Position: errors.Position{
 			Line:     line,
-			Column:   1, // Default to column 1
+			Column:   column,
 			StartPos: 0,
 			EndPos:   0,
 			Source:   src,

@@ -1467,8 +1467,9 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		panic("Compiler internal error: typeChecker is nil during compileNode")
 	}
 
-	if c.line != parser.GetTokenFromNode(node).Line {
-		c.line = parser.GetTokenFromNode(node).Line
+	if tok := parser.GetTokenFromNode(node); c.line != tok.Line {
+		c.line = tok.Line
+		c.markPosition(tok.Column)
 		debugPrintf("// DEBUG compiling line %d (%s)\n", c.line, c.compilingFuncName)
 	}
 
