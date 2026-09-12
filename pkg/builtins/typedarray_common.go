@@ -213,6 +213,11 @@ func typedArrayEffectivePrototype(vmInstance *vm.VM, val vm.Value) vm.Value {
 	}
 	if p := ta.GetPrototype(); p.IsObject() {
 		return p
+	} else if p.Type() == vm.TypeNull {
+		// An explicit Object.setPrototypeOf(typedArray, null) (#418) must
+		// end the chain here, not fall back to the intrinsic below -
+		// TypeNull is a deliberately-stored override, not "unset".
+		return vm.Null
 	}
 	switch ta.GetElementType() {
 	case vm.TypedArrayInt8:

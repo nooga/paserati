@@ -696,26 +696,47 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		// prototype whose chain runs S.prototype -> Array.prototype, so a method
 		// override on the subclass resolves before the intrinsic builtin. Normal
 		// arrays leave it unset and fall back to the realm's Array.prototype.
+		// An explicit Object.setPrototypeOf(arr, null) (#418) must leave
+		// `prototype` nil rather than fall to the intrinsic below it -
+		// TypeNull is a real, deliberately-stored override (see subclass.go's
+		// InstancePrototypeOverride), not "unset".
 		if arr := objVal.AsArray(); arr != nil && arr.prototype.Type() == TypeObject {
 			prototype = arr.prototype.AsPlainObject()
-		} else {
+		} else if arr == nil || arr.prototype.Type() != TypeNull {
 			prototype = vm.ArrayPrototype.AsPlainObject()
 		}
 	case TypeMap:
 		if mp := objVal.AsMap(); mp != nil && mp.prototype.Type() == TypeObject {
 			prototype = mp.prototype.AsPlainObject()
-		} else if vm.MapPrototype.Type() == TypeObject {
-			prototype = vm.MapPrototype.AsPlainObject()
+		} else if mp == nil || mp.prototype.Type() != TypeNull {
+			if vm.MapPrototype.Type() == TypeObject {
+				prototype = vm.MapPrototype.AsPlainObject()
+			}
 		}
 	case TypeSet:
 		if st := objVal.AsSet(); st != nil && st.prototype.Type() == TypeObject {
 			prototype = st.prototype.AsPlainObject()
-		} else if vm.SetPrototype.Type() == TypeObject {
-			prototype = vm.SetPrototype.AsPlainObject()
+		} else if st == nil || st.prototype.Type() != TypeNull {
+			if vm.SetPrototype.Type() == TypeObject {
+				prototype = vm.SetPrototype.AsPlainObject()
+			}
 		}
 	case TypeRegExp:
-		if vm.RegExpPrototype.Type() == TypeObject {
-			prototype = vm.RegExpPrototype.AsPlainObject()
+		// Same per-instance override handling as TypeArray/TypeMap/TypeSet/
+		// TypePromise above (subclassing, or an explicit
+		// Object.setPrototypeOf - #418): this case used to ignore any
+		// override entirely and always resolve through the intrinsic
+		// RegExp.prototype, which both silently defeated `class S extends
+		// RegExp {}` method overrides and, worse, kept resolving methods
+		// like `.test` through the intrinsic even after
+		// Object.setPrototypeOf(re, null) - disagreeing with
+		// Object.getPrototypeOf(re), which correctly reported null.
+		if re := objVal.AsRegExpObject(); re != nil && re.GetPrototype().Type() == TypeObject {
+			prototype = re.GetPrototype().AsPlainObject()
+		} else if re == nil || re.GetPrototype().Type() != TypeNull {
+			if vm.RegExpPrototype.Type() == TypeObject {
+				prototype = vm.RegExpPrototype.AsPlainObject()
+			}
 		}
 	case TypeSymbol:
 		if vm.SymbolPrototype.Type() == TypeObject {
@@ -748,8 +769,12 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 			// overridden method like `then` resolves to the subclass's
 			// before falling back to the intrinsic - see paserati#198.
 			prototype = pr.prototype.AsPlainObject()
-		} else if vm.PromisePrototype.Type() == TypeObject {
-			prototype = vm.PromisePrototype.AsPlainObject()
+		} else if pr == nil || pr.prototype.Type() != TypeNull {
+			// An explicit Object.setPrototypeOf(promise, null) (#418) must
+			// leave `prototype` nil, not fall back to the intrinsic.
+			if vm.PromisePrototype.Type() == TypeObject {
+				prototype = vm.PromisePrototype.AsPlainObject()
+			}
 		}
 	case TypeTypedArray:
 		// Get the appropriate typed array prototype based on element type
@@ -765,6 +790,13 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 			// over the intrinsic default resolved below.
 			if ta.GetPrototype().Type() == TypeObject {
 				prototype = ta.GetPrototype().AsPlainObject()
+				break
+			}
+			// An explicit Object.setPrototypeOf(typedArray, null) (#418)
+			// must leave `prototype` nil (no prototype at all) rather than
+			// fall through to the intrinsic %TypedArray%.prototype resolved
+			// below - TypeNull is a deliberately-stored override, not "unset".
+			if ta.GetPrototype().Type() == TypeNull {
 				break
 			}
 			// Resolve prototype dynamically via global constructors to avoid missing VM fields
@@ -939,6 +971,11 @@ func (vm *VM) effectiveBuiltinPrototype(objVal Value) Value {
 			arr := objVal.AsArray()
 			if proto := arr.GetPrototype(); proto.IsObject() {
 				return proto
+			} else if proto.Type() == TypeNull {
+				// An explicit Object.setPrototypeOf(arr, null) (#418) must
+				// end the chain here, not fall back to the intrinsic below -
+				// TypeNull is a deliberately-stored override, not "unset".
+				return Null
 			}
 		}
 		return vm.ArrayPrototype
@@ -947,6 +984,8 @@ func (vm *VM) effectiveBuiltinPrototype(objVal Value) Value {
 			mp := objVal.AsMap()
 			if proto := mp.GetPrototype(); proto.IsObject() {
 				return proto
+			} else if proto.Type() == TypeNull {
+				return Null
 			}
 		}
 		return vm.MapPrototype
@@ -955,6 +994,8 @@ func (vm *VM) effectiveBuiltinPrototype(objVal Value) Value {
 			st := objVal.AsSet()
 			if proto := st.GetPrototype(); proto.IsObject() {
 				return proto
+			} else if proto.Type() == TypeNull {
+				return Null
 			}
 		}
 		return vm.SetPrototype
@@ -963,6 +1004,8 @@ func (vm *VM) effectiveBuiltinPrototype(objVal Value) Value {
 			wr := objVal.AsWeakRef()
 			if proto := wr.GetPrototype(); proto.IsObject() {
 				return proto
+			} else if proto.Type() == TypeNull {
+				return Null
 			}
 		}
 		return vm.WeakRefPrototype
@@ -970,6 +1013,8 @@ func (vm *VM) effectiveBuiltinPrototype(objVal Value) Value {
 		if fr := objVal.AsFinalizationRegistry(); fr != nil {
 			if proto := fr.GetPrototype(); proto.IsObject() {
 				return proto
+			} else if proto.Type() == TypeNull {
+				return Null
 			}
 		}
 		return vm.FinalizationRegistryPrototype

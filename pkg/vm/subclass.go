@@ -100,7 +100,16 @@ func (vm *VM) InstancePrototypeOverride(v Value) (Value, bool) {
 	default:
 		return Undefined, false
 	}
-	if p.IsObject() {
+	// The zero Value is TypeUndefined ("no override set" - the field's
+	// natural default), and applySubclassPrototype only ever stores an
+	// object. But Object.setPrototypeOf legitimately stores an explicit
+	// TypeNull override too (setPrototypeOf(v, null) - see
+	// objectSetPrototypeOfWithVM in pkg/builtins/object_init.go), which
+	// `p.IsObject()` alone would misreport as "no override", falling back
+	// to the intrinsic prototype instead of the null the caller asked for
+	// (#418). Undefined is never a legitimately stored override, so "not
+	// Undefined" is the correct presence check for both cases.
+	if p.Type() != TypeUndefined {
 		return p, true
 	}
 	return Undefined, false
