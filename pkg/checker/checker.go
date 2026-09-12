@@ -2369,7 +2369,18 @@ func (c *Checker) visit(node parser.Node) {
 		node.SetComputedType(types.Null)
 
 	case *parser.UndefinedLiteral:
-		node.SetComputedType(types.Undefined)
+		// 'undefined' is an ordinary identifier, not a reserved word, so it
+		// can legally be shadowed by a local binding (e.g. `let undefined = 42`,
+		// or `import { x as undefined }`). Consult the symbol table before
+		// falling back to the real undefined value (#440).
+		if typ, _, found := c.env.Resolve("undefined"); found {
+			if narrowType, ok := c.flowNarrowOverlay["undefined"]; ok {
+				typ = narrowType
+			}
+			node.SetComputedType(typ)
+		} else {
+			node.SetComputedType(types.Undefined)
+		}
 
 	// --- NEW: Handle TemplateLiteral ---
 	case *parser.TemplateLiteral:

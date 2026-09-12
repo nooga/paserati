@@ -1275,10 +1275,15 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 			// Define as global with undefined value
 			globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 			c.currentSymbolTable.DefineGlobal(name, globalIdx)
-			// Emit code to initialize to undefined
+			// Emit code to initialize to undefined. Use the *Init opcode, not
+			// plain OpSetGlobal: this is establishing a brand new `var`
+			// binding, which - like `let`/`const` - must not be blocked by a
+			// pre-existing non-writable global of the same name (e.g. `var
+			// undefined = 42`, see #440 follow-up; OpSetGlobalInit resets
+			// writability for exactly this reason).
 			tempReg := c.regAlloc.Alloc()
 			c.emitLoadUndefined(tempReg, 0)
-			c.emitSetGlobal(globalIdx, tempReg, 0)
+			c.emitSetGlobalInit(globalIdx, tempReg, 0)
 			c.regAlloc.Free(tempReg)
 			// Mark as non-configurable (DontDelete) only for true top-level var declarations,
 			// not for eval-created bindings which should be configurable
@@ -1307,10 +1312,17 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 				// Define as global with Uninitialized value (TDZ)
 				globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 				c.currentSymbolTable.DefineGlobal(name, globalIdx)
-				// Emit code to initialize to Uninitialized (TDZ marker)
+				// Emit code to initialize to Uninitialized (TDZ marker). Use
+				// the *Init opcode: this establishes a brand new let/const
+				// binding (in TDZ state), so - same reasoning as the var
+				// hoisting above - it must not be silently dropped by a
+				// pre-existing non-writable global of the same name (e.g.
+				// `let undefined = 42`, #440 follow-up). The TDZ guard itself
+				// keys off the Uninitialized sentinel value, not the
+				// writable flag, so resetting writability here is harmless.
 				tempReg := c.regAlloc.Alloc()
 				c.emitLoadUninitialized(tempReg, 0)
-				c.emitSetGlobal(globalIdx, tempReg, 0)
+				c.emitSetGlobalInit(globalIdx, tempReg, 0)
 				c.regAlloc.Free(tempReg)
 				debugPrintf("[Compile TDZHoist] TDZ hoisted let/const '%s' at global index %d\n", name, globalIdx)
 			}
@@ -2310,6 +2322,17 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		return hint, nil // ADDED: Explicit return
 
 	case *parser.UndefinedLiteral: // Added
+		// 'undefined' is not a reserved word - a local binding named
+		// 'undefined' shadows the global value (#440). This includes plain
+		// declarations (tracked in the symbol table) and import bindings
+		// (tracked separately in moduleBindings, e.g. `import { x as undefined }`).
+		// Delegate to normal identifier lookup when such a shadow exists.
+		_, _, foundLocal := c.currentSymbolTable.Resolve("undefined")
+		foundImport := c.moduleBindings != nil && c.moduleBindings.IsImported("undefined")
+		if foundLocal || foundImport {
+			shadowIdent := &parser.Identifier{Token: node.Token, Value: "undefined"}
+			return c.compileNode(shadowIdent, hint)
+		}
 		c.emitLoadUndefined(hint, node.Token.Line)
 		return hint, nil // ADDED: Explicit return
 

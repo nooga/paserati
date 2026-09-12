@@ -135,6 +135,20 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		}
 	}()
 
+	// 'undefined' is not a reserved word - `undefined = expr` parses to an
+	// UndefinedLiteral LHS (isValidLValue allows it, see #440 follow-up), but
+	// it is otherwise a plain identifier assignment: rewrite it as one and
+	// let the *parser.Identifier case below do the real work. If a local or
+	// imported binding named 'undefined' shadows the global, this correctly
+	// stores to it; if not, it falls through to the global "undefined" slot,
+	// which is registered non-writable (silent no-op in sloppy mode, TypeError
+	// in strict mode - matching NaN/Infinity, see pkg/vm/vm.go's OpSetGlobal).
+	if undefLit, ok := node.Left.(*parser.UndefinedLiteral); ok {
+		rewritten := *node
+		rewritten.Left = &parser.Identifier{Token: undefLit.Token, Value: "undefined"}
+		return c.compileAssignmentExpression(&rewritten, hint)
+	}
+
 	// Namespace property: rewrite `X = expr` (where X is a namespace export
 	// in the current scope) as `<ns>.X = expr` and let the MemberExpression
 	// path handle storage. Compound assignment operators are handled there too.

@@ -21,6 +21,20 @@ func isUndefinedLiteral(node parser.Expression) bool {
 	return ok
 }
 
+// isUnshadowedUndefinedLiteral reports whether node is the literal `undefined`
+// AND no local binding named 'undefined' shadows it in the current scope.
+// 'undefined' is an ordinary identifier, not a reserved word, so it can be
+// shadowed (#440); the null/undefined comparison peepholes below must not
+// fire when it has been.
+func (c *Compiler) isUnshadowedUndefinedLiteral(node parser.Expression) bool {
+	if !isUndefinedLiteral(node) {
+		return false
+	}
+	_, _, foundLocal := c.currentSymbolTable.Resolve("undefined")
+	foundImport := c.moduleBindings != nil && c.moduleBindings.IsImported("undefined")
+	return !foundLocal && !foundImport
+}
+
 // isDataProperty checks if a type represents a data property (as opposed to a getter/setter)
 func (c *Compiler) isDataProperty(propType types.Type) bool {
 	// Check for primitive types
@@ -1261,7 +1275,7 @@ func (c *Compiler) emitStandardBinaryOp(op string, dest, left, right Register, l
 // fold; every other shape (logical operators, comma, the null/undefined
 // comparison peepholes, private-field `in`) has bespoke codegen and has to keep
 // going through the recursive path.
-func foldableChainLink(n *parser.InfixExpression) bool {
+func (c *Compiler) foldableChainLink(n *parser.InfixExpression) bool {
 	switch n.Operator {
 	case "+", "-", "*", "/", "%", "**",
 		"<=", ">=", "==", "!=", "<", ">", "in", "instanceof", "===", "!==",
@@ -1270,8 +1284,8 @@ func foldableChainLink(n *parser.InfixExpression) bool {
 		return false
 	}
 	if n.Operator == "===" || n.Operator == "!==" {
-		if isNullLiteral(n.Left) || isUndefinedLiteral(n.Left) ||
-			isNullLiteral(n.Right) || isUndefinedLiteral(n.Right) {
+		if isNullLiteral(n.Left) || c.isUnshadowedUndefinedLiteral(n.Left) ||
+			isNullLiteral(n.Right) || c.isUnshadowedUndefinedLiteral(n.Right) {
 			return false
 		}
 	}
@@ -1299,7 +1313,7 @@ func (c *Compiler) compileInfixChain(node *parser.InfixExpression, hint Register
 	chain := []*parser.InfixExpression{node}
 	for {
 		left, ok := chain[len(chain)-1].Left.(*parser.InfixExpression)
-		if !ok || !foldableChainLink(left) {
+		if !ok || !c.foldableChainLink(left) {
 			break
 		}
 		chain = append(chain, left)
@@ -1507,9 +1521,9 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		if node.Operator == "===" || node.Operator == "!==" {
 			// Check if one operand is a null or undefined literal
 			leftIsNull := isNullLiteral(node.Left)
-			leftIsUndefined := isUndefinedLiteral(node.Left)
+			leftIsUndefined := c.isUnshadowedUndefinedLiteral(node.Left)
 			rightIsNull := isNullLiteral(node.Right)
-			rightIsUndefined := isUndefinedLiteral(node.Right)
+			rightIsUndefined := c.isUnshadowedUndefinedLiteral(node.Right)
 
 			if leftIsNull || leftIsUndefined || rightIsNull || rightIsUndefined {
 				// One side is null/undefined literal - use efficient opcodes!
@@ -1585,7 +1599,7 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 		// A long left-associative chain (`a + b + c + ...`) is compiled as an
 		// iterative fold instead of recursing once per term, which would keep a
 		// register live per level and exhaust the allocator (issue #121).
-		if left, ok := node.Left.(*parser.InfixExpression); ok && foldableChainLink(left) {
+		if left, ok := node.Left.(*parser.InfixExpression); ok && c.foldableChainLink(left) {
 			return c.compileInfixChain(node, hint)
 		}
 
