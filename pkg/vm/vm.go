@@ -17065,8 +17065,25 @@ startExecution:
 						// Resume async function with rejected value (it will throw)
 						result, err := vm.resumeAsyncFunctionWithException(asyncPromise, reason)
 						if err != nil {
-							// Exception wasn't caught - reject the async promise
-							vm.rejectPromise(asyncPromise, reason)
+							// Exception wasn't caught (or the async function's own
+							// catch/finally threw something new before propagating
+							// out) - reject the async promise with the value that
+							// actually reached us, not the original rejection
+							// `reason` this closure captured as its own argument.
+							// resumeAsyncFunctionWithException/vm.throwException may
+							// have replaced that value along the way (e.g. `catch
+							// (e) { throw somethingElse }` inside the resumed
+							// function), and it's err's ExceptionError, not `reason`,
+							// that carries whatever ultimately propagated. Mirrors
+							// the identical extraction the Resolve handler above
+							// already does.
+							var propagated Value
+							if ee, ok := err.(ExceptionError); ok {
+								propagated = ee.GetExceptionValue()
+							} else {
+								propagated = NewString(err.Error())
+							}
+							vm.rejectPromise(asyncPromise, propagated)
 						} else if asyncPromise.Frame != nil {
 							// Async function hit another await and suspended again
 							// Don't resolve - the new await's handlers will take over
