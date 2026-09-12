@@ -75,6 +75,23 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 		funcCompiler.regAlloc.Pin(reg)
 	}
 
+	// 2.4. Reserve the rest parameter's register (if present) right here,
+	// before default-parameter compilation below gets a chance to allocate
+	// and free its own temporary registers. The VM hard-codes the rest
+	// array's destination as register index `calleeFunc.Arity` (the count
+	// of named parameters) rather than looking up wherever the compiler
+	// happened to put it - see the matching comment on
+	// compileFunctionLiteralWithOptions's own step 2.4 for the full
+	// explanation (#443 investigation). That is only correct if this is
+	// the very next register handed out after the named parameters above,
+	// with nothing freed in between for the allocator to recycle instead.
+	var restParamReg Register
+	haveRestParam := node.RestParameter != nil
+	if haveRestParam {
+		restParamReg = funcCompiler.regAlloc.Alloc()
+		funcCompiler.regAlloc.Pin(restParamReg) // Pin since it can be captured
+	}
+
 	// 3. Handle default parameters
 	// Build parameter list for TDZ checking
 	funcCompiler.parameterList = make([]string, len(node.Parameters))
@@ -130,9 +147,9 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	}
 
 	// 4. Handle rest parameter (if present)
-	if node.RestParameter != nil {
-		// Define the rest parameter in the symbol table
-		restParamReg := funcCompiler.regAlloc.Alloc()
+	// The register itself was already reserved at step 2.4, before default-
+	// value temp registers could get in its way.
+	if haveRestParam {
 		// Handle both simple rest parameters (...args) and destructured (...[x, y])
 		if node.RestParameter.Name != nil {
 			funcCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
@@ -142,8 +159,6 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			funcCompiler.currentSymbolTable.Define("__rest__", restParamReg)
 			debugPrintf("// [Compiler] Rest parameter (destructured) defined in R%d\n", restParamReg)
 		}
-		// Pin the register since rest parameters can be captured by inner functions
-		funcCompiler.regAlloc.Pin(restParamReg)
 	}
 
 	// 5. Compile the function body
@@ -336,6 +351,20 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 		funcCompiler.regAlloc.Pin(reg)
 	}
 
+	// Reserve the rest parameter's register (if present) right here, before
+	// default-parameter compilation below gets a chance to allocate and
+	// free its own temporary registers - see compileFunctionLiteralWithOptions's
+	// step 2.4 for the full explanation of why this ordering matters (#443
+	// investigation): the VM hard-codes the rest array's destination as
+	// register index `calleeFunc.Arity`, which is only correct if this is
+	// the very next register handed out after the named parameters above.
+	var restParamReg Register
+	haveRestParam := node.RestParameter != nil
+	if haveRestParam {
+		restParamReg = funcCompiler.regAlloc.Alloc()
+		funcCompiler.regAlloc.Pin(restParamReg)
+	}
+
 	// Handle default parameters (same as original)
 	// Build parameter list for TDZ checking
 	funcCompiler.parameterList = make([]string, len(node.Parameters))
@@ -382,14 +411,14 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	}
 
 	// Handle rest parameter (same as original)
-	if node.RestParameter != nil {
-		restParamReg := funcCompiler.regAlloc.Alloc()
+	// The register itself was already reserved above, before default-value
+	// temp registers could get in its way.
+	if haveRestParam {
 		if node.RestParameter.Name != nil {
 			funcCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
 		} else if node.RestParameter.Pattern != nil {
 			funcCompiler.currentSymbolTable.Define("__rest__", restParamReg)
 		}
-		funcCompiler.regAlloc.Pin(restParamReg)
 		// Rest parameter collection is handled at runtime during function call
 	}
 
@@ -1344,6 +1373,77 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 		debugPrintf("// [Compiling Function Literal] %s: Parameter %s defined in R%d\n", determinedFuncName, param.Name.Value, reg)
 	}
 
+	// 2.4. Reserve the rest parameter's register, if present, right here -
+	// before ANY default-value/destructuring-parameter compilation gets a
+	// chance to allocate and free its own temporary registers (step 3
+	// below). The VM does not look up the rest parameter's register by
+	// name at call time: it hard-codes the rest array's destination as
+	// register index `calleeFunc.Arity` (see call.go's prepareCall,
+	// several inlined fast paths in vm.go, and async.go), where Arity is
+	// simply the count of named (non-rest) parameters. That is only the
+	// correct register number if parameter registers were handed out
+	// gaplessly, in order, starting at 0 - true right after this loop
+	// (nothing has been freed yet, so the allocator's free list is empty
+	// and a fresh Alloc() must return the very next sequential register,
+	// i.e. exactly Arity). If the rest parameter's register were allocated
+	// later instead (as it used to be, at step 4), a default-parameter
+	// temp register freed in between could get recycled into that later
+	// Alloc() call, landing the rest parameter one or more registers past
+	// where the VM actually writes its array - so reading the rest
+	// parameter by name read whatever stale value (or a live temporary)
+	// happened to be sitting in the WRONG register, e.g.
+	// `function f(n, {step=1}={}, ...rest) { Array.isArray(rest) }` -
+	// `{step=1}={}` a plain, non-destructured, default-valued parameter
+	// hits this too, no destructuring required - reading false for an
+	// array that was actually passed (#443 investigation).
+	var restParamReg Register
+	var restParamPattern parser.Expression // Save pattern for later destructuring
+	haveRestParam := node.RestParameter != nil
+	if haveRestParam {
+		restParamReg = functionCompiler.regAlloc.Alloc()
+		functionCompiler.regAlloc.Pin(restParamReg) // Pin since it can be captured
+	}
+
+	// 2.5. Handle named function expression binding
+	// For named function expressions like: function g() { g(); }
+	// The name 'g' should be accessible inside and refer to the closure itself.
+	//
+	// This MUST happen before default-parameter/destructuring-parameter compilation
+	// (steps 3 and 3.5 below), which allocate and free temporary registers for things
+	// like the "is this param undefined?" check. If the name binding's register were
+	// allocated afterwards (as it used to be), the allocator could hand it the exact
+	// register number a temp register had just been freed from - and the VM writes
+	// the self-reference into that register number at call setup (see
+	// call.go prepareCall), before any bytecode runs. Default-parameter bytecode
+	// (which runs at function entry, ahead of the rest of the body) would then
+	// clobber the self-reference with its own temporary value before the recursive
+	// call ever executed, e.g. `function fact(n, {step=1}={}) { ...; fact(n-1, {step}); }`
+	// nested inside another function (#443).
+	if needsInnerNameBinding {
+		// Per ECMAScript spec: if a parameter has the same name as the function name,
+		// the parameter shadows the function name binding. Skip creating the inner
+		// binding in this case to avoid overriding the parameter register.
+		shadowedByParam := functionCompiler.parameterNames[funcNameForInnerBinding]
+		if !shadowedByParam && node.RestParameter != nil && node.RestParameter.Name != nil &&
+			node.RestParameter.Name.Value == funcNameForInnerBinding {
+			shadowedByParam = true
+		}
+		if shadowedByParam {
+			needsInnerNameBinding = false
+		} else {
+			// Allocate a register for the function name binding
+			nameBindingReg := functionCompiler.regAlloc.Alloc()
+			// Use DefineImmutable so assignments to the NFE name are silently ignored in non-strict mode
+			functionCompiler.currentSymbolTable.DefineImmutable(funcNameForInnerBinding, nameBindingReg)
+			functionCompiler.regAlloc.Pin(nameBindingReg) // Pin since it can be captured
+
+			// No bytecode needs to be emitted here - the VM will initialize this register
+			// when the function is called (see call.go prepareCall)
+			debugPrintf("// [Compiler] Function name binding '%s' allocated in R%d (will be initialized by VM)\n",
+				funcNameForInnerBinding, nameBindingReg)
+		}
+	}
+
 	// 3. Handle default parameters
 	// Build parameter list for TDZ checking (excluding 'this' and destructuring params)
 	functionCompiler.parameterList = make([]string, 0, len(node.Parameters))
@@ -1516,50 +1616,22 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	}
 
 	// 4. Handle rest parameter (if present)
-	var restParamReg Register
-	var restParamPattern parser.Expression // Save pattern for later destructuring
-	if node.RestParameter != nil {
-		// Allocate register for the rest parameter array
-		// The VM will populate this register with the rest arguments array
-		restParamReg = functionCompiler.regAlloc.Alloc()
-
+	// The register itself was already reserved at step 2.4, before default-
+	// value/destructuring temp registers could get in its way - here we
+	// just bind the name (or stash the pattern for step 4.6).
+	if haveRestParam {
 		// Check if it's a simple identifier or destructuring pattern
 		if node.RestParameter.Name != nil {
 			// Simple rest parameter like ...args
 			functionCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
 			// Track rest parameter name for var hoisting
 			functionCompiler.parameterNames[node.RestParameter.Name.Value] = true
-			// Pin the register since rest parameters can be captured by inner functions
-			functionCompiler.regAlloc.Pin(restParamReg)
 			debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
 		} else if node.RestParameter.Pattern != nil {
 			// Destructuring rest parameter like ...[x, y] or ...{a, b}
 			// Save the pattern for generating destructuring code after function prologue
 			restParamPattern = node.RestParameter.Pattern
 			debugPrintf("// [Compiler] Rest parameter with destructuring pattern in R%d\n", restParamReg)
-		}
-	}
-
-	// 4.5. Handle named function expression binding
-	// For named function expressions like: function g() { g(); }
-	// The name 'g' should be accessible inside and refer to the closure itself
-	if needsInnerNameBinding {
-		// Per ECMAScript spec: if a parameter has the same name as the function name,
-		// the parameter shadows the function name binding. Skip creating the inner
-		// binding in this case to avoid overriding the parameter register.
-		if functionCompiler.parameterNames[funcNameForInnerBinding] {
-			needsInnerNameBinding = false
-		} else {
-			// Allocate a register for the function name binding
-			nameBindingReg := functionCompiler.regAlloc.Alloc()
-			// Use DefineImmutable so assignments to the NFE name are silently ignored in non-strict mode
-			functionCompiler.currentSymbolTable.DefineImmutable(funcNameForInnerBinding, nameBindingReg)
-			functionCompiler.regAlloc.Pin(nameBindingReg) // Pin since it can be captured
-
-			// No bytecode needs to be emitted here - the VM will initialize this register
-			// when the function is called (see call.go prepareCall)
-			debugPrintf("// [Compiler] Function name binding '%s' allocated in R%d (will be initialized by VM)\n",
-				funcNameForInnerBinding, nameBindingReg)
 		}
 	}
 

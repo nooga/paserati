@@ -256,6 +256,21 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 		}
 	}
 
+	// Initialize named function expression binding if present, mirroring
+	// prepareCall (call.go) - see its own comment for what this does. This
+	// path builds its frame by hand instead of going through prepareCall
+	// (see the openUpvalues comment above for why), so it must independently
+	// reproduce this step too. It previously didn't: an async named function
+	// expression recursing by its own name (e.g. `async function fact(n) {
+	// ... await fact(n - 1) ... }`) nested inside another function - so its
+	// name can't fall back to resolving as an outer/global variable - read
+	// its own self-binding register as whatever this frame slot's zeroed
+	// Undefined default was, and calling `undefined` threw
+	// "TypeError: undefined is not a function".
+	if funcObj.NameBindingRegister >= 0 && funcObj.NameBindingRegister < len(frame.registers) {
+		frame.registers[funcObj.NameBindingRegister] = calleeVal
+	}
+
 	// Update VM state
 	vm.frameCount++
 
