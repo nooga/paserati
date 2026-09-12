@@ -20,17 +20,34 @@ import (
 // slot (see finalizeClosureBinding) — reusing the spilled symbol's zero-valued
 // Register field (0 != nilRegister) would silently target R0 and leave the slot
 // holding the sentinel, so `f()` later reads an uninitialized value.
+//
+// The global case has the identical hazard and needs the identical guard: a
+// top-level `let`/`const` binding's own predefine pass also leaves a stale,
+// meaningless zero-valued Register field once the symbol is marked IsGlobal
+// (global reads/writes go through GlobalIndex via OpGetGlobal/OpSetGlobal, not
+// a register at all) - so `sym.Register != nilRegister` alone can't tell "this
+// binding has a real, still-live register" from "this is a global whose
+// Register field just happens to read as 0". Reusing it directly (as this
+// function used to, missing the IsGlobal check the sibling non-function value
+// branch in compileLetStatement/compileConstStatement already has) aliases
+// the closure's destination onto whatever unrelated register happens to share
+// that same stale number - harmless by accident as long as nothing else ever
+// frees or reallocates that number, but a real, silent correctness bug once
+// something does (see paserati#426, where fixing an unrelated register leak
+// unmasked this: the closure's destination collided with the enclosing
+// program's own completion-value register once it stopped being permanently,
+// accidentally reserved by the leak).
 func (c *Compiler) closureBindingDest(name string) (reg Register, spilled bool, spillIdx uint16) {
 	if sym, _, found := c.currentSymbolTable.Resolve(name); found {
 		if sym.IsSpilled {
 			return c.regAlloc.Alloc(), true, sym.SpillIndex
 		}
-		if sym.Register != nilRegister {
+		if sym.Register != nilRegister && !sym.IsGlobal {
 			return sym.Register, false, 0
 		}
 	}
-	// Not predefined (or predefined without a register): define temporarily so the
-	// body can self-reference, and allocate a fresh register.
+	// Not predefined (or predefined without a real, live register): define
+	// temporarily so the body can self-reference, and allocate a fresh register.
 	c.currentSymbolTable.Define(name, nilRegister)
 	return c.regAlloc.Alloc(), false, 0
 }
@@ -278,6 +295,20 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 				globalIdx := c.GetOrAssignGlobalIndex(key)
 				c.emitSetGlobalInit(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+				// valueReg is guaranteed a fresh temp here (the branch that
+				// computed it explicitly excludes reusing sym.Register for an
+				// already-global symbol - see TryAllocForVariable() above) -
+				// its value now lives in the global slot, and every future
+				// reference to this name resolves via OpGetGlobal, never this
+				// register again. Free it now instead of leaking it for the
+				// rest of the module's compilation: a module with many
+				// top-level `let`/`const` declarations (a common bundler/
+				// codegen output shape - e.g. @aws-sdk/client-s3's
+				// Aws_restXml.js hoists 720 short-name string constants this
+				// way) would otherwise exhaust the 255-register budget purely
+				// from this leak, with genuinely at most one such register
+				// ever live at a time. See paserati#426.
+				c.regAlloc.Free(valueReg)
 			} else {
 				// Local scope (function or enclosed block): use local symbol table
 				if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
@@ -311,6 +342,12 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 					// Update the symbol to be global
 					c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
 					// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
+					// Free the closure register now that the closure lives in
+					// the global slot - Free() is a safe no-op if a closure
+					// defined later already captured it as an upvalue (pinned
+					// registers are skipped). See the identical comment on the
+					// non-function value branch above (paserati#426).
+					c.regAlloc.Free(symbolRef.Register)
 				}
 			}
 		}
@@ -680,6 +717,13 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 					c.MarkVarGlobal(globalIdx)
 				}
 				// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
+				// Free the closure register now that the closure lives in the
+				// global slot - see the identical comment on let/const's
+				// analogous function-value branches (paserati#426). A large
+				// bundled CJS file with hundreds of top-level `function`
+				// declarations (a common bundler output shape) would
+				// otherwise leak one register per declaration.
+				c.regAlloc.Free(symbolRef.Register)
 			}
 		}
 	}
@@ -841,6 +885,13 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 				globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(node.Name.Value))
 				c.emitSetGlobalInit(globalIdx, valueReg, node.Name.Token.Line)
 				c.currentSymbolTable.DefineGlobalConst(node.Name.Value, globalIdx)
+				// See the identical comment in compileLetStatement's analogous
+				// branch above - valueReg is a fresh temp here (never reused
+				// for an already-global symbol), its value now lives in the
+				// global slot, and leaking it here exhausts the register
+				// budget on a module with many top-level const declarations
+				// (paserati#426).
+				c.regAlloc.Free(valueReg)
 			} else {
 				// Local scope (function or enclosed block): use local symbol table
 				if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister {
@@ -865,6 +916,9 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 					// Update the symbol to be global const
 					c.currentSymbolTable.DefineGlobalConst(node.Name.Value, globalIdx)
 					// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
+					// See the identical comment in compileLetStatement's
+					// analogous function-value branch (paserati#426).
+					c.regAlloc.Free(symbolRef.Register)
 				}
 			}
 		}
