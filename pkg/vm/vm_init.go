@@ -2433,16 +2433,37 @@ func (vm *VM) putSentinelReg(r []Value) {
 // frame's bytecode) would find crossedNative already true and blow
 // straight through its own boundary too.
 //
-// This does NOT reclaim vm.nextRegSlot for the dropped frame(s)' register
-// windows. That's a real leaked-registers gap (unwindException's own
-// frame-popping loop has the same gap: it decrements vm.frameCount without
-// touching vm.nextRegSlot for every frame it walks past), but register
-// space is only reclaimed in bulk relative to the frame the dispatch loop
-// eventually resumes at, not frame-by-frame during unwinding - subtracting
-// an additional, independently-computed delta here corrupted that
-// accounting and broke a previously-working reproducer (nextRegSlot went
-// negative). Left as a documented pre-existing gap rather than a local fix
-// that isn't provably correct; see issue #61.
+// This function itself does NOT reclaim vm.regDir's cursor for the dropped
+// frame(s)' register windows - only frameCount and upvalues. unwindException's
+// own frame-popping loop has the same gap: it decrements vm.frameCount
+// without touching vm.regDir for every frame it walks past, because register
+// space during a multi-boundary unwind is only reclaimed in bulk relative to
+// the frame the dispatch loop eventually resumes at, not frame-by-frame
+// while walking past intermediate native boundaries - see issue #61, which
+// remains open for that general case.
+//
+// executeUserFunctionSafe/executeUserFunctionWithNewTarget are a narrower,
+// fully-solvable case, however: by the time either calls this, it already
+// knows exactly which single register-directory mark to restore to - the
+// cursor as it was before it pushed its own sentinel frame (their own
+// `entryRegMark`, captured with vm.regDir.mark() before that push, since a
+// sentinel frame never itself goes through regDir.push). Both callers do
+// vm.regDir.popTo(entryRegMark) themselves, right after every call to this
+// that follows an actual exception (vm.run() returning InterpretRuntimeError,
+// or an inline exception raised before any frame switch) - the only paths
+// that can genuinely have registers left to reclaim. Their plain
+// call-completed-without-switching-frames and prepareCall-returned-an-error
+// exits deliberately do NOT call popTo even though the cursor is expected to
+// already equal entryRegMark there too (see the comments at those call
+// sites): asserting that via popTo on a path with nothing to reclaim would
+// silently paper over the invariant no longer holding, converting a loud
+// checkRegWindowRelease panic into silent corruption instead - worse than
+// leaving it caught. Left as this function's own caller's responsibility
+// rather than folded in here because the *other*
+// class of caller (a bare unwindException walk with no single call frame to
+// scope a mark to) has no equivalent fixed point to restore to - see #414
+// for the fix and the leak it closes, and the comment above for why #61
+// itself is a different, still-open case.
 func (vm *VM) truncateFramesTo(entryCount int) {
 	// unwindException leaves the native-boundary frame it stopped at on the
 	// stack without popping it; dropping it here retires it for good, so its
@@ -2469,6 +2490,15 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 	// at without popping, once we've taken ownership of the exception as a
 	// Go error.
 	frameCountAtEntry := vm.frameCount
+	// truncateFramesTo (see its own doc comment, #414) drops frames but
+	// deliberately doesn't touch the register directory's cursor - that's
+	// this call's own register space to reclaim, the same way Interpret's
+	// nested-call error path already does for itself (vm.go, "entryMark").
+	// Captured before the sentinel frame push below: sentinel frames reuse a
+	// pooled 1-element slice rather than going through regDir.push, so the
+	// cursor here is exactly where it will still be once every frame this
+	// call pushed - sentinel included - is gone.
+	entryRegMark := vm.regDir.mark()
 
 	// Set up the caller context (pooled 1-element result holder, not a per-call alloc)
 	callerRegisters := vm.getSentinelReg()
@@ -2499,11 +2529,28 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 
 	shouldSwitch, err := vm.prepareCall(fn, effectiveThis, args, destReg, callerRegisters, callerIP)
 	if err != nil {
+		// No vm.regDir.popTo(entryRegMark) needed here (unlike the exception
+		// paths below): prepareCall only ever returns a non-nil err before it
+		// has pushed a register window for the callee (a frame-limit check,
+		// or regDir.push itself failing - which per its own doc comment
+		// never mutates the cursor on failure), so the cursor is already
+		// exactly entryRegMark. Deliberately not added defensively either -
+		// popTo's trim() isn't free, and silently popping here if that
+		// invariant ever changed would convert a loud, catchable
+		// checkRegWindowRelease panic into silent register-space corruption
+		// instead (#414).
 		vm.frameCount--
 		return Undefined, err
 	}
 
 	if !shouldSwitch {
+		// Same reasoning as the err != nil case just above: a native
+		// function ran synchronously and returned normally without pushing
+		// anything here itself. If it made its own nested vm.Call that threw
+		// and got absorbed, that nested call's own error path (this
+		// function or executeUserFunctionSafe) already restored its own
+		// window before returning to us - so the cursor is already back to
+		// entryRegMark by the time we get here regardless.
 		vm.frameCount--
 		return callerRegisters[destReg], nil
 	}
@@ -2537,6 +2584,7 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 			vm.currentException = Null
 			vm.unwinding = false
 			vm.truncateFramesTo(frameCountAtEntry)
+			vm.regDir.popTo(entryRegMark)
 			return Undefined, exceptionError{exception: ex}
 		}
 		return Undefined, fmt.Errorf("runtime error during constructor execution")
@@ -2547,6 +2595,7 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 		vm.currentException = Null
 		vm.unwinding = false
 		vm.truncateFramesTo(frameCountAtEntry)
+		vm.regDir.popTo(entryRegMark)
 		return Undefined, exceptionError{exception: ex}
 	}
 
@@ -2620,6 +2669,21 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	// caller (e.g. DisposableStack running several dispose() callbacks in
 	// sequence, each via its own executeUserFunctionSafe call).
 	frameCountAtEntry := vm.frameCount
+	// truncateFramesTo (see its own doc comment, #414) drops frames but
+	// deliberately doesn't touch the register directory's cursor - that's
+	// this call's own register space to reclaim, the same way Interpret's
+	// nested-call error path already does for itself (vm.go, "entryMark").
+	// Captured before the sentinel frame push below: sentinel frames reuse a
+	// pooled 1-element slice rather than going through regDir.push, so the
+	// cursor here is exactly where it will still be once every frame this
+	// call pushed - sentinel included - is gone. Without this, a promise
+	// reaction whose handler throws (triggerPromiseReactions in promise.go
+	// absorbs the resulting Go error from exactly this call) leaked the
+	// callee's whole register window into whatever frame is resumed next -
+	// harmless in isolation, but flagged by checkRegWindowRelease under
+	// StrictRegWindowChecks the next time that frame (often the top-level
+	// script itself, via top-level await) finally pops (#414).
+	entryRegMark := vm.regDir.mark()
 
 	// Remember whether we were already unwinding *with* a live exception at
 	// entry (the cleanup just above only scrubs the currentException==Null
@@ -2670,7 +2734,16 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	// Use prepareCall to set up the function call
 	shouldSwitch, err := vm.prepareCall(fn, thisValue, args, destReg, callerRegisters, callerIP)
 	if err != nil {
-		// Remove sentinel frame on error
+		// No vm.regDir.popTo(entryRegMark) needed here (unlike the exception
+		// paths below): prepareCall only ever returns a non-nil err before it
+		// has pushed a register window for the callee (a frame-limit check,
+		// or regDir.push itself failing - which per its own doc comment
+		// never mutates the cursor on failure), so the cursor is already
+		// exactly entryRegMark. Deliberately not added defensively either -
+		// popTo's trim() isn't free, and silently popping here if that
+		// invariant ever changed would convert a loud, catchable
+		// checkRegWindowRelease panic into silent register-space corruption
+		// instead (#414).
 		vm.frameCount--
 		return Undefined, err
 	}
@@ -2705,10 +2778,16 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 			vm.currentException = Null
 			vm.unwinding = false
 			vm.truncateFramesTo(frameCountAtEntry)
+			vm.regDir.popTo(entryRegMark)
 			return Undefined, exceptionError{exception: ex}
 		}
-		// Native function was executed directly
-		// Remove sentinel frame
+		// Native function was executed directly. Remove sentinel frame - no
+		// popTo needed: it may have made its own nested vm.Call that threw
+		// and got absorbed, but that nested call's own error path (this
+		// function or executeUserFunctionWithNewTarget) already restored its
+		// own window before returning to us, so the cursor is already back
+		// to entryRegMark regardless. Same reasoning as the err != nil case
+		// above (#414).
 		vm.frameCount--
 		return callerRegisters[destReg], nil
 	}
@@ -2762,6 +2841,7 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 			// frameCountAtEntry) so they can't be mistaken for a live boundary
 			// by a later, unrelated throw.
 			vm.truncateFramesTo(frameCountAtEntry)
+			vm.regDir.popTo(entryRegMark)
 			return Undefined, exceptionError{exception: ex}
 		}
 		if msg := vm.lastRecordedErrorMessage(); msg != "" {
@@ -2776,6 +2856,7 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 		vm.currentException = Null
 		vm.unwinding = false // see the matching comment above (#142)
 		vm.truncateFramesTo(frameCountAtEntry)
+		vm.regDir.popTo(entryRegMark)
 		return Undefined, exceptionError{exception: ex}
 	}
 
