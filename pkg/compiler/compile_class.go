@@ -518,6 +518,20 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 		// not whichever one the loop ends on.
 		c.declareLoopBodyLocalSpill(classSpillSlot)
 	}
+	// constructorReg's value now lives in the global slot or spill slot above
+	// (the class's own binding was already predefined as global/spilled back
+	// in step 1, so every reference to this class name resolves there, never
+	// through this register again) - free it instead of leaking it for the
+	// rest of the enclosing function/module's compilation. This is the same
+	// missing-free bug already found and fixed for let/const/var
+	// declarations: a source file with many sequential top-level class
+	// declarations (a common bundler/codegen output shape - e.g.
+	// @aws-sdk/client-s3's dist-cjs/index.js declares ~150 `class XCommand
+	// extends ... {}` API command classes back to back inside its CJS
+	// wrapper function) would otherwise exhaust the 255-register budget at
+	// exactly 1 register held per class declaration, regardless of whether
+	// it has a superclass. See paserati#426.
+	c.regAlloc.Free(constructorReg)
 
 	// Restore outer scope
 	if prevSymbolTable != nil {
