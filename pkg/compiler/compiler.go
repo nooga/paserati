@@ -5507,13 +5507,24 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 							superConstructorReg = c.regAlloc.Alloc()
 							needToFreeSuperReg = true
 							c.emitGetGlobal(superConstructorReg, symbol.GlobalIndex, node.Token.Line)
-						} else if symbol.IsSpilled {
-							superConstructorReg = c.regAlloc.Alloc()
-							needToFreeSuperReg = true
-							c.emitLoadSpill(superConstructorReg, symbol.SpillIndex, node.Token.Line)
 						} else if !c.isInCurrentScopeChain(defTable) && c.enclosing != nil {
 							// Symbol from enclosing function's scope - compile as expression
-							// for proper upvalue access through the closure mechanism
+							// for proper upvalue access through the closure mechanism.
+							// This must be checked BEFORE the IsSpilled branch below: a
+							// spilled symbol can belong to an ENCLOSING function's own
+							// spill-slot array, not this function's. Spill slots are
+							// per-chunk (see AllocSpillSlot/NumSpillSlots), so emitting a
+							// direct OpLoadSpill here - as the old code did whenever
+							// symbol.IsSpilled was true, regardless of which function
+							// defined it - reads slot N out of *this* function's own
+							// (possibly smaller, or zero) spill array instead of capturing
+							// it as an upvalue through the closure mechanism the normal
+							// identifier-reference path already uses (see the analogous
+							// ordering in compileNode's Identifier case). That produced a
+							// VM panic ("OpLoadSpill: invalid spill slot index") for a
+							// `class extends Base {}` returned from a nested function whose
+							// `Base` superclass was a spilled binding one function further
+							// out (#416).
 							superConstructorReg = c.regAlloc.Alloc()
 							needToFreeSuperReg = true
 							_, err := c.compileNode(node.SuperClass, superConstructorReg)
@@ -5524,6 +5535,10 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 								c.regAlloc.Free(superConstructorReg)
 								return BadRegister, err
 							}
+						} else if symbol.IsSpilled {
+							superConstructorReg = c.regAlloc.Alloc()
+							needToFreeSuperReg = true
+							c.emitLoadSpill(superConstructorReg, symbol.SpillIndex, node.Token.Line)
 						} else {
 							superConstructorReg = symbol.Register
 							needToFreeSuperReg = false
