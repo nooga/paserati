@@ -4345,6 +4345,13 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 			if isTypeOnly {
 				c.env.DefineTypeAlias(localName, types.Any)
 				debugPrintf("// [Checker] Registered unresolved type-only import %s as type alias\n", localName)
+			} else {
+				// The value binding is still real and usable at runtime (e.g. a namespace
+				// import whose type can't be statically resolved) - register it as `any`
+				// so later references (including `export { name }`) can resolve it,
+				// mirroring the no-module-mode fallback path below (paserati#424).
+				c.env.Define(localName, types.Any, false)
+				debugPrintf("// [Checker] Registered unresolved import %s as any\n", localName)
 			}
 		}
 	} else {

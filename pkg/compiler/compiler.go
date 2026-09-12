@@ -4828,6 +4828,27 @@ func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclara
 						importRef := c.moduleBindings.ImportedNames[localName]
 						c.moduleBindings.DefineReExport(exportName, importRef.SourceModule, importRef.SourceName)
 						debugPrintf("// [Compiler] Re-exported (via import): %s as %s from %s\n", importRef.SourceName, exportName, importRef.SourceModule)
+					} else if c.IsModuleMode() && c.moduleBindings.IsImported(localName) &&
+						c.moduleBindings.ImportedNames[localName].ImportType == ImportNamespaceRef {
+						// export { ns } where ns is a namespace import (import * as
+						// ns from "module"). Unlike named/default imports, "*" isn't
+						// a real export name in the source module to re-export by
+						// reference, but the namespace object itself is a genuine
+						// runtime value - materialize it into a global slot exactly
+						// like "export * as ns from 'module'" already does
+						// (compileExportAllDeclaration), and register that slot as
+						// a real (non-re-export) export. See paserati#424.
+						importRef := c.moduleBindings.ImportedNames[localName]
+						globalIdx := int(c.GetOrAssignGlobalIndex(c.moduleGlobalKey(exportName)))
+						c.moduleBindings.DefineExport(localName, exportName, vm.Undefined, nil, globalIdx)
+
+						nsReg := c.regAlloc.Alloc()
+						c.emitEvalModule(importRef.SourceModule, node.Token.Line)
+						c.emitCreateNamespace(nsReg, importRef.SourceModule, node.Token.Line)
+						c.emitSetGlobal(uint16(globalIdx), nsReg, node.Token.Line)
+						c.regAlloc.Free(nsReg)
+
+						debugPrintf("// [Compiler] Exported namespace import: %s as %s from %s\n", localName, exportName, importRef.SourceModule)
 					} else {
 						return BadRegister, NewCompileError(node, fmt.Sprintf("exported name '%s' not found in current scope", localName))
 					}
