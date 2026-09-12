@@ -2409,6 +2409,55 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	}
 }
 
+// applyExoticPrototype stores proto as obj's per-instance [[Prototype]]
+// override via store (one of the void SetPrototype methods in subclass.go's
+// storage list - ArrayObject.SetPrototype, MapObject.SetPrototype, ...),
+// applying the same OrdinarySetPrototypeOf checks (ECMAScript 10.1.2) that
+// PlainObject/DictObject/Array already enforce inside their own bool-
+// returning SetPrototype: a no-op when proto doesn't actually change the
+// current *effective* prototype (vmInstance.PrototypeOf, not the raw
+// per-instance field, so a fresh instance whose field is still unset
+// compares against its intrinsic prototype rather than Undefined),
+// rejection when obj is non-extensible, and rejection of the direct
+// one-step cycle setPrototypeOf(x, x). Without this, every case added for
+// #418 would silently accept a change on a frozen/sealed instance and even
+// let it become its own prototype - since those void setters, unlike
+// PlainObject/DictObject's, have nowhere to report failure except through
+// this wrapper.
+//
+// Returns nil on success, or the TypeError to raise. The two rejections get
+// distinct messages (matching the spec's own distinct steps 4 and 7b) rather
+// than one generic string - otherwise `Object.setPrototypeOf(x, x)` on a
+// perfectly extensible x would confusingly report it as non-extensible.
+func applyExoticPrototype(vmInstance *vm.VM, obj vm.Value, proto vm.Value, store func(vm.Value)) error {
+	if proto.Is(vmInstance.PrototypeOf(obj)) {
+		return nil
+	}
+	if !isExoticExtensible(vmInstance, obj) {
+		return vmInstance.NewTypeError("Cannot set prototype of non-extensible object")
+	}
+	if proto.Is(obj) {
+		return vmInstance.NewTypeError("Cyclic __proto__ value")
+	}
+	store(proto)
+	return nil
+}
+
+// isExoticExtensible reuses Object.isExtensible's own answer for obj, so
+// applyExoticPrototype's notion of "extensible" never drifts from what
+// Object.isExtensible/preventExtensions actually track for each kind (the
+// side table for Map/Set/RegExp/Promise, nothing at all yet for WeakMap/
+// WeakSet/WeakRef/FinalizationRegistry/ArrayBuffer/SharedArrayBuffer/
+// DataView/TypedArray - those report "true" the same way Object.isExtensible
+// does for them today).
+func isExoticExtensible(vmInstance *vm.VM, obj vm.Value) bool {
+	result, err := objectIsExtensibleWithVM(vmInstance, []vm.Value{obj})
+	if err != nil {
+		return true
+	}
+	return result.IsTruthy()
+}
+
 func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if len(args) < 2 {
 		return vm.Undefined, vmInstance.NewTypeError("Object.setPrototypeOf requires 2 arguments")
@@ -2465,16 +2514,15 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		return objectSetPrototypeOfWithVM(vmInstance, []vm.Value{proxy.Target(), proto})
 	}
 
-	// First argument must be an object (including functions, arrays, etc.)
-	// In JavaScript, functions are objects and their [[Prototype]] can be changed
-	objIsObject := obj.Type() == vm.TypeObject ||
-		obj.IsCallable() ||
-		obj.Type() == vm.TypeArray ||
-		obj.Type() == vm.TypeGenerator ||
-		obj.Type() == vm.TypeAsyncGenerator ||
-		obj.Type() == vm.TypeRegExp ||
-		obj.Type() == vm.TypeMap ||
-		obj.Type() == vm.TypeSet
+	// First argument must be an object (including functions, arrays, typed
+	// arrays, etc.) - anything IsObject() reports (the contiguous
+	// TypeObject..TypeProxy span, which includes TypedArray/DataView/
+	// ArrayBuffer/Map/Set/WeakMap/... - see Value.IsObject()'s doc comment)
+	// or a callable. The previous hand-rolled list of "object-ish" kinds
+	// omitted the typed-array family entirely, so Object.setPrototypeOf
+	// rejected every Uint8Array/DataView/ArrayBuffer value as non-object
+	// even though typeof/instanceof correctly treated them as objects (#418).
+	objIsObject := obj.IsObject() || obj.IsCallable()
 	if !objIsObject {
 		return vm.Undefined, vmInstance.NewTypeError("Object.setPrototypeOf called on non-object")
 	}
@@ -2492,17 +2540,18 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		}
 	}
 
-	// Set the prototype based on object type
+	// Set the prototype based on object type. Every exotic kind that carries
+	// its own per-instance [[Prototype]] storage (see subclass.go's storage
+	// note) needs its own case here - falling through to "do nothing" would
+	// report success while silently discarding the new prototype.
 	success := true
 	switch obj.Type() {
 	case vm.TypeObject:
-		if obj.Type() == vm.TypeObject {
-			plainObj := obj.AsPlainObject()
-			success = plainObj.SetPrototype(proto)
-		} else if obj.Type() == vm.TypeDictObject {
-			dictObj := obj.AsDictObject()
-			success = dictObj.SetPrototype(proto)
-		}
+		plainObj := obj.AsPlainObject()
+		success = plainObj.SetPrototype(proto)
+	case vm.TypeDictObject:
+		dictObj := obj.AsDictObject()
+		success = dictObj.SetPrototype(proto)
 	case vm.TypeFunction:
 		// For FunctionObject, set the Prototype field
 		fn := obj.AsFunction()
@@ -2520,12 +2569,63 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	case vm.TypeBoundFunction:
 		// Bound functions don't have their own prototype
 		success = true
-	default:
-		// For other object types (Map, Set, Generator, etc.), try setting via AsPlainObject
-		if obj.Type() == vm.TypeObject {
-			plainObj := obj.AsPlainObject()
-			success = plainObj.SetPrototype(proto)
+	case vm.TypeArray:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsArray().SetPrototype); err != nil {
+			return vm.Undefined, err
 		}
+	case vm.TypeMap:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsMap().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	case vm.TypeSet:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsSet().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	case vm.TypeWeakMap:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsWeakMap().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	case vm.TypeWeakSet:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsWeakSet().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	case vm.TypeWeakRef:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsWeakRef().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	case vm.TypeFinalizationRegistry:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsFinalizationRegistry().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	case vm.TypeRegExp:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsRegExpObject().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	case vm.TypeArrayBuffer:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsArrayBuffer().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	case vm.TypeSharedArrayBuffer:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsSharedArrayBuffer().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	case vm.TypeDataView:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsDataView().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	case vm.TypeTypedArray:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsTypedArray().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	case vm.TypePromise:
+		if err := applyExoticPrototype(vmInstance, obj, proto, obj.AsPromise().SetPrototype); err != nil {
+			return vm.Undefined, err
+		}
+	default:
+		// Generator/AsyncGenerator (and any other kind reaching here) only
+		// carry a *PlainObject prototype slot, not an arbitrary Value, so an
+		// arbitrary [[Prototype]] isn't representable there yet - leave as a
+		// no-op success rather than throwing, matching prior behavior.
 	}
 
 	if !success {

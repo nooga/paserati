@@ -661,42 +661,20 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 			*dest = v
 			return true, InterpretOK, *dest
 		}
-		// Walk the prototype chain. For instances of subclasses (`class S
-		// extends Array {}`), arr.prototype points at S.prototype, whose
-		// [[Prototype]] chains through Array.prototype → Object.prototype.
-		// For plain arrays the per-instance override is unset and we fall
-		// through to the realm's intrinsic Array.prototype.
-		proto := arr.prototype
-		if !proto.IsObject() {
-			proto = vm.ArrayPrototype
-		}
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk up the chain
-			current := po.GetPrototype()
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						p := current.AsPlainObject()
-						if v, ok := p.GetOwn(propName); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = p.GetPrototype()
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// Walk the prototype chain via the shared, non-panicking helper -
+		// not a hand-rolled walk assuming arr.prototype (when set, e.g. by
+		// `class S extends Array {}`, or explicitly via
+		// Object.setPrototypeOf) is always a PlainObject or unset. Since
+		// Object.setPrototypeOf can now store *any* object-kind value or an
+		// explicit null there (#418), the previous `!proto.IsObject()`
+		// fallback-to-intrinsic check also mishandled an explicit null
+		// override (indistinguishable from "unset") and the walk itself
+		// would panic in AsPlainObject() the first time it reached a
+		// non-PlainObject link (e.g. another Array or a Map as the
+		// prototype). finishProtoChainGet -> plainPrototypeOf goes through
+		// InstancePrototypeOverride, which now tells null and unset apart,
+		// and stops cleanly instead of panicking on any other kind.
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 9. Map objects - check user-defined properties first, then prototype chain
@@ -709,36 +687,11 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				return true, InterpretOK, *dest
 			}
 		}
-		// Consult the per-instance prototype (set by subclass ctor for
-		// `class S extends Map {}`) before falling back to the realm
-		// intrinsic Map.prototype.
-		proto := mapObj.prototype
-		if !proto.IsObject() {
-			proto = vm.MapPrototype
-		}
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk the prototype chain
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					cpo := current.AsPlainObject()
-					if v, ok := cpo.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					current = cpo.prototype
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// Walk the prototype chain via the shared, non-panicking helper -
+		// see the Array case above for why a hand-rolled walk here is
+		// unsafe now that Object.setPrototypeOf can store any object-kind
+		// value or an explicit null on a Map instance (#418).
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 10. Set objects - check user-defined properties first, then prototype chain
@@ -751,35 +704,11 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				return true, InterpretOK, *dest
 			}
 		}
-		// Consult the per-instance prototype (set by subclass ctor for
-		// `class S extends Set {}`) before falling back to the intrinsic.
-		proto := setObj.prototype
-		if !proto.IsObject() {
-			proto = vm.SetPrototype
-		}
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk the prototype chain
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					cpo := current.AsPlainObject()
-					if v, ok := cpo.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					current = cpo.prototype
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// Walk the prototype chain via the shared, non-panicking helper -
+		// see the Array case above for why a hand-rolled walk here is
+		// unsafe now that Object.setPrototypeOf can store any object-kind
+		// value or an explicit null on a Set instance (#418).
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 10aa. Promise objects - check user-defined properties first, then prototype chain
@@ -792,35 +721,11 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 				return true, InterpretOK, *dest
 			}
 		}
-		// Consult the per-instance prototype (set by subclass ctor for
-		// `class S extends Promise {}`) before falling back to the intrinsic.
-		proto := promiseObj.prototype
-		if !proto.IsObject() {
-			proto = vm.PromisePrototype
-		}
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			// Walk the prototype chain
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					cpo := current.AsPlainObject()
-					if v, ok := cpo.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					current = cpo.prototype
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// Walk the prototype chain via the shared, non-panicking helper -
+		// see the Array case above for why a hand-rolled walk here is
+		// unsafe now that Object.setPrototypeOf can store any object-kind
+		// value or an explicit null on a Promise instance (#418).
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 10a. WeakMap objects - consult WeakMap.prototype chain for properties like get, set, has, delete
@@ -847,66 +752,22 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 	// the constructor via GetPrototypeFromConstructor for cross-realm support),
 	// falling back to vm.WeakRefPrototype if absent.
 	if objVal.Type() == TypeWeakRef {
-		wr := objVal.AsWeakRef()
-		proto := wr.GetPrototype()
-		if !proto.IsObject() {
-			proto = vm.WeakRefPrototype
-		}
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					cpo := current.AsPlainObject()
-					if v, ok := cpo.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					current = cpo.prototype
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// Walk the prototype chain via the shared, non-panicking helper -
+		// see the Array case above for why a hand-rolled walk here is
+		// unsafe now that Object.setPrototypeOf can store any object-kind
+		// value or an explicit null on a WeakRef instance (#418).
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 10b''. FinalizationRegistry objects - consult the instance's stored
 	// prototype (set by the constructor via GetPrototypeFromConstructor for
 	// cross-realm support), falling back to vm.FinalizationRegistryPrototype.
 	if objVal.Type() == TypeFinalizationRegistry {
-		fr := objVal.AsFinalizationRegistry()
-		proto := fr.GetPrototype()
-		if !proto.IsObject() {
-			proto = vm.FinalizationRegistryPrototype
-		}
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					cpo := current.AsPlainObject()
-					if v, ok := cpo.GetOwn(propName); ok {
-						*dest = v
-						return true, InterpretOK, *dest
-					}
-					current = cpo.prototype
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		// Walk the prototype chain via the shared, non-panicking helper -
+		// see the Array case above for why a hand-rolled walk here is
+		// unsafe now that Object.setPrototypeOf can store any object-kind
+		// value or an explicit null on a FinalizationRegistry instance (#418).
+		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
 	// 10c. SharedArrayBuffer objects - check own properties first, then prototype chain
