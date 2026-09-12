@@ -11512,7 +11512,7 @@ func isExportSpecifierName(t lexer.TokenType) bool {
 		lexer.THROW, lexer.TRY, lexer.CATCH, lexer.FINALLY,
 		lexer.FUNCTION, lexer.CLASS, lexer.CONST, lexer.LET, lexer.VAR,
 		lexer.NEW, lexer.DELETE, lexer.TYPEOF, lexer.VOID, lexer.IN, lexer.INSTANCEOF,
-		lexer.THIS, lexer.SUPER, lexer.NULL, lexer.TRUE, lexer.FALSE,
+		lexer.THIS, lexer.SUPER, lexer.NULL, lexer.TRUE, lexer.FALSE, lexer.UNDEFINED,
 		lexer.IMPORT, lexer.EXPORT, lexer.EXTENDS, lexer.IMPLEMENTS,
 		lexer.STATIC, lexer.GET, lexer.SET, lexer.ASYNC, lexer.AWAIT, lexer.YIELD,
 		lexer.TYPE, lexer.INTERFACE, lexer.ENUM, lexer.SATISFIES,
