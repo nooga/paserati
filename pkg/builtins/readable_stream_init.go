@@ -49,10 +49,20 @@ func (r *ReadableStreamInitializer) InitTypes(ctx *TypeContext) error {
 	streamType.WithProperty("tee", types.NewSimpleFunction([]types.Type{}, &types.TupleType{
 		ElementTypes: []types.Type{streamType, streamType},
 	}))
+	// pipeTo/pipeThrough: kept Any-typed (both the destination/pair argument
+	// and pipeThrough's return) so any WritableStream-shaped or
+	// {readable,writable}-shaped object works without cross-file structural
+	// friction between ReadableStream/WritableStream/TransformStream's
+	// separately-declared types - see pipeReadableTo below for the runtime
+	// behavior (#413).
+	streamType.WithProperty("pipeTo", types.NewSimpleFunction([]types.Type{types.Any}, types.Any))      // Promise<void>
+	streamType.WithProperty("pipeThrough", types.NewSimpleFunction([]types.Type{types.Any}, types.Any)) // returns the pair's `readable`
 
 	streamCtorType := types.NewObjectType().
-		WithSimpleCallSignature([]types.Type{}, streamType).             // new ReadableStream()
-		WithSimpleCallSignature([]types.Type{types.Any}, streamType).    // new ReadableStream(underlyingSource)
+		WithSimpleCallSignature([]types.Type{}, streamType).               // new ReadableStream()
+		WithSimpleCallSignature([]types.Type{types.Any}, streamType).      // new ReadableStream(underlyingSource)
+		WithSimpleConstructSignature([]types.Type{}, streamType).          // super() from a subclass, no args
+		WithSimpleConstructSignature([]types.Type{types.Any}, streamType). // super(underlyingSource) from a subclass
 		WithProperty("prototype", streamType)
 
 	return ctx.DefineGlobal("ReadableStream", streamCtorType)
@@ -228,6 +238,25 @@ func (s *readableStreamState) errorOut(reason vm.Value) {
 	for _, pr := range pending {
 		s.vmInstance.RejectPromise(pr.promise, reason)
 	}
+}
+
+// desiredSizeValue computes the WHATWG-style backpressure signal for a
+// stream with the given highWaterMark: null once errored, 0 once closed,
+// highWaterMark minus the current queue length otherwise. ReadableStream
+// itself doesn't expose desiredSize; this exists so TransformStream's
+// controller (#413, transform_stream_init.go) can report a live number
+// instead of a fixed placeholder - the queue it needs to see lives on this,
+// the readable side's own state.
+func (s *readableStreamState) desiredSizeValue(highWaterMark int) vm.Value {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.errored {
+		return vm.Null
+	}
+	if s.closed {
+		return vm.NumberValue(0)
+	}
+	return vm.NumberValue(float64(highWaterMark - len(s.queue)))
 }
 
 // read implements reader.read()/the async-iterator's next(). Unlike
@@ -463,6 +492,34 @@ func createReadableStreamObject(vmInstance *vm.VM, state *readableStreamState, s
 		return vm.NewArrayWithArgs([]vm.Value{branch1Val, branch2Val}), nil
 	}))
 
+	obj.SetOwnNonEnumerable("pipeTo", vm.NewNativeFunction(1, false, "pipeTo", func(args []vm.Value) (vm.Value, error) {
+		if len(args) == 0 {
+			return vm.Undefined, vmInstance.NewTypeError("pipeTo requires a destination WritableStream")
+		}
+		return pipeReadableTo(vmInstance, state, args[0]), nil
+	}))
+
+	obj.SetOwnNonEnumerable("pipeThrough", vm.NewNativeFunction(1, false, "pipeThrough", func(args []vm.Value) (vm.Value, error) {
+		if len(args) == 0 {
+			return vm.Undefined, vmInstance.NewTypeError("pipeThrough requires a { readable, writable } pair")
+		}
+		pair := args[0]
+		writableSide, err := vmInstance.GetProperty(pair, "writable")
+		if err != nil {
+			return vm.Undefined, err
+		}
+		readableSide, err := vmInstance.GetProperty(pair, "readable")
+		if err != nil {
+			return vm.Undefined, err
+		}
+		// Per spec, pipeThrough's own pipe-completion promise isn't exposed
+		// to the caller - only the piped-through `readable` is returned.
+		// Errors on that internal pipe still propagate through the readable
+		// side (pipeReadableTo cancels/aborts both ends on failure).
+		pipeReadableTo(vmInstance, state, writableSide)
+		return readableSide, nil
+	}))
+
 	// [Symbol.asyncIterator] - the surface every real SDK's own
 	// ReadableStreamToAsyncIterable shim tries first (#205's scope note).
 	asyncIterFn := vm.NewNativeFunction(0, false, "[Symbol.asyncIterator]", func(args []vm.Value) (vm.Value, error) {
@@ -611,6 +668,103 @@ func (c *ReadableStreamController) Close() { c.state.close() }
 // Error signals an abnormal end of stream, rejecting every pending and
 // future read() with reason.
 func (c *ReadableStreamController) Error(reason vm.Value) { c.state.errorOut(reason) }
+
+// pipeReadableTo implements the runtime behavior behind both
+// ReadableStream.prototype.pipeTo (called directly) and .pipeThrough (called
+// internally with the pair's `writable`, #413). It duck-types dest as
+// anything with a WritableStream-shaped getWriter()/write()/close()/abort(),
+// so it works on a real WritableStream and (transitively, since
+// TransformStream.writable is one) a TransformStream's writable side too.
+//
+// Simplifications vs. the full spec (matching this file's existing tee()/
+// read() scope note): no preventClose/preventAbort/preventCancel/signal
+// options - closing, aborting and cancelling always propagate both ways.
+func pipeReadableTo(vmInstance *vm.VM, src *readableStreamState, dest vm.Value) vm.Value {
+	resultVal := vmInstance.NewPendingPromise()
+	resultPromise := resultVal.AsPromise()
+
+	getWriterFn, err := vmInstance.GetProperty(dest, "getWriter")
+	if err != nil {
+		vmInstance.RejectPromise(resultPromise, errorValueFromGoError(err))
+		return resultVal
+	}
+	if !getWriterFn.IsCallable() {
+		reason := errorValueFromGoError(vmInstance.NewTypeError("pipeTo destination is not a WritableStream"))
+		vmInstance.RejectPromise(resultPromise, reason)
+		return resultVal
+	}
+	writerVal, callErr := vmInstance.Call(getWriterFn, dest, nil)
+	if callErr != nil {
+		vmInstance.RejectPromise(resultPromise, errorValueFromGoError(callErr))
+		return resultVal
+	}
+
+	var pump func()
+	pump = func() {
+		readVal := src.read()
+		vmInstance.AddPromiseReaction(readVal, true, func(v vm.Value) {
+			resultObj := v.AsPlainObject()
+			if resultObj == nil {
+				vmInstance.ResolvePromise(resultPromise, vm.Undefined)
+				return
+			}
+			doneVal, _ := resultObj.GetOwn("done")
+			if doneVal.AsBoolean() {
+				closeFn, err := vmInstance.GetProperty(writerVal, "close")
+				if err != nil || !closeFn.IsCallable() {
+					vmInstance.ResolvePromise(resultPromise, vm.Undefined)
+					return
+				}
+				closeResult, callErr := vmInstance.Call(closeFn, writerVal, nil)
+				if callErr != nil {
+					vmInstance.RejectPromise(resultPromise, errorValueFromGoError(callErr))
+					return
+				}
+				closeSettled := vmInstance.NewPendingPromise()
+				vmInstance.ResolvePromise(closeSettled.AsPromise(), closeResult)
+				vmInstance.AddPromiseReaction(closeSettled, true, func(vm.Value) {
+					vmInstance.ResolvePromise(resultPromise, vm.Undefined)
+				})
+				vmInstance.AddPromiseReaction(closeSettled, false, func(r vm.Value) {
+					vmInstance.RejectPromise(resultPromise, r)
+				})
+				return
+			}
+			chunkVal, _ := resultObj.GetOwn("value")
+			writeFn, err := vmInstance.GetProperty(writerVal, "write")
+			if err != nil || !writeFn.IsCallable() {
+				reason := errorValueFromGoError(vmInstance.NewTypeError("pipeTo destination writer has no write()"))
+				vmInstance.RejectPromise(resultPromise, reason)
+				return
+			}
+			writeResult, callErr := vmInstance.Call(writeFn, writerVal, []vm.Value{chunkVal})
+			if callErr != nil {
+				reason := errorValueFromGoError(callErr)
+				vmInstance.RejectPromise(resultPromise, reason)
+				src.cancel(reason)
+				return
+			}
+			writeSettled := vmInstance.NewPendingPromise()
+			vmInstance.ResolvePromise(writeSettled.AsPromise(), writeResult)
+			vmInstance.AddPromiseReaction(writeSettled, true, func(vm.Value) {
+				pump()
+			})
+			vmInstance.AddPromiseReaction(writeSettled, false, func(r vm.Value) {
+				vmInstance.RejectPromise(resultPromise, r)
+				src.cancel(r)
+			})
+		})
+		vmInstance.AddPromiseReaction(readVal, false, func(r vm.Value) {
+			vmInstance.RejectPromise(resultPromise, r)
+			if abortFn, err := vmInstance.GetProperty(writerVal, "abort"); err == nil && abortFn.IsCallable() {
+				_, _ = vmInstance.Call(abortFn, writerVal, []vm.Value{r})
+			}
+		})
+	}
+	pump()
+
+	return resultVal
+}
 
 // NewHostFedReadableStream creates a ReadableStream with no JS-authored
 // underlying source, whose contents are instead fed entirely from Go via the
