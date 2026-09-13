@@ -123,6 +123,16 @@ func collectVarDeclarations(stmts []parser.Statement) []string {
 			for _, inner := range s.Declarations {
 				collect(inner)
 			}
+		case *parser.ExportNamedDeclaration:
+			// `export var X` wraps the VarStatement in Declaration; unwrap it
+			// so exported vars get the same pre-registration/hoisting (and
+			// the same namespaced moduleGlobalKey fallback via
+			// TopLevelDeclNames) as unexported ones. Without this, a hoisted
+			// function's body compiled before this export statement is
+			// reached can't forward-reference it when the module is loaded
+			// via the module loader (namespaced heap keys) - see
+			// paserati#451, the var-specific counterpart to #117.
+			collect(s.Declaration)
 		case *parser.BlockStatement:
 			if s != nil && s.Statements != nil {
 				for _, inner := range s.Statements {
