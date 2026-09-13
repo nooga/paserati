@@ -2669,7 +2669,33 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 	// 1. Allocate contiguous block for function + all arguments
 	totalArgCount := c.determineTotalArgCount(node)
 	blockSize := 1 + totalArgCount // funcReg + arguments
-	funcReg := c.regAlloc.AllocContiguous(blockSize)
+
+	// Overflow fallback (issue #455 follow-up): a call site's own argument
+	// count, on top of whatever registers the enclosing function already
+	// has live, can exceed what a single contiguous register run can
+	// provide - the register file is hard-capped at 255 addressable slots
+	// (Register is a uint8; see regalloc.go's registerLimit). Route such
+	// calls through the existing spread-call machinery instead of failing:
+	// see compileCallArgOverflow for how and why.
+	//
+	// This does not apply to a with-context identifier call (checked
+	// further below, once the callee has been compiled):
+	// OpCallFromWithContext has no spread counterpart, so that combination
+	// is left on the original AllocContiguous path, which turns register
+	// exhaustion into a normal compile error rather than a crash, same as
+	// before this fix.
+	_, isIdentCallee := node.Function.(*parser.Identifier)
+	inWithContextCall := isIdentCallee && c.currentFuncWithDepth > 0
+	funcReg, ok := c.regAlloc.TryAllocContiguous(blockSize)
+	if !ok {
+		if !inWithContextCall {
+			return c.compileCallArgOverflow(node, hint, &tempRegs)
+		}
+		// with-context edge case: reproduce the pre-existing panic (caught
+		// upstream and turned into a normal compile error) by calling the
+		// panicking allocator directly.
+		funcReg = c.regAlloc.AllocContiguous(blockSize)
+	}
 	// Mark the entire block for cleanup
 	for i := 0; i < blockSize; i++ {
 		tempRegs = append(tempRegs, funcReg+Register(i))
@@ -3095,6 +3121,80 @@ func (c *Compiler) compileMultiSpreadCall(node *parser.CallExpression, hint Regi
 		c.emitSpreadCall(hint, funcReg, arrayReg, line)
 	}
 
+	return hint, nil
+}
+
+// compileCallArgOverflow compiles a plain (non-spread) function call whose
+// "funcReg + arguments" block is too large for a single contiguous register
+// run to hold (issue #455 follow-up). The register file is hard-capped at
+// 255 addressable slots (Register is a uint8; see regalloc.go's
+// registerLimit), so once a call site's argument count - on top of whatever
+// registers the enclosing function already has live - approaches that
+// budget, AllocContiguous can no longer find room for the block, even
+// though before this fix that was fatal to compiling the call at all.
+//
+// The fix reuses two pieces of machinery that already exist for exactly
+// this kind of overflow:
+//   - compileArrayLiteral's "large literal" path (compile_literal.go)
+//     builds an array without ever needing all N element registers live at
+//     once: it pre-allocates the array on the heap via OpAllocArray and
+//     fills it in small contiguous chunks (falling back to one-by-one via
+//     OpArrayCopy when even a chunk can't get contiguous registers).
+//   - OpSpreadCall's VM handler (extractSpreadArguments) turns that heap
+//     array into a plain Go slice with no register-count limit at all;
+//     prepareCall then copies it into the callee's new frame the same way
+//     it would any other argument slice.
+//
+// Together these move the argument list off the register file entirely for
+// the call, so no new opcode is needed - this is the same strategy
+// compileMultiSpreadCall already uses for calls with `...spread` arguments,
+// applied here to a plain, spread-free argument list instead.
+//
+// Two behaviors the normal OpCall path supports are intentionally not
+// emulated here:
+//   - Tail-call optimization: there is no OpSpreadTailCall, so a call that
+//     would otherwise be compiled as a tail call is emitted as a plain
+//     (non-tail) OpSpreadCall instead. This only affects calls that could
+//     not compile at all before this change, so it's a strict improvement,
+//     not a regression.
+//   - with-context identifier calls (OpCallFromWithContext): the caller
+//     (compileCallExpression) does not route those here, leaving them on
+//     the original AllocContiguous path and its pre-existing
+//     register-exhaustion-becomes-a-compile-error behavior, rather than
+//     silently changing 'this' resolution semantics inside a with block.
+func (c *Compiler) compileCallArgOverflow(node *parser.CallExpression, hint Register, tempRegs *[]Register) (Register, errors.PaseratiError) {
+	line := node.Token.Line
+
+	// NOTE: Clear tail position when compiling the callee AND arguments,
+	// as they are NOT in tail position - only the result of THIS call can
+	// be (see the identical comment on the normal path above).
+	oldTailPos := c.inTailPosition
+	c.inTailPosition = false
+
+	funcReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, funcReg)
+	if _, err := c.compileNode(node.Function, funcReg); err != nil {
+		c.inTailPosition = oldTailPos
+		return BadRegister, err
+	}
+
+	// Build an array containing all (spread-free - hasSpreadArgument was
+	// already checked before compileCallExpression ever reaches this point)
+	// arguments, using the same chunked machinery a large array literal
+	// uses.
+	arrayReg := c.regAlloc.Alloc()
+	*tempRegs = append(*tempRegs, arrayReg)
+	arrayLiteral := &parser.ArrayLiteral{
+		Elements: node.Arguments,
+		Token:    node.Token,
+	}
+	_, err := c.compileArrayLiteral(arrayLiteral, arrayReg)
+	c.inTailPosition = oldTailPos // Restore after callee and arguments are compiled
+	if err != nil {
+		return BadRegister, err
+	}
+
+	c.emitSpreadCall(hint, funcReg, arrayReg, line)
 	return hint, nil
 }
 
