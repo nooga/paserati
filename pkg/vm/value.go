@@ -776,30 +776,31 @@ func NewAsyncGenerator(function Value) Value {
 	return Value{typ: TypeAsyncGenerator, obj: unsafe.Pointer(genObj)}
 }
 
-// NewArrayWithArgs creates an array based on the Array constructor arguments:
-// - No args: empty array
-// - Single numeric arg: array with that length (filled with undefined)
-// - Multiple args: array with those elements
+// NewArrayWithArgs creates an array whose elements are exactly args, in
+// order - e.g. NewArrayWithArgs([]Value{v}) is a one-element array [v], even
+// when v is a number.
+//
+// This is NOT `Array(...)` constructor semantics: per ECMAScript 23.1.1.1,
+// `new Array(n)` for a single numeric n creates a sparse array of LENGTH n
+// (holes, not an array containing n). This function used to implement that
+// special case directly, but its only caller that actually needs it - the
+// real Array() constructor (pkg/builtins/array_init.go) - already detects
+// and handles the single-numeric-argument form itself before ever reaching
+// here (see its own `len(args) == 1 && args[0].IsNumber()` branch), so this
+// function's special case was dead for that legitimate caller and pure
+// poison for every other one, which all just want a literal array built
+// from an already-computed slice of elements.
+//
+// The poison: any such caller whose computed result happened to be exactly
+// one element and that element was a number (`[1, 5].slice(1)`, `JSON.parse
+// ("[5]")`, ...) silently got back a length-N array of holes instead of the
+// intended one-element array - see paserati#452, where this corrupted a
+// spread-call's argument list and shifted every argument after it.
 func NewArrayWithArgs(args []Value) Value {
 	arr := NewArray()
 	arrayObj := arr.AsArray()
-
-	if len(args) == 0 {
-		// Array() - empty array
-		return arr
-	} else if len(args) == 1 && args[0].IsNumber() {
-		// Array(length) - array with specified length
-		length := int(args[0].ToFloat())
-		if length < 0 {
-			length = 0
-		}
-		arrayObj.SetLength(length)
-		return arr
-	} else {
-		// Array(element1, element2, ...) - array with specified elements
-		arrayObj.SetElements(args)
-		return arr
-	}
+	arrayObj.SetElements(args)
+	return arr
 }
 
 // NewArrayWithLength creates an array with the specified length
