@@ -200,6 +200,17 @@ func collectVarDeclarations(stmts []parser.Statement) []string {
 			if s.Statement != nil {
 				collect(s.Statement)
 			}
+		case *parser.ExportNamedDeclaration:
+			// `export var X` wraps the actual declaration in Declaration; unwrap
+			// it so exported vars get the same hoisting as unexported ones - see
+			// collectLetConstDeclarations's identical case and paserati#117/#451.
+			// Without this, a top-level function forward-referencing an
+			// `export var` declared later in the same file throws "X is not
+			// defined" when the file is loaded as an imported module (module
+			// top-level statements compile in source order, so the var's
+			// DefineGlobal hasn't run yet; hoisting it here, alongside the
+			// function's own hoisting, fixes that).
+			collect(s.Declaration)
 		}
 	}
 
