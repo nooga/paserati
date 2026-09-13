@@ -84,6 +84,55 @@ func (c *Checker) unwrapNestedPatternTarget(target parser.Expression, expectedTy
 		// the array walk knows the position for - it calls restElementType
 		// directly and bypasses this.
 		return t.Argument, &types.ArrayType{ElementType: expectedType}
+	case *parser.ObjectDestructuringAssignment:
+		// A nested pattern that itself carries a default, e.g.
+		// `{z: {} = 42}` or, one level deeper,
+		// `{x: {y: {z: {} = 42}}}`. Reaches here - rather than an
+		// ObjectLiteral wrapped in a plain *parser.AssignmentExpression like
+		// the `{i = 7}` case above - because the parser's
+		// parseAssignmentExpression special-cases an ObjectLiteral on the
+		// left of `=` into a full ObjectDestructuringAssignment (the node
+		// built for a *standalone* destructuring-assignment expression like
+		// `({a} = obj)`), even when that `pattern = default` appears nested
+		// inside another pattern instead. Its Properties/RestProperty are
+		// already the shape ObjectParameterPattern uses, so re-wrap them as
+		// one and let the caller's switch dispatch to the existing
+		// ObjectParameterPattern case - mirrors the identical handling in
+		// the compiler's compileNestedPatternDeclaration.
+		if t.Value != nil {
+			c.visit(t.Value)
+			defaultType := t.Value.GetComputedType()
+			if defaultType == nil {
+				defaultType = types.Any
+			}
+			if expectedType == types.Undefined || expectedType == types.Unknown {
+				expectedType = types.GetWidenedType(defaultType)
+			}
+		}
+		return &parser.ObjectParameterPattern{
+			Token:        t.Token,
+			Properties:   t.Properties,
+			RestProperty: t.RestProperty,
+		}, expectedType
+	case *parser.ArrayDestructuringAssignment:
+		// Array-literal analog of the ObjectDestructuringAssignment case
+		// above - e.g. a nested object property whose own value is an array
+		// pattern carrying a default, such as `{a: {b: [x, y] = [1, 2]}}`'s
+		// inner `[x, y] = [1, 2]`.
+		if t.Value != nil {
+			c.visit(t.Value)
+			defaultType := t.Value.GetComputedType()
+			if defaultType == nil {
+				defaultType = types.Any
+			}
+			if expectedType == types.Undefined || expectedType == types.Unknown {
+				expectedType = types.GetWidenedType(defaultType)
+			}
+		}
+		return &parser.ArrayParameterPattern{
+			Token:    t.Token,
+			Elements: t.Elements,
+		}, expectedType
 	}
 	return target, expectedType
 }
@@ -132,7 +181,8 @@ func (c *Checker) checkDestructuringTarget(target parser.Expression, expectedTyp
 		// Index access as target: [arr[0]] = [value]
 		// Type check the index expression and ensure it's assignable
 		c.visit(targetNode)
-	case *parser.AssignmentExpression, *parser.SpreadElement:
+	case *parser.AssignmentExpression, *parser.SpreadElement,
+		*parser.ObjectDestructuringAssignment, *parser.ArrayDestructuringAssignment:
 		// Nested default or rest - see unwrapNestedPatternTarget.
 		inner, innerType := c.unwrapNestedPatternTarget(target, expectedType)
 		c.checkDestructuringTarget(inner, innerType, context)
@@ -163,7 +213,8 @@ func (c *Checker) checkDestructuringTargetForProperty(target parser.Expression, 
 	case *parser.IndexExpression:
 		// Index access as target: {prop: arr[0]} = {prop: value}
 		c.visit(targetNode)
-	case *parser.AssignmentExpression, *parser.SpreadElement:
+	case *parser.AssignmentExpression, *parser.SpreadElement,
+		*parser.ObjectDestructuringAssignment, *parser.ArrayDestructuringAssignment:
 		// Nested default or rest - see unwrapNestedPatternTarget.
 		inner, innerType := c.unwrapNestedPatternTarget(target, expectedType)
 		c.checkDestructuringTargetForProperty(inner, innerType, propName)
@@ -403,7 +454,8 @@ func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expressio
 		// Index access as target: const [arr[0]] = [value]
 		// This is valid in JavaScript (though less common in declarations)
 		c.visit(targetNode)
-	case *parser.AssignmentExpression, *parser.SpreadElement:
+	case *parser.AssignmentExpression, *parser.SpreadElement,
+		*parser.ObjectDestructuringAssignment, *parser.ArrayDestructuringAssignment:
 		// Nested default or rest - see unwrapNestedPatternTarget.
 		inner, innerType := c.unwrapNestedPatternTarget(target, expectedType)
 		c.checkDestructuringTargetForDeclaration(inner, innerType, isConst, isVar)

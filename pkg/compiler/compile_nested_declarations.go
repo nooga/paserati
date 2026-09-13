@@ -26,9 +26,84 @@ func (c *Compiler) compileNestedPatternDeclaration(target parser.Expression, val
 	case *parser.UndefinedLiteral:
 		// Elision in destructuring - no code to generate, just skip this element
 		return nil
+	case *parser.ObjectDestructuringAssignment:
+		// A nested pattern target that itself carries a default value, e.g.
+		// `{z: {} = 42}` or (one level deeper) `{x: {y: {z: {} = 42}}}`.
+		// This shape reaches here - rather than an ObjectLiteral wrapped in
+		// a plain *parser.AssignmentExpression, which compileNestedObjectDeclaration
+		// and compileNestedArrayDeclaration already know how to split into
+		// Target/Default - because the parser's parseAssignmentExpression
+		// special-cases an ObjectLiteral/ArrayLiteral on the left of `=` into
+		// a full ObjectDestructuringAssignment/ArrayDestructuringAssignment
+		// node (built for a *standalone* destructuring-assignment expression
+		// like `({a} = obj)`), even when that `pattern = default` appears
+		// nested inside another pattern instead. Its Properties/RestProperty
+		// are already the same shape a declaration uses, so resolve the
+		// default here (the same "undefined -> evaluate default" check every
+		// other nested-pattern default gets) and bind the rest exactly like
+		// an ObjectParameterPattern already does just above.
+		resolvedReg, err := c.resolveNestedPatternDefault(valueReg, targetNode.Value, line)
+		if err != nil {
+			return err
+		}
+		declaration := &parser.ObjectDestructuringDeclaration{
+			Token:        targetNode.Token,
+			IsConst:      isConst,
+			Properties:   targetNode.Properties,
+			RestProperty: targetNode.RestProperty,
+			Value:        nil, // We already have the value in resolvedReg
+		}
+		return c.compileObjectDestructuringDeclarationWithValueReg(declaration, isVar, resolvedReg, line)
+	case *parser.ArrayDestructuringAssignment:
+		// Array-literal analog of the ObjectDestructuringAssignment case
+		// above - e.g. a nested object property whose own value is an array
+		// pattern carrying a default, such as `{a: {b: [x, y] = [1, 2]}}`'s
+		// inner `[x, y] = [1, 2]` (one level down from the object property
+		// `b`, reached via ObjectLiteral's generic property-value parsing,
+		// same mechanism as the object case above).
+		resolvedReg, err := c.resolveNestedPatternDefault(valueReg, targetNode.Value, line)
+		if err != nil {
+			return err
+		}
+		declaration := &parser.ArrayDestructuringDeclaration{
+			Token:    targetNode.Token,
+			IsConst:  isConst,
+			Elements: targetNode.Elements,
+			Value:    nil, // We already have the value in resolvedReg
+		}
+		return c.compileArrayDestructuringIteratorPath(declaration, isVar, resolvedReg, line)
 	default:
 		return NewCompileError(target, fmt.Sprintf("unsupported nested pattern type: %T", target))
 	}
+}
+
+// resolveNestedPatternDefault implements `valueReg !== undefined ? valueReg :
+// defaultExpr`, returning a register holding the result. If defaultExpr is
+// nil, valueReg is returned unchanged - no code is emitted. Mirrors the
+// value/default resolution compileConditionalAssignmentForDeclaration does
+// for a DestructuringProperty/DestructuringElement's own Default field,
+// reused here for a nested pattern-with-default that arrives as a single
+// combined node (ObjectDestructuringAssignment/ArrayDestructuringAssignment)
+// instead of a separately-tracked Default.
+func (c *Compiler) resolveNestedPatternDefault(valueReg Register, defaultExpr parser.Expression, line int) (Register, errors.PaseratiError) {
+	if defaultExpr == nil {
+		return valueReg, nil
+	}
+
+	resultReg := c.regAlloc.Alloc()
+
+	jumpToDefault := c.emitPlaceholderJump(vm.OpJumpIfUndefined, valueReg, line)
+	c.emitMove(resultReg, valueReg, line)
+	jumpPastDefault := c.emitPlaceholderJump(vm.OpJump, 0, line)
+
+	c.patchJump(jumpToDefault)
+	if _, err := c.compileNode(defaultExpr, resultReg); err != nil {
+		c.patchJump(jumpPastDefault)
+		return BadRegister, err
+	}
+
+	c.patchJump(jumpPastDefault)
+	return resultReg, nil
 }
 
 // compileNestedArrayDeclaration handles nested array pattern declarations
