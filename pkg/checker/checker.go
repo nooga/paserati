@@ -593,6 +593,247 @@ func (c *Checker) getCurrentClassName() string {
 	return ""
 }
 
+// varLikeDeclarationParts extracts the declarator list, a human-readable
+// statement-type label ("Let"/"Const"/"Var"), and const-ness from a
+// Let/Const/Var statement. Returns a zero value (nil, "", false) for any
+// other statement type, so callers can use the empty stmtType as a
+// "not var-like" signal.
+func varLikeDeclarationParts(stmt parser.Statement) ([]*parser.VarDeclarator, string, bool) {
+	switch specificNode := stmt.(type) {
+	case *parser.LetStatement:
+		return specificNode.Declarations, "Let", false
+	case *parser.ConstStatement:
+		return specificNode.Declarations, "Const", true
+	case *parser.VarStatement:
+		return specificNode.Declarations, "Var", false
+	default:
+		return nil, "", false
+	}
+}
+
+// hoistVarLikeDeclarationsPass2 pre-registers each declarator's name in
+// globalEnv with a preliminary type - the Pass 2 treatment ordinary
+// top-level Let/Const/Var statements get - and returns any FunctionLiteral
+// initializers found so Pass 3 can check their bodies. Shared by bare
+// top-level declarations and the analogous ExportNamedDeclaration-wrapped
+// case, so a top-level function can forward-reference an exported
+// var/let/const the same way it already can a non-exported one.
+func (c *Checker) hoistVarLikeDeclarationsPass2(declarations []*parser.VarDeclarator, stmtType string, isConst bool, globalEnv *Environment, nodesProcessedPass2 map[parser.Node]bool) []*parser.FunctionLiteral {
+	var functionsToVisitBody []*parser.FunctionLiteral
+
+	for _, declarator := range declarations {
+		varName := declarator.Name
+		typeAnnotation := declarator.TypeAnnotation
+		initializer := declarator.Value
+
+		debugPrintf("// [Checker Pass 2] Processing %s: %s\n", stmtType, varName.Value)
+		c.checkDefiniteAssignmentAssertionInitializer(declarator)
+
+		var declaredType types.Type
+		if typeAnnotation != nil {
+			declaredType = c.resolveTypeAnnotation(typeAnnotation) // Use globalEnv implicitly
+		}
+
+		var preliminaryType types.Type = declaredType // Start with annotation type
+
+		// Check initializer specifically for FunctionLiteral
+		if funcLitInitializer, ok := initializer.(*parser.FunctionLiteral); ok {
+			debugPrintf("// [Checker Pass 2] Variable '%s' initialized with FunctionLiteral\n", varName.Value)
+			initialFuncSignature := c.resolveFunctionLiteralSignature(funcLitInitializer, globalEnv)
+			if initialFuncSignature == nil { // Handle resolution error
+				initialFuncSignature = &types.Signature{ // Default to Any signature on error
+					ParameterTypes: make([]types.Type, len(funcLitInitializer.Parameters)),
+					ReturnType:     types.Any,
+				}
+				for i := range initialFuncSignature.ParameterTypes {
+					initialFuncSignature.ParameterTypes[i] = types.Any
+				}
+			}
+			// Convert signature to ObjectType and use function signature type if no annotation, or check compatibility if annotation exists
+			initialFuncObjectType := types.NewFunctionType(initialFuncSignature)
+			if preliminaryType == nil {
+				preliminaryType = initialFuncObjectType
+			} else {
+				// TODO: Check if initialFuncObjectType is assignable to declaredType?
+				// For now, declaredType takes precedence if both exist.
+			}
+			funcLitInitializer.SetComputedType(initialFuncObjectType) // Set initial type on the initializer node
+			functionsToVisitBody = append(functionsToVisitBody, funcLitInitializer)
+			nodesProcessedPass2[funcLitInitializer] = true // Mark initializer node if it's a func lit
+			debugPrintf("// [Checker Pass 2] Added initializer func for '%s' to visit list\n", varName.Value)
+		}
+
+		// Fallback type if still nil
+		if preliminaryType == nil {
+			preliminaryType = types.Any // Or Undefined if no initializer? Let's use Any for now.
+		}
+
+		// Define variable in the environment.
+		// `var` allows re-declarations (JavaScript semantics); only `let`/`const` are errors.
+		if !globalEnv.Define(varName.Value, preliminaryType, isConst) {
+			if stmtType != "Var" {
+				c.addError(varName, fmt.Sprintf("identifier '%s' already declared", varName.Value))
+			} else {
+				// var re-declaration: update to the new type (widening allowed).
+				globalEnv.Update(varName.Value, preliminaryType)
+			}
+		} else {
+			debugPrintf("// [Checker Pass 2] Defined var '%s' with initial type: %s\n", varName.Value, preliminaryType.String())
+		}
+		// Set type on the Name node itself
+		varName.SetComputedType(preliminaryType)
+	}
+
+	return functionsToVisitBody
+}
+
+// varLikeDeclaratorParts extracts the legacy single-declarator fields
+// (Name/TypeAnnotation/Value) from a Let/Const/Var statement, along with its
+// statement-type label. These legacy fields only reflect the *first*
+// declarator (see VarStatement.Name/.Value etc.), matching the pre-existing
+// limitation of the Pass 5 initializer re-check this feeds.
+func varLikeDeclaratorParts(stmt parser.Statement) (*parser.Identifier, parser.Expression, parser.Expression, string) {
+	switch specificNode := stmt.(type) {
+	case *parser.LetStatement:
+		return specificNode.Name, specificNode.TypeAnnotation, specificNode.Value, "Let"
+	case *parser.ConstStatement:
+		return specificNode.Name, specificNode.TypeAnnotation, specificNode.Value, "Const"
+	case *parser.VarStatement:
+		return specificNode.Name, specificNode.TypeAnnotation, specificNode.Value, "Var"
+	default:
+		return nil, nil, nil, ""
+	}
+}
+
+// exportedVarLikeDeclarationParts is varLikeDeclaratorParts for an
+// ExportNamedDeclaration wrapping a Let/Const/Var statement. isVarLike is
+// false when the export wraps something else (a function, class, etc.),
+// telling the caller to fall back to the normal export-visiting path.
+func exportedVarLikeDeclarationParts(exportStmt *parser.ExportNamedDeclaration) (varName *parser.Identifier, typeAnnotation parser.Expression, initializer parser.Expression, isVarLike bool) {
+	if exportStmt.Declaration == nil {
+		return nil, nil, nil, false
+	}
+	var stmtType string
+	varName, typeAnnotation, initializer, stmtType = varLikeDeclaratorParts(exportStmt.Declaration)
+	return varName, typeAnnotation, initializer, stmtType != ""
+}
+
+// checkVarLikeInitializerAndRefine re-checks a top-level Let/Const/Var
+// declarator's initializer against the type registered for it in Pass 2 (an
+// annotation, or Any if none), then - when there was no annotation - refines
+// its environment type to the initializer's (widened) type. Used in Pass 5
+// for both bare top-level declarations and the ExportNamedDeclaration-
+// wrapped case.
+func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, typeAnnotation parser.Expression, initializer parser.Expression, globalEnv *Environment, flow *flowNarrowState) {
+	if initializer == nil {
+		// No initializer (or it was a FunctionLiteral, already fully handled
+		// in Pass 2/3) - nothing left to check.
+		return
+	}
+	debugPrintf("// [Checker Pass 5] Checking initializer for variable '%s'\n", varName.Value)
+
+	// Get the variable's type defined in Pass 2 to check if we have a type annotation
+	variableType, _, found := globalEnv.Resolve(varName.Value)
+	if !found { // Should not happen
+		debugPrintf("// [Checker Pass 5] ERROR: Variable '%s' not found in env during final check?\n", varName.Value)
+		return
+	}
+
+	// Use contextual typing if we have a type annotation (not Any)
+	if typeAnnotation != nil && variableType != types.Any {
+		debugPrintf("// [Checker Pass 5] Using contextual typing for '%s' with expected type: %s\n", varName.Value, variableType.String())
+		c.visitWithContext(initializer, &ContextualType{
+			ExpectedType: variableType,
+			IsContextual: true,
+		})
+	} else {
+		c.visit(initializer) // Regular visit if no type annotation
+	}
+
+	computedInitializerType := initializer.GetComputedType()
+	if computedInitializerType == nil {
+		computedInitializerType = types.Any
+	}
+
+	// Perform assignability check using the type from env (e.g., Any or annotation)
+	// Use expansion to handle mapped types
+	assignable := c.isAssignableWithExpansion(computedInitializerType, variableType)
+
+	// Handle special case for assigning [] (unknown[]) to T[]
+	isEmptyArrayAssignment := false
+	if _, isTargetArray := variableType.(*types.ArrayType); isTargetArray {
+		if sourceArray, isSourceArray := computedInitializerType.(*types.ArrayType); isSourceArray {
+			if sourceArray.ElementType == types.Unknown {
+				isEmptyArrayAssignment = true
+			}
+		}
+	}
+	// Allow assigning empty array even if assignable check fails due to unknown element type
+	if isEmptyArrayAssignment {
+		assignable = true
+	}
+
+	// Additional validation: Check index signature constraints
+	if assignable { // Only check index signatures if basic assignability passes
+		indexSigErrors := c.validateIndexSignatures(computedInitializerType, variableType)
+		for _, sigError := range indexSigErrors {
+			c.addError(initializer, fmt.Sprintf("Type '%s' is not assignable to type '%s' as required by index signature [%s: %s]",
+				sigError.PropertyType.String(), sigError.ExpectedType.String(),
+				sigError.KeyType.String(), sigError.ExpectedType.String()))
+		}
+		// If there are index signature errors, treat assignment as invalid
+		if len(indexSigErrors) > 0 {
+			assignable = false
+		}
+	}
+
+	if !assignable {
+		// Check if this is an enum assignment to use appropriate error format
+		if c.isEnumType(variableType) {
+			// For enum assignments, use widened source type and no variable name
+			sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, variableType)
+			c.addErrorWithCode(initializer, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
+		} else {
+			// For regular variable assignments, use literal types and include variable name
+			sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, variableType)
+			c.addErrorWithCode(initializer, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
+		}
+	}
+
+	// --- FIX: Refine variable type in environment if no annotation ---
+	if typeAnnotation == nil && found { // Check if ANNOTATION was nil
+		// Widen literal types before updating environment, unless it's empty array
+		var finalInferredType types.Type
+		if isEmptyArrayAssignment {
+			finalInferredType = computedInitializerType // Keep unknown[] type
+		} else if _, isBareLiteral := computedInitializerType.(*types.LiteralType); isBareLiteral && !isFreshLiteralExpression(initializer) {
+			// A bare literal type computed from something other than literal
+			// syntax (e.g. `a || "foo"` collapsing via subtype reduction) isn't
+			// fresh, so it doesn't widen — see isFreshLiteralExpression.
+			finalInferredType = computedInitializerType
+		} else {
+			finalInferredType = types.DeeplyWidenType(computedInitializerType) // Use the deep widen helper
+		}
+
+		// Update the environment only if the refined type is different from the current one
+		if variableType != finalInferredType {
+			debugPrintf("// [Checker Pass 5] Refining type for '%s' (no annotation). Old: %s, New: %s\n", varName.Value, variableType.String(), finalInferredType.String())
+			if !globalEnv.Update(varName.Value, finalInferredType) {
+				debugPrintf("// [Checker Pass 5] WARNING: Failed env update refinement for '%s'\n", varName.Value)
+			}
+			// Also update the type on the name node itself for consistency
+			varName.SetComputedType(finalInferredType)
+		} else {
+			debugPrintf("// [Checker Pass 5] Type for '%s' already refined to %s. No update needed.\n", varName.Value, variableType.String())
+		}
+
+		// See flow_narrowing.go: a widened literal keeps its
+		// exact narrow type for straight-line reads that follow.
+		flow.observeLetOrVar(varName.Value, variableType, computedInitializerType, finalInferredType != computedInitializerType)
+	}
+	// --- END FIX ---
+}
+
 // Check analyzes the given program AST for type errors.
 func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.program = program
@@ -899,86 +1140,28 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		case *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement:
 			// Process all declarations in the statement
-			var declarations []*parser.VarDeclarator
-			isConst := false
-			stmtType := ""
-
-			switch specificNode := node.(type) {
-			case *parser.LetStatement:
-				declarations = specificNode.Declarations
-				stmtType = "Let"
-			case *parser.ConstStatement:
-				declarations = specificNode.Declarations
-				isConst = true
-				stmtType = "Const"
-			case *parser.VarStatement:
-				declarations = specificNode.Declarations
-				stmtType = "Var"
-			}
-
-			for _, declarator := range declarations {
-				varName := declarator.Name
-				typeAnnotation := declarator.TypeAnnotation
-				initializer := declarator.Value
-
-				debugPrintf("// [Checker Pass 2] Processing %s: %s\n", stmtType, varName.Value)
-				c.checkDefiniteAssignmentAssertionInitializer(declarator)
-
-				var declaredType types.Type
-				if typeAnnotation != nil {
-					declaredType = c.resolveTypeAnnotation(typeAnnotation) // Use globalEnv implicitly
-				}
-
-				var preliminaryType types.Type = declaredType // Start with annotation type
-
-				// Check initializer specifically for FunctionLiteral
-				if funcLitInitializer, ok := initializer.(*parser.FunctionLiteral); ok {
-					debugPrintf("// [Checker Pass 2] Variable '%s' initialized with FunctionLiteral\n", varName.Value)
-					initialFuncSignature := c.resolveFunctionLiteralSignature(funcLitInitializer, globalEnv)
-					if initialFuncSignature == nil { // Handle resolution error
-						initialFuncSignature = &types.Signature{ // Default to Any signature on error
-							ParameterTypes: make([]types.Type, len(funcLitInitializer.Parameters)),
-							ReturnType:     types.Any,
-						}
-						for i := range initialFuncSignature.ParameterTypes {
-							initialFuncSignature.ParameterTypes[i] = types.Any
-						}
-					}
-					// Convert signature to ObjectType and use function signature type if no annotation, or check compatibility if annotation exists
-					initialFuncObjectType := types.NewFunctionType(initialFuncSignature)
-					if preliminaryType == nil {
-						preliminaryType = initialFuncObjectType
-					} else {
-						// TODO: Check if initialFuncObjectType is assignable to declaredType?
-						// For now, declaredType takes precedence if both exist.
-					}
-					funcLitInitializer.SetComputedType(initialFuncObjectType) // Set initial type on the initializer node
-					functionsToVisitBody = append(functionsToVisitBody, funcLitInitializer)
-					nodesProcessedPass2[funcLitInitializer] = true // Mark initializer node if it's a func lit
-					debugPrintf("// [Checker Pass 2] Added initializer func for '%s' to visit list\n", varName.Value)
-				}
-
-				// Fallback type if still nil
-				if preliminaryType == nil {
-					preliminaryType = types.Any // Or Undefined if no initializer? Let's use Any for now.
-				}
-
-				// Define variable in the environment.
-				// `var` allows re-declarations (JavaScript semantics); only `let`/`const` are errors.
-				if !globalEnv.Define(varName.Value, preliminaryType, isConst) {
-					if stmtType != "Var" {
-						c.addError(varName, fmt.Sprintf("identifier '%s' already declared", varName.Value))
-					} else {
-						// var re-declaration: update to the new type (widening allowed).
-						globalEnv.Update(varName.Value, preliminaryType)
-					}
-				} else {
-					debugPrintf("// [Checker Pass 2] Defined var '%s' with initial type: %s\n", varName.Value, preliminaryType.String())
-				}
-				// Set type on the Name node itself
-				varName.SetComputedType(preliminaryType)
-			}
+			declarations, stmtType, isConst := varLikeDeclarationParts(node)
+			functionsToVisitBody = append(functionsToVisitBody,
+				c.hoistVarLikeDeclarationsPass2(declarations, stmtType, isConst, globalEnv, nodesProcessedPass2)...)
 			nodesProcessedPass2[stmt] = true // Mark the Let/Const/Var statement itself
+
+		case *parser.ExportNamedDeclaration:
+			// Exported var/let/const declarations need the same forward-reference
+			// hoisting as bare ones (case above): a top-level function that
+			// forward-references `export var/let/const X` declared later in the
+			// file must see X's name here, in Pass 2, before Pass 3 checks
+			// function bodies - otherwise it's a spurious "Cannot find name" even
+			// though the identical, non-exported declaration works fine. Pass 5
+			// finishes the job (see the ExportNamedDeclaration handling there):
+			// it checks the initializer and registers the export.
+			if node.Declaration != nil {
+				declarations, stmtType, isConst := varLikeDeclarationParts(node.Declaration)
+				if stmtType != "" {
+					functionsToVisitBody = append(functionsToVisitBody,
+						c.hoistVarLikeDeclarationsPass2(declarations, stmtType, isConst, globalEnv, nodesProcessedPass2)...)
+					nodesProcessedPass2[stmt] = true
+				}
+			}
 
 		default:
 			// Skip other statement types (e.g., ExpressionStatement) in this pass
@@ -1331,6 +1514,26 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.env = globalEnv // Ensure global scope
 	flow := c.newFlowNarrowState()
 	for _, stmt := range program.Statements {
+		// An ExportNamedDeclaration wrapping a Let/Const/Var whose name was
+		// hoisted in Pass 2 (see the ExportNamedDeclaration case there) still
+		// needs its initializer checked and its export registered - but it
+		// must NOT be visited generically like other exports (the default
+		// case below, via checkExportNamedDeclaration): that re-runs
+		// Environment.Define for a name already defined in Pass 2, which
+		// fails and reports a bogus "already declared" error for let/const.
+		if exportStmt, ok := stmt.(*parser.ExportNamedDeclaration); ok && nodesProcessedPass2[stmt] {
+			varName, typeAnnotation, initializer, isVarLike := exportedVarLikeDeclarationParts(exportStmt)
+			if isVarLike {
+				if varName != nil {
+					c.checkVarLikeInitializerAndRefine(varName, typeAnnotation, initializer, globalEnv, flow)
+				} else {
+					flow.invalidateAll()
+				}
+				c.processExportDeclaration(exportStmt.Declaration)
+				continue
+			}
+		}
+
 		// Skip nodes processed in initial passes OR function literals visited in Pass 3
 		if nodesProcessedPass1[stmt] || nodesProcessedPass2[stmt] {
 			// Special check: If it's a Let/Const whose VALUE was a FunctionLiteral,
@@ -1366,125 +1569,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		switch node := stmt.(type) {
 		case *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement:
 			// This block now ONLY handles checking non-function initializers
-			var varName *parser.Identifier
-			var typeAnnotation parser.Expression // Added to check if annotation existed
-			var initializer parser.Expression
-			// isConst := false // Removed, not needed here
-
-			switch specificNode := node.(type) {
-			case *parser.LetStatement:
-				varName, typeAnnotation, initializer = specificNode.Name, specificNode.TypeAnnotation, specificNode.Value
-			case *parser.ConstStatement:
-				varName, typeAnnotation, initializer = specificNode.Name, specificNode.TypeAnnotation, specificNode.Value //; isConst = true
-			case *parser.VarStatement:
-				varName, typeAnnotation, initializer = specificNode.Name, specificNode.TypeAnnotation, specificNode.Value
-			}
-
-			if initializer != nil {
-				// Initializer exists and wasn't a function literal handled before
-				debugPrintf("// [Checker Pass 5] Checking initializer for variable '%s'\n", varName.Value)
-
-				// Get the variable's type defined in Pass 2 to check if we have a type annotation
-				variableType, _, found := globalEnv.Resolve(varName.Value)
-				if !found { // Should not happen
-					debugPrintf("// [Checker Pass 5] ERROR: Variable '%s' not found in env during final check?\n", varName.Value)
-					continue
-				}
-
-				// Use contextual typing if we have a type annotation (not Any)
-				if typeAnnotation != nil && variableType != types.Any {
-					debugPrintf("// [Checker Pass 5] Using contextual typing for '%s' with expected type: %s\n", varName.Value, variableType.String())
-					c.visitWithContext(initializer, &ContextualType{
-						ExpectedType: variableType,
-						IsContextual: true,
-					})
-				} else {
-					c.visit(initializer) // Regular visit if no type annotation
-				}
-
-				computedInitializerType := initializer.GetComputedType()
-				if computedInitializerType == nil {
-					computedInitializerType = types.Any
-				}
-
-				// Perform assignability check using the type from env (e.g., Any or annotation)
-				// Use expansion to handle mapped types
-				assignable := c.isAssignableWithExpansion(computedInitializerType, variableType)
-
-				// Handle special case for assigning [] (unknown[]) to T[]
-				isEmptyArrayAssignment := false
-				if _, isTargetArray := variableType.(*types.ArrayType); isTargetArray {
-					if sourceArray, isSourceArray := computedInitializerType.(*types.ArrayType); isSourceArray {
-						if sourceArray.ElementType == types.Unknown {
-							isEmptyArrayAssignment = true
-						}
-					}
-				}
-				// Allow assigning empty array even if assignable check fails due to unknown element type
-				if isEmptyArrayAssignment {
-					assignable = true
-				}
-
-				// Additional validation: Check index signature constraints
-				if assignable { // Only check index signatures if basic assignability passes
-					indexSigErrors := c.validateIndexSignatures(computedInitializerType, variableType)
-					for _, sigError := range indexSigErrors {
-						c.addError(initializer, fmt.Sprintf("Type '%s' is not assignable to type '%s' as required by index signature [%s: %s]",
-							sigError.PropertyType.String(), sigError.ExpectedType.String(),
-							sigError.KeyType.String(), sigError.ExpectedType.String()))
-					}
-					// If there are index signature errors, treat assignment as invalid
-					if len(indexSigErrors) > 0 {
-						assignable = false
-					}
-				}
-
-				if !assignable {
-					// Check if this is an enum assignment to use appropriate error format
-					if c.isEnumType(variableType) {
-						// For enum assignments, use widened source type and no variable name
-						sourceTypeStr, targetTypeStr := c.getEnumAssignmentErrorTypes(computedInitializerType, variableType)
-						c.addErrorWithCode(initializer, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
-					} else {
-						// For regular variable assignments, use literal types and include variable name
-						sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, variableType)
-						c.addErrorWithCode(initializer, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
-					}
-				}
-
-				// --- FIX: Refine variable type in environment if no annotation ---
-				if typeAnnotation == nil && found { // Check if ANNOTATION was nil
-					// Widen literal types before updating environment, unless it's empty array
-					var finalInferredType types.Type
-					if isEmptyArrayAssignment {
-						finalInferredType = computedInitializerType // Keep unknown[] type
-					} else if _, isBareLiteral := computedInitializerType.(*types.LiteralType); isBareLiteral && !isFreshLiteralExpression(initializer) {
-						// A bare literal type computed from something other than literal
-						// syntax (e.g. `a || "foo"` collapsing via subtype reduction) isn't
-						// fresh, so it doesn't widen — see isFreshLiteralExpression.
-						finalInferredType = computedInitializerType
-					} else {
-						finalInferredType = types.DeeplyWidenType(computedInitializerType) // Use the deep widen helper
-					}
-
-					// Update the environment only if the refined type is different from the current one
-					if variableType != finalInferredType {
-						debugPrintf("// [Checker Pass 5] Refining type for '%s' (no annotation). Old: %s, New: %s\n", varName.Value, variableType.String(), finalInferredType.String())
-						if !globalEnv.Update(varName.Value, finalInferredType) {
-							debugPrintf("// [Checker Pass 5] WARNING: Failed env update refinement for '%s'\n", varName.Value)
-						}
-						// Also update the type on the name node itself for consistency
-						varName.SetComputedType(finalInferredType)
-					} else {
-						debugPrintf("// [Checker Pass 5] Type for '%s' already refined to %s. No update needed.\n", varName.Value, variableType.String())
-					}
-
-					// See flow_narrowing.go: a widened literal keeps its
-					// exact narrow type for straight-line reads that follow.
-					flow.observeLetOrVar(varName.Value, variableType, computedInitializerType, finalInferredType != computedInitializerType)
-				}
-				// --- END FIX ---
-			}
+			varName, typeAnnotation, initializer, _ := varLikeDeclaratorParts(node)
+			c.checkVarLikeInitializerAndRefine(varName, typeAnnotation, initializer, globalEnv, flow)
 
 		case *parser.ExpressionStatement:
 			flow.observeExpressionStatement(c, node)
