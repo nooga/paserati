@@ -146,8 +146,19 @@ func (ra *RegisterAllocator) TryAlloc() (Register, bool) {
 // issue #239), but it can no longer escape compilation itself. Any other
 // panic value is re-raised unchanged, so genuine compiler bugs still fail
 // loudly rather than being laundered into a "compile error".
+//
+// contiguousCount is 0 for an ordinary single-register Alloc() failure, and
+// the requested block size for an AllocContiguous failure (used for a
+// function's parameter list, or a call/new expression's argument list -
+// anything that needs many registers at once rather than spread across many
+// statements). Compile's recover uses this to give a much more targeted
+// message than the old, unconditional "expression too deeply nested" - which
+// is actively misleading for a flat parameter or argument list and sent the
+// paserati#455 investigation looking for deep nesting/recursion for a while
+// before the real trigger (raw parameter/argument count) was found.
 type registerExhaustionPanic struct {
-	functionName string
+	functionName    string
+	contiguousCount int
 }
 
 // Alloc allocates the next available register.
@@ -242,7 +253,7 @@ func (ra *RegisterAllocator) AllocContiguous(count int) Register {
 
 	// Check if we have enough room
 	if int(firstReg)+count > registerLimit {
-		panic(registerExhaustionPanic{functionName: ra.functionName})
+		panic(registerExhaustionPanic{functionName: ra.functionName, contiguousCount: count})
 	}
 
 	// Allocate the block
