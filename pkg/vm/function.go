@@ -26,6 +26,21 @@ type FunctionObject struct {
 	HomeRealm            *Realm       // [[Realm]] - the realm where this function was created
 	NameBindingRegister  int          // For named function expressions: register to initialize with closure (-1 if not used)
 
+	// NumRegisterParams is how many of this function's parameters - named
+	// parameters, then the rest parameter if present, in that order - are
+	// bound to registers rather than spill slots (paserati#467). It counts
+	// the register-bound *prefix* of that sequence: parameter i (0-indexed
+	// over Arity named parameters, with the rest parameter counted as index
+	// Arity when Variadic) lives in register i if i < NumRegisterParams,
+	// otherwise in spillSlots[i-NumRegisterParams]. For every function whose
+	// parameters fit in registers - the overwhelming majority - this equals
+	// Arity (+1 if Variadic), so the "beyond NumRegisterParams" branch in
+	// bindPositionalParams (call.go) is unreachable and this field is purely
+	// bookkeeping. Set by NewFunction to that fully-register-bound default;
+	// only the compiler's parameter-binding code (which alone can decide a
+	// given parameter spilled) ever overrides it afterward.
+	NumRegisterParams int
+
 	// Deleted intrinsic property tracking - these are configurable:true so can be deleted
 	DeletedName   bool // True if the 'name' property has been deleted
 	DeletedLength bool // True if the 'length' property has been deleted
@@ -149,6 +164,14 @@ type VMCaller interface {
 }
 
 func NewFunction(arity, length, upvalueCount, registerSize int, variadic bool, name string, chunk *Chunk, isGenerator bool, isAsync bool, isArrowFunction bool, hasLocalCaptures bool) Value {
+	// Default to "every parameter (and the rest parameter, if any) is
+	// register-bound" - true unless the compiler's own parameter-binding
+	// code (the only place that can know a parameter spilled) overrides
+	// NumRegisterParams afterward. See paserati#467.
+	numRegisterParams := arity
+	if variadic {
+		numRegisterParams++
+	}
 	fnObj := &FunctionObject{
 		Arity:               arity,
 		Length:              length,
@@ -163,8 +186,21 @@ func NewFunction(arity, length, upvalueCount, registerSize int, variadic bool, n
 		HasLocalCaptures:    hasLocalCaptures,
 		NameBindingRegister: -1,  // Default: no name binding
 		Properties:          nil, // Start with nil - create lazily
+		NumRegisterParams:   numRegisterParams,
 	}
 	return Value{typ: TypeFunction, obj: unsafe.Pointer(fnObj)}
+}
+
+// NeedsParamSpillSlots reports whether calling fn requires the
+// paserati#467 spill-slot path - i.e. whether any of its named parameters,
+// or its rest parameter, live outside the register file. False (the fast,
+// common case) for every function whose parameters fit in registers.
+func (fn *FunctionObject) NeedsParamSpillSlots() bool {
+	total := fn.Arity
+	if fn.Variadic {
+		total++
+	}
+	return fn.NumRegisterParams < total
 }
 
 // GetOrCreatePrototype lazily creates and returns the function's prototype property

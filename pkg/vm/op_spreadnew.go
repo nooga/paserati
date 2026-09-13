@@ -20,42 +20,11 @@ import "fmt"
 //     array - the exact shape of a `super(...arguments)` pass-through
 //     constructor once the "arguments is not iterable" bug this issue is
 //     about stopped masking it.
-func populateSpreadCallRegisters(vmInstance *VM, calleeFunc *FunctionObject, spreadArgs []Value, registers []Value) {
-	argCount := len(spreadArgs)
-	maxArgsToCopy := argCount
-	if calleeFunc.Arity > maxArgsToCopy {
-		maxArgsToCopy = calleeFunc.Arity
-	}
-	if maxArgsToCopy > len(registers) {
-		maxArgsToCopy = len(registers)
-	}
-	for i := 0; i < maxArgsToCopy; i++ {
-		if i < argCount {
-			registers[i] = spreadArgs[i]
-		} else {
-			registers[i] = Undefined
-		}
-	}
-
-	if calleeFunc.Variadic {
-		extraArgCount := argCount - calleeFunc.Arity
-		var restArray Value
-		if extraArgCount <= 0 {
-			restArray = NewArray()
-		} else {
-			restArray = NewArray()
-			restArrayObj := restArray.AsArray()
-			for i := 0; i < extraArgCount; i++ {
-				argIndex := calleeFunc.Arity + i
-				if argIndex < len(spreadArgs) {
-					restArrayObj.Append(spreadArgs[argIndex])
-				}
-			}
-		}
-		if calleeFunc.Arity < len(registers) {
-			registers[calleeFunc.Arity] = restArray
-		}
-	}
+// paserati#467: delegates to bindPositionalParams (call.go) so a spread
+// constructor call binds any parameter beyond the callee's register-bound
+// prefix to a spill slot instead of silently truncating it.
+func populateSpreadCallRegisters(vmInstance *VM, calleeFunc *FunctionObject, spreadArgs []Value, registers []Value, spillSlots []Value) {
+	bindPositionalParams(calleeFunc, spreadArgs, registers, spillSlots)
 }
 
 // handleOpSpreadNew handles OpSpreadNew bytecode instruction for constructor calls with spread arguments
@@ -254,7 +223,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		// beyond argCount with Undefined and building a real rest-parameter
 		// array if the constructor is variadic - see populateSpreadCallRegisters
 		// (paserati#182).
-		populateSpreadCallRegisters(vm, constructorFunc, spreadArgs, newFrame.registers)
+		populateSpreadCallRegisters(vm, constructorFunc, spreadArgs, newFrame.registers, newFrame.spillSlots)
 		vm.frameCount++
 
 		// Store instance in caller's destination register
@@ -388,7 +357,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		// beyond argCount with Undefined and building a real rest-parameter
 		// array if the constructor is variadic - see populateSpreadCallRegisters
 		// (paserati#182).
-		populateSpreadCallRegisters(vm, constructorFunc, spreadArgs, newFrame.registers)
+		populateSpreadCallRegisters(vm, constructorFunc, spreadArgs, newFrame.registers, newFrame.spillSlots)
 		vm.frameCount++
 
 		// Store instance in caller's destination register

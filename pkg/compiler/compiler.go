@@ -2943,71 +2943,48 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 		functionCompiler.currentSymbolTable.Define(funcNameForLookup, nilRegister)
 	}
 
-	// 4. Define parameters in the function compiler's enclosed scope
+	// 4. Define parameters in the function compiler's enclosed scope:
+	// register-bound, or (paserati#467) spill-slot-bound once the register
+	// budget reserved for parameters is exhausted.
+	registerParamCount := 0
 	for _, param := range node.Parameters {
-		reg := functionCompiler.regAlloc.Alloc()
-		functionCompiler.currentSymbolTable.Define(param.Name.Value, reg)
-		// Pin the register since parameters can be captured by inner functions
-		functionCompiler.regAlloc.Pin(reg)
+		if _, usedRegister := functionCompiler.defineParamOrSpill(param.Name.Value); usedRegister {
+			registerParamCount++
+		}
 	}
 
-	// 4.5. Reserve the rest parameter's register (if present) right here,
+	// 4.5. Reserve the rest parameter's slot (if present) right here,
 	// before default-parameter compilation below gets a chance to allocate
 	// and free its own temporary registers - see
 	// compileFunctionLiteralWithOptions's step 2.4 for the full explanation
-	// of why this ordering matters (#443 investigation): the VM hard-codes
-	// the rest array's destination as register index `calleeFunc.Arity`,
-	// which is only correct if this is the very next register handed out
-	// after the named parameters above.
+	// of why this ordering matters (#443 investigation): when register-bound,
+	// the VM hard-codes the rest array's destination as register index
+	// `calleeFunc.Arity`, which is only correct if this is the very next
+	// register handed out after the named parameters above.
 	var restParamReg Register
+	var restParamSpillIdx uint16
+	var restParamIsSpilled bool
 	haveRestParam := node.RestParameter != nil
 	if haveRestParam {
-		restParamReg = functionCompiler.regAlloc.Alloc()
-		functionCompiler.regAlloc.Pin(restParamReg)
+		restParamReg, restParamSpillIdx, restParamIsSpilled = functionCompiler.reserveRestParamSlot()
+		if !restParamIsSpilled {
+			registerParamCount++
+		}
 	}
 
 	// 5. Handle default parameters
 	for _, param := range node.Parameters {
 		if param.DefaultValue != nil {
-			// Get the parameter's register
+			// Get the parameter's symbol (register- or, paserati#467,
+			// spill-slot-bound)
 			symbol, _, exists := functionCompiler.currentSymbolTable.Resolve(param.Name.Value)
 			if !exists {
 				// This should not happen if parameter definition worked correctly
 				functionCompiler.addError(param.Name, fmt.Sprintf("parameter %s not found in symbol table", param.Name.Value))
 				continue
 			}
-			paramReg := symbol.Register
-
-			// Create a temporary register to hold undefined for comparison
-			undefinedReg := functionCompiler.regAlloc.Alloc()
-			functionCompiler.emitLoadUndefined(undefinedReg, param.Token.Line)
-
-			// Create another temporary register for the comparison result
-			compareReg := functionCompiler.regAlloc.Alloc()
-			functionCompiler.emitStrictEqual(compareReg, paramReg, undefinedReg, param.Token.Line)
-
-			// Jump if the comparison is false (parameter is not undefined, so keep original value)
-			jumpIfDefinedPos := functionCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
-
-			// Free temporary registers
-			functionCompiler.regAlloc.Free(undefinedReg)
-			functionCompiler.regAlloc.Free(compareReg)
-
-			// Compile the default value expression
-			defaultValueReg := functionCompiler.regAlloc.Alloc()
-			_, err := functionCompiler.compileNode(param.DefaultValue, defaultValueReg)
-			if err != nil {
-				// Continue with compilation even if default value has errors
-				functionCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
-			} else {
-				// Move the default value to the parameter register
-				if defaultValueReg != paramReg {
-					functionCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
-				}
-			}
-
-			// Patch the jump to come here (end of default value assignment)
-			functionCompiler.patchJump(jumpIfDefinedPos)
+			// No TDZ tracking here (matches this loop's pre-existing behavior).
+			functionCompiler.emitParamDefault(symbol, param.DefaultValue, -1, param.Token.Line, param.DefaultValue, param.Name.Value)
 		}
 	}
 
@@ -3015,13 +2992,19 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 	// The register itself was already reserved at step 4.5, before default-
 	// value temp registers could get in its way.
 	if haveRestParam {
-		// Handle both simple rest parameters (...args) and destructured (...[x, y])
+		restParamName := "__rest__"
 		if node.RestParameter.Name != nil {
-			functionCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
-			debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
-		} else if node.RestParameter.Pattern != nil {
-			functionCompiler.currentSymbolTable.Define("__rest__", restParamReg)
-			debugPrintf("// [Compiler] Rest parameter (destructured) defined in R%d\n", restParamReg)
+			restParamName = node.RestParameter.Name.Value
+		}
+		// Handle both simple rest parameters (...args) and destructured (...[x, y])
+		if node.RestParameter.Name != nil || node.RestParameter.Pattern != nil {
+			if restParamIsSpilled {
+				functionCompiler.currentSymbolTable.DefineSpilled(restParamName, restParamSpillIdx)
+				debugPrintf("// [Compiler] Rest parameter '%s' defined in spill slot %d\n", restParamName, restParamSpillIdx)
+			} else {
+				functionCompiler.currentSymbolTable.Define(restParamName, restParamReg)
+				debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", restParamName, restParamReg)
+			}
 		}
 	}
 
@@ -3072,6 +3055,7 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 		}
 	}
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, false, false, false, functionCompiler.hasLocalCaptures) // isGenerator=false, isAsync=false, isArrowFunction=false
+	funcValue.AsFunction().NumRegisterParams = registerParamCount                                                                                                                        // paserati#467
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	return constIdx, freeSymbols, nil

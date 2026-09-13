@@ -4214,7 +4214,13 @@ startExecution:
 				// - Generators need special return handling (generator objects)
 				// - Async functions need Promise wrapping which is done in prepareCall
 				// Native functions are TypeNativeFunction, not TypeClosure, so they're already excluded
-				if !calleeFunc.IsGenerator && !calleeFunc.IsAsync {
+				// A callee with spilled parameters (paserati#467) falls back
+				// to prepareCall too: this inline path's own arg-copy below
+				// is a fixed, non-shared duplicate of the pre-#467 register-
+				// only logic and was deliberately left that way rather than
+				// taught to spill (see bindPositionalParams, call.go) -
+				// prepareCall already handles it correctly.
+				if !calleeFunc.IsGenerator && !calleeFunc.IsAsync && !calleeFunc.NeedsParamSpillSlots() {
 					canPerformTCO = true
 				}
 			} else if calleeVal.Type() == TypeFunction {
@@ -4224,7 +4230,7 @@ startExecution:
 				// - Generators need special return handling (generator objects)
 				// - Async functions need Promise wrapping which is done in prepareCall
 				// Native functions are TypeNativeFunction, not TypeFunction, so they're already excluded
-				if !funcToCall.IsGenerator && !funcToCall.IsAsync {
+				if !funcToCall.IsGenerator && !funcToCall.IsAsync && !funcToCall.NeedsParamSpillSlots() {
 					calleeClosure = &ClosureObject{
 						Fn:       funcToCall,
 						Upvalues: []*Upvalue{},
@@ -4457,7 +4463,9 @@ startExecution:
 				// - Generators need special return handling (generator objects)
 				// - Async functions need Promise wrapping which is done in prepareCall
 				// Native functions are TypeNativeFunction, not TypeClosure, so they're already excluded
-				if !calleeFunc.IsGenerator && !calleeFunc.IsAsync {
+				// A callee with spilled parameters (paserati#467) falls back
+				// to prepareCall too - see the matching comment on OpTailCall.
+				if !calleeFunc.IsGenerator && !calleeFunc.IsAsync && !calleeFunc.NeedsParamSpillSlots() {
 					canPerformTCO = true
 				}
 			} else if calleeVal.Type() == TypeFunction {
@@ -4467,7 +4475,7 @@ startExecution:
 				// - Generators need special return handling (generator objects)
 				// - Async functions need Promise wrapping which is done in prepareCall
 				// Native functions are TypeNativeFunction, not TypeFunction, so they're already excluded
-				if !funcToCall.IsGenerator && !funcToCall.IsAsync {
+				if !funcToCall.IsGenerator && !funcToCall.IsAsync && !funcToCall.NeedsParamSpillSlots() {
 					calleeClosure = &ClosureObject{
 						Fn:       funcToCall,
 						Upvalues: []*Upvalue{},
@@ -12137,47 +12145,14 @@ startExecution:
 					newFrame.spillSlots = nil
 				}
 
-				// Copy fixed arguments and handle rest parameters
-
-				// Copy fixed arguments (up to Arity)
-				for i := 0; i < constructorFunc.Arity; i++ {
-					if i < len(newFrame.registers) {
-						if i < argCount && argStartRegInCaller+i < len(callerRegisters) {
-							newFrame.registers[i] = callerRegisters[argStartRegInCaller+i]
-						} else {
-							newFrame.registers[i] = Undefined
-						}
-					} else {
-						vm.regDir.popTo(newFrame.regSlotBeforePush)
-						frame.ip = callerIP
-						status := vm.runtimeError("Internal Error: Argument register index out of bounds during constructor call setup.")
-						return status, Undefined
-					}
-				}
-
-				// Handle rest parameters for variadic constructors
-				if constructorFunc.Variadic {
-					extraArgCount := argCount - constructorFunc.Arity
-					var restArray Value
-
-					if extraArgCount == 0 {
-						restArray = NewArray()
-					} else {
-						restArray = NewArray()
-						restArrayObj := restArray.AsArray()
-						for i := 0; i < extraArgCount; i++ {
-							argIndex := constructorFunc.Arity + i
-							if argIndex < argCount && argStartRegInCaller+argIndex < len(callerRegisters) {
-								restArrayObj.Append(callerRegisters[argStartRegInCaller+argIndex])
-							}
-						}
-					}
-
-					// Store rest array at the appropriate position
-					if constructorFunc.Arity < len(newFrame.registers) {
-						newFrame.registers[constructorFunc.Arity] = restArray
-					}
-				}
+				// Copy fixed arguments to registers/spill slots and handle rest
+				// parameters (paserati#467: bindPositionalParams, call.go,
+				// handles a constructor whose parameters overflowed into
+				// spill slots exactly like an ordinary call would).
+				// newFrame.args (set above) is the same argCount-length view
+				// of the caller's contiguous argument registers this loop
+				// used to read positionally.
+				bindPositionalParams(constructorFunc, newFrame.args, newFrame.registers, newFrame.spillSlots)
 
 				vm.frameCount++
 
@@ -12392,47 +12367,12 @@ startExecution:
 					newFrame.spillSlots = nil
 				}
 
-				// Copy fixed arguments and handle rest parameters
-
-				// Copy fixed arguments (up to Arity)
-				for i := 0; i < constructorFunc.Arity; i++ {
-					if i < len(newFrame.registers) {
-						if i < argCount && argStartRegInCaller+i < len(callerRegisters) {
-							newFrame.registers[i] = callerRegisters[argStartRegInCaller+i]
-						} else {
-							newFrame.registers[i] = Undefined
-						}
-					} else {
-						vm.regDir.popTo(newFrame.regSlotBeforePush)
-						frame.ip = callerIP
-						status := vm.runtimeError("Internal Error: Argument register index out of bounds during constructor call setup.")
-						return status, Undefined
-					}
-				}
-
-				// Handle rest parameters for variadic constructors
-				if constructorFunc.Variadic {
-					extraArgCount := argCount - constructorFunc.Arity
-					var restArray Value
-
-					if extraArgCount == 0 {
-						restArray = NewArray()
-					} else {
-						restArray = NewArray()
-						restArrayObj := restArray.AsArray()
-						for i := 0; i < extraArgCount; i++ {
-							argIndex := constructorFunc.Arity + i
-							if argIndex < argCount && argStartRegInCaller+argIndex < len(callerRegisters) {
-								restArrayObj.Append(callerRegisters[argStartRegInCaller+argIndex])
-							}
-						}
-					}
-
-					// Store rest array at the appropriate position
-					if constructorFunc.Arity < len(newFrame.registers) {
-						newFrame.registers[constructorFunc.Arity] = restArray
-					}
-				}
+				// Copy fixed arguments to registers/spill slots and handle rest
+				// parameters (paserati#467: bindPositionalParams, call.go).
+				// newFrame.args (set above) is the same argCount-length view
+				// of the caller's contiguous argument registers this loop
+				// used to read positionally.
+				bindPositionalParams(constructorFunc, newFrame.args, newFrame.registers, newFrame.spillSlots)
 
 				vm.frameCount++
 
@@ -12892,33 +12832,33 @@ startExecution:
 					newFrame.regSlotBeforePush = pushMark    // B4 invariant: record window start for checkRegWindowRelease
 					newFrame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 
-					// Copy combined args to registers
-					for i := 0; i < len(newFrame.registers); i++ {
-						if i < finalArgCount {
-							newFrame.registers[i] = finalArgs[i]
-						} else {
-							newFrame.registers[i] = Undefined
-						}
+					// Allocate spill slots if this function needs them (for
+					// register overflow - local variables, or, paserati#467,
+					// parameters). Every other frame-setup site does this;
+					// this one didn't, which meant a spill-slot-using
+					// constructor called through a bound function
+					// (`new (Ctor.bind(...))()`) got whatever stale
+					// spillSlots slice happened to be sitting in this
+					// vm.frames[N] slot from its last occupant instead of a
+					// fresh one sized for this function.
+					if constructorFunc.Chunk.NumSpillSlots > 0 {
+						newFrame.spillSlots = make([]Value, constructorFunc.Chunk.NumSpillSlots)
+					} else {
+						newFrame.spillSlots = nil
 					}
 
-					// Handle rest parameters for variadic constructors
-					if constructorFunc.Variadic && constructorFunc.Arity < len(newFrame.registers) {
-						extraArgCount := finalArgCount - constructorFunc.Arity
-						var restArray Value
-						if extraArgCount <= 0 {
-							restArray = NewArray()
-						} else {
-							restArray = NewArray()
-							restArrayObj := restArray.AsArray()
-							for i := 0; i < extraArgCount; i++ {
-								argIndex := constructorFunc.Arity + i
-								if argIndex < finalArgCount {
-									restArrayObj.Append(finalArgs[argIndex])
-								}
-							}
-						}
-						newFrame.registers[constructorFunc.Arity] = restArray
+					// Zero out all registers first (mirrors the old
+					// full-window loop this replaces) - register-stack space
+					// is reused across frames, not zeroed per call, and
+					// bindPositionalParams below only ever touches indices
+					// belonging to a named/rest parameter.
+					for i := range newFrame.registers {
+						newFrame.registers[i] = Undefined
 					}
+					// Copy combined args to registers/spill slots and handle
+					// rest parameters (paserati#467: bindPositionalParams,
+					// call.go).
+					bindPositionalParams(constructorFunc, finalArgs, newFrame.registers, newFrame.spillSlots)
 
 					vm.frameCount++
 					callerRegisters[destReg] = newInstance

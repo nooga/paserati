@@ -47,6 +47,11 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	// 2. Define parameters in the function's symbol table
 	// Track seen parameter names for duplicate detection in strict mode
 	seenArrowParams := make(map[string]bool)
+	// registerParamCount tracks how many of (named params, then rest param)
+	// ended up register-bound, in order - see FunctionObject.NumRegisterParams
+	// (paserati#467). Equals len(node.Parameters)+1(if rest) unless spilling
+	// was needed.
+	registerParamCount := 0
 
 	for _, p := range node.Parameters {
 		// Strict mode validation: cannot use 'eval' or 'arguments' as parameter names
@@ -68,28 +73,37 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			seenArrowParams[p.Name.Value] = true
 		}
 
-		reg := funcCompiler.regAlloc.Alloc()
 		// --- FIX: Access Name field ---
-		funcCompiler.currentSymbolTable.Define(p.Name.Value, reg)
-		// Pin the register since parameters can be captured by inner functions
-		funcCompiler.regAlloc.Pin(reg)
+		// Bind to a register, or (paserati#467) a spill slot once the
+		// register budget reserved for parameters is exhausted.
+		_, usedRegister := funcCompiler.defineParamOrSpill(p.Name.Value)
+		if usedRegister {
+			registerParamCount++
+		}
 	}
 
-	// 2.4. Reserve the rest parameter's register (if present) right here,
+	// 2.4. Reserve the rest parameter's slot (if present) right here,
 	// before default-parameter compilation below gets a chance to allocate
-	// and free its own temporary registers. The VM hard-codes the rest
-	// array's destination as register index `calleeFunc.Arity` (the count
-	// of named parameters) rather than looking up wherever the compiler
-	// happened to put it - see the matching comment on
-	// compileFunctionLiteralWithOptions's own step 2.4 for the full
-	// explanation (#443 investigation). That is only correct if this is
-	// the very next register handed out after the named parameters above,
-	// with nothing freed in between for the allocator to recycle instead.
+	// and free its own temporary registers. When register-bound, the VM
+	// hard-codes the rest array's destination as register index
+	// `calleeFunc.Arity` (the count of named parameters) rather than
+	// looking up wherever the compiler happened to put it - see the
+	// matching comment on compileFunctionLiteralWithOptions's own step 2.4
+	// for the full explanation (#443 investigation). That is only correct
+	// if this is the very next register handed out after the named
+	// parameters above, with nothing freed in between for the allocator to
+	// recycle instead. A spilled rest parameter has no such positional
+	// requirement (see bindPositionalParams, call.go), but is reserved here
+	// too for symmetry and so registerParamCount stays accurate.
 	var restParamReg Register
+	var restParamSpillIdx uint16
+	var restParamIsSpilled bool
 	haveRestParam := node.RestParameter != nil
 	if haveRestParam {
-		restParamReg = funcCompiler.regAlloc.Alloc()
-		funcCompiler.regAlloc.Pin(restParamReg) // Pin since it can be captured
+		restParamReg, restParamSpillIdx, restParamIsSpilled = funcCompiler.reserveRestParamSlot()
+		if !restParamIsSpilled {
+			registerParamCount++
+		}
 	}
 
 	// 3. Handle default parameters
@@ -101,48 +115,16 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 
 	for paramIdx, param := range node.Parameters {
 		if param.DefaultValue != nil {
-			// Get the parameter's register
+			// Get the parameter's symbol (register- or, paserati#467,
+			// spill-slot-bound)
 			symbol, _, exists := funcCompiler.currentSymbolTable.Resolve(param.Name.Value)
 			if !exists {
 				// This should not happen if parameter definition worked correctly
 				funcCompiler.addError(param.Name, fmt.Sprintf("parameter %s not found in symbol table", param.Name.Value))
 				continue
 			}
-			paramReg := symbol.Register
-
-			// Create temporary registers for comparison
-			undefinedReg := funcCompiler.regAlloc.Alloc()
-			defer funcCompiler.regAlloc.Free(undefinedReg)
-			funcCompiler.emitLoadUndefined(undefinedReg, param.Token.Line)
-
-			compareReg := funcCompiler.regAlloc.Alloc()
-			defer funcCompiler.regAlloc.Free(compareReg)
-			funcCompiler.emitStrictEqual(compareReg, paramReg, undefinedReg, param.Token.Line)
-
-			// Jump if the comparison is false (parameter is not undefined, so keep original value)
-			jumpIfDefinedPos := funcCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
-
-			// Compile the default value expression
 			// Set TDZ tracking: parameters at index >= paramIdx are in TDZ
-			defaultValueReg := funcCompiler.regAlloc.Alloc()
-			funcCompiler.currentDefaultParamIndex = paramIdx
-			funcCompiler.inDefaultParamScope = true
-			_, err := funcCompiler.compileNode(param.DefaultValue, defaultValueReg)
-			funcCompiler.inDefaultParamScope = false
-			funcCompiler.currentDefaultParamIndex = -1
-			if err != nil {
-				// Continue with compilation even if default value has errors
-				funcCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
-			} else {
-				// Move the default value to the parameter register
-				if defaultValueReg != paramReg {
-					funcCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
-				}
-			}
-			funcCompiler.regAlloc.Free(defaultValueReg)
-
-			// Patch the jump to come here (end of default value assignment)
-			funcCompiler.patchJump(jumpIfDefinedPos)
+			funcCompiler.emitParamDefault(symbol, param.DefaultValue, paramIdx, param.Token.Line, param.DefaultValue, param.Name.Value)
 		}
 	}
 
@@ -150,14 +132,19 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	// The register itself was already reserved at step 2.4, before default-
 	// value temp registers could get in its way.
 	if haveRestParam {
-		// Handle both simple rest parameters (...args) and destructured (...[x, y])
+		restParamName := "__rest__"
 		if node.RestParameter.Name != nil {
-			funcCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
-			debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
-		} else if node.RestParameter.Pattern != nil {
-			// For destructured rest parameters, we'll define a temporary and handle destructuring
-			funcCompiler.currentSymbolTable.Define("__rest__", restParamReg)
-			debugPrintf("// [Compiler] Rest parameter (destructured) defined in R%d\n", restParamReg)
+			restParamName = node.RestParameter.Name.Value
+		}
+		// Handle both simple rest parameters (...args) and destructured (...[x, y])
+		if node.RestParameter.Name != nil || node.RestParameter.Pattern != nil {
+			if restParamIsSpilled {
+				funcCompiler.currentSymbolTable.DefineSpilled(restParamName, restParamSpillIdx)
+				debugPrintf("// [Compiler] Rest parameter '%s' defined in spill slot %d\n", restParamName, restParamSpillIdx)
+			} else {
+				funcCompiler.currentSymbolTable.Define(restParamName, restParamReg)
+				debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", restParamName, restParamReg)
+			}
 		}
 	}
 
@@ -242,6 +229,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	arrowName := ""                                                                                                                                                                           // Arrow functions have empty name by default (per ECMAScript spec)
 	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot)                                                                                                                             // Set spill slots needed
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, arrowName, functionChunk, false, node.IsAsync, true, funcCompiler.hasLocalCaptures) // isArrowFunction = true
+	funcValue.AsFunction().NumRegisterParams = registerParamCount                                                                                                                            // paserati#467: how many of Arity(+rest) landed in registers vs spill slots
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	// 8. Emit OpClosure in the *enclosing* compiler (c) - result goes to hint register
@@ -344,25 +332,32 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	funcCompiler.isIndirectEval = c.isIndirectEval
 	funcCompiler.newTargetAvailable = c.newTargetAvailable
 
-	// Define parameters
+	// Define parameters: register-bound, or (paserati#467) spill-slot-bound
+	// once the register budget reserved for parameters is exhausted.
+	registerParamCount := 0
 	for _, p := range node.Parameters {
-		reg := funcCompiler.regAlloc.Alloc()
-		funcCompiler.currentSymbolTable.Define(p.Name.Value, reg)
-		funcCompiler.regAlloc.Pin(reg)
+		if _, usedRegister := funcCompiler.defineParamOrSpill(p.Name.Value); usedRegister {
+			registerParamCount++
+		}
 	}
 
-	// Reserve the rest parameter's register (if present) right here, before
+	// Reserve the rest parameter's slot (if present) right here, before
 	// default-parameter compilation below gets a chance to allocate and
 	// free its own temporary registers - see compileFunctionLiteralWithOptions's
 	// step 2.4 for the full explanation of why this ordering matters (#443
-	// investigation): the VM hard-codes the rest array's destination as
-	// register index `calleeFunc.Arity`, which is only correct if this is
-	// the very next register handed out after the named parameters above.
+	// investigation): when register-bound, the VM hard-codes the rest
+	// array's destination as register index `calleeFunc.Arity`, which is
+	// only correct if this is the very next register handed out after the
+	// named parameters above.
 	var restParamReg Register
+	var restParamSpillIdx uint16
+	var restParamIsSpilled bool
 	haveRestParam := node.RestParameter != nil
 	if haveRestParam {
-		restParamReg = funcCompiler.regAlloc.Alloc()
-		funcCompiler.regAlloc.Pin(restParamReg)
+		restParamReg, restParamSpillIdx, restParamIsSpilled = funcCompiler.reserveRestParamSlot()
+		if !restParamIsSpilled {
+			registerParamCount++
+		}
 	}
 
 	// Handle default parameters (same as original)
@@ -379,45 +374,25 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 				funcCompiler.addError(param.Name, fmt.Sprintf("parameter %s not found in symbol table", param.Name.Value))
 				continue
 			}
-			paramReg := symbol.Register
-
-			undefinedReg := funcCompiler.regAlloc.Alloc()
-			defer funcCompiler.regAlloc.Free(undefinedReg)
-			funcCompiler.emitLoadUndefined(undefinedReg, param.Token.Line)
-
-			compareReg := funcCompiler.regAlloc.Alloc()
-			defer funcCompiler.regAlloc.Free(compareReg)
-			funcCompiler.emitStrictEqual(compareReg, paramReg, undefinedReg, param.Token.Line)
-
-			jumpIfDefinedPos := funcCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
-
 			// Set TDZ tracking: parameters at index >= paramIdx are in TDZ
-			defaultValueReg := funcCompiler.regAlloc.Alloc()
-			funcCompiler.currentDefaultParamIndex = paramIdx
-			funcCompiler.inDefaultParamScope = true
-			_, err := funcCompiler.compileNode(param.DefaultValue, defaultValueReg)
-			funcCompiler.inDefaultParamScope = false
-			funcCompiler.currentDefaultParamIndex = -1
-			if err != nil {
-				funcCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
-			} else {
-				if defaultValueReg != paramReg {
-					funcCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
-				}
-			}
-			funcCompiler.regAlloc.Free(defaultValueReg)
-			funcCompiler.patchJump(jumpIfDefinedPos)
+			funcCompiler.emitParamDefault(symbol, param.DefaultValue, paramIdx, param.Token.Line, param.DefaultValue, param.Name.Value)
 		}
 	}
 
 	// Handle rest parameter (same as original)
-	// The register itself was already reserved above, before default-value
+	// The slot itself was already reserved above, before default-value
 	// temp registers could get in its way.
 	if haveRestParam {
+		restParamName := "__rest__"
 		if node.RestParameter.Name != nil {
-			funcCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
-		} else if node.RestParameter.Pattern != nil {
-			funcCompiler.currentSymbolTable.Define("__rest__", restParamReg)
+			restParamName = node.RestParameter.Name.Value
+		}
+		if node.RestParameter.Name != nil || node.RestParameter.Pattern != nil {
+			if restParamIsSpilled {
+				funcCompiler.currentSymbolTable.DefineSpilled(restParamName, restParamSpillIdx)
+			} else {
+				funcCompiler.currentSymbolTable.Define(restParamName, restParamReg)
+			}
 		}
 		// Rest parameter collection is handled at runtime during function call
 	}
@@ -487,6 +462,7 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	}
 
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, nameHint, functionChunk, false, node.IsAsync, true, funcCompiler.hasLocalCaptures)
+	funcValue.AsFunction().NumRegisterParams = registerParamCount // paserati#467
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	return constIdx, freeSymbols, nil
@@ -1324,6 +1300,12 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	// 2. Define parameters in the function compiler's *enclosed* scope
 	// Track seen parameter names for duplicate detection in strict mode
 	seenParams := make(map[string]bool)
+	// registerParamCount tracks how many of (named params, then rest param)
+	// ended up register-bound, in order - see FunctionObject.NumRegisterParams
+	// (paserati#467). Equals the full parameter count unless spilling was
+	// needed. Destructuring parameters (step 3.5 below) aren't counted here
+	// and remain register-only for now - see that step's own comment.
+	registerParamCount := 0
 
 	for _, param := range node.Parameters {
 		// Skip 'this' parameters - they don't have names and don't get compiled as regular parameters
@@ -1364,13 +1346,15 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 			seenParams[param.Name.Value] = true
 		}
 
-		reg := functionCompiler.regAlloc.Alloc()
-		functionCompiler.currentSymbolTable.Define(param.Name.Value, reg)
+		// Bind to a register, or (paserati#467) a spill slot once the
+		// register budget reserved for parameters is exhausted.
+		_, usedRegister := functionCompiler.defineParamOrSpill(param.Name.Value)
+		if usedRegister {
+			registerParamCount++
+		}
 		// Track parameter names for var hoisting (var x; should not reset parameter x)
 		functionCompiler.parameterNames[param.Name.Value] = true
-		// Pin the register since parameters can be captured by inner functions
-		functionCompiler.regAlloc.Pin(reg)
-		debugPrintf("// [Compiling Function Literal] %s: Parameter %s defined in R%d\n", determinedFuncName, param.Name.Value, reg)
+		debugPrintf("// [Compiling Function Literal] %s: Parameter %s defined (register=%v)\n", determinedFuncName, param.Name.Value, usedRegister)
 	}
 
 	// 2.4. Reserve the rest parameter's register, if present, right here -
@@ -1397,11 +1381,30 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	// hits this too, no destructuring required - reading false for an
 	// array that was actually passed (#443 investigation).
 	var restParamReg Register
+	var restParamSpillIdx uint16
+	var restParamIsSpilled bool
 	var restParamPattern parser.Expression // Save pattern for later destructuring
 	haveRestParam := node.RestParameter != nil
 	if haveRestParam {
-		restParamReg = functionCompiler.regAlloc.Alloc()
-		functionCompiler.regAlloc.Pin(restParamReg) // Pin since it can be captured
+		if node.RestParameter.Pattern != nil {
+			// A destructured rest parameter (`...[x, y]` / `...{a, b}`) is
+			// destructured below (step 4.6) by compileNestedArrayParameter
+			// Pattern/compileNestedObjectParameterPattern, which read
+			// straight out of restParamReg as a register - they have no
+			// spill-slot-aware counterpart yet, so this case stays
+			// register-only (paserati#467 leaves it, like other
+			// destructuring parameters, as a documented gap: it still fails
+			// as a clean register-exhaustion compile error rather than
+			// miscompiling).
+			restParamReg = functionCompiler.regAlloc.Alloc()
+			functionCompiler.regAlloc.Pin(restParamReg)
+			registerParamCount++
+		} else {
+			restParamReg, restParamSpillIdx, restParamIsSpilled = functionCompiler.reserveRestParamSlot()
+			if !restParamIsSpilled {
+				registerParamCount++
+			}
+		}
 	}
 
 	// 2.5. Handle named function expression binding
@@ -1472,7 +1475,8 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 				paramIdx++
 				continue
 			}
-			// Get the parameter's register
+			// Get the parameter's symbol (register- or, paserati#467,
+			// spill-slot-bound)
 			symbol, _, exists := functionCompiler.currentSymbolTable.Resolve(param.Name.Value)
 			if !exists {
 				// This should not happen if parameter definition worked correctly
@@ -1480,54 +1484,8 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 				paramIdx++
 				continue
 			}
-			paramReg := symbol.Register
-
-			// Create a temporary register to hold undefined for comparison
-			undefinedReg := functionCompiler.regAlloc.Alloc()
-			functionCompiler.emitLoadUndefined(undefinedReg, param.Token.Line)
-
-			// Create another temporary register for the comparison result
-			compareReg := functionCompiler.regAlloc.Alloc()
-			functionCompiler.emitStrictEqual(compareReg, paramReg, undefinedReg, param.Token.Line)
-
-			// Jump if the comparison is false (parameter is not undefined, so keep original value)
-			jumpIfDefinedPos := functionCompiler.emitPlaceholderJump(vm.OpJumpIfFalse, compareReg, param.Token.Line)
-
-			// Free temporary registers
-			functionCompiler.regAlloc.Free(undefinedReg)
-			functionCompiler.regAlloc.Free(compareReg)
-
-			// Compile the default value expression
 			// Set TDZ tracking: parameters at index >= paramIdx are in TDZ
-			defaultValueReg := functionCompiler.regAlloc.Alloc()
-			var beforeMaxReg Register
-			if debugRegAlloc {
-				beforeMaxReg = functionCompiler.regAlloc.maxReg
-				fmt.Printf("// [PARAM_DEBUG] Before compileNode for param %s: maxReg=%d\\n", param.Name.Value, beforeMaxReg)
-			}
-			functionCompiler.currentDefaultParamIndex = paramIdx
-			functionCompiler.inDefaultParamScope = true
-			_, err := functionCompiler.compileNode(param.DefaultValue, defaultValueReg)
-			functionCompiler.inDefaultParamScope = false
-			functionCompiler.currentDefaultParamIndex = -1
-			if debugRegAlloc {
-				afterMaxReg := functionCompiler.regAlloc.maxReg
-				fmt.Printf("// [PARAM_DEBUG] After compileNode for param %s: maxReg was %d, now %d\\n", param.Name.Value, beforeMaxReg, afterMaxReg)
-			}
-			if err != nil {
-				// Continue with compilation even if default value has errors
-				functionCompiler.addError(param.DefaultValue, fmt.Sprintf("error compiling default value for parameter %s", param.Name.Value))
-			} else {
-				// Move the default value to the parameter register
-				if defaultValueReg != paramReg {
-					functionCompiler.emitMove(paramReg, defaultValueReg, param.Token.Line)
-					// Free the temporary default value register after moving
-					functionCompiler.regAlloc.Free(defaultValueReg)
-				}
-			}
-
-			// Patch the jump to come here (end of default value assignment)
-			functionCompiler.patchJump(jumpIfDefinedPos)
+			functionCompiler.emitParamDefault(symbol, param.DefaultValue, paramIdx, param.Token.Line, param.DefaultValue, param.Name.Value)
 		}
 		paramIdx++ // Increment for all non-skipped parameters
 	}
@@ -1545,9 +1503,13 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 			continue
 		}
 
-		// Allocate a register for this destructuring parameter
+		// Allocate a register for this destructuring parameter (always
+		// register-bound, never spilled - see the comment on this loop's
+		// declaration-order/positional assumptions; paserati#467 leaves this
+		// path as-is).
 		// The VM will place the argument value in this register during function call
 		paramReg := functionCompiler.regAlloc.Alloc()
+		registerParamCount++
 		debugPrintf("// [Compiler] Destructuring parameter %d allocated R%d\n", i, paramReg)
 
 		// Handle default value for destructuring parameter
@@ -1623,10 +1585,15 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 		// Check if it's a simple identifier or destructuring pattern
 		if node.RestParameter.Name != nil {
 			// Simple rest parameter like ...args
-			functionCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+			if restParamIsSpilled {
+				functionCompiler.currentSymbolTable.DefineSpilled(node.RestParameter.Name.Value, restParamSpillIdx)
+				debugPrintf("// [Compiler] Rest parameter '%s' defined in spill slot %d\n", node.RestParameter.Name.Value, restParamSpillIdx)
+			} else {
+				functionCompiler.currentSymbolTable.Define(node.RestParameter.Name.Value, restParamReg)
+				debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
+			}
 			// Track rest parameter name for var hoisting
 			functionCompiler.parameterNames[node.RestParameter.Name.Value] = true
-			debugPrintf("// [Compiler] Rest parameter '%s' defined in R%d\n", node.RestParameter.Name.Value, restParamReg)
 		} else if node.RestParameter.Pattern != nil {
 			// Destructuring rest parameter like ...[x, y] or ...{a, b}
 			// Save the pattern for generating destructuring code after function prologue
@@ -1932,6 +1899,7 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	}
 	functionChunk.HasSimpleParameterList = hasSimpleParams
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, node.IsGenerator, node.IsAsync, false, functionCompiler.hasLocalCaptures) // isArrowFunction = false for regular functions
+	funcValue.AsFunction().NumRegisterParams = registerParamCount                                                                                                                                          // paserati#467
 
 	// Set the name binding register if this is a named function expression
 	if needsInnerNameBinding {

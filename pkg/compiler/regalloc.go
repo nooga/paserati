@@ -41,6 +41,73 @@ const registerLimit = 255
 // Temporaries can still use registers 200-254 for intermediate calculations.
 const VariableRegisterThreshold Register = 200
 
+// ParamRegisterThreshold is the register index above which a function's
+// remaining named parameters (and its rest parameter, if any) are bound to
+// spill slots instead of registers - see paserati#467, the callee-side
+// counterpart to paserati#461's caller-side argument-overflow fix.
+//
+// It deliberately equals VariableRegisterThreshold rather than pushing all
+// the way to registerLimit (255): a parameter is, from the body's point of
+// view, just a pre-initialized local variable, and the two compete for the
+// exact same register file. Reusing the higher, 255-adjacent ceiling
+// paserati#459 established (functions binding every register through 253
+// to parameters, with none left over) works fine for a bare parameter list
+// with a trivial body, but leaves only the couple of registers above 253
+// for everything the body itself needs - its own locals, its expression
+// temporaries, bodyReg, spillTempReg. A function with, say, 300 parameters
+// and a body that computes anything beyond immediately returning one of
+// them exhausts that sliver of headroom and panics moments after
+// parameter binding "succeeded", trading one register-exhaustion failure
+// for another, harder-to-diagnose one. Capping parameter registers at the
+// same boundary local variables already respect leaves the intended
+// 200-254 temporary/computation headroom (VariableRegisterThreshold's own
+// job) actually available to a heavily-parameterized function's body, at
+// the cost of a few more of its parameters spilling than the bare minimum
+// required - exactly the cost/only-when-needed tradeoff paserati#467 is
+// for. Below this threshold - the overwhelming majority of functions -
+// parameter binding is byte-for-byte identical to before this change.
+const ParamRegisterThreshold Register = VariableRegisterThreshold
+
+// TryAllocForParam attempts to allocate a register for a function parameter
+// or its rest-parameter slot. Like TryAllocForVariable, it fails early - at
+// ParamRegisterThreshold rather than the hard 255 limit - so the caller can
+// fall back to a spill slot (paserati#467) instead of the register
+// allocator panicking. Parameters are always the very first thing a fresh
+// function scope allocates, before anything is ever freed, so in practice
+// the free-list branch below never fires; it's here for symmetry with
+// TryAllocForVariable and so a future caller that doesn't preserve that
+// invariant doesn't silently misbehave.
+func (ra *RegisterAllocator) TryAllocForParam() (Register, bool) {
+	if len(ra.freeRegs) > 0 {
+		for i := len(ra.freeRegs) - 1; i >= 0; i-- {
+			if ra.freeRegs[i] < ParamRegisterThreshold {
+				reg := ra.freeRegs[i]
+				ra.freeRegs = append(ra.freeRegs[:i], ra.freeRegs[i+1:]...)
+				ra.track(reg)
+				if debugRegAlloc {
+					fmt.Printf("[REGALLOC %s] REUSE FOR PARAM R%d (from free list, %d available)\n", ra.functionName, reg, len(ra.freeRegs))
+				}
+				return reg, true
+			}
+		}
+	}
+
+	if ra.nextReg < ParamRegisterThreshold {
+		reg := ra.nextReg
+		ra.nextReg++
+		ra.track(reg)
+		if debugRegAlloc {
+			fmt.Printf("[REGALLOC %s] NEW FOR PARAM R%d (nextReg now %d, threshold %d)\n", ra.functionName, reg, ra.nextReg, ParamRegisterThreshold)
+		}
+		return reg, true
+	}
+
+	if debugRegAlloc {
+		fmt.Printf("[REGALLOC] TryAllocForParam FAILED! nextReg=%d >= threshold=%d\n", ra.nextReg, ParamRegisterThreshold)
+	}
+	return 0, false
+}
+
 // RegisterAllocator manages the allocation of registers within a function scope.
 // This initial implementation uses a simple stack-like allocation.
 // Global counter for allocator IDs
