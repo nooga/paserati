@@ -21,33 +21,93 @@ import (
 // Register field (0 != nilRegister) would silently target R0 and leave the slot
 // holding the sentinel, so `f()` later reads an uninitialized value.
 //
-// The global case has the identical hazard and needs the identical guard: a
-// top-level `let`/`const` binding's own predefine pass also leaves a stale,
-// meaningless zero-valued Register field once the symbol is marked IsGlobal
-// (global reads/writes go through GlobalIndex via OpGetGlobal/OpSetGlobal, not
-// a register at all) - so `sym.Register != nilRegister` alone can't tell "this
-// binding has a real, still-live register" from "this is a global whose
-// Register field just happens to read as 0". Reusing it directly (as this
-// function used to, missing the IsGlobal check the sibling non-function value
-// branch in compileLetStatement/compileConstStatement already has) aliases
-// the closure's destination onto whatever unrelated register happens to share
+// The global case has the identical register-aliasing hazard, but a
+// different fix: a top-level `let`/`const`/`var`/function-value binding's own
+// TDZ/hoisting predefine pass (see compileProgram) already marks the symbol
+// IsGlobal with a real GlobalIndex before this statement compiles - only its
+// Register field is a stale, meaningless zero value (global reads/writes go
+// through GlobalIndex via OpGetGlobal/OpSetGlobal, never a register), so
+// `sym.Register != nilRegister` alone can't tell "this binding has a real,
+// still-live register" from "this is a global whose Register field just
+// happens to read as 0". Reusing it directly (as this function used to,
+// missing the IsGlobal check the sibling non-function value branch in
+// compileLetStatement/compileConstStatement already has) aliases the
+// closure's destination onto whatever unrelated register happens to share
 // that same stale number - harmless by accident as long as nothing else ever
 // frees or reallocates that number, but a real, silent correctness bug once
 // something does (see paserati#426, where fixing an unrelated register leak
 // unmasked this: the closure's destination collided with the enclosing
 // program's own completion-value register once it stopped being permanently,
 // accidentally reserved by the leak).
+//
+// The fix for the global case is to leave its *existing* IsGlobal symbol
+// table entry untouched and just hand back a plain temp register to build the
+// closure in: a self-reference inside the closure body then resolves `name`
+// through that same still-global symbol via ordinary OpGetGlobal/OpSetGlobal,
+// exactly like every other reference to it, needing no register or upvalue
+// capture at all. The caller copies the finished closure out of the temp and
+// into the global slot, then frees it (see the callers' post-storage
+// c.regAlloc.Free calls, paserati#426).
+//
+// Shadowing it instead with a *fresh local* binding (this function's earlier
+// fix attempt, and its original bug before that) breaks self-reference
+// differently depending on direction: a plain read of `name` inside the body
+// happens to fall back to a *different* special case built for this exact
+// module-level shape (see the `symbolRef.Register == nilRegister` handling in
+// the Identifier read path, compiler.go, added for #106) and still resolves
+// to the correct global - but a *write* (`name = ...`) has no equivalent
+// fallback and instead captures the shadow binding as a genuine upvalue,
+// recording the register it was given. A fresh local binding's register
+// field starts at the nilRegister (255) sentinel until the closure is done
+// compiling, so that captured upvalue index is invalid the moment anything
+// (even just freeing the temp below) treats it as live - "Invalid local
+// register index 255 for upvalue capture" - and reusing a real, live-looking
+// register instead just aliases the write onto the wrong storage entirely,
+// since every other reference to `name` still resolves via GlobalIndex, not
+// that register. See paserati#449 (`let a = function () { a = 1; }` at
+// top-level/module scope failing to compile, then - once fixed by way of a
+// fresh local register instead of leaving the global alone - "fixed" into
+// silently writing the wrong place: `a()` then returning the closure itself
+// instead of the reassigned value).
 func (c *Compiler) closureBindingDest(name string) (reg Register, spilled bool, spillIdx uint16) {
 	if sym, _, found := c.currentSymbolTable.Resolve(name); found {
 		if sym.IsSpilled {
 			return c.regAlloc.Alloc(), true, sym.SpillIndex
 		}
-		if sym.Register != nilRegister && !sym.IsGlobal {
+		if sym.IsGlobal {
+			// Ensure the global binding exists in the *current* symbol table,
+			// not just wherever Resolve found it. A top-level `var` inside a
+			// nested block (e.g. `try { var f = function(){...} }`) resolves
+			// here via the Outer chain - the symbol itself lives in the
+			// script's root table, installed by the earlier var-hoisting
+			// pass, while c.currentSymbolTable is the try-block's own child
+			// table. finalizeClosureBinding below records the closure's temp
+			// register via UpdateRegister(name, ...), which only mutates the
+			// table it's called on - so without this, it panics with
+			// "Symbol not found in current scope" the first time this global
+			// is reached from a nested scope. Defining it into the current
+			// table (same GlobalIndex, so still the same heap slot) mirrors
+			// what the non-function-value branches already do in this
+			// situation and keeps every scope's own copy self-consistent.
+			c.currentSymbolTable.DefineGlobal(name, sym.GlobalIndex)
+			return c.regAlloc.Alloc(), false, 0
+		}
+		if sym.Register != nilRegister {
 			return sym.Register, false, 0
 		}
 	}
-	// Not predefined (or predefined without a real, live register): define
-	// temporarily so the body can self-reference, and allocate a fresh register.
+	// Not predefined (or predefined without a real, live register, and not
+	// global): define temporarily so the body can self-reference, and
+	// allocate a fresh register. This path is for genuinely local bindings
+	// that reach here without ever having a real register (e.g. inside a
+	// `with` block or eval-created scope) - left exactly as before this
+	// file's #449 fix: some of those special-cased contexts key off the
+	// nilRegister sentinel to fall back to their own resolution (with-object
+	// lookup, caller-scope lookup, etc.), so defining with a fresh real
+	// register here instead regressed them (see the with-statement and
+	// eval-adjacent test262 fallout from an earlier version of this fix).
+	// The #449 global-scope case above never reaches this fallback at all -
+	// it's handled entirely by the sym.IsGlobal branch.
 	c.currentSymbolTable.Define(name, nilRegister)
 	return c.regAlloc.Alloc(), false, 0
 }
@@ -423,32 +483,12 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 		if funcLit, ok := declarator.Value.(*parser.FunctionLiteral); ok {
 			isValueFunc = true
 			// --- Handle var f = function g() {} or var f = function() {} ---
-
-			// Check if variable was already pre-defined during block var hoisting
-			// (this happens when nested functions capture this variable as an upvalue)
-			var closureReg Register
-			preDefinedReg := nilRegister
-			closureSpilled := false
-			var closureSpillIdx uint16
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsSpilled {
-				// Pre-defined as spilled: build the closure in a temp and write it back to
-				// the slot below. Reusing the zero-valued Register (0 != nilRegister) would
-				// target R0 and leave the slot holding undefined, so `f()` later fails.
-				closureSpilled = true
-				closureSpillIdx = sym.SpillIndex
-				closureReg = c.regAlloc.Alloc()
-			} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal {
-				// Variable was pre-defined, reuse its register for the closure
-				preDefinedReg = sym.Register
-				closureReg = preDefinedReg
-				debugPrintf("// [VarStmt] Function '%s' was pre-defined in R%d, reusing register\n", node.Name.Value, preDefinedReg)
-			} else {
-				// 1. Define the *variable name (f)* temporarily for potential recursion
-				//    within the function body (e.g., recursive anonymous function).
-				c.currentSymbolTable.Define(node.Name.Value, nilRegister)
-				// Allocate new register for the closure
-				closureReg = c.regAlloc.Alloc()
-			}
+			// 1. Pick the destination register (reusing a predefined register, a
+			//    temp for a spilled binding, or - at global scope - a plain temp
+			//    that leaves the existing global symbol alone so a self-
+			//    reference inside the body resolves via OpGetGlobal/OpSetGlobal
+			//    instead of an invalid upvalue capture; see closureBindingDest).
+			closureReg, spilled, spillIdx := c.closureBindingDest(node.Name.Value)
 
 			// 2. Compile the function literal body.
 			//    Pass the variable name (f) as the hint for the function object's name
@@ -461,14 +501,9 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			// 3. Create the closure object in the appropriate register
 			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
-			// 4. Store the closure back into its spill slot, or update the symbol table
-			//    entry with the closure register (only if we didn't pre-define with one).
-			if closureSpilled {
-				c.emitStoreSpill(closureSpillIdx, closureReg, node.Name.Token.Line)
-				c.regAlloc.Free(closureReg)
-			} else if preDefinedReg == nilRegister {
-				c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
-			}
+			// 4. Store the closure back into its spill slot, or update the symbol
+			//    table entry with the closure register.
+			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, node.Name.Token.Line)
 
 			// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 
@@ -478,24 +513,9 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 		} else if arrowFunc, ok := declarator.Value.(*parser.ArrowFunctionLiteral); ok {
 			isValueFunc = true
 			// --- Handle var f = () => {} ---
-
-			// Check if variable was already pre-defined during block var hoisting
-			var closureReg Register
-			preDefinedReg := nilRegister
-			closureSpilled := false
-			var closureSpillIdx uint16
-			if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.IsSpilled {
-				// Pre-defined as spilled: build in a temp, write back to the slot below.
-				closureSpilled = true
-				closureSpillIdx = sym.SpillIndex
-				closureReg = c.regAlloc.Alloc()
-			} else if sym, _, found := c.currentSymbolTable.Resolve(node.Name.Value); found && sym.Register != nilRegister && !sym.IsGlobal {
-				preDefinedReg = sym.Register
-				closureReg = preDefinedReg
-			} else {
-				c.currentSymbolTable.Define(node.Name.Value, nilRegister)
-				closureReg = c.regAlloc.Alloc()
-			}
+			// 1. Pick the destination register - see the identical comment on
+			//    the function-literal branch above.
+			closureReg, spilled, spillIdx := c.closureBindingDest(node.Name.Value)
 
 			// Compile the arrow function with variable name as the name hint
 			funcConstIndex, freeSymbols, err := c.compileArrowFunctionWithName(arrowFunc, node.Name.Value)
@@ -512,12 +532,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 			c.emitClosure(closureReg, funcConstIndex, minimalFuncLit, freeSymbols)
 
-			if closureSpilled {
-				c.emitStoreSpill(closureSpillIdx, closureReg, node.Name.Token.Line)
-				c.regAlloc.Free(closureReg)
-			} else if preDefinedReg == nilRegister {
-				c.currentSymbolTable.UpdateRegister(node.Name.Value, closureReg)
-			}
+			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, node.Name.Token.Line)
 
 		} else if classExpr, ok := declarator.Value.(*parser.ClassExpression); ok {
 			// --- Handle var C = class {} or var C = class D {} ---
