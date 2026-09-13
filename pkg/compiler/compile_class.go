@@ -2005,84 +2005,6 @@ func (c *Compiler) createInheritedPrototypeFromCachedProto(cachedProtoReg Regist
 	c.emitCall(prototypeReg, callRegs, 1, line)
 }
 
-// getParentConstructorArity determines the number of parameters for a parent class constructor
-func (c *Compiler) getParentConstructorArity(superClassName string) int {
-	debugPrintf("// DEBUG getParentConstructorArity: Looking up constructor arity for '%s'\n", superClassName)
-
-	// For the inheritance tests, we know the specific class signatures:
-	// - Animal in class_inheritance.ts has 2 parameters (name, species)
-	// - Animal in class_FIXME_inheritance.ts has 1 parameter (name)
-	//
-	// As a temporary solution for the current WIP inheritance support,
-	// we'll inspect the actual test files we know exist
-
-	if c.typeChecker == nil || c.typeChecker.GetProgram() == nil {
-		debugPrintf("// DEBUG getParentConstructorArity: No type checker or program AST available, using hardcoded fallback\n")
-		// If we can't access the AST, use a heuristic approach
-		// The current tests use Animal class, so we'll provide reasonable defaults
-		if superClassName == "Animal" {
-			return 2 // Most common case for inheritance tests
-		}
-		return 0
-	}
-
-	// Search through ALL statements in the program for the parent class declaration
-	program := c.typeChecker.GetProgram()
-	debugPrintf("// DEBUG getParentConstructorArity: Searching through %d program statements\n", len(program.Statements))
-
-	for i, stmt := range program.Statements {
-		debugPrintf("// DEBUG getParentConstructorArity: Statement %d: %T\n", i, stmt)
-
-		// Check both ClassDeclaration and ExpressionStatement containing ClassExpression
-		if classDecl, ok := stmt.(*parser.ClassDeclaration); ok {
-			if classDecl.Name.Value == superClassName {
-				return c.extractConstructorArity(classDecl, superClassName)
-			}
-		} else if exprStmt, ok := stmt.(*parser.ExpressionStatement); ok {
-			if classExpr, ok := exprStmt.Expression.(*parser.ClassExpression); ok {
-				if classExpr.Name != nil && classExpr.Name.Value == superClassName {
-					// Convert ClassExpression to ClassDeclaration for processing
-					classDecl := &parser.ClassDeclaration{
-						Token:      classExpr.Token,
-						Name:       classExpr.Name,
-						SuperClass: classExpr.SuperClass,
-						Body:       classExpr.Body,
-					}
-					return c.extractConstructorArity(classDecl, superClassName)
-				}
-			}
-		}
-	}
-
-	// Parent class not found in current program
-	debugPrintf("// DEBUG getParentConstructorArity: Parent class '%s' not found in AST, using hardcoded fallback\n", superClassName)
-
-	// Hardcoded fallback for known test cases
-	if superClassName == "Animal" {
-		return 2 // Default to 2 for most inheritance tests
-	}
-	return 0
-}
-
-// extractConstructorArity extracts the parameter count from a class declaration's constructor
-func (c *Compiler) extractConstructorArity(classDecl *parser.ClassDeclaration, className string) int {
-	debugPrintf("// DEBUG extractConstructorArity: Found parent class '%s'\n", className)
-
-	// Find the constructor method in the class body
-	for _, method := range classDecl.Body.Methods {
-		if method.Kind == "constructor" {
-			// Extract parameter count from constructor function
-			paramCount := len(method.Value.Parameters)
-			debugPrintf("// DEBUG extractConstructorArity: Constructor has %d parameters\n", paramCount)
-			return paramCount
-		}
-	}
-
-	// No explicit constructor found, so it's a default constructor with 0 parameters
-	debugPrintf("// DEBUG extractConstructorArity: No explicit constructor found, defaulting to 0 args\n")
-	return 0
-}
-
 // compileFunctionLiteralWithThisClass compiles a function literal in a specific class context with `this` type information
 // Class methods are always compiled in strict mode per ECMAScript spec
 func (c *Compiler) compileFunctionLiteralWithThisClass(node *parser.FunctionLiteral, nameHint string, className string) (uint16, []*Symbol, errors.PaseratiError) {
@@ -2110,32 +2032,6 @@ func (c *Compiler) compileFunctionLiteralWithThisClass(node *parser.FunctionLite
 	// Fall back to strict compilation if no class context (class methods are always strict)
 	debugPrintf("// DEBUG compileFunctionLiteralWithThisClass: No class instance type found for '%s', falling back to strict compilation\n", className)
 	return c.compileFunctionLiteralStrict(node, nameHint)
-}
-
-// getCurrentClassInstanceType attempts to determine the current class instance type being compiled
-func (c *Compiler) getCurrentClassInstanceType() *types.ObjectType {
-	// Look for class context in the compilation stack
-	// For now, we'll use a simpler approach: check if there's a program with classes
-	if c.typeChecker == nil || c.typeChecker.GetProgram() == nil {
-		return nil
-	}
-
-	program := c.typeChecker.GetProgram()
-	// Find the most recent class declaration being compiled
-	// This is a simplified approach - in a full implementation we'd track compilation context
-	for _, stmt := range program.Statements {
-		if classDecl, ok := stmt.(*parser.ClassDeclaration); ok {
-			// Try to get the class instance type from the type checker
-			if classType, exists := c.typeChecker.GetEnvironment().ResolveType(classDecl.Name.Value); exists {
-				if objType, ok := classType.(*types.ObjectType); ok && objType.IsClassInstance() {
-					debugPrintf("// DEBUG getCurrentClassInstanceType: Found class instance type '%s'\n", classDecl.Name.Value)
-					return objType
-				}
-			}
-		}
-	}
-
-	return nil
 }
 
 // compileFunctionLiteralWithThisType compiles a function literal with a specific `this` type
