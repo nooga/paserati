@@ -1719,20 +1719,15 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 					break // Stop when we hit a non-desugared statement
 				}
 
-				// Compile this desugared parameter declaration
-				//
-				// NOTE: deliberately still `_, _ =`, discarding any compile
-				// error, unlike the non-generator body path below. Making
-				// this one report errors too surfaces a separate, pre-existing
-				// parser bug: `yield *\n expr` (the delegated expression on
-				// its own line) gets mis-parsed, which a generator body statement
-				// failing to compile here would turn into a hard compile
-				// error for otherwise-valid-looking generator code instead of
-				// today's silent (wrong, but non-fatal) miscompilation. Left
-				// as-is until that parser bug has its own fix - see the
-				// generator-body loop below for the same tradeoff.
+				// Compile this desugared parameter declaration. A compile
+				// error here must not be discarded - see the identical
+				// handling on the non-generator body path below (the
+				// carve-out that used to live here, for the `yield *\n expr`
+				// parser bug, was removed once that bug was fixed - #464).
 				stmtReg := functionCompiler.regAlloc.Alloc()
-				_, _ = functionCompiler.compileNode(stmt, stmtReg)
+				if _, err := functionCompiler.compileNode(stmt, stmtReg); err != nil {
+					functionCompiler.errors = append(functionCompiler.errors, err)
+				}
 				functionCompiler.regAlloc.Free(stmtReg)
 				desugarCount++
 
@@ -1813,28 +1808,21 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 			functionCompiler.emitOpCode(vm.OpInitYield, node.Body.Token.Line)
 			debugPrintf("// [Generator] Emitted OpInitYield after %d desugared parameter declarations\n", desugarCount)
 
-			// Compile remaining statements (the actual body).
-			//
-			// NOTE: deliberately still `_, _ =` here too - see the identical
-			// comment on the desugared-parameter loop above. A generator
-			// containing `yield *\n expr` (the delegated expression on its
-			// own line) hits a pre-existing, separate parser bug that mis-
-			// parses that split; reporting the resulting compile error here
-			// would turn otherwise-valid generator code that happens to use
-			// that line-break style into a hard failure instead of today's
-			// silent miscompilation. Left as a known, narrower gap pending a
-			// fix to that parser bug - tracked separately from the
-			// swallowing fix this function's non-generator sibling below
-			// (the "Non-generator: compile body normally" branch) got.
+			// Compile remaining statements (the actual body). See the
+			// identical error handling on the desugared-parameter loop above.
 			for i := desugarCount; i < len(blockBody.Statements); i++ {
 				stmtReg := functionCompiler.regAlloc.Alloc()
-				_, _ = functionCompiler.compileNode(blockBody.Statements[i], stmtReg)
+				if _, err := functionCompiler.compileNode(blockBody.Statements[i], stmtReg); err != nil {
+					functionCompiler.errors = append(functionCompiler.errors, err)
+				}
 				functionCompiler.regAlloc.Free(stmtReg)
 			}
 		} else {
 			// Non-block body (arrow function expression) - just emit OpInitYield first
 			functionCompiler.emitOpCode(vm.OpInitYield, node.Body.Token.Line)
-			_, _ = functionCompiler.compileNode(node.Body, bodyReg)
+			if _, err := functionCompiler.compileNode(node.Body, bodyReg); err != nil {
+				functionCompiler.errors = append(functionCompiler.errors, err)
+			}
 		}
 
 		// Defensive reset only - this branch never sets isCompilingFunctionBody true
