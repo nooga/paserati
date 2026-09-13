@@ -145,9 +145,14 @@ func (c *Compiler) compileNewExpression(node *parser.NewExpression, hint Registe
 	// Allocate a contiguous block: [constructor, arg1, arg2, ...]
 	totalRegs := 1 + totalArgCount // constructor + arguments
 
-	// Check for register exhaustion before attempting allocation
-	if int(c.regAlloc.nextReg)+totalRegs > 256 {
-		return BadRegister, NewCompileError(node, "register exhaustion: expression too deeply nested")
+	// Check for register exhaustion before attempting allocation. Compare
+	// against registerLimit (255), not a raw 256 - see the comment on
+	// registerLimit in regalloc.go for why 255 is the real boundary (256 is
+	// exclusive of register 255, the NoHint sentinel).
+	if int(c.regAlloc.nextReg)+totalRegs > registerLimit {
+		return BadRegister, NewCompileError(node, fmt.Sprintf(
+			"register exhaustion: too many arguments for a single `new` call (needs %d contiguous registers, only %d available)",
+			totalRegs, registerLimit-int(c.regAlloc.nextReg)))
 	}
 
 	constructorReg := c.regAlloc.AllocContiguous(totalRegs)

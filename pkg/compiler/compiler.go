@@ -877,7 +877,20 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 		var msg string
 		switch p := r.(type) {
 		case registerExhaustionPanic:
-			msg = "register exhaustion: expression too deeply nested"
+			if p.contiguousCount > 0 {
+				// A contiguous-block request (a function's parameter list, or a
+				// call/new expression's argument list) exhausted the register
+				// file - this is a flat count of parameters/arguments, not
+				// nesting depth, so say so directly (paserati#455: the old,
+				// unconditional "expression too deeply nested" wording sent
+				// that investigation looking for deep nesting/recursion for a
+				// while before the real trigger - a plain 239-parameter
+				// function - was found).
+				msg = fmt.Sprintf("register exhaustion: too many parameters or arguments for one call frame (needs %d contiguous registers, only %d available)",
+					p.contiguousCount, registerLimit)
+			} else {
+				msg = "register exhaustion: expression too deeply nested"
+			}
 			if p.functionName != "" {
 				msg = fmt.Sprintf("%s (in function %q)", msg, p.functionName)
 			}
@@ -890,7 +903,6 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 		if c.chunk != nil {
 			src = c.chunk.Source
 		}
-		resultChunk = nil
 		resultErrs = []errors.PaseratiError{&errors.CompileError{
 			Position: errors.Position{Line: c.line, Source: src},
 			Msg:      msg,
@@ -1621,19 +1633,27 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		}
 
 		// 0) Predefine block-scoped let/const and function-scoped var so inner closures can capture stable locations
-		// Reserve temp registers for spilling operations and general temp use
-		// We reserve a pool to ensure temps are available throughout the hoisting phase
-		const tempPoolSize = 16
+		// Reserve a single scratch register (spillTempReg) used by the predefine
+		// loop below to stage a spilled variable's initial value before storing
+		// it to its spill slot (see emitLoadUndefined/emitLoadUninitialized +
+		// emitStoreSpill call sites in this loop).
+		//
+		// This used to eagerly reserve a 16-register "pool" here (tempPoolSize),
+		// on the theory that the hoisting phase might need several temporaries
+		// at once - but only index 0 was ever read anywhere in this function;
+		// the other 15 were allocated, held untouched for the whole predefine
+		// loop, then freed without ever being used. Held-but-idle registers
+		// still count against a function's 255-register budget for as long as
+		// they're held, so this alone made every function with >238 parameters
+		// (or a comparably register-hungry body) fail to compile at all, with
+		// a misleading "expression too deeply nested" error - see paserati#455.
 		var tempPool []Register
 		var spillTempReg Register
 		spillTempUsed := false
 
 		if len(node.Statements) > 0 || len(node.HoistedDeclarations) > 0 {
-			tempPool = make([]Register, tempPoolSize)
-			for i := 0; i < tempPoolSize; i++ {
-				tempPool[i] = c.regAlloc.Alloc()
-			}
-			spillTempReg = tempPool[0] // Use first temp for spill operations
+			tempPool = []Register{c.regAlloc.Alloc()}
+			spillTempReg = tempPool[0] // Use first (only) temp for spill operations
 		}
 
 		if len(node.Statements) > 0 {
