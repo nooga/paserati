@@ -1720,6 +1720,17 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 				}
 
 				// Compile this desugared parameter declaration
+				//
+				// NOTE: deliberately still `_, _ =`, discarding any compile
+				// error, unlike the non-generator body path below. Making
+				// this one report errors too surfaces a separate, pre-existing
+				// parser bug: `yield *\n expr` (the delegated expression on
+				// its own line) gets mis-parsed, which a generator body statement
+				// failing to compile here would turn into a hard compile
+				// error for otherwise-valid-looking generator code instead of
+				// today's silent (wrong, but non-fatal) miscompilation. Left
+				// as-is until that parser bug has its own fix - see the
+				// generator-body loop below for the same tradeoff.
 				stmtReg := functionCompiler.regAlloc.Alloc()
 				_, _ = functionCompiler.compileNode(stmt, stmtReg)
 				functionCompiler.regAlloc.Free(stmtReg)
@@ -1802,7 +1813,19 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 			functionCompiler.emitOpCode(vm.OpInitYield, node.Body.Token.Line)
 			debugPrintf("// [Generator] Emitted OpInitYield after %d desugared parameter declarations\n", desugarCount)
 
-			// Compile remaining statements (the actual body)
+			// Compile remaining statements (the actual body).
+			//
+			// NOTE: deliberately still `_, _ =` here too - see the identical
+			// comment on the desugared-parameter loop above. A generator
+			// containing `yield *\n expr` (the delegated expression on its
+			// own line) hits a pre-existing, separate parser bug that mis-
+			// parses that split; reporting the resulting compile error here
+			// would turn otherwise-valid generator code that happens to use
+			// that line-break style into a hard failure instead of today's
+			// silent miscompilation. Left as a known, narrower gap pending a
+			// fix to that parser bug - tracked separately from the
+			// swallowing fix this function's non-generator sibling below
+			// (the "Non-generator: compile body normally" branch) got.
 			for i := desugarCount; i < len(blockBody.Statements); i++ {
 				stmtReg := functionCompiler.regAlloc.Alloc()
 				_, _ = functionCompiler.compileNode(blockBody.Statements[i], stmtReg)
@@ -1823,7 +1846,21 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 		// Non-generator: compile body normally
 		bodyReg := functionCompiler.regAlloc.Alloc()
 		functionCompiler.isCompilingFunctionBody = true
-		_, _ = functionCompiler.compileNode(node.Body, bodyReg)
+		if _, err := functionCompiler.compileNode(node.Body, bodyReg); err != nil {
+			// A compile error from the function body must not be discarded:
+			// this used to be a bare `_, _ =`, which let a statement that
+			// failed to compile (e.g. an array literal over the 65535-
+			// element limit, or any other compileNode error) silently
+			// produce truncated/wrong bytecode for the whole function -
+			// no error reported, process exits 0 - instead of failing the
+			// compile the way the identical construct at the top level of
+			// a script already correctly does. See the "Collect any
+			// additional errors from the sub-compilation" merge below,
+			// which only ever picked up errors added via functionCompiler's
+			// own addError/addErrorWithCode side-channel - never one
+			// returned directly from compileNode and dropped here.
+			functionCompiler.errors = append(functionCompiler.errors, err)
+		}
 		functionCompiler.isCompilingFunctionBody = false
 		functionCompiler.regAlloc.Free(bodyReg)
 	}
