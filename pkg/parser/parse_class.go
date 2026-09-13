@@ -75,8 +75,11 @@ func (p *Parser) parseClassDeclaration() Statement {
 		isCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LPAREN)
 		// Also detect member expression that might become a call: a.b(...)
 		isMemberCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.DOT)
+		// Also detect computed member access: a["b"], a[0], etc. - always a runtime
+		// expression, never a TS type construct.
+		isIndexedMemberExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LBRACKET)
 
-		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) || isCallExpr || isMemberCallExpr {
+		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) || isCallExpr || isMemberCallExpr || isIndexedMemberExpr {
 			// Runtime expression: function() {}, class {}, (expr), fn(), a.b.fn(), etc.
 			superClass = p.parseExpression(LOWEST)
 		} else {
@@ -269,8 +272,11 @@ func (p *Parser) parseClassExpression() Expression {
 		isCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LPAREN)
 		// Also detect member expression that might become a call: a.b(...)
 		isMemberCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.DOT)
+		// Also detect computed member access: a["b"], a[0], etc. - always a runtime
+		// expression, never a TS type construct.
+		isIndexedMemberExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LBRACKET)
 
-		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) || isCallExpr || isMemberCallExpr {
+		if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) || p.curTokenIs(lexer.LPAREN) || isCallExpr || isMemberCallExpr || isIndexedMemberExpr {
 			// Runtime expression: function() {}, class {}, (expr), fn(), a.b.fn(), etc.
 			superClass = p.parseExpression(LOWEST)
 		} else {
