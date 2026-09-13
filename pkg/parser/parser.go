@@ -4318,38 +4318,45 @@ func (p *Parser) parseYieldExpression() Expression {
 			Token: yieldToken, // The 'yield' token
 		}
 
-		// Check if next token is yield* delegation
+		// Check if next token is yield* delegation.
+		// Per ECMAScript grammar: yield [no LineTerminator here] * AssignmentExpression
+		// The "no LineTerminator" restriction is between 'yield' and '*', NOT between
+		// '*' and the delegated expression - that expression is mandatory and may
+		// legally start on the following line (see issue #464).
 		if p.peekTokenIs(lexer.ASTERISK) {
 			p.nextToken() // Move to '*'
 			expression.Delegate = true
 		}
 
-		// yield can have an optional value
-		// Per ECMAScript: yield [no LineTerminator here] AssignmentExpression
-		// If there's a newline after yield, ASI inserts a semicolon (yield has no value)
-		yieldLine := yieldToken.Line
 		if expression.Delegate {
-			// For yield*, check line after the asterisk
-			yieldLine = p.curToken.Line
-		}
-
-		// Check if there's an expression following yield (or yield*)
-		// Don't try to parse if:
-		// 1. There's a newline after yield (ASI applies)
-		// 2. Next token is closing punctuation, comma, or statement terminator
-		if p.peekToken.Line == yieldLine &&
-			!p.peekTokenIs(lexer.SEMICOLON) && !p.peekTokenIs(lexer.RBRACE) &&
-			!p.peekTokenIs(lexer.RBRACKET) && !p.peekTokenIs(lexer.RPAREN) &&
-			!p.peekTokenIs(lexer.COMMA) && !p.peekTokenIs(lexer.EOF) &&
-			!p.peekTokenIs(lexer.COLON) { // for switch cases and object properties
-			// Advance to the value expression
+			// yield* always requires a delegated AssignmentExpression, regardless of
+			// whether it appears on the same line as the '*' or the next one.
 			p.nextToken()
-			// Parse the value to yield with ASSIGNMENT precedence (stops at commas)
-			// This prevents yield from consuming comma operators in contexts like object literals
 			expression.Value = p.parseExpression(ASSIGNMENT)
-			if expression.Value == nil {
-				// If parsing failed, treat as yield with no value
-				expression.Value = nil
+		} else {
+			// yield can have an optional value.
+			// Per ECMAScript: yield [no LineTerminator here] AssignmentExpression
+			// If there's a newline after yield, ASI inserts a semicolon (yield has no value)
+			yieldLine := yieldToken.Line
+
+			// Check if there's an expression following yield
+			// Don't try to parse if:
+			// 1. There's a newline after yield (ASI applies)
+			// 2. Next token is closing punctuation, comma, or statement terminator
+			if p.peekToken.Line == yieldLine &&
+				!p.peekTokenIs(lexer.SEMICOLON) && !p.peekTokenIs(lexer.RBRACE) &&
+				!p.peekTokenIs(lexer.RBRACKET) && !p.peekTokenIs(lexer.RPAREN) &&
+				!p.peekTokenIs(lexer.COMMA) && !p.peekTokenIs(lexer.EOF) &&
+				!p.peekTokenIs(lexer.COLON) { // for switch cases and object properties
+				// Advance to the value expression
+				p.nextToken()
+				// Parse the value to yield with ASSIGNMENT precedence (stops at commas)
+				// This prevents yield from consuming comma operators in contexts like object literals
+				expression.Value = p.parseExpression(ASSIGNMENT)
+				if expression.Value == nil {
+					// If parsing failed, treat as yield with no value
+					expression.Value = nil
+				}
 			}
 		}
 
