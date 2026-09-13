@@ -1571,9 +1571,20 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		// Also resolve superType via type annotation for generic refs
 		superType = c.resolveTypeAnnotation(superClassExpr)
 	} else {
-		// For other expressions (function literals, call expressions, etc.), visit as expression
+		// For other expressions (member expressions, call expressions, etc.), visit as expression.
+		//
+		// Class declarations are checked in Pass 1, before top-level `const`/`let`/`var`
+		// bindings are defined in the environment (Pass 2). A superclass expression like
+		// `lib.default.Base` needs to resolve the outer-scope identifier `lib`, which may
+		// not exist yet at this point even though it's perfectly valid JS/TS. Temporarily
+		// allow forward references (treating not-yet-defined identifiers as `any`, same as
+		// method bodies already do - see checkMethodBodyWithContext) so the base identifier
+		// doesn't spuriously fail with "cannot find name" during Pass 1.
+		savedAllowForwardReferences := c.allowForwardReferences
+		c.allowForwardReferences = true
 		debugPrintf("// [Checker Class] Processing 'else' branch for superclass expression: %T\n", superClassExpr)
 		c.visit(superClassExpr)
+		c.allowForwardReferences = savedAllowForwardReferences
 		constructorType = superClassExpr.GetComputedType()
 		if constructorType == nil {
 			// If visiting didn't produce a type, it's likely an error already reported
@@ -1851,8 +1862,29 @@ func (c *Checker) checkSuperExpression(node *parser.SuperExpression) {
 		return
 	}
 
-	// Get the superclass instance type
+	// If the superclass expression itself only resolved to 'any' (e.g. a class
+	// declaration processed before the outer-scope value it extends has a known
+	// type - see handleClassInheritance's forward-reference handling), super
+	// member access is unchecked, same as TypeScript does for `extends <any>`.
+	if classInstanceType.ClassMeta.SuperConstructorType == types.Any {
+		node.SetComputedType(types.Any)
+		debugPrintf("// [Checker SuperExpr] Superclass constructor type is 'any', using 'any' for super\n")
+		return
+	}
+
+	// Get the superclass instance type. For a simple identifier superclass this
+	// resolves by name; for a non-identifier superclass expression (e.g.
+	// `class Sub extends lib.default.Base`), SuperClassName is just the
+	// expression's string form and won't resolve as a class name, so fall back
+	// to the instance type already computed and stored in BaseTypes[0] by
+	// handleClassInheritance (superclass is always added there first, before
+	// any implemented interfaces).
 	superInstanceType := c.getClassInstanceType(superClassName)
+	if superInstanceType == nil && len(classInstanceType.BaseTypes) > 0 {
+		if baseObjType, ok := classInstanceType.BaseTypes[0].(*types.ObjectType); ok {
+			superInstanceType = baseObjType
+		}
+	}
 	if superInstanceType == nil {
 		c.addError(node, fmt.Sprintf("could not resolve superclass '%s'", superClassName))
 		node.SetComputedType(types.Any)
