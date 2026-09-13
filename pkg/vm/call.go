@@ -89,6 +89,91 @@ func setTailCallHomeObject(frame *CallFrame, calleeFunc *FunctionObject, thisVal
 	}
 }
 
+// bindPositionalParams copies positional call arguments into a callee
+// frame's registers and spill slots, then - for a variadic callee - builds
+// and stores the rest-parameter array, in whichever storage its own
+// position resolves to.
+//
+// paserati#467: a function's named parameters (and its rest parameter, if
+// present) are bound left-to-right to registers up through
+// calleeFunc.NumRegisterParams, then to spill slots for the remainder -
+// see that field's own doc comment on FunctionObject for the exact index
+// arithmetic. NumRegisterParams equals the full parameter count for every
+// function that fits in registers (the overwhelming majority), so the
+// spill branch below is unreachable for them: this is a no-op fast path,
+// not a new cost, for ordinary functions.
+//
+// registers is the callee frame's register window; spillSlots is its
+// spill-slot array (nil when NumSpillSlots == 0, i.e. whenever
+// NeedsParamSpillSlots() is false). Shared by every call/construct frame-
+// setup site that binds parameters this way (prepareCall below, async.go,
+// op_spreadnew.go, and OpNew's two "new"-expression blocks in vm.go),
+// instead of each repeating this branch inline as they used to - see the
+// investigation notes on paserati#467.
+//
+// This intentionally drops one thing the old, separately-duplicated
+// per-site loops used to do: copy positional arguments beyond Arity (for a
+// non-variadic call with more arguments than declared parameters) into
+// registers past Arity. Nothing ever reads a register by that scheme -
+// `arguments` reads from the frame's own args slice, not registers, and no
+// symbol is ever bound to those register indices - so those writes were
+// dead stores, immediately overwritten by the callee's own compiled
+// prologue before anything could observe them.
+func bindPositionalParams(calleeFunc *FunctionObject, args []Value, registers []Value, spillSlots []Value) {
+	arity := calleeFunc.Arity
+	regParams := calleeFunc.NumRegisterParams
+	argCount := len(args)
+
+	for i := 0; i < arity; i++ {
+		var v Value
+		if i < argCount {
+			v = args[i]
+		} else {
+			v = Undefined
+		}
+		if i < regParams {
+			if i < len(registers) {
+				registers[i] = v
+			}
+		} else {
+			spillSlots[i-regParams] = v
+		}
+	}
+
+	if calleeFunc.Variadic {
+		extraArgCount := argCount - arity
+		var restArray Value
+
+		// extraArgCount is negative when called with fewer arguments than
+		// the non-rest parameter count (legal - see the arity-checking
+		// comment in prepareCall, paserati#170) - treat that the same as
+		// exactly zero extra arguments: an empty rest array. Each call must
+		// get a fresh, independently identifiable array (paserati A4) - a
+		// shared singleton here would let one call's mutation of its rest
+		// array leak into every other call's.
+		if extraArgCount <= 0 {
+			restArray = NewArray()
+		} else {
+			restArray = NewArray()
+			restArrayObj := restArray.AsArray()
+			for i := 0; i < extraArgCount; i++ {
+				argIndex := arity + i
+				if argIndex < argCount {
+					restArrayObj.Append(args[argIndex])
+				}
+			}
+		}
+
+		if arity < regParams {
+			if arity < len(registers) {
+				registers[arity] = restArray
+			}
+		} else {
+			spillSlots[arity-regParams] = restArray
+		}
+	}
+}
+
 // prepareCall sets up a function call and returns whether the interpreter should switch to the new frame.
 // For native functions, it executes immediately and returns false.
 // For closures/functions, it sets up the frame and returns true to switch context.
@@ -451,56 +536,10 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			newFrame.spillSlots = nil
 		}
 
-		// Copy arguments to registers
-		// We need to copy ALL passed arguments (up to argCount), not just up to Arity,
-		// so that the arguments object can access them via OpGetArguments.
-		// However, we can only copy as many as fit in the allocated registers.
-		maxArgsToCopy := argCount
-		if calleeFunc.Arity > maxArgsToCopy {
-			maxArgsToCopy = calleeFunc.Arity
-		}
-		if maxArgsToCopy > len(newFrame.registers) {
-			maxArgsToCopy = len(newFrame.registers)
-		}
-
-		for i := 0; i < maxArgsToCopy; i++ {
-			if i < argCount {
-				newFrame.registers[i] = args[i]
-			} else {
-				newFrame.registers[i] = Undefined
-			}
-		}
-
-		// Handle rest parameters for variadic functions
-		if calleeFunc.Variadic {
-			extraArgCount := argCount - calleeFunc.Arity
-			var restArray Value
-
-			// extraArgCount is negative when called with fewer arguments than
-			// the non-rest parameter count (now legal - see the arity-checking
-			// comment above, paserati#170) - treat that the same as exactly
-			// zero extra arguments: an empty rest array. Each call must get a
-			// fresh, independently identifiable array (paserati A4) - a shared
-			// singleton here would let one call's mutation of its rest array
-			// leak into every other call's.
-			if extraArgCount <= 0 {
-				restArray = NewArray()
-			} else {
-				restArray = NewArray()
-				restArrayObj := restArray.AsArray()
-				for i := 0; i < extraArgCount; i++ {
-					argIndex := calleeFunc.Arity + i
-					if argIndex < len(args) {
-						restArrayObj.Append(args[argIndex])
-					}
-				}
-			}
-
-			// Store rest array at the appropriate position
-			if calleeFunc.Arity < len(newFrame.registers) {
-				newFrame.registers[calleeFunc.Arity] = restArray
-			}
-		}
+		// Copy arguments to registers (and spill slots, for any parameter
+		// beyond the register-bound prefix - paserati#467), then build the
+		// rest-parameter array if variadic. See bindPositionalParams below.
+		bindPositionalParams(calleeFunc, args, newFrame.registers, newFrame.spillSlots)
 
 		// Initialize named function expression binding if present
 		// For named function expressions like: let f = function g() { g(); }

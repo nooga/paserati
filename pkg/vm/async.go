@@ -208,53 +208,20 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 		frame.registers[i] = Undefined
 	}
 
-	// Set up arguments in registers. Mirrors prepareCall's argument-copying
-	// and variadic-handling logic specifically (call.go), not its full frame
-	// setup - this path builds its frame by hand instead of going through
-	// prepareCall (see the openUpvalues comment above for why), so it must
-	// independently reproduce prepareCall's variadic handling too.
-	// It previously didn't: a rest-only async function (e.g. `async
-	// function f(...args) {}`) called with fewer arguments than its arity
-	// left the rest-parameter register at its zeroed Undefined default
-	// instead of an empty array, since nothing here ever checked
-	// funcObj.Variadic. `await f()` observed `undefined` where `[]` was
-	// expected.
+	// Set up arguments in registers (and spill slots, for any parameter
+	// beyond the register-bound prefix - paserati#467) via bindPositionalParams
+	// (call.go), which mirrors prepareCall's argument-copying and variadic-
+	// handling logic - this path builds its frame by hand instead of going
+	// through prepareCall (see the openUpvalues comment above for why), so
+	// it must independently reproduce that handling too. It previously
+	// didn't: a rest-only async function (e.g. `async function f(...args)
+	// {}`) called with fewer arguments than its arity left the rest-
+	// parameter register at its zeroed Undefined default instead of an
+	// empty array, since nothing here ever checked funcObj.Variadic.
+	// `await f()` observed `undefined` where `[]` was expected.
 	argCount := len(args)
 	frame.argCount = argCount
-	maxArgsToCopy := argCount
-	if funcObj.Arity > maxArgsToCopy {
-		maxArgsToCopy = funcObj.Arity
-	}
-	if maxArgsToCopy > len(frame.registers) {
-		maxArgsToCopy = len(frame.registers)
-	}
-	for i := 0; i < maxArgsToCopy; i++ {
-		if i < argCount {
-			frame.registers[i] = args[i]
-		} else {
-			frame.registers[i] = Undefined
-		}
-	}
-
-	if funcObj.Variadic {
-		extraArgCount := argCount - funcObj.Arity
-		var restArray Value
-		if extraArgCount <= 0 {
-			restArray = NewArray()
-		} else {
-			restArray = NewArray()
-			restArrayObj := restArray.AsArray()
-			for i := 0; i < extraArgCount; i++ {
-				argIndex := funcObj.Arity + i
-				if argIndex < len(args) {
-					restArrayObj.Append(args[argIndex])
-				}
-			}
-		}
-		if funcObj.Arity < len(frame.registers) {
-			frame.registers[funcObj.Arity] = restArray
-		}
-	}
+	bindPositionalParams(funcObj, args, frame.registers, frame.spillSlots)
 
 	// Initialize named function expression binding if present, mirroring
 	// prepareCall (call.go) - see its own comment for what this does. This
