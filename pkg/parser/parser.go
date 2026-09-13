@@ -4255,6 +4255,22 @@ func (p *Parser) curPrecedence() int {
 	return LOWEST
 }
 
+// isCompoundAssignmentToken reports whether t is one of the compound
+// assignment operators (+=, -=, *=, /=, %=, **=, &=, |=, ^=, <<=, >>=, >>>=,
+// &&=, ||=, ??=) - i.e. an assignment-precedence token other than bare '='.
+func (p *Parser) isCompoundAssignmentToken(t lexer.TokenType) bool {
+	switch t {
+	case lexer.PLUS_ASSIGN, lexer.MINUS_ASSIGN, lexer.ASTERISK_ASSIGN, lexer.SLASH_ASSIGN,
+		lexer.REMAINDER_ASSIGN, lexer.EXPONENT_ASSIGN,
+		lexer.BITWISE_AND_ASSIGN, lexer.BITWISE_OR_ASSIGN, lexer.BITWISE_XOR_ASSIGN,
+		lexer.LEFT_SHIFT_ASSIGN, lexer.RIGHT_SHIFT_ASSIGN, lexer.UNSIGNED_RIGHT_SHIFT_ASSIGN,
+		lexer.LOGICAL_AND_ASSIGN, lexer.LOGICAL_OR_ASSIGN, lexer.COALESCE_ASSIGN:
+		return true
+	default:
+		return false
+	}
+}
+
 // -- Prefix Parse Functions --
 
 // parsePrefixExpression handles expressions like !expr or -expr
@@ -6588,6 +6604,17 @@ func (p *Parser) parseArrayLiteral() Expression {
 				Operator: "=",
 				Left:     elem,
 				Value:    defaultExpr,
+			}
+		} else if p.isCompoundAssignmentToken(p.peekToken.Type) {
+			// Compound assignment operators (+=, -=, ||=, etc.) have no
+			// destructuring-default meaning the way bare '=' does above -
+			// `[x += 1] = arr` isn't valid destructuring syntax either, so
+			// there's no cover-grammar ambiguity to protect against here.
+			// Parse a real assignment expression directly (paserati#454).
+			p.nextToken() // move onto the compound-assignment operator
+			elem = p.parseAssignmentExpression(elem)
+			if elem == nil {
+				return nil
 			}
 		}
 
