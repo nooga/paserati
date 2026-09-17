@@ -179,10 +179,13 @@ func (c *Compiler) compileNestedObjectDeclaration(objectTarget *parser.ObjectLit
 			continue
 		}
 
-		// Key can be identifier, number, or bigint (for array destructuring as object)
+		// Key can be identifier, number, bigint, or a computed property name.
 		var keyIdent *parser.Identifier
+		var keyExpr parser.Expression
 		if ident, ok := prop.Key.(*parser.Identifier); ok {
 			keyIdent = ident
+		} else if computed, ok := prop.Key.(*parser.ComputedPropertyName); ok {
+			keyExpr = computed
 		} else if numLit, ok := prop.Key.(*parser.NumberLiteral); ok {
 			// Convert number to identifier for destructuring property
 			keyIdent = &parser.Identifier{Token: numLit.Token, Value: numLit.Token.Literal}
@@ -203,6 +206,21 @@ func (c *Compiler) compileNestedObjectDeclaration(objectTarget *parser.ObjectLit
 		// 4. {name: localVar = defaultVal} - explicit target with default
 		// 5. {name: [a, b]} - nested pattern target
 		// 6. {name: {x, y}} - nested pattern target
+
+		if keyExpr != nil {
+			// Computed key: never shorthand, so the property's value is always
+			// the explicit target (possibly with a default).
+			if assignExpr, ok := prop.Value.(*parser.AssignmentExpression); ok && assignExpr.Operator == "=" {
+				declaration.Properties = append(declaration.Properties, &parser.DestructuringProperty{
+					Key: keyExpr, Target: assignExpr.Left, Default: assignExpr.Value,
+				})
+			} else {
+				declaration.Properties = append(declaration.Properties, &parser.DestructuringProperty{
+					Key: keyExpr, Target: prop.Value,
+				})
+			}
+			continue
+		}
 
 		if valueIdent, ok := prop.Value.(*parser.Identifier); ok && valueIdent.Value == keyIdent.Value {
 			// Pattern 1: Shorthand without default {name}
