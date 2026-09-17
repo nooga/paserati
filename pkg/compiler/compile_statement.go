@@ -460,8 +460,10 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 		// so that subsequent references within the same block use the local binding rather than a global.
 		if funcLit, ok := declarator.Value.(*parser.FunctionLiteral); ok {
 			if funcLit.Name != nil {
-				// Predefine to enable using it before assignment in the block
-				c.currentSymbolTable.Define(declarator.Name.Value, nilRegister)
+				if sym, _, found := c.currentSymbolTable.Resolve(declarator.Name.Value); !found || (!sym.IsGlobal && !sym.IsSpilled && sym.Register == nilRegister) {
+					// Predefine to enable using it before assignment in the block
+					c.currentSymbolTable.Define(declarator.Name.Value, nilRegister)
+				}
 			}
 		}
 		// Set current declarator in legacy fields for backward compatibility
