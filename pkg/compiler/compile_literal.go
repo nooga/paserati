@@ -477,6 +477,27 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 // Object.keys etc. all already treat a Hole value as an absent own
 // property) rather than a present element whose value happens to be
 // undefined.
+// isContainerLiteral reports whether e is itself an object or array literal -
+// the two node types whose compilation recurses through THIS SAME function's
+// own register file (a nested function/method literal gets a fresh
+// RegisterAllocator via newFunctionCompiler and never competes for registers
+// here, however deep its own body is). compileObjectLiteral holds its own
+// object reference (hint, and for a computed key, keyReg) live across every
+// property's value compile purely to reuse it afterward for that property's
+// store - if the value is itself a container literal, that reference sits
+// idle-but-allocated for the value's entire, potentially deep/wide recursive
+// compile. Gating the spill-around-the-recursive-compile fix on this check
+// (mirroring #470's "only when the RHS is itself a chained AssignmentExpression"
+// gate) keeps the fix from adding any overhead to the ubiquitous case of a
+// literal whose properties/elements are plain values - see paserati#471.
+func isContainerLiteral(e parser.Expression) bool {
+	switch e.(type) {
+	case *parser.ObjectLiteral, *parser.ArrayLiteral:
+		return true
+	}
+	return false
+}
+
 func (c *Compiler) compileArrayLiteralElement(node *parser.ArrayLiteral, index int, targetReg Register, line int) (Register, errors.PaseratiError) {
 	if index < len(node.Elisions) && node.Elisions[index] {
 		c.emitLoadNewConstant(targetReg, vm.Hole, line)
@@ -529,19 +550,6 @@ func (c *Compiler) compileArrayLiteral(node *parser.ArrayLiteral, hint Register)
 // Original implementation for arrays without spread
 func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Register, tempRegs []Register) (Register, errors.PaseratiError) {
 	elementCount := len(node.Elements)
-	// debug disabled
-
-	// Dynamic chunking based on available registers.
-	// We reserve half of available registers for element computation and other temps.
-	available := c.regAlloc.AvailableTotal()
-	if available < 0 {
-		available = 0
-	}
-	maxChunkByAvail := available / 2
-	// Cap chunk size to 32 for good locality.
-	// Determine if we should use chunking path (large literal or tight registers)
-	useChunking := elementCount > 32 || elementCount > maxChunkByAvail
-
 	line := node.Token.Line
 
 	if elementCount == 0 {
@@ -553,13 +561,40 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 		return hint, nil
 	}
 
+	// `hint` doesn't hold a real value yet at this point: the fast path
+	// below only writes into it once every element has already been
+	// compiled elsewhere (OpMakeArray, at the very end), and the chunking
+	// path's own OpAllocArray hasn't run yet either. Give its register back
+	// to the pool for the duration of element/chunk compilation - each of
+	// which may itself recurse into an arbitrarily deep/wide nested
+	// container literal (paserati#471) and would otherwise have to compete
+	// with an idle-but-reserved `hint` for the register file - and reclaim
+	// it (preferably the exact same register, via AllocHinted, so the
+	// caller-visible register-identity contract holds: whatever function
+	// receives our returned register is trusted to have gotten the finished
+	// array back in the very register it originally handed us) only once
+	// we're actually about to write the array's value into it. Unlike the
+	// chunking path and compileObjectLiteral below, this needs no spill
+	// slot at all - there's no value here to preserve, only a register
+	// number to temporarily lend out.
+	originalHint := hint
+	c.regAlloc.Free(hint)
+
+	// Dynamic chunking based on available registers, now that hint's own
+	// register is back in the pool and counted.
+	available := c.regAlloc.AvailableTotal()
+	if available < 0 {
+		available = 0
+	}
+	maxChunkByAvail := available / 2
+	// Cap chunk size to 32 for good locality.
+	// Determine if we should use chunking path (large literal or tight registers)
+	useChunking := elementCount > 32 || elementCount > maxChunkByAvail
+
 	if !useChunking {
 		// Fast path: try to allocate contiguous block for OpMakeArray
 		firstTargetReg, ok := c.regAlloc.TryAllocContiguous(elementCount)
-		if !ok {
-			// Fall back to chunking if we can't get a contiguous block
-			// (control flows to the chunking path below)
-		} else {
+		if ok {
 			// Compile elements directly into contiguous positions
 			for i := range node.Elements {
 				targetReg := firstTargetReg + Register(i)
@@ -571,28 +606,79 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 					return BadRegister, err
 				}
 			}
+			// Free the contiguous block BEFORE asking for originalHint back:
+			// if originalHint's own register number happens to fall inside
+			// this block (quite likely - it was the most-recently-freed
+			// register right before TryAllocContiguous ran above, and the
+			// free list is consulted last-freed-first), AllocHinted would
+			// otherwise see it as still allocated (to this about-to-be-
+			// freed block) and needlessly fall back to a substitute -
+			// exactly the ordering bug this comment is here to prevent a
+			// future edit from reintroducing (paserati#471 post-fix
+			// regression: got a substitute here, then treated the move to
+			// originalHint as though it fully reconciled the situation
+			// without ever telling the allocator originalHint was live
+			// again - leaving it dangling in the free list for the very
+			// next allocation, e.g. this array's own caller fetching
+			// `.join` off of it, to silently clobber). Freeing the block
+			// first means the common case reclaims the *exact* register we
+			// started with, and OpMakeArray reading from firstTargetReg
+			// after the free is safe regardless - freeing only updates
+			// compile-time bookkeeping, never the registers' actual runtime
+			// contents, and nothing else runs in between to reuse them.
+			for i := 0; i < elementCount; i++ {
+				c.regAlloc.Free(firstTargetReg + Register(i))
+			}
+			hint = c.regAlloc.AllocHinted(originalHint)
 			c.emitOpCode(vm.OpMakeArray, line)
 			c.emitByte(byte(hint))
 			c.emitByte(byte(firstTargetReg))
 			c.emitByte(byte(elementCount))
-			// Free the contiguous block
-			for i := 0; i < elementCount; i++ {
-				c.regAlloc.Free(firstTargetReg + Register(i))
+			if hint != originalHint {
+				c.emitMove(originalHint, hint, line)
+				c.regAlloc.Free(hint) // don't leak the substitute AllocHinted fell back to
+				hint = originalHint
 			}
 			return hint, nil
 		}
+		// Fall back to chunking if we can't get a contiguous block
+		// (control flows to the chunking path below, hint remains freed).
 	}
 
-	// Large literal path: allocate and copy in chunks to avoid register blowup
+	// Large literal path: allocate and copy in chunks to avoid register blowup.
+	// This is the first point in this path where `hint` actually needs to
+	// hold a real, must-survive value, so reclaim its register now.
+	hint = c.regAlloc.AllocHinted(originalHint)
+
 	// 1) Pre-allocate array to full length
 	c.emitOpCode(vm.OpAllocArray, line)
 	c.emitByte(byte(hint))
 	c.emitUint16(uint16(elementCount))
 
+	// hint now holds the real (still-empty) array. Park it in a spill slot
+	// between uses instead of leaving it live for the whole chunking loop:
+	// it's only actually needed, briefly, once per chunk's own OpArrayCopy
+	// call - the rest of the time it would just sit there idle-but-
+	// allocated while that chunk's own elements (which may themselves be
+	// deeply/widely nested container literals) compile. Unconditional
+	// (not gated per-element like compileObjectLiteral below) because
+	// chunking is already array-literal compilation's own cold,
+	// register-constrained path - entered only for >32 elements or under
+	// real register pressure - so the extra store/load pair per chunk is
+	// negligible next to the chunk-copy work already happening there, and
+	// gating it per element would need the same bookkeeping for no
+	// measurable benefit.
+	hintSpill := c.AllocSpillSlot()
+	c.emitStoreSpill(hintSpill, hint, line)
+	c.regAlloc.Free(hint)
+
 	// 2) Emit in chunks
 	offset := 0
 	for offset < elementCount {
-		// Recompute availability for each chunk
+		// Recompute availability for each chunk - hint's register is
+		// currently free (parked in hintSpill), so this correctly counts
+		// it as available headroom for this chunk's own size choice and
+		// for whatever its elements need to compile.
 		available = c.regAlloc.AvailableTotal()
 		maxChunkByAvail = available / 2
 		if maxChunkByAvail < 1 {
@@ -633,12 +719,16 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 					c.regAlloc.Free(elemReg)
 					return BadRegister, err
 				}
+				hint = c.regAlloc.AllocHinted(hint)
+				c.emitLoadSpill(hint, hintSpill, line)
 				c.emitOpCode(vm.OpArrayCopy, line)
 				c.emitByte(byte(hint))
 				c.emitUint16(uint16(offset + i))
 				c.emitByte(byte(elemReg))
 				c.emitByte(1)
 				c.regAlloc.Free(elemReg)
+				c.emitStoreSpill(hintSpill, hint, line)
+				c.regAlloc.Free(hint)
 			}
 			offset += n
 			continue
@@ -654,6 +744,8 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 			}
 		}
 		// Copy chunk into array at current offset
+		hint = c.regAlloc.AllocHinted(hint)
+		c.emitLoadSpill(hint, hintSpill, line)
 		c.emitOpCode(vm.OpArrayCopy, line)
 		c.emitByte(byte(hint))
 		c.emitUint16(uint16(offset))
@@ -663,7 +755,19 @@ func (c *Compiler) compileArrayLiteralSimple(node *parser.ArrayLiteral, hint Reg
 		for i := 0; i < n; i++ {
 			c.regAlloc.Free(startReg + Register(i))
 		}
+		c.emitStoreSpill(hintSpill, hint, line)
+		c.regAlloc.Free(hint)
 		offset += n
+	}
+
+	// Final reload: bring the finished array back into a live register -
+	// preferably the exact one the caller originally gave us.
+	hint = c.regAlloc.AllocHinted(originalHint)
+	c.emitLoadSpill(hint, hintSpill, line)
+	if hint != originalHint {
+		c.emitMove(originalHint, hint, line)
+		c.regAlloc.Free(hint) // don't leak the substitute AllocHinted fell back to
+		hint = originalHint
 	}
 
 	return hint, nil
@@ -740,6 +844,14 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 		debugPrintf("Compiling Object Literal (One-by-One): %s\n", node.String())
 	}
 	line := parser.GetTokenFromNode(node).Line
+
+	// originalHint is the register the caller expects the finished object
+	// back in; hint may be locally reassigned below (see the spill/reload
+	// around a nested container literal's value compile) whenever the
+	// register it started in isn't available again by the time it's next
+	// needed - keep it as a defensive fallback so that contract still holds
+	// even in that rare case (see the final reconciliation before return).
+	originalHint := hint
 
 	// 1. Create an empty object in hint register
 	c.emitMakeEmptyObject(hint, line)
@@ -996,10 +1108,65 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 			}
 
 			if !valueCompiled {
+				// hint (this object's own reference) - and, for a computed
+				// key, keyReg - aren't needed again until this property's
+				// own store call just below, but would otherwise sit idle,
+				// live, and unusable by anything else for the ENTIRE
+				// duration of compiling prop.Value if it's itself a nested
+				// object/array literal: that recursive compile shares this
+				// same register file (unlike a method/function body, which
+				// gets its own), so depth costs one (or two, with a
+				// computed key) real registers per level for nothing more
+				// than moving a reference back into a register moments
+				// later - see paserati#471, the literal-nesting counterpart
+				// to #470's chained-assignment fix. Gated narrowly (only
+				// when the value is itself a container literal) so a
+				// literal whose properties are plain values - the
+				// overwhelming common case - pays nothing extra.
+				spillHint := isContainerLiteral(prop.Value)
+				var hintSpillSlot, keySpillSlot uint16
+				var spilledKey bool
+				if spillHint {
+					hintSpillSlot = c.AllocSpillSlot()
+					c.emitStoreSpill(hintSpillSlot, hint, line)
+					c.regAlloc.Free(hint)
+					if isComputedKey {
+						keySpillSlot = c.AllocSpillSlot()
+						c.emitStoreSpill(keySpillSlot, keyReg, line)
+						c.regAlloc.Free(keyReg)
+						spilledKey = true
+					}
+				}
+
 				_, err := c.compileNode(prop.Value, valueReg)
 				if err != nil {
 					freePropertyRegs()
 					return BadRegister, err
+				}
+
+				if spillHint {
+					hint = c.regAlloc.AllocHinted(hint)
+					c.emitLoadSpill(hint, hintSpillSlot, line)
+					if spilledKey {
+						oldKeyReg := keyReg
+						keyReg = c.regAlloc.AllocHinted(keyReg)
+						c.emitLoadSpill(keyReg, keySpillSlot, line)
+						if keyReg != oldKeyReg {
+							// regsToFree already holds keyReg's old identity
+							// (pushed when the key was first computed,
+							// above) - repoint it at wherever the reload
+							// actually landed so freePropertyRegs() below
+							// frees the right register instead of leaking
+							// this one and double-freeing (a silent no-op,
+							// per the allocator's own guard) the stale one.
+							for idx, r := range regsToFree {
+								if r == oldKeyReg {
+									regsToFree[idx] = keyReg
+									break
+								}
+							}
+						}
+					}
 				}
 			}
 			debugPrintf("--- OL Value Compiled. valueReg: R%d\n", valueReg)
@@ -1062,7 +1229,19 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 		}
 	}
 
-	// The object is fully constructed in hint register
+	// The object is fully constructed in hint register - reconcile back to
+	// the caller's originally-supplied register in case a reload above
+	// landed somewhere else (routine, not just a defensive edge case: once
+	// a property's own recursive value compile has run, its own freed
+	// registers - including whatever this object's hint was relocated out
+	// of - are exactly what a *sibling* property's own temp allocations
+	// reach for first, so by the time a later reload wants it back it may
+	// well be in active use again).
+	if hint != originalHint {
+		c.emitMove(originalHint, hint, line)
+		c.regAlloc.Free(hint) // don't leak the substitute AllocHinted fell back to
+		hint = originalHint
+	}
 	return hint, nil
 }
 
