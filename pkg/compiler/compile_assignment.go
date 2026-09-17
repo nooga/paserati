@@ -12,6 +12,20 @@ import (
 
 const debugAssignment = false // Enable debug output for assignment compilation
 
+// removeRegister returns regs with the first occurrence of target removed,
+// preserving order of the rest. Used to pull a register that's being
+// relocated to a spill slot back out of a tempRegs list before its owning
+// register is freed, so the deferred cleanup loop doesn't free it a second
+// time once a fresh register is later reloaded into its place and re-added.
+func removeRegister(regs []Register, target Register) []Register {
+	for i, r := range regs {
+		if r == target {
+			return append(regs[:i], regs[i+1:]...)
+		}
+	}
+	return regs
+}
+
 // WithPropertyInfo contains information about how to handle a with property access
 type WithPropertyInfo struct {
 	UseWithProperty  bool     // True if this should use with-property resolution
@@ -821,6 +835,62 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		return BadRegister, NewCompileError(node, fmt.Sprintf("invalid assignment target, expected identifier, index expression, or member expression, got %T", node.Left))
 	}
 
+	// Chained simple assignment (a.b = c.d = ... = value): park this level's
+	// LHS base register(s) in a spill slot instead of leaving them live for
+	// the entire nested RHS compile below. node.Value is compiled via a
+	// plain recursive call to compileAssignmentExpression, so for a chain
+	// N levels deep, Go's own call stack keeps every enclosing level's
+	// tempRegs slice - and the registers in it - alive until that level's
+	// own function call returns, which only happens after every deeper
+	// level has already finished. That holds up to N object/key registers
+	// live simultaneously purely to be moved back into a register moments
+	// later, with nothing computed from them in between: it's dead weight,
+	// not real register pressure. A hard-capped 255-register-per-function
+	// file (see registerLimit) makes that cost real, while a spill slot is
+	// cheap and effectively unbounded (0-65534) - so relocate the base(s)
+	// there for the duration of the nested compile and reload them only
+	// when this level's own store actually needs them again (paserati#470).
+	//
+	// Only "=" chains reach here: currentValueReg is nilRegister for simple
+	// assignment (compound ops need the pre-assignment value, which would
+	// need the same treatment but isn't the shape either real-world trigger
+	// or #470 itself hit, so it's left as future work rather than guessed at).
+	var chainChildIsAssignment bool
+	if node.Operator == "=" {
+		_, chainChildIsAssignment = node.Value.(*parser.AssignmentExpression)
+	}
+	var chainSpilledObj, chainSpilledKey, chainSpilledArr, chainSpilledIdx bool
+	var chainObjSpill, chainKeySpill, chainArrSpill, chainIdxSpill uint16
+	if chainChildIsAssignment {
+		switch lhsType {
+		case lhsIsMemberExpr:
+			chainObjSpill = c.AllocSpillSlot()
+			c.emitStoreSpill(chainObjSpill, memberInfo.objectReg, line)
+			tempRegs = removeRegister(tempRegs, memberInfo.objectReg)
+			c.regAlloc.Free(memberInfo.objectReg)
+			chainSpilledObj = true
+			if memberInfo.isComputed {
+				chainKeySpill = c.AllocSpillSlot()
+				c.emitStoreSpill(chainKeySpill, memberInfo.keyReg, line)
+				tempRegs = removeRegister(tempRegs, memberInfo.keyReg)
+				c.regAlloc.Free(memberInfo.keyReg)
+				chainSpilledKey = true
+			}
+		case lhsIsIndexExpr:
+			chainArrSpill = c.AllocSpillSlot()
+			c.emitStoreSpill(chainArrSpill, indexInfo.arrayReg, line)
+			tempRegs = removeRegister(tempRegs, indexInfo.arrayReg)
+			c.regAlloc.Free(indexInfo.arrayReg)
+			chainSpilledArr = true
+
+			chainIdxSpill = c.AllocSpillSlot()
+			c.emitStoreSpill(chainIdxSpill, indexInfo.indexReg, line)
+			tempRegs = removeRegister(tempRegs, indexInfo.indexReg)
+			c.regAlloc.Free(indexInfo.indexReg)
+			chainSpilledIdx = true
+		}
+	}
+
 	// Track temporary registers used for operation results
 	var operationTempRegs []Register
 
@@ -1206,6 +1276,35 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	// Clean up operation temporary registers
 	for _, reg := range operationTempRegs {
 		c.regAlloc.Free(reg)
+	}
+
+	// Reload whatever this level's own store below is about to need back
+	// out of the spill slot(s) it was parked in above, now that the nested
+	// RHS chain has finished compiling and no longer needs the register
+	// file to itself. needsStore is always true here when any of these
+	// flags is set: they're only set for a plain "=" to a member/index
+	// target, and none of the paths that turn needsStore off (immutable
+	// bindings, NFE self-binding, compound in-place, logical short-circuit)
+	// apply to that combination - see the guard where these were spilled.
+	if chainSpilledObj {
+		memberInfo.objectReg = c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, memberInfo.objectReg)
+		c.emitLoadSpill(memberInfo.objectReg, chainObjSpill, line)
+	}
+	if chainSpilledKey {
+		memberInfo.keyReg = c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, memberInfo.keyReg)
+		c.emitLoadSpill(memberInfo.keyReg, chainKeySpill, line)
+	}
+	if chainSpilledArr {
+		indexInfo.arrayReg = c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, indexInfo.arrayReg)
+		c.emitLoadSpill(indexInfo.arrayReg, chainArrSpill, line)
+	}
+	if chainSpilledIdx {
+		indexInfo.indexReg = c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, indexInfo.indexReg)
+		c.emitLoadSpill(indexInfo.indexReg, chainIdxSpill, line)
 	}
 
 	// --- Store Result Back to LHS ---
