@@ -69,10 +69,10 @@ import (
 // fresh local register instead of leaving the global alone - "fixed" into
 // silently writing the wrong place: `a()` then returning the closure itself
 // instead of the reassigned value).
-func (c *Compiler) closureBindingDest(name string) (reg Register, spilled bool, spillIdx uint16) {
-	if sym, _, found := c.currentSymbolTable.Resolve(name); found {
+func (c *Compiler) closureBindingDest(name string) (reg Register, spilled bool, spillIdx uint16, updateTable *SymbolTable) {
+	if sym, definingTable, found := c.currentSymbolTable.Resolve(name); found {
 		if sym.IsSpilled {
-			return c.regAlloc.Alloc(), true, sym.SpillIndex
+			return c.regAlloc.Alloc(), true, sym.SpillIndex, nil
 		}
 		if sym.IsGlobal {
 			// Ensure the global binding exists in the *current* symbol table,
@@ -90,10 +90,25 @@ func (c *Compiler) closureBindingDest(name string) (reg Register, spilled bool, 
 			// what the non-function-value branches already do in this
 			// situation and keeps every scope's own copy self-consistent.
 			c.currentSymbolTable.DefineGlobal(name, sym.GlobalIndex)
-			return c.regAlloc.Alloc(), false, 0
+			return c.regAlloc.Alloc(), false, 0, c.currentSymbolTable
 		}
 		if sym.Register != nilRegister {
-			return sym.Register, false, 0
+			// Same cross-scope hazard as the IsGlobal case above, but a
+			// function-scope `var` can't be aliased into the current
+			// (block-local) table the same way: c.freeScopeRegisters, called
+			// when the enclosing block exits, reclaims every non-global,
+			// non-spilled register still on record in that block's own
+			// table - including one that's really owned by the *enclosing*
+			// function scope, since a plain `var` predefined via the
+			// function's own hoisting pass isn't marked IsGlobal or
+			// IsSpilled. Aliasing it here would get it freed the moment the
+			// block ends even though `f` is still live afterward (see
+			// paserati#476: `var f = function(){}` inside a bare block,
+			// referenced after the block). Instead, hand back the table
+			// Resolve actually found it in, so finalizeClosureBinding can
+			// update the register there directly without ever touching
+			// c.currentSymbolTable.
+			return sym.Register, false, 0, definingTable
 		}
 	}
 	// Not predefined (or predefined without a real, live register, and not
@@ -109,19 +124,21 @@ func (c *Compiler) closureBindingDest(name string) (reg Register, spilled bool, 
 	// The #449 global-scope case above never reaches this fallback at all -
 	// it's handled entirely by the sym.IsGlobal branch.
 	c.currentSymbolTable.Define(name, nilRegister)
-	return c.regAlloc.Alloc(), false, 0
+	return c.regAlloc.Alloc(), false, 0, c.currentSymbolTable
 }
 
 // finalizeClosureBinding records the register holding a freshly emitted closure
 // for `name`. For a spilled binding it writes the closure into the spill slot and
-// frees the temp; otherwise it points the symbol at the closure register.
-func (c *Compiler) finalizeClosureBinding(name string, reg Register, spilled bool, spillIdx uint16, line int) {
+// frees the temp; otherwise it points the symbol at the closure register, in the
+// symbol table that owns it (see closureBindingDest's updateTable, which may not
+// be c.currentSymbolTable when `name` is a var hoisted to an enclosing scope).
+func (c *Compiler) finalizeClosureBinding(name string, reg Register, spilled bool, spillIdx uint16, updateTable *SymbolTable, line int) {
 	if spilled {
 		c.emitStoreSpill(spillIdx, reg, line)
 		c.regAlloc.Free(reg)
 		return
 	}
-	c.currentSymbolTable.UpdateRegister(name, reg)
+	updateTable.UpdateRegister(name, reg)
 }
 
 func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register) (Register, errors.PaseratiError) {
@@ -150,7 +167,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// --- Handle let f = function g() {} or let f = function() {} ---
 			// 1. Pick the destination register (reusing a predefined TDZ register, or
 			//    a temp for a spilled binding); define temporarily for recursion.
-			closureReg, spilled, spillIdx := c.closureBindingDest(node.Name.Value)
+			closureReg, spilled, spillIdx, updateTable := c.closureBindingDest(node.Name.Value)
 
 			// 2. Compile the function literal body.
 			//    Pass the variable name (f) as the hint for the function object's name
@@ -165,7 +182,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
 			// 4. Record the closure register (or store it back to the spill slot).
-			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, node.Name.Token.Line)
+			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, updateTable, node.Name.Token.Line)
 
 			// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 
@@ -177,7 +194,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			// --- Handle let f = () => {} ---
 			// 1. Pick the destination register (reusing a predefined TDZ register, or
 			//    a temp for a spilled binding); define temporarily for recursion.
-			closureReg, spilled, spillIdx := c.closureBindingDest(node.Name.Value)
+			closureReg, spilled, spillIdx, updateTable := c.closureBindingDest(node.Name.Value)
 
 			// 2. Compile the arrow function with variable name as the name hint
 			//    Per ECMAScript spec, anonymous arrow functions infer name from variable
@@ -197,7 +214,7 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 			c.emitClosure(closureReg, funcConstIndex, minimalFuncLit, freeSymbols)
 
 			// 4. Record the closure register (or store it back to the spill slot).
-			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, node.Name.Token.Line)
+			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, updateTable, node.Name.Token.Line)
 
 		} else if classExpr, ok := node.Value.(*parser.ClassExpression); ok {
 			// --- Handle let C = class {} or let C = class D {} ---
@@ -490,7 +507,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			//    that leaves the existing global symbol alone so a self-
 			//    reference inside the body resolves via OpGetGlobal/OpSetGlobal
 			//    instead of an invalid upvalue capture; see closureBindingDest).
-			closureReg, spilled, spillIdx := c.closureBindingDest(node.Name.Value)
+			closureReg, spilled, spillIdx, updateTable := c.closureBindingDest(node.Name.Value)
 
 			// 2. Compile the function literal body.
 			//    Pass the variable name (f) as the hint for the function object's name
@@ -505,7 +522,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 
 			// 4. Store the closure back into its spill slot, or update the symbol
 			//    table entry with the closure register.
-			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, node.Name.Token.Line)
+			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, updateTable, node.Name.Token.Line)
 
 			// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 
@@ -517,7 +534,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			// --- Handle var f = () => {} ---
 			// 1. Pick the destination register - see the identical comment on
 			//    the function-literal branch above.
-			closureReg, spilled, spillIdx := c.closureBindingDest(node.Name.Value)
+			closureReg, spilled, spillIdx, updateTable := c.closureBindingDest(node.Name.Value)
 
 			// Compile the arrow function with variable name as the name hint
 			funcConstIndex, freeSymbols, err := c.compileArrowFunctionWithName(arrowFunc, node.Name.Value)
@@ -534,7 +551,7 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			minimalFuncLit := &parser.FunctionLiteral{Token: arrowFunc.Token, Body: body}
 			c.emitClosure(closureReg, funcConstIndex, minimalFuncLit, freeSymbols)
 
-			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, node.Name.Token.Line)
+			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, updateTable, node.Name.Token.Line)
 
 		} else if classExpr, ok := declarator.Value.(*parser.ClassExpression); ok {
 			// --- Handle var C = class {} or var C = class D {} ---
@@ -778,7 +795,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			// --- Handle const f = function g() {} or const f = function() {} ---
 			// 1. Pick the destination register (reusing a predefined TDZ register, or
 			//    a temp for a spilled binding); define temporarily for recursion.
-			closureReg, spilled, spillIdx := c.closureBindingDest(node.Name.Value)
+			closureReg, spilled, spillIdx, updateTable := c.closureBindingDest(node.Name.Value)
 
 			// 2. Compile the function literal body, passing const name as hint.
 			funcConstIndex, freeSymbols, err := c.compileFunctionLiteral(funcLit, node.Name.Value)
@@ -790,7 +807,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			c.emitClosure(closureReg, funcConstIndex, funcLit, freeSymbols)
 
 			// 4. Record the closure register (or store it back to the spill slot).
-			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, node.Name.Token.Line)
+			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, updateTable, node.Name.Token.Line)
 
 			// Smart pinning: Don't pin here - register will be pinned when/if captured by inner closure
 
@@ -802,7 +819,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			// --- Handle const f = () => {} ---
 			// 1. Pick the destination register (reusing a predefined TDZ register, or
 			//    a temp for a spilled binding); define temporarily for recursion.
-			closureReg, spilled, spillIdx := c.closureBindingDest(node.Name.Value)
+			closureReg, spilled, spillIdx, updateTable := c.closureBindingDest(node.Name.Value)
 
 			// 2. Compile the arrow function with const name as the name hint
 			funcConstIndex, freeSymbols, err := c.compileArrowFunctionWithName(arrowFunc, node.Name.Value)
@@ -821,7 +838,7 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 			c.emitClosure(closureReg, funcConstIndex, minimalFuncLit, freeSymbols)
 
 			// 4. Record the closure register (or store it back to the spill slot).
-			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, node.Name.Token.Line)
+			c.finalizeClosureBinding(node.Name.Value, closureReg, spilled, spillIdx, updateTable, node.Name.Token.Line)
 
 		} else if classExpr, ok := node.Value.(*parser.ClassExpression); ok {
 			// --- Handle const C = class {} or const C = class D {} ---
