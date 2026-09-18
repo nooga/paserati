@@ -86,6 +86,10 @@ func ownPropertiesSlot(v Value) **PlainObject {
 		if re := v.AsRegExpObject(); re != nil {
 			return &re.Properties
 		}
+	case TypeArray:
+		if arr := v.AsArray(); arr != nil {
+			return &arr.Properties
+		}
 	case TypeMap:
 		if m := v.AsMap(); m != nil {
 			return &m.Properties

@@ -255,6 +255,12 @@ type ArrayObject struct {
 	// this points at S.prototype (whose own [[Prototype]] chains through Array.prototype).
 	// Zero value (TypeUndefined) means use the realm's intrinsic ArrayPrototype.
 	prototype Value
+	// Properties is the side table holding private fields/methods/accessors
+	// for a `class S extends Array {}` instance (see properties_table.go).
+	// Ordinary named/symbol properties still go through the fields above -
+	// this table exists only so ArrayObject can reuse PlainObject's private-
+	// member storage instead of duplicating it. Allocated lazily.
+	Properties *PlainObject
 }
 
 // PropertyDesc stores property descriptor attributes

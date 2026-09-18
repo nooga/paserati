@@ -10713,6 +10713,10 @@ startExecution:
 					ip = frame.ip
 					continue
 				}
+			} else if props := OwnPropertiesTable(objVal); props != nil {
+				// Instances of `class S extends Array/Map/Set {}` (see
+				// paserati#478) store private members in this side table.
+				obj = props
 			} else {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot read private member #%s from an object whose class did not declare it", fieldName))
@@ -10884,6 +10888,9 @@ startExecution:
 					cl.Properties = newPropertiesTable()
 				}
 				obj = cl.Properties
+			} else if props := EnsureOwnPropertiesTable(objVal); props != nil {
+				// See paserati#478: Array/Map/Set subclass instances.
+				obj = props
 			} else {
 				frame.ip = ip
 				status := vm.runtimeError("Cannot set private field '%s' of %s", fieldName, objVal.TypeName())
@@ -11001,6 +11008,12 @@ startExecution:
 					cl.Properties = newPropertiesTable()
 				}
 				obj = cl.Properties
+			} else if props := EnsureOwnPropertiesTable(objVal); props != nil {
+				// Instances of `class S extends Array/Map/Set {}` are the VM's
+				// dedicated ArrayObject/MapObject/SetObject, not PlainObject -
+				// private-member storage for those lives in this side table
+				// instead (see properties_table.go). See paserati#478.
+				obj = props
 			} else {
 				frame.ip = ip
 				status := vm.runtimeError("Cannot add private field '%s' of %s", fieldName, objVal.TypeName())
@@ -11095,6 +11108,9 @@ startExecution:
 					cl.Properties = newPropertiesTable()
 				}
 				obj = cl.Properties
+			} else if props := EnsureOwnPropertiesTable(objVal); props != nil {
+				// See paserati#478: Array/Map/Set subclass instances.
+				obj = props
 			} else {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot write private member #%s from an object whose class did not declare it", displayName))
@@ -11196,6 +11212,9 @@ startExecution:
 					closure.Properties = newPropertiesTable()
 				}
 				obj = closure.Properties
+			} else if props := EnsureOwnPropertiesTable(objVal); props != nil {
+				// See paserati#478: Array/Map/Set subclass instances.
+				obj = props
 			} else {
 				frame.ip = ip
 				status := vm.runtimeError("Cannot set private method '%s' of %s", methodName, objVal.TypeName())
@@ -11277,8 +11296,12 @@ startExecution:
 
 			objVal := registers[objReg]
 
-			// Per ECMAScript: #field in obj throws TypeError if obj is not an object
-			if objVal.Type() != TypeObject && objVal.Type() != TypeFunction {
+			// Per ECMAScript: #field in obj throws TypeError if obj is not an object.
+			// Array/Map/Set/etc. subclass instances (paserati#478) are objects too,
+			// even though the VM represents them with a dedicated Go type rather
+			// than TypeObject - OwnPropertiesTable below recognizes exactly the
+			// same set of kinds that can hold a private member.
+			if objVal.Type() != TypeObject && objVal.Type() != TypeFunction && objVal.Type() != TypeClosure && OwnPropertiesTable(objVal) == nil {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot use 'in' operator to search for '#%s' in %s", fieldName, objVal.TypeName()))
 				if vm.frameCount == 0 || vm.unwindingCrossedNative {
@@ -11310,6 +11333,8 @@ startExecution:
 				if closure.Properties != nil {
 					obj = closure.Properties
 				}
+			} else {
+				obj = OwnPropertiesTable(objVal)
 			}
 
 			// Check for private field, method, or accessor
@@ -11376,6 +11401,9 @@ startExecution:
 					closure.Properties = newPropertiesTable()
 				}
 				obj = closure.Properties
+			} else if props := EnsureOwnPropertiesTable(objVal); props != nil {
+				// See paserati#478: Array/Map/Set subclass instances.
+				obj = props
 			} else {
 				frame.ip = ip
 				status := vm.runtimeError("Cannot set private accessor '%s' on %s", fieldName, objVal.TypeName())
