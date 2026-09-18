@@ -3382,7 +3382,8 @@ func (p *Parser) parseParameterDestructuringElement() *DestructuringElement {
 	}
 
 	// Parse target (support nested patterns in parameter context)
-	if p.curTokenIs(lexer.IDENT) {
+	if p.curTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.curToken.Type) {
+		// Includes contextual keywords like FROM, OF, TYPE, etc.
 		element.Target = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	} else if p.curTokenIs(lexer.LBRACKET) {
 		// Nested array destructuring: function f([a, [b, c]]) or function f([...[x, y]])
