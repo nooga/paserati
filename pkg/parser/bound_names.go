@@ -59,6 +59,17 @@ func CollectPatternNames(target Expression, seen map[string]bool, names *[]strin
 		for _, elem := range t.Elements {
 			CollectPatternNames(elem, seen, names)
 		}
+	case *ObjectParameterPattern:
+		// A nested pattern reached through a function parameter's own pattern
+		// nodes rather than a plain object literal, e.g. the `{a}` inside
+		// `function f([{a}])` - parameter patterns parse their nested shapes
+		// as ObjectParameterPattern/ArrayParameterPattern instead of
+		// ObjectLiteral/ArrayLiteral, so they need their own cases here or
+		// their names go uncollected (paserati#496).
+		CollectObjectPatternNames(t.Properties, t.RestProperty, seen, names)
+	case *ArrayParameterPattern:
+		// See ObjectParameterPattern above.
+		CollectArrayPatternNames(t.Elements, seen, names)
 	}
 }
 
