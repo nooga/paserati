@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/source"
@@ -645,14 +646,14 @@ func (vm *VM) formatStackFrames(frames []StackFrame) string {
 		return ""
 	}
 
-	result := ""
+	var b strings.Builder
 	for i, frame := range frames {
 		if i > 0 {
-			result += "\n"
+			b.WriteByte('\n')
 		}
-		result += fmt.Sprintf("    at %s (%s:%d:%d)", frame.FunctionName, frame.FileName, frame.Line, frame.Column)
+		fmt.Fprintf(&b, "    at %s (%s:%d:%d)", frame.FunctionName, frame.FileName, frame.Line, frame.Column)
 	}
-	return result
+	return b.String()
 }
 
 // getStackFrames extracts stack frame information from the current VM call stack
@@ -669,6 +670,15 @@ func (vm *VM) getStackFrames() []StackFrame {
 // matching V8, where passing a constructorOpt that was never called leaves
 // the trace untouched rather than swallowing it entirely.
 func (vm *VM) getStackFramesExcluding(target *FunctionObject) []StackFrame {
+	return vm.getStackFramesExcludingLimited(target, -1)
+}
+
+// getStackFramesExcludingLimited is getStackFramesExcluding, but stops once
+// `limit` frames have been collected (a negative limit means unlimited) -
+// letting Error.stackTraceLimit bound the walk itself on a deep call stack,
+// rather than walking every live frame just to discard all but the first
+// few afterward.
+func (vm *VM) getStackFramesExcludingLimited(target *FunctionObject, limit int) []StackFrame {
 	startIdx := vm.frameCount - 1
 	if target != nil {
 		for i := vm.frameCount - 1; i >= 0; i-- {
@@ -687,6 +697,10 @@ func (vm *VM) getStackFramesExcluding(target *FunctionObject) []StackFrame {
 
 	// Walk through all active frames, starting below target's own frame (if found)
 	for i := startIdx; i >= 0; i-- {
+		if limit >= 0 && len(frames) >= limit {
+			break
+		}
+
 		frame := &vm.frames[i]
 
 		// Skip native frames - they don't have meaningful source location info
