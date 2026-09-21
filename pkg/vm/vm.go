@@ -615,6 +615,11 @@ func NewVM() *VM {
 		globalsFromGlobalObject: make(map[uint16]bool),           // Track globals read from GlobalObject
 	}
 
+	// Create this VM's single canonical set of well-known symbols before
+	// the default realm exists, so realm.InitializeSymbols() (below) has
+	// something to copy instead of minting its own (see its own comment).
+	vm.ensureWellKnownSymbols()
+
 	// Create and initialize the default realm
 	realm := NewRealm(vm, vm.nextRealmID())
 	realm.InitializePrototypes()
@@ -652,6 +657,35 @@ func (vm *VM) DecrementCallDepth() {
 func (vm *VM) nextRealmID() int {
 	vm.realmCounter++
 	return vm.realmCounter
+}
+
+// ensureWellKnownSymbols creates this VM's single canonical set of
+// well-known symbols (Symbol.iterator, Symbol.replace, ...), if they don't
+// already exist. Per ECMA-262 6.1.5.1, well-known symbols "are shared by
+// all realms" of the same agent - unlike per-realm intrinsics such as
+// %Array.prototype%, a Symbol.replace minted for one Realm must be the
+// exact same Symbol value used by every other Realm of this VM, including
+// ones created later (e.g. by a host's `vm.createContext()`). Idempotent:
+// safe to call from every Realm's InitializeSymbols.
+func (vm *VM) ensureWellKnownSymbols() {
+	if vm.SymbolIterator.Type() == TypeSymbol {
+		return
+	}
+	vm.SymbolIterator = NewSymbol("Symbol.iterator")
+	vm.SymbolToPrimitive = NewSymbol("Symbol.toPrimitive")
+	vm.SymbolToStringTag = NewSymbol("Symbol.toStringTag")
+	vm.SymbolHasInstance = NewSymbol("Symbol.hasInstance")
+	vm.SymbolIsConcatSpreadable = NewSymbol("Symbol.isConcatSpreadable")
+	vm.SymbolSpecies = NewSymbol("Symbol.species")
+	vm.SymbolMatch = NewSymbol("Symbol.match")
+	vm.SymbolMatchAll = NewSymbol("Symbol.matchAll")
+	vm.SymbolReplace = NewSymbol("Symbol.replace")
+	vm.SymbolSearch = NewSymbol("Symbol.search")
+	vm.SymbolSplit = NewSymbol("Symbol.split")
+	vm.SymbolUnscopables = NewSymbol("Symbol.unscopables")
+	vm.SymbolAsyncIterator = NewSymbol("Symbol.asyncIterator")
+	vm.SymbolDispose = NewSymbol("Symbol.dispose")
+	vm.SymbolAsyncDispose = NewSymbol("Symbol.asyncDispose")
 }
 
 // CurrentRealm returns the active realm for the current execution.
