@@ -19480,7 +19480,8 @@ func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 			// Each entry is a [key, value] pair
 			pairVal := NewArray()
 			pairArr := pairVal.AsArray()
-			pairArr.elements = []Value{key, value}
+			pairArr.Append(key)
+			pairArr.Append(value)
 			args = append(args, pairVal)
 		})
 		return args, nil
