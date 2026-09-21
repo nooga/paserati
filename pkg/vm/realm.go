@@ -218,24 +218,34 @@ func (r *Realm) InitializePrototypes() {
 	r.GlobalObject = NewObject(r.ObjectPrototype).AsPlainObject()
 }
 
-// InitializeSymbols creates well-known symbols for this realm.
-// Each realm has its own set of symbols.
+// InitializeSymbols gives this realm the VM's single canonical set of
+// well-known symbols (see VM.ensureWellKnownSymbols) instead of minting
+// its own. Per ECMA-262 6.1.5.1, well-known symbols are shared by every
+// Realm of the same agent - a second Realm (e.g. one spun up by a host's
+// `vm.createContext()`) must resolve Symbol.replace, Symbol.iterator, etc.
+// to the exact same Symbol values the first Realm uses, or property
+// lookups keyed by one Realm's copy silently miss on an object whose
+// method was registered under another Realm's differently-identitied copy
+// (paserati#486: vm.createContext() permanently broke String.prototype.replace
+// process-wide because each Realm used to get its own distinct
+// Symbol.replace).
 func (r *Realm) InitializeSymbols() {
-	r.SymbolIterator = NewSymbol("Symbol.iterator")
-	r.SymbolToPrimitive = NewSymbol("Symbol.toPrimitive")
-	r.SymbolToStringTag = NewSymbol("Symbol.toStringTag")
-	r.SymbolHasInstance = NewSymbol("Symbol.hasInstance")
-	r.SymbolIsConcatSpreadable = NewSymbol("Symbol.isConcatSpreadable")
-	r.SymbolSpecies = NewSymbol("Symbol.species")
-	r.SymbolMatch = NewSymbol("Symbol.match")
-	r.SymbolMatchAll = NewSymbol("Symbol.matchAll")
-	r.SymbolReplace = NewSymbol("Symbol.replace")
-	r.SymbolSearch = NewSymbol("Symbol.search")
-	r.SymbolSplit = NewSymbol("Symbol.split")
-	r.SymbolUnscopables = NewSymbol("Symbol.unscopables")
-	r.SymbolAsyncIterator = NewSymbol("Symbol.asyncIterator")
-	r.SymbolDispose = NewSymbol("Symbol.dispose")
-	r.SymbolAsyncDispose = NewSymbol("Symbol.asyncDispose")
+	r.vm.ensureWellKnownSymbols()
+	r.SymbolIterator = r.vm.SymbolIterator
+	r.SymbolToPrimitive = r.vm.SymbolToPrimitive
+	r.SymbolToStringTag = r.vm.SymbolToStringTag
+	r.SymbolHasInstance = r.vm.SymbolHasInstance
+	r.SymbolIsConcatSpreadable = r.vm.SymbolIsConcatSpreadable
+	r.SymbolSpecies = r.vm.SymbolSpecies
+	r.SymbolMatch = r.vm.SymbolMatch
+	r.SymbolMatchAll = r.vm.SymbolMatchAll
+	r.SymbolReplace = r.vm.SymbolReplace
+	r.SymbolSearch = r.vm.SymbolSearch
+	r.SymbolSplit = r.vm.SymbolSplit
+	r.SymbolUnscopables = r.vm.SymbolUnscopables
+	r.SymbolAsyncIterator = r.vm.SymbolAsyncIterator
+	r.SymbolDispose = r.vm.SymbolDispose
+	r.SymbolAsyncDispose = r.vm.SymbolAsyncDispose
 }
 
 // GetGlobal retrieves a global variable by name from this realm.
