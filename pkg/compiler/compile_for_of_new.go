@@ -465,10 +465,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 	c.closeLoopBodyPerIterationBindings(loopContext, node.Token.Line)
 
 	// 16. Jump back to loop start
-	jumpBackPos := len(c.chunk.Code) + 1 + 2
-	backOffset := loopStartPos - jumpBackPos
-	c.emitOpCode(vm.OpJump, node.Token.Line)
-	c.emitUint16(uint16(int16(backOffset)))
+	c.emitBackwardJump(loopStartPos, node.Token.Line)
 
 	// 17. Patch exit jumps - this is where the loop exits normally when
 	// done=true (the fast path has its own exit jump to the same target)

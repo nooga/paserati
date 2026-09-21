@@ -32,6 +32,10 @@ func (c *Compiler) emitUint16(val uint16) {
 	c.chunk.WriteUint16(val)
 }
 
+func (c *Compiler) emitUint32(val uint32) {
+	c.chunk.WriteUint32(val)
+}
+
 func (c *Compiler) emitLoadConstant(dest Register, constIdx uint16, line int) {
 	c.emitOpCode(vm.OpLoadConst, line)
 	c.emitByte(byte(dest))
@@ -795,24 +799,24 @@ func (c *Compiler) emitIsNullish(dest, src Register, line int) {
 }
 
 // emitJumpIfNull emits OpJumpIfNull instruction: jump to offset if src === null
-func (c *Compiler) emitJumpIfNull(src Register, offset int16, line int) {
+func (c *Compiler) emitJumpIfNull(src Register, offset int32, line int) {
 	c.emitOpCode(vm.OpJumpIfNull, line)
 	c.emitByte(byte(src))
-	c.emitUint16(uint16(offset))
+	c.emitUint32(uint32(offset))
 }
 
 // emitJumpIfUndefined emits OpJumpIfUndefined instruction: jump to offset if src === undefined
-func (c *Compiler) emitJumpIfUndefined(src Register, offset int16, line int) {
+func (c *Compiler) emitJumpIfUndefined(src Register, offset int32, line int) {
 	c.emitOpCode(vm.OpJumpIfUndefined, line)
 	c.emitByte(byte(src))
-	c.emitUint16(uint16(offset))
+	c.emitUint32(uint32(offset))
 }
 
 // emitJumpIfNullish emits OpJumpIfNullish instruction: jump to offset if src is null or undefined
-func (c *Compiler) emitJumpIfNullish(src Register, offset int16, line int) {
+func (c *Compiler) emitJumpIfNullish(src Register, offset int32, line int) {
 	c.emitOpCode(vm.OpJumpIfNullish, line)
 	c.emitByte(byte(src))
-	c.emitUint16(uint16(offset))
+	c.emitUint32(uint32(offset))
 }
 
 // --- With Statement Support ---

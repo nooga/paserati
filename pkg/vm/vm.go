@@ -4168,19 +4168,15 @@ startExecution:
 			registers[destReg] = BooleanValue(result)
 
 		case OpJump:
-			offsetHi := code[ip]
-			offsetLo := code[ip+1]
-			ip += 2
-			offset := int16(uint16(offsetHi)<<8 | uint16(offsetLo))
+			offset := readInt32BE(code[ip : ip+4])
+			ip += 4
 			ip += int(offset) // Apply jump relative to IP *after* reading offset bytes
 
 		case OpJumpIfFalse:
 			condReg := code[ip]
-			offsetHi := code[ip+1]
-			offsetLo := code[ip+2]
-			ip += 3
+			offset := readInt32BE(code[ip+1 : ip+5])
+			ip += 5
 			if isFalsey(registers[condReg]) {
-				offset := int16(uint16(offsetHi)<<8 | uint16(offsetLo))
 				ip += int(offset) // Apply jump relative to IP *after* reading offset bytes
 			}
 
@@ -14947,32 +14943,26 @@ startExecution:
 
 		case OpJumpIfNull:
 			condReg := code[ip]
-			offsetHi := code[ip+1]
-			offsetLo := code[ip+2]
-			ip += 3
+			offset := readInt32BE(code[ip+1 : ip+5])
+			ip += 5
 			if registers[condReg].Type() == TypeNull {
-				offset := int16(uint16(offsetHi)<<8 | uint16(offsetLo))
 				ip += int(offset) // Apply jump relative to IP *after* reading offset bytes
 			}
 
 		case OpJumpIfUndefined:
 			condReg := code[ip]
-			offsetHi := code[ip+1]
-			offsetLo := code[ip+2]
-			ip += 3
+			offset := readInt32BE(code[ip+1 : ip+5])
+			ip += 5
 			if registers[condReg].Type() == TypeUndefined {
-				offset := int16(uint16(offsetHi)<<8 | uint16(offsetLo))
 				ip += int(offset) // Apply jump relative to IP *after* reading offset bytes
 			}
 
 		case OpJumpIfNullish:
 			condReg := code[ip]
-			offsetHi := code[ip+1]
-			offsetLo := code[ip+2]
-			ip += 3
+			offset := readInt32BE(code[ip+1 : ip+5])
+			ip += 5
 			val := registers[condReg]
 			if val.Type() == TypeNull || val.Type() == TypeUndefined {
-				offset := int16(uint16(offsetHi)<<8 | uint16(offsetLo))
 				ip += int(offset) // Apply jump relative to IP *after* reading offset bytes
 			}
 		// --- END NEW ---
@@ -15952,14 +15942,12 @@ startExecution:
 
 		// --- Phase 4a: Push Completion Records ---
 		case OpPushBreak:
-			// Format: OpPushBreak(1) + TargetOffset(2 bytes, 16-bit signed)
-			targetPCHi := code[ip]
-			targetPCLo := code[ip+1]
-			ip += 2
+			// Format: OpPushBreak(1) + TargetOffset(4 bytes, 32-bit signed)
+			offset := readInt32BE(code[ip : ip+4])
+			ip += 4
 
 			// Calculate absolute target PC from relative offset
 			offsetFrom := ip // Position after the operand
-			offset := int16(uint16(targetPCHi)<<8 | uint16(targetPCLo))
 			targetPC := offsetFrom + int(offset)
 
 			// Push break completion onto stack
@@ -15972,14 +15960,12 @@ startExecution:
 			continue
 
 		case OpPushContinue:
-			// Format: OpPushContinue(1) + TargetOffset(2 bytes, 16-bit signed)
-			targetPCHi := code[ip]
-			targetPCLo := code[ip+1]
-			ip += 2
+			// Format: OpPushContinue(1) + TargetOffset(4 bytes, 32-bit signed)
+			offset := readInt32BE(code[ip : ip+4])
+			ip += 4
 
 			// Calculate absolute target PC from relative offset
 			offsetFrom := ip // Position after the operand
-			offset := int16(uint16(targetPCHi)<<8 | uint16(targetPCLo))
 			targetPC := offsetFrom + int(offset)
 
 			// Push continue completion onto stack

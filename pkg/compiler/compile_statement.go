@@ -2,7 +2,6 @@ package compiler
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
@@ -1143,10 +1142,7 @@ func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, lab
 	c.closeLoopBodyPerIterationBindings(loopContext, line)
 
 	// --- Jump Back To Start ---
-	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2 // OpCode + 16bit offset
-	backOffset := loopStartPos - jumpBackInstructionEndPos
-	c.emitOpCode(vm.OpJump, line)
-	c.emitUint16(uint16(int16(backOffset))) // Emit calculated signed offset
+	c.emitBackwardJump(loopStartPos, line)
 
 	// --- Finish Loop ---
 	// Patch the initial conditional jump to land here (after the backward jump)
@@ -1164,15 +1160,7 @@ func (c *Compiler) compileWhileStatementLabeled(node *parser.WhileStatement, lab
 	// Continue jumps to continueLandingPos (just before the per-iteration close
 	// and the jump back to the condition check).
 	for _, continuePos := range poppedContext.ContinuePlaceholderPosList {
-		jumpInstructionEndPos := continuePos + 1 + 2 // OpCode + 16bit offset
-		targetOffset := continueLandingPos - jumpInstructionEndPos
-
-		if targetOffset > math.MaxInt16 || targetOffset < math.MinInt16 {
-			return BadRegister, NewCompileError(node, fmt.Sprintf("internal compiler error: continue jump offset %d exceeds 16-bit limit", targetOffset))
-		}
-		// Manually write the 16-bit offset into the placeholder jump instruction
-		c.chunk.Code[continuePos+1] = byte(int16(targetOffset) >> 8)   // High byte
-		c.chunk.Code[continuePos+2] = byte(int16(targetOffset) & 0xFF) // Low byte
+		c.patchJumpToTarget(continuePos, continueLandingPos)
 	}
 
 	// Return completion value (which is undefined if loop never ran, or last body value)
@@ -1479,10 +1467,7 @@ func (c *Compiler) compileForStatementLabeled(node *parser.ForStatement, label s
 	}
 
 	// --- 5. Jump back to Loop Start (before condition) ---
-	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2 // OpCode + 16bit offset
-	backOffset := loopStartPos - jumpBackInstructionEndPos
-	c.emitOpCode(vm.OpJump, node.Body.Token.Line) // Use body's line for jump back
-	c.emitUint16(uint16(int16(backOffset)))
+	c.emitBackwardJump(loopStartPos, node.Body.Token.Line) // Use body's line for jump back
 
 	// --- 6. Loop End & Patch Condition/Breaks ---
 
@@ -1582,7 +1567,7 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement, hint Regis
 			// Break targets a loop outside try-finally: push completion and jump to finally
 			opcodePos := len(c.chunk.Code)
 			c.emitOpCode(vm.OpPushBreak, node.Token.Line)
-			c.emitUint16(0xFFFF) // Placeholder for target PC offset
+			c.emitUint32(0xFFFFFFFF) // Placeholder for target PC offset
 
 			// Add opcode position to loop's break list (will be patched when loop finishes)
 			targetContext.BreakPlaceholderPosList = append(targetContext.BreakPlaceholderPosList, opcodePos)
@@ -1715,7 +1700,7 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 			// Emit: OpPushContinue <placeholder>
 			opcodePos := len(c.chunk.Code)
 			c.emitOpCode(vm.OpPushContinue, node.Token.Line)
-			c.emitUint16(0xFFFF) // Placeholder for target PC offset
+			c.emitUint32(0xFFFFFFFF) // Placeholder for target PC offset
 
 			// Add opcode position to loop's continue list (will be patched when loop finishes)
 			targetContext.ContinuePlaceholderPosList = append(targetContext.ContinuePlaceholderPosList, opcodePos)
@@ -1856,14 +1841,7 @@ func (c *Compiler) compileDoWhileStatementLabeled(node *parser.DoWhileStatement,
 	c.emitNot(invertedConditionReg, conditionReg, line)
 
 	// Now jump back if the *inverted* condition is FALSE (i.e., original was TRUE)
-	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2 + 1 // OpCode + Reg + 16bit offset
-	backOffset := loopStartPos - jumpBackInstructionEndPos
-	if backOffset > math.MaxInt16 || backOffset < math.MinInt16 {
-		return BadRegister, NewCompileError(node, fmt.Sprintf("internal compiler error: do-while loop jump offset %d exceeds 16-bit limit", backOffset))
-	}
-	c.emitOpCode(vm.OpJumpIfFalse, line)    // Use OpJumpIfFalse on inverted result
-	c.emitByte(byte(invertedConditionReg))  // Jump based on the inverted condition
-	c.emitUint16(uint16(int16(backOffset))) // Emit calculated signed offset
+	c.emitJumpToKnownTarget(vm.OpJumpIfFalse, invertedConditionReg, loopStartPos, line)
 
 	// --- 7. Loop End & Patching ---
 	// Position after the loop (target for breaks) is implicitly len(c.chunk.Code)
@@ -2022,10 +2000,10 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 		c.regAlloc.Free(caseCondReg)
 
 		// Pattern: JumpIfFalse to skip the jump-to-body, then unconditional jump to body
-		// JumpIfFalse matchReg, +3 (skip the OpJump instruction which is 3 bytes)
+		// JumpIfFalse matchReg, +5 (skip the OpJump instruction: 1 byte opcode + 4 bytes offset)
 		c.emitOpCode(vm.OpJumpIfFalse, caseLine)
 		c.emitByte(byte(matchReg))
-		c.emitUint16(3) // Skip the following OpJump (1 byte opcode + 2 bytes offset)
+		c.emitUint32(5) // Skip the following OpJump (1 byte opcode + 4 bytes offset)
 
 		// Free matchReg - no longer needed after the jump condition
 		c.regAlloc.Free(matchReg)
@@ -2081,12 +2059,9 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 
 	// Patch the jump to default body or end
 	if defaultCaseIndex >= 0 {
-		// Patch to jump to default body position
-		// We need to manually patch since the default body was already emitted
-		jumpInstructionEndPos := jumpToDefaultOrEnd + 1 + 2
-		targetOffset := caseBodyPositions[defaultCaseIndex] - jumpInstructionEndPos
-		c.chunk.Code[jumpToDefaultOrEnd+1] = byte(int16(targetOffset) >> 8)
-		c.chunk.Code[jumpToDefaultOrEnd+2] = byte(int16(targetOffset) & 0xFF)
+		// Patch to jump to default body position (already emitted, so its
+		// position is known - patch directly to that target).
+		c.patchJumpToTarget(jumpToDefaultOrEnd, caseBodyPositions[defaultCaseIndex])
 	} else {
 		// Patch to jump to end (current position)
 		c.patchJump(jumpToDefaultOrEnd)
@@ -2557,10 +2532,7 @@ func (c *Compiler) compileForInStatementLabeled(node *parser.ForInStatement, lab
 	c.emitByte(byte(oneReg))      // right operand (1)
 
 	// 10. Jump back to loop start
-	jumpBackInstructionEndPos := len(c.chunk.Code) + 1 + 2
-	backOffset := loopStartPos - jumpBackInstructionEndPos
-	c.emitOpCode(vm.OpJump, node.Body.Token.Line)
-	c.emitUint16(uint16(int16(backOffset)))
+	c.emitBackwardJump(loopStartPos, node.Body.Token.Line)
 
 	// 11. Clean up loop context and patch jumps
 	poppedContext := c.loopContextStack[len(c.loopContextStack)-1]

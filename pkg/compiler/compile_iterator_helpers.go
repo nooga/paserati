@@ -252,10 +252,7 @@ func (c *Compiler) compileIteratorToArrayWithDone(iteratorReg Register, destReg 
 	c.regAlloc.Free(pushMethodReg)
 
 	// Jump back to loop start
-	jumpBackPos := len(c.chunk.Code) + 1 + 2
-	backOffset := loopStart - jumpBackPos
-	c.emitOpCode(vm.OpJump, line)
-	c.emitUint16(uint16(int16(backOffset)))
+	c.emitBackwardJump(loopStart, line)
 
 	// Patch exit jump
 	c.patchJump(exitJump)
