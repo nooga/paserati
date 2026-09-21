@@ -43,6 +43,8 @@ func (e *ErrorInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("captureStackTrace", types.NewObjectType().
 			WithSimpleCallSignature([]types.Type{types.Any}, types.Void).
 			WithSimpleCallSignature([]types.Type{types.Any, types.Any}, types.Void)).
+		WithProperty("stackTraceLimit", types.Number).
+		WithProperty("prepareStackTrace", types.Any).
 		WithProperty("prototype", errorProtoType)
 
 	// Define the constructor globally
@@ -174,9 +176,13 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 
-		// Capture stack trace at the time of Error creation
-		stackTrace := vmInstance.CaptureStackTrace()
-		errorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))
+		// Capture stack trace at the time of Error creation, honoring
+		// Error.stackTraceLimit / Error.prepareStackTrace if set (#492).
+		stackValue, stackErr := vmInstance.CaptureStackValue(errorInstance)
+		if stackErr != nil {
+			return vm.Undefined, stackErr
+		}
+		errorInstancePtr.SetOwnNonEnumerable("stack", stackValue)
 
 		return errorInstance, nil
 	})
@@ -225,8 +231,10 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				}
 			}
 
-			stackTrace := vmInstance.CaptureStackTraceExcluding(excludeFn)
-			stackValue := vm.NewString(stackTrace)
+			stackValue, err := vmInstance.CaptureStackValueExcluding(target, excludeFn)
+			if err != nil {
+				return vm.Undefined, err
+			}
 
 			// Per real V8, "stack" is non-enumerable - including when
 			// captureStackTrace is the one creating it (e.g. on a plain object
@@ -243,6 +251,14 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			return vm.Undefined, nil
 		}))
+
+		// Add Error.stackTraceLimit and Error.prepareStackTrace (V8 Stack
+		// Trace API, #492): ordinary writable/configurable data properties
+		// that CaptureStackValue(Excluding) reads back on every capture, so
+		// assigning to them from user code takes effect immediately - no
+		// special accessor machinery needed.
+		ctorPropsObj.Properties.SetOwnNonEnumerable("stackTraceLimit", vm.NumberValue(10))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("prepareStackTrace", vm.Undefined)
 
 		errorConstructor = ctorWithProps
 	}
@@ -379,7 +395,11 @@ func (e *AggregateErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if hasMessage {
 			inst.SetOwnNonEnumerable("message", vm.NewString(message))
 		}
-		inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))
+		stackValue, stackErr := vmInstance.CaptureStackValue(vm.NewValueFromPlainObject(inst))
+		if stackErr != nil {
+			return vm.Undefined, stackErr
+		}
+		inst.SetOwnNonEnumerable("stack", stackValue)
 
 		// Set errors property (per ECMAScript spec, this is an own data property)
 		inst.SetOwn("errors", errorsArray)
@@ -465,7 +485,11 @@ func (e *SuppressedErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		inst := vm.NewObject(instProto).AsPlainObject()
 		inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
-		inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))
+		stackValue, stackErr := vmInstance.CaptureStackValue(vm.NewValueFromPlainObject(inst))
+		if stackErr != nil {
+			return vm.Undefined, stackErr
+		}
+		inst.SetOwnNonEnumerable("stack", stackValue)
 
 		// Per spec: message is installed before error/suppressed, and only
 		// when not undefined. Uses ToPrimitive("string") (via ToString) so a
@@ -548,7 +572,11 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 		if hasMessage {
 			inst.SetOwnNonEnumerable("message", vm.NewString(message))
 		}
-		inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))
+		stackValue, stackErr := vmInstance.CaptureStackValue(vm.NewValueFromPlainObject(inst))
+		if stackErr != nil {
+			return vm.Undefined, stackErr
+		}
+		inst.SetOwnNonEnumerable("stack", stackValue)
 
 		// Per ECMAScript 20.5.8.1 InstallErrorCause:
 		// If options is an Object and HasProperty(options, "cause") is true,

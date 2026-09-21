@@ -94,9 +94,13 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			typeErrorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
 		}
 
-		// Capture stack trace at the time of TypeError creation
-		stackTrace := vmInstance.CaptureStackTrace()
-		typeErrorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))
+		// Capture stack trace at the time of TypeError creation, honoring
+		// Error.stackTraceLimit / Error.prepareStackTrace if set (#492).
+		stackValue, stackErr := vmInstance.CaptureStackValue(typeErrorInstance)
+		if stackErr != nil {
+			return vm.Undefined, stackErr
+		}
+		typeErrorInstancePtr.SetOwnNonEnumerable("stack", stackValue)
 
 		// Per ECMAScript 20.5.8.1 InstallErrorCause:
 		// If options is an Object and HasProperty(options, "cause") is true,
