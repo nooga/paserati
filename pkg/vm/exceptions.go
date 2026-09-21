@@ -567,6 +567,29 @@ func (vm *VM) formatExceptionDisplay(exception Value) string {
 	return exception.ToString()
 }
 
+// FormatUncaughtCallError formats an error returned from Call/executeUserFunctionSafe
+// the same way a genuinely uncaught top-level exception is reported (see
+// handleUncaughtException). It exists for host callback dispatch sites - timers,
+// nextTick, and anything else invoking JS callbacks with no catching JS context
+// above them - that receive the thrown exception as a Go error rather than
+// having the VM's own unwind loop print it automatically.
+func (vm *VM) FormatUncaughtCallError(err error) string {
+	ee, ok := err.(ExceptionError)
+	if !ok {
+		return "Uncaught exception: " + err.Error()
+	}
+	exception := ee.GetExceptionValue()
+	msg := "Uncaught exception: " + vm.formatExceptionDisplay(exception)
+	if exception.IsObject() && exception.Type() == TypeObject {
+		if stackVal, hasStack := exception.AsPlainObject().GetOwn("stack"); hasStack {
+			if stackTrace := stackVal.ToString(); stackTrace != "" {
+				msg += "\n" + stackTrace
+			}
+		}
+	}
+	return msg
+}
+
 // --- OpThrow Implementation ---
 
 // executeOpThrow implements the OpThrow opcode

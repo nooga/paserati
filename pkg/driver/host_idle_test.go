@@ -1,6 +1,9 @@
 package driver
 
 import (
+	"bytes"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -142,5 +145,89 @@ func TestHostTLAWaitsForTimer(t *testing.T) {
 	}
 	if result.ToString() != "true" {
 		t.Errorf("expected true after awaited timer, got %v", result.ToString())
+	}
+}
+
+// captureStderr redirects os.Stderr to a pipe for the duration of the test and
+// returns a function that closes the pipe and yields everything written to
+// it. Needed because reportUncaughtTimerException writes straight to
+// os.Stderr rather than through an injectable writer.
+func captureStderr(t *testing.T) func() string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe failed: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = old })
+	return func() string {
+		w.Close()
+		os.Stderr = old
+		var buf bytes.Buffer
+		io.Copy(&buf, r)
+		return buf.String()
+	}
+}
+
+// captureExit swaps in a fake osExit that records the requested code instead
+// of terminating the test binary, and restores the real one afterwards.
+func captureExit(t *testing.T) *bool {
+	t.Helper()
+	exited := false
+	old := osExit
+	osExit = func(code int) {
+		exited = true
+		if code != 1 {
+			t.Errorf("expected exit code 1, got %d", code)
+		}
+	}
+	t.Cleanup(func() { osExit = old })
+	return &exited
+}
+
+// #484: an exception thrown inside a setTimeout callback has no catching JS
+// context above it (unlike a normal call stack), so it must be reported and
+// terminate the process the way a genuinely uncaught top-level exception
+// does - not silently discarded, leaving the process to exit 0 as if the
+// throw never happened.
+func TestHostSetTimeoutUncaughtExceptionReportsAndExits(t *testing.T) {
+	exited := captureExit(t)
+	stderr := captureStderr(t)
+	p := newHostTimerPaserati()
+
+	js := `
+		setTimeout(() => { throw new Error("boom from timeout") }, 0)
+	`
+	_, errs := p.RunCode(js, RunOptions{})
+	if len(errs) > 0 {
+		t.Fatalf("RunCode failed: %v", errs[0])
+	}
+	if !*exited {
+		t.Fatal("expected the uncaught exception to trigger a process exit")
+	}
+	if got := stderr(); !strings.Contains(got, "Uncaught exception: Error: boom from timeout") {
+		t.Errorf("expected stderr to report the uncaught exception, got %q", got)
+	}
+}
+
+// Same as above but for nextTick, which shares the exact discard bug.
+func TestHostNextTickUncaughtExceptionReportsAndExits(t *testing.T) {
+	exited := captureExit(t)
+	stderr := captureStderr(t)
+	p := newHostTimerPaserati()
+
+	js := `
+		nextTick(() => { throw new Error("boom from nextTick") })
+	`
+	_, errs := p.RunCode(js, RunOptions{})
+	if len(errs) > 0 {
+		t.Fatalf("RunCode failed: %v", errs[0])
+	}
+	if !*exited {
+		t.Fatal("expected the uncaught exception to trigger a process exit")
+	}
+	if got := stderr(); !strings.Contains(got, "Uncaught exception: Error: boom from nextTick") {
+		t.Errorf("expected stderr to report the uncaught exception, got %q", got)
 	}
 }
