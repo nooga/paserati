@@ -71,11 +71,7 @@ func (vm *VM) CaptureStackValue(errorObject Value) (Value, error) {
 // `target`, if non-nil, excludes its own frame and everything more recent
 // than it - see getStackFramesExcluding, which this delegates to.
 func (vm *VM) CaptureStackValueExcluding(errorObject Value, target *FunctionObject) (Value, error) {
-	frames := vm.getStackFramesExcluding(target)
-
-	if limit := vm.stackTraceLimit(); limit >= 0 && len(frames) > limit {
-		frames = frames[:limit]
-	}
+	frames := vm.getStackFramesExcludingLimited(target, vm.stackTraceLimit())
 
 	if prepare, ok := vm.errorCtorProp("prepareStackTrace"); ok && prepare.IsCallable() {
 		return vm.Call(prepare, Undefined, []Value{errorObject, vm.buildCallSites(frames)})
