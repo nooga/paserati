@@ -74,8 +74,8 @@ const (
 	OpReturnUndefined OpCode = 25 // No operands: Return undefined value from current function.
 
 	// Control Flow
-	OpJumpIfFalse OpCode = 26 // Rx Offset(16bit): Jump by Offset if Rx is falsey.
-	OpJump        OpCode = 27 // Offset(16bit): Unconditionally jump by Offset.
+	OpJumpIfFalse OpCode = 26 // Rx Offset(32bit): Jump by Offset if Rx is falsey.
+	OpJump        OpCode = 27 // Offset(32bit): Unconditionally jump by Offset.
 
 	// Array Operations (NEW)
 	OpMakeArray OpCode = 28 // DestReg StartReg Count: Create array in DestReg from Count values starting at StartReg.
@@ -234,9 +234,9 @@ const (
 	OpIsNullish   OpCode = 53 // Rx Ry: Rx = (Ry === null || Ry === undefined) - efficient nullish check
 
 	// Jump variants for control flow optimization
-	OpJumpIfNull      OpCode = 54 // Ry Offset(16bit): Jump if Ry === null
-	OpJumpIfUndefined OpCode = 55 // Ry Offset(16bit): Jump if Ry === undefined
-	OpJumpIfNullish   OpCode = 56 // Ry Offset(16bit): Jump if Ry is null or undefined
+	OpJumpIfNull      OpCode = 54 // Ry Offset(32bit): Jump if Ry === null
+	OpJumpIfUndefined OpCode = 55 // Ry Offset(32bit): Jump if Ry === undefined
+	OpJumpIfNullish   OpCode = 56 // Ry Offset(32bit): Jump if Ry is null or undefined
 
 	// --- NEW: Spread Call Support ---
 	OpSpreadCall       OpCode = 57 // Rx FuncReg SpreadArgReg: Call function with spread array as arguments, result in Rx
@@ -273,8 +273,8 @@ const (
 
 	// --- Phase 4a: Handle Pending Actions ---
 	OpHandlePending OpCode = 67  // Handle pending actions after finally block
-	OpPushBreak     OpCode = 107 // TargetPC(16): Push break completion for try-finally
-	OpPushContinue  OpCode = 108 // TargetPC(16): Push continue completion for try-finally
+	OpPushBreak     OpCode = 107 // TargetPC(32): Push break completion for try-finally
+	OpPushContinue  OpCode = 108 // TargetPC(32): Push continue completion for try-finally
 	// --- END Phase 4a ---
 
 	// --- Module System ---
@@ -975,6 +975,27 @@ func (c *Chunk) WriteUint16(val uint16) {
 	c.Lines = append(c.Lines, c.currentLine)
 }
 
+// WriteUint32 adds a 32-bit unsigned integer operand (used for jump/branch
+// offsets, which need a wider range than 16 bits can hold for very large
+// compiled functions - see #482). Encoded as Big Endian. Uses the line number
+// from the most recent WriteOpCode call.
+func (c *Chunk) WriteUint32(val uint32) {
+	c.Code = append(c.Code, byte(val>>24))
+	c.Lines = append(c.Lines, c.currentLine)
+	c.Code = append(c.Code, byte(val>>16))
+	c.Lines = append(c.Lines, c.currentLine)
+	c.Code = append(c.Code, byte(val>>8))
+	c.Lines = append(c.Lines, c.currentLine)
+	c.Code = append(c.Code, byte(val&0xff))
+	c.Lines = append(c.Lines, c.currentLine)
+}
+
+// readInt32BE decodes a signed 32-bit Big Endian value from the first 4 bytes
+// of b (used to decode jump/branch offsets in the VM's dispatch loop).
+func readInt32BE(b []byte) int32 {
+	return int32(uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]))
+}
+
 // constantPoolCapacity is the number of distinct constants a chunk can hold:
 // LoadConst and friends address the pool with a uint16 operand, so indices
 // 0..65535 are representable and a 65,537th distinct entry is not (A5).
@@ -1377,8 +1398,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpHandlePending:
 		return c.simpleInstruction(builder, instruction.String(), offset) // No operands
 	case OpPushBreak, OpPushContinue:
-		// Format: OpPushBreak/Continue(1) + TargetOffset(2 bytes, 16-bit signed)
-		return c.constantInstruction16(builder, instruction.String(), offset)
+		// Format: OpPushBreak/Continue(1) + TargetOffset(4 bytes, 32-bit signed) - see #482
+		return c.pushCompletionInstruction(builder, instruction.String(), offset)
 	// --- END Phase 4a ---
 
 	// --- Module System ---
@@ -1729,6 +1750,21 @@ func (c *Chunk) deleteWithPropertyInstruction(builder *strings.Builder, name str
 }
 
 // constantInstruction16 handles OpCode ConstIdx(16bit) - for instructions that only take a constant index
+// pushCompletionInstruction disassembles OpPushBreak/OpPushContinue: OpCode(1)
+// + TargetOffset(4 bytes, 32-bit signed), relative to the position right after
+// the offset (see the VM's OpPushBreak/OpPushContinue handlers for the same
+// arithmetic used at runtime).
+func (c *Chunk) pushCompletionInstruction(builder *strings.Builder, name string, offset int) int {
+	if offset+4 >= len(c.Code) {
+		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
+		return offset + 1
+	}
+	targetOffset := readInt32BE(c.Code[offset+1 : offset+5])
+	targetPC := offset + 5 + int(targetOffset)
+	builder.WriteString(fmt.Sprintf("%-16s %d (to %04d)\n", name, targetOffset, targetPC))
+	return offset + 5 // Opcode + 4 bytes for offset
+}
+
 func (c *Chunk) constantInstruction16(builder *strings.Builder, name string, offset int) int {
 	if offset+2 >= len(c.Code) {
 		builder.WriteString(fmt.Sprintf("%s (missing operands)\n", name))
@@ -1962,8 +1998,8 @@ func (c *Chunk) jumpInstruction(builder *strings.Builder, name string, offset in
 		operandOffset = 2
 	}
 
-	// Need 2 bytes for the jump offset
-	if offset+operandOffset+1 >= len(c.Code) {
+	// Need 4 bytes for the jump offset (see #482 - widened from 16 to 32 bits)
+	if offset+operandOffset+3 >= len(c.Code) {
 		builder.WriteString(fmt.Sprintf("%s (missing jump offset)\n", name))
 		// Approximate return offset
 		if offset+operandOffset < len(c.Code) {
@@ -1975,16 +2011,15 @@ func (c *Chunk) jumpInstruction(builder *strings.Builder, name string, offset in
 		return offset + 1
 	}
 
-	jumpOffset := int16(uint16(c.Code[offset+operandOffset])<<8 | uint16(c.Code[offset+operandOffset+1]))
-	jumpTarget := offset + 3 + int(jumpOffset) // Offset relative to *after* this instruction
+	jumpOffset := readInt32BE(c.Code[offset+operandOffset : offset+operandOffset+4])
+	jumpTarget := offset + operandOffset + 4 + int(jumpOffset) // Offset relative to *after* this instruction
 	if hasRegister {
-		jumpTarget++ // Account for register byte
 		reg := c.Code[offset+1]
 		builder.WriteString(fmt.Sprintf("%-16s R%d, %d (to %04d)\n", name, reg, jumpOffset, jumpTarget))
-		return offset + 4 // Op + Reg + Offset(2)
+		return offset + 6 // Op + Reg + Offset(4)
 	} else {
 		builder.WriteString(fmt.Sprintf("%-16s %d (to %04d)\n", name, jumpOffset, jumpTarget))
-		return offset + 3 // Op + Offset(2)
+		return offset + 5 // Op + Offset(4)
 	}
 }
 

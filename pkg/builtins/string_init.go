@@ -344,6 +344,8 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("trim", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("trimStart", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("trimEnd", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("trimLeft", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("trimRight", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("repeat", types.NewSimpleFunction([]types.Type{types.Number}, types.String)).
 		WithProperty("padStart", types.NewOptionalFunction([]types.Type{types.Number, types.String}, types.String, []bool{false, true})).
 		WithProperty("padEnd", types.NewOptionalFunction([]types.Type{types.Number, types.String}, types.String, []bool{false, true})).
@@ -1122,7 +1124,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(trimECMAScriptWhitespace(thisStr)), nil
 	}))
 
-	stringProto.SetOwnNonEnumerable("trimStart", vm.NewNativeFunction(0, false, "trimStart", func(args []vm.Value) (vm.Value, error) {
+	trimStartFn := vm.NewNativeFunction(0, false, "trimStart", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// RequireObjectCoercible: throw TypeError for null/undefined
 		if err := requireObjectCoercible(vmInstance, thisVal, "trimStart"); err != nil {
@@ -1134,9 +1136,12 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		return vm.NewString(trimLeftECMAScriptWhitespace(thisStr)), nil
-	}))
+	})
+	stringProto.SetOwnNonEnumerable("trimStart", trimStartFn)
+	// Annex B.2.3.4: trimLeft is the same function object as trimStart
+	stringProto.SetOwnNonEnumerable("trimLeft", trimStartFn)
 
-	stringProto.SetOwnNonEnumerable("trimEnd", vm.NewNativeFunction(0, false, "trimEnd", func(args []vm.Value) (vm.Value, error) {
+	trimEndFn := vm.NewNativeFunction(0, false, "trimEnd", func(args []vm.Value) (vm.Value, error) {
 		thisVal := vmInstance.GetThis()
 		// RequireObjectCoercible: throw TypeError for null/undefined
 		if err := requireObjectCoercible(vmInstance, thisVal, "trimEnd"); err != nil {
@@ -1148,7 +1153,10 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		return vm.NewString(trimRightECMAScriptWhitespace(thisStr)), nil
-	}))
+	})
+	stringProto.SetOwnNonEnumerable("trimEnd", trimEndFn)
+	// Annex B.2.3.3: trimRight is the same function object as trimEnd
+	stringProto.SetOwnNonEnumerable("trimRight", trimEndFn)
 
 	// String.prototype.isWellFormed - checks if string has no lone surrogates (ES2024)
 	stringProto.SetOwnNonEnumerable("isWellFormed", vm.NewNativeFunction(0, false, "isWellFormed", func(args []vm.Value) (vm.Value, error) {

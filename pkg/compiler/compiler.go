@@ -3556,10 +3556,16 @@ func (c *Compiler) trackLocalName(name string, reg Register) {
 	}
 }
 
-// emitPlaceholderJump emits a jump instruction with a placeholder offset (0xFFFF).
+// emitPlaceholderJump emits a jump instruction with a placeholder offset (0xFFFFFFFF).
 // Returns the position of the start of the jump instruction in the bytecode.
 // For OpJumpIfFalse, srcReg is the condition register.
 // For OpJump, srcReg is ignored (pass 0 or any value).
+//
+// The offset operand is 32-bit (see #482): a function whose compiled bytecode
+// is large enough to need a jump distance beyond a 16-bit signed range (real
+// generated code, such as ajv's compiled JSON-Schema validators, gets there)
+// used to be uncompilable. 32 bits away from ever mattering for a single
+// function's bytecode size is a good trade against the extra 2 bytes/jump.
 func (c *Compiler) emitPlaceholderJump(op vm.OpCode, srcReg Register, line int) int {
 	pos := len(c.chunk.Code)
 	if debugCompiler {
@@ -3569,9 +3575,9 @@ func (c *Compiler) emitPlaceholderJump(op vm.OpCode, srcReg Register, line int) 
 	c.emitOpCode(op, line)
 	if op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined || op == vm.OpJumpIfNull || op == vm.OpJumpIfNullish {
 		c.emitByte(byte(srcReg)) // Register operand
-		c.emitUint16(0xFFFF)     // Placeholder offset
+		c.emitUint32(0xFFFFFFFF) // Placeholder offset
 	} else { // OpJump
-		c.emitUint16(0xFFFF) // Placeholder offset
+		c.emitUint32(0xFFFFFFFF) // Placeholder offset
 	}
 	return pos
 }
@@ -3587,7 +3593,7 @@ func (c *Compiler) patchJump(placeholderPos int) {
 	// OpPushBreak and OpPushContinue have no register operand, just the offset
 
 	// Calculate offset from the position *after* the jump instruction
-	jumpInstructionEndPos := operandStartPos + 2
+	jumpInstructionEndPos := operandStartPos + 4
 	offset := len(c.chunk.Code) - jumpInstructionEndPos
 
 	if debugCompiler {
@@ -3595,25 +3601,52 @@ func (c *Compiler) patchJump(placeholderPos int) {
 			placeholderPos, op, offset, jumpInstructionEndPos, len(c.chunk.Code))
 	}
 
-	if offset > math.MaxInt16 || offset < math.MinInt16 { // Use math constants
+	if offset > math.MaxInt32 || offset < math.MinInt32 { // Use math constants
 		c.recordJumpOverflow(placeholderPos, offset)
 		return
 	}
 
-	// Write the 16-bit offset back into the placeholder bytes (Big Endian)
-	c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)     // High byte
-	c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF) // Low byte
+	// Write the 32-bit offset back into the placeholder bytes (Big Endian)
+	writeInt32BE(c.chunk.Code[operandStartPos:operandStartPos+4], int32(offset))
 }
 
-// recordJumpOverflow reports a jump whose distance exceeds the 16-bit branch
+// emitBackwardJump emits an unconditional OpJump whose target (an already-known
+// earlier position, such as a loop's start) is encoded directly rather than via
+// a placeholder+patch, since the offset is known immediately. Used by loop
+// constructs to jump back to their condition/start.
+func (c *Compiler) emitBackwardJump(targetPC int, line int) {
+	c.emitJumpToKnownTarget(vm.OpJump, 0, targetPC, line)
+}
+
+// emitJumpToKnownTarget emits a jump instruction (conditional if srcReg's op
+// needs a register operand, e.g. OpJumpIfFalse; unconditional OpJump
+// otherwise) whose target position is already known, encoding the offset
+// directly rather than via a placeholder+patch.
+func (c *Compiler) emitJumpToKnownTarget(op vm.OpCode, srcReg Register, targetPC int, line int) {
+	c.emitOpCode(op, line)
+	hasRegOperand := op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined || op == vm.OpJumpIfNull || op == vm.OpJumpIfNullish
+	if hasRegOperand {
+		c.emitByte(byte(srcReg))
+	}
+	jumpInstructionEndPos := len(c.chunk.Code) + 4
+	offset := targetPC - jumpInstructionEndPos
+	if offset > math.MaxInt32 || offset < math.MinInt32 {
+		c.recordJumpOverflow(len(c.chunk.Code)-1, offset)
+		c.emitUint32(0) // keep bytecode well-formed even though compile will fail
+		return
+	}
+	c.emitUint32(uint32(int32(offset)))
+}
+
+// recordJumpOverflow reports a jump whose distance exceeds the 32-bit branch
 // offset — i.e. a function too large for the bytecode format — as a graceful
 // compile error instead of panicking. The unpatched placeholder is harmless: a
 // non-empty error list aborts the compile before the chunk can run.
 func (c *Compiler) recordJumpOverflow(placeholderPos, offset int) {
 	c.errors = append(c.errors, &errors.CompileError{
 		Position: errors.Position{Line: c.chunk.GetLine(placeholderPos)},
-		Msg: fmt.Sprintf("function too large: a jump offset of %d bytes exceeds the 16-bit "+
-			"branch limit (±32767); split this function into smaller ones", offset),
+		Msg: fmt.Sprintf("function too large: a jump offset of %d bytes exceeds the 32-bit "+
+			"branch limit (±2147483647); split this function into smaller ones", offset),
 	})
 }
 
@@ -3626,7 +3659,7 @@ func (c *Compiler) patchJumpToTarget(placeholderPos int, targetPC int) {
 	}
 
 	// Calculate offset from the position *after* the jump instruction to the target
-	jumpInstructionEndPos := operandStartPos + 2
+	jumpInstructionEndPos := operandStartPos + 4
 	offset := targetPC - jumpInstructionEndPos
 
 	if debugCompiler {
@@ -3634,14 +3667,21 @@ func (c *Compiler) patchJumpToTarget(placeholderPos int, targetPC int) {
 			placeholderPos, op, offset, jumpInstructionEndPos, targetPC)
 	}
 
-	if offset > math.MaxInt16 || offset < math.MinInt16 {
+	if offset > math.MaxInt32 || offset < math.MinInt32 {
 		c.recordJumpOverflow(placeholderPos, offset)
 		return
 	}
 
-	// Write the 16-bit offset back into the placeholder bytes (Big Endian)
-	c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)     // High byte
-	c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF) // Low byte
+	// Write the 32-bit offset back into the placeholder bytes (Big Endian)
+	writeInt32BE(c.chunk.Code[operandStartPos:operandStartPos+4], int32(offset))
+}
+
+// writeInt32BE writes a signed 32-bit value into 4 bytes, Big Endian.
+func writeInt32BE(dst []byte, v int32) {
+	dst[0] = byte(v >> 24)
+	dst[1] = byte(v >> 16)
+	dst[2] = byte(v >> 8)
+	dst[3] = byte(v)
 }
 
 // storeToLvalue is a helper function to store a value back to different types of lvalues

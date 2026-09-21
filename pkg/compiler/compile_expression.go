@@ -1690,24 +1690,12 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			patchedEnd             = false
 		)
 		defer func() {
-			// Anchor to current end of code by default
-			endAnchor := len(c.chunk.Code)
 			if jumpToRightPlaceholder >= 0 && !patchedRight {
 				c.patchJump(jumpToRightPlaceholder)
 				patchedRight = true
 			}
 			if jumpToEndPlaceholder >= 0 && !patchedEnd {
-				// Manually patch OpJump to end if not already patched
-				op := vm.OpCode(c.chunk.Code[jumpToEndPlaceholder])
-				if op == vm.OpJump {
-					operandStartPos := jumpToEndPlaceholder + 1
-					jumpInstructionEndPos := operandStartPos + 2
-					offset := endAnchor - jumpInstructionEndPos
-					c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)
-					c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF)
-				} else {
-					c.patchJump(jumpToEndPlaceholder)
-				}
+				c.patchJump(jumpToEndPlaceholder)
 				patchedEnd = true
 			}
 		}()
@@ -1753,22 +1741,12 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			patchedSkip                  = false
 		)
 		defer func() {
-			endAnchor := len(c.chunk.Code)
 			if jumpToEndPlaceholder >= 0 && !patchedEnd {
 				c.patchJump(jumpToEndPlaceholder)
 				patchedEnd = true
 			}
 			if jumpSkipFalseMovePlaceholder >= 0 && !patchedSkip {
-				op := vm.OpCode(c.chunk.Code[jumpSkipFalseMovePlaceholder])
-				if op == vm.OpJump {
-					operandStartPos := jumpSkipFalseMovePlaceholder + 1
-					jumpInstructionEndPos := operandStartPos + 2
-					offset := endAnchor - jumpInstructionEndPos
-					c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)
-					c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF)
-				} else {
-					c.patchJump(jumpSkipFalseMovePlaceholder)
-				}
+				c.patchJump(jumpSkipFalseMovePlaceholder)
 				patchedSkip = true
 			}
 		}()
@@ -1814,22 +1792,12 @@ func (c *Compiler) compileInfixExpression(node *parser.InfixExpression, hint Reg
 			patchedEnd               = false
 		)
 		defer func() {
-			endAnchor := len(c.chunk.Code)
 			if jumpSkipRightPlaceholder >= 0 && !patchedSkip {
 				c.patchJump(jumpSkipRightPlaceholder)
 				patchedSkip = true
 			}
 			if jumpEndPlaceholder >= 0 && !patchedEnd {
-				op := vm.OpCode(c.chunk.Code[jumpEndPlaceholder])
-				if op == vm.OpJump {
-					operandStartPos := jumpEndPlaceholder + 1
-					jumpInstructionEndPos := operandStartPos + 2
-					offset := endAnchor - jumpInstructionEndPos
-					c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)
-					c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF)
-				} else {
-					c.patchJump(jumpEndPlaceholder)
-				}
+				c.patchJump(jumpEndPlaceholder)
 				patchedEnd = true
 			}
 		}()
@@ -2998,6 +2966,48 @@ func (c *Compiler) compileSingleSpreadCall(node *parser.CallExpression, spreadEl
 	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
 		// Method call with spread: obj.method(...args)
 
+		// Check if this is a super method call (super.method(...args))
+		if _, isSuperMethod := memberExpr.Object.(*parser.SuperExpression); isSuperMethod {
+			// 1. Load 'this' (for the this binding when calling the super method)
+			thisReg := c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, thisReg)
+			c.emitLoadThis(thisReg, memberExpr.Token.Line)
+
+			// 2. Get the method from super using OpGetSuper/OpGetSuperComputed
+			funcReg := c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, funcReg)
+			if computedKey, isComputed := memberExpr.Property.(*parser.ComputedPropertyName); isComputed {
+				propertyReg := c.regAlloc.Alloc()
+				*tempRegs = append(*tempRegs, propertyReg)
+				_, err := c.compileNode(computedKey.Expr, propertyReg)
+				if err != nil {
+					return BadRegister, err
+				}
+				c.chunk.WriteOpCode(vm.OpGetSuperComputed, memberExpr.Token.Line)
+				c.chunk.EmitByte(byte(funcReg))
+				c.chunk.EmitByte(byte(propertyReg))
+			} else {
+				propertyName := c.extractPropertyName(memberExpr.Property)
+				nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+				c.chunk.WriteOpCode(vm.OpGetSuper, memberExpr.Token.Line)
+				c.chunk.EmitByte(byte(funcReg))
+				c.chunk.WriteUint16(nameConstIdx)
+			}
+
+			// 3. Compile the spread argument (array to spread)
+			spreadArgReg := c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, spreadArgReg)
+			_, err := c.compileNode(spreadElement.Argument, spreadArgReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			// 4. Emit OpSpreadCallMethod with the real 'this' binding
+			c.emitSpreadCallMethod(hint, funcReg, thisReg, spreadArgReg, node.Token.Line)
+
+			return hint, nil
+		}
+
 		// 1. Compile the object part (this value)
 		thisReg := c.regAlloc.Alloc()
 		*tempRegs = append(*tempRegs, thisReg)
@@ -3022,6 +3032,60 @@ func (c *Compiler) compileSingleSpreadCall(node *parser.CallExpression, spreadEl
 		}
 
 		// 4. Emit OpSpreadCallMethod
+		c.emitSpreadCallMethod(hint, funcReg, thisReg, spreadArgReg, node.Token.Line)
+
+		return hint, nil
+	} else if indexExpr, isIndexCall := node.Function.(*parser.IndexExpression); isIndexCall {
+		// Computed method call with spread: obj[key](...args) or super[key](...args)
+
+		var thisReg Register
+		funcReg := c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, funcReg)
+
+		if _, isSuperIndex := indexExpr.Left.(*parser.SuperExpression); isSuperIndex {
+			// super[key](...args): 'this' is the actual instance, method comes from super
+			thisReg = c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, thisReg)
+			c.emitLoadThis(thisReg, indexExpr.Token.Line)
+
+			propertyReg := c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, propertyReg)
+			_, err := c.compileNode(indexExpr.Index, propertyReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			c.chunk.WriteOpCode(vm.OpGetSuperComputed, indexExpr.Token.Line)
+			c.chunk.EmitByte(byte(funcReg))
+			c.chunk.EmitByte(byte(propertyReg))
+		} else {
+			// Preserve 'this' binding: obj[key](...args)
+			thisReg = c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, thisReg)
+			_, err := c.compileNode(indexExpr.Left, thisReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			propertyReg := c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, propertyReg)
+			_, err = c.compileNode(indexExpr.Index, propertyReg)
+			if err != nil {
+				return BadRegister, err
+			}
+			c.chunk.WriteOpCode(vm.OpGetIndex, indexExpr.Token.Line)
+			c.chunk.EmitByte(byte(funcReg))
+			c.chunk.EmitByte(byte(thisReg))
+			c.chunk.EmitByte(byte(propertyReg))
+		}
+
+		// Compile the spread argument (array to spread)
+		spreadArgReg := c.regAlloc.Alloc()
+		*tempRegs = append(*tempRegs, spreadArgReg)
+		_, err := c.compileNode(spreadElement.Argument, spreadArgReg)
+		if err != nil {
+			return BadRegister, err
+		}
+
 		c.emitSpreadCallMethod(hint, funcReg, thisReg, spreadArgReg, node.Token.Line)
 
 		return hint, nil
@@ -3072,19 +3136,85 @@ func (c *Compiler) compileMultiSpreadCall(node *parser.CallExpression, hint Regi
 	// Check if this is a method call
 	var thisReg Register = BadRegister
 	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
-		// Method call: obj.method(args)
-		// Compile the object (this value)
-		thisReg = c.regAlloc.Alloc()
-		*tempRegs = append(*tempRegs, thisReg)
-		_, err := c.compileNode(memberExpr.Object, thisReg)
-		if err != nil {
-			return BadRegister, err
-		}
+		// Check if this is a super method call (super.method(args...))
+		if _, isSuperMethod := memberExpr.Object.(*parser.SuperExpression); isSuperMethod {
+			// Load 'this' (for the this binding when calling the super method)
+			thisReg = c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, thisReg)
+			c.emitLoadThis(thisReg, memberExpr.Token.Line)
 
-		// Compile the method function
-		propertyName := c.extractPropertyName(memberExpr.Property)
-		nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
-		c.emitGetProp(funcReg, thisReg, nameConstIdx, line)
+			// Get the method from super using OpGetSuper/OpGetSuperComputed
+			if computedKey, isComputed := memberExpr.Property.(*parser.ComputedPropertyName); isComputed {
+				propertyReg := c.regAlloc.Alloc()
+				*tempRegs = append(*tempRegs, propertyReg)
+				_, err := c.compileNode(computedKey.Expr, propertyReg)
+				if err != nil {
+					c.inTailPosition = oldTailPos
+					return BadRegister, err
+				}
+				c.chunk.WriteOpCode(vm.OpGetSuperComputed, memberExpr.Token.Line)
+				c.chunk.EmitByte(byte(funcReg))
+				c.chunk.EmitByte(byte(propertyReg))
+			} else {
+				propertyName := c.extractPropertyName(memberExpr.Property)
+				nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+				c.chunk.WriteOpCode(vm.OpGetSuper, memberExpr.Token.Line)
+				c.chunk.EmitByte(byte(funcReg))
+				c.chunk.WriteUint16(nameConstIdx)
+			}
+		} else {
+			// Method call: obj.method(args)
+			// Compile the object (this value)
+			thisReg = c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, thisReg)
+			_, err := c.compileNode(memberExpr.Object, thisReg)
+			if err != nil {
+				return BadRegister, err
+			}
+
+			// Compile the method function
+			propertyName := c.extractPropertyName(memberExpr.Property)
+			nameConstIdx := c.chunk.AddConstant(vm.String(propertyName))
+			c.emitGetProp(funcReg, thisReg, nameConstIdx, line)
+		}
+	} else if indexExpr, isIndexCall := node.Function.(*parser.IndexExpression); isIndexCall {
+		// Computed method call: obj[key](args) or super[key](args)
+		if _, isSuperIndex := indexExpr.Left.(*parser.SuperExpression); isSuperIndex {
+			thisReg = c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, thisReg)
+			c.emitLoadThis(thisReg, indexExpr.Token.Line)
+
+			propertyReg := c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, propertyReg)
+			_, err := c.compileNode(indexExpr.Index, propertyReg)
+			if err != nil {
+				c.inTailPosition = oldTailPos
+				return BadRegister, err
+			}
+			c.chunk.WriteOpCode(vm.OpGetSuperComputed, indexExpr.Token.Line)
+			c.chunk.EmitByte(byte(funcReg))
+			c.chunk.EmitByte(byte(propertyReg))
+		} else {
+			thisReg = c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, thisReg)
+			_, err := c.compileNode(indexExpr.Left, thisReg)
+			if err != nil {
+				c.inTailPosition = oldTailPos
+				return BadRegister, err
+			}
+
+			propertyReg := c.regAlloc.Alloc()
+			*tempRegs = append(*tempRegs, propertyReg)
+			_, err = c.compileNode(indexExpr.Index, propertyReg)
+			if err != nil {
+				c.inTailPosition = oldTailPos
+				return BadRegister, err
+			}
+			c.chunk.WriteOpCode(vm.OpGetIndex, indexExpr.Token.Line)
+			c.chunk.EmitByte(byte(funcReg))
+			c.chunk.EmitByte(byte(thisReg))
+			c.chunk.EmitByte(byte(propertyReg))
+		}
 	} else {
 		// Regular function call
 		_, err := c.compileNode(node.Function, funcReg)
@@ -3235,27 +3365,15 @@ func (c *Compiler) compileIfExpression(node *parser.IfExpression, hint Register)
 				anchor = len(c.chunk.Code)
 			}
 			// Compute and write offset
-			op := vm.OpCode(c.chunk.Code[jumpIfFalsePos])
-			operandStartPos := jumpIfFalsePos + 1
-			if op == vm.OpJumpIfFalse || op == vm.OpJumpIfUndefined || op == vm.OpJumpIfNull || op == vm.OpJumpIfNullish {
-				operandStartPos = jumpIfFalsePos + 2 // skip register byte
-			}
-			jumpInstructionEndPos := operandStartPos + 2
-			offset := anchor - jumpInstructionEndPos
-			c.chunk.Code[operandStartPos] = byte(int16(offset) >> 8)
-			c.chunk.Code[operandStartPos+1] = byte(int16(offset) & 0xFF)
+			c.patchJumpToTarget(jumpIfFalsePos, anchor)
 			patchedIfFalse = true
-			debugPrintf("[IfExpr][defer] Patched OpJumpIfFalse at pos=%d to anchor=%d (offset=%d)", jumpIfFalsePos, anchor, offset)
+			debugPrintf("[IfExpr][defer] Patched OpJumpIfFalse at pos=%d to anchor=%d", jumpIfFalsePos, anchor)
 		}
 		if hasElse && jumpElsePos >= 0 && !patchedElseJump {
 			// Patch else-jump to end of else (current end)
-			oprandPos := jumpElsePos + 1
-			jumpInstructionEndPos := oprandPos + 2
-			offset := len(c.chunk.Code) - jumpInstructionEndPos
-			c.chunk.Code[oprandPos] = byte(int16(offset) >> 8)
-			c.chunk.Code[oprandPos+1] = byte(int16(offset) & 0xFF)
+			c.patchJump(jumpElsePos)
 			patchedElseJump = true
-			debugPrintf("[IfExpr][defer] Patched OpJump (over else) at pos=%d to end (offset=%d)", jumpElsePos, offset)
+			debugPrintf("[IfExpr][defer] Patched OpJump (over else) at pos=%d to end", jumpElsePos)
 		}
 	}()
 	// conditionReg is freed immediately after its one use (the conditional
@@ -4080,11 +4198,7 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 	c.emitByte(byte(iteratorReg))  // Delegated iterator for .return()/.throw() forwarding
 
 	// Jump back to loop start
-	c.emitOpCode(vm.OpJump, node.Token.Line)
-	// The jump offset is relative to the position AFTER the jump instruction
-	currentPos := len(c.chunk.Code) + 2 // Position after the 2-byte offset
-	jumpBackOffset := loopStart - currentPos
-	c.emitUint16(uint16(int16(jumpBackOffset)))
+	c.emitBackwardJump(loopStart, node.Token.Line)
 
 	// Done label: iterator is exhausted - patch the exit jump to come here
 	c.patchJump(exitLoopJump)

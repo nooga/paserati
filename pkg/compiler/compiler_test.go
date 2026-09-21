@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"math"
 	// "os"
 	// "bytes"
 	// "io"
@@ -1131,17 +1132,26 @@ func TestBasicFunctionalCorrectness(t *testing.T) {
 	}
 }
 
-// TestJumpOffsetOverflowIsGracefulError verifies that a function too large for
-// the 16-bit branch offset fails with a compile error instead of panicking the
-// compiler. Regression for the old
-// `panic("jump offset ... exceeds 16-bit limit")` in patchJump/patchJumpToTarget.
-func TestJumpOffsetOverflowIsGracefulError(t *testing.T) {
+// TestJumpOffsetPastOldSixteenBitLimitCompilesAndRuns verifies that a function
+// whose jump distance exceeds the *old* 16-bit signed branch offset
+// (±32767 bytes) now compiles and runs correctly, instead of failing with a
+// "function too large" compile error. Paserati#482 found a real, large
+// ajv-generated JSON-Schema validator function that hit exactly this ceiling
+// (a jump of 36895 bytes) and could not be compiled at all; the fix widened
+// jump/branch offsets from 16 to 32 bits (see patchJump/patchJumpToTarget/
+// emitPlaceholderJump/emitBackwardJump in compiler.go and the corresponding
+// VM dispatch in vm.go), which comfortably covers any realistic function
+// size. This was previously TestJumpOffsetOverflowIsGracefulError, which
+// asserted the graceful-compile-error behavior this fix replaced.
+func TestJumpOffsetPastOldSixteenBitLimitCompilesAndRuns(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("function big(x) {\n  let s = 0;\n  if (x > 0) {\n")
-	// ~6000 statements between the `if` test and its merge point pushes the
-	// OpJumpIfFalse offset well past 32767 bytes.
+	// ~6000 statements between the `if` test and its merge point used to push
+	// the OpJumpIfFalse offset well past the old 16-bit limit of 32767 bytes.
+	want := 0
 	for i := 0; i < 6000; i++ {
 		fmt.Fprintf(&b, "    s = s + %d;\n", i)
+		want += i
 	}
 	b.WriteString("  }\n  return s;\n}\nbig(1);\n")
 
@@ -1149,20 +1159,44 @@ func TestJumpOffsetOverflowIsGracefulError(t *testing.T) {
 	if len(parseErrs) > 0 {
 		t.Fatalf("unexpected parse errors: %v", parseErrs)
 	}
-	// The call itself must not panic (that is the core of the regression).
-	_, compileErrs := NewCompiler().Compile(program)
-	if len(compileErrs) == 0 {
-		t.Fatal("expected a compile error for the oversized function, got none")
+	chunk, compileErrs := NewCompiler().Compile(program)
+	if len(compileErrs) > 0 {
+		t.Fatalf("unexpected compile errors: %v", compileErrs)
+	}
+
+	vmInstance := vm.NewVM()
+	result, runtimeErrs := vmInstance.Interpret(chunk)
+	if len(runtimeErrs) > 0 {
+		t.Fatalf("unexpected runtime errors: %v", runtimeErrs)
+	}
+	wantStr := fmt.Sprintf("%d", want)
+	if result.ToString() != wantStr {
+		t.Fatalf("expected %s, got %s", wantStr, result.ToString())
+	}
+}
+
+// TestJumpOffsetOverflowStillGracefulAtNewLimit verifies that patchJump and
+// patchJumpToTarget still report a graceful compile error (rather than
+// panicking or silently writing a truncated/wrong offset) for a jump distance
+// that exceeds even the new 32-bit signed range. Actually compiling a
+// function whose bytecode spans >2GB to exercise this end-to-end isn't
+// practical in a unit test, so this drives the same overflow-detection code
+// path (recordJumpOverflow) directly instead.
+func TestJumpOffsetOverflowStillGracefulAtNewLimit(t *testing.T) {
+	c := NewCompiler()
+	c.recordJumpOverflow(0, math.MaxInt32+1)
+	if len(c.errors) == 0 {
+		t.Fatal("expected a compile error for the offset overflowing the 32-bit limit, got none")
 	}
 	found := false
-	for _, e := range compileErrs {
+	for _, e := range c.errors {
 		if strings.Contains(e.Error(), "too large") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected a 'function too large' error, got: %v", compileErrs)
+		t.Fatalf("expected a 'function too large' error, got: %v", c.errors)
 	}
 }
 
