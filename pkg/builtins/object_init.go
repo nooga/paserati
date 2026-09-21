@@ -1019,7 +1019,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		ctorPropsObj.Properties.SetOwnNonEnumerable("hasOwn", vm.NewNativeFunction(2, false, "hasOwn", func(args []vm.Value) (vm.Value, error) {
 			return objectHasOwnWithVM(vmInstance, args)
 		}))
-		ctorPropsObj.Properties.SetOwnNonEnumerable("fromEntries", vm.NewNativeFunction(1, false, "fromEntries", objectFromEntriesImpl))
+		ctorPropsObj.Properties.SetOwnNonEnumerable("fromEntries", vm.NewNativeFunction(1, false, "fromEntries", func(args []vm.Value) (vm.Value, error) {
+			return objectFromEntriesWithVM(vmInstance, args)
+		}))
 		ctorPropsObj.Properties.SetOwnNonEnumerable("getPrototypeOf", vm.NewNativeFunction(1, false, "getPrototypeOf", func(args []vm.Value) (vm.Value, error) {
 			return objectGetPrototypeOfWithVM(vmInstance, args)
 		}))
@@ -4059,39 +4061,196 @@ func objectHasOwnWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	return vm.BooleanValue(false), nil
 }
 
-func objectFromEntriesImpl(args []vm.Value) (vm.Value, error) {
-	if len(args) == 0 {
-		// TODO: Throw TypeError when error objects are implemented
-		// Create an empty plain object (this should use the Object prototype)
-		return vm.NewObject(vm.Undefined), nil
+// objectFromEntriesWithVM implements Object.fromEntries (ECMA-262 20.1.2.7),
+// i.e. AddEntriesFromIterable(obj, iterable, CreateDataPropertyOrThrow).
+//
+// The previous implementation (a) only ever walked a real TypeArray, silently
+// producing {} for every other iterable (a Map, a generator, an array-like),
+// and (b) wrote each property with SetOwnNonEnumerable - so even the array
+// case produced an object whose properties were invisible to Object.keys,
+// for...in, JSON.stringify and spread (paserati#488: this broke unmodified
+// prettier, whose defaults are built by spreading an Object.fromEntries
+// result). The spec's adder is CreateDataPropertyOrThrow, which defines
+// {writable: true, enumerable: true, configurable: true}.
+func objectFromEntriesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
+	iterable := vm.Undefined
+	if len(args) > 0 {
+		iterable = args[0]
+	}
+	// RequireObjectCoercible(iterable)
+	if iterable.Type() == vm.TypeUndefined || iterable.Type() == vm.TypeNull {
+		return vm.Undefined, vmInstance.NewTypeError("Object.fromEntries called on null or undefined")
 	}
 
-	iterable := args[0]
-
-	// Create new object to populate (use undefined to get Object.prototype)
-	result := vm.NewObject(vm.Undefined)
+	// OrdinaryObjectCreate(%Object.prototype%) - explicitly THIS vm's
+	// Object.prototype, not vm.NewObject's process-wide
+	// DefaultObjectPrototype fallback, which is a different object from the
+	// realm's intrinsic (so `Object.getPrototypeOf(Object.fromEntries([]))
+	// === Object.prototype` was false).
+	result := vm.NewObject(vmInstance.ObjectPrototype)
 	resultObj := result.AsPlainObject()
 
-	// If it's an array, iterate through it
-	if iterable.Type() == vm.TypeArray {
-		arr := iterable.AsArray()
-		for i := 0; i < arr.Length(); i++ {
-			entry := arr.Get(i)
-
-			// Each entry should be an array-like with at least 2 elements
-			if entry.Type() == vm.TypeArray {
-				entryArr := entry.AsArray()
-				if entryArr.Length() >= 2 {
-					key := entryArr.Get(0).ToString()
-					value := entryArr.Get(1)
-					resultObj.SetOwnNonEnumerable(key, value)
-				}
+	// GetIterator(iterable, sync). Strings keep the same special case every
+	// other iterator-consuming builtin here uses (a primitive string has no
+	// own symbol table, so the method has to come off String.prototype).
+	var iterMethod vm.Value
+	var hasIterator bool
+	if iterable.Type() == vm.TypeString {
+		if vmInstance.StringPrototype.Type() != vm.TypeUndefined {
+			if proto := vmInstance.StringPrototype.AsPlainObject(); proto != nil {
+				iterMethod, hasIterator = proto.GetOwnByKey(vm.NewSymbolKey(SymbolIterator))
 			}
 		}
+	} else {
+		iterMethod, hasIterator = vmInstance.GetSymbolProperty(iterable, SymbolIterator)
 	}
-	// TODO: Support other iterables when iterator protocol is implemented
+	if !hasIterator || !iterMethod.IsCallable() {
+		return vm.Undefined, vmInstance.NewTypeError("Object.fromEntries: argument is not iterable")
+	}
+	iterator, err := vmInstance.Call(iterMethod, iterable, []vm.Value{})
+	if err != nil {
+		return vm.Undefined, err
+	}
+	if !iterator.IsObject() && !iterator.IsCallable() {
+		return vm.Undefined, vmInstance.NewTypeError("Object.fromEntries: iterator is not an object")
+	}
+	// GetIteratorDirect: read "next" once, not per step.
+	nextMethod, err := vmInstance.GetProperty(iterator, "next")
+	if err != nil {
+		return vm.Undefined, err
+	}
+	if !nextMethod.IsCallable() {
+		return vm.Undefined, vmInstance.NewTypeError("Object.fromEntries: iterator.next is not a function")
+	}
+
+	for {
+		iterResult, err := vmInstance.Call(nextMethod, iterator, []vm.Value{})
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if !iterResult.IsObject() && !iterResult.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("Object.fromEntries: iterator result is not an object")
+		}
+		doneVal, err := vmInstance.GetProperty(iterResult, "done")
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if doneVal.IsTruthy() {
+			break
+		}
+		entry, err := vmInstance.GetProperty(iterResult, "value")
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if !entry.IsObject() && !entry.IsCallable() {
+			return vm.Undefined, closeIteratorWithError(vmInstance, iterator,
+				vmInstance.NewTypeError("Iterator value "+entry.ToString()+" is not an entry object"))
+		}
+		k, err := vmInstance.GetProperty(entry, "0")
+		if err != nil {
+			return vm.Undefined, closeIteratorWithError(vmInstance, iterator, err)
+		}
+		v, err := vmInstance.GetProperty(entry, "1")
+		if err != nil {
+			return vm.Undefined, closeIteratorWithError(vmInstance, iterator, err)
+		}
+		keyVal, err := toPropertyKeyOrError(vmInstance, k)
+		if err != nil {
+			return vm.Undefined, closeIteratorWithError(vmInstance, iterator, err)
+		}
+		// CreateDataPropertyOrThrow: a fresh ordinary object, so this always
+		// succeeds with the default {true, true, true} attributes.
+		w, e, c := true, true, true
+		if keyVal.Type() == vm.TypeSymbol {
+			resultObj.DefineOwnPropertyByKey(vm.NewSymbolKey(keyVal), v, &w, &e, &c)
+		} else {
+			resultObj.DefineOwnProperty(keyVal.ToString(), v, &w, &e, &c)
+		}
+	}
 
 	return result, nil
+}
+
+// toPropertyKeyOrError is ToPropertyKey (ECMA-262 7.1.19) for callers that
+// must run cleanup steps when the conversion throws.
+//
+// It exists next to toPropertyKeyValue because that one drives the VM's own
+// ToPrimitive, which reports a throwing user toString/valueOf by leaving the
+// VM unwinding and answering (undefined, nil) - by then the exception is
+// already in flight, so a caller can't call back into JS to clean up.
+// Object.fromEntries has to: AddEntriesFromIterable step 4.g says a failed
+// ToPropertyKey on the key is an abrupt completion that must go through
+// IteratorClose, i.e. the iterator's "return" method still gets called (see
+// test262 built-ins/Object/fromEntries/iterator-closed-for-throwing-entry-
+// key-tostring.js). Driving OrdinaryToPrimitive through vm.Call instead
+// surfaces the throw as an ordinary Go error, which the caller can act on
+// before propagating. The hint is always "string", so the Date "default"
+// special case the VM's ToPrimitive carries doesn't apply here.
+func toPropertyKeyOrError(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
+	if val.Type() == vm.TypeSymbol {
+		return val, nil
+	}
+	if !val.IsObject() && !val.IsCallable() {
+		return vm.NewString(val.ToString()), nil
+	}
+	prim, err := toPrimitiveStringHintOrError(vmInstance, val)
+	if err != nil {
+		return vm.Undefined, err
+	}
+	if prim.Type() == vm.TypeSymbol {
+		return prim, nil
+	}
+	return vm.NewString(prim.ToString()), nil
+}
+
+// toPrimitiveStringHintOrError is ToPrimitive(val, string) built out of
+// vm.Call, so a throw from @@toPrimitive / toString / valueOf comes back as a
+// Go error rather than as VM unwinding state. See toPropertyKeyOrError.
+func toPrimitiveStringHintOrError(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
+	if vmInstance.SymbolToPrimitive.Type() == vm.TypeSymbol {
+		if method, ok := vmInstance.GetSymbolProperty(val, vmInstance.SymbolToPrimitive); ok &&
+			method.Type() != vm.TypeUndefined && method.Type() != vm.TypeNull {
+			if !method.IsCallable() {
+				return vm.Undefined, vmInstance.NewTypeError("@@toPrimitive must be callable")
+			}
+			result, err := vmInstance.Call(method, val, []vm.Value{vm.NewString("string")})
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if result.IsObject() || result.IsCallable() {
+				return vm.Undefined, vmInstance.NewTypeError("Symbol.toPrimitive must return a primitive value")
+			}
+			return result, nil
+		}
+	}
+	// OrdinaryToPrimitive(val, string): toString first, then valueOf.
+	for _, name := range []string{"toString", "valueOf"} {
+		method, err := vmInstance.GetProperty(val, name)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if !method.IsCallable() {
+			continue
+		}
+		result, err := vmInstance.Call(method, val, []vm.Value{})
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if !result.IsObject() && !result.IsCallable() {
+			return result, nil
+		}
+	}
+	return vm.Undefined, vmInstance.NewTypeError("Cannot convert object to primitive value")
+}
+
+// closeIteratorWithError performs IteratorClose(iterator, throwCompletion):
+// it calls the iterator's "return" method (ignoring any error from it, per
+// spec - the original completion wins) and returns the original error.
+func closeIteratorWithError(vmInstance *vm.VM, iterator vm.Value, cause error) error {
+	if retMethod, err := vmInstance.GetProperty(iterator, "return"); err == nil && retMethod.IsCallable() {
+		_, _ = vmInstance.Call(retMethod, iterator, []vm.Value{})
+	}
+	return cause
 }
 
 // definePropertyTarget returns the PlainObject that objectDefinePropertyWithVM
