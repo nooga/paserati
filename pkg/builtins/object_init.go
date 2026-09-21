@@ -942,35 +942,32 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.NewObject(vm.NewValueFromPlainObject(objectProto)), nil
 
 		case vm.TypeBigInt:
-			// Create BigInt wrapper object
+			// Stays hand-rolled: vm.ToObject (the VM-side ToObject the other
+			// branches' helpers make up) has no BigInt case at all - it falls
+			// through to "already an object" and would hand back the raw
+			// primitive.
 			wrapper := vm.NewObject(vmInstance.BigIntPrototype).AsPlainObject()
-			// Store the primitive value internally
 			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
 			return vm.NewValueFromPlainObject(wrapper), nil
 
 		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
-			// Create Number wrapper object
-			wrapper := vm.NewObject(vmInstance.NumberPrototype).AsPlainObject()
-			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
-			return vm.NewValueFromPlainObject(wrapper), nil
+			return vmInstance.NewNumberObject(arg.ToFloat()), nil
 
 		case vm.TypeString:
-			// Create String wrapper object
-			wrapper := vm.NewObject(vmInstance.StringPrototype).AsPlainObject()
-			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
-			return vm.NewValueFromPlainObject(wrapper), nil
+			// vm.NewStringObject, not a hand-rolled NewObject(StringPrototype)
+			// + [[PrimitiveValue]]: a String exotic object also carries one
+			// non-writable, enumerable, non-configurable property per UTF-16
+			// code unit plus its own "length", which the hand-rolled version
+			// left out - so Object("ab")[0] was undefined (and Object("ab")
+			// had no length and no own keys) while new String("ab")[0], which
+			// already went through this helper, was "a".
+			return vmInstance.NewStringObject(arg.ToString()), nil
 
 		case vm.TypeBoolean:
-			// Create Boolean wrapper object
-			wrapper := vm.NewObject(vmInstance.BooleanPrototype).AsPlainObject()
-			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
-			return vm.NewValueFromPlainObject(wrapper), nil
+			return vmInstance.NewBooleanObject(arg.AsBoolean()), nil
 
 		case vm.TypeSymbol:
-			// Create Symbol wrapper object
-			wrapper := vm.NewObject(vmInstance.SymbolPrototype).AsPlainObject()
-			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
-			return vm.NewValueFromPlainObject(wrapper), nil
+			return vmInstance.NewSymbolObject(arg), nil
 
 		default:
 			// Fallback: create empty object
