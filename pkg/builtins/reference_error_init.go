@@ -94,9 +94,13 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			referenceErrorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
 		}
 
-		// Capture stack trace at the time of ReferenceError creation
-		stackTrace := vmInstance.CaptureStackTrace()
-		referenceErrorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))
+		// Capture stack trace at the time of ReferenceError creation, honoring
+		// Error.stackTraceLimit / Error.prepareStackTrace if set (#492).
+		stackValue, stackErr := vmInstance.CaptureStackValue(referenceErrorInstance)
+		if stackErr != nil {
+			return vm.Undefined, stackErr
+		}
+		referenceErrorInstancePtr.SetOwnNonEnumerable("stack", stackValue)
 
 		// Per ECMAScript 20.5.8.1 InstallErrorCause:
 		// If options is an Object and HasProperty(options, "cause") is true,

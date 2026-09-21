@@ -695,32 +695,15 @@ func (vm *VM) getStackFramesExcluding(target *FunctionObject) []StackFrame {
 		}
 
 		if frame.closure != nil && frame.closure.Fn != nil {
-			fn := frame.closure.Fn
+			// Reuse the same line/column/name resolution used for thrown
+			// runtime errors, rather than the coarser (and in the filename's
+			// case, nonsensical - it wrapped the function name, not a path)
+			// logic this used to duplicate.
+			line, column, funcName := vm.getFrameLineAndColumnInfo(frame)
 
-			// Get function name
-			funcName := fn.Name
-			if funcName == "" {
-				funcName = "<anonymous>"
-			}
-
-			// Get current line number from chunk's line info
-			// IP points to the NEXT instruction, so use ip-1 for the current/error instruction
-			line := 1
-			column := 1
-			if fn.Chunk != nil {
-				instructionPos := frame.ip - 1
-				if instructionPos >= 0 && instructionPos < len(fn.Chunk.Lines) {
-					line = fn.Chunk.GetLine(instructionPos)
-				} else if frame.ip >= 0 && frame.ip < len(fn.Chunk.Lines) {
-					// Fallback to ip if ip-1 is invalid
-					line = fn.Chunk.GetLine(frame.ip)
-				}
-			}
-
-			// For now, use a placeholder filename - could be enhanced with source mapping
 			fileName := "<script>"
-			if funcName != "<script>" && funcName != "<anonymous>" {
-				fileName = "<" + funcName + ">"
+			if src := frameSource(frame); src != nil {
+				fileName = src.DisplayPath()
 			}
 
 			frames = append(frames, StackFrame{

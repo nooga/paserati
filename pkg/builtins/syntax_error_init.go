@@ -94,9 +94,13 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			syntaxErrorInstancePtr.SetOwnNonEnumerable("message", vm.NewString(message))
 		}
 
-		// Capture stack trace at the time of SyntaxError creation
-		stackTrace := vmInstance.CaptureStackTrace()
-		syntaxErrorInstancePtr.SetOwnNonEnumerable("stack", vm.NewString(stackTrace))
+		// Capture stack trace at the time of SyntaxError creation, honoring
+		// Error.stackTraceLimit / Error.prepareStackTrace if set (#492).
+		stackValue, stackErr := vmInstance.CaptureStackValue(syntaxErrorInstance)
+		if stackErr != nil {
+			return vm.Undefined, stackErr
+		}
+		syntaxErrorInstancePtr.SetOwnNonEnumerable("stack", stackValue)
 
 		// Per ECMAScript 20.5.8.1 InstallErrorCause:
 		// If options is an Object and HasProperty(options, "cause") is true,

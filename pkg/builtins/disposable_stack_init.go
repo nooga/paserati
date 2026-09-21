@@ -27,12 +27,15 @@ func exceptionValue(vmInstance *vm.VM, err error) vm.Value {
 // (possibly reassigned) global SuppressedError binding.
 func newSuppressedError(vmInstance *vm.VM, errorVal, suppressedVal vm.Value) vm.Value {
 	proto := vmInstance.CurrentRealm().SuppressedErrorPrototype
-	inst := vm.NewObject(proto).AsPlainObject()
+	instVal := vm.NewObject(proto)
+	inst := instVal.AsPlainObject()
 	inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
-	inst.SetOwnNonEnumerable("stack", vm.NewString(vmInstance.CaptureStackTrace()))
+	if stackValue, err := vmInstance.CaptureStackValue(instVal); err == nil {
+		inst.SetOwnNonEnumerable("stack", stackValue)
+	}
 	inst.SetOwnNonEnumerable("error", errorVal)
 	inst.SetOwnNonEnumerable("suppressed", suppressedVal)
-	return vm.NewValueFromPlainObject(inst)
+	return instVal
 }
 
 // disposeStackResources runs resources in reverse push order (spec:
