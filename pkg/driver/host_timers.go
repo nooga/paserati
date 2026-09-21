@@ -1,12 +1,30 @@
 package driver
 
 import (
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/nooga/paserati/pkg/builtins"
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 )
+
+// osExit is os.Exit, overridden in tests so they can observe the exit
+// request (code, and that it happened) without killing the test binary.
+var osExit = os.Exit
+
+// reportUncaughtTimerException reports an exception thrown from a
+// setTimeout/nextTick callback the way real Node crashes the process for an
+// uncaught exception escaping an event-loop callback - there's no catching JS
+// context above these, so unlike a thrown exception inside a normal call
+// stack, it can never be caught anywhere and must terminate the process
+// (#484). Without this, vmInstance.Call's error return was discarded and the
+// process kept running silently, as if the throw never happened.
+func reportUncaughtTimerException(vmInstance *vm.VM, err error) {
+	fmt.Fprintln(os.Stderr, vmInstance.FormatUncaughtCallError(err))
+	osExit(1)
+}
 
 // HostTimerInitializer provides opt-in Node-style nextTick/setTimeout globals
 // for embed hosts (e.g. noderati). Not part of standard builtins.
@@ -47,7 +65,9 @@ func (h *HostTimerInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 		fn := args[0]
 		fnArgs := args[1:]
 		rt.ScheduleNextTick(func() {
-			_, _ = vmInstance.Call(fn, vm.Undefined, fnArgs)
+			if _, err := vmInstance.Call(fn, vm.Undefined, fnArgs); err != nil {
+				reportUncaughtTimerException(vmInstance, err)
+			}
 		})
 		return vm.Undefined, nil
 	})
@@ -66,7 +86,9 @@ func (h *HostTimerInitializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 		}
 		fnArgs := args[2:]
 		id := rt.ScheduleTimer(time.Duration(delayMs)*time.Millisecond, func() {
-			_, _ = vmInstance.Call(fn, vm.Undefined, fnArgs)
+			if _, err := vmInstance.Call(fn, vm.Undefined, fnArgs); err != nil {
+				reportUncaughtTimerException(vmInstance, err)
+			}
 		})
 		return vm.NumberValue(float64(id)), nil
 	})
