@@ -563,8 +563,12 @@ func (c *Compiler) compileConstructor(node *parser.ClassDeclaration, superConstr
 		functionLiteral = c.createDefaultConstructor(node)
 	}
 
-	// Inject field initializers into the constructor body
-	functionLiteral = c.injectFieldInitializers(node, functionLiteral)
+	// Inject field initializers into the constructor body. For a derived
+	// class, pendingFieldInits comes back non-nil instead: it must run at
+	// each super() call site rather than at a fixed position in the body
+	// (see injectFieldInitializers).
+	var pendingFieldInits []parser.Statement
+	functionLiteral, pendingFieldInits = c.injectFieldInitializers(node, functionLiteral)
 
 	// Store the super class name in the compiler context so compileSuperConstructorCall can use it
 	// This is a simple approach that avoids complex free variable handling
@@ -580,6 +584,12 @@ func (c *Compiler) compileConstructor(node *parser.ClassDeclaration, superConstr
 	}
 	defer func() {
 		c.compilingSuperClassName = oldSuperClassName
+	}()
+
+	oldPendingFieldInits := c.pendingFieldInitStatements
+	c.pendingFieldInitStatements = pendingFieldInits
+	defer func() {
+		c.pendingFieldInitStatements = oldPendingFieldInits
 	}()
 
 	// Compile the constructor function
@@ -1000,37 +1010,14 @@ func flattenCommaExpression(expr parser.Expression) []parser.Expression {
 	return append(flattenCommaExpression(infix.Left), infix.Right)
 }
 
-// flattenTopLevelCommaStatements expands any top-level ExpressionStatement
-// whose expression is a comma chain into one ExpressionStatement per
-// sub-expression, in order - the reverse of what a minifier's "join
-// consecutive statements with the comma operator" pass did to produce it.
-// Behavior-preserving: a bare ExpressionStatement's value is always
-// discarded, so `a(), b();` and `a(); b();` run identically. Every other
-// statement kind (declarations, control flow, ...) passes through
-// untouched. See injectFieldInitializers' derived-class branch (paserati#180)
-// for why this needs to run before searching for a bare super() call.
-func flattenTopLevelCommaStatements(statements []parser.Statement) []parser.Statement {
-	out := make([]parser.Statement, 0, len(statements))
-	for _, stmt := range statements {
-		exprStmt, ok := stmt.(*parser.ExpressionStatement)
-		if !ok {
-			out = append(out, stmt)
-			continue
-		}
-		parts := flattenCommaExpression(exprStmt.Expression)
-		if len(parts) == 1 {
-			out = append(out, stmt)
-			continue
-		}
-		for _, part := range parts {
-			out = append(out, &parser.ExpressionStatement{Token: exprStmt.Token, Expression: part})
-		}
-	}
-	return out
-}
-
-// injectFieldInitializers creates a new function literal with field initializers prepended to the constructor body
-func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functionLiteral *parser.FunctionLiteral) *parser.FunctionLiteral {
+// injectFieldInitializers prepares a class's field/private-method/accessor
+// initializers for its constructor. For a regular (non-derived) class they
+// are spliced directly into the returned function literal's body. For a
+// derived class they cannot be safely spliced at a fixed AST position (see
+// the comment below), so the returned function literal's body is left
+// unchanged and the initializer statements are returned separately, for the
+// caller to run at each super() call site instead.
+func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functionLiteral *parser.FunctionLiteral) (*parser.FunctionLiteral, []parser.Statement) {
 	// Collect field initializer statements
 	var fieldInitializers []parser.Statement
 
@@ -1241,64 +1228,36 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 
 	// If no field initializers, return original function literal
 	if len(fieldInitializers) == 0 {
-		return functionLiteral
+		return functionLiteral, nil
 	}
-
-	// Create new body with field initializers at the correct position
-	// For derived classes, field initializers must come AFTER super() call
-	// For regular classes, they come at the beginning
-	newStatements := make([]parser.Statement, 0, len(fieldInitializers)+len(functionLiteral.Body.Statements))
 
 	isDerivedClass := node.SuperClass != nil
 	if isDerivedClass {
-		// A minifier commonly merges `super(...);` with the statement right
-		// after it into one `super(...), <next>;` via the comma operator -
-		// legal JS (a bare ExpressionStatement's value is always discarded,
-		// so splitting the chain back into separate statements is behavior-
-		// preserving) and a real, common shape (paserati#180: esbuild's
-		// bundling of glob@13.0.6 produces exactly
-		// `super(t,mi,"/",{...e,nocase:s}),this.nocase=s` for one
-		// constructor). The search below only recognizes a super() call
-		// that IS the entire expression of its statement, so flatten any
-		// top-level comma chain into separate statements first - this
-		// also correctly relocates whatever followed super() in the same
-		// chain to *after* the injected field initializers, not before
-		// them, which a "detect but don't restructure" fix could not do.
-		statements := flattenTopLevelCommaStatements(functionLiteral.Body.Statements)
-
-		// Find the super() call and insert field initializers after it
-		insertPos := 0
-		foundSuper := false
-		for i, stmt := range statements {
-			// Check if this statement contains a super() call
-			if exprStmt, ok := stmt.(*parser.ExpressionStatement); ok {
-				if callExpr, ok := exprStmt.Expression.(*parser.CallExpression); ok {
-					if _, isSuper := callExpr.Function.(*parser.SuperExpression); isSuper {
-						insertPos = i + 1 // Insert after this statement
-						foundSuper = true
-						break
-					}
-				}
-			}
-		}
-
-		if foundSuper {
-			// Insert field initializers after super() call
-			newStatements = append(newStatements, statements[:insertPos]...)
-			newStatements = append(newStatements, fieldInitializers...)
-			newStatements = append(newStatements, statements[insertPos:]...)
-		} else {
-			// No explicit super() call found - this is an error in real code,
-			// but for now prepend (will fail at runtime when fields try to access this)
-			debugPrintf("// WARNING: Derived class constructor without explicit super() call\n")
-			newStatements = append(newStatements, fieldInitializers...)
-			newStatements = append(newStatements, statements...)
-		}
-	} else {
-		// Regular class - prepend field initializers
-		newStatements = append(newStatements, fieldInitializers...)
-		newStatements = append(newStatements, functionLiteral.Body.Statements...)
+		// For a derived class, field initializers must run immediately after
+		// `this` is bound by super() - which the spec ties to evaluating the
+		// SuperCall itself, not to whatever statement happens to contain it.
+		// Trying to find and splice them into the AST next to a super() call
+		// only worked when super() was its own top-level statement or comma
+		// chain (paserati#180: minifiers commonly merge `super(...);` with
+		// the statement after it into `super(...), <next>;`) - it silently
+		// missed a super() call nested any deeper, e.g. folded into an `if`
+		// condition's comma expression (paserati#504, a real shape produced
+		// by minifiers: `if (super(), this.x = t, cond) { ... }`).
+		//
+		// So leave the constructor body untouched here and instead hand the
+		// field initializers back to compileConstructor, which compiles them
+		// inline at every super()/super(...) call site
+		// (compileSuperConstructorCall / compileSpreadSuperCall), wherever
+		// in the body that site actually is.
+		debugPrintf("// DEBUG injectFieldInitializers: Deferring %d field initializers to super() call site(s)\n", len(fieldInitializers))
+		return functionLiteral, fieldInitializers
 	}
+
+	// Regular (non-derived) class - prepend field initializers, there's no
+	// super() call to tie them to.
+	newStatements := make([]parser.Statement, 0, len(fieldInitializers)+len(functionLiteral.Body.Statements))
+	newStatements = append(newStatements, fieldInitializers...)
+	newStatements = append(newStatements, functionLiteral.Body.Statements...)
 
 	// Create new function literal with modified body
 	newFunctionLiteral := &parser.FunctionLiteral{
@@ -1315,7 +1274,7 @@ func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functi
 	}
 
 	debugPrintf("// DEBUG injectFieldInitializers: Created constructor with %d field initializers\n", len(fieldInitializers))
-	return newFunctionLiteral
+	return newFunctionLiteral, nil
 }
 
 // setupStaticMembers sets up static properties and methods on the constructor function
