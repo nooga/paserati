@@ -85,6 +85,7 @@ type ClosureObject struct {
 	Upvalues                 []*Upvalue
 	WithObjects              []Value      // Captured with-object stack from enclosing with statements
 	CapturedThis             Value        // Captured 'this' for arrow functions (lexical this binding)
+	CapturedThisCell         *thisCell    // Shared 'this' binding for an arrow created before super() - see this_cell.go
 	CapturedSuperConstructor Value        // Captured super constructor for arrow functions with super() calls
 	CapturedArguments        Value        // Captured 'arguments' for arrow functions (lexical arguments binding)
 	CapturedNewTarget        Value        // Captured 'new.target' for arrow functions (lexical new.target binding)

@@ -174,6 +174,7 @@ type CallFrame struct {
 	regWindowStart registerMark
 	targetRegister      byte     // Which register in the CALLER the result should go into
 	thisValue           Value    // The 'this' value for method calls (undefined for regular function calls)
+	thisCell            *thisCell // Derived-constructor frames only: 'this' binding shared with arrows created before super() - see this_cell.go
 	homeObject          Value    // The [[HomeObject]] for super property access (object where method is defined)
 	openUpvalues        *Upvalue // Head of this frame's open-upvalue list (captures into this frame's registers/spill slots), linked via Upvalue.next. nil iff the frame has captured nothing.
 	isConstructorCall   bool     // Whether this frame was created by a constructor call (new expression)
@@ -4372,6 +4373,7 @@ startExecution:
 					}
 					setTailCallHomeObject(frame, calleeFunc, frame.thisValue)
 					frame.isConstructorCall = false
+					frame.thisCell = nil // see this_cell.go
 					frame.isDirectCall = false
 					frame.isSentinelFrame = false
 					frame.generatorObj = nil
@@ -4623,6 +4625,7 @@ startExecution:
 					}
 					setTailCallHomeObject(frame, calleeFunc, thisVal)
 					frame.isConstructorCall = false
+					frame.thisCell = nil // see this_cell.go
 					frame.isDirectCall = false
 					frame.isSentinelFrame = false
 					frame.generatorObj = nil
@@ -7208,10 +7211,23 @@ startExecution:
 				// For arrow functions, capture the current 'this' value (lexical this binding)
 				// and the super constructor for super() calls
 				if cl.Fn.IsArrowFunction {
-					cl.CapturedThis = frame.thisValue
-					// Capture super constructor from enclosing non-arrow function
+					// By value, or via the shared cell while `this` is still
+					// uninitialized (paserati#520).
+					if frame.thisValue.typ != TypeUninitialized {
+						cl.CapturedThis = frame.thisValue
+					} else {
+						frame.captureArrowThis(cl)
+					}
+					// Capture super constructor from enclosing non-arrow function.
+					// An arrow inside an arrow inherits the outer arrow's capture:
+					// the outer arrow's own Fn.Prototype is Function.prototype,
+					// so super() in the inner one called a non-constructor.
 					if frame.closure != nil && frame.closure.Fn != nil {
-						cl.CapturedSuperConstructor = frame.closure.Fn.Prototype
+						if frame.closure.Fn.IsArrowFunction {
+							cl.CapturedSuperConstructor = frame.closure.CapturedSuperConstructor
+						} else {
+							cl.CapturedSuperConstructor = frame.closure.Fn.Prototype
+						}
 					}
 					// Capture new.target from enclosing scope (for lexical new.target binding)
 					// If enclosing frame is itself an arrow function, use its captured new.target
@@ -7373,10 +7389,23 @@ startExecution:
 				// For arrow functions, capture the current 'this' value (lexical this binding)
 				// and the super constructor for super() calls
 				if cl.Fn.IsArrowFunction {
-					cl.CapturedThis = frame.thisValue
-					// Capture super constructor from enclosing non-arrow function
+					// By value, or via the shared cell while `this` is still
+					// uninitialized (paserati#520).
+					if frame.thisValue.typ != TypeUninitialized {
+						cl.CapturedThis = frame.thisValue
+					} else {
+						frame.captureArrowThis(cl)
+					}
+					// Capture super constructor from enclosing non-arrow function.
+					// An arrow inside an arrow inherits the outer arrow's capture:
+					// the outer arrow's own Fn.Prototype is Function.prototype,
+					// so super() in the inner one called a non-constructor.
 					if frame.closure != nil && frame.closure.Fn != nil {
-						cl.CapturedSuperConstructor = frame.closure.Fn.Prototype
+						if frame.closure.Fn.IsArrowFunction {
+							cl.CapturedSuperConstructor = frame.closure.CapturedSuperConstructor
+						} else {
+							cl.CapturedSuperConstructor = frame.closure.Fn.Prototype
+						}
 					}
 					// Capture new.target from enclosing scope (for lexical new.target binding)
 					// If enclosing frame is itself an arrow function, use its captured new.target
@@ -12219,6 +12248,7 @@ startExecution:
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
 				newFrame.thisValue = newInstance        // Set the new instance as 'this' (or undefined for derived)
+				newFrame.thisCell = nil                 // see this_cell.go
 				newFrame.homeObject = instancePrototype // Set [[HomeObject]] for super property access in constructors
 				newFrame.isConstructorCall = true       // Mark this as a constructor call
 				newFrame.isDirectCall = false           // Not a direct call (normal OpNew)
@@ -12441,6 +12471,7 @@ startExecution:
 				newFrame.ip = 0
 				newFrame.targetRegister = destReg
 				newFrame.thisValue = newInstance        // Set the new instance as 'this' (or undefined for derived)
+				newFrame.thisCell = nil                 // see this_cell.go
 				newFrame.homeObject = instancePrototype // Set [[HomeObject]] for super property access in constructors
 				newFrame.isConstructorCall = true       // Mark this as a constructor call
 				newFrame.isDirectCall = false           // Not a direct call (normal OpNew)
@@ -12929,6 +12960,7 @@ startExecution:
 					newFrame.ip = 0
 					newFrame.targetRegister = destReg
 					newFrame.thisValue = newInstance
+					newFrame.thisCell = nil // see this_cell.go
 					newFrame.homeObject = instancePrototype
 					newFrame.isConstructorCall = true
 					newFrame.isDirectCall = false
@@ -13236,8 +13268,10 @@ startExecution:
 			ip++
 
 			// Load 'this' value from current call frame context
-			// Check for TDZ: in derived constructors, 'this' is Uninitialized until super() is called
-			if frame.thisValue.typ == TypeUninitialized {
+			// Check for TDZ: in derived constructors, 'this' is Uninitialized until super() is called.
+			// currentThis re-reads the shared binding an arrow created before
+			// super() holds, so it sees a super() that has run since (paserati#520).
+			if frame.thisValue.typ == TypeUninitialized && frame.currentThis().typ == TypeUninitialized {
 				frame.ip = ip
 				vm.ThrowReferenceError("Must call super constructor in derived class before accessing 'this' or returning from derived constructor")
 				if !vm.unwinding {
@@ -13265,7 +13299,18 @@ startExecution:
 
 			// For arrow functions, check the captured this instead of frame.thisValue
 			// since arrow functions use lexical this binding
-			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
+			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction && frame.closure.CapturedThisCell != nil {
+				// Arrow created before super(): its `this` is the constructor's
+				// shared binding (paserati#520).
+				if !vm.bindThisFromArrowSuper(frame, frame.closure.CapturedThisCell, registers[srcReg]) {
+					frame.ip = ip
+					vm.ThrowReferenceError("super() already called")
+					if !vm.unwinding {
+						goto reloadFrame
+					}
+					return InterpretRuntimeError, Undefined
+				}
+			} else if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
 				// Arrow function: check if captured this is already initialized
 				// If CapturedThis is not Uninitialized, super() was already called in the enclosing constructor
 				if frame.closure.CapturedThis.Type() != TypeUninitialized {
@@ -13331,6 +13376,9 @@ startExecution:
 					return InterpretRuntimeError, Undefined
 				}
 				frame.thisValue = registers[srcReg]
+				if frame.thisCell != nil {
+					frame.thisCell.value = registers[srcReg]
+				}
 			}
 
 		case OpLoadNewTarget:
@@ -13426,12 +13474,9 @@ startExecution:
 
 			// Get 'this' value for receiver binding
 			// For arrow functions, use the captured 'this' from lexical scope
-			var thisValue Value
-			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
-				thisValue = frame.closure.CapturedThis
-			} else {
-				thisValue = frame.thisValue
-			}
+			// An arrow's frame.thisValue is its captured `this`; currentThis
+			// also sees a super() that ran after the arrow was created (#520).
+			thisValue := frame.currentThis()
 			if debugVM {
 				fmt.Printf("[DEBUG OpGetSuper] thisValue type=%d, value=%s\n", thisValue.Type(), thisValue.Inspect())
 			}
@@ -13535,12 +13580,9 @@ startExecution:
 
 			// Get 'this' value for receiver binding
 			// For arrow functions, use the captured 'this' from lexical scope
-			var thisValue Value
-			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
-				thisValue = frame.closure.CapturedThis
-			} else {
-				thisValue = frame.thisValue
-			}
+			// An arrow's frame.thisValue is its captured `this`; currentThis
+			// also sees a super() that ran after the arrow was created (#520).
+			thisValue := frame.currentThis()
 
 			// Get the home object to determine super base
 			// Per ECMAScript spec: super base = Object.getPrototypeOf([[HomeObject]])
@@ -13619,12 +13661,9 @@ startExecution:
 
 			// Get 'this' value for receiver binding
 			// For arrow functions, use the captured 'this' from lexical scope
-			var thisValue Value
-			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
-				thisValue = frame.closure.CapturedThis
-			} else {
-				thisValue = frame.thisValue
-			}
+			// An arrow's frame.thisValue is its captured `this`; currentThis
+			// also sees a super() that ran after the arrow was created (#520).
+			thisValue := frame.currentThis()
 
 			// Get the home object to determine super base
 			// For arrow functions, use the captured [[HomeObject]] from lexical scope
@@ -13768,12 +13807,9 @@ startExecution:
 
 			// Get 'this' value for receiver binding
 			// For arrow functions, use the captured 'this' from lexical scope
-			var thisValue Value
-			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
-				thisValue = frame.closure.CapturedThis
-			} else {
-				thisValue = frame.thisValue
-			}
+			// An arrow's frame.thisValue is its captured `this`; currentThis
+			// also sees a super() that ran after the arrow was created (#520).
+			thisValue := frame.currentThis()
 
 			// Get the home object to determine super base
 			// For arrow functions, use the captured [[HomeObject]] from lexical scope
@@ -13904,12 +13940,9 @@ startExecution:
 
 			// Get 'this' value for receiver binding
 			// For arrow functions, use the captured 'this' from lexical scope
-			var thisValue Value
-			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
-				thisValue = frame.closure.CapturedThis
-			} else {
-				thisValue = frame.thisValue
-			}
+			// An arrow's frame.thisValue is its captured `this`; currentThis
+			// also sees a super() that ran after the arrow was created (#520).
+			thisValue := frame.currentThis()
 
 			// Check that we're in a valid context for super property access
 			if frame.isConstructorCall && thisValue.Type() == TypeUninitialized {

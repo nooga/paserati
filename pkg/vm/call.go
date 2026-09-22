@@ -490,6 +490,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		newFrame.closure = calleeClosure
 		newFrame.ip = 0
 		newFrame.targetRegister = destReg
+		newFrame.thisCell = nil // see this_cell.go
 		// Arrow functions use their captured 'this' (lexical this binding)
 		// They ignore the provided thisValue from call/apply/bind
 		if calleeFunc.IsArrowFunction {

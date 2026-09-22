@@ -179,6 +179,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.ip = 0
 		newFrame.targetRegister = destReg
 		newFrame.thisValue = newInstance
+		newFrame.thisCell = nil                 // see this_cell.go
 		newFrame.homeObject = instancePrototype // Set [[HomeObject]] for super property access in constructors
 		newFrame.isConstructorCall = true
 		newFrame.isDirectCall = false    // Not a direct call (spread new)
@@ -314,6 +315,7 @@ func (vm *VM) handleOpSpreadNew(code []byte, ip *int, frame *CallFrame, register
 		newFrame.ip = 0
 		newFrame.targetRegister = destReg
 		newFrame.thisValue = newInstance
+		newFrame.thisCell = nil                 // see this_cell.go
 		newFrame.homeObject = instancePrototype // Set [[HomeObject]] for super property access in constructors
 		newFrame.isConstructorCall = true
 		newFrame.isDirectCall = false    // Not a direct call (spread new)
