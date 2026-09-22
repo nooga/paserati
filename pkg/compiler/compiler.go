@@ -464,6 +464,21 @@ type Compiler struct {
 	// --- NEW: Class Context for super() support ---
 	compilingSuperClassName string // Name of parent class when compiling derived class constructor
 
+	// pendingFieldInitStatements holds a derived class's `this.field = ...`
+	// initializer statements (plus private-method/accessor setup) while
+	// compiling its constructor. Rather than trying to splice these into the
+	// constructor's AST next to wherever super() textually appears - which
+	// only works when super() is its own top-level statement or comma chain
+	// (see #180) and silently misses it inside e.g. an `if` condition's
+	// comma expression (#504, a real shape produced by minifiers folding
+	// `super(); this.x = t;` into one `if (super(), this.x = t, cond)`) -
+	// compileSuperConstructorCall/compileSpreadSuperCall compile these
+	// statements inline immediately after binding `this`, at every syntactic
+	// super() call site, matching how the spec actually ties instance field
+	// initialization to evaluating the SuperCall itself rather than to its
+	// enclosing statement.
+	pendingFieldInitStatements []parser.Statement
+
 	// --- Tail Call Optimization ---
 	inTailPosition bool // True when compiling tail-positioned expression
 
@@ -831,7 +846,8 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		constantCache:            make(map[uint16]Register),                 // Each function has its own constant cache
 		moduleBindings:           enclosingCompiler.moduleBindings,          // Inherit module bindings
 		moduleLoader:             enclosingCompiler.moduleLoader,            // Inherit module loader
-		compilingSuperClassName:  enclosingCompiler.compilingSuperClassName, // Inherit super class context
+		compilingSuperClassName:    enclosingCompiler.compilingSuperClassName,    // Inherit super class context
+		pendingFieldInitStatements: enclosingCompiler.pendingFieldInitStatements, // Inherit pending field inits (e.g. for super() inside a nested arrow function)
 		finallyContextStack:      make([]*FinallyContext, 0),                // Each function has its own finally context stack
 		withBlockDepth:           enclosingCompiler.withBlockDepth,          // Inherit for unresolved var lookups in closure's scope chain
 		currentFuncWithDepth:     0,                                         // NOT inherited - function's own locals shadow with-object

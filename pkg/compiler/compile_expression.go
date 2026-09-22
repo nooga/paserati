@@ -3806,6 +3806,13 @@ func (c *Compiler) compileSuperConstructorCall(node *parser.CallExpression, hint
 	// Update 'this' to be the newly created instance
 	c.emitSetThis(resultReg, node.Token.Line)
 
+	// Per spec, instance field initializers run as part of evaluating the
+	// SuperCall itself, immediately once 'this' is bound - not at some fixed
+	// point relative to the statement super() happens to sit in. See #504.
+	if err := c.emitPendingFieldInitializers(node.Token.Line); err != nil {
+		return BadRegister, err
+	}
+
 	// Now load the current 'this' (which may have been updated) into hint
 	c.emitLoadThis(hint, node.Token.Line)
 
@@ -3864,10 +3871,38 @@ func (c *Compiler) compileSpreadSuperCall(node *parser.CallExpression, hint Regi
 	// Update 'this' to be the newly created instance
 	c.emitSetThis(resultReg, node.Token.Line)
 
+	// See the matching comment in compileSuperConstructorCall (#504).
+	if err := c.emitPendingFieldInitializers(node.Token.Line); err != nil {
+		return BadRegister, err
+	}
+
 	// Now load the current 'this' (which has been updated) into hint
 	c.emitLoadThis(hint, node.Token.Line)
 
 	return hint, nil
+}
+
+// emitPendingFieldInitializers compiles this constructor's pending derived-
+// class instance field/private-method/accessor initializers (see
+// pendingFieldInitStatements), if any, at the current position - called
+// right after a super()/super(...) call binds 'this' to the newly
+// constructed instance, wherever in the constructor body that call actually
+// is. A no-op when nothing is pending (a base class constructor, or a
+// derived class with no instance fields - the overwhelmingly common case).
+func (c *Compiler) emitPendingFieldInitializers(line int) errors.PaseratiError {
+	if len(c.pendingFieldInitStatements) == 0 {
+		return nil
+	}
+	// Reuse one scratch register across all of them, the same way a
+	// BlockStatement compiles its own statement list into a shared hint.
+	scratch := c.regAlloc.Alloc()
+	defer c.regAlloc.Free(scratch)
+	for _, stmt := range c.pendingFieldInitStatements {
+		if _, err := c.compileNode(stmt, scratch); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // compileSpreadNewExpression compiles new Foo(...args) with spread arguments
