@@ -289,7 +289,13 @@ func reflectCreateOrUpdateDataProperty(vmInstance *vm.VM, receiver vm.Value, pro
 	if _, _, isAccessor := reflectGetOwnAccessorGeneric(receiver, propKey); isAccessor {
 		return false, nil
 	}
-	if _, writable, found := reflectGetOwnDataDescriptorGeneric(receiver, propKey); found && !writable {
+	_, writable, found := reflectGetOwnDataDescriptorGeneric(receiver, propKey)
+	if found && !writable {
+		return false, nil
+	}
+	// 10.1.9.2 step 2.e: a brand-new key is CreateDataProperty, which fails
+	// on a non-extensible receiver.
+	if !found && !reflectReceiverExtensible(receiver) {
 		return false, nil
 	}
 
@@ -338,6 +344,19 @@ func reflectCreateOrUpdateDataProperty(vmInstance *vm.VM, receiver vm.Value, pro
 	}
 }
 
+// reflectReceiverExtensible reports [[IsExtensible]] for the receiver kinds
+// reflectCreateOrUpdateDataProperty writes directly; other kinds (Proxy has
+// its own defineProperty path) are treated as extensible, as before.
+func reflectReceiverExtensible(receiver vm.Value) bool {
+	switch receiver.Type() {
+	case vm.TypeObject:
+		return receiver.AsPlainObject().IsExtensible()
+	case vm.TypeArray:
+		return receiver.AsArray().IsExtensible()
+	}
+	return true
+}
+
 // reflectCreateOrUpdateDataPropertyByKey is reflectCreateOrUpdateDataProperty
 // for a symbol key. A symbol can never equal "length" or a numeric index
 // string, so the TypeArray case here is simpler than the string-key
@@ -366,7 +385,11 @@ func reflectCreateOrUpdateDataPropertyByKey(vmInstance *vm.VM, receiver vm.Value
 	if _, _, isAccessor := reflectGetOwnAccessorGenericByKey(receiver, sym); isAccessor {
 		return false, nil
 	}
-	if _, writable, found := reflectGetOwnDataDescriptorGenericByKey(receiver, sym); found && !writable {
+	_, writable, found := reflectGetOwnDataDescriptorGenericByKey(receiver, sym)
+	if found && !writable {
+		return false, nil
+	}
+	if !found && !reflectReceiverExtensible(receiver) {
 		return false, nil
 	}
 

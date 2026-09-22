@@ -3576,29 +3576,24 @@ func reflectOwnKeysImpl(args []vm.Value) (vm.Value, error) {
 // a plain named property, exactly like the `.provisional` case that
 // motivated this fix.
 //
-// This is the [[Set]] half of Object.assign's copy: CreateDataProperty-like
-// for a plain data slot, but if target already has key as an own accessor
-// property, [[Set]] must invoke its setter rather than clobbering it with a
-// data value (paserati#274) - mirrors the own-accessor check vm.SetProperty
-// makes for the same reason.
+// Object.assign writes with Set(to, key, value, true) (20.1.2.1 step
+// 3.a.ii.4.b): a full ordinary [[Set]] on target, so a setter or a
+// non-writable data property anywhere on target's prototype chain governs
+// the write - every class `set x()` accessor lives on the prototype, and
+// Object.assign(this, opts) has to run it (paserati#521). Plain, dict and
+// Proxy targets go through reflectSetDispatch, the same [[Set]] Reflect.set
+// uses, and a false result throws the TypeError the `true` flag demands
+// (a frozen target, a getter-only accessor, ...).
 func setObjectAssignTargetProperty(vmInstance *vm.VM, target vm.Value, key string, value vm.Value) error {
 	switch target.Type() {
-	case vm.TypeObject:
-		plainTarget := target.AsPlainObject()
-		if _, setter, _, _, isAccessor := plainTarget.GetOwnAccessor(key); isAccessor {
-			if setter.Type() == vm.TypeUndefined {
-				return nil // accessor with no setter: [[Set]] silently no-ops (non-strict)
-			}
-			_, err := vmInstance.Call(setter, target, []vm.Value{value})
+	case vm.TypeObject, vm.TypeDictObject, vm.TypeProxy:
+		ok, err := reflectSetDispatch(vmInstance, target, key, value, target)
+		if err != nil {
 			return err
 		}
-		// Object.assign copies as if by ordinary [[Set]] - the property must
-		// land enumerable on the target, not non-enumerable (paserati#168).
-		// SetOwnNonEnumerable exists for built-in method registration, not
-		// for this.
-		plainTarget.SetOwn(key, value)
-	case vm.TypeDictObject:
-		target.AsDictObject().SetOwn(key, value)
+		if !ok {
+			return vmInstance.NewTypeError("Cannot assign to read only property '" + key + "' of object")
+		}
 	case vm.TypeArray:
 		arr := target.AsArray()
 		if idx, isIndex := vm.ParseArrayIndex(key); isIndex {
@@ -3632,7 +3627,7 @@ func setObjectAssignTargetProperty(vmInstance *vm.VM, target vm.Value, key strin
 		// live in a side table reached via EnsureOwnPropertiesTable, which
 		// allocates the table lazily the same way direct assignment
 		// (`fn.a = 1`) already does for these types - and lands the
-		// property enumerable, just like SetOwn does for TypeObject above.
+		// property enumerable, just like a plain-object data write does.
 		if props := vm.EnsureOwnPropertiesTable(target); props != nil {
 			props.SetOwn(key, value)
 		}
@@ -3644,16 +3639,14 @@ func setObjectAssignTargetProperty(vmInstance *vm.VM, target vm.Value, key strin
 // symbol key - backing Object.assign's own symbol-key copy loops below
 // (previously nonexistent: no source branch ever walked a symbol key at
 // all, so there was nothing to write here either - see objectAssignWithVM's
-// doc comment). Mirrors the string-key version's exact per-target-kind
-// scope: an accessor is only checked for a TypeObject target (the
-// string-key version doesn't check one for TypeArray or the callable
-// side-table kinds either - a separate, narrower, pre-existing limitation
-// this function deliberately doesn't widen).
+// doc comment). Mirrors the string-key version's per-target-kind scope:
+// plain and Proxy targets get a full [[Set]]; TypeArray and the callable
+// side-table kinds still write an own data property directly.
 //
 // There is no PlainObject.SetOwnByKey (only the string-keyed SetOwn, which
 // itself implements "preserve existing writable/enumerable/configurable,
-// default a brand-new key to true/true/true"), so the TypeObject and
-// callable-side-table branches reproduce that same rule explicitly via
+// default a brand-new key to true/true/true"), so the callable-side-table
+// branch reproduces that same rule explicitly via
 // HasOwnByKey + DefineOwnPropertyByKey, matching vm.setOwnCheckedByKey's
 // identical pattern (pkg/vm/properties_table.go) for the same "ordinary
 // [[Set]], not Object.defineProperty" distinction that function's own doc
@@ -3663,20 +3656,14 @@ func setObjectAssignTargetProperty(vmInstance *vm.VM, target vm.Value, key strin
 func setObjectAssignTargetPropertyByKey(vmInstance *vm.VM, target vm.Value, sym vm.Value, value vm.Value) error {
 	key := vm.NewSymbolKey(sym)
 	switch target.Type() {
-	case vm.TypeObject:
-		plainTarget := target.AsPlainObject()
-		if _, setter, _, _, isAccessor := plainTarget.GetOwnAccessorByKey(key); isAccessor {
-			if setter.Type() == vm.TypeUndefined {
-				return nil // accessor with no setter: [[Set]] silently no-ops (non-strict)
-			}
-			_, err := vmInstance.Call(setter, target, []vm.Value{value})
+	case vm.TypeObject, vm.TypeProxy:
+		// Full ordinary [[Set]], like the string-key version (paserati#521).
+		ok, err := reflectSetDispatchByKey(vmInstance, target, sym, value, target)
+		if err != nil {
 			return err
 		}
-		if plainTarget.HasOwnByKey(key) {
-			plainTarget.DefineOwnPropertyByKey(key, value, nil, nil, nil)
-		} else {
-			w, e, c := true, true, true
-			plainTarget.DefineOwnPropertyByKey(key, value, &w, &e, &c)
+		if !ok {
+			return vmInstance.NewTypeError("Cannot assign to read only property '" + sym.ToString() + "' of object")
 		}
 	case vm.TypeDictObject:
 		// DictObjects have no symbol-keyed storage at all - matches every
