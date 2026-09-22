@@ -782,6 +782,14 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 				return NewString(fn.Name), nil
 			case "length":
 				return NumberValue(float64(fn.Length)), nil
+			case "prototype":
+				// Mirrors handleCallableProperty's "prototype" special case
+				// (property_helpers.go) - the bytecode `Foo.prototype` read
+				// path - so this Go-callable API agrees with it instead of
+				// answering Undefined for a property real bytecode access
+				// (and typeof) reports as a real, lazily-created object
+				// (paserati#500).
+				return fn.GetOrCreatePrototypeWithVM(vm), nil
 			}
 			// Walk [[Prototype]] chain (set by Object.setPrototypeOf)
 			if fn.Prototype.Type() != TypeUndefined && fn.Prototype.Type() != TypeNull {
@@ -842,6 +850,15 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 					return NewString(cl.Fn.Name), nil
 				case "length":
 					return NumberValue(float64(cl.Fn.Length)), nil
+				case "prototype":
+					// Mirrors handleCallableProperty's "prototype" special
+					// case (property_helpers.go) - the bytecode
+					// `Foo.prototype` read path - via GetPrototypeWithVM,
+					// which checks cl.Properties for a directly-assigned
+					// override before falling back to the underlying
+					// FunctionObject's lazily-created prototype
+					// (paserati#500).
+					return cl.GetPrototypeWithVM(vm), nil
 				}
 				// Walk [[Prototype]] chain (set by Object.setPrototypeOf)
 				if cl.Fn.Prototype.Type() != TypeUndefined && cl.Fn.Prototype.Type() != TypeNull {
@@ -1665,6 +1682,43 @@ func (vm *VM) SetProperty(obj Value, propName string, value Value) error {
 			}
 			args.SetNamedProp(propName, value)
 		}
+		return nil
+
+	case TypeFunction:
+		// A function is a real, property-bearing object - `Foo.bar = 42`
+		// works fine through ordinary bytecode property assignment
+		// (op_setprop.go's TypeFunction case, which writes into the same
+		// fn.Properties table). This case didn't exist at all before this
+		// fix - TypeFunction fell to the `default: return nil` no-op below,
+		// so a Go-callable SetProperty(fnValue, "extra", v) from host code
+		// silently dropped the write instead (paserati#500). Mirrors
+		// TypeObject's case above (accessor setter, else a plain own-
+		// property write) rather than op_setprop.go's full strict-mode/
+		// writability semantics, matching this function's existing
+		// simplified convention for every other case.
+		fn := obj.AsFunction()
+		if fn.Properties == nil {
+			fn.Properties = newPropertiesTable()
+		}
+		if _, s, _, _, ok := fn.Properties.GetOwnAccessor(propName); ok && s.Type() != TypeUndefined {
+			_, err := vm.Call(s, obj, []Value{value})
+			return err
+		}
+		fn.Properties.SetOwn(propName, value)
+		return nil
+
+	case TypeClosure:
+		// Same gap and fix as TypeFunction above, for a closure's own
+		// Properties table (op_setprop.go's TypeClosure case).
+		cl := obj.AsClosure()
+		if cl.Properties == nil {
+			cl.Properties = newPropertiesTable()
+		}
+		if _, s, _, _, ok := cl.Properties.GetOwnAccessor(propName); ok && s.Type() != TypeUndefined {
+			_, err := vm.Call(s, obj, []Value{value})
+			return err
+		}
+		cl.Properties.SetOwn(propName, value)
 		return nil
 
 	case TypeProxy:
