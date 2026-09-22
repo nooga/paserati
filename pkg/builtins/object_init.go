@@ -1357,12 +1357,10 @@ func lookupSymbolProp(vmInstance *vm.VM, val vm.Value, symKey vm.PropertyKey, sy
 		}
 		return lookupSymbolPropFromProto(vmInstance, vmInstance.RegExpPrototype, symKey, symObj, depth)
 
-	case vm.TypeMap:
-		return lookupSymbolPropFromProto(vmInstance, vmInstance.MapPrototype, symKey, symObj, depth)
-	case vm.TypeSet:
-		return lookupSymbolPropFromProto(vmInstance, vmInstance.SetPrototype, symKey, symObj, depth)
-	case vm.TypePromise:
-		return lookupSymbolPropFromProto(vmInstance, vmInstance.PromisePrototype, symKey, symObj, depth)
+	// Map, Set, Promise, ArrayBuffer and SharedArrayBuffer take the default
+	// branch: it resolves a subclass's own prototype, which a hardcoded
+	// intrinsic here would skip (class M extends Map { get
+	// [Symbol.toStringTag]() {...} } reported "[object Map]").
 	case vm.TypeGenerator:
 		// Check the generator's own prototype chain (genFn.prototype → Generator.prototype).
 		// Prototype is a plain vm.Value now, not always a *PlainObject (#418):
@@ -1397,10 +1395,6 @@ func lookupSymbolProp(vmInstance *vm.VM, val vm.Value, symKey vm.PropertyKey, sy
 		default:
 			return lookupSymbolPropFromProto(vmInstance, asyncGenObj.Prototype, symKey, symObj, depth)
 		}
-	case vm.TypeArrayBuffer:
-		return lookupSymbolPropFromProto(vmInstance, vmInstance.ArrayBufferPrototype, symKey, symObj, depth)
-	case vm.TypeSharedArrayBuffer:
-		return lookupSymbolPropFromProto(vmInstance, vmInstance.SharedArrayBufferPrototype, symKey, symObj, depth)
 	case vm.TypeTypedArray:
 		// Resolve the concrete per-kind prototype (or a per-instance override,
 		// e.g. from subclassing) rather than ObjectPrototype: well-known symbol
@@ -1440,7 +1434,22 @@ func lookupSymbolProp(vmInstance *vm.VM, val vm.Value, symKey vm.PropertyKey, sy
 		return lookupSymbolPropFromProto(vmInstance, vmInstance.BigIntPrototype, symKey, symObj, depth)
 
 	default:
-		return vm.Undefined, nil
+		// Any other kind (WeakMap, WeakSet, WeakRef, FinalizationRegistry,
+		// DataView, and whatever is added later) has no own symbol storage
+		// here: resolve its actual [[Prototype]] - including a subclass's
+		// per-instance override - and do the lookup from there. This used
+		// to return undefined, so those built-ins' @@toStringTag was never
+		// found and Object.prototype.toString reported "[object Object]"
+		// (paserati#523). A plain-object prototype is walked with val as the
+		// receiver so an accessor tag sees the instance, as for TypedArray.
+		proto, err := getPrototypeOfValue(vmInstance, val)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if proto.Type() == vm.TypeObject {
+			return lookupSymbolPropInPlainObj(vmInstance, val, proto.AsPlainObject(), symKey, symObj, depth)
+		}
+		return lookupSymbolPropFromProto(vmInstance, proto, symKey, symObj, depth)
 	}
 }
 
