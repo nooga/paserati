@@ -2615,6 +2615,7 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 		frame.isDirectCall = true
 		frame.isConstructorCall = true
 		frame.newTargetValue = newTarget
+		frame.thisCell = nil // see this_cell.go
 		// For derived constructors, this is in TDZ until super() is called
 		if isDerivedConstructor {
 			frame.thisValue = Uninitialized
