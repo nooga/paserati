@@ -2675,12 +2675,22 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 				c.emitGetGlobal(hint, symbolRef.GlobalIndex, node.Token.Line)
 			}
 		} else if !isLocal {
-			// Check if this is an imported identifier before treating as free variable
+			// Check if this is an imported identifier before treating as free variable.
+			// Imports are never registered in the symbol table under module mode (see
+			// processImportBinding), so a `found` symbolRef sharing a name with a
+			// module-level import is only ever a real, nearer binding (e.g. a
+			// parameter of an enclosing function shadowing the import) that Resolve
+			// correctly walked up to - never the import itself. Gating on
+			// symbolRef.Register == nilRegister (mirroring the isLocal path below)
+			// makes sure that real, closer binding is used instead of the
+			// name-only-matched import, fixing a nested function incorrectly seeing
+			// a module-level import through an enclosing function's same-named
+			// parameter (#501).
 			isModuleMode := c.IsModuleMode()
 			isImported := c.moduleBindings != nil && c.moduleBindings.IsImported(node.Value)
 			debugPrintf("// DEBUG Identifier '%s': NOT LOCAL, IsModuleMode=%v, IsImported=%v\n", node.Value, isModuleMode, isImported)
 
-			if isModuleMode && isImported {
+			if isModuleMode && isImported && symbolRef.Register == nilRegister {
 				debugPrintf("// DEBUG Identifier '%s': This is an imported name, generating runtime import resolution (non-local path)\n", node.Value)
 				// Generate code to resolve the import at runtime
 				c.emitImportResolve(hint, node.Value, node.Token.Line)
