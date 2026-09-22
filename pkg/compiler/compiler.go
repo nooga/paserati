@@ -3836,13 +3836,25 @@ func (c *Compiler) currentLoopContext() *LoopContext {
 // per-iteration registers, for the same reason: it must not be handed to a
 // different declaration later in the same loop body, or closing it at the
 // iteration boundary could close the wrong variable's upvalue.
+//
+// The binding is recorded with EVERY enclosing loop context, not just the
+// innermost: a switch or a labeled statement pushes its own pseudo context
+// (for break) that never closes anything, so a binding in a switch case (or
+// in a block under a label) inside a loop was never closed. Its
+// register kept an open upvalue across iterations, and code earlier in the
+// loop body that had used the same register as a temporary (the switch's
+// case comparison, say) overwrote the captured value on the next iteration
+// (paserati#531). Closing at an outer loop's iteration boundary is always
+// safe: whatever binding occupies a loop-body register there is itself
+// per-iteration.
 func (c *Compiler) declareLoopBodyLocalRegister(reg Register) {
-	lc := c.currentLoopContext()
-	if lc == nil {
+	if len(c.loopContextStack) == 0 {
 		return
 	}
 	c.regAlloc.Pin(reg)
-	lc.BodyPerIterationRegs = append(lc.BodyPerIterationRegs, reg)
+	for _, lc := range c.loopContextStack {
+		lc.BodyPerIterationRegs = append(lc.BodyPerIterationRegs, reg)
+	}
 }
 
 // declareLoopBodyLocalSpill is declareLoopBodyLocalRegister's spill-slot
@@ -3851,11 +3863,11 @@ func (c *Compiler) declareLoopBodyLocalRegister(reg Register) {
 // slots are never reused (AllocSpillSlot is a monotonic counter), so unlike
 // the register case there's no need to pin anything against reuse.
 func (c *Compiler) declareLoopBodyLocalSpill(spillIdx uint16) {
-	lc := c.currentLoopContext()
-	if lc == nil {
-		return
+	// Every enclosing loop context, for the same reason as
+	// declareLoopBodyLocalRegister.
+	for _, lc := range c.loopContextStack {
+		lc.BodyPerIterationSpills = append(lc.BodyPerIterationSpills, spillIdx)
 	}
-	lc.BodyPerIterationSpills = append(lc.BodyPerIterationSpills, spillIdx)
 }
 
 // trackIfLoopBodyLocal looks up name in the current symbol table and, if it
@@ -4236,7 +4248,12 @@ func (c *Compiler) emitClosureGeneric(destReg Register, funcConstIndex uint16, l
 				}
 			} else {
 				debugPrintf("// [emitClosureGeneric] Free '%s' is Local in same function, will capture from R%d\n", freeSym.Name, enclosingSymbol.Register)
-				c.regAlloc.Pin(enclosingSymbol.Register)
+				// PinCapture, not Pin: block-exit reclamation (freeScopeRegisters)
+				// drops plain pins and frees the register, so the next statement
+				// reused a captured block binding's slot and the closure read
+				// whatever landed there (paserati#531). emitClosure above already
+				// did this; arrows and methods come through here.
+				c.regAlloc.PinCapture(enclosingSymbol.Register)
 				upvalueDescriptors[i] = upvalueInfo{captureType: CaptureFromRegister, index: uint16(enclosingSymbol.Register)}
 			}
 		} else {
