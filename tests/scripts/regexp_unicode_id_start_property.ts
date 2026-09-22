@@ -32,8 +32,15 @@ checks.push(/^[^\p{ID_Start}]$/u.test("9"));
 checks.push(!/^[^\p{ID_Start}]$/u.test("Z"));
 checks.push(/^\p{IDS}\p{IDC}*$/u.test("a1"));
 
-// ZWNJ is Cf, not ID_Continue - typebox lists it explicitly for that reason.
-checks.push(!ident.test("x\u200c"));
+// ZWNJ is category Cf, but it IS part of Unicode's ID_Continue derived
+// property as of the Unicode Character Database version bundled with the Go
+// toolchain pinned in go.mod (see unicode.Other_ID_Continue - this is a
+// per-Go-version snapshot, so it can differ across Go releases; verify with
+// `go run ./cmd/paserati --no-typecheck -e '...'` under the pinned toolchain
+// before assuming this assertion is stale). The second check below shows
+// explicitly unioning in \u200c\u200d is (on the current toolchain)
+// redundant but still correct.
+checks.push(ident.test("x\u200c"));
 checks.push(/^[\p{ID_Start}_$][\p{ID_Continue}_$\u200c\u200d]*$/u.test("x\u200c"));
 
 // Unrelated property names are left to the engines and still work.
