@@ -13516,207 +13516,12 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
-			// Get the property from the prototype, walking the prototype chain
-			if protoValue.Type() == TypeObject {
-				if debugVM {
-					fmt.Printf("[DEBUG OpGetSuper] Starting prototype chain search for property '%s'\n", propertyName)
+			// base.[[Get]](key, this) - see super_property.go.
+			if !vm.superGetInLoop(frame, ip, protoValue, keyFromString(propertyName), thisValue, &registers[destReg]) {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
 				}
-
-				// Walk the prototype chain starting from protoValue
-				currentProto := protoValue
-				found := false
-				for currentProto.Type() == TypeObject {
-					protoObj := currentProto.AsPlainObject()
-					if debugVM {
-						fmt.Printf("[DEBUG OpGetSuper] Checking prototype level for '%s'\n", propertyName)
-					}
-
-					// Check if the property is an accessor (getter/setter) at this level
-					if getter, _, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && getter.Type() != TypeUndefined {
-						if debugVM {
-							fmt.Printf("[DEBUG OpGetSuper] Found accessor for '%s'\n", propertyName)
-						}
-						// Call the getter with 'this' bound to the original object (not the prototype)
-						result, err := vm.Call(getter, thisValue, nil)
-						if err != nil {
-							frame.ip = ip
-							if ee, ok := err.(ExceptionError); ok {
-								vm.throwException(ee.GetExceptionValue())
-								if !vm.unwinding {
-									continue
-								}
-								return InterpretRuntimeError, Undefined
-							}
-							// Wrap non-exception Go error
-							var excVal Value
-							if errCtor, ok := vm.GetGlobal("Error"); ok {
-								if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-									excVal = res
-								} else {
-									eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-									eo.SetOwn("name", NewString("Error"))
-									eo.SetOwn("message", NewString(err.Error()))
-									excVal = NewValueFromPlainObject(eo)
-								}
-							} else {
-								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-								eo.SetOwn("name", NewString("Error"))
-								eo.SetOwn("message", NewString(err.Error()))
-								excVal = NewValueFromPlainObject(eo)
-							}
-							vm.throwException(excVal)
-							if !vm.unwinding {
-								continue
-							}
-							return InterpretRuntimeError, Undefined
-						}
-						registers[destReg] = result
-						found = true
-						break
-					} else if propValue, ok := protoObj.GetOwn(propertyName); ok {
-						// Regular property (not an accessor) found at this level
-						if debugVM {
-							fmt.Printf("[DEBUG OpGetSuper] Found property '%s': type=%d, value=%s\n", propertyName, propValue.Type(), propValue.Inspect())
-						}
-						registers[destReg] = propValue
-						found = true
-						break
-					}
-
-					// Move to the next prototype in the chain
-					currentProto = protoObj.prototype
-				}
-
-				if !found {
-					// Property not found in entire prototype chain, return undefined
-					if debugVM {
-						fmt.Printf("[DEBUG OpGetSuper] Property '%s' NOT found in prototype chain, returning undefined\n", propertyName)
-					}
-					registers[destReg] = Undefined
-				}
-			} else if protoValue.Type() == TypeClosure {
-				// For static methods, the parent class is a closure
-				// Look up the property on the closure (for static methods/getters)
-				closureObj := protoValue.AsClosure()
-				found := false
-
-				// Check closure's own properties first
-				if closureObj.Properties != nil {
-					// Check for accessor property
-					if getter, _, _, _, ok := closureObj.Properties.GetOwnAccessor(propertyName); ok && getter.Type() != TypeUndefined {
-						result, err := vm.Call(getter, thisValue, nil)
-						if err != nil {
-							frame.ip = ip
-							if ee, ok := err.(ExceptionError); ok {
-								vm.throwException(ee.GetExceptionValue())
-								if !vm.unwinding {
-									// Exception was caught by a handler, reload frame and continue
-									frame = &vm.frames[vm.frameCount-1]
-									closure = frame.closure
-									function = closure.Fn
-									code = function.Chunk.Code
-									constants = function.Chunk.Constants
-									registers = frame.registers
-									ip = frame.ip
-									continue
-								}
-								return InterpretRuntimeError, Undefined
-							}
-							var excVal Value
-							if errCtor, ok := vm.GetGlobal("Error"); ok {
-								if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-									excVal = res
-								}
-							}
-							if excVal.Type() == 0 {
-								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-								eo.SetOwn("name", NewString("Error"))
-								eo.SetOwn("message", NewString(err.Error()))
-								excVal = NewValueFromPlainObject(eo)
-							}
-							vm.throwException(excVal)
-							if !vm.unwinding {
-								// Exception was caught by a handler, reload frame and continue
-								frame = &vm.frames[vm.frameCount-1]
-								closure = frame.closure
-								function = closure.Fn
-								code = function.Chunk.Code
-								constants = function.Chunk.Constants
-								registers = frame.registers
-								ip = frame.ip
-								continue
-							}
-							return InterpretRuntimeError, Undefined
-						}
-						registers[destReg] = result
-						found = true
-					} else if propValue, ok := closureObj.Properties.GetOwn(propertyName); ok {
-						registers[destReg] = propValue
-						found = true
-					}
-				}
-
-				// Check function object's properties if not found
-				if !found && closureObj.Fn != nil && closureObj.Fn.Properties != nil {
-					if getter, _, _, _, ok := closureObj.Fn.Properties.GetOwnAccessor(propertyName); ok && getter.Type() != TypeUndefined {
-						result, err := vm.Call(getter, thisValue, nil)
-						if err != nil {
-							frame.ip = ip
-							if ee, ok := err.(ExceptionError); ok {
-								vm.throwException(ee.GetExceptionValue())
-								if !vm.unwinding {
-									// Exception was caught by a handler, reload frame and continue
-									frame = &vm.frames[vm.frameCount-1]
-									closure = frame.closure
-									function = closure.Fn
-									code = function.Chunk.Code
-									constants = function.Chunk.Constants
-									registers = frame.registers
-									ip = frame.ip
-									continue
-								}
-								return InterpretRuntimeError, Undefined
-							}
-							var excVal Value
-							if errCtor, ok := vm.GetGlobal("Error"); ok {
-								if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-									excVal = res
-								}
-							}
-							if excVal.Type() == 0 {
-								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-								eo.SetOwn("name", NewString("Error"))
-								eo.SetOwn("message", NewString(err.Error()))
-								excVal = NewValueFromPlainObject(eo)
-							}
-							vm.throwException(excVal)
-							if !vm.unwinding {
-								// Exception was caught by a handler, reload frame and continue
-								frame = &vm.frames[vm.frameCount-1]
-								closure = frame.closure
-								function = closure.Fn
-								code = function.Chunk.Code
-								constants = function.Chunk.Constants
-								registers = frame.registers
-								ip = frame.ip
-								continue
-							}
-							return InterpretRuntimeError, Undefined
-						}
-						registers[destReg] = result
-						found = true
-					} else if propValue, ok := closureObj.Fn.Properties.GetOwn(propertyName); ok {
-						registers[destReg] = propValue
-						found = true
-					}
-				}
-
-				if !found {
-					registers[destReg] = Undefined
-				}
-			} else {
-				// Prototype is not an object or closure, return undefined
-				registers[destReg] = Undefined
+				goto reloadFrame
 			}
 
 		case OpSetSuper:
@@ -13798,152 +13603,12 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
-			// Set the property: look up setter in protoValue, set on thisValue
-			value := registers[valueReg]
-
-			// Check if the super base has a setter for this property
-			var setter Value = Undefined
-			switch protoValue.Type() {
-			case TypeObject:
-				protoObj := protoValue.AsPlainObject()
-				if _, s, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && s.Type() != TypeUndefined {
-					setter = s
+			// base.[[Set]](key, value, this) - see super_property.go.
+			if !vm.superSetInLoop(frame, ip, protoValue, keyFromString(propertyName), thisValue, registers[valueReg]) {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
 				}
-			case TypeClosure:
-				// For closures (class constructors), check Properties
-				cl := protoValue.AsClosure()
-				if cl.Properties != nil {
-					if _, s, _, _, ok := cl.Properties.GetOwnAccessor(propertyName); ok && s.Type() != TypeUndefined {
-						setter = s
-					}
-				}
-			case TypeFunction:
-				fn := protoValue.AsFunction()
-				if fn.Properties != nil {
-					if _, s, _, _, ok := fn.Properties.GetOwnAccessor(propertyName); ok && s.Type() != TypeUndefined {
-						setter = s
-					}
-				}
-			}
-
-			// If there's a setter, call it with 'this' bound to the original object
-			if setter.Type() != TypeUndefined {
-				_, err := vm.Call(setter, thisValue, []Value{value})
-				if err != nil {
-					frame.ip = ip
-					if ee, ok := err.(ExceptionError); ok {
-						vm.throwException(ee.GetExceptionValue())
-						if !vm.unwinding {
-							continue
-						}
-						return InterpretRuntimeError, Undefined
-					}
-					// Wrap non-exception Go error
-					var excVal Value
-					if errCtor, ok := vm.GetGlobal("Error"); ok {
-						if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-							excVal = res
-						} else {
-							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-							eo.SetOwn("name", NewString("Error"))
-							eo.SetOwn("message", NewString(err.Error()))
-							excVal = NewValueFromPlainObject(eo)
-						}
-					} else {
-						eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-						eo.SetOwn("name", NewString("Error"))
-						eo.SetOwn("message", NewString(err.Error()))
-						excVal = NewValueFromPlainObject(eo)
-					}
-					vm.throwException(excVal)
-					if !vm.unwinding {
-						continue
-					}
-					return InterpretRuntimeError, Undefined
-				}
-			} else {
-				// Regular property (not an accessor) - set it on 'this', not the prototype
-				// This is important: super.x = v should set x on 'this', not on the prototype
-				isStrict := frame.closure != nil && frame.closure.Fn != nil &&
-					frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
-
-				switch thisValue.Type() {
-				case TypeObject:
-					thisObj := thisValue.AsPlainObject()
-
-					// Check if property exists and its attributes
-					propertyExists := false
-					for _, f := range thisObj.shape.fields {
-						if f.keyKind == KeyKindString && f.name == propertyName {
-							propertyExists = true
-							if !f.writable {
-								// Property is not writable - throw TypeError in strict mode
-								if isStrict {
-									frame.ip = ip
-									vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
-									if vm.frameCount == 0 || vm.unwindingCrossedNative {
-										return InterpretRuntimeError, vm.currentException
-									}
-									frame = &vm.frames[vm.frameCount-1]
-									closure = frame.closure
-									function = closure.Fn
-									code = function.Chunk.Code
-									constants = function.Chunk.Constants
-									registers = frame.registers
-									ip = frame.ip
-									continue
-								}
-								// Non-strict: silently fail
-								break
-							}
-							break
-						}
-					}
-
-					// Check extensibility for new properties
-					if !propertyExists && !thisObj.IsExtensible() {
-						// Cannot add new property to non-extensible object
-						if isStrict {
-							frame.ip = ip
-							vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
-							if vm.frameCount == 0 || vm.unwindingCrossedNative {
-								return InterpretRuntimeError, vm.currentException
-							}
-							frame = &vm.frames[vm.frameCount-1]
-							closure = frame.closure
-							function = closure.Fn
-							code = function.Chunk.Code
-							constants = function.Chunk.Constants
-							registers = frame.registers
-							ip = frame.ip
-							continue
-						}
-						// Non-strict: silently fail (don't set the property)
-					} else {
-						thisObj.SetOwn(propertyName, value)
-					}
-
-				case TypeClosure:
-					// Setting property on a closure (e.g., static method on class constructor)
-					cl := thisValue.AsClosure()
-					if cl.Properties == nil {
-						cl.Properties = newPropertiesTable()
-					}
-					cl.Properties.SetOwn(propertyName, value)
-
-				case TypeFunction:
-					// Setting property on a function
-					fn := thisValue.AsFunction()
-					if fn.Properties == nil {
-						fn.Properties = newPropertiesTable()
-					}
-					fn.Properties.SetOwn(propertyName, value)
-
-				default:
-					frame.ip = ip
-					vm.runtimeError("Cannot set property on non-object 'this'")
-					return InterpretRuntimeError, Undefined
-				}
+				goto reloadFrame
 			}
 
 		case OpGetSuperComputed:
@@ -14026,14 +13691,15 @@ startExecution:
 			// This happens AFTER GetSuperBase per ECMAScript spec
 			keyValue := registers[keyReg]
 			var propertyName string
+			var symKey Value // set when ToPropertyKey yields a symbol (paserati#518)
 			switch keyValue.Type() {
 			case TypeString:
 				propertyName = AsString(keyValue)
 			case TypeFloatNumber, TypeIntegerNumber:
 				propertyName = keyValue.ToString()
 			case TypeSymbol:
-				// Symbols are valid property keys - use string representation
-				propertyName = keyValue.ToString()
+				// A symbol key takes the superGetSymbol/superSetSymbol path below.
+				symKey = keyValue
 			default:
 				// For objects and other types, call ToPrimitive with "string" hint
 				if keyValue.IsObject() {
@@ -14054,7 +13720,11 @@ startExecution:
 						ip = frame.ip
 						continue
 					}
-					propertyName = primitiveVal.ToString()
+					if primitiveVal.Type() == TypeSymbol {
+						symKey = primitiveVal
+					} else {
+						propertyName = primitiveVal.ToString()
+					}
 				} else {
 					propertyName = keyValue.ToString()
 				}
@@ -14078,76 +13748,18 @@ startExecution:
 				return InterpretRuntimeError, Undefined
 			}
 
-			// Look up the property in the super base
-			if protoValue.Type() == TypeObject {
-				protoObj := protoValue.AsPlainObject()
-
-				// Check if the property is an accessor (getter/setter)
-				if getter, _, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && getter.Type() != TypeUndefined {
-					// Call the getter with 'this' bound to the original object (not the prototype)
-					result, err := vm.Call(getter, thisValue, []Value{})
-					if err != nil {
-						frame.ip = ip
-						if ee, ok := err.(ExceptionError); ok {
-							vm.throwException(ee.GetExceptionValue())
-							if !vm.unwinding {
-								continue
-							}
-							return InterpretRuntimeError, Undefined
-						}
-						// Wrap non-exception Go error
-						var excVal Value
-						if errCtor, ok := vm.GetGlobal("Error"); ok {
-							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-								excVal = res
-							} else {
-								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-								eo.SetOwn("name", NewString("Error"))
-								eo.SetOwn("message", NewString(err.Error()))
-								excVal = NewValueFromPlainObject(eo)
-							}
-						} else {
-							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-							eo.SetOwn("name", NewString("Error"))
-							eo.SetOwn("message", NewString(err.Error()))
-							excVal = NewValueFromPlainObject(eo)
-						}
-						vm.throwException(excVal)
-						if !vm.unwinding {
-							continue
-						}
-						return InterpretRuntimeError, Undefined
-					}
-					registers[destReg] = result
-				} else {
-					// Regular property (not an accessor) - walk the prototype chain
-					currentProto := protoValue
-					found := false
-					for currentProto.Type() == TypeObject {
-						currentObj := currentProto.AsPlainObject()
-						if propValue, exists := currentObj.GetOwn(propertyName); exists {
-							registers[destReg] = propValue
-							found = true
-							break
-						}
-						// Move to the next prototype in the chain
-						currentProto = currentObj.prototype
-					}
-					if !found {
-						registers[destReg] = Undefined
-					}
-				}
-			} else if protoValue.Type() == TypeClosure || protoValue.Type() == TypeFunction || protoValue.Type() == TypeNativeFunctionWithProps {
-				// Prototype is a callable (parent class) - look up static property using handleCallableProperty
-				if result, handled := vm.handleCallableProperty(protoValue, propertyName); handled {
-					registers[destReg] = result
-				} else {
-					registers[destReg] = Undefined
-				}
-			} else {
-				// Prototype is not an object or callable, return undefined
-				registers[destReg] = Undefined
+			superKey := keyFromString(propertyName)
+			if symKey.Type() == TypeSymbol {
+				superKey = NewSymbolKey(symKey)
 			}
+			// base.[[Get]](key, this) - see super_property.go.
+			if !vm.superGetInLoop(frame, ip, protoValue, superKey, thisValue, &registers[destReg]) {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
+				}
+				goto reloadFrame
+			}
+
 		case OpSetSuperComputed:
 			keyReg := code[ip]
 			ip++
@@ -14228,14 +13840,15 @@ startExecution:
 			// This happens AFTER GetSuperBase per ECMAScript spec
 			keyValue := registers[keyReg]
 			var propertyName string
+			var symKey Value // set when ToPropertyKey yields a symbol (paserati#518)
 			switch keyValue.Type() {
 			case TypeString:
 				propertyName = AsString(keyValue)
 			case TypeFloatNumber, TypeIntegerNumber:
 				propertyName = keyValue.ToString()
 			case TypeSymbol:
-				// Symbols are valid property keys - use string representation
-				propertyName = keyValue.ToString()
+				// A symbol key takes the superGetSymbol/superSetSymbol path below.
+				symKey = keyValue
 			default:
 				// For objects and other types, call ToPrimitive with "string" hint
 				if keyValue.IsObject() {
@@ -14256,124 +13869,26 @@ startExecution:
 						ip = frame.ip
 						continue
 					}
-					propertyName = primitiveVal.ToString()
+					if primitiveVal.Type() == TypeSymbol {
+						symKey = primitiveVal
+					} else {
+						propertyName = primitiveVal.ToString()
+					}
 				} else {
 					propertyName = keyValue.ToString()
 				}
 			}
 
-			// Set the property on the prototype (or call setter if it exists)
-			if protoValue.Type() == TypeObject {
-				protoObj := protoValue.AsPlainObject()
-				value := registers[valueReg]
-
-				// Check if the property is an accessor (getter/setter)
-				if _, setter, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && setter.Type() != TypeUndefined {
-					// Call the setter with 'this' bound to the original object (not the prototype)
-					_, err := vm.Call(setter, thisValue, []Value{value})
-					if err != nil {
-						frame.ip = ip
-						if ee, ok := err.(ExceptionError); ok {
-							vm.throwException(ee.GetExceptionValue())
-							if !vm.unwinding {
-								continue
-							}
-							return InterpretRuntimeError, Undefined
-						}
-						// Wrap non-exception Go error
-						var excVal Value
-						if errCtor, ok := vm.GetGlobal("Error"); ok {
-							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-								excVal = res
-							} else {
-								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-								eo.SetOwn("name", NewString("Error"))
-								eo.SetOwn("message", NewString(err.Error()))
-								excVal = NewValueFromPlainObject(eo)
-							}
-						} else {
-							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-							eo.SetOwn("name", NewString("Error"))
-							eo.SetOwn("message", NewString(err.Error()))
-							excVal = NewValueFromPlainObject(eo)
-						}
-						vm.throwException(excVal)
-						if !vm.unwinding {
-							continue
-						}
-						return InterpretRuntimeError, Undefined
-					}
-				} else {
-					// Regular property (not an accessor) - set it on 'this', not the prototype
-					// This is important: super[x] = v should set x on 'this', not on the prototype
-					if thisValue.Type() == TypeObject {
-						thisObj := thisValue.AsPlainObject()
-
-						// Check for strict mode property assignment restrictions
-						isStrict := frame.closure != nil && frame.closure.Fn != nil &&
-							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
-
-						// Check if property exists and its attributes
-						propertyExists := false
-						for _, f := range thisObj.shape.fields {
-							if f.keyKind == KeyKindString && f.name == propertyName {
-								propertyExists = true
-								if !f.writable {
-									// Property is not writable - throw TypeError in strict mode
-									if isStrict {
-										frame.ip = ip
-										vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
-										if vm.frameCount == 0 || vm.unwindingCrossedNative {
-											return InterpretRuntimeError, vm.currentException
-										}
-										frame = &vm.frames[vm.frameCount-1]
-										closure = frame.closure
-										function = closure.Fn
-										code = function.Chunk.Code
-										constants = function.Chunk.Constants
-										registers = frame.registers
-										ip = frame.ip
-										continue
-									}
-									// Non-strict: silently fail
-									break
-								}
-								break
-							}
-						}
-
-						// Check extensibility for new properties
-						if !propertyExists && !thisObj.IsExtensible() {
-							// Cannot add new property to non-extensible object
-							if isStrict {
-								frame.ip = ip
-								vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
-								if vm.frameCount == 0 || vm.unwindingCrossedNative {
-									return InterpretRuntimeError, vm.currentException
-								}
-								frame = &vm.frames[vm.frameCount-1]
-								closure = frame.closure
-								function = closure.Fn
-								code = function.Chunk.Code
-								constants = function.Chunk.Constants
-								registers = frame.registers
-								ip = frame.ip
-								continue
-							}
-							// Non-strict: silently fail (don't set the property)
-						} else {
-							thisObj.SetOwn(propertyName, value)
-						}
-					} else {
-						frame.ip = ip
-						vm.runtimeError("Cannot set property on non-object 'this'")
-						return InterpretRuntimeError, Undefined
-					}
+			superKey := keyFromString(propertyName)
+			if symKey.Type() == TypeSymbol {
+				superKey = NewSymbolKey(symKey)
+			}
+			// base.[[Set]](key, value, this) - see super_property.go.
+			if !vm.superSetInLoop(frame, ip, protoValue, superKey, thisValue, registers[valueReg]) {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
 				}
-			} else {
-				frame.ip = ip
-				vm.runtimeError("Cannot assign super property: prototype is not an object")
-				return InterpretRuntimeError, Undefined
+				goto reloadFrame
 			}
 
 		case OpSetSuperComputedWithBase:
@@ -14417,19 +13932,24 @@ startExecution:
 			// Get the property key using ToPropertyKey (calls toString() for objects)
 			keyValue := registers[keyReg]
 			var propertyName string
+			var symKey Value // set when ToPropertyKey yields a symbol (paserati#518)
 			switch keyValue.Type() {
 			case TypeString:
 				propertyName = AsString(keyValue)
 			case TypeFloatNumber, TypeIntegerNumber:
 				propertyName = keyValue.ToString()
 			case TypeSymbol:
-				// Symbols are valid property keys - use string representation
-				propertyName = keyValue.ToString()
+				// A symbol key takes the superGetSymbol/superSetSymbol path below.
+				symKey = keyValue
 			default:
 				// For objects and other types, call ToPrimitive with "string" hint
 				if keyValue.IsObject() {
 					primitiveVal := vm.toPrimitive(keyValue, "string")
-					propertyName = primitiveVal.ToString()
+					if primitiveVal.Type() == TypeSymbol {
+						symKey = primitiveVal
+					} else {
+						propertyName = primitiveVal.ToString()
+					}
 				} else {
 					propertyName = keyValue.ToString()
 				}
@@ -14438,117 +13958,16 @@ startExecution:
 			// Get the super base from the explicit register (captured before key evaluation)
 			protoValue := registers[baseReg]
 
-			// Set the property using the captured super base for setter lookup
-			if protoValue.Type() == TypeObject {
-				protoObj := protoValue.AsPlainObject()
-				value := registers[valueReg]
-
-				// Check if the property is an accessor (getter/setter) on the captured super base
-				if _, setter, _, _, ok := protoObj.GetOwnAccessor(propertyName); ok && setter.Type() != TypeUndefined {
-					// Call the setter with 'this' bound to the original object (not the prototype)
-					_, err := vm.Call(setter, thisValue, []Value{value})
-					if err != nil {
-						frame.ip = ip
-						if ee, ok := err.(ExceptionError); ok {
-							vm.throwException(ee.GetExceptionValue())
-							if !vm.unwinding {
-								continue
-							}
-							return InterpretRuntimeError, Undefined
-						}
-						// Wrap non-exception Go error
-						var excVal Value
-						if errCtor, ok := vm.GetGlobal("Error"); ok {
-							if res, callErr := vm.Call(errCtor, Undefined, []Value{NewString(err.Error())}); callErr == nil {
-								excVal = res
-							} else {
-								eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-								eo.SetOwn("name", NewString("Error"))
-								eo.SetOwn("message", NewString(err.Error()))
-								excVal = NewValueFromPlainObject(eo)
-							}
-						} else {
-							eo := NewObject(vm.ErrorPrototype).AsPlainObject()
-							eo.SetOwn("name", NewString("Error"))
-							eo.SetOwn("message", NewString(err.Error()))
-							excVal = NewValueFromPlainObject(eo)
-						}
-						vm.throwException(excVal)
-						if !vm.unwinding {
-							continue
-						}
-						return InterpretRuntimeError, Undefined
-					}
-				} else {
-					// Regular property (not an accessor) - set it on 'this', not the prototype
-					if thisValue.Type() == TypeObject {
-						thisObj := thisValue.AsPlainObject()
-
-						// Check for strict mode property assignment restrictions
-						isStrict := frame.closure != nil && frame.closure.Fn != nil &&
-							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
-
-						// Check if property exists and its attributes
-						propertyExists := false
-						for _, f := range thisObj.shape.fields {
-							if f.keyKind == KeyKindString && f.name == propertyName {
-								propertyExists = true
-								if !f.writable {
-									// Property is not writable - throw TypeError in strict mode
-									if isStrict {
-										frame.ip = ip
-										vm.ThrowTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propertyName))
-										if vm.frameCount == 0 || vm.unwindingCrossedNative {
-											return InterpretRuntimeError, vm.currentException
-										}
-										frame = &vm.frames[vm.frameCount-1]
-										closure = frame.closure
-										function = closure.Fn
-										code = function.Chunk.Code
-										constants = function.Chunk.Constants
-										registers = frame.registers
-										ip = frame.ip
-										continue
-									}
-									// Non-strict: silently fail
-									break
-								}
-								break
-							}
-						}
-
-						// Check extensibility for new properties
-						if !propertyExists && !thisObj.IsExtensible() {
-							// Cannot add new property to non-extensible object
-							if isStrict {
-								frame.ip = ip
-								vm.ThrowTypeError(fmt.Sprintf("Cannot add property '%s', object is not extensible", propertyName))
-								if vm.frameCount == 0 || vm.unwindingCrossedNative {
-									return InterpretRuntimeError, vm.currentException
-								}
-								frame = &vm.frames[vm.frameCount-1]
-								closure = frame.closure
-								function = closure.Fn
-								code = function.Chunk.Code
-								constants = function.Chunk.Constants
-								registers = frame.registers
-								ip = frame.ip
-								continue
-							}
-							// Non-strict: silently fail (don't set the property)
-						} else {
-							thisObj.SetOwn(propertyName, value)
-						}
-					} else {
-						frame.ip = ip
-						vm.runtimeError("Cannot set property on non-object 'this'")
-						return InterpretRuntimeError, Undefined
-					}
+			superKey := keyFromString(propertyName)
+			if symKey.Type() == TypeSymbol {
+				superKey = NewSymbolKey(symKey)
+			}
+			// base.[[Set]](key, value, this) - see super_property.go.
+			if !vm.superSetInLoop(frame, ip, protoValue, superKey, thisValue, registers[valueReg]) {
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
 				}
-			} else {
-				frame.ip = ip
-				vm.runtimeError("Cannot assign super property: super base is not an object")
-				return InterpretRuntimeError, Undefined
+				goto reloadFrame
 			}
 
 		case OpGetSuperConstructor:
