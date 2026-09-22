@@ -53,9 +53,13 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          # Build from source to match the Go version in go.mod
-          install-mode: goinstall
-          version: v1.64.8
+          # v2's prebuilt binary release is already built with a recent Go,
+          # so (unlike v1's goinstall-from-source setup this replaced) it
+          # isn't tied to whatever Go version this repo currently pins -
+          # avoids repeating the "export data version N is greater than
+          # maximum supported version" failure a future Go bump would
+          # otherwise cause again.
+          version: v2.13.2
           args: --timeout=5m

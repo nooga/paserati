@@ -1,57 +1,74 @@
-linters:
-  enable:
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-  disable:
-    - unused  # Too many false positives for debug flags and future-use code
-
-linters-settings:
-  errcheck:
-    # Don't check for errors in test files for certain patterns
-    exclude-functions:
-      - (io.Writer).Write
-      - (*testing.T).Errorf
-      - (*testing.T).Fatalf
-
-  staticcheck:
-    checks:
-      - all
-      - "-SA9003"  # Empty branch - often intentional for future implementation
-      - "-SA4023"  # Impossible nil check - sometimes needed for safety
-      - "-SA5011"  # Possible nil pointer - we check for nil before use
-      - "-SA4006"  # Value never used - often intentional for clarity
-      - "-SA4010"  # Result of append not used - often intentional
-      - "-SA4017"  # Function without side effects - sometimes used for readability
-
-  gosimple:
-    checks:
-      - all
-      - "-S1021"  # Merge variable declaration - often clearer separate
-      - "-S1034"  # Type switch patterns - current style is intentional
-      - "-S1011"  # Replace loop with append - current style is clearer
-      - "-S1020"  # Simplify type check - current style is intentional
-      - "-S1039"  # Unnecessary fmt.Sprintf - consistency preference
-
+version: "2"
 run:
-  timeout: 5m
   tests: true
-
+linters:
+  disable:
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - (io.Writer).Write
+        - (*testing.T).Errorf
+        - (*testing.T).Fatalf
+    govet:
+      # `inline` (new govet pass, flags deprecated stdlib aliases like
+      # ioutil.ReadFile/reflect.Ptr as "should be inlined" to their modern
+      # replacement) surfaces ~12 pre-existing, unrelated call sites -
+      # same "fix separately" treatment as the ioutil staticcheck exclusion
+      # below, not something to drive-by fix in an unrelated change.
+      disable:
+        - inline
+    staticcheck:
+      # v1's separate `staticcheck` and `gosimple` linters were merged into
+      # one `staticcheck` linter in golangci-lint v2, backed by the full
+      # honnef.co/go/tools multichecker (SA + ST + QF categories) rather than
+      # just SA. `checks: [all, ...]` now pulls in ST (style, e.g.
+      # "error strings should not be capitalized") and QF (quickfix
+      # suggestions) checks that were never enabled before and flag hundreds
+      # of pre-existing, intentional patterns in this codebase - scope back
+      # down to SA (bug-pattern) + S1xxx (the old gosimple checks) explicitly
+      # to preserve v1's actual behavior instead of "all" pulling in whole
+      # new categories on every future golangci-lint update.
+      checks:
+        - SA*
+        - S1*
+        - -S1011
+        - -S1020
+        - -S1021
+        - -S1034
+        - -S1039
+        - -SA4006
+        - -SA4010
+        - -SA4017
+        - -SA4023
+        - -SA5011
+        - -SA9003
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - errcheck
+          - ineffassign
+        path: _test\.go
+      - linters:
+          - staticcheck
+        text: SA1019.*ioutil
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
-  # Don't limit issues
   max-issues-per-linter: 0
   max-same-issues: 0
-
-  exclude-rules:
-    # Exclude some linters from running on tests files
-    - path: _test\.go
-      linters:
-        - errcheck
-        - ineffassign
-
-    # Exclude deprecated warnings for ioutil (we'll fix these separately)
-    - text: "SA1019.*ioutil"
-      linters:
-        - staticcheck
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
