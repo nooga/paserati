@@ -1,7 +1,10 @@
 package vm
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"strconv"
 	"strings"
 )
@@ -85,50 +88,89 @@ func (v Value) MarshalJSON() ([]byte, error) {
 	}
 }
 
-// UnmarshalJSON implements json.Unmarshaler interface for vm.Value
-// This allows direct JSON unmarshaling without intermediate conversions
+// UnmarshalJSON implements json.Unmarshaler for vm.Value.
+//
+// Object keys keep their source order (paserati#522): this used to decode
+// into a Go map[string]any, whose iteration order is randomized, so the
+// resulting object's property order changed from run to run. It now reads
+// the token stream directly.
+//
+// There is no realm here, so objects get no [[Prototype]]. Code that has a
+// VM and wants JSON.parse's result - Object.prototype, lone surrogate
+// escapes preserved - should call JSON.parse's implementation instead, as
+// Response.json() does.
 func (v *Value) UnmarshalJSON(data []byte) error {
-	// Parse the JSON using Go's json package first to determine the type
-	var intermediate any
-	if err := json.Unmarshal(data, &intermediate); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	val, err := decodeJSONValue(dec)
+	if err != nil {
 		return err
 	}
-
-	// Convert the parsed Go value to a VM value
-	*v = convertGoValueToVMValue(intermediate)
+	if _, err := dec.Token(); err != io.EOF {
+		return errors.New("unexpected data after top-level JSON value")
+	}
+	*v = val
 	return nil
 }
 
-// convertGoValueToVMValue converts a Go any value from json.Unmarshal to a VM value
-// This is a helper function used by UnmarshalJSON
-func convertGoValueToVMValue(value any) Value {
-	switch v := value.(type) {
-	case nil:
-		return Null
-	case bool:
-		return BooleanValue(v)
-	case float64:
-		return NumberValue(v)
-	case string:
-		return NewString(v)
-	case []any:
-		// Create an array
-		arr := NewArray()
-		arrayObj := arr.AsArray()
-		for i, elem := range v {
-			arrayObj.Set(i, convertGoValueToVMValue(elem))
-		}
-		return arr
-	case map[string]any:
-		// Create an object
-		obj := NewObject(Undefined)
-		plainObj := obj.AsPlainObject()
-		for key, val := range v {
-			plainObj.SetOwn(key, convertGoValueToVMValue(val))
-		}
-		return obj
-	default:
-		// Fallback for unknown types
-		return Undefined
+// decodeJSONValue reads one JSON value from dec's token stream.
+func decodeJSONValue(dec *json.Decoder) (Value, error) {
+	token, err := dec.Token()
+	if err != nil {
+		return Undefined, err
 	}
+	switch t := token.(type) {
+	case nil:
+		return Null, nil
+	case bool:
+		return BooleanValue(t), nil
+	case json.Number:
+		f, err := t.Float64()
+		if err != nil {
+			return Undefined, err
+		}
+		return NumberValue(f), nil
+	case string:
+		return NewString(t), nil
+	case json.Delim:
+		switch t {
+		case '{':
+			obj := NewObject(Undefined)
+			plainObj := obj.AsPlainObject()
+			for dec.More() {
+				keyToken, err := dec.Token()
+				if err != nil {
+					return Undefined, err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return Undefined, errors.New("expected string key in JSON object")
+				}
+				val, err := decodeJSONValue(dec)
+				if err != nil {
+					return Undefined, err
+				}
+				plainObj.SetOwn(key, val)
+			}
+			if _, err := dec.Token(); err != nil { // closing '}'
+				return Undefined, err
+			}
+			return obj, nil
+		case '[':
+			arr := NewArray()
+			arrayObj := arr.AsArray()
+			for i := 0; dec.More(); i++ {
+				elem, err := decodeJSONValue(dec)
+				if err != nil {
+					return Undefined, err
+				}
+				arrayObj.Set(i, elem)
+			}
+			if _, err := dec.Token(); err != nil { // closing ']'
+				return Undefined, err
+			}
+			return arr, nil
+		}
+	}
+	return Undefined, errors.New("unexpected JSON token")
 }

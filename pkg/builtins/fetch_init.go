@@ -998,14 +998,31 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 	// settles a promise with transform's result. Shared by text()/json()/
 	// blob()/arrayBuffer()/bytes(); they only differ in transform.
 	drainBody := func(transform func([]byte) (vm.Value, error)) vm.Value {
-		if r.bodyState.isDone() {
-			data, err := r.bodyState.wait() // already final; does not block
+		// transform builds JS values (json() allocates objects, and on a parse
+		// error calls the SyntaxError constructor), so it only ever runs on
+		// the VM goroutine: inline when the body is already final, otherwise
+		// queued as a microtask from the waiting goroutine. The microtask is
+		// queued before EndExternalOp so the runtime can't go idle between
+		// the two (#238). A thrown JS exception rejects with its value, not
+		// its message string.
+		settle := func(data []byte, err error) (vm.Value, vm.Value, bool) {
 			if err != nil {
-				return vmInstance.NewRejectedPromise(vm.NewString(err.Error()))
+				return vm.Undefined, vm.NewString(err.Error()), false
 			}
 			result, err := transform(data)
 			if err != nil {
-				return vmInstance.NewRejectedPromise(vm.NewString(err.Error()))
+				if ee, ok := err.(vm.ExceptionError); ok {
+					return vm.Undefined, ee.GetExceptionValue(), false
+				}
+				return vm.Undefined, vm.NewString(err.Error()), false
+			}
+			return result, vm.Undefined, true
+		}
+		if r.bodyState.isDone() {
+			data, err := r.bodyState.wait() // already final; does not block
+			result, reason, ok := settle(data, err)
+			if !ok {
+				return vmInstance.NewRejectedPromise(reason)
 			}
 			return vmInstance.NewResolvedPromise(result)
 		}
@@ -1016,16 +1033,14 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 		go func() {
 			defer rt.EndExternalOp()
 			data, err := r.bodyState.wait()
-			if err != nil {
-				vmInstance.RejectPromise(promiseObj, vm.NewString(err.Error()))
-				return
-			}
-			result, err := transform(data)
-			if err != nil {
-				vmInstance.RejectPromise(promiseObj, vm.NewString(err.Error()))
-				return
-			}
-			vmInstance.ResolvePromise(promiseObj, result)
+			rt.ScheduleMicrotask(func() {
+				result, reason, ok := settle(data, err)
+				if !ok {
+					vmInstance.RejectPromise(promiseObj, reason)
+					return
+				}
+				vmInstance.ResolvePromise(promiseObj, result)
+			})
 		}()
 		return promise
 	}
@@ -1050,12 +1065,9 @@ func createResponseObject(vmInstance *vm.VM, r *FetchResponse) vm.Value {
 		}
 		r.bodyUsed = true
 		obj.SetOwn("bodyUsed", vm.True)
+		// Same result as JSON.parse(await r.text()) (paserati#522).
 		return drainBody(func(data []byte) (vm.Value, error) {
-			var result vm.Value
-			if err := result.UnmarshalJSON(data); err != nil {
-				return vm.Undefined, err
-			}
-			return result, nil
+			return jsonParseText(vmInstance, string(data))
 		}), nil
 	}))
 
@@ -1733,8 +1745,13 @@ func createRequestObject(vmInstance *vm.VM, req *FetchRequest, _ *vm.PlainObject
 			return vmInstance.NewRejectedPromise(vm.NewString("Unexpected end of JSON input")), nil
 		}
 
-		parsed, err := parseJSONToValue(string(req.body))
+		// Same result as JSON.parse(await req.text()) (paserati#522):
+		// parseJSONToValue gave every object a null prototype.
+		parsed, err := jsonParseText(vmInstance, string(req.body))
 		if err != nil {
+			if ee, ok := err.(vm.ExceptionError); ok {
+				return vmInstance.NewRejectedPromise(ee.GetExceptionValue()), nil
+			}
 			return vmInstance.NewRejectedPromise(vm.NewString(err.Error())), nil
 		}
 		return vmInstance.NewResolvedPromise(parsed), nil
