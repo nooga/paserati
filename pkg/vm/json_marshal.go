@@ -27,8 +27,7 @@ func (v Value) MarshalJSON() ([]byte, error) {
 		}
 		return []byte(strconv.FormatFloat(num, 'g', -1, 64)), nil
 	case TypeString:
-		// Use Go's json.Marshal for proper string escaping
-		return json.Marshal(v.ToString())
+		return []byte(QuoteJSONString(v.ToString())), nil
 	case TypeArray:
 		arr := v.AsArray()
 		length := arr.Length()
@@ -63,11 +62,7 @@ func (v Value) MarshalJSON() ([]byte, error) {
 			}
 
 			// Marshal the key (always a string in JSON)
-			keyJSON, err := json.Marshal(key)
-			if err != nil {
-				return nil, err
-			}
-			builder.Write(keyJSON)
+			builder.WriteString(QuoteJSONString(key))
 			builder.WriteByte(':')
 
 			// Marshal the value
