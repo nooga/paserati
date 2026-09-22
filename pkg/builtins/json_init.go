@@ -102,27 +102,7 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return internalizeJSONProperty(vmInstance, rootVal, "", reviver, sourceMap, "")
 		}
 
-		// No reviver - use the standard parser (faster). Go's decoder turns a lone
-		// surrogate escape into U+FFFD, so text that may hold one goes through the
-		// WTF-8-preserving manual parser instead.
-		var val vm.Value
-		var err error
-		if jsonMayContainSurrogateEscape(text) || wtf8.HasSurrogate(text) {
-			val, _, err = parseJSONWithSource(vmInstance, text)
-		} else {
-			val, err = parseJSONToValueWithPrototypes(vmInstance, text)
-		}
-		if err != nil {
-			// Wrap parse error as SyntaxError exception
-			ctor, _ := ctx.VM.GetGlobal("SyntaxError")
-			if ctor != vm.Undefined {
-				errObj, _ := ctx.VM.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(err.Error())})
-				return vm.Undefined, ctx.VM.NewExceptionError(errObj)
-			}
-			return vm.Undefined, err
-		}
-
-		return val, nil
+		return jsonParseText(vmInstance, text)
 	}))
 
 	// Add stringify method (supports optional replacer and space parameters)
@@ -340,17 +320,30 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 	return ctx.DefineGlobal("JSON", vm.NewValueFromPlainObject(jsonObj))
 }
 
-// parseJSONToValue converts a JSON string to a VM Value, preserving object key order
-func parseJSONToValue(text string) (vm.Value, error) {
-	dec := json.NewDecoder(strings.NewReader(text))
-	dec.UseNumber() // Use json.Number to preserve number precision
-	val, err := parseJSONValueFromDecoder(dec, nil)
-	if err != nil {
-		return vm.Undefined, err
+// jsonParseText is JSON.parse(text) with no reviver: source key order,
+// Object.prototype on every object, a "__proto__" key kept as an own data
+// property, lone surrogate escapes preserved, and a parse failure returned as
+// a thrown SyntaxError. Anything that turns JSON text into JS values
+// (Response.json(), Request.json()) goes through this rather than its own
+// decoder, so it can't drift from JSON.parse (paserati#522).
+func jsonParseText(vmInstance *vm.VM, text string) (vm.Value, error) {
+	// The standard parser is faster, but Go's decoder turns a lone surrogate
+	// escape into U+FFFD, so text that may hold one goes through the
+	// WTF-8-preserving manual parser instead.
+	var val vm.Value
+	var err error
+	if jsonMayContainSurrogateEscape(text) || wtf8.HasSurrogate(text) {
+		val, _, err = parseJSONWithSource(vmInstance, text)
+	} else {
+		val, err = parseJSONToValueWithPrototypes(vmInstance, text)
 	}
-	// Check for trailing content (JSON should have exactly one value)
-	if dec.More() {
-		return vm.Undefined, errors.New("unexpected token after JSON")
+	if err != nil {
+		// Wrap parse error as SyntaxError exception
+		if ctor, _ := vmInstance.GetGlobal("SyntaxError"); ctor != vm.Undefined {
+			errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(err.Error())})
+			return vm.Undefined, vmInstance.NewExceptionError(errObj)
+		}
+		return vm.Undefined, err
 	}
 	return val, nil
 }
