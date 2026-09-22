@@ -4289,8 +4289,10 @@ startExecution:
 				// is a fixed, non-shared duplicate of the pre-#467 register-
 				// only logic and was deliberately left that way rather than
 				// taught to spill (see bindPositionalParams, call.go) -
-				// prepareCall already handles it correctly.
-				if !calleeFunc.IsGenerator && !calleeFunc.IsAsync && !calleeFunc.NeedsParamSpillSlots() {
+				// prepareCall already handles it correctly. So does a class
+				// constructor: only prepareCall throws the "cannot be invoked
+				// without 'new'" TypeError (paserati#517).
+				if !calleeFunc.IsGenerator && !calleeFunc.IsAsync && !calleeFunc.NeedsParamSpillSlots() && !calleeFunc.IsClassConstructor {
 					canPerformTCO = true
 				}
 			} else if calleeVal.Type() == TypeFunction {
@@ -4300,7 +4302,7 @@ startExecution:
 				// - Generators need special return handling (generator objects)
 				// - Async functions need Promise wrapping which is done in prepareCall
 				// Native functions are TypeNativeFunction, not TypeFunction, so they're already excluded
-				if !funcToCall.IsGenerator && !funcToCall.IsAsync && !funcToCall.NeedsParamSpillSlots() {
+				if !funcToCall.IsGenerator && !funcToCall.IsAsync && !funcToCall.NeedsParamSpillSlots() && !funcToCall.IsClassConstructor {
 					calleeClosure = &ClosureObject{
 						Fn:       funcToCall,
 						Upvalues: []*Upvalue{},
@@ -4444,6 +4446,12 @@ startExecution:
 				}
 				callerRegisters := registers
 				callerIP := ip
+				// Like OpCall: the frame's ip must be the resume point before
+				// the call, both for nested vm.run() returns and so an
+				// in-band throw can be detected afterwards.
+				frame.ip = callerIP
+				wasUnwinding := vm.unwinding
+				frameCountBeforeCall := vm.frameCount
 
 				shouldSwitch, err := vm.prepareCall(calleeVal, Undefined, args, destReg, callerRegisters, callerIP)
 
@@ -4488,6 +4496,16 @@ startExecution:
 					constants = function.Chunk.Constants
 					ip = frame.ip
 					continue
+				}
+
+				if !shouldSwitch {
+					// prepareCall may have thrown in-band (paserati#517).
+					switch vm.resyncAfterInBandThrow(wasUnwinding, frameCountBeforeCall, callerIP) {
+					case inBandThrowExit:
+						return InterpretRuntimeError, vm.currentException
+					case inBandThrowReload:
+						goto reloadFrame
+					}
 				}
 
 				if shouldSwitch {
@@ -4535,7 +4553,7 @@ startExecution:
 				// Native functions are TypeNativeFunction, not TypeClosure, so they're already excluded
 				// A callee with spilled parameters (paserati#467) falls back
 				// to prepareCall too - see the matching comment on OpTailCall.
-				if !calleeFunc.IsGenerator && !calleeFunc.IsAsync && !calleeFunc.NeedsParamSpillSlots() {
+				if !calleeFunc.IsGenerator && !calleeFunc.IsAsync && !calleeFunc.NeedsParamSpillSlots() && !calleeFunc.IsClassConstructor {
 					canPerformTCO = true
 				}
 			} else if calleeVal.Type() == TypeFunction {
@@ -4545,7 +4563,7 @@ startExecution:
 				// - Generators need special return handling (generator objects)
 				// - Async functions need Promise wrapping which is done in prepareCall
 				// Native functions are TypeNativeFunction, not TypeFunction, so they're already excluded
-				if !funcToCall.IsGenerator && !funcToCall.IsAsync && !funcToCall.NeedsParamSpillSlots() {
+				if !funcToCall.IsGenerator && !funcToCall.IsAsync && !funcToCall.NeedsParamSpillSlots() && !funcToCall.IsClassConstructor {
 					calleeClosure = &ClosureObject{
 						Fn:       funcToCall,
 						Upvalues: []*Upvalue{},
@@ -4680,6 +4698,8 @@ startExecution:
 
 				callSiteIP := ip - 5 // IP where OpTailCallMethod instruction started (5 bytes)
 				frame.ip = callSiteIP
+				wasUnwinding := vm.unwinding
+				frameCountBeforeCall := vm.frameCount
 
 				shouldSwitch, err := vm.prepareMethodCall(calleeVal, thisVal, args, destReg, callerRegisters, callerIP)
 
@@ -4725,6 +4745,16 @@ startExecution:
 					constants = function.Chunk.Constants
 					ip = frame.ip
 					continue
+				}
+
+				if !shouldSwitch {
+					// prepareMethodCall may have thrown in-band (paserati#517).
+					switch vm.resyncAfterInBandThrow(wasUnwinding, frameCountBeforeCall, callerIP) {
+					case inBandThrowExit:
+						return InterpretRuntimeError, vm.currentException
+					case inBandThrowReload:
+						goto reloadFrame
+					}
 				}
 
 				if shouldSwitch {

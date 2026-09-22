@@ -189,6 +189,49 @@ func bindPositionalParams(calleeFunc *FunctionObject, args []Value, registers []
 // Returns (shouldSwitchFrame, error)
 const debugPrepareCall = false
 
+// inBandThrowResync is what a run-loop call site must do after prepareCall
+// (or prepareMethodCall) returned (false, nil).
+type inBandThrowResync uint8
+
+const (
+	inBandThrowNone   inBandThrowResync = iota // nothing was thrown: keep going
+	inBandThrowReload                          // thrown and unwound or caught: reload the top frame and continue
+	inBandThrowExit                            // thrown past this run loop: return InterpretRuntimeError
+)
+
+// resyncAfterInBandThrow classifies VM state after a prepareCall that
+// returned (false, nil). That return also covers the case where prepareCall
+// threw a TypeError itself through vm.ThrowTypeError (non-callable callee,
+// class constructor without new, revoked proxy) - by then the exception has
+// already unwound frames or moved a handler frame's ip, so the caller's
+// cached frame/code/ip are stale. OpTailCall and OpTailCallMethod used to
+// check only err and shouldSwitch, so they kept running the dead frame and
+// its OpReturn unwound the wrong frame: catch skipped, script silently
+// halted (paserati#517). Mirrors the checks OpCall makes inline.
+//
+// wasUnwinding, frameCountBefore and frameIPBefore are sampled just before
+// the call; frameIPBefore is the ip the caller's frame holds when nothing
+// was thrown.
+func (vm *VM) resyncAfterInBandThrow(wasUnwinding bool, frameCountBefore, frameIPBefore int) inBandThrowResync {
+	if vm.frameCount == 0 {
+		return inBandThrowExit
+	}
+	if !wasUnwinding && vm.unwinding {
+		if vm.unwindingCrossedNative {
+			return inBandThrowExit
+		}
+		return inBandThrowReload
+	}
+	if vm.handlerFound {
+		vm.handlerFound = false
+		return inBandThrowReload
+	}
+	if vm.frameCount != frameCountBefore || vm.frames[vm.frameCount-1].ip != frameIPBefore {
+		return inBandThrowReload
+	}
+	return inBandThrowNone
+}
+
 func (vm *VM) prepareCall(calleeVal Value, thisValue Value, args []Value, destReg byte, callerRegisters []Value, callerIP int) (bool, error) {
 	if debugPrepareCall {
 		fmt.Printf("[CALL] prepareCall: isGenExec=false, frameCount=%d\n", vm.frameCount)
