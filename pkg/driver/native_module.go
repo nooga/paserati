@@ -335,15 +335,18 @@ func (m *ModuleBuilder) createClassConstructor(name string, goStruct interface{}
 
 	// A shared prototype object for instances to point at, so `instanceof`
 	// has something to walk to instead of throwing "Function has non-object
-	// prototype in instanceof check" (paserati#201). bindStructMethods binds
-	// methods directly onto each *instance* rather than this prototype, so
-	// it only needs to exist and carry `constructor` - nothing else reads it.
+	// prototype in instanceof check" (paserati#201). Struct methods are
+	// bound onto this prototype once, below - not per instance - so that
+	// ordinary prototype-chain method lookup and prototype borrowing
+	// (`Other.prototype = X.prototype`) work the way they do for any real
+	// JS class (paserati#512).
 	protoParent := vm.Undefined
 	if m.vm != nil {
 		protoParent = m.vm.ObjectPrototype
 	}
 	classPrototype := vm.NewObject(protoParent).AsPlainObject()
 	classPrototypeVal := vm.NewValueFromPlainObject(classPrototype)
+	m.bindStructMethodsToPrototype(classPrototype, structType)
 
 	constructorValue := vm.NewConstructorWithProps(constructorType.NumIn(), constructorType.IsVariadic(), name, func(args []vm.Value) (vm.Value, error) {
 		// Convert VM values to Go values for constructor call. Capped at
@@ -390,16 +393,18 @@ func (m *ModuleBuilder) createClassConstructor(name string, goStruct interface{}
 		}
 
 		// Create a VM object to represent the instance, chained to the
-		// class's shared prototype so `instance instanceof Class` resolves.
+		// class's shared prototype so `instance instanceof Class` resolves
+		// and prototype methods (bound once in createClassConstructor) are
+		// reachable through the chain.
 		instance := vm.NewObject(classPrototypeVal)
 		instanceObj := instance.AsPlainObject()
 
-		// Bind all methods from the Go struct to the VM object
-		m.bindStructMethods(instanceObj, goInstance, structType)
+		// Stash the Go instance so bound prototype methods can find it via
+		// `this` at call time (see createPrototypeMethod / paserati#512).
+		instanceObj.SetInternalSlots(goInstance)
 
-		// Store the Go instance as a hidden property for method calls
-		// This is a simple approach - in a full implementation, you'd use a more sophisticated storage
-		// For now, we'll just bind methods directly without storing the Go instance
+		// Bind struct fields as own properties of this instance.
+		m.bindStructFields(instanceObj, goInstance, structType)
 
 		return instance, nil
 	})
@@ -444,6 +449,112 @@ func (m *ModuleBuilder) bindStructMethods(vmObj *vm.PlainObject, goInstance refl
 		jsMethodName := strings.ToLower(methodName[:1]) + methodName[1:]
 		vmObj.SetOwn(jsMethodName, vmMethod)
 	}
+}
+
+// bindStructMethodsToPrototype binds all exported methods from a Go struct
+// type onto a class's shared prototype object, once, at class-registration
+// time - rather than re-binding them onto every instance createClassConstructor
+// creates. Each bound method (createPrototypeMethod) is receiver-generic: it
+// recovers the specific Go instance to operate on from the calling `this`
+// value's internal slots at call time, instead of closing over one fixed
+// instance. This is what makes ordinary JS prototype-chain method lookup and
+// prototype borrowing (`Other.prototype = X.prototype`) work the way they do
+// for any real JS class (paserati#512) - the old per-instance binding only
+// ever looked correct because `new X()` always finds the method as an own
+// property, regardless of where in the prototype chain it actually lives.
+func (m *ModuleBuilder) bindStructMethodsToPrototype(protoObj *vm.PlainObject, structType reflect.Type) {
+	ptrType := reflect.PointerTo(structType)
+
+	for i := 0; i < ptrType.NumMethod(); i++ {
+		method := ptrType.Method(i)
+
+		// Skip unexported methods
+		if !method.IsExported() {
+			continue
+		}
+
+		// method.Func is the unbound method - its first parameter is the
+		// receiver - so one binding here works for every instance.
+		vmMethod := m.createPrototypeMethod(method.Func)
+
+		// Convert method name to camelCase for JavaScript compatibility
+		jsMethodName := strings.ToLower(method.Name[:1]) + method.Name[1:]
+		protoObj.SetOwnNonEnumerable(jsMethodName, vmMethod)
+	}
+}
+
+// createPrototypeMethod creates a VM function, meant to live once on a
+// class's shared prototype, that dispatches to an unbound Go method
+// (reflect.Method.Func, whose first parameter is the receiver). The actual
+// receiver is recovered on each call from the internal slots of whatever
+// `this` value the method was invoked on (set by createClassConstructor at
+// instance-creation time), rather than being fixed at bind time.
+func (m *ModuleBuilder) createPrototypeMethod(unboundMethod reflect.Value) vm.Value {
+	methodType := unboundMethod.Type()
+	numArgs := methodType.NumIn() - 1 // exclude the receiver parameter
+	if numArgs < 0 {
+		numArgs = 0
+	}
+
+	return vm.NewNativeFunction(numArgs, methodType.IsVariadic(), "bound_method", func(args []vm.Value) (vm.Value, error) {
+		goInstance, ok := goInstanceFromThis(m.vm.GetThis())
+		if !ok {
+			return vm.Undefined, fmt.Errorf("method called on an object that is not a valid instance of this class")
+		}
+
+		// Convert VM values to Go values for method call, offset by one for
+		// the receiver. Capped at methodType.NumIn() (paserati#278) - see
+		// the identical comment in createClassConstructor.
+		goArgs := make([]reflect.Value, 0, methodType.NumIn())
+		goArgs = append(goArgs, goInstance)
+		for i := 0; i < len(args) && i+1 < methodType.NumIn(); i++ {
+			goArgs = append(goArgs, vmValueToReflectValue(args[i], methodType.In(i+1)))
+		}
+
+		// Add missing arguments as zero values if method expects more
+		for i := len(args) + 1; i < methodType.NumIn(); i++ {
+			goArgs = append(goArgs, reflect.Zero(methodType.In(i)))
+		}
+
+		// Call the unbound Go method with the recovered receiver
+		results := unboundMethod.Call(goArgs)
+
+		// Handle the common (value, error) method shape (paserati#221):
+		// mirrors createClassConstructor's own len(results) == 2 error check -
+		// without this, a non-nil error here was silently discarded and the
+		// call evaluated to a value instead of throwing.
+		if len(results) == 2 && results[1].Type().Implements(reflect.TypeOf((*error)(nil)).Elem()) {
+			if !results[1].IsNil() {
+				errVal := results[1].Interface().(error)
+				return vm.Undefined, errVal
+			}
+		}
+
+		// Convert result back to VM value
+		if len(results) > 0 {
+			return reflectValueToVM(results[0]), nil
+		}
+
+		return vm.Undefined, nil
+	})
+}
+
+// goInstanceFromThis recovers the Go instance stashed on a class instance's
+// internal slots (see createClassConstructor) so a shared prototype method
+// (createPrototypeMethod) can operate on the right receiver.
+func goInstanceFromThis(thisVal vm.Value) (reflect.Value, bool) {
+	if !thisVal.IsObject() {
+		return reflect.Value{}, false
+	}
+	obj := thisVal.AsPlainObject()
+	if obj == nil {
+		return reflect.Value{}, false
+	}
+	goInstance, ok := obj.InternalSlots().(reflect.Value)
+	if !ok || !goInstance.IsValid() {
+		return reflect.Value{}, false
+	}
+	return goInstance, true
 }
 
 // createBoundMethod creates a VM function that calls a bound Go method
