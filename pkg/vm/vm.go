@@ -3328,7 +3328,7 @@ startExecution:
 				objType != TypeFunction && objType != TypeNativeFunctionWithProps && objType != TypeProxy &&
 				objType != TypeClosure && objType != TypeNativeFunction && objType != TypeBoundFunction &&
 				objType != TypeSet && objType != TypeMap && objType != TypeArguments && objType != TypePromise &&
-				objType != TypeRegExp {
+				objType != TypeRegExp && objType != TypeTypedArray {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot use 'in' operator to search for '%s' in %s", propVal.ToString(), objVal.Type().String()))
 				if vm.frameCount == 0 || vm.unwindingCrossedNative {
@@ -3653,6 +3653,16 @@ startExecution:
 					} else {
 						// No has trap, fallback to target.[[HasProperty]]
 						hasProperty = vm.proxyHasSymbolPropertyFallback(proxy.target, propVal)
+					}
+				case TypeTypedArray:
+					// A TypedArray's own properties table is string-keyed
+					// only (TypedArrayObject.properties, typed_array.go), so
+					// a symbol key can only be found on the prototype chain
+					// (e.g. Symbol.iterator in buf, matching
+					// %TypedArray%.prototype[Symbol.iterator]).
+					proto := vm.PrototypeOf(objVal)
+					if proto.Type() == TypeObject {
+						hasProperty = vm.hasPropertyByKeyFromPrototypeChain(proto, NewSymbolKey(propVal))
 					}
 				default:
 					hasProperty = false
@@ -3995,6 +4005,36 @@ startExecution:
 						}
 						if proto.IsObject() {
 							hasProperty = proto.AsPlainObject().Has(propKey)
+						}
+					}
+				case TypeTypedArray:
+					// TypedArray (Uint8Array/Buffer/...) is an ordinary
+					// property-bearing object as far as `in` is concerned -
+					// own properties, own intrinsics (length/byteLength/
+					// byteOffset/buffer/BYTES_PER_ELEMENT), in-bounds
+					// indices, then the prototype chain, matching
+					// getPropertyWithReceiver's TypeTypedArray read path
+					// (pkg/vm/vm_init.go). Before this case existed,
+					// TypedArray was excluded from the object-type check
+					// above and `in` threw unconditionally for it - crashing
+					// real, unmodified Express (`res.send`) the moment its
+					// `etag` dependency did `'ctime' in buffer` as an
+					// ordinary duck-type check (paserati#502).
+					ta := objVal.AsTypedArray()
+					if ta != nil {
+						if ta.HasOwnProperty(propKey) {
+							hasProperty = true
+						} else {
+							switch propKey {
+							case "length", "byteLength", "byteOffset", "buffer", "BYTES_PER_ELEMENT":
+								hasProperty = true
+							default:
+								if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 && idx < ta.GetLength() {
+									hasProperty = true
+								} else {
+									hasProperty = vm.hasPropertyByKeyFromPrototypeChain(vm.PrototypeOf(objVal), keyFromString(propKey))
+								}
+							}
 						}
 					}
 				default:
