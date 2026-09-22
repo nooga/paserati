@@ -1312,9 +1312,10 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 			timestamp = float64(t.UnixMilli())
 		}
 
-		// Create Date object with timestamp stored as a property
+		// Create Date object with timestamp stored as a property. Every
+		// constructor form ends in TimeClip (21.4.2.1 steps 3-5).
 		dateObj := vm.NewObject(instanceProto)
-		dateObj.AsPlainObject().SetOwnNonEnumerable("__timestamp__", vm.NumberValue(timestamp))
+		dateObj.AsPlainObject().SetOwnNonEnumerable("__timestamp__", vm.NumberValue(timeClip(timestamp)))
 
 		return dateObj, nil
 	})
@@ -1561,13 +1562,15 @@ func getDateTimestamp(dateValue vm.Value) (float64, bool) {
 	return 0, false
 }
 
-// timeClip implements the ECMAScript TimeClip abstract operation (21.4.1.15)
-// If |time| > 8.64 × 10^15, return NaN
+// timeClip implements the ECMAScript TimeClip abstract operation (21.4.1.31):
+// NaN if |time| > 8.64 × 10^15, otherwise ToIntegerOrInfinity(time) - a time
+// value is always an integral number of milliseconds, so new Date(1.7) stores
+// 1 and new Date(-1.7) stores -1 (paserati#519). The +0 folds -0 into +0.
 func timeClip(t float64) float64 {
 	if math.IsNaN(t) || math.IsInf(t, 0) || math.Abs(t) > 8.64e15 {
 		return math.NaN()
 	}
-	return t
+	return math.Trunc(t) + 0
 }
 
 func setDateTimestamp(dateValue vm.Value, timestamp float64) float64 {
