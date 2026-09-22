@@ -298,7 +298,11 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 			} else {
 				debugPrintf("// [Closure Loop %s] Free '%s' is in current function's scope chain. Emitting isLocal=1, index=R%d\n", funcCompiler.compilingFuncName, freeSym.Name, enclosingSymbol.Register)
 				c.emitByte(1) // isLocal = true
-				// Capture the value from the enclosing scope's actual register
+				// Capture the value from the enclosing scope's actual register.
+				// PinCapture keeps block-exit reclamation from handing the
+				// register to a later statement while this upvalue still
+				// points at it (paserati#531) - see emitClosureGeneric.
+				c.regAlloc.PinCapture(enclosingSymbol.Register)
 				c.emitByte(byte(enclosingSymbol.Register)) // Index = register index
 			}
 		} else {
