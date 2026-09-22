@@ -1239,11 +1239,22 @@ func (p *Paserati) runAsModule(sourceCode string, program *parser.Program, modul
 	// of the same source. See VM.RegisterExecutingModule.
 	p.vmInstance.RegisterExecutingModule(moduleName, chunk)
 
+	// A frame already on the stack means this run is reentrant (e.g. a
+	// synchronous require() compiling and running a module from inside
+	// already-executing script code), not the true top-level entry point.
+	// Only the outermost call should drive the event loop: draining here
+	// too would block on external ops (a long-lived server's listen(),
+	// etc.) that have nothing to do with this nested run and are never
+	// going to resolve on their own. See paserati#503.
+	isTopLevel := p.vmInstance.GetFrameCount() == 0
+
 	// Execute the chunk
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
 
 	// Drain async work (microtasks, timers, etc.) until idle
-	p.vmInstance.DrainUntilIdle()
+	if isTopLevel {
+		p.vmInstance.DrainUntilIdle()
+	}
 
 	// Record the final exported values so a circular reference that read this module
 	// mid-execution (and got Undefined for anything not yet initialized) is corrected
@@ -1290,8 +1301,15 @@ func (p *Paserati) runAsScript(program *parser.Program, filename string) (vm.Val
 	p.vmInstance.ResizeHeapForGlobals(p.compiler.GetHeapAlloc().GetAllocatedSize())
 	p.vmInstance.SetCurrentModulePath(filename)
 
+	// See the matching comment in runAsModule: only the true top-level call
+	// (no frame already on the stack) should drive the event loop. See
+	// paserati#503.
+	isTopLevel := p.vmInstance.GetFrameCount() == 0
+
 	finalValue, runtimeErrs := p.vmInstance.Interpret(chunk)
-	p.vmInstance.DrainUntilIdle()
+	if isTopLevel {
+		p.vmInstance.DrainUntilIdle()
+	}
 	return finalValue, runtimeErrs
 }
 
