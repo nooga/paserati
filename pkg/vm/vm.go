@@ -19376,6 +19376,23 @@ func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 		}
 		return args, nil
 
+	case TypeTypedArray:
+		// TypedArrays are iterable via %TypedArray%.prototype[Symbol.iterator],
+		// which is exactly why for-of/destructuring/Array.from already spread
+		// them correctly (paserati#498) - but this switch's default branch's
+		// prototype-chain walk only knows TypeObject/TypeGenerator/
+		// TypeAsyncGenerator/TypeDictObject, and a raw TypedArrayObject value
+		// is none of those, so it always fell straight to "is not iterable"
+		// before reaching here. Read elements directly, mirroring the
+		// TypeArray fast path above.
+		ta := iterableVal.AsTypedArray()
+		length := ta.GetLength()
+		args := make([]Value, length)
+		for i := 0; i < length; i++ {
+			args[i] = ta.GetElement(i)
+		}
+		return args, nil
+
 	case TypeArguments:
 		// Fast path for the arguments object (paserati#182). It's genuinely
 		// iterable - argsObj[Symbol.iterator] is set as a real own property
