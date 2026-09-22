@@ -392,6 +392,17 @@ func (m *ModuleBuilder) createClassConstructor(name string, goStruct interface{}
 			return vm.Undefined, nil
 		}
 
+		// Called as a plain function with an object receiver - the classic
+		// ES5 parent-constructor call `X.call(this, ...)` (paserati#514):
+		// initialize that receiver in place, like any JS constructor body
+		// would, rather than fabricating a separate object and discarding
+		// the one we were handed.
+		if receiver := m.inPlaceClassReceiver(); receiver != nil {
+			receiver.SetInternalSlots(goInstance)
+			m.bindStructFields(receiver, goInstance, structType)
+			return vm.Undefined, nil
+		}
+
 		// Create a VM object to represent the instance, chained to the
 		// class's shared prototype so `instance instanceof Class` resolves
 		// and prototype methods (bound once in createClassConstructor) are
@@ -539,11 +550,40 @@ func (m *ModuleBuilder) createPrototypeMethod(unboundMethod reflect.Value) vm.Va
 	})
 }
 
+// inPlaceClassReceiver returns the object a ModuleBuilder.Class constructor
+// should initialize in place, or nil if it should build a fresh instance as
+// usual. That is the case only for a non-`new` call whose `this` is an
+// ordinary object (`X.call(this, ...)` from another constructor): `new X()`,
+// a bare `X()` (receiver undefined or the global object - kept returning a
+// fresh instance for compatibility) and receivers already carrying some
+// other builtin's internal state all take the normal path.
+func (m *ModuleBuilder) inPlaceClassReceiver() *vm.PlainObject {
+	if m.vm == nil || m.vm.IsConstructorCall() {
+		return nil
+	}
+	thisVal := m.vm.GetThis()
+	if thisVal.Type() != vm.TypeObject {
+		return nil
+	}
+	obj := thisVal.AsPlainObject()
+	if obj == m.vm.GlobalObject {
+		return nil
+	}
+	if slots := obj.InternalSlots(); slots != nil {
+		if _, ok := slots.(reflect.Value); !ok {
+			return nil
+		}
+	}
+	return obj
+}
+
 // goInstanceFromThis recovers the Go instance stashed on a class instance's
 // internal slots (see createClassConstructor) so a shared prototype method
 // (createPrototypeMethod) can operate on the right receiver.
 func goInstanceFromThis(thisVal vm.Value) (reflect.Value, bool) {
-	if !thisVal.IsObject() {
+	// Only plain objects carry internal slots; AsPlainObject panics on any
+	// other object type (arrays, functions, ...), which must throw instead.
+	if thisVal.Type() != vm.TypeObject {
 		return reflect.Value{}, false
 	}
 	obj := thisVal.AsPlainObject()
