@@ -11262,9 +11262,20 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 			var imported *Identifier
 			var importedToken *lexer.Token
 
-			// Check for type-only import: { type name }
+			// Check for type-only import: { type name }. Per TS's
+			// disambiguation rule, a leading 'type' is the type-only
+			// modifier only when followed by another binding name - not
+			// when followed by 'as' (`{ type as alias }` imports the
+			// binding literally named "type", aliased to "alias" - 'type'
+			// itself is the imported name here, not a modifier; a distinct
+			// type-only import of it would need `{ type type as alias }`)
+			// or by ',' / '}' (`{ type }` imports the binding named
+			// "type" under its own name). Unconditionally consuming 'type'
+			// here used to make `{ type as osType }` (e.g. chokidar's
+			// `import { type as osType } from 'node:os'`) fail to parse,
+			// since 'as' isn't a valid binding name to land on afterward.
 			isTypeOnlySpecifier := false
-			if p.curToken.Type == lexer.TYPE {
+			if p.curToken.Type == lexer.TYPE && isImportBindingName(p.peekToken.Type) && p.peekToken.Type != lexer.AS {
 				isTypeOnlySpecifier = true
 				p.nextToken() // consume 'type'
 			}
