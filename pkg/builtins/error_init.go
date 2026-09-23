@@ -143,7 +143,7 @@ func (e *ErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		errorInstancePtr := errorInstance.AsPlainObject()
 
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
-		errorInstancePtr.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
+		errorInstancePtr.SetInternal("[[ErrorData]]", vm.Undefined)
 
 		// Per spec, "name" lives only on the prototype: an instance has no own
 		// "name" until user code assigns one, and that assignment must create
@@ -390,7 +390,7 @@ func (e *AggregateErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create instance
 		inst := vm.NewObject(vm.NewValueFromPlainObject(proto)).AsPlainObject()
-		inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
+		inst.SetInternal("[[ErrorData]]", vm.Undefined)
 		// "name" lives only on the prototype (see Error constructor).
 		if hasMessage {
 			inst.SetOwnNonEnumerable("message", vm.NewString(message))
@@ -484,7 +484,7 @@ func (e *SuppressedErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		inst := vm.NewObject(instProto).AsPlainObject()
-		inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
+		inst.SetInternal("[[ErrorData]]", vm.Undefined)
 		stackValue, stackErr := vmInstance.CaptureStackValue(vm.NewValueFromPlainObject(inst))
 		if stackErr != nil {
 			return vm.Undefined, stackErr
@@ -567,7 +567,7 @@ func initErrorSubclass(ctx *RuntimeContext, name string) error {
 		}
 		inst := vm.NewObject(instProto).AsPlainObject()
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
-		inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
+		inst.SetInternal("[[ErrorData]]", vm.Undefined)
 		// "name" lives only on the prototype (see Error constructor).
 		if hasMessage {
 			inst.SetOwnNonEnumerable("message", vm.NewString(message))
@@ -637,14 +637,9 @@ func isErrorValue(vmInstance *vm.VM, val vm.Value) bool {
 	// Check for [[ErrorData]] internal slot on the object itself
 	if val.Type() == vm.TypeObject {
 		po := val.AsPlainObject()
-		_, hasErrorData := po.GetOwn("[[ErrorData]]")
+		_, hasErrorData := po.GetInternal("[[ErrorData]]")
 		return hasErrorData
 	}
-	if val.Type() == vm.TypeDictObject {
-		d := val.AsDictObject()
-		_, hasErrorData := d.GetOwn("[[ErrorData]]")
-		return hasErrorData
-	}
-
+	// A DictObject (module namespace, enum) never has [[ErrorData]].
 	return false
 }

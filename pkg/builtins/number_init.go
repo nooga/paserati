@@ -223,7 +223,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create Number.prototype as a Number object with [[PrimitiveValue]] = 0
 	// Per ECMAScript spec, Number.prototype is a Number object whose [[NumberData]] is +0
 	numberProto := vm.NewObject(objectProto).AsPlainObject()
-	numberProto.SetOwnNonEnumerable("[[PrimitiveValue]]", vm.NumberValue(0))
+	numberProto.SetInternal("[[PrimitiveValue]]", vm.NumberValue(0))
 
 	// Add Number prototype methods
 	numberProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(1, false, "toString", func(args []vm.Value) (vm.Value, error) {
@@ -232,7 +232,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Extract primitive value from Number wrapper object
 		if thisNum.Type() == vm.TypeObject {
 			obj := thisNum.AsPlainObject()
-			if primVal, found := obj.GetOwn("[[PrimitiveValue]]"); found && primVal != vm.Undefined {
+			if primVal, found := obj.GetInternal("[[PrimitiveValue]]"); found && primVal != vm.Undefined {
 				thisNum = primVal
 			}
 		}
@@ -327,7 +327,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// IMPORTANT: Must verify the [[PrimitiveValue]] is actually a Number type
 		// (String objects also have [[PrimitiveValue]] but with string type)
 		if thisNum.Type() == vm.TypeObject {
-			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+			if primitiveVal, exists := thisNum.AsPlainObject().GetInternal("[[PrimitiveValue]]"); exists {
 				// Verify it's a Number primitive
 				if primitiveVal.Type() == vm.TypeFloatNumber || primitiveVal.Type() == vm.TypeIntegerNumber {
 					return primitiveVal, nil
@@ -344,7 +344,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Extract primitive value from wrapper if needed
 		if thisNum.Type() == vm.TypeObject {
-			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+			if primitiveVal, exists := thisNum.AsPlainObject().GetInternal("[[PrimitiveValue]]"); exists {
 				thisNum = primitiveVal
 			}
 		}
@@ -410,7 +410,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Extract primitive value from wrapper if needed
 		if thisNum.Type() == vm.TypeObject {
-			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+			if primitiveVal, exists := thisNum.AsPlainObject().GetInternal("[[PrimitiveValue]]"); exists {
 				thisNum = primitiveVal
 			}
 		}
@@ -499,7 +499,7 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Extract primitive value from wrapper if needed
 		if thisNum.Type() == vm.TypeObject {
-			if primitiveVal, exists := thisNum.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+			if primitiveVal, exists := thisNum.AsPlainObject().GetInternal("[[PrimitiveValue]]"); exists {
 				thisNum = primitiveVal
 			}
 		}

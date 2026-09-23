@@ -83,7 +83,7 @@ func (t *TypeErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		typeErrorInstancePtr := typeErrorInstance.AsPlainObject()
 
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
-		typeErrorInstancePtr.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
+		typeErrorInstancePtr.SetInternal("[[ErrorData]]", vm.Undefined)
 
 		// Per spec, "name" lives only on the prototype: an instance has no own
 		// "name" until user code assigns one, and that assignment must create

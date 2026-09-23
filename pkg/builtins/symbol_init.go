@@ -107,7 +107,7 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Check for Symbol wrapper object
 		if thisVal.Type() == vm.TypeObject {
 			po := thisVal.AsPlainObject()
-			if pv, ok := po.GetOwn("[[PrimitiveValue]]"); ok && pv.IsSymbol() {
+			if pv, ok := po.GetInternal("[[PrimitiveValue]]"); ok && pv.IsSymbol() {
 				return pv, nil
 			}
 		}

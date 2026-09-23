@@ -345,11 +345,11 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Get the wrapped iterator and cached next method
-		wrappedIter, exists := obj.GetOwn("[[Iterated]]")
+		wrappedIter, exists := obj.GetInternal("[[Iterated]]")
 		if !exists || wrappedIter.IsUndefined() {
 			return createIteratorResult(vm.Undefined, true), nil
 		}
-		nextMeth, _ := obj.GetOwn("[[NextMethod]]")
+		nextMeth, _ := obj.GetInternal("[[NextMethod]]")
 
 		// Call next on wrapped iterator using cached method
 		var result vm.Value
@@ -377,7 +377,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 
 		// Get the wrapped iterator
-		wrappedIter, exists := obj.GetOwn("[[Iterated]]")
+		wrappedIter, exists := obj.GetInternal("[[Iterated]]")
 		if !exists || wrappedIter.IsUndefined() {
 			return createIteratorResult(vm.Undefined, true), nil
 		}
@@ -466,11 +466,11 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create iterator helper object
 		helper := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
-		helper.SetOwn("[[UnderlyingIterator]]", thisValue)
-		helper.SetOwn("[[NextMethod]]", cachedNext)
-		helper.SetOwn("[[Mapper]]", mapper)
-		helper.SetOwn("[[Counter]]", vm.NumberValue(0))
-		helper.SetOwn("[[GeneratorState]]", vm.NewString("suspendedStart"))
+		helper.SetInternal("[[UnderlyingIterator]]", thisValue)
+		helper.SetInternal("[[NextMethod]]", cachedNext)
+		helper.SetInternal("[[Mapper]]", mapper)
+		helper.SetInternal("[[Counter]]", vm.NumberValue(0))
+		helper.SetInternal("[[GeneratorState]]", vm.NewString("suspendedStart"))
 
 		// Add next method
 		helper.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
@@ -481,7 +481,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			// Per spec: GeneratorValidate - if executing, throw TypeError
-			stateVal, _ := helperObj.GetOwn("[[GeneratorState]]")
+			stateVal, _ := helperObj.GetInternal("[[GeneratorState]]")
 			state := vm.AsString(stateVal)
 			if state == "executing" {
 				return vm.Undefined, vmInstance.NewTypeError("Generator is already running")
@@ -489,25 +489,25 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if state == "completed" {
 				return createIteratorResult(vm.Undefined, true), nil
 			}
-			helperObj.SetOwn("[[GeneratorState]]", vm.NewString("executing"))
+			helperObj.SetInternal("[[GeneratorState]]", vm.NewString("executing"))
 
-			underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
-			nextMeth, _ := helperObj.GetOwn("[[NextMethod]]")
-			mapperFn, _ := helperObj.GetOwn("[[Mapper]]")
-			counterVal, _ := helperObj.GetOwn("[[Counter]]")
+			underlyingIter, _ := helperObj.GetInternal("[[UnderlyingIterator]]")
+			nextMeth, _ := helperObj.GetInternal("[[NextMethod]]")
+			mapperFn, _ := helperObj.GetInternal("[[Mapper]]")
+			counterVal, _ := helperObj.GetInternal("[[Counter]]")
 			counter := int(counterVal.ToFloat())
 
 			// Get next value from underlying iterator using cached next method
 			result, err := callIteratorNext(underlyingIter, nextMeth)
 			if err != nil {
-				helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+				helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 				return vm.Undefined, err
 			}
 
 			// Check if done
 			doneVal, _ := vmInstance.GetProperty(result, "done")
 			if doneVal.IsTruthy() {
-				helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+				helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 				return createIteratorResult(vm.Undefined, true), nil
 			}
 
@@ -516,14 +516,14 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			mapped, err := vmInstance.CallArgs2(mapperFn, vm.Undefined, valueVal, vm.NumberValue(float64(counter)))
 			if err != nil {
 				closeIterator(underlyingIter)
-				helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+				helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 				return vm.Undefined, err
 			}
 
 			// Update counter
-			helperObj.SetOwn("[[Counter]]", vm.NumberValue(float64(counter+1)))
+			helperObj.SetInternal("[[Counter]]", vm.NumberValue(float64(counter+1)))
 
-			helperObj.SetOwn("[[GeneratorState]]", vm.NewString("suspendedYield"))
+			helperObj.SetInternal("[[GeneratorState]]", vm.NewString("suspendedYield"))
 			return createIteratorResult(mapped, false), nil
 		}))
 
@@ -532,12 +532,12 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			helperThis := vmInstance.GetThis()
 			helperObj := helperThis.AsPlainObject()
 			if helperObj != nil {
-				stateVal, _ := helperObj.GetOwn("[[GeneratorState]]")
+				stateVal, _ := helperObj.GetInternal("[[GeneratorState]]")
 				state := vm.AsString(stateVal)
 				if state != "completed" {
-					underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+					underlyingIter, _ := helperObj.GetInternal("[[UnderlyingIterator]]")
 					closeIterator(underlyingIter)
-					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+					helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 				}
 			}
 			return createIteratorResult(vm.Undefined, true), nil
@@ -571,11 +571,11 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create iterator helper object
 		helper := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
-		helper.SetOwn("[[UnderlyingIterator]]", thisValue)
-		helper.SetOwn("[[NextMethod]]", cachedNext)
-		helper.SetOwn("[[Predicate]]", predicate)
-		helper.SetOwn("[[Counter]]", vm.NumberValue(0))
-		helper.SetOwn("[[GeneratorState]]", vm.NewString("suspendedStart"))
+		helper.SetInternal("[[UnderlyingIterator]]", thisValue)
+		helper.SetInternal("[[NextMethod]]", cachedNext)
+		helper.SetInternal("[[Predicate]]", predicate)
+		helper.SetInternal("[[Counter]]", vm.NumberValue(0))
+		helper.SetInternal("[[GeneratorState]]", vm.NewString("suspendedStart"))
 
 		// Add next method
 		helper.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
@@ -586,7 +586,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			// Per spec: GeneratorValidate - if executing, throw TypeError
-			stateVal, _ := helperObj.GetOwn("[[GeneratorState]]")
+			stateVal, _ := helperObj.GetInternal("[[GeneratorState]]")
 			state := vm.AsString(stateVal)
 			if state == "executing" {
 				return vm.Undefined, vmInstance.NewTypeError("Generator is already running")
@@ -594,26 +594,26 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if state == "completed" {
 				return createIteratorResult(vm.Undefined, true), nil
 			}
-			helperObj.SetOwn("[[GeneratorState]]", vm.NewString("executing"))
+			helperObj.SetInternal("[[GeneratorState]]", vm.NewString("executing"))
 
-			underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
-			nextMeth, _ := helperObj.GetOwn("[[NextMethod]]")
-			predicateFn, _ := helperObj.GetOwn("[[Predicate]]")
-			counterVal, _ := helperObj.GetOwn("[[Counter]]")
+			underlyingIter, _ := helperObj.GetInternal("[[UnderlyingIterator]]")
+			nextMeth, _ := helperObj.GetInternal("[[NextMethod]]")
+			predicateFn, _ := helperObj.GetInternal("[[Predicate]]")
+			counterVal, _ := helperObj.GetInternal("[[Counter]]")
 			counter := int(counterVal.ToFloat())
 
 			for {
 				// Get next value from underlying iterator using cached next method
 				result, err := callIteratorNext(underlyingIter, nextMeth)
 				if err != nil {
-					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+					helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 					return vm.Undefined, err
 				}
 
 				// Check if done
 				doneVal, _ := vmInstance.GetProperty(result, "done")
 				if doneVal.IsTruthy() {
-					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+					helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 					return createIteratorResult(vm.Undefined, true), nil
 				}
 
@@ -621,16 +621,16 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				valueVal, _ := vmInstance.GetProperty(result, "value")
 				passed, err := vmInstance.CallArgs2(predicateFn, vm.Undefined, valueVal, vm.NumberValue(float64(counter)))
 				counter++
-				helperObj.SetOwn("[[Counter]]", vm.NumberValue(float64(counter)))
+				helperObj.SetInternal("[[Counter]]", vm.NumberValue(float64(counter)))
 
 				if err != nil {
 					closeIterator(underlyingIter)
-					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+					helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 					return vm.Undefined, err
 				}
 
 				if passed.IsTruthy() {
-					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("suspendedYield"))
+					helperObj.SetInternal("[[GeneratorState]]", vm.NewString("suspendedYield"))
 					return createIteratorResult(valueVal, false), nil
 				}
 				// Continue to next value
@@ -642,12 +642,12 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			helperThis := vmInstance.GetThis()
 			helperObj := helperThis.AsPlainObject()
 			if helperObj != nil {
-				stateVal, _ := helperObj.GetOwn("[[GeneratorState]]")
+				stateVal, _ := helperObj.GetInternal("[[GeneratorState]]")
 				state := vm.AsString(stateVal)
 				if state != "completed" {
-					underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+					underlyingIter, _ := helperObj.GetInternal("[[UnderlyingIterator]]")
 					closeIterator(underlyingIter)
-					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+					helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 				}
 			}
 			return createIteratorResult(vm.Undefined, true), nil
@@ -713,9 +713,9 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create iterator helper object
 		helper := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
-		helper.SetOwn("[[UnderlyingIterator]]", thisValue)
-		helper.SetOwn("[[NextMethod]]", nextMethod)
-		helper.SetOwn("[[Remaining]]", vm.NumberValue(float64(limit)))
+		helper.SetInternal("[[UnderlyingIterator]]", thisValue)
+		helper.SetInternal("[[NextMethod]]", nextMethod)
+		helper.SetInternal("[[Remaining]]", vm.NumberValue(float64(limit)))
 
 		// Add next method
 		helper.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
@@ -725,17 +725,17 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, vmInstance.NewTypeError("next called on non-object")
 			}
 
-			remainingVal, _ := helperObj.GetOwn("[[Remaining]]")
+			remainingVal, _ := helperObj.GetInternal("[[Remaining]]")
 			remaining := int(remainingVal.ToFloat())
 
 			if remaining <= 0 {
-				underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+				underlyingIter, _ := helperObj.GetInternal("[[UnderlyingIterator]]")
 				closeIterator(underlyingIter)
 				return createIteratorResult(vm.Undefined, true), nil
 			}
 
-			underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
-			storedNext, _ := helperObj.GetOwn("[[NextMethod]]")
+			underlyingIter, _ := helperObj.GetInternal("[[UnderlyingIterator]]")
+			storedNext, _ := helperObj.GetInternal("[[NextMethod]]")
 
 			// Call stored next method
 			var result vm.Value
@@ -755,7 +755,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			// Decrement remaining
-			helperObj.SetOwn("[[Remaining]]", vm.NumberValue(float64(remaining-1)))
+			helperObj.SetInternal("[[Remaining]]", vm.NumberValue(float64(remaining-1)))
 
 			// Get value
 			valueVal, _ := vmInstance.GetProperty(result, "value")
@@ -767,7 +767,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			helperThis := vmInstance.GetThis()
 			helperObj := helperThis.AsPlainObject()
 			if helperObj != nil {
-				underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+				underlyingIter, _ := helperObj.GetInternal("[[UnderlyingIterator]]")
 				closeIterator(underlyingIter)
 			}
 			return createIteratorResult(vm.Undefined, true), nil
@@ -834,9 +834,9 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create iterator helper object
 		helper := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
-		helper.SetOwn("[[UnderlyingIterator]]", thisValue)
-		helper.SetOwn("[[NextMethod]]", nextMethod)
-		helper.SetOwn("[[ToSkip]]", vm.NumberValue(float64(count)))
+		helper.SetInternal("[[UnderlyingIterator]]", thisValue)
+		helper.SetInternal("[[NextMethod]]", nextMethod)
+		helper.SetInternal("[[ToSkip]]", vm.NumberValue(float64(count)))
 
 		// Add next method
 		helper.SetOwnNonEnumerable("next", vm.NewNativeFunction(0, false, "next", func(args []vm.Value) (vm.Value, error) {
@@ -846,9 +846,9 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				return vm.Undefined, vmInstance.NewTypeError("next called on non-object")
 			}
 
-			underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
-			storedNext, _ := helperObj.GetOwn("[[NextMethod]]")
-			toSkipVal, _ := helperObj.GetOwn("[[ToSkip]]")
+			underlyingIter, _ := helperObj.GetInternal("[[UnderlyingIterator]]")
+			storedNext, _ := helperObj.GetInternal("[[NextMethod]]")
+			toSkipVal, _ := helperObj.GetInternal("[[ToSkip]]")
 			toSkip := int(toSkipVal.ToFloat())
 
 			// Helper to call stored next method
@@ -870,7 +870,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return createIteratorResult(vm.Undefined, true), nil
 				}
 				toSkip--
-				helperObj.SetOwn("[[ToSkip]]", vm.NumberValue(float64(toSkip)))
+				helperObj.SetInternal("[[ToSkip]]", vm.NumberValue(float64(toSkip)))
 			}
 
 			// Get next value from underlying iterator
@@ -895,7 +895,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			helperThis := vmInstance.GetThis()
 			helperObj := helperThis.AsPlainObject()
 			if helperObj != nil {
-				underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+				underlyingIter, _ := helperObj.GetInternal("[[UnderlyingIterator]]")
 				closeIterator(underlyingIter)
 			}
 			return createIteratorResult(vm.Undefined, true), nil
@@ -1234,13 +1234,13 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// Create iterator helper object
 		helper := vm.NewObject(vmInstance.IteratorHelperPrototype).AsPlainObject()
-		helper.SetOwn("[[UnderlyingIterator]]", thisValue)
-		helper.SetOwn("[[NextMethod]]", cachedNext)
-		helper.SetOwn("[[Mapper]]", mapper)
-		helper.SetOwn("[[InnerIterator]]", vm.Undefined)
-		helper.SetOwn("[[InnerNextMethod]]", vm.Undefined)
-		helper.SetOwn("[[Counter]]", vm.NumberValue(0))
-		helper.SetOwn("[[GeneratorState]]", vm.NewString("suspendedStart"))
+		helper.SetInternal("[[UnderlyingIterator]]", thisValue)
+		helper.SetInternal("[[NextMethod]]", cachedNext)
+		helper.SetInternal("[[Mapper]]", mapper)
+		helper.SetInternal("[[InnerIterator]]", vm.Undefined)
+		helper.SetInternal("[[InnerNextMethod]]", vm.Undefined)
+		helper.SetInternal("[[Counter]]", vm.NumberValue(0))
+		helper.SetInternal("[[GeneratorState]]", vm.NewString("suspendedStart"))
 
 		// Helper to get iterator from value using GetIteratorFlattenable semantics
 		// GetIteratorFlattenable ONLY accepts objects, not primitives
@@ -1288,7 +1288,7 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 
 			// Per spec: GeneratorValidate - if executing, throw TypeError
-			stateVal, _ := helperObj.GetOwn("[[GeneratorState]]")
+			stateVal, _ := helperObj.GetInternal("[[GeneratorState]]")
 			state := vm.AsString(stateVal)
 			if state == "executing" {
 				return vm.Undefined, vmInstance.NewTypeError("Generator is already running")
@@ -1296,14 +1296,14 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if state == "completed" {
 				return createIteratorResult(vm.Undefined, true), nil
 			}
-			helperObj.SetOwn("[[GeneratorState]]", vm.NewString("executing"))
+			helperObj.SetInternal("[[GeneratorState]]", vm.NewString("executing"))
 
-			underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
-			nextMeth, _ := helperObj.GetOwn("[[NextMethod]]")
-			mapperFn, _ := helperObj.GetOwn("[[Mapper]]")
-			innerIter, _ := helperObj.GetOwn("[[InnerIterator]]")
-			innerNextMeth, _ := helperObj.GetOwn("[[InnerNextMethod]]")
-			counterVal, _ := helperObj.GetOwn("[[Counter]]")
+			underlyingIter, _ := helperObj.GetInternal("[[UnderlyingIterator]]")
+			nextMeth, _ := helperObj.GetInternal("[[NextMethod]]")
+			mapperFn, _ := helperObj.GetInternal("[[Mapper]]")
+			innerIter, _ := helperObj.GetInternal("[[InnerIterator]]")
+			innerNextMeth, _ := helperObj.GetInternal("[[InnerNextMethod]]")
+			counterVal, _ := helperObj.GetInternal("[[Counter]]")
 			counter := int(counterVal.ToFloat())
 
 			for {
@@ -1312,33 +1312,33 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 					result, err := callIteratorNext(innerIter, innerNextMeth)
 					if err != nil {
 						closeIterator(underlyingIter)
-						helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+						helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 						return vm.Undefined, err
 					}
 
 					doneVal, _ := vmInstance.GetProperty(result, "done")
 					if !doneVal.IsTruthy() {
 						valueVal, _ := vmInstance.GetProperty(result, "value")
-						helperObj.SetOwn("[[GeneratorState]]", vm.NewString("suspendedYield"))
+						helperObj.SetInternal("[[GeneratorState]]", vm.NewString("suspendedYield"))
 						return createIteratorResult(valueVal, false), nil
 					}
 
 					// Inner iterator exhausted
-					helperObj.SetOwn("[[InnerIterator]]", vm.Undefined)
-					helperObj.SetOwn("[[InnerNextMethod]]", vm.Undefined)
+					helperObj.SetInternal("[[InnerIterator]]", vm.Undefined)
+					helperObj.SetInternal("[[InnerNextMethod]]", vm.Undefined)
 					innerIter = vm.Undefined
 				}
 
 				// Get next value from underlying iterator using cached next method
 				result, err := callIteratorNext(underlyingIter, nextMeth)
 				if err != nil {
-					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+					helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 					return vm.Undefined, err
 				}
 
 				doneVal, _ := vmInstance.GetProperty(result, "done")
 				if doneVal.IsTruthy() {
-					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+					helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 					return createIteratorResult(vm.Undefined, true), nil
 				}
 
@@ -1347,21 +1347,21 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 				mapped, err := vmInstance.CallArgs2(mapperFn, vm.Undefined, valueVal, vm.NumberValue(float64(counter)))
 				if err != nil {
 					closeIterator(underlyingIter)
-					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+					helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 					return vm.Undefined, err
 				}
 				counter++
-				helperObj.SetOwn("[[Counter]]", vm.NumberValue(float64(counter)))
+				helperObj.SetInternal("[[Counter]]", vm.NumberValue(float64(counter)))
 
 				// Get iterator from mapped value (also caches inner next method)
 				innerIter, innerNextMeth, err = getIterator(mapped)
 				if err != nil {
 					closeIterator(underlyingIter)
-					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+					helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 					return vm.Undefined, err
 				}
-				helperObj.SetOwn("[[InnerIterator]]", innerIter)
-				helperObj.SetOwn("[[InnerNextMethod]]", innerNextMeth)
+				helperObj.SetInternal("[[InnerIterator]]", innerIter)
+				helperObj.SetInternal("[[InnerNextMethod]]", innerNextMeth)
 			}
 		}))
 
@@ -1371,16 +1371,16 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 			helperObj := helperThis.AsPlainObject()
 			if helperObj != nil {
 				// Only close iterators if not already completed
-				stateVal, _ := helperObj.GetOwn("[[GeneratorState]]")
+				stateVal, _ := helperObj.GetInternal("[[GeneratorState]]")
 				state := vm.AsString(stateVal)
 				if state != "completed" {
-					underlyingIter, _ := helperObj.GetOwn("[[UnderlyingIterator]]")
+					underlyingIter, _ := helperObj.GetInternal("[[UnderlyingIterator]]")
 					closeIterator(underlyingIter)
-					innerIter, _ := helperObj.GetOwn("[[InnerIterator]]")
+					innerIter, _ := helperObj.GetInternal("[[InnerIterator]]")
 					if !innerIter.IsUndefined() {
 						closeIterator(innerIter)
 					}
-					helperObj.SetOwn("[[GeneratorState]]", vm.NewString("completed"))
+					helperObj.SetInternal("[[GeneratorState]]", vm.NewString("completed"))
 				}
 			}
 			return createIteratorResult(vm.Undefined, true), nil
@@ -1587,10 +1587,10 @@ func (i *IteratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 			// Wrap the iterator with cached next method
 			wrapper := vm.NewObject(vmInstance.WrapForValidIteratorPrototype).AsPlainObject()
-			wrapper.SetOwn("[[Iterated]]", iterator)
+			wrapper.SetInternal("[[Iterated]]", iterator)
 			// Cache the next method per GetIteratorDirect
 			if iterNextMethod, nerr := getIteratorDirect(iterator); nerr == nil {
-				wrapper.SetOwn("[[NextMethod]]", iterNextMethod)
+				wrapper.SetInternal("[[NextMethod]]", iterNextMethod)
 			}
 			return vm.NewValueFromPlainObject(wrapper), nil
 		}))

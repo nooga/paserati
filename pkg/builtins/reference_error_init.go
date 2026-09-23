@@ -83,7 +83,7 @@ func (r *ReferenceErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		referenceErrorInstancePtr := referenceErrorInstance.AsPlainObject()
 
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
-		referenceErrorInstancePtr.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
+		referenceErrorInstancePtr.SetInternal("[[ErrorData]]", vm.Undefined)
 
 		// Per spec, "name" lives only on the prototype: an instance has no own
 		// "name" until user code assigns one, and that assignment must create

@@ -47,7 +47,7 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create Boolean.prototype inheriting from Object.prototype
 	// Boolean.prototype itself is a Boolean wrapper object with [[PrimitiveValue]] = false
 	booleanProto := vm.NewObject(objectProto).AsPlainObject()
-	booleanProto.SetOwnNonEnumerable("[[PrimitiveValue]]", vm.BooleanValue(false))
+	booleanProto.SetInternal("[[PrimitiveValue]]", vm.BooleanValue(false))
 
 	// Add Boolean prototype methods
 	booleanProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
@@ -64,7 +64,7 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// If this is a Boolean wrapper object, extract [[PrimitiveValue]]
 		if thisBool.IsObject() {
-			if primitiveVal, exists := thisBool.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+			if primitiveVal, exists := thisBool.AsPlainObject().GetInternal("[[PrimitiveValue]]"); exists {
 				if primitiveVal.Type() == vm.TypeBoolean {
 					boolVal := primitiveVal.AsBoolean()
 					if boolVal {
@@ -88,7 +88,7 @@ func (b *BooleanInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// If this is a Boolean wrapper object, extract [[PrimitiveValue]]
 		if thisBool.IsObject() {
-			if primitiveVal, exists := thisBool.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+			if primitiveVal, exists := thisBool.AsPlainObject().GetInternal("[[PrimitiveValue]]"); exists {
 				// Must be a boolean [[PrimitiveValue]], not string or number
 				if primitiveVal.Type() == vm.TypeBoolean {
 					return primitiveVal, nil

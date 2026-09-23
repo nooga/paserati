@@ -29,7 +29,7 @@ func newSuppressedError(vmInstance *vm.VM, errorVal, suppressedVal vm.Value) vm.
 	proto := vmInstance.CurrentRealm().SuppressedErrorPrototype
 	instVal := vm.NewObject(proto)
 	inst := instVal.AsPlainObject()
-	inst.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
+	inst.SetInternal("[[ErrorData]]", vm.Undefined)
 	if stackValue, err := vmInstance.CaptureStackValue(instVal); err == nil {
 		inst.SetOwnNonEnumerable("stack", stackValue)
 	}

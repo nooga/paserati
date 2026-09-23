@@ -585,7 +585,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if arg.IsObject() {
 				if arg.Type() == vm.TypeObject {
 					plainObj := arg.AsPlainObject()
-					if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists && primitiveVal.Type() == vm.TypeString {
+					if primitiveVal, exists := plainObj.GetInternal("[[PrimitiveValue]]"); exists && primitiveVal.Type() == vm.TypeString {
 						str = primitiveVal.ToString()
 					} else {
 						vmInstance.EnterHelperCall()
@@ -627,7 +627,7 @@ func (r *RegExpInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// Check for [[PrimitiveValue]] (String wrapper)
 			if val.Type() == vm.TypeObject {
 				plainObj := val.AsPlainObject()
-				if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists && primitiveVal.Type() == vm.TypeString {
+				if primitiveVal, exists := plainObj.GetInternal("[[PrimitiveValue]]"); exists && primitiveVal.Type() == vm.TypeString {
 					return primitiveVal.ToString()
 				}
 			}
