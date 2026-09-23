@@ -73,12 +73,17 @@ done
 
 # Merge shard outputs: concatenate per-test results, sum the stats counters.
 jq -s '{
+  policy: (map(.policy) | first),
+  corpus: (map(.corpus) | first),
   stats: {
     Total:    (map(.stats.Total)    | add // 0),
     Passed:   (map(.stats.Passed)   | add // 0),
     Failed:   (map(.stats.Failed)   | add // 0),
     Timeouts: (map(.stats.Timeouts) | add // 0),
     Skipped:  (map(.stats.Skipped)  | add // 0),
+    InfraErrors:    (map(.stats.InfraErrors // 0)    | add // 0),
+    Variants:       (map(.stats.Variants // 0)       | add // 0),
+    VariantsPassed: (map(.stats.VariantsPassed // 0) | add // 0),
     Duration: (map(.stats.Duration) | add // 0)
   },
   results: (map(.results) | add // [])

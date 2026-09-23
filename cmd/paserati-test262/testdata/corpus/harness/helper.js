@@ -1,0 +1,1 @@
+var helperValue = 42;

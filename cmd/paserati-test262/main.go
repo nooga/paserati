@@ -1,22 +1,19 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"runtime/pprof"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/nooga/paserati/pkg/builtins"
-	"github.com/nooga/paserati/pkg/driver"
 	errorsPkg "github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
@@ -113,7 +110,16 @@ func main() {
 	}
 
 	// Run tests
-	stats, fileResults := runTests(testFiles, *verbose, *timeout, testDir, *testPath, *treeMode, *suiteMode, *disasm, *strictOnly, *jsonFlag)
+	opts := runOptions{
+		testRoot:   *testPath,
+		testDir:    testDir,
+		timeout:    *timeout,
+		strictOnly: *strictOnly,
+		verbose:    *verbose,
+		jsonMode:   *jsonFlag,
+	}
+	stats, fileResults := runTests(testFiles, opts, *treeMode, *suiteMode, *disasm)
+	corpus := corpusRevision(*testPath)
 
 	if *jsonFlag {
 		os.Stdout = realStdout
@@ -121,12 +127,12 @@ func main() {
 
 	// Handle diff/dump modes
 	if *diffFile != "" {
-		handleDiffMode(fileResults, testDir, *diffFile, *dumpFile)
+		handleDiffMode(fileResults, testDir, *diffFile, *dumpFile, corpus)
 	} else if *dumpFile != "" {
-		handleDumpMode(fileResults, testDir, *dumpFile)
+		handleDumpMode(fileResults, testDir, *dumpFile, corpus)
 	} else if *jsonFlag {
 		// JSON output mode — stdout is now guaranteed clean.
-		output := test262.Output{Stats: stats, Results: fileResults}
+		output := test262.Output{Policy: test262.Policy, Corpus: corpus, Stats: stats, Results: fileResults}
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(output); err != nil {
@@ -172,9 +178,25 @@ func main() {
 	if *allowFile != "" {
 		os.Exit(allowFailuresExitCode(fileResults, testDir, *allowFile))
 	}
-	if stats.Failed > 0 || stats.Timeouts > 0 {
+	if stats.Failed > 0 || stats.Timeouts > 0 || stats.InfraErrors > 0 {
 		os.Exit(1)
 	}
+}
+
+// corpusRevision is the checked-out test262 commit, part of a result's
+// identity ("unknown" when it can't be read).
+func corpusRevision(testPath string) string {
+	out, err := exec.Command("git", "-C", testPath, "rev-parse", "--short=12", "HEAD").Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// dumpHeader starts every -dump file: results from a different policy or
+// corpus are not comparable line for line.
+func dumpHeader(corpus string) string {
+	return fmt.Sprintf("# paserati-test262 policy=%d corpus=%s", test262.Policy, corpus)
 }
 
 // allowFailuresExitCode loads a baseline file (same `+path` / `-path` format
@@ -289,10 +311,12 @@ func findTestFiles(testDir, pattern, subPath, skipPattern string, jsonMode bool)
 }
 
 // runTests executes all test files
-func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir string, testRoot string, treeMode bool, suiteMode bool, disasm bool, strictOnly bool, jsonMode bool) (test262.Stats, []test262.Result) {
+func runTests(testFiles []string, opts runOptions, treeMode bool, suiteMode bool, disasm bool) (test262.Stats, []test262.Result) {
 	var stats test262.Stats
 	var fileResults []test262.Result
 	stats.Total = len(testFiles)
+	testDir := opts.testDir
+	jsonMode := opts.jsonMode
 
 	startTime := time.Now()
 
@@ -360,85 +384,50 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 			runtime.GC()
 		}
 
-		testStart := time.Now()
-		passed, err := runSingleTest(testFile, verbose, timeout, testDir, testRoot, disasm, strictOnly, jsonMode)
-		testDuration := time.Since(testStart)
-
-		result := test262.Result{
-			Path:     testFile,
-			Duration: testDuration,
+		result := runFile(testFile, opts)
+		for _, v := range result.Variants {
+			stats.Variants++
+			if v.Status == test262.StatusPass {
+				stats.VariantsPassed++
+			}
+		}
+		if !jsonMode {
+			result.Error = ""
 		}
 
-		if err != nil {
-			// Check if it's a timeout
-			if strings.Contains(err.Error(), "timed out") {
+		switch result.Status {
+		case test262.StatusPass:
+			stats.Passed++
+		case test262.StatusSkip:
+			stats.Skipped++
+			if opts.verbose && !treeMode && !jsonMode {
+				fmt.Printf("SKIP %d/%d %s\n", i+1, stats.Total, testFile)
+			}
+		default:
+			switch result.Status {
+			case test262.StatusTimeout:
 				stats.Timeouts++
-				result.TimedOut = true
-
-				// Aggressive cleanup after timeout to prevent memory bloat from leaked goroutines
+				// Aggressive cleanup after timeout to prevent memory bloat
 				vm.ClearShapeCache()
 				runtime.GC()
-
-				if !treeMode && !jsonMode {
-					fmt.Printf("TIMEOUT %d/%d %s - %v\n", i+1, stats.Total, testFile, err)
-				}
-				if jsonMode {
-					result.Error = err.Error()
-				}
-			} else {
+			case test262.StatusInfra:
+				stats.InfraErrors++
+			default:
 				stats.Failed++
-				result.Failed = true
-				if !treeMode && !jsonMode {
-					fmt.Printf("FAIL %d/%d %s - %v\n", i+1, stats.Total, testFile, err)
-					if disasm {
-						// Attempt to compile and dump bytecode for debugging when enabled
-						pas := createTest262Paserati()
-						defer pas.Cleanup()
-						prog := parserFromFile(testFile, testRoot)
-						chunk, cerrs := pas.CompileProgram(prog)
-						if len(cerrs) > 0 {
-							fmt.Printf("[Disasm] compile errors: %d\n", len(cerrs))
-							// Print errors with includes-expanded source for clarity
-							if raw, rerr := os.ReadFile(testFile); rerr == nil {
-								src := string(raw)
-								if hdr := extractFrontmatterHeader(src); hdr != "" {
-									if includeNames := extractIncludes(hdr); len(includeNames) > 0 {
-										var builder strings.Builder
-										for _, inc := range includeNames {
-											incPath := filepath.Join(testRoot, "harness", inc)
-											if incBytes, ierr := os.ReadFile(incPath); ierr == nil {
-												builder.Write(incBytes)
-												builder.WriteString("\n")
-											}
-										}
-										builder.WriteString(src)
-										src = builder.String()
-									}
-								}
-								errorsPkg.DisplayErrors(cerrs, src)
-							}
-							// Do not disassemble or run when compile failed
-							continue
-						}
-						if chunk != nil {
-							fmt.Println(chunk.DisassembleChunk(testFile))
-						}
+			}
+			if !treeMode && !jsonMode {
+				label := map[test262.Status]string{test262.StatusTimeout: "TIMEOUT", test262.StatusInfra: "INFRA", test262.StatusFail: "FAIL"}[result.Status]
+				for _, v := range result.Variants {
+					if v.Status != test262.StatusPass {
+						fmt.Printf("%s %d/%d %s [%s] - %s\n", label, i+1, stats.Total, testFile, v.Variant, v.Diagnostic)
 					}
 				}
-				if jsonMode {
-					result.Error = err.Error()
+				if disasm && result.Status == test262.StatusFail {
+					printDisassembly(testFile, opts)
 				}
 			}
-		} else if passed {
-			stats.Passed++
-			result.Passed = true
-			// Never print passes - only show failures and timeouts
-		} else {
-			stats.Skipped++
-			result.Skipped = true
-			// Don't print skips unless verbose
-			if verbose && !treeMode && !jsonMode {
-				fmt.Printf("SKIP %d/%d %s\n", i+1, stats.Total, testFile)
+			if jsonMode && result.Error == "" {
+				result.Error = string(result.Status)
 			}
 		}
 
@@ -509,330 +498,35 @@ func runTests(testFiles []string, verbose bool, timeout time.Duration, testDir s
 	return stats, fileResults
 }
 
-// runSingleTest runs a single test file with timeout
-func runSingleTest(testFile string, verbose bool, timeout time.Duration, testDir string, testRoot string, disasm bool, strictOnly bool, jsonMode bool) (bool, error) {
-	// Read test file
-	content, err := os.ReadFile(testFile)
+// printDisassembly compiles a failing test (sloppy, with its includes) and
+// prints the bytecode, for -disasm.
+func printDisassembly(testFile string, opts runOptions) {
+	raw, err := os.ReadFile(testFile)
 	if err != nil {
-		return false, fmt.Errorf("failed to read test: %w", err)
+		return
 	}
-
-	// Check if strict-only mode is enabled and this test has noStrict flag
-	if strictOnly {
-		sourceStr := string(content)
-		if hdr := extractFrontmatterHeader(sourceStr); hdr != "" {
-			if flags := extractFlags(hdr); len(flags) > 0 {
-				for _, flag := range flags {
-					if flag == "noStrict" {
-						// Skip this test (return passed=false, err=nil to mark as skipped)
-						return false, nil
-					}
-				}
-			}
+	src := string(raw)
+	meta, _ := parseMeta(src)
+	var b strings.Builder
+	for _, inc := range append([]string{"sta.js", "assert.js"}, meta.Includes...) {
+		if incBytes, err := os.ReadFile(filepath.Join(opts.testRoot, "harness", inc)); err == nil {
+			b.Write(incBytes)
+			b.WriteString("\n")
 		}
 	}
-
-	// Module mode is now default - no need to skip import/export tests
-	// All code runs as modules transparently
-
-	// Create context with timeout to properly cancel goroutines
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel() // Always cancel to free resources
-
-	// Channel to receive test result
-	type testResult struct {
-		passed bool
-		err    error
+	b.WriteString(src)
+	pas := newTest262Paserati(testFile, &printSink{}, opts)
+	defer pas.Cleanup()
+	prog, _ := parser.NewParser(lexer.NewLexer(b.String())).ParseProgram()
+	chunk, cerrs := pas.CompileProgram(prog)
+	if len(cerrs) > 0 {
+		fmt.Printf("[Disasm] compile errors: %d\n", len(cerrs))
+		errorsPkg.DisplayErrors(cerrs, b.String())
+		return
 	}
-	resultChan := make(chan testResult, 1)
-
-	// Create fresh Paserati instance for each test with the test file's directory as base
-	paserati := createTest262PaseratiForTest(testFile)
-
-	// IMPORTANT: This goroutine can leak if paserati.RunString gets stuck in an infinite loop.
-	// Since paserati.RunString doesn't support context cancellation, we cannot interrupt it.
-	// This is a known limitation that needs to be fixed in the VM/parser/checker to support
-	// cancellable execution.
-	go func() {
-		defer func() {
-			// Ensure we don't leak goroutines on panic
-			if r := recover(); r != nil {
-				debug.PrintStack()
-				resultChan <- testResult{passed: false, err: fmt.Errorf("test panicked: %v", r)}
-			}
-			// Clean up to release memory. This is the only place Cleanup runs: the
-			// timeout path below must not call it while this goroutine may still be
-			// using the compiler and heap allocator it nils out.
-			paserati.Cleanup()
-		}()
-
-		// Execute the test with harness includes (if any)
-		sourceWithIncludes := string(content)
-		if hdr := extractFrontmatterHeader(sourceWithIncludes); hdr != "" {
-			var builder strings.Builder
-			includeFiles := []string{}
-
-			// Check for raw flag and other flags first
-			hdr := extractFrontmatterHeader(string(content))
-			isModule := false
-			isRaw := false
-			isOnlyStrict := false
-			if hdr != "" {
-				if flags := extractFlags(hdr); len(flags) > 0 {
-					for _, flag := range flags {
-						if flag == "async" {
-							includeFiles = append(includeFiles, "doneprintHandle.js")
-						} else if flag == "module" {
-							isModule = true
-						} else if flag == "raw" {
-							isRaw = true
-						} else if flag == "onlyStrict" {
-							isOnlyStrict = true
-						}
-					}
-				}
-			}
-
-			// For onlyStrict tests, add "use strict" at the VERY beginning
-			// This must come before any harness includes
-			if isOnlyStrict && !isRaw {
-				builder.WriteString("\"use strict\";\n")
-			}
-
-			// For raw tests, don't include any harness files
-			if !isRaw {
-				// Always include sta.js first (defines Test262Error used by assert.js)
-				includeFiles = append([]string{"sta.js", "assert.js"}, includeFiles...)
-			}
-
-			// Add explicitly requested includes
-			if includeNames := extractIncludes(hdr); len(includeNames) > 0 {
-				includeFiles = append(includeFiles, includeNames...)
-			}
-
-			// Load includes
-			var harnessSource string
-			if len(includeFiles) > 0 {
-				for _, inc := range includeFiles {
-					incPath := filepath.Join(testRoot, "harness", inc)
-					incBytes, err := os.ReadFile(incPath)
-					if err != nil {
-						resultChan <- testResult{passed: false, err: fmt.Errorf("failed to read include %s: %v", inc, err)}
-						return
-					}
-					builder.WriteString("\n// [included] ")
-					builder.WriteString(inc)
-					builder.WriteString("\n")
-					builder.Write(incBytes)
-					builder.WriteString("\n")
-				}
-				harnessSource = builder.String()
-			}
-
-			if isModule {
-				// --- MODULE MODE: Execute harness as script, then test as module ---
-
-				// 1. Execute Harness (Script Mode)
-				if harnessSource != "" {
-					lx := lexer.NewLexer(harnessSource)
-					p := parser.NewParser(lx)
-					prog, parseErrs := p.ParseProgram()
-					if len(parseErrs) > 0 {
-						resultChan <- testResult{passed: false, err: fmt.Errorf("harness parse failed: %v", parseErrs[0])}
-						return
-					}
-
-					// Compile harness (Script mode - no EnableModuleMode yet)
-					chunk, compileErrs := paserati.CompileProgram(prog)
-					if len(compileErrs) > 0 {
-						resultChan <- testResult{passed: false, err: fmt.Errorf("harness compile failed: %v", compileErrs[0])}
-						return
-					}
-
-					paserati.SyncGlobalNamesFromCompiler()
-					_, runtimeErrs := paserati.InterpretChunk(chunk)
-					if len(runtimeErrs) > 0 {
-						resultChan <- testResult{passed: false, err: fmt.Errorf("harness execution failed: %v", runtimeErrs[0])}
-						return
-					}
-				}
-
-				// 2. Execute Test Body (Module Mode)
-				paserati.EnableModuleMode(testFile)
-
-				lx := lexer.NewLexer(string(content))
-				p := parser.NewParser(lx)
-				prog, parseErrs := p.ParseProgram()
-				if len(parseErrs) > 0 {
-					if isNegativeTest(string(content)) {
-						resultChan <- testResult{passed: true, err: nil}
-						return
-					}
-					if !jsonMode {
-						errorsPkg.DisplayErrors(parseErrs, string(content))
-					}
-					resultChan <- testResult{passed: false, err: fmt.Errorf("module parse failed: %v", parseErrs[0])}
-					return
-				}
-
-				chunk, compileErrs := paserati.CompileProgram(prog)
-				if len(compileErrs) > 0 {
-					if isNegativeTest(string(content)) {
-						resultChan <- testResult{passed: true, err: nil}
-						return
-					}
-					if !jsonMode {
-						errorsPkg.DisplayErrors(compileErrs, string(content))
-					}
-					resultChan <- testResult{passed: false, err: fmt.Errorf("module compile failed: %v", compileErrs[0])}
-					return
-				}
-
-				paserati.SyncGlobalNamesFromCompiler()
-				_, runtimeErrs := paserati.InterpretChunk(chunk)
-				if len(runtimeErrs) > 0 {
-					if isNegativeTest(string(content)) {
-						resultChan <- testResult{passed: true, err: nil}
-						return
-					}
-					resultChan <- testResult{passed: false, err: fmt.Errorf("module execution failed: %v", runtimeErrs[0])}
-					return
-				}
-
-				// Success
-				resultChan <- testResult{passed: true, err: nil}
-				return
-
-			} else {
-				// --- SCRIPT MODE: Concatenate and execute as one script ---
-				if isRaw {
-					// Raw tests: use content exactly as-is (no harness, no prefix)
-					sourceWithIncludes = string(content)
-				} else {
-					builder.WriteString("\n// [test body]\n")
-					builder.WriteString(string(content))
-					sourceWithIncludes = builder.String()
-				}
-			}
-		}
-
-		// Parse once, compile once, execute that exact chunk
-		lx := lexer.NewLexer(sourceWithIncludes)
-		p := parser.NewParser(lx)
-		prog, parseErrs := p.ParseProgram()
-		if len(parseErrs) > 0 {
-			// Negative tests that expect SyntaxError are handled as failures unless marked
-			if isNegativeTest(string(content)) {
-				resultChan <- testResult{passed: true, err: nil}
-				return
-			}
-			if !jsonMode {
-				errorsPkg.DisplayErrors(parseErrs, sourceWithIncludes)
-			}
-			resultChan <- testResult{passed: false, err: fmt.Errorf("test failed: %v", parseErrs[0])}
-			return
-		}
-
-		// Check if this is a module test and enable module mode if needed
-		// (Should not happen here if isModule logic above works, but kept for safety/fallback)
-		if hdr := extractFrontmatterHeader(string(content)); hdr != "" {
-			if flags := extractFlags(hdr); len(flags) > 0 {
-				for _, flag := range flags {
-					if flag == "module" {
-						// Enable module mode in checker and compiler for module tests
-						paserati.EnableModuleMode(testFile)
-						break
-					}
-				}
-			}
-		}
-
-		chunk, compileErrs := paserati.CompileProgram(prog)
-		if len(compileErrs) > 0 {
-			if isNegativeTest(string(content)) {
-				resultChan <- testResult{passed: true, err: nil}
-				return
-			}
-			if !jsonMode {
-				errorsPkg.DisplayErrors(compileErrs, sourceWithIncludes)
-			}
-			resultChan <- testResult{passed: false, err: fmt.Errorf("test failed: %v", compileErrs[0])}
-			return
-		}
-
-		// Sync global names from compiler to VM so globalThis property access works
-		paserati.SyncGlobalNamesFromCompiler()
-
-		// Execute compiled chunk
-		_, runtimeErrs := paserati.InterpretChunk(chunk)
-		if len(runtimeErrs) > 0 {
-			if isNegativeTest(string(content)) {
-				resultChan <- testResult{passed: true, err: nil}
-				return
-			}
-			// Optionally show disassembly of the exact chunk that ran
-			if disasm && !jsonMode {
-				fmt.Println(chunk.DisassembleChunk(testFile))
-			}
-			if !jsonMode {
-				errorsPkg.DisplayErrors(runtimeErrs, sourceWithIncludes)
-			}
-			resultChan <- testResult{passed: false, err: fmt.Errorf("test failed: %v", runtimeErrs[0])}
-			return
-		}
-
-		resultChan <- testResult{passed: true, err: nil}
-	}()
-
-	// Wait for result or timeout
-	select {
-	case result := <-resultChan:
-		return result.passed, result.err
-	case <-ctx.Done():
-		// Context timeout - cancel VM execution to stop the goroutine
-		paserati.CancelVM()
-
-		// Give the goroutine time to respond to cancellation and exit gracefully.
-		// If it is still running, leave cleanup to its deferred call: nilling the
-		// Paserati fields under a goroutine that is mid-compile made CompileProgram
-		// dereference a nil heapAlloc and report a compiler panic, and it releases
-		// nothing the goroutine's own stack still references.
-		select {
-		case <-resultChan:
-		case <-time.After(50 * time.Millisecond):
-		}
-
-		return false, fmt.Errorf("test timed out after %v", timeout)
+	if chunk != nil {
+		fmt.Println(chunk.DisassembleChunk(testFile))
 	}
-}
-
-// helper: build a parser.Program from a file
-func parserFromFile(path string, testDir string) *parser.Program {
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		return &parser.Program{}
-	}
-	// Honor includes for better parity
-	content := string(bytes)
-	if hdr := extractFrontmatterHeader(content); hdr != "" {
-		if includeNames := extractIncludes(hdr); len(includeNames) > 0 {
-			var b strings.Builder
-			for _, inc := range includeNames {
-				incPath := filepath.Join(testDir, "harness", inc)
-				if incBytes, e := os.ReadFile(incPath); e == nil {
-					b.WriteString("\n")
-					b.Write(incBytes)
-					b.WriteString("\n")
-				}
-			}
-			b.WriteString(content)
-			content = b.String()
-		}
-	}
-	lx := lexer.NewLexer(content)
-	p := parser.NewParser(lx)
-	prog, _ := p.ParseProgram()
-	return prog
 }
 
 // extractFrontmatterHeader returns the content between the leading /*--- and ---*/ block, or empty string if none
@@ -849,122 +543,22 @@ func extractFrontmatterHeader(content string) string {
 	return content[start+5 : start+5+end]
 }
 
-// extractIncludes parses an includes: [a.js, b.js] list from the header block
-func extractIncludes(header string) []string {
-	// Look for "includes:" and then capture everything inside the next [...] pair
-	idx := strings.Index(header, "includes:")
-	if idx == -1 {
-		return nil
-	}
-	rest := header[idx+len("includes:"):]
-	// find '[' and matching ']'
-	open := strings.Index(rest, "[")
-	if open == -1 {
-		return nil
-	}
-	close := strings.Index(rest[open+1:], "]")
-	if close == -1 {
-		return nil
-	}
-	inside := rest[open+1 : open+1+close]
-	// Split by commas
-	parts := strings.Split(inside, ",")
-	var out []string
-	for _, p := range parts {
-		name := strings.TrimSpace(p)
-		name = strings.TrimPrefix(name, "'")
-		name = strings.TrimSuffix(name, "'")
-		name = strings.TrimPrefix(name, "\"")
-		name = strings.TrimSuffix(name, "\"")
-		if name != "" {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
-func extractFlags(header string) []string {
-	// Look for "flags:" and then capture everything inside the next [...] pair
-	idx := strings.Index(header, "flags:")
-	if idx == -1 {
-		return nil
-	}
-	rest := header[idx+len("flags:"):]
-	// find '[' and matching ']'
-	open := strings.Index(rest, "[")
-	if open == -1 {
-		return nil
-	}
-	close := strings.Index(rest[open+1:], "]")
-	if close == -1 {
-		return nil
-	}
-	inside := rest[open+1 : open+1+close]
-	// Split by commas
-	parts := strings.Split(inside, ",")
-	var out []string
-	for _, p := range parts {
-		flag := strings.TrimSpace(p)
-		flag = strings.TrimPrefix(flag, "'")
-		flag = strings.TrimSuffix(flag, "'")
-		flag = strings.TrimPrefix(flag, "\"")
-		flag = strings.TrimSuffix(flag, "\"")
-		if flag != "" {
-			out = append(out, flag)
-		}
-	}
-	return out
-}
-
-// createTest262Paserati creates a Paserati instance with Test262 builtins
-func createTest262Paserati() *driver.Paserati {
-	// Create a custom Paserati instance with Test262 initializers
-	paserati := driver.NewPaseratiWithInitializers(getTest262EnabledInitializers())
-	// Completely skip type checking for test262 (JavaScript test suite, no type annotations)
-	paserati.SetSkipTypeCheck(true)
-	return paserati
-}
-
-// createTest262PaseratiForTest creates a Paserati instance with the base directory set to the test file's directory
-func createTest262PaseratiForTest(testFile string) *driver.Paserati {
-	// Get the directory of the test file for module resolution
-	testDir := filepath.Dir(testFile)
-
-	// Create a custom Paserati instance with Test262 initializers and the test's base directory
-	paserati := driver.NewPaseratiWithInitializersAndBaseDir(getTest262EnabledInitializers(), testDir)
-	// Completely skip type checking for test262 (JavaScript test suite, no type annotations)
-	paserati.SetSkipTypeCheck(true)
-	return paserati
-}
-
-// getTest262EnabledInitializers returns standard initializers plus Test262 ones
-func getTest262EnabledInitializers() []builtins.BuiltinInitializer {
-	// Get standard initializers
-	initializers := builtins.GetStandardInitializers()
-
-	// Add Test262 initializers
-	test262Initializers := GetTest262Initializers()
-	initializers = append(initializers, test262Initializers...)
-
-	return initializers
-}
-
-// isNegativeTest checks if a test is expected to fail
-func isNegativeTest(content string) bool {
-	// Simple heuristic: look for negative test markers
-	return strings.Contains(content, "negative:") ||
-		strings.Contains(content, "* @negative") ||
-		strings.Contains(content, "SyntaxError") && strings.Contains(content, "expected")
-}
-
 // printSummary prints the final test summary
 func printSummary(stats *test262.Stats) {
-	fmt.Printf("\n=== Test262 Summary ===\n")
+	pct := func(n int) float64 {
+		if stats.Total == 0 {
+			return 0
+		}
+		return float64(n) / float64(stats.Total) * 100
+	}
+	fmt.Printf("\n=== Test262 Summary (policy %d) ===\n", test262.Policy)
 	fmt.Printf("Total:    %d\n", stats.Total)
-	fmt.Printf("Passed:   %d (%.1f%%)\n", stats.Passed, float64(stats.Passed)/float64(stats.Total)*100)
-	fmt.Printf("Failed:   %d (%.1f%%)\n", stats.Failed, float64(stats.Failed)/float64(stats.Total)*100)
-	fmt.Printf("Timeouts: %d (%.1f%%)\n", stats.Timeouts, float64(stats.Timeouts)/float64(stats.Total)*100)
-	fmt.Printf("Skipped:  %d (%.1f%%)\n", stats.Skipped, float64(stats.Skipped)/float64(stats.Total)*100)
+	fmt.Printf("Passed:   %d (%.1f%%)\n", stats.Passed, pct(stats.Passed))
+	fmt.Printf("Failed:   %d (%.1f%%)\n", stats.Failed, pct(stats.Failed))
+	fmt.Printf("Timeouts: %d (%.1f%%)\n", stats.Timeouts, pct(stats.Timeouts))
+	fmt.Printf("Skipped:  %d (%.1f%%)\n", stats.Skipped, pct(stats.Skipped))
+	fmt.Printf("Infra:    %d (%.1f%%)\n", stats.InfraErrors, pct(stats.InfraErrors))
+	fmt.Printf("Variants: %d run, %d passed\n", stats.Variants, stats.VariantsPassed)
 	fmt.Printf("Duration: %v\n", stats.Duration)
 	fmt.Printf("======================\n")
 }
@@ -1051,7 +645,7 @@ func updateNodeStats(root *TreeNode, relPath string, result test262.Result) {
 		current.Stats.Total++
 		if result.Passed {
 			current.Stats.Passed++
-		} else if result.Failed {
+		} else if result.Failed || result.Infra {
 			current.Stats.Failed++
 		} else if result.TimedOut {
 			current.Stats.Timeouts++
@@ -1158,7 +752,7 @@ func printSuiteSummary(results []test262.Result, testDir string, testPath *strin
 		stats.Duration += result.Duration
 		if result.Passed {
 			stats.Passed++
-		} else if result.Failed {
+		} else if result.Failed || result.Infra {
 			stats.Failed++
 		} else if result.TimedOut {
 			stats.Timeouts++
@@ -1399,13 +993,14 @@ func printColoredTreeNode(node *TreeNode, indent string, isLast bool, showDurati
 }
 
 // handleDumpMode writes all test results to a file in +/- format
-func handleDumpMode(results []test262.Result, testDir string, dumpFile string) {
+func handleDumpMode(results []test262.Result, testDir string, dumpFile string, corpus string) {
 	f, err := os.Create(dumpFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating dump file: %v\n", err)
 		os.Exit(1)
 	}
 	defer f.Close()
+	fmt.Fprintln(f, dumpHeader(corpus))
 
 	// Sort results by path for deterministic output
 	sort.Slice(results, func(i, j int) bool {
@@ -1435,12 +1030,18 @@ func handleDumpMode(results []test262.Result, testDir string, dumpFile string) {
 }
 
 // handleDiffMode compares current results against a baseline file
-func handleDiffMode(results []test262.Result, testDir string, diffFile string, dumpFile string) {
+func handleDiffMode(results []test262.Result, testDir string, diffFile string, dumpFile string, corpus string) {
 	// Load baseline
-	baseline, err := loadBaseline(diffFile)
+	baseline, header, err := loadBaseline(diffFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading baseline file: %v\n", err)
 		os.Exit(1)
+	}
+	if want := dumpHeader(corpus); header != want {
+		if header == "" {
+			header = "no header: a policy 1 baseline"
+		}
+		fmt.Fprintf(os.Stderr, "warning: %s was produced under a different policy or corpus (%s; this run is %q), so differences include scoring changes, not only runtime changes\n", diffFile, header, want)
 	}
 
 	// Build current results map
@@ -1512,15 +1113,20 @@ func handleDiffMode(results []test262.Result, testDir string, diffFile string, d
 
 	// Optionally dump current state
 	if dumpFile != "" {
-		handleDumpMode(results, testDir, dumpFile)
+		handleDumpMode(results, testDir, dumpFile, corpus)
 	}
 }
 
-// loadBaseline reads a baseline file and returns a map of path -> passed
-func loadBaseline(filename string) (map[string]bool, error) {
+// loadBaseline reads a baseline file and returns a map of path -> passed,
+// plus its "# paserati-test262 ..." header line ("" for a legacy file).
+func loadBaseline(filename string) (map[string]bool, string, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	header := ""
+	if first, _, _ := strings.Cut(string(data), "\n"); strings.HasPrefix(first, "# paserati-test262 ") {
+		header = strings.TrimSpace(first)
 	}
 
 	baseline := make(map[string]bool)
@@ -1546,5 +1152,5 @@ func loadBaseline(filename string) (map[string]bool, error) {
 		}
 	}
 
-	return baseline, nil
+	return baseline, header, nil
 }

@@ -37,7 +37,7 @@ func (vm *VM) GetAsyncRuntime() runtime.AsyncRuntime {
 func (vm *VM) DrainMicrotasks() {
 	rt := vm.GetAsyncRuntime()
 	iterations := 0
-	for rt.RunUntilIdle() {
+	for !vm.cancelled.Load() && rt.RunUntilIdle() {
 		iterations++
 		if iterations > 1000 {
 			break // Safety: prevent infinite microtask loops
@@ -51,6 +51,11 @@ func (vm *VM) DrainUntilIdle() {
 	rt := vm.GetAsyncRuntime()
 	iterations := 0
 	for {
+		// A cancelled VM (a host timeout) stops draining; otherwise a job
+		// that keeps queueing jobs would run forever.
+		if vm.cancelled.Load() {
+			return
+		}
 		if rt.RunNextTicks() {
 			iterations++
 			continue
