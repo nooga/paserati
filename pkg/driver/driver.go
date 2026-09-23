@@ -548,6 +548,27 @@ func (p *Paserati) IndirectEvalCode(code string) (vm.Value, []error) {
 	return result, nil
 }
 
+// scopePrivateNames lists the private names (without '#') declared by the
+// classes enclosing a direct eval call site.
+func scopePrivateNames(desc *vm.ScopeDescriptor) []string {
+	var names []string
+	add := func(info *vm.PrivateBrandInfoVM) {
+		for n := range info.DeclaredFields {
+			names = append(names, n)
+		}
+		for n := range info.MemberKinds {
+			names = append(names, n)
+		}
+	}
+	for i := range desc.PrivateBrandStack {
+		add(&desc.PrivateBrandStack[i])
+	}
+	if desc.CurrentPrivateBrandInfo != nil {
+		add(desc.CurrentPrivateBrandInfo)
+	}
+	return names
+}
+
 // DirectEvalCode implements vm.EvalDriver interface for direct eval with caller scope access
 // This compiles and executes eval code with access to the caller's local variables, 'this', and homeObject.
 func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm.ScopeDescriptor, callerRegs []vm.Value, callerThis vm.Value, callerHomeObject vm.Value) (vm.Value, []error) {
@@ -561,6 +582,11 @@ func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm
 	// Set strict mode before parsing so legacy octal etc. are rejected during parse
 	if inheritStrict {
 		ps.SetStrictMode(true)
+	}
+	// Private names of the enclosing classes stay in scope for the eval code
+	// (PerformEval: privateIdentifiers of the running PrivateEnvironment).
+	if scopeDesc != nil {
+		ps.SetOuterPrivateNames(scopePrivateNames(scopeDesc))
 	}
 	prog, parseErrs := ps.ParseProgram()
 	if len(parseErrs) > 0 {

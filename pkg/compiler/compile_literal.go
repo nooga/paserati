@@ -1395,7 +1395,10 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	// 1.5. Set method compilation flag if this is a method (has [[HomeObject]])
 	functionCompiler.isMethodCompilation = isMethod
 
-	// 1.5a. Set class field initializer flag if specified via parameter or AST node
+	// 1.5a. Set class field initializer flag if specified via parameter or AST node.
+	// A non-arrow function nested in an initializer has its own 'arguments', so
+	// the flag inherited by newFunctionCompiler does not apply to it.
+	functionCompiler.isClassFieldInitializer = false
 	if len(isFieldInitializer) > 0 && isFieldInitializer[0] {
 		functionCompiler.isClassFieldInitializer = true
 	}

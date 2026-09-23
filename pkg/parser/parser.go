@@ -77,6 +77,16 @@ type Parser struct {
 	// Strict mode tracking
 	strictMode bool // True when parsing strict mode code
 
+	// Private names: one scope per class body being parsed, plus the names
+	// visible to a direct eval from its calling context. See
+	// class_early_errors.go.
+	privateScopes     []*privateNameScope
+	outerPrivateNames map[string]bool
+
+	// prevToken is the token consumed before curToken, for ASI decisions that
+	// need the line of the last token of a construct.
+	prevToken *lexer.Token
+
 	// Arena allocator for AST nodes - reduces GC pressure
 	arena *ASTArena
 }
@@ -463,6 +473,7 @@ func (p *Parser) SetStrictMode(strict bool) {
 
 // nextToken advances the current and peek tokens.
 func (p *Parser) nextToken() {
+	p.prevToken = p.curToken
 	p.curToken = p.peekToken
 	p.peekToken = p.tokenPool.Take(p.l.NextToken())
 	if debugParser && p.curToken != nil {
@@ -4302,6 +4313,11 @@ func (p *Parser) parsePrefixExpression() Expression {
 
 	expression.Right = p.parseExpression(PREFIX) // Parse the right-hand side with PREFIX precedence
 
+	// ECMA-262 13.5.1.1: delete of a private reference is an early error.
+	if expression.Operator == "delete" && isPrivateReference(expression.Right) {
+		p.addError(expression.Token, "Private fields can not be deleted")
+	}
+
 	return expression
 }
 
@@ -6731,6 +6747,12 @@ func (p *Parser) parseMemberExpression(left Expression) Expression {
 	}
 
 	exp.Property = propIdent
+	if propIdent.Token.Type == lexer.PRIVATE_IDENT {
+		if _, isSuper := left.(*SuperExpression); isSuper {
+			p.addError(propIdent.Token, "Unexpected private field")
+		}
+		p.notePrivateReference(propIdent.Token)
+	}
 
 	// We don't call parseExpression here because the right side MUST be an identifier.
 	// The precedence check in the main parseExpression loop handles chaining, e.g., a.b.c
@@ -8751,6 +8773,7 @@ func (p *Parser) parsePropertyName() *Identifier {
 // parsePrivateIdent parses a standalone private identifier for use in 'in' expressions.
 // Syntax: #field in obj - checks if private field exists on object
 func (p *Parser) parsePrivateIdent() Expression {
+	p.notePrivateReference(p.curToken)
 	return &PrivateIdentifier{
 		Token: p.curToken,
 		Value: p.curToken.Literal, // includes the # prefix
@@ -8989,6 +9012,9 @@ func (p *Parser) parseOptionalChainingExpression(left Expression) Expression {
 		}
 
 		exp.Property = propIdent
+		if propIdent.Token.Type == lexer.PRIVATE_IDENT {
+			p.notePrivateReference(propIdent.Token)
+		}
 		// Check for continuation chain (e.g., obj?.a.b.c)
 		exp.Continuation = p.parseOptionalChainContinuation()
 		return exp
@@ -9017,6 +9043,9 @@ func (p *Parser) parseOptionalChainContinuation() Expression {
 			propIdent := p.parsePropertyName()
 			if propIdent == nil {
 				return result
+			}
+			if propIdent.Token.Type == lexer.PRIVATE_IDENT {
+				p.notePrivateReference(propIdent.Token)
 			}
 			result = &MemberExpression{
 				Token:    p.curToken,
