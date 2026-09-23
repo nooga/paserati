@@ -14,15 +14,20 @@ const (
 
 // PropCacheEntry represents a single shape+offset entry in the cache
 type PropCacheEntry struct {
-	shape        *Shape // The shape this cache entry is valid for
-	shapeVersion uint32 // Version guard for the shape
-	propName     string // The property name this entry is valid for (for dynamic access validation)
-	// For proto hits
-	isProto       bool
+	shape    *Shape // The shape this cache entry is valid for
+	propName string // The property name this entry is valid for (for dynamic access validation)
+	// For proto hits: the holder's shape, and the shapes of the prototypes
+	// between the base and the holder (protoDepth-1 of them). Shapes carry
+	// no prototype link, so a hit re-walks the chain and checks each level:
+	// an intermediate that has (or gains) its own propName has a different
+	// shape and must shadow the holder.
 	holderShape   *Shape
+	midShapes     []*Shape
+	offset        int    // The property offset in the object's properties slice
+	shapeVersion  uint32 // Version guard for the shape
 	holderVersion uint32
 	protoDepth    int8
-	offset        int // The property offset in the object's properties slice
+	isProto       bool
 	// Flags for fast-path correctness
 	isAccessor bool // If true, skip direct slot access fast path
 	writable   bool // For write fast path on own data properties
@@ -166,30 +171,46 @@ func (ic *PropInlineCache) updateCache(shape *Shape, propName string, offset int
 	}
 }
 
-// updateCacheProto updates with a proto-holder guarded entry
-func (ic *PropInlineCache) updateCacheProto(baseShape *Shape, propName string, holderShape *Shape, offset int, depth int8, isAccessor bool) {
+// updateCacheProto updates with a proto-holder guarded entry for a property
+// found depth levels up base's prototype chain.
+func (ic *PropInlineCache) updateCacheProto(base *PlainObject, propName string, holderShape *Shape, offset int, depth int8, isAccessor bool) {
+	var mids []*Shape
+	if depth > 1 {
+		mids = make([]*Shape, 0, depth-1)
+		cur := base
+		for i := int8(1); i < depth; i++ {
+			pv := cur.prototype
+			if pv.Type() != TypeObject {
+				return
+			}
+			cur = pv.AsPlainObject()
+			mids = append(mids, cur.shape)
+		}
+	}
+	baseShape := base.shape
+	e := PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, midShapes: mids, protoDepth: depth, offset: offset, isAccessor: isAccessor}
 	switch ic.state {
 	case CacheStateUninitialized:
 		ic.state = CacheStateMonomorphic
-		ic.entries[0] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
+		ic.entries[0] = e
 		ic.entryCount = 1
 	case CacheStateMonomorphic:
 		if ic.entries[0].shape == baseShape && ic.entries[0].propName == propName {
-			ic.entries[0] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
+			ic.entries[0] = e
 			return
 		}
 		ic.state = CacheStatePolymorphic
-		ic.entries[1] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
+		ic.entries[1] = e
 		ic.entryCount = 2
 	case CacheStatePolymorphic:
 		for i := 0; i < ic.entryCount; i++ {
 			if ic.entries[i].shape == baseShape && ic.entries[i].propName == propName {
-				ic.entries[i] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
+				ic.entries[i] = e
 				return
 			}
 		}
 		if ic.entryCount < 4 {
-			ic.entries[ic.entryCount] = PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, protoDepth: depth, offset: offset, isAccessor: isAccessor}
+			ic.entries[ic.entryCount] = e
 			ic.entryCount++
 		} else {
 			ic.state = CacheStateMegamorphic
