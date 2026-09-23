@@ -130,6 +130,37 @@ type Shape struct {
 	// inline caches stay monomorphic. Protected by mu.
 	frozenShape *Shape
 	sealedShape *Shape
+
+	// indexKeys caches whether any string key in fields is an array index
+	// (0 unknown, 1 none, 2 some); see hasIndexKey. Field names never change
+	// for a given Shape, so the answer never goes stale.
+	indexKeys atomic.Uint32
+}
+
+// hasIndexKey reports whether an object of this shape has an own property
+// whose key is an array index ("0", "17", ...).
+func (s *Shape) hasIndexKey() bool {
+	switch s.indexKeys.Load() {
+	case 1:
+		return false
+	case 2:
+		return true
+	}
+	has := false
+	for i := range s.fields {
+		if s.fields[i].keyKind == KeyKindString {
+			if _, ok := tryParseArrayIndex(s.fields[i].name); ok {
+				has = true
+				break
+			}
+		}
+	}
+	if has {
+		s.indexKeys.Store(2)
+	} else {
+		s.indexKeys.Store(1)
+	}
+	return has
 }
 
 // extendFields returns a new fields slice equal to cur.fields with fld appended.

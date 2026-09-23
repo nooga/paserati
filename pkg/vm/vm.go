@@ -2304,7 +2304,7 @@ startExecution:
 			iterReg := code[ip+1]
 			nextReg := code[ip+2]
 			ip += 3
-			registers[destReg] = BooleanValue(resolveFastIterState(registers[iterReg], registers[nextReg]) != nil)
+			registers[destReg] = BooleanValue(vm.fastIterEligible(registers[iterReg], registers[nextReg]))
 
 		case OpFastIterNext:
 			// Fast for-of step: advance the built-in iterator state - no
@@ -8232,8 +8232,16 @@ startExecution:
 						// see paserati#176.
 						if v, ok := arr.sparseOrNamed(idx); ok {
 							registers[destReg] = v
-						} else {
+						} else if vm.arrayMissingIndexIsUndefined(arr) {
 							registers[destReg] = Undefined // Out of bounds or hole -> undefined
+						} else {
+							// An index property on the prototype chain shows through.
+							if ok, status, value := vm.opGetProp(frame, ip, &baseVal, strconv.Itoa(idx), &registers[destReg]); !ok {
+								if status != InterpretOK {
+									return status, value
+								}
+								goto reloadFrame
+							}
 						}
 					} else {
 						registers[destReg] = arr.elements[idx]
@@ -8265,8 +8273,13 @@ startExecution:
 								// the shared bounds check).
 								if v, ok := arr.sparseOrNamed(idx); idx >= 0 && ok {
 									registers[destReg] = v
-								} else {
+								} else if vm.arrayMissingIndexIsUndefined(arr) {
 									registers[destReg] = Undefined
+								} else if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
+									if status != InterpretOK {
+										return status, value
+									}
+									goto reloadFrame
 								}
 							} else {
 								registers[destReg] = arr.elements[idx]
@@ -18889,7 +18902,7 @@ func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 		arrayObj := AsArray(iterableVal)
 		length := arrayObj.length
 		args := make([]Value, length)
-		if !arrayObj.HasAccessors() {
+		if !arrayObj.HasAccessors() && vm.arrayMissingIndexIsUndefined(arrayObj) {
 			// Fast path for the common case: no own accessor anywhere on
 			// the array, so ordinary [[Get]] never needs to call into
 			// script. arrayObj.Get(i) already resolves a Hole to Undefined
@@ -18901,7 +18914,8 @@ func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 			}
 			return args, nil
 		}
-		// Slow path: the array has at least one own accessor. A getter is
+		// Slow path: an own accessor, or an index property on the prototype
+		// chain that a hole reads through to (full [[Get]]). A getter is
 		// arbitrary script: it can shrink (or replace) `elements` out from
 		// under this loop (`a.length = 0`, `a.pop()`, ...) before a later
 		// iteration's read runs. arrayObj.Get(i) re-checks the live slice
@@ -18910,20 +18924,11 @@ func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 		// (consistent with arr.Get/HasIndex's own out-of-bounds behavior)
 		// instead of a Go slice-bounds panic.
 		for i := 0; i < length; i++ {
-			key := strconv.Itoa(i)
-			if getter, _, _, _, ok := arrayObj.GetOwnAccessor(key); ok {
-				if getter.Type() == TypeUndefined {
-					args[i] = Undefined
-					continue
-				}
-				v, err := vm.Call(getter, iterableVal, nil)
-				if err != nil {
-					return nil, err
-				}
-				args[i] = v
-				continue
+			v, err := vm.arrayGetIndex(arrayObj, i)
+			if err != nil {
+				return nil, err
 			}
-			args[i] = arrayObj.Get(i)
+			args[i] = v
 		}
 		return args, nil
 

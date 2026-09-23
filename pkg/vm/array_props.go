@@ -1,5 +1,10 @@
 package vm
 
+import (
+	"strconv"
+	"unsafe"
+)
+
 // HasOwnIndexProperty reports whether a numeric index is a genuine own
 // property of the array - the same three-way check ArrayObject.Get's
 // callers (hasOwnProperty, `in`, Object.keys/values/entries/
@@ -426,4 +431,75 @@ func (a *ArrayObject) DeleteIndex(idx int) bool {
 		a.dropSparse(idx)
 	}
 	return true
+}
+
+// arrayProto is arr's [[Prototype]], defaulting to the realm's
+// Array.prototype for arrays created without an explicit one.
+func (vm *VM) arrayProto(arr *ArrayObject) Value {
+	if arr.prototype.IsObject() {
+		return arr.prototype
+	}
+	return vm.ArrayPrototype
+}
+
+// protoChainIndexFree reports whether nothing on the prototype chain starting
+// at p has an own array-index property, so [[Get]] of an index an array lacks
+// (a hole, or past its elements) is undefined without walking the chain. A
+// non-ordinary link (proxy, exotic or dictionary object) answers false.
+func protoChainIndexFree(p Value) bool {
+	for i := 0; i < 16; i++ {
+		switch p.typ {
+		case TypeNull, TypeUndefined:
+			return true
+		case TypeObject:
+			po := p.AsPlainObject()
+			if po.shape.hasIndexKey() {
+				return false
+			}
+			p = po.prototype
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// arrayMissingIndexIsUndefined reports whether reading an index arr has no
+// element for yields undefined, i.e. its prototype chain holds no index keys.
+func (vm *VM) arrayMissingIndexIsUndefined(arr *ArrayObject) bool {
+	return protoChainIndexFree(vm.arrayProto(arr))
+}
+
+// arrayGetIndex is [[Get]](arr, i): an own accessor's getter, an own element,
+// and otherwise the prototype chain (with arr as the receiver).
+func (vm *VM) arrayGetIndex(arr *ArrayObject, i int) (Value, error) {
+	if arr.HasAccessors() {
+		if v, err, ok := vm.arrayOwnAccessorGet(arr, i); ok {
+			return v, err
+		}
+	}
+	if arr.HasIndex(i) {
+		return arr.Get(i), nil
+	}
+	if v, ok := arr.sparseOrNamed(i); ok {
+		return v, nil
+	}
+	proto := vm.arrayProto(arr)
+	if protoChainIndexFree(proto) {
+		return Undefined, nil
+	}
+	return vm.GetPropertyWithReceiver(proto, strconv.Itoa(i), Value{typ: TypeArray, obj: unsafe.Pointer(arr)})
+}
+
+// arrayOwnAccessorGet calls arr's own accessor at index i, if it has one.
+func (vm *VM) arrayOwnAccessorGet(arr *ArrayObject, i int) (Value, error, bool) {
+	getter, _, _, _, ok := arr.GetOwnAccessor(strconv.Itoa(i))
+	if !ok {
+		return Undefined, nil, false
+	}
+	if getter.Type() == TypeUndefined {
+		return Undefined, nil, true
+	}
+	v, err := vm.Call(getter, Value{typ: TypeArray, obj: unsafe.Pointer(arr)}, nil)
+	return v, err, true
 }
