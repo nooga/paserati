@@ -14144,13 +14144,17 @@ startExecution:
 				vm.currentModulePath = mp
 			}
 			status, moduleErrVal := vm.executeModule(specifier)
-			var moduleCtx *ModuleContext
 			var ctxExists bool
+			var namespaceObj Value
 			if status == InterpretOK {
 				contextKey, _ := vm.moduleContextKey(specifier)
-				moduleCtx, ctxExists = vm.moduleContexts[contextKey]
-				if ctxExists && len(moduleCtx.exports) == 0 {
-					vm.collectModuleExports(specifier, moduleCtx)
+				_, ctxExists = vm.moduleContexts[contextKey]
+				if ctxExists {
+					// The module's one cached [[Namespace]] - the same object
+					// every other import() and `import * as` of it gets
+					// (GetModuleNamespace). This used to build a fresh
+					// DictObject copy on every call (paserati#527).
+					namespaceObj = vm.createModuleNamespace(contextKey)
 				}
 			}
 			vm.currentModulePath = prevImportFrom
@@ -14197,15 +14201,6 @@ startExecution:
 				vm.rejectPromise(promiseObj, NewValueFromPlainObject(errObj))
 				registers[destReg] = promiseVal
 				continue
-			}
-
-			// Create a namespace object containing all exports
-			namespaceObj := NewDictObject(vm.ObjectPrototype)
-			namespaceDict := namespaceObj.AsDictObject()
-
-			// Copy all exports into the namespace object
-			for exportName, exportValue := range moduleCtx.exports {
-				namespaceDict.SetOwn(exportName, exportValue)
 			}
 
 			// Resolve the promise with the namespace object
@@ -21899,6 +21894,16 @@ func (vm *VM) getModuleExport(modulePath string, exportName string) Value {
 		}
 	}
 
+	// A named import is a live binding: read the exporting module's slot as
+	// it is now. moduleCtx.exports is a snapshot taken when exports were
+	// collected, so `import { count }` kept seeing the value count had then
+	// (paserati#527).
+	if slot, ok := vm.exportSlot(modulePath, moduleCtx, exportName, 0); ok {
+		if v, exists := vm.heap.Get(slot); exists && v.typ != TypeUninitialized {
+			return v
+		}
+	}
+
 	if exportValue, found := moduleCtx.exports[exportName]; found {
 		return exportValue
 	}
@@ -21944,9 +21949,11 @@ func (vm *VM) createModuleNamespace(modulePath string) Value {
 
 			vm.collectModuleExports(modulePath, moduleCtx)
 
-			// Invalidate cached namespace if we just collected exports for the first time
-			// This ensures we recreate the namespace with the collected exports
-			if !moduleCtx.namespace.IsUndefined() {
+			// Invalidate the cached namespace only if collecting actually
+			// found exports it lacks. A module with no exports used to get a
+			// brand-new namespace on every import(), breaking identity
+			// (paserati#527).
+			if !moduleCtx.namespace.IsUndefined() && len(moduleCtx.exports) > 0 {
 
 				moduleCtx.namespace = Undefined
 			}
@@ -22005,6 +22012,16 @@ func (vm *VM) createModuleNamespace(modulePath string) Value {
 		// - [[Configurable]]: false
 		for _, exportName := range exportNames {
 			exportValue := moduleCtx.exports[exportName]
+			slot, live := vm.exportSlot(modulePath, moduleCtx, exportName, 0)
+			if live {
+				// The binding's current value, not the collected snapshot.
+				if v, ok := vm.heap.Get(slot); ok {
+					exportValue = v
+				}
+				if exportValue.typ == TypeUninitialized {
+					exportValue = Undefined
+				}
+			}
 
 			namespace.DefineOwnProperty(
 				exportName,
@@ -22013,6 +22030,11 @@ func (vm *VM) createModuleNamespace(modulePath string) Value {
 				&trueVal,  // enumerable: true
 				&falseVal, // configurable: false
 			)
+			if live {
+				// Keep the property in sync with the live binding (see
+				// module_namespace.go).
+				vm.heap.watchSlot(slot, namespaceBinding{ns: namespace, name: exportName})
+			}
 		}
 
 		// Prevent extensions (Namespace objects are non-extensible)

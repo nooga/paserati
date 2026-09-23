@@ -4526,7 +4526,8 @@ func (c *Compiler) GetExportGlobalIndices() map[string]int {
 	return exportIndices
 }
 
-// GetReExports returns named re-exports (`export { x } from "./mod"`).
+// GetReExports returns re-exports: named (`export { x } from "./mod"`) and
+// the names a bare `export * from` flattened in.
 func (c *Compiler) GetReExports() map[string]vm.ModuleReExport {
 	out := make(map[string]vm.ModuleReExport)
 	if !c.IsModuleMode() || c.moduleBindings == nil {
@@ -4538,6 +4539,12 @@ func (c *Compiler) GetReExports() map[string]vm.ModuleReExport {
 				SourceModule: exportRef.SourceModule,
 				SourceName:   exportRef.LocalName,
 			}
+		}
+	}
+	// Names a bare `export * from` flattened in (see StarReExports).
+	for exportName, sourceModule := range c.moduleBindings.StarReExports {
+		if _, named := out[exportName]; !named {
+			out[exportName] = vm.ModuleReExport{SourceModule: sourceModule, SourceName: exportName}
 		}
 	}
 	return out
@@ -5024,6 +5031,10 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 		globalIdx := int(c.GetOrAssignGlobalIndex(key))
 		c.moduleBindings.DefineImport(exportName, sourceModule, exportName, ImportNamedRef, -1)
 		c.moduleBindings.DefineExport(exportName, exportName, vm.Undefined, nil, globalIdx)
+		if c.moduleBindings.StarReExports == nil {
+			c.moduleBindings.StarReExports = make(map[string]string)
+		}
+		c.moduleBindings.StarReExports[exportName] = sourceModule
 
 		tempReg := c.regAlloc.Alloc()
 		c.emitEvalModule(sourceModule, node.Token.Line)

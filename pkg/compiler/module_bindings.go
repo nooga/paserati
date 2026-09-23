@@ -21,6 +21,13 @@ type ModuleBindings struct {
 	// Module dependencies (for circular dependency detection)
 	Dependencies map[string]bool // Set of module paths this module depends on
 
+	// StarReExports maps each name a bare `export * from` flattened into this
+	// module to its source module. The name is still installed as a local
+	// copy (see compileExportAllDeclaration), but the live binding is the
+	// source module's, which the VM follows through GetReExports
+	// (paserati#527).
+	StarReExports map[string]string
+
 	// TopLevelDeclNames names this module's own top-level var/let/const/class
 	// declarations (populated once, at the root compiler, before any hoisted
 	// function body compiles - see Compile's pre-registration step). A
