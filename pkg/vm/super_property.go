@@ -1,7 +1,5 @@
 package vm
 
-import "strconv"
-
 // super property access: super.x, super[key], super.x = v, super[key] = v.
 //
 // A Super Reference's base is the home object's [[Prototype]] and its this
@@ -146,7 +144,7 @@ func superDefineOnArray(arr *ArrayObject, key PropertyKey, v Value) superSetFail
 		arr.SetLength(int(n))
 		return superSetOK
 	}
-	if idx, err := strconv.Atoi(key.name); err == nil && idx >= 0 && idx < maxDenseSuperSetIndex {
+	if idx, ok := tryParseArrayIndex(key.name); ok {
 		if idx >= arr.Length() && !arr.IsExtensible() {
 			return superSetNotExtensible
 		}
@@ -159,12 +157,6 @@ func superDefineOnArray(arr *ArrayObject, key PropertyKey, v Value) superSetFail
 	arr.SetOwn(key.name, v)
 	return superSetOK
 }
-
-// maxDenseSuperSetIndex bounds the element index superDefineOnArray writes
-// densely: ArrayObject.Set fills every slot up to idx, so a key like
-// "4294967294" would allocate billions of holes. Past it the key is stored
-// as a named property, the same trade-off Object.assign makes.
-const maxDenseSuperSetIndex = 1 << 24
 
 // superSetInLoop runs superSet for the super-set opcodes and throws what it
 // reports: a setter's exception, or - in strict code - the TypeError a

@@ -611,7 +611,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 					// arr.GetOwn(propName) check just below would also
 					// work, but returning here keeps this branch
 					// self-contained and mirrors OpGetIndex's identical fix.
-					if v, ok := arr.GetOwn(propName); ok {
+					if v, ok := arr.sparseOrNamed(idx); ok {
 						*dest = v
 						return true, InterpretOK, *dest
 					}

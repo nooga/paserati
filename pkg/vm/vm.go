@@ -8231,7 +8231,7 @@ startExecution:
 						// maxDenseArrayDefineIndex is stored there instead
 						// of growing .elements (ArrayObject.Set is O(idx)) -
 						// see paserati#176.
-						if v, ok := arr.GetOwn(strconv.Itoa(idx)); ok {
+						if v, ok := arr.sparseOrNamed(idx); ok {
 							registers[destReg] = v
 						} else {
 							registers[destReg] = Undefined // Out of bounds or hole -> undefined
@@ -8264,7 +8264,7 @@ startExecution:
 								// stored there, but parseArrayIndex never
 								// returns a negative idx, so this is just
 								// the shared bounds check).
-								if v, ok := arr.GetOwn(key); ok {
+								if v, ok := arr.sparseOrNamed(idx); idx >= 0 && ok {
 									registers[destReg] = v
 								} else {
 									registers[destReg] = Undefined
@@ -8793,7 +8793,7 @@ startExecution:
 								// See paserati#176: fall back to the
 								// named-property store before Undefined.
 								if idx >= 0 {
-									if v, ok := arr.GetOwn(strconv.Itoa(idx)); ok {
+									if v, ok := arr.sparseOrNamed(idx); ok {
 										registers[destReg] = v
 									} else {
 										registers[destReg] = Undefined
@@ -9201,7 +9201,7 @@ startExecution:
 					numVal := AsNumber(indexVal)
 					idx = int(numVal)
 					// ECMAScript: array index must be a non-negative integer where ToString(ToUint32(P)) == P
-					isValidArrayIndex = float64(idx) == numVal && idx >= 0
+					isValidArrayIndex = float64(idx) == numVal && idx >= 0 && idx <= 0xFFFFFFFE
 				} else if indexVal.Type() == TypeString {
 					// String indices that represent valid array indices should be treated as array indices
 					// e.g., arr["0"] should be equivalent to arr[0]
@@ -9346,50 +9346,17 @@ startExecution:
 					}
 				}
 
-				// Handle Array Expansion
+				// Dense elements, or the sparse store for a write far past the
+				// dense end (ArrayObject.Set, paserati#544).
 				if idx < len(arr.elements) {
 					arr.elements[idx] = valueVal
-				} else if idx == len(arr.elements) {
+				} else if idx == len(arr.elements) && arr.sparse == nil {
 					arr.elements = append(arr.elements, valueVal)
-					// Only update length if the new index exceeds current length
 					if len(arr.elements) > arr.length {
 						arr.length = len(arr.elements)
 					}
 				} else {
-					neededCapacity := idx + 1
-
-					// Prevent massive memory allocations from large array indices
-					// JavaScript engines typically use sparse arrays for large indices
-					// For indices beyond our dense array limit, store as a property instead
-					const maxArrayIndex = 16777216 // 2^24 - reasonable limit for dense arrays
-					if neededCapacity > maxArrayIndex {
-						// Store as a property (sparse array behavior)
-						// Convert index to string for property key
-						key := fmt.Sprintf("%d", idx)
-						// Use opSetProp to handle property setting with accessor awareness
-						frame.ip = ip
-						if ok, status, res := vm.opSetProp(ip, &registers[baseReg], key, &valueVal); !ok {
-							if status != InterpretOK && vm.unwinding {
-								return status, res
-							}
-							goto reloadFrame
-						}
-						// Don't update array length for out-of-range indices stored as properties
-					} else {
-						if cap(arr.elements) < neededCapacity {
-							newElements := make([]Value, len(arr.elements), neededCapacity)
-							copy(newElements, arr.elements)
-							arr.elements = newElements
-						}
-						for i := len(arr.elements); i < idx; i++ {
-							arr.elements = append(arr.elements, Hole) // Use Hole marker for sparse array gaps
-						}
-						arr.elements = append(arr.elements, valueVal)
-						// Only update length if the new index exceeds current length (preserve sparse array length)
-						if len(arr.elements) > arr.length {
-							arr.length = len(arr.elements)
-						}
-					}
+					arr.Set(idx, valueVal)
 				}
 
 			case TypeObject, TypeDictObject, TypeFunction, TypeClosure, TypeRegExp, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeAsyncNativeFunction, TypeMap, TypeSet, TypePromise,
@@ -10164,7 +10131,7 @@ startExecution:
 						AsPlainObject(destVal).SetOwn(key, value)
 					}
 				}
-				for _, idx := range arraySparseIndices(arr, true) {
+				for _, idx := range ArraySparseIndices(arr, true) {
 					key := strconv.Itoa(idx)
 					var value Value
 					if getter, _, _, _, isAccessor := arr.GetOwnAccessor(key); isAccessor {
@@ -14789,7 +14756,7 @@ startExecution:
 						}
 					}
 				}
-				for _, idx := range arraySparseIndices(arr, true) {
+				for _, idx := range ArraySparseIndices(arr, true) {
 					keys = append(keys, strconv.Itoa(idx))
 				}
 				// Then the named (non-index) own properties: an exec result's

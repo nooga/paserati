@@ -453,7 +453,7 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 				// see paserati#176: fall back to the named-property store
 				// (where an index beyond maxDenseArraySetIndex/
 				// maxDenseArrayDefineIndex lives) before Undefined.
-				if v, ok := arr.GetOwn(propName); ok {
+				if v, ok := arr.sparseOrNamed(idx); ok {
 					return v, nil
 				}
 				return Undefined, nil
@@ -1627,7 +1627,7 @@ func (vm *VM) SetProperty(obj Value, propName string, value Value) error {
 			arr.SetLength(toLengthIntForSetProperty(value))
 			return nil
 		}
-		if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 {
+		if idx, ok := tryParseArrayIndex(propName); ok {
 			arr.Set(idx, value)
 			return nil
 		}
