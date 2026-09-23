@@ -92,16 +92,17 @@ func reflectGetOwnDataDescriptorGeneric(v vm.Value, propKey string) (value vm.Va
 	case vm.TypeArray:
 		arr := v.AsArray()
 		if propKey == "length" {
-			return vm.Number(float64(arr.Length())), true, true
+			return vm.Number(float64(arr.Length())), arr.IsLengthWritable(), true
 		}
-		if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 {
+		if idx, isIndex := vm.ParseArrayIndex(propKey); isIndex {
 			if arr.HasOwnIndexProperty(propKey, idx) {
-				return arr.Get(idx), true, true
+				w, _, _ := arr.IndexAttributes(propKey)
+				return arr.Get(idx), w, true
 			}
 			return vm.Undefined, false, false
 		}
-		if val, ok := arr.GetOwn(propKey); ok {
-			return val, true, true
+		if val, desc, ok := arr.GetOwnPropertyDescriptor(propKey); ok {
+			return val, desc.Writable, true
 		}
 		return vm.Undefined, false, false
 	default:

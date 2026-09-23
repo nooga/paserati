@@ -1821,6 +1821,16 @@ func arrayDenseIndexValue(vmInstance *vm.VM, a *vm.ArrayObject, receiver vm.Valu
 // properties only, per CopyDataProperties/EnumerableOwnPropertyNames),
 // false for Object.getOwnPropertyNames/Reflect.ownKeys (every own key
 // regardless of enumerability).
+// arrayCanSetNamed reports whether a data write may store named key on a:
+// an existing data property must be writable, a new one needs an
+// extensible array.
+func arrayCanSetNamed(a *vm.ArrayObject, key string) bool {
+	if _, desc, ok := a.GetOwnPropertyDescriptor(key); ok {
+		return desc.Writable
+	}
+	return a.IsExtensible()
+}
+
 func arrayNamedKeys(a *vm.ArrayObject, enumerableOnly bool) []string {
 	var keys []string
 	for _, name := range a.OwnNamedKeys() {
@@ -3636,24 +3646,15 @@ func setObjectAssignTargetProperty(vmInstance *vm.VM, target vm.Value, key strin
 	case vm.TypeArray:
 		arr := target.AsArray()
 		if idx, isIndex := vm.ParseArrayIndex(key); isIndex {
-			// ArrayObject.Set is O(idx): it fills every slot up to idx with
-			// Hole before writing. ParseArrayIndex accepts anything up to
-			// 2^32-2, so an object source key like "4294967294" would try
-			// to allocate/loop over four billion slots and hang - the same
-			// hazard maxDenseArraySetIndex already guards against for
-			// arrayLikeSet (array_generic.go) and maxDenseArrayDefineIndex
-			// guards for ArrayDefineOwnProperty (package vm). Past the
-			// bound, track it as a named/sparse property instead, same
-			// tradeoff those two call sites make.
-			if idx <= maxDenseArraySetIndex {
-				arr.Set(idx, value)
-			} else {
-				arr.DefineOwnProperty(key, value, true, true, true)
-				if idx+1 > arr.Length() {
-					arr.SetLength(idx + 1)
-				}
+			// Set(O, P, V, true) - see arrayLikeSet (paserati#544/#546).
+			if !arr.CanSetIndex(idx) {
+				return vmInstance.NewTypeError("Cannot assign to read only property '" + key + "' of object '[object Array]'")
 			}
+			arr.Set(idx, value)
 		} else {
+			if !arrayCanSetNamed(arr, key) {
+				return vmInstance.NewTypeError("Cannot assign to read only property '" + key + "' of object '[object Array]'")
+			}
 			arr.SetOwn(key, value)
 		}
 	case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
@@ -5338,7 +5339,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 					targetConfigurable = false
 				} else if index, parseErr := strconv.Atoi(propName); parseErr == nil && index >= 0 && arrObj.HasOwnIndexProperty(propName, index) {
 					targetDescFound = true
-					targetConfigurable = !arrObj.IsFrozen()
+					_, _, targetConfigurable = arrObj.IndexAttributes(propName)
 				} else if _, desc, ok := arrObj.GetOwnPropertyDescriptor(propName); ok {
 					_ = desc
 					targetDescFound = true
@@ -5608,7 +5609,6 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			}
 			return vm.Undefined, nil
 		}
-		isFrozen := arrObj.IsFrozen()
 		// An index (or named key) explicitly turned into an accessor via
 		// Object.defineProperty takes priority over the plain-element read
 		// below - see ArrayDefineOwnProperty's doc comment for why elements
@@ -5663,10 +5663,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			// from before the freeze must still be ANDed with !isFrozen here -
 			// freeze can only take capabilities away, never hand back one an
 			// explicit defineProperty granted.
-			writable, enumerable, configurable := !isFrozen, true, !isFrozen
-			if desc, ok := arrObj.GetIndexAttributesOverride(propName); ok {
-				writable, enumerable, configurable = desc.Writable && !isFrozen, desc.Enumerable, desc.Configurable && !isFrozen
-			}
+			writable, enumerable, configurable := arrObj.IndexAttributes(propName)
 			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 			descriptor.SetOwn("value", value)
 			descriptor.SetOwn("writable", vm.BooleanValue(writable))
@@ -6651,7 +6648,7 @@ func objectSealWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	if obj.Type() == vm.TypeArray {
 		arr := obj.AsArray()
 		arr.SetExtensible(false)
-		arr.SealProperties() // Seal named properties but leave elements writable
+		arr.SealProperties() // every property non-configurable; elements stay writable
 		return obj, nil
 	}
 
@@ -6694,7 +6691,7 @@ func objectIsFrozenWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 	// Handle arrays specially
 	if obj.Type() == vm.TypeArray {
 		arr := obj.AsArray()
-		return vm.BooleanValue(!arr.IsExtensible() && arr.IsFrozen()), nil
+		return vm.BooleanValue(arr.TestIntegrity(true)), nil
 	}
 
 	// Check if extensible - frozen objects must not be extensible
@@ -6734,7 +6731,7 @@ func objectIsSealedWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 	// Handle arrays
 	if obj.Type() == vm.TypeArray {
 		arr := obj.AsArray()
-		return vm.BooleanValue(!arr.IsExtensible()), nil
+		return vm.BooleanValue(arr.TestIntegrity(false)), nil
 	}
 
 	// Check if extensible - sealed objects must not be extensible

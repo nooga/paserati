@@ -9346,6 +9346,25 @@ startExecution:
 					}
 				}
 
+				// Frozen/sealed/non-extensible arrays, non-writable elements
+				// and a non-writable length reject the write: silently in
+				// sloppy code, with a TypeError in strict code (paserati#546).
+				if arr.mayRejectIndexWrite() && !arr.CanSetIndex(idx) {
+					if function.Chunk.IsStrict {
+						frame.ip = ip
+						msg := fmt.Sprintf("Cannot assign to read only property '%d' of object '[object Array]'", idx)
+						if !arr.HasIndex(idx) {
+							msg = fmt.Sprintf("Cannot add property %d, object is not extensible", idx)
+						}
+						vm.ThrowTypeError(msg)
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
+							return InterpretRuntimeError, vm.currentException
+						}
+						goto reloadFrame
+					}
+					continue
+				}
+
 				// Dense elements, or the sparse store for a write far past the
 				// dense end (ArrayObject.Set, paserati#544).
 				if idx < len(arr.elements) {
@@ -17435,6 +17454,14 @@ startExecution:
 					} else {
 						success = arr.DeleteOwn(keyStr)
 					}
+				}
+				if !success && function.Chunk.IsStrict {
+					frame.ip = ip
+					vm.ThrowTypeError("Cannot delete property '" + key.ToString() + "' of [object Array]")
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
+						return InterpretRuntimeError, vm.currentException
+					}
+					goto reloadFrame
 				}
 			} else if obj.Type() == TypeString {
 				// String primitives: indices within length are non-configurable

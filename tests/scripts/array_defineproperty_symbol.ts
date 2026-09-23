@@ -202,10 +202,16 @@ const checks: boolean[] = [];
   } catch (e) {
     threw = e instanceof TypeError;
   }
-  const deleteResult = delete arr7[s7];
+  // Strict code: deleting a non-configurable property throws (paserati#546).
+  let deleteThrew = false;
+  try {
+    delete arr7[s7];
+  } catch (e) {
+    deleteThrew = e instanceof TypeError;
+  }
   const stillHasIt = s7 in arr7;
   const stillReadsAsOne = arr7[s7] === 1;
-  checks.push(threw && deleteResult === false && stillHasIt && stillReadsAsOne);
+  checks.push(threw && deleteThrew && stillHasIt && stillReadsAsOne);
 }
 
 // --- 8. A configurable accessor property CAN be deleted, and deleting it
