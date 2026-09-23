@@ -20,7 +20,7 @@ import (
 type BuiltinIterState struct {
 	Kind      IterKind
 	Index     int
-	Exhausted bool // Map/Set kinds: sticky done flag (spec [[Exhausted]])
+	Exhausted bool // sticky done flag: set once Step reports done
 
 	Arr  *ArrayObject     // IterKindArrayValues/Keys/Entries when the source is a real array
 	Args *ArgumentsObject // IterKindArguments
@@ -109,7 +109,8 @@ func resolveFastIterState(iterVal, nextVal Value) *BuiltinIterState {
 // default iteration is exactly Arr.Get(0..len-1) (what BuiltinIterState.Step
 // yields), so OpArrayRawGetInt reproduces it bit-for-bit. Any instance- or
 // prototype-level override of Symbol.iterator fails the identity check and the
-// caller falls back to the generic protocol.
+// caller falls back to the generic protocol, as does an array with an own
+// accessor property, whose getter a raw index read would skip.
 //
 // Symbol.iterator is resolved the way opGetPropSymbol resolves it — own symbol
 // properties, then the per-instance prototype override (`class X extends Array`),
@@ -123,7 +124,9 @@ func (vm *VM) isFastDestructureArray(v Value) bool {
 		return false
 	}
 	arr := v.AsArray()
-	if arr == nil {
+	if arr == nil || arr.HasAccessors() {
+		// Raw index reads skip an own accessor's getter; the protocol
+		// path (StepVM) calls it.
 		return false
 	}
 
@@ -180,9 +183,15 @@ func (st *BuiltinIterState) likeLength() int {
 // in a spec {value, done} object) and the OpFastIterNext opcode (which lands
 // value and done directly in registers).
 func (st *BuiltinIterState) Step() (Value, bool) {
+	// Once an iterator reports done it stays done (spec: the iterated object
+	// is released), even if the source grows afterwards.
+	if st.Exhausted {
+		return Undefined, true
+	}
 	switch st.Kind {
 	case IterKindArrayValues:
 		if st.Index >= st.Arr.Length() {
+			st.Exhausted = true
 			return Undefined, true
 		}
 		v := st.Arr.Get(st.Index)
@@ -191,6 +200,7 @@ func (st *BuiltinIterState) Step() (Value, bool) {
 
 	case IterKindArguments:
 		if st.Index >= st.Args.Length() {
+			st.Exhausted = true
 			return Undefined, true
 		}
 		v := st.Args.Get(st.Index)
@@ -205,6 +215,7 @@ func (st *BuiltinIterState) Step() (Value, bool) {
 			length = st.likeLength()
 		}
 		if st.Index >= length {
+			st.Exhausted = true
 			return Undefined, true
 		}
 		v := Number(float64(st.Index))
@@ -219,6 +230,7 @@ func (st *BuiltinIterState) Step() (Value, bool) {
 			length = st.likeLength()
 		}
 		if st.Index >= length {
+			st.Exhausted = true
 			return Undefined, true
 		}
 		var elem Value = Undefined
@@ -238,6 +250,7 @@ func (st *BuiltinIterState) Step() (Value, bool) {
 
 	case IterKindLikeValues:
 		if st.Index >= st.likeLength() {
+			st.Exhausted = true
 			return Undefined, true
 		}
 		var v Value = Undefined
@@ -251,6 +264,7 @@ func (st *BuiltinIterState) Step() (Value, bool) {
 
 	case IterKindString:
 		if st.Index >= len(st.Str) {
+			st.Exhausted = true
 			return Undefined, true
 		}
 		// ECMAScript string iteration yields code points: combine a valid
@@ -367,6 +381,9 @@ func (a *ArrayObject) getOwnIndexed(vmInstance *VM, i int) (Value, error) {
 // live on every step, so a shrunk array simply reports done sooner instead
 // of a Go slice-bounds panic.
 func (st *BuiltinIterState) StepVM(vmInstance *VM) (Value, bool, error) {
+	if st.Exhausted {
+		return Undefined, true, nil
+	}
 	switch st.Kind {
 	case IterKindArrayValues:
 		if st.Arr == nil || !st.Arr.HasAccessors() {
@@ -374,6 +391,7 @@ func (st *BuiltinIterState) StepVM(vmInstance *VM) (Value, bool, error) {
 			return v, done, nil
 		}
 		if st.Index >= st.Arr.Length() {
+			st.Exhausted = true
 			return Undefined, true, nil
 		}
 		idx := st.Index
@@ -390,6 +408,7 @@ func (st *BuiltinIterState) StepVM(vmInstance *VM) (Value, bool, error) {
 			return v, done, nil
 		}
 		if st.Index >= st.Arr.Length() {
+			st.Exhausted = true
 			return Undefined, true, nil
 		}
 		idx := st.Index
