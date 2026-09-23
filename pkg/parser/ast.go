@@ -628,6 +628,12 @@ type FunctionLiteral struct {
 	RestParameter          *RestParameter   // Optional rest parameter (...args)
 	ReturnTypeAnnotation   Expression       // << RENAMED & TYPE CHANGED
 	Body                   *BlockStatement  // Function body
+
+	// Parenthesized is true for a function expression wrapped in its own
+	// parentheses: `(function f() {});` is an expression statement, not a
+	// function declaration - f is not bound in the enclosing scope and the
+	// statement has a completion value (paserati#542).
+	Parenthesized bool
 }
 
 func (fl *FunctionLiteral) expressionNode()      {} // Functions can be expressions

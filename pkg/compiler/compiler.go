@@ -2144,7 +2144,7 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 		// Check specifically for NAMED function literals used as standalone statements.
 		// Anonymous ones are handled by the case *parser.FunctionLiteral above now.
-		if funcLit, ok := node.Expression.(*parser.FunctionLiteral); ok && funcLit.Name != nil {
+		if funcLit, ok := node.Expression.(*parser.FunctionLiteral); ok && funcLit.Name != nil && !funcLit.Parenthesized {
 			debugPrintf("// DEBUG ExprStmt: Handling NAMED function declaration '%s' as statement.\n", funcLit.Name.Value)
 
 			// Check if this function was already processed during hoisting
