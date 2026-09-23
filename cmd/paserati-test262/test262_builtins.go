@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/builtins"
 	"github.com/nooga/paserati/pkg/types"
@@ -17,8 +18,12 @@ type test262ExceptionError struct{ v vm.Value }
 func (e test262ExceptionError) Error() string               { return "VM exception" }
 func (e test262ExceptionError) GetExceptionValue() vm.Value { return e.v }
 
-// Test262Initializer provides minimal Test262-specific globals
-type Test262Initializer struct{}
+// Test262Initializer provides minimal Test262-specific globals. print()
+// output goes to sink, where the runner reads the async completion
+// protocol ($DONE prints Test262:AsyncTestComplete / AsyncTestFailure).
+type Test262Initializer struct {
+	sink *printSink
+}
 
 func (t *Test262Initializer) Name() string {
 	return "Test262Minimal"
@@ -69,16 +74,13 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 	printFn := vm.NewNativeFunctionWithProps(0, true, "print", func(args []vm.Value) (vm.Value, error) {
 		parts := make([]string, len(args))
 		for i, arg := range args {
-			parts[i] = arg.Inspect()
+			parts[i] = arg.ToString()
 		}
-		if len(parts) > 0 {
-			fmt.Println(parts[0])
-			for i := 1; i < len(parts); i++ {
-				fmt.Print(" ", parts[i])
-			}
-			if len(parts) > 1 {
-				fmt.Println()
-			}
+		line := strings.Join(parts, " ")
+		if t.sink != nil {
+			t.sink.print(line)
+		} else {
+			fmt.Println(line)
 		}
 		return vm.Undefined, nil
 	})
@@ -276,11 +278,4 @@ func (t *Test262Initializer) InitRuntime(ctx *builtins.RuntimeContext) error {
 	// No need to redefine them here.
 
 	return nil
-}
-
-// GetTest262Initializers returns the minimal Test262-specific initializers
-func GetTest262Initializers() []builtins.BuiltinInitializer {
-	return []builtins.BuiltinInitializer{
-		&Test262Initializer{},
-	}
 }

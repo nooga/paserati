@@ -531,6 +531,7 @@ func (vm *VM) handleUncaughtException() {
 		Msg:          errorMsg,
 		FunctionName: funcName,
 		FileName:     fileName,
+		Thrown:       vm.currentException,
 	}
 	vm.errors = append(vm.errors, runtimeErr)
 

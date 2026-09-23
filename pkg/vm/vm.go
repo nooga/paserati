@@ -1754,12 +1754,18 @@ func (vm *VM) run() (status InterpretResult, resultValue Value) {
 					if r2 := recover(); r2 != nil {
 						fmt.Fprintf(os.Stderr, "[VM PANIC] runtimeError itself panicked while reporting the above: %v\n", r2)
 						vm.errors = append(vm.errors, &errors.RuntimeError{
-							Msg: fmt.Sprintf("Internal VM Error: panic during execution: %v", r),
+							Msg:      fmt.Sprintf("Internal VM Error: panic during execution: %v", r),
+							Internal: true,
 						})
 						status = InterpretRuntimeError
 					}
 				}()
 				status = vm.runtimeError("Internal VM Error: panic during execution: %v", r)
+				if n := len(vm.errors); n > 0 {
+					if re, ok := vm.errors[n-1].(*errors.RuntimeError); ok {
+						re.Internal = true
+					}
+				}
 			}()
 			resultValue = Undefined
 		}
@@ -21473,7 +21479,13 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 			jsonSource := moduleRecord.GetSource()
 			jsonValue, parseErr := vm.parseJSONString(jsonSource)
 			if parseErr != nil {
-				return vm.runtimeError("Failed to parse JSON module '%s': %v", modulePath, parseErr), Undefined
+				status := vm.runtimeError("Failed to parse JSON module '%s': %v", modulePath, parseErr)
+				if n := len(vm.errors); n > 0 {
+					if re, ok := vm.errors[n-1].(*errors.RuntimeError); ok {
+						re.Resolution = true
+					}
+				}
+				return status, Undefined
 			}
 
 			// Create module context for JSON module with default export
@@ -21706,6 +21718,7 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 			runtimeErr := &errors.RuntimeError{
 				Position: errors.Position{Line: 1, Column: 1},
 				Msg:      fmt.Sprintf("Uncaught exception: %s", displayStr),
+				Thrown:   moduleException,
 			}
 			errs = []errors.PaseratiError{runtimeErr}
 			vm.errors = append(vm.errors[:0], runtimeErr) // Clear and add only the exception

@@ -120,6 +120,10 @@ type CompileError struct {
 	Msg       string
 	ErrorCode string // Error code (e.g., PS3001)
 	Cause     error  // Underlying cause, if any
+	// Resolution marks a module loading/linking failure (a requested module
+	// that can't be loaded, or an import it doesn't export) rather than an
+	// early error in the code being compiled.
+	Resolution bool
 }
 
 func (e *CompileError) Error() string {
@@ -152,6 +156,14 @@ type RuntimeError struct {
 	Cause        error  // Underlying cause, if any
 	FunctionName string // Name of the function where the error occurred (empty for script level)
 	FileName     string // Name of the source file (if available)
+	// Thrown is the uncaught JavaScript value (a vm.Value) when this error
+	// reports an uncaught exception; nil otherwise.
+	Thrown any
+	// Internal marks a failure of the runtime itself (a recovered Go panic),
+	// as opposed to anything the program did.
+	Internal bool
+	// Resolution marks a module loading failure found while running.
+	Resolution bool
 }
 
 func (e *RuntimeError) Error() string {

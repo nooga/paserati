@@ -3790,6 +3790,12 @@ func (c *Compiler) addError(node parser.Node, msg string) {
 	c.errors = append(c.errors, compileErr)
 }
 
+// resolutionError marks err as a module loading/linking failure.
+func resolutionError(err *errors.CompileError) *errors.CompileError {
+	err.Resolution = true
+	return err
+}
+
 func NewCompileError(node parser.Node, msg string) *errors.CompileError {
 	token := parser.GetTokenFromNode(node)
 	return &errors.CompileError{
@@ -4702,7 +4708,7 @@ func (c *Compiler) compileJSONImport(node *parser.ImportDeclaration, sourceModul
 
 			// Only allow importing "default"
 			if importSpec.Imported.Value != "default" {
-				return BadRegister, NewCompileError(node, fmt.Sprintf("JSON modules only have a 'default' export, cannot import '%s'", importSpec.Imported.Value))
+				return BadRegister, resolutionError(NewCompileError(node, fmt.Sprintf("JSON modules only have a 'default' export, cannot import '%s'", importSpec.Imported.Value)))
 			}
 
 			localName := importSpec.Local.Value
@@ -4937,7 +4943,7 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 	}
 	sourceModuleRecord, err := c.moduleLoader.LoadModule(sourceModule, fromPath)
 	if err != nil {
-		return BadRegister, NewCompileError(node, fmt.Sprintf("Failed to load source module '%s' for re-export: %v", sourceModule, err))
+		return BadRegister, resolutionError(NewCompileError(node, fmt.Sprintf("Failed to load source module '%s' for re-export: %v", sourceModule, err)))
 	}
 
 	// "export * as ns from 'module'" binds a single namespace export; unlike bare
@@ -5081,7 +5087,7 @@ func (c *Compiler) collectExportAllNames(rec vm.ModuleRecord, specifier string, 
 	// `import`/`export * as ns from`, and must propagate here exactly as
 	// those do.
 	if loadErr := rec.GetError(); loadErr != nil {
-		return nil, NewCompileError(node, fmt.Sprintf("Failed to load module '%s' for re-export: %v", specifier, loadErr))
+		return nil, resolutionError(NewCompileError(node, fmt.Sprintf("Failed to load module '%s' for re-export: %v", specifier, loadErr)))
 	}
 
 	if exportValues := rec.GetExportValues(); len(exportValues) > 0 {
