@@ -27,6 +27,9 @@ type Heap struct {
 	// builtinCount tracks how many globals are builtins (indices 0 to builtinCount-1)
 	// Used to preserve builtins during Reset() while clearing user-defined globals
 	builtinCount int
+	// watch lists, per slot, the module namespace properties that mirror it
+	// (see module_namespace.go). nil until a namespace is built.
+	watch [][]namespaceBinding
 }
 
 // fillEmpty sets every slot in s to the empty-slot marker. Called when a values
@@ -129,6 +132,11 @@ func (h *Heap) Set(index int, value Value) error {
 	h.values[index] = value // any non-empty value marks the slot as set
 	if index >= h.size {
 		h.size = index + 1
+	}
+	if h.watch != nil && index < len(h.watch) {
+		for _, b := range h.watch[index] {
+			b.update(value)
+		}
 	}
 	return nil
 }
@@ -350,4 +358,5 @@ func (h *Heap) ClearUserGlobals() {
 	}
 	// Reset size to just the builtins
 	h.size = h.builtinCount
+	h.watch = nil
 }
