@@ -37,6 +37,22 @@ func (vm *VM) throwFromCallError(err error) {
 	vm.throwException(excVal)
 }
 
+// setSideTableProp is ordinary [[Set]] of a string key on a value whose own
+// properties live in its OwnPropertiesTable side table: an accessor on the
+// [[Prototype]] chain wins, otherwise the write goes through setOwnChecked
+// (writability, extensibility, own accessors). The Map/Set/Promise/RegExp
+// cases below open-code the same sequence.
+func (vm *VM) setSideTableProp(objVal *Value, propName string, valueToSet *Value) (bool, InterpretResult, Value) {
+	if handled, ok, status, val := vm.checkCustomProtoChainAccessorSetter(vm.PrototypeOf(*objVal), propName, objVal, valueToSet); handled {
+		return ok, status, val
+	}
+	props := EnsureOwnPropertiesTable(*objVal)
+	if props == nil {
+		return true, InterpretOK, *valueToSet
+	}
+	return vm.setOwnChecked(props, propName, *objVal, *valueToSet)
+}
+
 func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Value) (bool, InterpretResult, Value) {
 	if debugOpSetProp {
 		fmt.Printf("[DEBUG opSetProp] ENTRY: propName=%q, objType=%s, valueType=%s\n", propName, objVal.TypeName(), valueToSet.TypeName())
@@ -943,11 +959,13 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 && idx < ta.GetLength() {
 			ta.SetElement(idx, *valueToSet)
 		} else {
-			// Non-index property - store in own properties
+			// Non-index property - an ordinary own property on the side
+			// table, with the same inherited-accessor precedence and
+			// writability/extensibility checks as the other exotic kinds.
 			if debugOpSetProp {
 				fmt.Printf("[DEBUG opSetProp] Setting own property on TypedArray: %q = %v\n", propName, *valueToSet)
 			}
-			ta.SetOwnProperty(propName, *valueToSet)
+			return vm.setSideTableProp(objVal, propName, valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
 	case TypeRegExp:
@@ -1018,20 +1036,13 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			return vm.setOwnChecked(promiseObj.Properties, propName, *objVal, *valueToSet)
 		}
 		return true, InterpretOK, *valueToSet
-	case TypeArrayBuffer:
-		// ArrayBuffer objects can have user-defined properties (e.g., constructor override)
-		ab := objVal.AsArrayBuffer()
-		if ab != nil {
-			ab.SetOwnProperty(propName, *valueToSet)
-		}
-		return true, InterpretOK, *valueToSet
-	case TypeSharedArrayBuffer:
-		// SharedArrayBuffer objects can have user-defined properties (e.g., constructor override)
-		sab := objVal.AsSharedArrayBuffer()
-		if sab != nil {
-			sab.SetOwnProperty(propName, *valueToSet)
-		}
-		return true, InterpretOK, *valueToSet
+	case TypeArrayBuffer, TypeSharedArrayBuffer, TypeDataView, TypeWeakMap, TypeWeakSet,
+		TypeWeakRef, TypeFinalizationRegistry, TypeGenerator, TypeAsyncGenerator:
+		// Ordinary objects apart from their internal slots: user properties
+		// live on the side table. DataView, the weak collections, WeakRef,
+		// FinalizationRegistry and generators used to fall to the default
+		// branch below and drop the write (paserati#529).
+		return vm.setSideTableProp(objVal, propName, valueToSet)
 	default:
 		// Check if value is a PlainObject (TypeObject)
 		if objVal.Type() != TypeObject {
@@ -1284,7 +1295,9 @@ func (vm *VM) opSetPropSymbol(ip int, objVal *Value, symKey Value, valueToSet *V
 	// though the equivalent string-keyed assignment (opSetProp, called by
 	// OpSetIndex's outer switch) already writes into the exact same table.
 	switch objVal.Type() {
-	case TypeMap, TypeSet, TypePromise, TypeBoundFunction, TypeNativeFunctionWithProps, TypeNativeFunction:
+	case TypeMap, TypeSet, TypePromise, TypeBoundFunction, TypeNativeFunctionWithProps, TypeNativeFunction,
+		TypeTypedArray, TypeArrayBuffer, TypeSharedArrayBuffer, TypeDataView, TypeWeakMap, TypeWeakSet,
+		TypeWeakRef, TypeFinalizationRegistry, TypeGenerator, TypeAsyncGenerator:
 		if props := EnsureOwnPropertiesTable(*objVal); props != nil {
 			return vm.setOwnCheckedByKey(props, NewSymbolKey(symKey), *objVal, *valueToSet)
 		}

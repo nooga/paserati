@@ -436,34 +436,6 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 		}
 		return Undefined, nil
 
-	case TypeGenerator:
-		// Generator objects: consult Generator.prototype chain for regular properties
-		proto := vm.GeneratorPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwn(propName); ok {
-				return v, nil
-			}
-			// Walk the prototype chain
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwn(propName); ok {
-							return v, nil
-						}
-						current = proto2.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		return Undefined, nil
-
 	case TypeArray:
 		// Arrays: check own properties and prototype chain
 		arr := obj.AsArray()
@@ -1047,7 +1019,9 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 		return Undefined, nil
 
 	case TypeArrayBuffer, TypeSharedArrayBuffer, TypeDataView,
-		TypeWeakMap, TypeWeakSet, TypeWeakRef, TypeFinalizationRegistry:
+		TypeWeakMap, TypeWeakSet, TypeWeakRef, TypeFinalizationRegistry, TypeGenerator, TypeAsyncGenerator:
+		// (Generators used to read only the intrinsic Generator.prototype chain,
+		// missing own properties and subclass prototypes - paserati#529.)
 		// These kinds had no case at all and fell through to the primitive
 		// default at the bottom of this switch, which leaves proto unset - so
 		// every native read on them answered undefined, including the

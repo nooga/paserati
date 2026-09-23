@@ -344,7 +344,10 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			return vm.BooleanValue(!desc.IsUndefined()), nil
 		default:
-			return vm.BooleanValue(false), nil
+			// Every other kind (TypedArray, buffers, DataView, the weak kinds,
+			// generators, Map/Set/Promise, ...): HasOwnProperty is
+			// [[GetOwnProperty]] != undefined (paserati#528/#529).
+			return hasOwnViaDescriptor(vmInstance, thisValue, keyVal)
 		}
 	}))
 	// Ensure attributes per spec: writable true, enumerable false, configurable true
@@ -2210,7 +2213,15 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				}
 			}
 		}
-	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps:
+	case vm.TypeTypedArray:
+		// Integer indices first, then enumerable named properties from the
+		// side table. Object.keys(typedArray) used to be [] (paserati#528).
+		for _, k := range typedArrayOwnNames(obj, true) {
+			keysArray.Append(vm.NewString(k))
+		}
+	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps,
+		vm.TypeArrayBuffer, vm.TypeSharedArrayBuffer, vm.TypeDataView, vm.TypeWeakMap, vm.TypeWeakSet,
+		vm.TypeWeakRef, vm.TypeFinalizationRegistry, vm.TypeGenerator, vm.TypeAsyncGenerator:
 		// Same side table as the exotic kinds above (OwnPropertiesTable,
 		// pkg/vm/properties_table.go) - this case was missing entirely, so
 		// Object.keys always came back empty for these six kinds even
@@ -2433,8 +2444,14 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 		// For SharedArrayBuffers, return SharedArrayBuffer.prototype
 		return vmInstance.SharedArrayBufferPrototype, nil
 	default:
-		// For primitive values, return null
-		return vm.Null, nil
+		// Every other kind - WeakSet, WeakRef, FinalizationRegistry, and the
+		// number/boolean/symbol/bigint primitives (ToObject, then
+		// [[GetPrototypeOf]]) - used to answer null here.
+		p := vmInstance.PrototypeOf(obj)
+		if p.Type() == vm.TypeUndefined {
+			return vm.Null, nil
+		}
+		return p, nil
 	}
 }
 
@@ -3269,6 +3286,21 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 			}
 		}
 	default:
+		// Plain side-table kinds (Map, Set, Promise, buffers, DataView, the
+		// weak kinds, generators) have no own properties besides their side
+		// table (paserati#528/#529).
+		if vm.IsPlainSideTableKind(obj) {
+			if props := vm.OwnPropertiesTable(obj); props != nil {
+				for _, k := range props.OwnPropertyNames() {
+					arrObj.Append(vm.NewString(k))
+				}
+			}
+		}
+		if obj.Type() == vm.TypeTypedArray {
+			for _, k := range typedArrayOwnNames(obj, false) {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
 		// Non-object types return empty array
 		return arr, nil
 	}
@@ -3337,7 +3369,11 @@ func objectGetOwnPropertySymbolsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.V
 				arrObj.Append(s)
 			}
 		}
-	} else if obj.Type() == vm.TypeNativeFunction || obj.Type() == vm.TypeNativeFunctionWithProps || obj.Type() == vm.TypeBoundFunction {
+	} else if obj.Type() == vm.TypeNativeFunction || obj.Type() == vm.TypeNativeFunctionWithProps || obj.Type() == vm.TypeBoundFunction ||
+		obj.Type() == vm.TypeRegExp || obj.Type() == vm.TypeTypedArray || vm.IsPlainSideTableKind(obj) {
+		// RegExp, TypedArray and the plain side-table kinds keep their symbol
+		// properties in the same side table (paserati#528/#529).
+		//
 		// These three callable kinds keep their own properties in the same
 		// lazily-allocated *PlainObject side table shape as TypeFunction/
 		// TypeClosure above (OwnPropertiesTable, pkg/vm/properties_table.go),
@@ -3594,7 +3630,25 @@ func reflectOwnKeysImpl(args []vm.Value) (vm.Value, error) {
 // uses, and a false result throws the TypeError the `true` flag demands
 // (a frozen target, a getter-only accessor, ...).
 func setObjectAssignTargetProperty(vmInstance *vm.VM, target vm.Value, key string, value vm.Value) error {
+	if target.Type() == vm.TypeTypedArray || vm.IsPlainSideTableKind(target) {
+		// Same ordinary [[Set]] as a plain object: TypedArray (integer
+		// indices write elements), Map/Set/Promise, buffers, DataView, the
+		// weak kinds, generators. These used to fall out of the switch below
+		// and silently copy nothing (paserati#528).
+		ok, err := reflectSetDispatch(vmInstance, target, key, value, target)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return vmInstance.NewTypeError("Cannot assign to read only property '" + key + "' of object")
+		}
+		return nil
+	}
 	switch target.Type() {
+	case vm.TypeRegExp, vm.TypeArguments:
+		// Special own properties (lastIndex, mapped indices/length/callee)
+		// that vm.SetProperty already models (paserati#528).
+		return vmInstance.SetProperty(target, key, value)
 	case vm.TypeObject, vm.TypeDictObject, vm.TypeProxy:
 		ok, err := reflectSetDispatch(vmInstance, target, key, value, target)
 		if err != nil {
@@ -3664,7 +3718,22 @@ func setObjectAssignTargetProperty(vmInstance *vm.VM, target vm.Value, key strin
 // the same reason.
 func setObjectAssignTargetPropertyByKey(vmInstance *vm.VM, target vm.Value, sym vm.Value, value vm.Value) error {
 	key := vm.NewSymbolKey(sym)
+	if target.Type() == vm.TypeTypedArray || vm.IsPlainSideTableKind(target) {
+		// See setObjectAssignTargetProperty (paserati#528).
+		ok, err := reflectSetDispatchByKey(vmInstance, target, sym, value, target)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return vmInstance.NewTypeError("Cannot assign to read only property '" + sym.ToString() + "' of object")
+		}
+		return nil
+	}
 	switch target.Type() {
+	case vm.TypeArguments:
+		if symObj := sym.AsSymbolObject(); symObj != nil {
+			target.AsArguments().SetSymbolProp(symObj, value)
+		}
 	case vm.TypeObject, vm.TypeProxy:
 		// Full ordinary [[Set]], like the string-key version (paserati#521).
 		ok, err := reflectSetDispatchByKey(vmInstance, target, sym, value, target)
@@ -3681,7 +3750,7 @@ func setObjectAssignTargetPropertyByKey(vmInstance *vm.VM, target vm.Value, sym 
 		if symObj := sym.AsSymbolObject(); symObj != nil {
 			target.AsArray().SetSymbolProp(symObj, value)
 		}
-	case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
+	case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction, vm.TypeRegExp:
 		if props := vm.EnsureOwnPropertiesTable(target); props != nil {
 			if props.HasOwnByKey(key) {
 				props.DefineOwnPropertyByKey(key, value, nil, nil, nil)
@@ -3982,6 +4051,13 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				targetDict := target.AsDictObject()
 				targetDict.SetOwn("length", vm.NumberValue(float64(arrObj.Length())))
 			}
+		} else if source.IsObject() || source.IsCallable() {
+			// Every other object source - Proxy, functions, RegExp,
+			// TypedArray, Map/Set/Promise, buffers, DataView, the weak kinds,
+			// generators, arguments - used to copy nothing (paserati#528).
+			if err := objectAssignFromGenericSource(vmInstance, target, source); err != nil {
+				return vm.Undefined, err
+			}
 		}
 	}
 
@@ -4051,7 +4127,23 @@ func objectHasOwnWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		}
 	}
 
-	return vm.BooleanValue(false), nil
+	// Everything else - functions, Proxies, RegExp, TypedArray, Map/Set,
+	// buffers, DataView, the weak kinds, generators, and an array's named
+	// properties: HasOwnProperty is [[GetOwnProperty]] != undefined. This
+	// used to answer false for all of them (paserati#528/#529).
+	return hasOwnViaDescriptor(vmInstance, obj, keyVal)
+}
+
+// hasOwnViaDescriptor is HasOwnProperty(O, P) spelled as the spec defines it:
+// [[GetOwnProperty]](P) is not undefined. key must already be a property key
+// (string or symbol). It shares Object.getOwnPropertyDescriptor's per-kind
+// coverage, including a Proxy's getOwnPropertyDescriptor trap.
+func hasOwnViaDescriptor(vmInstance *vm.VM, obj vm.Value, key vm.Value) (vm.Value, error) {
+	desc, err := objectGetOwnPropertyDescriptorWithVM(vmInstance, []vm.Value{obj, key})
+	if err != nil {
+		return vm.Undefined, err
+	}
+	return vm.BooleanValue(!desc.IsUndefined()), nil
 }
 
 // objectFromEntriesWithVM implements Object.fromEntries (ECMA-262 20.1.2.7),
@@ -5101,7 +5193,22 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 				return vm.Undefined, definePropertyRejected(vmInstance, propName, propSym, keyIsSymbol)
 			}
 		}
-	} else if obj.Type() == vm.TypeRegExp || obj.Type() == vm.TypeMap || obj.Type() == vm.TypeSet || obj.Type() == vm.TypePromise {
+	} else if obj.Type() == vm.TypeTypedArray && !keyIsSymbol && isCanonicalNumericKey(propName) {
+		// Integer-indexed [[DefineOwnProperty]] (10.4.5.3): only a valid
+		// index, only a data descriptor, and only {configurable, enumerable,
+		// writable: true} - anything else is rejected. The value is written
+		// through the element type's conversion (paserati#528).
+		idx, _ := canonicalNumericIndex(propName)
+		ta := obj.AsTypedArray()
+		if idx < 0 || idx >= ta.GetLength() || hasGetter || hasSetter ||
+			(configurablePtr != nil && !*configurablePtr) || (enumerablePtr != nil && !*enumerablePtr) ||
+			(writablePtr != nil && !*writablePtr) {
+			return vm.Undefined, definePropertyRejected(vmInstance, propName, propSym, keyIsSymbol)
+		}
+		if hasValue {
+			ta.SetElement(idx, value)
+		}
+	} else if obj.Type() == vm.TypeRegExp || obj.Type() == vm.TypeTypedArray || vm.IsPlainSideTableKind(obj) {
 		// These exotic kinds keep their ordinary own properties in the same
 		// lazily-allocated side table Function/Closure use above
 		// (OwnPropertiesTable/EnsureOwnPropertiesTable, pkg/vm/
@@ -6071,7 +6178,25 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 	// assignment (OwnPropertiesTable, pkg/vm/properties_table.go). This case
 	// was missing entirely, so Object.getOwnPropertyDescriptor always
 	// answered undefined for a custom property on one of these three kinds.
-	if obj.Type() == vm.TypeMap || obj.Type() == vm.TypeSet || obj.Type() == vm.TypePromise {
+	// TypedArray: an integer index is an own data property {writable,
+	// enumerable, configurable: true}; any other canonical numeric string is
+	// never an own property; everything else lives on the side table
+	// (paserati#528).
+	if obj.Type() == vm.TypeTypedArray && !keyIsSymbol {
+		if idx, numeric := canonicalNumericIndex(propName); numeric {
+			ta := obj.AsTypedArray()
+			if idx < 0 || idx >= ta.GetLength() {
+				return vm.Undefined, nil
+			}
+			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+			descriptor.SetOwn("value", ta.GetElement(idx))
+			descriptor.SetOwn("writable", vm.BooleanValue(true))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(true))
+			descriptor.SetOwn("configurable", vm.BooleanValue(true))
+			return vm.NewValueFromPlainObject(descriptor), nil
+		}
+	}
+	if vm.IsPlainSideTableKind(obj) || obj.Type() == vm.TypeTypedArray {
 		if props := vm.OwnPropertiesTable(obj); props != nil {
 			if keyIsSymbol {
 				symKey := vm.NewSymbolKey(propSym)
@@ -6290,7 +6415,9 @@ func objectGetOwnPropertyDescriptorsWithVM(vmInstance *vm.VM, args []vm.Value) (
 			stringKeys = append(stringKeys, bf.Properties.OwnPropertyNames()...)
 			symbolKeys = append(symbolKeys, bf.Properties.OwnSymbolKeys()...)
 		}
-	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise:
+	case vm.TypeRegExp, vm.TypeMap, vm.TypeSet, vm.TypePromise,
+		vm.TypeArrayBuffer, vm.TypeSharedArrayBuffer, vm.TypeDataView, vm.TypeWeakMap, vm.TypeWeakSet,
+		vm.TypeWeakRef, vm.TypeFinalizationRegistry, vm.TypeGenerator, vm.TypeAsyncGenerator:
 		// These exotic kinds keep their ordinary own properties in the same
 		// lazily-allocated side table (OwnPropertiesTable, pkg/vm/
 		// properties_table.go) as Function/Closure/NativeFunctionWithProps
@@ -6539,6 +6666,13 @@ func objectFreezeWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		return obj, nil
 	}
 
+	// A TypedArray's elements are always writable (10.4.5.3), so
+	// freezing one that has any fails ("Cannot freeze array
+	// buffer views with elements", as in V8).
+	if obj.Type() == vm.TypeTypedArray && obj.AsTypedArray().GetLength() > 0 {
+		return vm.Undefined, vmInstance.NewTypeError("Cannot freeze array buffer views with elements")
+	}
+
 	// Handle arrays specially
 	if obj.Type() == vm.TypeArray {
 		arr := obj.AsArray()
@@ -6616,6 +6750,12 @@ func objectIsFrozenWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 		return vm.BooleanValue(true), nil
 	}
 
+	// A TypedArray with elements is never frozen: its elements stay
+	// writable (10.4.5.3).
+	if obj.Type() == vm.TypeTypedArray && obj.AsTypedArray().GetLength() > 0 {
+		return vm.BooleanValue(false), nil
+	}
+
 	// Handle arrays specially
 	if obj.Type() == vm.TypeArray {
 		arr := obj.AsArray()
@@ -6679,4 +6819,117 @@ func objectIsSealedWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 // ObjectGetOwnPropertyDescriptorForHarness exposes a minimal descriptor getter for the test262 harness
 func ObjectGetOwnPropertyDescriptorForHarness(obj vm.Value, name vm.Value) (vm.Value, error) {
 	return objectGetOwnPropertyDescriptorWithVM(nil, []vm.Value{obj, name})
+}
+
+// canonicalNumericIndex reports whether key is a CanonicalNumericIndexString
+// (ToString(ToNumber(key)) === key, or "-0") and, if so, its value as an int
+// (-1 when it is not a non-negative integer, so never a valid index).
+func canonicalNumericIndex(key string) (int, bool) {
+	if key == "-0" {
+		return -1, true
+	}
+	f, err := strconv.ParseFloat(key, 64)
+	if err != nil && key != "Infinity" && key != "-Infinity" && key != "NaN" {
+		return 0, false
+	}
+	if key == "NaN" {
+		return -1, true
+	}
+	if vm.NumberValue(f).ToString() != key {
+		return 0, false
+	}
+	if f < 0 || f != float64(int(f)) || f > 9007199254740991 {
+		return -1, true
+	}
+	return int(f), true
+}
+
+// isCanonicalNumericKey reports whether key is a CanonicalNumericIndexString.
+func isCanonicalNumericKey(key string) bool {
+	_, ok := canonicalNumericIndex(key)
+	return ok
+}
+
+// typedArrayOwnNames is a TypedArray's own string keys in
+// [[OwnPropertyKeys]] order: its integer indices, then the named properties
+// on its side table (only enumerable ones when enumerableOnly).
+func typedArrayOwnNames(obj vm.Value, enumerableOnly bool) []string {
+	ta := obj.AsTypedArray()
+	n := ta.GetLength()
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, strconv.Itoa(i))
+	}
+	if props := vm.OwnPropertiesTable(obj); props != nil {
+		for _, k := range props.OwnPropertyNames() {
+			if enumerableOnly {
+				if _, _, en, _, ok := props.GetOwnDescriptor(k); !ok || !en {
+					continue
+				}
+			}
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// objectAssignFromGenericSource is Object.assign's copy step (20.1.2.1 step
+// 3.a) for a source of any object kind without a dedicated fast path: its
+// own keys in [[OwnPropertyKeys]] order (names, then symbols), keeping those
+// whose own descriptor is enumerable, each read with [[Get]] and written to
+// target with [[Set]]. The key and descriptor helpers it uses are Proxy-aware
+// (ownKeys / getOwnPropertyDescriptor traps).
+func objectAssignFromGenericSource(vmInstance *vm.VM, target, source vm.Value) error {
+	var keys []vm.Value
+	if source.Type() == vm.TypeProxy {
+		ks, err := proxyOwnPropertyKeys(vmInstance, source)
+		if err != nil {
+			return err
+		}
+		keys = ks
+	} else {
+		for _, list := range []func(*vm.VM, []vm.Value) (vm.Value, error){objectGetOwnPropertyNamesWithVM, objectGetOwnPropertySymbolsWithVM} {
+			arr, err := list(vmInstance, []vm.Value{source})
+			if err != nil {
+				return err
+			}
+			if arr.Type() == vm.TypeArray {
+				a := arr.AsArray()
+				for i := 0; i < a.Length(); i++ {
+					keys = append(keys, a.Get(i))
+				}
+			}
+		}
+	}
+	for _, key := range keys {
+		desc, err := objectGetOwnPropertyDescriptorWithVM(vmInstance, []vm.Value{source, key})
+		if err != nil {
+			return err
+		}
+		if desc.Type() != vm.TypeObject {
+			continue
+		}
+		if en, _ := desc.AsPlainObject().GetOwn("enumerable"); !en.IsTruthy() {
+			continue
+		}
+		if key.Type() == vm.TypeSymbol {
+			v, err := vmInstance.ReflectGetSymbolPropertyWithReceiver(source, key, source)
+			if err != nil {
+				return err
+			}
+			if err := setObjectAssignTargetPropertyByKey(vmInstance, target, key, v); err != nil {
+				return err
+			}
+			continue
+		}
+		name := key.ToString()
+		v, err := vmInstance.GetPropertyWithReceiver(source, name, source)
+		if err != nil {
+			return err
+		}
+		if err := setObjectAssignTargetProperty(vmInstance, target, name, v); err != nil {
+			return err
+		}
+	}
+	return nil
 }

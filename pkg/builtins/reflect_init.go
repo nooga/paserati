@@ -354,6 +354,9 @@ func reflectReceiverExtensible(receiver vm.Value) bool {
 	case vm.TypeArray:
 		return receiver.AsArray().IsExtensible()
 	}
+	if props := vm.OwnPropertiesTable(receiver); props != nil {
+		return props.IsExtensible()
+	}
 	return true
 }
 
@@ -751,6 +754,29 @@ func reflectSetDispatch(vmInstance *vm.VM, target vm.Value, propKey string, valu
 	switch target.Type() {
 	case vm.TypeObject, vm.TypeDictObject, vm.TypeArray:
 		return reflectOrdinarySet(vmInstance, target, propKey, value, receiver)
+	case vm.TypeTypedArray:
+		// Integer-indexed [[Set]] (10.4.5.5): a canonical numeric key writes
+		// an element (a no-op for an invalid index) when the receiver is the
+		// typed array itself; otherwise ordinary [[Set]] (paserati#528).
+		if idx, numeric := canonicalNumericIndex(propKey); numeric {
+			ta := target.AsTypedArray()
+			valid := idx >= 0 && idx < ta.GetLength()
+			if receiver == target {
+				if valid {
+					ta.SetElement(idx, value)
+				}
+				return true, nil
+			}
+			if !valid {
+				return true, nil
+			}
+		}
+		return reflectOrdinarySet(vmInstance, target, propKey, value, receiver)
+	}
+	// Map, Set, Promise, buffers, DataView, the weak kinds, generators:
+	// ordinary [[Set]] over their side table (paserati#528/#529).
+	if vm.IsPlainSideTableKind(target) {
+		return reflectOrdinarySet(vmInstance, target, propKey, value, receiver)
 	}
 
 	// target is some other kind this function doesn't model a set for.
@@ -790,7 +816,10 @@ func reflectSetDispatchByKey(vmInstance *vm.VM, target vm.Value, sym vm.Value, v
 	}
 
 	switch target.Type() {
-	case vm.TypeObject, vm.TypeDictObject, vm.TypeArray:
+	case vm.TypeObject, vm.TypeDictObject, vm.TypeArray, vm.TypeTypedArray:
+		return reflectOrdinarySetByKey(vmInstance, target, sym, value, receiver)
+	}
+	if vm.IsPlainSideTableKind(target) {
 		return reflectOrdinarySetByKey(vmInstance, target, sym, value, receiver)
 	}
 
@@ -1132,7 +1161,12 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		arr := keysArray.AsArray()
 
 		switch target.Type() {
-		case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
+		case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction,
+			vm.TypeRegExp, vm.TypeTypedArray, vm.TypeMap, vm.TypeSet, vm.TypePromise, vm.TypeArrayBuffer, vm.TypeSharedArrayBuffer,
+			vm.TypeDataView, vm.TypeWeakMap, vm.TypeWeakSet, vm.TypeWeakRef, vm.TypeFinalizationRegistry, vm.TypeGenerator, vm.TypeAsyncGenerator:
+			// Names then symbols. The non-callable kinds on the second and
+			// third lines had no case and always answered [] (paserati#528/#529).
+			//
 			// Fixing the gate above just made these five kinds reach this
 			// switch instead of throwing - but the switch itself had no
 			// case for any of them, so they'd have fallen through to

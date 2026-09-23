@@ -3329,7 +3329,7 @@ startExecution:
 				objType != TypeFunction && objType != TypeNativeFunctionWithProps && objType != TypeProxy &&
 				objType != TypeClosure && objType != TypeNativeFunction && objType != TypeBoundFunction &&
 				objType != TypeSet && objType != TypeMap && objType != TypeArguments && objType != TypePromise &&
-				objType != TypeRegExp && objType != TypeTypedArray {
+				objType != TypeRegExp && objType != TypeTypedArray && !isPlainSideTableKind(objType) {
 				frame.ip = ip
 				vm.ThrowTypeError(fmt.Sprintf("Cannot use 'in' operator to search for '%s' in %s", propVal.ToString(), objVal.Type().String()))
 				if vm.frameCount == 0 || vm.unwindingCrossedNative {
@@ -3347,7 +3347,16 @@ startExecution:
 
 			// Check if property exists in object or its prototype chain
 			var hasProperty bool
-			if propVal.Type() == TypeSymbol {
+			if isPlainSideTableKind(objType) {
+				// Buffers, DataView, the weak kinds, generators: own side-table
+				// property, else the [[Prototype]] chain. These used to throw
+				// "Cannot use 'in' operator" (paserati#529).
+				if propVal.Type() == TypeSymbol {
+					hasProperty = vm.sideTableHasProperty(objVal, NewSymbolKey(propVal))
+				} else {
+					hasProperty = vm.sideTableHasProperty(objVal, keyFromString(propVal.ToString()))
+				}
+			} else if propVal.Type() == TypeSymbol {
 				// Symbol key: walk prototype chain for symbol
 				switch objVal.Type() {
 				case TypeObject:
@@ -3656,15 +3665,10 @@ startExecution:
 						hasProperty = vm.proxyHasSymbolPropertyFallback(proxy.target, propVal)
 					}
 				case TypeTypedArray:
-					// A TypedArray's own properties table is string-keyed
-					// only (TypedArrayObject.properties, typed_array.go), so
-					// a symbol key can only be found on the prototype chain
-					// (e.g. Symbol.iterator in buf, matching
-					// %TypedArray%.prototype[Symbol.iterator]).
-					proto := vm.PrototypeOf(objVal)
-					if proto.Type() == TypeObject {
-						hasProperty = vm.hasPropertyByKeyFromPrototypeChain(proto, NewSymbolKey(propVal))
-					}
+					// Own symbol properties live on the side table now
+					// (paserati#528); then the prototype chain (e.g.
+					// Symbol.iterator in buf).
+					hasProperty = vm.sideTableHasProperty(objVal, NewSymbolKey(propVal))
 				default:
 					hasProperty = false
 				}
@@ -4023,19 +4027,22 @@ startExecution:
 					// ordinary duck-type check (paserati#502).
 					ta := objVal.AsTypedArray()
 					if ta != nil {
-						if ta.HasOwnProperty(propKey) {
-							hasProperty = true
+						// A canonical numeric key is answered by
+						// IsValidIntegerIndex alone - never the prototype
+						// chain (10.4.5.2) - so an index past the end (or on
+						// a detached / shrunk buffer), "-0" or "1.5" is
+						// absent even if a prototype has that key. length,
+						// byteLength, byteOffset, buffer and
+						// BYTES_PER_ELEMENT are found on the prototype like
+						// any other inherited property; they used to be
+						// hardcoded as present even with a replaced
+						// [[Prototype]].
+						if propKey == "-0" {
+							hasProperty = false
+						} else if f, err := strconv.ParseFloat(propKey, 64); err == nil && NumberValue(f).ToString() == propKey {
+							hasProperty = f >= 0 && f == float64(int(f)) && int(f) < ta.GetLength()
 						} else {
-							switch propKey {
-							case "length", "byteLength", "byteOffset", "buffer", "BYTES_PER_ELEMENT":
-								hasProperty = true
-							default:
-								if idx, err := strconv.Atoi(propKey); err == nil && idx >= 0 && idx < ta.GetLength() {
-									hasProperty = true
-								} else {
-									hasProperty = vm.hasPropertyByKeyFromPrototypeChain(vm.PrototypeOf(objVal), keyFromString(propKey))
-								}
-							}
+							hasProperty = vm.sideTableHasProperty(objVal, keyFromString(propKey))
 						}
 					}
 				default:
@@ -8569,39 +8576,6 @@ startExecution:
 					}
 				}
 
-			case TypeGenerator, TypeAsyncGenerator:
-				// Generators and async generators support property access via prototype chain (string or symbol keys)
-				switch indexVal.Type() {
-				case TypeString:
-					key := AsString(indexVal)
-					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
-						if status != InterpretOK {
-							return status, value
-						}
-						goto reloadFrame
-					}
-				case TypeSymbol:
-					if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, indexVal, &registers[destReg]); !ok {
-						if status != InterpretOK {
-							return status, value
-						}
-						goto reloadFrame
-					}
-				case TypeIntegerNumber, TypeFloatNumber:
-					// Convert number to string for property access (JavaScript behavior)
-					key := indexVal.ToString()
-					if ok, status, value := vm.opGetProp(frame, ip, &baseVal, key, &registers[destReg]); !ok {
-						if status != InterpretOK {
-							return status, value
-						}
-						goto reloadFrame
-					}
-				default:
-					frame.ip = ip
-					status := vm.runtimeError("Generator index must be a string or symbol, got '%v'", indexVal.Type())
-					return status, Undefined
-				}
-
 			case TypeFunction, TypeNativeFunction, TypeNativeFunctionWithProps, TypeClosure, TypeBoundFunction, TypeAsyncNativeFunction:
 				// Route computed access on callables through property paths
 				switch indexVal.Type() {
@@ -8689,8 +8663,12 @@ startExecution:
 					}
 				}
 
-			case TypeSharedArrayBuffer, TypeArrayBuffer:
-				// SharedArrayBuffer and ArrayBuffer support property access via prototype chain
+			case TypeSharedArrayBuffer, TypeArrayBuffer, TypeDataView, TypeWeakMap, TypeWeakSet, TypeWeakRef,
+				TypeFinalizationRegistry, TypeGenerator, TypeAsyncGenerator:
+				// Ordinary objects apart from their internal slots: own
+				// side-table properties, then the prototype chain. DataView and
+				// the weak kinds used to fall to the default branch's hard
+				// "Cannot index" runtime error (paserati#529).
 				switch indexVal.Type() {
 				case TypeString:
 					key := AsString(indexVal)
@@ -9463,7 +9441,12 @@ startExecution:
 					}
 				}
 
-			case TypeObject, TypeDictObject, TypeFunction, TypeClosure, TypeRegExp, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeAsyncNativeFunction, TypeMap, TypeSet, TypePromise: // Functions, closures, RegExps, native functions, and Map/Set/Promise can have properties
+			case TypeObject, TypeDictObject, TypeFunction, TypeClosure, TypeRegExp, TypeNativeFunction, TypeNativeFunctionWithProps, TypeBoundFunction, TypeAsyncNativeFunction, TypeMap, TypeSet, TypePromise,
+				TypeArrayBuffer, TypeSharedArrayBuffer, TypeDataView, TypeWeakMap, TypeWeakSet, TypeWeakRef, TypeFinalizationRegistry, TypeGenerator, TypeAsyncGenerator:
+				// Functions, closures, RegExps, native functions, Map/Set/Promise and the
+				// other side-table kinds can have properties. The buffer, DataView, weak
+				// and generator kinds used to hit the default branch's hard
+				// "Cannot set index" runtime error (paserati#529).
 				var key string
 				switch indexVal.Type() {
 				case TypeString:
@@ -9972,6 +9955,23 @@ startExecution:
 							destVal.AsPlainObject().SetOwn(keyStr, value)
 						}
 					}
+				}
+				continue
+			}
+
+			// Exotic kinds whose ordinary own properties live on a side
+			// table (TypedArray, Map/Set/Promise, buffers, DataView, the weak
+			// kinds, generators, callables, RegExp) used to be skipped here
+			// and spread nothing (paserati#528/#529).
+			if st := sourceVal.Type(); st != TypeObject && st != TypeDictObject && st != TypeArray && st != TypeArguments &&
+				(st == TypeTypedArray || ownPropertiesSlot(sourceVal) != nil) {
+				frame.ip = ip
+				if err := vm.copySideTableDataProperties(destVal, sourceVal); err != nil {
+					vm.throwFromCallError(err)
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
+						return InterpretRuntimeError, vm.currentException
+					}
+					goto reloadFrame
 				}
 				continue
 			}
@@ -14992,7 +14992,21 @@ startExecution:
 						cur = pv.AsPlainObject()
 					}
 				}
-			case TypeMap, TypeSet, TypePromise, TypeNativeFunction, TypeNativeFunctionWithProps:
+			case TypeTypedArray:
+				// Integer indices, then enumerable side-table keys. for-in over
+				// a typed array used to yield nothing (paserati#528).
+				ta := objValue.AsTypedArray()
+				for i := 0; i < ta.GetLength(); i++ {
+					keys = append(keys, strconv.Itoa(i))
+				}
+				if props := OwnPropertiesTable(objValue); props != nil {
+					keys = append(keys, props.OwnKeys()...)
+				}
+			case TypeMap, TypeSet, TypePromise, TypeNativeFunction, TypeNativeFunctionWithProps,
+				TypeArrayBuffer, TypeSharedArrayBuffer, TypeDataView, TypeWeakMap, TypeWeakSet,
+				TypeWeakRef, TypeFinalizationRegistry, TypeGenerator, TypeAsyncGenerator:
+				// (The buffer, DataView, weak and generator kinds were missing
+				// from this list - paserati#529.)
 				// Same side table as TypeRegExp just above (OwnPropertiesTable,
 				// pkg/vm/properties_table.go) - this case was missing
 				// entirely, so `for (k in map)`/`for (k in set)`/
@@ -16926,6 +16940,19 @@ startExecution:
 					d := obj.AsDictObject()
 					// DictObject properties are always configurable, no strict mode check needed
 					success = d.DeleteOwn(propName)
+				} else if isPlainSideTableKind(obj.Type()) || obj.Type() == TypeTypedArray {
+					// Side-table kinds used to fall through this chain - delete
+					// answered false and left the property in place
+					// (paserati#528/#529).
+					success = deleteSideTableProp(obj, keyFromString(propName))
+					if !success && function.Chunk.IsStrict {
+						frame.ip = ip
+						vm.ThrowTypeError("Cannot delete property '" + propName + "' of " + obj.TypeName())
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
+							return InterpretRuntimeError, vm.currentException
+						}
+						goto reloadFrame
+					}
 				}
 			} else if obj.Type() == TypeFunction {
 				// Delete from function's properties
@@ -17541,6 +17568,23 @@ startExecution:
 					success = bf.Properties.DeleteOwn(propName)
 				} else {
 					success = true
+				}
+			} else if isPlainSideTableKind(obj.Type()) || obj.Type() == TypeTypedArray {
+				// See OpDeleteProp (paserati#528/#529).
+				var pk PropertyKey
+				if key.Type() == TypeSymbol {
+					pk = NewSymbolKey(key)
+				} else {
+					pk = keyFromString(key.ToString())
+				}
+				success = deleteSideTableProp(obj, pk)
+				if !success && function.Chunk.IsStrict {
+					frame.ip = ip
+					vm.ThrowTypeError("Cannot delete property '" + pk.debugName() + "' of " + obj.TypeName())
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
+						return InterpretRuntimeError, vm.currentException
+					}
+					goto reloadFrame
 				}
 			} else {
 				// For other primitives (number, boolean), properties don't exist

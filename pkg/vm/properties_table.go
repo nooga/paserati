@@ -1,5 +1,7 @@
 package vm
 
+import "strconv"
+
 // Functions, RegExps, Maps and Sets are ordinary objects to user code, but the
 // VM gives each of them its own Go representation rather than a PlainObject.
 // Their *ordinary* own properties therefore live in a side table: a PlainObject
@@ -101,6 +103,51 @@ func ownPropertiesSlot(v Value) **PlainObject {
 	case TypePromise:
 		if p := v.AsPromise(); p != nil {
 			return &p.Properties
+		}
+	// The kinds below had no own-property storage reachable from here -
+	// TypedArray/ArrayBuffer/SharedArrayBuffer kept a private string map
+	// that nothing generic could see, the rest nothing at all - so
+	// Object.assign, Reflect.set, Object.keys and friends skipped them and
+	// `dv.x = 1` was dropped (paserati#528, #529).
+	case TypeTypedArray:
+		if ta := v.AsTypedArray(); ta != nil {
+			return &ta.Properties
+		}
+	case TypeArrayBuffer:
+		if ab := v.AsArrayBuffer(); ab != nil {
+			return &ab.Properties
+		}
+	case TypeSharedArrayBuffer:
+		if sab := v.AsSharedArrayBuffer(); sab != nil {
+			return &sab.Properties
+		}
+	case TypeDataView:
+		if dv := v.AsDataView(); dv != nil {
+			return &dv.Properties
+		}
+	case TypeWeakMap:
+		if wm := v.AsWeakMap(); wm != nil {
+			return &wm.Properties
+		}
+	case TypeWeakSet:
+		if ws := v.AsWeakSet(); ws != nil {
+			return &ws.Properties
+		}
+	case TypeWeakRef:
+		if wr := v.AsWeakRef(); wr != nil {
+			return &wr.Properties
+		}
+	case TypeFinalizationRegistry:
+		if fr := v.AsFinalizationRegistry(); fr != nil {
+			return &fr.Properties
+		}
+	case TypeGenerator:
+		if g := v.AsGenerator(); g != nil {
+			return &g.Properties
+		}
+	case TypeAsyncGenerator:
+		if g := v.AsAsyncGenerator(); g != nil {
+			return &g.Properties
 		}
 	}
 	return nil
@@ -361,4 +408,103 @@ func MaterializeIntrinsicOwnProperties(vmInst *VM, v Value) {
 			props.DefineOwnProperty("prototype", prototype, &yes, &no, &no)
 		}
 	}
+}
+
+// isPlainSideTableKind reports the exotic kinds that are ordinary objects
+// apart from their internal slots and have no own properties besides their
+// side table: no indexed elements, no special own names. The generic
+// fallbacks (in, hasOwn, own keys, delete, ...) use it to decide when the
+// side table alone answers an own-property question.
+func isPlainSideTableKind(t ValueType) bool {
+	switch t {
+	case TypeArrayBuffer, TypeSharedArrayBuffer, TypeDataView, TypeWeakMap, TypeWeakSet,
+		TypeWeakRef, TypeFinalizationRegistry, TypeGenerator, TypeAsyncGenerator,
+		TypeMap, TypeSet, TypePromise:
+		return true
+	}
+	return false
+}
+
+// IsPlainSideTableKind is isPlainSideTableKind for pkg/builtins.
+func IsPlainSideTableKind(v Value) bool { return isPlainSideTableKind(v.Type()) }
+
+// sideTableHasProperty is [[HasProperty]] for a plain side-table kind: an own
+// property on its side table, else anywhere on its [[Prototype]] chain.
+func (vm *VM) sideTableHasProperty(v Value, key PropertyKey) bool {
+	if props := OwnPropertiesTable(v); props != nil && props.HasOwnByKey(key) {
+		return true
+	}
+	return vm.hasPropertyByKeyFromPrototypeChain(vm.PrototypeOf(v), key)
+}
+
+// SideTableHasProperty is sideTableHasProperty for pkg/builtins (Reflect.has).
+func (vm *VM) SideTableHasProperty(v Value, key PropertyKey) bool {
+	return vm.sideTableHasProperty(v, key)
+}
+
+// copySideTableDataProperties is CopyDataProperties (7.3.26) from a source
+// whose own properties are a TypedArray's integer indices plus whatever is
+// on its side table, into a plain or dict object dest: own enumerable keys in
+// [[OwnPropertyKeys]] order (indices, strings, symbols), each read with
+// [[Get]] - an own getter runs with source as `this`.
+func (vm *VM) copySideTableDataProperties(dest Value, source Value) error {
+	put := func(key PropertyKey, v Value) {
+		if dest.Type() == TypeDictObject {
+			if key.isString() {
+				dest.AsDictObject().SetOwn(key.name, v)
+			}
+			return
+		}
+		w, e, c := true, true, true
+		dest.AsPlainObject().DefineOwnPropertyByKey(key, v, &w, &e, &c)
+	}
+	if source.Type() == TypeTypedArray {
+		ta := source.AsTypedArray()
+		for i := 0; i < ta.GetLength(); i++ {
+			put(keyFromString(strconv.Itoa(i)), ta.GetElement(i))
+		}
+	}
+	props := OwnPropertiesTable(source)
+	if props == nil {
+		return nil
+	}
+	var keys []PropertyKey
+	for _, name := range props.OwnKeys() {
+		keys = append(keys, keyFromString(name))
+	}
+	for _, sym := range props.OwnSymbolKeys() {
+		keys = append(keys, NewSymbolKey(sym))
+	}
+	for _, key := range keys {
+		_, _, enumerable, _, exists := props.GetOwnDescriptorByKey(key)
+		if !exists || !enumerable {
+			continue
+		}
+		v, _, err := vm.getOwnFromTableByKey(props, key, source)
+		if err != nil {
+			return err
+		}
+		put(key, v)
+	}
+	return nil
+}
+
+// deleteSideTableProp is [[Delete]] for a plain side-table kind or a
+// TypedArray: a TypedArray's valid integer index is never deletable (and an
+// invalid canonical numeric key is never present); anything else is removed
+// from the side table if present and configurable.
+func deleteSideTableProp(obj Value, key PropertyKey) bool {
+	if obj.Type() == TypeTypedArray && key.isString() {
+		if f, err := strconv.ParseFloat(key.name, 64); err == nil && NumberValue(f).ToString() == key.name {
+			if f >= 0 && f == float64(int(f)) && int(f) < obj.AsTypedArray().GetLength() {
+				return false
+			}
+			return true
+		}
+	}
+	props := OwnPropertiesTable(obj)
+	if props == nil {
+		return true
+	}
+	return props.DeleteOwnByKey(key)
 }

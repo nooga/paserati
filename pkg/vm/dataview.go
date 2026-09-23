@@ -13,9 +13,10 @@ type DataViewObject struct {
 	Object
 	buffer      BufferData // Can be ArrayBuffer or SharedArrayBuffer
 	byteOffset  int
-	byteLength  int   // fixed byte length; ignored (recomputed live) when trackLength is true
-	trackLength bool  // auto length-tracking view: constructed over a resizable/growable buffer with no explicit byteLength
-	prototype   Value // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	byteLength  int          // fixed byte length; ignored (recomputed live) when trackLength is true
+	trackLength bool         // auto length-tracking view: constructed over a resizable/growable buffer with no explicit byteLength
+	prototype   Value        // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	Properties  *PlainObject // Own properties side table, see OwnPropertiesTable (paserati#529)
 }
 
 func (dv *DataViewObject) GetPrototype() Value  { return dv.prototype }
