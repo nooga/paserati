@@ -19474,6 +19474,10 @@ func stringNeedsUTF16Comparison(s string) bool {
 	return false
 }
 
+// CompareStringsUTF16 orders two strings by UTF-16 code units (IsLessThan on
+// strings): -1, 0 or 1.
+func CompareStringsUTF16(a, b string) int { return compareStringsUTF16(a, b) }
+
 // compareStringsUTF16 compares two strings using UTF-16 code unit ordering
 // Returns -1 if a < b, 0 if a == b, 1 if a > b
 func compareStringsUTF16(a, b string) int {

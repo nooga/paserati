@@ -469,15 +469,21 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err := checkArrayCreateLength(vmInstance, count); err != nil {
 			return vm.Undefined, err
 		}
-		elements := make([]vm.Value, count)
+		// Only present indices are copied (HasProperty), so a hole stays a
+		// hole (paserati#547); the result's length is still count.
+		result := vm.NewArray()
+		resultArr := result.AsArray()
 		for i := start; i < end; i++ {
-			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
+			v, exists, err := arrayLikeGet(vmInstance, thisVal, i)
 			if err != nil {
 				return vm.Undefined, err
 			}
-			elements[i-start] = v
+			if exists {
+				resultArr.Set(i-start, v)
+			}
 		}
-		return vm.NewArrayWithArgs(elements), nil
+		resultArr.SetLength(count)
+		return result, nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("splice", vm.NewNativeFunction(2, true, "splice", func(args []vm.Value) (vm.Value, error) {
@@ -790,6 +796,13 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	arrayProto.SetOwnNonEnumerable("sort", vm.NewNativeFunction(1, false, "sort", func(args []vm.Value) (vm.Value, error) {
+		comparefn := vm.Undefined
+		if len(args) > 0 {
+			comparefn = args[0]
+		}
+		if !comparefn.IsUndefined() && !comparefn.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("The comparison function must be either a function or undefined")
+		}
 		thisVal := vmInstance.GetThis()
 		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
 			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
@@ -798,54 +811,34 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if length <= 1 {
-			return thisVal, nil
-		}
-		// Extract elements to slice
-		elements := make([]vm.Value, length)
-		for i := 0; i < length; i++ {
-			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
+		// SortIndexedProperties(obj, len, SortCompare, skip-holes): holes
+		// are left out of the sort and end up deleted past the sorted
+		// values (paserati#547).
+		var items []vm.Value
+		for k := 0; k < length; k++ {
+			v, exists, err := arrayLikeGet(vmInstance, thisVal, k)
 			if err != nil {
 				return vm.Undefined, err
 			}
-			elements[i] = v
-		}
-
-		// Get comparator function if provided
-		var compareFn vm.Value
-		if len(args) > 0 && args[0].IsCallable() {
-			compareFn = args[0]
-		}
-
-		// Simple bubble sort (not efficient but correct)
-		for i := 0; i < length-1; i++ {
-			for j := 0; j < length-i-1; j++ {
-				var shouldSwap bool
-				if compareFn.IsCallable() {
-					// Use the comparator function
-					result, err := vmInstance.CallArgs2(compareFn, vm.Undefined, elements[j], elements[j+1])
-					if err != nil {
-						return vm.Undefined, err
-					}
-					// Per ECMAScript: compareFn(a, b) > 0 means a should come after b
-					shouldSwap = result.ToFloat() > 0
-				} else {
-					// Default: string comparison per ECMAScript spec
-					shouldSwap = elements[j].ToString() > elements[j+1].ToString()
-				}
-				if shouldSwap {
-					elements[j], elements[j+1] = elements[j+1], elements[j]
-				}
+			if exists {
+				items = append(items, v)
 			}
 		}
-		// Set sorted elements back
-		if thisVal.Type() == vm.TypeArray {
-			thisVal.AsArray().SetElements(elements)
-		} else {
-			for i, v := range elements {
-				if err := arrayLikeSet(vmInstance, thisVal, i, v); err != nil {
-					return vm.Undefined, err
-				}
+		sorted, err := sortValues(vmInstance, items, comparefn)
+		if err != nil {
+			if err == ErrVMUnwinding {
+				return vm.Undefined, nil
+			}
+			return vm.Undefined, err
+		}
+		for j, v := range sorted {
+			if err := arrayLikeSet(vmInstance, thisVal, j, v); err != nil {
+				return vm.Undefined, err
+			}
+		}
+		for j := len(sorted); j < length; j++ {
+			if err := arrayLikeDelete(vmInstance, thisVal, j); err != nil {
+				return vm.Undefined, err
 			}
 		}
 		return thisVal, nil
@@ -1993,56 +1986,23 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 
-		// Create a copy
-		result := vm.NewArray()
-		resultArr := result.AsArray()
-
+		// SortIndexedProperties(O, len, SortCompare, read-through-holes).
+		items := make([]vm.Value, 0, length)
 		for i := 0; i < length; i++ {
 			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
 			if err != nil {
 				return vm.Undefined, err
 			}
-			resultArr.Append(v)
+			items = append(items, v)
 		}
-
-		// Sort the copy using the same logic as sort
-		n := resultArr.Length()
-		if n <= 1 {
-			return result, nil
-		}
-
-		// Simple insertion sort for stability
-		for i := 1; i < n; i++ {
-			key := resultArr.Get(i)
-			j := i - 1
-			for j >= 0 {
-				cmp := 0
-				if comparator.IsCallable() {
-					res, err := vmInstance.CallArgs2(comparator, vm.Undefined, resultArr.Get(j), key)
-					if err != nil {
-						return vm.Undefined, err
-					}
-					cmp = int(res.ToFloat())
-				} else {
-					// Default string comparison
-					a := resultArr.Get(j).ToString()
-					b := key.ToString()
-					if a > b {
-						cmp = 1
-					} else if a < b {
-						cmp = -1
-					}
-				}
-				if cmp <= 0 {
-					break
-				}
-				resultArr.Set(j+1, resultArr.Get(j))
-				j--
+		sorted, err := sortValues(vmInstance, items, comparator)
+		if err != nil {
+			if err == ErrVMUnwinding {
+				return vm.Undefined, nil
 			}
-			resultArr.Set(j+1, key)
+			return vm.Undefined, err
 		}
-
-		return result, nil
+		return vm.NewArrayWithArgs(sorted), nil
 	}))
 
 	// Array.prototype.toSpliced - non-mutating splice
