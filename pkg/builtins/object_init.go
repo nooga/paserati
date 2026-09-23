@@ -309,20 +309,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			return vm.BooleanValue(false), nil
 		case vm.TypeArguments:
-			argsObj := thisValue.AsArguments()
-			// Arguments objects have own properties: length, callee, and numeric indices
-			if propName == "length" {
-				return vm.BooleanValue(true), nil
-			}
-			if propName == "callee" {
-				return vm.BooleanValue(true), nil
-			}
-			// Check numeric indices
-			if index, err := strconv.Atoi(propName); err == nil {
-				return vm.BooleanValue(index >= 0 && index < argsObj.Length()), nil
-			}
-			// Check overflow named properties
-			return vm.BooleanValue(argsObj.HasNamedProp(propName)), nil
+			// One resolution for every key - indices, length, callee, named -
+			// honoring deletes and redefinitions (paserati#535).
+			return vm.BooleanValue(thisValue.AsArguments().ArgumentsOwnProperty(propName).Exists), nil
 		case vm.TypeRegExp:
 			// RegExp objects have intrinsic own property: lastIndex
 			// (source, flags, global, etc. are on prototype in modern JS)
@@ -393,10 +382,11 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 					return vm.BooleanValue(en), nil
 				}
 			case vm.TypeArguments:
-				// Symbol.iterator is the only own symbol property arguments
-				// objects have, and it's non-enumerable per spec.
-				if thisValue.AsArguments().HasOwnSymbolProp(keyVal.AsSymbolObject()) {
-					return vm.BooleanValue(false), nil
+				// Symbol.iterator is created non-enumerable; symbol properties
+				// added later are enumerable (paserati#535).
+				if a := thisValue.AsArguments(); a.HasOwnSymbolProp(keyVal.AsSymbolObject()) {
+					_, en, _ := a.SymbolPropAttrs(keyVal.AsSymbolObject())
+					return vm.BooleanValue(en), nil
 				}
 			}
 			return vm.BooleanValue(false), nil
@@ -463,10 +453,6 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.BooleanValue(false), nil
 		case vm.TypeArguments:
 			argsObj := thisValue.AsArguments()
-			// Per spec: length and callee are non-enumerable
-			if propName == "length" || propName == "callee" {
-				return vm.BooleanValue(false), nil
-			}
 			// Numeric indices: consult any defineProperty override instead of
 			// assuming the CreateMappedArgumentsObject default of true.
 			own := argsObj.ArgumentsOwnProperty(propName)
@@ -2176,10 +2162,13 @@ func objectKeysWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			keysArray.Append(vm.NewString(key))
 		}
 	case vm.TypeArguments:
+		// Own enumerable string keys in [[OwnPropertyKeys]] order - indices
+		// (only those still present), then named ones (paserati#535).
 		argsObj := obj.AsArguments()
-		// Arguments object: return numeric indices as keys
-		for i := 0; i < argsObj.Length(); i++ {
-			keysArray.Append(vm.NewString(strconv.Itoa(i)))
+		for _, k := range argsObj.OwnKeys() {
+			if argsObj.ArgumentsOwnProperty(k).Enumerable {
+				keysArray.Append(vm.NewString(k))
+			}
 		}
 	case vm.TypeFunction:
 		funcObj := obj.AsFunction()
@@ -2795,6 +2784,24 @@ func objectValuesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 				}
 			}
 		}
+	default:
+		// Every other object kind - arguments, Proxy, TypedArray, Map/Set,
+		// buffers, ... - EnumerableOwnProperties(O, value) over Object.keys
+		// and [[Get]] (paserati#535).
+		keysVal, err := objectKeysWithVM(vmInstance, []vm.Value{obj})
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if keysVal.Type() == vm.TypeArray {
+			ka := keysVal.AsArray()
+			for i := 0; i < ka.Length(); i++ {
+				v, err := vmInstance.GetProperty(obj, ka.Get(i).ToString())
+				if err != nil {
+					return vm.Undefined, err
+				}
+				valuesArray.Append(v)
+			}
+		}
 	}
 
 	return values, nil
@@ -2964,6 +2971,25 @@ func objectEntriesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 					entry.AsArray().Append(value)
 					entriesArray.Append(entry)
 				}
+			}
+		}
+	default:
+		// Every other object kind - arguments, Proxy, TypedArray, Map/Set,
+		// buffers, ... - EnumerableOwnProperties(O, key+value) over
+		// Object.keys and [[Get]] (paserati#535).
+		keysVal, err := objectKeysWithVM(vmInstance, []vm.Value{obj})
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if keysVal.Type() == vm.TypeArray {
+			ka := keysVal.AsArray()
+			for i := 0; i < ka.Length(); i++ {
+				k := ka.Get(i).ToString()
+				v, err := vmInstance.GetProperty(obj, k)
+				if err != nil {
+					return vm.Undefined, err
+				}
+				entriesArray.Append(vm.NewArrayWithArgs([]vm.Value{vm.NewString(k), v}))
 			}
 		}
 	}
@@ -3301,6 +3327,13 @@ func objectGetOwnPropertyNamesWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Val
 				arrObj.Append(vm.NewString(k))
 			}
 		}
+		if obj.Type() == vm.TypeArguments {
+			// Indices, length, callee, then named keys in creation order
+			// (paserati#535).
+			for _, k := range obj.AsArguments().OwnKeys() {
+				arrObj.Append(vm.NewString(k))
+			}
+		}
 		// Non-object types return empty array
 		return arr, nil
 	}
@@ -3391,6 +3424,12 @@ func objectGetOwnPropertySymbolsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.V
 			for _, s := range props.OwnSymbolKeys() {
 				arrObj.Append(s)
 			}
+		}
+	} else if obj.Type() == vm.TypeArguments {
+		// Symbol.iterator, then symbols added later, in creation order
+		// (paserati#535).
+		for _, sv := range obj.AsArguments().OwnSymbolKeyValues() {
+			arrObj.Append(sv)
 		}
 	} else if obj.Type() == vm.TypeProxy {
 		// Same gap, same fix, as objectGetOwnPropertyNamesWithVM's new
@@ -3645,9 +3684,20 @@ func setObjectAssignTargetProperty(vmInstance *vm.VM, target vm.Value, key strin
 		return nil
 	}
 	switch target.Type() {
-	case vm.TypeRegExp, vm.TypeArguments:
-		// Special own properties (lastIndex, mapped indices/length/callee)
-		// that vm.SetProperty already models (paserati#528).
+	case vm.TypeArguments:
+		// The arguments object's own [[Set]] (paserati#535); a false result
+		// throws, as Set(..., true) requires.
+		ok, err := vmInstance.ArgumentsSet(target.AsArguments(), key, value)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return vmInstance.NewTypeError("Cannot assign to read only property '" + key + "' of object '[object Arguments]'")
+		}
+		return nil
+	case vm.TypeRegExp:
+		// Special own properties (lastIndex) that vm.SetProperty already
+		// models (paserati#528).
 		return vmInstance.SetProperty(target, key, value)
 	case vm.TypeObject, vm.TypeDictObject, vm.TypeProxy:
 		ok, err := reflectSetDispatch(vmInstance, target, key, value, target)
@@ -3731,8 +3781,8 @@ func setObjectAssignTargetPropertyByKey(vmInstance *vm.VM, target vm.Value, sym 
 	}
 	switch target.Type() {
 	case vm.TypeArguments:
-		if symObj := sym.AsSymbolObject(); symObj != nil {
-			target.AsArguments().SetSymbolProp(symObj, value)
+		if symObj := sym.AsSymbolObject(); symObj != nil && !target.AsArguments().SetSymbolChecked(symObj, value) {
+			return vmInstance.NewTypeError("Cannot assign to read only property '" + sym.ToString() + "' of object '[object Arguments]'")
 		}
 	case vm.TypeObject, vm.TypeProxy:
 		// Full ordinary [[Set]], like the string-key version (paserati#521).
@@ -4870,13 +4920,14 @@ func objectDefinePropertyWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	// and symbol keys aren't covered yet - falls through to the no-op below,
 	// same pre-existing behavior as before this case existed.
 	if obj.Type() == vm.TypeArguments && !keyIsSymbol {
-		if _, isIndex := vm.ParseArgumentsIndex(propName); isIndex {
-			argsObj := obj.AsArguments()
-			if err := vmInstance.ArgumentsDefineOwnProperty(argsObj, propName, hasValue, value, writablePtr, enumerablePtr, configurablePtr, hasGetter, getter, hasSetter, setter); err != nil {
-				return vm.Undefined, err
-			}
-			return obj, nil
+		// Every string key - indices, length, callee, named - uses the
+		// arguments object's [[DefineOwnProperty]] (paserati#535); only
+		// indices used to, so defining a named property did nothing.
+		argsObj := obj.AsArguments()
+		if err := vmInstance.ArgumentsDefineOwnProperty(argsObj, propName, hasValue, value, writablePtr, enumerablePtr, configurablePtr, hasGetter, getter, hasSetter, setter); err != nil {
+			return vm.Undefined, err
 		}
+		return obj, nil
 	}
 
 	// Array objects: Object.defineProperty(arr, "length", desc) - ES
@@ -5831,78 +5882,47 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
 	case vm.TypeArguments:
+		// One resolution for every key (paserati#535): symbol properties with
+		// their own attributes, and indices/length/callee/named via
+		// ArgumentsOwnProperty - named properties and redefined length/callee
+		// used to be missing or reported with fixed attributes.
 		argsObj := obj.AsArguments()
-		// Handle symbol-keyed properties (e.g., Symbol.iterator)
+		descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 		if keyIsSymbol {
-			if v, ok := argsObj.GetSymbolProp(propSym.AsSymbolObject()); ok {
-				// Symbol.iterator is writable, non-enumerable, configurable per spec
-				descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-				descriptor.SetOwn("value", v)
-				descriptor.SetOwn("writable", vm.BooleanValue(true))
-				descriptor.SetOwn("enumerable", vm.BooleanValue(false))
-				descriptor.SetOwn("configurable", vm.BooleanValue(true))
-				return vm.NewValueFromPlainObject(descriptor), nil
-			}
-			// Symbol property not found
-			return vm.Undefined, nil
-		}
-		// Handle numeric index or "length"
-		if propName == "length" {
-			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			descriptor.SetOwn("value", vm.NumberValue(float64(argsObj.Length())))
-			descriptor.SetOwn("writable", vm.BooleanValue(true))
-			descriptor.SetOwn("enumerable", vm.BooleanValue(false))
-			descriptor.SetOwn("configurable", vm.BooleanValue(true))
-			return vm.NewValueFromPlainObject(descriptor), nil
-		}
-		// Check for numeric index - consult any Object.defineProperty
-		// override (attributes and, once the mapping's been severed, the
-		// stored value) instead of always synthesizing the
-		// CreateMappedArgumentsObject default. See arguments_props.go.
-		if _, isIndex := vm.ParseArgumentsIndex(propName); isIndex {
-			own := argsObj.ArgumentsOwnProperty(propName)
-			if !own.Exists {
+			sym := propSym.AsSymbolObject()
+			v, ok := argsObj.GetSymbolProp(sym)
+			if !ok {
 				return vm.Undefined, nil
 			}
-			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			if own.IsAccessor {
-				if own.HasGetter {
-					descriptor.SetOwn("get", own.Getter)
-				} else {
-					descriptor.SetOwn("get", vm.Undefined)
-				}
-				if own.HasSetter {
-					descriptor.SetOwn("set", own.Setter)
-				} else {
-					descriptor.SetOwn("set", vm.Undefined)
-				}
-			} else {
-				descriptor.SetOwn("value", own.Value)
-				descriptor.SetOwn("writable", vm.BooleanValue(own.Writable))
-			}
-			descriptor.SetOwn("enumerable", vm.BooleanValue(own.Enumerable))
-			descriptor.SetOwn("configurable", vm.BooleanValue(own.Configurable))
+			w, e, c := argsObj.SymbolPropAttrs(sym)
+			descriptor.SetOwn("value", v)
+			descriptor.SetOwn("writable", vm.BooleanValue(w))
+			descriptor.SetOwn("enumerable", vm.BooleanValue(e))
+			descriptor.SetOwn("configurable", vm.BooleanValue(c))
 			return vm.NewValueFromPlainObject(descriptor), nil
 		}
-		// Handle callee property
-		if propName == "callee" {
-			descriptor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			if argsObj.IsStrict() {
-				// In strict mode: accessor descriptor with %ThrowTypeError% intrinsic as get/set
-				// Per ECMAScript spec, the same %ThrowTypeError% function is used for both
-				descriptor.SetOwn("get", vmInstance.ThrowTypeErrorFunc)
-				descriptor.SetOwn("set", vmInstance.ThrowTypeErrorFunc)
-				descriptor.SetOwn("enumerable", vm.BooleanValue(false))
-				descriptor.SetOwn("configurable", vm.BooleanValue(false))
-			} else {
-				// In non-strict mode: data descriptor with callee value
-				descriptor.SetOwn("value", argsObj.Callee())
-				descriptor.SetOwn("writable", vm.BooleanValue(true))
-				descriptor.SetOwn("enumerable", vm.BooleanValue(false))
-				descriptor.SetOwn("configurable", vm.BooleanValue(true))
-			}
-			return vm.NewValueFromPlainObject(descriptor), nil
+		own := argsObj.ArgumentsOwnProperty(propName)
+		if !own.Exists {
+			return vm.Undefined, nil
 		}
+		if own.IsAccessor {
+			if own.HasGetter {
+				descriptor.SetOwn("get", own.Getter)
+			} else {
+				descriptor.SetOwn("get", vm.Undefined)
+			}
+			if own.HasSetter {
+				descriptor.SetOwn("set", own.Setter)
+			} else {
+				descriptor.SetOwn("set", vm.Undefined)
+			}
+		} else {
+			descriptor.SetOwn("value", own.Value)
+			descriptor.SetOwn("writable", vm.BooleanValue(own.Writable))
+		}
+		descriptor.SetOwn("enumerable", vm.BooleanValue(own.Enumerable))
+		descriptor.SetOwn("configurable", vm.BooleanValue(own.Configurable))
+		return vm.NewValueFromPlainObject(descriptor), nil
 	}
 
 	// Handle function intrinsic properties: name, length, prototype
@@ -6477,6 +6497,9 @@ func objectIsExtensibleWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, err
 	}
 
 	obj := args[0]
+	if obj.Type() == vm.TypeArguments {
+		return vm.BooleanValue(obj.AsArguments().IsExtensible()), nil
+	}
 
 	// Handle Proxy objects
 	if obj.Type() == vm.TypeProxy {
@@ -6570,6 +6593,10 @@ func objectPreventExtensionsWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value
 	}
 
 	obj := args[0]
+	if obj.Type() == vm.TypeArguments {
+		obj.AsArguments().PreventExtensions()
+		return obj, nil
+	}
 
 	// Handle Proxy objects
 	if obj.Type() == vm.TypeProxy {
@@ -6659,6 +6686,13 @@ func objectFreezeWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	}
 
 	obj := args[0]
+	if obj.Type() == vm.TypeArguments {
+		// SetIntegrityLevel frozen (paserati#535).
+		if err := vmInstance.ArgumentsSetIntegrity(obj.AsArguments(), true); err != nil {
+			return vm.Undefined, err
+		}
+		return obj, nil
+	}
 
 	// If not an object, return as-is (primitives are already immutable).
 	// Callables are objects even when Value.IsObject() says otherwise.
@@ -6708,6 +6742,13 @@ func objectSealWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 	}
 
 	obj := args[0]
+	if obj.Type() == vm.TypeArguments {
+		// SetIntegrityLevel sealed (paserati#535).
+		if err := vmInstance.ArgumentsSetIntegrity(obj.AsArguments(), false); err != nil {
+			return vm.Undefined, err
+		}
+		return obj, nil
+	}
 
 	// If not an object, return as-is.
 	// Callables are objects even when Value.IsObject() says otherwise.
@@ -6744,6 +6785,9 @@ func objectIsFrozenWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 	}
 
 	obj := args[0]
+	if obj.Type() == vm.TypeArguments {
+		return vm.BooleanValue(obj.AsArguments().ArgumentsTestIntegrity(true)), nil
+	}
 
 	// Primitives are frozen
 	if !obj.IsObject() && !obj.IsCallable() {
@@ -6787,6 +6831,9 @@ func objectIsSealedWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) 
 	}
 
 	obj := args[0]
+	if obj.Type() == vm.TypeArguments {
+		return vm.BooleanValue(obj.AsArguments().ArgumentsTestIntegrity(false)), nil
+	}
 
 	// Primitives are sealed
 	if !obj.IsObject() && !obj.IsCallable() {

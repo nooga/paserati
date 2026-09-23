@@ -157,28 +157,10 @@ func reflectHas(vmInstance *vm.VM, target vm.Value, key vm.Value) (bool, error) 
 		return proto.AsPlainObject().Has(name), nil
 
 	case vm.TypeArguments:
-		// Mirrors OpIn's own TypeArguments case (pkg/vm/vm.go) exactly -
-		// including its non-symbol-only scope; a symbol key on an
-		// Arguments object isn't handled by either `in` or here.
-		argObj := target.AsArguments()
-		if !isSym {
-			if name == "length" {
-				return true, nil
-			}
-			if name == "callee" && !argObj.IsStrict() {
-				return true, nil
-			}
-			if idx, ok := vm.ParseArrayIndex(name); ok {
-				return idx < argObj.Length(), nil
-			}
-		}
-		if vmInstance.ObjectPrototype.IsObject() {
-			if isSym {
-				return vmInstance.HasPropertyOnGivenPrototypeChain(vmInstance.ObjectPrototype, propKey), nil
-			}
-			return vmInstance.ObjectPrototype.AsPlainObject().Has(name), nil
-		}
-		return false, nil
+		// Own property through the arguments object's own model (named
+		// properties, deletes, symbols included), else its [[Prototype]]
+		// chain (paserati#535).
+		return vmInstance.ArgumentsHasProperty(target, propKey), nil
 
 	case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction:
 		// Every callable kind used to answer false for anything beyond

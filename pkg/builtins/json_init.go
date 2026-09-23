@@ -1353,11 +1353,8 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 		if propertyList != nil {
 			keys = propertyList
 		} else {
-			length := ta.GetLength()
-			keys = make([]string, length)
-			for i := 0; i < length; i++ {
-				keys[i] = strconv.Itoa(i)
-			}
+			// Indices, then enumerable named properties (paserati#535).
+			keys = typedArrayOwnNames(value, true)
 		}
 
 		getElem := func(key string) vm.Value {
@@ -1388,7 +1385,7 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 						result += ","
 					}
 					first = false
-					result += "\n" + stepIndent + "\"" + elemKey + "\": " + elemJSON
+					result += "\n" + stepIndent + vm.QuoteJSONString(elemKey) + ": " + elemJSON
 				}
 			}
 			if !first {
@@ -1410,7 +1407,7 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 					result += ","
 				}
 				first = false
-				result += "\"" + elemKey + "\":" + elemJSON
+				result += vm.QuoteJSONString(elemKey) + ":" + elemJSON
 			}
 		}
 		result += "}"
@@ -1437,7 +1434,12 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 		}
 		// Fall through to object handling
 		fallthrough
-	case vm.TypeObject, vm.TypeDictObject:
+	case vm.TypeObject, vm.TypeDictObject, vm.TypeArguments, vm.TypeMap, vm.TypeSet, vm.TypePromise,
+		vm.TypeWeakMap, vm.TypeWeakSet, vm.TypeWeakRef, vm.TypeFinalizationRegistry, vm.TypeArrayBuffer,
+		vm.TypeSharedArrayBuffer, vm.TypeDataView, vm.TypeGenerator, vm.TypeAsyncGenerator:
+		// arguments and the other ordinary-apart-from-internal-slots kinds
+		// serialize their own enumerable string keys like any object; they
+		// used to come out as "null" (paserati#535).
 		// Get object pointer for circular reference check
 		var ptr uintptr
 		if value.Type() == vm.TypeObject {
@@ -1454,6 +1456,8 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 				}
 				return "", errors.New("TypeError: Cannot perform 'ownKeys' on a proxy that has been revoked")
 			}
+		} else {
+			ptr = value.ObjectIdentity()
 		}
 
 		// Check for circular reference
@@ -1489,6 +1493,18 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 						return "", err
 					}
 					keys = sortJSONKeys(proxyKeys)
+				}
+			} else if vmInstance != nil {
+				// Other kinds: EnumerableOwnProperties via Object.keys.
+				keysVal, err := objectKeysWithVM(vmInstance, []vm.Value{value})
+				if err != nil {
+					return "", err
+				}
+				if keysVal.Type() == vm.TypeArray {
+					ka := keysVal.AsArray()
+					for i := 0; i < ka.Length(); i++ {
+						keys = append(keys, ka.Get(i).ToString())
+					}
 				}
 			}
 		}

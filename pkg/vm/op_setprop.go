@@ -908,43 +908,21 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		}
 		d.SetOwn(propName, *valueToSet)
 	case TypeArguments:
+		// Every key goes through the arguments object's [[Set]]: indices
+		// (write-through while mapped), length, callee (strict mode's is a
+		// throwing accessor), and named properties - with redefined
+		// attributes, freeze and preventExtensions respected (paserati#535).
 		argObj := objVal.AsArguments()
-		switch propName {
-		case "callee":
-			if argObj.IsStrict() {
-				// In strict mode, callee is a throwing accessor - setting throws TypeError
-				vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
-				if !vm.unwinding {
-					return true, InterpretOK, *valueToSet
-				}
+		if err := vm.argumentsSet(argObj, propName, *valueToSet, vm.IsInStrictMode()); err != nil {
+			if excErr, ok := err.(ExceptionError); ok {
+				vm.throwException(excErr.GetExceptionValue())
 				return false, InterpretRuntimeError, Undefined
 			}
-			// Store override in named props so reads check there first
-			argObj.SetNamedProp("callee", *valueToSet)
-		case "length":
-			// Store override in named props so reads check there first
-			argObj.SetNamedProp("length", *valueToSet)
-		default:
-			// Check for numeric string index. Goes through argumentsSet (see
-			// arguments_props.go) so a defineProperty-installed accessor,
-			// non-writable rejection, or write-through-while-mapped is
-			// respected instead of always writing the raw slot. Strict-mode
-			// throwing isn't wired up here (this opcode doesn't have the
-			// calling frame's strictness on hand) - non-writable writes
-			// silently no-op, matching this switch's other cases.
-			if _, isIndex := ParseArgumentsIndex(propName); isIndex {
-				if err := vm.argumentsSet(argObj, propName, *valueToSet, false); err != nil {
-					if excErr, ok := err.(ExceptionError); ok {
-						vm.throwException(excErr.GetExceptionValue())
-						return false, InterpretRuntimeError, Undefined
-					}
-					vm.ThrowTypeError(err.Error())
-					return false, InterpretRuntimeError, Undefined
-				}
-			} else {
-				// Store in overflow named properties
-				argObj.SetNamedProp(propName, *valueToSet)
+			vm.ThrowTypeError(err.Error())
+			if !vm.unwinding {
+				return false, InterpretOK, Undefined
 			}
+			return false, InterpretRuntimeError, Undefined
 		}
 		return true, InterpretOK, *valueToSet
 	case TypeTypedArray:
