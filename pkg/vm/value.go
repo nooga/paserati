@@ -278,7 +278,7 @@ type ArgumentsObject struct {
 	isStrict    bool                    // Whether the arguments object is from strict mode code
 	symbolProps map[*SymbolObject]Value // Symbol-keyed properties (e.g., Symbol.iterator)
 	namedProps  map[string]Value        // Overflow storage for arbitrary named properties
-	mappedRegs  []Value                 // Shared slice into frame registers for mapped arguments (sloppy mode)
+	mapped      []*Upvalue              // Sloppy-mode mapped parameters: upvalues on the parameter registers (see mappedGet)
 	numMapped   int                     // Number of mapped parameters (0 = unmapped)
 
 	// argDescs/deletedProps back the arguments exotic object's own property
@@ -291,6 +291,17 @@ type ArgumentsObject struct {
 	// parameter register when index < numMapped.
 	argDescs     map[string]*ArgDescriptor
 	deletedProps map[string]bool
+
+	// The rest backs the arguments object's ordinary-object behavior
+	// (paserati#535): creation order for [[OwnPropertyKeys]], symbol
+	// attributes, [[Extensible]], and the %ThrowTypeError% that strict-mode
+	// callee's accessor uses.
+	named         []string                // non-index, non-length/callee keys in creation order
+	symOrder      []*SymbolObject         // symbol keys in creation order
+	symNonEnum    map[*SymbolObject]bool  // symbol keys created non-enumerable (Symbol.iterator)
+	symLocked     map[*SymbolObject]uint8 // 1 = non-configurable (sealed), 2 = also non-writable (frozen)
+	nonExtensible bool
+	thrower       Value
 }
 
 // ArgDescriptor overrides an arguments object's default per-key attributes
@@ -1179,6 +1190,10 @@ func (v Value) AsSymbol() string {
 }
 
 // AsSymbolObject returns the underlying SymbolObject pointer for symbol values
+// ObjectIdentity returns an identity for an object-kind value, usable as a
+// map key for cycle detection (JSON.stringify).
+func (v Value) ObjectIdentity() uintptr { return uintptr(v.obj) }
+
 func (v Value) AsSymbolObject() *SymbolObject {
 	if v.typ != TypeSymbol {
 		panic("value is not a symbol")
@@ -3331,8 +3346,8 @@ func (a *ArgumentsObject) Length() int {
 
 func (a *ArgumentsObject) Get(index int) Value {
 	// For mapped arguments (sloppy mode), read directly from the register
-	if index >= 0 && index < a.numMapped && a.mappedRegs != nil {
-		return a.mappedRegs[index]
+	if index >= 0 && index < a.numMapped && a.mapped != nil {
+		return a.mappedGet(index)
 	}
 	if index >= 0 && index < len(a.args) {
 		return a.args[index]
@@ -3349,8 +3364,8 @@ func (a *ArgumentsObject) Get(index int) Value {
 
 func (a *ArgumentsObject) Set(index int, value Value) {
 	// For mapped arguments (sloppy mode), write directly to the register
-	if index >= 0 && index < a.numMapped && a.mappedRegs != nil {
-		a.mappedRegs[index] = value
+	if index >= 0 && index < a.numMapped && a.mapped != nil {
+		a.mappedSet(index, value)
 		return
 	}
 	if index < 0 || index >= len(a.args) {
@@ -3370,8 +3385,8 @@ func (a *ArgumentsObject) SetIndexed(index int, value Value) {
 	if index < 0 {
 		return
 	}
-	if index < a.numMapped && a.mappedRegs != nil {
-		a.mappedRegs[index] = value
+	if index < a.numMapped && a.mapped != nil {
+		a.mappedSet(index, value)
 		return
 	}
 	for len(a.args) <= index {
@@ -3404,7 +3419,37 @@ func (a *ArgumentsObject) SetSymbolProp(sym *SymbolObject, val Value) {
 	if a.symbolProps == nil {
 		a.symbolProps = make(map[*SymbolObject]Value)
 	}
+	if _, had := a.symbolProps[sym]; !had {
+		a.symOrder = append(a.symOrder, sym)
+	}
 	a.symbolProps[sym] = val
+}
+
+// SetSymbolPropNonEnumerable is SetSymbolProp for a property that is created
+// non-enumerable (the arguments object's own Symbol.iterator).
+func (a *ArgumentsObject) SetSymbolPropNonEnumerable(sym *SymbolObject, val Value) {
+	a.SetSymbolProp(sym, val)
+	if a.symNonEnum == nil {
+		a.symNonEnum = make(map[*SymbolObject]bool)
+	}
+	a.symNonEnum[sym] = true
+}
+
+// SymbolPropAttrs reports a symbol property's attributes.
+func (a *ArgumentsObject) SymbolPropAttrs(sym *SymbolObject) (writable, enumerable, configurable bool) {
+	lock := a.symLocked[sym]
+	return lock < 2, !a.symNonEnum[sym], lock < 1
+}
+
+// OwnSymbolKeys returns the own symbol keys in creation order.
+func (a *ArgumentsObject) OwnSymbolKeys() []*SymbolObject {
+	out := make([]*SymbolObject, 0, len(a.symbolProps))
+	for _, sym := range a.symOrder {
+		if _, ok := a.symbolProps[sym]; ok {
+			out = append(out, sym)
+		}
+	}
+	return out
 }
 
 // HasOwnSymbolProp checks if the arguments object has an own symbol property
@@ -3423,6 +3468,9 @@ func (a *ArgumentsObject) DeleteSymbolProp(sym *SymbolObject) bool {
 		return false
 	}
 	_, existed := a.symbolProps[sym]
+	if existed && a.symLocked[sym] >= 1 {
+		return false
+	}
 	delete(a.symbolProps, sym)
 	return existed
 }
@@ -3451,7 +3499,13 @@ func (a *ArgumentsObject) SetNamedProp(name string, val Value) {
 	if a.namedProps == nil {
 		a.namedProps = make(map[string]Value)
 	}
+	if _, had := a.namedProps[name]; !had {
+		a.noteNamedKey(name)
+	}
 	a.namedProps[name] = val
+	if a.deletedProps != nil {
+		delete(a.deletedProps, name)
+	}
 }
 
 // HasNamedProp checks if the arguments object has a named property in overflow storage

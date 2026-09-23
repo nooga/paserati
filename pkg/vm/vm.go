@@ -3347,7 +3347,15 @@ startExecution:
 
 			// Check if property exists in object or its prototype chain
 			var hasProperty bool
-			if isPlainSideTableKind(objType) {
+			if objType == TypeArguments {
+				// Own property through the arguments object's own model, else
+				// its [[Prototype]] chain (paserati#535).
+				if propVal.Type() == TypeSymbol {
+					hasProperty = vm.ArgumentsHasProperty(objVal, NewSymbolKey(propVal))
+				} else {
+					hasProperty = vm.ArgumentsHasProperty(objVal, keyFromString(propVal.ToString()))
+				}
+			} else if isPlainSideTableKind(objType) {
 				// Buffers, DataView, the weak kinds, generators: own side-table
 				// property, else the [[Prototype]] chain. These used to throw
 				// "Cannot use 'in' operator" (paserati#529).
@@ -7263,11 +7271,11 @@ startExecution:
 						}
 						argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
 							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
-						cl.CapturedArguments = NewArguments(frame.args, calleeValue, argsIsStrict)
+						cl.CapturedArguments = vm.newArguments(frame.args, calleeValue, argsIsStrict)
 					} else {
 						argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
 							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
-						cl.CapturedArguments = NewArguments([]Value{}, Undefined, argsIsStrict)
+						cl.CapturedArguments = vm.newArguments([]Value{}, Undefined, argsIsStrict)
 					}
 				}
 			}
@@ -7441,11 +7449,11 @@ startExecution:
 						}
 						argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
 							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
-						cl.CapturedArguments = NewArguments(frame.args, calleeValue, argsIsStrict)
+						cl.CapturedArguments = vm.newArguments(frame.args, calleeValue, argsIsStrict)
 					} else {
 						argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
 							frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
-						cl.CapturedArguments = NewArguments([]Value{}, Undefined, argsIsStrict)
+						cl.CapturedArguments = vm.newArguments([]Value{}, Undefined, argsIsStrict)
 					}
 				}
 			}
@@ -8341,73 +8349,27 @@ startExecution:
 						}
 						registers[destReg] = v
 					}
-				case TypeString:
-					key := AsString(indexVal)
-					switch key {
-					case "length":
-						registers[destReg] = Number(float64(args.Length()))
-					case "callee":
-						if args.IsStrict() {
-							frame.ip = ip
-							status := vm.runtimeError("'callee' is not accessible in strict mode")
-							return status, Undefined
-						}
-						registers[destReg] = args.Callee()
-					default:
-						// Try parsing as array index
-						if idx, ok := tryParseArrayIndex(key); ok {
-							v, err := vm.argumentsGet(args, strconv.Itoa(idx))
-							if err != nil {
-								frame.ip = ip
-								if excErr, ok := err.(ExceptionError); ok {
-									vm.throwException(excErr.GetExceptionValue())
-								} else {
-									vm.ThrowTypeError(err.Error())
-								}
-								if vm.frameCount == 0 || vm.unwindingCrossedNative {
-									return InterpretRuntimeError, vm.currentException
-								}
-								goto reloadFrame
-							}
-							registers[destReg] = v
-						} else {
-							// Delegate to Array.prototype for other string properties
-							if vm.ArrayPrototype.Type() == TypeObject {
-								proto := vm.ArrayPrototype.AsPlainObject()
-								if prop, found := proto.GetOwn(key); found {
-									registers[destReg] = prop
-								} else {
-									registers[destReg] = Undefined
-								}
-							} else {
-								registers[destReg] = Undefined
-							}
-						}
-					}
 				case TypeSymbol:
-					// Check own symbol properties first (e.g., arguments[Symbol.toStringTag] = ...)
-					symKey := NewSymbolKey(indexVal)
-					if sym := indexVal.AsSymbolObject(); sym != nil {
-						if val, ok := args.GetSymbolProp(sym); ok {
-							registers[destReg] = val
-							continue
+					frame.ip = ip
+					if ok, status, value := vm.opGetPropSymbol(frame, ip, &baseVal, indexVal, &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
 						}
-					}
-					// Then check Object.prototype (arguments inherit from Object.prototype)
-					if vm.ObjectPrototype.IsObject() {
-						proto := vm.ObjectPrototype.AsPlainObject()
-						if prop, found := proto.GetOwnByKey(symKey); found {
-							registers[destReg] = prop
-						} else {
-							registers[destReg] = Undefined
-						}
-					} else {
-						registers[destReg] = Undefined
+						goto reloadFrame
 					}
 				default:
+					// Every other key - length, callee, named properties,
+					// booleans, null/undefined - through the same resolution
+					// as `arguments.x` (paserati#535). This used to answer
+					// length/callee from the raw fields and look named keys
+					// up on Array.prototype only.
 					frame.ip = ip
-					status := vm.runtimeError("Arguments index must be a number, string, or symbol, got '%v'", indexVal.Type())
-					return status, Undefined
+					if ok, status, value := vm.argumentsGetProp(frame, ip, false, baseVal, indexVal.ToString(), &registers[destReg]); !ok {
+						if status != InterpretOK {
+							return status, value
+						}
+						goto reloadFrame
+					}
 				}
 
 			case TypeObject, TypeDictObject, TypeRegExp, TypePromise:
@@ -9183,7 +9145,7 @@ startExecution:
 					// defineProperty-installed accessor, non-writable
 					// rejection, or write-through-while-mapped is respected
 					// instead of always writing the raw slot.
-					if err := vm.argumentsSet(argObj, strconv.Itoa(idx), valueVal, false); err != nil {
+					if err := vm.argumentsSet(argObj, strconv.Itoa(idx), valueVal, function.Chunk.IsStrict); err != nil {
 						frame.ip = ip
 						if excErr, ok := err.(ExceptionError); ok {
 							vm.throwException(excErr.GetExceptionValue())
@@ -9196,45 +9158,34 @@ startExecution:
 						goto reloadFrame
 					}
 				} else if indexVal.Type() == TypeSymbol {
-					// Symbol key access on arguments object
+					// Symbol key: ordinary [[Set]] on the arguments object's own
+					// symbol properties (refused when frozen / non-extensible).
 					if sym := indexVal.AsSymbolObject(); sym != nil {
-						argObj.SetSymbolProp(sym, valueVal)
+						if !argObj.SetSymbolChecked(sym, valueVal) && function.Chunk.IsStrict {
+							frame.ip = ip
+							vm.ThrowTypeError("Cannot assign to read only property '" + indexVal.ToString() + "' of object '[object Arguments]'")
+							if vm.frameCount == 0 || vm.unwindingCrossedNative {
+								return InterpretRuntimeError, vm.currentException
+							}
+							goto reloadFrame
+						}
 					}
 				} else {
-					// String key access (e.g., arguments["callee"], arguments["length"])
-					key := indexVal.ToString()
-					switch key {
-					case "callee":
-						if argObj.IsStrict() {
-							frame.ip = ip
-							vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
-							if vm.unwinding {
-								return InterpretRuntimeError, Undefined
-							}
-							break
-						}
-						argObj.SetNamedProp("callee", valueVal)
-					case "length":
-						argObj.SetNamedProp("length", valueVal)
-					default:
-						// Check for numeric string index
-						if _, isIndex := ParseArgumentsIndex(key); isIndex {
-							if err := vm.argumentsSet(argObj, key, valueVal, false); err != nil {
-								frame.ip = ip
-								if excErr, ok := err.(ExceptionError); ok {
-									vm.throwException(excErr.GetExceptionValue())
-								} else {
-									vm.ThrowTypeError(err.Error())
-								}
-								if vm.frameCount == 0 || vm.unwindingCrossedNative {
-									return InterpretRuntimeError, Undefined
-								}
-								goto reloadFrame
-							}
+					// Any other key - length, callee, named properties - goes
+					// through the same [[Set]] as indices, so redefined
+					// attributes, freeze/preventExtensions and strict callee's
+					// throwing accessor all apply (paserati#535).
+					if err := vm.argumentsSet(argObj, indexVal.ToString(), valueVal, function.Chunk.IsStrict); err != nil {
+						frame.ip = ip
+						if excErr, ok := err.(ExceptionError); ok {
+							vm.throwException(excErr.GetExceptionValue())
 						} else {
-							// Store in overflow named properties
-							argObj.SetNamedProp(key, valueVal)
+							vm.ThrowTypeError(err.Error())
 						}
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
+							return InterpretRuntimeError, vm.currentException
+						}
+						goto reloadFrame
 					}
 				}
 
@@ -9963,6 +9914,20 @@ startExecution:
 			// table (TypedArray, Map/Set/Promise, buffers, DataView, the weak
 			// kinds, generators, callables, RegExp) used to be skipped here
 			// and spread nothing (paserati#528/#529).
+			if sourceVal.Type() == TypeArguments {
+				// CopyDataProperties from an arguments object: own enumerable
+				// keys (indices, named, then symbols) read with [[Get]]
+				// (paserati#535).
+				frame.ip = ip
+				if err := vm.copyArgumentsDataProperties(destVal, sourceVal); err != nil {
+					vm.throwFromCallError(err)
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
+						return InterpretRuntimeError, vm.currentException
+					}
+					goto reloadFrame
+				}
+				continue
+			}
 			if st := sourceVal.Type(); st != TypeObject && st != TypeDictObject && st != TypeArray && st != TypeArguments &&
 				(st == TypeTypedArray || ownPropertiesSlot(sourceVal) != nil) {
 				frame.ip = ip
@@ -14865,9 +14830,10 @@ startExecution:
 				// per index (rather than assuming the CreateMappedArgumentsObject
 				// default of enumerable:true) is what verifyProperty's for-in-based
 				// isEnumerable() check in propertyHelper.js relies on.
+				// Named properties are included too, in creation order
+				// (paserati#535).
 				argsObj := objValue.AsArguments()
-				for i := 0; i < argsObj.length; i++ {
-					key := strconv.Itoa(i)
+				for _, key := range argsObj.OwnKeys() {
 					if own := argsObj.ArgumentsOwnProperty(key); own.Exists && own.Enumerable {
 						keys = append(keys, key)
 					}
@@ -15951,7 +15917,7 @@ startExecution:
 				} else {
 					argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
 						frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
-					frame.registers[destReg] = NewArguments([]Value{}, Undefined, argsIsStrict)
+					frame.registers[destReg] = vm.newArguments([]Value{}, Undefined, argsIsStrict)
 				}
 				continue
 			}
@@ -15993,7 +15959,7 @@ startExecution:
 				}
 				argsIsStrict := frame.closure != nil && frame.closure.Fn != nil &&
 					frame.closure.Fn.Chunk != nil && frame.closure.Fn.Chunk.IsStrict
-				argsObj := NewArguments(args, calleeValue, argsIsStrict)
+				argsObj := vm.newArguments(args, calleeValue, argsIsStrict)
 
 				// Set up mapped arguments for sloppy mode functions with simple parameter lists.
 				// Per ES spec 10.4.4.7: In non-strict mode, arguments[i] and the corresponding
@@ -16006,8 +15972,14 @@ startExecution:
 						numMapped = argCount
 					}
 					if numMapped > 0 && numMapped <= len(frame.registers) {
-						// Share the register slice so reads/writes go through the live registers
-						argObjPtr.mappedRegs = frame.registers[:numMapped]
+						// Map each parameter through an upvalue on its register:
+						// live while this frame runs, closed (and still shared
+						// with any closure over the same parameter) once it
+						// returns - see ArgumentsObject.mappedGet.
+						argObjPtr.mapped = make([]*Upvalue, numMapped)
+						for i := 0; i < numMapped; i++ {
+							argObjPtr.mapped[i] = vm.captureUpvalue(&frame.registers[i])
+						}
 						argObjPtr.numMapped = numMapped
 					}
 				}
@@ -16017,7 +15989,7 @@ startExecution:
 				if vm.SymbolIterator.Type() == TypeSymbol && vm.ArrayPrototype.Type() == TypeObject {
 					arrProto := vm.ArrayPrototype.AsPlainObject()
 					if iterMethod, ok := arrProto.GetOwnByKey(NewSymbolKey(vm.SymbolIterator)); ok {
-						argsObj.AsArguments().SetSymbolProp(vm.SymbolIterator.AsSymbolObject(), iterMethod)
+						argsObj.AsArguments().SetSymbolPropNonEnumerable(vm.SymbolIterator.AsSymbolObject(), iterMethod)
 					}
 				}
 
@@ -16935,6 +16907,18 @@ startExecution:
 					d := obj.AsDictObject()
 					// DictObject properties are always configurable, no strict mode check needed
 					success = d.DeleteOwn(propName)
+				} else if obj.Type() == TypeArguments {
+					// Used to fall through this chain: `delete arguments.x`
+					// answered false and kept x (paserati#535).
+					success = obj.AsArguments().argumentsDelete(propName)
+					if !success && function.Chunk.IsStrict {
+						frame.ip = ip
+						vm.ThrowTypeError("Cannot delete property '" + propName + "' of #<Object>")
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
+							return InterpretRuntimeError, vm.currentException
+						}
+						goto reloadFrame
+					}
 				} else if isPlainSideTableKind(obj.Type()) || obj.Type() == TypeTypedArray {
 					// Side-table kinds used to fall through this chain - delete
 					// answered false and left the property in place
@@ -17210,14 +17194,19 @@ startExecution:
 					// are always configurable per spec - actually remove it so a
 					// following hasOwnProperty check (propertyHelper.js's
 					// isConfigurable) sees it gone, not just report success.
-					obj.AsArguments().DeleteSymbolProp(key.AsSymbolObject())
-					success = true
+					// A sealed/frozen symbol property is non-configurable and
+					// stays (paserati#535).
+					if a := obj.AsArguments(); a.HasOwnSymbolProp(key.AsSymbolObject()) {
+						success = a.DeleteSymbolProp(key.AsSymbolObject())
+					} else {
+						success = true
+					}
 				} else {
 					success = obj.AsArguments().argumentsDelete(keyStr)
 				}
 				if !success && function.Chunk.IsStrict {
 					frame.ip = ip
-					vm.ThrowTypeError("Cannot delete property '" + keyStr + "' of [object Arguments]")
+					vm.ThrowTypeError("Cannot delete property '" + keyStr + "' of #<Object>")
 					if !vm.unwinding {
 						frame = &vm.frames[vm.frameCount-1]
 						closure = frame.closure
@@ -18964,7 +18953,7 @@ func (vm *VM) extractSpreadArguments(iterableVal Value) ([]Value, error) {
 		// looking for Symbol.iterator via their *prototype chain*, and
 		// TypeArguments was never one of them, so it always fell through to
 		// "is not iterable". Read each index through argumentsGet (not the
-		// raw args/mappedRegs slices directly) so a live-mapped parameter
+		// raw args/mapped parameter slots directly) so a live-mapped parameter
 		// register, a deleted index, or a defineProperty-installed accessor
 		// on some index is honored exactly the way plain property access on
 		// arguments already respects it elsewhere. Likewise for "length"

@@ -1172,34 +1172,14 @@ func (vm *VM) handleSpecialProperties(objVal Value, propName string) (Value, boo
 		case TypeArray:
 			arr := AsArray(objVal)
 			return Number(float64(arr.Length())), true
-		case TypeArguments:
-			args := AsArguments(objVal)
-			// Check if length has been overridden
-			if v, ok := args.GetNamedProp("length"); ok {
-				return v, true
-			}
-			return Number(float64(args.Length())), true
 		case TypeString:
 			str := AsString(objVal)
 			// Use UTF-16 code unit count for correct JavaScript string length
 			return Number(float64(UTF16Length(str))), true
 		}
 	}
-	if propName == "callee" {
-		switch objVal.Type() {
-		case TypeArguments:
-			args := AsArguments(objVal)
-			if !args.IsStrict() {
-				// Check if callee has been overridden
-				if v, ok := args.GetNamedProp("callee"); ok {
-					return v, true
-				}
-				return args.callee, true
-			}
-			// In strict mode, don't handle here - let opGetProp throw TypeError
-			return Undefined, false
-		}
-	}
+	// arguments' length and callee resolve through ArgumentsOwnProperty in
+	// opGetProp (redefinition, deletion, strict callee's accessor - #535).
 
 	if propName == "size" {
 		switch objVal.Type() {

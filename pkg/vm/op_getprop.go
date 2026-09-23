@@ -198,47 +198,11 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		}
 	}
 
-	// 5. Arguments object property lookup
+	// 5. Arguments object: own property per ArgumentsOwnProperty (indices,
+	// length, callee, named, redefined or deleted), else its real
+	// [[Prototype]] chain (paserati#535).
 	if objVal.Type() == TypeArguments {
-		argObj := AsArguments(*objVal)
-		// Handle special arguments object properties
-		if propName == "length" {
-			*dest = Number(float64(argObj.Length()))
-			return true, InterpretOK, *dest
-		}
-		if propName == "callee" {
-			if argObj.IsStrict() {
-				// In strict mode, accessing 'callee' throws TypeError (proper TypeError object)
-				if frame != nil && !frameWasNil {
-					frame.ip = ip - 4
-				}
-				vm.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
-				if !vm.unwinding {
-					return false, InterpretOK, Undefined
-				}
-				return false, InterpretRuntimeError, Undefined
-			}
-			*dest = argObj.Callee()
-			return true, InterpretOK, *dest
-		}
-		// Check overflow named properties
-		if val, ok := argObj.GetNamedProp(propName); ok {
-			*dest = val
-			return true, InterpretOK, *dest
-		}
-		// Delegate to Object.prototype for inherited methods (NOT Array.prototype)
-		// Arguments objects have [[Prototype]] = Object.prototype per ES spec
-		// Symbol.iterator is an OWN property, handled separately in opGetPropSymbol
-		if vm.ObjectPrototype.Type() == TypeObject {
-			objProto := vm.ObjectPrototype.AsPlainObject()
-			if method, exists := objProto.GetOwn(propName); exists {
-				*dest = method
-				return true, InterpretOK, *dest
-			}
-		}
-		// Property not found on Object.prototype
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		return vm.argumentsGetProp(frame, ip, frameWasNil, *objVal, propName, dest)
 	}
 
 	// 6. General object property lookup
@@ -1090,56 +1054,24 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 		*dest = Undefined
 		return true, InterpretOK, *dest
 	case TypeArguments:
-		// Arguments objects: check own symbol properties first, then consult Array.prototype chain
+		// Own symbol property first (e.g. Symbol.iterator, set at creation),
+		// then the object's real [[Prototype]] chain - Object.prototype, not
+		// Array.prototype, which this used to walk (paserati#535).
 		argObj := base.AsArguments()
-		// Check own symbol property first (e.g., Symbol.iterator set during creation)
 		if v, ok := argObj.GetSymbolProp(symKey.AsSymbolObject()); ok {
 			*dest = v
-			if debugVM {
-				fmt.Printf("[DBG opGetPropSymbol] Arguments own[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
-			}
 			return true, InterpretOK, *dest
 		}
-		// Fall back to Array.prototype chain for symbol properties
-		proto := vm.ArrayPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if debugVM {
-				fmt.Printf("[DBG opGetPropSymbol] Looking up Array.prototype=%p for arguments symbol %s\n", po, symKey.AsSymbol())
-			}
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-				*dest = v
-				if debugVM {
-					fmt.Printf("[DBG opGetPropSymbol] Array.prototype[%s] -> %s (%s) for arguments\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
-				}
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
-							*dest = v
-							if debugVM {
-								fmt.Printf("[DBG opGetPropSymbol] Arguments proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
-							}
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
+		slot := vm.findSymbolSlot(vm.PrototypeOf(base), NewSymbolKey(symKey))
+		if !slot.found {
+			*dest = Undefined
+			return true, InterpretOK, *dest
 		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
+		if !slot.isAccessor {
+			*dest = slot.value
+			return true, InterpretOK, *dest
+		}
+		return vm.invokeSymbolGetter(frame, ip, frameWasNil, slot.getter, base, dest)
 	}
 
 	// RegExp: check own properties first, then RegExp.prototype chain for symbol properties

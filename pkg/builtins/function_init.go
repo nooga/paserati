@@ -196,8 +196,10 @@ func (f *FunctionInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Per ECMAScript spec, this is NOT extensible (unlike normal functions)
 	// Used for strict mode arguments.callee and arguments.caller accessors
 	throwTypeErrorFunc := vm.NewNativeFunction(0, false, "ThrowTypeError", func(args []vm.Value) (vm.Value, error) {
-		vmInstance.ThrowTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
-		return vm.Undefined, nil
+		// Returned, not thrown in-band: an in-band throw followed by a nil
+		// error was lost by vm.Call (a getter invocation) and by a plain
+		// call inside try, so strict arguments.callee read as undefined.
+		return vm.Undefined, vmInstance.NewTypeError("'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them")
 	})
 	vmInstance.ThrowTypeErrorFunc = throwTypeErrorFunc
 

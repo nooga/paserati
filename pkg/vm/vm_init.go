@@ -1063,7 +1063,7 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 				return args.Callee(), nil
 			}
 			// Check for numeric index access. Goes through argumentsGet (see
-			// arguments_props.go) rather than the raw Get()/mappedRegs fast
+			// arguments_props.go) rather than the raw Get()/mapped-slot fast
 			// path so a defineProperty-installed accessor or an explicit
 			// deletion is respected instead of always reading the live
 			// value straight through.

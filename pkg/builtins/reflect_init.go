@@ -778,6 +778,10 @@ func reflectSetDispatch(vmInstance *vm.VM, target vm.Value, propKey string, valu
 	if vm.IsPlainSideTableKind(target) {
 		return reflectOrdinarySet(vmInstance, target, propKey, value, receiver)
 	}
+	// arguments: its own [[Set]] when it is also the receiver (paserati#535).
+	if target.Type() == vm.TypeArguments && receiver == target {
+		return vmInstance.ArgumentsSet(target.AsArguments(), propKey, value)
+	}
 
 	// target is some other kind this function doesn't model a set for.
 	// Matches this function's prior behavior for every kind it didn't have
@@ -821,6 +825,11 @@ func reflectSetDispatchByKey(vmInstance *vm.VM, target vm.Value, sym vm.Value, v
 	}
 	if vm.IsPlainSideTableKind(target) {
 		return reflectOrdinarySetByKey(vmInstance, target, sym, value, receiver)
+	}
+	if target.Type() == vm.TypeArguments && receiver == target {
+		if symObj := sym.AsSymbolObject(); symObj != nil {
+			return target.AsArguments().SetSymbolChecked(symObj, value), nil
+		}
 	}
 
 	return false, nil
@@ -1163,7 +1172,8 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 		switch target.Type() {
 		case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction,
 			vm.TypeRegExp, vm.TypeTypedArray, vm.TypeMap, vm.TypeSet, vm.TypePromise, vm.TypeArrayBuffer, vm.TypeSharedArrayBuffer,
-			vm.TypeDataView, vm.TypeWeakMap, vm.TypeWeakSet, vm.TypeWeakRef, vm.TypeFinalizationRegistry, vm.TypeGenerator, vm.TypeAsyncGenerator:
+			vm.TypeDataView, vm.TypeWeakMap, vm.TypeWeakSet, vm.TypeWeakRef, vm.TypeFinalizationRegistry, vm.TypeGenerator, vm.TypeAsyncGenerator,
+			vm.TypeArguments:
 			// Names then symbols. The non-callable kinds on the second and
 			// third lines had no case and always answered [] (paserati#528/#529).
 			//
