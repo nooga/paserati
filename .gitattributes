@@ -1,0 +1,3 @@
+# Smoke-test scripts compare exact source text (e.g. Function.prototype.toString),
+# so keep them LF on every platform instead of CRLF on Windows checkouts.
+tests/scripts/** text eol=lf
