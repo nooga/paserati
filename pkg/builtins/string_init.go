@@ -2420,7 +2420,8 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Create a string iterator object
 		return createStringIterator(vmInstance, thisStr), nil
 	})
-	stringProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), strIterFn, nil, nil, nil)
+	strIterW, strIterE, strIterC := true, false, true
+	stringProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolIterator), strIterFn, &strIterW, &strIterE, &strIterC)
 
 	// Set String prototype in VM
 	vmInstance.StringPrototype = vm.NewValueFromPlainObject(stringProto)

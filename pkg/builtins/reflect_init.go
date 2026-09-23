@@ -1152,164 +1152,7 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, vmInstance.NewTypeError("Reflect.ownKeys requires 1 argument")
 		}
 		target := args[0]
-
-		// Every sibling Reflect method in this file (get/set/has/apply/
-		// construct/...) gates on "!IsObject() && !IsCallable()" - this one
-		// used to gate on "!IsObject()" alone, so it threw a TypeError
-		// outright for a plain function, a class, a native function, a
-		// native constructor, or a bound function - values every other
-		// Reflect method here already accepts. Confirmed against Node:
-		// Reflect.ownKeys(Array.prototype.slice) is ["length","name"]
-		// there, not a throw.
-		if !target.IsObject() && !target.IsCallable() {
-			return vm.Undefined, vmInstance.NewTypeError("Reflect.ownKeys called on non-object")
-		}
-
-		// Get all own keys (including non-enumerable, unlike Object.keys)
-		keysArray := vm.NewArray()
-		arr := keysArray.AsArray()
-
-		switch target.Type() {
-		case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction,
-			vm.TypeRegExp, vm.TypeTypedArray, vm.TypeMap, vm.TypeSet, vm.TypePromise, vm.TypeArrayBuffer, vm.TypeSharedArrayBuffer,
-			vm.TypeDataView, vm.TypeWeakMap, vm.TypeWeakSet, vm.TypeWeakRef, vm.TypeFinalizationRegistry, vm.TypeGenerator, vm.TypeAsyncGenerator,
-			vm.TypeArguments:
-			// Names then symbols. The non-callable kinds on the second and
-			// third lines had no case and always answered [] (paserati#528/#529).
-			//
-			// Fixing the gate above just made these five kinds reach this
-			// switch instead of throwing - but the switch itself had no
-			// case for any of them, so they'd have fallen through to
-			// "return keysArray, nil" and answered [] instead of actually
-			// throwing OR actually working (silently wrong either way).
-			//
-			// Rather than hand-rolling a THIRD independent per-kind
-			// name/length/prototype synthesis switch alongside
-			// objectGetOwnPropertyNamesWithVM's (Object.getOwnPropertyNames)
-			// and objectGetOwnPropertySymbolsWithVM's (Object.
-			// getOwnPropertySymbols) own already-correct ones - the exact
-			// "N independent copies of the same per-kind dispatch slowly
-			// drift apart" pattern behind most of this session's bug
-			// fixes - delegate straight to those two for these five kinds
-			// only (TypeObject/TypeDictObject/TypeArray/TypeProxy below
-			// keep their own existing, already-correct logic exactly as
-			// it was; TypeNativeFunction/TypeBoundFunction were just added
-			// to objectGetOwnPropertyNamesWithVM as part of this same fix,
-			// since it had no case for either of them either - the same
-			// gap, just one level down).
-			//
-			// Per ECMAScript 10.1.11 OrdinaryOwnPropertyKeys, Reflect.
-			// ownKeys's required order - integer indices ascending, then
-			// string keys in creation order, then symbol keys in creation
-			// order - is exactly what concatenating these two functions'
-			// own outputs already produces, so no reordering is needed
-			// here.
-			namesVal, err := objectGetOwnPropertyNamesWithVM(vmInstance, []vm.Value{target})
-			if err != nil {
-				return vm.Undefined, err
-			}
-			if namesVal.Type() == vm.TypeArray {
-				namesArr := namesVal.AsArray()
-				for i := 0; i < namesArr.Length(); i++ {
-					arr.Append(namesArr.Get(i))
-				}
-			}
-			symsVal, err := objectGetOwnPropertySymbolsWithVM(vmInstance, []vm.Value{target})
-			if err != nil {
-				return vm.Undefined, err
-			}
-			if symsVal.Type() == vm.TypeArray {
-				symsArr := symsVal.AsArray()
-				for i := 0; i < symsArr.Length(); i++ {
-					arr.Append(symsArr.Get(i))
-				}
-			}
-			return keysArray, nil
-		case vm.TypeObject:
-			obj := target.AsPlainObject()
-			// 1. String keys (all, including non-enumerable)
-			for _, key := range obj.OwnPropertyNames() {
-				arr.Append(vm.NewString(key))
-			}
-			// 2. Symbol keys
-			for _, sym := range obj.OwnSymbolKeys() {
-				arr.Append(sym)
-			}
-		case vm.TypeDictObject:
-			// DictObject only supports string keys for now
-			for _, key := range target.AsDictObject().OwnPropertyNames() {
-				arr.Append(vm.NewString(key))
-			}
-		case vm.TypeArray:
-			// This used to hand-roll its own index/sparse-index/"length"
-			// logic - byte-for-byte identical to
-			// objectGetOwnPropertyNamesWithVM's own TypeArray case except
-			// for one thing: it never appended NAMED (non-index) string
-			// properties at all, so an array with an ad-hoc property like
-			// `arr.foo = "bar"` was missing "foo" from Reflect.ownKeys even
-			// though Object.getOwnPropertyNames(arr) correctly included it
-			// (verified against Node, which lists it in both). It also had
-			// no symbol-key coverage whatsoever - ArrayObject.OwnSymbolKeys
-			// (pkg/vm/value.go) is a brand-new method this exact fix added,
-			// since Object.getOwnPropertySymbols had no TypeArray case
-			// either before this.
-			//
-			// Rather than hand-rolling BOTH gaps' worth of duplicate logic
-			// a second time in a second independent switch - the "N
-			// independent copies of the same per-kind dispatch slowly
-			// drift apart" pattern behind most of this session's bug
-			// fixes, and exactly how this array case ended up missing
-			// named properties while its sibling function didn't - this
-			// now delegates to objectGetOwnPropertyNamesWithVM +
-			// objectGetOwnPropertySymbolsWithVM, mirroring the five
-			// callable kinds' own delegation above (task_06547fb2). Their
-			// index/sparse-index/"length" handling is already identical to
-			// what this case had, so this is a pure superset: same output
-			// for everything that already worked, plus the two gaps closed.
-			namesVal, err := objectGetOwnPropertyNamesWithVM(vmInstance, []vm.Value{target})
-			if err != nil {
-				return vm.Undefined, err
-			}
-			if namesVal.Type() == vm.TypeArray {
-				namesArr := namesVal.AsArray()
-				for i := 0; i < namesArr.Length(); i++ {
-					arr.Append(namesArr.Get(i))
-				}
-			}
-			symsVal, err := objectGetOwnPropertySymbolsWithVM(vmInstance, []vm.Value{target})
-			if err != nil {
-				return vm.Undefined, err
-			}
-			if symsVal.Type() == vm.TypeArray {
-				symsArr := symsVal.AsArray()
-				for i := 0; i < symsArr.Length(); i++ {
-					arr.Append(symsArr.Get(i))
-				}
-			}
-		case vm.TypeProxy:
-			// This used to claim (inaccurately) to "delegate to
-			// Object.getOwnPropertyNames + getOwnPropertySymbols as a
-			// simplification" - but the delegation target itself had no
-			// TypeProxy case at all (objectGetOwnPropertyNamesWithVM,
-			// object_init.go), so the "simplification" was a complete
-			// no-op: Reflect.ownKeys on ANY Proxy, trap or no trap,
-			// always answered [] before this fix. proxyOwnPropertyKeys
-			// (object_init.go) is the real, shared ECMA-262 10.5.11
-			// [[OwnPropertyKeys]] implementation - see its own comment for
-			// what it does and doesn't validate - used here directly
-			// rather than through Object.getOwnPropertyNames, since this
-			// caller wants the FULL mixed string+symbol result, not one
-			// filtered half of it.
-			keys, err := proxyOwnPropertyKeys(vmInstance, target)
-			if err != nil {
-				return vm.Undefined, err
-			}
-			for _, k := range keys {
-				arr.Append(k)
-			}
-		}
-
-		return keysArray, nil
+		return reflectOwnKeysWithVM(vmInstance, target)
 	}))
 
 	// Reflect.isExtensible(target) - must be an object
@@ -1497,4 +1340,167 @@ func (r *ReflectInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Define Reflect globally
 	return ctx.DefineGlobal("Reflect", vm.NewValueFromPlainObject(reflectObj))
+}
+
+// reflectOwnKeysWithVM is Reflect.ownKeys: target.[[OwnPropertyKeys]]() as an
+// array (TypeError for a non-object target).
+func reflectOwnKeysWithVM(vmInstance *vm.VM, target vm.Value) (vm.Value, error) {
+
+	// Every sibling Reflect method in this file (get/set/has/apply/
+	// construct/...) gates on "!IsObject() && !IsCallable()" - this one
+	// used to gate on "!IsObject()" alone, so it threw a TypeError
+	// outright for a plain function, a class, a native function, a
+	// native constructor, or a bound function - values every other
+	// Reflect method here already accepts. Confirmed against Node:
+	// Reflect.ownKeys(Array.prototype.slice) is ["length","name"]
+	// there, not a throw.
+	if !target.IsObject() && !target.IsCallable() {
+		return vm.Undefined, vmInstance.NewTypeError("Reflect.ownKeys called on non-object")
+	}
+
+	// Get all own keys (including non-enumerable, unlike Object.keys)
+	keysArray := vm.NewArray()
+	arr := keysArray.AsArray()
+
+	switch target.Type() {
+	case vm.TypeFunction, vm.TypeClosure, vm.TypeNativeFunction, vm.TypeNativeFunctionWithProps, vm.TypeBoundFunction,
+		vm.TypeRegExp, vm.TypeTypedArray, vm.TypeMap, vm.TypeSet, vm.TypePromise, vm.TypeArrayBuffer, vm.TypeSharedArrayBuffer,
+		vm.TypeDataView, vm.TypeWeakMap, vm.TypeWeakSet, vm.TypeWeakRef, vm.TypeFinalizationRegistry, vm.TypeGenerator, vm.TypeAsyncGenerator,
+		vm.TypeArguments:
+		// Names then symbols. The non-callable kinds on the second and
+		// third lines had no case and always answered [] (paserati#528/#529).
+		//
+		// Fixing the gate above just made these five kinds reach this
+		// switch instead of throwing - but the switch itself had no
+		// case for any of them, so they'd have fallen through to
+		// "return keysArray, nil" and answered [] instead of actually
+		// throwing OR actually working (silently wrong either way).
+		//
+		// Rather than hand-rolling a THIRD independent per-kind
+		// name/length/prototype synthesis switch alongside
+		// objectGetOwnPropertyNamesWithVM's (Object.getOwnPropertyNames)
+		// and objectGetOwnPropertySymbolsWithVM's (Object.
+		// getOwnPropertySymbols) own already-correct ones - the exact
+		// "N independent copies of the same per-kind dispatch slowly
+		// drift apart" pattern behind most of this session's bug
+		// fixes - delegate straight to those two for these five kinds
+		// only (TypeObject/TypeDictObject/TypeArray/TypeProxy below
+		// keep their own existing, already-correct logic exactly as
+		// it was; TypeNativeFunction/TypeBoundFunction were just added
+		// to objectGetOwnPropertyNamesWithVM as part of this same fix,
+		// since it had no case for either of them either - the same
+		// gap, just one level down).
+		//
+		// Per ECMAScript 10.1.11 OrdinaryOwnPropertyKeys, Reflect.
+		// ownKeys's required order - integer indices ascending, then
+		// string keys in creation order, then symbol keys in creation
+		// order - is exactly what concatenating these two functions'
+		// own outputs already produces, so no reordering is needed
+		// here.
+		namesVal, err := objectGetOwnPropertyNamesWithVM(vmInstance, []vm.Value{target})
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if namesVal.Type() == vm.TypeArray {
+			namesArr := namesVal.AsArray()
+			for i := 0; i < namesArr.Length(); i++ {
+				arr.Append(namesArr.Get(i))
+			}
+		}
+		symsVal, err := objectGetOwnPropertySymbolsWithVM(vmInstance, []vm.Value{target})
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if symsVal.Type() == vm.TypeArray {
+			symsArr := symsVal.AsArray()
+			for i := 0; i < symsArr.Length(); i++ {
+				arr.Append(symsArr.Get(i))
+			}
+		}
+		return keysArray, nil
+	case vm.TypeObject:
+		obj := target.AsPlainObject()
+		// 1. String keys (all, including non-enumerable)
+		for _, key := range obj.OwnPropertyNames() {
+			arr.Append(vm.NewString(key))
+		}
+		// 2. Symbol keys
+		for _, sym := range obj.OwnSymbolKeys() {
+			arr.Append(sym)
+		}
+	case vm.TypeDictObject:
+		// DictObject only supports string keys for now
+		for _, key := range target.AsDictObject().OwnPropertyNames() {
+			arr.Append(vm.NewString(key))
+		}
+	case vm.TypeArray:
+		// This used to hand-roll its own index/sparse-index/"length"
+		// logic - byte-for-byte identical to
+		// objectGetOwnPropertyNamesWithVM's own TypeArray case except
+		// for one thing: it never appended NAMED (non-index) string
+		// properties at all, so an array with an ad-hoc property like
+		// `arr.foo = "bar"` was missing "foo" from Reflect.ownKeys even
+		// though Object.getOwnPropertyNames(arr) correctly included it
+		// (verified against Node, which lists it in both). It also had
+		// no symbol-key coverage whatsoever - ArrayObject.OwnSymbolKeys
+		// (pkg/vm/value.go) is a brand-new method this exact fix added,
+		// since Object.getOwnPropertySymbols had no TypeArray case
+		// either before this.
+		//
+		// Rather than hand-rolling BOTH gaps' worth of duplicate logic
+		// a second time in a second independent switch - the "N
+		// independent copies of the same per-kind dispatch slowly
+		// drift apart" pattern behind most of this session's bug
+		// fixes, and exactly how this array case ended up missing
+		// named properties while its sibling function didn't - this
+		// now delegates to objectGetOwnPropertyNamesWithVM +
+		// objectGetOwnPropertySymbolsWithVM, mirroring the five
+		// callable kinds' own delegation above (task_06547fb2). Their
+		// index/sparse-index/"length" handling is already identical to
+		// what this case had, so this is a pure superset: same output
+		// for everything that already worked, plus the two gaps closed.
+		namesVal, err := objectGetOwnPropertyNamesWithVM(vmInstance, []vm.Value{target})
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if namesVal.Type() == vm.TypeArray {
+			namesArr := namesVal.AsArray()
+			for i := 0; i < namesArr.Length(); i++ {
+				arr.Append(namesArr.Get(i))
+			}
+		}
+		symsVal, err := objectGetOwnPropertySymbolsWithVM(vmInstance, []vm.Value{target})
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if symsVal.Type() == vm.TypeArray {
+			symsArr := symsVal.AsArray()
+			for i := 0; i < symsArr.Length(); i++ {
+				arr.Append(symsArr.Get(i))
+			}
+		}
+	case vm.TypeProxy:
+		// This used to claim (inaccurately) to "delegate to
+		// Object.getOwnPropertyNames + getOwnPropertySymbols as a
+		// simplification" - but the delegation target itself had no
+		// TypeProxy case at all (objectGetOwnPropertyNamesWithVM,
+		// object_init.go), so the "simplification" was a complete
+		// no-op: Reflect.ownKeys on ANY Proxy, trap or no trap,
+		// always answered [] before this fix. proxyOwnPropertyKeys
+		// (object_init.go) is the real, shared ECMA-262 10.5.11
+		// [[OwnPropertyKeys]] implementation - see its own comment for
+		// what it does and doesn't validate - used here directly
+		// rather than through Object.getOwnPropertyNames, since this
+		// caller wants the FULL mixed string+symbol result, not one
+		// filtered half of it.
+		keys, err := proxyOwnPropertyKeys(vmInstance, target)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		for _, k := range keys {
+			arr.Append(k)
+		}
+	}
+
+	return keysArray, nil
 }
