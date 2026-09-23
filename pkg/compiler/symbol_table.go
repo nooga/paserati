@@ -206,6 +206,15 @@ func (st *SymbolTable) DefineConstTDZSpilled(name string, spillIndex uint16) Sym
 	return symbol
 }
 
+// MarkTDZ puts a let/const symbol back under a runtime TDZ check, for code
+// that can run without the declaration having executed (a later switch case).
+func (st *SymbolTable) MarkTDZ(name string) {
+	if symbol, ok := st.store[name]; ok {
+		symbol.IsTDZ = true
+		st.store[name] = symbol
+	}
+}
+
 // InitializeTDZ marks a TDZ symbol as initialized, allowing it to be accessed.
 // This should be called when the let/const declaration is actually executed.
 func (st *SymbolTable) InitializeTDZ(name string) {

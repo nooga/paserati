@@ -1959,8 +1959,9 @@ startExecution:
 			registers[reg] = Uninitialized // TDZ marker for let/const
 
 		case OpCheckUninitialized:
-			// TDZ check: throws ReferenceError if register contains uninitialized value
-			// Self-rewrites to OpNop on success for performance (check only runs once)
+			// TDZ check: throws ReferenceError if register contains uninitialized value.
+			// It must run every time: the same site can see an initialized binding on
+			// one execution and an uninitialized one on the next (switch cases).
 			reg := code[ip]
 			ip++
 			if registers[reg].typ == TypeUninitialized {
@@ -1979,8 +1980,6 @@ startExecution:
 				}
 				return InterpretRuntimeError, Undefined
 			}
-			// Self-rewrite to OpNop: opcode is at ip-2 (we advanced ip past opcode and operand)
-			code[ip-2] = byte(OpNop)
 
 		case OpCloseUpvalue:
 			// Close any open upvalue pointing to the specified register.
