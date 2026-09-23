@@ -10167,7 +10167,7 @@ startExecution:
 						AsPlainObject(destVal).SetOwn(key, value)
 					}
 				}
-				for _, name := range arr.AccessorKeys() {
+				for _, name := range arr.OwnNamedKeys() {
 					// tryParseArrayIndex, not LooksLikeArrayIndex: the latter has
 					// no upper bound, so an out-of-range numeric key like
 					// "4294967295" would look like an index here and get
@@ -10181,7 +10181,18 @@ startExecution:
 						continue // an index accessor - already handled above
 					}
 					getter, _, enumerable, _, isAccessor := arr.GetOwnAccessor(name)
-					if !isAccessor || !enumerable {
+					if !isAccessor {
+						// A named data property, e.g. `arr.foo = "bar"`.
+						if value, enumerable, ok := arr.GetNamedPropertyDescriptor(name); ok && enumerable {
+							if destVal.Type() == TypeDictObject {
+								AsDictObject(destVal).SetOwn(name, value)
+							} else {
+								AsPlainObject(destVal).SetOwn(name, value)
+							}
+						}
+						continue
+					}
+					if !enumerable {
 						continue
 					}
 					var value Value
@@ -10207,23 +10218,6 @@ startExecution:
 						value = res
 					} else {
 						value = Undefined
-					}
-					if destVal.Type() == TypeDictObject {
-						AsDictObject(destVal).SetOwn(name, value)
-					} else {
-						AsPlainObject(destVal).SetOwn(name, value)
-					}
-				}
-				for _, name := range arr.NamedPropertyKeys() {
-					// tryParseArrayIndex - see the matching comment on the
-					// AccessorKeys loop above for why this can't be
-					// LooksLikeArrayIndex.
-					if _, isIndex := tryParseArrayIndex(name); isIndex {
-						continue // a sparse index sharing this map - already handled above
-					}
-					value, enumerable, ok := arr.GetNamedPropertyDescriptor(name)
-					if !ok || !enumerable {
-						continue
 					}
 					if destVal.Type() == TypeDictObject {
 						AsDictObject(destVal).SetOwn(name, value)
@@ -14774,19 +14768,12 @@ startExecution:
 				// vanishing from enumeration entirely (see the matching
 				// object-spread TypeArray case above for the full
 				// explanation of that predicate mismatch).
-				for _, key := range arr.AccessorKeys() {
-					if _, isIndex := tryParseArrayIndex(key); isIndex {
-						continue
-					}
-					if _, _, enumerable, _, isAccessor := arr.GetOwnAccessor(key); isAccessor && enumerable {
-						keys = append(keys, key)
-					}
-				}
-				for _, key := range arr.NamedPropertyKeys() {
-					if _, isIndex := tryParseArrayIndex(key); isIndex {
-						continue
-					}
-					if _, enumerable, ok := arr.GetNamedPropertyDescriptor(key); ok && enumerable {
+				for _, key := range arr.OwnNamedKeys() {
+					if _, _, enumerable, _, isAccessor := arr.GetOwnAccessor(key); isAccessor {
+						if enumerable {
+							keys = append(keys, key)
+						}
+					} else if _, enumerable, ok := arr.GetNamedPropertyDescriptor(key); ok && enumerable {
 						keys = append(keys, key)
 					}
 				}
@@ -16874,6 +16861,25 @@ startExecution:
 					d := obj.AsDictObject()
 					// DictObject properties are always configurable, no strict mode check needed
 					success = d.DeleteOwn(propName)
+				} else if obj.Type() == TypeArray {
+					// Used to fall through this chain: `delete arr.x` answered
+					// false and kept x, while `delete arr["x"]` worked.
+					arr := obj.AsArray()
+					if idx, isIndex := tryParseArrayIndex(propName); isIndex {
+						success = arr.DeleteIndex(idx)
+					} else if propName == "length" {
+						success = false // non-configurable
+					} else {
+						success = arr.DeleteOwn(propName)
+					}
+					if !success && function.Chunk.IsStrict {
+						frame.ip = ip
+						vm.ThrowTypeError("Cannot delete property '" + propName + "' of [object Array]")
+						if vm.frameCount == 0 || vm.unwindingCrossedNative {
+							return InterpretRuntimeError, vm.currentException
+						}
+						goto reloadFrame
+					}
 				} else if obj.Type() == TypeArguments {
 					// Used to fall through this chain: `delete arguments.x`
 					// answered false and kept x (paserati#535).
@@ -17424,6 +17430,8 @@ startExecution:
 					keyStr := key.ToString()
 					if idx, isNumeric := tryParseArrayIndex(keyStr); isNumeric {
 						success = arr.DeleteIndex(idx)
+					} else if keyStr == "length" {
+						success = false // non-configurable
 					} else {
 						success = arr.DeleteOwn(keyStr)
 					}

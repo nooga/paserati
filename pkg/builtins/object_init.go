@@ -1599,12 +1599,7 @@ func objectDefinePropertiesImpl(vmInstance *vm.VM, obj vm.Value, propertiesDesc 
 				keys = append(keys, strconv.Itoa(i))
 			}
 			// Include named properties (like "prop" in the test)
-			for _, key := range arr.NamedPropertyKeys() {
-				// Check if enumerable
-				if _, enumerable, ok := arr.GetNamedPropertyDescriptor(key); ok && enumerable {
-					keys = append(keys, key)
-				}
-			}
+			keys = append(keys, arrayNamedKeys(arr, true)...)
 		}
 	default:
 		// For function types and others, try to get as PlainObject if possible
@@ -1828,23 +1823,13 @@ func arrayDenseIndexValue(vmInstance *vm.VM, a *vm.ArrayObject, receiver vm.Valu
 // regardless of enumerability).
 func arrayNamedKeys(a *vm.ArrayObject, enumerableOnly bool) []string {
 	var keys []string
-	for _, name := range a.AccessorKeys() {
-		if _, isIndex := vm.ParseArrayIndex(name); isIndex {
-			continue
-		}
+	for _, name := range a.OwnNamedKeys() {
 		if enumerableOnly {
-			if _, _, enumerable, _, isAccessor := a.GetOwnAccessor(name); !isAccessor || !enumerable {
-				continue
-			}
-		}
-		keys = append(keys, name)
-	}
-	for _, name := range a.NamedPropertyKeys() {
-		if _, isIndex := vm.ParseArrayIndex(name); isIndex {
-			continue
-		}
-		if enumerableOnly {
-			if _, enumerable, ok := a.GetNamedPropertyDescriptor(name); !ok || !enumerable {
+			if _, _, enumerable, _, isAccessor := a.GetOwnAccessor(name); isAccessor {
+				if !enumerable {
+					continue
+				}
+			} else if _, enumerable, ok := a.GetNamedPropertyDescriptor(name); !ok || !enumerable {
 				continue
 			}
 		}
@@ -3949,45 +3934,10 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			// own vm.ParseArrayIndex-based filter (used below) also rejects it
 			// as too big - the two filters must use the SAME predicate or a
 			// key can fall in the gap between them and vanish entirely.
-			for _, name := range arrObj.AccessorKeys() {
-				if _, isIndex := vm.ParseArrayIndex(name); isIndex {
-					continue
-				}
-				getter, _, enumerable, _, isAccessor := arrObj.GetOwnAccessor(name)
-				if !isAccessor || !enumerable {
-					continue
-				}
-				var value vm.Value
-				if getter.Type() == vm.TypeUndefined {
-					value = vm.Undefined
-				} else {
-					var err error
-					value, err = vmInstance.Call(getter, source, nil)
-					if err != nil {
-						return vm.Undefined, err
-					}
-				}
-				if err := setObjectAssignTargetProperty(vmInstance, target, name, value); err != nil {
+			for _, name := range arrayNamedKeys(arrObj, true) {
+				value, err := arrayNamedKeyValue(vmInstance, arrObj, source, name)
+				if err != nil {
 					return vm.Undefined, err
-				}
-			}
-			// Named (non-index) plain data properties, e.g. `arr.foo = "bar"`.
-			// NamedPropertyKeys() (despite its doc comment) also returns any
-			// sparse-index key sharing the same `properties` map - already
-			// handled above via arraySparseIndices - so vm.ParseArrayIndex
-			// filters those back out here, the exact same predicate
-			// arraySparseIndices itself uses to find only the ones that ARE
-			// indices (not vm.LooksLikeArrayIndex, which has no upper bound
-			// and would leave an out-of-range numeric key like
-			// "4294967295" matched by neither filter - see the AccessorKeys
-			// loop above for the full explanation).
-			for _, name := range arrObj.NamedPropertyKeys() {
-				if _, isIndex := vm.ParseArrayIndex(name); isIndex {
-					continue
-				}
-				value, enumerable, ok := arrObj.GetNamedPropertyDescriptor(name)
-				if !ok || !enumerable {
-					continue
 				}
 				if err := setObjectAssignTargetProperty(vmInstance, target, name, value); err != nil {
 					return vm.Undefined, err
