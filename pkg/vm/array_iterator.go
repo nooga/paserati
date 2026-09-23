@@ -2,7 +2,6 @@ package vm
 
 import (
 	"strconv"
-	"unsafe"
 )
 
 // BuiltinIterState is the shared mutable state behind the built-in
@@ -25,6 +24,11 @@ type BuiltinIterState struct {
 	Arr  *ArrayObject     // IterKindArrayValues/Keys/Entries when the source is a real array
 	Args *ArgumentsObject // IterKindArguments
 	Like *PlainObject     // array-like source for Keys/Entries/LikeValues (may be nil -> length 0)
+	// LikeSrc is the array-like source itself (any value) when the
+	// iterator is not over a real array; the native next reads it with
+	// full [[Get]] (length and each index), so the raw Like fast path
+	// is never used for it.
+	LikeSrc Value
 	Str  []uint16         // IterKindString: UTF-16 code units of the iterated string
 	M    *MapObject       // IterKindMapKeys/Values/Entries
 	S    *SetObject       // IterKindSetValues/Entries
@@ -60,6 +64,27 @@ func (k IterKind) IsMapKind() bool {
 }
 func (k IterKind) IsSetKind() bool {
 	return k == IterKindSetValues || k == IterKindSetEntries
+}
+
+// fastIterEligible is OpIterFastCheck: the for-of loop may step the iterator
+// with raw Step() calls. An array source whose prototype chain has index
+// properties needs [[Get]] on its holes, so it takes the call path (checked
+// once per loop, like the next-method identity).
+func (vm *VM) fastIterEligible(iterVal, nextVal Value) bool {
+	st := resolveFastIterState(iterVal, nextVal)
+	if st == nil {
+		return false
+	}
+	switch st.Kind {
+	case IterKindArrayValues, IterKindArrayEntries, IterKindArrayKeys, IterKindLikeValues:
+		if st.LikeSrc.typ != TypeUndefined {
+			return false // array-like source: read with [[Get]] by the native next
+		}
+		if st.Arr != nil && st.Kind != IterKindArrayKeys {
+			return vm.arrayMissingIndexIsUndefined(st.Arr)
+		}
+	}
+	return true
 }
 
 // resolveFastIterState returns the steppable iterator state for the for-of
@@ -110,7 +135,8 @@ func resolveFastIterState(iterVal, nextVal Value) *BuiltinIterState {
 // yields), so OpArrayRawGetInt reproduces it bit-for-bit. Any instance- or
 // prototype-level override of Symbol.iterator fails the identity check and the
 // caller falls back to the generic protocol, as does an array with an own
-// accessor property, whose getter a raw index read would skip.
+// accessor property or with index properties on its prototype chain, which
+// a raw index read would skip.
 //
 // Symbol.iterator is resolved the way opGetPropSymbol resolves it — own symbol
 // properties, then the per-instance prototype override (`class X extends Array`),
@@ -124,9 +150,10 @@ func (vm *VM) isFastDestructureArray(v Value) bool {
 		return false
 	}
 	arr := v.AsArray()
-	if arr == nil || arr.HasAccessors() {
-		// Raw index reads skip an own accessor's getter; the protocol
-		// path (StepVM) calls it.
+	if arr == nil || arr.HasAccessors() || !vm.arrayMissingIndexIsUndefined(arr) {
+		// Raw index reads skip an own accessor's getter and an inherited
+		// index property a hole should read through to; the protocol path
+		// (StepVM) does a full [[Get]].
 		return false
 	}
 
@@ -335,49 +362,18 @@ func (st *BuiltinIterState) Step() (Value, bool) {
 	return Undefined, true
 }
 
-// getOwnIndexed reads the array's index i via ordinary [[Get]]: an own
-// accessor property at that index (get/set installed via
-// Object.defineProperty, at any index - DefineAccessorProperty never touches
-// `elements`, so an accessor index's raw slot is stale or a leftover Hole,
-// not the value [[Get]] must produce) has its getter called with the array
-// itself as `this` (a setter-only accessor reads as undefined, matching
-// ordinary [[Get]] on an accessor with no getter, without calling anything);
-// otherwise falls back to the raw element via Get, which is already
-// bounds/hole safe. Mirrors the accessor-first-then-raw-element precedence
-// arrayLikeGet (pkg/builtins/array_generic.go) uses for the generic
-// Array.prototype methods, applied here for the shared array values/entries
-// iterator state that backs for-of, spread's generic iterator-protocol
-// fallback, and iterator-protocol destructuring - including rest
-// (`const [x, ...rest] = arr`), which always takes the full generic path
-// since a rest element disables the destructuring fast path
-// (arrayDeclPatternFastEligible).
-func (a *ArrayObject) getOwnIndexed(vmInstance *VM, i int) (Value, error) {
-	key := strconv.Itoa(i)
-	if getter, _, _, _, ok := a.GetOwnAccessor(key); ok {
-		if getter.Type() == TypeUndefined {
-			return Undefined, nil
-		}
-		return vmInstance.Call(getter, Value{typ: TypeArray, obj: unsafe.Pointer(a)}, nil)
-	}
-	return a.Get(i), nil
-}
-
 // StepVM behaves exactly like Step, except for IterKindArrayValues and
-// IterKindArrayEntries when the source array has at least one own accessor
-// property: those two kinds read an element via getOwnIndexed instead of
-// Step()'s raw Arr.Get, so an own accessor's getter runs. Step() itself
-// can't do this - it has no VM to call the getter with and no way to report
-// a thrown exception - which is exactly why callers that can only tolerate
-// the fast, error-free Step() (the OpFastIterNext dispatch-loop opcode) bail
-// to the generic iterator-protocol call path up front instead, via
-// resolveFastIterState's own HasAccessors check. StepVM is for the one
-// caller that already goes through a real call and has an error channel to
-// use: the native `next` closure (makeBuiltinIterNext).
+// IterKindArrayEntries when the source array has an own accessor property or
+// index properties on its prototype chain: those kinds read each element
+// with a full [[Get]] (arrayGetIndex), so a getter runs and a hole reads
+// through to the prototype. Step() can't - it has no VM to call a getter
+// with and no way to report a thrown exception - which is why the
+// OpFastIterNext opcode's loops are gated by fastIterEligible up front.
+// StepVM is for the caller that goes through a real call and has an error
+// channel: the native `next` closure (makeBuiltinIterNext).
 //
-// A getter is arbitrary script: it can shrink the array's own backing
-// storage mid-loop (`a.length = 0`, `a.pop()`, ...). No extra guard is
-// needed for that here, the same way Step()'s own IterKindArrayValues case
-// needs none - Length() and getOwnIndexed's Get fallback are both re-read
+// A getter is arbitrary script: it can shrink the array mid-loop
+// (`a.length = 0`, `a.pop()`, ...). Length() and arrayGetIndex are re-read
 // live on every step, so a shrunk array simply reports done sooner instead
 // of a Go slice-bounds panic.
 func (st *BuiltinIterState) StepVM(vmInstance *VM) (Value, bool, error) {
@@ -386,7 +382,7 @@ func (st *BuiltinIterState) StepVM(vmInstance *VM) (Value, bool, error) {
 	}
 	switch st.Kind {
 	case IterKindArrayValues:
-		if st.Arr == nil || !st.Arr.HasAccessors() {
+		if st.Arr == nil || (!st.Arr.HasAccessors() && vmInstance.arrayMissingIndexIsUndefined(st.Arr)) {
 			v, done := st.Step()
 			return v, done, nil
 		}
@@ -396,14 +392,14 @@ func (st *BuiltinIterState) StepVM(vmInstance *VM) (Value, bool, error) {
 		}
 		idx := st.Index
 		st.Index++
-		v, err := st.Arr.getOwnIndexed(vmInstance, idx)
+		v, err := vmInstance.arrayGetIndex(st.Arr, idx)
 		if err != nil {
 			return Undefined, false, err
 		}
 		return v, false, nil
 
 	case IterKindArrayEntries:
-		if st.Arr == nil || !st.Arr.HasAccessors() {
+		if st.Arr == nil || (!st.Arr.HasAccessors() && vmInstance.arrayMissingIndexIsUndefined(st.Arr)) {
 			v, done := st.Step()
 			return v, done, nil
 		}
@@ -413,7 +409,7 @@ func (st *BuiltinIterState) StepVM(vmInstance *VM) (Value, bool, error) {
 		}
 		idx := st.Index
 		st.Index++
-		elem, err := st.Arr.getOwnIndexed(vmInstance, idx)
+		elem, err := vmInstance.arrayGetIndex(st.Arr, idx)
 		if err != nil {
 			return Undefined, false, err
 		}

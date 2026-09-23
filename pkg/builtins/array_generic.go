@@ -180,6 +180,12 @@ func arrayIndexGetFromProto(vmInstance *vm.VM, arr *vm.ArrayObject, receiver vm.
 	if proto.Type() != vm.TypeObject {
 		proto = vmInstance.ArrayPrototype
 	}
+	return protoChainGet(vmInstance, proto, receiver, key)
+}
+
+// protoChainGet is the prototype-chain half of [[Get]]/[[HasProperty]] for
+// key, starting at proto, with receiver as `this` for an inherited getter.
+func protoChainGet(vmInstance *vm.VM, proto vm.Value, receiver vm.Value, key string) (vm.Value, bool, error) {
 	// proto.IsObject() is true for TypeArray/TypeProxy/TypeMap/... too (see
 	// Value.IsObject's doc comment) - not just TypeObject/PlainObject, so
 	// this must check the concrete type before calling AsPlainObject
@@ -296,7 +302,12 @@ func arrayLikeGet(vmInstance *vm.VM, thisVal vm.Value, i int) (vm.Value, bool, e
 		// the fast own-value paths above have already missed.
 		return arrayIndexGetFromProto(vmInstance, arr, thisVal, key)
 	case vm.TypeObject:
-		return getOwnPlainObjectProperty(vmInstance, thisVal.AsPlainObject(), thisVal, strconv.Itoa(i))
+		po := thisVal.AsPlainObject()
+		key := strconv.Itoa(i)
+		if v, ok, err := getOwnPlainObjectProperty(vmInstance, po, thisVal, key); ok || err != nil {
+			return v, ok, err
+		}
+		return protoChainGet(vmInstance, po.GetPrototype(), thisVal, key)
 	case vm.TypeProxy:
 		// Proxy needs a real HasProperty check (invoking the "has" trap
 		// when present) before Get - unlike the default branch below,

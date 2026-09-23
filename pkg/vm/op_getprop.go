@@ -618,8 +618,13 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 						*dest = v
 						return true, InterpretOK, *dest
 					}
-					*dest = Undefined
-					return true, InterpretOK, *dest
+					if vm.arrayMissingIndexIsUndefined(arr) {
+						*dest = Undefined
+						return true, InterpretOK, *dest
+					}
+					// A hole reads through to an index property on the
+					// prototype chain.
+					return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 				}
 			}
 		}

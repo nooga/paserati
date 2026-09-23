@@ -3070,7 +3070,14 @@ func makeBuiltinIterNext(vmInstance *vm.VM, state *vm.BuiltinIterState) vm.Value
 		// comment. A throwing getter propagates as this native call's error,
 		// exactly like a thrown exception from a real accessor read anywhere
 		// else the VM calls into script.
-		v, done, err := state.StepVM(vmInstance)
+		var v vm.Value
+		var done bool
+		var err error
+		if state.LikeSrc.Type() != vm.TypeUndefined {
+			v, done, err = stepArrayLike(vmInstance, state)
+		} else {
+			v, done, err = state.StepVM(vmInstance)
+		}
 		if err != nil {
 			return vm.Undefined, err
 		}
@@ -3081,6 +3088,39 @@ func makeBuiltinIterNext(vmInstance *vm.VM, state *vm.BuiltinIterState) vm.Value
 	})
 	nextFn.AsNativeFunction().IterState = state
 	return nextFn
+}
+
+// stepArrayLike is %ArrayIteratorPrototype%.next over a non-array source:
+// LengthOfArrayLike and each element are read with full [[Get]] (getters,
+// prototype chain, proxies), re-read on every step.
+func stepArrayLike(vmInstance *vm.VM, st *vm.BuiltinIterState) (vm.Value, bool, error) {
+	if st.Exhausted {
+		return vm.Undefined, true, nil
+	}
+	n, err := arrayLikeLength(vmInstance, st.LikeSrc)
+	if err != nil {
+		return vm.Undefined, false, err
+	}
+	if st.Index >= n {
+		st.Exhausted = true
+		return vm.Undefined, true, nil
+	}
+	idx := st.Index
+	st.Index++
+	if st.Kind == vm.IterKindArrayKeys {
+		return vm.NumberValue(float64(idx)), false, nil
+	}
+	elem, _, err := arrayLikeGet(vmInstance, st.LikeSrc, idx)
+	if err != nil {
+		return vm.Undefined, false, err
+	}
+	if st.Kind == vm.IterKindArrayEntries {
+		pair := vm.NewArray()
+		pair.AsArray().Append(vm.NumberValue(float64(idx)))
+		pair.AsArray().Append(elem)
+		return pair, false, nil
+	}
+	return elem, false, nil
 }
 
 // createArrayIterator creates an iterator object for array iteration
@@ -3127,7 +3167,7 @@ func createArrayLikeIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 	iterator := vm.NewObject(vmInstance.ArrayIteratorPrototype).AsPlainObject()
 	iteratorVal := vm.NewValueFromPlainObject(iterator)
 
-	state := &vm.BuiltinIterState{Kind: vm.IterKindLikeValues, Like: asPlainObjectOrNil(arrayLike)}
+	state := &vm.BuiltinIterState{Kind: vm.IterKindLikeValues, Like: asPlainObjectOrNil(arrayLike), LikeSrc: arrayLike}
 	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
 	// Add [Symbol.iterator] that returns the iterator itself
@@ -3149,7 +3189,8 @@ func createArrayKeysIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value {
 	if arrayLike.Type() == vm.TypeArray {
 		state.Arr = arrayLike.AsArray()
 	} else {
-		state.Like = asPlainObjectOrNil(arrayLike) // nil source (or non-PlainObject array-like) iterates as length 0
+		state.Like = asPlainObjectOrNil(arrayLike)
+		state.LikeSrc = arrayLike
 	}
 	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
@@ -3172,7 +3213,8 @@ func createArrayEntriesIterator(vmInstance *vm.VM, arrayLike vm.Value) vm.Value 
 	if arrayLike.Type() == vm.TypeArray {
 		state.Arr = arrayLike.AsArray()
 	} else {
-		state.Like = asPlainObjectOrNil(arrayLike) // nil source (or non-PlainObject array-like) iterates as length 0
+		state.Like = asPlainObjectOrNil(arrayLike)
+		state.LikeSrc = arrayLike
 	}
 	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
