@@ -6,6 +6,9 @@ import (
 )
 
 type FunctionObject struct {
+	// SourceText is the function's source slice for Function.prototype.toString
+	// (paserati#524); empty for functions without ECMAScript source.
+	SourceText string
 	Object
 	Arity                int // Number of declared parameters (used for VM register allocation)
 	Length               int // ECMAScript length property (params before first default, per spec)

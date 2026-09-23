@@ -193,6 +193,7 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Store in VM
 	vmInstance.AsyncGeneratorFunctionPrototype = vm.NewValueFromPlainObject(asyncGeneratorFunctionProto)
+	installDynamicFunctionConstructor(ctx, asyncGeneratorFunctionProto, "async function*", "AsyncGeneratorFunction")
 
 	return nil
 }

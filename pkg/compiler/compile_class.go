@@ -614,6 +614,8 @@ func (c *Compiler) compileConstructor(node *parser.ClassDeclaration, superConstr
 		funcObj := vm.AsFunction(funcConst)
 		// All class constructors must be called with 'new', per ECMAScript spec
 		funcObj.IsClassConstructor = true
+		// A class's toString is the whole class, not its constructor method.
+		funcObj.SourceText = c.sourceTextOf(node)
 		// Mark as derived constructor if this class extends another class
 		if node.SuperClass != nil {
 			funcObj.IsDerivedConstructor = true

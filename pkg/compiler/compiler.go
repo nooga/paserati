@@ -2230,6 +2230,8 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 
 		classDecl := &parser.ClassDeclaration{
 			Token:          node.Token,
+			SourceStart:    node.SourceStart,
+			SourceEnd:      node.SourceEnd,
 			Name:           className,
 			TypeParameters: node.TypeParameters,
 			SuperClass:     node.SuperClass,
@@ -3081,6 +3083,7 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 		}
 	}
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, false, false, false, functionCompiler.hasLocalCaptures) // isGenerator=false, isAsync=false, isArrowFunction=false
+	funcValue.AsFunction().SourceText = c.sourceTextOf(node)
 	funcValue.AsFunction().NumRegisterParams = registerParamCount                                                                                                                        // paserati#467
 	constIdx := c.chunk.AddConstant(funcValue)
 
@@ -5763,4 +5766,25 @@ func (c *Compiler) compileClassExpression(node *parser.ClassDeclaration, hint Re
 
 	debugPrintf("// DEBUG compileClassExpression: Returning constructor in R%d\n", constructorReg)
 	return constructorReg, nil
+}
+
+// sourceTextOf returns a function-like node's source text for
+// Function.prototype.toString (paserati#524): the slice of the source being
+// compiled that FunctionSourceSpan delimits, or "" when unknown. The slice
+// shares the source string's memory rather than copying it.
+func (c *Compiler) sourceTextOf(node parser.Node) string {
+	start, end, ok := parser.FunctionSourceSpan(node)
+	if !ok {
+		return ""
+	}
+	for cc := c; cc != nil; cc = cc.enclosing {
+		if cc.chunk != nil && cc.chunk.Source != nil {
+			content := cc.chunk.Source.Content
+			if end <= len(content) {
+				return content[start:end]
+			}
+			return ""
+		}
+	}
+	return ""
 }

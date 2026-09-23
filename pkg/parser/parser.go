@@ -878,6 +878,7 @@ func (p *Parser) parseFunctionDeclarationStatement() *ExpressionStatement {
 // --- Async Function Declaration Statement Parsing ---
 func (p *Parser) parseAsyncFunctionDeclarationStatement() *ExpressionStatement {
 	// We're at the 'async' token, peek should be 'function'
+	asyncStart := p.curToken.StartPos // an async function's source text starts at 'async'
 	if !p.expectPeek(lexer.FUNCTION) {
 		return &ExpressionStatement{
 			Token:      p.curToken,
@@ -887,6 +888,9 @@ func (p *Parser) parseAsyncFunctionDeclarationStatement() *ExpressionStatement {
 
 	// Parse the function as an expression (FunctionLiteral with IsAsync=true)
 	funcExpr := p.parseFunctionLiteral(true)
+	if fl, ok := funcExpr.(*FunctionLiteral); ok {
+		fl.SourceStart = asyncStart + 1
+	}
 	if funcExpr == nil {
 		return &ExpressionStatement{
 			Token:      p.curToken,
@@ -2129,7 +2133,7 @@ func (p *Parser) parseIdentifier() Expression {
 			TypeAnnotation: nil, // No type annotation in this shorthand syntax
 		}
 		// parseArrowFunctionBodyAndFinish expects curToken to be '=>'
-		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil, false)
+		return p.parseArrowFunctionBodyAndFinish(ident.Token.StartPos, nil, []*Parameter{param}, nil, nil, false)
 	}
 
 	debugPrint("parseIdentifier (VALUE context): Just identifier '%s', returning.", ident.Value)
@@ -3641,6 +3645,10 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 			HoistedDeclarations: fn.Body.HoistedDeclarations,
 		},
 	}
+	// Keep the original's source span: the rebuilt body has no EndPos.
+	if st, en, ok := FunctionSourceSpan(fn); ok {
+		newFn.SourceStart, newFn.SourceEnd = st+1, en+1
+	}
 
 	return newFn
 }
@@ -3770,6 +3778,10 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 		ReturnTypeAnnotation: fn.ReturnTypeAnnotation,
 		Body:                 newBody,
 	}
+	// Keep the original's source span: the rebuilt body has no EndPos.
+	if st, en, ok := FunctionSourceSpan(fn); ok {
+		newFn.SourceStart, newFn.SourceEnd = st+1, en+1
+	}
 
 	return newFn
 }
@@ -3879,6 +3891,10 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 			HoistedDeclarations: method.Body.HoistedDeclarations,
 		},
 	}
+	// Keep the original's source span: the rebuilt body has no EndPos.
+	if st, en, ok := FunctionSourceSpan(method); ok {
+		newMethod.SourceStart, newMethod.SourceEnd = st+1, en+1
+	}
 
 	return newMethod
 }
@@ -3952,6 +3968,7 @@ func (p *Parser) parseBlockStatement() *BlockStatement {
 	}
 	// --- END DEBUG ---
 
+	block.EndPos = p.curToken.EndPos // curToken is the closing '}'
 	return block
 }
 
@@ -4012,6 +4029,7 @@ func (p *Parser) parseFunctionBodyWithDirectives() *BlockStatement {
 		return nil
 	}
 
+	block.EndPos = p.curToken.EndPos // curToken is the closing '}'
 	return block
 }
 
@@ -4377,7 +4395,7 @@ func (p *Parser) parseYieldExpression() Expression {
 			Name:           ident,
 			TypeAnnotation: nil,
 		}
-		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil, false)
+		return p.parseArrowFunctionBodyAndFinish(yieldToken.StartPos, nil, []*Parameter{param}, nil, nil, false)
 	}
 
 	// Common identifier contexts: yield), yield,, yield;, yield}, yield], yield.prop, yield + x, yield()
@@ -4458,7 +4476,11 @@ func (p *Parser) parseAsyncExpression() Expression {
 
 	// Check if this is an async function expression
 	if p.curTokenIs(lexer.FUNCTION) {
-		return p.parseFunctionLiteral(true)
+		fnExpr := p.parseFunctionLiteral(true)
+		if fl, ok := fnExpr.(*FunctionLiteral); ok {
+			fl.SourceStart = asyncToken.StartPos + 1 // source text starts at 'async'
+		}
+		return fnExpr
 	}
 
 	// Check if this is an async arrow function with single parameter: async x => x
@@ -4471,7 +4493,7 @@ func (p *Parser) parseAsyncExpression() Expression {
 			Name:           ident,
 			TypeAnnotation: nil,
 		}
-		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil, true)
+		return p.parseArrowFunctionBodyAndFinish(asyncToken.StartPos, nil, []*Parameter{param}, nil, nil, true)
 	}
 
 	// Check if this is an async arrow function with parenthesized parameters: async () => ...
@@ -4488,7 +4510,7 @@ func (p *Parser) parseAsyncExpression() Expression {
 		if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.ARROW) {
 			p.nextToken() // Consume ')', cur is now '=>'
 			p.errors = p.errors[:startErrors]
-			return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, nil, true)
+			return p.parseArrowFunctionBodyAndFinish(asyncToken.StartPos, nil, params, restParam, nil, true)
 		} else if params != nil && p.curTokenIs(lexer.RPAREN) && p.peekTokenIs(lexer.COLON) {
 			// async (params): ReturnType => body
 			p.nextToken() // Consume ')', cur is now ':'
@@ -4498,7 +4520,7 @@ func (p *Parser) parseAsyncExpression() Expression {
 			if !p.expectPeek(lexer.ARROW) {
 				return nil
 			}
-			return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, returnTypeAnnotation, true)
+			return p.parseArrowFunctionBodyAndFinish(asyncToken.StartPos, nil, params, restParam, returnTypeAnnotation, true)
 		} else {
 			// Backtrack - not a valid async arrow function
 			p.l.RestoreState(startState)
@@ -4564,7 +4586,7 @@ func (p *Parser) parseAwaitExpression() Expression {
 			Name:           ident,
 			TypeAnnotation: nil,
 		}
-		return p.parseArrowFunctionBodyAndFinish(nil, []*Parameter{param}, nil, nil, false)
+		return p.parseArrowFunctionBodyAndFinish(awaitToken.StartPos, nil, []*Parameter{param}, nil, nil, false)
 	}
 
 	// Check if the next token can start an expression
@@ -4657,8 +4679,8 @@ func (p *Parser) parseGroupedExpression() Expression {
 			debugPrint("parseGroupedExpression: Successfully parsed arrow params: %v, found '=>' next.", params)
 			p.nextToken() // Consume ')', Now curToken is '=>'
 			debugPrint("parseGroupedExpression: Consumed ')', cur is now '=>'")
-			p.errors = p.errors[:startErrors]                                            // Clear errors from backtrack attempt
-			return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, nil, false) // No return type annotation
+			p.errors = p.errors[:startErrors]                                                               // Clear errors from backtrack attempt
+			return p.parseArrowFunctionBodyAndFinish(startCur.StartPos, nil, params, restParam, nil, false) // No return type annotation
 
 			// Case 2: Arrow function with params AND return type annotation: (a: T, b: U): R => body
 			// We need to save state here too, because ): might NOT be a return type annotation
@@ -4685,7 +4707,7 @@ func (p *Parser) parseGroupedExpression() Expression {
 
 				// Pass the correctly parsed returnTypeAnnotation.
 				// parseArrowFunctionBodyAndFinish expects curToken to be '=>'.
-				return p.parseArrowFunctionBodyAndFinish(nil, params, restParam, returnTypeAnnotation, false)
+				return p.parseArrowFunctionBodyAndFinish(startCur.StartPos, nil, params, restParam, returnTypeAnnotation, false)
 			}
 
 			// NOT an arrow function! The ): was part of something else (e.g., ternary alternate)
@@ -5063,7 +5085,9 @@ func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 // parseArrowFunctionBodyAndFinish completes parsing an arrow function.
 // It assumes the parameters have been parsed and the current token is '=>'.
 // The isAsync parameter indicates whether this is an async arrow function.
-func (p *Parser) parseArrowFunctionBodyAndFinish(typeParams []*TypeParameter, params []*Parameter, restParam *RestParameter, returnTypeAnnotation Expression, isAsync bool) Expression {
+// start is the byte offset of the arrow's first token (its parameter list,
+// or `async`), for its source text.
+func (p *Parser) parseArrowFunctionBodyAndFinish(start int, typeParams []*TypeParameter, params []*Parameter, restParam *RestParameter, returnTypeAnnotation Expression, isAsync bool) Expression {
 	debugPrint("parseArrowFunctionBodyAndFinish: Starting, curToken='%s' (%s), params=%v, restParam=%v, isAsync=%v", p.curToken.Literal, p.curToken.Type, params, restParam, isAsync)
 	arrowFunc := &ArrowFunctionLiteral{
 		Token:                p.curToken, // The '=>' token
@@ -5104,6 +5128,8 @@ func (p *Parser) parseArrowFunctionBodyAndFinish(typeParams []*TypeParameter, pa
 	// Transform arrow function if it has destructuring parameters
 	arrowFunc = p.transformArrowFunctionWithDestructuring(arrowFunc)
 
+	// curToken is the body's last token ('}' or the expression's end).
+	arrowFunc.SourceStart, arrowFunc.SourceEnd = start+1, p.curToken.EndPos+1
 	return arrowFunc
 }
 
@@ -7234,7 +7260,8 @@ func (p *Parser) parseObjectLiteral() Expression {
 
 		} else if p.curTokenIs(lexer.LBRACKET) {
 			// Computed property: [expression]: value
-			p.nextToken() // Consume '['
+			lbracketStart := p.curToken.StartPos // a computed method's source text starts at '['
+			p.nextToken()                        // Consume '['
 			key := p.parseExpression(COMMA)
 			if key == nil {
 				return nil // Error parsing expression inside []
@@ -7252,7 +7279,8 @@ func (p *Parser) parseObjectLiteral() Expression {
 			if p.peekTokenIs(lexer.LPAREN) {
 				// Parse as computed method - create a function literal
 				funcLit := &FunctionLiteral{
-					Token: p.curToken, // Current token (should be after ']')
+					Token:       p.curToken, // Current token (should be after ']')
+					SourceStart: lbracketStart + 1,
 				}
 
 				// Expect '(' for parameters
@@ -10190,7 +10218,7 @@ func (p *Parser) parseGenericArrowFunction() Expression {
 			// Expect '=>'
 			if p.expectPeek(lexer.ARROW) {
 				p.errors = p.errors[:startErrors]
-				return p.parseArrowFunctionBodyAndFinish(typeParams, params, restParam, returnTypeAnnotation, false)
+				return p.parseArrowFunctionBodyAndFinish(startCur.StartPos, typeParams, params, restParam, returnTypeAnnotation, false)
 			}
 		}
 	}

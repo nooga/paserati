@@ -229,6 +229,7 @@ func (c *Compiler) compileArrowFunctionLiteral(node *parser.ArrowFunctionLiteral
 	arrowName := ""                                                                                                                                                                           // Arrow functions have empty name by default (per ECMAScript spec)
 	functionChunk.NumSpillSlots = int(funcCompiler.nextSpillSlot)                                                                                                                             // Set spill slots needed
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, arrowName, functionChunk, false, node.IsAsync, true, funcCompiler.hasLocalCaptures) // isArrowFunction = true
+	funcValue.AsFunction().SourceText = c.sourceTextOf(node)
 	funcValue.AsFunction().NumRegisterParams = registerParamCount                                                                                                                            // paserati#467: how many of Arity(+rest) landed in registers vs spill slots
 	constIdx := c.chunk.AddConstant(funcValue)
 
@@ -466,6 +467,7 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	}
 
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, nameHint, functionChunk, false, node.IsAsync, true, funcCompiler.hasLocalCaptures)
+	funcValue.AsFunction().SourceText = c.sourceTextOf(node)
 	funcValue.AsFunction().NumRegisterParams = registerParamCount // paserati#467
 	constIdx := c.chunk.AddConstant(funcValue)
 
@@ -2082,6 +2084,7 @@ func (c *Compiler) compileFunctionLiteralWithOptions(node *parser.FunctionLitera
 	}
 	functionChunk.HasSimpleParameterList = hasSimpleParams
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, node.IsGenerator, node.IsAsync, false, functionCompiler.hasLocalCaptures) // isArrowFunction = false for regular functions
+	funcValue.AsFunction().SourceText = c.sourceTextOf(node)
 	funcValue.AsFunction().NumRegisterParams = registerParamCount                                                                                                                                          // paserati#467
 
 	// Set the name binding register if this is a named function expression

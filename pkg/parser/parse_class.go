@@ -376,6 +376,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 		isAbstract := false
 		isOverride := false
 		isAsync := false
+		asyncStart := -1 // byte offset of this member's 'async', if any
 
 		// Helper to check if current token is likely a field name (not a modifier)
 		// A keyword is a field name if followed by tokens that indicate it's a name, not a modifier
@@ -463,6 +464,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 			} else if p.curTokenIs(lexer.ASYNC) && !isAsync && !isFieldName() {
 				isAsync = true
 				seenAsync = true
+				asyncStart = p.curToken.StartPos
 				p.nextToken()
 			} else {
 				break // No more modifiers
@@ -472,8 +474,18 @@ func (p *Parser) parseClassBody() *ClassBody {
 		// Parse constructor, method, getter, setter, generator, or computed member
 		// Per ECMAScript spec: "get [no LineTerminator here] ClassElementName"
 		// If there's a newline after 'get', it's a field named "get", not a getter accessor
+		// A method's source text (Function.prototype.toString, paserati#524)
+		// starts after static/visibility modifiers, at 'async', '*', get/set,
+		// the name, or '['.
+		memberStart := p.curToken.StartPos
+		if asyncStart >= 0 {
+			memberStart = asyncStart
+		}
 		// Helper to attach decorators to a parsed method or property
 		attachDecorators := func(node interface{}) {
+			if m, ok := node.(*MethodDefinition); ok && m.Value != nil {
+				m.Value.SourceStart = memberStart + 1
+			}
 			if len(memberDecorators) == 0 {
 				return
 			}
@@ -676,6 +688,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 
 	return &ClassBody{
 		Token:              bodyToken,
+		EndPos:             p.curToken.EndPos, // curToken is the closing '}'
 		Methods:            methods,
 		Properties:         properties,
 		ConstructorSigs:    constructorSigs,

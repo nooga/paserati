@@ -443,6 +443,7 @@ func (g *GeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Store in VM (before setting constructor so we can reference it)
 	vmInstance.GeneratorFunctionPrototype = vm.NewValueFromPlainObject(generatorFunctionProto)
+	installDynamicFunctionConstructor(ctx, generatorFunctionProto, "function*", "GeneratorFunction")
 
 	// Set constructor property on GeneratorPrototype pointing to GeneratorFunction.prototype
 	// Per ECMAScript 25.3.1.1: GeneratorPrototype.constructor is %GeneratorFunction%.prototype
