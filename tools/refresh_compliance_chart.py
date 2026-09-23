@@ -221,7 +221,7 @@ def readme_block(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: S
 | TypeScript {version} conformance (loose) | {ts_loose.passed:,}/{ts_loose.total:,} | {ts_loose.failed:,} | {ts_loose.skipped:,} | {ts_loose.timeout:,} | {ts_loose.pass_rate:.1f}% |
 <!-- compliance:end -->
 
-`strict error codes` requires our diagnostics to carry the same TypeScript error code(s) the baseline expects; `loose` only requires that we raised *some* error where one was expected. Loose overcounts conformance — treat strict as the honest number."""
+`strict error codes` requires our diagnostics to carry the same TypeScript error code(s) the baseline expects. `loose` only requires that we raised *some* error where one was expected, so it overcounts conformance. Treat strict as the honest number."""
 
 
 def update_readme(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: Suite) -> None:
@@ -246,7 +246,8 @@ def update_readme(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: 
 	)
 	text = re.sub(
 		r"At \*\*[0-9.]+% Test262 language compliance\*\* and "
-		r"\*\*[0-9.]+% TypeScript [^*]+ conformance\*\*",
+		r"\*\*[0-9.]+% TypeScript [^*]+ conformance\*\*"
+		r"( \(strict error codes; [0-9.]+% under the looser any-error-raised metric\))?",
 		f"At **{language.pass_rate:.1f}% Test262 language compliance** and "
 		f"**{ts_strict.pass_rate:.1f}% TypeScript {version} conformance** (strict error codes; "
 		f"{ts_loose.pass_rate:.1f}% under the looser any-error-raised metric)",

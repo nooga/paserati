@@ -14,22 +14,22 @@
   <text x="710" y="42" text-anchor="middle" class="group">TypeScript conformance</text>
   <line x1="470" y1="28" x2="470" y2="250" stroke="#d9e0e8" stroke-width="1" />
   <g aria-label="Test262 language">
-<path d="M 165.00 135.00 L 157.57 73.45 A 62.00 62.00 0 1 0 165.00 73.00 Z" fill="#20a060" />
-<path d="M 165.00 135.00 L 165.00 73.00 A 62.00 62.00 0 0 0 157.57 73.45 Z" fill="#d64b4b" />
+<path d="M 165.00 135.00 L 121.27 91.05 A 62.00 62.00 0 1 0 165.00 73.00 Z" fill="#20a060" />
+<path d="M 165.00 135.00 L 165.00 73.00 A 62.00 62.00 0 0 0 121.27 91.05 Z" fill="#d64b4b" />
 <circle cx="165" cy="135" r="38" fill="#ffffff" />
-<text x="165" y="131" text-anchor="middle" class="percent">98.1%</text>
+<text x="165" y="131" text-anchor="middle" class="percent">87.5%</text>
 <text x="165" y="153" text-anchor="middle" class="caption">pass</text>
 <text x="165" y="233" text-anchor="middle" class="title">Test262 language</text>
-<text x="165" y="255" text-anchor="middle" class="caption">23,073/23,523</text>
+<text x="165" y="255" text-anchor="middle" class="caption">20,592/23,523</text>
 </g>
   <g aria-label="Test262 built-ins">
-<path d="M 340.00 135.00 L 279.31 147.69 A 62.00 62.00 0 1 0 340.00 73.00 Z" fill="#20a060" />
-<path d="M 340.00 135.00 L 340.00 73.00 A 62.00 62.00 0 0 0 279.31 147.69 Z" fill="#d64b4b" />
+<path d="M 340.00 135.00 L 278.62 143.73 A 62.00 62.00 0 1 0 340.00 73.00 Z" fill="#20a060" />
+<path d="M 340.00 135.00 L 340.00 73.00 A 62.00 62.00 0 0 0 278.62 143.73 Z" fill="#d64b4b" />
 <circle cx="340" cy="135" r="38" fill="#ffffff" />
-<text x="340" y="131" text-anchor="middle" class="percent">71.7%</text>
+<text x="340" y="131" text-anchor="middle" class="percent">72.8%</text>
 <text x="340" y="153" text-anchor="middle" class="caption">pass</text>
 <text x="340" y="233" text-anchor="middle" class="title">Test262 built-ins</text>
-<text x="340" y="255" text-anchor="middle" class="caption">16,706/23,294</text>
+<text x="340" y="255" text-anchor="middle" class="caption">16,947/23,294</text>
 </g>
   <g aria-label="TypeScript 6.0.3 (strict error codes)">
 <path d="M 610.00 135.00 L 641.71 188.28 A 62.00 62.00 0 0 0 610.00 73.00 Z" fill="#20a060" />
