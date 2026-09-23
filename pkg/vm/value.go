@@ -1594,7 +1594,7 @@ func (v Value) ToFloat() float64 {
 	case TypeObject, TypeDictObject, TypeArray, TypeArguments, TypeRegExp, TypeMap, TypeSet, TypeArrayBuffer, TypeSharedArrayBuffer, TypeTypedArray, TypeDataView, TypeProxy:
 		// Special case for Date objects - directly get timestamp
 		if v.typ == TypeObject {
-			if timestampValue, exists := v.AsPlainObject().GetOwn("__timestamp__"); exists {
+			if timestampValue, exists := v.AsPlainObject().GetInternal("__timestamp__"); exists {
 				return timestampValue.ToFloat()
 			}
 		}
@@ -1632,7 +1632,7 @@ func (v Value) ToPrimitive(hint string) Value {
 			return NewString(v.ToString())
 		case TypeBigInt:
 			// For BigInt object wrappers, extract the primitive value from [[BigIntData]]
-			if dataVal, exists := po.GetOwn("[[BigIntData]]"); exists {
+			if dataVal, exists := po.GetInternal("[[BigIntData]]"); exists {
 				return dataVal
 			}
 			// If no [[BigIntData]], return as-is (shouldn't happen for valid BigInt objects)
@@ -3904,7 +3904,7 @@ func (v Value) GetArity() int {
 // tryBuiltinToString checks for specific built-in object patterns and formats them
 func tryBuiltinToString(obj *PlainObject) string {
 	// Check for Date objects with __timestamp__ property
-	if timestampValue, exists := obj.GetOwn("__timestamp__"); exists && timestampValue.IsNumber() {
+	if timestampValue, exists := obj.GetInternal("__timestamp__"); exists && timestampValue.IsNumber() {
 		return formatDateTimestamp(timestampValue.ToFloat())
 	}
 
@@ -3946,7 +3946,7 @@ func findToStringMethod(obj *PlainObject) Value {
 
 // tryFormatAsDate attempts to format an object as a Date if it has the right structure
 func tryFormatAsDate(obj *PlainObject) string {
-	if timestampValue, exists := obj.GetOwn("__timestamp__"); exists && timestampValue.IsNumber() {
+	if timestampValue, exists := obj.GetInternal("__timestamp__"); exists && timestampValue.IsNumber() {
 		return formatDateTimestamp(timestampValue.ToFloat())
 	}
 	return ""

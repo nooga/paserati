@@ -851,19 +851,19 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		dateObj := thisDate.AsPlainObject()
 
 		// Check if it's a Date object by verifying it has __timestamp__ property
-		if _, exists := dateObj.GetOwn("__timestamp__"); !exists {
+		if _, exists := dateObj.GetInternal("__timestamp__"); !exists {
 			return vm.Undefined, vmInstance.NewTypeError("setYear called on non-Date object")
 		}
 
 		if len(args) == 0 {
 			// Set to NaN if no arguments
-			dateObj.SetOwnNonEnumerable("__timestamp__", vm.NaN)
+			dateObj.SetInternal("__timestamp__", vm.NaN)
 			return vm.NaN, nil
 		}
 
 		yearArg := args[0].ToFloat()
 		if math.IsNaN(yearArg) {
-			dateObj.SetOwnNonEnumerable("__timestamp__", vm.NaN)
+			dateObj.SetInternal("__timestamp__", vm.NaN)
 			return vm.NaN, nil
 		}
 
@@ -888,7 +888,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		newTimestamp := float64(newTime.UnixMilli())
 
 		// Update the date object
-		dateObj.SetOwnNonEnumerable("__timestamp__", vm.NumberValue(newTimestamp))
+		dateObj.SetInternal("__timestamp__", vm.NumberValue(newTimestamp))
 		return vm.NumberValue(newTimestamp), nil
 	}))
 
@@ -1315,7 +1315,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Create Date object with timestamp stored as a property. Every
 		// constructor form ends in TimeClip (21.4.2.1 steps 3-5).
 		dateObj := vm.NewObject(instanceProto)
-		dateObj.AsPlainObject().SetOwnNonEnumerable("__timestamp__", vm.NumberValue(timeClip(timestamp)))
+		dateObj.AsPlainObject().SetInternal("__timestamp__", vm.NumberValue(timeClip(timestamp)))
 
 		return dateObj, nil
 	})
@@ -1504,7 +1504,7 @@ func thisTimeValue(vmInstance *vm.VM, dateValue vm.Value) (float64, error) {
 		return 0, vmInstance.NewTypeError("this is not a Date object")
 	}
 	obj := dateValue.AsPlainObject()
-	timestampValue, exists := obj.GetOwn("__timestamp__")
+	timestampValue, exists := obj.GetInternal("__timestamp__")
 	if !exists {
 		return 0, vmInstance.NewTypeError("this is not a Date object")
 	}
@@ -1555,7 +1555,7 @@ func parseDateString(dateStr string) float64 {
 func getDateTimestamp(dateValue vm.Value) (float64, bool) {
 	if dateValue.Type() == vm.TypeObject {
 		obj := dateValue.AsPlainObject()
-		if timestampValue, exists := obj.GetOwn("__timestamp__"); exists {
+		if timestampValue, exists := obj.GetInternal("__timestamp__"); exists {
 			return timestampValue.ToFloat(), true
 		}
 	}
@@ -1577,7 +1577,7 @@ func setDateTimestamp(dateValue vm.Value, timestamp float64) float64 {
 	clipped := timeClip(timestamp)
 	if dateValue.Type() == vm.TypeObject {
 		obj := dateValue.AsPlainObject()
-		obj.SetOwnNonEnumerable("__timestamp__", vm.NumberValue(clipped))
+		obj.SetInternal("__timestamp__", vm.NumberValue(clipped))
 	}
 	return clipped
 }

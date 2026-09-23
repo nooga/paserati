@@ -520,9 +520,9 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			case vm.TypeObject:
 				if thisValue.Type() == vm.TypeObject {
 					plainObj := thisValue.AsPlainObject()
-					if _, hasErrorData := plainObj.GetOwn("[[ErrorData]]"); hasErrorData {
+					if _, hasErrorData := plainObj.GetInternal("[[ErrorData]]"); hasErrorData {
 						builtinTag = "Error"
-					} else if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
+					} else if primitiveVal, exists := plainObj.GetInternal("[[PrimitiveValue]]"); exists {
 						switch primitiveVal.Type() {
 						case vm.TypeBoolean:
 							builtinTag = "Boolean"
@@ -936,7 +936,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// through to "already an object" and would hand back the raw
 			// primitive.
 			wrapper := vm.NewObject(vmInstance.BigIntPrototype).AsPlainObject()
-			wrapper.SetOwnNonEnumerable("[[PrimitiveValue]]", arg)
+			wrapper.SetInternal("[[PrimitiveValue]]", arg)
 			return vm.NewValueFromPlainObject(wrapper), nil
 
 		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
@@ -3839,12 +3839,12 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 			// Box to Boolean object (we'd need to add NewBooleanObject)
 			// For now, create a plain object with [[PrimitiveValue]]
 			obj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			obj.SetOwnNonEnumerable("[[PrimitiveValue]]", target)
+			obj.SetInternal("[[PrimitiveValue]]", target)
 			target = vm.NewValueFromPlainObject(obj)
 		case vm.TypeSymbol:
 			// Box to Symbol object
 			obj := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			obj.SetOwnNonEnumerable("[[PrimitiveValue]]", target)
+			obj.SetInternal("[[PrimitiveValue]]", target)
 			target = vm.NewValueFromPlainObject(obj)
 		}
 	}
@@ -5801,7 +5801,7 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 		plainObj := obj.AsPlainObject()
 		// String exotic object: check [[PrimitiveValue]] for index properties
 		if !keyIsSymbol {
-			if primVal, hasPrim := plainObj.GetOwn("[[PrimitiveValue]]"); hasPrim && primVal.Type() == vm.TypeString {
+			if primVal, hasPrim := plainObj.GetInternal("[[PrimitiveValue]]"); hasPrim && primVal.Type() == vm.TypeString {
 				str := vm.AsString(primVal)
 				runes := []rune(str)
 				if propName == "length" {

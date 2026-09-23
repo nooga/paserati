@@ -83,7 +83,7 @@ func (s *SyntaxErrorInitializer) InitRuntime(ctx *RuntimeContext) error {
 		syntaxErrorInstancePtr := syntaxErrorInstance.AsPlainObject()
 
 		// Set [[ErrorData]] internal slot (used by Error.isError to distinguish real errors)
-		syntaxErrorInstancePtr.SetOwnNonEnumerable("[[ErrorData]]", vm.Undefined)
+		syntaxErrorInstancePtr.SetInternal("[[ErrorData]]", vm.Undefined)
 
 		// Per spec, "name" lives only on the prototype: an instance has no own
 		// "name" until user code assigns one, and that assignment must create

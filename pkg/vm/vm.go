@@ -19202,21 +19202,21 @@ func (vm *VM) IsInStrictMode() bool {
 // NewBooleanObject creates a Boolean wrapper object with the given primitive value
 func (vm *VM) NewBooleanObject(primitiveValue bool) Value {
 	obj := NewObject(vm.BooleanPrototype).AsPlainObject()
-	obj.SetOwnNonEnumerable("[[PrimitiveValue]]", BooleanValue(primitiveValue))
+	obj.SetInternal("[[PrimitiveValue]]", BooleanValue(primitiveValue))
 	return NewValueFromPlainObject(obj)
 }
 
 // NewNumberObject creates a Number wrapper object with the given primitive value
 func (vm *VM) NewNumberObject(primitiveValue float64) Value {
 	obj := NewObject(vm.NumberPrototype).AsPlainObject()
-	obj.SetOwnNonEnumerable("[[PrimitiveValue]]", NumberValue(primitiveValue))
+	obj.SetInternal("[[PrimitiveValue]]", NumberValue(primitiveValue))
 	return NewValueFromPlainObject(obj)
 }
 
 // NewStringObject creates a String wrapper object with the given primitive value
 func (vm *VM) NewStringObject(primitiveValue string) Value {
 	obj := NewObject(vm.StringPrototype).AsPlainObject()
-	obj.SetOwnNonEnumerable("[[PrimitiveValue]]", NewString(primitiveValue))
+	obj.SetInternal("[[PrimitiveValue]]", NewString(primitiveValue))
 
 	// Add indexed character properties per ECMAScript String exotic object
 	// Each character is enumerable, non-writable, non-configurable
@@ -19239,7 +19239,7 @@ func (vm *VM) NewStringObject(primitiveValue string) Value {
 // NewSymbolObject creates a Symbol wrapper object with the given primitive value
 func (vm *VM) NewSymbolObject(symbolValue Value) Value {
 	obj := NewObject(vm.SymbolPrototype).AsPlainObject()
-	obj.SetOwnNonEnumerable("[[PrimitiveValue]]", symbolValue)
+	obj.SetInternal("[[PrimitiveValue]]", symbolValue)
 	return NewValueFromPlainObject(obj)
 }
 

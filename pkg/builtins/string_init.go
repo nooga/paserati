@@ -92,7 +92,7 @@ func getStringValueWithVM(vmInstance *vm.VM, val vm.Value) (string, error) {
 	if val.IsObject() {
 		if val.Type() == vm.TypeObject {
 			plainObj := val.AsPlainObject()
-			if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
+			if primitiveVal, exists := plainObj.GetInternal("[[PrimitiveValue]]"); exists {
 				if primitiveVal.Type() == vm.TypeString {
 					return primitiveVal.ToString(), nil
 				}
@@ -134,7 +134,7 @@ func getStringValue(val vm.Value) string {
 	if val.IsObject() {
 		if val.Type() == vm.TypeObject {
 			plainObj := val.AsPlainObject()
-			if primitiveVal, exists := plainObj.GetOwn("[[PrimitiveValue]]"); exists {
+			if primitiveVal, exists := plainObj.GetInternal("[[PrimitiveValue]]"); exists {
 				if primitiveVal.Type() == vm.TypeString {
 					return primitiveVal.ToString()
 				}
@@ -402,7 +402,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Create String.prototype inheriting from Object.prototype
 	// String.prototype itself has [[PrimitiveValue]] = "" per ES spec
 	stringProto := vm.NewObject(objectProto).AsPlainObject()
-	stringProto.SetOwnNonEnumerable("[[PrimitiveValue]]", vm.NewString(""))
+	stringProto.SetInternal("[[PrimitiveValue]]", vm.NewString(""))
 	// String.prototype.length should be 0 (length of empty string "")
 	stringProto.SetOwnNonEnumerable("length", vm.NumberValue(0))
 
@@ -417,7 +417,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// If this is a String wrapper object, extract [[PrimitiveValue]]
 		if thisStr.Type() == vm.TypeObject {
-			if primitiveVal, exists := thisStr.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+			if primitiveVal, exists := thisStr.AsPlainObject().GetInternal("[[PrimitiveValue]]"); exists {
 				return primitiveVal, nil
 			}
 		}
@@ -436,7 +436,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 		// If this is a String wrapper object, extract [[PrimitiveValue]]
 		if thisStr.Type() == vm.TypeObject {
-			if primitiveVal, exists := thisStr.AsPlainObject().GetOwn("[[PrimitiveValue]]"); exists {
+			if primitiveVal, exists := thisStr.AsPlainObject().GetInternal("[[PrimitiveValue]]"); exists {
 				if primitiveVal.Type() == vm.TypeString {
 					return primitiveVal, nil
 				}

@@ -293,6 +293,35 @@ type PlainObject struct {
 	// type assertion on the stored value is the spec's internal-slot brand
 	// check, so a plain object or another builtin's instance never passes.
 	internalSlots any
+	// Named internal slots of builtin objects - [[ErrorData]],
+	// [[PrimitiveValue]], a Date's time value, iterator-helper and Temporal
+	// state, ... (see GetInternal). Nil for ordinary objects.
+	internals map[string]Value
+}
+
+// GetInternal reads a named internal slot. Internal slots are not
+// properties: no property API lists, reads, writes or deletes them, so they
+// can neither be observed (Reflect.ownKeys, getOwnPropertyNames, in, hasOwn)
+// nor forged by user code - Date.prototype.getTime.call({__timestamp__: 5})
+// used to succeed when these were ordinary non-enumerable properties
+// (paserati#525).
+func (o *PlainObject) GetInternal(name string) (Value, bool) {
+	v, ok := o.internals[name]
+	return v, ok
+}
+
+// SetInternal writes a named internal slot (see GetInternal).
+func (o *PlainObject) SetInternal(name string, v Value) {
+	if o.internals == nil {
+		o.internals = make(map[string]Value, 1)
+	}
+	o.internals[name] = v
+}
+
+// HasInternal reports whether a named internal slot is present.
+func (o *PlainObject) HasInternal(name string) bool {
+	_, ok := o.internals[name]
+	return ok
 }
 
 // InternalSlots returns the opaque builtin-specific internal state attached

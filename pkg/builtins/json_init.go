@@ -154,7 +154,7 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 						// Check if it's a String or Number wrapper object
 						if elem.Type() == vm.TypeObject {
 							obj := elem.AsPlainObject()
-							if _, ok := obj.GetOwn("[[PrimitiveValue]]"); ok {
+							if _, ok := obj.GetInternal("[[PrimitiveValue]]"); ok {
 								// Has [[PrimitiveValue]] - it's a wrapper, call ToString via ToPrimitive
 								primVal := vmInstance.ToPrimitive(elem, "string")
 								item = primVal.ToString()
@@ -182,7 +182,7 @@ func (j *JSONInitializer) InitRuntime(ctx *RuntimeContext) error {
 			if space.Type() == vm.TypeObject {
 				obj := space.AsPlainObject()
 				// Check if it has [[PrimitiveValue]] property (our representation of boxed primitives)
-				if pv, ok := obj.GetOwn("[[PrimitiveValue]]"); ok {
+				if pv, ok := obj.GetInternal("[[PrimitiveValue]]"); ok {
 					// Determine if it's a Number or String object based on primitive type
 					if pv.Type() == vm.TypeFloatNumber || pv.Type() == vm.TypeIntegerNumber {
 						// Number object - call ToNumber via ToPrimitive with number hint
@@ -1215,7 +1215,7 @@ func stringifyValueToJSONWithVisited(vmInstance *vm.VM, value vm.Value, visited 
 	// BigInt objects throw TypeError
 	if value.Type() == vm.TypeObject && vmInstance != nil {
 		obj := value.AsPlainObject()
-		if pv, ok := obj.GetOwn("[[PrimitiveValue]]"); ok {
+		if pv, ok := obj.GetInternal("[[PrimitiveValue]]"); ok {
 			// This is a boxed primitive - convert using ToPrimitive
 			switch pv.Type() {
 			case vm.TypeFloatNumber, vm.TypeIntegerNumber:

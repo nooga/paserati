@@ -311,7 +311,7 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return nil, vmInstance.NewTypeError("Value is not a Temporal.Instant")
 		}
 		obj := val.AsPlainObject()
-		nanosVal, exists := obj.GetOwn("[[EpochNanoseconds]]")
+		nanosVal, exists := obj.GetInternal("[[EpochNanoseconds]]")
 		if !exists {
 			return nil, vmInstance.NewTypeError("Value is not a Temporal.Instant")
 		}
@@ -324,7 +324,7 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Helper to create a new Temporal.Instant from nanoseconds
 	createInstant := func(nanos *big.Int) vm.Value {
 		instant := vm.NewObject(vm.NewValueFromPlainObject(instantProto)).AsPlainObject()
-		instant.SetOwn("[[EpochNanoseconds]]", vm.NewBigInt(nanos))
+		instant.SetInternal("[[EpochNanoseconds]]", vm.NewBigInt(nanos))
 		return vm.NewValueFromPlainObject(instant)
 	}
 
@@ -455,17 +455,17 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		obj := arg.AsPlainObject()
 		// Try internal slots first (for Temporal.Duration objects)
-		if yVal, ok := obj.GetOwn("[[Years]]"); ok {
-			yearsVal, _ := obj.GetOwn("[[Years]]")
-			monthsVal, _ := obj.GetOwn("[[Months]]")
-			weeksVal, _ := obj.GetOwn("[[Weeks]]")
-			daysVal, _ := obj.GetOwn("[[Days]]")
-			hoursVal, _ := obj.GetOwn("[[Hours]]")
-			minutesVal, _ := obj.GetOwn("[[Minutes]]")
-			secondsVal, _ := obj.GetOwn("[[Seconds]]")
-			msVal, _ := obj.GetOwn("[[Milliseconds]]")
-			usVal, _ := obj.GetOwn("[[Microseconds]]")
-			nsVal, _ := obj.GetOwn("[[Nanoseconds]]")
+		if yVal, ok := obj.GetInternal("[[Years]]"); ok {
+			yearsVal, _ := obj.GetInternal("[[Years]]")
+			monthsVal, _ := obj.GetInternal("[[Months]]")
+			weeksVal, _ := obj.GetInternal("[[Weeks]]")
+			daysVal, _ := obj.GetInternal("[[Days]]")
+			hoursVal, _ := obj.GetInternal("[[Hours]]")
+			minutesVal, _ := obj.GetInternal("[[Minutes]]")
+			secondsVal, _ := obj.GetInternal("[[Seconds]]")
+			msVal, _ := obj.GetInternal("[[Milliseconds]]")
+			usVal, _ := obj.GetInternal("[[Microseconds]]")
+			nsVal, _ := obj.GetInternal("[[Nanoseconds]]")
 			_ = yVal
 			return int(yearsVal.ToFloat()), int(monthsVal.ToFloat()), int(weeksVal.ToFloat()), int(daysVal.ToFloat()),
 				int(hoursVal.ToFloat()), int(minutesVal.ToFloat()), int(secondsVal.ToFloat()),
@@ -783,9 +783,9 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainDate")
 		}
 		obj := val.AsPlainObject()
-		yVal, yOk := obj.GetOwn("[[ISOYear]]")
-		mVal, mOk := obj.GetOwn("[[ISOMonth]]")
-		dVal, dOk := obj.GetOwn("[[ISODay]]")
+		yVal, yOk := obj.GetInternal("[[ISOYear]]")
+		mVal, mOk := obj.GetInternal("[[ISOMonth]]")
+		dVal, dOk := obj.GetInternal("[[ISODay]]")
 		if !yOk || !mOk || !dOk {
 			return 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainDate")
 		}
@@ -795,10 +795,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Helper to create PlainDate
 	createPlainDate := func(year, month, day int) vm.Value {
 		date := vm.NewObject(vm.NewValueFromPlainObject(plainDateProto)).AsPlainObject()
-		date.SetOwn("[[ISOYear]]", vm.NumberValue(float64(year)))
-		date.SetOwn("[[ISOMonth]]", vm.NumberValue(float64(month)))
-		date.SetOwn("[[ISODay]]", vm.NumberValue(float64(day)))
-		date.SetOwn("[[Calendar]]", vm.NewString("iso8601"))
+		date.SetInternal("[[ISOYear]]", vm.NumberValue(float64(year)))
+		date.SetInternal("[[ISOMonth]]", vm.NumberValue(float64(month)))
+		date.SetInternal("[[ISODay]]", vm.NumberValue(float64(day)))
+		date.SetInternal("[[Calendar]]", vm.NewString("iso8601"))
 		return vm.NewValueFromPlainObject(date)
 	}
 
@@ -1065,12 +1065,12 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainTime")
 		}
 		obj := val.AsPlainObject()
-		hVal, hOk := obj.GetOwn("[[ISOHour]]")
-		minVal, minOk := obj.GetOwn("[[ISOMinute]]")
-		sVal, sOk := obj.GetOwn("[[ISOSecond]]")
-		msVal, msOk := obj.GetOwn("[[ISOMillisecond]]")
-		usVal, usOk := obj.GetOwn("[[ISOMicrosecond]]")
-		nsVal, nsOk := obj.GetOwn("[[ISONanosecond]]")
+		hVal, hOk := obj.GetInternal("[[ISOHour]]")
+		minVal, minOk := obj.GetInternal("[[ISOMinute]]")
+		sVal, sOk := obj.GetInternal("[[ISOSecond]]")
+		msVal, msOk := obj.GetInternal("[[ISOMillisecond]]")
+		usVal, usOk := obj.GetInternal("[[ISOMicrosecond]]")
+		nsVal, nsOk := obj.GetInternal("[[ISONanosecond]]")
 		if !hOk || !minOk || !sOk || !msOk || !usOk || !nsOk {
 			return 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainTime")
 		}
@@ -1079,12 +1079,12 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	createPlainTime := func(hour, minute, second, ms, us, ns int) vm.Value {
 		t := vm.NewObject(vm.NewValueFromPlainObject(plainTimeProto)).AsPlainObject()
-		t.SetOwn("[[ISOHour]]", vm.NumberValue(float64(hour)))
-		t.SetOwn("[[ISOMinute]]", vm.NumberValue(float64(minute)))
-		t.SetOwn("[[ISOSecond]]", vm.NumberValue(float64(second)))
-		t.SetOwn("[[ISOMillisecond]]", vm.NumberValue(float64(ms)))
-		t.SetOwn("[[ISOMicrosecond]]", vm.NumberValue(float64(us)))
-		t.SetOwn("[[ISONanosecond]]", vm.NumberValue(float64(ns)))
+		t.SetInternal("[[ISOHour]]", vm.NumberValue(float64(hour)))
+		t.SetInternal("[[ISOMinute]]", vm.NumberValue(float64(minute)))
+		t.SetInternal("[[ISOSecond]]", vm.NumberValue(float64(second)))
+		t.SetInternal("[[ISOMillisecond]]", vm.NumberValue(float64(ms)))
+		t.SetInternal("[[ISOMicrosecond]]", vm.NumberValue(float64(us)))
+		t.SetInternal("[[ISONanosecond]]", vm.NumberValue(float64(ns)))
 		return vm.NewValueFromPlainObject(t)
 	}
 
@@ -1269,15 +1269,15 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return 0, 0, 0, 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainDateTime")
 		}
 		obj := val.AsPlainObject()
-		yVal, yOk := obj.GetOwn("[[ISOYear]]")
-		moVal, moOk := obj.GetOwn("[[ISOMonth]]")
-		dVal, dOk := obj.GetOwn("[[ISODay]]")
-		hVal, hOk := obj.GetOwn("[[ISOHour]]")
-		miVal, miOk := obj.GetOwn("[[ISOMinute]]")
-		sVal, sOk := obj.GetOwn("[[ISOSecond]]")
-		msVal, msOk := obj.GetOwn("[[ISOMillisecond]]")
-		usVal, usOk := obj.GetOwn("[[ISOMicrosecond]]")
-		nsVal, nsOk := obj.GetOwn("[[ISONanosecond]]")
+		yVal, yOk := obj.GetInternal("[[ISOYear]]")
+		moVal, moOk := obj.GetInternal("[[ISOMonth]]")
+		dVal, dOk := obj.GetInternal("[[ISODay]]")
+		hVal, hOk := obj.GetInternal("[[ISOHour]]")
+		miVal, miOk := obj.GetInternal("[[ISOMinute]]")
+		sVal, sOk := obj.GetInternal("[[ISOSecond]]")
+		msVal, msOk := obj.GetInternal("[[ISOMillisecond]]")
+		usVal, usOk := obj.GetInternal("[[ISOMicrosecond]]")
+		nsVal, nsOk := obj.GetInternal("[[ISONanosecond]]")
 		if !yOk || !moOk || !dOk || !hOk || !miOk || !sOk || !msOk || !usOk || !nsOk {
 			return 0, 0, 0, 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainDateTime")
 		}
@@ -1286,16 +1286,16 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	createPlainDateTime := func(year, month, day, hour, minute, second, ms, us, ns int) vm.Value {
 		dt := vm.NewObject(vm.NewValueFromPlainObject(plainDateTimeProto)).AsPlainObject()
-		dt.SetOwn("[[ISOYear]]", vm.NumberValue(float64(year)))
-		dt.SetOwn("[[ISOMonth]]", vm.NumberValue(float64(month)))
-		dt.SetOwn("[[ISODay]]", vm.NumberValue(float64(day)))
-		dt.SetOwn("[[ISOHour]]", vm.NumberValue(float64(hour)))
-		dt.SetOwn("[[ISOMinute]]", vm.NumberValue(float64(minute)))
-		dt.SetOwn("[[ISOSecond]]", vm.NumberValue(float64(second)))
-		dt.SetOwn("[[ISOMillisecond]]", vm.NumberValue(float64(ms)))
-		dt.SetOwn("[[ISOMicrosecond]]", vm.NumberValue(float64(us)))
-		dt.SetOwn("[[ISONanosecond]]", vm.NumberValue(float64(ns)))
-		dt.SetOwn("[[Calendar]]", vm.NewString("iso8601"))
+		dt.SetInternal("[[ISOYear]]", vm.NumberValue(float64(year)))
+		dt.SetInternal("[[ISOMonth]]", vm.NumberValue(float64(month)))
+		dt.SetInternal("[[ISODay]]", vm.NumberValue(float64(day)))
+		dt.SetInternal("[[ISOHour]]", vm.NumberValue(float64(hour)))
+		dt.SetInternal("[[ISOMinute]]", vm.NumberValue(float64(minute)))
+		dt.SetInternal("[[ISOSecond]]", vm.NumberValue(float64(second)))
+		dt.SetInternal("[[ISOMillisecond]]", vm.NumberValue(float64(ms)))
+		dt.SetInternal("[[ISOMicrosecond]]", vm.NumberValue(float64(us)))
+		dt.SetInternal("[[ISONanosecond]]", vm.NumberValue(float64(ns)))
+		dt.SetInternal("[[Calendar]]", vm.NewString("iso8601"))
 		return vm.NewValueFromPlainObject(dt)
 	}
 
@@ -1634,8 +1634,8 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainYearMonth")
 		}
 		obj := val.AsPlainObject()
-		yVal, yOk := obj.GetOwn("[[ISOYear]]")
-		mVal, mOk := obj.GetOwn("[[ISOMonth]]")
+		yVal, yOk := obj.GetInternal("[[ISOYear]]")
+		mVal, mOk := obj.GetInternal("[[ISOMonth]]")
 		if !yOk || !mOk {
 			return 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainYearMonth")
 		}
@@ -1644,10 +1644,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	createPlainYearMonth := func(year, month int) vm.Value {
 		ym := vm.NewObject(vm.NewValueFromPlainObject(plainYearMonthProto)).AsPlainObject()
-		ym.SetOwn("[[ISOYear]]", vm.NumberValue(float64(year)))
-		ym.SetOwn("[[ISOMonth]]", vm.NumberValue(float64(month)))
-		ym.SetOwn("[[ISODay]]", vm.NumberValue(1)) // Reference day
-		ym.SetOwn("[[Calendar]]", vm.NewString("iso8601"))
+		ym.SetInternal("[[ISOYear]]", vm.NumberValue(float64(year)))
+		ym.SetInternal("[[ISOMonth]]", vm.NumberValue(float64(month)))
+		ym.SetInternal("[[ISODay]]", vm.NumberValue(1)) // Reference day
+		ym.SetInternal("[[Calendar]]", vm.NewString("iso8601"))
 		return vm.NewValueFromPlainObject(ym)
 	}
 
@@ -1845,8 +1845,8 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainMonthDay")
 		}
 		obj := val.AsPlainObject()
-		mVal, mOk := obj.GetOwn("[[ISOMonth]]")
-		dVal, dOk := obj.GetOwn("[[ISODay]]")
+		mVal, mOk := obj.GetInternal("[[ISOMonth]]")
+		dVal, dOk := obj.GetInternal("[[ISODay]]")
 		if !mOk || !dOk {
 			return 0, 0, vmInstance.NewTypeError("Value is not a Temporal.PlainMonthDay")
 		}
@@ -1855,10 +1855,10 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	createPlainMonthDay := func(month, day int) vm.Value {
 		md := vm.NewObject(vm.NewValueFromPlainObject(plainMonthDayProto)).AsPlainObject()
-		md.SetOwn("[[ISOYear]]", vm.NumberValue(1972)) // Reference year (leap year)
-		md.SetOwn("[[ISOMonth]]", vm.NumberValue(float64(month)))
-		md.SetOwn("[[ISODay]]", vm.NumberValue(float64(day)))
-		md.SetOwn("[[Calendar]]", vm.NewString("iso8601"))
+		md.SetInternal("[[ISOYear]]", vm.NumberValue(1972)) // Reference year (leap year)
+		md.SetInternal("[[ISOMonth]]", vm.NumberValue(float64(month)))
+		md.SetInternal("[[ISODay]]", vm.NumberValue(float64(day)))
+		md.SetInternal("[[Calendar]]", vm.NewString("iso8601"))
 		return vm.NewValueFromPlainObject(md)
 	}
 
@@ -1995,19 +1995,19 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 		}
 		obj := val.AsPlainObject()
 		// Check for internal slots to verify this is a Temporal.Duration
-		yearsVal, hasYears := obj.GetOwn("[[Years]]")
+		yearsVal, hasYears := obj.GetInternal("[[Years]]")
 		if !hasYears {
 			return 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, vmInstance.NewTypeError("Value is not a Temporal.Duration")
 		}
-		monthsVal, _ := obj.GetOwn("[[Months]]")
-		weeksVal, _ := obj.GetOwn("[[Weeks]]")
-		daysVal, _ := obj.GetOwn("[[Days]]")
-		hoursVal, _ := obj.GetOwn("[[Hours]]")
-		minutesVal, _ := obj.GetOwn("[[Minutes]]")
-		secondsVal, _ := obj.GetOwn("[[Seconds]]")
-		msVal, _ := obj.GetOwn("[[Milliseconds]]")
-		usVal, _ := obj.GetOwn("[[Microseconds]]")
-		nsVal, _ := obj.GetOwn("[[Nanoseconds]]")
+		monthsVal, _ := obj.GetInternal("[[Months]]")
+		weeksVal, _ := obj.GetInternal("[[Weeks]]")
+		daysVal, _ := obj.GetInternal("[[Days]]")
+		hoursVal, _ := obj.GetInternal("[[Hours]]")
+		minutesVal, _ := obj.GetInternal("[[Minutes]]")
+		secondsVal, _ := obj.GetInternal("[[Seconds]]")
+		msVal, _ := obj.GetInternal("[[Milliseconds]]")
+		usVal, _ := obj.GetInternal("[[Microseconds]]")
+		nsVal, _ := obj.GetInternal("[[Nanoseconds]]")
 		return int(yearsVal.ToFloat()), int(monthsVal.ToFloat()), int(weeksVal.ToFloat()), int(daysVal.ToFloat()),
 			int(hoursVal.ToFloat()), int(minutesVal.ToFloat()), int(secondsVal.ToFloat()),
 			int(msVal.ToFloat()), int(usVal.ToFloat()), int(nsVal.ToFloat()), nil
@@ -2015,16 +2015,16 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	createDuration := func(years, months, weeks, days, hours, minutes, seconds, ms, us, ns int) vm.Value {
 		d := vm.NewObject(vm.NewValueFromPlainObject(durationProto)).AsPlainObject()
-		d.SetOwn("[[Years]]", vm.NumberValue(float64(years)))
-		d.SetOwn("[[Months]]", vm.NumberValue(float64(months)))
-		d.SetOwn("[[Weeks]]", vm.NumberValue(float64(weeks)))
-		d.SetOwn("[[Days]]", vm.NumberValue(float64(days)))
-		d.SetOwn("[[Hours]]", vm.NumberValue(float64(hours)))
-		d.SetOwn("[[Minutes]]", vm.NumberValue(float64(minutes)))
-		d.SetOwn("[[Seconds]]", vm.NumberValue(float64(seconds)))
-		d.SetOwn("[[Milliseconds]]", vm.NumberValue(float64(ms)))
-		d.SetOwn("[[Microseconds]]", vm.NumberValue(float64(us)))
-		d.SetOwn("[[Nanoseconds]]", vm.NumberValue(float64(ns)))
+		d.SetInternal("[[Years]]", vm.NumberValue(float64(years)))
+		d.SetInternal("[[Months]]", vm.NumberValue(float64(months)))
+		d.SetInternal("[[Weeks]]", vm.NumberValue(float64(weeks)))
+		d.SetInternal("[[Days]]", vm.NumberValue(float64(days)))
+		d.SetInternal("[[Hours]]", vm.NumberValue(float64(hours)))
+		d.SetInternal("[[Minutes]]", vm.NumberValue(float64(minutes)))
+		d.SetInternal("[[Seconds]]", vm.NumberValue(float64(seconds)))
+		d.SetInternal("[[Milliseconds]]", vm.NumberValue(float64(ms)))
+		d.SetInternal("[[Microseconds]]", vm.NumberValue(float64(us)))
+		d.SetInternal("[[Nanoseconds]]", vm.NumberValue(float64(ns)))
 		return vm.NewValueFromPlainObject(d)
 	}
 
@@ -2427,8 +2427,8 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return nil, "", vmInstance.NewTypeError("Value is not a Temporal.ZonedDateTime")
 		}
 		obj := val.AsPlainObject()
-		nanosVal, nanosOk := obj.GetOwn("[[EpochNanoseconds]]")
-		tzVal, tzOk := obj.GetOwn("[[TimeZone]]")
+		nanosVal, nanosOk := obj.GetInternal("[[EpochNanoseconds]]")
+		tzVal, tzOk := obj.GetInternal("[[TimeZone]]")
 		if !nanosOk || !tzOk {
 			return nil, "", vmInstance.NewTypeError("Value is not a Temporal.ZonedDateTime")
 		}
@@ -2442,9 +2442,9 @@ func (t *TemporalInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	createZonedDateTime := func(nanos *big.Int, tzId string) vm.Value {
 		zdt := vm.NewObject(vm.NewValueFromPlainObject(zonedDateTimeProto)).AsPlainObject()
-		zdt.SetOwn("[[EpochNanoseconds]]", vm.NewBigInt(nanos))
-		zdt.SetOwn("[[TimeZone]]", vm.NewString(tzId))
-		zdt.SetOwn("[[Calendar]]", vm.NewString("iso8601"))
+		zdt.SetInternal("[[EpochNanoseconds]]", vm.NewBigInt(nanos))
+		zdt.SetInternal("[[TimeZone]]", vm.NewString(tzId))
+		zdt.SetInternal("[[Calendar]]", vm.NewString("iso8601"))
 		return vm.NewValueFromPlainObject(zdt)
 	}
 
