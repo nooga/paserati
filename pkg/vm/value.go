@@ -216,7 +216,7 @@ type ArrayObject struct {
 	Object
 	length       int
 	elements     []Value
-	properties   map[string]Value        // Named properties (e.g., "index", "input" for match results)
+	properties   *namedProps             // Named properties (see namedProps) (e.g., "index", "input" for match results)
 	propertyDesc map[string]PropertyDesc // Property descriptors for named properties
 	symbolProps  map[*SymbolObject]Value // Symbol-keyed properties (e.g., Symbol.iterator override)
 	// symbolPropOrder tracks symbolProps' keys in creation order - a Go map
@@ -302,6 +302,62 @@ func (s *sparseElements) entries() map[int]Value {
 		return nil
 	}
 	return s.m
+}
+
+// namedProps is an array's string-keyed own data properties that aren't
+// held as elements (ArrayObject.properties), plus the creation order of
+// every own named key - data or accessor, excluding array indices - which a
+// Go map alone can't give Object.keys and friends (paserati#548).
+type namedProps struct {
+	m     map[string]Value
+	order []string
+}
+
+// noteNamedKey records name in the creation order if it isn't an own
+// property yet. Array-index keys are ordered numerically instead.
+func (a *ArrayObject) noteNamedKey(name string) {
+	if _, isIndex := tryParseArrayIndex(name); isIndex {
+		return
+	}
+	if a.properties != nil {
+		if _, ok := a.properties.m[name]; ok {
+			return
+		}
+	}
+	if _, ok := a.getters[name]; ok {
+		return
+	}
+	if _, ok := a.setters[name]; ok {
+		return
+	}
+	if a.properties == nil {
+		a.properties = &namedProps{m: make(map[string]Value)}
+	}
+	a.properties.order = append(a.properties.order, name)
+}
+
+// putNamed stores a named data property, noting it in the creation order.
+func (a *ArrayObject) putNamed(name string, v Value) {
+	a.noteNamedKey(name)
+	if a.properties == nil {
+		a.properties = &namedProps{m: make(map[string]Value)}
+	}
+	a.properties.m[name] = v
+}
+
+// dropNamed removes a named data property and its place in the creation
+// order.
+func (a *ArrayObject) dropNamed(name string) {
+	if a.properties == nil {
+		return
+	}
+	delete(a.properties.m, name)
+	for i, k := range a.properties.order {
+		if k == name {
+			a.properties.order = append(a.properties.order[:i], a.properties.order[i+1:]...)
+			break
+		}
+	}
 }
 
 // dropSparse deletes sparse element i, releasing the store once empty.
@@ -2564,7 +2620,7 @@ func (a *ArrayObject) SetLength(newLength int) {
 	// so an unconditional scan would tax that hot, unrelated path for
 	// every length write instead of only real truncations.
 	if newLength < a.length && a.properties != nil {
-		for key := range a.properties {
+		for key := range a.properties.m {
 			if idx, ok := tryParseArrayIndex(key); ok && idx >= newLength {
 				a.DeleteOwn(key)
 			}
@@ -2709,7 +2765,7 @@ func (a *ArrayObject) sparseOrNamed(idx int) (Value, bool) {
 	if v, ok := a.sparse.get(idx); ok {
 		return v, true
 	}
-	if len(a.properties) == 0 {
+	if a.properties == nil {
 		return Undefined, false
 	}
 	return a.GetOwn(intToString(idx))
@@ -2842,12 +2898,17 @@ func (a *ArrayObject) materializeExecMeta() {
 		return
 	}
 	a.execMeta = nil
-	if a.properties == nil {
-		a.properties = make(map[string]Value)
-	}
+	var created []string
 	for _, k := range m.keys() {
-		a.properties[k], _ = m.get(k)
+		v, _ := m.get(k)
+		a.putNamed(k, v)
+		created = append(created, k)
 	}
+	// The exec-result properties were created before any other named
+	// property; putNamed just appended them, so move them to the front.
+	order := a.properties.order
+	rest := order[:len(order)-len(created)]
+	a.properties.order = append(append(make([]string, 0, len(order)), created...), rest...)
 }
 
 // isExecMetaKey reports whether name is one of the lazily held exec-result
@@ -2870,7 +2931,7 @@ func (a *ArrayObject) GetOwn(name string) (Value, bool) {
 	if a.properties == nil {
 		return Undefined, false
 	}
-	v, ok := a.properties[name]
+	v, ok := a.properties.m[name]
 	return v, ok
 }
 
@@ -2879,10 +2940,7 @@ func (a *ArrayObject) SetOwn(name string, value Value) {
 	if a.isExecMetaKey(name) {
 		a.materializeExecMeta()
 	}
-	if a.properties == nil {
-		a.properties = make(map[string]Value)
-	}
-	a.properties[name] = value
+	a.putNamed(name, value)
 }
 
 // DeleteOwn removes a named (non-index) property, along with any tracked
@@ -2903,9 +2961,7 @@ func (a *ArrayObject) DeleteOwn(name string) bool {
 			return false
 		}
 	}
-	if a.properties != nil {
-		delete(a.properties, name)
-	}
+	a.dropNamed(name)
 	if a.propertyDesc != nil {
 		delete(a.propertyDesc, name)
 	}
@@ -2923,13 +2979,10 @@ func (a *ArrayObject) DefineOwnProperty(name string, value Value, writable, enum
 	if a.isExecMetaKey(name) {
 		a.materializeExecMeta()
 	}
-	if a.properties == nil {
-		a.properties = make(map[string]Value)
-	}
 	if a.propertyDesc == nil {
 		a.propertyDesc = make(map[string]PropertyDesc)
 	}
-	a.properties[name] = value
+	a.putNamed(name, value)
 	a.propertyDesc[name] = PropertyDesc{
 		Writable:     writable,
 		Enumerable:   enumerable,
@@ -2964,7 +3017,7 @@ func (a *ArrayObject) GetOwnPropertyDescriptor(name string) (Value, PropertyDesc
 	if a.properties == nil {
 		return Undefined, PropertyDesc{}, false
 	}
-	v, ok := a.properties[name]
+	v, ok := a.properties.m[name]
 	if !ok {
 		return Undefined, PropertyDesc{}, false
 	}
@@ -2993,7 +3046,7 @@ func (a *ArrayObject) IsFrozen() bool {
 	}
 	// Check properties that don't have explicit descriptors (default: writable+configurable)
 	if a.properties != nil {
-		for name := range a.properties {
+		for name := range a.properties.m {
 			if a.propertyDesc == nil {
 				return false // no descriptors means default (writable/configurable)
 			}
@@ -3023,8 +3076,7 @@ func (a *ArrayObject) sealOrFreezeProperties(freeze bool) {
 		if a.propertyDesc == nil {
 			a.propertyDesc = make(map[string]PropertyDesc)
 		}
-		for name, val := range a.properties {
-			_ = val
+		for name := range a.properties.m {
 			desc, hasDesc := a.propertyDesc[name]
 			if !hasDesc {
 				desc = PropertyDesc{Writable: true, Enumerable: true, Configurable: true}
@@ -3035,6 +3087,18 @@ func (a *ArrayObject) sealOrFreezeProperties(freeze bool) {
 			}
 			a.propertyDesc[name] = desc
 		}
+	}
+
+	// Accessor properties (data-less, so absent from .properties) must stop
+	// being configurable too, or a frozen/sealed array's accessor could still
+	// be redefined and IsFrozen would report false.
+	for _, name := range a.AccessorKeys() {
+		if a.propertyDesc == nil {
+			a.propertyDesc = make(map[string]PropertyDesc)
+		}
+		desc := a.propertyDesc[name]
+		desc.Configurable = false
+		a.propertyDesc[name] = desc
 	}
 
 	// A dense-element index can also carry its own propertyDesc entry -
@@ -3315,6 +3379,7 @@ func (a *ArrayObject) GetOwnSymbolAccessor(sym *SymbolObject) (Value, Value, boo
 // DefineAccessorProperty defines an accessor property on the array object
 func (a *ArrayObject) DefineAccessorProperty(name string, getter Value, hasGetter bool, setter Value, hasSetter bool, enumerable *bool, configurable *bool) {
 	noteAccessorKey(name)
+	a.noteNamedKey(name)
 	// Initialize maps if needed
 	if a.getters == nil {
 		a.getters = make(map[string]Value)
@@ -3348,8 +3413,11 @@ func (a *ArrayObject) DefineAccessorProperty(name string, getter Value, hasGette
 	}
 	a.propertyDesc[name] = desc
 
-	// Remove from regular properties if it was a data property
-	delete(a.properties, name)
+	// Remove from regular properties if it was a data property (it keeps
+	// its place in the creation order)
+	if a.properties != nil {
+		delete(a.properties.m, name)
+	}
 }
 
 // HasAccessors reports whether this array has ever had an accessor property
@@ -3496,8 +3564,24 @@ func (a *ArrayObject) NamedPropertyKeys() []string {
 		// of an exec result, created in this order right after the captures.
 		keys = append(keys, a.execMeta.keys()...)
 	}
-	for k := range a.properties {
-		keys = append(keys, k)
+	if a.properties != nil {
+		for k := range a.properties.m {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+// OwnNamedKeys returns every own string-keyed property that isn't an array
+// index - data or accessor - in property creation order, as
+// OrdinaryOwnPropertyKeys requires (paserati#548).
+func (a *ArrayObject) OwnNamedKeys() []string {
+	var keys []string
+	if a.execMeta != nil {
+		keys = append(keys, a.execMeta.keys()...)
+	}
+	if a.properties != nil {
+		keys = append(keys, a.properties.order...)
 	}
 	return keys
 }
@@ -3526,7 +3610,7 @@ func (a *ArrayObject) GetNamedPropertyDescriptor(name string) (Value, bool, bool
 	if a.properties == nil {
 		return Undefined, false, false
 	}
-	v, ok := a.properties[name]
+	v, ok := a.properties.m[name]
 	if !ok {
 		return Undefined, false, false
 	}

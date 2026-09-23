@@ -397,9 +397,7 @@ func (a *ArrayObject) DeleteIndex(idx int) bool {
 	if a.propertyDesc != nil {
 		delete(a.propertyDesc, key)
 	}
-	if a.properties != nil {
-		delete(a.properties, key)
-	}
+	a.dropNamed(key)
 	if idx < len(a.elements) {
 		a.elements[idx] = Hole
 	} else {
