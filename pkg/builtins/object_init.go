@@ -2,7 +2,6 @@ package builtins
 
 import (
 	"math"
-	"sort"
 	"strconv"
 
 	"github.com/nooga/paserati/pkg/types"
@@ -1734,73 +1733,12 @@ func isTargetKeyEnumerable(vmInstance *vm.VM, target vm.Value, key string) bool 
 	return false
 }
 
-// arraySparseIndices returns an array's own numeric-index keys that live
-// beyond its dense elements bound (a.DenseLength()), as ints in ascending
-// numeric order - the order ECMA-262's OrdinaryOwnPropertyKeys requires
-// for integer-indexed properties (matching how the dense range below them
-// is already visited in order by a plain 0..DenseLength() loop).
-//
-// A property beyond the dense bound is tracked in one of two disjoint
-// places depending on how it was defined (see ArrayDefineOwnProperty,
-// array_props.go): a plain data property lives in a.properties (found via
-// NamedPropertyKeys), while an accessor - possible at ANY index, not just
-// ones past maxDenseArrayDefineIndex; an in-bounds index that never grew
-// `elements` far enough to reach it, e.g. index 10000 on a 5-element
-// array, is just as "sparse" from this function's point of view - is
-// never written to a.properties at all (DefineAccessorProperty only ever
-// touches getters/setters/propertyDesc), so it's found via AccessorKeys
-// instead. Both must be walked, or an accessor sparse index silently
-// disappears from every enumeration below (regressed test262
-// built-ins/Object/keys/15.2.3.14-5-14.js during development of this fix,
-// which defines exactly such an accessor at index 10000 on a 5-element
-// sparse array).
-//
-// Every array-own-key enumeration below used to loop `0..a.Length()` to
-// visit every index, but Length() reports the array's `.length` property -
-// which a defineProperty call at a huge index extends without touching
-// `elements` at all - so that loop was actually a multi-billion-iteration
-// hang for an array otherwise holding a handful of elements, not an O(1)
-// per real entry scan (paserati#176/#178). This walks NamedPropertyKeys()
-// and AccessorKeys() instead - O(number of sparse/named/accessor entries),
-// never O(index value) - keeping only the ones that parse as a valid array
-// index (vm.ParseArrayIndex, which already enforces the same 2^32-2 upper
-// bound ArrayDefineOwnProperty itself uses, so nothing here can
-// accidentally treat an out-of-range numeric-looking key as an index).
-//
-// When enumerableOnly is true, only keys whose tracked descriptor reports
-// Enumerable are included (Object.keys/values/entries and Object.assign's
-// own-enumerable-properties rule); pass false for an operation that wants
-// every own index key regardless of enumerability (Object.
-// getOwnPropertyNames, Reflect.ownKeys).
+// arraySparseIndices returns, ascending, an array's own index keys beyond
+// its dense elements (a.DenseLength()) - see vm.ArraySparseIndices. A plain
+// 0..DenseLength() loop plus this visits every own index in order without
+// ever looping to an arbitrarily large .length (paserati#176/#178/#544).
 func arraySparseIndices(a *vm.ArrayObject, enumerableOnly bool) []int {
-	dense := a.DenseLength()
-	seen := make(map[int]bool)
-	var idxs []int
-	consider := func(key string) {
-		idx, isIndex := vm.ParseArrayIndex(key)
-		if !isIndex || idx < dense || seen[idx] {
-			return
-		}
-		if enumerableOnly {
-			if _, _, enumerable, _, isAccessor := a.GetOwnAccessor(key); isAccessor {
-				if !enumerable {
-					return
-				}
-			} else if _, desc, ok := a.GetOwnPropertyDescriptor(key); !ok || !desc.Enumerable {
-				return
-			}
-		}
-		seen[idx] = true
-		idxs = append(idxs, idx)
-	}
-	for _, key := range a.NamedPropertyKeys() {
-		consider(key)
-	}
-	for _, key := range a.AccessorKeys() {
-		consider(key)
-	}
-	sort.Ints(idxs)
-	return idxs
+	return vm.ArraySparseIndices(a, enumerableOnly)
 }
 
 // arraySparseIndexValue reads the value an own sparse index (one
@@ -1825,6 +1763,9 @@ func arraySparseIndexValue(vmInstance *vm.VM, a *vm.ArrayObject, receiver vm.Val
 			return vm.Undefined, nil
 		}
 		return vmInstance.Call(getter, receiver, nil)
+	}
+	if a.HasIndex(idx) {
+		return a.Get(idx), nil
 	}
 	if v, ok := a.GetOwn(key); ok {
 		return v, nil

@@ -215,7 +215,7 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 					}
 				}
 				// Numeric index
-				if idx, err := strconv.Atoi(propName); err == nil && idx >= 0 {
+				if idx, ok := tryParseArrayIndex(propName); ok {
 					arr.Set(idx, *valueToSet)
 					return true, InterpretOK, *valueToSet
 				}

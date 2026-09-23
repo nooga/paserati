@@ -12,12 +12,9 @@ package vm
 //  1. An accessor explicitly installed at this index via
 //     Object.defineProperty takes priority - it's tracked separately from
 //     `elements` (see ArrayDefineOwnProperty's doc comment).
-//  2. Otherwise, HasIndex covers the dense `elements` range, correctly
-//     reporting a hole as absent.
-//  3. Beyond that range (see maxDenseArrayDefineIndex), a huge sparse index
-//     defined via Object.defineProperty (paserati#176/#178) is tracked in
-//     the properties map instead of `elements`, so it must still count as
-//     present even though HasIndex can't see it.
+//  2. Otherwise, HasIndex covers the dense `elements` range and the sparse
+//     store (paserati#544), correctly reporting a hole as absent.
+//  3. Otherwise an index-keyed entry of the properties map still counts.
 //
 // propName must be index formatted as a decimal string (the same key
 // GetOwnAccessor/GetOwn use); callers that already have both the parsed int
@@ -37,16 +34,6 @@ func (a *ArrayObject) HasOwnIndexProperty(propName string, index int) bool {
 	_, ok := a.GetOwn(propName)
 	return ok
 }
-
-// maxDenseArrayDefineIndex bounds how far ArrayDefineOwnProperty will grow
-// the elements slice via ArrayObject.Set for a single index write. A valid
-// array index can be as large as 2^32-2 (ArraySetLength's bound - see
-// tryParseArrayIndex), and Set(idx, ...) is O(idx): it fills every slot up
-// to idx with Hole before writing. Without this guard, defining a property
-// at a huge index (a real Test262 boundary-condition pattern, e.g. testing
-// behavior at 4294967294) would attempt a multi-billion-entry allocation -
-// mirrors OpSetIndex's own identical guard in vm.go for `arr[hugeIdx] = v`.
-const maxDenseArrayDefineIndex = 16777216 // 2^24
 
 // ArrayPrototypeSetterFor checks whether idx has an inherited accessor
 // somewhere on Array.prototype's chain - an own-index write on an array
@@ -244,36 +231,22 @@ func (vm *VM) ArrayDefineOwnProperty(
 		if a.propertyDesc != nil {
 			delete(a.propertyDesc, key)
 		}
-		if idx <= maxDenseArrayDefineIndex {
-			a.Set(idx, newValue)
-			// A plain element's descriptor otherwise reports the ES
-			// default (value, true, true, true) - see this file's doc
-			// comment. Track a non-default writable/enumerable/
-			// configurable combination explicitly in propertyDesc instead
-			// (paserati#178) - GetOwnPropertyDescriptor, DeleteIndex, and
-			// this function's own "resolve current descriptor" step above
-			// all already check propertyDesc first for exactly this
-			// reason. An all-default combination needs no entry, matching
-			// the delete just above (which also clears whatever an
-			// earlier defineProperty call on this index may have left).
-			if !(writable && enumerable && configurable) {
-				if a.propertyDesc == nil {
-					a.propertyDesc = make(map[string]PropertyDesc)
-				}
-				a.propertyDesc[key] = PropertyDesc{Writable: writable, Enumerable: enumerable, Configurable: configurable}
+		a.Set(idx, newValue)
+		// A plain element's descriptor otherwise reports the ES
+		// default (value, true, true, true) - see this file's doc
+		// comment. Track a non-default writable/enumerable/
+		// configurable combination explicitly in propertyDesc instead
+		// (paserati#178) - GetOwnPropertyDescriptor, DeleteIndex, and
+		// this function's own "resolve current descriptor" step above
+		// all already check propertyDesc first for exactly this
+		// reason. An all-default combination needs no entry, matching
+		// the delete just above (which also clears whatever an
+		// earlier defineProperty call on this index may have left).
+		if !(writable && enumerable && configurable) {
+			if a.propertyDesc == nil {
+				a.propertyDesc = make(map[string]PropertyDesc)
 			}
-		} else {
-			// Beyond the dense-allocation bound: track it as a named
-			// property instead of materializing the elements slice up to
-			// idx (see maxDenseArrayDefineIndex). DefineOwnProperty stores
-			// the actual attributes here (unlike the old hardcoded
-			// true/true/true - paserati#178), since it always tracks a
-			// full descriptor for a named property regardless of index
-			// size.
-			a.DefineOwnProperty(key, newValue, writable, enumerable, configurable)
-			if idx+1 > a.length {
-				a.length = idx + 1
-			}
+			a.propertyDesc[key] = PropertyDesc{Writable: writable, Enumerable: enumerable, Configurable: configurable}
 		}
 		return nil
 	}
@@ -429,6 +402,8 @@ func (a *ArrayObject) DeleteIndex(idx int) bool {
 	}
 	if idx < len(a.elements) {
 		a.elements[idx] = Hole
+	} else {
+		a.dropSparse(idx)
 	}
 	return true
 }

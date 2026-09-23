@@ -261,6 +261,58 @@ type ArrayObject struct {
 	// this table exists only so ArrayObject can reuse PlainObject's private-
 	// member storage instead of duplicating it. Allocated lazily.
 	Properties *PlainObject
+
+	// sparse holds the elements at indices >= len(elements) that a write
+	// placed too far past the dense end to grow elements for (see
+	// sparseMaxGap; paserati#544). Every key k satisfies
+	// len(elements) <= k < length: dense growth absorbs the keys it reaches,
+	// and truncating length deletes those past it. Attributes are tracked in
+	// propertyDesc exactly as for dense elements. nil when there are none -
+	// a single pointer, so ordinary arrays pay 8 bytes for it.
+	sparse *sparseElements
+}
+
+// sparseElements is an array's sparse element store (ArrayObject.sparse).
+type sparseElements struct {
+	m map[int]Value
+	// max is an upper bound on m's keys (exact until a delete or
+	// truncation), used to tell when the array has filled in enough to go
+	// back to dense storage.
+	max int
+}
+
+func (s *sparseElements) len() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.m)
+}
+
+func (s *sparseElements) get(i int) (Value, bool) {
+	if s == nil {
+		return Undefined, false
+	}
+	v, ok := s.m[i]
+	return v, ok
+}
+
+// entries returns the index->value map, nil for no sparse elements.
+func (s *sparseElements) entries() map[int]Value {
+	if s == nil {
+		return nil
+	}
+	return s.m
+}
+
+// dropSparse deletes sparse element i, releasing the store once empty.
+func (a *ArrayObject) dropSparse(i int) {
+	if a.sparse == nil {
+		return
+	}
+	delete(a.sparse.m, i)
+	if len(a.sparse.m) == 0 {
+		a.sparse = nil
+	}
 }
 
 // PropertyDesc stores property descriptor attributes
@@ -2483,6 +2535,13 @@ func (a *ArrayObject) SetLength(newLength int) {
 		// Truncate array
 		a.elements = a.elements[:newLength]
 	}
+	if newLength < a.length {
+		for i := range a.sparse.entries() {
+			if i >= newLength {
+				a.dropSparse(i)
+			}
+		}
+	}
 	// Don't expand elements slice - JavaScript arrays are sparse
 	// Elements beyond len(a.elements) will return undefined when accessed
 
@@ -2517,7 +2576,13 @@ func (a *ArrayObject) SetLength(newLength int) {
 
 // Get returns the element at the given index, or Undefined if out of bounds
 func (a *ArrayObject) Get(index int) Value {
-	if index < 0 || index >= len(a.elements) {
+	if index < 0 {
+		return Undefined
+	}
+	if index >= len(a.elements) {
+		if v, ok := a.sparse.get(index); ok {
+			return v
+		}
 		return Undefined
 	}
 	elem := a.elements[index]
@@ -2528,35 +2593,155 @@ func (a *ArrayObject) Get(index int) Value {
 	return elem
 }
 
+// sparseMaxGap is how far past the dense end a write may land and still grow
+// the elements slice (filling the gap with holes). A write further out goes
+// to the sparse map instead, so storage stays proportional to the number of
+// elements, never to an index's value (paserati#544) - V8's kMaxGap rule for
+// dictionary elements. Relative allowances ("up to the current dense
+// length") don't work: writes at 2^k - 2 would double the slice each time
+// while holding only k elements.
+const sparseMaxGap = 1024
+
+// maxPreallocLength: a write below .length may also grow the dense slice
+// when .length is at most this, so new Array(n) (or arr.length = n) filled
+// in any order stays dense - V8's kInitialMaxFastElementArray.
+const maxPreallocLength = 100000
+
 // Set sets the element at the given index, expanding the array if necessary
 func (a *ArrayObject) Set(index int, value Value) {
+	if index >= 0 && index < len(a.elements) {
+		a.elements[index] = value // index < len(elements) <= length
+		return
+	}
+	a.setSlow(index, value)
+}
+
+// setSlow is Set past the dense slice: append, grow with holes, or store in
+// the sparse map.
+func (a *ArrayObject) setSlow(index int, value Value) {
 	if index < 0 {
 		return // Ignore negative indices
 	}
-
-	// Expand array if necessary
-	if index >= len(a.elements) {
-		for i := len(a.elements); i < index; i++ {
-			a.elements = append(a.elements, Hole) // Use Hole marker for gaps
-		}
-		a.elements = append(a.elements, value) // Append the actual value at index
-	} else {
+	n := len(a.elements)
+	switch {
+	case index < n:
 		a.elements[index] = value
+	case index == n && a.sparse == nil:
+		a.elements = append(a.elements, value)
+	case index-n <= sparseMaxGap || (index < a.length && a.length <= maxPreallocLength):
+		a.growElements(index + 1)
+		a.elements[index] = value
+	default:
+		if a.sparse == nil {
+			a.sparse = &sparseElements{m: make(map[int]Value), max: index}
+		} else if index > a.sparse.max {
+			a.sparse.max = index
+		}
+		a.sparse.m[index] = value
+		// Once the sparse entries fill at least half of the range between
+		// the dense end and sparse.max, growing the dense slice over it at
+		// most doubles that range's storage: switch back (e.g. new Array(n)
+		// filled from the end), as V8 does for dictionary elements. Holes
+		// in elements don't count - see sparseMaxGap.
+		if 2*len(a.sparse.m) > a.sparse.max-len(a.elements) {
+			a.growElements(a.sparse.max + 1)
+		}
 	}
 	if index >= a.length {
 		a.length = index + 1
 	}
 }
 
+// growElements extends elements to newLen, filling the new slots with holes
+// and then moving in any sparse elements they now cover.
+func (a *ArrayObject) growElements(newLen int) {
+	n := len(a.elements)
+	if newLen <= n {
+		return
+	}
+	if cap(a.elements) < newLen {
+		grown := make([]Value, n, max(newLen, 2*cap(a.elements)))
+		copy(grown, a.elements)
+		a.elements = grown
+	}
+	a.elements = a.elements[:newLen]
+	for i := n; i < newLen; i++ {
+		a.elements[i] = Hole
+	}
+	a.absorbSparse(n, newLen)
+}
+
+// absorbSparse moves the sparse elements at indices [from, to) - now inside
+// the dense slice - into elements. A slot the growing write already filled
+// keeps that newer value.
+func (a *ArrayObject) absorbSparse(from, to int) {
+	if a.sparse == nil {
+		return
+	}
+	m := a.sparse.m
+	take := func(i int, v Value) {
+		if a.elements[i].typ == TypeHole {
+			a.elements[i] = v
+		}
+		delete(m, i)
+	}
+	if to-from <= len(m) {
+		for i := from; i < to; i++ {
+			if v, ok := m[i]; ok {
+				take(i, v)
+			}
+		}
+	} else {
+		for i, v := range m {
+			if i >= from && i < to {
+				take(i, v)
+			}
+		}
+	}
+	if len(m) == 0 {
+		a.sparse = nil
+	}
+}
+
+// sparseOrNamed is the slow path of an index read that missed the dense
+// slice: the sparse store, then an index-keyed entry of the properties map.
+func (a *ArrayObject) sparseOrNamed(idx int) (Value, bool) {
+	if v, ok := a.sparse.get(idx); ok {
+		return v, true
+	}
+	if len(a.properties) == 0 {
+		return Undefined, false
+	}
+	return a.GetOwn(intToString(idx))
+}
+
+// SparseIndices returns the indices held in the sparse map, ascending.
+func (a *ArrayObject) SparseIndices() []int {
+	if a.sparse == nil {
+		return nil
+	}
+	idxs := make([]int, 0, len(a.sparse.m))
+	for i := range a.sparse.m {
+		idxs = append(idxs, i)
+	}
+	sort.Ints(idxs)
+	return idxs
+}
+
 // SetElements sets all elements at once and updates length
 func (a *ArrayObject) SetElements(elements []Value) {
 	a.elements = make([]Value, len(elements))
 	copy(a.elements, elements)
+	a.sparse = nil
 	a.length = len(elements)
 }
 
 // Append adds a value to the end of the array
 func (a *ArrayObject) Append(value Value) {
+	if a.length != len(a.elements) || a.sparse != nil {
+		a.setSlow(a.length, value)
+		return
+	}
 	a.elements = append(a.elements, value)
 	a.length++
 }
@@ -2564,8 +2749,12 @@ func (a *ArrayObject) Append(value Value) {
 // HasIndex returns true if the index has an actual value (not a hole in sparse array)
 func (a *ArrayObject) HasIndex(index int) bool {
 	// Check bounds first
-	if index < 0 || index >= len(a.elements) {
+	if index < 0 {
 		return false
+	}
+	if index >= len(a.elements) {
+		_, ok := a.sparse.get(index)
+		return ok
 	}
 	// Check if it's a hole (using the special Hole marker)
 	return a.elements[index].typ != TypeHole
@@ -3241,7 +3430,7 @@ func (a *ArrayObject) AccessorKeys() []string {
 	return keys
 }
 
-// arraySparseIndices returns, ascending, every own array-index property this
+// ArraySparseIndices returns, ascending, every own array-index property this
 // array holds beyond DenseLength() - i.e. entries too far past
 // maxDenseArrayDefineIndex to live in the dense elements slice, tracked
 // instead in the properties map (data) or the getters/setters maps
@@ -3256,7 +3445,7 @@ func (a *ArrayObject) AccessorKeys() []string {
 // assign's own-enumerable-properties rule); pass false for an operation
 // that wants every own index key regardless of enumerability (Object.
 // getOwnPropertyNames, Reflect.ownKeys).
-func arraySparseIndices(a *ArrayObject, enumerableOnly bool) []int {
+func ArraySparseIndices(a *ArrayObject, enumerableOnly bool) []int {
 	dense := a.DenseLength()
 	seen := make(map[int]bool)
 	var idxs []int
@@ -3282,6 +3471,18 @@ func arraySparseIndices(a *ArrayObject, enumerableOnly bool) []int {
 	}
 	for _, key := range a.AccessorKeys() {
 		consider(key)
+	}
+	for i := range a.sparse.entries() {
+		if seen[i] {
+			continue
+		}
+		if enumerableOnly {
+			if desc, ok := a.GetIndexAttributesOverride(intToString(i)); ok && !desc.Enumerable {
+				continue
+			}
+		}
+		seen[i] = true
+		idxs = append(idxs, i)
 	}
 	sort.Ints(idxs)
 	return idxs
