@@ -578,7 +578,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
 			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt != nil {
 				if exprStmt.Expression != nil {
-					if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
+					if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil && !funcLit.Parenthesized {
 						// In JavaScript, duplicate function declarations are allowed
 						// The last declaration wins due to hoisting
 						program.HoistedDeclarations[funcLit.Name.Value] = funcLit // Store Expression
@@ -591,7 +591,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 				// Check if the exported declaration is a function
 				if exprStmt, isExprStmt := exportDecl.Declaration.(*ExpressionStatement); isExprStmt && exprStmt != nil {
 					if exprStmt.Expression != nil {
-						if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
+						if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil && !funcLit.Parenthesized {
 							// In JavaScript, duplicate function declarations are allowed
 							// The last declaration wins due to hoisting
 							program.HoistedDeclarations[funcLit.Name.Value] = funcLit // Store Expression
@@ -3934,7 +3934,7 @@ func (p *Parser) parseBlockStatement() *BlockStatement {
 			// --- Hoisting Check ---
 			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
 			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt.Expression != nil {
-				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
+				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil && !funcLit.Parenthesized {
 					if _, exists := block.HoistedDeclarations[funcLit.Name.Value]; exists {
 						// Function with this name already hoisted in this block
 						p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration in block: %s", funcLit.Name.Value)) // Use Token
@@ -4012,7 +4012,7 @@ func (p *Parser) parseFunctionBodyWithDirectives() *BlockStatement {
 
 			// --- Hoisting Check ---
 			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt.Expression != nil {
-				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
+				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil && !funcLit.Parenthesized {
 					if _, exists := block.HoistedDeclarations[funcLit.Name.Value]; exists {
 						p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration in block: %s", funcLit.Name.Value))
 					} else {
@@ -4791,6 +4791,10 @@ func (p *Parser) parseGroupedExpression() Expression {
 	// ArrowFunction is not a LeftHandSideExpression - see paserati#292.
 	if arrow, ok := exp.(*ArrowFunctionLiteral); ok {
 		arrow.Parenthesized = true
+	}
+	// A parenthesized named function is an expression, not a declaration.
+	if fn, ok := exp.(*FunctionLiteral); ok {
+		fn.Parenthesized = true
 	}
 	return exp
 }
@@ -6893,7 +6897,7 @@ func (p *Parser) parseSwitchCase() *SwitchCase {
 			// --- Hoisting Check (same as parseBlockStatement) ---
 			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
 			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt.Expression != nil {
-				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
+				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil && !funcLit.Parenthesized {
 					if _, exists := caseClause.Body.HoistedDeclarations[funcLit.Name.Value]; exists {
 						// Function with this name already hoisted in this block
 						p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration in switch case: %s", funcLit.Name.Value))
