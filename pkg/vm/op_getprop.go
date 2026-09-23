@@ -379,6 +379,9 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 						break
 					}
 					current = pv.AsPlainObject()
+					if i+1 < entry.protoDepth && current.shape != entry.midShapes[i] {
+						current = nil
+					}
 				}
 				if current != nil && current.shape == entry.holderShape && current.shape.version == entry.holderVersion {
 					if entry.isAccessor {
