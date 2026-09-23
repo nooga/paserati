@@ -42,6 +42,11 @@ func (p *Parser) isValidMethodName() bool {
 func (p *Parser) parseClassDeclaration() Statement {
 	classToken := p.curToken
 
+	// All parts of a class, including its name and heritage, are strict mode code.
+	savedStrict := p.strictMode
+	p.strictMode = true
+	defer func() { p.strictMode = savedStrict }()
+
 	// Class name: must be an identifier-like token (includes contextual keywords
 	// like 'abstract', 'from', 'of', 'type', 'async', etc. that are valid names).
 	p.nextToken()
@@ -51,6 +56,7 @@ func (p *Parser) parseClassDeclaration() Statement {
 	}
 
 	name := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	p.checkClassName(name)
 
 	// Parse type parameters if present (same pattern as interfaces)
 	typeParameters := p.tryParseTypeParameters()
@@ -103,6 +109,7 @@ func (p *Parser) parseClassDeclaration() Statement {
 		if superClass == nil {
 			return nil // Failed to parse superclass expression
 		}
+		p.checkClassHeritage(superClass)
 	}
 
 	var implements []*Identifier
@@ -236,6 +243,11 @@ func isWellKnownSymbol(name string) bool {
 func (p *Parser) parseClassExpression() Expression {
 	classToken := p.curToken
 
+	// All parts of a class, including its name and heritage, are strict mode code.
+	savedStrict := p.strictMode
+	p.strictMode = true
+	defer func() { p.strictMode = savedStrict }()
+
 	var name *Identifier
 	// Class expression name is optional; it can be any identifier-like token.
 	// Peek ahead to see if the next token can start a class name.
@@ -246,6 +258,7 @@ func (p *Parser) parseClassExpression() Expression {
 		p.peekToken.Type == lexer.OVERRIDE || p.peekToken.Type == lexer.READONLY {
 		p.nextToken()
 		name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		p.checkClassName(name)
 	}
 
 	// Parse type parameters if present (same pattern as interfaces)
@@ -300,6 +313,7 @@ func (p *Parser) parseClassExpression() Expression {
 		if superClass == nil {
 			return nil // Failed to parse superclass expression
 		}
+		p.checkClassHeritage(superClass)
 	}
 
 	var implements []*Identifier
@@ -351,6 +365,17 @@ func (p *Parser) parseClassBody() *ClassBody {
 	var constructorSigs []*ConstructorSignature
 	var methodSigs []*MethodSignature
 	var staticInitializers []*BlockStatement
+
+	scope := &privateNameScope{}
+	p.privateScopes = append(p.privateScopes, scope)
+	popped := false
+	popScope := func() {
+		if !popped {
+			popped = true
+			p.privateScopes = p.privateScopes[:len(p.privateScopes)-1]
+		}
+	}
+	defer popScope()
 
 	p.nextToken() // move past '{'
 
@@ -460,6 +485,12 @@ func (p *Parser) parseClassBody() *ClassBody {
 				}
 				isOverride = true
 				seenOverride = true
+				p.nextToken()
+			} else if p.curToken.Type == lexer.IDENT && p.curToken.Literal == "accessor" && !isFieldName() &&
+				p.peekToken.Type != lexer.ASTERISK && p.peekToken.Type != lexer.GET && p.peekToken.Type != lexer.SET {
+				// Decorators proposal auto-accessor: `accessor x = v`.
+				// FIXME: parsed as a plain field; the getter/setter pair backed
+				// by a private slot is not implemented.
 				p.nextToken()
 			} else if p.curTokenIs(lexer.ASYNC) && !isAsync && !isFieldName() {
 				isAsync = true
@@ -686,7 +717,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 	// The class body parsing is complete. We don't advance past the '}' here
 	// to be consistent with other parsing functions like parseBlockStatement
 
-	return &ClassBody{
+	body := &ClassBody{
 		Token:              bodyToken,
 		EndPos:             p.curToken.EndPos, // curToken is the closing '}'
 		Methods:            methods,
@@ -695,6 +726,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 		MethodSigs:         methodSigs,
 		StaticInitializers: staticInitializers,
 	}
+	popScope()
+	p.checkClassBodyEarlyErrors(body, scope)
+	return body
 }
 
 // parseConstructor parses a constructor method or signature
@@ -1004,6 +1038,7 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 		// Use COMMA precedence (lower than ASSIGNMENT) to allow assignment operators to be parsed
 		// This allows chained assignments like: x = obj['lol'] = 42
 		initializer = p.parseExpression(COMMA)
+		p.checkClassFieldEnd(p.curToken, p.peekToken)
 
 		// After parseExpression, curToken is at the last token of the expression.
 		// We need to advance to the next token for the class body parser.
@@ -1019,6 +1054,7 @@ func (p *Parser) parseProperty(isStatic, isReadonly, isPublic, isPrivate, isProt
 		}
 	} else {
 		// No initializer
+		p.checkClassFieldEnd(p.prevToken, p.curToken)
 		// Check for optional semicolon and skip it
 		if p.curTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Move past semicolon
@@ -1086,6 +1122,7 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 		// Use COMMA precedence (lower than ASSIGNMENT) to allow assignment operators to be parsed
 		// This allows chained assignments like: x = obj['lol'] = 42
 		initializer = p.parseExpression(COMMA)
+		p.checkClassFieldEnd(p.curToken, p.peekToken)
 
 		// After parseExpression, curToken is at the last token of the expression.
 		// We need to advance to the next token for the class body parser.
@@ -1101,6 +1138,7 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 		}
 	} else {
 		// No initializer
+		p.checkClassFieldEnd(p.prevToken, p.curToken)
 		// Check for optional semicolon and skip it
 		if p.curTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Move past semicolon
@@ -1599,6 +1637,7 @@ func (p *Parser) parseComputedProperty(bracketToken *lexer.Token, keyExpr Expres
 		// step past the arrow's own closing brace to reach `[k2]`).
 		// parseProperty (the non-computed sibling of this function) never
 		// had this special case and doesn't need it either.
+		p.checkClassFieldEnd(p.curToken, p.peekToken)
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Move to semicolon
 			p.nextToken() // Move past semicolon to next class member
@@ -1613,6 +1652,7 @@ func (p *Parser) parseComputedProperty(bracketToken *lexer.Token, keyExpr Expres
 		// as the earlier initializer case above, and for the exact same
 		// reason must not be special-cased as "must be the class body's
 		// closing brace".
+		p.checkClassFieldEnd(p.curToken, p.peekToken)
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Move to semicolon
 			p.nextToken() // Move past semicolon to next class member
