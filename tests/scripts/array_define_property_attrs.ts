@@ -27,9 +27,16 @@ try {
 }
 checks.push(threw);
 
-// Deleting a non-configurable dense index must fail (sloppy mode:
-// silently - the property must still be there afterward).
-delete a[2];
+// Deleting a non-configurable dense index must fail - this file is strict
+// code, so with a TypeError (paserati#546) - and the property must still
+// be there afterward.
+let deleteThrew = false;
+try {
+  delete a[2];
+} catch (e) {
+  deleteThrew = e instanceof TypeError;
+}
+checks.push(deleteThrew);
 checks.push((a as any).hasOwnProperty("2"));
 checks.push(a[2] === "v");
 
@@ -72,7 +79,13 @@ checks.push(
     descD.enumerable === false &&
     descD.configurable === false,
 );
-delete d[4294967290];
+let deleteDThrew = false;
+try {
+  delete d[4294967290];
+} catch (e) {
+  deleteDThrew = e instanceof TypeError; // strict code (paserati#546)
+}
+checks.push(deleteDThrew);
 checks.push((d as any).hasOwnProperty("4294967290")); // survives: non-configurable
 
 // Object.freeze must still win over an earlier defineProperty-tracked
@@ -93,7 +106,13 @@ Object.freeze(e);
 checks.push(Object.isFrozen(e));
 const descE = Object.getOwnPropertyDescriptor(e, "2")!;
 checks.push(descE.writable === false && descE.configurable === false);
-delete e[2];
+let deleteEThrew = false;
+try {
+  delete e[2];
+} catch (err) {
+  deleteEThrew = err instanceof TypeError; // strict code (paserati#546)
+}
+checks.push(deleteEThrew);
 checks.push((e as any).hasOwnProperty("2")); // survives: freeze wins
 
 checks.every((c) => c === true);

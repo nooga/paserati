@@ -244,6 +244,7 @@ type ArrayObject struct {
 	setters            map[string]Value // Accessor setters for named properties
 	extensible         bool             // When false, no new properties can be added (for Object.freeze/seal)
 	frozen             bool             // When true, elements are also non-writable and non-configurable
+	sealed             bool             // When true (Object.seal, or frozen), elements are non-configurable
 	// lengthNonWritable tracks Object.defineProperty(arr, "length",
 	// {writable: false}) - stored inverted (zero value = writable, the ES
 	// default) so every existing ArrayObject construction site, which
@@ -3066,9 +3067,80 @@ func (a *ArrayObject) SetFrozen(frozen bool) {
 	}
 }
 
-// SealProperties makes all named properties non-configurable (but preserves writable)
+// SealProperties makes all properties non-configurable (but preserves
+// writable): named ones via propertyDesc, elements via the sealed flag.
 func (a *ArrayObject) SealProperties() {
+	a.sealed = true
 	a.sealOrFreezeProperties(false)
+}
+
+// IndexAttributes returns the writable/enumerable/configurable attributes of
+// own element key: the ES defaults, an Object.defineProperty override
+// tracked in propertyDesc (paserati#178), then the array-wide seal/freeze
+// restrictions, which only ever take capabilities away (paserati#546).
+func (a *ArrayObject) IndexAttributes(key string) (writable, enumerable, configurable bool) {
+	writable, enumerable, configurable = true, true, true
+	if desc, ok := a.propertyDesc[key]; ok {
+		writable, enumerable, configurable = desc.Writable, desc.Enumerable, desc.Configurable
+	}
+	if a.sealed || a.frozen {
+		configurable = false
+	}
+	if a.frozen {
+		writable = false
+	}
+	return writable, enumerable, configurable
+}
+
+// TestIntegrity is TestIntegrityLevel(a, sealed|frozen): non-extensible,
+// every own property non-configurable, and for frozen every data property -
+// length included - non-writable.
+func (a *ArrayObject) TestIntegrity(frozen bool) bool {
+	if a.extensible {
+		return false
+	}
+	if frozen && a.IsLengthWritable() {
+		return false
+	}
+	elementOK := func(i int) bool {
+		key := intToString(i)
+		if _, _, _, c, isAccessor := a.GetOwnAccessor(key); isAccessor {
+			return !c
+		}
+		w, _, c := a.IndexAttributes(key)
+		return !c && !(frozen && w)
+	}
+	if !a.frozen && !(a.sealed && !frozen) {
+		for i := range a.elements {
+			if a.elements[i].typ != TypeHole && !elementOK(i) {
+				return false
+			}
+		}
+		for i := range a.sparse.entries() {
+			if !elementOK(i) {
+				return false
+			}
+		}
+	}
+	for _, name := range a.OwnNamedKeys() {
+		if _, _, _, c, isAccessor := a.GetOwnAccessor(name); isAccessor {
+			if c {
+				return false
+			}
+			continue
+		}
+		if _, desc, ok := a.GetOwnPropertyDescriptor(name); ok && (desc.Configurable || (frozen && desc.Writable)) {
+			return false
+		}
+	}
+	for _, key := range a.AccessorKeys() {
+		if _, isIndex := tryParseArrayIndex(key); isIndex {
+			if _, _, _, c, _ := a.GetOwnAccessor(key); c {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (a *ArrayObject) sealOrFreezeProperties(freeze bool) {

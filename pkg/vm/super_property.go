@@ -145,8 +145,11 @@ func superDefineOnArray(arr *ArrayObject, key PropertyKey, v Value) superSetFail
 		return superSetOK
 	}
 	if idx, ok := tryParseArrayIndex(key.name); ok {
-		if idx >= arr.Length() && !arr.IsExtensible() {
-			return superSetNotExtensible
+		if !arr.CanSetIndex(idx) {
+			if !arr.HasIndex(idx) && !arr.IsExtensible() {
+				return superSetNotExtensible
+			}
+			return superSetReadOnly
 		}
 		arr.Set(idx, v)
 		return superSetOK

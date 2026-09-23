@@ -129,18 +129,10 @@ func (vm *VM) ArrayDefineOwnProperty(
 	var exists, isAccessor, curWritable, curEnumerable, curConfigurable bool
 	if _, _, e, c, ok := a.GetOwnAccessor(key); ok {
 		exists, isAccessor, curEnumerable, curConfigurable = true, true, e, c
-	} else if isIndex && idx < len(a.elements) && a.elements[idx].typ != TypeHole {
-		// The ES default for a plain element (paserati#178: a prior
-		// ArrayDefineOwnProperty call on this same index may have tracked a
-		// non-default combination in propertyDesc instead - see the write
-		// side below - and DeleteIndex already checks propertyDesc first
-		// for exactly this reason).
-		exists, curWritable, curEnumerable, curConfigurable = true, true, true, true
-		if a.propertyDesc != nil {
-			if desc, ok := a.propertyDesc[key]; ok {
-				curWritable, curEnumerable, curConfigurable = desc.Writable, desc.Enumerable, desc.Configurable
-			}
-		}
+	} else if isIndex && a.HasIndex(idx) {
+		// A plain element - dense or sparse (paserati#178/#544/#546).
+		exists = true
+		curWritable, curEnumerable, curConfigurable = a.IndexAttributes(key)
 	} else if _, desc, ok := a.GetOwnPropertyDescriptor(key); ok {
 		exists, curWritable, curEnumerable, curConfigurable = true, desc.Writable, desc.Enumerable, desc.Configurable
 	}
@@ -163,6 +155,18 @@ func (vm *VM) ArrayDefineOwnProperty(
 		}
 		if !isAccessor && !becomingAccessor && !curWritable && writablePtr != nil && *writablePtr {
 			return vm.NewTypeError("Cannot redefine property: " + key)
+		}
+		// ...and a non-writable one keeps its value (step 7.a.ii).
+		if !isAccessor && !becomingAccessor && !curWritable && hasValue {
+			cur := Undefined
+			if isIndex && a.HasIndex(idx) {
+				cur = a.Get(idx)
+			} else if v, ok := a.GetOwn(key); ok {
+				cur = v
+			}
+			if !sameValue(cur, value) {
+				return vm.NewTypeError("Cannot redefine property: " + key)
+			}
 		}
 	} else if !exists && !a.IsExtensible() {
 		return vm.NewTypeError("Cannot define property " + key + ", object is not extensible")
@@ -354,6 +358,38 @@ func (vm *VM) ArrayDefineOwnSymbolProperty(
 	return nil
 }
 
+// CanSetIndex reports whether OrdinarySet may write data element idx of a
+// (ECMA-262 10.1.9.2 with the Array exotic [[DefineOwnProperty]]): an
+// existing element must be writable, and a new one needs an extensible
+// array and, at or past .length, a writable length (paserati#546). Own and
+// inherited accessors are the caller's business.
+func (a *ArrayObject) CanSetIndex(idx int) bool {
+	key := intToString(idx)
+	if a.HasIndex(idx) || a.hasNamedIndexKey(key) {
+		writable, _, _ := a.IndexAttributes(key)
+		return writable
+	}
+	if !a.extensible {
+		return false
+	}
+	return idx < a.length || a.IsLengthWritable()
+}
+
+// mayRejectIndexWrite is the cheap guard in front of CanSetIndex: false
+// means no integrity level, per-element attribute or non-writable length
+// could make an index write fail.
+func (a *ArrayObject) mayRejectIndexWrite() bool {
+	return a.frozen || !a.extensible || a.lengthNonWritable || a.propertyDesc != nil
+}
+
+func (a *ArrayObject) hasNamedIndexKey(key string) bool {
+	if a.properties == nil {
+		return false
+	}
+	_, ok := a.properties.m[key]
+	return ok
+}
+
 // DeleteIndex implements [[Delete]] (ECMA-262 10.4.2.1 -> OrdinaryDelete
 // 10.1.7) for a numeric array index, clearing the slot (and any tracked
 // accessor/descriptor state for it) and reporting success. A plain element
@@ -370,21 +406,7 @@ func (vm *VM) ArrayDefineOwnSymbolProperty(
 // DeletePropertyOrThrow) so both report identical success/failure.
 func (a *ArrayObject) DeleteIndex(idx int) bool {
 	key := intToString(idx)
-	configurable := !a.frozen
-	if a.propertyDesc != nil {
-		if desc, ok := a.propertyDesc[key]; ok {
-			// Object.freeze only ever flips the array-wide `frozen` flag,
-			// never touching propertyDesc (see ArrayDefineOwnProperty's doc
-			// comment) - so a tracked configurable:true from before the
-			// freeze must still be ANDed with !a.frozen here (paserati#178):
-			// freeze can only take the capability away, never hand back one
-			// an explicit defineProperty granted. Before #178 tracked a
-			// plain data index's own attributes at all, this branch could
-			// only ever fire for an accessor index, where the same
-			// intersection already applies for the same reason.
-			configurable = desc.Configurable && !a.frozen
-		}
-	}
+	_, _, configurable := a.IndexAttributes(key)
 	if !configurable {
 		return false
 	}

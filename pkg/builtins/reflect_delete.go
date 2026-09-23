@@ -351,8 +351,9 @@ func targetOwnNonConfigurable(target vm.Value, key vm.Value) (exists bool, nonCo
 			return true, true
 		}
 		if idx, isIndex := vm.ParseArrayIndex(name); isIndex {
-			if idx < arr.Length() {
-				return true, arr.IsFrozen()
+			if arr.HasOwnIndexProperty(name, idx) {
+				_, _, configurable := arr.IndexAttributes(name)
+				return true, !configurable
 			}
 			return false, false
 		}

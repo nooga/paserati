@@ -47,14 +47,6 @@ const maxSafeInteger = 9007199254740991
 // that off immediately rather than requiring a fast per-iteration no-op.
 const maxArrayLength = 4294967295
 
-// maxDenseArraySetIndex bounds how far arrayLikeSet will grow a real
-// Array's elements slice via ArrayObject.Set for a single index write -
-// same value and same hazard as maxDenseArrayDefineIndex in package vm's
-// array_props.go (kept as a separate constant here rather than exported
-// from there, since the two guard unrelated call sites that happen to
-// share a threshold, not one shared piece of logic).
-const maxDenseArraySetIndex = 16777216 // 2^24
-
 // checkArrayCreateLength returns a RangeError if length exceeds the largest
 // valid Array length, matching ArrayCreate's own bounds check. Call this
 // immediately after computing a result array's target length and before any
@@ -410,25 +402,14 @@ func arrayLikeSet(vmInstance *vm.VM, thisVal vm.Value, i int, val vm.Value) erro
 				return nil
 			}
 		}
-		// ArrayObject.Set(i, ...) is O(i): it fills every slot up to i with
-		// Hole before writing, same hazard maxDenseArrayDefineIndex guards
-		// against in ArrayDefineOwnProperty (package vm). i can reach here
-		// as an array-index-sized value - not just a small loop counter -
-		// whenever the caller's own bound came from arrayLikeLength on a
-		// receiver whose "length" was set arbitrarily high without ever
-		// materializing that many elements (Array(N) for large N, or
-		// {length: N} array-likes); push/pop/shift/unshift all compute
-		// their write indices exactly that way. Past the bound, track it
-		// as a named property instead - same known-gap tradeoff
-		// ArrayDefineOwnProperty documents for the same case.
-		if i <= maxDenseArraySetIndex {
-			arr.Set(i, val)
-		} else {
-			arr.DefineOwnProperty(strconv.Itoa(i), val, true, true, true)
-			if i+1 > arr.Length() {
-				arr.SetLength(i + 1)
-			}
+		// Set(O, P, V, true): a frozen/sealed/non-extensible array, a
+		// non-writable element or a non-writable length makes the write
+		// throw (paserati#546). ArrayObject.Set keeps a write far past the
+		// dense end in its sparse store (paserati#544).
+		if !arr.CanSetIndex(i) {
+			return vmInstance.NewTypeError("Cannot assign to read only property '" + strconv.Itoa(i) + "' of object '[object Array]'")
 		}
+		arr.Set(i, val)
 		return nil
 	case vm.TypeObject:
 		po := thisVal.AsPlainObject()
