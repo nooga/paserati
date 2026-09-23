@@ -371,6 +371,11 @@ type Lexer struct {
 
 	// --- NEW: Parser-controlled regex context ---
 	forceRegexContext bool // when true, next '/' is always treated as regex start
+
+	// identBadEscape is set by readIdentifierWithUnicode when the identifier
+	// contained a \u escape that is malformed or does not denote an
+	// ID_Start/ID_Continue code point; such source text is not a valid token.
+	identBadEscape bool
 }
 
 // CurrentPosition returns the lexer's current byte position in the input.
@@ -1564,6 +1569,9 @@ func (l *Lexer) NextToken() Token {
 			if !hasEscape {
 				tokType = LookupIdent(literal)
 			}
+			if l.identBadEscape {
+				tokType = ILLEGAL
+			}
 			// readIdentifierWithUnicode leaves l.position *after* the last char of the identifier
 			tok = Token{Type: tokType, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			//return tok // Return early, readIdentifierWithUnicode already called readChar()
@@ -1601,7 +1609,7 @@ func (l *Lexer) NextToken() Token {
 				// Try to read an identifier (including Unicode escapes)
 				identifierPart, _ := l.readIdentifierWithUnicode()
 
-				if identifierPart != "" {
+				if identifierPart != "" && !l.identBadEscape {
 					// Successfully read an identifier part
 					literal := "#" + identifierPart
 					tok = Token{Type: PRIVATE_IDENT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
@@ -1644,6 +1652,7 @@ func (l *Lexer) readIdentifier() string {
 // or Unicode characters, and returns the resolved identifier string (e.g., "\u0064o" becomes "do")
 func (l *Lexer) readIdentifierWithUnicode() (string, bool) {
 	startPos := l.position
+	l.identBadEscape = false
 
 	// Fast path: try to read a pure ASCII identifier (99%+ of cases)
 	// This avoids strings.Builder allocation entirely
@@ -1718,6 +1727,7 @@ func (l *Lexer) readIdentifierWithUnicode() (string, bool) {
 							continue
 						} else {
 							// Invalid start character - fall back to literal
+							l.identBadEscape = true
 							result.WriteString("\\u")
 							if unicodeHex != "" {
 								result.WriteString(unicodeHex)
@@ -1730,19 +1740,21 @@ func (l *Lexer) readIdentifierWithUnicode() (string, bool) {
 							result.WriteRune(r)
 							continue
 						} else {
-							// Invalid continue character - stop here
-							// Don't consume this character, backtrack
+							// Invalid continue character
+							l.identBadEscape = true
 							break
 						}
 					}
 				} else {
 					// Invalid hex - fall back to literal
+					l.identBadEscape = true
 					result.WriteString("\\u")
 					result.WriteString(unicodeHex)
 					break
 				}
 			} else {
 				// Invalid unicode escape - fall back to literal
+				l.identBadEscape = true
 				result.WriteString("\\u")
 				if unicodeHex != "" {
 					result.WriteString(unicodeHex)
