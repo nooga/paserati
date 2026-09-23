@@ -396,12 +396,20 @@ func functionPrototypeToStringImpl(vmInstance *vm.VM, args []vm.Value) (vm.Value
 		name := thisFunction.AsNativeFunctionWithProps().Name
 		return vm.NewString(formatNativeFunctionString(name)), nil
 	case vm.TypeFunction:
-		name := thisFunction.AsFunction().Name
-		return vm.NewString(formatNativeFunctionString(name)), nil
+		fn := thisFunction.AsFunction()
+		// An ECMAScript function returns its source text (20.2.3.5 step 2,
+		// paserati#524); NativeFunction syntax is for built-ins only.
+		if fn.SourceText != "" {
+			return vm.NewString(fn.SourceText), nil
+		}
+		return vm.NewString(formatNativeFunctionString(fn.Name)), nil
 	case vm.TypeClosure:
 		cl := thisFunction.AsClosure()
 		name := ""
 		if cl.Fn != nil {
+			if cl.Fn.SourceText != "" {
+				return vm.NewString(cl.Fn.SourceText), nil
+			}
 			name = cl.Fn.Name
 		}
 		return vm.NewString(formatNativeFunctionString(name)), nil
@@ -582,6 +590,11 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 	// If homeRealm was captured at constructor init time, use it; otherwise fall back to current realm
 	if functionValue.Type() == vm.TypeFunction {
 		fnObj := functionValue.AsFunction()
+		// CreateDynamicFunction's source text (20.2.1.1.1 steps 17-19): the
+		// function is compiled unnamed, but toString shows it as
+		// "anonymous" with the parameter and body strings on their own
+		// lines (paserati#524).
+		fnObj.SourceText = "function anonymous(" + strings.Join(params, ",") + "\n) {\n" + body + "\n}"
 		if homeRealm != nil {
 			fnObj.HomeRealm = homeRealm
 		} else {
@@ -593,85 +606,89 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 }
 
 func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Value, homeRealm *vm.Realm) (vm.Value, error) {
-	// The AsyncFunction constructor has signature:
-	// AsyncFunction(param1, param2, ..., paramN, body)
-	// Where all arguments are strings, creates an async function
+	return createDynamicFunction(vmInstance, driver, args, homeRealm, "async function", "AsyncFunction")
+}
 
+// createDynamicFunction implements CreateDynamicFunction (20.2.1.1.1) for the
+// AsyncFunction, GeneratorFunction and AsyncGeneratorFunction constructors:
+// kind is the source prefix ("async function", "function*",
+// "async function*") and ctorName the constructor's name for errors. The
+// parameter and body strings are compiled as an unnamed function
+// expression, and the result's source text is the spec's
+// "<kind> anonymous(<params>\n) {\n<body>\n}" (paserati#524).
+func createDynamicFunction(vmInstance *vm.VM, driver interface{}, args []vm.Value, homeRealm *vm.Realm, kind, ctorName string) (vm.Value, error) {
 	var params []string
 	var body string
-
-	if len(args) == 0 {
-		// AsyncFunction() - no parameters, empty body
-		body = ""
-	} else if len(args) == 1 {
-		// AsyncFunction(body) - no parameters, just body
+	if len(args) == 1 {
 		body = vmInstance.ToPrimitive(args[0], "string").ToString()
-	} else {
-		// AsyncFunction(param1, ..., paramN, body) - last arg is body, rest are parameters
+	} else if len(args) > 1 {
 		for i := 0; i < len(args)-1; i++ {
 			params = append(params, vmInstance.ToPrimitive(args[i], "string").ToString())
 		}
 		body = vmInstance.ToPrimitive(args[len(args)-1], "string").ToString()
 	}
+	paramStr := strings.Join(params, ",")
 
-	// Construct the async function source code as an IIFE that returns the function
-	// ECMAScript spec requires newlines between parameter strings and around body
-	// to handle single-line comments (//) correctly
 	var source string
 	if len(params) == 0 {
-		source = fmt.Sprintf("return (async function() {\n%s\n});", body)
+		source = fmt.Sprintf("return (%s() {\n%s\n});", kind, body)
 	} else {
-		// Join parameters with commas
-		// Per ECMAScript spec section 20.2.1.1: each parameter string is separated
-		// by ',' but we need newlines to handle // comments within parameter strings
-		paramStr := ""
-		for i, param := range params {
-			if i > 0 {
-				paramStr += ","
-			}
-			paramStr += param
-		}
-		source = fmt.Sprintf("return (async function(%s\n) {\n%s\n});", paramStr, body)
+		source = fmt.Sprintf("return (%s(%s\n) {\n%s\n});", kind, paramStr, body)
 	}
 
-	// We need access to the driver to compile this source code
 	if driver == nil {
-		return vm.Undefined, vmInstance.NewSyntaxError("AsyncFunction constructor - driver is nil")
+		return vm.Undefined, vmInstance.NewSyntaxError(ctorName + " constructor - driver is nil")
 	}
-
-	chunk, err := compileDynamicFunctionSource(vmInstance, driver, source, "AsyncFunction")
+	chunk, err := compileDynamicFunctionSource(vmInstance, driver, source, ctorName)
 	if err != nil {
 		return vm.Undefined, err
 	}
-
 	if chunk == nil {
 		return vm.Undefined, vmInstance.NewSyntaxError("compilation returned nil chunk")
 	}
-
 	if len(chunk.Constants) == 0 {
-		return vm.Undefined, vmInstance.NewTypeError("compiled AsyncFunction() code has no constants")
+		return vm.Undefined, vmInstance.NewTypeError("compiled " + ctorName + "() code has no constants")
 	}
-
-	// The first constant is the async function object we created
 	functionValue := chunk.Constants[0]
-
-	// Verify it's actually a function
 	if !functionValue.IsCallable() {
-		return vm.Undefined, vmInstance.NewTypeError("AsyncFunction() constant is not callable (got " + functionValue.TypeName() + ")")
+		return vm.Undefined, vmInstance.NewTypeError(ctorName + "() constant is not callable (got " + functionValue.TypeName() + ")")
 	}
-
-	// Set the function's HomeRealm to the realm where the AsyncFunction constructor was defined
-	// This is critical for cross-realm behavior (GetFunctionRealm spec)
 	if functionValue.Type() == vm.TypeFunction {
 		fnObj := functionValue.AsFunction()
+		fnObj.SourceText = kind + " anonymous(" + paramStr + "\n) {\n" + body + "\n}"
+		// The constant is returned without an OpClosure, which is what
+		// normally gives an async/generator function its [[Prototype]].
+		switch kind {
+		case "function*":
+			fnObj.Prototype = vmInstance.GeneratorFunctionPrototype
+		case "async function*":
+			fnObj.Prototype = vmInstance.AsyncGeneratorFunctionPrototype
+		case "async function":
+			fnObj.Prototype = vmInstance.AsyncFunctionPrototype
+		}
 		if homeRealm != nil {
 			fnObj.HomeRealm = homeRealm
 		} else {
 			fnObj.HomeRealm = vmInstance.CurrentRealm()
 		}
 	}
-
 	return functionValue, nil
+}
+
+// installDynamicFunctionConstructor creates a constructor like %GeneratorFunction%
+// whose .prototype is proto, and sets proto.constructor to it ({writable:
+// false, enumerable: false, configurable: true}). These constructors aren't
+// globals, only reachable as e.g. Object.getPrototypeOf(function*(){}).constructor;
+// without them that lookup fell through to plain Function (paserati#524).
+func installDynamicFunctionConstructor(ctx *RuntimeContext, proto *vm.PlainObject, kind, name string) {
+	vmInstance := ctx.VM
+	realm := vmInstance.CurrentRealm()
+	ctor := vm.NewConstructorWithProps(1, true, name, func(args []vm.Value) (vm.Value, error) {
+		return createDynamicFunction(vmInstance, ctx.Driver, args, realm, kind, name)
+	})
+	ctor.AsNativeFunctionWithProps().Properties.DefineFixedProperty("prototype", vm.NewValueFromPlainObject(proto))
+	f, t := false, true
+	proto.DefineOwnProperty("constructor", ctor, &f, &f, &t)
 }
 
 // functionHasInstanceImpl implements OrdinaryHasInstance (ES 7.3.21)

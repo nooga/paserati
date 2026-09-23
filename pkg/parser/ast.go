@@ -613,17 +613,21 @@ func (die *DeferredImportExpression) String() string {
 // function <Name>(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 // Or anonymous: function(<Parameters>) : <ReturnTypeAnnotation> { <Body> }
 type FunctionLiteral struct {
-	BaseExpression                        // Embed base for ComputedType (Function type)
-	Token                *lexer.Token     // The 'function' token
-	Name                 *Identifier      // Optional function name
-	IsGenerator          bool             // true for function* (generator functions)
-	IsAsync              bool             // true for async functions
-	IsFieldInitializer   bool             // true for class field initializer wrapper functions (eval forbids 'arguments')
-	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
-	Parameters           []*Parameter     // Regular parameters
-	RestParameter        *RestParameter   // Optional rest parameter (...args)
-	ReturnTypeAnnotation Expression       // << RENAMED & TYPE CHANGED
-	Body                 *BlockStatement  // Function body
+	BaseExpression              // Embed base for ComputedType (Function type)
+	Token          *lexer.Token // The 'function' token
+	// SourceStart / SourceEnd delimit the node's source text for
+	// Function.prototype.toString (paserati#524), as byte offsets + 1 so the
+	// zero value means "not recorded"; see FunctionSource.
+	SourceStart, SourceEnd int
+	Name                   *Identifier      // Optional function name
+	IsGenerator            bool             // true for function* (generator functions)
+	IsAsync                bool             // true for async functions
+	IsFieldInitializer     bool             // true for class field initializer wrapper functions (eval forbids 'arguments')
+	TypeParameters         []*TypeParameter // Generic type parameters (e.g., <T, U>)
+	Parameters             []*Parameter     // Regular parameters
+	RestParameter          *RestParameter   // Optional rest parameter (...args)
+	ReturnTypeAnnotation   Expression       // << RENAMED & TYPE CHANGED
+	Body                   *BlockStatement  // Function body
 }
 
 func (fl *FunctionLiteral) expressionNode()      {} // Functions can be expressions
@@ -732,14 +736,18 @@ func (ue *UpdateExpression) String() string {
 // ArrowFunctionLiteral represents an arrow function definition.
 // (<Parameters>) => <BodyExpression | BodyStatements>
 type ArrowFunctionLiteral struct {
-	BaseExpression                        // Embed base for ComputedType (Function type)
-	Token                *lexer.Token     // The '=>' token
-	IsAsync              bool             // true for async arrow functions
-	TypeParameters       []*TypeParameter // Generic type parameters (e.g., <T, U>)
-	Parameters           []*Parameter     // Regular parameters
-	RestParameter        *RestParameter   // Optional rest parameter (...args)
-	ReturnTypeAnnotation Expression       // << MODIFIED
-	Body                 Node             // Can be Expression or *BlockStatement
+	BaseExpression              // Embed base for ComputedType (Function type)
+	Token          *lexer.Token // The '=>' token
+	// SourceStart / SourceEnd delimit the node's source text for
+	// Function.prototype.toString (paserati#524), as byte offsets + 1 so the
+	// zero value means "not recorded"; see FunctionSource.
+	SourceStart, SourceEnd int
+	IsAsync                bool             // true for async arrow functions
+	TypeParameters         []*TypeParameter // Generic type parameters (e.g., <T, U>)
+	Parameters             []*Parameter     // Regular parameters
+	RestParameter          *RestParameter   // Optional rest parameter (...args)
+	ReturnTypeAnnotation   Expression       // << MODIFIED
+	Body                   Node             // Can be Expression or *BlockStatement
 	// Parenthesized is true when this arrow function was wrapped in its own
 	// parens, e.g. `((x) => {})`. An ArrowFunction is not a MemberExpression/
 	// LeftHandSideExpression, so `.`, `?.`, `[`, `(`, and tagged templates
@@ -807,6 +815,7 @@ func (afl *ArrowFunctionLiteral) String() string {
 // { <statement1>; <statement2>; ... }
 type BlockStatement struct {
 	Token               *lexer.Token // The { token
+	EndPos              int          // Byte offset just past the closing '}' (0 if unknown); see FunctionSource
 	Statements          []Statement
 	HoistedDeclarations map[string]Expression // Changed: Store hoisted Expression within this block
 }
@@ -2623,13 +2632,17 @@ func (op *ObjectProperty) String() string {
 
 // ShorthandMethod represents a shorthand method in object literals like { method() { ... } }
 type ShorthandMethod struct {
-	BaseExpression                       // Embed base for ComputedType (Function type)
-	Token                *lexer.Token    // The identifier token (method name)
-	Name                 *Identifier     // Method name
-	Parameters           []*Parameter    // Regular method parameters
-	RestParameter        *RestParameter  // Optional rest parameter (...args)
-	ReturnTypeAnnotation Expression      // Optional return type annotation
-	Body                 *BlockStatement // Method body
+	BaseExpression              // Embed base for ComputedType (Function type)
+	Token          *lexer.Token // The identifier token (method name)
+	// SourceStart / SourceEnd delimit the node's source text for
+	// Function.prototype.toString (paserati#524), as byte offsets + 1 so the
+	// zero value means "not recorded"; see FunctionSource.
+	SourceStart, SourceEnd int
+	Name                   *Identifier     // Method name
+	Parameters             []*Parameter    // Regular method parameters
+	RestParameter          *RestParameter  // Optional rest parameter (...args)
+	ReturnTypeAnnotation   Expression      // Optional return type annotation
+	Body                   *BlockStatement // Method body
 }
 
 func (sm *ShorthandMethod) expressionNode()      {}
@@ -3323,15 +3336,19 @@ func (d *Decorator) String() string {
 
 // ClassDeclaration represents a class declaration statement
 type ClassDeclaration struct {
-	Token          *lexer.Token     // The 'class' token
-	Name           *Identifier      // Class name
-	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
-	SuperClass     Expression       // nil for basic classes (supports generic extends)
-	Implements     []*Identifier    // Interfaces this class implements
-	Body           *ClassBody       // Class body containing methods and properties
-	IsAbstract     bool             // true if this is an abstract class
-	Declare        bool             // true for `declare class` (ambient, type-only)
-	Decorators     []*Decorator     // Decorators applied to the class
+	Token *lexer.Token // The 'class' token
+	// SourceStart / SourceEnd delimit the node's source text for
+	// Function.prototype.toString (paserati#524), as byte offsets + 1 so the
+	// zero value means "not recorded"; see FunctionSource.
+	SourceStart, SourceEnd int
+	Name                   *Identifier      // Class name
+	TypeParameters         []*TypeParameter // Generic type parameters (e.g., <T, U>)
+	SuperClass             Expression       // nil for basic classes (supports generic extends)
+	Implements             []*Identifier    // Interfaces this class implements
+	Body                   *ClassBody       // Class body containing methods and properties
+	IsAbstract             bool             // true if this is an abstract class
+	Declare                bool             // true for `declare class` (ambient, type-only)
+	Decorators             []*Decorator     // Decorators applied to the class
 }
 
 func (cd *ClassDeclaration) statementNode()       {}
@@ -3380,14 +3397,18 @@ func (cd *ClassDeclaration) String() string {
 // ClassExpression represents a class expression (can be anonymous)
 type ClassExpression struct {
 	BaseExpression
-	Token          *lexer.Token     // The 'class' token
-	Name           *Identifier      // nil for anonymous classes
-	TypeParameters []*TypeParameter // Generic type parameters (e.g., <T, U>)
-	SuperClass     Expression       // nil for basic classes (supports generic extends)
-	Implements     []*Identifier    // Interfaces this class implements
-	Body           *ClassBody       // Class body containing methods and properties
-	IsAbstract     bool             // true if this is an abstract class
-	Decorators     []*Decorator     // Decorators applied to the class
+	Token *lexer.Token // The 'class' token
+	// SourceStart / SourceEnd delimit the node's source text for
+	// Function.prototype.toString (paserati#524), as byte offsets + 1 so the
+	// zero value means "not recorded"; see FunctionSource.
+	SourceStart, SourceEnd int
+	Name                   *Identifier      // nil for anonymous classes
+	TypeParameters         []*TypeParameter // Generic type parameters (e.g., <T, U>)
+	SuperClass             Expression       // nil for basic classes (supports generic extends)
+	Implements             []*Identifier    // Interfaces this class implements
+	Body                   *ClassBody       // Class body containing methods and properties
+	IsAbstract             bool             // true if this is an abstract class
+	Decorators             []*Decorator     // Decorators applied to the class
 }
 
 func (ce *ClassExpression) TokenLiteral() string { return ce.Token.Literal }
@@ -3436,6 +3457,7 @@ func (ce *ClassExpression) String() string {
 // ClassBody represents the body of a class containing methods and properties
 type ClassBody struct {
 	Token              *lexer.Token            // The '{' token
+	EndPos             int                     // Byte offset just past the closing '}'; see FunctionSource
 	Methods            []*MethodDefinition     // Class method implementations
 	Properties         []*PropertyDefinition   // Class properties
 	ConstructorSigs    []*ConstructorSignature // Constructor overload signatures
@@ -4149,4 +4171,55 @@ func dumpNode(node Node, indent string) {
 		// Fallback for unhandled node types
 		fmt.Fprintf(os.Stderr, "%T { /* details not implemented */ }", node)
 	}
+}
+
+// FunctionSourceSpan returns the byte span [start, end) of a function-like
+// node's source text - what Function.prototype.toString returns for the
+// function it creates (paserati#524). A recorded SourceStart/SourceEnd wins;
+// otherwise the span runs from the node's own token to the end of its body.
+// ok is false when the span is unknown.
+func FunctionSourceSpan(n Node) (start, end int, ok bool) {
+	pick := func(recStart, recEnd int, tok *lexer.Token, bodyEnd int) (int, int, bool) {
+		start, end := recStart-1, recEnd-1
+		if recStart == 0 && tok != nil {
+			start = tok.StartPos
+		}
+		if recEnd == 0 {
+			end = bodyEnd
+		}
+		return start, end, start >= 0 && end > start
+	}
+	switch f := n.(type) {
+	case *FunctionLiteral:
+		bodyEnd := 0
+		if f.Body != nil {
+			bodyEnd = f.Body.EndPos
+		}
+		return pick(f.SourceStart, f.SourceEnd, f.Token, bodyEnd)
+	case *ArrowFunctionLiteral:
+		bodyEnd := 0
+		if b, isBlock := f.Body.(*BlockStatement); isBlock && b != nil {
+			bodyEnd = b.EndPos
+		}
+		return pick(f.SourceStart, f.SourceEnd, nil, bodyEnd)
+	case *ShorthandMethod:
+		bodyEnd := 0
+		if f.Body != nil {
+			bodyEnd = f.Body.EndPos
+		}
+		return pick(f.SourceStart, f.SourceEnd, f.Token, bodyEnd)
+	case *ClassDeclaration:
+		bodyEnd := 0
+		if f.Body != nil {
+			bodyEnd = f.Body.EndPos
+		}
+		return pick(f.SourceStart, f.SourceEnd, f.Token, bodyEnd)
+	case *ClassExpression:
+		bodyEnd := 0
+		if f.Body != nil {
+			bodyEnd = f.Body.EndPos
+		}
+		return pick(f.SourceStart, f.SourceEnd, f.Token, bodyEnd)
+	}
+	return 0, 0, false
 }
