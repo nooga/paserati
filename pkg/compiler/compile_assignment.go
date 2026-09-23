@@ -125,6 +125,7 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		withNameConstIdx uint16   // Name constant index for with-property
 		withLocalReg     Register // Local register to fall back to
 		withBindingReg   Register // Register holding captured binding (for simple assignments)
+		tdz              bool     // let/const that may still be uninitialized: the store must check
 	}
 	var indexInfo struct { // Info needed to store back to index expr
 		arrayReg Register
@@ -405,11 +406,15 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 						identInfo.spillIndex = symbolRef.SpillIndex
 						identInfo.isUpvalue = false
 						identInfo.isGlobal = false
+						identInfo.tdz = symbolRef.IsTDZ
 						// For compound assignments, we need to load the current value
 						if node.Operator != "=" {
 							currentValueReg = c.regAlloc.Alloc()
 							tempRegs = append(tempRegs, currentValueReg)
 							c.emitLoadSpill(currentValueReg, identInfo.spillIndex, line)
+							if identInfo.tdz {
+								c.emitCheckUninitialized(currentValueReg, line)
+							}
 						} else {
 							currentValueReg = nilRegister // Not needed for simple assignment
 						}
@@ -419,6 +424,12 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 						identInfo.isUpvalue = false
 						identInfo.isGlobal = false
 						currentValueReg = identInfo.targetReg // Current value is already in targetReg
+						if symbolRef.IsTDZ {
+							identInfo.tdz = true
+							if node.Operator != "=" {
+								c.emitCheckUninitialized(identInfo.targetReg, line)
+							}
+						}
 					}
 				} else if c.enclosing != nil && c.isDefinedInEnclosingCompiler(definingTable) {
 					// Variable defined in outer function: treat as upvalue
@@ -436,11 +447,15 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 						identInfo.spillIndex = symbolRef.SpillIndex
 						identInfo.isUpvalue = false
 						identInfo.isGlobal = false
+						identInfo.tdz = symbolRef.IsTDZ
 						// For compound assignments, we need to load the current value
 						if node.Operator != "=" {
 							currentValueReg = c.regAlloc.Alloc()
 							tempRegs = append(tempRegs, currentValueReg)
 							c.emitLoadSpill(currentValueReg, identInfo.spillIndex, line)
+							if identInfo.tdz {
+								c.emitCheckUninitialized(currentValueReg, line)
+							}
 						} else {
 							currentValueReg = nilRegister // Not needed for simple assignment
 						}
@@ -450,6 +465,12 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 						identInfo.isUpvalue = false
 						identInfo.isGlobal = false
 						currentValueReg = identInfo.targetReg // Current value is already in targetReg
+						if symbolRef.IsTDZ {
+							identInfo.tdz = true
+							if node.Operator != "=" {
+								c.emitCheckUninitialized(identInfo.targetReg, line)
+							}
+						}
 					}
 				}
 			}
@@ -1004,8 +1025,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			} else if identInfo.isUpvalue {
 				c.emitSetUpvalue(identInfo.upvalueIndex, hint, line)
 			} else if identInfo.isSpilled {
+				c.emitTDZStoreGuard(identInfo.tdz && node.Operator == "=", identInfo.spillIndex, true, line)
 				c.emitStoreSpill(identInfo.spillIndex, hint, line)
 			} else {
+				c.emitTDZStoreGuard(identInfo.tdz && node.Operator == "=", uint16(identInfo.targetReg), false, line)
 				if hint != identInfo.targetReg {
 					c.emitMove(identInfo.targetReg, hint, line)
 				}
@@ -1328,8 +1351,10 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			} else if identInfo.isSpilled {
 				// Spilled variable assignment
 				debugPrintf("// DEBUG Assign Store Ident: Emitting StoreSpill[%d] <- R%d\n", identInfo.spillIndex, hint)
+				c.emitTDZStoreGuard(identInfo.tdz && node.Operator == "=", identInfo.spillIndex, true, line)
 				c.emitStoreSpill(identInfo.spillIndex, hint, line)
 			} else {
+				c.emitTDZStoreGuard(identInfo.tdz && node.Operator == "=", uint16(identInfo.targetReg), false, line)
 				if hint != identInfo.targetReg {
 					debugPrintf("// DEBUG Assign Store Ident: Emitting Move R%d <- R%d\n", identInfo.targetReg, hint)
 					c.emitMove(identInfo.targetReg, hint, line)
@@ -3584,4 +3609,22 @@ func (c *Compiler) compileAssignmentToIndex(indexExpr *parser.IndexExpression, v
 	c.emitByte(byte(valueReg))
 
 	return nil
+}
+
+// emitTDZStoreGuard emits the ReferenceError check a plain `x = v` store to a
+// possibly uninitialized let/const binding needs. It runs after the RHS, as
+// PutValue does; compound forms check when they read the old value instead.
+// slot is a register, or a spill index when spilled.
+func (c *Compiler) emitTDZStoreGuard(needed bool, slot uint16, spilled bool, line int) {
+	if !needed {
+		return
+	}
+	if !spilled {
+		c.emitCheckUninitialized(Register(slot), line)
+		return
+	}
+	tmp := c.regAlloc.Alloc()
+	c.emitLoadSpill(tmp, slot, line)
+	c.emitCheckUninitialized(tmp, line)
+	c.regAlloc.Free(tmp)
 }

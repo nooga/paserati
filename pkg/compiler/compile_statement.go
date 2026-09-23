@@ -1880,6 +1880,36 @@ func (c *Compiler) compileDoWhileStatementLabeled(node *parser.DoWhileStatement,
 //     f. Implicit fallthrough means after a body (without break), execution continues to the next case test.
 //  3. Handle default: If reached (all cases failed), execute default body.
 //  4. Patch all jumps.
+// predefineCaseLexicals pre-defines the let/const bindings a case clause
+// declares (plain and destructuring declarators) as TDZ bindings in the
+// switch's CaseBlock scope and returns their names.
+func (c *Compiler) predefineCaseLexicals(stmts []parser.Statement) []string {
+	var names []string
+	define := func(ns []string, isConst bool, line int) {
+		for _, name := range ns {
+			c.predefineLexicalName(name, isConst, line)
+			names = append(names, name)
+		}
+	}
+	for _, stmt := range stmts {
+		switch s := stmt.(type) {
+		case *parser.LetStatement:
+			define(parser.DeclaredNames(s), false, s.Token.Line)
+		case *parser.ConstStatement:
+			define(parser.DeclaredNames(s), true, s.Token.Line)
+		case *parser.ObjectDestructuringDeclaration:
+			if s.Token.Type == lexer.LET || s.Token.Type == lexer.CONST {
+				define(extractDestructuringVarNames(s), s.Token.Type == lexer.CONST, s.Token.Line)
+			}
+		case *parser.ArrayDestructuringDeclaration:
+			if s.Token.Type == lexer.LET || s.Token.Type == lexer.CONST {
+				define(extractArrayDestructuringVarNames(s), s.Token.Type == lexer.CONST, s.Token.Line)
+			}
+		}
+	}
+	return names
+}
+
 func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Register) (Register, errors.PaseratiError) {
 	// Track temporary registers for cleanup
 	var tempRegs []Register
@@ -1934,40 +1964,16 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 	prevSymbolTable := c.currentSymbolTable
 	c.currentSymbolTable = NewEnclosedSymbolTable(prevSymbolTable)
 
-	// Pre-define all let/const declarations found in case bodies (hoisting)
+	// Pre-define every let/const declared in a case body as a TDZ binding
+	// (uninitialized marker loaded here, on entry to the CaseBlock), since
+	// control can jump straight to a later case and skip the declaration.
+	var caseLexicals [][]string
 	for _, caseClause := range node.Cases {
+		var names []string
 		if caseClause.Body != nil {
-			for _, stmt := range caseClause.Body.Statements {
-				switch s := stmt.(type) {
-				case *parser.LetStatement:
-					if s.Name != nil {
-						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-							reg, ok := c.regAlloc.TryAllocForVariable()
-							if ok {
-								c.currentSymbolTable.Define(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-							} else {
-								spillIdx := c.AllocSpillSlot()
-								c.currentSymbolTable.DefineSpilled(s.Name.Value, spillIdx)
-							}
-						}
-					}
-				case *parser.ConstStatement:
-					if s.Name != nil {
-						if _, alreadyInCurrentScope := c.currentSymbolTable.store[s.Name.Value]; !alreadyInCurrentScope {
-							reg, ok := c.regAlloc.TryAllocForVariable()
-							if ok {
-								c.currentSymbolTable.Define(s.Name.Value, reg)
-								c.regAlloc.Pin(reg)
-							} else {
-								spillIdx := c.AllocSpillSlot()
-								c.currentSymbolTable.DefineSpilled(s.Name.Value, spillIdx)
-							}
-						}
-					}
-				}
-			}
+			names = c.predefineCaseLexicals(caseClause.Body.Statements)
 		}
+		caseLexicals = append(caseLexicals, names)
 	}
 
 	// === PHASE 1: Emit all case comparisons ===
@@ -2053,6 +2059,11 @@ func (c *Compiler) compileSwitchStatement(node *parser.SwitchStatement, hint Reg
 					c.emitMove(completionReg, stmtReg, caseLine)
 				}
 			}
+		}
+		// A later case can be entered without running this one, so its
+		// reads of the names declared here need a runtime TDZ check.
+		for _, name := range caseLexicals[i] {
+			c.currentSymbolTable.MarkTDZ(name)
 		}
 		// Fall through to the next case body (no jump emitted)
 	}
