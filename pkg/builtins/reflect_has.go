@@ -232,13 +232,23 @@ func reflectHas(vmInstance *vm.VM, target vm.Value, key vm.Value) (bool, error) 
 		return vmInstance.HasFunctionPrototypeProperty(name), nil
 	}
 
-	// Not (yet) handled: WeakMap/WeakSet/WeakRef/FinalizationRegistry,
-	// Generator/AsyncGenerator. Each answers false unconditionally, same
-	// as before this fix - a real gap, not silently implied covered by a
-	// blanket default (effectiveBuiltinPrototype, the obvious-looking
-	// shortcut, only resolves a prototype for Array/Map/Set/WeakRef/
-	// FinalizationRegistry - a default case built on it would look like
-	// it covers these kinds and actually return false for all of them).
+	// TypedArray: a canonical numeric key is an own property exactly when it
+	// is a valid index, and is never looked up on the prototype chain
+	// (10.4.5.2); anything else is an ordinary side-table/prototype lookup.
+	if target.Type() == vm.TypeTypedArray {
+		if !isSym {
+			if idx, numeric := canonicalNumericIndex(name); numeric {
+				return idx >= 0 && idx < target.AsTypedArray().GetLength(), nil
+			}
+		}
+		return vmInstance.SideTableHasProperty(target, propKey), nil
+	}
+	// Buffers, DataView, the weak kinds, generators: own side-table
+	// property, else the instance's own [[Prototype]] chain. These used to
+	// answer false unconditionally (paserati#528/#529).
+	if vm.IsPlainSideTableKind(target) {
+		return vmInstance.SideTableHasProperty(target, propKey), nil
+	}
 	return false, nil
 }
 

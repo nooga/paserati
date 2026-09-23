@@ -41,9 +41,9 @@ type ArrayBufferObject struct {
 	Object
 	data          []byte
 	detached      bool
-	maxByteLength int              // -1 if the buffer is not resizable, else the max byteLength given at construction
-	properties    map[string]Value // Own properties (e.g., constructor override)
-	prototype     Value            // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	maxByteLength int          // -1 if the buffer is not resizable, else the max byteLength given at construction
+	Properties    *PlainObject // Own properties side table, see OwnPropertiesTable (paserati#528)
+	prototype     Value        // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
 
 func (ab *ArrayBufferObject) GetPrototype() Value  { return ab.prototype }
@@ -145,27 +145,26 @@ func (ab *ArrayBufferObject) Transfer(newLen int, preserveResizability bool) (*A
 
 // GetOwnProperty returns an own property value
 func (ab *ArrayBufferObject) GetOwnProperty(name string) (Value, bool) {
-	if ab.properties == nil {
+	if ab.Properties == nil {
 		return Undefined, false
 	}
-	v, ok := ab.properties[name]
-	return v, ok
+	return ab.Properties.GetOwn(name)
 }
 
 // SetOwnProperty sets an own property value
 func (ab *ArrayBufferObject) SetOwnProperty(name string, value Value) {
-	if ab.properties == nil {
-		ab.properties = make(map[string]Value)
+	if ab.Properties == nil {
+		ab.Properties = newPropertiesTable()
 	}
-	ab.properties[name] = value
+	ab.Properties.SetOwn(name, value)
 }
 
 // HasOwnProperty checks if the buffer has an own property
 func (ab *ArrayBufferObject) HasOwnProperty(name string) bool {
-	if ab.properties == nil {
+	if ab.Properties == nil {
 		return false
 	}
-	_, ok := ab.properties[name]
+	_, ok := ab.Properties.GetOwn(name)
 	return ok
 }
 
@@ -183,9 +182,9 @@ type BufferData interface {
 type SharedArrayBufferObject struct {
 	Object
 	data          []byte
-	maxByteLength int              // -1 if not growable, else [[ArrayBufferMaxByteLength]]
-	properties    map[string]Value // Own properties (e.g., constructor override)
-	prototype     Value            // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	maxByteLength int          // -1 if not growable, else [[ArrayBufferMaxByteLength]]
+	Properties    *PlainObject // Own properties side table, see OwnPropertiesTable (paserati#528)
+	prototype     Value        // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
 
 func (sab *SharedArrayBufferObject) GetPrototype() Value  { return sab.prototype }
@@ -249,27 +248,26 @@ func (sab *SharedArrayBufferObject) Grow(newLen int) error {
 
 // GetOwnProperty returns an own property value
 func (sab *SharedArrayBufferObject) GetOwnProperty(name string) (Value, bool) {
-	if sab.properties == nil {
+	if sab.Properties == nil {
 		return Undefined, false
 	}
-	v, ok := sab.properties[name]
-	return v, ok
+	return sab.Properties.GetOwn(name)
 }
 
 // SetOwnProperty sets an own property value
 func (sab *SharedArrayBufferObject) SetOwnProperty(name string, value Value) {
-	if sab.properties == nil {
-		sab.properties = make(map[string]Value)
+	if sab.Properties == nil {
+		sab.Properties = newPropertiesTable()
 	}
-	sab.properties[name] = value
+	sab.Properties.SetOwn(name, value)
 }
 
 // HasOwnProperty checks if the buffer has an own property
 func (sab *SharedArrayBufferObject) HasOwnProperty(name string) bool {
-	if sab.properties == nil {
+	if sab.Properties == nil {
 		return false
 	}
-	_, ok := sab.properties[name]
+	_, ok := sab.Properties.GetOwn(name)
 	return ok
 }
 
@@ -282,8 +280,8 @@ type TypedArrayObject struct {
 	length      int  // fixed number of elements; ignored (recomputed live) when trackLength is true
 	trackLength bool // auto length-tracking view: constructed over a resizable/growable buffer with no explicit length, so length/byteLength follow the buffer's live size
 	elementType TypedArrayKind
-	properties  map[string]Value // Own properties (e.g., constructor override)
-	prototype   Value            // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	Properties  *PlainObject // Own properties side table, see OwnPropertiesTable (paserati#528)
+	prototype   Value        // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
 }
 
 func (ta *TypedArrayObject) GetPrototype() Value  { return ta.prototype }
@@ -291,27 +289,26 @@ func (ta *TypedArrayObject) SetPrototype(p Value) { ta.prototype = p }
 
 // GetOwnProperty returns an own property value (non-index properties)
 func (ta *TypedArrayObject) GetOwnProperty(name string) (Value, bool) {
-	if ta.properties == nil {
+	if ta.Properties == nil {
 		return Undefined, false
 	}
-	v, ok := ta.properties[name]
-	return v, ok
+	return ta.Properties.GetOwn(name)
 }
 
 // SetOwnProperty sets an own property value (non-index properties)
 func (ta *TypedArrayObject) SetOwnProperty(name string, value Value) {
-	if ta.properties == nil {
-		ta.properties = make(map[string]Value)
+	if ta.Properties == nil {
+		ta.Properties = newPropertiesTable()
 	}
-	ta.properties[name] = value
+	ta.Properties.SetOwn(name, value)
 }
 
 // HasOwnProperty checks if the TypedArray has an own property
 func (ta *TypedArrayObject) HasOwnProperty(name string) bool {
-	if ta.properties == nil {
+	if ta.Properties == nil {
 		return false
 	}
-	_, ok := ta.properties[name]
+	_, ok := ta.Properties.GetOwn(name)
 	return ok
 }
 

@@ -397,6 +397,7 @@ type GeneratorObject struct {
 	DelegatedIterator     Value           // Iterator being delegated to (for yield* forwarding of .return()/.throw())
 	DelegationResult      Value           // Result value when delegation completed via external throw/return with done:true
 	DelegationResultReady bool            // Flag indicating DelegationResult is set (needed because result could be undefined)
+	Properties            *PlainObject    // Own properties side table, see OwnPropertiesTable (paserati#529)
 }
 
 type AsyncGeneratorObject GeneratorObject
@@ -450,8 +451,9 @@ type WeakMapEntry struct {
 // Keys must be objects (not primitives) and are held weakly, allowing GC.
 type WeakMapObject struct {
 	Object
-	entries   map[uintptr]*WeakMapEntry // pointer address -> entry
-	prototype Value                     // [[Prototype]] for cross-realm support
+	entries    map[uintptr]*WeakMapEntry // pointer address -> entry
+	prototype  Value                     // [[Prototype]] for cross-realm support
+	Properties *PlainObject              // Own properties side table, see OwnPropertiesTable (paserati#529)
 }
 
 // WeakSetEntry holds a weak reference to a value
@@ -463,8 +465,9 @@ type WeakSetEntry struct {
 // Values must be objects and are held weakly, allowing GC.
 type WeakSetObject struct {
 	Object
-	entries   map[uintptr]*WeakSetEntry // pointer address -> entry
-	prototype Value                     // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	entries    map[uintptr]*WeakSetEntry // pointer address -> entry
+	prototype  Value                     // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	Properties *PlainObject              // Own properties side table, see OwnPropertiesTable (paserati#529)
 }
 
 func (ws *WeakSetObject) SetPrototype(p Value) { ws.prototype = p }
@@ -477,6 +480,7 @@ type WeakRefObject struct {
 	targetWeak weak.Pointer[byte] // Weak reference to the target object
 	targetType ValueType          // Original ValueType of the target, restored on Deref
 	prototype  Value              // [[Prototype]] for cross-realm support
+	Properties *PlainObject       // Own properties side table, see OwnPropertiesTable (paserati#529)
 }
 
 // finalizationRegistryCell mirrors the spec's per-registration Record:
@@ -498,6 +502,7 @@ type FinalizationRegistryObject struct {
 	cleanupCallback Value
 	cells           []*finalizationRegistryCell
 	prototype       Value
+	Properties      *PlainObject // Own properties side table, see OwnPropertiesTable (paserati#529)
 }
 
 func (fr *FinalizationRegistryObject) GetPrototype() Value  { return fr.prototype }

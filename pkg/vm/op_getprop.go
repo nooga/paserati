@@ -677,164 +677,24 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
-	// 9. Map objects - check user-defined properties first, then prototype chain
-	if objVal.Type() == TypeMap {
-		mapObj := objVal.AsMap()
-		// First check user-defined properties on this Map instance
-		if mapObj.Properties != nil {
-			if v, ok := mapObj.Properties.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
+	// 9-11. Map, Set, Promise, WeakMap, WeakSet, WeakRef,
+	// FinalizationRegistry, SharedArrayBuffer, ArrayBuffer, DataView and
+	// (async) generators: ordinary objects apart from their internal slots.
+	// An own property lives on the side table (OwnPropertiesTable) - an own
+	// accessor's getter runs with the instance as `this` - and otherwise the
+	// instance's own [[Prototype]] chain is walked via finishProtoChainGet
+	// (see the Array case above for why a hand-rolled walk is unsafe since
+	// #418). WeakMap/WeakSet/WeakRef/FinalizationRegistry/DataView and the
+	// generators used to skip the own lookup entirely, so an expando like
+	// `dv.x = 1` read back as undefined (paserati#529).
+	switch objVal.Type() {
+	case TypeMap, TypeSet, TypePromise, TypeWeakMap, TypeWeakSet, TypeWeakRef, TypeFinalizationRegistry,
+		TypeSharedArrayBuffer, TypeArrayBuffer, TypeDataView, TypeGenerator, TypeAsyncGenerator:
+		if props := OwnPropertiesTable(*objVal); props != nil {
+			if handled, ok, status, val := vm.getSideTableOwn(frame, ip, frameWasNil, props, keyFromString(propName), *objVal, dest); handled {
+				return ok, status, val
 			}
 		}
-		// Walk the prototype chain via the shared, non-panicking helper -
-		// see the Array case above for why a hand-rolled walk here is
-		// unsafe now that Object.setPrototypeOf can store any object-kind
-		// value or an explicit null on a Map instance (#418).
-		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
-	}
-
-	// 10. Set objects - check user-defined properties first, then prototype chain
-	if objVal.Type() == TypeSet {
-		setObj := objVal.AsSet()
-		// First check user-defined properties on this Set instance
-		if setObj.Properties != nil {
-			if v, ok := setObj.Properties.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-		}
-		// Walk the prototype chain via the shared, non-panicking helper -
-		// see the Array case above for why a hand-rolled walk here is
-		// unsafe now that Object.setPrototypeOf can store any object-kind
-		// value or an explicit null on a Set instance (#418).
-		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
-	}
-
-	// 10aa. Promise objects - check user-defined properties first, then prototype chain
-	if objVal.Type() == TypePromise {
-		promiseObj := objVal.AsPromise()
-		// First check user-defined properties on this Promise instance
-		if promiseObj.Properties != nil {
-			if v, ok := promiseObj.Properties.GetOwn(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-		}
-		// Walk the prototype chain via the shared, non-panicking helper -
-		// see the Array case above for why a hand-rolled walk here is
-		// unsafe now that Object.setPrototypeOf can store any object-kind
-		// value or an explicit null on a Promise instance (#418).
-		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
-	}
-
-	// 10a. WeakMap objects - consult WeakMap.prototype chain for properties like get, set, has, delete
-	if objVal.Type() == TypeWeakMap {
-		// The instance's own [[Prototype]] (a subclass's, when one was
-		// installed) rather than the hardcoded intrinsic, and a walk that
-		// invokes accessors - see finishProtoChainGet. The hand-rolled walk
-		// this replaces did neither, so `class S extends WeakMap {}` could reach
-		// none of S.prototype's methods or getters.
-		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
-	}
-
-	// 10b. WeakSet objects - consult WeakSet.prototype chain for properties like add, has, delete
-	if objVal.Type() == TypeWeakSet {
-		// The instance's own [[Prototype]] (a subclass's, when one was
-		// installed) rather than the hardcoded intrinsic, and a walk that
-		// invokes accessors - see finishProtoChainGet. The hand-rolled walk
-		// this replaces did neither, so `class S extends WeakSet {}` could reach
-		// none of S.prototype's methods or getters.
-		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
-	}
-
-	// 10b'. WeakRef objects - consult the instance's stored prototype (set by
-	// the constructor via GetPrototypeFromConstructor for cross-realm support),
-	// falling back to vm.WeakRefPrototype if absent.
-	if objVal.Type() == TypeWeakRef {
-		// Walk the prototype chain via the shared, non-panicking helper -
-		// see the Array case above for why a hand-rolled walk here is
-		// unsafe now that Object.setPrototypeOf can store any object-kind
-		// value or an explicit null on a WeakRef instance (#418).
-		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
-	}
-
-	// 10b''. FinalizationRegistry objects - consult the instance's stored
-	// prototype (set by the constructor via GetPrototypeFromConstructor for
-	// cross-realm support), falling back to vm.FinalizationRegistryPrototype.
-	if objVal.Type() == TypeFinalizationRegistry {
-		// Walk the prototype chain via the shared, non-panicking helper -
-		// see the Array case above for why a hand-rolled walk here is
-		// unsafe now that Object.setPrototypeOf can store any object-kind
-		// value or an explicit null on a FinalizationRegistry instance (#418).
-		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
-	}
-
-	// 10c. SharedArrayBuffer objects - check own properties first, then prototype chain
-	if objVal.Type() == TypeSharedArrayBuffer {
-		sab := objVal.AsSharedArrayBuffer()
-		// Check own property first
-		if sab != nil {
-			if v, ok := sab.GetOwnProperty(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-		}
-		// Then check prototype chain
-		// The instance's own [[Prototype]] (a subclass's, when one was
-		// installed) rather than the hardcoded intrinsic, and a walk that
-		// invokes accessors - see finishProtoChainGet. The hand-rolled walk
-		// this replaces did neither, so `class S extends SharedArrayBuffer {}` could reach
-		// none of S.prototype's methods or getters.
-		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
-	}
-
-	// 10d. ArrayBuffer objects - check own properties first, then prototype chain
-	if objVal.Type() == TypeArrayBuffer {
-		ab := objVal.AsArrayBuffer()
-		// Check own property first
-		if ab != nil {
-			if v, ok := ab.GetOwnProperty(propName); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-		}
-		// Then check prototype chain
-		// The instance's own [[Prototype]] (a subclass's, when one was
-		// installed) rather than the hardcoded intrinsic, and a walk that
-		// invokes accessors - see finishProtoChainGet. The hand-rolled walk
-		// this replaces did neither, so `class S extends ArrayBuffer {}` could reach
-		// none of S.prototype's methods or getters.
-		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
-	}
-
-	// 10e. DataView objects - check own properties first, then prototype chain
-	if objVal.Type() == TypeDataView {
-		// Then check prototype chain
-		// The instance's own [[Prototype]] (a subclass's, when one was
-		// installed) rather than the hardcoded intrinsic, and a walk that
-		// invokes accessors - see finishProtoChainGet. The hand-rolled walk
-		// this replaces did neither, so `class S extends DataView {}` could reach
-		// none of S.prototype's methods or getters.
-		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
-	}
-
-	// 11. Generator objects
-	if objVal.Type() == TypeGenerator {
-		// Generator objects: consult the prototype chain via the shared,
-		// non-panicking helper - not the hardcoded vm.GeneratorPrototype
-		// this used to always use regardless of any per-instance override.
-		// handlePrimitiveMethod (called earlier, at the top of opGetProp)
-		// deliberately does NOT handle TypeGenerator any more, since its
-		// Prototype field is a plain Value now (#418, can hold any
-		// object-kind value or an explicit null) that only
-		// finishProtoChainGet -> plainPrototypeOf -> InstancePrototypeOverride
-		// walks correctly - this block is the sole real handler.
-		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
-	}
-
-	if objVal.Type() == TypeAsyncGenerator {
-		// AsyncGenerator objects - see the TypeGenerator case just above.
 		return vm.finishProtoChainGet(frame, ip, frameWasNil, propName, *objVal, dest)
 	}
 
@@ -1071,6 +931,30 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 	// Resolve a prototype-backed view for primitives
 	base := *objVal
 	switch base.Type() {
+	case TypeMap, TypeSet, TypePromise, TypeWeakMap, TypeWeakSet, TypeWeakRef, TypeFinalizationRegistry,
+		TypeSharedArrayBuffer, TypeArrayBuffer, TypeDataView, TypeTypedArray, TypeGenerator, TypeAsyncGenerator:
+		// Side-table kinds (see OwnPropertiesTable): own symbol property
+		// first, then the instance's actual [[Prototype]] chain, with any
+		// getter found called on the instance. The per-kind walks further
+		// down skipped the own table (so `m[sym] = v; m[sym]` read
+		// undefined - paserati#528/#529), ignored subclass prototypes, and
+		// returned an accessor's raw slot instead of calling its getter.
+		key := NewSymbolKey(symKey)
+		if props := OwnPropertiesTable(base); props != nil {
+			if handled, ok, status, val := vm.getSideTableOwn(frame, ip, frameWasNil, props, key, base, dest); handled {
+				return ok, status, val
+			}
+		}
+		slot := vm.findSymbolSlot(vm.PrototypeOf(base), key)
+		if !slot.found {
+			*dest = Undefined
+			return true, InterpretOK, *dest
+		}
+		if !slot.isAccessor {
+			*dest = slot.value
+			return true, InterpretOK, *dest
+		}
+		return vm.invokeSymbolGetter(frame, ip, frameWasNil, slot.getter, base, dest)
 	case TypeString:
 		// Emulate boxing: access via String.prototype
 		proto := vm.StringPrototype
@@ -1205,175 +1089,6 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 		}
 		*dest = Undefined
 		return true, InterpretOK, *dest
-	case TypeTypedArray:
-		// TypedArrays: consult the TypedArray.prototype chain for symbol
-		// properties. vm.PrototypeOf rather than a local element-type switch so
-		// a subclass instance's per-instance [[Prototype]] override wins - see
-		// getPropertyWithReceiver's TypeTypedArray case (pkg/vm/vm_init.go).
-		proto := vm.PrototypeOf(base)
-		// Type() == TypeObject, not IsObject(): the latter admits Proxy and
-		// DictObject, which AsPlainObject cannot represent - see
-		// getPropertyWithReceiver's TypePromise case (pkg/vm/vm_init.go).
-		if proto.Type() == TypeObject {
-			po := proto.AsPlainObject()
-			symKeyVal := NewSymbolKey(symKey)
-			// Check for accessor property first
-			if getter, _, _, _, exists := po.GetOwnAccessorByKey(symKeyVal); exists {
-				if getter.Type() != TypeUndefined {
-					// Call the getter with the TypedArray as 'this'
-					res, err := vm.Call(getter, base, nil)
-					if err != nil {
-						*dest = Undefined
-						return true, InterpretOK, *dest
-					}
-					*dest = res
-					return true, InterpretOK, *dest
-				}
-			}
-			// Check for data property
-			if v, ok := po.GetOwnByKey(symKeyVal); ok {
-				*dest = v
-				if debugVM {
-					fmt.Printf("[DBG opGetPropSymbol] TypedArray.prototype[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
-				}
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						// Check for accessor property first
-						if getter, _, _, _, exists := proto2.GetOwnAccessorByKey(symKeyVal); exists {
-							if getter.Type() != TypeUndefined {
-								// Call the getter with the TypedArray as 'this'
-								res, err := vm.Call(getter, base, nil)
-								if err != nil {
-									*dest = Undefined
-									return true, InterpretOK, *dest
-								}
-								*dest = res
-								return true, InterpretOK, *dest
-							}
-						}
-						// Check for data property
-						if v, ok := proto2.GetOwnByKey(symKeyVal); ok {
-							*dest = v
-							if debugVM {
-								fmt.Printf("[DBG opGetPropSymbol] TypedArray proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
-							}
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	case TypeSharedArrayBuffer:
-		// SharedArrayBuffer: consult SharedArrayBuffer.prototype chain for symbol properties
-		proto := vm.SharedArrayBufferPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	case TypeArrayBuffer:
-		// ArrayBuffer: consult ArrayBuffer.prototype chain for symbol properties
-		proto := vm.ArrayBufferPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	case TypeDataView:
-		// DataView: consult DataView.prototype chain for symbol properties
-		proto := vm.DataViewPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
 	case TypeArguments:
 		// Arguments objects: check own symbol properties first, then consult Array.prototype chain
 		argObj := base.AsArguments()
@@ -1409,247 +1124,6 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 							if debugVM {
 								fmt.Printf("[DBG opGetPropSymbol] Arguments proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
 							}
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	case TypeGenerator:
-		// Generators: consult Generator.prototype chain for symbol properties
-		proto := vm.GeneratorPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-				*dest = v
-				if debugVM {
-					fmt.Printf("[DBG opGetPropSymbol] Generator.prototype[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
-				}
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
-							*dest = v
-							if debugVM {
-								fmt.Printf("[DBG opGetPropSymbol] Generator proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
-							}
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	case TypeAsyncGenerator:
-		// Async generators: consult AsyncGenerator.prototype chain for symbol properties
-		proto := vm.AsyncGeneratorPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-				*dest = v
-				if debugVM {
-					fmt.Printf("[DBG opGetPropSymbol] AsyncGenerator.prototype[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
-				}
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
-							*dest = v
-							if debugVM {
-								fmt.Printf("[DBG opGetPropSymbol] AsyncGenerator proto-chain[%s] -> %s (%s)\n", symKey.AsSymbol(), v.Inspect(), v.TypeName())
-							}
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	}
-
-	// Map: consult the per-instance prototype for symbol properties (e.g.,
-	// subclass overrides of [Symbol.iterator]) before the intrinsic prototype.
-	if base.Type() == TypeMap {
-		if v, ok := vm.getPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(base), NewSymbolKey(symKey)); ok {
-			*dest = v
-			return true, InterpretOK, *dest
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	}
-
-	// Set: consult the per-instance prototype for symbol properties.
-	if base.Type() == TypeSet {
-		if v, ok := vm.getPropertyByKeyFromPrototypeChain(vm.effectiveBuiltinPrototype(base), NewSymbolKey(symKey)); ok {
-			*dest = v
-			return true, InterpretOK, *dest
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	}
-
-	// WeakMap: consult WeakMap.prototype for symbol properties
-	if base.Type() == TypeWeakMap {
-		proto := vm.WeakMapPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	}
-
-	// WeakSet: consult WeakSet.prototype for symbol properties
-	if base.Type() == TypeWeakSet {
-		proto := vm.WeakSetPrototype
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	}
-
-	// WeakRef: consult the instance's stored prototype for symbol properties
-	if base.Type() == TypeWeakRef {
-		wr := base.AsWeakRef()
-		proto := wr.GetPrototype()
-		if !proto.IsObject() {
-			proto = vm.WeakRefPrototype
-		}
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
-							*dest = v
-							return true, InterpretOK, *dest
-						}
-						current = proto2.prototype
-					} else if current.Type() == TypeDictObject {
-						dict := current.AsDictObject()
-						current = dict.prototype
-					} else {
-						break
-					}
-				} else {
-					break
-				}
-			}
-		}
-		*dest = Undefined
-		return true, InterpretOK, *dest
-	}
-
-	// FinalizationRegistry: consult the instance's stored prototype for symbol properties
-	if base.Type() == TypeFinalizationRegistry {
-		fr := base.AsFinalizationRegistry()
-		proto := fr.GetPrototype()
-		if !proto.IsObject() {
-			proto = vm.FinalizationRegistryPrototype
-		}
-		if proto.IsObject() {
-			po := proto.AsPlainObject()
-			if v, ok := po.GetOwnByKey(NewSymbolKey(symKey)); ok {
-				*dest = v
-				return true, InterpretOK, *dest
-			}
-			current := po.prototype
-			for current.typ != TypeNull && current.typ != TypeUndefined {
-				if current.IsObject() {
-					if current.Type() == TypeObject {
-						proto2 := current.AsPlainObject()
-						if v, ok := proto2.GetOwnByKey(NewSymbolKey(symKey)); ok {
-							*dest = v
 							return true, InterpretOK, *dest
 						}
 						current = proto2.prototype
@@ -1859,4 +1333,20 @@ func (vm *VM) opGetPropSymbol(frame *CallFrame, ip int, objVal *Value, symKey Va
 	// DictObject: no symbol identity support yet
 	*dest = Undefined
 	return true, InterpretOK, *dest
+}
+
+// getSideTableOwn reads key from an exotic value's own-property side table:
+// a data property's value, or an own accessor's getter called with receiver
+// as `this`. handled is false when props has no such own property, in which
+// case the caller continues up the [[Prototype]] chain.
+func (vm *VM) getSideTableOwn(frame *CallFrame, ip int, frameWasNil bool, props *PlainObject, key PropertyKey, receiver Value, dest *Value) (handled bool, ok bool, status InterpretResult, val Value) {
+	if getter, _, _, _, isAcc := props.GetOwnAccessorByKey(key); isAcc {
+		ok, status, val = vm.invokeSymbolGetter(frame, ip, frameWasNil, getter, receiver, dest)
+		return true, ok, status, val
+	}
+	if v, exists := props.GetOwnByKey(key); exists {
+		*dest = v
+		return true, true, InterpretOK, v
+	}
+	return false, false, InterpretOK, Undefined
 }
