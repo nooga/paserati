@@ -146,6 +146,9 @@ func (c *Compiler) compileLetStatement(node *parser.LetStatement, hint Register)
 	}
 	// Process all variable declarations in the statement
 	for _, declarator := range node.Declarations {
+		if declarator.Name != nil && declarator.Name.Value == "arguments" {
+			c.hasLexicalArguments = true
+		}
 		// Set current declarator in legacy fields for backward compatibility
 		node.Name = declarator.Name
 		node.Value = declarator.Value
@@ -450,24 +453,24 @@ func (c *Compiler) compileVarStatement(node *parser.VarStatement, hint Register)
 			}
 		}
 
-		// EvalDeclarationInstantiation check: In direct eval context, declaring 'var arguments'
-		// may conflict with the caller's arguments binding (in non-strict mode).
-		// This implements ECMAScript 19.2.1.3 step 5.d.ii.2.a - checking for binding conflicts.
+		// EvalDeclarationInstantiation (ECMA-262 19.2.1.3 step 3): a sloppy
+		// eval's `var arguments` is a SyntaxError when a binding of that name
+		// sits between the eval's lexical environment and its variable
+		// environment. Only 'arguments' is tracked here.
 		if c.callerScopeDesc != nil && declarator.Name != nil && declarator.Name.Value == "arguments" {
-			// Case 1: eval in default parameter expression - conflicts with implicit 'arguments' binding
-			// In default parameter scope, the function's implicit 'arguments' object is being initialized,
-			// so 'var arguments' from eval would conflict with it.
-			if c.callerScopeDesc.InDefaultParameterScope && c.callerScopeDesc.HasArgumentsBinding {
+			// In a parameter initializer the parameters (and a non-arrow
+			// function's arguments object) live in an environment inside the
+			// var environment that eval's vars land in.
+			if c.callerScopeDesc.InDefaultParameterScope && c.callerScopeDesc.ParamScopeHasArguments {
 				c.addError(declarator.Name, "SyntaxError: 'var arguments' not allowed in direct eval in default parameter expression")
 				return BadRegister, nil
 			}
-			// Case 2: eval in function body - only conflicts with EXPLICIT 'arguments' parameter/local
-			// The implicit arguments object allows 'var arguments' to shadow it in the function body.
-			for _, localName := range c.callerScopeDesc.LocalNames {
-				if localName == "arguments" {
-					c.addError(declarator.Name, "SyntaxError: 'var arguments' not allowed in direct eval when caller has explicit arguments binding")
-					return BadRegister, nil
-				}
+			// In the body only a lexical (let/const) 'arguments' conflicts;
+			// parameters, vars and function declarations share the var
+			// environment and are simply reused.
+			if !c.callerScopeDesc.InDefaultParameterScope && c.callerScopeDesc.HasLexicalArguments {
+				c.addError(declarator.Name, "SyntaxError: 'var arguments' not allowed in direct eval when caller has a lexical arguments binding")
+				return BadRegister, nil
 			}
 		}
 
@@ -771,6 +774,9 @@ func (c *Compiler) compileConstStatement(node *parser.ConstStatement, hint Regis
 	}
 	// Process all constant declarations in the statement
 	for _, declarator := range node.Declarations {
+		if declarator.Name != nil && declarator.Name.Value == "arguments" {
+			c.hasLexicalArguments = true
+		}
 		// Set current declarator in legacy fields for backward compatibility
 		node.Name = declarator.Name
 		node.Value = declarator.Value

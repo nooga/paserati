@@ -64,9 +64,7 @@ func (p *Parser) parseVariableDeclarationList(declToken *lexer.Token, kind varDe
 	// declaration parsers deliberately leave this to us so that a pattern in
 	// the last declarator position doesn't consume the statement terminator
 	// out from under this loop.
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken()
-	}
+	p.consumeStatementEnd()
 
 	return p.buildDeclarationStatements(declToken, kind, items)
 }

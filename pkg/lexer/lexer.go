@@ -74,6 +74,7 @@ type Token struct {
 	RawLiteral        string // For template strings: the unprocessed escape sequences (TRV)
 	CookedIsUndefined bool   // For template strings: true if cooked value should be undefined (invalid escape)
 	HasEscape         bool   // For string literals and identifiers: true if the source contained an escape sequence or line continuation (Literal is cooked either way)
+	LegacyOctal       bool   // STRING: has a LegacyOctalEscapeSequence or NonOctalDecimalEscapeSequence; NUMBER: is a LegacyOctalIntegerLiteral or NonOctalDecimalIntegerLiteral. Both are strict mode errors.
 	Line              int    // 1-based line number where the token starts
 	Column            int    // 1-based column number (rune index) where the token starts
 	StartPos          int    // 0-based byte offset where the token starts
@@ -375,6 +376,8 @@ type Lexer struct {
 
 	// --- NEW: Parser-controlled regex context ---
 	forceRegexContext bool // when true, next '/' is always treated as regex start
+
+	stringLegacyOctal bool // set by readString: the literal had a legacy octal or \8/\9 escape
 }
 
 // CurrentPosition returns the lexer's current byte position in the input.
@@ -1456,7 +1459,7 @@ func (l *Lexer) NextToken() Token {
 			// For now, use a generic message. l.position is where the error occurred.
 			tok = Token{Type: ILLEGAL, Literal: "Invalid string literal", Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
 		} else {
-			tok = Token{Type: STRING, Literal: literal, HasEscape: hasEscape, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
+			tok = Token{Type: STRING, Literal: literal, HasEscape: hasEscape, LegacyOctal: l.stringLegacyOctal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
 		}
 	case '\'': // Single quoted string
 		literal, hasEscape, ok := l.readString('\'')
@@ -1464,7 +1467,7 @@ func (l *Lexer) NextToken() Token {
 		if !ok {
 			tok = Token{Type: ILLEGAL, Literal: "Invalid string literal", Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
 		} else {
-			tok = Token{Type: STRING, Literal: literal, HasEscape: hasEscape, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
+			tok = Token{Type: STRING, Literal: literal, HasEscape: hasEscape, LegacyOctal: l.stringLegacyOctal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
 		}
 	case '?':
 		peek := l.peekChar()
@@ -1514,27 +1517,7 @@ func (l *Lexer) NextToken() Token {
 			}
 		} else if isDigit(l.peekChar()) {
 			// Decimal number starting with dot: .123 => 0.123
-			l.readChar() // Consume '.'
-			// Read remaining digits
-			for isDigit(l.ch) || l.ch == '_' {
-				l.readChar()
-			}
-			// Check for exponent (e.g., .5e10)
-			if l.ch == 'e' || l.ch == 'E' {
-				l.readChar() // Consume 'e' or 'E'
-				if l.ch == '+' || l.ch == '-' {
-					l.readChar() // Consume sign
-				}
-				for isDigit(l.ch) || l.ch == '_' {
-					l.readChar()
-				}
-			}
-			// Check for 'n' suffix (BigInt)
-			if l.ch == 'n' {
-				l.readChar() // Consume 'n'
-			}
-			literal := l.input[startPos:l.position]
-			tok = Token{Type: NUMBER, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			tok = l.numberToken(startLine, startCol, startPos)
 		} else {
 			// Just a single dot
 			literal := charString(l.ch)
@@ -1574,24 +1557,8 @@ func (l *Lexer) NextToken() Token {
 			// readIdentifierWithUnicode leaves l.position *after* the last char of the identifier.
 			// HasEscape lets the parser reject an escaped reserved word used as an identifier.
 			tok = Token{Type: tokType, Literal: literal, HasEscape: hasEscape, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-			//return tok // Return early, readIdentifierWithUnicode already called readChar()
 		} else if isDigit(l.ch) {
-			literal := l.readNumber() // Consumes digits and potentially '.'
-			// readNumber leaves l.position *after* the last char of the number
-
-			// Check for BigInt suffix 'n'
-			if l.ch == 'n' {
-				l.readChar() // Consume the 'n' suffix
-				tok = Token{Type: BIGINT, Literal: literal + "n", Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-				// Debug: Check if this looks like it might be mis-tokenized
-				if strings.Contains(literal, ".") {
-					// This should not happen for valid BigInt literals
-					fmt.Printf("DEBUG: Lexer produced BIGINT token with literal: %q\n", literal)
-				}
-			} else {
-				tok = Token{Type: NUMBER, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
-			}
-			//return tok // Return early, readNumber already called readChar()
+			tok = l.numberToken(startLine, startCol, startPos)
 		} else if l.ch == '#' {
 			if l.peekChar() == '!' && l.line == 1 && (l.position == 0 || (l.position == 1 && startPos == 0)) {
 				// Hashbang comment - only valid at very start of file
@@ -1830,160 +1797,180 @@ func (l *Lexer) readIdentifierWithUnicode() (string, bool) {
 	return wtf8.JoinSurrogatePairs(result.String()), hasEscape
 }
 
-// readNumber reads a number literal (integer or float, various bases) and advances the lexer's position.
-// Handles decimal (optional exponent/fraction), hex (0x), binary (0b), octal (0o).
-// Handles numeric separators '_'.
-// Returns the raw literal string found.
-// It performs basic validation (e.g., separator placement) and stops if invalid sequence is found.
-func (l *Lexer) readNumber() string {
-	startPos := l.position
-	base := 10
-	consumedPrefix := false
+// numberToken scans a numeric literal into a NUMBER or BIGINT token, or an
+// ILLEGAL token whose Literal is the error message.
+func (l *Lexer) numberToken(startLine, startCol, startPos int) Token {
+	literal, isBigInt, legacyOctal, errMsg := l.readNumber()
+	typ := NUMBER
+	switch {
+	case errMsg != "":
+		typ, literal = ILLEGAL, errMsg
+	case isBigInt:
+		typ = BIGINT
+	}
+	return Token{Type: typ, Literal: literal, LegacyOctal: legacyOctal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+}
 
-	// 1. Check for base prefix (0x, 0b, 0o) or legacy octal (0 followed by octal digits)
-	isLegacyOctal := false
-	if l.ch == '0' {
-		peek := l.peekChar()
-		switch peek {
-		case 'x', 'X':
-			base = 16
-			l.readChar() // Consume '0'
-			l.readChar() // Consume 'x' or 'X'
-			consumedPrefix = true
-		case 'b', 'B':
-			base = 2
-			l.readChar() // Consume '0'
-			l.readChar() // Consume 'b' or 'B'
-			consumedPrefix = true
+// readNumber scans a NumericLiteral (ECMAScript 12.9.3) starting at a digit,
+// or at a '.' that is followed by a digit. It returns the raw literal text
+// (including any BigInt 'n' suffix), whether the literal is a BigInt, whether
+// it is a LegacyOctalIntegerLiteral / NonOctalDecimalIntegerLiteral (which
+// strict mode code must reject), and a non-empty error message when the
+// source is not a valid numeric literal - misplaced separators, a prefix
+// with no digits, a leading-zero or fractional BigInt, or a literal
+// immediately followed by an IdentifierStart or DecimalDigit.
+func (l *Lexer) readNumber() (literal string, isBigInt bool, legacyOctal bool, errMsg string) {
+	startPos := l.position
+
+	fail := func(msg string) (string, bool, bool, string) {
+		// Swallow the rest of the malformed literal so it yields one error.
+		for isDigit(l.ch) || isLetter(l.ch) || l.ch == '$' {
+			l.readChar()
+		}
+		return l.input[startPos:l.position], false, false, msg
+	}
+
+	// digits consumes a run of digits of the given base, with numeric
+	// separators allowed only between two digits. It reports how many
+	// digits were read and false on a misplaced separator.
+	digits := func(base int) (int, bool) {
+		n := 0
+		for {
+			if isDigitForBase(l.ch, base) {
+				n++
+				l.readChar()
+			} else if l.ch == '_' {
+				if n == 0 || !isDigitForBase(l.peekChar(), base) {
+					return n, false
+				}
+				l.readChar()
+			} else {
+				return n, true
+			}
+		}
+	}
+
+	const badSeparator = "Numeric separators are only allowed between digits"
+	intOnly := true
+	leadingZero := false
+
+	switch {
+	case l.ch == '.':
+		intOnly = false
+		l.readChar()
+		if _, ok := digits(10); !ok {
+			return fail(badSeparator)
+		}
+	case l.ch == '0' && strings.IndexByte("xXoObB", l.peekChar()) >= 0:
+		base := 16
+		switch l.peekChar() {
 		case 'o', 'O':
 			base = 8
-			l.readChar() // Consume '0'
-			l.readChar() // Consume 'o' or 'O'
-			consumedPrefix = true
-		case '0', '1', '2', '3', '4', '5', '6', '7':
-			// Legacy octal: 0 followed by octal digits (non-strict mode)
-			// We provisionally set base to 8, but if we see 8 or 9, it becomes decimal
-			base = 8
-			isLegacyOctal = true
-			// Don't consume prefix - the '0' is part of the number
+		case 'b', 'B':
+			base = 2
 		}
-	}
-
-	// 2. Read integer part (handling separators)
-	lastCharWasDigit := false
-	for {
-		if isDigitForBase(l.ch, base) {
+		l.readChar()
+		l.readChar()
+		n, ok := digits(base)
+		if !ok {
+			return fail(badSeparator)
+		}
+		if n == 0 {
+			return fail("Digit expected")
+		}
+		if l.ch == 'n' {
 			l.readChar()
-			lastCharWasDigit = true
-		} else if isLegacyOctal && (l.ch == '8' || l.ch == '9') {
-			// Legacy octal with 8 or 9 becomes decimal (e.g., 079 = 79)
-			base = 10
-			isLegacyOctal = false
+			isBigInt = true
+		}
+		return l.finishNumber(startPos, isBigInt, false)
+	case l.ch == '0' && isDigit(l.peekChar()):
+		// LegacyOctalIntegerLiteral, or NonOctalDecimalIntegerLiteral once an
+		// 8 or 9 appears. Neither admits separators or a BigInt suffix.
+		leadingZero = true
+		octal := true
+		l.readChar()
+		for isDigit(l.ch) {
+			if l.ch >= '8' {
+				octal = false
+			}
 			l.readChar()
-			lastCharWasDigit = true
-		} else if l.ch == '_' {
-			if !lastCharWasDigit { // Separator must follow a digit
-				// Invalid format (e.g., 0x_1, 1__2, starts with _)
-				// Return what we have *before* the invalid separator.
-				return l.input[startPos:l.position]
-			}
-			l.readChar()                     // Consume '_'
-			if !isDigitForBase(l.ch, base) { // Separator must be followed by a digit
-				// Invalid format (e.g., 1_)
-				// Return what we have *before* the separator and the following non-digit.
-				return l.input[startPos : l.position-1]
-			}
-			lastCharWasDigit = false // Reset after consuming separator
-		} else {
-			break // Not a valid digit or separator for this base
+		}
+		if l.ch == '_' {
+			return fail("Numeric separators are not allowed in numbers with a leading zero")
+		}
+		if l.ch == 'n' {
+			return fail("BigInt literals cannot have a leading zero")
+		}
+		if octal {
+			return l.finishNumber(startPos, false, true)
+		}
+	case l.ch == '0':
+		l.readChar()
+		if l.ch == '_' {
+			return fail("Numeric separators are not allowed after a leading 0")
+		}
+	default:
+		if _, ok := digits(10); !ok {
+			return fail(badSeparator)
 		}
 	}
 
-	// Check if *any* digits were read after the prefix
-	if consumedPrefix && l.position == startPos+2 {
-		// Only prefix was read (e.g., "0x", "0b") - invalid
-		// Return just the prefix as the consumed part.
-		return l.input[startPos:l.position]
-	}
-
-	// 3. Read fractional part (only for base 10)
-	if base == 10 && l.ch == '.' {
-		// Check if the character *after* the dot is a digit, separator, or 'e'/'E' (for cases like "1.e10")
-		peek := l.peekChar()
-		// Per ECMAScript: "1." is valid (trailing dot), so we consume the dot even if not followed by digits
-		// But we need to ensure it's not a property access (e.g., obj.property)
-		// The difference: after a number, any non-identifier-start character means it's a trailing dot
-		if isDigit(peek) || peek == '_' || peek == 'e' || peek == 'E' || !isLetter(peek) && peek != '$' && peek != '_' {
-			l.readChar()             // Consume '.'
-			lastCharWasDigit = false // Reset for fraction part validation
-
-			// Only read fractional digits if the next char is a digit or separator
-			if isDigit(l.ch) || l.ch == '_' {
-				for {
-					if isDigit(l.ch) {
-						l.readChar()
-						lastCharWasDigit = true
-					} else if l.ch == '_' {
-						if !lastCharWasDigit { // Separator must follow a digit
-							return l.input[startPos:l.position]
-						}
-						l.readChar()        // Consume '_'
-						if !isDigit(l.ch) { // Separator must be followed by a digit
-							return l.input[startPos : l.position-1]
-						}
-						lastCharWasDigit = false // Reset
-					} else {
-						break // End of fractional part
-					}
-				}
-				// Must end fraction with a digit
-				if l.input[l.position-1] == '_' {
-					return l.input[startPos : l.position-1]
-				}
-			}
+	if intOnly && l.ch == '.' {
+		intOnly = false
+		l.readChar()
+		if l.ch == '_' {
+			return fail(badSeparator)
+		}
+		if _, ok := digits(10); !ok {
+			return fail(badSeparator)
 		}
 	}
 
-	// 4. Read exponent part (only for base 10)
-	if base == 10 && (l.ch == 'e' || l.ch == 'E') {
-		l.readChar() // Consume 'e' or 'E'
+	if l.ch == 'e' || l.ch == 'E' {
+		intOnly = false
+		l.readChar()
 		if l.ch == '+' || l.ch == '-' {
-			l.readChar() // Consume sign
+			l.readChar()
 		}
-
-		digitsReadExponent := false
-		lastCharWasDigit = false // Reset
-		for {
-			if isDigit(l.ch) {
-				l.readChar()
-				lastCharWasDigit = true
-				digitsReadExponent = true
-			} else if l.ch == '_' {
-				if !lastCharWasDigit { // Separator must follow a digit
-					return l.input[startPos:l.position]
-				}
-				l.readChar()        // Consume '_'
-				if !isDigit(l.ch) { // Separator must be followed by a digit
-					return l.input[startPos : l.position-1]
-				}
-				lastCharWasDigit = false // Reset
-			} else {
-				break // End of exponent part
-			}
+		n, ok := digits(10)
+		if !ok {
+			return fail(badSeparator)
 		}
-
-		// Exponent must have digits and not end with separator
-		if !digitsReadExponent {
-			// Invalid: 'e'/'E' not followed by digits (e.g., "1e", "1e+")
-			// Return up to the 'e'/'E' or the sign
-			return l.input[startPos:l.position]
-		}
-		if l.input[l.position-1] == '_' {
-			return l.input[startPos : l.position-1]
+		if n == 0 {
+			return fail("Exponent must have at least one digit")
 		}
 	}
 
-	return l.input[startPos:l.position]
+	if l.ch == 'n' {
+		if !intOnly {
+			return fail("A BigInt literal must be an integer")
+		}
+		if leadingZero {
+			return fail("BigInt literals cannot have a leading zero")
+		}
+		l.readChar()
+		isBigInt = true
+	}
+	return l.finishNumber(startPos, isBigInt, leadingZero)
+}
+
+// finishNumber enforces that the SourceCharacter immediately following a
+// NumericLiteral is neither an IdentifierStart nor a DecimalDigit (so `3in`
+// and `0b12` are errors rather than two tokens).
+func (l *Lexer) finishNumber(startPos int, isBigInt, legacyOctal bool) (string, bool, bool, string) {
+	next := l.ch
+	bad := isDigit(next) || isLetter(next) || next == '$' || next == '\\'
+	if !bad && next >= 0x80 {
+		r, _ := utf8.DecodeRuneInString(l.input[l.position:])
+		bad = isUnicodeIDStart(r)
+	}
+	if bad {
+		for isDigit(l.ch) || isLetter(l.ch) || l.ch == '$' {
+			l.readChar()
+		}
+		return l.input[startPos:l.position], false, false, "An identifier or keyword cannot immediately follow a numeric literal"
+	}
+	return l.input[startPos:l.position], isBigInt, legacyOctal, ""
 }
 
 // readString reads a string literal enclosed in the given quote character.
@@ -2001,6 +1988,7 @@ func (l *Lexer) readNumber() string {
 func (l *Lexer) readString(quote byte) (string, bool, bool) {
 	var builder strings.Builder
 	hasEscape := false
+	l.stringLegacyOctal = false
 	// Consume the opening quote
 	l.readChar()
 
@@ -2052,8 +2040,11 @@ func (l *Lexer) readString(quote byte) (string, bool, bool) {
 			case 'b':
 				builder.WriteByte('\b') // Backspace (U+0008)
 			case '0', '1', '2', '3', '4', '5', '6', '7':
-				// Legacy octal escape sequence \0 through \377
-				// In non-strict mode, \0-\7 start octal sequences
+				// LegacyOctalEscapeSequence \0 through \377. A lone \0 not
+				// followed by a decimal digit is the (strict-safe) NUL escape.
+				if l.ch != '0' || isDigit(l.peekChar()) {
+					l.stringLegacyOctal = true
+				}
 				octalValue := int(l.ch - '0')
 				// Check for more octal digits (up to 3 digits total)
 				for i := 0; i < 2; i++ {
@@ -2069,7 +2060,11 @@ func (l *Lexer) readString(quote byte) (string, bool, bool) {
 						break
 					}
 				}
-				builder.WriteByte(byte(octalValue))
+				builder.WriteRune(rune(octalValue))
+			case '8', '9':
+				// NonOctalDecimalEscapeSequence: the digit itself, but a strict mode error.
+				l.stringLegacyOctal = true
+				builder.WriteByte(l.ch)
 			case '\n':
 				// Escaped newline: Already consumed by readChar before the switch.
 				// Line count was updated. Do nothing else.
@@ -2383,8 +2378,9 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, 
 
 // skipComment reads until the end of the line.
 func (l *Lexer) skipComment() {
-	// Skip until end of line (ECMAScript line terminators: LF, CR, LS, PS)
-	for l.ch != 0 {
+	// Skip until end of line (ECMAScript line terminators: LF, CR, LS, PS).
+	// A literal NUL is an ordinary comment character, so test for real EOF.
+	for !l.isEOF() {
 		// Check for standard line terminators
 		if l.ch == '\n' || l.ch == '\r' {
 			break
@@ -2409,8 +2405,9 @@ func (l *Lexer) skipHashbangComment() {
 	l.readChar() // Consume '#'
 	l.readChar() // Consume '!'
 
-	// Skip until end of line (ECMAScript line terminators: LF, CR, LS, PS)
-	for l.ch != 0 {
+	// Skip until end of line (ECMAScript line terminators: LF, CR, LS, PS).
+	// A literal NUL is an ordinary comment character, so test for real EOF.
+	for !l.isEOF() {
 		// Check for standard line terminators
 		if l.ch == '\n' || l.ch == '\r' {
 			break
@@ -2432,16 +2429,12 @@ func (l *Lexer) skipHashbangComment() {
 // It consumes the opening '/*' and the closing '*/'.
 // Returns true if the comment is terminated successfully, false otherwise (EOF reached).
 func (l *Lexer) skipMultilineComment() bool {
-	startLine := l.line // For potential error message
-
 	// Consume the opening '/*'
 	l.readChar() // Consume '/'
 	l.readChar() // Consume '*'
 
 	for {
-		if l.ch == 0 { // Reached EOF before finding closing */
-			// Error or warning could be logged here about the unterminated comment starting at startLine
-			fmt.Printf("Lexer Warning: Unterminated multiline comment starting on line %d\n", startLine)
+		if l.isEOF() { // Reached EOF before finding closing */ - NextToken reports it
 			return false
 		}
 

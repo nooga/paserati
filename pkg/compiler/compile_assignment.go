@@ -489,6 +489,9 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	case *parser.IndexExpression:
 		// Check for super indexed assignment (super[expr] = value or super[expr] op= value)
 		if _, isSuper := lhsNode.Left.(*parser.SuperExpression); isSuper {
+			if err := c.checkSuperPropertyAllowed(lhsNode.Left); err != nil {
+				return BadRegister, err
+			}
 			// Super indexed assignment requires special handling with OpSetSuperComputedWithBase
 			// Property lookup uses super base, but assignment is on 'this'
 			// IMPORTANT: Per ECMAScript spec, super base must be captured BEFORE evaluating the key
@@ -616,6 +619,9 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 	case *parser.MemberExpression:
 		// Check for super property assignment (super.prop = value or super[expr] = value)
 		if _, isSuper := lhsNode.Object.(*parser.SuperExpression); isSuper {
+			if err := c.checkSuperPropertyAllowed(lhsNode.Object); err != nil {
+				return BadRegister, err
+			}
 			// Super property assignment requires special handling with dedicated opcodes
 			// This is because of dual-object semantics: property lookup on super base,
 			// but receiver binding uses original 'this' for setters
