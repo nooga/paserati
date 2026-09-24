@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/nooga/paserati/pkg/errors"
@@ -71,10 +72,7 @@ func (c *Compiler) checkModuleLinking(program *parser.Program) {
 	if c.moduleLoader == nil || c.moduleBindings == nil {
 		return
 	}
-	fromPath := "."
-	if c.moduleBindings.ModulePath != "" {
-		fromPath = c.moduleBindings.ModulePath
-	}
+	fromPath := c.linkFromPath()
 	l := &moduleLinker{c: c, modules: make(map[string]*linkModule)}
 	l.root = newLinkModule(canonicalLinkKey(fromPath), fromPath, program)
 	l.modules[l.root.key] = l.root
@@ -276,6 +274,25 @@ func isLinkFailure(err error) bool {
 	return ok && ce.Resolution
 }
 
+// linkFromPath is the path this module's specifiers resolve against. A
+// module file named by a relative path is made absolute: the file system
+// resolver joins a relative importer path onto its own base directory, which
+// already locates the importer, so a relative one would be applied twice.
+func (c *Compiler) linkFromPath() string {
+	path := c.moduleBindings.ModulePath
+	if path == "" {
+		return "."
+	}
+	if !filepath.IsAbs(path) {
+		if abs, err := filepath.Abs(path); err == nil {
+			if info, statErr := os.Stat(abs); statErr == nil && !info.IsDir() {
+				return abs
+			}
+		}
+	}
+	return path
+}
+
 func canonicalLinkKey(path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
 		return abs
@@ -425,10 +442,7 @@ func (c *Compiler) asyncModulesOfDeferredImport(spec string) []string {
 	if c.moduleLoader == nil || c.moduleBindings == nil {
 		return nil
 	}
-	fromPath := "."
-	if c.moduleBindings.ModulePath != "" {
-		fromPath = c.moduleBindings.ModulePath
-	}
+	fromPath := c.linkFromPath()
 	var out []string
 	seen := map[string]bool{}
 	var visit func(spec, from string)
