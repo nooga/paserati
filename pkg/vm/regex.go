@@ -8,6 +8,8 @@ import (
 	"unsafe"
 
 	"github.com/dlclark/regexp2"
+
+	"github.com/nooga/paserati/pkg/jsregex"
 )
 
 // cachedCompiledRegex holds the compiled regex engines that can be shared
@@ -17,6 +19,8 @@ type cachedCompiledRegex struct {
 	compiledRegex  *regexp.Regexp  // Go's RE2 engine (fast path)
 	compiledRegex2 *regexp2.Regexp // regexp2 fallback (full ECMAScript)
 	compileError   string          // Error if both engines failed
+	groupNames     []string        // capture names by number; nil without named groups
+	captureCount   int
 }
 
 // RegExpObject represents a JavaScript RegExp object backed by Go's regexp package
@@ -37,6 +41,8 @@ type RegExpObject struct {
 	Properties     *PlainObject    // Storage for user-defined properties
 	compileError   string          // If non-empty, regex couldn't be compiled by either engine
 	prototype      Value           // Per-instance [[Prototype]] override for subclassing; Undefined = intrinsic
+	groupNames     []string        // Capture names by number (0 = whole match); nil without named groups
+	captureCount   int             // Number of capture groups
 }
 
 func (re *RegExpObject) GetPrototype() Value  { return re.prototype }
@@ -47,10 +53,9 @@ func NewRegExp(pattern, flags string) (Value, error) {
 	if err := ValidateRegExpFlags(flags); err != nil {
 		return Undefined, err
 	}
-	if strings.Contains(flags, "v") && unicodeSetsUnsupportedSyntax(pattern) {
-		return Undefined, fmt.Errorf("Invalid regular expression: %s", unicodeSetsUnsupportedMessage)
+	if err := jsregex.Validate(pattern, flags); err != nil {
+		return Undefined, err
 	}
-
 	// ECMAScript forbids line terminators (U+2028, U+2029) in regex patterns
 	if strings.ContainsRune(pattern, '\u2028') || strings.ContainsRune(pattern, '\u2029') {
 		return Undefined, fmt.Errorf("Invalid regular expression: line terminator in pattern")
@@ -65,53 +70,14 @@ func NewRegExp(pattern, flags string) (Value, error) {
 		}
 	}
 
-	// Translate JavaScript flags to Go regex pattern. translateJSFlagsToGo can
-	// itself hard-error on constructs RE2 can never express (e.g. numbered
-	// backreferences like \1) before regexp.Compile is even called - route
-	// that into the same narrow regexp2 fallback below rather than returning
-	// immediately, so `new RegExp("(a)\\1")` falls back the way the
-	// equivalent literal /(a)\1/ already does (paserati#218).
-	goPattern, translateErr := translateJSFlagsToGo(pattern, flags)
-
-	var compiledRegex *regexp.Regexp
-	var compiledRegex2 *regexp2.Regexp
-	var err error
-	if translateErr != nil {
-		err = translateErr
-	} else {
-		compiledRegex, err = regexp.Compile(goPattern)
+	// The engines are only ever handed a pattern jsregex has accepted, so
+	// the constructor and regex literals (validated by the parser) agree on
+	// every SyntaxError, and either engine may run any valid pattern.
+	cached := compileRegexEngines(pattern, flags)
+	if cached.compileError != "" {
+		return Undefined, fmt.Errorf("Invalid regular expression: /%s/%s: %s", pattern, flags, cached.compileError)
 	}
-	if compiledRegex == nil {
-		// A regexp2 fallback here is deliberately narrow, not the unconditional
-		// one compileRegexEngines uses for regex literals (paserati#172).
-		// Measured against built-ins/RegExp at -timeout 2s (that suite is too
-		// flaky at the usual 0.2s to resolve a change this size - see
-		// 02454018's own note):
-		//   - unconditional fallback (whenever RE2 fails, regardless of why):
-		//     -27/+11. RE2 refusing a pattern is also how this path reports
-		//     the SyntaxError ECMAScript requires for a cluster of early
-		//     errors regexp2 doesn't itself enforce - contradictory/invalid
-		//     regexp-modifier arithmetic, invalid named-group identifiers,
-		//     and Annex B's restricted-escape/quantifiable-assertion rules
-		//     under the `u` flag.
-		//   - gated on the pattern containing one of the four lookaround
-		//     openers RE2 can't express at all: -1/+3. The one loss is
-		//     built-ins/RegExp/unicode_restricted_quantifiable_assertion.js:
-		//     a quantified lookaround under the `u` flag (`(?=.)*`) is itself
-		//     one of those Annex-B early errors, uses lookaround syntax, and
-		//     regexp2 (no notion of that restriction) happily accepts it.
-		// That one known, narrow regression is the cost of unblocking every
-		// other real use of lookaround - the thing this fallback exists for.
-		// (At -timeout 0.2s the net reads as -1/+0: the +3 property-escape
-		// gains, unrelated to lookaround, don't resolve inside that window.)
-		if needsRegexp2Fallback(pattern, flags) {
-			opts := regexp2ECMAScriptOptions(flags)
-			compiledRegex2, err = regexp2.Compile(expandDerivedUnicodeProperties(pattern), opts)
-		}
-		if compiledRegex2 == nil {
-			return Undefined, err
-		}
-	}
+	compiledRegex, compiledRegex2 := cached.compiledRegex, cached.compiledRegex2
 
 	// Parse individual flags
 	global := strings.Contains(flags, "g")
@@ -132,6 +98,8 @@ func NewRegExp(pattern, flags string) (Value, error) {
 		dotAll:         dotAll,
 		sticky:         sticky,
 		lastIndex:      0,
+		groupNames:     cached.groupNames,
+		captureCount:   cached.captureCount,
 	}
 
 	return RegExpValue(regexObj), nil
@@ -153,37 +121,6 @@ func regexp2ECMAScriptOptions(flags string) regexp2.RegexOptions {
 	return opts
 }
 
-// needsRegexp2Fallback reports whether pattern uses a lookaround construct -
-// (?=, (?!, (?<= or (?<! - or a numbered backreference (\1-\9), the
-// ECMAScript-valid syntax RE2 cannot express at all (the latter added for
-// paserati#218, matching translateJSFlagsToGo's own backreference check).
-// See the fallback's own comment in NewRegExp for why this check exists and
-// what it deliberately doesn't cover.
-//
-// The backreference check is skipped under the `u`/`v` flags: Annex B's
-// relaxed backreference/octal-escape handling (which is what makes \1-\9
-// legal even without a matching capture group) applies only in non-unicode
-// mode, so under `u`/`v` a bare \1-\9 must remain the SyntaxError
-// translateJSFlagsToGo already reports (built-ins/RegExp/
-// unicode_restricted_octal_escape.js exercises exactly this) rather than
-// silently succeed via regexp2, which has no notion of that restriction.
-func needsRegexp2Fallback(pattern, flags string) bool {
-	if strings.Contains(pattern, "(?=") ||
-		strings.Contains(pattern, "(?!") ||
-		strings.Contains(pattern, "(?<=") ||
-		strings.Contains(pattern, "(?<!") {
-		return true
-	}
-	if !strings.Contains(flags, "u") && !strings.Contains(flags, "v") {
-		for i := 1; i <= 9; i++ {
-			if strings.Contains(pattern, fmt.Sprintf(`\%d`, i)) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // compileRegexEngines compiles the regex pattern with both engines and returns a cached result.
 // This is called once per unique (pattern, flags) combination.
 func compileRegexEngines(pattern, flags string) *cachedCompiledRegex {
@@ -191,9 +128,21 @@ func compileRegexEngines(pattern, flags string) *cachedCompiledRegex {
 	var compiledRegex2 *regexp2.Regexp
 	var compileError string
 
-	if strings.Contains(flags, "v") && unicodeSetsUnsupportedSyntax(pattern) {
-		return &cachedCompiledRegex{compileError: unicodeSetsUnsupportedMessage}
+	// The engines run jsregex's respelling of the pattern, in which every
+	// capture group is unnamed: both then number captures in source order,
+	// as ECMAScript does, and never see a group name they can't spell. Under
+	// the v flag every class is also evaluated to a plain one (see
+	// regex_classset.go).
+	var rewrite jsregex.ClassSetRewriter
+	if strings.Contains(flags, "v") {
+		rewrite = rewriteClassSet(strings.Contains(flags, "i"))
 	}
+	analysis, err := jsregex.AnalyzeForEngine(pattern, flags, rewrite)
+	if err != nil {
+		return &cachedCompiledRegex{compileError: err.Error()}
+	}
+	groupNames, captureCount := analysis.CaptureNames, analysis.CaptureCount
+	pattern = analysis.Engine
 
 	// Try Go's standard regexp (RE2) first - it's faster
 	goPattern, err := translateJSFlagsToGo(pattern, flags)
@@ -201,12 +150,12 @@ func compileRegexEngines(pattern, flags string) *cachedCompiledRegex {
 		compiledRegex, _ = regexp.Compile(goPattern)
 	}
 
-	// If RE2 failed, try regexp2 (full ECMAScript support). Regex literals
-	// have always fallen back unconditionally here (unlike NewRegExp's own,
-	// deliberately narrower fallback for the RegExp constructor - see its
-	// comment) - this function's own behavior is unchanged by paserati#172.
+	// If RE2 failed, try regexp2 (full ECMAScript support). The fallback is
+	// unconditional: callers validate the pattern with jsregex first, so RE2
+	// refusing a pattern only ever means it can't express it (lookaround,
+	// backreferences), never that the pattern is a SyntaxError.
 	if compiledRegex == nil {
-		compiledRegex2, err = regexp2.Compile(expandDerivedUnicodeProperties(pattern), regexp2ECMAScriptOptions(flags))
+		compiledRegex2, err = regexp2.Compile(expandUnicodePropertyEscapes(pattern, flags), regexp2ECMAScriptOptions(flags))
 		if err != nil {
 			compileError = err.Error()
 		}
@@ -216,6 +165,8 @@ func compileRegexEngines(pattern, flags string) *cachedCompiledRegex {
 		compiledRegex:  compiledRegex,
 		compiledRegex2: compiledRegex2,
 		compileError:   compileError,
+		groupNames:     groupNames,
+		captureCount:   captureCount,
 	}
 }
 
@@ -300,6 +251,8 @@ func (vm *VM) NewRegExpDeferred(pattern, flags string) Value {
 		sticky:         sticky,
 		lastIndex:      0,                   // Fresh per instance
 		compileError:   cached.compileError, // Shared from cache
+		groupNames:     cached.groupNames,
+		captureCount:   cached.captureCount,
 	}
 
 	return RegExpValue(regexObj)
@@ -450,9 +403,8 @@ func (r *RegExpObject) FindStringSubmatchIndexAt(s string, byteStartAt int) []in
 // ECMAScript capture order, with -1/-1 for a group that did not participate.
 func (r *RegExpObject) matchToByteIndices(s string, match *regexp2.Match) []int {
 	groups := match.Groups()
-	order := r.regexp2GroupOrder()
-	runeIndices := make([]int, 0, len(order)*2)
-	for _, gi := range order {
+	runeIndices := make([]int, 0, (r.captureCount+1)*2)
+	for gi := 0; gi <= r.captureCount; gi++ {
 		// A group that took part in the match has a capture, even an empty
 		// one; only a group with no capture at all is unmatched.
 		if gi < 0 || gi >= len(groups) || len(groups[gi].Captures) == 0 {
@@ -466,70 +418,11 @@ func (r *RegExpObject) matchToByteIndices(s string, match *regexp2.Match) []int 
 	return runeIndexToByteIndex(s, runeIndices)
 }
 
-// regexp2GroupOrder maps ECMAScript capture numbers (source order, named and
-// unnamed alike; 0 is the whole match) to positions in a regexp2 Match's
-// Groups(). regexp2 follows .NET and numbers every unnamed group before any
-// named one, so a pattern mixing the two would otherwise report its captures
-// shuffled.
-func (r *RegExpObject) regexp2GroupOrder() []int {
-	names := ecmaCaptureNames(r.source)
-	order := make([]int, len(names))
-	unnamed := 0
-	for k := 1; k < len(names); k++ {
-		if names[k] == "" {
-			unnamed++
-			order[k] = unnamed
-		} else {
-			order[k] = r.compiledRegex2.GroupNumberFromName(names[k])
-		}
-	}
-	return order
-}
-
-// ecmaCaptureNames lists a pattern's capture groups in source order - the
-// order ECMAScript numbers them - as their names ("" for an unnamed group),
-// with element 0 standing for the whole match.
-func ecmaCaptureNames(pattern string) []string {
-	names := []string{""}
-	inClass := false
-	for i := 0; i < len(pattern); i++ {
-		c := pattern[i]
-		switch {
-		case c == '\\':
-			i++ // the escaped character is never syntax
-		case inClass:
-			if c == ']' {
-				inClass = false
-			}
-		case c == '[':
-			inClass = true
-		case c == '(':
-			if i+1 >= len(pattern) || pattern[i+1] != '?' {
-				names = append(names, "")
-			} else if i+3 < len(pattern) && pattern[i+2] == '<' && pattern[i+3] != '=' && pattern[i+3] != '!' {
-				// (?<name>...) - but not the lookbehinds (?<= and (?<!
-				if end := strings.IndexByte(pattern[i+3:], '>'); end >= 0 {
-					names = append(names, pattern[i+3:i+3+end])
-					i += 3 + end
-				}
-			}
-			// Every other (?...) form is a non-capturing construct.
-		}
-	}
-	return names
-}
-
 // GroupNames returns the pattern's capture-group names by ECMAScript capture
 // number (element 0 is the whole match, an unnamed group is ""), or nil when
 // the pattern has no named group at all.
 func (r *RegExpObject) GroupNames() []string {
-	names := ecmaCaptureNames(r.source)
-	for _, n := range names {
-		if n != "" {
-			return names
-		}
-	}
-	return nil
+	return r.groupNames
 }
 
 // ValidateRegExpFlags is the RegExp constructor's flag check: each flag must
@@ -548,45 +441,6 @@ func ValidateRegExpFlags(flags string) error {
 		return fmt.Errorf("Invalid flags supplied to RegExp constructor '%s'", flags)
 	}
 	return nil
-}
-
-const unicodeSetsUnsupportedMessage = "UnicodeSets mode (v flag) class set operations - nested classes, --, &&, \\q{...} - are not supported"
-
-// unicodeSetsUnsupportedSyntax reports whether a v-flag pattern uses the
-// class-set syntax only UnicodeSets mode has: a nested class, `--`
-// difference, `&&` intersection, or a \q{...} string literal. Neither engine
-// implements those, and letting them through would silently match the wrong
-// thing (RE2 reads `[a--b]` as a plain class), so such a pattern is refused
-// instead. Every pattern the u flag accepts works under v as usual.
-func unicodeSetsUnsupportedSyntax(pattern string) bool {
-	inClass := false
-	for i := 0; i < len(pattern); i++ {
-		c := pattern[i]
-		if c == '\\' && i+1 < len(pattern) {
-			if inClass && pattern[i+1] == 'q' && i+2 < len(pattern) && pattern[i+2] == '{' {
-				return true
-			}
-			i++
-			continue
-		}
-		if !inClass {
-			if c == '[' {
-				inClass = true
-			}
-			continue
-		}
-		switch {
-		case c == '[':
-			return true
-		case c == ']':
-			inClass = false
-		case c == '-' && i+1 < len(pattern) && pattern[i+1] == '-':
-			return true
-		case c == '&' && i+1 < len(pattern) && pattern[i+1] == '&':
-			return true
-		}
-	}
-	return false
 }
 
 // FindAllStringSubmatchIndex returns all matches with their indices
@@ -970,11 +824,11 @@ func translateJSFlagsToGo(pattern, flags string) (string, error) {
 	// Preprocess Unicode escapes (\uXXXX, \xXX) that Go's regexp doesn't support
 	pattern = preprocessUnicodeEscapes(pattern)
 
-	// Expand the two derived properties neither engine knows by name
-	// (paserati#190). After preprocessUnicodeEscapes on purpose: the expansion
+	// Expand property escapes, whose names neither engine knows (paserati#190).
+	// After preprocessUnicodeEscapes on purpose: the expansion
 	// spells ASCII members as \xHH so class metacharacters stay escaped, and
 	// that pass would otherwise turn them back into bare syntax.
-	pattern = expandDerivedUnicodeProperties(pattern)
+	pattern = expandUnicodePropertyEscapes(pattern, flags)
 
 	// Check for JavaScript features that Go's regexp doesn't support
 	// Go's regexp library doesn't support numbered backreferences like \1, \2, etc.
@@ -1008,7 +862,7 @@ func translateJSFlagsToGo(pattern, flags string) (string, error) {
 	// Note: 'g' (global), 'y' (sticky) and 'd' (hasIndices) are handled at
 	// the JavaScript level, not in Go's regex engine. 'u' (unicode) is the
 	// default in Go, and 'v' (unicodeSets) is a superset of it whose extra
-	// class-set syntax is refused up front (see unicodeSetsUnsupportedSyntax).
+	// class-set syntax has already been evaluated away (regex_classset.go).
 
 	// Prepend all flag prefixes to the pattern
 	if len(flagPrefixes) > 0 {

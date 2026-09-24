@@ -188,8 +188,12 @@ func namedGroupsObject(regex *vm.RegExpObject, str string, loc []int) vm.Value {
 		if names[k] == "" {
 			continue
 		}
+		// A name may belong to several groups in different alternatives;
+		// at most one of them participates, and its capture is the value.
 		if loc[2*k] == -1 {
-			gobj.SetOwn(names[k], vm.Undefined)
+			if !gobj.HasOwn(names[k]) {
+				gobj.SetOwn(names[k], vm.Undefined)
+			}
 		} else {
 			gobj.SetOwn(names[k], vm.NewString(str[loc[2*k]:loc[2*k+1]]))
 		}
@@ -242,8 +246,11 @@ func buildRegExpExecResult(regex *vm.RegExpObject, str string, loc []int) vm.Val
 			igroups = vm.NewObject(vm.Null)
 			gobj := igroups.AsPlainObject()
 			for k := 1; k < len(names) && k < iarr.Length(); k++ {
-				if names[k] != "" {
-					gobj.SetOwn(names[k], iarr.Get(k))
+				if names[k] == "" {
+					continue
+				}
+				if v := iarr.Get(k); v.Type() != vm.TypeUndefined || !gobj.HasOwn(names[k]) {
+					gobj.SetOwn(names[k], v)
 				}
 			}
 		}
