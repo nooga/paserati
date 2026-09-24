@@ -3902,6 +3902,9 @@ type NamespaceDeclaration struct {
 	Body       *BlockStatement // Body block; statements may be ExportNamedDeclaration wrappers
 	Declare    bool            // True for `declare namespace`
 	IsExported bool            // True if declared as `export namespace ...`
+	// AmbientModule is set for `declare module "m" { ... }` and
+	// `declare global { ... }`: Name holds "m" (or "global") but binds nothing.
+	AmbientModule bool
 }
 
 func (n *NamespaceDeclaration) statementNode()       {}

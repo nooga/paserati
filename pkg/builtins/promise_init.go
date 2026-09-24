@@ -334,4 +334,3 @@ func promiseSpeciesConstructor(vmInstance *vm.VM, promise vm.Value, defaultCtor 
 	}
 	return species, nil
 }
-

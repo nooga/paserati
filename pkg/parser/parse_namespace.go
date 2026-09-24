@@ -98,3 +98,28 @@ func (p *Parser) parseNamespaceDeclaration(declare bool) *NamespaceDeclaration {
 
 	return current
 }
+
+// parseAmbientModuleDeclaration parses the rest of `declare module "m" { ... }`
+// or `declare global { ... }` (curToken is 'module' or 'global'). The body is
+// an ambient context: it is type checked but never emitted.
+func (p *Parser) parseAmbientModuleDeclaration() *NamespaceDeclaration {
+	kwToken := p.curToken
+	if p.inAmbientContext > 0 {
+		p.addError(kwToken, "A 'declare' modifier cannot be used in an already ambient context.")
+	}
+	name := &Identifier{Token: kwToken, Value: "global"}
+	if kwToken.Literal == "module" {
+		p.nextToken() // module name string
+		name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
+	if !p.expectPeek(lexer.LBRACE) {
+		return nil
+	}
+	p.inAmbientContext++
+	body := p.parseBlockStatement()
+	p.inAmbientContext--
+	if body == nil {
+		return nil
+	}
+	return &NamespaceDeclaration{Token: kwToken, Name: name, Body: body, Declare: true, AmbientModule: true}
+}
