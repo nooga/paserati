@@ -589,6 +589,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	program.Statements = []Statement{}
 	program.HoistedDeclarations = make(map[string]Expression) // Initialize map with Expression
 	program.Source = p.source                                 // Set source context for error reporting
+	initialStrict := p.strictMode
 
 	// Track if we're still in the directive prologue (for "use strict" detection)
 	inDirectivePrologue := true
@@ -669,6 +670,12 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	}
 
 	p.checkScriptScope(program.Statements)
+	// Identifier/strict-mode early errors need the whole tree (strictness and
+	// function kinds are only known once bodies are parsed); skip them when
+	// parsing already failed, since the tree may be partial.
+	if len(p.errors) == 0 {
+		p.checkEarlyErrors(program, initialStrict)
+	}
 
 	return program, p.errors
 }
@@ -2112,6 +2119,11 @@ func (p *Parser) parseExpressionStatement() *ExpressionStatement {
 	// Optional semicolon - consume if next
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
+	} else if stmt.Expression != nil && !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) &&
+		p.peekToken.Line == p.curToken.Line && !p.curTokenIs(lexer.SEMICOLON) {
+		// Automatic semicolon insertion only applies before `}`, at the end of
+		// input, or when the offending token follows a line terminator.
+		p.addErrorWithCode(p.peekToken, errors.TS1005, "';' expected.")
 	}
 
 	return stmt
@@ -2126,11 +2138,24 @@ func (p *Parser) parseExpression(precedence int) Expression {
 		p.noPrefixParseFnError(p.curToken.Type)
 		return nil
 	}
+	yieldTok := p.curToken
 	leftExp := prefix()
 	// --- NIL CHECK AFTER PREFIX ---
 	if leftExp == nil {
 		debugPrint("parseExpression(prec=%d): prefix function for '%s' returned nil", precedence, p.curToken.Literal)
 		return nil // Prefix parsing failed, propagate nil
+	}
+	if yieldTok.Type == lexer.YIELD {
+		if _, ok := leftExp.(*YieldExpression); ok {
+			// YieldExpression is an AssignmentExpression: it cannot be the
+			// operand of a tighter operator (`void yield`, `a + yield b`), nor
+			// the left operand of one (`yield\n* 1` is `(yield) * 1`).
+			next := p.peekPrecedence()
+			newlineUpdate := (p.peekTokenIs(lexer.INC) || p.peekTokenIs(lexer.DEC)) && p.peekToken.Line > p.curToken.Line
+			if precedence > ASSIGNMENT || (next > COMMA && next > precedence && !newlineUpdate && !p.peekTokenIs(lexer.SEMICOLON)) {
+				p.addError(yieldTok, "Yield expression not allowed in this context")
+			}
+		}
 	}
 	debugPrint("parseExpression(prec=%d): after prefix, leftExp=%T, cur='%s', peek='%s'", precedence, leftExp, p.curToken.Literal, p.peekToken.Literal)
 
@@ -2150,6 +2175,11 @@ func (p *Parser) parseInfixContinuation(leftExp Expression, precedence int) Expr
 		// side expression and a ++ or -- token, the ++ or -- is NOT postfix.
 		// A semicolon is automatically inserted before it.
 		if (p.peekToken.Type == lexer.INC || p.peekToken.Type == lexer.DEC) && p.peekToken.Line > p.curToken.Line {
+			break
+		}
+		// TypeScript's non-null assertion `x!` likewise needs no line break
+		// before the `!`; otherwise the `!` starts the next statement.
+		if p.peekToken.Type == lexer.BANG && p.peekToken.Line > p.curToken.Line {
 			break
 		}
 
@@ -2659,6 +2689,9 @@ func (p *Parser) parseImportMetaExpression() Expression {
 		p.nextToken() // Move to '.'
 		if p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "meta" {
 			p.nextToken() // Move to 'meta'
+			if p.curToken.HasEscape {
+				p.addError(p.curToken, "Keyword must not contain escaped characters")
+			}
 			if p.disallowModuleSyntax {
 				p.addError(importToken, "SyntaxError: 'import.meta' is only valid in module code")
 			}
@@ -3766,6 +3799,8 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 	if st, en, ok := FunctionSourceSpan(fn); ok {
 		newFn.SourceStart, newFn.SourceEnd = st+1, en+1
 	}
+	newFn.LoweredParams = fn.Parameters
+	newFn.LoweredStmts = paramIndex
 
 	return newFn
 }
@@ -3890,6 +3925,8 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 	newFn := &ArrowFunctionLiteral{
 		BaseExpression:       fn.BaseExpression,
 		Token:                fn.Token,
+		IsAsync:              fn.IsAsync,
+		TypeParameters:       fn.TypeParameters,
 		Parameters:           newParams,
 		RestParameter:        fn.RestParameter,
 		ReturnTypeAnnotation: fn.ReturnTypeAnnotation,
@@ -3899,6 +3936,8 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 	if st, en, ok := FunctionSourceSpan(fn); ok {
 		newFn.SourceStart, newFn.SourceEnd = st+1, en+1
 	}
+	newFn.LoweredParams = fn.Parameters
+	newFn.LoweredStmts = paramIndex
 
 	return newFn
 }
@@ -4138,8 +4177,7 @@ func (p *Parser) parseFunctionBody(params []*Parameter, rest *RestParameter, kin
 	}
 	body := p.parseFunctionBodyWithDirectives()
 	if body != nil {
-		rules := functionParamRules{uniqueParams: kind == bodyArrow || kind == bodyMethod}
-		p.checkFunctionScope(params, rest, body, p.isStrictContext(), rules)
+		p.checkFunctionScope(params, rest, body)
 	}
 	p.superPropertyDepth = savedSuperProp
 	p.newTargetDepth = savedNewTarget
@@ -4530,7 +4568,7 @@ func (p *Parser) parseYieldExpression() Expression {
 		// The "no LineTerminator" restriction is between 'yield' and '*', NOT between
 		// '*' and the delegated expression - that expression is mandatory and may
 		// legally start on the following line (see issue #464).
-		if p.peekTokenIs(lexer.ASTERISK) {
+		if p.peekTokenIs(lexer.ASTERISK) && p.peekToken.Line == yieldToken.Line {
 			p.nextToken() // Move to '*'
 			expression.Delegate = true
 		}
@@ -5281,6 +5319,10 @@ func (p *Parser) parseExpressionList(end lexer.TokenType) []Expression {
 // or `async`), for its source text.
 func (p *Parser) parseArrowFunctionBodyAndFinish(start int, typeParams []*TypeParameter, params []*Parameter, restParam *RestParameter, returnTypeAnnotation Expression, isAsync bool) Expression {
 	debugPrint("parseArrowFunctionBodyAndFinish: Starting, curToken='%s' (%s), params=%v, restParam=%v, isAsync=%v", p.curToken.Literal, p.curToken.Type, params, restParam, isAsync)
+	// ArrowFunction: ArrowParameters [no LineTerminator here] =>
+	if p.prevToken != nil && p.curTokenIs(lexer.ARROW) && p.curToken.Line > p.prevToken.Line {
+		p.addError(p.curToken, "Line terminator not permitted before arrow")
+	}
 	arrowFunc := &ArrowFunctionLiteral{
 		Token:                p.curToken, // The '=>' token
 		IsAsync:              isAsync,
@@ -5733,6 +5775,10 @@ func (p *Parser) parseArrayDestructuringAssignment(arrayLit *ArrayLiteral) Expre
 		}
 
 		destructure.Elements = append(destructure.Elements, destElement)
+	}
+	if arrayLit.CommaAfterSpread {
+		p.addError(arrayLit.Token, "rest element must be last element in destructuring pattern")
+		return nil
 	}
 
 	// Consume the '=' token (already checked in caller)
@@ -6857,6 +6903,9 @@ func (p *Parser) parseArrayLiteral() Expression {
 		}
 		// Optional comma between elements
 		if p.peekTokenIs(lexer.COMMA) {
+			if _, isSpread := elem.(*SpreadElement); isSpread {
+				array.CommaAfterSpread = true
+			}
 			p.nextToken() // move to comma
 			p.nextToken() // move past comma
 			debugPrint("parseArrayLiteral: consumed ',', cur='%s'", p.curToken.Literal)
@@ -7089,6 +7138,11 @@ func (p *Parser) parseSwitchCase() *SwitchCase {
 	for !p.curTokenIs(lexer.CASE) && !p.curTokenIs(lexer.DEFAULT) && !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		stmt := p.parseStatement() // parseStatement consumes tokens including optional semicolon
 		if stmt != nil {
+			if ls, ok := stmt.(*LetStatement); ok && (ls.IsUsing || ls.IsAwaitUsing) {
+				// A case clause's StatementList may not directly contain a
+				// using declaration: it has no scope boundary of its own.
+				p.addError(ls.Token, "'using' declarations are not allowed directly in a case or default clause")
+			}
 			caseClause.Body.Statements = appendFlatteningGroups(caseClause.Body.Statements, stmt)
 
 			// --- Hoisting Check (same as parseBlockStatement) ---
@@ -7554,6 +7608,10 @@ func (p *Parser) parseObjectLiteral() Expression {
 			if p.curTokenIs(lexer.ASYNC) && !p.peekTokenIs(lexer.COLON) && !p.peekTokenIs(lexer.COMMA) && !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.LPAREN) {
 				asyncToken := p.curToken
 				p.nextToken() // Consume 'async' to see what's next
+				// AsyncMethod: async [no LineTerminator here] ClassElementName
+				if p.curToken.Line > asyncToken.Line {
+					p.addError(p.curToken, "Line terminator not permitted after 'async' in a method definition")
+				}
 
 				// Check if this is an async generator (async *foo())
 				isAsyncGenerator := p.curTokenIs(lexer.ASTERISK)
@@ -9693,6 +9751,7 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 
 		stmt := &ForOfStatement{Token: forToken, IsAsync: isAsync}
 		stmt.Variable = varStmt
+		p.checkForInOfHead(varStmt, true)
 
 		// ForInOfStatement's lookahead restrictions: a for-of LHS may not
 		// start with `let`, nor (outside for-await) with `async of`.
@@ -9732,6 +9791,7 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 
 		stmt := &ForInStatement{Token: forToken}
 		stmt.Variable = varStmt
+		p.checkForInOfHead(varStmt, false)
 
 		// Parse object
 		p.nextToken() // consume 'in', move to object
@@ -11745,7 +11805,12 @@ func (p *Parser) parseExportDeclaration() Statement {
 			ns.IsExported = true
 			return &ExportNamedDeclaration{Token: exportToken, Declaration: ns}
 		}
-		p.addError(p.curToken, "SyntaxError: Unexpected token '"+p.curToken.Literal+"' after export")
+		if p.curToken.HasEscape {
+			// e.g. `export d\u0065fault 0`: an escaped keyword is just an identifier.
+			p.addError(p.curToken, "Keyword must not contain escaped characters")
+		} else {
+			p.addError(p.curToken, "SyntaxError: Unexpected token '"+p.curToken.Literal+"' after export")
+		}
 		return nil
 
 	default:

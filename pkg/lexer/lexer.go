@@ -73,7 +73,7 @@ type Token struct {
 	Literal           string // The actual text of the token (lexeme)
 	RawLiteral        string // For template strings: the unprocessed escape sequences (TRV)
 	CookedIsUndefined bool   // For template strings: true if cooked value should be undefined (invalid escape)
-	HasEscape         bool   // For string literals: true if the source contained an escape sequence or line continuation (Literal is cooked either way)
+	HasEscape         bool   // For string literals and identifiers: true if the source contained an escape sequence or line continuation (Literal is cooked either way)
 	Line              int    // 1-based line number where the token starts
 	Column            int    // 1-based column number (rune index) where the token starts
 	StartPos          int    // 0-based byte offset where the token starts
@@ -355,6 +355,10 @@ type Lexer struct {
 	line         int                // current 1-based line number
 	column       int                // current 1-based column number (position of l.position on l.line)
 
+	// identInvalidEscape is set by readIdentifierWithUnicode when a \u escape
+	// inside an identifier does not denote an ID_Start/ID_Continue code point.
+	identInvalidEscape bool
+
 	// --- NEW: Template literal state tracking ---
 	inTemplate    bool // true when we're inside a template literal
 	braceDepth    int  // tracks nested braces inside ${...} interpolations
@@ -371,11 +375,6 @@ type Lexer struct {
 
 	// --- NEW: Parser-controlled regex context ---
 	forceRegexContext bool // when true, next '/' is always treated as regex start
-
-	// identBadEscape is set by readIdentifierWithUnicode when the identifier
-	// contained a \u escape that is malformed or does not denote an
-	// ID_Start/ID_Continue code point; such source text is not a valid token.
-	identBadEscape bool
 }
 
 // CurrentPosition returns the lexer's current byte position in the input.
@@ -1563,17 +1562,18 @@ func (l *Lexer) NextToken() Token {
 		tok = Token{Type: EOF, Literal: "", Line: startLine, Column: startCol, StartPos: startPos, EndPos: startPos}
 	default:
 		if l.canStartIdentifier() {
+			l.identInvalidEscape = false
 			literal, hasEscape := l.readIdentifierWithUnicode() // Consumes letters/digits/_/$/unicode escapes/unicode chars
 			// If identifier contains escape sequences, it should NOT be treated as a keyword
 			tokType := IDENT
-			if !hasEscape {
+			if l.identInvalidEscape {
+				tokType = ILLEGAL
+			} else if !hasEscape {
 				tokType = LookupIdent(literal)
 			}
-			if l.identBadEscape {
-				tokType = ILLEGAL
-			}
-			// readIdentifierWithUnicode leaves l.position *after* the last char of the identifier
-			tok = Token{Type: tokType, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+			// readIdentifierWithUnicode leaves l.position *after* the last char of the identifier.
+			// HasEscape lets the parser reject an escaped reserved word used as an identifier.
+			tok = Token{Type: tokType, Literal: literal, HasEscape: hasEscape, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 			//return tok // Return early, readIdentifierWithUnicode already called readChar()
 		} else if isDigit(l.ch) {
 			literal := l.readNumber() // Consumes digits and potentially '.'
@@ -1607,9 +1607,12 @@ func (l *Lexer) NextToken() Token {
 				savedCh := l.ch
 
 				// Try to read an identifier (including Unicode escapes)
+				l.identInvalidEscape = false
 				identifierPart, _ := l.readIdentifierWithUnicode()
 
-				if identifierPart != "" && !l.identBadEscape {
+				if identifierPart != "" && l.identInvalidEscape {
+					tok = Token{Type: ILLEGAL, Literal: "#" + identifierPart, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+				} else if identifierPart != "" {
 					// Successfully read an identifier part
 					literal := "#" + identifierPart
 					tok = Token{Type: PRIVATE_IDENT, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
@@ -1652,7 +1655,6 @@ func (l *Lexer) readIdentifier() string {
 // or Unicode characters, and returns the resolved identifier string (e.g., "\u0064o" becomes "do")
 func (l *Lexer) readIdentifierWithUnicode() (string, bool) {
 	startPos := l.position
-	l.identBadEscape = false
 
 	// Fast path: try to read a pure ASCII identifier (99%+ of cases)
 	// This avoids strings.Builder allocation entirely
@@ -1727,7 +1729,7 @@ func (l *Lexer) readIdentifierWithUnicode() (string, bool) {
 							continue
 						} else {
 							// Invalid start character - fall back to literal
-							l.identBadEscape = true
+							l.identInvalidEscape = true
 							result.WriteString("\\u")
 							if unicodeHex != "" {
 								result.WriteString(unicodeHex)
@@ -1740,21 +1742,22 @@ func (l *Lexer) readIdentifierWithUnicode() (string, bool) {
 							result.WriteRune(r)
 							continue
 						} else {
-							// Invalid continue character
-							l.identBadEscape = true
+							// Invalid continue character: the escape was already
+							// consumed, so the identifier is malformed.
+							l.identInvalidEscape = true
 							break
 						}
 					}
 				} else {
 					// Invalid hex - fall back to literal
-					l.identBadEscape = true
+					l.identInvalidEscape = true
 					result.WriteString("\\u")
 					result.WriteString(unicodeHex)
 					break
 				}
 			} else {
 				// Invalid unicode escape - fall back to literal
-				l.identBadEscape = true
+				l.identInvalidEscape = true
 				result.WriteString("\\u")
 				if unicodeHex != "" {
 					result.WriteString(unicodeHex)
@@ -2447,6 +2450,18 @@ func (l *Lexer) skipMultilineComment() bool {
 			return true
 		}
 
+		// U+2028/U+2029 (E2 80 A8/A9) are line terminators too; readChar()
+		// only counts LF/CR, and a comment containing one acts as a line
+		// terminator for ASI.
+		if l.ch == 0xE2 && l.peekChar() == 0x80 && (l.peekCharN(2) == 0xA8 || l.peekCharN(2) == 0xA9) {
+			l.readChar()
+			l.readChar()
+			l.readChar()
+			l.line++
+			l.column = 1
+			continue
+		}
+
 		// Consume the current character. readChar() handles line counting.
 		l.readChar()
 	}
@@ -2463,6 +2478,13 @@ func isUnicodeIDStart(r rune) bool {
 	// ASCII fast path
 	if r < 128 {
 		return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' || r == '$'
+	}
+
+	// ID_Start and ID_Continue exclude Pattern_Syntax and Pattern_White_Space
+	// code points even when their general category would qualify (e.g. U+2E2F
+	// VERTICAL TILDE is Lm).
+	if unicode.Is(unicode.Pattern_Syntax, r) || unicode.Is(unicode.Pattern_White_Space, r) {
+		return false
 	}
 
 	// Standard Unicode Letter categories
