@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
 )
 
@@ -444,36 +445,15 @@ func hasUseStrictDirective(body *BlockStatement) bool {
 	return false
 }
 
-// functionParamRules says which parameter early errors a function kind is
-// subject to.
-type functionParamRules struct {
-	// uniqueParams: arrow functions and methods use UniqueFormalParameters,
-	// which never allows duplicates.
-	uniqueParams bool
-}
-
-// checkFunctionScope applies the FunctionBody early errors: the body's
-// lexical names against its var names and parameter names, duplicate
-// parameters, and "use strict" in a function with non-simple parameters.
-// strict is the strictness of the function's own code.
-func (p *Parser) checkFunctionScope(params []*Parameter, rest *RestParameter, body *BlockStatement, strict bool, rules functionParamRules) {
+// checkFunctionScope applies the FunctionBody scope early errors: the body's
+// lexical names against its var names and parameter names. Parameter-list
+// rules (duplicates, "use strict" with non-simple parameters) live in
+// early_errors.go, which knows each function's final strictness.
+func (p *Parser) checkFunctionScope(params []*Parameter, rest *RestParameter, body *BlockStatement) {
 	if body == nil {
 		return
 	}
-	paramNames, simple := parameterNames(params, rest)
-	if !simple && hasUseStrictDirective(body) {
-		p.addError(body.Token, "SyntaxError: Illegal 'use strict' directive in function with non-simple parameter list")
-	}
-	if strict || !simple || rules.uniqueParams {
-		seen := make(map[string]bool, len(paramNames))
-		for _, n := range paramNames {
-			if seen[n.name] {
-				p.addError(n.tok, fmt.Sprintf("SyntaxError: Duplicate parameter name '%s' not allowed in this context", n.name))
-				break
-			}
-			seen[n.name] = true
-		}
-	}
+	paramNames, _ := parameterNames(params, rest)
 	lex, vars := statementListNames(body.Statements, true)
 	p.checkLexicalNames(lex, vars, false)
 	if len(lex) > 0 && len(paramNames) > 0 {
@@ -712,5 +692,5 @@ func (p *Parser) checkDeclarationEnd(stmt Statement) {
 	if p.peekTokenIs(lexer.RBRACE) || p.peekTokenIs(lexer.EOF) || p.peekToken.Line > p.curToken.Line {
 		return
 	}
-	p.addError(p.peekToken, "';' expected.")
+	p.addErrorWithCode(p.peekToken, errors.TS1005, "';' expected.")
 }

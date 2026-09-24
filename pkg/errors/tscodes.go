@@ -17,6 +17,8 @@ const (
 	TS1127  = "TS1127"  // Invalid character
 	TS1206  = "TS1206"  // Decorators are not valid here
 	TS1492  = "TS1492"  // 'using'/'await using' declarations may not have binding patterns
+	TS1346  = "TS1346"  // This parameter is not allowed with 'use strict' directive
+	TS1347  = "TS1347"  // 'use strict' directive cannot be used with non-simple parameter list
 	TS1212  = "TS1212"  // Identifier expected. 'X' is a reserved word in strict mode
 	TS1213  = "TS1213"  // ... Class definitions are automatically in strict mode
 	TS1214  = "TS1214"  // ... Modules are automatically in strict mode

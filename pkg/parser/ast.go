@@ -630,6 +630,13 @@ type FunctionLiteral struct {
 	ReturnTypeAnnotation   Expression       // << RENAMED & TYPE CHANGED
 	Body                   *BlockStatement  // Function body
 
+	// LoweredParams is the parameter list as written when destructuring
+	// parameters were lowered into the first LoweredStmts body statements
+	// (see transformFunctionWithDestructuring); early-error checks need the
+	// original shape. Nil when nothing was lowered.
+	LoweredParams []*Parameter
+	LoweredStmts  int
+
 	// Parenthesized is true for a function expression wrapped in its own
 	// parentheses: `(function f() {});` is an expression statement, not a
 	// function declaration - f is not bound in the enclosing scope and the
@@ -755,6 +762,10 @@ type ArrowFunctionLiteral struct {
 	RestParameter          *RestParameter   // Optional rest parameter (...args)
 	ReturnTypeAnnotation   Expression       // << MODIFIED
 	Body                   Node             // Can be Expression or *BlockStatement
+
+	// LoweredParams / LoweredStmts: see FunctionLiteral.
+	LoweredParams []*Parameter
+	LoweredStmts  int
 	// Parenthesized is true when this arrow function was wrapped in its own
 	// parens, e.g. `((x) => {})`. An ArrowFunction is not a MemberExpression/
 	// LeftHandSideExpression, so `.`, `?.`, `[`, `(`, and tagged templates
@@ -1672,6 +1683,10 @@ type ArrayLiteral struct {
 	BaseExpression              // Embed base for ComputedType (e.g., types.ArrayType)
 	Token          *lexer.Token // The '[' token
 	Elements       []Expression
+	// CommaAfterSpread records that a spread element was directly followed by
+	// a comma (`[...x,]`), which is fine in a literal but an early error once
+	// the literal is reinterpreted as a destructuring pattern.
+	CommaAfterSpread bool
 	// Elisions marks which of Elements is a genuine elision - a real hole
 	// written in source as an empty slot between commas ([1,,3], a
 	// trailing [1,2,,], or new Array-style leading/only commas [,,,]) -
