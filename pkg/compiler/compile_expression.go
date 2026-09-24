@@ -192,6 +192,9 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 
 	// 1. Check for super member access (super.method)
 	if _, isSuperMember := node.Object.(*parser.SuperExpression); isSuperMember {
+		if err := c.checkSuperPropertyAllowed(node.Object); err != nil {
+			return BadRegister, err
+		}
 		return c.compileSuperMemberExpression(node, hint, &tempRegs)
 	}
 
@@ -635,6 +638,9 @@ func (c *Compiler) compileIndexExpression(node *parser.IndexExpression, hint Reg
 
 	// Check if this is super[expr] (not a call)
 	if _, isSuper := node.Left.(*parser.SuperExpression); isSuper {
+		if err := c.checkSuperPropertyAllowed(node.Left); err != nil {
+			return BadRegister, err
+		}
 		// Super index access: super[expr]
 		// This handles property access including getters
 
@@ -1864,6 +1870,12 @@ func (c *Compiler) compilePrefixExpression(node *parser.PrefixExpression, hint R
 	// This must be checked BEFORE compiling the operand, as unresolvable identifiers would fail
 	if node.Operator == "delete" {
 		if ident, ok := node.Right.(*parser.Identifier); ok {
+			// Strict mode: delete of an unqualified (even parenthesized)
+			// identifier is an early SyntaxError (ECMA-262 13.5.1.1).
+			if c.chunk.IsStrict {
+				c.addError(ident, "SyntaxError: Delete of an unqualified identifier in strict mode.")
+				return BadRegister, nil
+			}
 			// Special case: 'arguments' is a non-configurable binding in function scope
 			// Per ECMAScript spec, delete arguments should return false
 			if ident.Value == "arguments" {
@@ -2324,6 +2336,9 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 	if memberExpr, isMethodCall := node.Function.(*parser.MemberExpression); isMethodCall {
 		// Check if this is a super method call (super.method() or super['method']())
 		if _, isSuperMethod := memberExpr.Object.(*parser.SuperExpression); isSuperMethod {
+			if err := c.checkSuperPropertyAllowed(memberExpr.Object); err != nil {
+				return BadRegister, err
+			}
 			// Super method call: super.method(args...) or super['method'](args...)
 			// This requires special handling:
 			// 1. Load 'this' (for the this binding when calling the super method)
@@ -2391,6 +2406,9 @@ func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Regis
 	// Check if this is a super index call (super[expr]())
 	if indexExpr, isIndexCall := node.Function.(*parser.IndexExpression); isIndexCall {
 		if _, isSuperIndex := indexExpr.Left.(*parser.SuperExpression); isSuperIndex {
+			if err := c.checkSuperPropertyAllowed(indexExpr.Left); err != nil {
+				return BadRegister, err
+			}
 			// Super index call: super[expr](args...)
 			// Similar handling to super.method() but with computed property
 			// NOTE: Clear tail position when compiling key expression and arguments

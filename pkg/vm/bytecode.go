@@ -794,6 +794,13 @@ type ScopeDescriptor struct {
 	// already contains the function's implicit 'arguments' binding, causing a conflict.
 	InDefaultParameterScope bool
 
+	// ParamScopeHasArguments: the function's parameter scope binds
+	// 'arguments' (implicit arguments object, or a parameter so named).
+	ParamScopeHasArguments bool
+
+	// HasLexicalArguments: the function declares a let/const 'arguments'.
+	HasLexicalArguments bool
+
 	// LexicalBindings contains names of let/const bindings in the caller's scope chain
 	// between the eval and the variable environment. Used to reject var declarations
 	// that would conflict with these lexical bindings (per 19.2.1.3 step 5.d).
@@ -803,6 +810,10 @@ type ScopeDescriptor struct {
 	// meaning super property access is valid. This is true when eval is called from
 	// within a method (class method or object method with concise syntax).
 	HasSuperBinding bool
+
+	// NewTargetAvailable indicates the caller is function code (or an arrow
+	// nested in function code), so eval code may reference new.target.
+	NewTargetAvailable bool
 
 	// InClassFieldInitializer indicates if direct eval is called from a class field initializer.
 	// Per ECMAScript, accessing 'arguments' in eval inside a class field initializer is a SyntaxError

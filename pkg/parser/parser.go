@@ -277,7 +277,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.BIGINT, p.parseBigIntLiteral)
 	p.registerPrefix(lexer.STRING, p.parseStringLiteral)
 	p.registerPrefix(lexer.REGEX_LITERAL, p.parseRegexLiteral)     // NEW: Regex literals
-	p.registerPrefix(lexer.TEMPLATE_START, p.parseTemplateLiteral) // NEW: Template literals
+	p.registerPrefix(lexer.TEMPLATE_START, p.parseUntaggedTemplateLiteral)
 	p.registerPrefix(lexer.TRUE, p.parseBooleanLiteral)
 	p.registerPrefix(lexer.FALSE, p.parseBooleanLiteral)
 	p.registerPrefix(lexer.NULL, p.parseNullLiteral)
@@ -512,12 +512,29 @@ func (p *Parser) SetAllowSuperProperty(allow bool) {
 // This is used for eval() to inherit strict mode from the calling context.
 func (p *Parser) SetStrictMode(strict bool) {
 	p.strictMode = strict
+	p.checkLegacyOctal(p.curToken)
+}
+
+// checkLegacyOctal reports a legacy octal / non-octal-decimal numeric literal
+// or string escape sequence met in strict mode code (ECMA-262 12.9.3.1,
+// 12.9.4.1). It runs as each token becomes current, since such tokens can
+// appear anywhere a literal can (including property names).
+func (p *Parser) checkLegacyOctal(tok *lexer.Token) {
+	if tok == nil || !tok.LegacyOctal || !p.strictMode {
+		return
+	}
+	if tok.Type == lexer.NUMBER {
+		p.addError(tok, "Octal literals are not allowed in strict mode.")
+	} else {
+		p.addError(tok, "Octal escape sequences are not allowed in strict mode.")
+	}
 }
 
 // nextToken advances the current and peek tokens.
 func (p *Parser) nextToken() {
 	p.prevToken = p.curToken
 	p.curToken = p.peekToken
+	p.checkLegacyOctal(p.curToken)
 	p.peekToken = p.tokenPool.Take(p.l.NextToken())
 	if debugParser && p.curToken != nil {
 		debugPrint("nextToken(): cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
@@ -594,6 +611,9 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 
 	// Track if we're still in the directive prologue (for "use strict" detection)
 	inDirectivePrologue := true
+	// An earlier directive with a legacy octal escape becomes an error once a
+	// later "use strict" directive makes the whole prologue strict.
+	var octalDirective *lexer.Token
 
 	for p.curToken.Type != lexer.EOF {
 		if p.curTokenIs(lexer.RBRACE) {
@@ -615,7 +635,12 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 						// continuation (e.g. 'use str\ict' or 'use strict') must NOT
 						// be recognized as the "use strict" directive.
 						if strLit.Value == "use strict" && !strLit.HasEscape {
+							if octalDirective != nil && !p.strictMode {
+								p.addError(octalDirective, "Octal escape sequences are not allowed in strict mode.")
+							}
 							p.strictMode = true
+						} else if strLit.Token.LegacyOctal && octalDirective == nil {
+							octalDirective = strLit.Token
 						}
 						// Continue in directive prologue - more directives may follow
 					} else {
@@ -699,7 +724,9 @@ func (p *Parser) parseStatement() Statement {
 		// parseSubStatement can reject it.
 		hasNewlineBefore := p.peekToken.Line > p.curToken.Line
 		startsBinding := p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) || p.peekTokenIs(lexer.IDENT)
-		if !hasNewlineBefore && (startsBinding || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
+		// An ExpressionStatement may never start with `let [`, so that is a
+		// declaration even across a line break (and rejected in a sub-statement).
+		if p.peekTokenIs(lexer.LBRACKET) || !hasNewlineBefore && (startsBinding || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
 			return p.parseLetStatement()
 		}
 		if hasNewlineBefore && !inSubStatement && (startsBinding || p.peekTokenIs(lexer.LET) ||
@@ -907,7 +934,7 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseExpressionStatement()
 	case lexer.ILLEGAL:
 		// Handle ILLEGAL tokens by adding error and advancing
-		p.addErrorWithCode(p.curToken, errors.TS1127, "Invalid character.")
+		p.addErrorWithCode(p.curToken, errors.TS1127, illegalTokenMessage(p.curToken))
 		p.nextToken() // Advance past the ILLEGAL token to avoid infinite loop
 		return nil
 	default:
@@ -2000,9 +2027,8 @@ func (p *Parser) parseReturnStatement() *ReturnStatement {
 	} else {
 		// Parse the expression
 		stmt.ReturnValue = p.parseExpression(LOWEST)
-		// Optional semicolon - Consume it here
-		if p.peekTokenIs(lexer.SEMICOLON) {
-			p.nextToken()
+		if stmt.ReturnValue != nil {
+			p.consumeStatementEnd()
 		}
 	}
 
@@ -2117,17 +2143,39 @@ func (p *Parser) parseExpressionStatement() *ExpressionStatement {
 
 	stmt.Expression = p.parseExpression(LOWEST)
 
-	// Optional semicolon - consume if next
-	if p.peekTokenIs(lexer.SEMICOLON) {
+	if stmt.Expression != nil && !isDeclarationLikeExpression(stmt.Expression) {
+		p.consumeStatementEnd()
+	} else if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
-	} else if stmt.Expression != nil && !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) &&
-		p.peekToken.Line == p.curToken.Line && !p.curTokenIs(lexer.SEMICOLON) {
-		// Automatic semicolon insertion only applies before `}`, at the end of
-		// input, or when the offending token follows a line terminator.
-		p.addErrorWithCode(p.peekToken, errors.TS1005, "';' expected.")
 	}
 
 	return stmt
+}
+
+// consumeStatementEnd consumes the optional ';' that ends a statement whose
+// last token is curToken. Automatic semicolon insertion (ECMA-262 12.10.1)
+// only applies before '}', at the end of input, or when a line terminator
+// precedes the next token, so `a b` or `{ 1 2 }` on one line is an error.
+func (p *Parser) consumeStatementEnd() {
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+		return
+	}
+	if p.peekTokenIs(lexer.RBRACE) || p.peekTokenIs(lexer.EOF) || p.peekToken.Line != p.curToken.Line || p.curTokenIs(lexer.SEMICOLON) {
+		return
+	}
+	p.addErrorWithCode(p.peekToken, errors.TS1005, "';' expected.")
+}
+
+// isDeclarationLikeExpression reports whether an expression statement is
+// really a declaration (function declarations are parsed as expression
+// statements for hoisting), which needs no terminating semicolon.
+func isDeclarationLikeExpression(expr Expression) bool {
+	switch e := expr.(type) {
+	case *FunctionLiteral:
+		return e.Name != nil && !e.Parenthesized
+	}
+	return false
 }
 
 // --- Expression Parsing (Pratt Parser) ---
@@ -2291,11 +2339,7 @@ func (p *Parser) parseNumberLiteral() Expression {
 			}
 		}
 		if isLegacyOctal {
-			// Legacy octal literals are not allowed in strict mode
-			if p.strictMode {
-				p.addError(p.curToken, "Octal literals are not allowed in strict mode")
-				return nil
-			}
+			// Strict mode rejection happens in checkLegacyOctal.
 			base = 8
 			prefixLen = 0 // No prefix to strip - the 0 is part of the number but strconv handles it
 		}
@@ -2429,6 +2473,23 @@ func (p *Parser) parseStringLiteral() Expression {
 	lit.Value = p.curToken.Literal
 	lit.HasEscape = p.curToken.HasEscape
 	return lit
+}
+
+// parseUntaggedTemplateLiteral parses a template literal in expression
+// position. Only tagged templates may contain NotEscapeSequences (their
+// cooked value is undefined); anywhere else they are early SyntaxErrors.
+func (p *Parser) parseUntaggedTemplateLiteral() Expression {
+	startTok := p.curToken
+	expr := p.parseTemplateLiteral()
+	if tl, ok := expr.(*TemplateLiteral); ok {
+		for _, part := range tl.Parts {
+			if sp, ok := part.(*TemplateStringPart); ok && sp.CookedIsUndefined {
+				p.addError(startTok, "Invalid escape sequence in template literal.")
+				return nil
+			}
+		}
+	}
+	return expr
 }
 
 // parseTemplateLiteral parses template literals with interpolations
@@ -4179,6 +4240,9 @@ func (p *Parser) parseFunctionBodyWithDirectives() *BlockStatement {
 
 	// Track directive prologue - only string literals at the start count
 	inDirectivePrologue := true
+	// An earlier directive with a legacy octal escape becomes an error once a
+	// later "use strict" directive makes the whole prologue strict.
+	var octalDirective *lexer.Token
 
 	for !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
 		stmt := p.parseStatement()
@@ -4193,7 +4257,12 @@ func (p *Parser) parseFunctionBodyWithDirectives() *BlockStatement {
 						// matching is on raw source text, so an escaped/line-continued
 						// literal must not be recognized as "use strict".
 						if strLit.Value == "use strict" && !strLit.HasEscape {
+							if octalDirective != nil && !p.strictMode {
+								p.addError(octalDirective, "Octal escape sequences are not allowed in strict mode.")
+							}
 							p.strictMode = true
+						} else if strLit.Token.LegacyOctal && octalDirective == nil {
+							octalDirective = strLit.Token
 						}
 						// Continue checking - multiple directives are allowed
 					} else {
@@ -4448,7 +4517,20 @@ func (p *Parser) noPrefixParseFnError(t lexer.TokenType) {
 	if len(p.errors) >= 1000 {
 		return
 	}
+	if t == lexer.ILLEGAL {
+		p.addErrorWithCode(p.curToken, errors.TS1127, illegalTokenMessage(p.curToken))
+		return
+	}
 	p.addErrorWithCode(p.curToken, errors.TS1109, "Expression expected.")
+}
+
+// illegalTokenMessage describes an ILLEGAL token. For malformed literals the
+// lexer puts a description in Literal; a lone bad character has itself there.
+func illegalTokenMessage(tok *lexer.Token) string {
+	if len(tok.Literal) > 1 && strings.Contains(tok.Literal, " ") {
+		return tok.Literal + "."
+	}
+	return "Invalid character."
 }
 
 // --- Precedence Helper ---
@@ -4993,7 +5075,44 @@ func (p *Parser) parseGroupedExpression() Expression {
 	if fn, ok := exp.(*FunctionLiteral); ok {
 		fn.Parenthesized = true
 	}
+	switch e := exp.(type) {
+	case *ArrayLiteral:
+		e.Parenthesized = true
+	case *ObjectLiteral:
+		e.Parenthesized = true
+	case *InfixExpression:
+		e.Parenthesized = true
+	case *OptionalChainingExpression:
+		e.Parenthesized = true
+	case *OptionalIndexExpression:
+		e.Parenthesized = true
+	case *OptionalCallExpression:
+		e.Parenthesized = true
+	}
 	return exp
+}
+
+// isOptionalChain reports whether expr is an (unparenthesized) OptionalChain,
+// i.e. has a ?. somewhere along its member/call spine.
+func isOptionalChain(expr Expression) bool {
+	for {
+		switch e := expr.(type) {
+		case *OptionalChainingExpression:
+			return !e.Parenthesized
+		case *OptionalIndexExpression:
+			return !e.Parenthesized
+		case *OptionalCallExpression:
+			return !e.Parenthesized
+		case *MemberExpression:
+			expr = e.Object
+		case *IndexExpression:
+			expr = e.Left
+		case *CallExpression:
+			expr = e.Function
+		default:
+			return false
+		}
+	}
 }
 
 // parseIfExpression parses an if expression: if (condition) { consequence } else { alternative }
@@ -5134,6 +5253,22 @@ func (p *Parser) parseIfExpression() Expression {
 // -- Infix Parse Functions --
 
 // parseInfixExpression handles expressions like left op right
+// isCoalesceMix reports whether operand, an unparenthesized logical
+// expression, cannot be combined with op: ?? with || / &&, or vice versa.
+func isCoalesceMix(op string, operand Expression) bool {
+	inner, ok := operand.(*InfixExpression)
+	if !ok || inner.Parenthesized {
+		return false
+	}
+	switch op {
+	case "??":
+		return inner.Operator == "||" || inner.Operator == "&&"
+	case "||", "&&":
+		return inner.Operator == "??"
+	}
+	return false
+}
+
 func (p *Parser) parseInfixExpression(left Expression) Expression {
 	if debugParser {
 		debugPrint("parseInfixExpression: Starting. left=%T('%s'), cur='%s' (%s)", left, left.String(), p.curToken.Literal, p.curToken.Type)
@@ -5169,6 +5304,11 @@ func (p *Parser) parseInfixExpression(left Expression) Expression {
 	if expression.Right == nil {
 		debugPrint("parseInfixExpression: Right expression was nil, returning nil.")
 		return nil // Error occurred parsing right side
+	}
+	// ?? cannot be mixed with || or && without parentheses (ECMA-262 13.13:
+	// CoalesceExpressionHead only admits a BitwiseORExpression).
+	if isCoalesceMix(expression.Operator, expression.Left) || isCoalesceMix(expression.Operator, expression.Right) {
+		p.addError(expression.Token, "'??' cannot be mixed with '||' or '&&' without parentheses.")
 	}
 	if debugParser {
 		debugPrint("parseInfixExpression: Finished. Right=%T('%s')", expression.Right, expression.Right.String())
@@ -5225,6 +5365,11 @@ func (p *Parser) parseTaggedTemplateInfix(left Expression) Expression {
 	// Current token is TEMPLATE_START (parser advanced before calling infix)
 	if !p.curTokenIs(lexer.TEMPLATE_START) {
 		return left
+	}
+	// An OptionalChain cannot be the tag of a tagged template (ECMA-262
+	// 13.3.1.1), with or without a line break before the template.
+	if isOptionalChain(left) {
+		p.addError(p.curToken, "Tagged template cannot be used in optional chain.")
 	}
 	// Parse template literal starting at current TEMPLATE_START
 	tmpl := p.parseTemplateLiteral()
@@ -5647,6 +5792,17 @@ func (p *Parser) parseAssignmentExpression(left Expression) Expression {
 	}
 	if debugParser {
 		debugPrint("parseAssignmentExpression left.String(): %s", left.String())
+	}
+
+	// A parenthesized literal is not an AssignmentPattern: ({}) = 1 and
+	// ([a]) = 1 are early SyntaxErrors.
+	if arr, ok := left.(*ArrayLiteral); ok && arr.Parenthesized {
+		p.addError(p.curToken, "Invalid left-hand side in assignment.")
+		return nil
+	}
+	if obj, ok := left.(*ObjectLiteral); ok && obj.Parenthesized {
+		p.addError(p.curToken, "Invalid left-hand side in assignment.")
+		return nil
 	}
 
 	// Check for array destructuring assignment: [a, b, c] = expr
@@ -6601,10 +6757,7 @@ func (p *Parser) parseBreakStatement() *BreakStatement {
 		}
 	}
 
-	// Consume optional semicolon
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken()
-	}
+	p.consumeStatementEnd()
 
 	return stmt
 }
@@ -6634,10 +6787,7 @@ func (p *Parser) parseContinueStatement() *ContinueStatement {
 		p.checkContinueLabel(stmt.Label)
 	}
 
-	// Consume optional semicolon
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken()
-	}
+	p.consumeStatementEnd()
 
 	return stmt
 }
@@ -10742,10 +10892,7 @@ func (p *Parser) parseThrowStatement() *ThrowStatement {
 		return nil
 	}
 
-	// Optional semicolon
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken()
-	}
+	p.consumeStatementEnd()
 
 	return stmt
 }
@@ -10754,10 +10901,7 @@ func (p *Parser) parseThrowStatement() *ThrowStatement {
 func (p *Parser) parseDebuggerStatement() *DebuggerStatement {
 	stmt := &DebuggerStatement{Token: p.curToken} // 'debugger' token
 
-	// Optional semicolon
-	if p.peekTokenIs(lexer.SEMICOLON) {
-		p.nextToken()
-	}
+	p.consumeStatementEnd()
 
 	return stmt
 }

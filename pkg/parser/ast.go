@@ -1421,6 +1421,7 @@ type InfixExpression struct {
 	Left           Expression   // The expression to the left of the operator
 	Operator       string       // e.g., "+", "-", "*", "/", "==", "!=", "<", ">"
 	Right          Expression   // The expression to the right of the operator
+	Parenthesized  bool         // True if wrapped in parens (distinguishes (a || b) ?? c from a || b ?? c)
 }
 
 func (ie *InfixExpression) expressionNode()      {}
@@ -1683,6 +1684,7 @@ type ArrayLiteral struct {
 	BaseExpression              // Embed base for ComputedType (e.g., types.ArrayType)
 	Token          *lexer.Token // The '[' token
 	Elements       []Expression
+	Parenthesized  bool // True if wrapped in parens: ([a]) is not an assignment pattern
 	// CommaAfterSpread records that a spread element was directly followed by
 	// a comma (`[...x,]`), which is fine in a literal but an early error once
 	// the literal is reinterpreted as a destructuring pattern.
@@ -1850,6 +1852,7 @@ type OptionalChainingExpression struct {
 	Object         Expression   // The expression on the left (e.g., identifier, call result)
 	Property       Expression   // The property access (identifier or computed expression)
 	Continuation   Expression   // Optional: continuation of the chain (.b.c, [x], (), etc.) that should short-circuit together
+	Parenthesized  bool         // True if wrapped in parens
 }
 
 func (oce *OptionalChainingExpression) expressionNode()      {}
@@ -1877,6 +1880,7 @@ type OptionalIndexExpression struct {
 	Object         Expression   // The expression on the left (e.g., identifier, call result)
 	Index          Expression   // The index expression (e.g., string, number, variable)
 	Continuation   Expression   // Optional: continuation of the chain that should short-circuit together
+	Parenthesized  bool         // True if wrapped in parens
 }
 
 func (oie *OptionalIndexExpression) expressionNode()      {}
@@ -1905,6 +1909,7 @@ type OptionalCallExpression struct {
 	Function       Expression   // The function expression on the left
 	Arguments      []Expression // The function arguments
 	Continuation   Expression   // Optional: continuation of the chain that should short-circuit together
+	Parenthesized  bool         // True if wrapped in parens
 }
 
 func (oce *OptionalCallExpression) expressionNode()      {}
@@ -2714,7 +2719,8 @@ type ObjectLiteral struct {
 	BaseExpression              // Embed base for ComputedType (e.g., types.ObjectType)
 	Token          *lexer.Token // The '{' token
 	// --- MODIFIED: Use slice instead of map to preserve order ---
-	Properties []*ObjectProperty
+	Properties    []*ObjectProperty
+	Parenthesized bool // True if wrapped in parens: ({a}) is not an assignment pattern
 }
 
 func (ol *ObjectLiteral) expressionNode()      {}

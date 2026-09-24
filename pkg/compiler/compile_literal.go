@@ -471,6 +471,11 @@ func (c *Compiler) compileArrowFunctionWithName(node *parser.ArrowFunctionLitera
 	funcValue.AsFunction().NumRegisterParams = registerParamCount // paserati#467
 	constIdx := c.chunk.AddConstant(funcValue)
 
+	// Collect errors from the body compile, as compileArrowFunctionLiteral does.
+	if len(funcCompiler.errors) > 0 {
+		c.errors = append(c.errors, funcCompiler.errors...)
+	}
+
 	return constIdx, freeSymbols, nil
 }
 

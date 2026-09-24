@@ -497,6 +497,7 @@ type Compiler struct {
 	hasDirectEval             bool                // True when function contains direct eval call (needs scope descriptor)
 	inDefaultParamScope       bool                // True when compiling a default parameter expression
 	hasEvalInDefaultParam     bool                // True when direct eval was found in a default parameter expression
+	hasLexicalArguments       bool                // True when this function declares a let/const named 'arguments'
 	hasEvalInFieldInitializer bool                // True when direct eval was found in a class field initializer
 	allLocalNames             map[Register]string // Tracks all local variable allocations for ScopeDescriptor
 
@@ -860,6 +861,7 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 		scopeBoundary:            enclosingCompiler.currentSymbolTable,      // Mark where parent's scope starts
 		allLocalNames:            make(map[Register]string),                 // Track all local names for ScopeDescriptor
 		isClassFieldInitializer:  enclosingCompiler.isClassFieldInitializer, // Inherit field initializer context for nested functions
+		newTargetAvailable:       true,                                      // Function code; arrow compilers override with the enclosing value
 		// Inherit private field brand context - methods need to use the class's brand ID
 		// and also need the brand stack to look up fields from enclosing classes
 		currentPrivateBrand:     enclosingCompiler.currentPrivateBrand,
@@ -1257,6 +1259,15 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 			}
 			sort.Strings(hoistedNames)
 			for _, name := range hoistedNames {
+				if c.isStrictEvalCode() {
+					// Strict eval code has its own variable environment
+					// (ECMA-262 19.2.1.1 PerformEval step 17): its function
+					// declarations bind eval-local registers, never freed.
+					reg := c.regAlloc.Alloc()
+					c.emitLoadUndefined(reg, 0)
+					c.currentSymbolTable.Define(name, reg)
+					continue
+				}
 				globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 				c.currentSymbolTable.DefineGlobal(name, globalIdx)
 			}
@@ -1284,7 +1295,10 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 			}
 
 			// 1. Define the function name temporarily to allow self-recursion
-			c.currentSymbolTable.Define(name, nilRegister)
+			// (strict eval code already bound it to its eval-local register)
+			if !c.isStrictEvalCode() {
+				c.currentSymbolTable.Define(name, nilRegister)
+			}
 
 			// 2. Compile the function literal (creates chunk & function object)
 			// This will now properly detect self-recursion and include it in freeSymbols
@@ -1297,6 +1311,14 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 
 			// 3. Create the Closure with the actual freeSymbols (not nil)
 			closureReg := c.emitClosure(c.regAlloc.Alloc(), funcConstIndex, funcLit, freeSymbols) // Use actual freeSymbols
+
+			if c.isStrictEvalCode() {
+				if sym, _, found := c.currentSymbolTable.Resolve(name); found && sym.Register != nilRegister {
+					c.emitMove(sym.Register, closureReg, funcLit.Token.Line)
+				}
+				c.regAlloc.Free(closureReg)
+				continue
+			}
 
 			// 4. Get global index and define as global symbol
 			globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
@@ -1332,6 +1354,14 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 			// Skip if already defined (e.g., by a hoisted function with the same name)
 			if _, _, found := c.currentSymbolTable.Resolve(name); found {
 				debugPrintf("[Compile VarHoist] Skipping '%s' - already defined\n", name)
+				continue
+			}
+			// Strict eval code has its own variable environment (ECMA-262
+			// 19.2.1.1 PerformEval step 17): its vars stay eval-local.
+			if c.isStrictEvalCode() {
+				reg := c.regAlloc.Alloc()
+				c.emitLoadUndefined(reg, 0)
+				c.currentSymbolTable.Define(name, reg)
 				continue
 			}
 			// Define as global with undefined value
@@ -2436,8 +2466,18 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		// Check: isIndirectEval + no callerScopeDesc (no function context to inherit from) + no newTargetAvailable
 		// For direct eval, callerScopeDesc provides the enclosing function context.
 		// For arrow functions in indirect eval, they inherit newTargetAvailable from enclosing scope.
-		if c.isIndirectEval && c.callerScopeDesc == nil && !c.newTargetAvailable {
-			return BadRegister, NewCompileError(node, "new.target expression is not allowed in indirect eval")
+		// Only function code (including eval code called from it) may use
+		// new.target; arrows inherit availability from their enclosing code.
+		if !c.newTargetAvailable {
+			err := NewCompileError(node, "SyntaxError: new.target expression is not allowed here")
+			c.errors = append(c.errors, err)
+			return BadRegister, err
+		}
+		// Field initializers are inlined into the constructor, but their
+		// new.target is undefined.
+		if c.inFieldInitializerFunctionScope() {
+			c.emitLoadUndefined(hint, node.Token.Line)
+			return hint, nil
 		}
 		// Load new.target value from constructor context
 		c.emitLoadNewTarget(hint, node.Token.Line)
@@ -3242,9 +3282,60 @@ func (c *Compiler) addFreeSymbol(node parser.Node, symbol *Symbol) uint16 {
 // Also sets newTargetAvailable - if scopeDesc is provided, new.target is available from caller.
 func (c *Compiler) SetCallerScopeDesc(scopeDesc *vm.ScopeDescriptor) {
 	c.callerScopeDesc = scopeDesc
-	// For direct eval (scopeDesc != nil), new.target is available from caller's context
-	// For indirect eval (scopeDesc == nil), new.target is not available
-	c.newTargetAvailable = scopeDesc != nil
+	// Direct eval code may use new.target only when its caller could
+	// (ECMA-262 19.2.1.1 PerformEval step 7: inFunction).
+	c.newTargetAvailable = scopeDesc != nil && scopeDesc.NewTargetAvailable
+}
+
+// inFieldInitializerFunctionScope reports whether the nearest non-arrow
+// function scope here is a class field initializer (inlined into the
+// constructor) rather than an ordinary function nested inside one, which
+// inherits isClassFieldInitializer from its enclosing compiler.
+func (c *Compiler) inFieldInitializerFunctionScope() bool {
+	cc := c
+	for cc.isArrowFunction && cc.enclosing != nil {
+		cc = cc.enclosing
+	}
+	return cc.isClassFieldInitializer && (cc.enclosing == nil || !cc.enclosing.isClassFieldInitializer)
+}
+
+// isStrictEvalCode reports whether this is the top-level compiler of strict
+// eval code, whose var and function declarations live in a fresh variable
+// environment instead of the caller's.
+func (c *Compiler) isStrictEvalCode() bool {
+	return c.enclosing == nil && c.chunk.IsStrict && (c.isIndirectEval || c.callerScopeDesc != nil)
+}
+
+// superPropertyAvailable reports whether code compiled here may use
+// super.x / super[x]: inside a method or class field initializer (which have
+// a [[HomeObject]]), inside an arrow nested in one, or in direct eval code
+// whose caller could (PerformEval step 7: inMethod).
+func (c *Compiler) superPropertyAvailable() bool {
+	for cc := c; cc != nil; cc = cc.enclosing {
+		if cc.isMethodCompilation || cc.isClassFieldInitializer {
+			return true
+		}
+		if cc.enclosing == nil {
+			return cc.callerScopeDesc != nil && cc.callerScopeDesc.HasSuperBinding
+		}
+		if !cc.isArrowFunction {
+			return false
+		}
+	}
+	return false
+}
+
+// checkSuperPropertyAllowed reports a SyntaxError for super property access
+// in top-level script code, or eval code not called from a function, where no
+// [[HomeObject]] can exist. For direct eval inside a function the home object
+// is only known at run time; OpGetSuper and friends throw the SyntaxError.
+func (c *Compiler) checkSuperPropertyAllowed(node parser.Node) errors.PaseratiError {
+	if c.enclosing != nil || c.callerScopeDesc != nil {
+		return nil
+	}
+	err := NewCompileError(node, "SyntaxError: 'super' keyword unexpected here")
+	c.errors = append(c.errors, err)
+	return err
 }
 
 // GetCallerScopeDesc returns the caller's scope descriptor (if any).
@@ -3455,6 +3546,21 @@ func (c *Compiler) resolveCallerLocal(name string) int {
 	return -1
 }
 
+// paramScopeHasArguments reports whether this function's parameter scope
+// binds 'arguments': the implicit arguments object of a non-arrow function,
+// or a parameter of that name.
+func (c *Compiler) paramScopeHasArguments() bool {
+	if !c.isArrowFunction {
+		return true
+	}
+	for _, name := range c.parameterList {
+		if name == "arguments" {
+			return true
+		}
+	}
+	return false
+}
+
 // generateScopeDescriptor creates a ScopeDescriptor from the current symbol table.
 // This is called when a function contains direct eval, to allow eval code to access local variables.
 func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
@@ -3465,7 +3571,10 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 			LocalNames:              []string{},
 			HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
 			InDefaultParameterScope: c.hasEvalInDefaultParam,
-			HasSuperBinding:         c.isMethodCompilation,       // Methods have [[HomeObject]] for super
+			ParamScopeHasArguments:  c.paramScopeHasArguments(),
+			HasLexicalArguments:     c.hasLexicalArguments,
+			HasSuperBinding:         c.superPropertyAvailable(),
+			NewTargetAvailable:      c.newTargetAvailable,
 			InClassFieldInitializer: c.hasEvalInFieldInitializer, // Class field initializers forbid 'arguments' in eval
 			PrivateBrandStack:       c.convertBrandStackToVM(),   // Private field brand context
 			CurrentPrivateBrand:     c.currentPrivateBrand,       // Current brand ID
@@ -3492,7 +3601,10 @@ func (c *Compiler) generateScopeDescriptor() *vm.ScopeDescriptor {
 		LocalNames:              localNames,
 		HasArgumentsBinding:     !c.isArrowFunction, // Non-arrow functions have implicit 'arguments'
 		InDefaultParameterScope: c.hasEvalInDefaultParam,
-		HasSuperBinding:         c.isMethodCompilation,       // Methods have [[HomeObject]] for super
+		ParamScopeHasArguments:  c.paramScopeHasArguments(),
+		HasLexicalArguments:     c.hasLexicalArguments,
+		HasSuperBinding:         c.superPropertyAvailable(),
+		NewTargetAvailable:      c.newTargetAvailable,
 		InClassFieldInitializer: c.hasEvalInFieldInitializer, // Class field initializers forbid 'arguments' in eval
 		PrivateBrandStack:       c.convertBrandStackToVM(),   // Private field brand context
 		CurrentPrivateBrand:     c.currentPrivateBrand,       // Current brand ID

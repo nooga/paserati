@@ -448,10 +448,12 @@ func (p *Paserati) EvalCode(code string, inheritStrict bool) (vm.Value, []error)
 	// Set indirect eval mode so let/const/class declarations stay local to the eval chunk
 	// (only var declarations should be synced to the outer scope).
 	p.compiler.SetIndirectEval(true)
-	defer p.compiler.SetIndirectEval(false)
 
 	// Compile with inherited strict mode
 	chunk, compileErrs := p.CompileProgramWithStrictMode(prog, inheritStrict)
+	// Reset before running: code compiled while this eval runs (Function(),
+	// nested evals) is not this eval's code.
+	p.compiler.SetIndirectEval(false)
 	if len(compileErrs) > 0 {
 		errs := make([]error, len(compileErrs))
 		for i, e := range compileErrs {
@@ -508,10 +510,10 @@ func (p *Paserati) IndirectEvalCode(code string) (vm.Value, []error) {
 
 	// Set indirect eval mode - let/const stay local, var goes to global
 	p.compiler.SetIndirectEval(true)
-	defer p.compiler.SetIndirectEval(false)
 
 	// Indirect eval does NOT inherit strict mode - only strict if code has "use strict"
 	chunk, compileErrs := p.CompileProgramWithStrictMode(prog, false)
+	p.compiler.SetIndirectEval(false) // see EvalCode
 	if len(compileErrs) > 0 {
 		errs := make([]error, len(compileErrs))
 		for i, e := range compileErrs {
@@ -606,10 +608,10 @@ func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm
 	// Set indirect eval mode so let/const/class declarations stay local to the eval chunk
 	// (only var declarations should be synced to the outer scope).
 	p.compiler.SetIndirectEval(true)
-	defer p.compiler.SetIndirectEval(false)
 
 	// Compile with inherited strict mode and caller scope info
 	chunk, compileErrs := p.CompileDirectEvalCode(prog, inheritStrict, scopeDesc)
+	p.compiler.SetIndirectEval(false) // see EvalCode
 	if len(compileErrs) > 0 {
 		errs := make([]error, len(compileErrs))
 		for i, e := range compileErrs {

@@ -200,6 +200,20 @@ type CallFrame struct {
 	promiseObj *PromiseObject // Reference to the promise object (if this is an async frame)
 }
 
+// newTarget returns the new.target value visible in this frame: a
+// constructor call's own new.target, otherwise the closure's captured one -
+// set for arrow functions and for direct eval code (which inherits its
+// caller's), and Undefined for any other function call.
+func (f *CallFrame) newTarget() Value {
+	if f.isConstructorCall && (f.closure == nil || f.closure.Fn == nil || !f.closure.Fn.IsArrowFunction) {
+		return f.newTargetValue
+	}
+	if f.closure != nil {
+		return f.closure.CapturedNewTarget
+	}
+	return Undefined
+}
+
 // BytecodeCall represents a request from a native function to call bytecode
 type BytecodeCall struct {
 	Function  Value
@@ -438,6 +452,7 @@ type VM struct {
 	evalCallerThis       Value
 	hasEvalCallerThis    bool  // True when evalCallerThis is valid (allows passing Undefined as 'this')
 	evalCallerHomeObject Value // Caller's [[HomeObject]] for super property access in eval
+	evalCallerNewTarget  Value // Caller's new.target for direct eval code (Undefined otherwise)
 
 	// Globals, open upvalues, etc. would go here later
 	errors []errors.PaseratiError
@@ -1464,6 +1479,8 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 		RegisterSize: scriptRegSize,
 	}
 	mainClosureObj := &ClosureObject{Fn: mainFuncObj, Upvalues: []*Upvalue{}}
+	// Direct eval code sees its caller's new.target (see CallFrame.newTarget).
+	mainClosureObj.CapturedNewTarget = vm.evalCallerNewTarget
 
 	// With no live frames there are no live register windows either, so a
 	// top-level run always starts from the bottom of the register stack. This
@@ -7270,11 +7287,7 @@ startExecution:
 					// Capture new.target from enclosing scope (for lexical new.target binding)
 					// If enclosing frame is itself an arrow function, use its captured new.target
 					// Otherwise use the frame's new.target value if it's a constructor call
-					if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
-						cl.CapturedNewTarget = frame.closure.CapturedNewTarget
-					} else if frame.isConstructorCall {
-						cl.CapturedNewTarget = frame.newTargetValue
-					}
+					cl.CapturedNewTarget = frame.newTarget()
 					// Capture [[HomeObject]] from enclosing scope for super property access (super.prop)
 					// If enclosing frame is itself an arrow function, use its captured home object
 					// Otherwise use the frame's homeObject
@@ -7448,11 +7461,7 @@ startExecution:
 					// Capture new.target from enclosing scope (for lexical new.target binding)
 					// If enclosing frame is itself an arrow function, use its captured new.target
 					// Otherwise use the frame's new.target value if it's a constructor call
-					if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
-						cl.CapturedNewTarget = frame.closure.CapturedNewTarget
-					} else if frame.isConstructorCall {
-						cl.CapturedNewTarget = frame.newTargetValue
-					}
+					cl.CapturedNewTarget = frame.newTarget()
 					// Capture [[HomeObject]] from enclosing scope for super property access (super.prop)
 					// If enclosing frame is itself an arrow function, use its captured home object
 					// Otherwise use the frame's homeObject
@@ -13369,16 +13378,7 @@ startExecution:
 			// Load 'new.target' value from current call frame context
 			// For arrow functions, use the lexically captured new.target
 			// For regular functions, use the frame's new.target if in constructor call
-			if frame.closure != nil && frame.closure.Fn != nil && frame.closure.Fn.IsArrowFunction {
-				// Arrow function: use captured new.target
-				registers[destReg] = frame.closure.CapturedNewTarget
-			} else if frame.isConstructorCall {
-				// Regular function in constructor call: use frame's new.target
-				registers[destReg] = frame.newTargetValue
-			} else {
-				// Regular function not in constructor call: undefined
-				registers[destReg] = Undefined
-			}
+			registers[destReg] = frame.newTarget()
 
 		case OpLoadSuper:
 			destReg := code[ip]
@@ -13397,7 +13397,12 @@ startExecution:
 			}
 			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
 				frame.ip = ip
-				vm.runtimeError("super keyword is only valid inside methods")
+				// Reached only by eval code whose caller has no [[HomeObject]]:
+				// that early error surfaces as a catchable SyntaxError.
+				vm.ThrowSyntaxError("'super' keyword unexpected here")
+				if !vm.unwinding {
+					goto reloadFrame
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -13473,7 +13478,12 @@ startExecution:
 			}
 			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
 				frame.ip = ip
-				vm.runtimeError("super keyword is only valid inside methods")
+				// Reached only by eval code whose caller has no [[HomeObject]]:
+				// that early error surfaces as a catchable SyntaxError.
+				vm.ThrowSyntaxError("'super' keyword unexpected here")
+				if !vm.unwinding {
+					goto reloadFrame
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -13576,7 +13586,12 @@ startExecution:
 			}
 			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
 				frame.ip = ip
-				vm.runtimeError("super keyword is only valid inside methods")
+				// Reached only by eval code whose caller has no [[HomeObject]]:
+				// that early error surfaces as a catchable SyntaxError.
+				vm.ThrowSyntaxError("'super' keyword unexpected here")
+				if !vm.unwinding {
+					goto reloadFrame
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -13656,7 +13671,12 @@ startExecution:
 			}
 			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
 				frame.ip = ip
-				vm.runtimeError("super keyword is only valid inside methods")
+				// Reached only by eval code whose caller has no [[HomeObject]]:
+				// that early error surfaces as a catchable SyntaxError.
+				vm.ThrowSyntaxError("'super' keyword unexpected here")
+				if !vm.unwinding {
+					goto reloadFrame
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -13802,7 +13822,12 @@ startExecution:
 			}
 			if homeObject.Type() == TypeUndefined || homeObject.Type() == TypeNull {
 				frame.ip = ip
-				vm.runtimeError("super keyword is only valid inside methods")
+				// Reached only by eval code whose caller has no [[HomeObject]]:
+				// that early error surfaces as a catchable SyntaxError.
+				vm.ThrowSyntaxError("'super' keyword unexpected here")
+				if !vm.unwinding {
+					goto reloadFrame
+				}
 				return InterpretRuntimeError, Undefined
 			}
 
@@ -17669,7 +17694,11 @@ startExecution:
 
 				// Use DirectEvalCode for direct eval with scope access
 				// Pass the caller's 'this' value and homeObject so they're inherited by the eval code
+				if !function.Chunk.ScopeDesc.InClassFieldInitializer {
+					vm.evalCallerNewTarget = frame.newTarget()
+				}
 				result, evalErrs = vm.evalDriver.DirectEvalCode(codeStr, callerIsStrict, function.Chunk.ScopeDesc, registers, callerThis, frame.homeObject)
+				vm.evalCallerNewTarget = Undefined
 			} else {
 				// Use regular EvalCode (no local scope access)
 				result, evalErrs = vm.evalDriver.EvalCode(codeStr, callerIsStrict)
