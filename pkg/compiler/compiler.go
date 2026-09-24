@@ -355,6 +355,9 @@ type IteratorCleanupInfo struct {
 	IteratorReg Register
 	// Whether this loop uses the iterator protocol (vs fast array path)
 	UsesIteratorProtocol bool
+	// IsAsync marks a for-await loop, whose close (AsyncIteratorClose)
+	// awaits the result of return()
+	IsAsync bool
 }
 
 // FinallyContext tracks try-finally blocks for proper control flow handling
@@ -5386,7 +5389,7 @@ func (c *Compiler) emitGetModuleExport(destReg Register, modulePath string, expo
 
 // emitIteratorCleanup emits bytecode to call iterator.return() if it exists
 // This is used for proper cleanup when for...of loops exit early (break, return, throw)
-func (c *Compiler) emitIteratorCleanup(iteratorReg Register, line int) {
+func (c *Compiler) emitIteratorCleanup(iteratorReg Register, isAsync bool, line int) {
 	// We need to check if iterator.return exists and call it if present
 	// This is done defensively - we don't want cleanup to throw errors
 
@@ -5420,6 +5423,13 @@ func (c *Compiler) emitIteratorCleanup(iteratorReg Register, line int) {
 	defer c.regAlloc.Free(resultReg)
 
 	c.emitCallMethod(resultReg, returnMethodReg, iteratorReg, 0, line)
+
+	// AsyncIteratorClose awaits return()'s result before checking it
+	if isAsync {
+		c.emitOpCode(vm.OpAwait, line)
+		c.emitByte(byte(resultReg))
+		c.emitByte(byte(resultReg))
+	}
 
 	// Per ECMAScript spec 7.4.6 IteratorClose step 9:
 	// If Type(innerResult.[[value]]) is not Object, throw a TypeError

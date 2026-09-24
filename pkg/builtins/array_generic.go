@@ -84,6 +84,9 @@ func toLengthWithVM(vmInstance *vm.VM, v vm.Value) (int, error) {
 	if v.Type() == vm.TypeSymbol {
 		return 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
 	}
+	if v.Type() == vm.TypeBigInt {
+		return 0, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
+	}
 	if !v.IsObject() && !v.IsCallable() {
 		return toLengthInt(v), nil
 	}

@@ -96,45 +96,46 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		return BadRegister, err
 	}
 
-	// 2. Get Symbol.iterator or Symbol.asyncIterator from global Symbol
-	symbolObjReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, symbolObjReg)
-	symIdx := c.GetOrAssignGlobalIndex("Symbol")
-	c.emitGetGlobal(symbolObjReg, symIdx, node.Token.Line)
-
-	// 3. Get Symbol.iterator or Symbol.asyncIterator property
-	propNameReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, propNameReg)
-	if node.IsAsync {
-		c.emitLoadNewConstant(propNameReg, vm.String("asyncIterator"), node.Token.Line)
-	} else {
-		c.emitLoadNewConstant(propNameReg, vm.String("iterator"), node.Token.Line)
-	}
-
-	iteratorKeyReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, iteratorKeyReg)
-	c.emitOpCode(vm.OpGetIndex, node.Token.Line)
-	c.emitByte(byte(iteratorKeyReg))
-	c.emitByte(byte(symbolObjReg))
-	c.emitByte(byte(propNameReg))
-
-	// 4. Get iterable[Symbol.iterator]
-	iteratorMethodReg := c.regAlloc.Alloc()
-	tempRegs = append(tempRegs, iteratorMethodReg)
-	c.emitOpCode(vm.OpGetIndex, node.Token.Line)
-	c.emitByte(byte(iteratorMethodReg))
-	c.emitByte(byte(iterableReg))
-	c.emitByte(byte(iteratorKeyReg))
-
-	// 5. Call the iterator method to get iterator object
 	iteratorObjReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, iteratorObjReg)
-	c.emitCallMethod(iteratorObjReg, iteratorMethodReg, iterableReg, 0, node.Token.Line)
+	if node.IsAsync {
+		// GetIterator(iterable, async), with the async-from-sync fallback
+		c.emitGetAsyncIterator(iterableReg, iteratorObjReg, node.Token.Line)
+	} else {
+		// 2. Get Symbol.iterator from global Symbol
+		symbolObjReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, symbolObjReg)
+		symIdx := c.GetOrAssignGlobalIndex("Symbol")
+		c.emitGetGlobal(symbolObjReg, symIdx, node.Token.Line)
 
-	// 5a. Validate that the iterator object is actually an object (not null/undefined/primitive)
-	// ECMAScript spec requires iterator to be an object
-	c.emitOpCode(vm.OpTypeGuardIteratorReturn, node.Token.Line)
-	c.emitByte(byte(iteratorObjReg))
+		// 3. Get Symbol.iterator property
+		propNameReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, propNameReg)
+		c.emitLoadNewConstant(propNameReg, vm.String("iterator"), node.Token.Line)
+
+		iteratorKeyReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, iteratorKeyReg)
+		c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+		c.emitByte(byte(iteratorKeyReg))
+		c.emitByte(byte(symbolObjReg))
+		c.emitByte(byte(propNameReg))
+
+		// 4. Get iterable[Symbol.iterator]
+		iteratorMethodReg := c.regAlloc.Alloc()
+		tempRegs = append(tempRegs, iteratorMethodReg)
+		c.emitOpCode(vm.OpGetIndex, node.Token.Line)
+		c.emitByte(byte(iteratorMethodReg))
+		c.emitByte(byte(iterableReg))
+		c.emitByte(byte(iteratorKeyReg))
+
+		// 5. Call the iterator method to get iterator object
+		c.emitCallMethod(iteratorObjReg, iteratorMethodReg, iterableReg, 0, node.Token.Line)
+
+		// 5a. Validate that the iterator object is actually an object (not null/undefined/primitive)
+		// ECMAScript spec requires iterator to be an object
+		c.emitOpCode(vm.OpTypeGuardIteratorReturn, node.Token.Line)
+		c.emitByte(byte(iteratorObjReg))
+	}
 
 	// 6. Get iterator.next method (once, outside loop)
 	nextMethodReg := c.regAlloc.Alloc()
@@ -171,6 +172,7 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		IteratorCleanup: &IteratorCleanupInfo{
 			IteratorReg:          iteratorObjReg,
 			UsesIteratorProtocol: true,
+			IsAsync:              node.IsAsync,
 		},
 		CompletionReg: hint, // For break/continue to update via UpdateEmpty
 	}

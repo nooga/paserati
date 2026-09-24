@@ -30,6 +30,7 @@ type Realm struct {
 	IntlSegmenterPrototype        Value // %Intl.Segmenter.prototype%
 	GeneratorPrototype            Value
 	AsyncGeneratorPrototype       Value
+	AsyncIteratorPrototype        Value
 	IteratorPrototype             Value // %Iterator.prototype% - base for all iterators
 	IteratorHelperPrototype       Value // %IteratorHelperPrototype% - for iterator helper objects
 	WrapForValidIteratorPrototype Value // For Iterator.from() wrapped iterators
@@ -83,6 +84,7 @@ type Realm struct {
 	ArrayConstructor         Value
 	ObjectConstructor        Value
 	FunctionConstructor      Value
+	PromiseConstructor       Value
 
 	// Well-known symbols
 	SymbolIterator           Value
@@ -210,7 +212,8 @@ func (r *Realm) InitializePrototypes() {
 	// Generator prototypes
 	r.GeneratorPrototype = NewObject(r.IteratorPrototype)
 	r.GeneratorFunctionPrototype = NewObject(r.FunctionPrototype)
-	r.AsyncGeneratorPrototype = NewObject(r.ObjectPrototype)
+	r.AsyncIteratorPrototype = NewObject(r.ObjectPrototype)
+	r.AsyncGeneratorPrototype = NewObject(r.AsyncIteratorPrototype)
 	r.AsyncGeneratorFunctionPrototype = NewObject(r.FunctionPrototype)
 	r.AsyncFunctionPrototype = NewObject(r.FunctionPrototype)
 

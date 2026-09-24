@@ -993,7 +993,9 @@ func (c *Compiler) isExpressionInTailPosition(expr parser.Expression) bool {
 func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Register) (Register, errors.PaseratiError) {
 	if node.ReturnValue != nil {
 		// Enable tail position only if the return value can be in tail position
-		if c.isExpressionInTailPosition(node.ReturnValue) {
+		// (never in an async generator, which awaits the value first)
+		asyncGen := c.isAsync && c.isGenerator
+		if !asyncGen && c.isExpressionInTailPosition(node.ReturnValue) {
 			oldTailPos := c.inTailPosition
 			c.inTailPosition = true
 			defer func() { c.inTailPosition = oldTailPos }()
@@ -1032,11 +1034,17 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Reg
 			// but keep for safety unless proven otherwise.
 			return BadRegister, err
 		}
+		// `return v` in an async generator returns Await(v).
+		if asyncGen {
+			c.emitOpCode(vm.OpAwait, node.Token.Line)
+			c.emitByte(byte(returnReg))
+			c.emitByte(byte(returnReg))
+		}
 		// Clean up any active iterators before returning from within a loop
 		for i := len(c.loopContextStack) - 1; i >= 0; i-- {
 			ctx := c.loopContextStack[i]
 			if ctx.IteratorCleanup != nil && ctx.IteratorCleanup.UsesIteratorProtocol {
-				c.emitIteratorCleanup(ctx.IteratorCleanup.IteratorReg, node.Token.Line)
+				c.emitIteratorCleanup(ctx.IteratorCleanup.IteratorReg, ctx.IteratorCleanup.IsAsync, node.Token.Line)
 			}
 		}
 
@@ -1053,7 +1061,7 @@ func (c *Compiler) compileReturnStatement(node *parser.ReturnStatement, hint Reg
 		for i := len(c.loopContextStack) - 1; i >= 0; i-- {
 			ctx := c.loopContextStack[i]
 			if ctx.IteratorCleanup != nil && ctx.IteratorCleanup.UsesIteratorProtocol {
-				c.emitIteratorCleanup(ctx.IteratorCleanup.IteratorReg, node.Token.Line)
+				c.emitIteratorCleanup(ctx.IteratorCleanup.IteratorReg, ctx.IteratorCleanup.IsAsync, node.Token.Line)
 			}
 		}
 
@@ -1523,7 +1531,7 @@ func (c *Compiler) compileBreakStatement(node *parser.BreakStatement, hint Regis
 
 	// Check if we need to emit iterator cleanup code before breaking
 	if targetContext.IteratorCleanup != nil && targetContext.IteratorCleanup.UsesIteratorProtocol {
-		c.emitIteratorCleanup(targetContext.IteratorCleanup.IteratorReg, node.Token.Line)
+		c.emitIteratorCleanup(targetContext.IteratorCleanup.IteratorReg, targetContext.IteratorCleanup.IsAsync, node.Token.Line)
 	}
 
 	// Per ECMAScript spec, break has an empty completion value.
@@ -1640,7 +1648,7 @@ func (c *Compiler) compileContinueStatement(node *parser.ContinueStatement, hint
 		for i := len(c.loopContextStack) - 1; i > targetIndex; i-- {
 			ctx := c.loopContextStack[i]
 			if ctx.IteratorCleanup != nil && ctx.IteratorCleanup.UsesIteratorProtocol {
-				c.emitIteratorCleanup(ctx.IteratorCleanup.IteratorReg, node.Token.Line)
+				c.emitIteratorCleanup(ctx.IteratorCleanup.IteratorReg, ctx.IteratorCleanup.IsAsync, node.Token.Line)
 			}
 		}
 	} else {
