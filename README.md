@@ -18,7 +18,7 @@ Right now it prioritizes **correctness** over raw speed, but the architecture is
 
 ### Wins
 
-- Test262 language suite: **98.1%**, built-ins: **71.7%**, TypeScript 6.0.3 conformance: **41.5%** strict / **70.8%** loose (see details below)
+- Test262 language suite: **98.3%**, built-ins: **75.3%**, TypeScript 6.0.3 conformance: **41.7%** strict / **72.7%** loose (see details below)
 - **Native TS execution.** No `tsc`, no TS→JS transpilation step.
 - **TCO.** Tail call optimization (elite feature).
 - **Shapes + ICs.** Fast-ish property access without a JIT.
@@ -86,10 +86,10 @@ go test ./tests/...
 
 | Suite | Passed | Failed | Skipped | Timeouts | Pass rate |
 | :-- | --: | --: | --: | --: | --: |
-| Test262 language | 20,592/23,523 | 2,931 | 0 | 0 | 87.5% |
-| Test262 built-ins | 16,947/23,294 | 6,347 | 0 | 0 | 72.8% |
-| TypeScript 6.0.3 conformance (strict error codes) | 2,045/4,933 | 2,415 | 473 | 0 | 41.5% |
-| TypeScript 6.0.3 conformance (loose) | 3,494/4,933 | 966 | 473 | 0 | 70.8% |
+| Test262 language | 23,119/23,523 | 404 | 0 | 0 | 98.3% |
+| Test262 built-ins | 17,533/23,294 | 5,761 | 0 | 0 | 75.3% |
+| TypeScript 6.0.3 conformance (strict error codes) | 2,058/4,933 | 2,402 | 473 | 0 | 41.7% |
+| TypeScript 6.0.3 conformance (loose) | 3,587/4,933 | 873 | 473 | 0 | 72.7% |
 <!-- compliance:end -->
 
 `strict error codes` requires our diagnostics to carry the same TypeScript error code(s) the baseline expects. `loose` only requires that we raised *some* error where one was expected, so it overcounts conformance. Treat strict as the honest number.
@@ -98,7 +98,7 @@ The Test262 language and built-ins figures come from the local baseline snapshot
 
 ### Current status
 
-At **87.5% Test262 language compliance** and **41.5% TypeScript 6.0.3 conformance** (strict error codes; 70.8% under the looser any-error-raised metric), Paserati handles a large chunk of modern JavaScript/TypeScript semantics correctly. It's still evolving, but it's past the "toy project" phase.
+At **98.3% Test262 language compliance** and **41.7% TypeScript 6.0.3 conformance** (strict error codes; 72.7% under the looser any-error-raised metric), Paserati handles a large chunk of modern JavaScript/TypeScript semantics correctly. It's still evolving, but it's past the "toy project" phase.
 
 Core language features that work well:
 
