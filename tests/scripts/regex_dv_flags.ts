@@ -46,8 +46,8 @@ function throwsSyntax(f: () => any): string {
 out.push(throwsSyntax(() => new RegExp("a", "q")));
 out.push(throwsSyntax(() => new RegExp("a", "gg")));
 out.push(throwsSyntax(() => new RegExp("a", "uv")));
-// v-mode class set operations are refused rather than silently mis-matched.
-out.push(throwsSyntax(() => new RegExp("[\\p{L}--[a-z]]", "v")));
+// v-mode class set operations are evaluated, not mis-read as a plain class.
+out.push(new RegExp("^[\\p{L}--[a-z]]$", "v").test("a") ? "bad" : "ok");
 out.push(new RegExp("a", "dv").flags === "dv" ? "ok" : "bad");
 
 out.join("|");

@@ -2233,6 +2233,20 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, 
 				l.readChar()
 			}
 
+			// RegularExpressionFlags is IdentifierPart*, so the flags run on
+			// through digits, '$', non-ASCII identifier characters and
+			// \u escapes - none of which is ever a valid flag (an escape is an
+			// early error even when it spells one).
+			if next, _ := utf8.DecodeRuneInString(l.input[l.position:]); l.ch == '\\' || l.ch == '$' ||
+				isDigit(l.ch) || (next >= utf8.RuneSelf && isUnicodeIDContinue(next)) {
+				l.position = savedPosition
+				l.readPosition = savedReadPosition
+				l.ch = savedCh
+				l.line = savedLine
+				l.column = savedColumn
+				return "", "", false, true
+			}
+
 			// Validate flags - check for duplicates and invalid flags
 			flagsStr := flagsBuilder.String()
 			seenFlags := make(map[byte]bool)
@@ -2274,7 +2288,7 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, 
 			return patternBuilder.String(), flagsStr, true, true
 		}
 
-		if l.ch == 0 { // EOF
+		if l.ch == 0 && l.position >= len(l.input) { // EOF (a NUL is an ordinary pattern character)
 			// Backtrack on EOF
 			l.position = savedPosition
 			l.readPosition = savedReadPosition
@@ -2309,26 +2323,14 @@ func (l *Lexer) readRegexLiteral() (pattern string, flags string, success bool, 
 			}
 		}
 
-		// Check for lone surrogates (U+D800-U+DFFF)
-		// In UTF-8, surrogates are encoded as: ED [A0-BF] [80-BF]
-		// ECMAScript forbids lone surrogates in regex patterns
-		if l.ch == 0xED && l.readPosition+1 < len(l.input) {
-			if l.input[l.readPosition] >= 0xA0 && l.input[l.readPosition] <= 0xBF {
-				// This is a lone surrogate - return error (foundComplete=true means it's a syntax error)
-				l.position = savedPosition
-				l.readPosition = savedReadPosition
-				l.ch = savedCh
-				l.line = savedLine
-				l.column = savedColumn
-				return "", "", false, true // Lone surrogate in regex (syntax error)
-			}
-		}
+		// A lone surrogate (reaching here as its 3-byte WTF-8 form, from
+		// eval of a string) is an ordinary RegularExpressionChar.
 
 		if l.ch == '\\' { // Handle escape sequences
 			patternBuilder.WriteByte('\\')
 			l.readChar() // Consume the backslash
 
-			if l.ch == 0 { // EOF after backslash
+			if l.ch == 0 && l.position >= len(l.input) { // EOF after backslash
 				// Backtrack on EOF after backslash
 				l.position = savedPosition
 				l.readPosition = savedReadPosition
