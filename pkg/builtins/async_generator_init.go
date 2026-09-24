@@ -34,128 +34,39 @@ func (g *AsyncGeneratorInitializer) InitTypes(ctx *TypeContext) error {
 func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
-	objectProto := vmInstance.ObjectPrototype
-	asyncGeneratorProto := vm.NewObject(objectProto).AsPlainObject()
-
-	// next(value?) - Returns Promise that resolves to next yielded value
-	asyncGeneratorProto.SetOwnNonEnumerable("next", vm.NewNativeFunction(1, false, "next", func(args []vm.Value) (vm.Value, error) {
-		thisValue := vmInstance.GetThis()
-		if thisValue.Type() != vm.TypeAsyncGenerator {
-			return vm.Undefined, vmInstance.NewTypeError("Method AsyncGenerator.prototype.next called on incompatible receiver")
-		}
-		thisGen := thisValue.AsAsyncGenerator()
-
-		// If generator is completed, return resolved promise with { value: undefined, done: true }
-		if thisGen.Done || thisGen.State == vm.GeneratorCompleted {
-			result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-			result.SetOwnNonEnumerable("value", vm.Undefined)
-			result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-			resultVal := vm.NewValueFromPlainObject(result)
-			return vmInstance.NewResolvedPromise(resultVal), nil
-		}
-
-		// Get the sent value (argument to .next())
-		sentValue := vm.Undefined
-		if len(args) > 0 {
-			sentValue = args[0]
-		}
-
-		// For now, treat AsyncGenerator like a regular Generator
-		// ExecuteGenerator works with GeneratorObject, so we need to cast
-		// This is a simplification - proper implementation would need separate ExecuteAsyncGenerator
-		genObj := &vm.GeneratorObject{
-			Function:     thisGen.Function,
-			State:        thisGen.State,
-			Frame:        thisGen.Frame,
-			YieldedValue: thisGen.YieldedValue,
-			ReturnValue:  thisGen.ReturnValue,
-			Done:         thisGen.Done,
-			Args:         thisGen.Args,
-			This:         thisGen.This, // BUGFIX: Copy the 'this' value so method context works
-		}
-
-		result, err := vmInstance.ExecuteGenerator(genObj, sentValue)
-
-		// Sync back the state
-		thisGen.State = genObj.State
-		thisGen.Frame = genObj.Frame
-		thisGen.YieldedValue = genObj.YieldedValue
-		thisGen.ReturnValue = genObj.ReturnValue
-		thisGen.Done = genObj.Done
-
-		if err != nil {
-			// Async generators convert exceptions to rejected promises
-			// Mark as completed since async generators don't resume after exception
-			thisGen.State = vm.GeneratorCompleted
-			thisGen.Done = true
-			thisGen.Frame = nil // OK for async - won't resume
-
-			// Clear recorded errors since we're handling the exception by returning a rejected promise
-			// This prevents "Uncaught exception" from being printed when the exception is actually caught
-			vmInstance.ClearErrors()
-
-			// Extract exception value and wrap in rejected promise
-			return vmInstance.NewRejectedPromise(vmInstance.ExceptionValueFromError(err)), nil
-		}
-
-		return vmInstance.NewResolvedPromise(result), nil
-	}))
-
-	// return(value?) - Returns Promise that resolves to force generator completion
-	asyncGeneratorProto.SetOwnNonEnumerable("return", vm.NewNativeFunction(1, false, "return", func(args []vm.Value) (vm.Value, error) {
-		thisValue := vmInstance.GetThis()
-		if thisValue.Type() != vm.TypeAsyncGenerator {
-			return vm.Undefined, vmInstance.NewTypeError("Method AsyncGenerator.prototype.return called on incompatible receiver")
-		}
-		thisGen := thisValue.AsAsyncGenerator()
-
-		returnValue := vm.Undefined
-		if len(args) > 0 {
-			returnValue = args[0]
-		}
-		thisGen.ReturnValue = returnValue
-		thisGen.State = vm.GeneratorCompleted
-		thisGen.Done = true
-		thisGen.Frame = nil
-
-		// Return a promise that resolves to { value: returnValue, done: true }
-		result := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-		result.SetOwnNonEnumerable("value", returnValue)
-		result.SetOwnNonEnumerable("done", vm.BooleanValue(true))
-		resultVal := vm.NewValueFromPlainObject(result)
-
-		return vmInstance.NewResolvedPromise(resultVal), nil
-	}))
-
-	// throw(exception?) - Returns Promise that may reject based on generator handling
-	asyncGeneratorProto.SetOwnNonEnumerable("throw", vm.NewNativeFunction(1, false, "throw", func(args []vm.Value) (vm.Value, error) {
-		thisValue := vmInstance.GetThis()
-		if thisValue.Type() != vm.TypeAsyncGenerator {
-			return vm.Undefined, vmInstance.NewTypeError("Method AsyncGenerator.prototype.throw called on incompatible receiver")
-		}
-		thisGen := thisValue.AsAsyncGenerator()
-
-		exception := vm.Undefined
-		if len(args) > 0 {
-			exception = args[0]
-		}
-
-		// If generator is completed, return rejected promise
-		if thisGen.Done || thisGen.State == vm.GeneratorCompleted {
-			return vmInstance.NewRejectedPromise(exception), nil
-		}
-
-		// For now, just reject - proper implementation would throw into the generator
-		return vmInstance.NewRejectedPromise(exception), nil
-	}))
-
-	// Add Symbol.asyncIterator - async generators are their own async iterators
-	// Set asyncGeneratorProto[Symbol.asyncIterator] = function() { return this; }
+	// %AsyncIteratorPrototype% (27.1.3): [Symbol.asyncIterator]() returns
+	// this, and [Symbol.asyncDispose]() calls return().
+	asyncIteratorProto := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 	asyncIteratorMethod := vm.NewNativeFunction(0, false, "[Symbol.asyncIterator]", func(args []vm.Value) (vm.Value, error) {
 		return vmInstance.GetThis(), nil
 	})
-	// Use DefineOwnPropertyByKey with symbol key (like generators do with Symbol.iterator)
-	asyncGeneratorProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolAsyncIterator), asyncIteratorMethod, nil, nil, nil)
+	wTrue, eFalse, cTrue := true, false, true
+	asyncIteratorProto.DefineOwnPropertyByKey(vm.NewSymbolKey(SymbolAsyncIterator), asyncIteratorMethod, &wTrue, &eFalse, &cTrue)
+	if vmInstance.SymbolAsyncDispose.Type() == vm.TypeSymbol {
+		asyncDispose := vm.NewNativeFunction(0, false, "[Symbol.asyncDispose]", func(args []vm.Value) (vm.Value, error) {
+			return vmInstance.AsyncIteratorDispose(vmInstance.GetThis()), nil
+		})
+		asyncIteratorProto.DefineOwnPropertyByKey(vm.NewSymbolKey(vmInstance.SymbolAsyncDispose), asyncDispose, &wTrue, &eFalse, &cTrue)
+	}
+	vmInstance.AsyncIteratorPrototype = vm.NewValueFromPlainObject(asyncIteratorProto)
+
+	asyncGeneratorProto := vm.NewObject(vmInstance.AsyncIteratorPrototype).AsPlainObject()
+
+	argOrUndefined := func(args []vm.Value) vm.Value {
+		if len(args) > 0 {
+			return args[0]
+		}
+		return vm.Undefined
+	}
+	asyncGeneratorProto.SetOwnNonEnumerable("next", vm.NewNativeFunction(1, false, "next", func(args []vm.Value) (vm.Value, error) {
+		return vmInstance.AsyncGeneratorNext(vmInstance.GetThis(), argOrUndefined(args)), nil
+	}))
+	asyncGeneratorProto.SetOwnNonEnumerable("return", vm.NewNativeFunction(1, false, "return", func(args []vm.Value) (vm.Value, error) {
+		return vmInstance.AsyncGeneratorReturn(vmInstance.GetThis(), argOrUndefined(args)), nil
+	}))
+	asyncGeneratorProto.SetOwnNonEnumerable("throw", vm.NewNativeFunction(1, false, "throw", func(args []vm.Value) (vm.Value, error) {
+		return vmInstance.AsyncGeneratorThrow(vmInstance.GetThis(), argOrUndefined(args)), nil
+	}))
 
 	// Add AsyncGenerator.prototype[@@toStringTag] = "AsyncGenerator"
 	// Per ECMAScript 25.5.1.5: writable: false, enumerable: false, configurable: true
@@ -179,6 +90,10 @@ func (g *AsyncGeneratorInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Per ECMAScript: AsyncGeneratorFunction.prototype.prototype === AsyncGenerator.prototype
 	w, e, c := false, false, false // writable=false, enumerable=false, configurable=false
 	asyncGeneratorFunctionProto.DefineOwnProperty("prototype", vmInstance.AsyncGeneratorPrototype, &w, &e, &c)
+	// AsyncGenerator.prototype.constructor is %AsyncGeneratorFunction.prototype%
+	// (27.6.1.1): { writable: false, enumerable: false, configurable: true }.
+	ctorW, ctorE, ctorC := false, false, true
+	asyncGeneratorProto.DefineOwnProperty("constructor", vm.NewValueFromPlainObject(asyncGeneratorFunctionProto), &ctorW, &ctorE, &ctorC)
 
 	// Add AsyncGeneratorFunction.prototype[@@toStringTag] = "AsyncGeneratorFunction"
 	// Per ECMAScript 25.4.3.4: writable: false, enumerable: false, configurable: true

@@ -341,7 +341,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			// Store the arguments and 'this' value for when the generator starts
 			genObj.Args = make([]Value, len(args))
 			copy(genObj.Args, args)
-			genObj.This = thisValue
+			genObj.This = vm.ordinaryCallBindThis(calleeFunc, thisValue)
 
 			// Execute generator prologue synchronously (parameter initialization)
 			// Only execute if prologue hasn't been run yet (state is GeneratorStart)
@@ -367,12 +367,10 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			// The spec says the generator object is created after FunctionDeclarationInstantiation,
 			// which means default parameter expressions can modify .prototype before it's read.
 			// Read from closure's Properties first (shadows Fn.Properties), then fall back to Fn.Properties.
-			prototypeVal := Undefined
-			if calleeClosure.Properties != nil && calleeClosure.Properties.HasOwn("prototype") {
-				prototypeVal, _ = calleeClosure.Properties.GetOwn("prototype")
-			} else if calleeFunc.Properties != nil && calleeFunc.Properties.HasOwn("prototype") {
-				prototypeVal, _ = calleeFunc.Properties.GetOwn("prototype")
-			}
+			// GetPrototypeWithVM creates the lazily-materialized .prototype
+			// (inheriting from %AsyncGeneratorPrototype%) if nothing has read
+			// it yet, as the sync generator path below does.
+			prototypeVal := calleeClosure.GetPrototypeWithVM(vm)
 
 			// If .prototype is an object, use it as the generator's prototype
 			// Otherwise, use the default AsyncGeneratorPrototype
@@ -399,7 +397,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			// We'll need to pass these when ExecuteGenerator is called
 			genObj.Args = make([]Value, len(args))
 			copy(genObj.Args, args)
-			genObj.This = thisValue
+			genObj.This = vm.ordinaryCallBindThis(calleeFunc, thisValue)
 
 			// Execute generator prologue synchronously (parameter initialization)
 			// Only execute if prologue hasn't been run yet (state is GeneratorStart)
@@ -450,7 +448,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			// This check has to happen here, ahead of the IsArrowFunction
 			// branch below, because the async path returns early without
 			// ever reaching it (see paserati#199).
-			asyncThis := thisValue
+			asyncThis := vm.ordinaryCallBindThis(calleeFunc, thisValue)
 			if calleeFunc.IsArrowFunction {
 				asyncThis = calleeClosure.CapturedThis
 			}
@@ -500,22 +498,7 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 			// - In strict mode, 'this' is passed as-is (undefined stays undefined)
 			// - In sloppy mode, undefined/null 'this' is coerced to the global object
 			// - In sloppy mode, primitive 'this' is auto-boxed via ToObject
-			if !calleeFunc.Chunk.IsStrict {
-				switch thisValue.Type() {
-				case TypeUndefined, TypeNull:
-					newFrame.thisValue = NewValueFromPlainObject(vm.GlobalObject)
-				case TypeFloatNumber, TypeIntegerNumber:
-					newFrame.thisValue = vm.NewNumberObject(thisValue.ToFloat())
-				case TypeString:
-					newFrame.thisValue = vm.NewStringObject(thisValue.ToString())
-				case TypeBoolean:
-					newFrame.thisValue = vm.NewBooleanObject(thisValue.AsBoolean())
-				default:
-					newFrame.thisValue = thisValue
-				}
-			} else {
-				newFrame.thisValue = thisValue
-			}
+			newFrame.thisValue = vm.ordinaryCallBindThis(calleeFunc, thisValue)
 		}
 		// Set [[HomeObject]] for super property access
 		// Arrow functions inherit homeObject from their enclosing scope
@@ -826,4 +809,25 @@ func (vm *VM) ExceptionValueFromError(err error) Value {
 		return ee.GetExceptionValue()
 	}
 	return NewString(err.Error())
+}
+
+// ordinaryCallBindThis is OrdinaryCallBindThis for a non-arrow function: a
+// strict function gets thisValue as is; a sloppy one gets the global object
+// for undefined/null and a wrapper object for a primitive.
+func (vm *VM) ordinaryCallBindThis(fn *FunctionObject, thisValue Value) Value {
+	if fn.Chunk.IsStrict {
+		return thisValue
+	}
+	switch thisValue.Type() {
+	case TypeUndefined, TypeNull:
+		return NewValueFromPlainObject(vm.GlobalObject)
+	case TypeFloatNumber, TypeIntegerNumber:
+		return vm.NewNumberObject(thisValue.ToFloat())
+	case TypeString:
+		return vm.NewStringObject(thisValue.ToString())
+	case TypeBoolean:
+		return vm.NewBooleanObject(thisValue.AsBoolean())
+	default:
+		return thisValue
+	}
 }

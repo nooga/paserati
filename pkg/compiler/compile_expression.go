@@ -4023,6 +4023,13 @@ func (c *Compiler) compileYieldExpression(node *parser.YieldExpression, hint Reg
 		c.emitLoadUndefined(valueReg, node.Token.Line)
 	}
 
+	// In an async generator, `yield v` yields Await(v).
+	if c.isAsync && c.isGenerator {
+		c.emitOpCode(vm.OpAwait, node.Token.Line)
+		c.emitByte(byte(valueReg))
+		c.emitByte(byte(valueReg))
+	}
+
 	// 2. Emit OpYield instruction with both input and output registers
 	// The VM will suspend execution, yield the value, and store sent value in hint register
 	c.emitOpCode(vm.OpYield, node.Token.Line)
@@ -4077,8 +4084,11 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 		return BadRegister, err
 	}
 
-	// 2. Get the Symbol.iterator or Symbol.asyncIterator method (depending on context)
-	// Per spec: async generators try asyncIterator first, fall back to iterator if undefined
+	if c.isAsync && c.isGenerator {
+		return c.compileAsyncYieldDelegation(iterableReg, hint, node.Token.Line), nil
+	}
+
+	// 2. Get the Symbol.iterator method
 	symbolObjReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, symbolObjReg)
 	symIdx := c.GetOrAssignGlobalIndex("Symbol")
@@ -4087,58 +4097,7 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 	iteratorMethodReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, iteratorMethodReg)
 
-	if c.isAsync && c.isGenerator {
-		// Async generator: try asyncIterator, fall back to iterator
-		// asyncIteratorKey = Symbol.asyncIterator
-		asyncPropNameReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, asyncPropNameReg)
-		c.emitLoadNewConstant(asyncPropNameReg, vm.String("asyncIterator"), node.Token.Line)
-		asyncIteratorKeyReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, asyncIteratorKeyReg)
-		c.emitOpCode(vm.OpGetIndex, node.Token.Line)
-		c.emitByte(byte(asyncIteratorKeyReg))
-		c.emitByte(byte(symbolObjReg))
-		c.emitByte(byte(asyncPropNameReg))
-
-		// method = iterable[asyncIteratorKey]
-		c.emitOpCode(vm.OpGetIndex, node.Token.Line)
-		c.emitByte(byte(iteratorMethodReg))
-		c.emitByte(byte(iterableReg))
-		c.emitByte(byte(asyncIteratorKeyReg))
-
-		// if method === undefined, fall back to Symbol.iterator
-		checkReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, checkReg)
-		c.emitLoadUndefined(checkReg, node.Token.Line)
-		cmpReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, cmpReg)
-		c.emitOpCode(vm.OpEqual, node.Token.Line)
-		c.emitByte(byte(cmpReg))
-		c.emitByte(byte(iteratorMethodReg))
-		c.emitByte(byte(checkReg))
-
-		// Jump past fallback if asyncIterator was defined
-		skipFallbackJump := c.emitPlaceholderJump(vm.OpJumpIfFalse, cmpReg, node.Token.Line)
-
-		// Fallback: use Symbol.iterator
-		syncPropNameReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, syncPropNameReg)
-		c.emitLoadNewConstant(syncPropNameReg, vm.String("iterator"), node.Token.Line)
-		syncIteratorKeyReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, syncIteratorKeyReg)
-		c.emitOpCode(vm.OpGetIndex, node.Token.Line)
-		c.emitByte(byte(syncIteratorKeyReg))
-		c.emitByte(byte(symbolObjReg))
-		c.emitByte(byte(syncPropNameReg))
-
-		c.emitOpCode(vm.OpGetIndex, node.Token.Line)
-		c.emitByte(byte(iteratorMethodReg))
-		c.emitByte(byte(iterableReg))
-		c.emitByte(byte(syncIteratorKeyReg))
-
-		// Patch the jump
-		c.patchJump(skipFallbackJump)
-	} else {
+	{
 		// Sync generator: use Symbol.iterator
 		propNameReg := c.regAlloc.Alloc()
 		tempRegs = append(tempRegs, propNameReg)
@@ -4191,17 +4150,6 @@ func (c *Compiler) compileYieldDelegation(node *parser.YieldExpression, hint Reg
 	resultReg := c.regAlloc.Alloc()
 	tempRegs = append(tempRegs, resultReg)
 	c.emitCallMethod(resultReg, nextMethodReg, iteratorReg, 1, node.Token.Line)
-
-	// For async generators: iterator.next() returns Promise<IteratorResult>
-	// We must await it per ECMAScript spec §27.6.3.8
-	if c.isAsync && c.isGenerator {
-		awaitedResultReg := c.regAlloc.Alloc()
-		tempRegs = append(tempRegs, awaitedResultReg)
-		c.emitOpCode(vm.OpAwait, node.Token.Line)
-		c.emitByte(byte(awaitedResultReg)) // Where to store awaited value
-		c.emitByte(byte(resultReg))        // Promise to await
-		resultReg = awaitedResultReg       // Use awaited result going forward
-	}
 
 	// Validate that iterator result is an object (required by ECMAScript spec)
 	// Per §27.5.3.7 step 7: If Type(innerResult) is not Object, throw a TypeError exception.

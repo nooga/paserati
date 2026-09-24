@@ -518,6 +518,20 @@ type GeneratorObject struct {
 	DelegationResult      Value           // Result value when delegation completed via external throw/return with done:true
 	DelegationResultReady bool            // Flag indicating DelegationResult is set (needed because result could be undefined)
 	Properties            *PlainObject    // Own properties side table, see OwnPropertiesTable (paserati#529)
+
+	// Async generator state (async_generator.go). isAsync marks an
+	// AsyncGeneratorObject; asyncAwaiting is the promise the body is parked
+	// on after an OpAwait (nil when suspended at a yield or not running).
+	isAsync       bool
+	asyncAwaiting *PromiseObject
+	asyncState    asyncGenState
+	asyncQueue    []asyncGenRequest
+	asyncPending  asyncGenPending
+	// asyncDelegating is set while a yield* runs; asyncDelegate is its inner
+	// iterator and asyncDelegateNext the cached next method.
+	asyncDelegating   bool
+	asyncDelegate     Value
+	asyncDelegateNext Value
 }
 
 type AsyncGeneratorObject GeneratorObject
@@ -903,6 +917,7 @@ func NewAsyncGenerator(function Value) Value {
 		YieldedValue: Undefined,
 		ReturnValue:  Undefined,
 		Done:         false,
+		isAsync:      true,
 	}
 	return Value{typ: TypeAsyncGenerator, obj: unsafe.Pointer(genObj)}
 }

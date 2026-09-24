@@ -293,6 +293,7 @@ type VM struct {
 	IntlSegmenterPrototype        Value // %Intl.Segmenter.prototype%
 	GeneratorPrototype            Value
 	AsyncGeneratorPrototype       Value
+	AsyncIteratorPrototype        Value // %AsyncIteratorPrototype%
 	IteratorPrototype             Value // %Iterator.prototype% - base for all iterators
 	IteratorHelperPrototype       Value // %IteratorHelperPrototype% - for iterator helper objects (map, filter, etc.)
 	WrapForValidIteratorPrototype Value // For Iterator.from() wrapped iterators
@@ -320,6 +321,7 @@ type VM struct {
 	ArrayConstructor    Value
 	ObjectConstructor   Value
 	FunctionConstructor Value
+	PromiseConstructor  Value // %Promise%, used by PromiseResolve in Await
 
 	// Well-known symbols (stored as singletons)
 	SymbolIterator           Value
@@ -976,6 +978,7 @@ func (vm *VM) syncPrototypesFromRealm() {
 	vm.GeneratorPrototype = r.GeneratorPrototype
 	vm.GeneratorFunctionPrototype = r.GeneratorFunctionPrototype
 	vm.AsyncGeneratorPrototype = r.AsyncGeneratorPrototype
+	vm.AsyncIteratorPrototype = r.AsyncIteratorPrototype
 	vm.AsyncGeneratorFunctionPrototype = r.AsyncGeneratorFunctionPrototype
 	vm.AsyncFunctionPrototype = r.AsyncFunctionPrototype
 
@@ -1021,6 +1024,7 @@ func (vm *VM) syncPrototypesFromRealm() {
 	vm.ArrayConstructor = r.ArrayConstructor
 	vm.ObjectConstructor = r.ObjectConstructor
 	vm.FunctionConstructor = r.FunctionConstructor
+	vm.PromiseConstructor = r.PromiseConstructor
 
 	// Intrinsics
 	vm.ThrowTypeErrorFunc = r.ThrowTypeErrorFunc
@@ -1074,6 +1078,7 @@ func (vm *VM) SyncPrototypesToRealm() {
 	r.GeneratorPrototype = vm.GeneratorPrototype
 	r.GeneratorFunctionPrototype = vm.GeneratorFunctionPrototype
 	r.AsyncGeneratorPrototype = vm.AsyncGeneratorPrototype
+	r.AsyncIteratorPrototype = vm.AsyncIteratorPrototype
 	r.AsyncGeneratorFunctionPrototype = vm.AsyncGeneratorFunctionPrototype
 	r.AsyncFunctionPrototype = vm.AsyncFunctionPrototype
 
@@ -1119,6 +1124,7 @@ func (vm *VM) SyncPrototypesToRealm() {
 	r.ArrayConstructor = vm.ArrayConstructor
 	r.ObjectConstructor = vm.ObjectConstructor
 	r.FunctionConstructor = vm.FunctionConstructor
+	r.PromiseConstructor = vm.PromiseConstructor
 
 	// Intrinsics
 	r.ThrowTypeErrorFunc = vm.ThrowTypeErrorFunc
@@ -16258,6 +16264,41 @@ startExecution:
 			// Return the iterator result as-is (don't wrap it)
 			return InterpretOK, iterResult
 
+		case OpAsyncYieldStar:
+			// OpAsyncYieldStar outputReg, iterReg, nextReg: park the async
+			// generator; agDelegate (async_generator.go) runs the delegation.
+			outputReg := code[ip]
+			iterReg := code[ip+1]
+			nextReg := code[ip+2]
+			ip += 3
+			genObj := frame.generatorObj
+			if genObj == nil || !genObj.isAsync {
+				status := vm.runtimeError("OpAsyncYieldStar outside an async generator")
+				return status, Undefined
+			}
+			vm.saveGeneratorFrame(genObj, frame, registers, ip, ip-3, outputReg)
+			genObj.State = GeneratorSuspendedYield
+			genObj.asyncDelegating = true
+			genObj.asyncDelegate = registers[iterReg]
+			genObj.asyncDelegateNext = registers[nextReg]
+			return InterpretOK, Undefined
+
+		case OpAsyncFromSyncIterator:
+			destReg := code[ip]
+			srcReg := code[ip+1]
+			ip += 2
+			frame.ip = ip
+			wrapped, err := vm.CreateAsyncFromSyncIterator(registers[srcReg])
+			if err != nil {
+				vm.throwFromCallError(err)
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
+				}
+				goto reloadFrame
+			}
+			registers = frame.registers
+			registers[destReg] = wrapped
+
 		case OpResumeGenerator:
 			// OpResumeGenerator is used internally to resume generator execution
 			// This should not be directly encountered in normal execution
@@ -16282,18 +16323,32 @@ startExecution:
 					funcName, resultReg, promiseReg, awaitedValue.TypeName(), awaitedValue.Inspect())
 			}
 
-			// JavaScript allows awaiting non-promises - they resolve immediately
-			if awaitedValue.Type() != TypePromise {
-				// Non-promise value - just store it and continue
-				registers[resultReg] = awaitedValue
-				if debugAsyncAwait {
-					fmt.Printf("[AWAIT-DEBUG] non-promise fast path: stored %s in R%d\n", awaitedValue.Inspect(), resultReg)
+			// Await step 2: PromiseResolve(%Promise%, value). A non-promise
+			// (thenables included) is wrapped in a fresh promise, so awaiting
+			// it still takes a tick and a thenable's `then` runs in a job.
+			// Reading `constructor` / `then` may run user code and throw,
+			// which throws at the await.
+			frame.ip = ip
+			awaitedPromise, awaitErr := vm.awaitPromiseResolve(awaitedValue)
+			if awaitErr != nil {
+				vm.throwFromCallError(awaitErr)
+				if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					return InterpretRuntimeError, vm.currentException
 				}
-				continue
+				goto reloadFrame
 			}
+			registers = frame.registers
 
-			// Get the promise object
-			awaitedPromise := awaitedValue.AsPromise()
+			// Async generator body: park the generator frame (as a yield
+			// would) and let the async generator driver resume it once the
+			// promise settles.
+			if frame.promiseObj == nil && frame.generatorObj != nil && frame.generatorObj.isAsync {
+				genObj := frame.generatorObj
+				vm.saveGeneratorFrame(genObj, frame, registers, ip, ip-2, resultReg)
+				genObj.State = GeneratorSuspendedYield
+				genObj.asyncAwaiting = awaitedPromise
+				return InterpretOK, Undefined
+			}
 
 			// Per ECMAScript spec, await ALWAYS suspends and schedules resumption as microtask
 			// even when the promise is already settled

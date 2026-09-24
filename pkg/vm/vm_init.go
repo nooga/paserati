@@ -559,10 +559,11 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 		// newTarget whose .prototype is one) would pass it and then have its
 		// pointer reinterpreted by AsPlainObject. Same guard as
 		// property_helpers.go's per-kind cases.
+		// Recurse rather than a raw Get so an inherited accessor (e.g. a
+		// `constructor` getter on Promise.prototype, observable through
+		// PromiseResolve) runs with this = receiver.
 		if proto := vm.PrototypeOf(obj); proto.Type() == TypeObject {
-			if v, ok := proto.AsPlainObject().Get(propName); ok {
-				return v, nil
-			}
+			return vm.getPropertyWithReceiver(proto, propName, receiver)
 		}
 		return Undefined, nil
 
@@ -1349,9 +1350,16 @@ func (vm *VM) getSymbolPropertyWithReceiver(obj Value, sym Value, receiver Value
 		}
 		return Undefined, nil
 
-	case TypeGenerator:
-		if vm.GeneratorPrototype.IsObject() {
-			v, _, err := vm.walkPlainObjectChainForKey(vm.GeneratorPrototype, key, receiver)
+	case TypeGenerator, TypeAsyncGenerator:
+		// Own side-table properties, then the per-instance [[Prototype]]
+		// (the generator function's .prototype, not the intrinsic).
+		if props := OwnPropertiesTable(obj); props != nil {
+			if v, ok, err := vm.getOwnFromTableByKey(props, key, receiver); ok || err != nil {
+				return v, err
+			}
+		}
+		if proto := vm.PrototypeOf(obj); proto.Type() == TypeObject {
+			v, _, err := vm.walkPlainObjectChainForKey(proto, key, receiver)
 			return v, err
 		}
 		return Undefined, nil

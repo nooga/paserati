@@ -6,6 +6,10 @@
 // no-typecheck
 
 class APIPromise extends Promise {
+    // The constructor ignores its executor, so it cannot serve as the
+    // species constructor for then() (NewPromiseCapability would throw a
+    // TypeError, as in other engines); derived promises are plain Promises.
+    static get [Symbol.species]() { return Promise; }
     constructor(client, responsePromise, parseResponse) {
         super((resolve) => { resolve(null); });
         this.responsePromise = responsePromise;

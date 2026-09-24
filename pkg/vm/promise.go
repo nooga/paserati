@@ -198,25 +198,7 @@ func (vm *VM) NewPromiseFromExecutor(executor Value) (Value, error) {
 	// Set up prototype chain later when PromisePrototype is available
 	promiseVal := Value{typ: TypePromise, obj: promiseToUnsafe(promise)}
 
-	// Create resolve function
-	resolve := NewNativeFunction(1, false, "resolve", func(args []Value) (Value, error) {
-		value := Undefined
-		if len(args) > 0 {
-			value = args[0]
-		}
-		vm.resolvePromise(promise, value)
-		return Undefined, nil
-	})
-
-	// Create reject function
-	reject := NewNativeFunction(1, false, "reject", func(args []Value) (Value, error) {
-		reason := Undefined
-		if len(args) > 0 {
-			reason = args[0]
-		}
-		vm.rejectPromise(promise, reason)
-		return Undefined, nil
-	})
+	resolve, reject := vm.CreateResolvingFunctions(promise)
 
 	// Call executor(resolve, reject)
 	if executor.IsCallable() {
@@ -230,7 +212,9 @@ func (vm *VM) NewPromiseFromExecutor(executor Value) (Value, error) {
 			} else {
 				reason = NewString(err.Error())
 			}
-			vm.rejectPromise(promise, reason)
+			// Through the reject function, so a throw after resolve() is ignored.
+			vm.ClearUnwindingState()
+			_, _ = vm.Call(reject, Undefined, []Value{reason})
 			// vm.Call itself now clears vm.unwinding when it hands an
 			// exception off as a Go error (#142 - see the comment in
 			// executeUserFunctionSafe). It deliberately does NOT clear
@@ -291,37 +275,11 @@ func (vm *VM) resolvePromise(promise *PromiseObject, value Value) {
 		return
 	}
 
-	// Handle promise resolution with thenable chaining
-	if value.Type() == TypePromise {
-		otherPromise := value.AsPromise()
-		if otherPromise == nil {
-			if promise.trySettle(PromiseFulfilled, value) {
-				vm.triggerPromiseReactions(promise, true)
-			}
-			return
-		}
-
-		otherState, otherResult := otherPromise.snapshot()
-		switch otherState {
-		case PromiseFulfilled:
-			if promise.trySettle(PromiseFulfilled, otherResult) {
-				vm.triggerPromiseReactions(promise, true)
-			}
-		case PromiseRejected:
-			vm.rejectPromise(promise, otherResult)
-		default: // Pending: chain to it
-			vm.addPromiseReaction(value, true, func(v Value) {
-				vm.resolvePromise(promise, v)
-			})
-			vm.addPromiseReaction(value, false, func(r Value) {
-				vm.rejectPromise(promise, r)
-			})
-		}
-		return
-	}
-
 	// Steps 8-12: an object (functions included) with a callable `then` is a
 	// thenable and must be assimilated, not used as the fulfillment value.
+	// Native promises are no exception: their `then` is looked up and called
+	// in a job like any other thenable's, which is observable both through a
+	// patched `then` and through the extra ticks it takes.
 	// Reading `then` happens here, synchronously, so a plain object with no
 	// `then` still fulfills on this tick; only the CALL is deferred to a
 	// microtask, which is NewPromiseResolveThenableJob.
@@ -355,31 +313,79 @@ func (vm *VM) resolvePromise(promise *PromiseObject, value Value) {
 // throw from `then` rejects, but only if nothing has settled the promise yet.
 func (vm *VM) scheduleThenableJob(promise *PromiseObject, thenable Value, then Value) {
 	vm.GetAsyncRuntime().ScheduleMicrotask(func() {
-		resolve := NewNativeFunction(1, false, "", func(args []Value) (Value, error) {
-			v := Undefined
-			if len(args) > 0 {
-				v = args[0]
-			}
-			vm.resolvePromise(promise, v)
-			return Undefined, nil
-		})
-		reject := NewNativeFunction(1, false, "", func(args []Value) (Value, error) {
-			r := Undefined
-			if len(args) > 0 {
-				r = args[0]
-			}
-			vm.rejectPromise(promise, r)
-			return Undefined, nil
-		})
+		resolve, reject := vm.CreateResolvingFunctions(promise)
 		if _, err := vm.Call(then, thenable, []Value{resolve, reject}); err != nil {
 			reason := NewString(err.Error())
 			if ee, ok := err.(ExceptionError); ok {
 				reason = ee.GetExceptionValue()
 			}
 			vm.ClearUnwindingState()
-			vm.rejectPromise(promise, reason)
+			// Through the reject function, so a throw after resolve() is ignored.
+			_, _ = vm.Call(reject, Undefined, []Value{reason})
 		}
 	})
+}
+
+// CreateResolvingFunctions (27.2.1.3) returns the resolve/reject pair for p.
+// They share [[AlreadyResolved]]: once either has been called - even by a
+// resolve with a thenable that has not settled p yet - both are no-ops.
+func (vm *VM) CreateResolvingFunctions(p *PromiseObject) (resolve, reject Value) {
+	alreadyResolved := false
+	resolve = NewNativeFunction(1, false, "", func(args []Value) (Value, error) {
+		if alreadyResolved {
+			return Undefined, nil
+		}
+		alreadyResolved = true
+		v := Undefined
+		if len(args) > 0 {
+			v = args[0]
+		}
+		vm.resolvePromise(p, v)
+		return Undefined, nil
+	})
+	reject = NewNativeFunction(1, false, "", func(args []Value) (Value, error) {
+		if alreadyResolved {
+			return Undefined, nil
+		}
+		alreadyResolved = true
+		r := Undefined
+		if len(args) > 0 {
+			r = args[0]
+		}
+		vm.rejectPromise(p, r)
+		return Undefined, nil
+	})
+	return resolve, reject
+}
+
+// PerformPromiseThen (27.2.5.4.1) registers onFulfilled/onRejected on p;
+// each reaction job settles the result capability through its resolve or
+// reject function. capResolve/capReject may be Undefined for no capability.
+func (vm *VM) PerformPromiseThen(p *PromiseObject, onFulfilled, onRejected, capResolve, capReject Value) {
+	settle := func(fn Value) func(Value) {
+		return func(v Value) {
+			if !fn.IsCallable() {
+				return
+			}
+			if _, err := vm.Call(fn, Undefined, []Value{v}); err != nil {
+				vm.ClearUnwindingState()
+			}
+		}
+	}
+	handler := func(h Value) Value {
+		if h.IsCallable() {
+			return h
+		}
+		return Undefined
+	}
+	fulfill := PromiseReaction{Handler: handler(onFulfilled), Resolve: settle(capResolve), Reject: settle(capReject)}
+	reject := PromiseReaction{Handler: handler(onRejected), Resolve: settle(capResolve), Reject: settle(capReject)}
+	if p.addReaction(true, fulfill) == PromiseFulfilled {
+		vm.triggerPromiseReactions(p, true)
+	}
+	if p.addReaction(false, reject) == PromiseRejected {
+		vm.triggerPromiseReactions(p, false)
+	}
 }
 
 // rejectPromise rejects a promise with a reason. Safe to call from any

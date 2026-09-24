@@ -316,6 +316,17 @@ const (
 	// variable number of items), ruling out OpArrayCopy's compile-time offset.
 	OpArrayAppendRaw OpCode = 179 // Rx Ry: Rx.elements = append(Rx.elements, Ry); Rx.length++
 
+	// --- Async iteration ---
+	// OpAsyncFromSyncIterator wraps the sync iterator in Ry as
+	// CreateAsyncFromSyncIterator does (reading its next method), for
+	// for-await and yield* over an iterable with no Symbol.asyncIterator.
+	OpAsyncFromSyncIterator OpCode = 180 // Rx Ry: Rx = CreateAsyncFromSyncIterator(Ry)
+	// OpAsyncYieldStar suspends an async generator for yield*: the async
+	// generator driver runs the delegation over the iterator in IterReg
+	// (next method in NextReg) and resumes the body with the result, or with
+	// a throw/return completion, storing a normal result in OutputReg.
+	OpAsyncYieldStar OpCode = 181 // OutputReg IterReg NextReg
+
 	// --- Accessor Property Support ---
 	OpDefineAccessor        OpCode = 80 // ObjReg GetterReg SetterReg NameIdx(16bit): Define accessor property on object
 	OpDefineAccessorDynamic OpCode = 84 // ObjReg GetterReg SetterReg NameReg: Define accessor property with dynamic name
@@ -686,6 +697,10 @@ func (op OpCode) String() string {
 		return "OpArrayCopy"
 	case OpArrayAppendRaw:
 		return "OpArrayAppendRaw"
+	case OpAsyncFromSyncIterator:
+		return "OpAsyncFromSyncIterator"
+	case OpAsyncYieldStar:
+		return "OpAsyncYieldStar"
 	case OpDefineAccessor:
 		return "OpDefineAccessor"
 	case OpDefineAccessorDynamic:
@@ -1268,6 +1283,10 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerRegisterInstruction(builder, instruction.String(), offset)
 	case OpArrayAppendRaw:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset)
+	case OpAsyncFromSyncIterator:
+		return c.registerRegisterInstruction(builder, instruction.String(), offset)
+	case OpAsyncYieldStar:
+		return c.registerRegisterRegisterInstruction(builder, instruction.String(), offset)
 	case OpObjectSpread:
 		return c.registerRegisterInstruction(builder, instruction.String(), offset)
 
