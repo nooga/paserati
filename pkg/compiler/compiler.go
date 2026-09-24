@@ -984,6 +984,20 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 	// No need to re-assign c.typeChecker here, it was already set or created.
 	// --- End Type Checking Step ---
 
+	// Module code has early errors of its own, which must be reported before
+	// any import is loaded (a parse-phase SyntaxError, not a link failure).
+	moduleGoal := c.isModuleGoal()
+	if moduleGoal {
+		c.errors = nil
+		c.checkModuleEarlyErrors(program)
+		if len(c.errors) == 0 {
+			c.checkModuleLinking(program)
+		}
+		if len(c.errors) > 0 {
+			return nil, c.errors
+		}
+	}
+
 	// Rewrite `using` declarations into try/finally dispose blocks. Runs after
 	// type checking so the checker sees the original declarations.
 	lowerUsingDeclarations(program)
@@ -1055,13 +1069,15 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 	// --- Determine strict mode ---
 	// TypeScript mode (type checking enabled): default to strict mode
 	// JavaScript mode (type checking disabled or skipped): respect "use strict" directive or inherited strict mode
+	c.chunk.IsModule = moduleGoal
 	if !c.ignoreTypeErrors && !c.skipTypeCheck {
 		// TypeScript mode - always strict
 		c.chunk.IsStrict = true
 		debugPrintf("[Compile] TypeScript mode - enabling strict mode by default\n")
 	} else {
 		// JavaScript mode - check for inherited strict mode (from eval context) first
-		if c.inheritedStrictMode {
+		if c.inheritedStrictMode || moduleGoal {
+			// Module code is always strict code.
 			c.chunk.IsStrict = true
 		} else {
 			// Check for "use strict" directive in the directive prologue
@@ -1209,6 +1225,10 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 				}
 				for _, name := range classNames {
 					c.moduleBindings.TopLevelDeclNames[name] = true
+					// Reserve the index too, so a strict-mode assignment to
+					// the class binding from a hoisted function compiled
+					// ahead of the class (module code is strict) finds it.
+					c.GetOrAssignGlobalIndex(c.moduleGlobalKey(name))
 				}
 			}
 		}
@@ -2436,35 +2456,42 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		return hint, nil
 
 	case *parser.DynamicImportExpression:
-		// Compile the module specifier expression
+		// The specifier, then the options, are evaluated before import()
+		// does anything else (an abrupt completion there throws).
 		specifierReg := c.regAlloc.Alloc()
 		defer c.regAlloc.Free(specifierReg)
-
 		specifierReg, err := c.compileNode(node.Source, specifierReg)
 		if err != nil {
 			return nilRegister, err
 		}
-
-		// Emit dynamic import instruction
-		// For now, this will load the module synchronously (simplified implementation)
-		// TODO: Implement proper Promise-based async loading
-		c.emitDynamicImport(hint, specifierReg, node.Token.Line)
+		optionsReg := specifierReg
+		flags := vm.ImportPhaseEvaluation
+		if node.Options != nil {
+			optionsReg = c.regAlloc.Alloc()
+			defer c.regAlloc.Free(optionsReg)
+			optionsReg, err = c.compileNode(node.Options, optionsReg)
+			if err != nil {
+				return nilRegister, err
+			}
+			flags |= vm.DynamicImportHasOptions
+		}
+		c.emitDynamicImport(hint, specifierReg, optionsReg, flags, node.Token.Line)
 		return hint, nil
 
 	case *parser.DeferredImportExpression:
-		// Compile the module specifier expression
 		specifierReg := c.regAlloc.Alloc()
 		defer c.regAlloc.Free(specifierReg)
-
 		specifierReg, err := c.compileNode(node.Source, specifierReg)
 		if err != nil {
 			return nilRegister, err
 		}
-
-		// Emit deferred import instruction
-		// For now, treat it the same as dynamic import (simplified implementation)
-		// TODO: Implement proper deferred loading semantics
-		c.emitDynamicImport(hint, specifierReg, node.Token.Line)
+		phase := vm.ImportPhaseDefer
+		if node.Phase == "source" {
+			phase = vm.ImportPhaseSource
+		}
+		// FIXME: import.defer() evaluates the module eagerly; deferred
+		// evaluation (on first namespace access) is not implemented.
+		c.emitDynamicImport(hint, specifierReg, specifierReg, phase, node.Token.Line)
 		return hint, nil
 
 	case *parser.PrivateIdentifier:
@@ -4614,7 +4641,22 @@ func (c *Compiler) compileImportDeclaration(node *parser.ImportDeclaration, hint
 	}
 
 	// Generate OpEvalModule to ensure the module is loaded and executed
-	// Only emit if this module hasn't been processed yet
+	// Only emit if this module hasn't been processed yet. A deferred import
+	// (import defer * as ns) leaves evaluation to the first use of ns.
+	if node.IsDeferred {
+		// The asynchronous parts of the deferred module's graph (modules
+		// with top-level await) are still evaluated now, since evaluating
+		// them later could not be synchronous.
+		for _, spec := range c.asyncModulesOfDeferredImport(sourceModulePath) {
+			c.emitEvalModule(spec, node.Token.Line)
+		}
+		for _, spec := range node.Specifiers {
+			if ns, ok := spec.(*parser.ImportNamespaceSpecifier); ok && ns.Local != nil {
+				c.processImportBinding(ns.Local.Value, sourceModulePath, deferredNamespaceImport, ImportNamespaceRef)
+			}
+		}
+		return BadRegister, nil
+	}
 	if !c.processedModules[sourceModulePath] {
 		debugPrintf("// [Compiler] Generating OpEvalModule for import from: %s\n", sourceModulePath)
 		c.emitEvalModule(sourceModulePath, node.Token.Line)
@@ -4892,8 +4934,42 @@ func (c *Compiler) compileExportDefaultDeclaration(node *parser.ExportDefaultDec
 
 	debugPrintf("// [Compiler] Processing default export\n")
 
-	// Compile the default export expression
-	resultReg, err := c.compileNode(node.Declaration, hint)
+	// Compile the default export expression. A named function declaration
+	// was hoisted as a module binding, so the export takes that binding's
+	// value; an anonymous function or class is named "default".
+	var resultReg Register
+	var err errors.PaseratiError
+	switch d := node.Declaration.(type) {
+	case *parser.FunctionLiteral:
+		if d.Name != nil && node.IsDeclaration {
+			resultReg, err = c.compileNode(d.Name, hint)
+		} else if d.Name == nil {
+			funcConstIndex, freeSymbols, compileErr := c.compileFunctionLiteral(d, "default")
+			if compileErr != nil {
+				return BadRegister, compileErr
+			}
+			resultReg = c.regAlloc.Alloc()
+			c.emitClosure(resultReg, funcConstIndex, d, freeSymbols)
+		} else {
+			resultReg, err = c.compileNode(d, hint)
+		}
+	case *parser.ArrowFunctionLiteral:
+		funcConstIndex, freeSymbols, compileErr := c.compileArrowFunctionWithName(d, "default")
+		if compileErr != nil {
+			return BadRegister, compileErr
+		}
+		resultReg = c.regAlloc.Alloc()
+		c.emitClosureGeneric(resultReg, funcConstIndex, d.Token.Line, &parser.Identifier{Token: d.Token, Value: "default"}, freeSymbols, true)
+	case *parser.ClassExpression:
+		if d.Name == nil {
+			// Same inferred-name convention as object literal properties: the
+			// prefix names the class without creating an inner binding.
+			d.Name = &parser.Identifier{Token: d.Token, Value: "__Inferred__default"}
+		}
+		resultReg, err = c.compileNode(d, hint)
+	default:
+		resultReg, err = c.compileNode(node.Declaration, hint)
+	}
 	if err != nil {
 		return BadRegister, err
 	}
@@ -5277,7 +5353,9 @@ func (c *Compiler) emitImportResolve(destReg Register, importName string, line i
 	// Get the import reference for this name
 	if importRef, exists := c.moduleBindings.ImportedNames[importName]; exists {
 		// Handle namespace imports specially
-		if importRef.ImportType == ImportNamespaceRef && importRef.SourceName == "*" {
+		if importRef.ImportType == ImportNamespaceRef && importRef.SourceName == deferredNamespaceImport {
+			c.emitCreateDeferredNamespace(destReg, importRef.SourceModule, line)
+		} else if importRef.ImportType == ImportNamespaceRef && importRef.SourceName == "*" {
 			debugPrintf("// [Compiler] emitImportResolve: Handling namespace import for '%s'\n", importName)
 			// For namespace imports, we need to create the namespace object from module exports
 			// TODO: This might need special handling for namespace creation
@@ -5347,6 +5425,19 @@ func (c *Compiler) emitLoadJSONModule(modulePath string, line int) {
 	// JSON modules use the same loading mechanism as regular modules
 	// The VM will detect that it's a JSON module and handle it appropriately
 	c.emitEvalModule(modulePath, line)
+}
+
+// deferredNamespaceImport is the import name recorded for an
+// `import defer * as ns` binding.
+const deferredNamespaceImport = "*defer*"
+
+// emitCreateDeferredNamespace loads a module's deferred namespace.
+func (c *Compiler) emitCreateDeferredNamespace(destReg Register, modulePath string, line int) {
+	modulePathIdx := c.chunk.AddConstant(vm.String(c.canonicalModulePath(modulePath)))
+	c.emitOpCode(vm.OpCreateDeferredNamespace, line)
+	c.emitByte(byte(destReg))
+	c.emitByte(byte(modulePathIdx >> 8))
+	c.emitByte(byte(modulePathIdx & 0xFF))
 }
 
 // emitCreateNamespace generates bytecode to create a namespace object from module exports

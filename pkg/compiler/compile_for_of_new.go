@@ -370,7 +370,10 @@ func (c *Compiler) compileForOfStatementLabeled(node *parser.ForOfStatement, lab
 		switch target := exprStmt.Expression.(type) {
 		case *parser.Identifier:
 			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(target.Value)
-			if !found {
+			if !found && c.isImportBinding(target.Value) {
+				// Import bindings are immutable.
+				c.emitConstAssignmentError(target.Value, node.Token.Line)
+			} else if !found {
 				// Variable not found in any scope
 				// A name that already has a global slot - including this module's own
 				// not-yet-compiled top-level declaration, see unresolvedGlobalKey - is

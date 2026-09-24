@@ -251,6 +251,12 @@ func (mb *ModuleBindings) IsImported(name string) bool {
 	return exists
 }
 
+// isImportBinding reports whether an identifier that resolved to no local
+// binding names one of this module's import bindings.
+func (c *Compiler) isImportBinding(name string) bool {
+	return c.IsModuleMode() && c.moduleBindings.IsImported(name)
+}
+
 // IsExported checks if a name is an exported binding
 func (mb *ModuleBindings) IsExported(name string) bool {
 	if name == "default" && mb.DefaultExport != nil {

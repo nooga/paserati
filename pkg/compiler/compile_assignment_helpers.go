@@ -209,6 +209,9 @@ func (c *Compiler) assignToDestructuringTargetRef(ref *DestructuringTargetRef, v
 					c.emitMove(ref.Symbol.Register, valueReg, line)
 				}
 			}
+		} else if c.isImportBinding(ref.SymbolName) {
+			// Import bindings are immutable.
+			c.emitConstAssignmentError(ref.SymbolName, line)
 		} else if ref.IsGlobal {
 			c.emitSetGlobal(ref.GlobalIdx, valueReg, line)
 		} else {

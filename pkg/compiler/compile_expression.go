@@ -799,7 +799,11 @@ func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint R
 			lvalueKind = lvalueIdentifier
 			// Resolve identifier and determine if local or upvalue
 			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(argNode.Value)
-			if !found {
+			if !found && c.isImportBinding(argNode.Value) {
+				// Import bindings are immutable.
+				c.emitConstAssignmentError(argNode.Value, line)
+				return hint, nil
+			} else if !found {
 				// Variable not found in symbol table
 				// In JavaScript mode, treat as potential global variable (will throw ReferenceError at runtime if doesn't exist)
 				// In TypeScript mode, this is a compile error
