@@ -5331,7 +5331,11 @@ func objectGetOwnPropertyDescriptorWithVM(vmInstance *vm.VM, args []vm.Value) (v
 			var targetConfigurable bool
 			if target.Type() == vm.TypeObject {
 				targetObj := target.AsPlainObject()
-				_, _, _, targetConfigurable, targetDescFound = targetObj.GetOwnDescriptor(propName)
+				if keyIsSymbol {
+					_, _, _, targetConfigurable, targetDescFound = targetObj.GetOwnDescriptorByKey(vm.NewSymbolKey(propSym))
+				} else {
+					_, _, _, targetConfigurable, targetDescFound = targetObj.GetOwnDescriptor(propName)
+				}
 			} else if target.Type() == vm.TypeArray {
 				arrObj := target.AsArray()
 				if propName == "length" {

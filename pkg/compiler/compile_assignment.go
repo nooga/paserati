@@ -249,6 +249,16 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 			// Regular identifier - resolve the identifier
 			symbolRef, definingTable, found := c.currentSymbolTable.Resolve(lhsNode.Value)
 
+			// An import binding is immutable: assigning to it is a TypeError
+			// (after the right-hand side is evaluated).
+			if !found && c.isImportBinding(lhsNode.Value) {
+				if _, err := c.compileNode(node.Value, hint); err != nil {
+					return BadRegister, err
+				}
+				c.emitConstAssignmentError(lhsNode.Value, line)
+				return hint, nil
+			}
+
 			// Check for const assignment - emit TypeError at runtime
 			if found && symbolRef.IsConst {
 				c.emitConstAssignmentError(lhsNode.Value, line)
@@ -1584,6 +1594,8 @@ func (c *Compiler) compileArrayDestructuringAssignment(node *parser.ArrayDestruc
 								c.emitMove(identSymbol.Register, restArrayReg, line)
 							}
 						}
+					} else if c.isImportBinding(targetNode.Value) {
+						c.emitConstAssignmentError(targetNode.Value, line)
 					} else if key := c.unresolvedGlobalKey(targetNode.Value); c.chunk.IsStrict && !c.GlobalExists(key) {
 						c.emitStrictUnresolvableReferenceError(targetNode.Value, line)
 					} else {
@@ -1832,6 +1844,11 @@ func (c *Compiler) compileIdentifierAssignment(identTarget *parser.Identifier, v
 
 	// Resolve the identifier to determine how to store it
 	symbol, definingTable, found := c.currentSymbolTable.Resolve(identTarget.Value)
+	if !found && c.isImportBinding(identTarget.Value) {
+		// Import bindings are immutable.
+		c.emitConstAssignmentError(identTarget.Value, line)
+		return nil
+	}
 	if !found {
 		// Variable not found in any scope. In strict mode an unresolvable
 		// reference is a ReferenceError per ECMAScript spec; a name that already

@@ -5,8 +5,9 @@
 // (not just no-typecheck): the checker's own checkExportAllDeclaration
 // already populates export names when it runs at all, so only fully
 // skipping the checker exercises the AST-harvesting fallback this test
-// is actually guarding.
-import { foo, Bar, q, default as maybeDefault } from "./export_star_helper_b.ts";
+// is actually guarding. (Importing `default` by name from it would be a
+// link-time SyntaxError, so the namespace is what shows it is absent.)
+import { foo, Bar, q } from "./export_star_helper_b.ts";
 import * as ns from "./export_star_helper_b.ts";
 
 [
@@ -14,5 +15,5 @@ import * as ns from "./export_star_helper_b.ts";
   foo(),
   new Bar().baz(),
   q,
-  typeof maybeDefault,
+  typeof ns.default,
 ].join(",");

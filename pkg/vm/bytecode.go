@@ -297,7 +297,7 @@ const (
 
 	// --- Module Support ---
 	OpLoadImportMeta OpCode = 96 // Rx: Load 'import.meta' object from current module context into register Rx
-	OpDynamicImport  OpCode = 97 // Rx SpecifierReg: Dynamically import module at runtime (specifier in SpecifierReg), store namespace in Rx
+	OpDynamicImport  OpCode = 97 // Rx SpecifierReg OptionsReg Flags: import() the module named in SpecifierReg (phase and whether OptionsReg holds options in Flags), store the promise in Rx
 
 	// --- Large Literal Support ---
 	OpAllocArray OpCode = 77 // Rx Len(16bit): Preallocate array of length Len into Rx, filled with undefined
@@ -326,6 +326,7 @@ const (
 	// (next method in NextReg) and resumes the body with the result, or with
 	// a throw/return completion, storing a normal result in OutputReg.
 	OpAsyncYieldStar OpCode = 181 // OutputReg IterReg NextReg
+	OpCreateDeferredNamespace OpCode = 182 // Rx ModulePathIdx: the module's deferred (import defer) namespace, store in Rx
 
 	// --- Accessor Property Support ---
 	OpDefineAccessor        OpCode = 80 // ObjReg GetterReg SetterReg NameIdx(16bit): Define accessor property on object
@@ -663,6 +664,8 @@ func (op OpCode) String() string {
 		return "OpGetModuleExport"
 	case OpCreateNamespace:
 		return "OpCreateNamespace"
+	case OpCreateDeferredNamespace:
+		return "OpCreateDeferredNamespace"
 
 	// --- Arguments Object ---
 	case OpGetArguments:
@@ -863,6 +866,7 @@ type Chunk struct {
 	BuiltinGlobalNames     []string
 	GlobalNames            []string
 	IsStrict               bool             // Whether this chunk runs in strict mode
+	IsModule               bool             // A module's top-level code (its top-level this is undefined)
 	HasSimpleParameterList bool             // True if all params are plain identifiers (no defaults, rest, or destructuring)
 	ScopeDesc              *ScopeDescriptor // Scope info for direct eval (nil if not needed)
 	MaxRegs                int              // Maximum registers needed to execute this chunk
@@ -1428,6 +1432,8 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 		return c.registerConstantConstantInstruction(builder, "OpGetModuleExport", offset)
 	case OpCreateNamespace:
 		return c.registerConstantInstruction(builder, "OpCreateNamespace", offset, true)
+	case OpCreateDeferredNamespace:
+		return c.registerConstantInstruction(builder, "OpCreateDeferredNamespace", offset, true)
 
 	// --- Arguments Object ---
 	case OpGetArguments:
@@ -1454,7 +1460,7 @@ func (c *Chunk) disassembleInstruction(builder *strings.Builder, offset int) int
 	case OpLoadImportMeta:
 		return c.loadThisInstruction(builder, instruction.String(), offset) // Same format as OpLoadThis: one register operand
 	case OpDynamicImport:
-		return c.registerRegisterInstruction(builder, "OpDynamicImport", offset) // Rx SpecifierReg
+		return c.registerRegisterRegisterRegisterInstruction(builder, "OpDynamicImport", offset) // Rx SpecifierReg OptionsReg Flags
 
 	// --- Large Literal Support ---
 	case OpAllocArray:

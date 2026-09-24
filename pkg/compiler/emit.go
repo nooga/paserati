@@ -386,10 +386,12 @@ func (c *Compiler) emitLoadImportMeta(dest Register, line int) {
 // emitDynamicImport emits OpDynamicImport to dynamically import a module at runtime
 // dest: register to store the imported module namespace
 // specifierReg: register containing the module specifier string
-func (c *Compiler) emitDynamicImport(dest Register, specifierReg Register, line int) {
+func (c *Compiler) emitDynamicImport(dest Register, specifierReg Register, optionsReg Register, flags byte, line int) {
 	c.emitOpCode(vm.OpDynamicImport, line)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(specifierReg))
+	c.emitByte(byte(optionsReg))
+	c.emitByte(flags)
 }
 
 // emitGetArguments emits OpGetArguments to create arguments object from current function arguments

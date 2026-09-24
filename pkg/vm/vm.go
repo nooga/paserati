@@ -466,6 +466,9 @@ type VM struct {
 
 	// Module system (Phase 5)
 	moduleContexts    map[string]*ModuleContext // Cached module contexts by path
+	// deferredNamespaces caches each module's `import defer` namespace, by
+	// module context key.
+	deferredNamespaces map[string]Value
 	moduleLoader      ModuleLoader              // Reference to module loader for loading modules
 	currentModulePath string                    // Currently executing module path (for module-scoped globals)
 	importMetaBaseDir string                    // FS resolver base dir; relative module paths Abs against this
@@ -1519,6 +1522,9 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	if vm.hasEvalCallerThis {
 		// Direct eval: inherit 'this' from caller
 		frame.thisValue = vm.evalCallerThis
+	} else if chunk.IsModule {
+		// A module's top-level this is undefined.
+		frame.thisValue = Undefined
 	} else {
 		// Normal script: align with JS semantics: top-level this is global object in non-strict script
 		// Use globalThis if available, otherwise undefined
@@ -3387,6 +3393,12 @@ startExecution:
 						}
 						pv := cur.GetPrototype()
 						if !pv.IsObject() {
+							break
+						}
+						if pv.Type() != TypeObject {
+							// A prototype that is not a plain object (a Proxy, an
+							// array, ...) answers through the general walk.
+							hasProperty = vm.hasPropertyByKeyFromPrototypeChain(pv, NewSymbolKey(propVal))
 							break
 						}
 						cur = pv.AsPlainObject()
@@ -14029,155 +14041,13 @@ startExecution:
 		case OpDynamicImport:
 			destReg := code[ip]
 			specifierReg := code[ip+1]
-			ip += 2
-
-			// Save current frame state
+			optionsReg := code[ip+2]
+			flags := code[ip+3]
+			ip += 4
 			frame.ip = ip
 
-			// Dynamic import MUST return a Promise per ECMAScript spec
-			// Create a Promise that will be resolved with the module namespace or rejected with an error
-			baseObj := NewObject(vm.PromisePrototype).AsPlainObject()
-			promiseObj := &PromiseObject{
-				Object:           baseObj.Object,
-				State:            PromisePending,
-				Result:           Undefined,
-				FulfillReactions: []PromiseReaction{},
-				RejectReactions:  []PromiseReaction{},
-			}
-			promiseVal := Value{typ: TypePromise, obj: unsafe.Pointer(promiseObj)}
-
-			// Get the module specifier from the register
-			// Per ECMAScript spec, import() calls ToString(specifier) which involves ToPrimitive
-			// If ToString throws (IfAbruptRejectPromise), reject the promise instead of propagating
-			specifierValue := registers[specifierReg]
-			var specifier string
-
-			// For objects, call toString() directly and handle errors
-			if specifierValue.IsObject() || specifierValue.IsCallable() {
-				var toStringMethod Value
-				if ok, _, _ := vm.opGetProp(nil, 0, &specifierValue, "toString", &toStringMethod); ok {
-					if toStringMethod.IsCallable() {
-						// Save state before calling
-						savedFrameCount := vm.frameCount
-						savedRegMark := vm.regDir.mark()
-						savedUnwinding := vm.unwinding
-						savedCurrentException := vm.currentException
-
-						result, err := vm.Call(toStringMethod, specifierValue, nil)
-
-						// Check for exception
-						if err != nil || vm.unwinding {
-							// Capture the exception before resetting state
-							var exceptionVal Value
-							if vm.currentException != Null {
-								exceptionVal = vm.currentException
-							} else if ee, ok := err.(ExceptionError); ok {
-								exceptionVal = ee.GetExceptionValue()
-							} else if err != nil {
-								exceptionVal = NewString(err.Error())
-							}
-
-							// Restore state to prevent unwinding
-							vm.frameCount = savedFrameCount
-							vm.regDir.popTo(savedRegMark)
-							vm.unwinding = savedUnwinding
-							vm.currentException = savedCurrentException
-
-							// Reject promise with the exception
-							vm.rejectPromise(promiseObj, exceptionVal)
-							registers[destReg] = promiseVal
-							continue
-						}
-						specifier = result.ToString()
-					} else {
-						specifier = specifierValue.ToString()
-					}
-				} else {
-					specifier = specifierValue.ToString()
-				}
-			} else {
-				specifier = specifierValue.ToString()
-			}
-
-			// Execute the module using the standard module loading infrastructure
-			// This goes through the resolver chain (fs, virtual, data URLs, native modules)
-			//
-			// A relative specifier resolves against the module containing this
-			// import() call, which is not necessarily the module running right
-			// now: a function exported from dirA/user.mjs and called from
-			// main.mjs still imports "./_helper.mjs" from dirA/. The chunk
-			// records its module; pin the VM's current module to it while
-			// loading, then restore.
-			prevImportFrom := vm.currentModulePath
-			if mp := function.Chunk.ModulePath; mp != "" {
-				vm.currentModulePath = mp
-			}
-			status, moduleErrVal := vm.executeModule(specifier)
-			var ctxExists bool
-			var namespaceObj Value
-			if status == InterpretOK {
-				contextKey, _ := vm.moduleContextKey(specifier)
-				_, ctxExists = vm.moduleContexts[contextKey]
-				if ctxExists {
-					// The module's one cached [[Namespace]] - the same object
-					// every other import() and `import * as` of it gets
-					// (GetModuleNamespace). This used to build a fresh
-					// DictObject copy on every call (paserati#527).
-					namespaceObj = vm.createModuleNamespace(contextKey)
-				}
-			}
-			vm.currentModulePath = prevImportFrom
-			if status != InterpretOK {
-				// Module load failed - reject the promise with the error.
-				// Prefer the actual thrown value (moduleErrVal) as the rejection
-				// reason: per spec, ImportCall must reject with the module's own
-				// abrupt completion value (e.g. a real TypeError instance), not
-				// a generic Error synthesized from a flattened message string.
-				// executeModule clears vm.currentException internally for
-				// isolation before returning, so it must hand the original
-				// thrown value back through its own return value instead.
-				if moduleErrVal != Null && moduleErrVal != Undefined {
-					reason := moduleErrVal
-					// Drop the diagnostic-only entry vm.errors accumulated for
-					// this now-handled (rejected-as-a-promise) exception.
-					if len(vm.errors) > 0 {
-						vm.errors = vm.errors[:len(vm.errors)-1]
-					}
-					vm.rejectPromise(promiseObj, reason)
-				} else {
-					var errorMsg string
-					if len(vm.errors) > 0 {
-						lastErr := vm.errors[len(vm.errors)-1]
-						errorMsg = lastErr.Error()
-						vm.errors = vm.errors[:len(vm.errors)-1]
-					} else {
-						errorMsg = fmt.Sprintf("Failed to load module '%s'", specifier)
-					}
-					errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
-					errObj.SetOwn("name", NewString("Error"))
-					errObj.SetOwn("message", NewString(errorMsg))
-					vm.rejectPromise(promiseObj, NewValueFromPlainObject(errObj))
-				}
-				registers[destReg] = promiseVal
-				continue
-			}
-
-			// The module context (exports already collected above)
-			if !ctxExists {
-				errObj := NewObject(vm.ErrorPrototype).AsPlainObject()
-				errObj.SetOwn("name", NewString("Error"))
-				errObj.SetOwn("message", NewString(fmt.Sprintf("Module '%s' was loaded but context is missing", specifier)))
-				vm.rejectPromise(promiseObj, NewValueFromPlainObject(errObj))
-				registers[destReg] = promiseVal
-				continue
-			}
-
-			// Resolve the promise with the namespace object
-			vm.resolvePromise(promiseObj, namespaceObj)
-			registers[destReg] = promiseVal
-
-			// Restore frame state
-			frame.ip = ip
+			// Dynamic import returns a promise for the module namespace.
+			registers[destReg] = vm.dynamicImport(registers[specifierReg], registers[optionsReg], flags, function.Chunk.ModulePath)
 
 		case OpGetGlobal:
 			destReg := code[ip]
@@ -15892,6 +15762,18 @@ startExecution:
 			// Create namespace object from module exports
 			namespaceObj := vm.createModuleNamespace(modulePath)
 			frame.registers[destReg] = namespaceObj
+
+		case OpCreateDeferredNamespace:
+			// OpCreateDeferredNamespace: Rx ModulePathIdx - the module's
+			// `import defer` namespace (evaluates the module on first use)
+			destReg := code[ip]
+			modulePathIdx := uint16(code[ip+1])<<8 | uint16(code[ip+2])
+			ip += 3
+			if int(modulePathIdx) >= len(constants) || constants[modulePathIdx].Type() != TypeString {
+				return vm.runtimeError("Invalid module path for OpCreateDeferredNamespace"), Undefined
+			}
+			frame.ip = ip
+			frame.registers[destReg] = vm.createDeferredNamespace(constants[modulePathIdx].AsString())
 
 		case OpGetArguments:
 			// OpGetArguments: Rx - Create arguments object from current function arguments
@@ -17640,6 +17522,32 @@ startExecution:
 				if !success && function.Chunk.IsStrict {
 					frame.ip = ip
 					vm.ThrowTypeError("Cannot delete property '" + pk.debugName() + "' of " + obj.TypeName())
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
+						return InterpretRuntimeError, vm.currentException
+					}
+					goto reloadFrame
+				}
+			} else if obj.Type() == TypeProxy {
+				// [[Delete]] of a Proxy runs its deleteProperty trap, the same
+				// operation Reflect.deleteProperty performs.
+				frame.ip = ip
+				reflectObj, _ := vm.GetGlobal("Reflect")
+				deleteFn, _ := vm.GetProperty(reflectObj, "deleteProperty")
+				result, err := vm.Call(deleteFn, Undefined, []Value{obj, key})
+				if err != nil {
+					if ee, ok := err.(ExceptionError); ok {
+						vm.throwException(ee.GetExceptionValue())
+					} else {
+						vm.ThrowTypeError(err.Error())
+					}
+					if vm.frameCount == 0 || vm.unwindingCrossedNative {
+						return InterpretRuntimeError, vm.currentException
+					}
+					goto reloadFrame
+				}
+				success = result.IsTruthy()
+				if !success && function.Chunk.IsStrict {
+					vm.ThrowTypeError("'deleteProperty' on proxy: trap returned falsish for property '" + key.ToString() + "'")
 					if vm.frameCount == 0 || vm.unwindingCrossedNative {
 						return InterpretRuntimeError, vm.currentException
 					}
@@ -21502,7 +21410,17 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		// Check if the module had any errors during loading/compilation
 		if moduleErr := moduleRecord.GetError(); moduleErr != nil {
 			// fmt.Printf("// [VM] executeModule: Module '%s' has error: %v\n", modulePath, moduleErr)
-			return vm.runtimeErrorFrom(moduleErr, "Module '%s' failed to load: %s", modulePath, moduleErr.Error()), Undefined
+			status := vm.runtimeErrorFrom(moduleErr, "Module '%s' failed to load: %s", modulePath, moduleErr.Error())
+			// A module that is not valid source text or fails to link is a
+			// SyntaxError (import() rejects with one).
+			if isModuleSyntaxFailure(moduleErr) {
+				if n := len(vm.errors); n > 0 {
+					if re, ok := vm.errors[n-1].(*errors.RuntimeError); ok {
+						re.Resolution = true
+					}
+				}
+			}
+			return status, Undefined
 		}
 
 		// Contexts are keyed by resolved path, so a second spelling of the same
@@ -21845,6 +21763,28 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	}
 }
 
+// isModuleSyntaxFailure reports whether a module record's error comes down
+// to a parse, early or linking error (a SyntaxError), rather than a module
+// that could not be found or failed type checking. The innermost cause
+// decides: failing to load a dependency is only a SyntaxError when that
+// dependency was itself not valid source text or failed to link.
+func isModuleSyntaxFailure(err error) bool {
+	for err != nil {
+		u, ok := err.(interface{ Unwrap() error })
+		if !ok || u.Unwrap() == nil {
+			break
+		}
+		err = u.Unwrap()
+	}
+	switch e := err.(type) {
+	case *errors.SyntaxError, *errors.CompileError:
+		return true
+	case *errors.RuntimeError:
+		return e.Resolution
+	}
+	return false
+}
+
 // collectModuleExports collects exported values from a module's global table
 func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) {
 	if vm.moduleLoader == nil {
@@ -21900,6 +21840,9 @@ func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) 
 			val := vm.getModuleExport(re.SourceModule, re.SourceName)
 			if val.Type() != TypeUndefined {
 				moduleCtx.exports[exportName] = val
+			} else if _, ok := moduleCtx.exports[exportName]; !ok {
+				// A re-exported binding that holds undefined is still an export.
+				moduleCtx.exports[exportName] = Undefined
 			}
 		}
 		vm.currentModulePath = prevFrom

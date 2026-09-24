@@ -1,6 +1,25 @@
 package driver
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nooga/paserati/pkg/vm"
+)
+
+// runSloppyScript runs js as a (sloppy) Script - module code is strict, and
+// mapped arguments and arguments.callee only exist in sloppy functions - and
+// returns the global `result` it leaves once its jobs have run.
+func runSloppyScript(t *testing.T, p *Paserati, js string) vm.Value {
+	t.Helper()
+	if _, errs := p.RunCode(js, RunOptions{Script: true}); len(errs) > 0 {
+		t.Fatalf("RunCode failed: %v", errs[0])
+	}
+	result, errs := p.RunCode("result", RunOptions{Script: true})
+	if len(errs) > 0 {
+		t.Fatalf("reading result failed: %v", errs[0])
+	}
+	return result
+}
 
 // TestAsyncFunctionArgumentsLength reproduces the reported bug directly:
 // executeAsyncFunctionBody (pkg/vm/async.go) builds an async function's
@@ -53,13 +72,13 @@ func TestAsyncFunctionArgumentsIndexing(t *testing.T) {
 			return before && aliasedByArgWrite && aliasedByParamWrite;
 		}
 		async function extra(a) { return arguments[1]; }
-		const extraIndexed = (await extra(1, 2)) === 2;
-		(await f(1, 2)) && extraIndexed
+		var result;
+		(async function () {
+			const extraIndexed = (await extra(1, 2)) === 2;
+			result = (await f(1, 2)) && extraIndexed;
+		})();
 	`
-	result, errs := p.RunCode(js, RunOptions{})
-	if len(errs) > 0 {
-		t.Fatalf("RunCode failed: %v", errs[0])
-	}
+	result := runSloppyScript(t, p, js)
 	if !result.IsTruthy() {
 		t.Errorf("expected mapped and unmapped arguments indexing to hold in an async function, got %v", result.ToString())
 	}
@@ -78,18 +97,16 @@ func TestAsyncFunctionArgumentsCallee(t *testing.T) {
 
 	js := `
 		async function f(a) { return arguments.callee === f; }
-		const direct = await f(1);
-
 		async function g() { return arguments.callee.name; }
-		const bound = g.bind(null);
-		const boundNamesTarget = (await bound()) === "g";
-
-		direct && boundNamesTarget
+		var result;
+		(async function () {
+			const direct = await f(1);
+			const bound = g.bind(null);
+			const boundNamesTarget = (await bound()) === "g";
+			result = direct && boundNamesTarget;
+		})();
 	`
-	result, errs := p.RunCode(js, RunOptions{})
-	if len(errs) > 0 {
-		t.Fatalf("RunCode failed: %v", errs[0])
-	}
+	result := runSloppyScript(t, p, js)
 	if !result.IsTruthy() {
 		t.Errorf("expected arguments.callee to identify the original function for both direct and bound async calls, got %v", result.ToString())
 	}

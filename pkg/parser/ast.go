@@ -601,6 +601,7 @@ type DeferredImportExpression struct {
 	BaseExpression              // Embed base for ComputedType
 	Token          *lexer.Token // The lexer.IMPORT token
 	Source         Expression   // The module specifier expression
+	Phase          string       // "defer" or "source"
 }
 
 func (die *DeferredImportExpression) expressionNode()      {}
@@ -1987,6 +1988,7 @@ type ImportDeclaration struct {
 	Source     *StringLiteral    // From where ("./module")
 	IsTypeOnly bool              // true for "import type" statements
 	IsDeferred bool              // true for "import defer * as ns" statements
+	IsSource   bool              // true for "import source x" (source phase) statements
 	Attributes map[string]string // Import attributes (e.g., { type: "json" })
 }
 
@@ -2163,6 +2165,10 @@ func (end *ExportNamedDeclaration) String() string {
 type ExportDefaultDeclaration struct {
 	Token       *lexer.Token // The 'export' token
 	Declaration Expression   // The default export expression
+	// IsDeclaration is true for the `export default function/class ...`
+	// declaration forms (a named one binds its name in the module scope),
+	// false for `export default AssignmentExpression`.
+	IsDeclaration bool
 }
 
 func (edd *ExportDefaultDeclaration) statementNode()       {}

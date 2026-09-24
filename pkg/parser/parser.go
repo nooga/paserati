@@ -652,6 +652,13 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 					}
 				}
 			}
+			// `export default function F() {}` declares F like any other
+			// function declaration.
+			if exportDefault, ok := stmt.(*ExportDefaultDeclaration); ok && exportDefault != nil && exportDefault.IsDeclaration {
+				if funcLit, isFuncLit := exportDefault.Declaration.(*FunctionLiteral); isFuncLit && funcLit.Name != nil {
+					program.HoistedDeclarations[funcLit.Name.Value] = funcLit
+				}
+			}
 			// --- End Hoisting Check ---
 		}
 		if p.curToken.Type != lexer.EOF {
@@ -2600,9 +2607,17 @@ func (p *Parser) parseNewExpression() Expression {
 
 	// Move to the next token (constructor identifier/expression)
 	p.nextToken()
+	startsWithImport := p.curTokenIs(lexer.IMPORT)
 
 	// Parse the constructor expression (identifier, member expression, etc.)
 	ne.Constructor = p.parseExpression(CALL)
+
+	// An ImportCall is not a MemberExpression, so `new import(...)` (and
+	// `new import.defer(...)`/`new import.source(...)`) is a SyntaxError;
+	// `new import.meta` and `new (import(...))` are fine.
+	if startsWithImport && isImportCall(leftmostOperand(ne.Constructor)) {
+		p.addError(newToken, "SyntaxError: import() cannot be used with 'new'")
+	}
 
 	// Check for tagged template: new tag`template` -> new (tag`template`)
 	// Tagged templates should be part of the constructor, not the arguments
@@ -2673,12 +2688,17 @@ func (p *Parser) parseImportMetaExpression() Expression {
 				p.addError(importToken, "import."+importPhase+"() expects exactly one argument")
 				return nil
 			}
+			if _, isSpread := args[0].(*SpreadElement); isSpread {
+				p.addError(importToken, "SyntaxError: spread is not allowed in import."+importPhase+"()")
+				return nil
+			}
 
 			// Both defer and source use the same AST node for now (deferred import)
 			// They have similar semantics - loading modules in a deferred manner
 			return &DeferredImportExpression{
 				Token:  importToken,
 				Source: args[0],
+				Phase:  importPhase,
 			}
 		} else {
 			// Error: import. followed by something other than 'meta', 'defer', or 'source'
@@ -2705,6 +2725,9 @@ func (p *Parser) parseImportMetaExpression() Expression {
 		// Parse first argument (specifier) as AssignmentExpression
 		// Use ARG_SEPARATOR precedence to allow assignment but stop at commas
 		p.nextToken() // advance to first argument
+		if p.curTokenIs(lexer.SPREAD) {
+			p.addError(p.curToken, "SyntaxError: spread is not allowed in import()")
+		}
 		specifier := p.parseExpression(ARG_SEPARATOR)
 		if specifier == nil {
 			p.addError(p.curToken, "import() requires a module specifier argument")
@@ -2720,6 +2743,9 @@ func (p *Parser) parseImportMetaExpression() Expression {
 			// Check if there's a second argument (not just trailing comma)
 			if !p.peekTokenIs(lexer.RPAREN) {
 				p.nextToken()
+				if p.curTokenIs(lexer.SPREAD) {
+					p.addError(p.curToken, "SyntaxError: spread is not allowed in import()")
+				}
 				options = p.parseExpression(ARG_SEPARATOR)
 				if options == nil {
 					p.addError(p.curToken, "invalid import options expression")
@@ -11285,6 +11311,27 @@ func (p *Parser) parseImportDeclaration() *ImportDeclaration {
 		p.nextToken() // consume 'defer', now on '*'
 	}
 
+	// Source phase import: import source x from "module". `source` is
+	// contextual: `import source from "m"` is a default import named source,
+	// while `import source from from "m"` binds `from` in the source phase.
+	if !stmt.IsTypeOnly && !stmt.IsDeferred && p.curToken.Type == lexer.IDENT && p.curToken.Literal == "source" &&
+		isImportBindingName(p.peekToken.Type) && (p.peekToken.Type != lexer.FROM || p.peekTokenIs2(lexer.FROM)) {
+		stmt.IsSource = true
+		p.nextToken() // consume 'source', now on the binding
+		stmt.Specifiers = []ImportSpecifier{&ImportDefaultSpecifier{
+			Token: p.curToken,
+			Local: &Identifier{Token: p.curToken, Value: p.curToken.Literal},
+		}}
+		if !p.expectPeek(lexer.FROM) || !p.expectPeek(lexer.STRING) {
+			return nil
+		}
+		stmt.Source = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+		if p.peekToken.Type == lexer.SEMICOLON {
+			p.nextToken()
+		}
+		return stmt
+	}
+
 	// Check for bare import: import "module-name"
 	if p.curToken.Type == lexer.STRING {
 		// This is a bare import with no specifiers
@@ -11401,16 +11448,17 @@ func (p *Parser) parseImportAttributes() map[string]string {
 
 	for p.curToken.Type != lexer.RBRACE {
 		// Parse key (must be identifier, string, or certain keywords like 'type')
+		// AttributeKey is an IdentifierName (reserved words included) or a
+		// string literal.
 		var key string
-		if p.curToken.Type == lexer.IDENT {
+		if p.curToken.Type == lexer.STRING || p.isIdentifierNameToken(p.curToken) {
 			key = p.curToken.Literal
-		} else if p.curToken.Type == lexer.STRING {
-			key = p.curToken.Literal
-		} else if p.curToken.Type == lexer.TYPE {
-			// Allow 'type' keyword as attribute key
-			key = "type"
 		} else {
 			p.addError(p.curToken, fmt.Sprintf("Expected identifier or string for import attribute key, got %s", p.curToken.Type))
+			return nil
+		}
+		if _, dup := attributes[key]; dup {
+			p.addError(p.curToken, fmt.Sprintf("SyntaxError: Duplicate import attribute key '%s'", key))
 			return nil
 		}
 
@@ -11523,6 +11571,11 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 				// Default as alias: { default as alias }
 				imported = &Identifier{Token: p.curToken, Value: "default"}
 				importedToken = p.curToken
+			} else if p.isIdentifierNameToken(p.curToken) && p.peekToken.Type == lexer.AS {
+				// Any other IdentifierName, reserved words included, can name
+				// the export as long as it is renamed: { if as if_ }
+				imported = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+				importedToken = p.curToken
 			} else {
 				// Expected identifier, string, or default
 				p.addError(p.curToken, "Expected identifier, string literal, or 'default' in import specifier")
@@ -11578,7 +11631,7 @@ func (p *Parser) parseImportSpecifierList() []ImportSpecifier {
 			// Next specifier should be an identifier, contextual keyword, string,
 			// 'default', or 'type'.
 			if !isImportBindingName(p.curToken.Type) && p.curToken.Type != lexer.STRING &&
-				p.curToken.Type != lexer.DEFAULT {
+				p.curToken.Type != lexer.DEFAULT && !p.isIdentifierNameToken(p.curToken) {
 				p.addError(p.curToken, "Expected identifier, string literal, 'default', or 'type' in import specifier")
 				return nil
 			}
@@ -11692,10 +11745,11 @@ func (p *Parser) parseExportDeclaration() Statement {
 			ns.IsExported = true
 			return &ExportNamedDeclaration{Token: exportToken, Declaration: ns}
 		}
+		p.addError(p.curToken, "SyntaxError: Unexpected token '"+p.curToken.Literal+"' after export")
 		return nil
 
 	default:
-		// Should not reach here due to expectPeek checks above
+		p.addError(p.curToken, "SyntaxError: Unexpected token '"+p.curToken.Literal+"' after export")
 		return nil
 	}
 }
@@ -11704,19 +11758,43 @@ func (p *Parser) parseExportDeclaration() Statement {
 func (p *Parser) parseExportDefaultDeclaration(exportToken *lexer.Token) *ExportDefaultDeclaration {
 	stmt := &ExportDefaultDeclaration{Token: exportToken}
 
-	// Parse the default export expression
 	p.nextToken() // Move past 'default'
-	stmt.Declaration = p.parseExpression(LOWEST)
+
+	// `export default function ...` / `class ...` is a declaration: it ends at
+	// its closing brace, so `export default function() {}()` is not a call.
+	if p.curTokenIs(lexer.FUNCTION) || p.curTokenIs(lexer.CLASS) ||
+		(p.curTokenIs(lexer.ASYNC) && p.peekTokenIs(lexer.FUNCTION) && p.peekToken.Line == p.curToken.Line) {
+		stmt.Declaration = p.prefixParseFns[p.curToken.Type]()
+		if stmt.Declaration == nil {
+			return nil
+		}
+		stmt.IsDeclaration = true
+		if p.peekToken.Type == lexer.SEMICOLON {
+			p.nextToken()
+		}
+		return stmt
+	}
+
+	// Otherwise it is `export default AssignmentExpression ;`
+	stmt.Declaration = p.parseExpression(ARG_SEPARATOR)
 	if stmt.Declaration == nil {
 		return nil
 	}
-
-	// Optional semicolon
-	if p.peekToken.Type == lexer.SEMICOLON {
-		p.nextToken()
-	}
-
+	p.expectExportStatementEnd()
 	return stmt
+}
+
+// expectExportStatementEnd consumes an export statement's terminating
+// semicolon, reporting an error when none can be inserted automatically:
+// the next token must be ';', '}', EOF or start a new line.
+func (p *Parser) expectExportStatementEnd() {
+	switch {
+	case p.peekTokenIs(lexer.SEMICOLON):
+		p.nextToken()
+	case p.peekTokenIs(lexer.RBRACE), p.peekTokenIs(lexer.EOF), p.peekToken.Line > p.curToken.Line:
+	default:
+		p.addError(p.peekToken, "SyntaxError: Unexpected token '"+p.peekToken.Literal+"' after export declaration")
+	}
 }
 
 // parseExportAllDeclaration parses: export * from "module" or export * as name from "module" or export type * from "module"
@@ -11771,11 +11849,7 @@ func (p *Parser) parseExportAllDeclaration(exportToken *lexer.Token, isTypeOnly 
 		}
 	}
 
-	// Optional semicolon
-	if p.peekToken.Type == lexer.SEMICOLON {
-		p.nextToken()
-	}
-
+	p.expectExportStatementEnd()
 	return stmt
 }
 
@@ -11838,6 +11912,7 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken *lexer.To
 				Value: p.curToken.Literal,
 			}
 		}
+		p.expectExportStatementEnd()
 		return stmt
 	}
 
@@ -11903,6 +11978,7 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken *lexer.To
 					Value: p.curToken.Literal,
 				}
 			}
+			p.expectExportStatementEnd()
 			return stmt
 		}
 
@@ -11935,11 +12011,7 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken *lexer.To
 		}
 	}
 
-	// Optional semicolon
-	if p.peekToken.Type == lexer.SEMICOLON {
-		p.nextToken()
-	}
-
+	p.expectExportStatementEnd()
 	return stmt
 }
 
@@ -12212,4 +12284,31 @@ func (p *Parser) isSetterMethod() bool {
 	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.STRING) || p.peekTokenIs(lexer.NUMBER) ||
 		p.peekTokenIs(lexer.BIGINT) || p.peekTokenIs(lexer.LBRACKET) ||
 		p.isKeywordThatCanBeIdentifier(p.peekToken.Type)
+}
+
+// leftmostOperand follows member, index, call and tag chains down to the
+// expression the chain starts from.
+func leftmostOperand(e Expression) Expression {
+	for {
+		switch n := e.(type) {
+		case *MemberExpression:
+			e = n.Object
+		case *IndexExpression:
+			e = n.Left
+		case *CallExpression:
+			e = n.Function
+		case *TaggedTemplateExpression:
+			e = n.Tag
+		default:
+			return e
+		}
+	}
+}
+
+func isImportCall(e Expression) bool {
+	switch e.(type) {
+	case *DynamicImportExpression, *DeferredImportExpression:
+		return true
+	}
+	return false
 }
