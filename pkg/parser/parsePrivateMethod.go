@@ -35,7 +35,7 @@ func (p *Parser) parsePrivateMethod(isStatic bool) *MethodDefinition {
 		return nil
 	}
 
-	body := p.parseBlockStatement()
+	body := p.parseFunctionBody(parameters, restParameter, bodyMethod)
 	if body == nil {
 		return nil
 	}

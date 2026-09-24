@@ -76,6 +76,24 @@ type Parser struct {
 
 	// Strict mode tracking
 	strictMode bool // True when parsing strict mode code
+	// classBodyDepth counts enclosing class bodies; all class code is strict.
+	classBodyDepth int
+
+	// Function-context tracking for early errors. labels holds the labels
+	// enclosing the current statement within the current function body;
+	// functionDepth counts enclosing function bodies (return is legal when
+	// > 0); newTargetDepth counts enclosing non-arrow function bodies and
+	// class bodies (new.target is legal when > 0).
+	labels         []labelEntry
+	functionDepth  int
+	newTargetDepth int
+	// superPropertyDepth > 0 where `super.x` / `super[x]` is legal: method
+	// bodies and class bodies, and arrows within them.
+	superPropertyDepth  int
+	allowTopLevelReturn bool
+	// inSubStatement is set by parseSubStatement for the one parseStatement
+	// call that parses a single-statement body (if/loop/with/label).
+	inSubStatement bool
 
 	// Private names: one scope per class body being parsed, plus the names
 	// visible to a direct eval from its calling context. See
@@ -465,6 +483,30 @@ func (p *Parser) SetDisallowModuleSyntax(disallow bool) {
 	}
 }
 
+// SetAllowTopLevelReturn permits `return` outside any function. The
+// Function constructors use it: they compile their body as the top level of a
+// program that returns the function.
+func (p *Parser) SetAllowTopLevelReturn(allow bool) {
+	p.allowTopLevelReturn = allow
+}
+
+// SetAllowNewTarget permits new.target at the top level. Direct eval inside a
+// function uses it: the eval code sees the function's new.target.
+func (p *Parser) SetAllowNewTarget(allow bool) {
+	if allow {
+		p.newTargetDepth++
+	}
+}
+
+// SetAllowSuperProperty permits super property access at the top level.
+// Direct eval inside a function uses it: when that function is a method, the
+// eval code may reference its home object.
+func (p *Parser) SetAllowSuperProperty(allow bool) {
+	if allow {
+		p.superPropertyDepth++
+	}
+}
+
 // SetStrictMode sets whether the parser should operate in strict mode.
 // This is used for eval() to inherit strict mode from the calling context.
 func (p *Parser) SetStrictMode(strict bool) {
@@ -619,6 +661,8 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 		}
 	}
 
+	p.checkScriptScope(program.Statements)
+
 	return program, p.errors
 }
 
@@ -626,22 +670,29 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 
 func (p *Parser) parseStatement() Statement {
 	debugPrint("parseStatement: cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
+	inSubStatement := p.inSubStatement
+	p.inSubStatement = false
 	switch p.curToken.Type {
 	case lexer.LET:
-		// Check if this is actually a let declaration or just 'let' as an identifier
-		// If followed by [, {, or identifier ON THE SAME LINE, it's a declaration
-		// If there's a newline before the next token, ASI applies and 'let' is an identifier
-		// Per ECMAScript, ExpressionStatement has lookahead restriction for `let [` but NOT `let {`
-		// However, if there's a LineTerminator between `let` and `{`, ASI inserts a semicolon
+		// Check if this is actually a let declaration or just 'let' as an identifier.
+		// In a statement list, `let` followed by [, {, or an identifier starts a
+		// LexicalDeclaration even across a line break - the declaration parses
+		// without ASI, so ASI never applies (`let \n x = 1` declares x).
+		// Where only a Statement is allowed (an if/loop body), a line break
+		// makes `let` an identifier expression statement ended by ASI; on the
+		// same line it is still parsed as a declaration, so that
+		// parseSubStatement can reject it.
 		hasNewlineBefore := p.peekToken.Line > p.curToken.Line
-		if !hasNewlineBefore &&
-			(p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) || p.peekTokenIs(lexer.IDENT) ||
-				p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
+		startsBinding := p.peekTokenIs(lexer.LBRACKET) || p.peekTokenIs(lexer.LBRACE) || p.peekTokenIs(lexer.IDENT)
+		if !hasNewlineBefore && (startsBinding || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
 			return p.parseLetStatement()
-		} else {
-			// Treat 'let' as an identifier in an expression statement
-			return p.parseExpressionStatement()
 		}
+		if hasNewlineBefore && !inSubStatement && (startsBinding || p.peekTokenIs(lexer.LET) ||
+			p.peekTokenIs(lexer.YIELD) || p.peekTokenIs(lexer.AWAIT) || isContextualKeywordType(p.peekToken.Type)) {
+			return p.parseLetStatement()
+		}
+		// Treat 'let' as an identifier in an expression statement
+		return p.parseExpressionStatement()
 	case lexer.CONST:
 		return p.parseConstStatement()
 	case lexer.VAR: // Added case
@@ -662,6 +713,7 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseDoWhileStatement()
 	case lexer.FOR:
 		stmt := p.parseForStatement()
+		p.checkForScope(stmt)
 		// After for body ending with }, next / should be regex
 		p.rescanPeekAsRegex()
 		return stmt
@@ -691,6 +743,7 @@ func (p *Parser) parseStatement() Statement {
 		return stmt
 	case lexer.SWITCH:
 		stmt := p.parseSwitchStatement()
+		p.checkSwitchScope(stmt)
 		// After switch ending with }, next / should be regex
 		p.rescanPeekAsRegex()
 		return stmt
@@ -1852,7 +1905,10 @@ func (p *Parser) parseLetStatement() Statement {
 	// parseVariableDeclarationList (paserati#159, #160).
 	switch {
 	case p.curTokenIs(lexer.LBRACKET), p.curTokenIs(lexer.LBRACE), p.curTokenIsIdentLike():
-		return p.parseVariableDeclarationList(letToken, varDeclLet)
+		stmt := p.parseVariableDeclarationList(letToken, varDeclLet)
+		p.checkLexicalDeclarationNames(stmt)
+		p.checkDeclarationEnd(stmt)
+		return stmt
 	default:
 		p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'let', got %s", p.curToken.Type))
 		return nil
@@ -1869,7 +1925,10 @@ func (p *Parser) parseConstStatement() Statement {
 		// Const enum: const enum Name { ... }
 		return p.parseConstEnumDeclarationStatement(constToken)
 	case p.curTokenIs(lexer.LBRACKET), p.curTokenIs(lexer.LBRACE), p.curTokenIsIdentLike():
-		return p.parseVariableDeclarationList(constToken, varDeclConst)
+		stmt := p.parseVariableDeclarationList(constToken, varDeclConst)
+		p.checkLexicalDeclarationNames(stmt)
+		p.checkDeclarationEnd(stmt)
+		return stmt
 	default:
 		p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'const', got %s", p.curToken.Type))
 		return nil
@@ -1883,7 +1942,9 @@ func (p *Parser) parseVarStatement() Statement {
 
 	switch {
 	case p.curTokenIs(lexer.LBRACKET), p.curTokenIs(lexer.LBRACE), p.curTokenIsIdentLike():
-		return p.parseVariableDeclarationList(varToken, varDeclVar)
+		stmt := p.parseVariableDeclarationList(varToken, varDeclVar)
+		p.checkDeclarationEnd(stmt)
+		return stmt
 	default:
 		p.addError(p.curToken, fmt.Sprintf("expected identifier or destructuring pattern after 'var', got %s", p.curToken.Type))
 		return nil
@@ -1894,6 +1955,9 @@ func (p *Parser) parseReturnStatement() *ReturnStatement {
 	stmt := p.arena.NewReturnStatement()
 	stmt.Token = p.curToken
 	returnLine := p.curToken.Line
+	if p.functionDepth == 0 && !p.allowTopLevelReturn {
+		p.addError(p.curToken, "SyntaxError: Illegal return statement")
+	}
 
 	// Check for ASI cases BEFORE consuming 'return':
 	// - If peek is on a different line, ASI applies
@@ -1972,7 +2036,7 @@ func (p *Parser) parseIfStatement() *IfStatement {
 	} else {
 		// Single statement case: if (condition) statement
 		p.nextToken() // Move to the start of the statement
-		consequenceStmt := p.parseStatement()
+		consequenceStmt := p.parseSubStatement(subStatementIf)
 		if consequenceStmt == nil {
 			return nil
 		}
@@ -2016,7 +2080,7 @@ func (p *Parser) parseIfStatement() *IfStatement {
 		} else {
 			// --- NEW: Single statement case: else statement ---
 			p.nextToken() // Move to the start of the else statement
-			elseStmt := p.parseStatement()
+			elseStmt := p.parseSubStatement(subStatementIf)
 			if elseStmt == nil {
 				return nil
 			}
@@ -2501,6 +2565,9 @@ func (p *Parser) parseSuperExpression() Expression {
 		p.addError(p.curToken, "SyntaxError: 'super' keyword unexpected here")
 		return nil
 	}
+	if p.superPropertyDepth == 0 && (p.peekTokenIs(lexer.DOT) || p.peekTokenIs(lexer.LBRACKET)) {
+		p.addError(p.curToken, "SyntaxError: 'super' keyword unexpected here")
+	}
 	return &SuperExpression{Token: p.curToken}
 }
 
@@ -2512,6 +2579,14 @@ func (p *Parser) parseNewExpression() Expression {
 		p.nextToken() // Move to '.'
 		if p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "target" {
 			p.nextToken() // Move to 'target'
+			// Neither `new` nor `target` may be spelled with escapes: a
+			// token whose source span is longer than its text had some.
+			if newToken.EndPos-newToken.StartPos != len("new") || p.curToken.EndPos-p.curToken.StartPos != len("target") {
+				p.addError(newToken, "SyntaxError: Keyword must not contain escaped characters")
+			}
+			if p.newTargetDepth == 0 {
+				p.addError(newToken, "SyntaxError: new.target expression is not allowed here")
+			}
 			return &NewTargetExpression{Token: newToken}
 		} else {
 			// Error: new. followed by something other than 'target'
@@ -2675,6 +2750,11 @@ func (p *Parser) parseImportMetaExpression() Expression {
 }
 
 func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
+	// A plain function's parameters, like its body, cannot use super
+	// properties, whatever encloses it.
+	savedSuperProp := p.superPropertyDepth
+	p.superPropertyDepth = 0
+	defer func() { p.superPropertyDepth = savedSuperProp }()
 	lit := &FunctionLiteral{Token: p.curToken}
 	lit.IsAsync = isAsync // Set BEFORE parsing body so context tracking works
 
@@ -2792,7 +2872,7 @@ func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 	// Save strict mode state before parsing body
 	savedStrictMode := p.strictMode
 
-	lit.Body = p.parseFunctionBodyWithDirectives() // Includes consuming RBRACE and directive prologue handling
+	lit.Body = p.parseFunctionBody(lit.Parameters, lit.RestParameter, bodyFunction) // Includes directive prologue handling
 
 	// Restore strict mode after parsing function body
 	p.strictMode = savedStrictMode
@@ -3930,6 +4010,16 @@ func (p *Parser) parseSpreadElement() Expression {
 }
 
 func (p *Parser) parseBlockStatement() *BlockStatement {
+	block := p.parseStatementListBlock()
+	if block != nil {
+		p.checkBlockScope(block.Statements)
+	}
+	return block
+}
+
+// parseStatementListBlock parses `{ StatementList }` without applying any
+// scope early errors; callers pick the Block or FunctionBody rules.
+func (p *Parser) parseStatementListBlock() *BlockStatement {
 	block := p.arena.NewBlockStatement()
 	block.Token = p.curToken // The '{' token
 	block.Statements = []Statement{}
@@ -3943,15 +4033,12 @@ func (p *Parser) parseBlockStatement() *BlockStatement {
 			block.Statements = appendFlatteningGroups(block.Statements, stmt)
 
 			// --- Hoisting Check ---
-			// Check if the statement IS an ExpressionStatement containing a FunctionLiteral
+			// Record function declarations; duplicates are checked with the
+			// rest of the scope's declarations (checkBlockScope). The last
+			// declaration wins, as it does when Annex B permits repeats.
 			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt.Expression != nil {
 				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil && !funcLit.Parenthesized {
-					if _, exists := block.HoistedDeclarations[funcLit.Name.Value]; exists {
-						// Function with this name already hoisted in this block
-						p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration in block: %s", funcLit.Name.Value)) // Use Token
-					} else {
-						block.HoistedDeclarations[funcLit.Name.Value] = funcLit // Store Expression
-					}
+					block.HoistedDeclarations[funcLit.Name.Value] = funcLit
 				}
 			}
 			// --- End Hoisting Check ---
@@ -3981,6 +4068,67 @@ func (p *Parser) parseBlockStatement() *BlockStatement {
 
 	block.EndPos = p.curToken.EndPos // curToken is the closing '}'
 	return block
+}
+
+// functionBodyKind says what kind of function a body belongs to.
+type functionBodyKind int
+
+const (
+	bodyFunction    functionBodyKind = iota // function declaration/expression
+	bodyArrow                               // arrow function
+	bodyMethod                              // object/class method, accessor, constructor
+	bodyStaticBlock                         // class static initialization block
+)
+
+// parseFunctionBody parses a function body `{ ... }` (curToken '{') in a
+// fresh function context - labels do not reach into it and `return` is legal
+// (except in a static block) - and then applies the FunctionBody declaration
+// early errors. new.target and super properties are legal in the body, except
+// that an arrow inherits both from its surroundings and a plain function
+// never allows super properties. Strict mode set by the body's directive
+// prologue ends with the body.
+func (p *Parser) parseFunctionBody(params []*Parameter, rest *RestParameter, kind functionBodyKind) *BlockStatement {
+	savedStrict := p.strictMode
+	savedLabels := p.labels
+	savedFunctionDepth := p.functionDepth
+	savedNewTarget := p.newTargetDepth
+	savedSuperProp := p.superPropertyDepth
+	p.labels = nil
+	switch kind {
+	case bodyFunction:
+		p.functionDepth++
+		p.newTargetDepth++
+		p.superPropertyDepth = 0
+	case bodyArrow:
+		p.functionDepth++
+	case bodyMethod:
+		p.functionDepth++
+		p.newTargetDepth++
+		p.superPropertyDepth++
+	case bodyStaticBlock:
+		p.functionDepth = 0
+		p.newTargetDepth++
+		p.superPropertyDepth++
+	}
+	body := p.parseFunctionBodyWithDirectives()
+	if body != nil {
+		rules := functionParamRules{uniqueParams: kind == bodyArrow || kind == bodyMethod}
+		p.checkFunctionScope(params, rest, body, p.isStrictContext(), rules)
+	}
+	p.superPropertyDepth = savedSuperProp
+	p.newTargetDepth = savedNewTarget
+	p.functionDepth = savedFunctionDepth
+	p.labels = savedLabels
+	p.strictMode = savedStrict
+	return body
+}
+
+// parseMethodParameters parses an object-literal method's parameter list,
+// where (as in its body) super properties are legal.
+func (p *Parser) parseMethodParameters() ([]*Parameter, *RestParameter, error) {
+	p.superPropertyDepth++
+	defer func() { p.superPropertyDepth-- }()
+	return p.parseFunctionParameters(false)
 }
 
 // parseFunctionBodyWithDirectives parses a function body block statement with
@@ -4022,13 +4170,11 @@ func (p *Parser) parseFunctionBodyWithDirectives() *BlockStatement {
 			}
 
 			// --- Hoisting Check ---
+			// Duplicate function declarations are legal in a function body
+			// (they are var-scoped); the last one wins.
 			if exprStmt, isExprStmt := stmt.(*ExpressionStatement); isExprStmt && exprStmt.Expression != nil {
 				if funcLit, isFuncLit := exprStmt.Expression.(*FunctionLiteral); isFuncLit && funcLit.Name != nil && !funcLit.Parenthesized {
-					if _, exists := block.HoistedDeclarations[funcLit.Name.Value]; exists {
-						p.addError(funcLit.Name.Token, fmt.Sprintf("duplicate hoisted function declaration in block: %s", funcLit.Name.Value))
-					} else {
-						block.HoistedDeclarations[funcLit.Name.Value] = funcLit
-					}
+					block.HoistedDeclarations[funcLit.Name.Value] = funcLit
 				}
 			}
 		}
@@ -5132,7 +5278,7 @@ func (p *Parser) parseArrowFunctionBodyAndFinish(start int, typeParams []*TypePa
 
 	if p.curTokenIs(lexer.LBRACE) {
 		debugPrint("parseArrowFunctionBodyAndFinish: Parsing BlockStatement body...")
-		arrowFunc.Body = p.parseBlockStatement() // parseBlockStatement leaves cur at '}'
+		arrowFunc.Body = p.parseFunctionBody(params, restParam, bodyArrow) // leaves cur at '}'
 	} else {
 		debugPrint("parseArrowFunctionBodyAndFinish: Parsing Expression body...")
 		// No nextToken here - curToken is already the start of the expression
@@ -6196,7 +6342,7 @@ func (p *Parser) parseWhileStatement() *WhileStatement {
 	} else {
 		// Single statement case: while (condition) statement
 		p.nextToken() // Move to the start of the statement
-		bodyStmt := p.parseStatement()
+		bodyStmt := p.parseSubStatement(subStatementOther)
 		if bodyStmt == nil {
 			return nil
 		}
@@ -6247,7 +6393,7 @@ func (p *Parser) parseWithStatement() *WithStatement {
 	} else {
 		// Single statement case: with (expression) statement
 		p.nextToken() // Move to the start of the statement
-		stmt.Body = p.parseStatement()
+		stmt.Body = p.parseSubStatement(subStatementOther)
 		if stmt.Body == nil {
 			return nil
 		}
@@ -6442,6 +6588,7 @@ func (p *Parser) parseContinueStatement() *ContinueStatement {
 			Token: p.curToken,
 			Value: p.curToken.Literal,
 		}
+		p.checkContinueLabel(stmt.Label)
 	}
 
 	// Consume optional semicolon
@@ -6470,7 +6617,9 @@ func (p *Parser) parseLabeledStatement() *LabeledStatement {
 
 	// Parse the labeled statement
 	p.nextToken()
-	stmt.Statement = p.parseStatement()
+	p.pushLabel(stmt.Token, stmt.Label.Value)
+	stmt.Statement = p.parseSubStatement(subStatementLabel)
+	p.labels = p.labels[:len(p.labels)-1]
 
 	return stmt
 }
@@ -6490,7 +6639,7 @@ func (p *Parser) parseDoWhileStatement() *DoWhileStatement {
 	} else {
 		// Single statement case: do statement while (condition)
 		p.nextToken() // Move to the start of the statement
-		bodyStmt := p.parseStatement()
+		bodyStmt := p.parseSubStatement(subStatementOther)
 		if bodyStmt == nil {
 			return nil
 		}
@@ -7133,7 +7282,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 
 			// Parse getter function (should have no parameters)
 			funcLit := &FunctionLiteral{Token: getToken}
-			funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+			funcLit.Parameters, funcLit.RestParameter, _ = p.parseMethodParameters()
 			if funcLit.Parameters == nil && funcLit.RestParameter == nil {
 				return nil
 			}
@@ -7160,7 +7309,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 			}
 
 			// Parse function body
-			funcLit.Body = p.parseBlockStatement()
+			funcLit.Body = p.parseFunctionBody(funcLit.Parameters, funcLit.RestParameter, bodyMethod)
 			if funcLit.Body == nil {
 				return nil
 			}
@@ -7230,7 +7379,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 
 			// Parse setter function (should have exactly one parameter)
 			funcLit := &FunctionLiteral{Token: setToken}
-			funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+			funcLit.Parameters, funcLit.RestParameter, _ = p.parseMethodParameters()
 			if funcLit.Parameters == nil && funcLit.RestParameter == nil {
 				return nil
 			}
@@ -7257,7 +7406,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 			}
 
 			// Parse function body
-			funcLit.Body = p.parseBlockStatement()
+			funcLit.Body = p.parseFunctionBody(funcLit.Parameters, funcLit.RestParameter, bodyMethod)
 			if funcLit.Body == nil {
 				return nil
 			}
@@ -7315,7 +7464,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Parse parameters
-				funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+				funcLit.Parameters, funcLit.RestParameter, _ = p.parseMethodParameters()
 				if funcLit.Parameters == nil && funcLit.RestParameter == nil {
 					return nil // Error parsing parameters
 				}
@@ -7336,7 +7485,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Parse function body
-				funcLit.Body = p.parseBlockStatement()
+				funcLit.Body = p.parseFunctionBody(funcLit.Parameters, funcLit.RestParameter, bodyMethod)
 				if funcLit.Body == nil {
 					return nil
 				}
@@ -7433,7 +7582,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Parse parameters
-				funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+				funcLit.Parameters, funcLit.RestParameter, _ = p.parseMethodParameters()
 				if funcLit.Parameters == nil && funcLit.RestParameter == nil {
 					return nil
 				}
@@ -7473,7 +7622,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				p.inAsyncFunction++
 
 				// Parse method body
-				funcLit.Body = p.parseBlockStatement()
+				funcLit.Body = p.parseFunctionBody(funcLit.Parameters, funcLit.RestParameter, bodyMethod)
 
 				// Restore async function context. Do this before checking the parsed
 				// body for nil so a malformed body doesn't leak the incremented depth
@@ -7571,7 +7720,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Parse parameters
-				funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+				funcLit.Parameters, funcLit.RestParameter, _ = p.parseMethodParameters()
 				if funcLit.Parameters == nil && funcLit.RestParameter == nil {
 					return nil // Error parsing parameters
 				}
@@ -7607,7 +7756,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Parse method body
-				funcLit.Body = p.parseBlockStatement()
+				funcLit.Body = p.parseFunctionBody(funcLit.Parameters, funcLit.RestParameter, bodyMethod)
 				if funcLit.Body == nil {
 					return nil // Error parsing method body
 				}
@@ -7655,7 +7804,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Parse parameters
-				funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+				funcLit.Parameters, funcLit.RestParameter, _ = p.parseMethodParameters()
 				if funcLit.Parameters == nil && funcLit.RestParameter == nil {
 					return nil // Error parsing parameters
 				}
@@ -7676,7 +7825,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Parse method body
-				funcLit.Body = p.parseBlockStatement()
+				funcLit.Body = p.parseFunctionBody(funcLit.Parameters, funcLit.RestParameter, bodyMethod)
 				if funcLit.Body == nil {
 					return nil // Error parsing method body
 				}
@@ -7706,7 +7855,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Parse parameters
-				funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+				funcLit.Parameters, funcLit.RestParameter, _ = p.parseMethodParameters()
 				if funcLit.Parameters == nil && funcLit.RestParameter == nil {
 					return nil // Error parsing parameters
 				}
@@ -7727,7 +7876,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Parse method body
-				funcLit.Body = p.parseBlockStatement()
+				funcLit.Body = p.parseFunctionBody(funcLit.Parameters, funcLit.RestParameter, bodyMethod)
 				if funcLit.Body == nil {
 					return nil // Error parsing method body
 				}
@@ -7752,7 +7901,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Parse parameters
-				funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+				funcLit.Parameters, funcLit.RestParameter, _ = p.parseMethodParameters()
 				if funcLit.Parameters == nil && funcLit.RestParameter == nil {
 					return nil // Error parsing parameters
 				}
@@ -7773,7 +7922,7 @@ func (p *Parser) parseObjectLiteral() Expression {
 				}
 
 				// Parse method body
-				funcLit.Body = p.parseBlockStatement()
+				funcLit.Body = p.parseFunctionBody(funcLit.Parameters, funcLit.RestParameter, bodyMethod)
 				if funcLit.Body == nil {
 					return nil // Error parsing method body
 				}
@@ -7931,7 +8080,7 @@ func (p *Parser) parseShorthandMethod() *MethodDefinition {
 	}
 
 	// Parse parameters
-	funcLit.Parameters, funcLit.RestParameter, _ = p.parseFunctionParameters(false)
+	funcLit.Parameters, funcLit.RestParameter, _ = p.parseMethodParameters()
 	if funcLit.Parameters == nil && funcLit.RestParameter == nil {
 		return nil // Error parsing parameters
 	}
@@ -7952,7 +8101,7 @@ func (p *Parser) parseShorthandMethod() *MethodDefinition {
 	}
 
 	// Parse method body
-	funcLit.Body = p.parseBlockStatement()
+	funcLit.Body = p.parseFunctionBody(funcLit.Parameters, funcLit.RestParameter, bodyMethod)
 	if funcLit.Body == nil {
 		return nil // Error parsing method body
 	}
@@ -9209,7 +9358,8 @@ func (p *Parser) parseForOfStatement() *ForOfStatement {
 	// Parse iterable expression
 	p.nextToken() // Move past 'of'
 	debugPrint("parseForOfStatement: Parsing iterable, cur='%s'", p.curToken.Literal)
-	stmt.Iterable = p.parseExpression(LOWEST)
+	// for-of takes an AssignmentExpression, not an Expression: no comma.
+	stmt.Iterable = p.parseExpression(COMMA)
 
 	// Expect ')'
 	if !p.expectPeek(lexer.RPAREN) {
@@ -9518,9 +9668,23 @@ func (p *Parser) parseForStatementOrForOf(forToken *lexer.Token, isAsync bool) S
 		stmt := &ForOfStatement{Token: forToken, IsAsync: isAsync}
 		stmt.Variable = varStmt
 
+		// ForInOfStatement's lookahead restrictions: a for-of LHS may not
+		// start with `let`, nor (outside for-await) with `async of`.
+		if es, ok := varStmt.(*ExpressionStatement); ok && es != nil {
+			// Only a bare identifier: `for ((async) of x)` is fine.
+			if id, ok := es.Expression.(*Identifier); ok && id.Token != nil && id.Token == es.Token {
+				if id.Token.Type == lexer.LET {
+					p.addError(id.Token, "SyntaxError: The left-hand side of a for-of loop may not be 'let'")
+				} else if id.Token.Type == lexer.ASYNC && !isAsync {
+					p.addError(id.Token, "SyntaxError: The left-hand side of a for-of loop may not be 'async'")
+				}
+			}
+		}
+
 		// Parse iterable
 		p.nextToken() // consume 'of', move to iterable
-		stmt.Iterable = p.parseExpression(LOWEST)
+		// for-of takes an AssignmentExpression, not an Expression: no comma.
+		stmt.Iterable = p.parseExpression(COMMA)
 
 		// Expect ')'
 		if !p.expectPeek(lexer.RPAREN) {
@@ -9779,7 +9943,7 @@ func (p *Parser) parseForBody() *BlockStatement {
 	} else {
 		// Single statement
 		p.nextToken()
-		bodyStmt := p.parseStatement()
+		bodyStmt := p.parseSubStatement(subStatementOther)
 		if bodyStmt == nil {
 			return nil
 		}
@@ -10491,6 +10655,7 @@ func (p *Parser) parseCatchClause() *CatchClause {
 	if clause.Body == nil {
 		return nil
 	}
+	p.checkCatchScope(clause)
 
 	return clause
 }

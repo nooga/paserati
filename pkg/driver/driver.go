@@ -588,6 +588,11 @@ func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm
 	if scopeDesc != nil {
 		ps.SetOuterPrivateNames(scopePrivateNames(scopeDesc))
 	}
+	// Direct eval with a caller scope runs inside a function, whose
+	// new.target (and, in a method, super properties) the eval code may
+	// reference.
+	ps.SetAllowNewTarget(true)
+	ps.SetAllowSuperProperty(true)
 	prog, parseErrs := ps.ParseProgram()
 	if len(parseErrs) > 0 {
 		errs := make([]error, len(parseErrs))
