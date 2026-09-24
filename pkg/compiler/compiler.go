@@ -5391,8 +5391,8 @@ func (c *Compiler) canonicalModulePath(specifier string) string {
 		return specifier
 	}
 	fromPath := "."
-	if c.moduleBindings != nil && c.moduleBindings.ModulePath != "" {
-		fromPath = c.moduleBindings.ModulePath
+	if c.moduleBindings != nil {
+		fromPath = c.linkFromPath()
 	}
 	rec, err := c.moduleLoader.LoadModule(specifier, fromPath)
 	if err != nil || rec == nil {
