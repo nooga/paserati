@@ -782,6 +782,8 @@ func printOpCodesToString(code []byte) string {
 func compileSource(input string) (*parser.Program, []errors.PaseratiError) { // Updated return type
 	l := lexer.NewLexer(input)
 	p := parser.NewParser(l)
+	// These tests compile snippets like `return x;` as a whole program.
+	p.SetAllowTopLevelReturn(true)
 	program, parseErrs := p.ParseProgram() // Updated call
 	// Return program even if there are errors, caller should check parseErrs
 	return program, parseErrs // Return program and errors

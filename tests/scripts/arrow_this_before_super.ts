@@ -29,32 +29,32 @@ class C extends Base {
 const head = [new A().later(), new B().opts.ondone(), new C().opts.ondone()].join(" ");
 const out = [];
 const t = (f) => { try { return String(f()); } catch (e) { return e.constructor.name; } };
-class Base { constructor(x) { this.x = x; } }
+class Base2 { constructor(x) { this.x = x; } }
 
 // 1. nested arrows created before super
-class N extends Base { constructor() { const outer = () => () => this.x; super(1); this.f = outer(); } }
+class N extends Base2 { constructor() { const outer = () => () => this.x; super(1); this.f = outer(); } }
 out.push("1:" + new N().f());
 
 // 2. arrow calling super(), then ctor reads this
-class S extends Base { constructor() { const s = () => super(2); s(); out.push("2:" + this.x); } }
+class S extends Base2 { constructor() { const s = () => super(2); s(); out.push("2:" + this.x); } }
 new S();
 
 // 3. arrow created before super, called before super -> ReferenceError; after -> ok
-class P extends Base { constructor() { const g = () => this.x; out.push("3a:" + t(g)); super(3); out.push("3b:" + g()); } }
+class P extends Base2 { constructor() { const g = () => this.x; out.push("3a:" + t(g)); super(3); out.push("3b:" + g()); } }
 new P();
 
 // 4. super() twice: ctor then arrow -> ReferenceError; arrow then ctor -> ReferenceError
-class D1 extends Base { constructor() { const s = () => super(4); super(4); out.push("4a:" + t(s)); } }
+class D1 extends Base2 { constructor() { const s = () => super(4); super(4); out.push("4a:" + t(s)); } }
 new D1();
-class D2 extends Base { constructor() { const s = () => super(4); s(); out.push("4b:" + t(() => super(5)) + "," + this.x); } }
+class D2 extends Base2 { constructor() { const s = () => super(4); s(); out.push("4b:" + t(() => super(5)) + "," + this.x); } }
 new D2();
 
 // 5. super() inside a nested arrow created before super
-class NS extends Base { constructor() { const a = () => () => super(6); a()(); out.push("5:" + this.x); } }
+class NS extends Base2 { constructor() { const a = () => () => super(6); a()(); out.push("5:" + this.x); } }
 new NS();
 
 // 6. cells are per-instance
-class I extends Base { constructor(v) { const g = () => this.x; super(v); this.g = g; } }
+class I extends Base2 { constructor(v) { const g = () => this.x; super(v); this.g = g; } }
 const i1 = new I("a"), i2 = new I("b");
 out.push("6:" + i1.g() + i2.g());
 
@@ -69,7 +69,7 @@ class SP extends SPB { constructor() { const g = () => super.m(); out.push("8a:"
 new SP();
 
 // 9. recursion: derived ctor constructing another instance of itself inside
-class R extends Base {
+class R extends Base2 {
   constructor(n) {
     const g = () => this.x;
     if (n > 0) { const inner = new R(n - 1); super(n); this.inner = inner; } else super(n);
@@ -81,34 +81,34 @@ out.push("9:" + r.g() + r.inner.g() + r.inner.inner.g() + r.inner.inner.inner.g(
 
 // 10. arrow escaping, ctor throws before super
 let esc;
-class E extends Base { constructor() { esc = () => this; throw new Error("boom"); } }
+class E extends Base2 { constructor() { esc = () => this; throw new Error("boom"); } }
 out.push("10:" + t(() => new E()) + "," + t(esc));
 
 // 11. derived returning object; arrow still sees uninitialized this? (spec: this stays uninit) -> ReferenceError
 let esc2;
-class RO extends Base { constructor() { esc2 = () => this; return { o: 1 }; } }
+class RO extends Base2 { constructor() { esc2 = () => this; return { o: 1 }; } }
 out.push("11:" + JSON.stringify(new RO()) + "," + t(esc2));
 
 // 12. arrow calling super after the constructor has returned -> ReferenceError
 let lateSuper;
-class LS extends Base { constructor() { lateSuper = () => super(12); super(1); } }
+class LS extends Base2 { constructor() { lateSuper = () => super(12); super(1); } }
 new LS();
 out.push("12:" + t(lateSuper));
 
 // 13. new.target and arguments inside arrow before super
-class NT extends Base { constructor() { const g = () => [new.target === NT, arguments.length, this.x]; super(13); out.push("13:" + g().join()); } }
+class NT extends Base2 { constructor() { const g = () => [new.target === NT, arguments.length, this.x]; super(13); out.push("13:" + g().join()); } }
 new NT(1, 2);
 
 // 14. fields initialized after super, arrow reads field
-class F extends Base { fld = "field"; constructor() { const g = () => this.fld; super(); out.push("14:" + g()); } }
+class F extends Base2 { fld = "field"; constructor() { const g = () => this.fld; super(); out.push("14:" + g()); } }
 new F();
 
 // 15. tail-position arrow call
-class TC extends Base { constructor() { const g = () => this.x; super(15); this.v = (() => g())(); } }
+class TC extends Base2 { constructor() { const g = () => this.x; super(15); this.v = (() => g())(); } }
 out.push("15:" + new TC().v);
 
 // 16. Reflect.construct path
-class RC extends Base { constructor() { const g = () => this.x; super(16); this.g = g; } }
+class RC extends Base2 { constructor() { const g = () => this.x; super(16); this.g = g; } }
 out.push("16:" + Reflect.construct(RC, []).g());
 
 head + " | " + out.join(" ");

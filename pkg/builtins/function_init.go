@@ -493,6 +493,8 @@ func compileDynamicFunctionSource(vmInstance *vm.VM, driver interface{}, source 
 	// Per ECMA-262 20.2.1.1.1 CreateDynamicFunction, the body parses with the
 	// FunctionBody goal - reject import/export declarations and import.meta.
 	p.SetDisallowModuleSyntax(true)
+	// The body is wrapped as `return (function ...)`, a top-level return.
+	p.SetAllowTopLevelReturn(true)
 	prog, parseErrs := p.ParseProgram()
 	if len(parseErrs) > 0 {
 		return nil, vmInstance.NewSyntaxError(parseErrs[0].Error())

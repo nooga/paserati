@@ -376,6 +376,17 @@ func (p *Parser) parseClassBody() *ClassBody {
 		}
 	}
 	defer popScope()
+	// Class bodies are strict code, and new.target and super properties are
+	// legal throughout them (methods, field initializers, static blocks).
+	p.classBodyDepth++
+	p.newTargetDepth++
+	savedSuperProp := p.superPropertyDepth
+	p.superPropertyDepth = 1
+	defer func() {
+		p.classBodyDepth--
+		p.newTargetDepth--
+		p.superPropertyDepth = savedSuperProp
+	}()
 
 	p.nextToken() // move past '{'
 
@@ -416,7 +427,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 		// Check for static initializer block before parsing modifiers: static { ... }
 		if p.curTokenIs(lexer.STATIC) && p.peekTokenIs(lexer.LBRACE) {
 			p.nextToken() // move to '{'
-			block := p.parseBlockStatement()
+			block := p.parseFunctionBody(nil, nil, bodyStaticBlock)
 			if block != nil {
 				staticInitializers = append(staticInitializers, block)
 			}
@@ -791,7 +802,7 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 		return nil
 	}
 
-	body := p.parseBlockStatement()
+	body := p.parseFunctionBody(parameters, restParameter, bodyMethod)
 
 	// parseBlockStatement leaves us at '}', advance past it
 	p.nextToken()
@@ -927,7 +938,7 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 		p.inNonAsyncFunction++
 	}
 
-	body := p.parseBlockStatement()
+	body := p.parseFunctionBody(parameters, restParameter, bodyMethod)
 
 	// Restore context
 	p.inAsyncFunction = savedAsyncContext
@@ -1255,7 +1266,7 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 		return nil
 	}
 
-	functionLiteral.Body = p.parseBlockStatement()
+	functionLiteral.Body = p.parseFunctionBody(functionLiteral.Parameters, functionLiteral.RestParameter, bodyMethod)
 
 	// parseBlockStatement leaves us at '}', advance past it
 	p.nextToken()
@@ -1347,7 +1358,7 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 		return nil
 	}
 
-	functionLiteral.Body = p.parseBlockStatement()
+	functionLiteral.Body = p.parseFunctionBody(functionLiteral.Parameters, functionLiteral.RestParameter, bodyMethod)
 
 	// parseBlockStatement leaves us at '}', advance past it
 	p.nextToken()
@@ -1547,7 +1558,7 @@ func (p *Parser) parseComputedMethod(bracketToken *lexer.Token, keyExpr Expressi
 		p.inNonAsyncFunction++
 	}
 
-	body := p.parseBlockStatement()
+	body := p.parseFunctionBody(parameters, restParameter, bodyMethod)
 
 	// Restore context
 	p.inAsyncFunction = savedAsyncContext
@@ -1769,7 +1780,7 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 		fmt.Printf("[PARSER] Entering generator context (class generator method), inGenerator=%d\n", p.inGenerator)
 	}
 
-	body := p.parseBlockStatement()
+	body := p.parseFunctionBody(parameters, restParameter, bodyMethod)
 
 	// Restore generator context
 	p.inGenerator--

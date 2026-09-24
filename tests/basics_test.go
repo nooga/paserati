@@ -29,7 +29,7 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{name: "LiteralFalse", input: "false;", expect: "false"},
 		{name: "LiteralNull", input: "null;", expect: "null"},
 		{name: "LiteralUndefinedLet", input: "let u; u;", expect: "undefined"},
-		{name: "LiteralUndefinedReturn", input: "return;", expect: "undefined"}, // Implicit undefined return
+		{name: "LiteralUndefinedReturn", input: "(function () { return; })();", expect: "undefined"}, // Implicit undefined return
 
 		// Prefix
 		{name: "PrefixMinusNum", input: "-15;", expect: "-15"},
