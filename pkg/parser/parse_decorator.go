@@ -75,7 +75,13 @@ func (p *Parser) parseDecoratedExport(decorators []*Decorator) Statement {
 		}
 	}
 
-	// export class C {} or export abstract class C {}
+	return p.parseDecoratedExportedClass(exportToken, decorators)
+}
+
+// parseDecoratedExportedClass parses the class after `export`, whose
+// decorators came either before `export` or between it and the class
+// (`export @dec class C {}`). curToken is 'class' or 'abstract'.
+func (p *Parser) parseDecoratedExportedClass(exportToken *lexer.Token, decorators []*Decorator) Statement {
 	isAbstract := false
 	if p.curTokenIs(lexer.ABSTRACT) {
 		isAbstract = true

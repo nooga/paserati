@@ -276,7 +276,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerPrefix(lexer.NUMBER, p.parseNumberLiteral)
 	p.registerPrefix(lexer.BIGINT, p.parseBigIntLiteral)
 	p.registerPrefix(lexer.STRING, p.parseStringLiteral)
-	p.registerPrefix(lexer.REGEX_LITERAL, p.parseRegexLiteral)     // NEW: Regex literals
+	p.registerPrefix(lexer.REGEX_LITERAL, p.parseRegexLiteral) // NEW: Regex literals
 	p.registerPrefix(lexer.TEMPLATE_START, p.parseUntaggedTemplateLiteral)
 	p.registerPrefix(lexer.TRUE, p.parseBooleanLiteral)
 	p.registerPrefix(lexer.FALSE, p.parseBooleanLiteral)
@@ -886,6 +886,14 @@ func (p *Parser) parseStatement() Statement {
 				if p.peekToken.Literal == "namespace" {
 					p.nextToken() // move to 'namespace'
 					return p.parseNamespaceDeclaration(true)
+				}
+				// declare module "m" { ... } / declare global { ... }
+				if next := p.lookAhead(1); (p.peekToken.Literal == "module" && next.Type == lexer.STRING) ||
+					(p.peekToken.Literal == "global" && next.Type == lexer.LBRACE) {
+					if !p.isEmptyDeclareNamespace() {
+						p.nextToken() // move to 'module' / 'global'
+						return p.parseAmbientModuleDeclaration()
+					}
 				}
 				// declare module/global with empty body — skip silently.
 				// Only skip empty bodies to avoid suppressing TS1038 errors inside non-empty bodies.
@@ -11887,6 +11895,12 @@ func (p *Parser) parseExportDeclaration() Statement {
 	case lexer.CONST, lexer.LET, lexer.VAR, lexer.FUNCTION, lexer.CLASS, lexer.INTERFACE, lexer.TYPE, lexer.ENUM, lexer.ASYNC, lexer.ABSTRACT:
 		// export const x = 1; export function foo() {} export async function bar() {} export abstract class Foo {}
 		return p.parseExportNamedDeclarationWithDeclaration(exportToken)
+
+	case lexer.AT:
+		// export @dec class C {}
+		stmt := p.parseDecoratedExportedClass(exportToken, p.parseDecoratorList())
+		p.rescanPeekAsRegex()
+		return stmt
 
 	case lexer.ASSIGN:
 		// export = expr; (CommonJS module export assignment)

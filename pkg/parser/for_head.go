@@ -43,4 +43,3 @@ func (p *Parser) checkForInOfHead(head Statement, isOf bool) {
 		}
 	}
 }
-
