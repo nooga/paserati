@@ -1153,6 +1153,16 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 	// We need to pre-register var, let, and const declarations because they're all
 	// globals at module/script scope.
 	if c.enclosing == nil {
+		if c.moduleBindings != nil {
+			lm := newLinkModule("", "", program)
+			c.moduleBindings.ExplicitExports = make(map[string]bool, len(lm.local)+len(lm.indirect))
+			for name := range lm.local {
+				c.moduleBindings.ExplicitExports[name] = true
+			}
+			for name := range lm.indirect {
+				c.moduleBindings.ExplicitExports[name] = true
+			}
+		}
 		// Pre-register var declarations
 		varNames := collectVarDeclarations(program.Statements)
 		for _, name := range varNames {
@@ -5210,7 +5220,7 @@ func (c *Compiler) compileExportAllDeclaration(node *parser.ExportAllDeclaration
 		}
 		seen[exportName] = true
 
-		if c.moduleBindings.IsExported(exportName) {
+		if c.moduleBindings.IsExported(exportName) || c.moduleBindings.ExplicitExports[exportName] {
 			// This module already exports this name itself (an own declaration
 			// exported earlier in source order, or - notably - a mutual re-export
 			// cycle where the "source" module's own name harvest looped back and

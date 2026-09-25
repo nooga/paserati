@@ -46,6 +46,13 @@ type ModuleBindings struct {
 	// fallback to use it, so a hoisted function referencing its own module's
 	// top-level var or class still got a ReferenceError).
 	TopLevelDeclNames map[string]bool
+
+	// ExplicitExports names every export this module declares itself: local
+	// exports and indirect ones (`export { x } from`, `export * as ns from`),
+	// but not names flattened in by a bare `export * from`. These always win
+	// over a star export of the same name, wherever they appear in the
+	// source (ResolveExport, paserati#562). Populated with TopLevelDeclNames.
+	ExplicitExports map[string]bool
 }
 
 // ImportReference represents an imported name's runtime binding information
