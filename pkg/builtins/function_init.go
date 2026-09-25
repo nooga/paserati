@@ -796,7 +796,7 @@ func getPrototypeOfValue(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
 		return vmInstance.FunctionPrototype, nil
 	case vm.TypeClosure:
 		cl := val.AsClosure()
-		if p := cl.Fn.Prototype; p.Type() != vm.TypeNull && p.Type() != vm.TypeUndefined {
+		if p := cl.GetProto(); p.Type() != vm.TypeNull && p.Type() != vm.TypeUndefined {
 			return p, nil
 		}
 		if cl.Fn.IsAsync && cl.Fn.IsGenerator {
