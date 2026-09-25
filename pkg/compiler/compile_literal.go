@@ -1085,7 +1085,9 @@ func (c *Compiler) compileObjectLiteral(node *parser.ObjectLiteral, hint Registe
 				case *parser.NumberLiteral:
 					propName = keyNode.TokenLiteral()
 				}
-				if propName != "" {
+				// `__proto__: v` sets the prototype (isProtoSetter), so v is not
+				// named after the key.
+				if propName != "" && propName != "__proto__" {
 					// Set function name for anonymous functions
 					if arrowFunc, ok := prop.Value.(*parser.ArrowFunctionLiteral); ok {
 						// Arrow function - compile with name hint
