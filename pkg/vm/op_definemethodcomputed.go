@@ -21,9 +21,21 @@ func setComputedFunctionName(methodVal Value, propKey PropertyKey, prefix string
 		name = prefix + name
 	}
 	if methodVal.Type() == TypeClosure {
-		fn := methodVal.AsClosure().Fn
-		if !onlyIfAnonymous || fn.Name == "" {
-			fn.Name = name
+		// The key can differ on every evaluation of the same literal, so the
+		// name goes on this closure instance, not the shared FunctionObject
+		// template (#563).
+		cl := methodVal.AsClosure()
+		anonymous := cl.Fn.Name == ""
+		if anonymous && cl.Properties != nil {
+			_, hasOwn := cl.Properties.GetOwn("name")
+			anonymous = !hasOwn
+		}
+		if !onlyIfAnonymous || anonymous {
+			if cl.Properties == nil {
+				cl.Properties = newPropertiesTable()
+			}
+			w, e, c := false, false, true
+			cl.Properties.DefineOwnProperty("name", NewString(name), &w, &e, &c)
 		}
 	} else if methodVal.Type() == TypeFunction {
 		fn := AsFunction(methodVal)

@@ -225,3 +225,43 @@ func TestCancelUnrefTimerPreventsCallback(t *testing.T) {
 		t.Fatal("cancelled unref'd timer callback should not run")
 	}
 }
+
+// Timers that come due together fire in deadline order, FIFO among equal
+// deadlines, regardless of which expiry goroutine wakes first (#564).
+func TestTimersFireInScheduleOrder(t *testing.T) {
+	for run := 0; run < 20; run++ {
+		rt := NewDefaultAsyncRuntime()
+		var seq []int
+		// A longer timer scheduled first fires last.
+		rt.ScheduleTimer(20*time.Millisecond, func() { seq = append(seq, -1) })
+		for i := 0; i < 50; i++ {
+			i := i
+			rt.ScheduleTimer(time.Millisecond, func() { seq = append(seq, i) })
+		}
+		time.Sleep(25 * time.Millisecond)
+		drainUntilIdle(rt)
+		if len(seq) != 51 || seq[50] != -1 {
+			t.Fatalf("run %d: got %v", run, seq)
+		}
+		for i, v := range seq[:50] {
+			if v != i {
+				t.Fatalf("run %d: timers out of order: %v", run, seq)
+			}
+		}
+	}
+}
+
+// Cancelling a timer that is already due in the same batch as the running
+// callback prevents it from firing.
+func TestCancelDueTimerFromEarlierCallback(t *testing.T) {
+	rt := NewDefaultAsyncRuntime()
+	var secondRan atomic.Bool
+	var second uint64
+	rt.ScheduleTimer(time.Millisecond, func() { rt.CancelTimer(second) })
+	second = rt.ScheduleTimer(time.Millisecond, func() { secondRan.Store(true) })
+	time.Sleep(5 * time.Millisecond)
+	drainUntilIdle(rt)
+	if secondRan.Load() {
+		t.Fatal("timer cancelled by an earlier callback in the same batch ran")
+	}
+}

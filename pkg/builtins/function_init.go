@@ -781,6 +781,11 @@ func getPrototypeOfValue(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
 		return vmInstance.PromisePrototype, nil
 	case vm.TypeFunction:
 		fn := val.AsFunction()
+		// An explicit [[Prototype]] (class heritage, Object.setPrototypeOf)
+		// wins over the intrinsic default, as in Object.getPrototypeOf (#565).
+		if p := fn.Prototype; p.Type() != vm.TypeNull && p.Type() != vm.TypeUndefined {
+			return p, nil
+		}
 		if fn.IsAsync && fn.IsGenerator {
 			return vmInstance.AsyncGeneratorFunctionPrototype, nil
 		} else if fn.IsGenerator {
@@ -791,6 +796,9 @@ func getPrototypeOfValue(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
 		return vmInstance.FunctionPrototype, nil
 	case vm.TypeClosure:
 		cl := val.AsClosure()
+		if p := cl.Fn.Prototype; p.Type() != vm.TypeNull && p.Type() != vm.TypeUndefined {
+			return p, nil
+		}
 		if cl.Fn.IsAsync && cl.Fn.IsGenerator {
 			return vmInstance.AsyncGeneratorFunctionPrototype, nil
 		} else if cl.Fn.IsGenerator {
@@ -800,10 +808,16 @@ func getPrototypeOfValue(vmInstance *vm.VM, val vm.Value) (vm.Value, error) {
 		}
 		return vmInstance.FunctionPrototype, nil
 	case vm.TypeNativeFunctionWithProps:
-		// All functions (including built-in constructors) have Function.prototype as [[Prototype]]
-		// Special case: Function.prototype itself has Object.prototype
+		// Function.prototype itself has Object.prototype
 		if val.Is(vmInstance.FunctionPrototype) {
 			return vmInstance.ObjectPrototype, nil
+		}
+		// Built-ins default to Function.prototype unless one was set
+		// explicitly (e.g. RangeError's is Error, TypedArray ctors' is %TypedArray%).
+		if nfp := val.AsNativeFunctionWithProps(); nfp.Properties != nil {
+			if p := nfp.Properties.GetPrototype(); p.Type() != vm.TypeUndefined && p.Type() != vm.TypeNull && p != vm.DefaultObjectPrototype {
+				return p, nil
+			}
 		}
 		return vmInstance.FunctionPrototype, nil
 	case vm.TypeNativeFunction, vm.TypeBoundFunction:

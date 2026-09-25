@@ -8028,8 +8028,9 @@ startExecution:
 
 			obj := objVal.AsPlainObject()
 
-			// Only set prototype if the value is an object or null (per ECMAScript spec)
-			if protoVal.Type() == TypeObject || protoVal.Type() == TypeNull {
+			// Only set prototype if the value is an object (any kind, including
+			// functions and arrays) or null (per ECMAScript spec)
+			if protoVal.IsObject() || protoVal.IsCallable() || protoVal.Type() == TypeNull {
 				obj.SetPrototype(protoVal)
 			}
 			// If protoVal is not an object or null, we silently ignore it (per spec)
@@ -16960,6 +16961,9 @@ startExecution:
 				// Handle deleting intrinsic properties (name, length) - they are configurable:true
 				if propName == "name" {
 					closureObj.Fn.DeletedName = true
+					if closureObj.Properties != nil {
+						closureObj.Properties.DeleteOwn("name")
+					}
 					success = true
 				} else if propName == "length" {
 					closureObj.Fn.DeletedLength = true
@@ -17478,6 +17482,9 @@ startExecution:
 				// Handle deleting intrinsic properties (name, length) - they are configurable:true
 				if propName == "name" {
 					closureObj.Fn.DeletedName = true
+					if closureObj.Properties != nil {
+						closureObj.Properties.DeleteOwn("name")
+					}
 					success = true
 				} else if propName == "length" {
 					closureObj.Fn.DeletedLength = true

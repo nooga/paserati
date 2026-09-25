@@ -2294,6 +2294,12 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			thisArg = args[2]
 		}
 
+		// A constructor this value other than %Array% (a subclass, a custom
+		// constructor) builds the result itself.
+		if c := vmInstance.GetThis(); !c.Is(ctorWithProps) && vmInstance.IsConstructor(c) {
+			return arrayFromConstructor(vmInstance, c, arrayLike, mapFn, thisArg)
+		}
+
 		// If it's already an array, create a shallow copy
 		if arrayLike.Type() == vm.TypeArray {
 			sourceArray := arrayLike.AsArray()

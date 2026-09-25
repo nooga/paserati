@@ -60,6 +60,7 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create AbortSignal.prototype
 	signalProto := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	intlDefineToStringTag(vmInstance, signalProto, "AbortSignal")
 
 	// AbortSignal is not directly constructible, but we need the static methods
 	signalConstructor := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
@@ -177,6 +178,7 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Create AbortController.prototype
 	controllerProto := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
+	intlDefineToStringTag(vmInstance, controllerProto, "AbortController")
 
 	// AbortController constructor
 	controllerConstructorFn := func(args []vm.Value) (vm.Value, error) {
