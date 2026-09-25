@@ -1,7 +1,7 @@
 // [[HomeObject]] and a class constructor's [[Prototype]] belong to each
 // closure, not to the function template shared by every evaluation (#570).
 // no-typecheck
-// expect: 1,2|3,4|b1!,b2!|s1?,s2?|true,true|true
+// expect: 1,2|3,4|b1!,b2!|s1?,s2?|true,true|true|true,true
 function mk(p) { return { __proto__: p, m() { return super.x; } }; }
 function mkc(p) { return { __proto__: p, get g() { return super.x; }, arr() { return (() => super.x)(); } }; }
 function klass(base) { return class extends base { m() { return super.m() + "!"; } static s() { return super.s() + "?"; } }; }
@@ -18,4 +18,5 @@ Object.setPrototypeOf(f1, null);
   [K1.s(), K2.s()].join(","),
   [Object.getPrototypeOf(K1) === B1, Object.getPrototypeOf(K2) === B2].join(","),
   String(Object.getPrototypeOf(f2) === Function.prototype),
+  [B1.isPrototypeOf(K1), B2.isPrototypeOf(K2)].join(","),
 ].join("|");
