@@ -152,7 +152,7 @@ func (vm *VM) executeUserFunctionReentrant(fn Value, thisValue Value, args []Val
 
 	if status == InterpretRuntimeError {
 		// If VM is unwinding and has a currentException, surface it as an ExceptionError
-		if vm.unwinding && vm.currentException != Null {
+		if vm.unwinding && vm.hasException {
 			return Undefined, exceptionError{exception: vm.currentException}
 		}
 		return Undefined, fmt.Errorf("runtime error during re-entrant execution")
@@ -266,7 +266,7 @@ func (vm *VM) CallFunctionDirectly(fn Value, thisValue Value, args []Value) (Val
 
 	if status == InterpretRuntimeError {
 		// If VM is unwinding and has a currentException, surface it as an ExceptionError
-		if vm.unwinding && vm.currentException != Null {
+		if vm.unwinding && vm.hasException {
 			return Undefined, exceptionError{exception: vm.currentException}
 		}
 		return Undefined, fmt.Errorf("runtime error during direct function execution")
@@ -2516,7 +2516,7 @@ func (vm *VM) truncateFramesTo(entryCount int) {
 
 func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args []Value, newTarget Value, isDerivedConstructor bool) (Value, error) {
 	// Clear stale unwinding state
-	if vm.unwinding && vm.currentException == Null {
+	if vm.unwinding && !vm.hasException {
 		vm.unwinding = false
 		vm.unwindingCrossedNative = false
 	}
@@ -2610,7 +2610,7 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 	status, result := vm.run()
 
 	if status == InterpretRuntimeError {
-		if vm.unwinding && vm.currentException != Null {
+		if vm.unwinding && vm.hasException {
 			ex := vm.currentException
 			// Clear vm.unwinding along with currentException when handing the
 			// exception off as a Go error - see the matching, longer comment
@@ -2618,7 +2618,7 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 			// here left the exact same stale-state trap for `new`-constructor
 			// calls that absorb a Go error (e.g. Reflect.construct-style
 			// wrappers) without re-throwing.
-			vm.currentException = Null
+			vm.clearException()
 			vm.unwinding = false
 			vm.truncateFramesTo(frameCountAtEntry)
 			vm.regDir.popTo(entryRegMark)
@@ -2627,9 +2627,9 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 		return Undefined, fmt.Errorf("runtime error during constructor execution")
 	}
 
-	if vm.unwinding && vm.currentException != Null {
+	if vm.unwinding && vm.hasException {
 		ex := vm.currentException
-		vm.currentException = Null
+		vm.clearException()
 		vm.unwinding = false
 		vm.truncateFramesTo(frameCountAtEntry)
 		vm.regDir.popTo(entryRegMark)
@@ -2649,7 +2649,7 @@ func (vm *VM) executeUserFunctionWithNewTarget(fn Value, thisValue Value, args [
 // *without* ever setting vm.unwinding/vm.currentException, because there is
 // no JS-level exception *value* to hand back (see runtimeError's callers in
 // vm.go). A caller of vm.run() that only checks
-// `vm.unwinding && vm.currentException != Null` to decide it got a real
+// `vm.unwinding && vm.hasException` to decide it got a real
 // exception therefore has nothing to report for this case and, before this
 // helper existed, fell back to a fixed generic string - discarding the one
 // piece of real information the VM actually recorded (#130).
@@ -2684,7 +2684,7 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	// 1. Handled it and is making a new call (not re-throwing) - clear the flags
 	// 2. Is about to re-throw it - but then it will call throwException() which will set them again
 	// So we can safely clear stale unwinding state here at the start of a new bytecode execution.
-	if vm.unwinding && vm.currentException == Null {
+	if vm.unwinding && !vm.hasException {
 		if debugExceptions {
 			fmt.Println("[DEBUG executeUserFunctionSafe] Clearing stale unwinding state (exception was handed to native)")
 		}
@@ -2732,7 +2732,7 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	// to completion, perfectly successfully, while an unrelated exception
 	// from before this call is still sitting on the VM, would get its
 	// legitimate result thrown away and replaced with that stale exception.
-	unwindingAtEntry := vm.unwinding && vm.currentException != Null
+	unwindingAtEntry := vm.unwinding && vm.hasException
 
 	// Set up the caller context first (pooled 1-element result holder)
 	callerRegisters := vm.getSentinelReg()
@@ -2810,9 +2810,9 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 		// prepareCall's native function complete normally - that must return
 		// its real result, not get it discarded in favor of the pre-existing,
 		// unrelated exception.
-		if !unwindingAtEntry && vm.unwinding && vm.currentException != Null {
+		if !unwindingAtEntry && vm.unwinding && vm.hasException {
 			ex := vm.currentException
-			vm.currentException = Null
+			vm.clearException()
 			vm.unwinding = false
 			vm.truncateFramesTo(frameCountAtEntry)
 			vm.regDir.popTo(entryRegMark)
@@ -2839,7 +2839,7 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 
 	if status == InterpretRuntimeError {
 		// If the VM is unwinding an exception, surface it as an ExceptionError
-		if vm.unwinding && vm.currentException != Null {
+		if vm.unwinding && vm.hasException {
 			ex := vm.currentException
 			// Clear vm.unwinding here too (#142), not just currentException.
 			// An earlier version of this left vm.unwinding=true deliberately
@@ -2871,7 +2871,7 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 			// shape) followed by an unrelated top-level-await resuming
 			// normally - the resumption's very first instruction reported a
 			// bogus "Uncaught exception: null" and aborted the script.
-			vm.currentException = Null
+			vm.clearException()
 			vm.unwinding = false
 			// We're taking ownership of the exception as a Go error - drop any
 			// frame(s) unwinding stopped at without popping (see comment above
@@ -2888,9 +2888,9 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	}
 	// If we reached a direct-call boundary and returned without InterpretRuntimeError,
 	// propagate any pending exception to the native caller.
-	if vm.unwinding && vm.currentException != Null {
+	if vm.unwinding && vm.hasException {
 		ex := vm.currentException
-		vm.currentException = Null
+		vm.clearException()
 		vm.unwinding = false // see the matching comment above (#142)
 		vm.truncateFramesTo(frameCountAtEntry)
 		vm.regDir.popTo(entryRegMark)
@@ -2932,5 +2932,5 @@ func (vm *VM) ClearErrors() {
 func (vm *VM) ClearUnwindingState() {
 	vm.unwinding = false
 	vm.unwindingCrossedNative = false
-	vm.currentException = Null
+	vm.clearException()
 }

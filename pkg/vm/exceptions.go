@@ -110,7 +110,7 @@ func (vm *VM) throwException(value Value) {
 	}
 	// If already unwinding, keep the flag and location (we're re-throwing after native propagation)
 
-	vm.currentException = value
+	vm.setException(value)
 	vm.unwinding = true
 	vm.lastThrownException = value
 
@@ -347,7 +347,7 @@ func (vm *VM) handleCatchBlock(handler *ExceptionHandler) {
 	vm.reclaimUnwoundRegisters()
 
 	// Clear exception state
-	vm.currentException = Null
+	vm.clearException()
 	vm.unwinding = false
 	vm.unwindingCrossedNative = false // NEW: Reset flag
 	// Only set handlerFound when we're inside a helper function call
@@ -371,7 +371,7 @@ func (vm *VM) handleFinallyBlock(handler *ExceptionHandler) {
 		vm.pendingValue = vm.currentException
 		// Temporarily clear unwinding so finally block executes normally
 		vm.unwinding = false
-		vm.currentException = Null
+		vm.clearException()
 	} else {
 		// fmt.Printf("[DEBUG] handleFinallyBlock: Not unwinding, just jumping to finally\n")
 	}
@@ -731,4 +731,18 @@ func (vm *VM) getStackFramesExcludingLimited(target *FunctionObject, limit int) 
 	}
 
 	return frames
+}
+
+// setException records v as the in-flight exception. Presence is tracked by
+// hasException rather than by currentException's value, because JS code may
+// throw null or undefined (#566).
+func (vm *VM) setException(v Value) {
+	vm.currentException = v
+	vm.hasException = true
+}
+
+// clearException forgets the in-flight exception value.
+func (vm *VM) clearException() {
+	vm.currentException = Null
+	vm.hasException = false
 }

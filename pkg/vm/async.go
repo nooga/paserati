@@ -263,14 +263,14 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	}
 
 	if status == InterpretRuntimeError {
-		if vm.unwinding && vm.currentException != Null {
+		if vm.unwinding && vm.hasException {
 			exc := vm.currentException
 			// CRITICAL: Clear exception state so it doesn't leak to the caller's vm.run().
 			// The exception is captured in the returned error and will be used to reject
 			// the async function's promise. Without this, the caller's OpCall handler
 			// sees stale unwinding/crossedNative flags and returns InterpretRuntimeError
 			// from the wrong vm.run() invocation.
-			vm.currentException = Null
+			vm.clearException()
 			vm.unwinding = false
 			vm.unwindingCrossedNative = false
 			return Undefined, exceptionError{exception: exc}
