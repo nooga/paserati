@@ -222,13 +222,14 @@ func (vm *VM) callCatchingException(op func() (Value, error)) (Value, Value, boo
 	savedRegMark := vm.regDir.mark()
 	savedUnwinding := vm.unwinding
 	savedCurrentException := vm.currentException
+	savedHasException := vm.hasException
 
 	result, err := op()
 	if err == nil && !vm.unwinding {
 		return result, Undefined, false
 	}
 	var exceptionVal Value
-	if vm.currentException != Null {
+	if vm.hasException {
 		exceptionVal = vm.currentException
 	} else if ee, ok := err.(ExceptionError); ok {
 		exceptionVal = ee.GetExceptionValue()
@@ -239,5 +240,6 @@ func (vm *VM) callCatchingException(op func() (Value, error)) (Value, Value, boo
 	vm.regDir.popTo(savedRegMark)
 	vm.unwinding = savedUnwinding
 	vm.currentException = savedCurrentException
+	vm.hasException = savedHasException
 	return Undefined, exceptionVal, true
 }

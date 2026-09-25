@@ -459,6 +459,7 @@ type VM struct {
 
 	// Exception handling state
 	currentException       Value // Current thrown exception
+	hasException           bool  // currentException holds a thrown value (which may itself be null/undefined, #566)
 	unwinding              bool  // True during exception unwinding
 	unwindingCrossedNative bool  // True if we've crossed a native boundary during unwinding
 	helperCallDepth        int   // Track when we're inside helper functions like toPrimitive
@@ -1672,7 +1673,7 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 		if isNestedInterpretCall && vm.unwinding {
 			exc := vm.currentException
 			vm.unwinding = false
-			vm.currentException = Null
+			vm.clearException()
 			vm.truncateFramesTo(entryFrameCount)
 			vm.regDir.popTo(entryMark)
 			runtimeErr := errors.NewRuntimeError(
@@ -2121,7 +2122,7 @@ startExecution:
 					// Per IteratorClose steps 6-7: suppress this if our own completion is
 					// already a throw, otherwise propagate GetMethod's error as the new one.
 					if vm.pendingAction == ActionThrow {
-						vm.currentException = Null
+						vm.clearException()
 						vm.unwinding = false
 					} else {
 						vm.pendingAction = ActionThrow
@@ -2130,7 +2131,7 @@ startExecution:
 						} else {
 							vm.pendingValue = vm.currentException
 						}
-						vm.currentException = Null
+						vm.clearException()
 						vm.unwinding = false
 					}
 				} else if returnMethod.IsCallable() {
@@ -2144,7 +2145,7 @@ startExecution:
 					if vm.pendingAction == ActionThrow {
 						// Step 7: completion is throw, suppress inner errors
 						if callErr != nil {
-							vm.currentException = Null
+							vm.clearException()
 							vm.unwinding = false
 						}
 					} else if vm.pendingAction == ActionReturn {
@@ -2157,7 +2158,7 @@ startExecution:
 							} else {
 								vm.pendingValue = vm.currentException
 							}
-							vm.currentException = Null
+							vm.clearException()
 							vm.unwinding = false
 						} else if !innerResult.IsObject() && !innerResult.IsCallable() {
 							// Step 9: return value is not an Object, throw TypeError
@@ -2207,7 +2208,7 @@ startExecution:
 						// itself threw - suppress it if our own completion is already a
 						// throw, otherwise propagate it as the new completion.
 						if vm.pendingAction == ActionThrow {
-							vm.currentException = Null
+							vm.clearException()
 							vm.unwinding = false
 						} else {
 							vm.pendingAction = ActionThrow
@@ -2216,7 +2217,7 @@ startExecution:
 							} else {
 								vm.pendingValue = vm.currentException
 							}
-							vm.currentException = Null
+							vm.clearException()
 							vm.unwinding = false
 						}
 					} else if returnMethod.IsCallable() {
@@ -2232,7 +2233,7 @@ startExecution:
 							// (just ignore callErr and result)
 							// Clear any exception that was set by the return() call
 							if callErr != nil {
-								vm.currentException = Null
+								vm.clearException()
 								vm.unwinding = false
 							}
 						} else {
@@ -5001,7 +5002,7 @@ startExecution:
 			// DISABLED: This logic was incorrectly detecting exception handling
 			// The VM main loop should handle exception continuation, not OpCall
 			/*
-				if !shouldSwitch && !wasUnwinding && !vm.unwinding && vm.currentException == Null {
+				if !shouldSwitch && !wasUnwinding && !vm.unwinding && !vm.hasException {
 					fmt.Printf("[DEBUG vm.go] OpCall: Native function call, checking for exception handling\n")
 					// If the frame IP was changed to a handler location, we should continue execution there
 					if frame.ip != originalFrameIP {
@@ -6621,7 +6622,7 @@ startExecution:
 				}
 				// Respect any pending exception propagation
 				if vm.pendingAction == ActionThrow {
-					vm.currentException = vm.pendingValue
+					vm.setException(vm.pendingValue)
 					return InterpretRuntimeError, vm.pendingValue
 				}
 				vm.popTopLevelScriptFrame(frame)
@@ -6691,7 +6692,7 @@ startExecution:
 				// Check if there's a pending exception that should be propagated
 				if vm.pendingAction == ActionThrow {
 					// Propagate the uncaught exception
-					vm.currentException = vm.pendingValue
+					vm.setException(vm.pendingValue)
 					return InterpretRuntimeError, vm.pendingValue
 				}
 				// Return the result directly.
@@ -13744,10 +13745,13 @@ startExecution:
 				// For objects and other types, call ToPrimitive with "string" hint
 				if keyValue.IsObject() {
 					frame.ip = ip // Save IP before potential exception
+					vm.helperCallDepth++
 					primitiveVal := vm.toPrimitive(keyValue, "string")
-					// Check if toPrimitive threw an exception
-					if vm.currentException.Type() != TypeUndefined {
-						if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					vm.helperCallDepth--
+					// Check if toPrimitive threw (caught or not)
+					if vm.unwinding || vm.handlerFound {
+						vm.handlerFound = false
+						if vm.unwinding && (vm.frameCount == 0 || vm.unwindingCrossedNative) {
 							return InterpretRuntimeError, vm.currentException
 						}
 						// Exception handler will handle it
@@ -13895,10 +13899,13 @@ startExecution:
 				// For objects and other types, call ToPrimitive with "string" hint
 				if keyValue.IsObject() {
 					frame.ip = ip // Save IP before potential exception
+					vm.helperCallDepth++
 					primitiveVal := vm.toPrimitive(keyValue, "string")
-					// Check if toPrimitive threw an exception
-					if vm.currentException.Type() != TypeUndefined {
-						if vm.frameCount == 0 || vm.unwindingCrossedNative {
+					vm.helperCallDepth--
+					// Check if toPrimitive threw (caught or not)
+					if vm.unwinding || vm.handlerFound {
+						vm.handlerFound = false
+						if vm.unwinding && (vm.frameCount == 0 || vm.unwindingCrossedNative) {
 							return InterpretRuntimeError, vm.currentException
 						}
 						// Exception handler will handle it
@@ -15221,7 +15228,7 @@ startExecution:
 
 			// Returns from finally blocks clear any pending exceptions
 			// because the return takes precedence over the exception
-			vm.currentException = Null
+			vm.clearException()
 			vm.unwinding = false
 			// Also clear any pending throw action - the return takes precedence
 			if vm.pendingAction == ActionThrow {
@@ -17706,9 +17713,14 @@ startExecution:
 
 			// Check if eval threw a runtime exception that should propagate to caller
 			// This happens when vm.currentException is set from eval's OpThrow
-			if vm.currentException.Type() != TypeUndefined && vm.currentException.Type() != TypeNull {
+			if vm.hasException {
 				// Re-throw the exception from eval so it can be caught by caller's try/catch
 				vm.throwException(vm.currentException)
+				// Still unwinding: uncaught, or stopped at a native boundary.
+				// The frames we'd reload may be gone (#559).
+				if vm.unwinding {
+					return InterpretRuntimeError, vm.currentException
+				}
 				// After exception unwinding, reload frame state
 				if vm.frameCount > 0 {
 					frame = &vm.frames[vm.frameCount-1]
@@ -17765,6 +17777,11 @@ startExecution:
 					}
 				}
 				vm.throwException(errObj)
+				// Still unwinding: uncaught, or stopped at a native boundary.
+				// The frames we'd reload may be gone (#559).
+				if vm.unwinding {
+					return InterpretRuntimeError, vm.currentException
+				}
 				// After exception unwinding, reload frame state
 				// because frames may have been popped during exception handling
 				if vm.frameCount > 0 {
@@ -20030,11 +20047,12 @@ func (vm *VM) executeGeneratorPrologue(genObj *GeneratorObject) InterpretResult 
 	if status != InterpretOK {
 		// Prologue failed - save the exception before cleaning up
 		savedException := vm.currentException
-		if savedException.Type() == TypeUndefined {
-			savedException = vm.lastThrownException
-		}
-		if savedException.Type() == TypeUndefined {
-			savedException = NewString("Generator initialization failed")
+		if !vm.hasException {
+			if vm.unwinding {
+				savedException = vm.lastThrownException
+			} else {
+				savedException = NewString("Generator initialization failed")
+			}
 		}
 
 		if debugGeneratorStates {
@@ -20067,7 +20085,7 @@ func (vm *VM) executeGeneratorPrologue(genObj *GeneratorObject) InterpretResult 
 		// Clear VM exception state - the prologue execution is now "erased"
 		vm.unwinding = false
 		vm.unwindingCrossedNative = false
-		vm.currentException = Null
+		vm.clearException()
 
 		// Return error with saved exception in lastThrownException
 		vm.lastThrownException = savedException
@@ -20252,9 +20270,9 @@ func (vm *VM) startGenerator(genObj *GeneratorObject, sentValue Value) (Value, e
 		// VM's unwinding state rather than leaving unwinding=true dangling - our
 		// caller may swallow this error entirely, and a stale unwinding=true
 		// would corrupt the next unrelated dispatch's view of VM state.
-		if vm.unwinding && vm.currentException != Null {
+		if vm.unwinding && vm.hasException {
 			ex := vm.currentException
-			vm.currentException = Null
+			vm.clearException()
 			vm.unwinding = false
 			vm.unwindingCrossedNative = false
 			return Undefined, exceptionError{exception: ex}
@@ -20497,9 +20515,9 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 		// unwinding" and misbehave. If our caller does re-throw via
 		// vm.throwException(ex), that call starts a fresh, honest unwind from
 		// scratch (see the !vm.unwinding branch there), which is what we want.
-		if vm.unwinding && vm.currentException != Null {
+		if vm.unwinding && vm.hasException {
 			ex := vm.currentException
-			vm.currentException = Null
+			vm.clearException()
 			vm.unwinding = false
 			vm.unwindingCrossedNative = false
 			return Undefined, exceptionError{exception: ex}
@@ -20584,7 +20602,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 		}
 		vm.unwinding = false
 		vm.unwindingCrossedNative = false
-		vm.currentException = Null
+		vm.clearException()
 	}
 
 	// Check if generator has saved state
@@ -20709,7 +20727,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 		// Clean up VM state
 		vm.unwinding = false
 		vm.unwindingCrossedNative = false
-		vm.currentException = Null
+		vm.clearException()
 		// Pop frames we pushed
 		if vm.frameCount > 0 {
 			vm.frameCount-- // Pop generator frame
@@ -20749,7 +20767,7 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 		if vm.frameCount > 0 && vm.frames[vm.frameCount-1].isSentinelFrame {
 			vm.frameCount--
 		}
-		if vm.currentException != Null {
+		if vm.hasException {
 			return Undefined, exceptionError{exception: vm.currentException}
 		}
 		return Undefined, exceptionError{exception: NewString("runtime error during generator exception handling")}
@@ -20960,7 +20978,7 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 				return Undefined, exceptionError{exception: result}
 			}
 			// Fallback to currentException if result wasn't set
-			if vm.currentException != Null {
+			if vm.hasException {
 				if debugExceptions {
 					fmt.Printf("[DEBUG generator.return] Returning currentException: %s\n", vm.currentException.ToString())
 				}
@@ -21125,14 +21143,14 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 		// legitimately re-suspends, so promiseObj.Frame must be cleared
 		// here too, not left stale as if a future resumption were still
 		// expected.
-		exc := vm.currentException
-		vm.currentException = Null
+		exc, hadExc := vm.currentException, vm.hasException
+		vm.clearException()
 		vm.unwinding = false
 		vm.unwindingCrossedNative = false
 		vm.frameCount = savedFrameCount
 		vm.regDir.popTo(savedRegMark)
 		promiseObj.Frame = nil
-		if exc != Null {
+		if hadExc {
 			return Undefined, exceptionError{exception: exc}
 		}
 		return Undefined, exceptionError{exception: NewString("runtime error during async function resumption")}
@@ -21272,7 +21290,7 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 		// by the next, unrelated vm.run() call (e.g. invoking the
 		// rejection handler this error is about to feed into).
 		exc := vm.currentException
-		vm.currentException = Null
+		vm.clearException()
 		vm.unwinding = false
 		vm.unwindingCrossedNative = false
 		vm.frameCount = savedFrameCount
@@ -21303,14 +21321,14 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 		// resumption never legitimately re-suspends, so promiseObj.Frame
 		// must be cleared here too, not left stale as if a future
 		// resumption were still expected.
-		exc := vm.currentException
-		vm.currentException = Null
+		exc, hadExc := vm.currentException, vm.hasException
+		vm.clearException()
 		vm.unwinding = false
 		vm.unwindingCrossedNative = false
 		vm.frameCount = savedFrameCount
 		vm.regDir.popTo(savedRegMark)
 		promiseObj.Frame = nil
-		if exc != Null {
+		if hadExc {
 			return Undefined, exceptionError{exception: exc}
 		}
 		return Undefined, exceptionError{exception: NewString("runtime error during async exception handling")}
@@ -21689,14 +21707,14 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	// for a misleading, generic "Uncaught exception: undefined".
 	var moduleException Value
 	var hasModuleException bool
-	if vm.unwinding && vm.currentException != Null {
+	if vm.unwinding && vm.hasException {
 		moduleException = vm.currentException
 		hasModuleException = true
 		// Clear the unwinding state since we're handling the exception here.
 		// The unwinder stopped at our direct-call frame and flagged the
 		// crossing; we consume the exception, so put that flag back too.
 		vm.unwinding = false
-		vm.currentException = Null
+		vm.clearException()
 		vm.unwindingCrossedNative = savedCrossedNative
 		resultStatus = InterpretRuntimeError
 	}

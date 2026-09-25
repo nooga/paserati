@@ -4468,7 +4468,8 @@ func (p *Parser) canStartExpression(t *lexer.Token) bool {
 		lexer.SUPER, lexer.GET, lexer.SET, lexer.LET, lexer.THROW, lexer.RETURN:
 		return true
 	default:
-		return false
+		// Contextual keywords (type, as, of, abstract, ...) are identifier references.
+		return isContextualKeywordType(t.Type)
 	}
 }
 
