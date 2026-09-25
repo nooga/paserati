@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -92,6 +93,9 @@ type timerEntry struct {
 	// toward hasPendingWorkLocked/HasPendingTimers while still pending -
 	// once it's due, it runs like any other timer regardless of this flag.
 	unref bool
+	// cancelled: CancelTimer ran after RunDueTimers took this entry into
+	// its batch but before its callback ran.
+	cancelled bool
 }
 
 // DefaultAsyncRuntime is a simple Go-based runtime with a microtask queue
@@ -100,6 +104,7 @@ type DefaultAsyncRuntime struct {
 	nextTicks       []func()
 	macrotasks      []func()
 	dueTimers       []*timerEntry
+	runningTimers   []*timerEntry // batch RunDueTimers is currently running
 	timers          map[uint64]*timerEntry
 	nextTimerID     uint64
 	mu              sync.Mutex
@@ -320,21 +325,54 @@ func (rt *DefaultAsyncRuntime) CancelTimer(id uint64) {
 		}
 		rt.dueTimers = kept
 	}
+	for _, e := range rt.runningTimers {
+		if e.id == id {
+			e.cancelled = true
+		}
+	}
 	rt.signalWaitersLocked()
 }
 
 // RunDueTimers runs callbacks for timers that have expired.
+//
+// Timers run in deadline order, FIFO among equal deadlines, like Node and
+// browsers (#564). Expiry goroutines wake in arbitrary order, so timers
+// already past their deadline are swept in here too rather than waiting
+// for their goroutine to append them.
 func (rt *DefaultAsyncRuntime) RunDueTimers() bool {
 	rt.mu.Lock()
+	now := time.Now()
+	for id, entry := range rt.timers {
+		if !entry.deadline.After(now) {
+			delete(rt.timers, id)
+			rt.dueTimers = append(rt.dueTimers, entry)
+		}
+	}
 	entries := rt.dueTimers
 	rt.dueTimers = make([]*timerEntry, 0, 8)
+	sort.Slice(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		if !a.deadline.Equal(b.deadline) {
+			return a.deadline.Before(b.deadline)
+		}
+		return a.id < b.id
+	})
+	rt.runningTimers = entries
 	rt.mu.Unlock()
 
 	if len(entries) == 0 {
 		return false
 	}
+	defer func() {
+		rt.mu.Lock()
+		rt.runningTimers = nil
+		rt.mu.Unlock()
+	}()
 	for _, e := range entries {
-		if e != nil && e.callback != nil {
+		rt.mu.Lock()
+		cancelled := e.cancelled
+		rt.mu.Unlock()
+		if !cancelled && e.callback != nil {
 			e.callback()
 		}
 	}
