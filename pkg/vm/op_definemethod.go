@@ -32,6 +32,7 @@ func (vm *VM) handleOpDefineMethod(code []byte, ip *int, constants []Value, regi
 	if methodVal.Type() == TypeClosure {
 		closure := methodVal.AsClosure()
 		closure.Fn.HomeObject = objVal
+		closure.HomeObject = objVal
 	} else if methodVal.Type() == TypeFunction {
 		// Bare FunctionObject (not yet wrapped in closure)
 		funcObj := AsFunction(methodVal)

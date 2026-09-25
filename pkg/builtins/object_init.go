@@ -2239,8 +2239,8 @@ func objectGetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	case vm.TypeClosure:
 		// For closures, return their function's [[Prototype]]
 		cl := obj.AsClosure()
-		if cl != nil && cl.Fn != nil && (cl.Fn.Prototype.Type() != vm.TypeNull && cl.Fn.Prototype.Type() != vm.TypeUndefined) {
-			return cl.Fn.Prototype, nil
+		if cl != nil && cl.Fn != nil && (cl.GetProto().Type() != vm.TypeNull && cl.GetProto().Type() != vm.TypeUndefined) {
+			return cl.GetProto(), nil
 		}
 		return vm.Null, nil
 	case vm.TypeNativeFunctionWithProps:
@@ -2530,7 +2530,7 @@ func objectSetPrototypeOfWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, e
 	case vm.TypeClosure:
 		// For closures, set the underlying function's Prototype field
 		closure := obj.AsClosure()
-		closure.Fn.Prototype = proto
+		closure.SetProto(proto)
 	case vm.TypeNativeFunction:
 		// Native functions - success but no actual prototype storage
 		success = true

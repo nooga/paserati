@@ -132,6 +132,9 @@ func (vm *VM) executeAsyncFunctionBody(calleeVal Value, thisValue Value, args []
 	frame.targetRegister = destReg
 	frame.thisValue = thisValue
 	frame.homeObject = funcObj.HomeObject // Set [[HomeObject]] for super property access (object literal methods)
+	if closureObj != nil {
+		frame.homeObject = closureObj.homeObject()
+	}
 	frame.isConstructorCall = false
 	frame.isDirectCall = true     // Mark as direct call for proper return handling
 	frame.isSentinelFrame = false // Clear sentinel flag - this frame slot may have been a sentinel in a previous call
