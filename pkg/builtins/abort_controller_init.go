@@ -22,6 +22,10 @@ func (a *AbortControllerInitializer) Priority() int {
 }
 
 func (a *AbortControllerInitializer) InitTypes(ctx *TypeContext) error {
+	if err := ctx.DefineGlobal("Event", eventConstructorType()); err != nil {
+		return err
+	}
+
 	// AbortSignal type
 	abortSignalType := types.NewObjectType().
 		WithProperty("aborted", types.Boolean).
@@ -58,6 +62,11 @@ func (a *AbortControllerInitializer) InitTypes(ctx *TypeContext) error {
 func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
+	events, err := installEvent(vmInstance, ctx)
+	if err != nil {
+		return err
+	}
+
 	// Create AbortSignal.prototype
 	signalProto := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 
@@ -81,7 +90,7 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 			reason:  reason,
 			onabort: vm.Null,
 		}
-		return createAbortSignalObject(vmInstance, signal, signalProto), nil
+		return createAbortSignalObject(vmInstance, events, signal, signalProto), nil
 	}))
 
 	// AbortSignal.timeout(ms) - creates a signal that aborts after timeout.
@@ -109,7 +118,7 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 			reason:  vm.Undefined,
 			onabort: vm.Null,
 		}
-		signalValue := createAbortSignalObject(vmInstance, signal, signalProto)
+		signalValue := createAbortSignalObject(vmInstance, events, signal, signalProto)
 
 		rt := vmInstance.GetAsyncRuntime()
 		rt.ScheduleUnrefTimer(time.Duration(ms)*time.Millisecond, func() {
@@ -132,7 +141,7 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 			reason:  vm.Undefined,
 			onabort: vm.Null,
 		}
-		signalValue := createAbortSignalObject(vmInstance, signal, signalProto)
+		signalValue := createAbortSignalObject(vmInstance, events, signal, signalProto)
 
 		if len(args) > 0 && args[0].Type() == vm.TypeArray {
 			arr := args[0].AsArray()
@@ -188,7 +197,7 @@ func (a *AbortControllerInitializer) InitRuntime(ctx *RuntimeContext) error {
 		controller := &AbortController{
 			signal: signal,
 		}
-		return createAbortControllerObject(vmInstance, controller, controllerProto, signalProto), nil
+		return createAbortControllerObject(vmInstance, events, controller, controllerProto, signalProto), nil
 	}
 
 	controllerConstructor := vm.NewConstructorWithProps(0, false, "AbortController", controllerConstructorFn)
@@ -231,6 +240,8 @@ type AbortSignal struct {
 	// poller working unchanged for every kind of signal, including a
 	// composite one from AbortSignal.any().
 	jsObj *vm.PlainObject
+	// events creates the dispatched "abort" Event (the VM's Event intrinsic).
+	events *eventRealm
 }
 
 // removeListenerLocked removes target from s.listeners. Caller must hold s.mu.
@@ -267,19 +278,25 @@ func triggerAbort(vmInstance *vm.VM, signal *AbortSignal, reason vm.Value) {
 	listeners := make([]*abortListener, len(signal.listeners))
 	copy(listeners, signal.listeners)
 	onabort := signal.onabort
+	events := signal.events
 	var jsSelf vm.Value
 	if signal.jsObj != nil {
 		jsSelf = vm.NewValueFromPlainObject(signal.jsObj)
 	}
 	signal.mu.Unlock()
 
-	if jsSelf.Type() == vm.TypeUndefined {
+	if jsSelf.Type() == vm.TypeUndefined || events == nil {
 		return
 	}
 
-	event := createAbortEventValue(vmInstance, jsSelf)
+	event, slots := events.newTrustedEvent("abort")
+	slots.beginDispatch(jsSelf)
+	defer slots.endDispatch()
 
 	for _, l := range listeners {
+		if slots.stopImmediate {
+			return
+		}
 		signal.mu.Lock()
 		skip := l.removed
 		if l.once && !skip {
@@ -301,7 +318,7 @@ func triggerAbort(vmInstance *vm.VM, signal *AbortSignal, reason vm.Value) {
 	// A, B, C here we fire A, C, B. Documented deviation - accepted to keep
 	// this a single extra field instead of threading onabort through the
 	// same ordered list as real listeners.
-	if onabort.IsCallable() {
+	if onabort.IsCallable() && !slots.stopImmediate {
 		callEventHandler(vmInstance, onabort, jsSelf, event)
 	}
 }
@@ -321,34 +338,6 @@ func callEventHandler(vmInstance *vm.VM, callback vm.Value, target vm.Value, eve
 	}
 }
 
-// createAbortEventValue builds a minimal Event-like object for dispatch to
-// "abort" listeners: type/target/currentTarget plus the no-op methods
-// libraries commonly call defensively (preventDefault etc. - abort events
-// are neither cancelable nor bubbling, so these are legitimately no-ops).
-func createAbortEventValue(vmInstance *vm.VM, target vm.Value) vm.Value {
-	evt := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-	evt.SetOwn("type", vm.NewString("abort"))
-	evt.SetOwn("target", target)
-	evt.SetOwn("currentTarget", target)
-	evt.SetOwn("bubbles", vm.False)
-	evt.SetOwn("cancelable", vm.False)
-	evt.SetOwn("composed", vm.False)
-	evt.SetOwn("defaultPrevented", vm.False)
-	evt.SetOwn("isTrusted", vm.True)
-	evt.SetOwn("timeStamp", vm.NumberValue(float64(time.Now().UnixMilli())))
-
-	noop := func(name string) vm.Value {
-		return vm.NewNativeFunction(0, false, name, func(args []vm.Value) (vm.Value, error) {
-			return vm.Undefined, nil
-		})
-	}
-	evt.SetOwnNonEnumerable("preventDefault", noop("preventDefault"))
-	evt.SetOwnNonEnumerable("stopPropagation", noop("stopPropagation"))
-	evt.SetOwnNonEnumerable("stopImmediatePropagation", noop("stopImmediatePropagation"))
-
-	return vm.NewValueFromPlainObject(evt)
-}
-
 // parseOnceOption reads the `once` flag out of addEventListener's optional
 // third argument. A bare boolean there is the legacy `useCapture` parameter,
 // not `once` (and capture is meaningless for AbortSignal's non-bubbling
@@ -362,7 +351,7 @@ func parseOnceOption(options vm.Value) bool {
 	return false
 }
 
-func createAbortSignalObject(vmInstance *vm.VM, signal *AbortSignal, signalProto *vm.PlainObject) vm.Value {
+func createAbortSignalObject(vmInstance *vm.VM, events *eventRealm, signal *AbortSignal, signalProto *vm.PlainObject) vm.Value {
 	obj := vm.NewObject(vm.NewValueFromPlainObject(signalProto)).AsPlainObject()
 
 	// Store the signal reference for internal use
@@ -370,6 +359,7 @@ func createAbortSignalObject(vmInstance *vm.VM, signal *AbortSignal, signalProto
 
 	signalRef.mu.Lock()
 	signalRef.jsObj = obj
+	signalRef.events = events
 	aborted := signalRef.aborted
 	reason := signalRef.reason
 	signalRef.mu.Unlock()
@@ -479,11 +469,11 @@ func createAbortSignalObject(vmInstance *vm.VM, signal *AbortSignal, signalProto
 	return vm.NewValueFromPlainObject(obj)
 }
 
-func createAbortControllerObject(vmInstance *vm.VM, controller *AbortController, controllerProto *vm.PlainObject, signalProto *vm.PlainObject) vm.Value {
+func createAbortControllerObject(vmInstance *vm.VM, events *eventRealm, controller *AbortController, controllerProto *vm.PlainObject, signalProto *vm.PlainObject) vm.Value {
 	obj := vm.NewObject(vm.NewValueFromPlainObject(controllerProto)).AsPlainObject()
 
 	// Create the signal object
-	signalObj := createAbortSignalObject(vmInstance, controller.signal, signalProto)
+	signalObj := createAbortSignalObject(vmInstance, events, controller.signal, signalProto)
 
 	// signal property
 	obj.SetOwn("signal", signalObj)
