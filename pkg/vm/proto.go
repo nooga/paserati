@@ -141,7 +141,16 @@ func (vm *VM) getOwnGeneric(v Value, propName string) (Value, bool) {
 	case TypeDictObject:
 		return v.AsDictObject().GetOwn(propName)
 	case TypeArray:
-		return v.AsArray().GetOwn(propName)
+		// An array used as a prototype still has its exotic own properties:
+		// length and its elements, not only named properties (#571).
+		arr := v.AsArray()
+		if propName == "length" {
+			return NumberValue(float64(arr.Length())), true
+		}
+		if idx, ok := ParseArrayIndex(propName); ok && arr.HasIndex(idx) {
+			return arr.Get(idx), true
+		}
+		return arr.GetOwn(propName)
 	case TypeClosure:
 		cl := v.AsClosure()
 		if cl.Properties != nil {
@@ -374,4 +383,27 @@ func (vm *VM) getOwnInstanceProperty(objVal Value, propName string) (Value, bool
 		}
 	}
 	return Undefined, false
+}
+
+// PlainObjectHasProperty is [[HasProperty]] for a string key on a plain
+// object. PlainObject.Has only walks plain and dictionary prototypes, so on a
+// miss the walk resumes from the first prototype of another kind (an array,
+// a function, ...) through the generic path (#571).
+func (vm *VM) PlainObjectHasProperty(po *PlainObject, name string) bool {
+	if po.Has(name) {
+		return true
+	}
+	for cur := po; ; {
+		pv := cur.GetPrototype()
+		switch pv.Type() {
+		case TypeObject:
+			cur = pv.AsPlainObject()
+			continue
+		case TypeNull, TypeUndefined, TypeDictObject:
+			// Has already covered a dictionary prototype and whatever follows it.
+			return false
+		}
+		_, ok := vm.getInheritedGeneric(pv, name)
+		return ok
+	}
 }

@@ -76,12 +76,12 @@ func (vm *VM) stackOverflowExceptionError() error {
 // them; the dispatch loop's register allocation is the thing being protected.
 //
 //go:noinline
-func setTailCallHomeObject(frame *CallFrame, calleeFunc *FunctionObject, thisVal Value) {
-	if calleeFunc.IsArrowFunction {
+func setTailCallHomeObject(frame *CallFrame, calleeClosure *ClosureObject, thisVal Value) {
+	if calleeClosure.Fn.IsArrowFunction {
 		return
 	}
-	if calleeFunc.HomeObject.Type() != TypeUndefined && calleeFunc.HomeObject.Type() != TypeNull {
-		frame.homeObject = calleeFunc.HomeObject
+	if home := calleeClosure.homeObject(); home.Type() != TypeUndefined && home.Type() != TypeNull {
+		frame.homeObject = home
 	} else if thisVal.Type() != TypeUndefined && thisVal.Type() != TypeNull {
 		frame.homeObject = thisVal
 	} else {
@@ -504,9 +504,9 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 		// Arrow functions inherit homeObject from their enclosing scope
 		if calleeFunc.IsArrowFunction {
 			newFrame.homeObject = currentFrame.homeObject
-		} else if calleeFunc.HomeObject.Type() != TypeUndefined && calleeFunc.HomeObject.Type() != TypeNull {
-			// Use the function's defined HomeObject (set when method is defined on prototype/object)
-			newFrame.homeObject = calleeFunc.HomeObject
+		} else if home := calleeClosure.homeObject(); home.Type() != TypeUndefined && home.Type() != TypeNull {
+			// Use the method's HomeObject (set when it is defined on a prototype/object)
+			newFrame.homeObject = home
 		} else if thisValue.Type() != TypeUndefined && thisValue.Type() != TypeNull {
 			// Fall back to thisValue for method calls where HomeObject wasn't explicitly set
 			// This is important for static field initializers called as methods on the constructor

@@ -400,8 +400,8 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		// Check the closure's *custom* [[Prototype]] chain (set via
 		// Object.setPrototypeOf) for an inherited accessor setter — e.g.
 		// chalk's `level` setter defined on a Function-typed prototype.
-		if propName != "prototype" && closure.Fn.Prototype.Type() != TypeNull && closure.Fn.Prototype.Type() != TypeUndefined {
-			if handled, ok, status, val := vm.checkCustomProtoChainAccessorSetter(closure.Fn.Prototype, propName, objVal, valueToSet); handled {
+		if propName != "prototype" && closure.GetProto().Type() != TypeNull && closure.GetProto().Type() != TypeUndefined {
+			if handled, ok, status, val := vm.checkCustomProtoChainAccessorSetter(closure.GetProto(), propName, objVal, valueToSet); handled {
 				return ok, status, val
 			}
 		}
