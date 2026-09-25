@@ -834,8 +834,8 @@ func (vm *VM) getPropertyWithReceiver(obj Value, propName string, receiver Value
 					return cl.GetPrototypeWithVM(vm), nil
 				}
 				// Walk [[Prototype]] chain (set by Object.setPrototypeOf)
-				if cl.Fn.Prototype.Type() != TypeUndefined && cl.Fn.Prototype.Type() != TypeNull {
-					return vm.getPropertyWithReceiver(cl.Fn.Prototype, propName, receiver)
+				if cl.GetProto().Type() != TypeUndefined && cl.GetProto().Type() != TypeNull {
+					return vm.getPropertyWithReceiver(cl.GetProto(), propName, receiver)
 				}
 			}
 			// Fall back to Function.prototype (which is a NativeFunctionWithProps)

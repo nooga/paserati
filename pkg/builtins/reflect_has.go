@@ -46,7 +46,7 @@ func reflectHas(vmInstance *vm.VM, target vm.Value, key vm.Value) (bool, error) 
 			_, ok := obj.GetOwnByKey(propKey)
 			return ok, nil
 		}
-		return obj.Has(name), nil
+		return vmInstance.PlainObjectHasProperty(obj, name), nil
 
 	case vm.TypeDictObject:
 		return target.AsDictObject().Has(name), nil

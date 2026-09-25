@@ -93,6 +93,8 @@ type ClosureObject struct {
 	CapturedArguments        Value        // Captured 'arguments' for arrow functions (lexical arguments binding)
 	CapturedNewTarget        Value        // Captured 'new.target' for arrow functions (lexical new.target binding)
 	CapturedHomeObject       Value        // Captured [[HomeObject]] for arrow functions (for super property access)
+	HomeObject               Value        // This method's [[HomeObject]]; Undefined falls back to Fn.HomeObject (#570)
+	proto                    Value        // This closure's [[Prototype]]; see GetProto (#570)
 	Properties               *PlainObject // Per-closure properties like .prototype (created lazily, shadows Fn.Properties)
 	constructorFixed         bool         // True after we've fixed the constructor property to point to this closure
 }
@@ -374,4 +376,34 @@ func NewBoundFunction(originalFunction Value, boundThis Value, partialArgs []Val
 		Name:             name,
 		Properties:       NewObject(Undefined).AsPlainObject(),
 	})}
+}
+
+// homeObject is the closure's [[HomeObject]]. MakeMethod sets it per closure:
+// every evaluation of a method literal makes a new closure with its own home
+// object, so the value on the shared FunctionObject template is only a
+// fallback for closures that never went through a method definition (#570).
+func (c *ClosureObject) homeObject() Value {
+	if c.HomeObject.typ != TypeUndefined {
+		return c.HomeObject
+	}
+	return c.Fn.HomeObject
+}
+
+// GetProto is the closure's [[Prototype]]. It is per closure: two classes
+// made from the same class literal (e.g. by a factory) extend different
+// bases, and Object.setPrototypeOf on one function must not move its
+// siblings (#570). Internal wrapper closures that never had one set fall
+// back to the shared FunctionObject's value.
+func (c *ClosureObject) GetProto() Value {
+	if c.proto.typ != TypeUndefined {
+		return c.proto
+	}
+	return c.Fn.Prototype
+}
+
+// SetProto sets the closure's [[Prototype]]. The FunctionObject template is
+// updated too, as the fallback for closures without their own.
+func (c *ClosureObject) SetProto(v Value) {
+	c.proto = v
+	c.Fn.Prototype = v
 }
