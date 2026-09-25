@@ -35,6 +35,7 @@ func (vm *VM) handleOpDefineMethodEnumerable(code []byte, ip *int, constants []V
 		if methodVal.Type() == TypeClosure {
 			closure := methodVal.AsClosure()
 			closure.Fn.HomeObject = objVal
+			closure.HomeObject = objVal
 		} else if methodVal.Type() == TypeFunction {
 			// Bare FunctionObject (not yet wrapped in closure)
 			funcObj := AsFunction(methodVal)

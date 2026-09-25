@@ -3843,8 +3843,7 @@ startExecution:
 					}
 				case TypeObject:
 					plainObj := objVal.AsPlainObject()
-					// Use prototype-aware Has() method first
-					hasProperty = plainObj.Has(propKey)
+					hasProperty = vm.PlainObjectHasProperty(plainObj, propKey)
 					// Special handling for global object: also check heap variables (var declarations)
 					// But ONLY if the property doesn't exist on the object itself
 					// This handles the case where var x is declared but not yet assigned
@@ -4426,7 +4425,7 @@ startExecution:
 							frame.thisValue = Undefined
 						}
 					}
-					setTailCallHomeObject(frame, calleeFunc, frame.thisValue)
+					setTailCallHomeObject(frame, calleeClosure, frame.thisValue)
 					frame.isConstructorCall = false
 					frame.thisCell = nil // see this_cell.go
 					frame.isDirectCall = false
@@ -4678,7 +4677,7 @@ startExecution:
 					} else {
 						frame.thisValue = thisVal // Method call: preserve 'this'
 					}
-					setTailCallHomeObject(frame, calleeFunc, thisVal)
+					setTailCallHomeObject(frame, calleeClosure, thisVal)
 					frame.isConstructorCall = false
 					frame.thisCell = nil // see this_cell.go
 					frame.isDirectCall = false
@@ -7237,24 +7236,24 @@ startExecution:
 				// Regular functions have Function.prototype
 				if cl.Fn.IsGenerator && cl.Fn.IsAsync {
 					if !vm.AsyncGeneratorFunctionPrototype.IsUndefined() {
-						cl.Fn.Prototype = vm.AsyncGeneratorFunctionPrototype
+						cl.SetProto(vm.AsyncGeneratorFunctionPrototype)
 					} else {
-						cl.Fn.Prototype = vm.FunctionPrototype
+						cl.SetProto(vm.FunctionPrototype)
 					}
 				} else if cl.Fn.IsGenerator {
 					if !vm.GeneratorFunctionPrototype.IsUndefined() {
-						cl.Fn.Prototype = vm.GeneratorFunctionPrototype
+						cl.SetProto(vm.GeneratorFunctionPrototype)
 					} else {
-						cl.Fn.Prototype = vm.FunctionPrototype
+						cl.SetProto(vm.FunctionPrototype)
 					}
 				} else if cl.Fn.IsAsync {
 					if !vm.AsyncFunctionPrototype.IsUndefined() {
-						cl.Fn.Prototype = vm.AsyncFunctionPrototype
+						cl.SetProto(vm.AsyncFunctionPrototype)
 					} else {
-						cl.Fn.Prototype = vm.FunctionPrototype
+						cl.SetProto(vm.FunctionPrototype)
 					}
 				} else {
-					cl.Fn.Prototype = vm.FunctionPrototype
+					cl.SetProto(vm.FunctionPrototype)
 				}
 				// Capture with-object stack if we're inside a with block
 				// This allows closures to resolve identifiers through the with-object
@@ -7281,7 +7280,7 @@ startExecution:
 						if frame.closure.Fn.IsArrowFunction {
 							cl.CapturedSuperConstructor = frame.closure.CapturedSuperConstructor
 						} else {
-							cl.CapturedSuperConstructor = frame.closure.Fn.Prototype
+							cl.CapturedSuperConstructor = frame.closure.GetProto()
 						}
 					}
 					// Capture new.target from enclosing scope (for lexical new.target binding)
@@ -7411,24 +7410,24 @@ startExecution:
 				// Regular functions have Function.prototype
 				if cl.Fn.IsGenerator && cl.Fn.IsAsync {
 					if !vm.AsyncGeneratorFunctionPrototype.IsUndefined() {
-						cl.Fn.Prototype = vm.AsyncGeneratorFunctionPrototype
+						cl.SetProto(vm.AsyncGeneratorFunctionPrototype)
 					} else {
-						cl.Fn.Prototype = vm.FunctionPrototype
+						cl.SetProto(vm.FunctionPrototype)
 					}
 				} else if cl.Fn.IsGenerator {
 					if !vm.GeneratorFunctionPrototype.IsUndefined() {
-						cl.Fn.Prototype = vm.GeneratorFunctionPrototype
+						cl.SetProto(vm.GeneratorFunctionPrototype)
 					} else {
-						cl.Fn.Prototype = vm.FunctionPrototype
+						cl.SetProto(vm.FunctionPrototype)
 					}
 				} else if cl.Fn.IsAsync {
 					if !vm.AsyncFunctionPrototype.IsUndefined() {
-						cl.Fn.Prototype = vm.AsyncFunctionPrototype
+						cl.SetProto(vm.AsyncFunctionPrototype)
 					} else {
-						cl.Fn.Prototype = vm.FunctionPrototype
+						cl.SetProto(vm.FunctionPrototype)
 					}
 				} else {
-					cl.Fn.Prototype = vm.FunctionPrototype
+					cl.SetProto(vm.FunctionPrototype)
 				}
 				// Capture with-object stack if we're inside a with block
 				// This allows closures to resolve identifiers through the with-object
@@ -7455,7 +7454,7 @@ startExecution:
 						if frame.closure.Fn.IsArrowFunction {
 							cl.CapturedSuperConstructor = frame.closure.CapturedSuperConstructor
 						} else {
-							cl.CapturedSuperConstructor = frame.closure.Fn.Prototype
+							cl.CapturedSuperConstructor = frame.closure.GetProto()
 						}
 					}
 					// Capture new.target from enclosing scope (for lexical new.target binding)
@@ -7817,6 +7816,7 @@ startExecution:
 				if getterVal.Type() == TypeClosure {
 					closure := getterVal.AsClosure()
 					closure.Fn.HomeObject = objVal
+					closure.HomeObject = objVal
 				} else if getterVal.Type() == TypeFunction {
 					funcObj := AsFunction(getterVal)
 					funcObj.HomeObject = objVal
@@ -7826,6 +7826,7 @@ startExecution:
 				if setterVal.Type() == TypeClosure {
 					closure := setterVal.AsClosure()
 					closure.Fn.HomeObject = objVal
+					closure.HomeObject = objVal
 				} else if setterVal.Type() == TypeFunction {
 					funcObj := AsFunction(setterVal)
 					funcObj.HomeObject = objVal
@@ -7897,6 +7898,7 @@ startExecution:
 					if getterVal.Type() == TypeClosure {
 						closure := getterVal.AsClosure()
 						closure.Fn.HomeObject = objVal
+						closure.HomeObject = objVal
 						closure.Fn.Name = "get " + funcNameSuffix
 					} else if getterVal.Type() == TypeFunction {
 						funcObj := AsFunction(getterVal)
@@ -7908,6 +7910,7 @@ startExecution:
 					if setterVal.Type() == TypeClosure {
 						closure := setterVal.AsClosure()
 						closure.Fn.HomeObject = objVal
+						closure.HomeObject = objVal
 						closure.Fn.Name = "set " + funcNameSuffix
 					} else if setterVal.Type() == TypeFunction {
 						funcObj := AsFunction(setterVal)
@@ -7987,6 +7990,7 @@ startExecution:
 				if getterVal.Type() == TypeClosure {
 					closure := getterVal.AsClosure()
 					closure.Fn.HomeObject = objVal
+					closure.HomeObject = objVal
 					closure.Fn.Name = "get " + propName
 				} else if getterVal.Type() == TypeFunction {
 					funcObj := AsFunction(getterVal)
@@ -7998,6 +8002,7 @@ startExecution:
 				if setterVal.Type() == TypeClosure {
 					closure := setterVal.AsClosure()
 					closure.Fn.HomeObject = objVal
+					closure.HomeObject = objVal
 					closure.Fn.Name = "set " + propName
 				} else if setterVal.Type() == TypeFunction {
 					funcObj := AsFunction(setterVal)
@@ -8055,7 +8060,7 @@ startExecution:
 			if closureObj.Fn != nil {
 				// Set the closure's internal prototype to the given value
 				// This is used for class inheritance so static methods can access super
-				closureObj.Fn.Prototype = protoVal
+				closureObj.SetProto(protoVal)
 			}
 
 		case OpValidateSuperclass:
@@ -13435,7 +13440,7 @@ startExecution:
 				// For static methods, HomeObject is the class constructor (a closure)
 				closureObj := homeObject.AsClosure()
 				if closureObj.Fn != nil {
-					superBase = closureObj.Fn.Prototype
+					superBase = closureObj.GetProto()
 				} else {
 					superBase = Null
 				}
@@ -13521,7 +13526,7 @@ startExecution:
 				// The super base is the closure's internal prototype (the parent class constructor)
 				closureObj := homeObject.AsClosure()
 				if closureObj.Fn != nil {
-					protoValue = closureObj.Fn.Prototype
+					protoValue = closureObj.GetProto()
 					if debugVM {
 						fmt.Printf("[DEBUG OpGetSuper] Got closure's internal prototype for static super: type=%d, value=%s\n", protoValue.Type(), protoValue.Inspect())
 					}
@@ -13631,8 +13636,8 @@ startExecution:
 				}
 			} else if homeObject.Type() == TypeClosure {
 				cl := homeObject.AsClosure()
-				if cl.Fn.Prototype.Type() != TypeNull && cl.Fn.Prototype.Type() != TypeUndefined {
-					protoValue = cl.Fn.Prototype
+				if cl.GetProto().Type() != TypeNull && cl.GetProto().Type() != TypeUndefined {
+					protoValue = cl.GetProto()
 				} else {
 					protoValue = vm.FunctionPrototype
 				}
@@ -13717,8 +13722,8 @@ startExecution:
 				}
 			} else if homeObject.Type() == TypeClosure {
 				cl := homeObject.AsClosure()
-				if cl.Fn.Prototype.Type() != TypeNull && cl.Fn.Prototype.Type() != TypeUndefined {
-					protoValue = cl.Fn.Prototype
+				if cl.GetProto().Type() != TypeNull && cl.GetProto().Type() != TypeUndefined {
+					protoValue = cl.GetProto()
 				} else {
 					protoValue = vm.FunctionPrototype
 				}
@@ -13868,8 +13873,8 @@ startExecution:
 				}
 			} else if homeObject.Type() == TypeClosure {
 				cl := homeObject.AsClosure()
-				if cl.Fn.Prototype.Type() != TypeNull && cl.Fn.Prototype.Type() != TypeUndefined {
-					protoValue = cl.Fn.Prototype
+				if cl.GetProto().Type() != TypeNull && cl.GetProto().Type() != TypeUndefined {
+					protoValue = cl.GetProto()
 				} else {
 					protoValue = vm.FunctionPrototype
 				}
@@ -13984,7 +13989,19 @@ startExecution:
 			default:
 				// For objects and other types, call ToPrimitive with "string" hint
 				if keyValue.IsObject() {
+					frame.ip = ip // Save IP before potential exception
+					vm.helperCallDepth++
 					primitiveVal := vm.toPrimitive(keyValue, "string")
+					vm.helperCallDepth--
+					// A throwing toString/valueOf must reach the enclosing
+					// handler instead of running the assignment (#568).
+					if vm.unwinding || vm.handlerFound {
+						vm.handlerFound = false
+						if vm.unwinding && (vm.frameCount == 0 || vm.unwindingCrossedNative) {
+							return InterpretRuntimeError, vm.currentException
+						}
+						goto reloadFrame
+					}
 					if primitiveVal.Type() == TypeSymbol {
 						symKey = primitiveVal
 					} else {
@@ -14033,7 +14050,7 @@ startExecution:
 				// For non-arrow functions, use the function's [[Prototype]]
 				// This is what ECMAScript's GetSuperConstructor() returns
 				if currentClosure.Fn != nil {
-					registers[destReg] = currentClosure.Fn.Prototype
+					registers[destReg] = currentClosure.GetProto()
 				} else {
 					registers[destReg] = vm.FunctionPrototype
 				}
@@ -14640,7 +14657,20 @@ startExecution:
 						seen[k] = true
 					}
 					pv := cur.GetPrototype()
-					if !pv.IsObject() {
+					// An array prototype contributes its indices and named
+					// keys; the walk then continues above it (#571).
+					if pv.Type() == TypeArray {
+						arr := pv.AsArray()
+						for _, k := range arrayForInOwnKeys(arr) {
+							if !seen[k] {
+								keys = append(keys, k)
+								seen[k] = true
+							}
+						}
+						seen["length"] = true
+						pv = vm.prototypeOf(pv)
+					}
+					if pv.Type() != TypeObject {
 						break
 					}
 					cur = pv.AsPlainObject()
@@ -14667,55 +14697,7 @@ startExecution:
 				// exist beyond it via arraySparseIndices (O(number of
 				// entries), not O(index value)) - ascending, per
 				// OrdinaryOwnPropertyKeys.
-				denseLen := arr.DenseLength()
-				for i := 0; i < denseLen; i++ {
-					key := strconv.Itoa(i)
-					if arr.HasAccessors() {
-						if _, _, e, _, ok := arr.GetOwnAccessor(key); ok {
-							if e {
-								keys = append(keys, key)
-							}
-							continue
-						}
-					}
-					if arr.HasIndex(i) {
-						keys = append(keys, key)
-					} else if arr.propertyDesc != nil {
-						// Beyond maxDenseArrayDefineIndex, a defined data
-						// property is tracked in propertyDesc/properties
-						// instead of elements - see ArrayDefineOwnProperty.
-						if desc, ok := arr.propertyDesc[key]; ok && desc.Enumerable {
-							keys = append(keys, key)
-						}
-					}
-				}
-				for _, idx := range ArraySparseIndices(arr, true) {
-					keys = append(keys, strconv.Itoa(idx))
-				}
-				// Then the named (non-index) own properties: an exec result's
-				// index/input/groups/indices, or anything a program stored on
-				// the array - accessor properties (AccessorKeys(), e.g. an
-				// Object.defineProperty(arr, "foo", {get, enumerable}) -
-				// stored in getters/setters, never in `properties`, so
-				// NamedPropertyKeys() alone can't see it) first, then plain
-				// data properties. Sparse indices living in either store were
-				// already handled above via arraySparseIndices, so both loops
-				// filter them out with tryParseArrayIndex - not
-				// LooksLikeArrayIndex, which has no upper bound and would let
-				// an out-of-range numeric key like "4294967295" slip past
-				// both this filter and arraySparseIndices' own filter,
-				// vanishing from enumeration entirely (see the matching
-				// object-spread TypeArray case above for the full
-				// explanation of that predicate mismatch).
-				for _, key := range arr.OwnNamedKeys() {
-					if _, _, enumerable, _, isAccessor := arr.GetOwnAccessor(key); isAccessor {
-						if enumerable {
-							keys = append(keys, key)
-						}
-					} else if _, enumerable, ok := arr.GetNamedPropertyDescriptor(key); ok && enumerable {
-						keys = append(keys, key)
-					}
-				}
+				keys = arrayForInOwnKeys(arr)
 			case TypeArguments:
 				// Arguments objects enumerate their indices as strings, skipping
 				// any made non-enumerable (or deleted) via Object.defineProperty/
@@ -22934,4 +22916,60 @@ func (vm *VM) ThrowRangeError(message string) {
 	}
 
 	vm.throwException(errorInstance)
+}
+
+// arrayForInOwnKeys lists arr's enumerable own string keys in for-in order:
+// indices ascending (skipping holes), then named properties.
+func arrayForInOwnKeys(arr *ArrayObject) []string {
+	var keys []string
+	denseLen := arr.DenseLength()
+	for i := 0; i < denseLen; i++ {
+		key := strconv.Itoa(i)
+		if arr.HasAccessors() {
+			if _, _, e, _, ok := arr.GetOwnAccessor(key); ok {
+				if e {
+					keys = append(keys, key)
+				}
+				continue
+			}
+		}
+		if arr.HasIndex(i) {
+			keys = append(keys, key)
+		} else if arr.propertyDesc != nil {
+			// Beyond maxDenseArrayDefineIndex, a defined data
+			// property is tracked in propertyDesc/properties
+			// instead of elements - see ArrayDefineOwnProperty.
+			if desc, ok := arr.propertyDesc[key]; ok && desc.Enumerable {
+				keys = append(keys, key)
+			}
+		}
+	}
+	for _, idx := range ArraySparseIndices(arr, true) {
+		keys = append(keys, strconv.Itoa(idx))
+	}
+	// Then the named (non-index) own properties: an exec result's
+	// index/input/groups/indices, or anything a program stored on
+	// the array - accessor properties (AccessorKeys(), e.g. an
+	// Object.defineProperty(arr, "foo", {get, enumerable}) -
+	// stored in getters/setters, never in `properties`, so
+	// NamedPropertyKeys() alone can't see it) first, then plain
+	// data properties. Sparse indices living in either store were
+	// already handled above via arraySparseIndices, so both loops
+	// filter them out with tryParseArrayIndex - not
+	// LooksLikeArrayIndex, which has no upper bound and would let
+	// an out-of-range numeric key like "4294967295" slip past
+	// both this filter and arraySparseIndices' own filter,
+	// vanishing from enumeration entirely (see the matching
+	// object-spread TypeArray case above for the full
+	// explanation of that predicate mismatch).
+	for _, key := range arr.OwnNamedKeys() {
+		if _, _, enumerable, _, isAccessor := arr.GetOwnAccessor(key); isAccessor {
+			if enumerable {
+				keys = append(keys, key)
+			}
+		} else if _, enumerable, ok := arr.GetNamedPropertyDescriptor(key); ok && enumerable {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }

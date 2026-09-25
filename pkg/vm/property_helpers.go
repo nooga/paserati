@@ -109,14 +109,14 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 	// Walk the closure's [[Prototype]] chain for inherited static properties (class inheritance)
 	// This handles `class C extends B { }` where C.staticMethod should find B.staticMethod
 	// Only walk user-defined class constructors (Closure/Function), stop at built-in prototypes
-	// NOTE: never resolve "prototype" itself here. closure.Fn.Prototype is the function's
+	// NOTE: never resolve "prototype" itself here. closure.GetProto() is the function's
 	// internal [[Prototype]] slot (e.g. GeneratorFunction.prototype for `function*(){}`), which
 	// is a distinct concept from the function's own visible `.prototype` property. Generator
 	// functions' [[Prototype]] carries an own "prototype" property pointing at the *shared*
 	// GeneratorPrototype singleton — matching on it here would hand out that shared object
 	// instead of lazily creating a fresh per-instance prototype below.
-	if closure != nil && propName != "prototype" && closure.Fn.Prototype.Type() != TypeNull && closure.Fn.Prototype.Type() != TypeUndefined {
-		proto := closure.Fn.Prototype
+	if closure != nil && propName != "prototype" && closure.GetProto().Type() != TypeNull && closure.GetProto().Type() != TypeUndefined {
+		proto := closure.GetProto()
 		for proto.Type() != TypeNull && proto.Type() != TypeUndefined {
 			switch proto.Type() {
 			case TypeClosure:
@@ -144,7 +144,7 @@ func (vm *VM) handleCallableProperty(objVal Value, propName string) (Value, bool
 						return prop, true
 					}
 				}
-				proto = cl.Fn.Prototype
+				proto = cl.GetProto()
 			case TypeFunction:
 				fn := proto.AsFunction()
 				if fn.Properties != nil {
@@ -615,7 +615,7 @@ func (vm *VM) checkCustomProtoChainAccessorSetter(startProto Value, propName str
 					return false, false, InterpretOK, Undefined
 				}
 			}
-			proto = cl.Fn.Prototype
+			proto = cl.GetProto()
 		case TypeFunction:
 			fnProto := proto.AsFunction()
 			if fnProto.Properties != nil {
@@ -1033,6 +1033,11 @@ func (vm *VM) getPropertyByKeyFromPrototypeChain(proto Value, key PropertyKey) (
 			}
 			proto = dict.GetPrototype()
 		default:
+			// Other kinds (an array, a function, ...) standing in as a
+			// prototype: walk the rest of the chain generically (#571).
+			if key.isString() {
+				return vm.getInheritedGeneric(proto, key.name)
+			}
 			return Undefined, false
 		}
 	}

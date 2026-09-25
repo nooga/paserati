@@ -63,7 +63,7 @@ func (vm *VM) symbolPropsAndProto(v Value) ([]*PlainObject, Value, bool) {
 		}
 		proto := Undefined
 		if cl.Fn != nil {
-			proto = cl.Fn.Prototype
+			proto = cl.GetProto()
 		}
 		// A closure's own Properties shadow its FunctionObject's, but both are
 		// consulted: the per-closure table is created lazily, so a property
