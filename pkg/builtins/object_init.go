@@ -240,12 +240,10 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 			// We check if it exists in Properties (created lazily or explicitly)
 			// or if the function is a class constructor (always has prototype)
 			if propName == "prototype" && !closure.Fn.IsArrowFunction {
-				// Class constructors always have prototype
-				if closure.Fn.IsClassConstructor {
-					return vm.BooleanValue(true), nil
-				}
-				// Generator functions (sync and async) always have prototype per spec
-				if closure.Fn.IsGenerator {
+				// Constructors (classes, plain functions) and generator
+				// functions always have a prototype; plain async functions
+				// do not.
+				if vm.HasOwnFunctionIntrinsic(thisValue, "prototype") {
 					return vm.BooleanValue(true), nil
 				}
 				// For closures, check both closure.Properties and Fn.Properties

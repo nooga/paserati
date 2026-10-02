@@ -1111,7 +1111,7 @@ func HasOwnFunctionIntrinsic(target Value, name string) bool {
 		case "length":
 			return !fn.DeletedLength
 		case "prototype":
-			return !fn.IsArrowFunction
+			return fn.hasIntrinsicPrototype()
 		}
 	case TypeClosure:
 		fn := target.AsClosure().Fn
@@ -1121,7 +1121,7 @@ func HasOwnFunctionIntrinsic(target Value, name string) bool {
 		case "length":
 			return !fn.DeletedLength
 		case "prototype":
-			return !fn.IsArrowFunction
+			return fn.hasIntrinsicPrototype()
 		}
 	case TypeNativeFunction:
 		nf := target.AsNativeFunction()

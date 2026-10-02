@@ -22,6 +22,7 @@ type FunctionObject struct {
 	IsArrowFunction      bool         // True for arrow functions (cannot be used as constructors)
 	IsDerivedConstructor bool         // True for derived class constructors (must call super())
 	IsClassConstructor   bool         // True for class constructors (calling without 'new' throws TypeError)
+	IsMethod             bool         // True for functions defined with method syntax (object/class methods, accessors); they have no own "prototype" unless they are generators
 	Properties           *PlainObject // For properties like .prototype (created lazily)
 	Prototype            Value        // [[Prototype]] - the function's prototype (usually Function.prototype)
 	subclassPrototype    Value        // Per-instance [[Prototype]] override when this function is a `new Sub()` instance of a Function subclass; Undefined = use the flag-based intrinsic
@@ -406,4 +407,19 @@ func (c *ClosureObject) GetProto() Value {
 func (c *ClosureObject) SetProto(v Value) {
 	c.proto = v
 	c.Fn.Prototype = v
+}
+
+// hasIntrinsicPrototype reports whether the function owns a "prototype"
+// property: constructors and generators do; arrow functions, plain async
+// functions and methods do not.
+func (f *FunctionObject) hasIntrinsicPrototype() bool {
+	switch {
+	case f.IsArrowFunction:
+		return false
+	case f.IsClassConstructor:
+		return true
+	case f.IsMethod && !f.IsGenerator:
+		return false
+	}
+	return !f.IsAsync || f.IsGenerator
 }

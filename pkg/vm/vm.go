@@ -474,6 +474,9 @@ type VM struct {
 	// it (see #102).
 	unhandledRejectionPrefix string
 
+	// rejections tracks rejected promises with no handler yet (#120).
+	rejections rejectionTracker
+
 	// Finally block state (Phase 3)
 	pendingAction   PendingAction // Action to perform after finally blocks complete
 	pendingValue    Value         // Value associated with pending action (e.g., return value)
@@ -7817,20 +7820,24 @@ startExecution:
 				if getterVal.Type() == TypeClosure {
 					closure := getterVal.AsClosure()
 					closure.Fn.HomeObject = objVal
+					closure.Fn.IsMethod = true
 					closure.HomeObject = objVal
 				} else if getterVal.Type() == TypeFunction {
 					funcObj := AsFunction(getterVal)
 					funcObj.HomeObject = objVal
+					funcObj.IsMethod = true
 				}
 			}
 			if hasSetter {
 				if setterVal.Type() == TypeClosure {
 					closure := setterVal.AsClosure()
 					closure.Fn.HomeObject = objVal
+					closure.Fn.IsMethod = true
 					closure.HomeObject = objVal
 				} else if setterVal.Type() == TypeFunction {
 					funcObj := AsFunction(setterVal)
 					funcObj.HomeObject = objVal
+					funcObj.IsMethod = true
 				}
 			}
 
@@ -7899,11 +7906,13 @@ startExecution:
 					if getterVal.Type() == TypeClosure {
 						closure := getterVal.AsClosure()
 						closure.Fn.HomeObject = objVal
+						closure.Fn.IsMethod = true
 						closure.HomeObject = objVal
 						closure.Fn.Name = "get " + funcNameSuffix
 					} else if getterVal.Type() == TypeFunction {
 						funcObj := AsFunction(getterVal)
 						funcObj.HomeObject = objVal
+						funcObj.IsMethod = true
 						funcObj.Name = "get " + funcNameSuffix
 					}
 				}
@@ -7911,11 +7920,13 @@ startExecution:
 					if setterVal.Type() == TypeClosure {
 						closure := setterVal.AsClosure()
 						closure.Fn.HomeObject = objVal
+						closure.Fn.IsMethod = true
 						closure.HomeObject = objVal
 						closure.Fn.Name = "set " + funcNameSuffix
 					} else if setterVal.Type() == TypeFunction {
 						funcObj := AsFunction(setterVal)
 						funcObj.HomeObject = objVal
+						funcObj.IsMethod = true
 						funcObj.Name = "set " + funcNameSuffix
 					}
 				}
@@ -7991,11 +8002,13 @@ startExecution:
 				if getterVal.Type() == TypeClosure {
 					closure := getterVal.AsClosure()
 					closure.Fn.HomeObject = objVal
+					closure.Fn.IsMethod = true
 					closure.HomeObject = objVal
 					closure.Fn.Name = "get " + propName
 				} else if getterVal.Type() == TypeFunction {
 					funcObj := AsFunction(getterVal)
 					funcObj.HomeObject = objVal
+					funcObj.IsMethod = true
 					funcObj.Name = "get " + propName
 				}
 			}
@@ -8003,11 +8016,13 @@ startExecution:
 				if setterVal.Type() == TypeClosure {
 					closure := setterVal.AsClosure()
 					closure.Fn.HomeObject = objVal
+					closure.Fn.IsMethod = true
 					closure.HomeObject = objVal
 					closure.Fn.Name = "set " + propName
 				} else if setterVal.Type() == TypeFunction {
 					funcObj := AsFunction(setterVal)
 					funcObj.HomeObject = objVal
+					funcObj.IsMethod = true
 					funcObj.Name = "set " + propName
 				}
 			}
@@ -11603,6 +11618,10 @@ startExecution:
 			status, value := vm.handleOpDefineMethodComputed(code, &ip, registers)
 			if status != InterpretOK {
 				return status, value
+			}
+			if vm.handlerFound {
+				vm.handlerFound = false
+				goto reloadFrame
 			}
 
 		case OpDefineMethodComputedEnumerable:

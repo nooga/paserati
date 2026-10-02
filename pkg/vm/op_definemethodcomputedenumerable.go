@@ -22,11 +22,13 @@ func (vm *VM) handleOpDefineMethodComputedEnumerable(code []byte, ip *int, regis
 	if methodVal.Type() == TypeClosure {
 		closure := methodVal.AsClosure()
 		closure.Fn.HomeObject = objVal
+		closure.Fn.IsMethod = true
 		closure.HomeObject = objVal
 	} else if methodVal.Type() == TypeFunction {
 		// Bare FunctionObject (not yet wrapped in closure)
 		funcObj := AsFunction(methodVal)
 		funcObj.HomeObject = objVal
+		funcObj.IsMethod = true
 	}
 
 	// Create PropertyKey - handles both strings and symbols
