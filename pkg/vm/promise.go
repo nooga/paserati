@@ -54,6 +54,7 @@ type PromiseObject struct {
 	mu               sync.Mutex
 	State            PromiseState
 	Result           Value // Fulfillment value or rejection reason
+	handled          bool  // a reject reaction was ever attached (see unhandled_rejection.go)
 	FulfillReactions []PromiseReaction
 	RejectReactions  []PromiseReaction
 
@@ -149,6 +150,7 @@ func (p *PromiseObject) addReaction(isFulfilled bool, reaction PromiseReaction) 
 		p.FulfillReactions = append(p.FulfillReactions, reaction)
 	} else {
 		p.RejectReactions = append(p.RejectReactions, reaction)
+		p.handled = true
 	}
 	return p.State
 }
@@ -178,9 +180,11 @@ func (p *PromiseObject) addAwaitReactions(onFulfill, onReject PromiseReaction) P
 		p.FulfillReactions = append(p.FulfillReactions, onFulfill)
 	case PromiseRejected:
 		p.RejectReactions = append(p.RejectReactions, onReject)
+		p.handled = true
 	default: // Pending
 		p.FulfillReactions = append(p.FulfillReactions, onFulfill)
 		p.RejectReactions = append(p.RejectReactions, onReject)
+		p.handled = true
 	}
 	return p.State
 }
@@ -254,6 +258,7 @@ func (vm *VM) NewRejectedPromise(reason Value) Value {
 		FulfillReactions: []PromiseReaction{},
 		RejectReactions:  []PromiseReaction{},
 	}
+	vm.trackRejection(promise)
 
 	return Value{typ: TypePromise, obj: promiseToUnsafe(promise)}
 }
@@ -392,6 +397,7 @@ func (vm *VM) PerformPromiseThen(p *PromiseObject, onFulfilled, onRejected, capR
 // goroutine (see PromiseObject's mu doc comment).
 func (vm *VM) rejectPromise(promise *PromiseObject, reason Value) {
 	if promise.trySettle(PromiseRejected, reason) {
+		vm.trackRejection(promise)
 		vm.triggerPromiseReactions(promise, false)
 	}
 }

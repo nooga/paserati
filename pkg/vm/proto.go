@@ -69,6 +69,11 @@ func (vm *VM) prototypeOf(v Value) Value {
 		return vm.FunctionPrototype
 	case TypeClosure:
 		cl := v.AsClosure()
+		// An explicit [[Prototype]] (class heritage, setPrototypeOf, a
+		// dynamic-function subclass) wins over the kind's intrinsic one.
+		if p := cl.GetProto(); p.Type() != TypeUndefined {
+			return p
+		}
 		if cl.Fn.IsAsync && cl.Fn.IsGenerator {
 			return vm.AsyncGeneratorFunctionPrototype
 		} else if cl.Fn.IsGenerator {

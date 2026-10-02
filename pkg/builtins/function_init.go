@@ -509,6 +509,7 @@ func compileDynamicFunctionSource(vmInstance *vm.VM, driver interface{}, source 
 }
 
 func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Value, homeRealm *vm.Realm) (vm.Value, error) {
+	newTarget := vmInstance.GetNewTarget() // before any call below can change it
 	// The Function constructor has signature:
 	// Function(param1, param2, ..., paramN, body)
 	// Where all arguments are strings
@@ -587,23 +588,13 @@ func functionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []vm.Va
 		return vm.Undefined, vmInstance.NewTypeError("Function() constant is not callable (got " + functionValue.TypeName() + ")")
 	}
 
-	// Set the function's HomeRealm to the realm where the Function constructor was defined
-	// This is critical for cross-realm behavior (GetFunctionRealm spec)
-	// If homeRealm was captured at constructor init time, use it; otherwise fall back to current realm
-	if functionValue.Type() == vm.TypeFunction {
-		fnObj := functionValue.AsFunction()
-		// CreateDynamicFunction's source text (20.2.1.1.1 steps 17-19): the
-		// function is compiled unnamed, but toString shows it as
-		// "anonymous" with the parameter and body strings on their own
-		// lines (paserati#524).
-		fnObj.SourceText = "function anonymous(" + strings.Join(params, ",") + "\n) {\n" + body + "\n}"
-		if homeRealm != nil {
-			fnObj.HomeRealm = homeRealm
-		} else {
-			fnObj.HomeRealm = vmInstance.CurrentRealm()
-		}
+	// CreateDynamicFunction's source text (20.2.1.1.1 steps 17-19): the
+	// function is compiled unnamed, but toString shows it as "anonymous"
+	// with the parameter and body strings on their own lines (paserati#524).
+	functionValue, err = finishDynamicFunction(vmInstance, functionValue, "function", "function anonymous("+strings.Join(params, ",")+"\n) {\n"+body+"\n}", homeRealm, newTarget)
+	if err != nil {
+		return vm.Undefined, err
 	}
-
 	return functionValue, nil
 }
 
@@ -619,6 +610,7 @@ func asyncFunctionConstructorImpl(vmInstance *vm.VM, driver interface{}, args []
 // expression, and the result's source text is the spec's
 // "<kind> anonymous(<params>\n) {\n<body>\n}" (paserati#524).
 func createDynamicFunction(vmInstance *vm.VM, driver interface{}, args []vm.Value, homeRealm *vm.Realm, kind, ctorName string) (vm.Value, error) {
+	newTarget := vmInstance.GetNewTarget() // before any call below can change it
 	var params []string
 	var body string
 	if len(args) == 1 {
@@ -655,26 +647,60 @@ func createDynamicFunction(vmInstance *vm.VM, driver interface{}, args []vm.Valu
 	if !functionValue.IsCallable() {
 		return vm.Undefined, vmInstance.NewTypeError(ctorName + "() constant is not callable (got " + functionValue.TypeName() + ")")
 	}
-	if functionValue.Type() == vm.TypeFunction {
-		fnObj := functionValue.AsFunction()
-		fnObj.SourceText = kind + " anonymous(" + paramStr + "\n) {\n" + body + "\n}"
-		// The constant is returned without an OpClosure, which is what
-		// normally gives an async/generator function its [[Prototype]].
-		switch kind {
-		case "function*":
-			fnObj.Prototype = vmInstance.GeneratorFunctionPrototype
-		case "async function*":
-			fnObj.Prototype = vmInstance.AsyncGeneratorFunctionPrototype
-		case "async function":
-			fnObj.Prototype = vmInstance.AsyncFunctionPrototype
-		}
-		if homeRealm != nil {
-			fnObj.HomeRealm = homeRealm
-		} else {
-			fnObj.HomeRealm = vmInstance.CurrentRealm()
-		}
+	functionValue, err = finishDynamicFunction(vmInstance, functionValue, kind, kind+" anonymous("+paramStr+"\n) {\n"+body+"\n}", homeRealm, newTarget)
+	if err != nil {
+		return vm.Undefined, err
 	}
 	return functionValue, nil
+}
+
+// finishDynamicFunction turns the function template the dynamic-function
+// source compiled to into the function CreateDynamicFunction returns. The
+// template is the unexecuted constant of `return (function ...)`, not a
+// function value: it has no closure, [[Prototype]] or own properties, so it
+// is wrapped in a closure here, the way OpClosure would (#114). kind is the
+// source prefix ("function", "function*", "async function", ...).
+func finishDynamicFunction(vmInstance *vm.VM, template vm.Value, kind, sourceText string, homeRealm *vm.Realm, newTarget vm.Value) (vm.Value, error) {
+	if template.Type() != vm.TypeFunction {
+		return template, nil
+	}
+	fnObj := template.AsFunction()
+	fnObj.SourceText = sourceText
+	fnObj.Name = "anonymous"
+	if homeRealm == nil {
+		homeRealm = vmInstance.CurrentRealm()
+	}
+	fnObj.HomeRealm = homeRealm
+
+	closure := vm.NewClosure(fnObj, make([]*vm.Upvalue, fnObj.UpvalueCount))
+	// The [[Prototype]] is the home realm's, by kind.
+	var proto vm.Value
+	switch kind {
+	case "function*":
+		proto = homeRealm.GeneratorFunctionPrototype
+	case "async function*":
+		proto = homeRealm.AsyncGeneratorFunctionPrototype
+	case "async function":
+		proto = homeRealm.AsyncFunctionPrototype
+	default:
+		proto = homeRealm.FunctionPrototype
+	}
+	if proto.IsUndefined() {
+		proto = homeRealm.FunctionPrototype
+	}
+	// GetPrototypeFromConstructor(newTarget, ...): `class X extends Function`
+	// and Reflect.construct pick the prototype from newTarget.
+	if !newTarget.IsUndefined() {
+		p, err := vmInstance.GetProperty(newTarget, "prototype")
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if p.IsObject() {
+			proto = p
+		}
+	}
+	closure.AsClosure().SetProto(proto)
+	return closure, nil
 }
 
 // installDynamicFunctionConstructor creates a constructor like %GeneratorFunction%

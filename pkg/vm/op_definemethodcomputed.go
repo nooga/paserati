@@ -67,11 +67,13 @@ func (vm *VM) handleOpDefineMethodComputed(code []byte, ip *int, registers []Val
 	if methodVal.Type() == TypeClosure {
 		closure := methodVal.AsClosure()
 		closure.Fn.HomeObject = objVal
+		closure.Fn.IsMethod = true
 		closure.HomeObject = objVal
 	} else if methodVal.Type() == TypeFunction {
 		// Bare FunctionObject (not yet wrapped in closure)
 		funcObj := AsFunction(methodVal)
 		funcObj.HomeObject = objVal
+		funcObj.IsMethod = true
 	}
 
 	// Create PropertyKey - handles both strings and symbols
@@ -111,8 +113,7 @@ func (vm *VM) handleOpDefineMethodComputed(code []byte, ip *int, registers []Val
 		// Static class methods - add to the constructor function's properties
 		// Per ECMAScript 14.5.14: Static method named "prototype" is forbidden
 		if propKey.kind == KeyKindString && propKey.name == "prototype" {
-			vm.ThrowTypeError("Classes may not have a static property named 'prototype'")
-			return InterpretRuntimeError, Undefined
+			return vm.throwFromOpHandler("Classes may not have a static property named 'prototype'")
 		}
 		funcObj := objVal.AsFunction()
 		if funcObj.Properties == nil {
@@ -124,8 +125,7 @@ func (vm *VM) handleOpDefineMethodComputed(code []byte, ip *int, registers []Val
 		// Static class methods on closures - add to closure's own Properties for per-closure isolation
 		// Per ECMAScript 14.5.14: Static method named "prototype" is forbidden
 		if propKey.kind == KeyKindString && propKey.name == "prototype" {
-			vm.ThrowTypeError("Classes may not have a static property named 'prototype'")
-			return InterpretRuntimeError, Undefined
+			return vm.throwFromOpHandler("Classes may not have a static property named 'prototype'")
 		}
 		closure := objVal.AsClosure()
 		// Use closure's own Properties for per-closure isolation (consistent with OpSetProp)
@@ -138,4 +138,20 @@ func (vm *VM) handleOpDefineMethodComputed(code []byte, ip *int, registers []Val
 		status := vm.runtimeError("Cannot define method on non-object type '%s'", objVal.TypeName())
 		return status, Undefined
 	}
+}
+
+// throwFromOpHandler throws a TypeError from inside an op handler that the
+// dispatch loop calls as a plain function. If a surrounding handler catches
+// it, vm.handlerFound is left set and the result is InterpretOK, so the
+// caller must check vm.handlerFound and reload its cached frame state (see
+// the OpDefineMethodComputed case in run). Otherwise the exception is
+// uncaught and the result is InterpretRuntimeError (#113).
+func (vm *VM) throwFromOpHandler(msg string) (InterpretResult, Value) {
+	vm.helperCallDepth++
+	vm.ThrowTypeError(msg)
+	vm.helperCallDepth--
+	if vm.unwinding {
+		return InterpretRuntimeError, vm.currentException
+	}
+	return InterpretOK, Undefined
 }

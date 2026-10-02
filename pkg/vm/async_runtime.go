@@ -64,6 +64,12 @@ func (vm *VM) DrainUntilIdle() {
 			iterations++
 			continue
 		}
+		// Microtasks are drained: a rejection still unhandled now is a real
+		// unhandled rejection (and the hook may queue more work).
+		if vm.ProcessUnhandledRejections() {
+			iterations++
+			continue
+		}
 		if rt.RunDueTimers() {
 			iterations++
 			continue

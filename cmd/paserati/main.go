@@ -13,6 +13,7 @@ import (
 	"github.com/nooga/paserati/pkg/builtins"
 	"github.com/nooga/paserati/pkg/driver"
 	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // Version information - set via ldflags at build time
@@ -137,8 +138,21 @@ func runExpression(expr string, showCacheStats bool, showBytecode bool) {
 	}
 }
 
+// exitOnUnhandledRejection makes a promise rejection that is still unhandled
+// once the microtask queue drains terminate the program: it is reported on
+// stderr and the process exits with the same status as an uncaught
+// exception, like Node (#120).
+func exitOnUnhandledRejection(paserati *driver.Paserati) {
+	machine := paserati.GetVM()
+	machine.SetUnhandledRejectionHandler(func(reason vm.Value, _ vm.Value) {
+		fmt.Fprintln(os.Stderr, machine.FormatUnhandledRejection(reason))
+		os.Exit(70)
+	})
+}
+
 func runExpressionWithTypes(expr string, showCacheStats bool, showBytecode bool, ignoreTypes bool, disasmFilter string) {
 	paserati := driver.NewPaserati()
+	exitOnUnhandledRejection(paserati)
 	if ignoreTypes {
 		// Completely skip type checking for pure JS mode
 		paserati.SetSkipTypeCheck(true)
@@ -190,6 +204,7 @@ func runFileWithTypes(filename string, scriptArgs []string, showCacheStats bool,
 	initializers := builtins.GetStandardInitializers()
 	initializers = append(initializers, driver.NewProcessInitializer(argv))
 	paserati := driver.NewPaseratiWithInitializers(initializers)
+	exitOnUnhandledRejection(paserati)
 	if ignoreTypes {
 		// Completely skip type checking for pure JS mode
 		paserati.SetSkipTypeCheck(true)
