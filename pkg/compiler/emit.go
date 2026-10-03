@@ -1000,6 +1000,45 @@ func (c *Compiler) emitStrictUnresolvableReferenceError(varName string, line int
 	c.emitThrowNewError("ReferenceError", fmt.Sprintf("%s is not defined", varName), line)
 }
 
+// emitGlobalHasBinding sets dest to `name in globalThis`: the HasBinding test
+// of the global object environment record (ES 9.1.1.2.1).
+func (c *Compiler) emitGlobalHasBinding(dest Register, name string, line int) {
+	gReg := c.regAlloc.Alloc()
+	nReg := c.regAlloc.Alloc()
+	c.emitGetGlobal(gReg, c.GetOrAssignGlobalIndex("globalThis"), line)
+	c.emitLoadNewConstant(nReg, vm.String(name), line)
+	c.emitIn(dest, nReg, gReg, line)
+	c.regAlloc.Free(nReg)
+	c.regAlloc.Free(gReg)
+}
+
+// emitStrictCheckedSetGlobal stores to a global whose binding wasn't known when
+// this code was compiled (a strict-mode assignment to an otherwise unresolved
+// name). PutValue on an object environment record (ES 9.1.1.2.5
+// SetMutableBinding) does a HasProperty on the global object and, in strict
+// code, throws ReferenceError if the binding is gone - e.g. a getter that
+// deleted its own property while the RHS was being computed. preHas, when not
+// nilRegister, holds the result of the same test taken before the RHS ran: a
+// reference that was unresolvable then stays unresolvable, even if the RHS
+// went on to create the global (`undeclared = (this.undeclared = 5)`).
+func (c *Compiler) emitStrictCheckedSetGlobal(name string, globalIdx uint16, valueReg, preHas Register, line int) {
+	hasReg := c.regAlloc.Alloc()
+	c.emitGlobalHasBinding(hasReg, name, line)
+	var toThrow []int
+	if preHas != nilRegister {
+		toThrow = append(toThrow, c.emitPlaceholderJump(vm.OpJumpIfFalse, preHas, line))
+	}
+	toThrow = append(toThrow, c.emitPlaceholderJump(vm.OpJumpIfFalse, hasReg, line))
+	c.emitSetGlobal(globalIdx, valueReg, line)
+	toEnd := c.emitPlaceholderJump(vm.OpJump, 0, line)
+	for _, j := range toThrow {
+		c.patchJump(j)
+	}
+	c.emitStrictUnresolvableReferenceError(name, line)
+	c.patchJump(toEnd)
+	c.regAlloc.Free(hasReg)
+}
+
 // emitStrictUndeclaredAssignmentError emits code to throw a ReferenceError for assigning to
 // an undeclared variable in strict mode.
 // ECMAScript spec 8.7.2: In strict mode, assignment to unresolvable reference throws ReferenceError.

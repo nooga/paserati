@@ -116,6 +116,8 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 		isUpvalue        bool
 		upvalueIndex     uint16   // 16-bit to support large closures (up to 65535 upvalues)
 		isGlobal         bool     // Track if this is a global variable
+		strictPreHas     Register // `name in globalThis` taken before the RHS (plain `=` only)
+		strictCheckedSet string   // non-empty: strict store to a global unknown at compile time; check it still exists
 		globalIdx        uint16   // Direct global index instead of name constant index
 		isCallerLocal    bool     // Track if this is a caller's local (for direct eval)
 		callerRegIdx     int      // Caller's register index (for direct eval)
@@ -332,13 +334,15 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 						// ReferenceError.
 						globalKey := c.unresolvedGlobalKey(lhsNode.Value)
 						if c.chunk.IsStrict && !c.GlobalExists(globalKey) && lhsNode.Value != "arguments" && lhsNode.Value != "eval" {
-							// Emit runtime error for strict mode undeclared variable assignment
-							c.emitStrictUndeclaredAssignmentError(lhsNode.Value, line)
-							// Still evaluate RHS for side effects
-							if _, err := c.compileNode(node.Value, hint); err != nil {
-								return BadRegister, err
+							// Resolve at the store, after the RHS has run (see
+							// emitStrictCheckedSetGlobal).
+							identInfo.strictCheckedSet = lhsNode.Value
+							identInfo.strictPreHas = nilRegister
+							if node.Operator == "=" {
+								identInfo.strictPreHas = c.regAlloc.Alloc()
+								tempRegs = append(tempRegs, identInfo.strictPreHas)
+								c.emitGlobalHasBinding(identInfo.strictPreHas, lhsNode.Value, line)
 							}
-							return hint, nil
 						}
 						// Either non-strict mode or existing global: treat as global assignment
 						identInfo.isGlobal = true
@@ -360,13 +364,15 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 					// See the identical globalKey comment in the callerScopeDesc branch above.
 					globalKey := c.unresolvedGlobalKey(lhsNode.Value)
 					if c.chunk.IsStrict && !c.GlobalExists(globalKey) && lhsNode.Value != "arguments" && lhsNode.Value != "eval" {
-						// Emit runtime error for strict mode undeclared variable assignment
-						c.emitStrictUndeclaredAssignmentError(lhsNode.Value, line)
-						// Still evaluate RHS for side effects
-						if _, err := c.compileNode(node.Value, hint); err != nil {
-							return BadRegister, err
+						// Resolve at the store, after the RHS has run (see
+						// emitStrictCheckedSetGlobal).
+						identInfo.strictCheckedSet = lhsNode.Value
+						identInfo.strictPreHas = nilRegister
+						if node.Operator == "=" {
+							identInfo.strictPreHas = c.regAlloc.Alloc()
+							tempRegs = append(tempRegs, identInfo.strictPreHas)
+							c.emitGlobalHasBinding(identInfo.strictPreHas, lhsNode.Value, line)
 						}
-						return hint, nil
 					}
 					// Either non-strict mode or existing global: treat as global assignment
 					identInfo.isGlobal = true
@@ -1033,7 +1039,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				// Use pre-captured binding to ensure correct semantics
 				c.emitSetWithByBinding(int(identInfo.withNameConstIdx), hint, identInfo.withLocalReg, identInfo.withBindingReg, line)
 			} else if identInfo.isGlobal {
-				c.emitSetGlobal(identInfo.globalIdx, hint, line)
+				if identInfo.strictCheckedSet != "" {
+					c.emitStrictCheckedSetGlobal(identInfo.strictCheckedSet, identInfo.globalIdx, hint, identInfo.strictPreHas, line)
+				} else {
+					c.emitSetGlobal(identInfo.globalIdx, hint, line)
+				}
 			} else if identInfo.isCallerLocal {
 				c.emitOpCode(vm.OpSetCallerLocal, line)
 				c.emitByte(byte(identInfo.callerRegIdx))
@@ -1356,7 +1366,11 @@ func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression
 				c.emitSetWithByBinding(int(identInfo.withNameConstIdx), hint, identInfo.withLocalReg, identInfo.withBindingReg, line)
 			} else if identInfo.isGlobal {
 				// Global variable assignment
-				c.emitSetGlobal(identInfo.globalIdx, hint, line)
+				if identInfo.strictCheckedSet != "" {
+					c.emitStrictCheckedSetGlobal(identInfo.strictCheckedSet, identInfo.globalIdx, hint, identInfo.strictPreHas, line)
+				} else {
+					c.emitSetGlobal(identInfo.globalIdx, hint, line)
+				}
 			} else if identInfo.isCallerLocal {
 				// Caller local assignment (for direct eval)
 				c.emitOpCode(vm.OpSetCallerLocal, line)
