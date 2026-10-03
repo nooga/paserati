@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"strconv"
 	"unsafe"
 )
 
@@ -772,6 +773,21 @@ func (vm *VM) handlePrimitiveMethod(objVal Value, propName string) (Value, bool)
 		// Get the appropriate typed array prototype based on element type
 		ta := objVal.AsTypedArray()
 		if ta != nil {
+			// A canonical numeric key is an integer-indexed element read
+			// (10.4.5.4): the element when the index is valid, otherwise
+			// undefined - never the prototype chain. String and BigInt keys
+			// (`ta["1"]`, `ta[1n]`) reach here from OpGetIndex; without this
+			// they fell through to the prototype and read undefined
+			// (paserati#587). Same test as the `in` operator's case.
+			if propName == "-0" {
+				return Undefined, true
+			}
+			if f, err := strconv.ParseFloat(propName, 64); err == nil && NumberValue(f).ToString() == propName {
+				if f >= 0 && f == float64(int(f)) && int(f) < ta.GetLength() {
+					return ta.GetElement(int(f)), true
+				}
+				return Undefined, true
+			}
 			// Check own properties first (e.g., overridden constructor)
 			if val, ok := ta.GetOwnProperty(propName); ok {
 				return val, true
