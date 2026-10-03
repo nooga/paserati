@@ -9285,6 +9285,12 @@ startExecution:
 							isValidArrayIndex = true
 						}
 					}
+				} else if indexVal.IsBigInt() {
+					// ToPropertyKey(3n) is "3", an array index (#582).
+					if parsed, err := strconv.Atoi(indexVal.ToString()); err == nil && parsed >= 0 && parsed <= 0xFFFFFFFE {
+						idx = parsed
+						isValidArrayIndex = true
+					}
 				}
 
 				// If not a valid array index, treat as property key

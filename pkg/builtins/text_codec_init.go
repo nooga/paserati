@@ -151,6 +151,19 @@ func (t *TextDecoderInitializer) InitRuntime(ctx *RuntimeContext) error {
 				start = end
 			}
 			return vm.NewString(string(raw[start:end])), nil
+		case vm.TypeDataView:
+			// Another ArrayBufferView (#581): same byteOffset/byteLength window.
+			dv := input.AsDataView()
+			raw := dv.GetBufferData().GetData()
+			start := dv.GetByteOffset()
+			end := start + dv.GetByteLength()
+			if end > len(raw) {
+				end = len(raw)
+			}
+			if start > end {
+				start = end
+			}
+			return vm.NewString(string(raw[start:end])), nil
 		case vm.TypeArrayBuffer:
 			ab := input.AsArrayBuffer()
 			return vm.NewString(string(ab.GetData())), nil
