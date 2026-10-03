@@ -15,49 +15,6 @@ var plainDateFieldNames = []string{fYear, fMonth, fMonthCode, fDay}
 
 func monthCode(m int) string { return "M" + string(rune('0'+m/10)) + string(rune('0'+m%10)) }
 
-// pdCalendar is ToTemporalCalendarIdentifier: an object with a calendar slot
-// is iso8601, a string is an identifier or an ISO string with a calendar
-// annotation, anything else is a TypeError.
-func (r *temporalRealm) pdCalendar(v vm.Value) error {
-	if isObjectValue(v) {
-		if _, ok := slotsOf[tPlainDate](v); ok {
-			return nil
-		}
-		if _, ok := slotsOf[tPlainDateTime](v); ok {
-			return nil
-		}
-		if _, ok := slotsOf[tPlainYearMonth](v); ok {
-			return nil
-		}
-		if _, ok := slotsOf[tPlainMonthDay](v); ok {
-			return nil
-		}
-		if _, ok := slotsOf[tZoned](v); ok {
-			return nil
-		}
-	}
-	if v.Type() != vm.TypeString {
-		return r.typeErr("calendar must be a string")
-	}
-	s := v.ToString()
-	if _, ok := temporal.CanonicalizeCalendarIdentifier(s); ok {
-		return nil
-	}
-	for _, parse := range []func(string) (*temporal.Parsed, error){
-		temporal.ParsePlainDateTimeString, temporal.ParseZonedDateTimeString, temporal.ParseInstantString,
-		temporal.ParsePlainTimeString, temporal.ParsePlainMonthDayString, temporal.ParsePlainYearMonthString,
-	} {
-		if p, err := parse(s); err == nil {
-			if p.Calendar == "" {
-				return nil
-			}
-			_, err := r.canonicalCalendar(p.Calendar)
-			return err
-		}
-	}
-	return r.rangeErr("invalid calendar " + s)
-}
-
 // pdStartOfDay is GetStartOfDay: the first instant of a date in a zone,
 // which is the transition itself when midnight is skipped.
 func pdStartOfDay(tz temporal.TimeZone, d temporal.Date) (*big.Int, error) {
@@ -79,15 +36,15 @@ func pdStartOfDay(tz temporal.TimeZone, d temporal.Date) (*big.Int, error) {
 	return t, nil
 }
 
-func (r *temporalRealm) createPlainDateWithProto(d temporal.Date, proto vm.Value) (vm.Value, error) {
+func (r *temporalRealm) createPlainDateWithProto(d temporal.Date, proto protoRef) (vm.Value, error) {
 	if !temporal.IsValidISODate(d.Year, d.Month, d.Day) || !temporal.ISODateWithinLimits(d) {
 		return vm.Undefined, r.rangeErr("date is outside the supported range")
 	}
-	return r.wrapWithProto(proto, &tPlainDate{d}), nil
+	return r.wrapNew(proto, &tPlainDate{d})
 }
 
 func (r *temporalRealm) createPlainDate(d temporal.Date) (vm.Value, error) {
-	return r.createPlainDateWithProto(d, vm.NewValueFromPlainObject(r.protos["PlainDate"]))
+	return r.createPlainDateWithProto(d, staticProto(r.protos["PlainDate"]))
 }
 
 // dateFromFields is CalendarDateFromFields once the fields have been read.
@@ -129,7 +86,7 @@ func (r *temporalRealm) toTemporalDate(item, options vm.Value) (temporal.Date, e
 			return d, err
 		}
 		if !cal.IsUndefined() {
-			if err := r.pdCalendar(cal); err != nil {
+			if err := r.checkCalendar(cal); err != nil {
 				return d, err
 			}
 		}
@@ -191,7 +148,7 @@ func (r *temporalRealm) pdDateDuration(d temporal.Duration) (years, months, week
 }
 
 func installPlainDate(r *temporalRealm) error {
-	ctor, proto := r.newClass("PlainDate", 3, func(args []vm.Value, p vm.Value) (vm.Value, error) {
+	ctor, proto := r.newClass("PlainDate", 3, func(args []vm.Value, p protoRef) (vm.Value, error) {
 		var n [3]float64
 		for i := range n {
 			v, err := r.toIntegerWithTruncation(argAt(args, i))
@@ -329,7 +286,7 @@ func installPlainDate(r *temporalRealm) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if err := r.pdCalendar(argAt(args, 0)); err != nil {
+		if err := r.checkCalendar(argAt(args, 0)); err != nil {
 			return vm.Undefined, err
 		}
 		return r.createPlainDate(s.date)

@@ -11,7 +11,7 @@ var timeFieldNames = []string{fHour, fMinute, fSecond, fMillisecond, fMicrosecon
 
 func init() {
 	registerTemporalInstaller(func(r *temporalRealm) error {
-		ctor, proto := r.newClass("PlainTime", 0, func(args []vm.Value, p vm.Value) (vm.Value, error) {
+		ctor, proto := r.newClass("PlainTime", 0, func(args []vm.Value, p protoRef) (vm.Value, error) {
 			var f [6]int
 			for i := range f {
 				if v := argAt(args, i); !v.IsUndefined() {
@@ -25,7 +25,7 @@ func init() {
 			if !temporal.IsValidTime(f[0], f[1], f[2], f[3], f[4], f[5]) {
 				return vm.Undefined, r.rangeErr("invalid time")
 			}
-			return r.wrapWithProto(p, &tPlainTime{temporal.Time{Hour: f[0], Minute: f[1], Second: f[2], Millisecond: f[3], Microsecond: f[4], Nanosecond: f[5]}}), nil
+			return r.wrapNew(p, &tPlainTime{temporal.Time{Hour: f[0], Minute: f[1], Second: f[2], Millisecond: f[3], Microsecond: f[4], Nanosecond: f[5]}})
 		})
 
 		r.static(ctor, "from", 1, func(args []vm.Value) (vm.Value, error) {

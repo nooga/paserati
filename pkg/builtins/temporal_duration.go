@@ -65,46 +65,6 @@ func (r *temporalRealm) durationWith(base temporal.Duration, item vm.Value) (tem
 // relativeTo
 // ---------------------------------------------------------------------------
 
-// relCalendarIdentifier is ToTemporalCalendarIdentifier for a relativeTo
-// bag's calendar property: only iso8601 exists.
-func (r *temporalRealm) relCalendarIdentifier(v vm.Value) error {
-	if isObjectValue(v) {
-		if _, ok := slotsOf[tPlainDate](v); ok {
-			return nil
-		}
-		if _, ok := slotsOf[tPlainDateTime](v); ok {
-			return nil
-		}
-		if _, ok := slotsOf[tZoned](v); ok {
-			return nil
-		}
-		if _, ok := slotsOf[tPlainYearMonth](v); ok {
-			return nil
-		}
-		if _, ok := slotsOf[tPlainMonthDay](v); ok {
-			return nil
-		}
-	}
-	if v.Type() != vm.TypeString {
-		return r.typeErr("calendar must be a string")
-	}
-	s := v.ToString()
-	if _, err := r.canonicalCalendar(s); err == nil {
-		return nil
-	}
-	// A calendar may also be given as an ISO string with an annotation.
-	for _, parse := range []func(string) (*temporal.Parsed, error){temporal.ParsePlainDateTimeString, temporal.ParsePlainTimeString, temporal.ParsePlainYearMonthString, temporal.ParsePlainMonthDayString} {
-		if p, err := parse(s); err == nil {
-			if p.Calendar == "" {
-				return nil
-			}
-			_, cerr := r.canonicalCalendar(p.Calendar)
-			return cerr
-		}
-	}
-	return r.rangeErr("unsupported calendar " + s)
-}
-
 func relFromZoned(s *tZoned) *temporal.RelativeTo {
 	local := s.tz.LocalDateTime(s.ns)
 	return &temporal.RelativeTo{Date: local.Date, Time: local.Time, Zone: s.tz, EpochNs: s.ns}
@@ -138,7 +98,7 @@ func (r *temporalRealm) relativeToOption(options vm.Value) (*temporal.RelativeTo
 			return nil, err
 		}
 		if !cal.IsUndefined() {
-			if err := r.relCalendarIdentifier(cal); err != nil {
+			if err := r.checkCalendar(cal); err != nil {
 				return nil, err
 			}
 		}
@@ -248,7 +208,7 @@ func (r *temporalRealm) relativeFieldsToDateTime(f *tFields) (temporal.Date, tem
 // ---------------------------------------------------------------------------
 
 func installDuration(r *temporalRealm) error {
-	ctor, proto := r.newClass("Duration", 0, func(args []vm.Value, p vm.Value) (vm.Value, error) {
+	ctor, proto := r.newClass("Duration", 0, func(args []vm.Value, p protoRef) (vm.Value, error) {
 		var d temporal.Duration
 		order := [10]func(*temporal.Duration, float64){
 			func(d *temporal.Duration, v float64) { d.Years = v },
@@ -276,7 +236,7 @@ func installDuration(r *temporalRealm) error {
 		if !temporal.IsValidDuration(d) {
 			return vm.Undefined, r.rangeErr("invalid duration")
 		}
-		return r.wrapWithProto(p, &tDuration{d: d}), nil
+		return r.wrapNew(p, &tDuration{d: d})
 	})
 
 	r.static(ctor, "from", 1, func(args []vm.Value) (vm.Value, error) {

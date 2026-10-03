@@ -186,69 +186,6 @@ func (r *temporalRealm) zonedFromFields(item, options vm.Value) (*tZoned, error)
 // Helpers
 // ---------------------------------------------------------------------------
 
-// calendarOfItem is GetTemporalCalendarIdentifierWithISODefault for a
-// property bag: only ISO 8601 exists, so it just validates the calendar.
-func (r *temporalRealm) calendarOfItem(item vm.Value) error {
-	if hasCalendarSlot(item) {
-		return nil
-	}
-	c, err := r.vm.GetProperty(item, "calendar")
-	if err != nil || c.IsUndefined() {
-		return err
-	}
-	_, err = r.toCalendarIdentifier(c)
-	return err
-}
-
-func hasCalendarSlot(v vm.Value) bool {
-	if _, ok := slotsOf[tZoned](v); ok {
-		return true
-	}
-	if _, ok := slotsOf[tPlainDate](v); ok {
-		return true
-	}
-	if _, ok := slotsOf[tPlainDateTime](v); ok {
-		return true
-	}
-	if _, ok := slotsOf[tPlainYearMonth](v); ok {
-		return true
-	}
-	_, ok := slotsOf[tPlainMonthDay](v)
-	return ok
-}
-
-// toCalendarIdentifier is ToTemporalCalendarIdentifier.
-func (r *temporalRealm) toCalendarIdentifier(v vm.Value) (string, error) {
-	if hasCalendarSlot(v) {
-		return "iso8601", nil
-	}
-	if v.Type() != vm.TypeString {
-		return "", r.typeErr("calendar must be a string")
-	}
-	s := v.ToString()
-	if c, ok := temporal.CanonicalizeCalendarIdentifier(s); ok {
-		return c, nil
-	}
-	// ParseTemporalCalendarString: any ISO string, whose calendar annotation counts.
-	var p *temporal.Parsed
-	var err error
-	for _, parse := range []func(string) (*temporal.Parsed, error){
-		temporal.ParseZonedDateTimeString, temporal.ParsePlainDateTimeString, temporal.ParseInstantString,
-		temporal.ParsePlainMonthDayString, temporal.ParsePlainYearMonthString, temporal.ParsePlainTimeString,
-	} {
-		if p, err = parse(s); err == nil {
-			break
-		}
-	}
-	if err != nil {
-		return "", r.rangeErr("invalid calendar " + s)
-	}
-	if p.Calendar == "" {
-		return "iso8601", nil
-	}
-	return r.canonicalCalendar(p.Calendar)
-}
-
 // dateTimeFromFields is InterpretTemporalDateTimeFields for the ISO calendar.
 func (r *temporalRealm) dateTimeFromFields(f *tFields, overflow temporal.Overflow) (temporal.DateTime, error) {
 	if f.Year == nil || f.Day == nil || (f.Month == nil && f.MonthCode == nil) {
@@ -372,7 +309,7 @@ func intValue(n int) vm.Value { return vm.NumberValue(float64(n)) }
 // ---------------------------------------------------------------------------
 
 func installZonedDateTime(r *temporalRealm) error {
-	ctor, proto := r.newClass("ZonedDateTime", 2, func(args []vm.Value, protoVal vm.Value) (vm.Value, error) {
+	ctor, proto := r.newClass("ZonedDateTime", 2, func(args []vm.Value, protoVal protoRef) (vm.Value, error) {
 		ns, err := r.toBigInt(argAt(args, 0))
 		if err != nil {
 			return vm.Undefined, err
@@ -396,7 +333,7 @@ func installZonedDateTime(r *temporalRealm) error {
 				return vm.Undefined, err
 			}
 		}
-		return r.wrapWithProto(protoVal, &tZoned{ns: ns, tz: tz}), nil
+		return r.wrapNew(protoVal, &tZoned{ns: ns, tz: tz})
 	})
 
 	r.static(ctor, "from", 1, func(args []vm.Value) (vm.Value, error) {
