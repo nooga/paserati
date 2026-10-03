@@ -2,8 +2,8 @@
   "test262_language": {
     "name": "Test262 language",
     "total": 23523,
-    "passed": 23119,
-    "failed": 404,
+    "passed": 23126,
+    "failed": 397,
     "skipped": 0,
     "timeout": 0,
     "version": ""
@@ -11,8 +11,8 @@
   "test262_builtins": {
     "name": "Test262 built-ins",
     "total": 23294,
-    "passed": 17533,
-    "failed": 5761,
+    "passed": 20947,
+    "failed": 2347,
     "skipped": 0,
     "timeout": 0,
     "version": ""
