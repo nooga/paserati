@@ -466,11 +466,13 @@ func (p *Paserati) EvalCode(code string, inheritStrict bool) (vm.Value, []error)
 		return vm.Undefined, []error{fmt.Errorf("eval: compilation returned nil chunk")}
 	}
 
-	// Only sync global names for non-strict eval
-	// In strict mode, eval creates its own variable environment and declarations stay local
-	if !chunk.IsStrict {
-		p.SyncGlobalNamesFromCompiler()
-	}
+	// Sync global names for strict eval too. The sync only maps names to heap
+	// slots; it puts nothing on the global object (SyncHeapToGlobalObject,
+	// still sloppy-only, does that), so strict declarations stay local. A
+	// strict eval that reads a global created at runtime as a globalThis
+	// property needs its slot named, or OpGetGlobal cannot fall back to the
+	// global object and throws "<index N> is not defined" (paserati#585).
+	p.SyncGlobalNamesFromCompiler()
 
 	// Execute the chunk
 	result, runtimeErrs := p.vmInstance.Interpret(chunk)
@@ -526,10 +528,13 @@ func (p *Paserati) IndirectEvalCode(code string) (vm.Value, []error) {
 		return vm.Undefined, []error{fmt.Errorf("eval: compilation returned nil chunk")}
 	}
 
-	// Only sync global names for non-strict eval
-	if !chunk.IsStrict {
-		p.SyncGlobalNamesFromCompiler()
-	}
+	// Sync global names for strict eval too. The sync only maps names to heap
+	// slots; it puts nothing on the global object (SyncHeapToGlobalObject,
+	// still sloppy-only, does that), so strict declarations stay local. A
+	// strict eval that reads a global created at runtime as a globalThis
+	// property needs its slot named, or OpGetGlobal cannot fall back to the
+	// global object and throws "<index N> is not defined" (paserati#585).
+	p.SyncGlobalNamesFromCompiler()
 
 	// Execute the chunk
 	result, runtimeErrs := p.vmInstance.Interpret(chunk)
@@ -624,11 +629,13 @@ func (p *Paserati) DirectEvalCode(code string, inheritStrict bool, scopeDesc *vm
 		return vm.Undefined, []error{fmt.Errorf("eval: compilation returned nil chunk")}
 	}
 
-	// Only sync global names for non-strict eval
-	// In strict mode, eval creates its own variable environment and declarations stay local
-	if !chunk.IsStrict {
-		p.SyncGlobalNamesFromCompiler()
-	}
+	// Sync global names for strict eval too. The sync only maps names to heap
+	// slots; it puts nothing on the global object (SyncHeapToGlobalObject,
+	// still sloppy-only, does that), so strict declarations stay local. A
+	// strict eval that reads a global created at runtime as a globalThis
+	// property needs its slot named, or OpGetGlobal cannot fall back to the
+	// global object and throws "<index N> is not defined" (paserati#585).
+	p.SyncGlobalNamesFromCompiler()
 
 	// Execute the chunk with caller scope access, inherited 'this', and homeObject for super property access
 	result, runtimeErrs := p.vmInstance.InterpretWithCallerScope(chunk, callerRegs, callerThis, callerHomeObject)
