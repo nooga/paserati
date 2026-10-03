@@ -178,9 +178,9 @@ func Add24HourDaysToTimeDuration(t *big.Int, days int64) (*big.Int, error) {
 func (i InternalDuration) ToDuration(largestUnit Unit) (Duration, error) {
 	sign := i.Time.Sign()
 	t := new(big.Int).Abs(i.Time)
-	var days, hours, minutes, seconds, ms, us, ns *big.Int
+	var days, hours, minutes, seconds, ms, us *big.Int
 	zero := func() *big.Int { return new(big.Int) }
-	days, hours, minutes, seconds, ms, us, ns = zero(), zero(), zero(), zero(), zero(), zero(), zero()
+	days, hours, minutes, seconds, ms, us = zero(), zero(), zero(), zero(), zero(), zero()
 	divmod := func(unit int64, q **big.Int) {
 		*q = new(big.Int)
 		(*q).DivMod(t, big.NewInt(unit), t)
@@ -208,7 +208,7 @@ func (i InternalDuration) ToDuration(largestUnit Unit) (Duration, error) {
 	if largestUnit <= UnitMicrosecond {
 		divmod(1e3, &us)
 	}
-	ns = t
+	ns := t
 	f := func(b *big.Int) float64 {
 		if b.Sign() == 0 {
 			return 0 // never -0
@@ -862,16 +862,13 @@ func TotalDuration(d Duration, unit Unit, rel *RelativeTo) (*big.Rat, error) {
 		if err != nil {
 			return nil, err
 		}
-		diff, err := DifferenceZonedDateTime(rel.EpochNs, target, rel.Zone, UnitDay)
-		if err != nil {
-			return nil, err
+		// Time units are totalled from a difference balanced to days.
+		diffUnit := unit
+		if unit.IsTimeUnit() {
+			diffUnit = UnitDay
 		}
-		if unit.IsTimeUnit() || unit == UnitDay {
-			diff, err = DifferenceZonedDateTime(rel.EpochNs, target, rel.Zone, LargerOfTwoUnits(unit, UnitDay))
-			if err != nil {
-				return nil, err
-			}
-		} else if diff, err = DifferenceZonedDateTime(rel.EpochNs, target, rel.Zone, unit); err != nil {
+		diff, err := DifferenceZonedDateTime(rel.EpochNs, target, rel.Zone, diffUnit)
+		if err != nil {
 			return nil, err
 		}
 		return TotalRelativeDuration(diff, target, rel.Zone.LocalDateTime(rel.EpochNs), rel.Zone, unit)
