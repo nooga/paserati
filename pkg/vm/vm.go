@@ -291,6 +291,7 @@ type VM struct {
 
 	// Built-in prototypes owned by this VM
 	ObjectPrototype               Value
+	callSiteProto                 Value // lazily built shared CallSite.prototype
 	FunctionPrototype             Value
 	ArrayPrototype                Value
 	StringPrototype               Value

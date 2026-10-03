@@ -98,49 +98,103 @@ func (vm *VM) buildCallSites(frames []StackFrame) Value {
 // typescript-eslint's own stack walker) call these unconditionally and
 // expect a function back, not `undefined`.
 func (vm *VM) newCallSite(frame StackFrame) Value {
-	obj := NewObject(vm.ObjectPrototype).AsPlainObject()
+	obj := NewObject(vm.callSitePrototype()).AsPlainObject()
 
 	nameValue := Null
 	if frame.FunctionName != "" && frame.FunctionName != "<anonymous>" {
 		nameValue = NewString(frame.FunctionName)
 	}
-
 	fileValue := Null
 	if frame.FileName != "" && frame.FileName != "<script>" {
 		fileValue = NewString(frame.FileName)
 	}
+	// Per-frame data lives in a hidden slot (not a property: V8's CallSite
+	// instances have no own properties) read back by the shared prototype's
+	// methods through `this`.
+	data := NewArray()
+	d := data.AsArray()
+	d.Append(nameValue)
+	d.Append(fileValue)
+	d.Append(NumberValue(float64(frame.Line)))
+	d.Append(NumberValue(float64(frame.Column)))
+	d.Append(NewString(frame.FunctionName))
+	d.Append(NewString(frame.FileName))
+	obj.SetPrivateField(callSiteSlot, data)
 
-	line, column := frame.Line, frame.Column
+	return NewValueFromPlainObject(obj)
+}
 
-	method := func(name string, fn func(args []Value) (Value, error)) {
-		obj.SetOwnNonEnumerable(name, NewNativeFunction(0, false, name, fn))
+// callSiteSlot is not a valid identifier, so it can't collide with a
+// user-visible #private name.
+const callSiteSlot = "[[CallSite]]"
+
+// callSiteData returns the hidden per-frame slot of a CallSite receiver.
+func callSiteData(vm *VM, this Value) (*ArrayObject, error) {
+	if this.Type() == TypeObject {
+		if v, ok := this.AsPlainObject().GetPrivateField(callSiteSlot); ok && v.Type() == TypeArray {
+			return v.AsArray(), nil
+		}
+	}
+	return nil, vm.NewTypeError("CallSite method called on incompatible receiver")
+}
+
+// callSitePrototype lazily builds the shared CallSite.prototype (and its
+// CallSite constructor, for `constructor.name`). V8 keeps the methods there,
+// and source-map-support / vite-node clone frames by walking
+// Object.getOwnPropertyNames(Object.getPrototypeOf(frame)) (#577).
+//
+// Paserati doesn't track enough per-frame detail to make most of the boolean
+// predicates (isNative, isConstructor, isEval, ...) meaningful, so they report
+// conservative constant answers rather than being left off - real callers
+// (e.g. typescript-eslint's stack walker) call them unconditionally.
+func (vm *VM) callSitePrototype() Value {
+	if vm.callSiteProto.Type() == TypeObject {
+		return vm.callSiteProto
+	}
+	proto := NewObject(vm.ObjectPrototype).AsPlainObject()
+	protoVal := NewValueFromPlainObject(proto)
+
+	ctor := NewConstructorWithProps(0, false, "CallSite", func(args []Value) (Value, error) {
+		return Undefined, vm.NewTypeError("Illegal constructor")
+	})
+	ctor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("prototype", protoVal)
+	proto.SetOwnNonEnumerable("constructor", ctor)
+
+	method := func(name string, fn func(vm *VM, d *ArrayObject) Value) {
+		proto.SetOwnNonEnumerable(name, NewNativeFunction(0, false, name, func(args []Value) (Value, error) {
+			d, err := callSiteData(vm, vm.GetThis())
+			if err != nil {
+				return Undefined, err
+			}
+			return fn(vm, d), nil
+		}))
+	}
+	constant := func(name string, v Value) {
+		method(name, func(*VM, *ArrayObject) Value { return v })
 	}
 
-	method("getFileName", func(args []Value) (Value, error) { return fileValue, nil })
-	method("getScriptNameOrSourceURL", func(args []Value) (Value, error) { return fileValue, nil })
-	method("getFunctionName", func(args []Value) (Value, error) { return nameValue, nil })
-	method("getMethodName", func(args []Value) (Value, error) { return Null, nil })
-	method("getTypeName", func(args []Value) (Value, error) { return Null, nil })
-	method("getThis", func(args []Value) (Value, error) { return Undefined, nil })
-	method("getFunction", func(args []Value) (Value, error) { return Undefined, nil })
-	method("getLineNumber", func(args []Value) (Value, error) { return NumberValue(float64(line)), nil })
-	method("getColumnNumber", func(args []Value) (Value, error) { return NumberValue(float64(column)), nil })
-	method("getEvalOrigin", func(args []Value) (Value, error) { return Undefined, nil })
-	method("getPromiseIndex", func(args []Value) (Value, error) { return Null, nil })
-	method("isToplevel", func(args []Value) (Value, error) { return BooleanValue(false), nil })
-	method("isEval", func(args []Value) (Value, error) { return BooleanValue(false), nil })
-	method("isNative", func(args []Value) (Value, error) { return BooleanValue(false), nil })
-	method("isConstructor", func(args []Value) (Value, error) { return BooleanValue(false), nil })
-	method("isAsync", func(args []Value) (Value, error) { return BooleanValue(false), nil })
-	method("isPromiseAll", func(args []Value) (Value, error) { return BooleanValue(false), nil })
-	method("isPromiseAny", func(args []Value) (Value, error) { return BooleanValue(false), nil })
-	method("toString", func(args []Value) (Value, error) {
-		name := frame.FunctionName
+	method("getFileName", func(_ *VM, d *ArrayObject) Value { return d.Get(1) })
+	method("getScriptNameOrSourceURL", func(_ *VM, d *ArrayObject) Value { return d.Get(1) })
+	method("getFunctionName", func(_ *VM, d *ArrayObject) Value { return d.Get(0) })
+	method("getLineNumber", func(_ *VM, d *ArrayObject) Value { return d.Get(2) })
+	method("getColumnNumber", func(_ *VM, d *ArrayObject) Value { return d.Get(3) })
+	constant("getMethodName", Null)
+	constant("getTypeName", Null)
+	constant("getThis", Undefined)
+	constant("getFunction", Undefined)
+	constant("getEvalOrigin", Undefined)
+	constant("getPromiseIndex", Null)
+	for _, n := range []string{"isToplevel", "isEval", "isNative", "isConstructor", "isAsync", "isPromiseAll", "isPromiseAny"} {
+		constant(n, BooleanValue(false))
+	}
+	method("toString", func(_ *VM, d *ArrayObject) Value {
+		name := d.Get(4).ToString()
 		if name == "" {
 			name = "<anonymous>"
 		}
-		return NewString(name + " (" + frame.FileName + ":" + strconv.Itoa(line) + ":" + strconv.Itoa(column) + ")"), nil
+		return NewString(name + " (" + d.Get(5).ToString() + ":" + strconv.Itoa(int(d.Get(2).ToFloat())) + ":" + strconv.Itoa(int(d.Get(3).ToFloat())) + ")")
 	})
 
-	return NewValueFromPlainObject(obj)
+	vm.callSiteProto = protoVal
+	return protoVal
 }
