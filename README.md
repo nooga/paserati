@@ -18,7 +18,7 @@ Right now it prioritizes **correctness** over raw speed, but the architecture is
 
 ### Wins
 
-- Test262 language suite: **98.3%**, built-ins: **75.3%**, TypeScript 6.0.3 conformance: **41.7%** strict / **72.7%** loose (see details below)
+- Test262 language suite: **98.3%**, built-ins: **89.9%**, TypeScript 6.0.3 conformance: **41.7%** strict / **72.7%** loose (see details below)
 - **Native TS execution.** No `tsc`, no TS→JS transpilation step.
 - **TCO.** Tail call optimization (elite feature).
 - **Shapes + ICs.** Fast-ish property access without a JIT.
@@ -86,8 +86,8 @@ go test ./tests/...
 
 | Suite | Passed | Failed | Skipped | Timeouts | Pass rate |
 | :-- | --: | --: | --: | --: | --: |
-| Test262 language | 23,119/23,523 | 404 | 0 | 0 | 98.3% |
-| Test262 built-ins | 17,533/23,294 | 5,761 | 0 | 0 | 75.3% |
+| Test262 language | 23,126/23,523 | 397 | 0 | 0 | 98.3% |
+| Test262 built-ins | 20,947/23,294 | 2,347 | 0 | 0 | 89.9% |
 | TypeScript 6.0.3 conformance (strict error codes) | 2,058/4,933 | 2,402 | 473 | 0 | 41.7% |
 | TypeScript 6.0.3 conformance (loose) | 3,587/4,933 | 873 | 473 | 0 | 72.7% |
 <!-- compliance:end -->
