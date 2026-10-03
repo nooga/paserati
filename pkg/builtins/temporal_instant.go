@@ -126,7 +126,7 @@ func (r *temporalRealm) differenceInstant(since bool, ns *big.Int, otherLike, op
 }
 
 func installInstant(r *temporalRealm) error {
-	ctor, proto := r.newClass("Instant", 1, func(args []vm.Value, p vm.Value) (vm.Value, error) {
+	ctor, proto := r.newClass("Instant", 1, func(args []vm.Value, p protoRef) (vm.Value, error) {
 		ns, err := r.toBigInt(argAt(args, 0))
 		if err != nil {
 			return vm.Undefined, err
@@ -134,7 +134,7 @@ func installInstant(r *temporalRealm) error {
 		if !validEpochNs(ns) {
 			return vm.Undefined, r.rangeErr("epoch nanoseconds out of range")
 		}
-		return r.wrapWithProto(p, &tInstant{ns: ns}), nil
+		return r.wrapNew(p, &tInstant{ns: ns})
 	})
 
 	r.static(ctor, "from", 1, func(args []vm.Value) (vm.Value, error) {

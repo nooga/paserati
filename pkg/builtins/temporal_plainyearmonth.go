@@ -48,51 +48,6 @@ func ymdIsTemporalObject(v vm.Value) bool {
 	return ok
 }
 
-// ymdCheckCalendarString is ParseTemporalCalendarString: a calendar
-// identifier or an ISO 8601 string with a calendar annotation.
-func (r *temporalRealm) ymdCheckCalendarString(s string) error {
-	if _, ok := temporal.CanonicalizeCalendarIdentifier(s); ok {
-		return nil
-	}
-	for _, parse := range []func(string) (*temporal.Parsed, error){
-		temporal.ParsePlainDateTimeString, temporal.ParseInstantString,
-		temporal.ParsePlainYearMonthString, temporal.ParsePlainMonthDayString,
-	} {
-		if p, err := parse(s); err == nil {
-			return r.ymdCheckParsedCalendar(p)
-		}
-	}
-	return r.rangeErr("invalid calendar " + s)
-}
-
-func (r *temporalRealm) ymdCheckParsedCalendar(p *temporal.Parsed) error {
-	if p.Calendar == "" {
-		return nil
-	}
-	_, err := r.canonicalCalendar(p.Calendar)
-	return err
-}
-
-// ymdReadCalendar is GetTemporalCalendarIdentifierWithISODefault: Temporal
-// objects are iso8601, anything else has its "calendar" property converted
-// by ToTemporalCalendarIdentifier.
-func (r *temporalRealm) ymdReadCalendar(item vm.Value) error {
-	if ymdIsTemporalObject(item) {
-		return nil
-	}
-	c, err := r.vm.GetProperty(item, "calendar")
-	if err != nil || c.IsUndefined() {
-		return err
-	}
-	if ymdIsTemporalObject(c) {
-		return nil
-	}
-	if c.Type() != vm.TypeString {
-		return r.typeErr("calendar must be a string")
-	}
-	return r.ymdCheckCalendarString(c.ToString())
-}
-
 // ymdRejectCalendarOrTimeZone is RejectObjectWithCalendarOrTimeZone.
 func (r *temporalRealm) ymdRejectCalendarOrTimeZone(item vm.Value) error {
 	if !isObjectValue(item) || ymdIsTemporalObject(item) {
@@ -173,7 +128,7 @@ func (r *temporalRealm) toTemporalYearMonth(item, options vm.Value) (temporal.Da
 			}
 			return s.date, nil
 		}
-		if err := r.ymdReadCalendar(item); err != nil {
+		if err := r.calendarOfItem(item); err != nil {
 			return temporal.Date{}, err
 		}
 		f, err := r.prepareFields(item, []string{fMonth, fMonthCode, fYear}, nil, false)
@@ -197,7 +152,7 @@ func (r *temporalRealm) toTemporalYearMonth(item, options vm.Value) (temporal.Da
 	if err != nil {
 		return temporal.Date{}, r.err(err)
 	}
-	if err := r.ymdCheckParsedCalendar(p); err != nil {
+	if err := r.checkParsedCalendar(p); err != nil {
 		return temporal.Date{}, err
 	}
 	opts, err := r.getOptionsObject(options)
@@ -218,7 +173,7 @@ func (r *temporalRealm) toTemporalYearMonth(item, options vm.Value) (temporal.Da
 // ---------------------------------------------------------------------------
 
 func installPlainYearMonth(r *temporalRealm) error {
-	ctor, proto := r.newClass("PlainYearMonth", 2, func(args []vm.Value, p vm.Value) (vm.Value, error) {
+	ctor, proto := r.newClass("PlainYearMonth", 2, func(args []vm.Value, p protoRef) (vm.Value, error) {
 		y, err := r.toIntegerWithTruncation(argAt(args, 0))
 		if err != nil {
 			return vm.Undefined, err
@@ -240,7 +195,7 @@ func installPlainYearMonth(r *temporalRealm) error {
 		if !temporal.IsValidISODate(ref.Year, ref.Month, ref.Day) || !ymWithinLimits(ref.Year, ref.Month) {
 			return vm.Undefined, r.rangeErr("invalid year-month")
 		}
-		return r.wrapWithProto(p, &tPlainYearMonth{ref}), nil
+		return r.wrapNew(p, &tPlainYearMonth{ref})
 	})
 
 	r.static(ctor, "from", 1, func(args []vm.Value) (vm.Value, error) {
@@ -479,18 +434,7 @@ func installPlainYearMonth(r *temporalRealm) error {
 // shows when the calendar annotation does.
 func formatYearMonth(ref temporal.Date, show string) string {
 	if show == "always" || show == "critical" {
-		return temporal.FormatDate(ref) + ymdCalendarAnnotation(show)
+		return temporal.FormatDate(ref) + calendarAnnotation(show)
 	}
 	return fmt.Sprintf("%s-%02d", temporal.FormatYear(ref.Year), ref.Month)
-}
-
-// ymdCalendarAnnotation is FormatCalendarAnnotation for the ISO calendar.
-func ymdCalendarAnnotation(show string) string {
-	switch show {
-	case "always":
-		return "[u-ca=iso8601]"
-	case "critical":
-		return "[!u-ca=iso8601]"
-	}
-	return ""
 }

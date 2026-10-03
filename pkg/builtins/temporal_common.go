@@ -102,10 +102,30 @@ func (r *temporalRealm) typeErr(msg string) error  { return r.vm.NewTypeError(ms
 // Class construction
 // ---------------------------------------------------------------------------
 
+// protoRef is the prototype for an object being constructed. It is resolved
+// from newTarget only when the object is created, after the constructor has
+// converted and validated its arguments (OrdinaryCreateFromConstructor comes
+// last in CreateTemporalX), because reading newTarget.prototype is
+// observable.
+type protoRef func() (vm.Value, error)
+
+func staticProto(p *vm.PlainObject) protoRef {
+	return func() (vm.Value, error) { return vm.NewValueFromPlainObject(p), nil }
+}
+
+// wrapNew creates an object of the constructor's prototype around slots.
+func (r *temporalRealm) wrapNew(proto protoRef, slots any) (vm.Value, error) {
+	p, err := proto()
+	if err != nil {
+		return vm.Undefined, err
+	}
+	return r.wrapWithProto(p, slots), nil
+}
+
 // newClass creates Temporal.<name> with its prototype and installs it on the
-// namespace. construct receives the arguments and the prototype to use for
-// the new object (from newTarget, per OrdinaryCreateFromConstructor).
-func (r *temporalRealm) newClass(name string, length int, construct func(args []vm.Value, proto vm.Value) (vm.Value, error)) (ctor vm.Value, proto *vm.PlainObject) {
+// namespace. construct receives the arguments and a protoRef to create the
+// new object with.
+func (r *temporalRealm) newClass(name string, length int, construct func(args []vm.Value, proto protoRef) (vm.Value, error)) (ctor vm.Value, proto *vm.PlainObject) {
 	proto = vm.NewObject(r.vm.ObjectPrototype).AsPlainObject()
 	protoVal := vm.NewValueFromPlainObject(proto)
 	ctor = vm.NewConstructorWithProps(length, false, name, func(args []vm.Value) (vm.Value, error) {
@@ -113,14 +133,16 @@ func (r *temporalRealm) newClass(name string, length int, construct func(args []
 		if newTarget.IsUndefined() {
 			return vm.Undefined, r.vm.NewTypeError("Constructor Temporal." + name + " requires 'new'")
 		}
-		p, err := r.vm.GetProperty(newTarget, "prototype")
-		if err != nil {
-			return vm.Undefined, err
-		}
-		if !p.IsObject() {
-			p = protoVal
-		}
-		return construct(args, p)
+		return construct(args, func() (vm.Value, error) {
+			p, err := r.vm.GetProperty(newTarget, "prototype")
+			if err != nil {
+				return vm.Undefined, err
+			}
+			if !p.IsObject() {
+				p = protoVal
+			}
+			return p, nil
+		})
 	})
 	props := ctor.AsNativeFunctionWithProps().Properties
 	props.DefineFixedProperty("prototype", protoVal)
@@ -924,4 +946,100 @@ func (r *temporalRealm) differenceSettings(since bool, options vm.Value, group u
 	}
 	s.largest, s.smallest = largest, smallest
 	return s, nil
+}
+
+// ---------------------------------------------------------------------------
+// Calendars: the ISO 8601 calendar is the only one, so these only validate
+// ---------------------------------------------------------------------------
+
+// hasCalendarSlot reports whether v is a Temporal object that carries a
+// calendar (everything except Instant, Duration and PlainTime).
+func hasCalendarSlot(v vm.Value) bool {
+	if _, ok := slotsOf[tZoned](v); ok {
+		return true
+	}
+	if _, ok := slotsOf[tPlainDate](v); ok {
+		return true
+	}
+	if _, ok := slotsOf[tPlainDateTime](v); ok {
+		return true
+	}
+	if _, ok := slotsOf[tPlainYearMonth](v); ok {
+		return true
+	}
+	_, ok := slotsOf[tPlainMonthDay](v)
+	return ok
+}
+
+// toCalendarIdentifier is ToTemporalCalendarIdentifier: a Temporal object
+// carries the ISO calendar, a string is an identifier or any ISO string whose
+// calendar annotation counts (ParseTemporalCalendarString), anything else is
+// a TypeError.
+func (r *temporalRealm) toCalendarIdentifier(v vm.Value) (string, error) {
+	if hasCalendarSlot(v) {
+		return "iso8601", nil
+	}
+	if v.Type() != vm.TypeString {
+		return "", r.typeErr("calendar must be a string")
+	}
+	return r.calendarFromString(v.ToString())
+}
+
+func (r *temporalRealm) calendarFromString(s string) (string, error) {
+	if c, ok := temporal.CanonicalizeCalendarIdentifier(s); ok {
+		return c, nil
+	}
+	for _, parse := range []func(string) (*temporal.Parsed, error){
+		temporal.ParseZonedDateTimeString, temporal.ParsePlainDateTimeString, temporal.ParseInstantString,
+		temporal.ParsePlainMonthDayString, temporal.ParsePlainYearMonthString, temporal.ParsePlainTimeString,
+	} {
+		if p, err := parse(s); err == nil {
+			if p.Calendar == "" {
+				return "iso8601", nil
+			}
+			return r.canonicalCalendar(p.Calendar)
+		}
+	}
+	return "", r.rangeErr("invalid calendar " + s)
+}
+
+// checkCalendar converts a calendar value and discards the result: with a
+// single calendar, only validity matters.
+func (r *temporalRealm) checkCalendar(v vm.Value) error {
+	_, err := r.toCalendarIdentifier(v)
+	return err
+}
+
+// checkParsedCalendar validates the calendar annotation of a parsed string.
+func (r *temporalRealm) checkParsedCalendar(p *temporal.Parsed) error {
+	if p.Calendar == "" {
+		return nil
+	}
+	_, err := r.canonicalCalendar(p.Calendar)
+	return err
+}
+
+// calendarOfItem is GetTemporalCalendarIdentifierWithISODefault for a
+// property bag: a Temporal object is ISO, otherwise its calendar property, if
+// any, is validated.
+func (r *temporalRealm) calendarOfItem(item vm.Value) error {
+	if hasCalendarSlot(item) {
+		return nil
+	}
+	c, err := r.vm.GetProperty(item, "calendar")
+	if err != nil || c.IsUndefined() {
+		return err
+	}
+	return r.checkCalendar(c)
+}
+
+// calendarAnnotation is FormatCalendarAnnotation for the ISO calendar.
+func calendarAnnotation(show string) string {
+	switch show {
+	case "always":
+		return "[u-ca=iso8601]"
+	case "critical":
+		return "[!u-ca=iso8601]"
+	}
+	return ""
 }

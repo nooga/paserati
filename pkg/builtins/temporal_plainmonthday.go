@@ -58,7 +58,7 @@ func (r *temporalRealm) toTemporalMonthDay(item, options vm.Value) (temporal.Dat
 			}
 			return s.date, nil
 		}
-		if err := r.ymdReadCalendar(item); err != nil {
+		if err := r.calendarOfItem(item); err != nil {
 			return temporal.Date{}, err
 		}
 		f, err := r.prepareFields(item, []string{fDay, fMonth, fMonthCode, fYear}, nil, false)
@@ -82,7 +82,7 @@ func (r *temporalRealm) toTemporalMonthDay(item, options vm.Value) (temporal.Dat
 	if err != nil {
 		return temporal.Date{}, r.err(err)
 	}
-	if err := r.ymdCheckParsedCalendar(p); err != nil {
+	if err := r.checkParsedCalendar(p); err != nil {
 		return temporal.Date{}, err
 	}
 	opts, err := r.getOptionsObject(options)
@@ -96,7 +96,7 @@ func (r *temporalRealm) toTemporalMonthDay(item, options vm.Value) (temporal.Dat
 }
 
 func installPlainMonthDay(r *temporalRealm) error {
-	ctor, proto := r.newClass("PlainMonthDay", 2, func(args []vm.Value, p vm.Value) (vm.Value, error) {
+	ctor, proto := r.newClass("PlainMonthDay", 2, func(args []vm.Value, p protoRef) (vm.Value, error) {
 		m, err := r.toIntegerWithTruncation(argAt(args, 0))
 		if err != nil {
 			return vm.Undefined, err
@@ -118,7 +118,7 @@ func installPlainMonthDay(r *temporalRealm) error {
 		if !temporal.IsValidISODate(ref.Year, ref.Month, ref.Day) || !temporal.ISODateWithinLimits(ref) {
 			return vm.Undefined, r.rangeErr("invalid month-day")
 		}
-		return r.wrapWithProto(p, &tPlainMonthDay{ref}), nil
+		return r.wrapNew(p, &tPlainMonthDay{ref})
 	})
 
 	r.static(ctor, "from", 1, func(args []vm.Value) (vm.Value, error) {
@@ -241,7 +241,7 @@ func installPlainMonthDay(r *temporalRealm) error {
 // when the calendar annotation does.
 func formatMonthDay(ref temporal.Date, show string) string {
 	if show == "always" || show == "critical" {
-		return temporal.FormatDate(ref) + ymdCalendarAnnotation(show)
+		return temporal.FormatDate(ref) + calendarAnnotation(show)
 	}
 	return fmt.Sprintf("%02d-%02d", ref.Month, ref.Day)
 }

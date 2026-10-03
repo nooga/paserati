@@ -25,43 +25,6 @@ func (r *temporalRealm) createPlainDateTime(dt temporal.DateTime) (vm.Value, err
 	return r.wrap("PlainDateTime", &tPlainDateTime{dt}), nil
 }
 
-// calendarFromValue is ToTemporalCalendarIdentifier: Temporal objects carry
-// the ISO calendar, anything else must be a string.
-func (r *temporalRealm) calendarFromValue(v vm.Value) error {
-	if isObjectValue(v) && (isSlots[tPlainDate](v) || isSlots[tPlainDateTime](v) || isSlots[tPlainMonthDay](v) ||
-		isSlots[tPlainYearMonth](v) || isSlots[tZoned](v)) {
-		return nil
-	}
-	if v.Type() != vm.TypeString {
-		return r.typeErr("calendar must be a string")
-	}
-	return r.calendarFromString(v.ToString())
-}
-
-// calendarFromString is ParseTemporalCalendarString: an identifier, or any
-// ISO date/time string with an optional calendar annotation.
-func (r *temporalRealm) calendarFromString(s string) error {
-	if _, err := r.canonicalCalendar(s); err == nil {
-		return nil
-	}
-	var p *temporal.Parsed
-	var err error
-	for _, parse := range []func(string) (*temporal.Parsed, error){temporal.ParsePlainDateTimeString,
-		temporal.ParsePlainTimeString, temporal.ParsePlainYearMonthString, temporal.ParsePlainMonthDayString} {
-		if p, err = parse(s); err == nil {
-			break
-		}
-	}
-	if err != nil {
-		return r.rangeErr("invalid calendar " + s)
-	}
-	if p.Calendar != "" {
-		_, err = r.canonicalCalendar(p.Calendar)
-		return err
-	}
-	return nil
-}
-
 // toTemporalDateTime is ToTemporalDateTime.
 func (r *temporalRealm) toTemporalDateTime(item, options vm.Value) (temporal.DateTime, error) {
 	if isObjectValue(item) {
@@ -118,7 +81,7 @@ func (r *temporalRealm) dateTimeFromBag(item, options vm.Value) (temporal.DateTi
 		return temporal.DateTime{}, err
 	}
 	if !cal.IsUndefined() {
-		if err := r.calendarFromValue(cal); err != nil {
+		if err := r.checkCalendar(cal); err != nil {
 			return temporal.DateTime{}, err
 		}
 	}
@@ -195,18 +158,8 @@ func (r *temporalRealm) rejectObjectWithCalendarOrTimeZone(v vm.Value) error {
 	return nil
 }
 
-func calendarAnnotation(mode string) string {
-	switch mode {
-	case "always":
-		return "[u-ca=iso8601]"
-	case "critical":
-		return "[!u-ca=iso8601]"
-	}
-	return ""
-}
-
 func installPlainDateTime(r *temporalRealm) error {
-	ctor, proto := r.newClass("PlainDateTime", 3, func(args []vm.Value, p vm.Value) (vm.Value, error) {
+	ctor, proto := r.newClass("PlainDateTime", 3, func(args []vm.Value, p protoRef) (vm.Value, error) {
 		var n [9]int
 		for i := range n {
 			a := argAt(args, i)
@@ -235,7 +188,7 @@ func installPlainDateTime(r *temporalRealm) error {
 		if !temporal.ISODateTimeWithinLimits(dt) {
 			return vm.Undefined, r.rangeErr("date-time is outside the supported range")
 		}
-		return r.wrapWithProto(p, &tPlainDateTime{dt}), nil
+		return r.wrapNew(p, &tPlainDateTime{dt})
 	})
 
 	r.static(ctor, "from", 1, func(args []vm.Value) (vm.Value, error) {
@@ -357,7 +310,7 @@ func installPlainDateTime(r *temporalRealm) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		if err := r.calendarFromValue(argAt(args, 0)); err != nil {
+		if err := r.checkCalendar(argAt(args, 0)); err != nil {
 			return vm.Undefined, err
 		}
 		return r.createPlainDateTime(s.dt)
