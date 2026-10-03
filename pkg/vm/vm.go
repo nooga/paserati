@@ -3281,29 +3281,33 @@ startExecution:
 					leftPrim := leftVal
 					rightPrim := rightVal
 
-					// Need to call toPrimitive for objects AND functions (callables)
+					// Need to call toPrimitive for objects AND functions (callables).
+					// A throw from valueOf/toString may be caught by a handler in
+					// any frame, including a caller's, so use the helper-call idiom
+					// (handlerFound) rather than comparing this frame's ip.
+					frame.ip = ip
 					if leftVal.IsObject() || leftVal.IsCallable() {
+						vm.helperCallDepth++
 						leftPrim = vm.toPrimitive(leftVal, "number")
-						// Check if toPrimitive threw an exception (either still unwinding, or handler was found and IP changed)
+						vm.helperCallDepth--
 						if vm.unwinding {
 							return InterpretRuntimeError, Undefined
 						}
-						// Check if exception handler was found - frame.ip would have changed
-						if frame.ip != ipBeforeOp {
-							ip = frame.ip
-							continue
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
 						}
 					}
 					if rightVal.IsObject() || rightVal.IsCallable() {
+						vm.helperCallDepth++
 						rightPrim = vm.toPrimitive(rightVal, "number")
-						// Check if toPrimitive threw an exception
+						vm.helperCallDepth--
 						if vm.unwinding {
 							return InterpretRuntimeError, Undefined
 						}
-						// Check if exception handler was found
-						if frame.ip != ipBeforeOp {
-							ip = frame.ip
-							continue
+						if vm.handlerFound {
+							vm.handlerFound = false
+							goto reloadFrame
 						}
 					}
 
