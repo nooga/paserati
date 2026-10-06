@@ -32,11 +32,10 @@ const (
 // stdin; results leave as JSON lines on fd 3. Anything the checker prints to
 // stdout is discarded so it cannot corrupt the protocol.
 func workerMain(conformanceDir string) {
-	resp := os.NewFile(3, "results")
-	if resp == nil {
-		fmt.Fprintln(os.Stderr, "worker: no result pipe")
-		os.Exit(2)
-	}
+	// Results go to the real stdout; the os.Stdout variable is pointed away so
+	// stray prints from the runtime under test cannot corrupt the JSON stream.
+	// (Not an inherited extra fd: exec.Cmd.ExtraFiles is unsupported on Windows.)
+	resp := os.Stdout
 	if devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
 		os.Stdout = devnull
 	}
@@ -115,26 +114,20 @@ type worker struct {
 const recycleAfter = 300
 
 func (w *worker) start() error {
-	resR, resW, err := os.Pipe()
-	if err != nil {
-		return err
-	}
 	cmd := exec.Command(w.exe, "-worker", "-conformance-dir", w.conformanceDir)
 	w.stderr = &tailBuffer{}
 	cmd.Stderr = w.stderr
-	cmd.ExtraFiles = []*os.File{resW}
+	resR, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		resR.Close()
-		resW.Close()
 		return err
 	}
 	if err := cmd.Start(); err != nil {
-		resR.Close()
-		resW.Close()
 		return err
 	}
-	resW.Close() // the child owns the write end now
 	w.cmd = cmd
 	w.stdin = stdin
 	w.results = make(chan workerResp, 1)
@@ -149,7 +142,6 @@ func (w *worker) start() error {
 			}
 			results <- r
 		}
-		resR.Close()
 		close(done)
 	}(w.results, w.done)
 	return nil

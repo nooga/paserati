@@ -24,7 +24,7 @@ func TestMain(m *testing.M) {
 }
 
 func fakeWorker(mode string) {
-	resp := os.NewFile(3, "results")
+	resp := os.Stdout
 	dec := json.NewDecoder(os.Stdin)
 	enc := json.NewEncoder(resp)
 	for {
