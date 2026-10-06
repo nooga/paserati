@@ -27,6 +27,7 @@ func fakeWorker(mode string) {
 	resp := os.Stdout
 	dec := json.NewDecoder(os.Stdin)
 	enc := json.NewEncoder(resp)
+	_ = enc.Encode(workerResp{Ready: true})
 	for {
 		var req workerReq
 		if dec.Decode(&req) != nil {
