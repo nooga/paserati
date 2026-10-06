@@ -30,6 +30,7 @@ type workerResp struct {
 	CheckPanic string `json:"checkPanic,omitempty"`
 	Panic      string `json:"panic,omitempty"` // panic outside the parse-error recovery path: the test is a failure
 	Err        string `json:"err,omitempty"`   // harness-level error (unreadable file, ...)
+	Ready      bool   `json:"ready,omitempty"` // handshake sent once by a freshly started worker, before any job
 	DurNs      int64  `json:"durNs"`
 }
 

@@ -45,6 +45,7 @@ func workerMain(conformanceDir string) {
 
 	dec := json.NewDecoder(os.Stdin)
 	enc := json.NewEncoder(resp)
+	_ = enc.Encode(workerResp{Ready: true})
 	n := 0
 	for {
 		var req workerReq
@@ -144,8 +145,27 @@ func (w *worker) start() error {
 		}
 		close(done)
 	}(w.results, w.done)
-	return nil
+	// Wait for the handshake so process startup (slow on loaded machines and on
+	// Windows, where several binaries launching at once get scanned) is not
+	// charged against the first job's deadline.
+	select {
+	case r := <-w.results:
+		if r.Ready {
+			return nil
+		}
+		w.stop(true)
+		return fmt.Errorf("worker sent a result before its ready handshake")
+	case <-w.done:
+		w.stop(true)
+		return fmt.Errorf("worker exited during startup: %s", lastLines(w.stderr.String()))
+	case <-time.After(workerStartTimeout):
+		w.stop(true)
+		return fmt.Errorf("worker not ready after %v", workerStartTimeout)
+	}
 }
+
+// workerStartTimeout bounds process startup, which is kept out of per-test deadlines.
+const workerStartTimeout = 60 * time.Second
 
 func (w *worker) stop(kill bool) {
 	if w.cmd == nil {
