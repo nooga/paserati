@@ -79,10 +79,10 @@ func (w *WritableStreamInitializer) InitRuntime(ctx *RuntimeContext) error {
 	writerProto := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
 
 	// Stashed so TransformStream (transform_stream_init.go) can build a
-	// writable side sharing these prototypes without a JS underlyingSink,
-	// mirroring readableStreamProto/readableStreamReaderProto's convention.
-	writableStreamProto = streamProto
-	writableStreamWriterProto = writerProto
+	// writable side sharing these prototypes without a JS underlyingSink.
+	// Per VM, not package-level: instances on other goroutines (#606).
+	vmInstance.WritableStreamPrototype = streamProto
+	vmInstance.WritableStreamWriterPrototype = writerProto
 
 	ctorFn := func(args []vm.Value) (vm.Value, error) {
 		state := newWritableStreamState(vmInstance)
@@ -111,13 +111,6 @@ func (w *WritableStreamInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	return ctx.DefineGlobal("WritableStream", ctor)
 }
-
-// Package-level prototypes, set once during InitRuntime - see the identical
-// convention on readableStreamProto/readableStreamReaderProto.
-var (
-	writableStreamProto       *vm.PlainObject
-	writableStreamWriterProto *vm.PlainObject
-)
 
 // callAlgorithm invokes a JS hook function and wraps whatever it returns (a
 // plain value, undefined, or a thenable) into a Promise<value> - i.e. the
@@ -439,7 +432,7 @@ func createWritableStreamObject(vmInstance *vm.VM, state *writableStreamState, s
 		state.locked = true
 		state.mu.Unlock()
 		obj.SetOwn("locked", vm.True)
-		return createWritableStreamWriterObject(state, writableStreamWriterProto), nil
+		return createWritableStreamWriterObject(state, vmInstance.WritableStreamWriterPrototype), nil
 	}))
 
 	obj.SetOwnNonEnumerable("abort", vm.NewNativeFunction(1, false, "abort", func(args []vm.Value) (vm.Value, error) {

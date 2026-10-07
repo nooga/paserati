@@ -148,9 +148,9 @@ type CallFrame struct {
 	ip      int            // Instruction pointer *within* this frame's closure.Fn.Chunk.Code
 	// `registers` is a slice pointing into the VM's main register stack,
 	// defining the window for this frame.
-	registers           []Value
-	spillSlots          []Value  // Spill slots for register overflow (allocated only if needed)
-	allocatedRegSize    int      // Actual allocated register window size (may differ from function.RegisterSize due to TCO expansion)
+	registers        []Value
+	spillSlots       []Value // Spill slots for register overflow (allocated only if needed)
+	allocatedRegSize int     // Actual allocated register window size (may differ from function.RegisterSize due to TCO expansion)
 	// regSlotBeforePush is vm.regDir's cursor as it was *immediately before*
 	// this frame's register window was pushed - the "release mark". It is
 	// what vm.regDir.popTo uses on every return path to give this window's
@@ -171,21 +171,21 @@ type CallFrame struct {
 	// window, possibly TCO-expanded, end where I think it does". TCO updates
 	// this field (not regSlotBeforePush) when it relocates the window via
 	// move(); tryExpand doesn't move it, so leaves it unchanged.
-	regWindowStart registerMark
-	targetRegister      byte     // Which register in the CALLER the result should go into
-	thisValue           Value    // The 'this' value for method calls (undefined for regular function calls)
+	regWindowStart      registerMark
+	targetRegister      byte      // Which register in the CALLER the result should go into
+	thisValue           Value     // The 'this' value for method calls (undefined for regular function calls)
 	thisCell            *thisCell // Derived-constructor frames only: 'this' binding shared with arrows created before super() - see this_cell.go
-	homeObject          Value    // The [[HomeObject]] for super property access (object where method is defined)
-	openUpvalues        *Upvalue // Head of this frame's open-upvalue list (captures into this frame's registers/spill slots), linked via Upvalue.next. nil iff the frame has captured nothing.
-	isConstructorCall   bool     // Whether this frame was created by a constructor call (new expression)
-	newTargetValue      Value    // The constructor that was invoked with 'new' (for new.target)
-	isDirectCall        bool     // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
-	isSentinelFrame     bool     // Whether this frame is a sentinel that should cause vm.run() to return immediately
-	isGeneratorPrologue bool     // Whether this frame is executing a generator prologue (suppresses uncaught exception printing)
-	argCount            int      // Actual number of arguments passed to this function (for arguments object)
-	args                []Value  // Actual argument values passed to this function (for arguments object, copied before registers are mutated)
-	argumentsObject     Value    // Cached arguments object (created on first access to 'arguments')
-	calleeValue         Value    // The original callee Value (for arguments.callee to reference the same object)
+	homeObject          Value     // The [[HomeObject]] for super property access (object where method is defined)
+	openUpvalues        *Upvalue  // Head of this frame's open-upvalue list (captures into this frame's registers/spill slots), linked via Upvalue.next. nil iff the frame has captured nothing.
+	isConstructorCall   bool      // Whether this frame was created by a constructor call (new expression)
+	newTargetValue      Value     // The constructor that was invoked with 'new' (for new.target)
+	isDirectCall        bool      // Whether this frame should return immediately upon OpReturn (for Function.prototype.call)
+	isSentinelFrame     bool      // Whether this frame is a sentinel that should cause vm.run() to return immediately
+	isGeneratorPrologue bool      // Whether this frame is executing a generator prologue (suppresses uncaught exception printing)
+	argCount            int       // Actual number of arguments passed to this function (for arguments object)
+	args                []Value   // Actual argument values passed to this function (for arguments object, copied before registers are mutated)
+	argumentsObject     Value     // Cached arguments object (created on first access to 'arguments')
+	calleeValue         Value     // The original callee Value (for arguments.callee to reference the same object)
 
 	// For async native functions that can call bytecode
 	isNativeFrame    bool
@@ -390,6 +390,13 @@ type VM struct {
 	SharedArrayBufferPrototype Value
 	DataViewPrototype          Value
 
+	// Stream prototypes, kept so Go-side constructors (NewHostFedReadableStream,
+	// TransformStream's sides) build objects on this VM's prototypes.
+	ReadableStreamPrototype       *PlainObject
+	ReadableStreamReaderPrototype *PlainObject
+	WritableStreamPrototype       *PlainObject
+	WritableStreamWriterPrototype *PlainObject
+
 	// Flag to disable method binding during Function.prototype.call to prevent infinite recursion
 	disableMethodBinding bool
 
@@ -485,13 +492,13 @@ type VM struct {
 	completionStack []Completion  // Stack of deferred break/continue actions
 
 	// Module system (Phase 5)
-	moduleContexts    map[string]*ModuleContext // Cached module contexts by path
+	moduleContexts map[string]*ModuleContext // Cached module contexts by path
 	// deferredNamespaces caches each module's `import defer` namespace, by
 	// module context key.
 	deferredNamespaces map[string]Value
-	moduleLoader      ModuleLoader              // Reference to module loader for loading modules
-	currentModulePath string                    // Currently executing module path (for module-scoped globals)
-	importMetaBaseDir string                    // FS resolver base dir; relative module paths Abs against this
+	moduleLoader       ModuleLoader // Reference to module loader for loading modules
+	currentModulePath  string       // Currently executing module path (for module-scoped globals)
+	importMetaBaseDir  string       // FS resolver base dir; relative module paths Abs against this
 
 	// Async runtime (Phase 6 - Async/Await)
 	asyncRuntime runtime.AsyncRuntime
@@ -697,21 +704,60 @@ func (vm *VM) ensureWellKnownSymbols() {
 	if vm.SymbolIterator.Type() == TypeSymbol {
 		return
 	}
-	vm.SymbolIterator = NewSymbol("Symbol.iterator")
-	vm.SymbolToPrimitive = NewSymbol("Symbol.toPrimitive")
-	vm.SymbolToStringTag = NewSymbol("Symbol.toStringTag")
-	vm.SymbolHasInstance = NewSymbol("Symbol.hasInstance")
-	vm.SymbolIsConcatSpreadable = NewSymbol("Symbol.isConcatSpreadable")
-	vm.SymbolSpecies = NewSymbol("Symbol.species")
-	vm.SymbolMatch = NewSymbol("Symbol.match")
-	vm.SymbolMatchAll = NewSymbol("Symbol.matchAll")
-	vm.SymbolReplace = NewSymbol("Symbol.replace")
-	vm.SymbolSearch = NewSymbol("Symbol.search")
-	vm.SymbolSplit = NewSymbol("Symbol.split")
-	vm.SymbolUnscopables = NewSymbol("Symbol.unscopables")
-	vm.SymbolAsyncIterator = NewSymbol("Symbol.asyncIterator")
-	vm.SymbolDispose = NewSymbol("Symbol.dispose")
-	vm.SymbolAsyncDispose = NewSymbol("Symbol.asyncDispose")
+	vm.SymbolIterator = WellKnownSymbols.Iterator
+	vm.SymbolToPrimitive = WellKnownSymbols.ToPrimitive
+	vm.SymbolToStringTag = WellKnownSymbols.ToStringTag
+	vm.SymbolHasInstance = WellKnownSymbols.HasInstance
+	vm.SymbolIsConcatSpreadable = WellKnownSymbols.IsConcatSpreadable
+	vm.SymbolSpecies = WellKnownSymbols.Species
+	vm.SymbolMatch = WellKnownSymbols.Match
+	vm.SymbolMatchAll = WellKnownSymbols.MatchAll
+	vm.SymbolReplace = WellKnownSymbols.Replace
+	vm.SymbolSearch = WellKnownSymbols.Search
+	vm.SymbolSplit = WellKnownSymbols.Split
+	vm.SymbolUnscopables = WellKnownSymbols.Unscopables
+	vm.SymbolAsyncIterator = WellKnownSymbols.AsyncIterator
+	vm.SymbolDispose = WellKnownSymbols.Dispose
+	vm.SymbolAsyncDispose = WellKnownSymbols.AsyncDispose
+}
+
+// WellKnownSymbols holds the well-known symbols, created once per process.
+// ECMA-262 6.1.5.1 shares them across all realms; sharing them across VMs
+// too keeps symbol-keyed shape transitions made by builtin setup identical
+// from one VM to the next, so instances don't each grow a fresh branch of
+// the global shape tree (#605), and nothing has to reassign them per VM.
+var WellKnownSymbols = struct {
+	Iterator           Value
+	ToPrimitive        Value
+	ToStringTag        Value
+	HasInstance        Value
+	IsConcatSpreadable Value
+	Species            Value
+	Match              Value
+	MatchAll           Value
+	Replace            Value
+	Search             Value
+	Split              Value
+	Unscopables        Value
+	AsyncIterator      Value
+	Dispose            Value
+	AsyncDispose       Value
+}{
+	Iterator:           NewSymbol("Symbol.iterator"),
+	ToPrimitive:        NewSymbol("Symbol.toPrimitive"),
+	ToStringTag:        NewSymbol("Symbol.toStringTag"),
+	HasInstance:        NewSymbol("Symbol.hasInstance"),
+	IsConcatSpreadable: NewSymbol("Symbol.isConcatSpreadable"),
+	Species:            NewSymbol("Symbol.species"),
+	Match:              NewSymbol("Symbol.match"),
+	MatchAll:           NewSymbol("Symbol.matchAll"),
+	Replace:            NewSymbol("Symbol.replace"),
+	Search:             NewSymbol("Symbol.search"),
+	Split:              NewSymbol("Symbol.split"),
+	Unscopables:        NewSymbol("Symbol.unscopables"),
+	AsyncIterator:      NewSymbol("Symbol.asyncIterator"),
+	Dispose:            NewSymbol("Symbol.dispose"),
+	AsyncDispose:       NewSymbol("Symbol.asyncDispose"),
 }
 
 // CurrentRealm returns the active realm for the current execution.
@@ -1360,7 +1406,16 @@ func (vm *VM) SetBuiltinGlobals(globals map[string]Value, indexMap map[string]in
 		"undefined": true,
 	}
 
-	for name, value := range globals {
+	// Define them in a fixed order. Ranging over the map directly gives every
+	// VM its own random insertion order, and so its own chain of shapes in
+	// the process-wide transition tree that is never shared or freed (#605).
+	names := make([]string, 0, len(globals))
+	for name := range globals {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		value := globals[name]
 		if nonWritableGlobals[name] {
 			// Define non-writable, non-enumerable, non-configurable globals
 			w, e, c := false, false, false
@@ -1529,7 +1584,7 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 	frame.registers = regWindow
 	frame.allocatedRegSize = scriptRegSize // Track actual allocation for proper cleanup
 	frame.regSlotBeforePush = pushMark     // B4 invariant: record window start for checkRegWindowRelease
-	frame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
+	frame.regWindowStart = windowStart     // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 
 	// For nested Interpret calls (eval), initialize registers to Undefined to avoid
 	// stale values from previous executions affecting the result
@@ -1837,6 +1892,7 @@ func (vm *VM) run() (status InterpretResult, resultValue Value) {
 	}()
 	return vm.runLoop()
 }
+
 // runLoop is the main execution loop.
 // It returns the InterpretResult status AND the final script Value.
 func (vm *VM) runLoop() (status InterpretResult, resultValue Value) {
@@ -5564,15 +5620,15 @@ startExecution:
 											hasProperty = result.IsTruthy()
 										}
 									} else {
-									// No has trap, check target.[[HasProperty]] -
-									// proxyHasPropertyFallback (not a hand-rolled
-									// TypeObject/TypeDictObject-only switch) so a target
-									// that is itself a Proxy resolves correctly instead of
-									// being treated as "not present" outright, and so does
-									// every other target kind proxyHasPropertyFallback
-									// already covers (TypeArray, TypeMap, TypeSet,
-									// TypeRegExp, ... - see its own definition).
-									hasProperty = vm.proxyHasPropertyFallback(proxy.target, propName)
+										// No has trap, check target.[[HasProperty]] -
+										// proxyHasPropertyFallback (not a hand-rolled
+										// TypeObject/TypeDictObject-only switch) so a target
+										// that is itself a Proxy resolves correctly instead of
+										// being treated as "not present" outright, and so does
+										// every other target kind proxyHasPropertyFallback
+										// already covers (TypeArray, TypeMap, TypeSet,
+										// TypeRegExp, ... - see its own definition).
+										hasProperty = vm.proxyHasPropertyFallback(proxy.target, propName)
 									}
 								}
 							}
@@ -12356,7 +12412,7 @@ startExecution:
 				newFrame.registers = newWindow
 				newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
 				newFrame.regSlotBeforePush = pushMark    // B4 invariant: record window start for checkRegWindowRelease
-				newFrame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
+				newFrame.regWindowStart = windowStart    // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 
 				// Allocate spill slots if this function needs them (for register overflow)
 				if constructorFunc.Chunk.NumSpillSlots > 0 {
@@ -12579,7 +12635,7 @@ startExecution:
 				newFrame.registers = newWindow
 				newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
 				newFrame.regSlotBeforePush = pushMark    // B4 invariant: record window start for checkRegWindowRelease
-				newFrame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
+				newFrame.regWindowStart = windowStart    // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 
 				// Allocate spill slots if this function needs them (for register overflow)
 				if constructorFunc.Chunk.NumSpillSlots > 0 {
@@ -13052,7 +13108,7 @@ startExecution:
 					newFrame.registers = newWindow
 					newFrame.allocatedRegSize = requiredRegs // Track actual allocation for proper cleanup
 					newFrame.regSlotBeforePush = pushMark    // B4 invariant: record window start for checkRegWindowRelease
-					newFrame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
+					newFrame.regWindowStart = windowStart    // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 
 					// Allocate spill slots if this function needs them (for
 					// register overflow - local variables, or, paserati#467,
@@ -20430,9 +20486,9 @@ func (vm *VM) resumeGenerator(genObj *GeneratorObject, sentValue Value) (Value, 
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = newWindow
-	frame.allocatedRegSize = regSize   // Track actual allocation for proper cleanup
-	frame.regSlotBeforePush = pushMark // B4 invariant: record window start for checkRegWindowRelease
-	frame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
+	frame.allocatedRegSize = regSize           // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = pushMark         // B4 invariant: record window start for checkRegWindowRelease
+	frame.regWindowStart = windowStart         // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 	frame.ip = genObj.Frame.pc                 // Resume from saved PC
 	frame.targetRegister = destReg             // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue   // Restore the saved 'this' value
@@ -20713,9 +20769,9 @@ func (vm *VM) resumeGeneratorWithException(genObj *GeneratorObject, exception Va
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = newWindow
-	frame.allocatedRegSize = regSize   // Track actual allocation for proper cleanup
-	frame.regSlotBeforePush = pushMark // B4 invariant: record window start for checkRegWindowRelease
-	frame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
+	frame.allocatedRegSize = regSize           // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = pushMark         // B4 invariant: record window start for checkRegWindowRelease
+	frame.regWindowStart = windowStart         // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 	frame.ip = genObj.Frame.pc                 // Resume from saved PC
 	frame.targetRegister = destReg             // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue   // Restore the saved 'this' value
@@ -20917,9 +20973,9 @@ func (vm *VM) resumeGeneratorWithReturn(genObj *GeneratorObject, returnValue Val
 	// Manually set up the generator frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = newWindow
-	frame.allocatedRegSize = regSize   // Track actual allocation for proper cleanup
-	frame.regSlotBeforePush = pushMark // B4 invariant: record window start for checkRegWindowRelease
-	frame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
+	frame.allocatedRegSize = regSize           // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = pushMark         // B4 invariant: record window start for checkRegWindowRelease
+	frame.regWindowStart = windowStart         // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 	frame.ip = genObj.Frame.pc                 // Resume from saved PC
 	frame.targetRegister = destReg             // Target in sentinel frame
 	frame.thisValue = genObj.Frame.thisValue   // Restore the saved 'this' value
@@ -21129,9 +21185,9 @@ func (vm *VM) resumeAsyncFunction(promiseObj *PromiseObject, resolvedValue Value
 	// Manually set up the async function frame for resumption (bypass prepareCall since we need custom setup)
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = newWindow
-	frame.allocatedRegSize = regSize   // Track actual allocation for proper cleanup
-	frame.regSlotBeforePush = pushMark // B4 invariant: record window start for checkRegWindowRelease
-	frame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
+	frame.allocatedRegSize = regSize               // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = pushMark             // B4 invariant: record window start for checkRegWindowRelease
+	frame.regWindowStart = windowStart             // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 	frame.ip = promiseObj.Frame.pc                 // Resume from saved PC
 	frame.targetRegister = destReg                 // Target in sentinel frame
 	frame.thisValue = promiseObj.ThisValue         // Restore original this value
@@ -21284,9 +21340,9 @@ func (vm *VM) resumeAsyncFunctionWithException(promiseObj *PromiseObject, except
 	// Manually set up the async function frame for resumption
 	frame := &vm.frames[vm.frameCount]
 	frame.registers = newWindow
-	frame.allocatedRegSize = regSize   // Track actual allocation for proper cleanup
-	frame.regSlotBeforePush = pushMark // B4 invariant: record window start for checkRegWindowRelease
-	frame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
+	frame.allocatedRegSize = regSize               // Track actual allocation for proper cleanup
+	frame.regSlotBeforePush = pushMark             // B4 invariant: record window start for checkRegWindowRelease
+	frame.regWindowStart = windowStart             // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 	frame.ip = promiseObj.Frame.pc                 // Resume from saved PC
 	frame.targetRegister = destReg                 // Target in sentinel frame
 	frame.thisValue = promiseObj.ThisValue         // Restore original this value
@@ -21712,7 +21768,7 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 	}
 	frame.allocatedRegSize = scriptRegSize // Track actual allocation for proper cleanup
 	frame.regSlotBeforePush = pushMark     // B4 invariant: record window start for checkRegWindowRelease
-	frame.regWindowStart = windowStart // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
+	frame.regWindowStart = windowStart     // B4 invariant: this window's actual location (may differ from regSlotBeforePush after a block-skip)
 	frame.targetRegister = 0               // a direct-call return writes no caller register
 	frame.thisValue = Undefined
 	frame.homeObject = Undefined

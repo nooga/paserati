@@ -42,8 +42,8 @@ func init() {
 // getPrototypeMethodTypeFromGlobalEnv is the new prototype method resolver
 // that uses the environment's primitive prototype registry
 func getPrototypeMethodTypeFromGlobalEnv(primitiveName, methodName string) types.Type {
-	if globalEnvironment != nil {
-		return globalEnvironment.GetPrimitivePrototypeMethodType(primitiveName, methodName)
+	if env := globalEnvironment.Load(); env != nil {
+		return env.GetPrimitivePrototypeMethodType(primitiveName, methodName)
 	}
 	return nil
 }

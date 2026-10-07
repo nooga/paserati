@@ -77,8 +77,8 @@ func (r *ReadableStreamInitializer) InitRuntime(ctx *RuntimeContext) error {
 	// Stashed so NewHostFedReadableStream (a Go-facing constructor with no
 	// JS underlyingSource) can build stream/reader objects that share the
 	// same prototypes as ones constructed from script.
-	readableStreamProto = streamProto
-	readableStreamReaderProto = readerProto
+	vmInstance.ReadableStreamPrototype = streamProto
+	vmInstance.ReadableStreamReaderPrototype = readerProto
 
 	ctorFn := func(args []vm.Value) (vm.Value, error) {
 		state := newReadableStreamState(vmInstance)
@@ -105,15 +105,6 @@ func (r *ReadableStreamInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	return ctx.DefineGlobal("ReadableStream", ctor)
 }
-
-// Package-level prototypes, set once during InitRuntime - mirrors the
-// SymbolIterator/SymbolAsyncIterator package-var convention in
-// symbol_init.go. Only valid after ReadableStreamInitializer.InitRuntime has
-// run (i.e. after normal Paserati/driver initialization).
-var (
-	readableStreamProto       *vm.PlainObject
-	readableStreamReaderProto *vm.PlainObject
-)
 
 // pendingStreamRead is a read() call that arrived while the queue was empty
 // and the stream neither closed nor errored; it is settled the moment a
@@ -776,6 +767,6 @@ func pipeReadableTo(vmInstance *vm.VM, src *readableStreamState, dest vm.Value) 
 // Paserati/driver initialization).
 func NewHostFedReadableStream(vmInstance *vm.VM) (vm.Value, *ReadableStreamController) {
 	state := newReadableStreamState(vmInstance)
-	streamVal := createReadableStreamObject(vmInstance, state, readableStreamProto, readableStreamReaderProto)
+	streamVal := createReadableStreamObject(vmInstance, state, vmInstance.ReadableStreamPrototype, vmInstance.ReadableStreamReaderPrototype)
 	return streamVal, &ReadableStreamController{state: state}
 }
