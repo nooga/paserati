@@ -49,7 +49,14 @@ type utf16Entry struct {
 	byteOff []int32
 }
 
-var utf16Cache [utf16CacheSlots]atomic.Pointer[utf16Entry]
+// Large strings get a table of their own. Sharing one with the small strings
+// that flow through every call (the 16-char result of each substring, a
+// charAt, a split piece, ...) let that churn evict a big source string a
+// fixed fraction of the time, and every eviction cost a full O(n) rescan - so
+// a loop of substring calls on one big string scaled with its length (#597).
+const utf16LargeStringBytes = 1024
+
+var utf16Cache, utf16LargeCache [utf16CacheSlots]atomic.Pointer[utf16Entry]
 
 var emptyUTF16Entry = &utf16Entry{ptr: nil, n: 0, ascii: true}
 
@@ -63,7 +70,11 @@ func stringInfo(s string) *utf16Entry {
 	}
 	ptr := unsafe.StringData(s)
 	slot := (uintptr(unsafe.Pointer(ptr)) ^ uintptr(len(s))) >> 3 & (utf16CacheSlots - 1)
-	if e := utf16Cache[slot].Load(); e != nil && e.ptr == ptr && e.byteLen == len(s) {
+	cache := &utf16Cache
+	if len(s) >= utf16LargeStringBytes {
+		cache = &utf16LargeCache
+	}
+	if e := cache[slot].Load(); e != nil && e.ptr == ptr && e.byteLen == len(s) {
 		return e
 	}
 
@@ -75,7 +86,7 @@ func stringInfo(s string) *utf16Entry {
 		e = &utf16Entry{ptr: ptr, byteLen: len(s), n: len(units), ascii: false,
 			units: units, byteOff: offs}
 	}
-	utf16Cache[slot].Store(e)
+	cache[slot].Store(e)
 	return e
 }
 
