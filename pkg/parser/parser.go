@@ -7017,8 +7017,29 @@ func (p *Parser) isValidLValue(expr Expression) bool {
 		// effect (a shadowing local binding) or is a no-op/TypeError (the
 		// real read-only global) is resolved later, not here.
 		return true
+	case *TypeAssertionExpression, *SatisfiesExpression, *NonNullExpression:
+		// TS-only wrappers are transparent to assignment: `(n as any) = 2`,
+		// `x! += 1` assign to what they wrap (#616).
+		return p.isValidLValue(UnwrapTypeAssertions(expr))
 	default:
 		return false
+	}
+}
+
+// UnwrapTypeAssertions strips the TypeScript-only `as`, `satisfies` and `!`
+// wrappers around an expression, which have no runtime effect.
+func UnwrapTypeAssertions(expr Expression) Expression {
+	for {
+		switch e := expr.(type) {
+		case *TypeAssertionExpression:
+			expr = e.Expression
+		case *SatisfiesExpression:
+			expr = e.Expression
+		case *NonNullExpression:
+			expr = e.Expression
+		default:
+			return expr
+		}
 	}
 }
 

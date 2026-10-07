@@ -717,6 +717,11 @@ type updateIdentInfo struct {
 }
 
 func (c *Compiler) compileUpdateExpression(node *parser.UpdateExpression, hint Register) (Register, errors.PaseratiError) {
+	if inner := parser.UnwrapTypeAssertions(node.Argument); inner != node.Argument {
+		unwrapped := *node
+		unwrapped.Argument = inner
+		return c.compileUpdateExpression(&unwrapped, hint)
+	}
 	line := node.Token.Line
 
 	// Manage temporary registers with automatic cleanup

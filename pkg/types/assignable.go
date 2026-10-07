@@ -225,6 +225,17 @@ func isAssignable(source, target Type) bool {
 		return true
 	}
 
+	// Template literal types (#616): a string literal is assignable when it
+	// matches the pattern.
+	if tlt, ok := target.(*TemplateLiteralType); ok {
+		if result, decided := assignableToTemplateLiteral(source, tlt); decided {
+			return result
+		}
+	}
+	if _, ok := source.(*TemplateLiteralType); ok && target == String {
+		return true // every template literal type is a string
+	}
+
 	// NonPrimitive (the `object` keyword) only accepts non-primitive types (ObjectType,
 	// arrays, functions). Primitive types are NOT assignable to `object`.
 	if target == NonPrimitive {

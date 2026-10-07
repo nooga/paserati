@@ -403,9 +403,23 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 					debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Detected recursive generic reference to '%s', creating placeholder\n", node.Name.Value)
 					// Create a placeholder for the recursive reference
 					// We'll use a special GenericForwardReference type that includes type arguments
+					// Keep the arguments: they mention the alias's own type
+					// parameters (`DeepReadonly<T[K]>`), which instantiation
+					// substitutes, so the reference can be expanded later (#613).
+					// Speculative: an argument naming an `infer` variable that
+					// isn't in scope here would report TS2304; keep the
+					// placeholders then.
+					args := make([]types.Type, len(node.TypeArguments))
+					if !c.speculate(func() {
+						for i, arg := range node.TypeArguments {
+							args[i] = c.resolveTypeAnnotation(arg)
+						}
+					}) {
+						args = make([]types.Type, len(node.TypeArguments))
+					}
 					return &types.GenericTypeAliasForwardReference{
 						AliasName:     node.Name.Value,
-						TypeArguments: make([]types.Type, len(node.TypeArguments)), // Placeholder args
+						TypeArguments: args,
 					}
 				}
 
@@ -1241,7 +1255,13 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	for i := len(typeArgs); i < len(genericType.TypeParameters); i++ {
 		typeParam := genericType.TypeParameters[i]
 		if typeParam.Default != nil {
-			finalTypeArgs[i] = typeParam.Default
+			// A default may name earlier parameters (`B = A`): substitute
+			// the arguments chosen so far (#616).
+			earlier := make(map[string]types.Type, i)
+			for j := 0; j < i; j++ {
+				earlier[genericType.TypeParameters[j].Name] = finalTypeArgs[j]
+			}
+			finalTypeArgs[i] = c.substituteTypes(typeParam.Default, earlier)
 			debugPrintf("// [Checker] Using default type '%s' for parameter '%s'\n",
 				typeParam.Default.String(), typeParam.Name)
 		} else {
@@ -1365,6 +1385,26 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		}
 		return types.NewInstantiatedType(typ.Generic, newArgs)
 
+	case *types.GenericTypeAliasForwardReference:
+		changed := false
+		args := make([]types.Type, len(typ.TypeArguments))
+		for k, arg := range typ.TypeArguments {
+			if arg == nil {
+				return typ
+			}
+			args[k] = c.substituteTypesWithVisited(arg, substitution, visited)
+			changed = changed || args[k] != arg
+		}
+		if !changed {
+			return typ
+		}
+		return &types.GenericTypeAliasForwardReference{AliasName: typ.AliasName, TypeArguments: args}
+	case *types.ReadonlyType:
+		inner := c.substituteTypesWithVisited(typ.InnerType, substitution, visited)
+		if inner == typ.InnerType {
+			return typ
+		}
+		return types.NewReadonlyType(inner)
 	case *types.ArrayType:
 		// Recursively substitute element type
 		newElementType := c.substituteTypesWithVisited(typ.ElementType, substitution, visited)
@@ -1461,12 +1501,10 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 
 		// Copy ClassMeta to preserve class instance information
 		if typ.ClassMeta != nil {
-			result.ClassMeta = &types.ClassMetadata{
-				ClassName:          typ.ClassMeta.ClassName,
-				IsClassInstance:    typ.ClassMeta.IsClassInstance,
-				IsClassConstructor: typ.ClassMeta.IsClassConstructor,
-				MemberAccess:       typ.ClassMeta.MemberAccess,
-			}
+			// A full copy: SourceClassName and the inheritance fields drive
+			// protected/private access checks on an instantiated generic class (#613).
+			meta := *typ.ClassMeta
+			result.ClassMeta = &meta
 		}
 
 		// Inherited members and the interface flag survive instantiation; the
@@ -1528,6 +1566,14 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		// Substitute both object and index types
 		newObjectType := c.substituteTypesWithVisited(typ.ObjectType, substitution, visited)
 		newIndexType := c.substituteTypesWithVisited(typ.IndexType, substitution, visited)
+		// Once both sides are concrete, T[K] is just a property type.
+		if _, ok := newIndexType.(*types.LiteralType); ok {
+			if _, ok := newObjectType.(*types.ObjectType); ok {
+				if resolved := c.computeIndexedAccessType(newObjectType, newIndexType); resolved != nil {
+					return resolved
+				}
+			}
+		}
 		return &types.IndexedAccessType{
 			ObjectType: newObjectType,
 			IndexType:  newIndexType,
@@ -1976,6 +2022,17 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 		return types.NewUnionType(resultTypes...)
 	}
 
+	// T[K] with T or K still a type parameter (a mapped type's value before
+	// its key is substituted) isn't known yet: defer, rather than let the
+	// unresolved indexed access count as assignable and pick the true branch.
+	if ia, ok := checkType.(*types.IndexedAccessType); ok {
+		_, objIsParam := ia.ObjectType.(*types.TypeParameterType)
+		_, idxIsParam := ia.IndexType.(*types.TypeParameterType)
+		if objIsParam || idxIsParam {
+			return nil
+		}
+	}
+
 	// Check if we have unresolved TypeofType that we should defer
 	if c.containsUnresolvedTypeofType(checkType) || c.containsUnresolvedTypeofType(extendsType) {
 		debugPrintf("// [ConditionalType] Contains unresolved TypeofType, deferring evaluation\n")
@@ -2336,6 +2393,12 @@ func (c *Checker) substituteTypeParameterInType(targetType types.Type, paramName
 		}
 		return types.NewUnionType(substitutedTypes...)
 
+	case *types.ConditionalType, *types.GenericTypeAliasForwardReference, *types.ReadonlyType, *types.IntersectionType:
+		// Composite types the cases above don't walk: the general name-based
+		// substitution does, evaluating a conditional once its parts are
+		// concrete (`T[K] extends object ? DeepReadonly<T[K]> : T[K]`, #613).
+		return c.substituteTypes(targetType, map[string]types.Type{paramName: replacement})
+
 	default:
 		// For other types (primitives, objects, etc.), no substitution needed
 		return targetType
@@ -2382,12 +2445,10 @@ func cloneObjectTypeWithTypes(obj *types.ObjectType, rewrite func(types.Type) ty
 		}
 	}
 	if obj.ClassMeta != nil {
-		result.ClassMeta = &types.ClassMetadata{
-			ClassName:          obj.ClassMeta.ClassName,
-			IsClassInstance:    obj.ClassMeta.IsClassInstance,
-			IsClassConstructor: obj.ClassMeta.IsClassConstructor,
-			MemberAccess:       obj.ClassMeta.MemberAccess,
-		}
+		// A full copy: SourceClassName and the inheritance fields drive
+		// protected/private access checks on an instantiated generic class (#613).
+		meta := *obj.ClassMeta
+		result.ClassMeta = &meta
 	}
 
 	return result

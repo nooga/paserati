@@ -2215,8 +2215,9 @@ func (c *Checker) visit(node parser.Node) {
 				if bsInfo != nil {
 					bsInfo.initializing = false
 				}
-			} else if node.Declare {
-				// Ambient declaration — no initializer needed, use declared type or any
+			} else if node.Declare || c.inAmbientNamespace {
+				// Ambient declaration (`declare const`, or any const in a
+				// `declare namespace` body, #616) — no initializer needed, use declared type or any
 				if declaredType != nil {
 					computedInitializerType = declaredType
 				} else {

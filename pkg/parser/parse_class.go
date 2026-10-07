@@ -431,9 +431,6 @@ func (p *Parser) parseClassBody() *ClassBody {
 		seenOverride := false
 		for {
 			if p.curTokenIs(lexer.READONLY) && !isReadonly && !isFieldName() {
-				if seenOverride {
-					p.addError(p.curToken, "'override' modifier must precede 'readonly' modifier.")
-				}
 				isReadonly = true
 				p.nextToken()
 			} else if p.curTokenIs(lexer.STATIC) && !isStatic && !isFieldName() {
@@ -482,6 +479,11 @@ func (p *Parser) parseClassBody() *ClassBody {
 			} else if p.curTokenIs(lexer.OVERRIDE) && !isOverride && !isFieldName() {
 				if seenAsync {
 					p.addError(p.curToken, "'override' modifier must precede 'async' modifier.")
+				}
+				// `override readonly` is the required order (#614); the
+				// error is for `readonly override`.
+				if isReadonly {
+					p.addError(p.curToken, "'override' modifier must precede 'readonly' modifier.")
 				}
 				isOverride = true
 				seenOverride = true

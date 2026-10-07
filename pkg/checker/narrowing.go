@@ -1576,7 +1576,7 @@ func (c *Checker) applyTypeNarrowingFromCondition(condition parser.Expression) *
 				}
 			}
 		}
-		return nil
+		return c.applyOrUnionNarrowing(infixExpr)
 	}
 
 	// Handle truthiness checks (bare identifiers)
@@ -1593,6 +1593,58 @@ func (c *Checker) applyTypeNarrowingFromCondition(condition parser.Expression) *
 	// Handle single type guard expressions
 	guard := c.detectTypeGuard(condition)
 	return c.applyTypeNarrowing(guard)
+}
+
+// applyOrUnionNarrowing narrows `A || B` generally: a binding narrowed by
+// both A and B is the union of its two narrowed types (e.g. a discriminated
+// union's `s.kind === "c" || s.kind === "s"` leaves s as the two members).
+// A binding only one side narrows keeps its type. nil if nothing narrows.
+func (c *Checker) applyOrUnionNarrowing(expr *parser.InfixExpression) *Environment {
+	base := c.env
+	leftEnv := c.applyTypeNarrowingFromCondition(expr.Left)
+	if leftEnv == nil {
+		return nil
+	}
+	rightEnv := c.applyTypeNarrowingFromCondition(expr.Right)
+	if rightEnv == nil {
+		return nil
+	}
+	left := narrowedBindings(leftEnv, base)
+	right := narrowedBindings(rightEnv, base)
+	var result *Environment
+	for name, lt := range left {
+		rt, ok := right[name]
+		if !ok {
+			continue
+		}
+		_, isConst, found := base.Resolve(name)
+		if !found {
+			continue
+		}
+		if result == nil {
+			result = NewEnclosedEnvironment(base)
+		}
+		result.Define(name, types.NewUnionType(lt, rt), isConst)
+	}
+	return result
+}
+
+// narrowedBindings returns the bindings env defines on top of base (the
+// innermost definition of each), i.e. what a narrowing changed.
+func narrowedBindings(env, base *Environment) map[string]types.Type {
+	out := make(map[string]types.Type)
+	e := env
+	for ; e != nil && e != base; e = e.outer {
+		for name, info := range e.symbols {
+			if _, seen := out[name]; !seen {
+				out[name] = info.Type
+			}
+		}
+	}
+	if e == nil {
+		return nil // not layered on base: nothing to attribute to the narrowing
+	}
+	return out
 }
 
 // collectOrEqualityGuards recursively walks an || chain and collects type guards

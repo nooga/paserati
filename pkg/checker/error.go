@@ -46,6 +46,24 @@ func (c *Checker) addErrorWithCode(node parser.Node, code string, message string
 	c.errors = append(c.errors, err)
 }
 
+// speculate runs fn and reports whether it raised no diagnostics. If it did,
+// they are discarded, dedupe keys included, so a later real report of the
+// same diagnostic still lands.
+func (c *Checker) speculate(fn func()) bool {
+	n := len(c.errors)
+	fn()
+	if len(c.errors) == n {
+		return true
+	}
+	for _, e := range c.errors[n:] {
+		if te, ok := e.(*errors.TypeError); ok && te.ErrorCode != "" {
+			delete(c.reportedErrors, fmt.Sprintf("%d:%s:%s", te.Position.StartPos, te.ErrorCode, te.Msg))
+		}
+	}
+	c.errors = c.errors[:n]
+	return false
+}
+
 // Helper to add generic type errors without a specific node
 func (c *Checker) addGenericError(message string) {
 	err := &errors.TypeError{

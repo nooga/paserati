@@ -783,12 +783,10 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 		result.CallSignatures = c.rebindSignaturesThisType(typ.CallSignatures, from, to, visited)
 		result.ConstructSignatures = c.rebindSignaturesThisType(typ.ConstructSignatures, from, to, visited)
 		if typ.ClassMeta != nil {
-			result.ClassMeta = &types.ClassMetadata{
-				ClassName:          typ.ClassMeta.ClassName,
-				IsClassInstance:    typ.ClassMeta.IsClassInstance,
-				IsClassConstructor: typ.ClassMeta.IsClassConstructor,
-				MemberAccess:       typ.ClassMeta.MemberAccess,
-			}
+			// A full copy: SourceClassName and the inheritance fields drive
+			// protected/private access checks on an instantiated generic class (#613).
+			meta := *typ.ClassMeta
+			result.ClassMeta = &meta
 		}
 
 		return result
@@ -900,14 +898,86 @@ func (c *Checker) checkSwitchStatement(node *parser.SwitchStatement) {
 			// --- End Comparability Check ---
 		}
 
+	}
+
+	// 3. Visit the bodies, each narrowed by the clauses that reach it (#615)
+	originalEnv := c.env
+	for i, caseClause := range node.Cases {
+		if cond := switchClauseCondition(node, i); cond != nil {
+			if narrowed := c.applyTypeNarrowingWithFallback(cond); narrowed != nil {
+				c.env = narrowed
+			}
+		}
 		// Visit case body (BlockStatement, handles its own scope)
 		c.switchDepth++
 		c.visit(caseClause.Body)
 		c.switchDepth--
+		c.env = originalEnv
 	}
 
 	// Switch statements don't produce a value themselves
 	// node.SetComputedType(types.Void) // Remove this line
+}
+
+// switchClauseCondition is the condition under which the body of clause i
+// runs, for narrowing: `expr === v` for a case, joined with || across the
+// empty clauses that fall into it (`case "a": case "b":`), and for default
+// `expr !== v1 && expr !== v2 ...` over every case. nil when a non-empty
+// body can fall through into it, or default shares a group with cases -
+// then the body is reachable more ways than the condition says.
+func switchClauseCondition(node *parser.SwitchStatement, i int) parser.Expression {
+	start := i
+	for start > 0 && len(node.Cases[start-1].Body.Statements) == 0 {
+		start--
+	}
+	if start > 0 && clauseMayFallThrough(node.Cases[start-1].Body) {
+		return nil
+	}
+	op := func(tok *lexer.Token, l parser.Expression, o string, r parser.Expression) parser.Expression {
+		return &parser.InfixExpression{Token: tok, Left: l, Operator: o, Right: r}
+	}
+	var cond parser.Expression
+	for j := start; j <= i; j++ {
+		cc := node.Cases[j]
+		if cc.Condition == nil {
+			if start != i {
+				return nil
+			}
+			// default: none of the cases matched
+			for _, other := range node.Cases {
+				if other.Condition == nil {
+					continue
+				}
+				ne := op(other.Token, node.Expression, "!==", other.Condition)
+				if cond == nil {
+					cond = ne
+				} else {
+					cond = op(other.Token, cond, "&&", ne)
+				}
+			}
+			return cond
+		}
+		eq := op(cc.Token, node.Expression, "===", cc.Condition)
+		if cond == nil {
+			cond = eq
+		} else {
+			cond = op(cc.Token, cond, "||", eq)
+		}
+	}
+	return cond
+}
+
+// clauseMayFallThrough reports whether control can run off the end of a
+// non-empty case body into the next clause.
+func clauseMayFallThrough(body *parser.BlockStatement) bool {
+	if body == nil || len(body.Statements) == 0 {
+		return true
+	}
+	switch body.Statements[len(body.Statements)-1].(type) {
+	case *parser.BreakStatement, *parser.ReturnStatement, *parser.ThrowStatement, *parser.ContinueStatement:
+		return false
+	}
+	return !blockAlwaysTerminates(body)
 }
 
 func (c *Checker) checkForStatement(node *parser.ForStatement) {
