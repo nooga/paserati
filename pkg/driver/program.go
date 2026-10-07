@@ -72,6 +72,18 @@ func (p *Paserati) RunProgram(prog *Program) (vm.Value, []errors.PaseratiError) 
 	return p.runScriptChunk(inst, scriptFilename(prog.options))
 }
 
+// Instantiable reports whether RunProgram can give each run a private copy of
+// the compiled code. When it is false, RunProgram still works but recompiles
+// from source on every call, so Precompile buys nothing; embedders can use this
+// to notice that.
+func (prog *Program) Instantiable() bool {
+	if prog == nil || prog.chunk == nil {
+		return false
+	}
+	_, ok := vm.InstantiateChunk(prog.chunk)
+	return ok
+}
+
 func (prog *Program) String() string {
 	return fmt.Sprintf("Program(%s, %d bytes of bytecode)", scriptFilename(prog.options), len(prog.chunk.Code))
 }
