@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 
@@ -295,11 +296,8 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Handle different radix - only for finite numbers
 		if thisNum.Type() == vm.TypeIntegerNumber {
 			return vm.NewString(strconv.FormatInt(int64(thisNum.AsInteger()), radix)), nil
-		} else {
-			// For float numbers with non-10 radix, convert to int first (JS behavior)
-			intVal := int64(numVal)
-			return vm.NewString(strconv.FormatInt(intVal, radix)), nil
 		}
+		return vm.NewString(floatToRadixString(numVal, radix)), nil
 	}))
 
 	numberProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
@@ -808,4 +806,73 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Define Number constructor in global scope
 	return ctx.DefineGlobal("Number", numberConstructor)
+}
+
+// floatToRadixString formats a finite float64 in the given radix (2..36),
+// including the fractional part. It follows V8's DoubleToRadixCString: the
+// fraction is expanded until the remaining value is below half the distance
+// to the next double, so the digits are the shortest that round-trip.
+func floatToRadixString(value float64, radix int) string {
+	const chars = "0123456789abcdefghijklmnopqrstuvwxyz"
+	if value == 0 {
+		return "0"
+	}
+	neg := value < 0
+	if neg {
+		value = -value
+	}
+	integer := math.Floor(value)
+	fraction := value - integer
+	delta := 0.5 * (math.Nextafter(value, math.Inf(1)) - value)
+	if d0 := math.Nextafter(0, 1); delta < d0 {
+		delta = d0
+	}
+	var frac []byte
+	if fraction >= delta {
+		for {
+			fraction *= float64(radix)
+			delta *= float64(radix)
+			digit := int(fraction)
+			frac = append(frac, chars[digit])
+			fraction -= float64(digit)
+			if fraction > 0.5 || (fraction == 0.5 && digit&1 == 1) {
+				if fraction+delta > 1 {
+					// Round up, propagating carries into the integer part.
+					for {
+						if len(frac) == 0 {
+							integer++
+							break
+						}
+						last := frac[len(frac)-1]
+						frac = frac[:len(frac)-1]
+						d := strings.IndexByte(chars, last) + 1
+						if d < radix {
+							frac = append(frac, chars[d])
+							break
+						}
+					}
+					break
+				}
+			}
+			if fraction < delta {
+				break
+			}
+		}
+	}
+	var intStr string
+	if integer < 1<<63 {
+		intStr = strconv.FormatUint(uint64(integer), radix)
+	} else {
+		// float64 integers above 2^63 are exact, so use big arithmetic.
+		bi, _ := new(big.Float).SetFloat64(integer).Int(nil)
+		intStr = bi.Text(radix)
+	}
+	out := intStr
+	if len(frac) > 0 {
+		out += "." + string(frac)
+	}
+	if neg {
+		out = "-" + out
+	}
+	return out
 }
