@@ -27,6 +27,10 @@ type NamespaceType struct {
 	// Declare is true if this namespace was introduced by `declare namespace ...`
 	// (no runtime emission, type-level only).
 	Declare bool
+	// Instantiated is true when some declaration of the namespace has a runtime
+	// value (anything but interfaces, type aliases and non-instantiated nested
+	// namespaces). A namespace without one cannot be used as a value (TS2708).
+	Instantiated bool
 }
 
 // NewNamespaceType creates an empty namespace type.

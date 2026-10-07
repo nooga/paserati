@@ -15,7 +15,7 @@ const enum Direction {
     Right = 4
 }
 
-// expect_compile_error: enum member initializer must be a constant expression
+// expect_compile_error: const enum member initializers must be constant expressions.
 const enum BadConst {
     A = [1, 2, 3].length  // not allowed in const enum
 }

@@ -33,6 +33,10 @@ type Environment struct {
 	// --- Scope type tracking for var hoisting ---
 	isFunctionScope bool // True if this is a function scope (for var hoisting)
 
+	// Child namespaces pre-bound from earlier declarations of the enclosing
+	// namespace (see checkNamespaceDeclaration).
+	seededNamespaces map[string]bool
+
 	// --- Generic type parameter support ---
 	typeParameters map[string]*types.TypeParameter // Maps type parameter names to their definitions
 

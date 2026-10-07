@@ -127,7 +127,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 			}
 
 			if !typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam) {
-				c.addError(typeParamNode.Name, fmt.Sprintf("duplicate type parameter name: %s", typeParam.Name))
+				c.redeclarationReportedByBinder()
 			}
 
 			typeParams[i] = typeParam
@@ -242,7 +242,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 	var expectedReturnType types.Type
 	if ctx.ReturnTypeAnnotation != nil {
 		originalEnv := c.env
-		c.env = typeParamEnv // Use environment that includes type parameters
+		c.env = c.returnTypeEnv(typeParamEnv, ctx.Parameters, paramTypes) // type parameters, and the parameters for `typeof p`
 		expectedReturnType = c.resolveTypeAnnotation(ctx.ReturnTypeAnnotation)
 		c.env = originalEnv
 	}
@@ -377,7 +377,7 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 	var returnType types.Type
 	if ctx.ReturnTypeAnnotation != nil {
 		originalEnv := c.env
-		c.env = typeParamEnv
+		c.env = c.returnTypeEnv(typeParamEnv, ctx.Parameters, paramTypes)
 		returnType = c.resolveTypeAnnotation(ctx.ReturnTypeAnnotation)
 		c.env = originalEnv
 	} else if ctx.ContextualReturnType != nil {
@@ -418,7 +418,7 @@ func (c *Checker) setupFunctionEnvironment(ctx *FunctionCheckContext, paramTypes
 	for i, nameNode := range paramNames {
 		if i < len(paramTypes) && nameNode != nil {
 			if !funcEnv.Define(nameNode.Value, paramTypes[i], false) {
-				c.addError(nameNode, fmt.Sprintf("duplicate parameter name: %s", nameNode.Value))
+				c.redeclarationReportedByBinder()
 			}
 		}
 	}
@@ -426,7 +426,7 @@ func (c *Checker) setupFunctionEnvironment(ctx *FunctionCheckContext, paramTypes
 	// Define rest parameter if present
 	if restParameterName != nil && restParameterType != nil {
 		if !funcEnv.Define(restParameterName.Value, restParameterType, false) {
-			c.addError(restParameterName, fmt.Sprintf("duplicate parameter name: %s", restParameterName.Value))
+			c.redeclarationReportedByBinder()
 		}
 		debugPrintf("// [Checker Function Common] Defined rest parameter '%s' with type: %s\n", restParameterName.Value, restParameterType.String())
 	}
@@ -473,6 +473,9 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	c.switchDepth = 0
 	c.activeLabels = make(map[string]bool)
 	c.functionNestingDepth++
+	if !ctx.IsArrow {
+		c.nonArrowFunctionDepth++
+	}
 
 	// Set up 'this' context - check for explicit 'this' parameter
 	outerThisType := c.currentThisType
@@ -504,6 +507,7 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	var finalReturnType types.Type
 
 	// Visit body
+	c.hoistFunctionBodyVars(ctx.Body)
 	c.visit(ctx.Body)
 
 	// Handle different body types
@@ -559,6 +563,9 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	c.switchDepth = outerSwitchDepth
 	c.activeLabels = outerActiveLabels
 	c.functionNestingDepth--
+	if !ctx.IsArrow {
+		c.nonArrowFunctionDepth--
+	}
 
 	return finalReturnType
 }
@@ -626,4 +633,21 @@ func (c *Checker) signatureTypeParameters(typeParamNodes []*parser.TypeParameter
 		}
 	}
 	return typeParams
+}
+
+// returnTypeEnv is the scope a return type annotation resolves in: the type
+// parameters plus the parameters themselves, which the annotation may name in a
+// type query (`(a: X): typeof a`).
+func (c *Checker) returnTypeEnv(typeParamEnv *Environment, params []*parser.Parameter, paramTypes []types.Type) *Environment {
+	env := typeParamEnv
+	for i, p := range params {
+		if p == nil || p.IsThis || p.Name == nil || i >= len(paramTypes) {
+			continue
+		}
+		if env == typeParamEnv {
+			env = NewEnclosedEnvironment(typeParamEnv)
+		}
+		env.Define(p.Name.Value, paramTypes[i], false)
+	}
+	return env
 }

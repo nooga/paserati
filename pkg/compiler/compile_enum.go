@@ -2,181 +2,187 @@ package compiler
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/vm"
 )
 
-// compileEnumDeclaration compiles an enum declaration to bytecode
+// compiledEnum is the enum object under construction for one scope+name. A
+// merged enum (several `enum E {...}` declarations in one scope) keeps adding
+// to the same object.
+type compiledEnum struct {
+	obj    vm.Value
+	dict   *vm.DictObject
+	consts map[string]*parser.EnumConst // nil entry: computed member
+}
+
+type enumRegistryKey struct {
+	scope *SymbolTable
+	name  string
+}
+
+// compileEnumDeclaration compiles an enum declaration to bytecode.
+//
+// Constant members are folded at compile time (literals, operators, and
+// references to earlier members - tsc's constant evaluator, shared with the
+// checker through parser.EvalEnumConst) and written straight into the enum
+// object. A computed member (`A = "foo".length`) is evaluated at run time and
+// stored together with its reverse mapping, with earlier members visible by
+// name inside its initializer.
 func (c *Compiler) compileEnumDeclaration(node *parser.EnumDeclaration, hint Register) (Register, errors.PaseratiError) {
 	debugPrintf("// [Compiler Enum] Compiling enum declaration '%s'\n", node.Name.Value)
+	enumName := node.Name.Value
 
-	// Create the enum object with both forward and reverse mappings
-	enumObj := vm.NewDictObject(vm.DefaultObjectPrototype)
-	enumDict := enumObj.AsDictObject()
-
-	// Track next auto-increment value for numeric enums
-	nextValue := 0
-	isNumeric := true
-	lastMemberWasNumeric := true // Track if the previous member was numeric
-
-	// Process enum members
-	for _, member := range node.Members {
-		memberName := member.Name.Value
-		var memberValue vm.Value
-		var isThisMemberNumeric bool
-
-		if member.Value != nil {
-
-			// For compile-time constant evaluation, we need to check the AST node type
-			switch v := member.Value.(type) {
-			case *parser.NumberLiteral:
-				memberValue = vm.Number(v.Value)
-				nextValue = int(v.Value) + 1
-				isThisMemberNumeric = true
-			case *parser.StringLiteral:
-				memberValue = vm.String(v.Value)
-				isNumeric = false
-				isThisMemberNumeric = false
-			case *parser.PrefixExpression:
-				// Handle negative numbers
-				if v.Operator == "-" {
-					if numLit, ok := v.Right.(*parser.NumberLiteral); ok {
-						memberValue = vm.Number(-numLit.Value)
-						nextValue = int(-numLit.Value) + 1
-						isThisMemberNumeric = true
-					} else {
-						return BadRegister, NewCompileError(member.Value, "enum member must have constant initializer")
-					}
-				} else {
-					return BadRegister, NewCompileError(member.Value, "enum member must have constant initializer")
-				}
-			case *parser.InfixExpression:
-				if val, ok := evalEnumConstExpr(member.Value); ok {
-					memberValue = vm.Number(float64(val))
-					nextValue = val + 1
-					isThisMemberNumeric = true
-				} else {
-					return BadRegister, NewCompileError(member.Value, "enum member initializer must be a constant expression")
-				}
-			default:
-				// For complex expressions, we would need runtime evaluation
-				// For now, only support compile-time constants
-				return BadRegister, NewCompileError(member.Value, "enum member initializer must be a constant expression")
-			}
-		} else {
-			// No initializer - use auto-increment
-			if !lastMemberWasNumeric {
-				return BadRegister, NewCompileError(member.Name, "enum member must have initializer")
-			}
-			memberValue = vm.Number(float64(nextValue))
-			nextValue++
-			isThisMemberNumeric = true
-		}
-
-		// Add forward mapping: memberName -> value
-		enumDict.SetOwn(memberName, memberValue)
-
-		// Add reverse mapping for numeric enums: value -> memberName
-		if isNumeric {
-			if memberValue.IsNumber() {
-				if memberValue.IsIntegerNumber() {
-					indexKey := fmt.Sprintf("%d", memberValue.AsInteger())
-					enumDict.SetOwn(indexKey, vm.String(memberName))
-				} else {
-					indexKey := fmt.Sprintf("%.0f", memberValue.AsFloat())
-					enumDict.SetOwn(indexKey, vm.String(memberName))
-				}
-			}
-		}
-
-		debugPrintf("// [Compiler Enum] Added member '%s' = %s\n", memberName, memberValue.ToString())
-
-		// Update tracking for next iteration
-		lastMemberWasNumeric = isThisMemberNumeric
+	if c.enumRegistry == nil {
+		c.enumRegistry = make(map[enumRegistryKey]*compiledEnum)
+	}
+	regKey := enumRegistryKey{scope: c.currentSymbolTable, name: enumName}
+	ce := c.enumRegistry[regKey]
+	if ce == nil {
+		obj := vm.NewDictObject(vm.DefaultObjectPrototype)
+		ce = &compiledEnum{obj: obj, dict: obj.AsDictObject(), consts: make(map[string]*parser.EnumConst)}
+		c.enumRegistry[regKey] = ce
 	}
 
-	// Store the enum object as a constant and load it into a register
-	enumConstIndex := c.chunk.AddConstant(enumObj)
+	// Install the enum object first so run-time initializers can see it.
+	enumConstIndex := c.chunk.AddConstant(ce.obj)
 	c.emitLoadConstant(hint, enumConstIndex, node.Token.Line)
-
-	// Define the enum as a global symbol (like function declarations).
 	// Namespace the heap key the same way top-level classes/functions/vars do
 	// (see moduleGlobalKey, #103/#106): an enum always installs a global here
 	// regardless of nesting, so an un-namespaced key would leak across
 	// modules exactly like the class case #103 first found.
-	globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(node.Name.Value))
-	c.currentSymbolTable.DefineGlobal(node.Name.Value, globalIdx)
+	globalIdx := c.GetOrAssignGlobalIndex(c.moduleGlobalKey(enumName))
+	c.currentSymbolTable.DefineGlobal(enumName, globalIdx)
 	c.emitSetGlobal(globalIdx, hint, node.Token.Line)
 
-	debugPrintf("// [Compiler Enum] Defined global enum '%s' at global index %d\n", node.Name.Value, globalIdx)
+	nextValue := 0.0
+	autoValid := true // false after a computed or string member
+	declared := make(map[string]bool, len(node.Members))
 
-	debugPrintf("// [Compiler Enum] Successfully compiled enum '%s' with %d members\n",
-		node.Name.Value, len(node.Members))
+	for _, member := range node.Members {
+		if member == nil || member.Name == nil {
+			continue
+		}
+		memberName := member.Name.Value
+		if _, dup := ce.consts[memberName]; dup {
+			continue // duplicate member: reported by the checker; first wins
+		}
 
+		resolve := func(qualifier, name string) (parser.EnumConst, bool) {
+			if qualifier != "" && qualifier != enumName {
+				if other := c.enumRegistry[enumRegistryKey{scope: c.currentSymbolTable, name: qualifier}]; other != nil {
+					if v := other.consts[name]; v != nil {
+						return *v, true
+					}
+				}
+				return parser.EnumConst{}, false
+			}
+			if v := ce.consts[name]; v != nil {
+				return *v, true
+			}
+			return parser.EnumConst{}, false
+		}
+
+		var constVal *parser.EnumConst
+		if member.Value != nil {
+			if v, ok := parser.EvalEnumConst(member.Value, resolve); ok {
+				constVal = &v
+			}
+		} else {
+			if !autoValid {
+				return BadRegister, NewCompileError(member.Name, "enum member must have initializer")
+			}
+			constVal = &parser.EnumConst{Num: nextValue}
+		}
+
+		if constVal != nil {
+			ce.consts[memberName] = constVal
+			declared[memberName] = true
+			if constVal.IsString {
+				ce.dict.SetOwn(memberName, vm.String(constVal.Str))
+				autoValid = false
+			} else {
+				ce.dict.SetOwn(memberName, vm.Number(constVal.Num))
+				ce.dict.SetOwn(enumReverseKey(constVal.Num), vm.String(memberName))
+				nextValue = constVal.Num + 1
+				autoValid = true
+			}
+			continue
+		}
+
+		// Computed member: evaluated when the declaration runs.
+		if err := c.compileComputedEnumMember(node, ce, member, hint); err != nil {
+			return BadRegister, err
+		}
+		ce.consts[memberName] = nil
+		declared[memberName] = true
+		autoValid = false
+	}
+
+	debugPrintf("// [Compiler Enum] Successfully compiled enum '%s' with %d members\n", enumName, len(node.Members))
 	return hint, nil
 }
 
-// evalEnumConstExpr evaluates a constant expression at compile time for enum initializers.
-func evalEnumConstExpr(expr parser.Expression) (int, bool) {
-	switch e := expr.(type) {
-	case *parser.NumberLiteral:
-		return int(e.Value), true
-	case *parser.PrefixExpression:
-		if e.Operator == "-" {
-			if val, ok := evalEnumConstExpr(e.Right); ok {
-				return -val, true
-			}
-		} else if e.Operator == "+" {
-			return evalEnumConstExpr(e.Right)
-		} else if e.Operator == "~" {
-			if val, ok := evalEnumConstExpr(e.Right); ok {
-				return ^val, true
-			}
+// compileComputedEnumMember emits `E["name"] = <init>; E[E["name"]] = "name"`
+// with the members the initializer mentions bound by name.
+func (c *Compiler) compileComputedEnumMember(node *parser.EnumDeclaration, ce *compiledEnum, member *parser.EnumMember, enumReg Register) errors.PaseratiError {
+	line := node.Token.Line
+	memberName := member.Name.Value
+
+	prevTable := c.currentSymbolTable
+	c.currentSymbolTable = NewEnclosedSymbolTable(prevTable)
+	var temps []Register
+	defer func() {
+		c.currentSymbolTable = prevTable
+		for _, r := range temps {
+			c.regAlloc.Free(r)
 		}
-	case *parser.InfixExpression:
-		left, lok := evalEnumConstExpr(e.Left)
-		right, rok := evalEnumConstExpr(e.Right)
-		if !lok || !rok {
-			return 0, false
+	}()
+
+	for _, name := range parser.ReferencedIdentifiers(member.Value) {
+		v, known := ce.consts[name]
+		if !known {
+			continue
 		}
-		switch e.Operator {
-		case "+":
-			return left + right, true
-		case "-":
-			return left - right, true
-		case "*":
-			return left * right, true
-		case "/":
-			if right == 0 {
-				return 0, false
+		reg := c.regAlloc.Alloc()
+		temps = append(temps, reg)
+		if v != nil {
+			if v.IsString {
+				c.emitLoadConstant(reg, c.chunk.AddConstant(vm.String(v.Str)), line)
+			} else {
+				c.emitLoadConstant(reg, c.chunk.AddConstant(vm.Number(v.Num)), line)
 			}
-			return left / right, true
-		case "%":
-			if right == 0 {
-				return 0, false
-			}
-			return left % right, true
-		case "<<":
-			return left << uint(right), true
-		case ">>":
-			return left >> uint(right), true
-		case ">>>":
-			return int(uint32(left) >> uint(right)), true
-		case "|":
-			return left | right, true
-		case "&":
-			return left & right, true
-		case "^":
-			return left ^ right, true
-		case "**":
-			result := 1
-			for i := 0; i < right; i++ {
-				result *= left
-			}
-			return result, true
+		} else {
+			c.emitGetProp(reg, enumReg, uint16(c.chunk.AddConstant(vm.String(name))), line)
 		}
+		c.currentSymbolTable.Define(name, reg)
 	}
-	return 0, false
+
+	valueReg := c.regAlloc.Alloc()
+	temps = append(temps, valueReg)
+	if _, err := c.compileNode(member.Value, valueReg); err != nil {
+		return err
+	}
+	nameConst := uint16(c.chunk.AddConstant(vm.String(memberName)))
+	c.emitSetProp(enumReg, valueReg, nameConst, line)
+
+	// Reverse mapping: E[value] = "name".
+	nameReg := c.regAlloc.Alloc()
+	temps = append(temps, nameReg)
+	c.emitLoadConstant(nameReg, uint16(nameConst), line)
+	c.emitOpCode(vm.OpSetIndex, line)
+	c.emitByte(byte(enumReg))
+	c.emitByte(byte(valueReg))
+	c.emitByte(byte(nameReg))
+	return nil
+}
+
+// enumReverseKey is the property key of a numeric member's reverse mapping.
+func enumReverseKey(v float64) string {
+	if v == math.Trunc(v) && math.Abs(v) < 1e21 {
+		return fmt.Sprintf("%d", int64(v))
+	}
+	return vm.Number(v).ToString()
 }

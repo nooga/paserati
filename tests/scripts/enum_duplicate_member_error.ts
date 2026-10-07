@@ -1,4 +1,4 @@
-// expect_compile_error: duplicate identifier 'Red'
+// expect_compile_error: Duplicate identifier 'Red'.
 
 // Test that duplicate enum member names are rejected
 

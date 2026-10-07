@@ -1,4 +1,4 @@
-// expect_compile_error: Label 'L' has already been declared
+// expect_compile_error: Duplicate label 'L'.
 L: {
   L: for (;;) break L;
 }

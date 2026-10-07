@@ -2,6 +2,8 @@ package checker
 
 import (
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
@@ -84,8 +86,8 @@ func levenshteinWithMax(s1, s2 []rune, max float64) (distance float64, ok bool) 
 		current[0] = float64(i)
 
 		minJ := 1
-		if v := i - int(max) - 1; v > minJ {
-			minJ = v
+		if float64(i) > max {
+			minJ = int(math.Ceil(float64(i) - max))
 		}
 		maxJ := len(s2)
 		if v := i + int(max); v < maxJ {
@@ -165,6 +167,14 @@ func maxInt(a, b int) int {
 // global/built-in scope). Used to build the candidate set for spelling
 // suggestions on "Cannot find name" errors.
 func collectScopeNames(env *Environment) []string {
+	return collectScopeNamesFor(env, true, true)
+}
+
+// collectScopeNamesFor is collectScopeNames restricted to the meanings a
+// reference can have: values (variables, functions, classes, enums) and/or
+// types (aliases, interfaces, type parameters). tsc only suggests candidates
+// whose meaning matches the position of the unresolved name.
+func collectScopeNamesFor(env *Environment, values, typeNames bool) []string {
 	if env == nil {
 		return nil
 	}
@@ -179,13 +189,30 @@ func collectScopeNames(env *Environment) []string {
 	}
 
 	for e := env; e != nil; e = e.outer {
-		for name := range e.symbols {
-			add(name)
+		// Go map order is random; tsc breaks distance ties by declaration order
+		// (innermost scope first). Sorting per scope at least makes the
+		// choice deterministic.
+		var scopeNames []string
+		if values {
+			for name := range e.symbols {
+				// IArguments is bound as a value only so the checker can find
+				// the type of `arguments`; it is an interface in tsc.
+				if name == "IArguments" {
+					continue
+				}
+				scopeNames = append(scopeNames, name)
+			}
 		}
-		for name := range e.typeAliases {
-			add(name)
+		if typeNames {
+			for name := range e.typeAliases {
+				scopeNames = append(scopeNames, name)
+			}
+			for name := range e.typeParameters {
+				scopeNames = append(scopeNames, name)
+			}
 		}
-		for name := range e.typeParameters {
+		sort.Strings(scopeNames)
+		for _, name := range scopeNames {
 			add(name)
 		}
 	}
@@ -199,9 +226,41 @@ func collectScopeNames(env *Environment) []string {
 // shared "Cannot find name" reporting path — use it instead of hand-rolling
 // TS2304 at new call sites so spelling suggestions stay consistent.
 func (c *Checker) addCannotFindNameError(node parser.Node, env *Environment, name string) {
-	if suggestion := getSpellingSuggestion(name, collectScopeNames(env)); suggestion != "" {
+	c.reportCannotFindName(node, name, collectScopeNames(env))
+}
+
+func (c *Checker) reportCannotFindName(node parser.Node, name string, candidates []string) {
+	// tsc (maximumSuggestionCount) stops computing suggestions after 10 unresolved names.
+	suggestion := ""
+	if c.nameNotFoundCount < 10 {
+		suggestion = getSpellingSuggestion(name, candidates)
+	}
+	c.nameNotFoundCount++
+	if suggestion != "" {
 		c.addErrorWithCode(node, errors.TS2552, fmt.Sprintf("Cannot find name '%s'. Did you mean '%s'?", name, suggestion))
 		return
 	}
 	c.addErrorWithCode(node, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", name))
+}
+
+// addCannotFindTypeNameError reports an unresolved name in a type position.
+// A name that exists only as a value is TS2749 ("refers to a value, but is being
+// used as a type here"); otherwise it is TS2304/TS2552 with type-meaning
+// spelling candidates.
+func (c *Checker) addCannotFindTypeNameError(node parser.Node, env *Environment, name string) {
+	if _, _, isValue := env.Resolve(name); isValue {
+		c.addErrorWithCode(node, tsValueUsedAsType, fmt.Sprintf("'%s' refers to a value, but is being used as a type here. Did you mean 'typeof %s'?", name, name))
+		return
+	}
+	// Primitive type keywords are not symbols in tsc, so they are never suggested.
+	var candidates []string
+	for _, cand := range collectScopeNamesFor(env, false, true) {
+		switch cand {
+		case "string", "number", "boolean", "null", "undefined", "void", "never",
+			"unknown", "any", "object", "symbol", "bigint":
+			continue
+		}
+		candidates = append(candidates, cand)
+	}
+	c.reportCannotFindName(node, name, candidates)
 }

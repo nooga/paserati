@@ -1,8 +1,8 @@
-// expect_compile_error: Cannot find name
+// expect: infer multiple sites test
 
 // Test multiple infer sites with same name
-// Note: Object type parsing now works, but using inferred type parameters 
-// in the true branch still needs enhanced scoping support
+// Note: inferred type parameters are scoped to the true branch;
+// repeated infer sites with the same name union their candidates.
 
 // Test 1: Multiple infer U in object type should create union
 type ExtractBoth<T> = T extends { a: infer U, b: infer U } ? U : never;

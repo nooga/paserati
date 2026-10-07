@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
 )
 
@@ -113,7 +114,13 @@ func (p *Parser) checkClassBodyEarlyErrors(body *ClassBody, scope *privateNameSc
 			dup = false
 		}
 		if dup {
+			before := len(p.errors)
 			p.addError(tok, "Identifier '"+name+"' has already been declared")
+			if len(p.errors) > before {
+				if se, ok := p.errors[len(p.errors)-1].(*errors.SyntaxError); ok {
+					p.redeclarationErrors = append(p.redeclarationErrors, se)
+				}
+			}
 		}
 		declared[name] = append(prev, privateDecl{kind, isStatic})
 	}

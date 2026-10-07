@@ -1,6 +1,8 @@
 package checker
 
 import (
+	"fmt"
+
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 )
@@ -18,6 +20,18 @@ func (c *Checker) addError(node parser.Node, message string) {
 // equivalent, or ones not mapped yet.
 func (c *Checker) addErrorWithCode(node parser.Node, code string, message string) {
 	token := parser.GetTokenFromNode(node)
+	if code != "" {
+		// tsc keeps one copy of identical diagnostics; re-visiting a node
+		// (overload resolution, spread arguments, ...) must not duplicate them.
+		key := fmt.Sprintf("%d:%s:%s", token.StartPos, code, message)
+		if c.reportedErrors[key] {
+			return
+		}
+		if c.reportedErrors == nil {
+			c.reportedErrors = make(map[string]bool)
+		}
+		c.reportedErrors[key] = true
+	}
 	err := &errors.TypeError{
 		Position: errors.Position{
 			Line:     token.Line,

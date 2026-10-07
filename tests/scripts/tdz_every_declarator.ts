@@ -1,4 +1,5 @@
 // expect: TDZ 'a'|TDZ 'b'|TDZ 'c'
+// skip-typecheck
 // Every declarator of a let/const clause needs its Temporal Dead Zone marker,
 // not just the first. Four pre-registration sites read the statement's legacy
 // first-declaration alias (s.Name) instead of its declarator list, so for
@@ -11,10 +12,8 @@
 //
 // This file covers the top-level script path, whose TDZ error names the
 // variable. The block, function-body and direct-eval paths are in
-// tdz_every_declarator_nested.ts, which has to skip type checking: the checker
-// rejects a use-before-declaration inside a block or function outright with
-// TS2304 rather than tsc's TS2448, a separate pre-existing gap that is the same
-// for every declarator.
+// tdz_every_declarator_nested.ts. Both skip type checking: they read the names
+// before their declarations on purpose, which tsc rejects with TS2448.
 
 let out: string[] = [];
 

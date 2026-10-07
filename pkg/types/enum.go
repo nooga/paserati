@@ -36,7 +36,22 @@ func (e *EnumType) OrderedMemberNames() []string {
 type EnumMemberType struct {
 	EnumName   string      // Parent enum name
 	MemberName string      // Member name
-	Value      interface{} // Runtime value (int or string)
+	Value      interface{} // Runtime value (int, float64 or string)
+	Parent     *EnumType   // The enum this member belongs to (nil if unknown)
+}
+
+// UnionOfMembers returns the enum as a type: the union of all its members.
+func (e *EnumType) UnionOfMembers() Type {
+	members := make([]Type, 0, len(e.Members))
+	names := make([]string, 0, len(e.Members))
+	for name := range e.Members {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		members = append(members, e.Members[name])
+	}
+	return &UnionType{Types: members}
 }
 
 // String returns the string representation of the enum type
@@ -94,7 +109,8 @@ func IsEnumMemberType(t Type) bool {
 // are treated as compatible with 'number' for operators like +, -, *, /, %, **.
 func IsNumericEnumLikeType(t Type) bool {
 	if em, ok := t.(*EnumMemberType); ok {
-		if _, isNumeric := em.Value.(int); isNumeric {
+		switch em.Value.(type) {
+		case int, float64:
 			return true
 		}
 		return false

@@ -18,6 +18,12 @@ type deferredMethodBodyCheck struct {
 	body         *parser.ClassBody
 	instanceType *types.ObjectType
 	env          *Environment // The environment that was active during class processing
+	// strict is set for classes whose enclosing scopes are all hoisted by the
+	// time the deferred check runs, so unresolved names are real errors.
+	strict bool
+	// run, when set, replaces the class method body check: it is deferred
+	// namespace body work (see checkNamespaceDeclaration).
+	run func()
 }
 
 // getMethodKeyString returns a normalized string key for a statically known class member name.
@@ -112,7 +118,7 @@ func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
 			}
 			kindKey := staticPrefix + method.Kind + ":" + name
 			if seenNames[kindKey] && !method.IsAbstract {
-				c.addErrorWithCode(method.Key, errors.TS2393, "Duplicate function implementation.")
+				c.redeclarationReportedByBinder()
 			}
 			seenNames[kindKey] = true
 		}
@@ -297,11 +303,13 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	c.setClassContext(node.Name.Value, types.AccessContextExternal)
 	defer func() { c.currentClassContext = prevContext }()
 
+	c.declareBlockScoped(c.env, node.Name.Value, node.Name.Token, bsClass)
+
 	// 1. Check if class name is already defined IN THE CURRENT SCOPE ONLY.
 	// Using Resolve() would walk up the scope chain and incorrectly flag a class
 	// inside a namespace as conflicting with an outer class of the same name.
 	if c.env.HasLocalSymbol(node.Name.Value) && !(c.isModule && c.env.shadowBuiltin(node.Name.Value)) {
-		c.addError(node.Name, fmt.Sprintf("identifier '%s' already declared", node.Name.Value))
+		c.redeclarationReportedByBinder()
 		return
 	}
 
@@ -319,8 +327,19 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// Create empty ObjectType first, then populate it during createInstanceType
 	placeholderType := types.NewClassInstanceType(node.Name.Value)
 	if !c.env.DefineTypeAlias(node.Name.Value, placeholderType) {
-		c.addError(node.Name, fmt.Sprintf("failed to pre-define class type '%s'", node.Name.Value))
-		return
+		// An interface of the same name declared first merges with the class:
+		// the class members are added to the interface's own type.
+		existing, ok := c.env.ResolveTypeLocal(node.Name.Value)
+		iface, isObj := existing.(*types.ObjectType)
+		if !ok || !isObj || iface.ClassMeta != nil {
+			c.addError(node.Name, fmt.Sprintf("failed to pre-define class type '%s'", node.Name.Value))
+			return
+		}
+		iface.ClassMeta = placeholderType.ClassMeta
+		for memberName := range iface.Properties {
+			iface.ClassMeta.AddMember(memberName, types.AccessPublic, false, false)
+		}
+		placeholderType = iface
 	}
 	debugPrintf("// [Checker Class] Pre-registered class type alias '%s' for self-reference support\n", node.Name.Value)
 
@@ -443,7 +462,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	genericEnv := NewEnclosedEnvironment(c.env)
 	for _, typeParam := range typeParams {
 		if !genericEnv.DefineTypeParameter(typeParam.Name, typeParam) {
-			c.addError(node.TypeParameters[0].Name, fmt.Sprintf("duplicate type parameter name: %s", typeParam.Name))
+			c.redeclarationReportedByBinder()
 		}
 
 		paramType := &types.TypeParameterType{
@@ -874,6 +893,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			body:         body,
 			instanceType: instanceType,
 			env:          c.env,
+			strict:       c.blockDepth == 0 && c.functionNestingDepth == 0,
 		})
 		debugPrintf("// [Checker Class] Deferred method body checking for class '%s'\n", className)
 	} else {
@@ -929,6 +949,7 @@ func (c *Checker) checkMethodBodiesInInstance(className string, body *parser.Cla
 			c.checkMethodBodyWithContext(method.Value)
 		}
 	}
+
 }
 
 // checkMethodBodyWithContext checks a method body while preserving class context
@@ -942,7 +963,12 @@ func (c *Checker) checkMethodBodyWithContext(fn *parser.FunctionLiteral) {
 
 	// Enable lenient mode for forward references in method bodies
 	// This allows methods to reference variables declared after the class
-	c.allowForwardReferences = true
+	// (except for top-level classes checked after Pass 2, where every top-level
+	// binding is already hoisted and a missing name is a genuine TS2304).
+	strictTop := c.strictDeferredMethodBodies
+	c.strictDeferredMethodBodies = false
+	defer func() { c.strictDeferredMethodBodies = strictTop }()
+	c.allowForwardReferences = !strictTop
 
 	// Create a new environment scope for the method body
 	c.env = NewEnclosedEnvironment(c.env)
@@ -1311,13 +1337,16 @@ func (c *Checker) inferPropertyType(prop *parser.PropertyDefinition) types.Type 
 			propType = types.Any
 		}
 	} else if prop.Value != nil {
-		// Type check the initializer expression to get its type. In an instance
-		// field initializer `this` is the instance, whose type is still being
-		// assembled here, so treat it as any rather than as undefined.
+		// Type check the initializer expression to get its type. An instance
+		// property initializer runs when an instance is created, not when the
+		// class is defined; `this` there is the instance, whose type is still
+		// being assembled here, so treat it as any.
 		if !prop.IsStatic {
 			prevThis := c.currentThisType
 			c.currentThisType = types.Any
+			c.deferredContextDepth++
 			c.visit(prop.Value)
+			c.deferredContextDepth--
 			c.currentThisType = prevThis
 		} else {
 			c.visit(prop.Value)
@@ -1565,19 +1594,30 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		debugPrintf("// [Checker Class] Superclass is simple identifier: %s\n", ident.Value)
 		constructorType, _, exists = c.env.Resolve(ident.Value)
 		if !exists {
-			if typeOnly, found := c.env.ResolveType(ident.Value); found {
-				// A type-only name (interface or alias) used where a value is needed.
-				if _, isObj := types.GetEffectiveType(typeOnly).(*types.ObjectType); isObj {
-					c.addErrorWithCode(superClassExpr, errors.TS2689, fmt.Sprintf("Cannot extend an interface '%s'. Did you mean 'implements'?", ident.Value))
-				} else {
-					c.addErrorWithCode(superClassExpr, errors.TS2693, fmt.Sprintf("'%s' only refers to a type, but is being used as a value here.", ident.Value))
+			// A class/let/const declared later in the file is reported by
+			// reportMissingSuperclass (TS2449/TS2448), even though its type
+			// may already be registered.
+			if c.blockScopedInfoFor(ident.Value) == nil {
+				if c.deferMethodBodies && c.programHoistedNames[ident.Value] {
+					// Classes are checked before top-level variables and
+					// functions are defined, so the name may still appear;
+					// decide once every declaration is in place.
+					c.deferredHeritageChecks = append(c.deferredHeritageChecks, deferredHeritageCheck{expr: ident, env: c.env})
+					return
 				}
-				return
+				if typeOnly, found := c.env.ResolveType(ident.Value); found {
+					// A type-only name (interface or alias) used where a value is needed.
+					if _, isObj := types.GetEffectiveType(typeOnly).(*types.ObjectType); isObj {
+						c.addErrorWithCode(superClassExpr, errors.TS2689, fmt.Sprintf("Cannot extend an interface '%s'. Did you mean 'implements'?", ident.Value))
+					} else {
+						c.addErrorWithCode(superClassExpr, errors.TS2693, fmt.Sprintf("'%s' only refers to a type, but is being used as a value here.", ident.Value))
+					}
+					return
+				}
 			}
-			// Classes are checked before top-level variables are defined, so the
-			// name may still appear; decide once every declaration is in place.
-			c.deferredHeritageChecks = append(c.deferredHeritageChecks, deferredHeritageCheck{expr: ident, env: c.env})
-			return
+			c.reportMissingSuperclass(ident)
+			// Carry on with an any-typed base so later uses of the class resolve.
+			constructorType, exists = types.Any, true
 		}
 		// For identifiers, the constructor type is also the super type
 		superType = constructorType
@@ -2247,6 +2287,10 @@ func (c *Checker) reportNonConstructorBase(expr parser.Expression, t types.Type)
 	switch bt := t.(type) {
 	case *types.ObjectType:
 		if len(bt.ConstructSignatures) > 0 || len(bt.CallSignatures) > 0 {
+			return
+		}
+		// An interface `new(...)` member is modeled as a property named "new".
+		if _, ok := bt.Properties["new"]; ok {
 			return
 		}
 	case *types.Primitive:
