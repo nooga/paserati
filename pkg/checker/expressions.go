@@ -409,6 +409,14 @@ func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, t types.Type)
 			}
 		}
 		return true
+	case *types.TypeParameterType:
+		// Spreading a type parameter is allowed whatever its constraint
+		// (#616); the constraint's known properties carry over when it has
+		// object shape.
+		if p := spreadType.Parameter; p != nil && p.Constraint != nil {
+			c.mergeSpreadOperand(fields, types.GetWidenedType(p.Constraint))
+		}
+		return true
 	case *types.LiteralType:
 		// A literal member of a union only ever shows up here as the falsy
 		// branch a logical operator retained (e.g. `false` from `cnd && {}`);
@@ -421,7 +429,8 @@ func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, t types.Type)
 		// Allow undefined (from yield without argument), any (can't verify
 		// statically), null and boolean (the other short-circuit results
 		// `&&`/`||`/`??` can retain).
-		if t == types.Any || t == types.Undefined || t == types.Null || t == types.Boolean {
+		// `object` (NonPrimitive) is spreadable too, with no known properties.
+		if t == types.Any || t == types.Undefined || t == types.Null || t == types.Boolean || t == types.NonPrimitive {
 			debugPrintf("// [Checker ObjectLit Spread] Spreading any/undefined/null/boolean type (no properties added)\n")
 			return true
 		}
@@ -1052,6 +1061,31 @@ func (c *Checker) checkTaggedTemplateExpression(node *parser.TaggedTemplateExpre
 }
 
 // Helper function
+// instantiateAliasReference instantiates a generic type alias reference
+// (`DeepReadonly<{ size: number }>`) through the checker's name-based
+// substitution, which covers mapped, conditional and indexed-access bodies.
+// nil if the alias isn't a known generic type.
+func (c *Checker) instantiateAliasReference(ref *types.GenericTypeAliasForwardReference) types.Type {
+	resolved, found := c.env.ResolveType(ref.AliasName)
+	if !found {
+		return nil
+	}
+	generic, ok := resolved.(*types.GenericType)
+	if !ok || len(ref.TypeArguments) != len(generic.TypeParameters) {
+		return nil
+	}
+	for _, arg := range ref.TypeArguments {
+		if arg == nil {
+			return nil // a placeholder reference with no recorded arguments
+		}
+	}
+	inst := c.instantiateGenericType(generic, ref.TypeArguments, nil)
+	if inst == nil || inst == types.Type(ref) {
+		return nil
+	}
+	return inst
+}
+
 func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	// Check if there's a narrowed type for this member expression
 	memberKey := expressionToNarrowingKey(node)
@@ -1177,6 +1211,32 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 
 	// 3. Widen the object type for checks
 	widenedObjectType := types.GetWidenedType(objectType)
+	// Reading through `readonly T` is reading T. Unwrap it unless the inner
+	// type is one the ReadonlyType case below handles itself (objects, and
+	// arrays/tuples, whose mutators readonly hides): a type parameter or
+	// mapped type underneath used to be rejected outright (#613).
+	for {
+		if ref, ok := widenedObjectType.(*types.GenericTypeAliasForwardReference); ok {
+			// A recursive generic alias (`DeepReadonly<T[K]>`) left as a
+			// forward reference: resolve it now that its arguments are known.
+			if resolved := c.instantiateAliasReference(ref); resolved != nil {
+				widenedObjectType = types.GetWidenedType(resolved)
+				continue
+			}
+			break
+		}
+		ro, ok := widenedObjectType.(*types.ReadonlyType)
+		if !ok {
+			break
+		}
+		switch ro.InnerType.(type) {
+		case *types.ObjectType, *types.ArrayType, *types.TupleType:
+		default:
+			widenedObjectType = types.GetWidenedType(ro.InnerType)
+			continue
+		}
+		break
+	}
 
 	var resultType types.Type = types.Never // Default to Never if property not found/invalid access
 
@@ -1621,6 +1681,18 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	// suppresses follow-on diagnostics; never would cascade into bogus errors.
 	if resultType == types.Never && len(c.errors) > errorsBefore {
 		resultType = types.Any
+	}
+
+	// The value read from a readonly property is its plain type: the
+	// ReadonlyType wrapper marks the property slot (checked on assignment
+	// against the declared type) and means nothing on a primitive value,
+	// where it broke arithmetic on `static readonly x = 1`.
+	if ro, ok := resultType.(*types.ReadonlyType); ok {
+		switch ro.InnerType.(type) {
+		case *types.ArrayType, *types.TupleType, *types.ObjectType:
+		default:
+			resultType = ro.InnerType
+		}
 	}
 
 	// 5. Set the computed type on the MemberExpression node itself

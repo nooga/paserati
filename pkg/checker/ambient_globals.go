@@ -1,6 +1,9 @@
 package checker
 
-import "github.com/nooga/paserati/pkg/types"
+import (
+	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
+)
 
 // tsc's default lib (lib.d.ts) declares the DOM globals and a number of
 // ES library types that Paserati has no runtime for. Programs are type checked
@@ -56,6 +59,7 @@ func declareAmbientLibGlobals(env *Environment) {
 			env.DefineTypeAlias(name, types.Any)
 		}
 	}
+	declareDecoratorContextTypes(env)
 	// lib.es5: type PropertyKey = string | number | symbol
 	if _, found := env.ResolveType("PropertyKey"); !found {
 		env.DefineTypeAlias("PropertyKey", types.NewUnionType(types.String, types.Number, types.Symbol))
@@ -135,4 +139,69 @@ func (c *Checker) mayBeDeclaredGeneric(name string) bool {
 		return true
 	}
 	return false
+}
+
+// declareDecoratorContextTypes declares lib.decorators.d.ts's context types
+// (#616): ClassDecoratorContext<Class> and Class{Method,Getter,Setter,
+// Accessor,Field}DecoratorContext<This, Value>, generic with defaulted
+// parameters so both bare and parameterized uses resolve, plus the
+// DecoratorContext union and DecoratorMetadata. Members are typed by shape;
+// This/Value-dependent ones are any.
+func declareDecoratorContextTypes(env *Environment) {
+	if _, found := env.ResolveType("ClassMethodDecoratorContext"); found {
+		return
+	}
+	lit := func(s string) types.Type { return &types.LiteralType{Value: vm.String(s)} }
+	metadata := types.NewObjectType()
+	metadata.IndexSignatures = []*types.IndexSignature{{KeyType: types.String, ValueType: types.Unknown}}
+	addInit := types.NewSimpleFunction([]types.Type{types.NewSimpleFunction(nil, types.Void)}, types.Void)
+	param := func(name string) *types.TypeParameter {
+		return &types.TypeParameter{Name: name, Default: types.Unknown}
+	}
+	var members []types.Type
+	define := func(name string, body *types.ObjectType, params ...*types.TypeParameter) {
+		for i, p := range params {
+			p.Index = i
+		}
+		env.DefineTypeAlias(name, types.NewGenericType(name, params, body))
+		members = append(members, body)
+	}
+
+	classCtx := types.NewObjectType().
+		WithProperty("kind", lit("class")).
+		WithProperty("name", types.NewUnionType(types.String, types.Undefined)).
+		WithProperty("addInitializer", addInit).
+		WithProperty("metadata", metadata)
+	classParam := param("Class")
+	classParam.Default = types.Any
+	define("ClassDecoratorContext", classCtx, classParam)
+
+	has := types.NewSimpleFunction([]types.Type{types.Any}, types.Boolean)
+	get := types.NewSimpleFunction([]types.Type{types.Any}, types.Any)
+	set := types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.Void)
+	member := func(kind string, access *types.ObjectType) *types.ObjectType {
+		return types.NewObjectType().
+			WithProperty("kind", lit(kind)).
+			WithProperty("name", types.NewUnionType(types.String, types.Symbol)).
+			WithProperty("static", types.Boolean).
+			WithProperty("private", types.Boolean).
+			WithProperty("access", access).
+			WithProperty("addInitializer", addInit).
+			WithProperty("metadata", metadata)
+	}
+	for _, m := range []struct {
+		name, kind string
+		access     *types.ObjectType
+	}{
+		{"ClassMethodDecoratorContext", "method", types.NewObjectType().WithProperty("has", has).WithProperty("get", get)},
+		{"ClassGetterDecoratorContext", "getter", types.NewObjectType().WithProperty("has", has).WithProperty("get", get)},
+		{"ClassSetterDecoratorContext", "setter", types.NewObjectType().WithProperty("has", has).WithProperty("set", set)},
+		{"ClassAccessorDecoratorContext", "accessor", types.NewObjectType().WithProperty("has", has).WithProperty("get", get).WithProperty("set", set)},
+		{"ClassFieldDecoratorContext", "field", types.NewObjectType().WithProperty("has", has).WithProperty("get", get).WithProperty("set", set)},
+	} {
+		define(m.name, member(m.kind, m.access), param("This"), param("Value"))
+	}
+	env.DefineTypeAlias("DecoratorContext", types.NewUnionType(members...))
+	env.DefineTypeAlias("DecoratorMetadata", metadata)
+	env.DefineTypeAlias("DecoratorMetadataObject", metadata)
 }

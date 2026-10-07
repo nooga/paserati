@@ -89,6 +89,12 @@ func (c *Compiler) getWithPropertyInfo(ident *parser.Identifier) WithPropertyInf
 
 // compileAssignmentExpression compiles identifier = value OR indexExpr = value OR memberExpr = value
 func (c *Compiler) compileAssignmentExpression(node *parser.AssignmentExpression, hint Register) (Register, errors.PaseratiError) {
+	// `(n as any) = v` / `x! += 1` assign to the wrapped target (#616).
+	if inner := parser.UnwrapTypeAssertions(node.Left); inner != node.Left {
+		unwrapped := *node
+		unwrapped.Left = inner
+		return c.compileAssignmentExpression(&unwrapped, hint)
+	}
 	line := node.Token.Line
 
 	// For class field initializers, set the flag so eval inside can detect this context
