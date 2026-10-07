@@ -2,7 +2,6 @@ package checker
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
@@ -96,7 +95,7 @@ func (c *Checker) checkInterfaceExtends(node *parser.InterfaceDeclaration, own *
 			// `interface B extends A<A<B>>`: the instantiation refers back to
 			// the interface being declared, so its expansion is not modelled
 			// (tsc reports nothing here).
-			if strings.Contains(baseName, "<") && strings.Contains(baseName, node.Name.Value) {
+			if ref, ok := node.Extends[i].(*parser.GenericTypeRef); ok && typeArgsReference(ref.TypeArguments, node.Name.Value) {
 				continue
 			}
 		}
@@ -165,4 +164,22 @@ func inheritIndexSignatures(sigs []*types.IndexSignature, extended []*types.Obje
 		}
 	}
 	return sigs
+}
+
+// typeArgsReference reports whether any of the type arguments (at any depth of
+// generic nesting) names the given type.
+func typeArgsReference(args []parser.Expression, name string) bool {
+	for _, a := range args {
+		switch t := a.(type) {
+		case *parser.Identifier:
+			if t.Value == name {
+				return true
+			}
+		case *parser.GenericTypeRef:
+			if (t.Name != nil && t.Name.Value == name) || typeArgsReference(t.TypeArguments, name) {
+				return true
+			}
+		}
+	}
+	return false
 }

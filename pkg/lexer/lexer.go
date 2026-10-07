@@ -2003,7 +2003,6 @@ func (l *Lexer) finishNumber(startPos int, isBigInt, legacyOctal bool) (string, 
 	return l.input[startPos:l.position], isBigInt, legacyOctal, ""
 }
 
-
 // diagAtOffset records a scanner diagnostic at byte offset off, which must lie
 // on the current line at or after the current character.
 func (l *Lexer) diagAtOffset(off int, code, msg string) {
@@ -2102,7 +2101,6 @@ func appendCodePoint(b *strings.Builder, cp int) {
 	}
 	b.WriteRune(rune(cp))
 }
-
 
 // diagOctalEscape reports tsc's TS1487 for the legacy octal escape whose first
 // digit is the current character; the offset reported is the backslash.

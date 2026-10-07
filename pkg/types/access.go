@@ -28,33 +28,33 @@ type MemberAccessInfo struct {
 	AccessLevel AccessModifier
 	IsStatic    bool
 	IsReadonly  bool
-	IsGetter    bool  // This property is defined with 'get' keyword
-	IsSetter    bool  // This property is defined with 'set' keyword
+	IsGetter    bool // This property is defined with 'get' keyword
+	IsSetter    bool // This property is defined with 'set' keyword
 }
 
 // ClassMetadata contains class-specific type information for access control
 type ClassMetadata struct {
 	// Name of the class this type represents
 	ClassName string
-	
+
 	// Access control information for each member
 	MemberAccess map[string]*MemberAccessInfo
-	
+
 	// Indicates this is a class instance type (not the constructor)
 	IsClassInstance bool
-	
+
 	// Indicates this is a class constructor type
 	IsClassConstructor bool
-	
+
 	// Reference to the source class declaration (if available)
 	// This is used for inheritance checks and access validation
 	SourceClassName string
-	
+
 	// Inheritance relationships
-	HasExtendsClause bool // The declaration has an `extends` clause (even if it could not be resolved)
-	ExtendsNull      bool // The extends clause is the literal `null`
-	SuperClassName string     // The class this class extends (if any)
-	SuperConstructorType Type // The resolved constructor type of the superclass (if any)
+	HasExtendsClause      bool     // The declaration has an `extends` clause (even if it could not be resolved)
+	ExtendsNull           bool     // The extends clause is the literal `null`
+	SuperClassName        string   // The class this class extends (if any)
+	SuperConstructorType  Type     // The resolved constructor type of the superclass (if any)
 	ImplementedInterfaces []string // The interfaces this class implements
 }
 
@@ -66,8 +66,8 @@ func NewClassMetadata(className string, isInstance bool) *ClassMetadata {
 		IsClassInstance:       isInstance,
 		IsClassConstructor:    !isInstance,
 		SourceClassName:       className,
-		SuperClassName:        "", // No inheritance by default
-		SuperConstructorType:  nil, // No inheritance by default
+		SuperClassName:        "",         // No inheritance by default
+		SuperConstructorType:  nil,        // No inheritance by default
 		ImplementedInterfaces: []string{}, // No interfaces by default
 	}
 }
@@ -153,11 +153,11 @@ func (cm *ClassMetadata) IsSubclassOf(targetClass string, getClassMeta func(stri
 	if cm.SuperClassName == "" {
 		return false // No superclass
 	}
-	
+
 	if cm.SuperClassName == targetClass {
 		return true // Direct inheritance
 	}
-	
+
 	// Check if superclass is a subclass of the target (recursive)
 	if getClassMeta != nil {
 		superMeta := getClassMeta(cm.SuperClassName)
@@ -165,7 +165,7 @@ func (cm *ClassMetadata) IsSubclassOf(targetClass string, getClassMeta func(stri
 			return superMeta.IsSubclassOf(targetClass, getClassMeta)
 		}
 	}
-	
+
 	return false
 }
 
@@ -183,13 +183,13 @@ func (cm *ClassMetadata) IsAccessibleFrom(memberName string, accessContext *Acce
 	case AccessPrivate:
 		// Only accessible within the same class
 		return accessContext != nil &&
-			   accessContext.CurrentClassName == cm.SourceClassName
+			accessContext.CurrentClassName == cm.SourceClassName
 
 	case AccessProtected:
 		// Accessible within the same class or subclasses
 		return accessContext != nil &&
-			   (accessContext.CurrentClassName == cm.SourceClassName ||
-			    accessContext.IsSubclassOf(cm.SourceClassName))
+			(accessContext.CurrentClassName == cm.SourceClassName ||
+				accessContext.IsSubclassOf(cm.SourceClassName))
 	}
 
 	return false
@@ -199,16 +199,16 @@ func (cm *ClassMetadata) IsAccessibleFrom(memberName string, accessContext *Acce
 type AccessContext struct {
 	// Name of the class currently being checked
 	CurrentClassName string
-	
+
 	// Type of access context
 	ContextType AccessContextType
-	
+
 	// Whether we're inside a constructor
 	IsInConstructor bool
-	
+
 	// Whether we're in a static context
 	IsStaticContext bool
-	
+
 	// Function to check inheritance relationships
 	// Returns true if currentClass is a subclass of targetClass
 	IsSubclassOfFunc func(currentClass, targetClass string) bool

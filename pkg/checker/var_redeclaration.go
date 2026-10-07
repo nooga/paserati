@@ -98,7 +98,7 @@ func (c *Checker) varTypesClearlyDiffer(a, b types.Type, bothAnnotated bool) boo
 		return false
 	}
 	if bothAnnotated && isIdentityComparable(a, 0) && isIdentityComparable(b, 0) &&
-		!strings.Contains(a.String(), "any") && !strings.Contains(b.String(), "any") {
+		!containsAny(a, 0) && !containsAny(b, 0) {
 		// Both sides are built from kinds the relation models (including
 		// function and object literal types): use the real identity relation.
 		return !types.IsIdenticalType(a, b)
@@ -316,6 +316,53 @@ func isIdentityComparable(t types.Type, depth int) bool {
 			}
 		}
 		return true
+	}
+	return false
+}
+
+// containsAny reports whether `any` occurs anywhere in an identity-comparable
+// type. The parser lowers annotations it does not understand to any, so an
+// identity mismatch involving any proves nothing.
+func containsAny(t types.Type, depth int) bool {
+	if t == nil || depth > 5 {
+		return false
+	}
+	switch tt := t.(type) {
+	case *types.Primitive:
+		return tt == types.Any
+	case *types.ArrayType:
+		return containsAny(tt.ElementType, depth+1)
+	case *types.TupleType:
+		for _, e := range tt.ElementTypes {
+			if containsAny(e, depth+1) {
+				return true
+			}
+		}
+		return containsAny(tt.RestElementType, depth+1)
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if containsAny(m, depth+1) {
+				return true
+			}
+		}
+	case *types.ObjectType:
+		for _, p := range tt.Properties {
+			if containsAny(p, depth+1) {
+				return true
+			}
+		}
+		for _, sigs := range [][]*types.Signature{tt.CallSignatures, tt.ConstructSignatures} {
+			for _, sig := range sigs {
+				for _, p := range sig.ParameterTypes {
+					if containsAny(p, depth+1) {
+						return true
+					}
+				}
+				if containsAny(sig.ReturnType, depth+1) {
+					return true
+				}
+			}
+		}
 	}
 	return false
 }

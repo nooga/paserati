@@ -23,18 +23,18 @@ const (
 	PS1001 = "PS1001" // Unexpected token
 	PS1002 = "PS1002" // Missing token
 	PS1003 = "PS1003" // Invalid syntax
-	
+
 	// Type Error Codes (PS2xxx)
 	PS2001 = "PS2001" // Type assignment error
 	PS2002 = "PS2002" // Property does not exist
 	PS2003 = "PS2003" // Function argument type mismatch
 	PS2004 = "PS2004" // Generic constraint violation
 	PS2005 = "PS2005" // Type not assignable
-	
+
 	// Compile Error Codes (PS3xxx)
 	PS3001 = "PS3001" // Compilation failed
 	PS3002 = "PS3002" // Bytecode generation error
-	
+
 	// Runtime Error Codes (PS4xxx)
 	PS4001 = "PS4001" // Runtime exception
 	PS4002 = "PS4002" // Reference error
@@ -57,9 +57,9 @@ type PaseratiError interface {
 // SyntaxError represents an error during lexing or parsing.
 type SyntaxError struct {
 	Position
-	Msg      string
+	Msg       string
 	ErrorCode string // Error code (e.g., PS1001)
-	Cause    error  // Underlying cause, if any
+	Cause     error  // Underlying cause, if any
 	// Grammar marks a diagnostic that tsc's *checker* reports through its
 	// grammarError* helpers. tsc suppresses those whenever the file has a
 	// syntactic (parse) diagnostic, so the parser drops them in that case.
@@ -73,11 +73,11 @@ type SyntaxError struct {
 func (e *SyntaxError) Error() string {
 	return fmt.Sprintf("Syntax Error at %d:%d: %s", e.Line, e.Column, e.Msg)
 }
-func (e *SyntaxError) Pos() Position   { return e.Position }
-func (e *SyntaxError) Kind() string    { return "Syntax" }
-func (e *SyntaxError) Code() string    { 
-	if e.ErrorCode != "" { 
-		return e.ErrorCode 
+func (e *SyntaxError) Pos() Position { return e.Position }
+func (e *SyntaxError) Kind() string  { return "Syntax" }
+func (e *SyntaxError) Code() string {
+	if e.ErrorCode != "" {
+		return e.ErrorCode
 	}
 	return PS1003 // Default syntax error code
 }
@@ -103,11 +103,11 @@ type TypeError struct {
 func (e *TypeError) Error() string {
 	return fmt.Sprintf("Type Error at %d:%d: %s", e.Line, e.Column, e.Msg)
 }
-func (e *TypeError) Pos() Position   { return e.Position }
-func (e *TypeError) Kind() string    { return "Type" }
-func (e *TypeError) Code() string    { 
-	if e.ErrorCode != "" { 
-		return e.ErrorCode 
+func (e *TypeError) Pos() Position { return e.Position }
+func (e *TypeError) Kind() string  { return "Type" }
+func (e *TypeError) Code() string {
+	if e.ErrorCode != "" {
+		return e.ErrorCode
 	}
 	return PS2001 // Default type error code
 }
@@ -137,11 +137,11 @@ type CompileError struct {
 func (e *CompileError) Error() string {
 	return fmt.Sprintf("Compile Error at %d:%d: %s", e.Line, e.Column, e.Msg)
 }
-func (e *CompileError) Pos() Position   { return e.Position }
-func (e *CompileError) Kind() string    { return "Compile" }
-func (e *CompileError) Code() string    { 
-	if e.ErrorCode != "" { 
-		return e.ErrorCode 
+func (e *CompileError) Pos() Position { return e.Position }
+func (e *CompileError) Kind() string  { return "Compile" }
+func (e *CompileError) Code() string {
+	if e.ErrorCode != "" {
+		return e.ErrorCode
 	}
 	return PS3001 // Default compile error code
 }
@@ -186,11 +186,11 @@ func (e *RuntimeError) Error() string {
 	}
 	return fmt.Sprintf("Runtime Error %s(%s:%d:%d): %s", location, fileName, e.Line, e.Column, e.Msg)
 }
-func (e *RuntimeError) Pos() Position   { return e.Position }
-func (e *RuntimeError) Kind() string    { return "Runtime" }
-func (e *RuntimeError) Code() string    { 
-	if e.ErrorCode != "" { 
-		return e.ErrorCode 
+func (e *RuntimeError) Pos() Position { return e.Position }
+func (e *RuntimeError) Kind() string  { return "Runtime" }
+func (e *RuntimeError) Code() string {
+	if e.ErrorCode != "" {
+		return e.ErrorCode
 	}
 	return PS4001 // Default runtime error code
 }
@@ -265,7 +265,7 @@ func NewTypeAssignmentError(pos Position, fromType, toType string) *TypeError {
 
 // NewGenericConstraintError creates a generic constraint violation error (PS2004)
 func NewGenericConstraintError(pos Position, argType, constraintType, paramName string) *TypeError {
-	msg := fmt.Sprintf("Type '%s' does not satisfy constraint '%s' for type parameter '%s'", 
+	msg := fmt.Sprintf("Type '%s' does not satisfy constraint '%s' for type parameter '%s'",
 		argType, constraintType, paramName)
 	return NewTypeError(pos, msg, PS2004)
 }
@@ -278,7 +278,7 @@ func NewPropertyNotExistError(pos Position, property, objectType string) *TypeEr
 
 // NewArgumentTypeError creates a function argument type mismatch error (PS2003)
 func NewArgumentTypeError(pos Position, argNum int, expectedType, actualType string) *TypeError {
-	msg := fmt.Sprintf("Argument %d: cannot assign type '%s' to parameter of type '%s'", 
+	msg := fmt.Sprintf("Argument %d: cannot assign type '%s' to parameter of type '%s'",
 		argNum, actualType, expectedType)
 	return NewTypeError(pos, msg, PS2003)
 }
@@ -302,8 +302,8 @@ func isColorTerminal() bool {
 	// Check common terminal color support environment variables
 	term := os.Getenv("TERM")
 	colorTerm := os.Getenv("COLORTERM")
-	return term != "dumb" && (colorTerm != "" || 
-		strings.Contains(term, "color") || 
+	return term != "dumb" && (colorTerm != "" ||
+		strings.Contains(term, "color") ||
 		strings.Contains(term, "xterm") ||
 		strings.Contains(term, "screen"))
 }
@@ -321,7 +321,7 @@ func DisplayErrors(errors []PaseratiError, fallbackSource ...string) {
 	if len(errors) == 0 {
 		return
 	}
-	
+
 	// Use fallback source if no source files are available
 	var fallbackLines []string
 	if len(fallbackSource) > 0 && fallbackSource[0] != "" {
@@ -334,9 +334,9 @@ func DisplayErrors(errors []PaseratiError, fallbackSource ...string) {
 		msg := err.Message()
 
 		// TypeScript-style header: PS2345 [ERROR]: Message
-		errorHeader := fmt.Sprintf("%s %s: %s", 
-			colorize(ColorBlue, code), 
-			colorize(ColorBold+ColorRed, "[ERROR]"), 
+		errorHeader := fmt.Sprintf("%s %s: %s",
+			colorize(ColorBlue, code),
+			colorize(ColorBold+ColorRed, "[ERROR]"),
 			msg)
 		fmt.Fprintf(os.Stderr, "%s\n", errorHeader)
 
@@ -368,7 +368,7 @@ func DisplayErrors(errors []PaseratiError, fallbackSource ...string) {
 			fmt.Fprintln(os.Stderr) // Add a blank line
 			continue
 		}
-		
+
 		// Ensure line numbers are within bounds (1-based index)
 		lineIdx := pos.Line - 1
 		if lineIdx < 0 || lineIdx >= len(lines) {
@@ -424,28 +424,28 @@ func DisplayErrors(errors []PaseratiError, fallbackSource ...string) {
 			// Show source line with line number and indentation
 			lineNumber := fmt.Sprintf("%d", pos.Line)
 			linePrefix := colorize(ColorGray, fmt.Sprintf("%s: ", lineNumber))
-			
+
 			fmt.Fprintf(os.Stderr, "  %s%s\n", linePrefix, trimmedLine)
 
 			// Create enhanced marker line with squiggly underline
 			if markerColumn >= 0 && markerColumn <= len(trimmedLine) {
 				// Calculate spaces to account for line number prefix
 				prefixSpaces := len(lineNumber) + 2 + 2 // "123: " + "  "
-				
+
 				// Fix off-by-one error: markerColumn is 1-based, convert to 0-based for spacing
 				adjustedColumn := markerColumn - 1
 				if adjustedColumn < 0 {
 					adjustedColumn = 0
 				}
-				
-				marker := strings.Repeat(" ", prefixSpaces + adjustedColumn)
-				
+
+				marker := strings.Repeat(" ", prefixSpaces+adjustedColumn)
+
 				// Use squiggly underline for better visibility
 				underline := strings.Repeat("~", markerLength)
 				if markerLength == 1 {
 					underline = "^" // Single character errors use caret
 				}
-				
+
 				markerLine := marker + colorize(ColorRed, underline)
 				fmt.Fprintf(os.Stderr, "%s\n", markerLine)
 			}

@@ -1428,7 +1428,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 					ReturnType:        newReturnType,
 					OptionalParams:    sig.OptionalParams, // Copy optional flags
 					IsVariadic:        sig.IsVariadic,
-					StrictVariance:   sig.StrictVariance,
+					StrictVariance:    sig.StrictVariance,
 					RestParameterType: newRestParamType,
 				}
 			}
@@ -1453,7 +1453,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 					ReturnType:        newReturnType,
 					OptionalParams:    sig.OptionalParams,
 					IsVariadic:        sig.IsVariadic,
-					StrictVariance:   sig.StrictVariance,
+					StrictVariance:    sig.StrictVariance,
 					RestParameterType: newRestParamType,
 				}
 			}
@@ -2413,7 +2413,7 @@ func cloneSignaturesWithTypes(signatures []*types.Signature, rewrite func(types.
 			ReturnType:        rewrite(sig.ReturnType),
 			OptionalParams:    append([]bool(nil), sig.OptionalParams...),
 			IsVariadic:        sig.IsVariadic,
-			StrictVariance:   sig.StrictVariance,
+			StrictVariance:    sig.StrictVariance,
 			RestParameterType: rewrite(sig.RestParameterType),
 		}
 	}
@@ -2966,7 +2966,7 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 					ReturnType:        newReturnType,
 					OptionalParams:    sig.OptionalParams,
 					IsVariadic:        sig.IsVariadic,
-					StrictVariance:   sig.StrictVariance,
+					StrictVariance:    sig.StrictVariance,
 					RestParameterType: sig.RestParameterType,
 				}
 			}

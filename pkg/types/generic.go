@@ -116,19 +116,19 @@ func (i *InstantiatedType) Substitute() Type {
 	if i.substituted != nil {
 		return i.substituted
 	}
-	
+
 	if len(i.TypeArguments) != len(i.Generic.TypeParameters) {
 		// This should be caught earlier, but return Any as fallback
 		i.substituted = Any
 		return i.substituted
 	}
-	
+
 	// Build substitution map
 	substitutions := make(map[*TypeParameter]Type)
 	for idx, param := range i.Generic.TypeParameters {
 		substitutions[param] = i.TypeArguments[idx]
 	}
-	
+
 	// Substitute in the body
 	i.substituted = substituteType(i.Generic.Body, substitutions)
 	return i.substituted
@@ -139,7 +139,7 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 	if t == nil {
 		return nil
 	}
-	
+
 	// Types that mention none of the substituted parameters are returned as
 	// they are, so identity (and class metadata) survives.
 	if !mentionsTypeParameter(t, substitutions, make(map[Type]bool)) {
@@ -153,12 +153,12 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 			return replacement
 		}
 		return t // Not found, return unchanged
-		
+
 	case *ArrayType:
 		// Recursively substitute in element type
 		newElementType := substituteType(t.ElementType, substitutions)
 		return &ArrayType{ElementType: newElementType}
-		
+
 	case *ObjectType:
 		// Deep copy and substitute in properties
 		newObj := NewObjectType()
@@ -184,19 +184,19 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 		}
 		newObj.ClassMeta = t.ClassMeta
 		newObj.IsInterface = t.IsInterface
-		
+
 		// Handle call signatures
 		for _, sig := range t.CallSignatures {
 			newSig := substituteSignature(sig, substitutions)
 			newObj.CallSignatures = append(newObj.CallSignatures, newSig)
 		}
-		
+
 		// Handle constructor signatures
 		for _, sig := range t.ConstructSignatures {
 			newSig := substituteSignature(sig, substitutions)
 			newObj.ConstructSignatures = append(newObj.ConstructSignatures, newSig)
 		}
-		
+
 		// Copy index signatures
 		for _, indexSig := range t.IndexSignatures {
 			newIndexSig := &IndexSignature{
@@ -205,9 +205,9 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 			}
 			newObj.IndexSignatures = append(newObj.IndexSignatures, newIndexSig)
 		}
-		
+
 		return newObj
-		
+
 	case *UnionType:
 		// Substitute in all constituent types
 		newTypes := make([]Type, len(t.Types))
@@ -215,7 +215,7 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 			newTypes[i] = substituteType(constituent, substitutions)
 		}
 		return NewUnionType(newTypes...)
-		
+
 	case *IntersectionType:
 		// Substitute in all constituent types
 		newTypes := make([]Type, len(t.Types))
@@ -223,7 +223,7 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 			newTypes[i] = substituteType(constituent, substitutions)
 		}
 		return NewIntersectionType(newTypes...)
-		
+
 	case *InstantiatedType:
 		// Recursively substitute in type arguments
 		newArgs := make([]Type, len(t.TypeArguments))
@@ -233,12 +233,12 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 		// Return the InstantiatedType with substituted arguments
 		// Don't call Substitute() here to avoid infinite recursion with self-referential types
 		return NewInstantiatedType(t.Generic, newArgs)
-		
+
 	case *ReadonlyType:
 		// Substitute in the inner type
 		newInnerType := substituteType(t.InnerType, substitutions)
 		return NewReadonlyType(newInnerType)
-		
+
 	// For primitive types and other types that don't contain type parameters
 	default:
 		return t
@@ -278,7 +278,7 @@ func NewInstantiatedType(generic *GenericType, typeArgs []Type) *InstantiatedTyp
 var (
 	// Array<T> generic type
 	ArrayGeneric *GenericType
-	
+
 	// Promise<T> generic type
 	PromiseGeneric *GenericType
 
@@ -294,7 +294,7 @@ func init() {
 	arrayT := NewTypeParameter("T", 0, nil)
 	arrayBody := &ArrayType{ElementType: &TypeParameterType{Parameter: arrayT}}
 	ArrayGeneric = NewGenericType("Array", []*TypeParameter{arrayT}, arrayBody)
-	
+
 	// Create Promise<T> generic type
 	promiseT := NewTypeParameter("T", 0, nil)
 	promiseTType := &TypeParameterType{Parameter: promiseT}
@@ -341,22 +341,22 @@ func init() {
 		[]bool{true}))
 
 	PromiseGeneric = NewGenericType("Promise", []*TypeParameter{promiseT}, promiseBody)
-	
+
 	// Create Generator<T, TReturn, TNext> generic type
 	t := NewTypeParameter("T", 0, nil)
 	tReturn := NewTypeParameter("TReturn", 1, nil)
 	tNext := NewTypeParameter("TNext", 2, nil)
-	
+
 	// Create types for the parameters
 	tType := &TypeParameterType{Parameter: t}
 	tReturnType := &TypeParameterType{Parameter: tReturn}
 	tNextType := &TypeParameterType{Parameter: tNext}
-	
+
 	// Create IteratorResult<T, TReturn> type
 	iteratorResultType := NewObjectType().
 		WithProperty("value", NewUnionType(tType, tReturnType)).
 		WithProperty("done", Boolean)
-	
+
 	// Create generator body with iterator protocol methods
 	generatorBody := NewObjectType().
 		// next(value?: TNext): IteratorResult<T, TReturn>
@@ -375,7 +375,7 @@ func init() {
 			[]Type{Any},
 			iteratorResultType,
 			[]bool{true}))
-	
+
 	GeneratorGeneric = NewGenericType("Generator", []*TypeParameter{t, tReturn, tNext}, generatorBody)
 
 	// Create AsyncGenerator<T, TReturn, TNext> generic type
@@ -423,31 +423,32 @@ func substituteSignature(sig *Signature, substitutions map[*TypeParameter]Type) 
 	if sig == nil {
 		return nil
 	}
-	
+
 	// Substitute parameter types
 	newParamTypes := make([]Type, len(sig.ParameterTypes))
 	for i, paramType := range sig.ParameterTypes {
 		newParamTypes[i] = substituteType(paramType, substitutions)
 	}
-	
+
 	// Substitute return type
 	newReturnType := substituteType(sig.ReturnType, substitutions)
-	
+
 	// Substitute rest parameter type if present
 	var newRestParamType Type
 	if sig.RestParameterType != nil {
 		newRestParamType = substituteType(sig.RestParameterType, substitutions)
 	}
-	
+
 	return &Signature{
 		ParameterTypes:    newParamTypes,
 		ReturnType:        newReturnType,
 		OptionalParams:    sig.OptionalParams, // Copy as-is
 		IsVariadic:        sig.IsVariadic,
-		StrictVariance:   sig.StrictVariance,
+		StrictVariance:    sig.StrictVariance,
 		RestParameterType: newRestParamType,
 	}
 }
+
 // mentionsTypeParameter reports whether t refers to any of the given type
 // parameters (visited guards against self-referential types).
 func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited map[Type]bool) bool {
