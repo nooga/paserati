@@ -42,6 +42,8 @@ type Parser struct {
 	l      *lexer.Lexer
 	source *source.SourceFile // cached from lexer
 	errors []errors.PaseratiError
+	// JS redeclaration early errors, re-labelled by finishBinding.
+	redeclarationErrors []*errors.SyntaxError
 
 	curToken  *lexer.Token
 	peekToken *lexer.Token
@@ -702,6 +704,7 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 	if len(p.errors) == 0 {
 		p.checkEarlyErrors(program, initialStrict)
 	}
+	p.safeFinishBinding(program)
 
 	return program, p.errors
 }
@@ -10459,7 +10462,11 @@ func GetTokenFromNode(node Node) *lexer.Token {
 
 	// Add other node types as needed
 	default:
-		// Cannot easily determine a representative token
+		// Fall back to the node's own `Token` field (most AST nodes - notably
+		// the type-expression nodes - carry one), else a zero token.
+		if tok := tokenFieldOf(node); tok != nil {
+			return tok
+		}
 		return &lexer.Token{} // Return zero value
 	}
 }
@@ -12506,4 +12513,11 @@ func isImportCall(e Expression) bool {
 		return true
 	}
 	return false
+}
+
+// safeFinishBinding runs the declaration binder; on a partial AST (parse
+// errors) it must never take the parse down with it.
+func (p *Parser) safeFinishBinding(program *Program) {
+	defer func() { _ = recover() }()
+	p.finishBinding(program)
 }

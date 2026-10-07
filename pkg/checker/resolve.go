@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
@@ -233,7 +234,12 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			// 4. If neither alias, primitive, nor imported type, it's an unknown type name
 			debugPrintf("// [Checker resolveTypeAnno Ident] Primitive check failed for '%s', reporting error.\n", node.Value) // ADDED DEBUG
 			// Use the Identifier node itself for error reporting
-			c.addErrorWithCode(node, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", node.Value))
+			if c.isLibGlobalValue(node.Value) {
+				// lib.d.ts declares an interface of this name (JSON, Atomics,
+				// IArguments, ...) that Paserati models only as a value.
+				return types.Any
+			}
+			c.addCannotFindTypeNameError(node, c.env, node.Value)
 			return nil // Indicate error
 		}
 
@@ -410,8 +416,16 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			}
 
 			if !exists {
-				// Create a forward reference placeholder (may be resolved later or reported
-				// as an error by the caller in strict contexts like generic constraints)
+				// A generic declared later in the program (or imported, or from a
+				// lib Paserati does not model) is only a forward reference; a name
+				// nothing declares is TS2304.
+				if !c.mayBeDeclaredGeneric(node.Name.Value) {
+					c.addCannotFindTypeNameError(node.Name, c.env, node.Name.Value)
+					for _, arg := range node.TypeArguments {
+						c.resolveTypeAnnotation(arg)
+					}
+					return nil
+				}
 				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Creating forward reference for unknown type '%s'\n", node.Name.Value)
 				return &types.GenericTypeAliasForwardReference{
 					AliasName:     node.Name.Value,
@@ -1523,9 +1537,13 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 
 	// Resolve the first segment from the environment.
 	varType, _, found := c.env.Resolve(path[0])
+	if found {
+		varType = c.checkNamespaceUsedAsValue(&parser.Identifier{Token: node.Token, Value: path[0]}, varType)
+	}
 	if !found {
 		if len(path) == 1 {
 			c.unresolvedTypeofNodes = append(c.unresolvedTypeofNodes, node)
+			c.unresolvedTypeofTypeOnly = append(c.unresolvedTypeofTypeOnly, c.isTypeOnlyName(node.Identifier))
 			return &types.TypeofType{Identifier: node.Identifier}
 		}
 		c.addCannotFindNameError(node, c.env, path[0])
@@ -1805,7 +1823,10 @@ func (c *Checker) resolveConditionalTypeExpression(node *parser.ConditionalTypeE
 		return nil
 	}
 
-	trueType := c.resolveTypeAnnotation(node.TrueType)
+	var trueType types.Type
+	c.withInferScope(node.ExtendsType, func() {
+		trueType = c.resolveTypeAnnotation(node.TrueType)
+	})
 	if trueType == nil {
 		// Error already reported by resolveTypeAnnotation
 		return nil
@@ -2427,6 +2448,25 @@ func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences ma
 				debugPrintf("// [TryInfer] Trying constructor signature inference\n")
 				return c.tryInferFromFunctionTypes(ct.ConstructSignatures[0], et.ConstructSignatures[0], inferences)
 			}
+			// Plain object types: infer property by property, e.g.
+			// { a: infer U, b: infer U } against { a: string, b: number }.
+			if len(et.Properties) > 0 && len(ct.CallSignatures) == 0 && len(ct.ConstructSignatures) == 0 {
+				names := make([]string, 0, len(et.Properties))
+				for name := range et.Properties {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				for _, name := range names {
+					checkProp, ok := ct.Properties[name]
+					if !ok {
+						return false
+					}
+					if !c.tryInferTypes(checkProp, et.Properties[name], inferences) {
+						return false
+					}
+				}
+				return true
+			}
 		}
 		debugPrintf("// [TryInfer] ObjectType inference failed\n")
 		return false
@@ -2933,6 +2973,10 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 	case *types.NamespaceType:
 		if member := ct.LookupTypeMember(memberName); member != nil {
 			return member
+		}
+		if obj, ok := node.Object.(*parser.Identifier); ok && c.isLibGlobalValue(obj.Value) {
+			// A lib namespace (Intl, ...) whose member Paserati does not model.
+			return types.Any
 		}
 		c.addErrorWithCode(node.Property, errors.TS2694, fmt.Sprintf("Namespace '%s' has no exported member '%s'.", node.Object.String(), memberName))
 		return nil

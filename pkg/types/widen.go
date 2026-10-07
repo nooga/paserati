@@ -83,3 +83,13 @@ func DeeplyWidenType(t Type) Type {
 	// Return the (potentially top-level widened) type if not an object
 	return widenedT
 }
+
+// WidenEnumMember widens an enum member type to its enum (`let t = Color.Red`
+// declares a Color), as tsc does for a mutable declaration's inferred type.
+// Other types are returned unchanged.
+func WidenEnumMember(t Type) Type {
+	if em, ok := t.(*EnumMemberType); ok && em.Parent != nil {
+		return em.Parent.UnionOfMembers()
+	}
+	return t
+}

@@ -392,6 +392,9 @@ type CompilerStats struct {
 
 // Compiler transforms an AST into bytecode.
 type Compiler struct {
+	// Enum objects under construction, for merged declarations (compile_enum.go).
+	enumRegistry map[enumRegistryKey]*compiledEnum
+
 	chunk              *vm.Chunk
 	regAlloc           *RegisterAllocator
 	currentSymbolTable *SymbolTable

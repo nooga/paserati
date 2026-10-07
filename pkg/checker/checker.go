@@ -287,8 +287,43 @@ type Checker struct {
 	// This allows checking method bodies that reference variables declared later
 	allowForwardReferences bool
 
+	// Number of unresolved-name diagnostics reported so far. tsc stops offering
+	// spelling suggestions (TS2552) once this reaches 10.
+	nameNotFoundCount int
+
+	// Set by the namespace pre-pass: the nested namespace declaration about to
+	// be checked is exported.
+	nsDeclExported bool
+
+	reportedErrors map[string]bool // dedupe of identical coded diagnostics
+
+	// Type-level declaration names of the program being checked (any scope).
+	declaredTypeNames map[string]bool
+
+	// Declaration names of each generic interface (TS2428).
+	genericInterfaceDecls map[*types.GenericType][]*parser.Identifier
+
+	// Names of the program's top-level var and function declarations.
+	programHoistedNames map[string]bool
+
+	// Constant values of enum members, per enum (see enum.go).
+	enumConsts map[*types.EnumType]enumMemberConsts
+
+	// Declaration positions of let/const/class names, for TS2448/TS2449.
+	blockScoped map[*Environment]map[string]*blockScopedInfo
+	// >0 while checking code that runs later than its enclosing statement
+	// (instance property initializers).
+	deferredContextDepth int
+
+	// Type of the first declaration of each function-scoped var, for TS2403.
+	varFirstDecl map[varDeclKey]varDeclRecord
+	// Top-level var names whose first user declaration Pass 2 already hoisted.
+	pass2VarSeen map[string]bool
+
 	// Track TypeofTypeExpression nodes with unresolved identifiers for deferred TS2304 reporting
 	unresolvedTypeofNodes []*parser.TypeofTypeExpression
+	// Parallel to unresolvedTypeofNodes: the name is a type in the scope of the query (TS2693).
+	unresolvedTypeofTypeOnly []bool
 
 	// --- NEW: Generator function tracking ---
 	// Track generator function names for yield* validation
@@ -299,6 +334,7 @@ type Checker struct {
 	inAsyncFunction        bool
 	inGeneratorFunction    bool
 	functionNestingDepth   int  // 0 = top level, >0 = inside function(s)
+	nonArrowFunctionDepth  int  // >0 = inside a non-arrow function, where `arguments` exists
 	crossFunctionTargets   bool // a loop, switch or label encloses the current function, so jumps there cross a function boundary
 	allowTopLevelReturn    bool
 	skipStrictPropertyInit bool // When true, TS2564 is not emitted (strict-init opt-out)
@@ -353,6 +389,9 @@ type Checker struct {
 	// This ensures type predicate functions and other hoisted functions are available
 	deferMethodBodies    bool
 	deferredMethodBodies []deferredMethodBodyCheck
+	// True while Pass 2.5 checks the bodies of top-level classes: all top-level
+	// bindings are hoisted by then, so unresolved names are real errors.
+	strictDeferredMethodBodies bool
 
 	// --- Deferred computed key expression checking ---
 	// Computed key expressions in class/interface bodies are checked after Pass 3
@@ -375,6 +414,7 @@ func NewChecker() *Checker {
 // NewCheckerWithInitializers creates a new type checker with custom built-in initializers.
 func NewCheckerWithInitializers(initializers []builtins.BuiltinInitializer) *Checker {
 	globalEnv := NewGlobalEnvironment(initializers)
+	declareAmbientLibGlobals(globalEnv)
 	globalEnv.snapshotBuiltins()
 	return &Checker{
 		env:    globalEnv,                // Create persistent global environment with custom initializers
@@ -629,7 +669,7 @@ func varLikeDeclarationParts(stmt parser.Statement) ([]*parser.VarDeclarator, st
 // top-level declarations and the analogous ExportNamedDeclaration-wrapped
 // case, so a top-level function can forward-reference an exported
 // var/let/const the same way it already can a non-exported one.
-func (c *Checker) hoistVarLikeDeclarationsPass2(declarations []*parser.VarDeclarator, stmtType string, isConst bool, globalEnv *Environment, nodesProcessedPass2 map[parser.Node]bool) []*parser.FunctionLiteral {
+func (c *Checker) hoistVarLikeDeclarationsPass2(declarations []*parser.VarDeclarator, stmtType string, isConst bool, ambient bool, globalEnv *Environment, nodesProcessedPass2 map[parser.Node]bool) []*parser.FunctionLiteral {
 	var functionsToVisitBody []*parser.FunctionLiteral
 
 	for _, declarator := range declarations {
@@ -679,15 +719,32 @@ func (c *Checker) hoistVarLikeDeclarationsPass2(declarations []*parser.VarDeclar
 			preliminaryType = types.Any // Or Undefined if no initializer? Let's use Any for now.
 		}
 
+		if stmtType != "Var" && !ambient {
+			c.declareBlockScoped(globalEnv, varName.Value, varName.Token, bsVariable)
+		}
+
 		// Define variable in the environment.
 		// `var` allows re-declarations (JavaScript semantics); only `let`/`const` are errors.
 		if !globalEnv.Define(varName.Value, preliminaryType, isConst) {
 			if stmtType != "Var" {
-				c.addError(varName, fmt.Sprintf("identifier '%s' already declared", varName.Value))
+				c.redeclarationReportedByBinder()
 			} else {
-				// var re-declaration: update to the new type (widening allowed).
-				globalEnv.Update(varName.Value, preliminaryType)
+				// var re-declaration: the variable keeps the first declaration's
+				// type; a differing later type is TS2403 (reported in Pass 5).
+				// The first user declaration of a builtin global (lib.d.ts's own
+				// `declare var Symbol`) takes over its type; so does the
+				// speculative hoisted placeholder.
+				if c.preexistingGlobals[varName.Value] && !c.pass2VarSeen[varName.Value] {
+					if builtinType, _, ok := globalEnv.Resolve(varName.Value); ok {
+						c.reportBuiltinRedeclaration(varName, typeAnnotation, builtinType, preliminaryType)
+					}
+					globalEnv.Update(varName.Value, preliminaryType)
+				}
 			}
+			if c.pass2VarSeen == nil {
+				c.pass2VarSeen = make(map[string]bool)
+			}
+			c.pass2VarSeen[varName.Value] = true
 		} else {
 			debugPrintf("// [Checker Pass 2] Defined var '%s' with initial type: %s\n", varName.Value, preliminaryType.String())
 		}
@@ -748,6 +805,11 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 	if !found { // Should not happen
 		debugPrintf("// [Checker Pass 5] ERROR: Variable '%s' not found in env during final check?\n", varName.Value)
 		return
+	}
+
+	if bs := c.blockScoped[globalEnv][varName.Value]; bs != nil && bs.kind == bsVariable {
+		bs.initializing = true
+		defer func() { bs.initializing = false }()
 	}
 
 	// Use contextual typing if we have a type annotation (not Any)
@@ -824,6 +886,9 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 			finalInferredType = computedInitializerType
 		} else {
 			finalInferredType = types.DeeplyWidenType(computedInitializerType) // Use the deep widen helper
+			if !isConstVarLikeName(varName, globalEnv) {
+				finalInferredType = types.WidenEnumMember(finalInferredType)
+			}
 		}
 
 		// Update the environment only if the refined type is different from the current one
@@ -850,9 +915,25 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.program = program
 	c.source = program.Source           // Cache source for error reporting
 	c.errors = []errors.PaseratiError{} // Reset errors
+	c.reportedErrors = nil
+	// Source positions and first-declaration records are per program: a REPL
+	// session checks many programs against one persistent global scope.
+	c.blockScoped = nil
+	c.varFirstDecl = nil
+	c.pass2VarSeen = nil
+	// Duplicate-declaration diagnostics come from the parser's declaration binder.
+	c.errors = append(c.errors, program.BindErrors...)
 	// DON'T reset the environment - keep it persistent for REPL sessions
 	// c.env = NewGlobalEnvironment()      // Start with a fresh global environment for this check
 	globalEnv := c.env
+	if programHasModuleSyntax(program) {
+		// A module's top-level declarations are module-scoped: they shadow
+		// builtin globals (`export class Object {}`) instead of colliding.
+		realGlobal := globalEnv
+		globalEnv = NewFunctionEnvironment(realGlobal)
+		c.env = globalEnv
+		defer func() { c.env = realGlobal }()
+	}
 
 	// Snapshot the globals that exist before any of this program's declarations
 	// are processed, for definite assignment analysis (see Pass 6).
@@ -865,6 +946,26 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	nodesProcessedPass1 := make(map[parser.Node]bool)   // Nodes handled in Pass 1 (Type Aliases)
 	nodesProcessedPass2 := make(map[parser.Node]bool)   // Nodes handled in Pass 2 (Signatures/Vars)
 	functionsToVisitBody := []*parser.FunctionLiteral{} // Function literals needing body check in Pass 3
+
+	c.declaredTypeNames = program.DeclaredTypeNames
+	c.preRegisterTopLevelBlockScoped(program.Statements)
+	c.programHoistedNames = make(map[string]bool)
+	for _, name := range parser.VarDeclaredNames(program.Statements) {
+		c.programHoistedNames[name] = true
+	}
+	for name := range program.HoistedDeclarations {
+		c.programHoistedNames[name] = true
+	}
+	for _, stmt := range program.Statements {
+		// `declare var x: T` is ambient, so it exists from the start too.
+		if v, ok := stmt.(*parser.VarStatement); ok && v.Declare {
+			for _, d := range v.Declarations {
+				if d != nil && d.Name != nil {
+					c.programHoistedNames[d.Name.Value] = true
+				}
+			}
+		}
+	}
 
 	// --- Pass 0: Pre-register all interface names as forward references ---
 	// This allows mutually recursive interfaces like:
@@ -899,6 +1000,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				}
 			}
 		} else if classStmt, ok := stmt.(*parser.ClassDeclaration); ok {
+			c.declareBlockScoped(c.env, classStmt.Name.Value, classStmt.Name.Token, bsClass)
 			// Pre-register class names so they can be used as types before declaration
 			if _, exists := c.env.ResolveType(classStmt.Name.Value); !exists {
 				placeholderType := &types.ObjectType{
@@ -1104,10 +1206,10 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					if _, isNamespace := existingType.(*types.NamespaceType); isNamespace {
 						globalEnv.Update(name, initialObjectType)
 					} else {
-						c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined (hoisted)", name))
+						c.redeclarationReportedByBinder()
 					}
 				} else {
-					c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined (hoisted)", name))
+					c.redeclarationReportedByBinder()
 				}
 			}
 			funcLit.SetComputedType(initialObjectType) // Set initial type on node
@@ -1153,7 +1255,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			// Process all declarations in the statement
 			declarations, stmtType, isConst := varLikeDeclarationParts(node)
 			functionsToVisitBody = append(functionsToVisitBody,
-				c.hoistVarLikeDeclarationsPass2(declarations, stmtType, isConst, globalEnv, nodesProcessedPass2)...)
+				c.hoistVarLikeDeclarationsPass2(declarations, stmtType, isConst, isAmbientVarLike(node), globalEnv, nodesProcessedPass2)...)
 			nodesProcessedPass2[stmt] = true // Mark the Let/Const/Var statement itself
 
 		case *parser.ExportNamedDeclaration:
@@ -1169,7 +1271,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				declarations, stmtType, isConst := varLikeDeclarationParts(node.Declaration)
 				if stmtType != "" {
 					functionsToVisitBody = append(functionsToVisitBody,
-						c.hoistVarLikeDeclarationsPass2(declarations, stmtType, isConst, globalEnv, nodesProcessedPass2)...)
+						c.hoistVarLikeDeclarationsPass2(declarations, stmtType, isConst, isAmbientVarLike(node.Declaration), globalEnv, nodesProcessedPass2)...)
 					nodesProcessedPass2[stmt] = true
 				}
 			}
@@ -1180,6 +1282,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 	}
 	debugPrintf("// --- Checker - Pass 2: Complete ---\n")
+
+	// Var bindings nested in top-level blocks/loops/try are script-scoped too.
+	c.hoistVarNames(globalEnv, program.Statements)
 
 	// --- Pass 2.5: Process deferred class method bodies ---
 	// Now that function signatures are hoisted (Pass 2), check class method bodies
@@ -1193,7 +1298,13 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			// Restore the environment that was active during class processing
 			// (includes type parameters for generic classes)
 			c.env = deferred.env
+			if deferred.run != nil {
+				deferred.run()
+				continue
+			}
+			c.strictDeferredMethodBodies = deferred.strict
 			c.checkMethodBodiesInInstance(deferred.className, deferred.body, deferred.instanceType)
+			c.strictDeferredMethodBodies = false
 		}
 		c.env = globalEnv
 		c.deferredMethodBodies = nil
@@ -1251,6 +1362,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.switchDepth = 0
 		c.activeLabels = make(map[string]bool)
 		c.functionNestingDepth++
+		c.nonArrowFunctionDepth++
 
 		if c.currentExpectedReturnType == nil {
 			c.currentInferredReturnTypes = []types.Type{} // Allocate only if inference needed
@@ -1308,7 +1420,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					// Already defined, reuse the existing one
 					typeParamNode.SetComputedType(&types.TypeParameterType{Parameter: existing})
 				} else if !typeParamEnv.DefineTypeParameter(typeParam.Name, typeParam) {
-					c.addError(typeParamNode.Name, fmt.Sprintf("duplicate type parameter name: %s", typeParam.Name))
+					c.redeclarationReportedByBinder()
 				} else {
 					// Successfully defined, set computed type on the AST node
 					typeParamNode.SetComputedType(&types.TypeParameterType{Parameter: typeParam})
@@ -1327,7 +1439,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				// Skip 'this' parameters as they don't have names and don't go into the scope
 				if !paramNode.IsThis {
 					if !funcEnv.Define(paramNode.Name.Value, paramType, false) {
-						c.addError(paramNode.Name, fmt.Sprintf("duplicate parameter name: %s", paramNode.Name.Value))
+						c.redeclarationReportedByBinder()
 					}
 				}
 				paramNode.ComputedType = paramType // Set type on parameter node
@@ -1342,7 +1454,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			if funcLit.RestParameter.Name != nil {
 				// Simple rest parameter like ...args
 				if !funcEnv.Define(funcLit.RestParameter.Name.Value, funcSignature.RestParameterType, false) {
-					c.addError(funcLit.RestParameter.Name, fmt.Sprintf("duplicate parameter name: %s", funcLit.RestParameter.Name.Value))
+					c.redeclarationReportedByBinder()
 				}
 				debugPrintf("// [Checker Pass 3] Defined rest parameter '%s' with type: %s\n", funcLit.RestParameter.Name.Value, funcSignature.RestParameterType.String())
 			} else if funcLit.RestParameter.Pattern != nil {
@@ -1361,7 +1473,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 						if elem != nil && elem.Target != nil {
 							if ident, ok := elem.Target.(*parser.Identifier); ok {
 								if !funcEnv.Define(ident.Value, elementType, false) {
-									c.addError(ident, fmt.Sprintf("duplicate parameter name: %s", ident.Value))
+									c.redeclarationReportedByBinder()
 								}
 								debugPrintf("// [Checker Pass 3] Defined rest destructured param '%s' with type: %s\n", ident.Value, elementType.String())
 							}
@@ -1373,7 +1485,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 						if prop != nil && prop.Key != nil {
 							if ident, ok := prop.Key.(*parser.Identifier); ok {
 								if !funcEnv.Define(ident.Value, elementType, false) {
-									c.addError(ident, fmt.Sprintf("duplicate parameter name: %s", ident.Value))
+									c.redeclarationReportedByBinder()
 								}
 								debugPrintf("// [Checker Pass 3] Defined rest destructured prop '%s' with type: %s\n", ident.Value, elementType.String())
 							}
@@ -1393,6 +1505,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 
 		// Visit Body
+		c.hoistFunctionBodyVars(funcLit.Body)
 		c.visit(funcLit.Body) // Use funcEnv implicitly
 
 		// Determine Final ACTUAL Return Type
@@ -1500,6 +1613,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.switchDepth = outerSwitchDepth
 		c.activeLabels = outerActiveLabels
 		c.functionNestingDepth--
+		c.nonArrowFunctionDepth--
 	}
 	debugPrintf("// --- Checker - Pass 3: Complete ---\n")
 
@@ -1537,10 +1651,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		// Environment.Define for a name already defined in Pass 2, which
 		// fails and reports a bogus "already declared" error for let/const.
 		if exportStmt, ok := stmt.(*parser.ExportNamedDeclaration); ok && nodesProcessedPass2[stmt] {
-			varName, typeAnnotation, initializer, isVarLike := exportedVarLikeDeclarationParts(exportStmt)
+			varName, _, _, isVarLike := exportedVarLikeDeclarationParts(exportStmt)
 			if isVarLike {
 				if varName != nil {
-					c.checkVarLikeInitializerAndRefine(varName, typeAnnotation, initializer, globalEnv, flow)
+					declarations, stmtType, _ := varLikeDeclarationParts(exportStmt.Declaration)
+					c.checkTopLevelVarLikeDeclarators(declarations, stmtType == "Var", globalEnv, flow)
 				} else {
 					flow.invalidateAll()
 				}
@@ -1554,17 +1669,15 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			// Special check: If it's a Let/Const whose VALUE was a FunctionLiteral,
 			// we marked the STATEMENT in Pass 2, but we still need to check its initializer assignability here.
 			needsInitializerCheck := false
-			switch specificNode := stmt.(type) {
-			case *parser.LetStatement:
-				if _, ok := specificNode.Value.(*parser.FunctionLiteral); !ok && specificNode.Value != nil {
-					needsInitializerCheck = true
+			if declarations, stmtType, _ := varLikeDeclarationParts(stmt); declarations != nil {
+				for _, d := range declarations {
+					if _, isFn := d.Value.(*parser.FunctionLiteral); !isFn && d.Value != nil {
+						needsInitializerCheck = true
+					}
 				}
-			case *parser.ConstStatement:
-				if _, ok := specificNode.Value.(*parser.FunctionLiteral); !ok && specificNode.Value != nil {
-					needsInitializerCheck = true
-				}
-			case *parser.VarStatement:
-				if _, ok := specificNode.Value.(*parser.FunctionLiteral); !ok && specificNode.Value != nil {
+				// Every `var` declarator takes part in the redeclaration check
+				// (TS2403), initializer or not.
+				if stmtType == "Var" {
 					needsInitializerCheck = true
 				}
 			}
@@ -1584,8 +1697,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		switch node := stmt.(type) {
 		case *parser.LetStatement, *parser.ConstStatement, *parser.VarStatement:
 			// This block now ONLY handles checking non-function initializers
-			varName, typeAnnotation, initializer, _ := varLikeDeclaratorParts(node)
-			c.checkVarLikeInitializerAndRefine(varName, typeAnnotation, initializer, globalEnv, flow)
+			declarations, stmtType, _ := varLikeDeclarationParts(node)
+			c.checkTopLevelVarLikeDeclarators(declarations, stmtType == "Var", globalEnv, flow)
 
 		case *parser.ExpressionStatement:
 			flow.observeExpressionStatement(c, node)
@@ -1607,12 +1720,17 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.runDeferredHeritageChecks()
 
 	// Emit TS2304/TS2552 for typeof expressions with identifiers that were never resolved
-	for _, node := range c.unresolvedTypeofNodes {
+	for i, node := range c.unresolvedTypeofNodes {
 		if _, _, found := globalEnv.Resolve(node.Identifier); !found {
+			if i < len(c.unresolvedTypeofTypeOnly) && c.unresolvedTypeofTypeOnly[i] {
+				c.addErrorWithCode(node, "TS2693", fmt.Sprintf("'%s' only refers to a type, but is being used as a value here.", node.Identifier))
+				continue
+			}
 			c.addCannotFindNameError(node, globalEnv, node.Identifier)
 		}
 	}
 	c.unresolvedTypeofNodes = nil
+	c.unresolvedTypeofTypeOnly = nil
 
 	// Emit TS2391 for any function overload signatures that never got an implementation
 	for _, sigs := range globalEnv.GetAllPendingOverloads() {
@@ -1880,9 +1998,16 @@ func (c *Checker) visit(node parser.Node) {
 			}
 			if !c.env.Define(declarator.Name.Value, tempType, false) {
 				// If Define fails here, it's a true redeclaration error.
-				c.addError(declarator.Name, fmt.Sprintf("variable '%s' already declared in this scope", declarator.Name.Value))
+				c.redeclarationReportedByBinder()
 			}
 			debugPrintf("// [Checker LetStmt] Temp Define '%s' as: %s\n", declarator.Name.Value, tempType.String())
+			var bsInfo *blockScopedInfo
+			if !node.Declare {
+				bsInfo = c.declareBlockScoped(c.env, declarator.Name.Value, declarator.Name.Token, bsVariable)
+				if bsInfo != nil {
+					bsInfo.initializing = declarator.Value != nil
+				}
+			}
 
 			// 2. Handle Initializer (if present)
 			var computedInitializerType types.Type
@@ -1901,6 +2026,9 @@ func (c *Checker) visit(node parser.Node) {
 				debugPrintf("// [Checker LetStmt] '%s': computedInitializerType from declarator.Value (%T): %T (%v)\n", nameValueStr, declarator.Value, computedInitializerType, computedInitializerType)
 			} else {
 				computedInitializerType = nil // No initializer
+			}
+			if bsInfo != nil {
+				bsInfo.initializing = false
 			}
 
 			// 3. Determine the final type and check assignment errors
@@ -1944,7 +2072,7 @@ func (c *Checker) visit(node parser.Node) {
 						finalVariableType = types.GetWidenedType(computedInitializerType)
 						debugPrintf("// [Checker LetStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					} else {
-						finalVariableType = computedInitializerType
+						finalVariableType = types.WidenEnumMember(computedInitializerType)
 						debugPrintf("// [Checker LetStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					}
 				} else {
@@ -2024,6 +2152,13 @@ func (c *Checker) visit(node parser.Node) {
 				tempType = types.Any // Fallback to Any (covers arrow functions, etc.)
 			}
 			preDefined := declarator.Value != nil && c.env.Define(declarator.Name.Value, tempType, true)
+			var bsInfo *blockScopedInfo
+			if !node.Declare {
+				bsInfo = c.declareBlockScoped(c.env, declarator.Name.Value, declarator.Name.Token, bsVariable)
+				if bsInfo != nil {
+					bsInfo.initializing = declarator.Value != nil
+				}
+			}
 			debugPrintf("// [Checker ConstStmt] Temp Define '%s' as: %s (ok=%v)\n", declarator.Name.Value, tempType.String(), preDefined)
 
 			// 2. Handle Initializer (Must be present for const)
@@ -2039,6 +2174,9 @@ func (c *Checker) visit(node parser.Node) {
 					c.visit(declarator.Value) // Regular visit if no type annotation
 				}
 				computedInitializerType = declarator.Value.GetComputedType()
+				if bsInfo != nil {
+					bsInfo.initializing = false
+				}
 			} else if node.Declare {
 				// Ambient declaration — no initializer needed, use declared type or any
 				if declaredType != nil {
@@ -2095,7 +2233,7 @@ func (c *Checker) visit(node parser.Node) {
 					debugPrintf("// [Checker ConstStmt] WARNING: Update failed unexpectedly for '%s'\n", declarator.Name.Value)
 				}
 			} else if !c.env.Define(declarator.Name.Value, finalType, true) {
-				c.addError(declarator.Name, fmt.Sprintf("constant '%s' already declared in this scope", declarator.Name.Value))
+				c.redeclarationReportedByBinder()
 			}
 			// Set computed type on the Name Identifier node itself and the declarator
 			declarator.Name.SetComputedType(finalType)
@@ -2161,7 +2299,7 @@ func (c *Checker) visit(node parser.Node) {
 				_, _, exists := funcScope.Resolve(declarator.Name.Value)
 				if !exists {
 					// Variable doesn't exist but Define failed - this shouldn't happen
-					c.addError(declarator.Name, fmt.Sprintf("variable '%s' already declared in this scope", declarator.Name.Value))
+					c.redeclarationReportedByBinder()
 				}
 				// If exists, silently allow redeclaration (JavaScript var semantics)
 			} else {
@@ -2228,7 +2366,7 @@ func (c *Checker) visit(node parser.Node) {
 						finalVariableType = types.GetWidenedType(computedInitializerType)
 						debugPrintf("// [Checker VarStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					} else {
-						finalVariableType = computedInitializerType
+						finalVariableType = types.WidenEnumMember(computedInitializerType)
 						debugPrintf("// [Checker VarStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					}
 				} else {
@@ -2236,6 +2374,16 @@ func (c *Checker) visit(node parser.Node) {
 					finalVariableType = types.Any
 					debugPrintf("// [Checker VarStmt] '%s': Inferred final type (no initializer, implicit any): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 				}
+			}
+
+			// A later `var` declaration of the same name must have the same
+			// type as the first one (TS2403) and the variable keeps that type.
+			reliableDecl := c.varDeclTypeIsReliable(declarator.TypeAnnotation, declarator.Value)
+			if first, seen := c.firstVarDecl(funcScope, declarator.Name.Value); seen {
+				c.reportSubsequentVarDeclaration(declarator.Name, first, finalVariableType, reliableDecl)
+				finalVariableType = first.typ
+			} else {
+				c.recordFirstVarDecl(funcScope, declarator.Name.Value, finalVariableType, reliableDecl)
 			}
 
 			// 4. UPDATE variable type in function scope with the final type
@@ -2345,6 +2493,8 @@ func (c *Checker) visit(node parser.Node) {
 		c.env = NewEnclosedEnvironment(originalEnv)
 		debugPrintf("// [Checker Visit Block] Created Block Env: %p (outer: %p)\n", c.env, originalEnv) // DEBUG
 
+		c.preRegisterBlockScoped(node.Statements)
+
 		// --- NEW: Process Hoisted Declarations for this block FIRST ---
 		if node.HoistedDeclarations != nil {
 			for name, hoistedNode := range node.HoistedDeclarations {
@@ -2359,7 +2509,7 @@ func (c *Checker) visit(node parser.Node) {
 				if funcSig == nil {
 					debugPrintf("// [Checker Block Hoisting] WARNING: Failed to resolve signature for hoisted func '%s'. Defining as Any.\n", name)
 					if !c.env.Define(name, types.Any, false) {
-						c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined in this block scope", name))
+						c.redeclarationReportedByBinder()
 					}
 					continue
 				}
@@ -2368,7 +2518,7 @@ func (c *Checker) visit(node parser.Node) {
 				funcObjectType := types.NewFunctionType(funcSig)
 				if !c.env.Define(name, funcObjectType, false) {
 					// Duplicate definition error
-					c.addError(funcLit.Name, fmt.Sprintf("identifier '%s' already defined in this block scope", name))
+					c.redeclarationReportedByBinder()
 				}
 
 				// Set the computed type on the FunctionLiteral node itself NOW.
@@ -2579,6 +2729,10 @@ func (c *Checker) visit(node parser.Node) {
 		// First try regular resolution, then check with objects
 		typ, isConst, found := c.env.Resolve(node.Value) // Use node.Value directly; UPDATED TO 3 VARS
 		isFromWith := false
+		if found {
+			c.checkBlockScopedUse(node)
+			typ = c.checkNamespaceUsedAsValue(node, typ)
+		}
 
 		// If not found as a regular variable, try with object resolution
 		if !found {
@@ -2590,7 +2744,7 @@ func (c *Checker) visit(node parser.Node) {
 			// Special handling for 'arguments' identifier - only available in function scope
 			if node.Value == "arguments" {
 				// Check if we're inside a function (not global scope)
-				if c.env.outer != nil { // Function scope has an outer environment
+				if c.nonArrowFunctionDepth > 0 {
 					// Get IArguments type that was defined by the builtin initializer
 					// Walk up to the global environment to find IArguments
 					globalEnv := c.env
@@ -2621,7 +2775,7 @@ func (c *Checker) visit(node parser.Node) {
 				node.SetComputedType(types.Any)
 			} else {
 				debugPrintf("// [Checker Debug] visit(Identifier): '%s' not found in env %p\n", node.Value, c.env) // DEBUG
-				c.addCannotFindNameError(node, c.env, node.Value)
+				c.reportUnresolvedOrTDZ(node)
 				// Set computed type if node itself is not nil (already checked)
 				node.SetComputedType(types.Any) // Set to Any on error?
 			}
@@ -3220,6 +3374,7 @@ func (c *Checker) visit(node parser.Node) {
 		c.switchDepth = 0
 		c.activeLabels = make(map[string]bool)
 		c.functionNestingDepth++
+		c.nonArrowFunctionDepth++
 		if resolvedReturnType == nil {
 			c.currentInferredReturnTypes = []types.Type{}
 		}
@@ -3237,7 +3392,7 @@ func (c *Checker) visit(node parser.Node) {
 		// Define parameters in the method scope using resolved types
 		for i, paramNode := range node.Parameters {
 			if !funcEnv.Define(paramNode.Name.Value, paramTypes[i], false) {
-				c.addError(paramNode.Name, fmt.Sprintf("duplicate parameter name: %s", paramNode.Name.Value))
+				c.redeclarationReportedByBinder()
 			}
 			paramNode.ComputedType = paramTypes[i]
 		}
@@ -3266,7 +3421,7 @@ func (c *Checker) visit(node parser.Node) {
 
 			// Define rest parameter in method scope
 			if !funcEnv.Define(node.RestParameter.Name.Value, restParameterType, false) {
-				c.addError(node.RestParameter.Name, fmt.Sprintf("duplicate parameter name: %s", node.RestParameter.Name.Value))
+				c.redeclarationReportedByBinder()
 			}
 			node.RestParameter.ComputedType = restParameterType
 			debugPrintf("// [Checker ShorthandMethod] Defined rest parameter '%s' with type: %s\n", node.RestParameter.Name.Value, restParameterType.String())
@@ -3313,6 +3468,7 @@ func (c *Checker) visit(node parser.Node) {
 		c.switchDepth = outerSwitchDepthSM
 		c.activeLabels = outerActiveLabelsSM
 		c.functionNestingDepth--
+		c.nonArrowFunctionDepth--
 
 	// --- NEW: Handle SpreadElement ---
 	case *parser.SpreadElement:
@@ -3377,7 +3533,7 @@ func (c *Checker) visit(node parser.Node) {
 			c.activeLabels = make(map[string]bool)
 		}
 		if c.activeLabels[labelName] {
-			c.addErrorWithCode(node.Label, errors.TS1114, fmt.Sprintf("Duplicate label '%s'.", labelName))
+			// duplicate labels are reported by the parser (TS1114)
 		}
 		c.activeLabels[labelName] = true
 		c.visit(node.Statement)
@@ -3467,7 +3623,7 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 			if element != nil && element.Target != nil {
 				if ident, ok := element.Target.(*parser.Identifier); ok {
 					if !env.Define(ident.Value, types.Undefined, node.IsConst) {
-						c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
+						c.redeclarationReportedByBinder()
 					}
 					ident.SetComputedType(types.Undefined)
 				}
@@ -3618,7 +3774,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 			if prop != nil && prop.Target != nil {
 				if ident, ok := prop.Target.(*parser.Identifier); ok {
 					if !env.Define(ident.Value, types.Undefined, node.IsConst) {
-						c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
+						c.redeclarationReportedByBinder()
 					}
 					ident.SetComputedType(types.Undefined)
 				}
@@ -3629,7 +3785,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 		if node.RestProperty != nil {
 			if ident, ok := node.RestProperty.Target.(*parser.Identifier); ok {
 				if !env.Define(ident.Value, types.Undefined, node.IsConst) {
-					c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
+					c.redeclarationReportedByBinder()
 				}
 				ident.SetComputedType(types.Undefined)
 			}
@@ -3781,7 +3937,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 				if node.Token != nil && node.Token.Literal == "var" {
 					restEnv.Update(ident.Value, restType)
 				} else {
-					c.addError(ident, fmt.Sprintf("identifier '%s' already declared", ident.Value))
+					c.redeclarationReportedByBinder()
 				}
 			}
 			ident.SetComputedType(restType)
@@ -4096,7 +4252,7 @@ func (c *Checker) checkCatchClause(clause *parser.CatchClause) {
 		case *parser.Identifier:
 			// Simple identifier: catch (e)
 			if !c.env.Define(param.Value, bindingType, false) {
-				c.addError(param, fmt.Sprintf("parameter '%s' already declared", param.Value))
+				c.redeclarationReportedByBinder()
 			}
 			param.SetComputedType(bindingType)
 		case *parser.ArrayParameterPattern, *parser.ObjectParameterPattern:
@@ -4165,7 +4321,7 @@ func (c *Checker) definePatternBinding(target parser.Expression, bindingType typ
 	switch t := target.(type) {
 	case *parser.Identifier:
 		if !c.env.Define(t.Value, bindingType, false) {
-			c.addError(t, fmt.Sprintf("parameter '%s' already declared", t.Value))
+			c.redeclarationReportedByBinder()
 		}
 		t.SetComputedType(bindingType)
 	case *parser.ArrayParameterPattern:
@@ -4884,4 +5040,17 @@ func (c *Checker) isInAsyncContext() bool {
 func (c *Checker) getNextAnonymousId() int {
 	c.anonymousClassCounter++
 	return c.anonymousClassCounter
+}
+
+// programHasModuleSyntax reports whether the program has top-level import or
+// export syntax, which makes it a module (its declarations are module-scoped).
+func programHasModuleSyntax(program *parser.Program) bool {
+	for _, stmt := range program.Statements {
+		switch stmt.(type) {
+		case *parser.ImportDeclaration, *parser.ExportNamedDeclaration,
+			*parser.ExportDefaultDeclaration, *parser.ExportAllDeclaration:
+			return true
+		}
+	}
+	return false
 }

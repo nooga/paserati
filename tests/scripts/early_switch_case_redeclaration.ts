@@ -1,4 +1,4 @@
-// expect_compile_error: Identifier 'a' has already been declared
+// expect_compile_error: Cannot redeclare block-scoped variable 'a'.
 // All clauses of a switch share one scope.
 switch (0) {
   case 1:

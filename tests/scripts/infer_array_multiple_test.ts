@@ -1,8 +1,8 @@
-// expect_compile_error: Cannot find name
+// expect: infer array multiple test
 
 // Test multiple infer sites in function parameters
-// Note: This currently doesn't work because infer type parameters aren't 
-// properly scoped in the true branch of conditional types
+// Note: infer type parameters are scoped to the true branch of the
+// conditional type.
 
 // Test 1: Multiple infer U in function parameters
 type ExtractParams<T> = T extends (a: infer U, b: infer U) => any ? U : never;
@@ -11,7 +11,7 @@ type ExtractParams<T> = T extends (a: infer U, b: infer U) => any ? U : never;
 type TestFunc = (a: string, b: number) => void;
 
 function test() {
-    // This should be string | number but currently fails with "unknown type name: U"
+    // This should be string | number and works now that infer is scoped
     type Result = ExtractParams<TestFunc>;
     
     let value: Result = "test";

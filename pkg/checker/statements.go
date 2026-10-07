@@ -3,8 +3,8 @@ package checker
 import (
 	"fmt"
 
-	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -69,13 +69,28 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 		delete(c.resolvingTypeAliases, node.Name.Value)
 	}()
 
-	// 1. Validate type parameters
+	// 1. Create the type parameters, then resolve constraints and defaults with
+	// every parameter in scope (`<A, B extends keyof A>`).
 	typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
 	for i, param := range node.TypeParameters {
-		// Create TypeParameter type
-		typeParam := &types.TypeParameter{
+		typeParams[i] = &types.TypeParameter{
 			Name: param.Name.Value,
 		}
+	}
+
+	// Create a new environment with type parameters available as TypeParameterType
+	genericEnv := NewEnclosedEnvironment(c.env)
+	for _, typeParam := range typeParams {
+		paramType := &types.TypeParameterType{
+			Parameter: typeParam,
+		}
+		genericEnv.DefineTypeAlias(typeParam.Name, paramType)
+	}
+
+	outerEnv := c.env
+	c.env = genericEnv
+	for i, param := range node.TypeParameters {
+		typeParam := typeParams[i]
 
 		// Handle constraint if present
 		if param.Constraint != nil {
@@ -97,20 +112,10 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 				}
 			}
 		}
-
-		typeParams[i] = typeParam
 	}
+	c.env = outerEnv
 
 	// 2. Create the body type with TypeParameterType references
-	// Create a new environment with type parameters available as TypeParameterType
-	genericEnv := NewEnclosedEnvironment(c.env)
-	for _, typeParam := range typeParams {
-		paramType := &types.TypeParameterType{
-			Parameter: typeParam,
-		}
-		genericEnv.DefineTypeAlias(typeParam.Name, paramType)
-	}
-
 	// Save current environment and switch to generic environment
 	savedEnv := c.env
 	c.env = genericEnv
@@ -155,6 +160,31 @@ func (c *Checker) resolveExtendedInterfaceObjectType(t types.Type) (*types.Objec
 		if objType, ok := substituted.(*types.ObjectType); ok {
 			return objType, true
 		}
+	}
+
+	// An interface may extend any object type: an intersection of object types
+	// contributes the members of all its parts; arrays, tuples and mapped types
+	// are accepted (their members are not modelled as properties here).
+	switch tt := t.(type) {
+	case *types.IntersectionType:
+		merged := types.NewObjectType()
+		for _, part := range tt.Types {
+			obj, ok := c.resolveExtendedInterfaceObjectType(part)
+			if !ok {
+				return nil, false
+			}
+			for name, prop := range obj.Properties {
+				merged.Properties[name] = prop
+				if obj.OptionalProperties != nil && obj.OptionalProperties[name] {
+					merged.OptionalProperties[name] = true
+				}
+			}
+			merged.CallSignatures = append(merged.CallSignatures, obj.CallSignatures...)
+			merged.ConstructSignatures = append(merged.ConstructSignatures, obj.ConstructSignatures...)
+		}
+		return merged, true
+	case *types.ArrayType, *types.TupleType, *types.MappedType:
+		return types.NewObjectType(), true
 	}
 
 	return nil, false
@@ -394,8 +424,8 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		case *types.GenericType:
 			existingGeneric = existing
 			if len(existing.TypeParameters) != len(node.TypeParameters) {
-				c.addErrorWithCode(node.Name, errors.TS2428, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
-				return
+				c.reportInterfaceTypeParameterMismatch(existing, node)
+				existingGeneric = nil
 			}
 			if existingBody, ok := existing.Body.(*types.ObjectType); ok {
 				bodyType = existingBody
@@ -411,11 +441,24 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
 	if existingGeneric != nil {
 		typeParams = existingGeneric.TypeParameters
+		mismatch := false
 		for i, param := range node.TypeParameters {
 			if param.Name.Value != typeParams[i].Name {
-				c.addErrorWithCode(param.Name, errors.TS2428, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
+				mismatch = true
 			}
 			param.SetComputedType(&types.TypeParameterType{Parameter: typeParams[i]})
+		}
+		if mismatch {
+			c.reportInterfaceTypeParameterMismatch(existingGeneric, node)
+			// Check this declaration's body against its own parameter names
+			// without merging it.
+			existingGeneric = nil
+			bodyType = nil
+			typeParams = make([]*types.TypeParameter, len(node.TypeParameters))
+			for i, param := range node.TypeParameters {
+				typeParams[i] = &types.TypeParameter{Name: param.Name.Value, Constraint: types.Any, Index: i}
+				param.SetComputedType(&types.TypeParameterType{Parameter: typeParams[i]})
+			}
 		}
 	} else {
 		for i, param := range node.TypeParameters {
@@ -436,6 +479,23 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			Parameter: typeParam,
 		}
 		genericEnv.DefineTypeAlias(typeParam.Name, paramType)
+	}
+
+	// Register the generic interface before its constraints are resolved so a
+	// constraint can mention the interface itself (`interface A<T extends A<T>>`).
+	earlyDefined := false
+	if existingGeneric == nil {
+		if bodyType == nil {
+			bodyType = &types.ObjectType{
+				Properties:         make(map[string]types.Type),
+				OptionalProperties: make(map[string]bool),
+			}
+		}
+		earlyGeneric := &types.GenericType{Name: node.Name.Value, TypeParameters: typeParams, Body: bodyType}
+		earlyDefined = c.env.DefineTypeAlias(node.Name.Value, earlyGeneric)
+		if earlyDefined {
+			c.recordGenericInterfaceDecl(earlyGeneric, node)
+		}
 	}
 
 	savedEnv := c.env
@@ -580,6 +640,10 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		existingGeneric.Body = bodyType
 		debugPrintf("// [Checker Interface P1] Merged generic interface '%s' with %d type parameters in env %p\n",
 			node.Name.Value, len(typeParams), c.env)
+		return
+	}
+
+	if earlyDefined {
 		return
 	}
 
@@ -862,6 +926,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 	originalEnv := c.env
 	loopEnv := NewEnclosedEnvironment(originalEnv)
 	c.env = loopEnv
+	c.preRegisterBlockScoped([]parser.Statement{node.Variable})
 	debugPrintf("// [Checker ForOfStmt] Created loop scope %p (outer: %p)\n", loopEnv, originalEnv)
 
 	// Hoist var declarations out of the loop scope so they're visible in the
@@ -876,7 +941,9 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 
 	// Visit the iterable first to determine its type
 	if node.Iterable != nil {
+		endTDZ := c.beginLoopHeadTDZ(node.Variable)
 		c.visit(node.Iterable)
+		endTDZ()
 		iterableType := node.Iterable.GetComputedType()
 		if iterableType == nil {
 			iterableType = types.Any
@@ -1205,6 +1272,7 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 	originalEnv := c.env
 	loopEnv := NewEnclosedEnvironment(originalEnv)
 	c.env = loopEnv
+	c.preRegisterBlockScoped([]parser.Statement{node.Variable})
 	debugPrintf("// [Checker ForInStmt] Created loop scope %p (outer: %p)\n", loopEnv, originalEnv)
 
 	// Hoist var declarations out of the loop scope so they're visible in the
@@ -1216,7 +1284,9 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 
 	// Visit the object first to determine its type
 	if node.Object != nil {
+		endTDZ := c.beginLoopHeadTDZ(node.Variable)
 		c.visit(node.Object)
+		endTDZ()
 		objectType := node.Object.GetComputedType()
 		if objectType == nil {
 			objectType = types.Any
@@ -1396,4 +1466,23 @@ func (c *Checker) extractPropertiesFromType(typ types.Type) map[string]types.Typ
 	}
 
 	return properties
+}
+
+// recordGenericInterfaceDecl remembers where each declaration of a generic
+// interface names it, for TS2428 (which tsc reports on every declaration).
+func (c *Checker) recordGenericInterfaceDecl(g *types.GenericType, node *parser.InterfaceDeclaration) {
+	if c.genericInterfaceDecls == nil {
+		c.genericInterfaceDecls = make(map[*types.GenericType][]*parser.Identifier)
+	}
+	c.genericInterfaceDecls[g] = append(c.genericInterfaceDecls[g], node.Name)
+}
+
+// reportInterfaceTypeParameterMismatch reports TS2428 on every declaration of
+// the interface when one of them declares different type parameters.
+func (c *Checker) reportInterfaceTypeParameterMismatch(g *types.GenericType, node *parser.InterfaceDeclaration) {
+	msg := fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value)
+	for _, name := range c.genericInterfaceDecls[g] {
+		c.addErrorWithCode(name, "TS2428", msg)
+	}
+	c.addErrorWithCode(node.Name, "TS2428", msg)
 }

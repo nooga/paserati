@@ -1,4 +1,4 @@
-// expect_compile_error: Cannot find name
+// expect: infer simple test
 
 // Test that infer parsing works
 

@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"fmt"
+	"github.com/nooga/paserati/pkg/errors"
 	"os"
 	"strings"
 
@@ -55,6 +56,12 @@ type Program struct {
 	Statements          []Statement
 	HoistedDeclarations map[string]Expression // Changed: Store hoisted Expression (e.g., FunctionLiteral)
 	Source              *source.SourceFile    // Source file context for error reporting
+	// BindErrors are the duplicate-declaration diagnostics (TS2300, TS2451,
+	// TS2393, ...) found by the declaration binder. The type checker reports them.
+	BindErrors []errors.PaseratiError
+	// DeclaredTypeNames are the names of all interfaces, type aliases, classes,
+	// enums and namespaces declared anywhere in the program.
+	DeclaredTypeNames map[string]bool
 }
 
 func (p *Program) TokenLiteral() string {

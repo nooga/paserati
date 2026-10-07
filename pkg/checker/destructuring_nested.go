@@ -427,7 +427,7 @@ func (c *Checker) checkDestructuringTargetForDeclaration(target parser.Expressio
 				// behavior of updating the existing binding.
 				env.Update(targetNode.Value, finalType)
 			} else {
-				c.addError(targetNode, fmt.Sprintf("identifier '%s' already declared", targetNode.Value))
+				c.redeclarationReportedByBinder()
 			}
 		}
 		targetNode.SetComputedType(finalType)

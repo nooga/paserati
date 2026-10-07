@@ -6,4 +6,4 @@ class C {
   #m = 2;
 }
 
-// expect_compile_error: Identifier '#m' has already been declared
+// expect_compile_error: Duplicate identifier '#m'.

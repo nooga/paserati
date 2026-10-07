@@ -26,6 +26,8 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 		return
 	}
 	name := node.Name.Value
+	exportedDecl := c.nsDeclExported || node.IsExported
+	c.nsDeclExported = false
 
 	// 1. Get-or-create the NamespaceType in the current scope. We look in the
 	//    type env: a NamespaceType always lives there.
@@ -35,7 +37,14 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 		nsType = types.NewNamespaceType(name)
 		nsType.Declare = true
 	} else if existing, found := c.env.ResolveTypeLocal(name); found {
-		if ns, ok := existing.(*types.NamespaceType); ok {
+		if c.env.seededNamespaces[name] && !exportedDecl {
+			// A non-exported namespace does not merge with the exported
+			// namespace of the same name an earlier body of the parent
+			// declared: it is a separate local declaration.
+			delete(c.env.typeAliases, name)
+			delete(c.env.symbols, name)
+			delete(c.env.seededNamespaces, name)
+		} else if ns, ok := existing.(*types.NamespaceType); ok {
 			nsType = ns
 		}
 	}
@@ -49,9 +58,14 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 		c.env.Define(name, nsType.ValueShape, false)
 	}
 
+	if parser.IsInstantiatedNamespace(node.Body) {
+		nsType.Instantiated = true
+	}
+
 	// 2. Create an enclosed environment for the body.
 	outerEnv := c.env
-	bodyEnv := NewEnclosedEnvironment(outerEnv)
+	// A namespace body is a var scope of its own, like a function body.
+	bodyEnv := NewFunctionEnvironment(outerEnv)
 	c.env = bodyEnv
 
 	// Seed bodyEnv with existing NAMESPACE children from nsType so that merge passes
@@ -61,6 +75,10 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 		if nsChild, ok := childT.(*types.NamespaceType); ok {
 			bodyEnv.DefineTypeAlias(childName, nsChild)
 			bodyEnv.Define(childName, nsChild.ValueShape, false)
+			if bodyEnv.seededNamespaces == nil {
+				bodyEnv.seededNamespaces = make(map[string]bool)
+			}
+			bodyEnv.seededNamespaces[childName] = true
 		}
 	}
 
@@ -73,28 +91,46 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 		//   Pass B: hoist function signatures (so interfaces are available for
 		//           parameter type resolution).
 		//   Pass C: visit remaining body statements.
-		c.preprocessNamespaceTypes(node.Body, nsType)
-		c.hoistNamespaceFunctions(node.Body, bodyEnv)
-
-		for _, stmt := range node.Body.Statements {
-			if stmt == nil {
-				continue
-			}
-			c.checkNamespaceBodyStatement(stmt, nsType)
+		// While the top-level passes run, the body's value statements wait
+		// until Pass 2.5: they may reference top-level functions, variables and
+		// classes that are only declared by Pass 2. The queue slot is reserved
+		// first so an enclosing namespace's body runs before its nested ones.
+		slot := -1
+		if c.deferMethodBodies && c.blockDepth == 0 && c.functionNestingDepth == 0 {
+			slot = len(c.deferredMethodBodies)
+			c.deferredMethodBodies = append(c.deferredMethodBodies, deferredMethodBodyCheck{})
 		}
-	}
+		c.preprocessNamespaceTypes(node.Body, nsType)
+		c.hoistNamespaceFunctions(node.Body, bodyEnv, nsType)
 
-	// 4. Report pending overload signatures with no implementation (TS2391),
-	// matching how checkBlockStatement validates block scopes. Skipped in
-	// `declare namespace` bodies, where bodiless function declarations are
-	// the norm in ambient contexts.
-	if !node.Declare {
-		for _, sigs := range bodyEnv.GetAllPendingOverloads() {
-			for _, sig := range sigs {
-				if sig.Name != nil {
-					c.addErrorWithCode(sig.Name, errors.TS2391, "Function implementation is missing or not immediately following the declaration.")
+		runBody := func() {
+			prevEnv := c.env
+			c.env = bodyEnv
+			// Exported values of earlier declarations of this namespace are
+			// visible by bare name in a merged body. (Done here, not before
+			// the body is queued: earlier bodies publish their exports when
+			// they run.)
+			for valueName, valueType := range nsType.ValueShape.Properties {
+				if _, isNs := nsType.TypeMembers[valueName].(*types.NamespaceType); isNs {
+					continue
 				}
+				bodyEnv.Define(valueName, valueType, false)
 			}
+			c.hoistVarNames(bodyEnv, node.Body.Statements)
+			c.preRegisterBlockScoped(node.Body.Statements)
+			for _, stmt := range node.Body.Statements {
+				if stmt == nil {
+					continue
+				}
+				c.checkNamespaceBodyStatement(stmt, nsType)
+			}
+			c.checkNamespaceOverloads(node, bodyEnv)
+			c.env = prevEnv
+		}
+		if slot >= 0 {
+			c.deferredMethodBodies[slot] = deferredMethodBodyCheck{env: bodyEnv, run: runBody}
+		} else {
+			runBody()
 		}
 	}
 
@@ -133,7 +169,32 @@ func (c *Checker) preprocessNamespaceTypes(body *parser.BlockStatement, nsType *
 					nsType.TypeMembers[n.Name.Value] = t
 				}
 			}
+		case *parser.ExpressionStatement:
+			// Enums are declarations too: they must be known before the
+			// namespace's value statements (and outside type annotations like
+			// `A.Color`) are checked.
+			if enum, ok := n.Expression.(*parser.EnumDeclaration); ok && enum != nil && enum.Name != nil {
+				if exported {
+					// An exported enum merges with the same-named exported enum
+					// of an earlier body of this namespace.
+					if prev, ok := nsType.ValueShape.Properties[enum.Name.Value].(*types.EnumType); ok {
+						if _, local := c.env.symbols[enum.Name.Value]; !local {
+							c.env.Define(enum.Name.Value, prev, false)
+						}
+					}
+				}
+				c.checkEnumDeclaration(enum)
+				if exported {
+					if t, _, found := c.env.Resolve(enum.Name.Value); found {
+						nsType.ValueShape.Properties[enum.Name.Value] = t
+					}
+					if t, found := c.env.ResolveType(enum.Name.Value); found {
+						nsType.TypeMembers[enum.Name.Value] = t
+					}
+				}
+			}
 		case *parser.NamespaceDeclaration:
+			c.nsDeclExported = exported
 			c.checkNamespaceDeclaration(n)
 			if (exported || n.IsExported) && n.Name != nil {
 				if childType, found := c.env.ResolveType(n.Name.Value); found {
@@ -147,7 +208,7 @@ func (c *Checker) preprocessNamespaceTypes(body *parser.BlockStatement, nsType *
 	}
 	for _, stmt := range body.Statements {
 		switch s := stmt.(type) {
-		case *parser.InterfaceDeclaration, *parser.TypeAliasStatement, *parser.ClassDeclaration, *parser.NamespaceDeclaration:
+		case *parser.InterfaceDeclaration, *parser.TypeAliasStatement, *parser.ClassDeclaration, *parser.NamespaceDeclaration, *parser.ExpressionStatement:
 			process(s, false)
 		case *parser.ExportNamedDeclaration:
 			if s.Declaration != nil {
@@ -162,8 +223,8 @@ func (c *Checker) preprocessNamespaceTypes(body *parser.BlockStatement, nsType *
 // declarations. Unlike block hoisting, we also pick up `export function f(){}`
 // (which the parser wraps in ExportNamedDeclaration and therefore does not
 // place into HoistedDeclarations).
-func (c *Checker) hoistNamespaceFunctions(body *parser.BlockStatement, env *Environment) {
-	hoistFunc := func(funcLit *parser.FunctionLiteral) {
+func (c *Checker) hoistNamespaceFunctions(body *parser.BlockStatement, env *Environment, nsType *types.NamespaceType) {
+	hoistFunc := func(funcLit *parser.FunctionLiteral, exported bool) {
 		if funcLit == nil || funcLit.Name == nil {
 			return
 		}
@@ -176,12 +237,17 @@ func (c *Checker) hoistNamespaceFunctions(body *parser.BlockStatement, env *Envi
 		funcObjectType := types.NewFunctionType(funcSig)
 		env.Define(fname, funcObjectType, false)
 		funcLit.SetComputedType(funcObjectType)
+		// Exported functions are visible through the namespace right away, even
+		// while the body's value statements are still waiting to be checked.
+		if exported && nsType != nil {
+			nsType.ValueShape.Properties[fname] = funcObjectType
+		}
 	}
 
 	if body.HoistedDeclarations != nil {
 		for _, hoistedNode := range body.HoistedDeclarations {
 			if funcLit, ok := hoistedNode.(*parser.FunctionLiteral); ok {
-				hoistFunc(funcLit)
+				hoistFunc(funcLit, false)
 			}
 		}
 	}
@@ -197,7 +263,7 @@ func (c *Checker) hoistNamespaceFunctions(body *parser.BlockStatement, env *Envi
 			continue
 		}
 		if funcLit, ok := exprStmt.Expression.(*parser.FunctionLiteral); ok {
-			hoistFunc(funcLit)
+			hoistFunc(funcLit, true)
 		}
 	}
 }
@@ -244,16 +310,7 @@ func (c *Checker) checkNamespaceBodyStatement(stmt parser.Statement, nsType *typ
 			return
 		}
 		if enum, ok := n.Expression.(*parser.EnumDeclaration); ok && enum.Name != nil {
-			c.checkEnumDeclaration(enum)
-			if exported {
-				if t, _, found := c.env.Resolve(enum.Name.Value); found {
-					nsType.ValueShape.Properties[enum.Name.Value] = t
-				}
-				if t, found := c.env.ResolveType(enum.Name.Value); found {
-					nsType.TypeMembers[enum.Name.Value] = t
-				}
-			}
-			return
+			return // already processed in preprocessNamespaceTypes
 		}
 		c.visit(n)
 
@@ -273,6 +330,23 @@ func (c *Checker) copyBindingTypes(names []string, nsType *types.NamespaceType) 
 	for _, name := range names {
 		if t, _, found := c.env.Resolve(name); found {
 			nsType.ValueShape.Properties[name] = t
+		}
+	}
+}
+
+// checkNamespaceOverloads reports pending overload signatures with no
+// implementation (TS2391), matching how checkBlockStatement validates block
+// scopes. Skipped in `declare namespace` bodies, where bodiless function
+// declarations are the norm in ambient contexts.
+func (c *Checker) checkNamespaceOverloads(node *parser.NamespaceDeclaration, bodyEnv *Environment) {
+	if node.Declare {
+		return
+	}
+	for _, sigs := range bodyEnv.GetAllPendingOverloads() {
+		for _, sig := range sigs {
+			if sig.Name != nil {
+				c.addErrorWithCode(sig.Name, errors.TS2391, "Function implementation is missing or not immediately following the declaration.")
+			}
 		}
 	}
 }

@@ -35,7 +35,14 @@ type scopedName struct {
 }
 
 func (p *Parser) redeclarationError(n scopedName) {
+	before := len(p.errors)
 	p.addError(n.tok, fmt.Sprintf("SyntaxError: Identifier '%s' has already been declared", n.name))
+	if len(p.errors) > before {
+		if se, ok := p.errors[len(p.errors)-1].(*errors.SyntaxError); ok {
+			// finishBinding re-labels these with TypeScript's code and wording.
+			p.redeclarationErrors = append(p.redeclarationErrors, se)
+		}
+	}
 }
 
 // isStrictContext reports whether the code being parsed is strict: a "use
@@ -602,7 +609,7 @@ func (p *Parser) pushLabel(tok *lexer.Token, name string) {
 	}
 	for _, outer := range p.labels {
 		if outer.name == name {
-			p.addError(tok, fmt.Sprintf("SyntaxError: Label '%s' has already been declared", name))
+			p.addErrorWithCode(tok, "TS1114", fmt.Sprintf("Duplicate label '%s'.", name))
 			break
 		}
 	}
