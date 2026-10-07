@@ -1443,7 +1443,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 
 			// null/undefined members are reported once (TS18047/18048/...) and
 			// the access is then checked against what remains.
-			unionMembers := obj.Types
+			var unionMembers []types.Type
 			if remaining, ok := c.stripNullishObject(node.Object, obj); !ok {
 				unionMembers = nil
 				resultType = types.Any

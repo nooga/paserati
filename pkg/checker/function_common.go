@@ -565,7 +565,7 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 				if _, ok := targetType.(*types.TypePredicateType); ok {
 					targetType = types.Boolean
 				}
-				bodyExpr, _ := exprBody.(parser.Expression)
+				bodyExpr := exprBody
 				if bodyExpr != nil && !c.assignableToFresh(bodyExpr, sourceType, targetType) {
 					c.reportNotAssignable(exprBody, bodyExpr, sourceType, targetType, headAssign)
 				} else if bodyExpr == nil && !c.isAssignableWithExpansion(sourceType, targetType) {

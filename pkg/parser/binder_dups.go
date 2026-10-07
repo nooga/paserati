@@ -141,9 +141,9 @@ type binder struct {
 	// Names introduced by any type-level declaration, in any scope.
 	typeNames map[string]bool
 	diags     []bindDiag
-	seen  map[string]bool
-	syms  []*bindSymbol
-	src   interface{}
+	seen      map[string]bool
+	syms      []*bindSymbol
+	src       interface{}
 }
 
 func (b *binder) report(tok *lexer.Token, code, msg string) {

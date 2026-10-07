@@ -3175,7 +3175,6 @@ func (p *Parser) parseFunctionParameters(allowParameterProperties bool) ([]*Para
 					p.nextToken()
 					return parameters, restParam, nil
 				}
-				first = false
 				goto nextParam
 			}
 			if !p.expectPeek(lexer.RPAREN) {

@@ -840,31 +840,31 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 	chunk.Source = enclosingCompiler.chunk.Source
 	chunk.ModulePath = enclosingCompiler.chunk.ModulePath
 	return &Compiler{
-		chunk:                    chunk,
-		regAlloc:                 NewRegisterAllocator(),
-		currentSymbolTable:       NewEnclosedSymbolTable(enclosingCompiler.currentSymbolTable),
-		enclosing:                enclosingCompiler,
-		freeSymbols:              []*Symbol{},
-		errors:                   []errors.PaseratiError{},
-		loopContextStack:         make([]*LoopContext, 0),
-		compilingFuncName:        "",
-		typeChecker:              enclosingCompiler.typeChecker, // Inherit checker from enclosing
-		stats:                    enclosingCompiler.stats,
-		constantCache:            make(map[uint16]Register),                 // Each function has its own constant cache
-		moduleBindings:           enclosingCompiler.moduleBindings,          // Inherit module bindings
-		moduleLoader:             enclosingCompiler.moduleLoader,            // Inherit module loader
+		chunk:                      chunk,
+		regAlloc:                   NewRegisterAllocator(),
+		currentSymbolTable:         NewEnclosedSymbolTable(enclosingCompiler.currentSymbolTable),
+		enclosing:                  enclosingCompiler,
+		freeSymbols:                []*Symbol{},
+		errors:                     []errors.PaseratiError{},
+		loopContextStack:           make([]*LoopContext, 0),
+		compilingFuncName:          "",
+		typeChecker:                enclosingCompiler.typeChecker, // Inherit checker from enclosing
+		stats:                      enclosingCompiler.stats,
+		constantCache:              make(map[uint16]Register),                    // Each function has its own constant cache
+		moduleBindings:             enclosingCompiler.moduleBindings,             // Inherit module bindings
+		moduleLoader:               enclosingCompiler.moduleLoader,               // Inherit module loader
 		compilingSuperClassName:    enclosingCompiler.compilingSuperClassName,    // Inherit super class context
 		pendingFieldInitStatements: enclosingCompiler.pendingFieldInitStatements, // Inherit pending field inits (e.g. for super() inside a nested arrow function)
-		finallyContextStack:      make([]*FinallyContext, 0),                // Each function has its own finally context stack
-		withBlockDepth:           enclosingCompiler.withBlockDepth,          // Inherit for unresolved var lookups in closure's scope chain
-		currentFuncWithDepth:     0,                                         // NOT inherited - function's own locals shadow with-object
-		parameterNames:           make(map[string]bool),                     // Track parameter names for var hoisting
-		currentDefaultParamIndex: -1,                                        // Not in default param scope initially
-		parameterList:            nil,                                       // Will be set when compiling function parameters
-		scopeBoundary:            enclosingCompiler.currentSymbolTable,      // Mark where parent's scope starts
-		allLocalNames:            make(map[Register]string),                 // Track all local names for ScopeDescriptor
-		isClassFieldInitializer:  enclosingCompiler.isClassFieldInitializer, // Inherit field initializer context for nested functions
-		newTargetAvailable:       true,                                      // Function code; arrow compilers override with the enclosing value
+		finallyContextStack:        make([]*FinallyContext, 0),                   // Each function has its own finally context stack
+		withBlockDepth:             enclosingCompiler.withBlockDepth,             // Inherit for unresolved var lookups in closure's scope chain
+		currentFuncWithDepth:       0,                                            // NOT inherited - function's own locals shadow with-object
+		parameterNames:             make(map[string]bool),                        // Track parameter names for var hoisting
+		currentDefaultParamIndex:   -1,                                           // Not in default param scope initially
+		parameterList:              nil,                                          // Will be set when compiling function parameters
+		scopeBoundary:              enclosingCompiler.currentSymbolTable,         // Mark where parent's scope starts
+		allLocalNames:              make(map[Register]string),                    // Track all local names for ScopeDescriptor
+		isClassFieldInitializer:    enclosingCompiler.isClassFieldInitializer,    // Inherit field initializer context for nested functions
+		newTargetAvailable:         true,                                         // Function code; arrow compilers override with the enclosing value
 		// Inherit private field brand context - methods need to use the class's brand ID
 		// and also need the brand stack to look up fields from enclosing classes
 		currentPrivateBrand:     enclosingCompiler.currentPrivateBrand,
@@ -3167,7 +3167,7 @@ func (c *Compiler) compileShorthandMethod(node *parser.ShorthandMethod, nameHint
 	}
 	funcValue := vm.NewFunction(arity, length, len(freeSymbols), int(regSize), node.RestParameter != nil, funcName, functionChunk, false, false, false, functionCompiler.hasLocalCaptures) // isGenerator=false, isAsync=false, isArrowFunction=false
 	funcValue.AsFunction().SourceText = c.sourceTextOf(node)
-	funcValue.AsFunction().NumRegisterParams = registerParamCount                                                                                                                        // paserati#467
+	funcValue.AsFunction().NumRegisterParams = registerParamCount // paserati#467
 	constIdx := c.chunk.AddConstant(funcValue)
 
 	return constIdx, freeSymbols, nil

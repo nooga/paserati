@@ -1,8 +1,8 @@
 package types
 
 import (
-	"sort"
 	"fmt"
+	"sort"
 	"strings"
 )
 
