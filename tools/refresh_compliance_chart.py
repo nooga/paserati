@@ -212,7 +212,7 @@ def render_svg(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: Sui
 def readme_block(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: Suite) -> str:
     version = ts_strict.version or ts_loose.version or "unknown"
     return f"""<!-- compliance:begin -->
-![Compliance snapshot](docs/compliance.svg)
+![Conformance snapshot](docs/compliance.svg)
 
 | Suite | Passed | Failed | Skipped | Timeouts | Pass rate |
 | :-- | --: | --: | --: | --: | --: |
@@ -222,7 +222,7 @@ def readme_block(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: S
 | TypeScript {version} conformance (loose) | {ts_loose.passed:,}/{ts_loose.total:,} | {ts_loose.failed:,} | {ts_loose.skipped:,} | {ts_loose.timeout:,} | {ts_loose.pass_rate:.1f}% |
 <!-- compliance:end -->
 
-TypeScript figures cover every test in TypeScript {version}'s `tests/cases/conformance`, one entry per compiler-option variant the test declares. `exact` counts a test as passed only when Paserati reports the same diagnostics as `tsc`: the same TypeScript error codes on the same lines, nothing missing and nothing extra. `loose` only requires that we raised *some* error where one was expected, so it overcounts conformance. Skipped tests (multi-file and `.tsx`, not yet supported by the runner) count against the pass rate. Treat exact as the honest number."""
+The TypeScript numbers cover every test in TypeScript {version}'s `tests/cases/conformance`. A test that declares several compiler-option variants counts once per variant. A test passes `exact` when Paserati reports the same error codes on the same lines as `tsc`, with nothing missing and nothing extra. `loose` only asks that we raised some error where `tsc` raised one, so it flatters us. The runner can't do multi-file or `.tsx` tests yet, and those skips count as failures. Exact is the number to trust."""
 
 
 def update_readme(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: Suite) -> None:
@@ -231,7 +231,7 @@ def update_readme(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: 
 	block = readme_block(language, builtins, ts_strict, ts_loose)
 	pattern = re.compile(
 		r"<!-- compliance:begin -->.*?<!-- compliance:end -->"
-		r"(\n\n(`strict error codes`|TypeScript figures cover).*?honest number\.)?",
+		r"(\n\n(`strict error codes`|TypeScript figures cover|The TypeScript numbers cover).*?(honest number|number to trust)\.)?",
 		re.S,
 	)
 	if not pattern.search(text):
