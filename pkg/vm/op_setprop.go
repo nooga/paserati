@@ -247,22 +247,20 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 			if globalIdx, exists := vm.heap.nameToIndex[propName]; exists {
 				// Check if the property is writable before updating
 				// Global constants like undefined, NaN, Infinity are non-writable
-				for _, f := range po.shape.fields {
-					if f.keyKind == KeyKindString && f.name == propName {
-						if !f.writable {
-							// Property is non-writable
-							// In strict mode, throw TypeError; in non-strict mode, silently fail
-							if vm.IsInStrictMode() {
-								err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
-								if excErr, ok := err.(ExceptionError); ok {
-									vm.throwException(excErr.GetExceptionValue())
-									return false, InterpretRuntimeError, Undefined
-								}
+				if i := po.shape.lookupStringField(propName); i >= 0 {
+					f := po.shape.fields[i]
+					if !f.writable {
+						// Property is non-writable
+						// In strict mode, throw TypeError; in non-strict mode, silently fail
+						if vm.IsInStrictMode() {
+							err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
+							if excErr, ok := err.(ExceptionError); ok {
+								vm.throwException(excErr.GetExceptionValue())
+								return false, InterpretRuntimeError, Undefined
 							}
-							// Non-strict mode: silently succeed without modifying
-							return true, InterpretOK, *valueToSet
 						}
-						break
+						// Non-strict mode: silently succeed without modifying
+						return true, InterpretOK, *valueToSet
 					}
 				}
 				// Update existing global in heap AND the PlainObject
@@ -652,12 +650,10 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		// Per ECMAScript 10.1.9 OrdinarySet: check receiver's own property first.
 		// If receiver has an own DATA property, skip prototype accessor walk entirely.
 		hasOwnDataProperty := false
-		for _, f := range po.shape.fields {
-			if f.keyKind == KeyKindString && f.name == propName {
-				if !f.isAccessor {
-					hasOwnDataProperty = true
-				}
-				break
+		if i := po.shape.lookupStringField(propName); i >= 0 {
+			f := po.shape.fields[i]
+			if !f.isAccessor {
+				hasOwnDataProperty = true
 			}
 		}
 
@@ -736,23 +732,21 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 
 		// Check if property exists on object or prototype and is non-writable
 		propertyExists := false
-		for _, f := range po.shape.fields {
-			if f.keyKind == KeyKindString && f.name == propName {
-				propertyExists = true
-				if !f.writable {
-					// Property exists but is not writable
-					// In strict mode, throw TypeError; in non-strict mode, silently fail
-					if vm.IsInStrictMode() {
-						err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
-						if excErr, ok := err.(ExceptionError); ok {
-							vm.throwException(excErr.GetExceptionValue())
-							return false, InterpretRuntimeError, Undefined
-						}
+		if i := po.shape.lookupStringField(propName); i >= 0 {
+			f := po.shape.fields[i]
+			propertyExists = true
+			if !f.writable {
+				// Property exists but is not writable
+				// In strict mode, throw TypeError; in non-strict mode, silently fail
+				if vm.IsInStrictMode() {
+					err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
+					if excErr, ok := err.(ExceptionError); ok {
+						vm.throwException(excErr.GetExceptionValue())
+						return false, InterpretRuntimeError, Undefined
 					}
-					// Non-strict mode: silently succeed without modifying
-					return true, InterpretOK, *valueToSet
 				}
-				break
+				// Non-strict mode: silently succeed without modifying
+				return true, InterpretOK, *valueToSet
 			}
 		}
 
@@ -766,23 +760,21 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 					break
 				}
 				// Check if property exists on this prototype
-				for _, f := range protoObj.shape.fields {
-					if f.keyKind == KeyKindString && f.name == propName {
-						// Found property on prototype
-						if !f.isAccessor && !f.writable {
-							// Non-writable data property on prototype - cannot shadow it
-							// In strict mode, throw TypeError; in non-strict mode, silently fail
-							if vm.IsInStrictMode() {
-								err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
-								if excErr, ok := err.(ExceptionError); ok {
-									vm.throwException(excErr.GetExceptionValue())
-									return false, InterpretRuntimeError, Undefined
-								}
+				if i := protoObj.shape.lookupStringField(propName); i >= 0 {
+					f := protoObj.shape.fields[i]
+					// Found property on prototype
+					if !f.isAccessor && !f.writable {
+						// Non-writable data property on prototype - cannot shadow it
+						// In strict mode, throw TypeError; in non-strict mode, silently fail
+						if vm.IsInStrictMode() {
+							err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
+							if excErr, ok := err.(ExceptionError); ok {
+								vm.throwException(excErr.GetExceptionValue())
+								return false, InterpretRuntimeError, Undefined
 							}
-							// Non-strict mode: silently succeed without modifying
-							return true, InterpretOK, *valueToSet
 						}
-						break
+						// Non-strict mode: silently succeed without modifying
+						return true, InterpretOK, *valueToSet
 					}
 				}
 				protoChain = protoObj.GetPrototype()
@@ -806,11 +798,9 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 
 		// Update cache if shape didn't change (existing property)
 		// or if shape changed (new property added)
-		for _, field := range po.shape.fields {
-			if field.name == propName {
-				cache.updateCache(po.shape, propName, field.offset, field.isAccessor, field.writable)
-				break
-			}
+		if i := po.shape.lookupStringField(propName); i >= 0 {
+			field := po.shape.fields[i]
+			cache.updateCache(po.shape, propName, field.offset, field.isAccessor, field.writable)
 		}
 
 		// If shape changed significantly, we might want to invalidate related caches
@@ -1038,18 +1028,16 @@ func (vm *VM) opSetProp(ip int, objVal *Value, propName string, valueToSet *Valu
 		po := AsPlainObject(*objVal)
 		// Check if property exists
 		propertyExists := false
-		for _, f := range po.shape.fields {
-			if f.keyKind == KeyKindString && f.name == propName {
-				propertyExists = true
-				if !f.writable {
-					// Property exists but is not writable - throw TypeError
-					err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
-					if excErr, ok := err.(ExceptionError); ok {
-						vm.throwException(excErr.GetExceptionValue())
-						return false, InterpretRuntimeError, Undefined
-					}
+		if i := po.shape.lookupStringField(propName); i >= 0 {
+			f := po.shape.fields[i]
+			propertyExists = true
+			if !f.writable {
+				// Property exists but is not writable - throw TypeError
+				err := vm.NewTypeError(fmt.Sprintf("Cannot assign to read only property '%s'", propName))
+				if excErr, ok := err.(ExceptionError); ok {
+					vm.throwException(excErr.GetExceptionValue())
+					return false, InterpretRuntimeError, Undefined
 				}
-				break
 			}
 		}
 		// Check if we're trying to add a new property to a non-extensible object

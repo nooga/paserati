@@ -41,19 +41,18 @@ func (vm *VM) handleOpDefineDataProperty(code []byte, ip *int, constants []Value
 
 		// Fast path: if existing property is a data property (or missing), use SetOwn which uses
 		// transitions and shares shapes across instances.
-		for _, f := range plainObj.shape.fields {
-			if f.keyKind == KeyKindString && f.name == propertyName {
-				if !f.isAccessor {
-					plainObj.SetOwn(propertyName, valueToSet)
-					return InterpretOK, Undefined
-				}
-				// Accessor present: must redefine as a data property.
-				writable := true
-				enumerable := true
-				configurable := true
-				plainObj.DefineOwnProperty(propertyName, valueToSet, &writable, &enumerable, &configurable)
+		if i := plainObj.shape.lookupStringField(propertyName); i >= 0 {
+			f := plainObj.shape.fields[i]
+			if !f.isAccessor {
+				plainObj.SetOwn(propertyName, valueToSet)
 				return InterpretOK, Undefined
 			}
+			// Accessor present: must redefine as a data property.
+			writable := true
+			enumerable := true
+			configurable := true
+			plainObj.DefineOwnProperty(propertyName, valueToSet, &writable, &enumerable, &configurable)
+			return InterpretOK, Undefined
 		}
 
 		// Missing property: SetOwn is correct (w/e/c all true) and uses transitions.
@@ -95,19 +94,18 @@ func (vm *VM) handleOpDefineComputedDataProperty(code []byte, ip *int, registers
 		}
 
 		// Fast path: if existing property is a data property, use SetOwn for shape reuse
-		for _, f := range plainObj.shape.fields {
-			if f.keyKind == KeyKindString && f.name == propertyName {
-				if !f.isAccessor {
-					plainObj.SetOwn(propertyName, valueToSet)
-					return InterpretOK, Undefined
-				}
-				// Accessor present: must redefine as a data property
-				writable := true
-				enumerable := true
-				configurable := true
-				plainObj.DefineOwnProperty(propertyName, valueToSet, &writable, &enumerable, &configurable)
+		if i := plainObj.shape.lookupStringField(propertyName); i >= 0 {
+			f := plainObj.shape.fields[i]
+			if !f.isAccessor {
+				plainObj.SetOwn(propertyName, valueToSet)
 				return InterpretOK, Undefined
 			}
+			// Accessor present: must redefine as a data property
+			writable := true
+			enumerable := true
+			configurable := true
+			plainObj.DefineOwnProperty(propertyName, valueToSet, &writable, &enumerable, &configurable)
+			return InterpretOK, Undefined
 		}
 
 		// Missing property: SetOwn creates w/e/c all true
