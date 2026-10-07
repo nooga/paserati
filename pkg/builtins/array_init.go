@@ -2,6 +2,8 @@ package builtins
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/nooga/paserati/pkg/wtf8"
 
 	"github.com/nooga/paserati/pkg/types"
@@ -706,15 +708,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		result := joinElementToString(vmInstance, first)
+		// Builder, not `+=`: repeated concatenation copied the accumulated
+		// string on every element, making join quadratic (#595).
+		var sb strings.Builder
+		sb.WriteString(joinElementToString(vmInstance, first))
 		for i := 1; i < length; i++ {
 			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
 			if err != nil {
 				return vm.Undefined, err
 			}
-			result += separator + joinElementToString(vmInstance, v)
+			sb.WriteString(separator)
+			sb.WriteString(joinElementToString(vmInstance, v))
 		}
-		return vm.NewString(wtf8.JoinSurrogatePairs(result)), nil
+		return vm.NewString(wtf8.JoinSurrogatePairs(sb.String())), nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("toString", vm.NewNativeFunction(0, false, "toString", func(args []vm.Value) (vm.Value, error) {
@@ -734,15 +740,19 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		result := joinElementToString(vmInstance, first)
+		// Builder, not `+=`: repeated concatenation copied the accumulated
+		// string on every element, making join quadratic (#595).
+		var sb strings.Builder
+		sb.WriteString(joinElementToString(vmInstance, first))
 		for i := 1; i < length; i++ {
 			v, _, err := arrayLikeGet(vmInstance, thisVal, i)
 			if err != nil {
 				return vm.Undefined, err
 			}
-			result += "," + joinElementToString(vmInstance, v)
+			sb.WriteString(",")
+			sb.WriteString(joinElementToString(vmInstance, v))
 		}
-		return vm.NewString(wtf8.JoinSurrogatePairs(result)), nil
+		return vm.NewString(wtf8.JoinSurrogatePairs(sb.String())), nil
 	}))
 
 	arrayProto.SetOwnNonEnumerable("reverse", vm.NewNativeFunction(0, false, "reverse", func(args []vm.Value) (vm.Value, error) {
