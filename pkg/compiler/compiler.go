@@ -546,6 +546,15 @@ type Compiler struct {
 	// --- Decorator Support ---
 	// Pre-evaluated decorators for the current class being compiled
 	currentClassDecorators []*decoratorInfo
+	// currentInstanceInitializers names the hidden binding holding the
+	// initializers non-static method decorators add (see
+	// RunInitializersStatement); empty when the class being compiled has none.
+	currentInstanceInitializers string
+	// currentStaticInitializerThis holds the class constructor while its
+	// static members are set up (inStaticMemberSetup), the receiver of static
+	// method decorators' initializers.
+	currentStaticInitializerThis Register
+	inStaticMemberSetup          bool
 }
 
 // NewCompiler creates a new *top-level* Compiler.
@@ -2395,6 +2404,20 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 		return c.compileWithStatement(node, hint)
 
 	// --- Module Statements ---
+	case *parser.RunInitializersStatement:
+		arrReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(arrReg)
+		if _, err := c.compileNode(node.Initializers, arrReg); err != nil {
+			return BadRegister, err
+		}
+		thisReg := c.regAlloc.Alloc()
+		defer c.regAlloc.Free(thisReg)
+		if _, err := c.compileNode(&parser.ThisExpression{Token: node.Token}, thisReg); err != nil {
+			return BadRegister, err
+		}
+		c.emitRunInitializers(arrReg, thisReg, node.Token.Line)
+		return BadRegister, nil
+
 	case *parser.ImportDeclaration:
 		return c.compileImportDeclaration(node, hint)
 

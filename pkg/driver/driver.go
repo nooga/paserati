@@ -504,12 +504,12 @@ func (p *Paserati) EvalCode(code string, inheritStrict bool) (vm.Value, []error)
 // while var declarations go to the global environment.
 // Per ECMAScript spec, indirect eval does NOT inherit strict mode from caller.
 func (p *Paserati) IndirectEvalCode(code string) (vm.Value, []error) {
-	// Parse the source code
-	// Per ECMAScript spec, indirect eval is always outside method context,
-	// so super property access is always a SyntaxError.
+	// Indirect eval runs outside any method, so `super` at its top level is
+	// a SyntaxError - which the parser's usual context tracking already
+	// reports. A class method inside the eval'd code may still use it (#612),
+	// so don't ban `super` wholesale.
 	lx := lexer.NewLexer(code)
 	ps := parser.NewParser(lx)
-	ps.SetDisallowSuper(true)
 	// Per ECMA-262 19.2.1.1 PerformEval, eval always parses with the Script
 	// goal - reject import/export/import.meta and top-level await.
 	ps.SetDisallowModuleSyntax(true)
