@@ -144,7 +144,14 @@ func (p *Parser) checkClassBodyEarlyErrors(body *ClassBody, scope *privateNameSc
 		switch {
 		case !m.IsStatic && name == "constructor":
 			if special {
-				p.addError(m.Token, "Class constructor may not be an accessor, generator or async method")
+				switch {
+				case m.Kind == "getter" || m.Kind == "setter":
+					p.addErrorWithCode(m.Token, "TS1341", "Class constructor may not be an accessor.")
+				case m.Value != nil && m.Value.IsGenerator:
+					p.addErrorWithCode(m.Token, "TS1368", "Class constructor may not be a generator.")
+				default:
+					p.addErrorWithCode(m.Token, "TS1089", "'async' modifier cannot appear on a constructor declaration.")
+				}
 			} else if m.Value != nil && m.Value.Body != nil {
 				constructors++
 				if constructors > 1 {

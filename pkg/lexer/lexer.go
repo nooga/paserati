@@ -79,6 +79,23 @@ type Token struct {
 	Column            int    // 1-based column number (rune index) where the token starts
 	StartPos          int    // 0-based byte offset where the token starts
 	EndPos            int    // 0-based byte offset after the token ends
+
+	// Diags are scanner diagnostics (bad escapes, unterminated strings, ...)
+	// the parser reports when the token becomes current, like tsc's scanner
+	// errors. The token itself is still produced so scanning can continue.
+	Diags []TokenDiag
+	// TemplateDiags are the escape diagnostics of a template string. They apply
+	// only to untagged templates (a tagged template tolerates invalid escapes),
+	// so the parser reports them from the template parser, not on advance.
+	TemplateDiags []TokenDiag
+}
+
+// TokenDiag is a scanner diagnostic located inside (or at the end of) a token.
+type TokenDiag struct {
+	Line, Column int
+	StartPos     int    // byte offset of the error
+	Code         string // TypeScript diagnostic code, e.g. "TS1125"
+	Msg          string
 }
 
 // --- Token Types ---
@@ -378,6 +395,8 @@ type Lexer struct {
 	forceRegexContext bool // when true, next '/' is always treated as regex start
 
 	stringLegacyOctal bool // set by readString: the literal had a legacy octal or \8/\9 escape
+
+	diags []TokenDiag // scanner diagnostics collected for the token being scanned
 }
 
 // CurrentPosition returns the lexer's current byte position in the input.
@@ -494,6 +513,14 @@ func (l *Lexer) newToken(tokenType TokenType, literal string) Token {
 		EndPos:   l.position + len(literal),
 	}
 }
+
+// HasPushedToken reports whether a token is already waiting in the pushback buffer.
+func (l *Lexer) HasPushedToken() bool { return l.pushedToken != nil }
+
+// PushBackToken makes the next NextToken call return tok (the parser uses this to
+// un-consume a token when it recovers from a missing expression). The pushback
+// buffer must be empty.
+func (l *Lexer) PushBackToken(tok Token) { l.pushedToken = &tok }
 
 // SplitRightShiftToken converts a >> token into > and pushes the second > back
 // This is used for nested generics like Array<Array<T>>
@@ -1452,23 +1479,15 @@ func (l *Lexer) NextToken() Token {
 		l.readChar()
 		tok = Token{Type: RBRACKET, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 	case '"': // Double quoted string
-		literal, hasEscape, ok := l.readString('"')
+		l.diags = nil
+		literal, hasEscape, _ := l.readString('"')
 		endPos := l.position // readString advances past the closing quote if successful
-		if !ok {
-			// Determine if it was unterminated or invalid escape
-			// For now, use a generic message. l.position is where the error occurred.
-			tok = Token{Type: ILLEGAL, Literal: "Invalid string literal", Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
-		} else {
-			tok = Token{Type: STRING, Literal: literal, HasEscape: hasEscape, LegacyOctal: l.stringLegacyOctal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
-		}
+		tok = Token{Type: STRING, Literal: literal, HasEscape: hasEscape, LegacyOctal: l.stringLegacyOctal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos, Diags: l.takeDiags()}
 	case '\'': // Single quoted string
-		literal, hasEscape, ok := l.readString('\'')
+		l.diags = nil
+		literal, hasEscape, _ := l.readString('\'')
 		endPos := l.position // readString advances past the closing quote if successful
-		if !ok {
-			tok = Token{Type: ILLEGAL, Literal: "Invalid string literal", Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
-		} else {
-			tok = Token{Type: STRING, Literal: literal, HasEscape: hasEscape, LegacyOctal: l.stringLegacyOctal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos}
-		}
+		tok = Token{Type: STRING, Literal: literal, HasEscape: hasEscape, LegacyOctal: l.stringLegacyOctal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: endPos, Diags: l.takeDiags()}
 	case '?':
 		peek := l.peekChar()
 		if peek == '?' { // Nullish Coalescing ?? or Assignment ??=
@@ -1800,6 +1819,7 @@ func (l *Lexer) readIdentifierWithUnicode() (string, bool) {
 // numberToken scans a numeric literal into a NUMBER or BIGINT token, or an
 // ILLEGAL token whose Literal is the error message.
 func (l *Lexer) numberToken(startLine, startCol, startPos int) Token {
+	l.diags = nil
 	literal, isBigInt, legacyOctal, errMsg := l.readNumber()
 	typ := NUMBER
 	switch {
@@ -1808,7 +1828,7 @@ func (l *Lexer) numberToken(startLine, startCol, startPos int) Token {
 	case isBigInt:
 		typ = BIGINT
 	}
-	return Token{Type: typ, Literal: literal, LegacyOctal: legacyOctal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
+	return Token{Type: typ, Literal: literal, LegacyOctal: legacyOctal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position, Diags: l.takeDiags()}
 }
 
 // readNumber scans a NumericLiteral (ECMAScript 12.9.3) starting at a digit,
@@ -1876,7 +1896,16 @@ func (l *Lexer) readNumber() (literal string, isBigInt bool, legacyOctal bool, e
 			return fail(badSeparator)
 		}
 		if n == 0 {
-			return fail("Digit expected")
+			// tsc reports the missing digit and still yields a numeric literal.
+			switch base {
+			case 16:
+				l.diagHere("TS1125", msgHexDigitExpected)
+			case 2:
+				l.diagHere("TS1177", "Binary digit expected.")
+			default:
+				l.diagHere("TS1178", "Octal digit expected.")
+			}
+			return "0", false, false, ""
 		}
 		if l.ch == 'n' {
 			l.readChar()
@@ -1937,7 +1966,8 @@ func (l *Lexer) readNumber() (literal string, isBigInt bool, legacyOctal bool, e
 			return fail(badSeparator)
 		}
 		if n == 0 {
-			return fail("Exponent must have at least one digit")
+			l.diagHere("TS1124", "Digit expected.")
+			return "0", false, false, ""
 		}
 	}
 
@@ -1973,6 +2003,126 @@ func (l *Lexer) finishNumber(startPos int, isBigInt, legacyOctal bool) (string, 
 	return l.input[startPos:l.position], isBigInt, legacyOctal, ""
 }
 
+
+// diagAtOffset records a scanner diagnostic at byte offset off, which must lie
+// on the current line at or after the current character.
+func (l *Lexer) diagAtOffset(off int, code, msg string) {
+	col := l.column + (off - l.position)
+	if col < 1 {
+		col = 1
+	}
+	l.diags = append(l.diags, TokenDiag{Line: l.line, Column: col, StartPos: off, Code: code, Msg: msg})
+}
+
+// diagHere records a scanner diagnostic at the current character.
+func (l *Lexer) diagHere(code, msg string) { l.diagAtOffset(l.position, code, msg) }
+
+// diagNext records a scanner diagnostic at the character after the current one.
+func (l *Lexer) diagNext(code, msg string) { l.diagAtOffset(l.readPosition, code, msg) }
+
+// takeDiags returns and clears the collected scanner diagnostics.
+func (l *Lexer) takeDiags() []TokenDiag {
+	d := l.diags
+	l.diags = nil
+	return d
+}
+
+func hexVal(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	default:
+		return int(c-'A') + 10
+	}
+}
+
+const (
+	msgHexDigitExpected  = "Hexadecimal digit expected."
+	msgUnterminatedUni   = "Unterminated Unicode escape sequence."
+	msgUnicodeOutOfRange = "An extended Unicode escape value must be between 0x0 and 0x10FFFF inclusive."
+)
+
+// readUnicodeBraceEscape scans the digits and closing brace of `\u{...}` per
+// tsc's scanExtendedUnicodeEscape. The current character is the '{'. It returns
+// the code point and whether the escape was valid; diagnostics go to l.diags.
+func (l *Lexer) readUnicodeBraceEscape() (rune, bool) {
+	valid := true
+	digitsStart := l.readPosition
+	n, v := 0, 0
+	for isHexDigit(l.peekChar()) {
+		l.readChar()
+		n++
+		if v <= 0x10FFFF {
+			v = v*16 + hexVal(l.ch)
+		}
+	}
+	if n == 0 {
+		l.diagNext("TS1125", msgHexDigitExpected)
+		valid = false
+	} else if v > 0x10FFFF {
+		l.diagAtOffset(digitsStart, "TS1198", msgUnicodeOutOfRange)
+		valid = false
+	}
+	switch {
+	case l.readPosition >= len(l.input):
+		l.diagNext("TS1126", "Unexpected end of text.")
+		valid = false
+	case l.peekChar() == '}':
+		l.readChar()
+	default:
+		l.diagNext("TS1199", msgUnterminatedUni)
+		valid = false
+	}
+	return rune(v), valid
+}
+
+// readHexEscapeDigits consumes up to count hex digits (for \uXXXX and \xXX)
+// and reports TS1125 at the first non-hex character. ok is false on error.
+func (l *Lexer) readHexEscapeDigits(count int) (val int, ok bool) {
+	for i := 0; i < count; i++ {
+		if !isHexDigit(l.peekChar()) {
+			l.diagNext("TS1125", msgHexDigitExpected)
+			return 0, false
+		}
+		l.readChar()
+		val = val*16 + hexVal(l.ch)
+	}
+	return val, true
+}
+
+func appendCodePoint(b *strings.Builder, cp int) {
+	if cp >= 0xD800 && cp <= 0xDFFF {
+		// WTF-8 encoding for lone surrogates
+		b.WriteByte(byte(0xE0 | ((cp >> 12) & 0x0F)))
+		b.WriteByte(byte(0x80 | ((cp >> 6) & 0x3F)))
+		b.WriteByte(byte(0x80 | (cp & 0x3F)))
+		return
+	}
+	b.WriteRune(rune(cp))
+}
+
+
+// diagOctalEscape reports tsc's TS1487 for the legacy octal escape whose first
+// digit is the current character; the offset reported is the backslash.
+func (l *Lexer) diagOctalEscape() {
+	start := l.position - 1
+	end := l.position + 1
+	maxMore := 2
+	if l.ch >= '4' {
+		maxMore = 1
+	}
+	for i := 0; i < maxMore && end < len(l.input) && l.input[end] >= '0' && l.input[end] <= '7'; i++ {
+		end++
+	}
+	v := 0
+	for _, c := range []byte(l.input[l.position:end]) {
+		v = v*8 + int(c-'0')
+	}
+	l.diagAtOffset(start, "TS1487", fmt.Sprintf("Octal escape sequences are not allowed. Use the syntax '\\x%02x'.", v))
+}
+
 // readString reads a string literal enclosed in the given quote character.
 // It handles basic escape sequences: \n, \t, \r, \\, and escaped quotes.
 // Returns the unescaped string content and a boolean indicating success.
@@ -2004,8 +2154,9 @@ func (l *Lexer) readString(quote byte) (string, bool, bool) {
 			return builder.String(), hasEscape, true
 		}
 		if l.isEOF() { // EOF - use isEOF() to distinguish from literal null bytes
-			// Unterminated string
-			return "", hasEscape, false
+			// Unterminated string: tsc still produces the string token
+			l.diagHere("TS1002", "Unterminated string literal.")
+			return builder.String(), hasEscape, true
 		}
 
 		if l.ch == '\\' { // Handle escape sequence
@@ -2084,89 +2235,26 @@ func (l *Lexer) readString(quote byte) (string, bool, bool) {
 			case 'u':
 				// Unicode escape sequence \uXXXX or \u{XXXX}
 				if l.peekChar() == '{' {
-					// \u{XXXX} format
 					l.readChar() // consume '{'
-					hexStr := ""
-					for l.peekChar() != '}' && l.peekChar() != 0 && len(hexStr) < 6 {
-						l.readChar()
-						if isHexDigit(l.ch) {
-							hexStr += charString(l.ch)
-						} else {
-							return "", hasEscape, false // Invalid hex digit
-						}
+					if cp, ok := l.readUnicodeBraceEscape(); ok {
+						appendCodePoint(&builder, int(cp))
 					}
-					if l.peekChar() == '}' {
-						l.readChar() // consume '}'
-						if codePoint, err := strconv.ParseInt(hexStr, 16, 32); err == nil && codePoint <= 0x10FFFF {
-							// Check if this is a lone surrogate (D800-DFFF)
-							if codePoint >= 0xD800 && codePoint <= 0xDFFF {
-								// WTF-8 encoding for surrogates (3 bytes: ED XX XX)
-								b1 := byte(0xE0 | ((codePoint >> 12) & 0x0F))
-								b2 := byte(0x80 | ((codePoint >> 6) & 0x3F))
-								b3 := byte(0x80 | (codePoint & 0x3F))
-								builder.WriteByte(b1)
-								builder.WriteByte(b2)
-								builder.WriteByte(b3)
-							} else {
-								builder.WriteRune(rune(codePoint))
-							}
-						} else {
-							return "", hasEscape, false // Invalid code point
-						}
-					} else {
-						return "", hasEscape, false // Unterminated \u{...}
-					}
-				} else {
-					// \uXXXX format
-					hexStr := ""
-					for i := 0; i < 4; i++ {
-						if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
-							l.readChar()
-							hexStr += charString(l.ch)
-						} else {
-							return "", hasEscape, false // Invalid or incomplete \uXXXX
-						}
-					}
-					if codePoint, err := strconv.ParseInt(hexStr, 16, 32); err == nil {
-						// Check if this is a lone surrogate (D800-DFFF)
-						if codePoint >= 0xD800 && codePoint <= 0xDFFF {
-							// WTF-8 encoding for surrogates (3 bytes: ED XX XX)
-							b1 := byte(0xE0 | ((codePoint >> 12) & 0x0F))
-							b2 := byte(0x80 | ((codePoint >> 6) & 0x3F))
-							b3 := byte(0x80 | (codePoint & 0x3F))
-							builder.WriteByte(b1)
-							builder.WriteByte(b2)
-							builder.WriteByte(b3)
-						} else {
-							builder.WriteRune(rune(codePoint))
-						}
-					} else {
-						return "", hasEscape, false // Invalid code point
-					}
+				} else if cp, ok := l.readHexEscapeDigits(4); ok {
+					appendCodePoint(&builder, cp)
 				}
 			case 'x':
-				// Hexadecimal escape sequence \xXX
-				hexStr := ""
-				for i := 0; i < 2; i++ {
-					if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
-						l.readChar()
-						hexStr += charString(l.ch)
-					} else {
-						return "", hasEscape, false // Invalid or incomplete \xXX
-					}
-				}
-				// Use ParseUint with 32 bits to handle full byte range (0x00-0xFF).
-				// \xXX names a *code point* (U+0000-U+00FF), not a raw byte - for
-				// 0x80-0xFF that needs a 2-byte UTF-8 encoding (WriteRune), not a
-				// single raw byte (WriteByte), which produces invalid UTF-8/WTF-8
-				// (a lone continuation-range byte). See paserati#425.
-				if codePoint, err := strconv.ParseUint(hexStr, 16, 32); err == nil && codePoint <= 255 {
-					builder.WriteRune(rune(codePoint))
-				} else {
-					return "", hasEscape, false // Invalid code point
+				// Hexadecimal escape sequence \xXX. \xXX names a *code point*
+				// (U+0000-U+00FF), which for 0x80-0xFF needs a 2-byte UTF-8
+				// encoding (see paserati#425).
+				if cp, ok := l.readHexEscapeDigits(2); ok {
+					builder.WriteRune(rune(cp))
 				}
 			case 0: // EOF after backslash
-				return "", hasEscape, false // Invalid escape sequence due to EOF
+				if l.isEOF() {
+					l.diagHere("TS1126", "Unexpected end of text.")
+				} else {
+					builder.WriteByte(0)
+				}
 			default:
 				// Identity escape sequence: In JavaScript (non-strict mode), unknown escape
 				// sequences like \A, \z, etc. are treated as the character itself.
@@ -2177,8 +2265,10 @@ func (l *Lexer) readString(quote byte) (string, bool, bool) {
 			// Regular character
 			// Check for unescaped newline within the string, which is often illegal
 			if l.ch == '\n' || l.ch == '\r' {
-				// Treat unescaped newline as termination error
-				return "", hasEscape, false
+				// An unescaped newline ends the (unterminated) string; tsc still
+				// produces the token and scanning resumes at the line break.
+				l.diagHere("TS1002", "Unterminated string literal.")
+				return builder.String(), hasEscape, true
 			}
 			builder.WriteByte(l.ch)
 		}
@@ -2942,6 +3032,7 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 	var cooked strings.Builder // TV (Template Value) - processed escape sequences
 	var raw strings.Builder    // TRV (Template Raw Value) - literal source text
 	hasInvalidEscape := false  // Track if we've seen an invalid escape sequence
+	l.diags = nil
 
 	for {
 		// Stop conditions - use isEOF() to distinguish from literal null bytes in source
@@ -2950,6 +3041,8 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 			l.inTemplate = false
 			l.braceDepth = 0
 			l.templateStack = nil
+			l.diags = nil
+			l.diagHere("TS1160", "Unterminated template literal.")
 			return Token{
 				Type:     ILLEGAL,
 				Literal:  "Unterminated template literal",
@@ -2957,6 +3050,7 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 				Column:   startCol,
 				StartPos: startPos,
 				EndPos:   l.position,
+				Diags:    l.takeDiags(),
 			}
 		}
 
@@ -2988,17 +3082,19 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 				cooked.WriteByte('`') // Escaped backtick
 			case '$':
 				cooked.WriteByte('$') // Escaped dollar sign
-			case '0':
-				// \0 is valid only if NOT followed by a digit (legacy octal)
-				if l.peekChar() >= '0' && l.peekChar() <= '9' {
-					// \0 followed by digit is invalid in template literals
-					hasInvalidEscape = true
-				} else {
+			case '0', '1', '2', '3', '4', '5', '6', '7':
+				// \0 is valid only if NOT followed by a digit; any other octal
+				// escape is invalid in a template (tsc: TS1487).
+				if l.ch == '0' && !(l.peekChar() >= '0' && l.peekChar() <= '9') {
 					cooked.WriteByte('\000') // Null character (U+0000)
+				} else {
+					hasInvalidEscape = true
+					l.diagOctalEscape()
 				}
-			case '1', '2', '3', '4', '5', '6', '7', '8', '9':
-				// Legacy octal escapes are invalid in template literals
+			case '8', '9':
+				// NonOctalDecimalEscapeSequence is invalid in a template (tsc: TS1488)
 				hasInvalidEscape = true
+				l.diagAtOffset(l.position-1, "TS1488", "Escape sequence '\\"+string(l.ch)+"' is not allowed.")
 			case 'f':
 				cooked.WriteByte('\f') // Form feed (U+000C)
 			case 'v':
@@ -3011,103 +3107,29 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 				cooked.WriteByte('"') // Double quote
 			case 'u':
 				// Unicode escape sequence \uXXXX or \u{XXXX}
+				escStart := l.readPosition
 				if l.peekChar() == '{' {
-					// \u{XXXX} format
 					l.readChar() // consume '{'
-					raw.WriteByte('{')
-					hexStr := ""
-					// Peek-before-consume to avoid eating template terminators
-					for l.peekChar() != '}' && l.peekChar() != 0 && l.peekChar() != '`' && l.peekChar() != '$' && len(hexStr) < 8 && isHexDigit(l.peekChar()) {
-						l.readChar()
-						hexStr += charString(l.ch)
-						raw.WriteByte(l.ch)
-					}
-					if l.peekChar() == '}' && len(hexStr) > 0 {
-						l.readChar() // consume '}'
-						raw.WriteByte('}')
-						if codePoint, err := strconv.ParseInt(hexStr, 16, 32); err == nil && codePoint <= 0x10FFFF {
-							if codePoint >= 0xD800 && codePoint <= 0xDFFF {
-								// WTF-8 encoding for surrogates
-								b1 := byte(0xE0 | ((codePoint >> 12) & 0x0F))
-								b2 := byte(0x80 | ((codePoint >> 6) & 0x3F))
-								b3 := byte(0x80 | (codePoint & 0x3F))
-								cooked.WriteByte(b1)
-								cooked.WriteByte(b2)
-								cooked.WriteByte(b3)
-							} else {
-								cooked.WriteRune(rune(codePoint))
-							}
-						} else {
-							// Invalid code point (out of range) - cooked is undefined
-							hasInvalidEscape = true
-						}
+					if cp, ok := l.readUnicodeBraceEscape(); ok {
+						appendCodePoint(&cooked, int(cp))
 					} else {
-						// Invalid escape (no closing brace or empty) - cooked is undefined
 						hasInvalidEscape = true
 					}
-				} else if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
-					// \uXXXX format
-					hexStr := ""
-					for i := 0; i < 4; i++ {
-						if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
-							l.readChar()
-							hexStr += charString(l.ch)
-							raw.WriteByte(l.ch)
-						} else {
-							break
-						}
-					}
-					if len(hexStr) == 4 {
-						if codePoint, err := strconv.ParseInt(hexStr, 16, 32); err == nil {
-							if codePoint >= 0xD800 && codePoint <= 0xDFFF {
-								// WTF-8 encoding for surrogates
-								b1 := byte(0xE0 | ((codePoint >> 12) & 0x0F))
-								b2 := byte(0x80 | ((codePoint >> 6) & 0x3F))
-								b3 := byte(0x80 | (codePoint & 0x3F))
-								cooked.WriteByte(b1)
-								cooked.WriteByte(b2)
-								cooked.WriteByte(b3)
-							} else {
-								cooked.WriteRune(rune(codePoint))
-							}
-						}
-					} else {
-						// Incomplete escape - cooked is undefined
-						hasInvalidEscape = true
-					}
+				} else if cp, ok := l.readHexEscapeDigits(4); ok {
+					appendCodePoint(&cooked, cp)
 				} else {
-					// Not followed by hex digit or brace - cooked is undefined
 					hasInvalidEscape = true
 				}
+				raw.WriteString(l.input[escStart : l.position+1])
 			case 'x':
-				// Hex escape sequence \xXX
-				if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
-					hexStr := ""
-					for i := 0; i < 2; i++ {
-						if l.peekChar() != 0 && isHexDigit(l.peekChar()) {
-							l.readChar()
-							hexStr += charString(l.ch)
-							raw.WriteByte(l.ch)
-						} else {
-							break
-						}
-					}
-					if len(hexStr) == 2 {
-						// \xXX names a *code point* (U+0000-U+00FF), not a raw byte -
-						// for 0x80-0xFF that needs a 2-byte UTF-8 encoding (WriteRune),
-						// not a single raw byte (WriteByte), which produces invalid
-						// UTF-8/WTF-8. See paserati#425.
-						if val, err := strconv.ParseUint(hexStr, 16, 32); err == nil && val <= 255 {
-							cooked.WriteRune(rune(val))
-						}
-					} else {
-						// Incomplete escape - cooked is undefined
-						hasInvalidEscape = true
-					}
+				// Hex escape sequence \xXX (a code point, U+0000-U+00FF; see paserati#425)
+				escStart := l.readPosition
+				if cp, ok := l.readHexEscapeDigits(2); ok {
+					cooked.WriteRune(rune(cp))
 				} else {
-					// Not followed by hex digit - cooked is undefined
 					hasInvalidEscape = true
 				}
+				raw.WriteString(l.input[escStart : l.position+1])
 			case '\n':
 				// Line continuation: backslash + LF
 				// Cooked: empty (continuation)
@@ -3198,6 +3220,7 @@ func (l *Lexer) readTemplateString(startLine, startCol, startPos int) Token {
 		Literal:           wtf8.JoinSurrogatePairs(cooked.String()),
 		RawLiteral:        raw.String(),
 		CookedIsUndefined: hasInvalidEscape,
+		TemplateDiags:     l.takeDiags(),
 		Line:              startLine,
 		Column:            startCol,
 		StartPos:          startPos,

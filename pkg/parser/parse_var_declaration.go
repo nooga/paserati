@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
 )
 
@@ -124,12 +125,15 @@ func (p *Parser) parseDeclListItem(declToken *lexer.Token, kind varDeclKind, pre
 		}
 
 		if kind == varDeclConst {
-			// const requires an initializer.
-			if !p.expectPeek(lexer.ASSIGN) {
-				return declListItem{}, false
+			if p.peekTokenIs(lexer.ASSIGN) {
+				p.nextToken() // Consume '='
+				p.nextToken() // Move to the first token of the initializer
+				declarator.Value = p.parseExpression(COMMA)
+			} else if p.inAmbientContext == 0 {
+				// tsc's parser accepts `const x;`; its checker reports TS1155
+				// at the name (grammar check, not in ambient contexts).
+				p.addErrorWithCode(declarator.Name.Token, errors.TS1155, "'const' declarations must be initialized.")
 			}
-			p.nextToken() // Move to the first token of the initializer
-			declarator.Value = p.parseExpression(COMMA)
 		} else if p.peekTokenIs(lexer.ASSIGN) {
 			p.nextToken() // Consume '='
 			p.nextToken() // Move to the first token of the initializer

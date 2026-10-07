@@ -340,6 +340,7 @@ type Checker struct {
 	skipStrictPropertyInit bool // When true, TS2564 is not emitted (strict-init opt-out)
 	skipDefiniteAssignment bool // When true, TS2454 is not emitted (definite-assignment opt-out)
 	allowUnreachableCode   bool // Mirrors --allowUnreachableCode; when true, TS2695 is not emitted
+	tscCompat              bool // Suppress diagnostics beyond what tsc reports; see SetTscCompatibleDiagnostics
 	alwaysStrict           bool // Mirrors --alwaysStrict; when true, TS1212 and its variants are emitted
 	strictNullChecks       bool // Mirrors --strictNullChecks; when false, TS18050 is not emitted
 	isModule               bool // Source is a module, so strict mode comes from the module (TS1214)
@@ -471,6 +472,18 @@ func (c *Checker) SetSkipDefiniteAssignment(skip bool) {
 func (c *Checker) SetAllowUnreachableCode(allow bool) {
 	c.allowUnreachableCode = allow
 }
+
+// SetTscCompatibleDiagnostics switches off the diagnostics Paserati reports
+// where tsc deliberately stays silent (for example names inside an operand tsc
+// skips after a grammar error). They are on by default because they point at
+// real problems; the TypeScript conformance harness turns them off to compare
+// against tsc. Guard each such place with c.beyondTsc() so they stay findable.
+func (c *Checker) SetTscCompatibleDiagnostics(on bool) {
+	c.tscCompat = on
+}
+
+// beyondTsc reports whether diagnostics tsc would not give are enabled.
+func (c *Checker) beyondTsc() bool { return !c.tscCompat }
 
 // SetStrictNullChecks mirrors the `--strictNullChecks` compiler option, which
 // gates TS18050. Without it `null` and `undefined` are assignable everywhere,
@@ -2415,8 +2428,11 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 	case *parser.ReturnStatement:
+		// A return outside a function body is reported by the parser (TS1108 /
+		// TS18041), like tsc's grammar check, so it is not repeated here. tsc
+		// does not check the returned expression of such a statement either.
 		if c.functionNestingDepth == 0 && !c.allowTopLevelReturn {
-			c.addErrorWithCode(node, errors.TS1108, "A 'return' statement can only be used within a function body.")
+			break
 		}
 		var actualReturnType types.Type = types.Undefined // Default if no return value
 		if node.ReturnValue != nil {
@@ -2706,6 +2722,13 @@ func (c *Checker) visit(node parser.Node) {
 		// --- Check concrete pointer AFTER type switch ---
 		if node == nil {
 			debugPrintf("// [Checker Debug] visit(Identifier): node is nil!\n") // DEBUG
+			return
+		}
+		// A zero-width identifier is the parser's stand-in for an expression that
+		// was missing (a syntax error was already reported); like tsc, give it
+		// an error type and say nothing more.
+		if node.Value == "" {
+			node.SetComputedType(types.Any)
 			return
 		}
 		// --- Log state BEFORE potentially problematic operations ---
@@ -3247,23 +3270,11 @@ func (c *Checker) visit(node parser.Node) {
 
 	// --- Loop Control ---
 	case *parser.BreakStatement:
-		if node.Label != nil {
-			if c.activeLabels == nil || !c.activeLabels[node.Label.Value] {
-				c.reportBadJump(node, true, true)
-			}
-		} else if c.loopDepth == 0 && c.switchDepth == 0 {
-			c.reportBadJump(node, true, false)
-		}
+		// break/continue targets are validated by the parser (TS1104-TS1107, TS1115,
+		// TS1116), like tsc's grammar check.
 	case *parser.EmptyStatement:
 		break // Nothing to check type-wise for empty statements
 	case *parser.ContinueStatement:
-		if node.Label != nil {
-			if c.activeLabels == nil || !c.activeLabels[node.Label.Value] {
-				c.reportBadJump(node, false, true)
-			}
-		} else if c.loopDepth == 0 {
-			c.reportBadJump(node, false, false)
-		}
 
 	case *parser.SwitchStatement: // Added
 		c.checkSwitchStatement(node)

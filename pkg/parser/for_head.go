@@ -11,11 +11,19 @@ func (p *Parser) checkForInOfHead(head Statement, isOf bool) {
 		kind = "for-of"
 	}
 	bad := func(tok *lexer.Token) {
-		p.addError(tok, kind+" loop variable declaration may not have an initializer")
+		if isOf {
+			p.addGrammarErrorWithCode(tok, "TS1190", "The variable declaration of a 'for...of' statement cannot have an initializer.")
+		} else {
+			p.addGrammarErrorWithCode(tok, "TS1189", "The variable declaration of a 'for...in' statement cannot have an initializer.")
+		}
 	}
 	declarators := func(tok *lexer.Token, decls []*VarDeclarator, isVar bool) {
 		if len(decls) > 1 {
-			p.addError(tok, "Only a single variable declaration is allowed in a "+kind+" statement")
+			if isOf {
+				p.addGrammarErrorWithCode(tok, "TS1188", "Only a single variable declaration is allowed in a 'for...of' statement.")
+			} else {
+				p.addGrammarErrorWithCode(tok, "TS1091", "Only a single variable declaration is allowed in a 'for...in' statement.")
+			}
 			return
 		}
 		if len(decls) == 1 && decls[0].Value != nil && (isOf || !isVar || p.strictMode) {
@@ -23,6 +31,12 @@ func (p *Parser) checkForInOfHead(head Statement, isOf bool) {
 		}
 	}
 	switch s := head.(type) {
+	case *ExpressionStatement:
+		// `for (f() of x)`: a direct call is an invalid assignment target (web-compat
+		// ReferenceError at run time only in sloppy code).
+		if _, isCall := s.Expression.(*CallExpression); isCall && p.strictMode {
+			p.addError(s.Token, "Invalid left-hand side in "+kind+" statement")
+		}
 	case *VarStatement:
 		declarators(s.Token, s.Declarations, true)
 	case *LetStatement:

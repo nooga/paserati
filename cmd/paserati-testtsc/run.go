@@ -145,6 +145,7 @@ func createTscPaserati(opts Options) *driver.Paserati {
 	pas.SetSkipStrictPropertyInit(!strictPropertyInitEnabled(opts))
 	pas.SetNoImplicitOverride(noImplicitOverrideEnabled(opts))
 	pas.SetAllowUnreachableCode(allowUnreachableCodeEnabled(opts))
+	pas.SetTscCompatibleDiagnostics(true)
 	pas.SetAlwaysStrict(alwaysStrictEnabled(opts))
 	return pas
 }
