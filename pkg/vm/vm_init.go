@@ -2057,11 +2057,12 @@ func (vm *VM) getArgsBuf(n int) []Value {
 // putArgsBuf returns a buffer to the pool, clearing it so pooled buffers don't
 // retain argument values.
 func (vm *VM) putArgsBuf(b []Value) {
-	b = b[:cap(b)]
+	// Only the n slots getArgsBuf handed out can hold values: every buffer in
+	// the pool is fully cleared, so slots past len(b) are already Undefined.
 	for i := range b {
 		b[i] = Undefined
 	}
-	vm.argsBufPool = append(vm.argsBufPool, b)
+	vm.argsBufPool = append(vm.argsBufPool, b[:cap(b)])
 }
 
 // CallArgs2/3/4 invoke fn with the given arguments through a pooled buffer,
@@ -2672,12 +2673,28 @@ func (vm *VM) lastRecordedErrorMessage() string {
 	return vm.errors[len(vm.errors)-1].Error()
 }
 
+// leaveUserFunctionCall undoes executeUserFunctionSafe's entry bookkeeping.
+func (vm *VM) leaveUserFunctionCall(prevNewTarget Value, prevInConstructorCall bool, callerRegisters []Value) {
+	vm.putSentinelReg(callerRegisters)
+	vm.currentNewTarget = prevNewTarget
+	vm.inConstructorCall = prevInConstructorCall
+}
+
 // executeUserFunctionSafe executes a user function from a native function using sentinel frames
 // This allows proper nested calls without infinite recursion
 func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (Value, error) {
 	// This is an ordinary [[Call]], so nothing it reaches - including natives
-	// its bytecode calls - may see an enclosing construct context.
-	defer vm.enterOrdinaryCall()()
+	// its bytecode calls - may see an enclosing construct context. The
+	// restore and the sentinel-register release share one deferred call (and
+	// no closure is allocated) so the function's many return paths stay within
+	// the budget Go needs to open-code its defers; this runs once per
+	// callback from every array method, sort comparator, etc.
+	prevNewTarget, prevInConstructorCall := vm.currentNewTarget, vm.inConstructorCall
+	vm.currentNewTarget = Undefined
+	vm.inConstructorCall = false
+	// Set up the caller context first (pooled 1-element result holder)
+	callerRegisters := vm.getSentinelReg()
+	defer vm.leaveUserFunctionCall(prevNewTarget, prevInConstructorCall, callerRegisters)
 
 	// If unwinding flags are set but currentException is Null, it means the exception was
 	// already handed off to native code as a Go error. Native code either:
@@ -2734,9 +2751,6 @@ func (vm *VM) executeUserFunctionSafe(fn Value, thisValue Value, args []Value) (
 	// legitimate result thrown away and replaced with that stale exception.
 	unwindingAtEntry := vm.unwinding && vm.hasException
 
-	// Set up the caller context first (pooled 1-element result holder)
-	callerRegisters := vm.getSentinelReg()
-	defer vm.putSentinelReg(callerRegisters)
 	destReg := byte(0)
 	callerIP := 0
 

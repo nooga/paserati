@@ -1749,8 +1749,75 @@ func (vm *VM) InterpretWithCallerScope(chunk *Chunk, callerRegs []Value, callerT
 	return result, errs
 }
 
-// run is the main execution loop.
-// It now returns the InterpretResult status AND the final script Value.
+// handleRunPanic turns a panic recovered from the interpreter loop into a
+// collected runtime error and returns its status.
+func (vm *VM) handleRunPanic(r any) (status InterpretResult) {
+	if debugVM {
+		fmt.Printf("[PANIC] Recovered panic in VM.run(): %v\n", r)
+		debug.PrintStack()
+	}
+	stack := debug.Stack()
+	fmt.Fprintf(os.Stderr, "[VM PANIC] recovered: %v\n%s", r, stack)
+	// #276: a panic shaped like "index out of range [N] with length M"
+	// here almost always means the CURRENT frame's register window
+	// (length M, always exactly its function's RegisterSize - see
+	// the allocation sites in call.go/async.go/vm.go, none of which
+	// ever pad or shrink it) is too small for the bytecode actually
+	// executing against it - i.e. a compiler register-count
+	// under-count for that specific function, not a VM bookkeeping
+	// bug. Dump the offending frame's identity so a future
+	// recurrence is immediately actionable instead of requiring a
+	// fresh multi-hour investigation like #276's own.
+	if vm.frameCount > 0 {
+		pf := &vm.frames[vm.frameCount-1]
+		fnName := "<unknown>"
+		var regSize, allocSize int
+		var isGen, isAsync bool
+		if pf.closure != nil && pf.closure.Fn != nil {
+			fnName = pf.closure.Fn.Name
+			regSize = pf.closure.Fn.RegisterSize
+			isGen = pf.closure.Fn.IsGenerator
+			isAsync = pf.closure.Fn.IsAsync
+		}
+		allocSize = pf.allocatedRegSize
+		fmt.Fprintf(os.Stderr,
+			"[VM PANIC] frame#%d func=%q RegisterSize=%d allocatedRegSize=%d ip=%d isGenerator=%v isAsync=%v generatorObj=%v promiseObj=%v\n",
+			vm.frameCount-1, fnName, regSize, allocSize, pf.ip, isGen, isAsync, pf.generatorObj != nil, pf.promiseObj != nil)
+		if pf.closure != nil && pf.closure.Fn != nil && pf.closure.Fn.Chunk != nil {
+			fmt.Fprintf(os.Stderr, "[VM PANIC] chunk disassembly:\n%s\n", pf.closure.Fn.Chunk.DisassembleChunk(fnName))
+		}
+	}
+	// vm.runtimeError() reads current frame/chunk state to attach a
+	// source position; if the panic itself corrupted that state,
+	// runtimeError could panic in turn. Guard against that so a
+	// crash reporting a crash can never escape as a second panic.
+	func() {
+		defer func() {
+			if r2 := recover(); r2 != nil {
+				fmt.Fprintf(os.Stderr, "[VM PANIC] runtimeError itself panicked while reporting the above: %v\n", r2)
+				vm.errors = append(vm.errors, &errors.RuntimeError{
+					Msg:      fmt.Sprintf("Internal VM Error: panic during execution: %v", r),
+					Internal: true,
+				})
+				status = InterpretRuntimeError
+			}
+		}()
+		status = vm.runtimeError("Internal VM Error: panic during execution: %v", r)
+		if n := len(vm.errors); n > 0 {
+			if re, ok := vm.errors[n-1].(*errors.RuntimeError); ok {
+				re.Internal = true
+			}
+		}
+	}()
+	return status
+}
+
+// run executes bytecode until the frame it was entered on returns or a
+// sentinel/direct-call boundary is hit. It is only the panic-recovery shell
+// around runLoop: the recover defer lives in this tiny function, where Go can
+// open-code it, rather than in runLoop's huge body, where it was a heap-style
+// defer costing a few dozen ns on every native->JS callback (array
+// map/filter/reduce, sort comparators, ...).
 func (vm *VM) run() (status InterpretResult, resultValue Value) {
 	// Panic recovery: convert a panic anywhere in the interpreter loop into
 	// a normal runtime error instead of silently reporting InterpretOK.
@@ -1764,67 +1831,15 @@ func (vm *VM) run() (status InterpretResult, resultValue Value) {
 	// harnesses) see it.
 	defer func() {
 		if r := recover(); r != nil {
-			if debugVM {
-				fmt.Printf("[PANIC] Recovered panic in VM.run(): %v\n", r)
-				debug.PrintStack()
-			}
-			stack := debug.Stack()
-			fmt.Fprintf(os.Stderr, "[VM PANIC] recovered: %v\n%s", r, stack)
-			// #276: a panic shaped like "index out of range [N] with length M"
-			// here almost always means the CURRENT frame's register window
-			// (length M, always exactly its function's RegisterSize - see
-			// the allocation sites in call.go/async.go/vm.go, none of which
-			// ever pad or shrink it) is too small for the bytecode actually
-			// executing against it - i.e. a compiler register-count
-			// under-count for that specific function, not a VM bookkeeping
-			// bug. Dump the offending frame's identity so a future
-			// recurrence is immediately actionable instead of requiring a
-			// fresh multi-hour investigation like #276's own.
-			if vm.frameCount > 0 {
-				pf := &vm.frames[vm.frameCount-1]
-				fnName := "<unknown>"
-				var regSize, allocSize int
-				var isGen, isAsync bool
-				if pf.closure != nil && pf.closure.Fn != nil {
-					fnName = pf.closure.Fn.Name
-					regSize = pf.closure.Fn.RegisterSize
-					isGen = pf.closure.Fn.IsGenerator
-					isAsync = pf.closure.Fn.IsAsync
-				}
-				allocSize = pf.allocatedRegSize
-				fmt.Fprintf(os.Stderr,
-					"[VM PANIC] frame#%d func=%q RegisterSize=%d allocatedRegSize=%d ip=%d isGenerator=%v isAsync=%v generatorObj=%v promiseObj=%v\n",
-					vm.frameCount-1, fnName, regSize, allocSize, pf.ip, isGen, isAsync, pf.generatorObj != nil, pf.promiseObj != nil)
-				if pf.closure != nil && pf.closure.Fn != nil && pf.closure.Fn.Chunk != nil {
-					fmt.Fprintf(os.Stderr, "[VM PANIC] chunk disassembly:\n%s\n", pf.closure.Fn.Chunk.DisassembleChunk(fnName))
-				}
-			}
-			// vm.runtimeError() reads current frame/chunk state to attach a
-			// source position; if the panic itself corrupted that state,
-			// runtimeError could panic in turn. Guard against that so a
-			// crash reporting a crash can never escape as a second panic.
-			func() {
-				defer func() {
-					if r2 := recover(); r2 != nil {
-						fmt.Fprintf(os.Stderr, "[VM PANIC] runtimeError itself panicked while reporting the above: %v\n", r2)
-						vm.errors = append(vm.errors, &errors.RuntimeError{
-							Msg:      fmt.Sprintf("Internal VM Error: panic during execution: %v", r),
-							Internal: true,
-						})
-						status = InterpretRuntimeError
-					}
-				}()
-				status = vm.runtimeError("Internal VM Error: panic during execution: %v", r)
-				if n := len(vm.errors); n > 0 {
-					if re, ok := vm.errors[n-1].(*errors.RuntimeError); ok {
-						re.Internal = true
-					}
-				}
-			}()
+			status = vm.handleRunPanic(r)
 			resultValue = Undefined
 		}
 	}()
-
+	return vm.runLoop()
+}
+// runLoop is the main execution loop.
+// It returns the InterpretResult status AND the final script Value.
+func (vm *VM) runLoop() (status InterpretResult, resultValue Value) {
 	// --- Caching frame variables ---
 	if vm.frameCount == 0 || vm.unwindingCrossedNative {
 		return InterpretOK, Undefined // Nothing to run
