@@ -3,4 +3,4 @@ class C {
   #\u0000;
 }
 
-// expect_compile_error: expected identifier
+// expect_compile_error: Unexpected token

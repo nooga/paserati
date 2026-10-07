@@ -2925,8 +2925,13 @@ func (c *Checker) instantiateGenericMethod(methodType types.Type, elementType ty
 
 // checkYieldExpression handles type checking for yield expressions in generator functions
 func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
-	// TODO: Check if we're currently in a generator function context
-	// For now, we'll allow yield expressions and assign them a generic type
+	// Outside a generator body the parser has already reported TS1163. tsc's
+	// checkYieldExpression then returns any without checking the operand; we
+	// still check it (an unknown name there is a real bug) unless in tsc mode.
+	if !c.inGeneratorFunction && !c.beyondTsc() {
+		node.SetComputedType(types.Any)
+		return
+	}
 
 	// 1. Check the yielded value (if present)
 	var yieldedType types.Type = types.Undefined

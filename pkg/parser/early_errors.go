@@ -547,13 +547,19 @@ func (w *eeWalker) expr(e Expression, c eeCtx) {
 	case *SpreadElement:
 		w.expr(t.Argument, c)
 	case *YieldExpression:
-		if !c.yield || c.noYieldExpr {
-			w.errorf(t.Token, "Yield expression not allowed in this context")
+		switch {
+		case !c.yield:
+			w.p.addErrorWithCode(t.Token, "TS1163", "A 'yield' expression is only allowed in a generator body.")
+		case c.noYieldExpr:
+			w.p.addErrorWithCode(t.Token, "TS2523", "'yield' expressions cannot be used in a parameter initializer.")
 		}
 		w.expr(t.Value, c)
 	case *AwaitExpression:
-		if c.noAwaitExpr || c.staticBlock {
-			w.errorf(t.Token, "Await expression not allowed in this context")
+		switch {
+		case c.staticBlock:
+			w.p.addErrorWithCode(t.Token, "TS18037", "'await' expression cannot be used inside a class static block.")
+		case c.noAwaitExpr:
+			w.p.addErrorWithCode(t.Token, "TS2524", "'await' expressions cannot be used in a parameter initializer.")
 		}
 		w.expr(t.Argument, c)
 	case *TypeAssertionExpression:

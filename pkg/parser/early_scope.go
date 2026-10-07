@@ -627,18 +627,35 @@ func (p *Parser) pushLabel(tok *lexer.Token, name string) {
 	p.labels = append(p.labels, entry)
 }
 
-// checkContinueLabel reports `continue L` where L is not the label of an
-// enclosing iteration statement in the current function.
-func (p *Parser) checkContinueLabel(label *Identifier) {
-	for i := len(p.labels) - 1; i >= 0; i-- {
-		if p.labels[i].name == label.Value {
-			if !p.labels[i].loop {
-				p.addError(label.Token, fmt.Sprintf("SyntaxError: Illegal continue statement: '%s' does not denote an iteration statement", label.Value))
+// checkJump validates a break/continue statement the way tsc's checker does
+// (checkGrammarBreakOrContinueStatement): the first function-like boundary
+// reached before a valid target is found makes it TS1107; at the top level the
+// diagnostic depends on the statement kind.
+func (p *Parser) checkJump(tok *lexer.Token, label *Identifier, isContinue bool) {
+	if label != nil {
+		for i := len(p.labels) - 1; i >= 0; i-- {
+			if p.labels[i].name == label.Value {
+				if isContinue && !p.labels[i].loop {
+					p.addErrorWithCode(tok, "TS1115", "A 'continue' statement can only jump to a label of an enclosing iteration statement.")
+				}
+				return
 			}
-			return
 		}
+	} else if p.iterDepth > 0 || (!isContinue && p.switchDepth > 0) {
+		return
 	}
-	p.addError(label.Token, fmt.Sprintf("SyntaxError: Undefined label '%s'", label.Value))
+	switch {
+	case p.inFunctionLike > 0:
+		p.addErrorWithCode(tok, "TS1107", "Jump target cannot cross function boundary.")
+	case label != nil && isContinue:
+		p.addErrorWithCode(tok, "TS1115", "A 'continue' statement can only jump to a label of an enclosing iteration statement.")
+	case label != nil:
+		p.addErrorWithCode(tok, "TS1116", "A 'break' statement can only jump to a label of an enclosing statement.")
+	case isContinue:
+		p.addErrorWithCode(tok, "TS1104", "A 'continue' statement can only be used within an enclosing iteration statement.")
+	default:
+		p.addErrorWithCode(tok, "TS1105", "A 'break' statement can only be used within an enclosing iteration or switch statement.")
+	}
 }
 
 // parseSubStatement parses the Statement child of if/else, a loop, with, or a

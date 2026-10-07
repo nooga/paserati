@@ -93,6 +93,12 @@ func (p *Paserati) SetSkipDefiniteAssignment(skip bool) {
 	p.checker.SetSkipDefiniteAssignment(skip)
 }
 
+// SetTscCompatibleDiagnostics drops the diagnostics Paserati reports beyond
+// tsc (on by default). paserati-testtsc enables it to compare against tsc.
+func (p *Paserati) SetTscCompatibleDiagnostics(on bool) {
+	p.checker.SetTscCompatibleDiagnostics(on)
+}
+
 // SetAllowUnreachableCode mirrors --allowUnreachableCode, which suppresses
 // TS2695. Default false (emit). Used by paserati-testtsc to opt out per-file
 // based on TS directives.

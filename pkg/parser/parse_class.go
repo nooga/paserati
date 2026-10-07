@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
 )
 
@@ -78,6 +79,7 @@ func (p *Parser) parseClassDeclaration() Statement {
 		// but parseExpression for call expressions and other runtime constructs.
 		//
 		// Detect call expression: identifier followed by '('
+		p.inHeritage++
 		isCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LPAREN)
 		// Also detect member expression that might become a call: a.b(...)
 		isMemberCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.DOT)
@@ -106,6 +108,7 @@ func (p *Parser) parseClassDeclaration() Statement {
 			}
 		}
 
+		p.inHeritage--
 		if superClass == nil {
 			return nil // Failed to parse superclass expression
 		}
@@ -114,19 +117,9 @@ func (p *Parser) parseClassDeclaration() Statement {
 
 	var implements []*Identifier
 	if p.peekTokenIs(lexer.IMPLEMENTS) {
-		p.nextToken() // consume 'implements'
-
-		// Parse comma-separated list of interface names
-		for {
-			if !p.expectPeek(lexer.IDENT) {
-				return nil
-			}
-			implements = append(implements, &Identifier{Token: p.curToken, Value: p.curToken.Literal})
-
-			if !p.peekTokenIs(lexer.COMMA) {
-				break
-			}
-			p.nextToken() // consume ','
+		var ok bool
+		if implements, ok = p.parseImplementsList(); !ok {
+			return nil
 		}
 	}
 
@@ -282,6 +275,7 @@ func (p *Parser) parseClassExpression() Expression {
 		// but parseExpression for call expressions and other runtime constructs.
 		//
 		// Detect call expression: identifier followed by '('
+		p.inHeritage++
 		isCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.LPAREN)
 		// Also detect member expression that might become a call: a.b(...)
 		isMemberCallExpr := p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.DOT)
@@ -310,6 +304,7 @@ func (p *Parser) parseClassExpression() Expression {
 			}
 		}
 
+		p.inHeritage--
 		if superClass == nil {
 			return nil // Failed to parse superclass expression
 		}
@@ -318,19 +313,9 @@ func (p *Parser) parseClassExpression() Expression {
 
 	var implements []*Identifier
 	if p.peekTokenIs(lexer.IMPLEMENTS) {
-		p.nextToken() // consume 'implements'
-
-		// Parse comma-separated list of interface names
-		for {
-			if !p.expectPeek(lexer.IDENT) {
-				return nil
-			}
-			implements = append(implements, &Identifier{Token: p.curToken, Value: p.curToken.Literal})
-
-			if !p.peekTokenIs(lexer.COMMA) {
-				break
-			}
-			p.nextToken() // consume ','
+		var ok bool
+		if implements, ok = p.parseImplementsList(); !ok {
+			return nil
 		}
 	}
 
@@ -413,6 +398,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 		isOverride := false
 		isAsync := false
 		asyncStart := -1 // byte offset of this member's 'async', if any
+		var asyncTok *lexer.Token
 
 		// Helper to check if current token is likely a field name (not a modifier)
 		// A keyword is a field name if followed by tokens that indicate it's a name, not a modifier
@@ -426,6 +412,9 @@ func (p *Parser) parseClassBody() *ClassBody {
 
 		// Check for static initializer block before parsing modifiers: static { ... }
 		if p.curTokenIs(lexer.STATIC) && p.peekTokenIs(lexer.LBRACE) {
+			if len(memberDecorators) > 0 {
+				p.addErrorWithCode(memberDecorators[0].Token, errors.TS1206, "Decorators are not valid here.")
+			}
 			p.nextToken() // move to '{'
 			block := p.parseFunctionBody(nil, nil, bodyStaticBlock)
 			if block != nil {
@@ -507,10 +496,18 @@ func (p *Parser) parseClassBody() *ClassBody {
 				isAsync = true
 				seenAsync = true
 				asyncStart = p.curToken.StartPos
+				asyncTok = p.curToken
 				p.nextToken()
 			} else {
 				break // No more modifiers
 			}
+		}
+
+		// Decorators that follow modifiers (`public @dec get x() {}`): tsc reports
+		// TS1436 here and then parses the decorated member on its own.
+		if p.curTokenIs(lexer.AT) && p.canRecover() {
+			p.addErrorWithCode(p.curToken, "TS1436", "Decorators must precede the name and all keywords of property declarations.")
+			continue
 		}
 
 		// Parse constructor, method, getter, setter, generator, or computed member
@@ -546,23 +543,37 @@ func (p *Parser) parseClassBody() *ClassBody {
 		isGetSetFieldTerminator := p.peekTokenIs(lexer.SEMICOLON) || p.peekTokenIs(lexer.ASSIGN) ||
 			p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.QUESTION) ||
 			p.peekTokenIs(lexer.BANG) || p.peekTokenIs(lexer.RBRACE)
-		if p.curTokenIs(lexer.GET) && !p.peekTokenIs(lexer.LPAREN) && !hasNewlineAfterCur && !isGetSetFieldTerminator {
+		if p.curTokenIs(lexer.GET) && !p.peekTokenIs(lexer.LPAREN) && !p.peekTokenIs(lexer.LT) && !hasNewlineAfterCur && !isGetSetFieldTerminator {
 			// Parse getter method: get propertyName() {}
 			// But NOT if followed by '(' - that's a method named "get": get() {}
 			// And NOT if there's a newline (ASI) or a field terminator - that's a field named "get"
-			method := p.parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
-			if method != nil {
-				attachDecorators(method)
-				methods = append(methods, method)
+			if isAsync && asyncTok != nil {
+				p.addErrorWithCode(asyncTok, errors.TS1042, "'async' modifier cannot be used here.")
 			}
-		} else if p.curTokenIs(lexer.SET) && !p.peekTokenIs(lexer.LPAREN) && !hasNewlineAfterCur && !isGetSetFieldTerminator {
+			switch m := p.parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride).(type) {
+			case *MethodDefinition:
+				attachDecorators(m)
+				methods = append(methods, m)
+			case *MethodSignature:
+				m.IsAbstract = isAbstract
+				p.noteDecoratedSignature(memberDecorators)
+				methodSigs = append(methodSigs, m)
+			}
+		} else if p.curTokenIs(lexer.SET) && !p.peekTokenIs(lexer.LPAREN) && !p.peekTokenIs(lexer.LT) && !hasNewlineAfterCur && !isGetSetFieldTerminator {
 			// Parse setter method: set propertyName(value) {}
 			// But NOT if followed by '(' - that's a method named "set": set() {}
 			// And NOT if there's a newline (ASI) or a field terminator - that's a field named "set"
-			method := p.parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride)
-			if method != nil {
-				attachDecorators(method)
-				methods = append(methods, method)
+			if isAsync && asyncTok != nil {
+				p.addErrorWithCode(asyncTok, errors.TS1042, "'async' modifier cannot be used here.")
+			}
+			switch m := p.parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride).(type) {
+			case *MethodDefinition:
+				attachDecorators(m)
+				methods = append(methods, m)
+			case *MethodSignature:
+				m.IsAbstract = isAbstract
+				p.noteDecoratedSignature(memberDecorators)
+				methodSigs = append(methodSigs, m)
 			}
 		} else if p.curTokenIs(lexer.ASTERISK) {
 			// Parse generator method: *methodName() { ... }
@@ -581,6 +592,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 			result := p.parseComputedClassMemberAsync(isStatic, isReadonly, isPublic, isPrivate, isProtected, isAbstract, isOverride, true)
 			if result != nil {
 				if sig, ok := result.(*MethodSignature); ok {
+					p.noteDecoratedSignature(memberDecorators)
 					methodSigs = append(methodSigs, sig)
 				} else if method, ok := result.(*MethodDefinition); ok {
 					attachDecorators(method)
@@ -599,6 +611,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 			result := p.parseComputedClassMember(isStatic, isReadonly, isPublic, isPrivate, isProtected, isAbstract, isOverride)
 			if result != nil {
 				if sig, ok := result.(*MethodSignature); ok {
+					p.noteDecoratedSignature(memberDecorators)
 					methodSigs = append(methodSigs, sig)
 				} else if method, ok := result.(*MethodDefinition); ok {
 					attachDecorators(method)
@@ -615,9 +628,13 @@ func (p *Parser) parseClassBody() *ClassBody {
 			// Private fields/methods are always implicitly private
 			// They cannot have explicit access modifiers
 			if isPublic || isPrivate || isProtected {
-				p.addError(p.curToken, "private fields/methods (#name) cannot have explicit access modifiers")
-				p.nextToken()
-				continue
+				if !p.canRecover() {
+					p.addError(p.curToken, "private fields/methods (#name) cannot have explicit access modifiers")
+					p.nextToken()
+					continue
+				}
+				// tsc parses the member and its checker reports TS18010.
+				p.addGrammarErrorWithCode(p.curToken, "TS18010", "An accessibility modifier cannot be used with a private identifier.")
 			}
 
 			// Check if this is a private method (followed by '(') or private field
@@ -693,6 +710,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 					if result != nil {
 						if sig, ok := result.(*MethodSignature); ok {
 							// It's a method signature
+							p.noteDecoratedSignature(memberDecorators)
 							methodSigs = append(methodSigs, sig)
 						} else if method, ok := result.(*MethodDefinition); ok {
 							// It's a method implementation
@@ -715,7 +733,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 		} else {
 			// Remove duplicate PRIVATE_IDENT check - now handled earlier in the chain
 			debugPrint("ERROR: Unrecognized token in class body: cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
-			p.addError(p.curToken, "expected identifier, 'get', 'set', or '[' in class body")
+			p.addError(p.curToken, "Unexpected token. A constructor, method, accessor, or property was expected.")
 			p.nextToken()
 		}
 	}
@@ -779,9 +797,8 @@ func (p *Parser) parseConstructor(isStatic, isPublic, isPrivate, isProtected boo
 	}
 
 	// Check if this is a constructor signature (ends with semicolon) or implementation (has body)
-	if p.peekTokenIs(lexer.SEMICOLON) {
+	if p.consumeSignatureEnd() {
 		// This is a constructor signature, not an implementation
-		p.nextToken() // Consume semicolon
 
 		sig := &ConstructorSignature{
 			Token:                constructorToken,
@@ -893,7 +910,7 @@ func (p *Parser) parseMethod(isStatic, isPublic, isPrivate, isProtected, isAbstr
 
 	// Check if this is a method signature (ends with semicolon) or implementation (has body)
 	// Abstract methods must be signatures (no implementation)
-	if p.peekTokenIs(lexer.SEMICOLON) || isAbstract {
+	if p.consumeSignatureEnd() || isAbstract {
 		// This is a method signature, not an implementation
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Consume semicolon
@@ -1175,11 +1192,12 @@ func (p *Parser) parsePrivateProperty(isStatic, isReadonly bool) *PropertyDefini
 
 // parseGetter parses a getter method in a class
 // Syntax: [static] get propertyName(): returnType { body } or [static] get [computed](): returnType { body }
-func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) *MethodDefinition {
+func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) interface{} {
 	getToken := p.curToken // 'get' token
 
 	// Move to property name token
 	p.nextToken()
+	nameTok := p.curToken
 
 	var propertyName Expression
 	if p.curToken.Type == lexer.STRING {
@@ -1243,10 +1261,14 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 		return nil
 	}
 
-	// Validate that getters have no parameters
-	if len(functionLiteral.Parameters) > 0 || functionLiteral.RestParameter != nil {
-		p.addError(p.curToken, "getters cannot have parameters")
-		return nil
+	// Validate that getters have no parameters (tsc's checker reports TS1054 at the
+	// name); a leading `this` parameter is not counted.
+	if nonThisParamCount(functionLiteral.Parameters) > 0 || functionLiteral.RestParameter != nil {
+		if !p.canRecover() {
+			p.addError(p.curToken, "getters cannot have parameters")
+			return nil
+		}
+		p.addErrorWithCode(nameTok, "TS1054", "A 'get' accessor cannot have parameters.")
 	}
 
 	// Parse return type annotation if present
@@ -1262,6 +1284,20 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 	}
 
 	// Parse body - after parseFunctionParameters we should be at ')' with peek being '{'
+	// An accessor without a body is a signature (ambient/abstract/overload).
+	if !p.peekTokenIs(lexer.LBRACE) && p.consumeSignatureEnd() {
+		return &MethodSignature{
+			Token:                getToken,
+			Key:                  propertyName,
+			ReturnTypeAnnotation: functionLiteral.ReturnTypeAnnotation,
+			Kind:                 "getter",
+			IsStatic:             isStatic,
+			IsPublic:             isPublic,
+			IsPrivate:            isPrivate,
+			IsProtected:          isProtected,
+			IsOverride:           isOverride,
+		}
+	}
 	if !p.expectPeek(lexer.LBRACE) {
 		return nil
 	}
@@ -1286,11 +1322,12 @@ func (p *Parser) parseGetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 
 // parseSetter parses a setter method in a class
 // Syntax: [static] set propertyName(value: type) { body } or [static] set [computed](value: type) { body }
-func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) *MethodDefinition {
+func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverride bool) interface{} {
 	setToken := p.curToken // 'set' token
 
 	// Move to property name token
 	p.nextToken()
+	nameTok := p.curToken
 
 	var propertyName Expression
 	if p.curToken.Type == lexer.STRING {
@@ -1347,13 +1384,31 @@ func (p *Parser) parseSetter(isStatic, isPublic, isPrivate, isProtected, isOverr
 		return nil
 	}
 
-	// Validate that setters have exactly one parameter
-	if len(functionLiteral.Parameters) != 1 || functionLiteral.RestParameter != nil {
-		p.addError(p.curToken, "setters must have exactly one parameter")
-		return nil
+	// Validate that setters have exactly one parameter (tsc's checker reports
+	// TS1049 at the name)
+	if nonThisParamCount(functionLiteral.Parameters) != 1 || functionLiteral.RestParameter != nil {
+		if !p.canRecover() {
+			p.addError(p.curToken, "setters must have exactly one parameter")
+			return nil
+		}
+		p.addErrorWithCode(nameTok, "TS1049", "A 'set' accessor must have exactly one parameter.")
 	}
 
 	// Parse body - after parseFunctionParameters we should be at ')' with peek being '{'
+	// An accessor without a body is a signature (ambient/abstract/overload).
+	if !p.peekTokenIs(lexer.LBRACE) && p.consumeSignatureEnd() {
+		return &MethodSignature{
+			Token:       setToken,
+			Key:         propertyName,
+			Parameters:  functionLiteral.Parameters,
+			Kind:        "setter",
+			IsStatic:    isStatic,
+			IsPublic:    isPublic,
+			IsPrivate:   isPrivate,
+			IsProtected: isProtected,
+			IsOverride:  isOverride,
+		}
+	}
 	if !p.expectPeek(lexer.LBRACE) {
 		return nil
 	}
@@ -1514,7 +1569,7 @@ func (p *Parser) parseComputedMethod(bracketToken *lexer.Token, keyExpr Expressi
 
 	// Check if this is a method signature (ends with semicolon) or implementation (has body)
 	// Abstract methods must be signatures (no implementation)
-	if p.peekTokenIs(lexer.SEMICOLON) || isAbstract {
+	if p.consumeSignatureEnd() || isAbstract {
 		// This is a method signature, not an implementation
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken() // Consume semicolon
@@ -1816,5 +1871,68 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 		IsPrivate:   isPrivate,
 		IsProtected: isProtected,
 		IsOverride:  isOverride,
+	}
+}
+
+// parseImplementsList parses `implements A, B.C, D<T>` (cur is 'implements' on
+// entry). The checker only needs interface names, so type arguments are parsed
+// and dropped and a qualified name is flattened into one dotted identifier.
+func (p *Parser) parseImplementsList() ([]*Identifier, bool) {
+	var list []*Identifier
+	p.nextToken() // consume 'implements'
+	for {
+		if !p.peekIsIdentifierLike() && !p.peekTokenIs(lexer.IDENT) {
+			p.peekError(lexer.IDENT)
+			return nil, false
+		}
+		p.nextToken()
+		t := p.parseTypeExpression()
+		id := heritageIdentifier(t)
+		if id == nil {
+			return nil, false
+		}
+		list = append(list, id)
+		if !p.peekTokenIs(lexer.COMMA) {
+			return list, true
+		}
+		p.nextToken() // consume ','
+	}
+}
+
+// heritageIdentifier reduces a heritage type reference to an identifier.
+func heritageIdentifier(t Expression) *Identifier {
+	switch n := t.(type) {
+	case *Identifier:
+		return n
+	case *GenericTypeRef:
+		id := &Identifier{Token: n.Name.Token, Value: n.Name.Value}
+		if n.Qualifier != nil {
+			id.Value = n.Qualifier.String() + "." + n.Name.Value
+		}
+		return id
+	case *MemberExpression:
+		if prop, ok := n.Property.(*Identifier); ok {
+			return &Identifier{Token: prop.Token, Value: n.String()}
+		}
+	}
+	return nil
+}
+
+// nonThisParamCount counts parameters other than an explicit `this` parameter.
+func nonThisParamCount(params []*Parameter) int {
+	n := 0
+	for _, prm := range params {
+		if !prm.IsThis {
+			n++
+		}
+	}
+	return n
+}
+
+// noteDecoratedSignature reports tsc's checker grammar error for a decorator on a
+// method (or accessor) that has no body: only an implementation can be decorated.
+func (p *Parser) noteDecoratedSignature(decorators []*Decorator) {
+	if len(decorators) > 0 {
+		p.addGrammarErrorWithCode(decorators[0].Token, "TS1249", "A decorator can only decorate a method implementation, not an overload.")
 	}
 }

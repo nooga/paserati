@@ -60,6 +60,7 @@ func (p *Parser) parseNamespaceDeclaration(declare bool) *NamespaceDeclaration {
 	if declare {
 		p.inAmbientContext++
 	}
+	p.nextBlockIsModule = true
 	body := p.parseBlockStatement()
 	if declare {
 		p.inAmbientContext--
@@ -112,10 +113,15 @@ func (p *Parser) parseAmbientModuleDeclaration() *NamespaceDeclaration {
 		p.nextToken() // module name string
 		name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	}
+	if kwToken.Literal == "module" && !p.peekTokenIs(lexer.LBRACE) && p.peekTokenIs(lexer.SEMICOLON) {
+		// Shorthand ambient module: `declare module "foo";`
+		return &NamespaceDeclaration{Token: kwToken, Name: name, Body: &BlockStatement{Token: kwToken, Statements: []Statement{}, HoistedDeclarations: make(map[string]Expression)}, Declare: true, AmbientModule: true}
+	}
 	if !p.expectPeek(lexer.LBRACE) {
 		return nil
 	}
 	p.inAmbientContext++
+	p.nextBlockIsModule = true
 	body := p.parseBlockStatement()
 	p.inAmbientContext--
 	if body == nil {

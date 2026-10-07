@@ -295,6 +295,8 @@ type Parameter struct {
 	IsPrivate   bool // true if marked with 'private' (constructor parameter property)
 	IsProtected bool // true if marked with 'protected' (constructor parameter property)
 	IsReadonly  bool // true if marked with 'readonly' (constructor parameter property)
+
+	Decorators []*Decorator // parameter decorators (@dec x); parsed, not interpreted
 }
 
 func (p *Parameter) expressionNode()      {} // Parameters can appear in type expressions
@@ -460,6 +462,9 @@ type TemplateLiteral struct {
 	BaseExpression              // Embed base for ComputedType (always string)
 	Token          *lexer.Token // The opening '`' token
 	Parts          []Node       // Alternating string parts and expressions
+	// EscapeDiags are the scanner diagnostics for invalid escapes in the string
+	// parts; reported only when the template is untagged.
+	EscapeDiags []lexer.TokenDiag
 }
 
 func (tl *TemplateLiteral) expressionNode()      {}
@@ -1664,12 +1669,19 @@ type GenericTypeRef struct {
 	Token          *lexer.Token // The identifier token
 	Name           *Identifier  // The generic type name (e.g., "Array")
 	TypeArguments  []Expression // The type arguments (e.g., [string] in Array<string>)
+	// Qualifier is the namespace path for a qualified reference such as
+	// `N.C<T>` (Name is then the rightmost identifier, `C`). Nil otherwise.
+	Qualifier Expression
 }
 
 func (g *GenericTypeRef) expressionNode()      {}
 func (g *GenericTypeRef) TokenLiteral() string { return g.Token.Literal }
 func (g *GenericTypeRef) String() string {
 	var out bytes.Buffer
+	if g.Qualifier != nil {
+		out.WriteString(g.Qualifier.String())
+		out.WriteString(".")
+	}
 	out.WriteString(g.Name.Value)
 	out.WriteString("<")
 	args := []string{}
@@ -1816,9 +1828,14 @@ func (ie *IndexExpression) TokenLiteral() string { return ie.Token.Literal }
 func (ie *IndexExpression) String() string {
 	var out bytes.Buffer
 	out.WriteString("(")
-	out.WriteString(ie.Left.String())
+	// Left is nil for the continuation segment of an optional chain (`a?.b[x]`).
+	if ie.Left != nil {
+		out.WriteString(ie.Left.String())
+	}
 	out.WriteString("[")
-	out.WriteString(ie.Index.String())
+	if ie.Index != nil {
+		out.WriteString(ie.Index.String())
+	}
 	out.WriteString("])")
 	if ie.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", ie.ComputedType.String()))
@@ -1841,9 +1858,14 @@ func (me *MemberExpression) TokenLiteral() string { return me.Token.Literal }
 func (me *MemberExpression) String() string {
 	var out bytes.Buffer
 	out.WriteString("(")
-	out.WriteString(me.Object.String())
+	// Object is nil for the continuation segment of an optional chain (`a?.b.c`).
+	if me.Object != nil {
+		out.WriteString(me.Object.String())
+	}
 	out.WriteString(".")
-	out.WriteString(me.Property.String())
+	if me.Property != nil {
+		out.WriteString(me.Property.String())
+	}
 	out.WriteString(")")
 	if me.ComputedType != nil {
 		out.WriteString(fmt.Sprintf(" /* type: %s */", me.ComputedType.String()))
@@ -2332,6 +2354,7 @@ type MappedTypeExpression struct {
 	TypeParameter  *Identifier  // The iteration variable (e.g., "P" in [P in K])
 	ConstraintType Expression   // The type being iterated over (e.g., K in [P in K])
 	ValueType      Expression   // The resulting value type for each property
+	NameType       Expression   // Optional key remapping: `[P in K as N]` (parsed, not yet applied by the checker)
 
 	// Modifiers for the mapped type
 	ReadonlyModifier string // "+", "-", or "" (for readonly modifier)
@@ -2544,6 +2567,7 @@ type InferTypeExpression struct {
 	BaseExpression              // Embed base for ComputedType
 	Token          *lexer.Token // The 'infer' token
 	TypeParameter  string       // The type parameter being inferred (e.g., 'R' in 'infer R')
+	Constraint     Expression   // Optional constraint: `infer R extends string` (parsed, not yet checked)
 }
 
 func (ite *InferTypeExpression) expressionNode()      {}
@@ -2574,6 +2598,7 @@ type TypePredicateExpression struct {
 	Token          *lexer.Token // The 'is' token
 	Parameter      *Identifier  // The parameter being tested (e.g., "x" in "x is string")
 	Type           Expression   // The type being tested for
+	Asserts        bool         // `asserts x is T` / `asserts x` (an assertion signature)
 }
 
 func (tpe *TypePredicateExpression) expressionNode()      {}
@@ -2581,6 +2606,9 @@ func (tpe *TypePredicateExpression) TokenLiteral() string { return tpe.Token.Lit
 func (tpe *TypePredicateExpression) String() string {
 	var out bytes.Buffer
 
+	if tpe.Asserts {
+		out.WriteString("asserts ")
+	}
 	if tpe.Parameter != nil {
 		out.WriteString(tpe.Parameter.String())
 	}

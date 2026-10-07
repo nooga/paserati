@@ -60,6 +60,14 @@ type SyntaxError struct {
 	Msg      string
 	ErrorCode string // Error code (e.g., PS1001)
 	Cause    error  // Underlying cause, if any
+	// Grammar marks a diagnostic that tsc's *checker* reports through its
+	// grammarError* helpers. tsc suppresses those whenever the file has a
+	// syntactic (parse) diagnostic, so the parser drops them in that case.
+	Grammar bool
+	// Semantic marks a diagnostic tsc reports from its checker with a plain
+	// error(): it is reported even when the file has parse diagnostics, and does
+	// not itself count as a parse diagnostic.
+	Semantic bool
 }
 
 func (e *SyntaxError) Error() string {

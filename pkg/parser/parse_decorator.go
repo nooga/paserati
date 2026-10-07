@@ -35,8 +35,17 @@ func (p *Parser) parseDecoratedStatement() Statement {
 		return p.parseDecoratedExport(decorators)
 
 	default:
-		p.addErrorWithCode(p.curToken, errors.TS1206, "Decorators are not valid here.")
-		return nil
+		// tsc parses the statement after the decorators normally and its checker
+		// reports the decorators as misplaced, at the first '@'.
+		if len(decorators) > 0 {
+			p.addErrorWithCode(decorators[0].Token, errors.TS1206, "Decorators are not valid here.")
+		} else {
+			p.addErrorWithCode(p.curToken, errors.TS1206, "Decorators are not valid here.")
+		}
+		if p.curTokenIs(lexer.EOF) {
+			return nil
+		}
+		return p.parseStatement()
 	}
 }
 
@@ -164,12 +173,12 @@ func (p *Parser) parseDecorator() *Decorator {
 			return nil
 		}
 
-		// Check for call expression: DecoratorMemberExpression Arguments
-		if p.curTokenIs(lexer.LPAREN) {
-			// DecoratorCallExpression - parse the call
-			expr = p.parseDecoratorCallExpression(expr)
-		}
 	}
+
+	// tsc accepts any LeftHandSideExpression after '@' (no element access, which
+	// would be ambiguous with a computed member name): calls, `!`, and generic
+	// calls `@g<T>()` may follow the member chain.
+	expr = p.parseDecoratorSuffixes(expr)
 
 	return &Decorator{
 		Token:      atToken,
@@ -234,4 +243,45 @@ func (p *Parser) parseDecoratorCallExpression(callee Expression) Expression {
 	p.nextToken() // consume ')'
 
 	return callExpr
+}
+
+// parseDecoratorSuffixes parses the call / non-null / type-argument suffixes that
+// may follow a decorator's member chain. cur is the first token after the chain
+// and, as everywhere in decorator parsing, is left on the token after the
+// expression.
+func (p *Parser) parseDecoratorSuffixes(expr Expression) Expression {
+	for {
+		switch {
+		case p.curTokenIs(lexer.LPAREN):
+			expr = p.parseDecoratorCallExpression(expr)
+		case p.curTokenIs(lexer.BANG) && p.curToken.Line == p.prevToken.Line:
+			expr = &NonNullExpression{Token: p.curToken, Expression: expr}
+			p.nextToken()
+		case p.curTokenIs(lexer.DOT) && p.peekIsMemberName():
+			dot := p.curToken
+			p.nextToken()
+			expr = &MemberExpression{Token: dot, Object: expr, Property: &Identifier{Token: p.curToken, Value: p.curToken.Literal}}
+			p.nextToken()
+		case p.curTokenIs(lexer.LT):
+			// @g<T>(...)
+			var targs []Expression
+			p.speculatively(func() { targs = p.tryParseTypeArguments() })
+			if targs == nil || !p.peekTokenIs(lexer.LPAREN) {
+				return expr
+			}
+			p.nextToken() // '('
+			call := p.parseDecoratorCallExpression(expr)
+			if ce, ok := call.(*CallExpression); ok {
+				ce.TypeArguments = targs
+			}
+			expr = call
+		default:
+			return expr
+		}
+	}
+}
+
+// peekIsMemberName reports whether the token after the current one can name a property.
+func (p *Parser) peekIsMemberName() bool {
+	return p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.PRIVATE_IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)
 }
