@@ -243,3 +243,33 @@ func TestVariantsFor(t *testing.T) {
 		}
 	}
 }
+
+// TestTestRootSpellingIndependent checks that a module test resolving its
+// fixtures relative to the test file gets the same result whether -path is
+// relative, absolute, or reached through a symlink.
+func TestTestRootSpellingIndependent(t *testing.T) {
+	rel := filepath.Join("testdata", "corpus")
+	abs, err := filepath.Abs(rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "corpus-link")
+	if err := os.Symlink(abs, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	for _, spelling := range []string{rel, "./" + rel, abs, link} {
+		t.Run(spelling, func(t *testing.T) {
+			root, err := normalizeTestRoot(spelling)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := fixtureOptions(t)
+			opts.testRoot = root
+			opts.testDir = filepath.Join(root, "test")
+			r := runFile(filepath.Join(opts.testDir, "module-fixture.js"), opts)
+			if r.Status != test262.StatusPass {
+				t.Fatalf("status = %s, want pass: %s", r.Status, r.Error)
+			}
+		})
+	}
+}
