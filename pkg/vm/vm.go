@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	stderrors "errors"
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/runtime"
 	"github.com/nooga/paserati/pkg/source"
@@ -1494,6 +1495,20 @@ func (vm *VM) Reset() {
 // from any goroutine.
 func (vm *VM) Cancel() {
 	vm.cancelled.Store(true)
+}
+
+// errCancelled is what CheckCancelled returns once Cancel has been called.
+var errCancelled = stderrors.New("VM execution cancelled")
+
+// CheckCancelled returns an error once Cancel has been called. Native
+// builtins that loop over caller-controlled sizes poll it so a cancellation
+// takes effect inside the builtin, not only at the next instruction (#621).
+// Cheap enough to call per element.
+func (vm *VM) CheckCancelled() error {
+	if vm.cancelled.Load() {
+		return errCancelled
+	}
+	return nil
 }
 
 // Interpret starts executing the given chunk of bytecode.

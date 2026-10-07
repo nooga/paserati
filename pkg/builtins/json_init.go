@@ -339,6 +339,9 @@ func jsonParseText(vmInstance *vm.VM, text string) (vm.Value, error) {
 		val, err = parseJSONToValueWithPrototypes(vmInstance, text)
 	}
 	if err != nil {
+		if cerr := vmInstance.CheckCancelled(); cerr != nil {
+			return vm.Undefined, cerr // not a parse error
+		}
 		// Wrap parse error as SyntaxError exception
 		if ctor, _ := vmInstance.GetGlobal("SyntaxError"); ctor != vm.Undefined {
 			errObj, _ := vmInstance.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(err.Error())})
@@ -381,6 +384,11 @@ func parseJSONWithSource(vmInstance *vm.VM, text string) (vm.Value, jsonSourceMa
 
 // parseJSONWithSourceRecursive parses JSON while tracking source positions
 func parseJSONWithSourceRecursive(vmInstance *vm.VM, text string, path string, sourceMap jsonSourceMap) (vm.Value, error) {
+	if vmInstance != nil {
+		if err := vmInstance.CheckCancelled(); err != nil {
+			return vm.Undefined, err
+		}
+	}
 	text = strings.TrimLeft(text, " \t\r\n")
 	if len(text) == 0 {
 		return vm.Undefined, errors.New("unexpected end of JSON input")
@@ -821,6 +829,11 @@ func internalizeJSONProperty(vmInstance *vm.VM, holder vm.Value, name string, re
 // parseJSONValueFromDecoder reads a JSON value from a decoder, preserving object key order
 // If vmInstance is provided, objects will use Object.prototype and arrays will use Array.prototype
 func parseJSONValueFromDecoder(dec *json.Decoder, vmInstance *vm.VM) (vm.Value, error) {
+	if vmInstance != nil {
+		if err := vmInstance.CheckCancelled(); err != nil {
+			return vm.Undefined, err
+		}
+	}
 	token, err := dec.Token()
 	if err != nil {
 		return vm.Undefined, err

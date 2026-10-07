@@ -1122,6 +1122,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		}
 
 		for i := start; i < end; i++ {
+			if err := pollCancelled(vmInstance, i); err != nil {
+				return vm.Undefined, err
+			}
 			ta.SetElement(i, value)
 		}
 		return thisArray, nil

@@ -2461,6 +2461,9 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 				length := int(lengthVal.ToFloat())
 				result := vm.NewArray()
 				for i := 0; i < length; i++ {
+					if err := pollCancelled(vmInstance, i); err != nil {
+						return vm.Undefined, err
+					}
 					element, _ := vmInstance.GetProperty(arrayLike, fmt.Sprintf("%d", i))
 					// Apply mapping function if provided
 					if mapFn.Type() != vm.TypeUndefined {

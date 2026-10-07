@@ -252,6 +252,16 @@ func joinElementToString(vmInstance *vm.VM, v vm.Value) string {
 	return v.ToString()
 }
 
+// pollCancelled checks for a host cancellation (vm.CheckCancelled) every
+// 4096 iterations of a native loop that does too little per element to poll
+// on every one (#621).
+func pollCancelled(vmInstance *vm.VM, i int) error {
+	if i&4095 != 0 {
+		return nil
+	}
+	return vmInstance.CheckCancelled()
+}
+
 // arrayLikeGet returns (value, exists, error) for index i of an array-like
 // `this`. "exists" mirrors HasProperty so callers can skip holes in a sparse
 // Array or a PlainObject missing that key, matching spec semantics for
@@ -265,6 +275,9 @@ func joinElementToString(vmInstance *vm.VM, v vm.Value) string {
 // primitives, Map/Set/...) has no holes to speak of, so a plain Get is
 // both correct and simpler.
 func arrayLikeGet(vmInstance *vm.VM, thisVal vm.Value, i int) (vm.Value, bool, error) {
+	if err := vmInstance.CheckCancelled(); err != nil {
+		return vm.Undefined, false, err
+	}
 	switch thisVal.Type() {
 	case vm.TypeArray:
 		arr := thisVal.AsArray()
@@ -397,6 +410,9 @@ func arrayLikeGetProxy(vmInstance *vm.VM, proxyVal vm.Value, i int) (vm.Value, b
 // the VM's generic property set (correct for TypedArray element coercion,
 // Proxy set traps, setters, etc.).
 func arrayLikeSet(vmInstance *vm.VM, thisVal vm.Value, i int, val vm.Value) error {
+	if err := vmInstance.CheckCancelled(); err != nil {
+		return err
+	}
 	switch thisVal.Type() {
 	case vm.TypeArray:
 		arr := thisVal.AsArray()
@@ -549,6 +565,9 @@ func isConcatSpreadable(vmInstance *vm.VM, v vm.Value) (bool, error) {
 // false) that throws a TypeError if it fails, rather than the silent
 // always-succeeds write-undefined this replaced.
 func arrayLikeDelete(vmInstance *vm.VM, thisVal vm.Value, i int) error {
+	if err := vmInstance.CheckCancelled(); err != nil {
+		return err
+	}
 	key := strconv.Itoa(i)
 	switch thisVal.Type() {
 	case vm.TypeArray:
