@@ -25,6 +25,9 @@ type linkModule struct {
 	key      string // canonical path, the module's identity
 	fromPath string // what its specifiers resolve against
 	opaque   bool   // no source entries (native or JSON module)
+	// closed marks an opaque module whose export names are known (a native
+	// module): local then lists every name it provides.
+	closed bool
 
 	local    map[string]bool         // export names bound in the module itself
 	indirect map[string]linkIndirect // export name -> imported binding
@@ -171,6 +174,9 @@ func (l *moduleLinker) failLoad(node parser.Node, err error) {
 // resolve (missing or circular), ambiguous for conflicting star exports.
 func (l *moduleLinker) resolveExport(m *linkModule, name string, resolveSet map[linkBinding]bool) (*linkBinding, bool, error) {
 	if m.opaque {
+		if m.closed && !m.local[name] {
+			return nil, false, nil
+		}
 		return &linkBinding{m.key, name}, false, nil
 	}
 	visit := linkBinding{m.key, name}
@@ -251,7 +257,18 @@ func (l *moduleLinker) load(m *linkModule, spec string) (*linkModule, error) {
 	switch {
 	case record.IsJSON:
 		lm = &linkModule{key: key, local: map[string]bool{"default": true}}
-	case record.AST == nil || record.IsNativeModule():
+	case record.IsNativeModule():
+		// A native module's exports are fixed once it has loaded; a name it
+		// does not provide is a link error like any other (#619). Type
+		// exports count too, since a TS import of a type is elided.
+		lm = &linkModule{key: key, opaque: true, closed: true, local: make(map[string]bool)}
+		for name := range record.ExportValues {
+			lm.local[name] = true
+		}
+		for name := range record.Exports {
+			lm.local[name] = true
+		}
+	case record.AST == nil:
 		lm = &linkModule{key: key, opaque: true}
 	default:
 		lm = newLinkModule(key, record.ResolvedPath, record.AST)
