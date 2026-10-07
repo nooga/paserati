@@ -955,6 +955,15 @@ func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs 
 		return nil, c.errors
 	}
 
+	// Script code (a Script, eval code, Function() bodies) cannot contain
+	// import or export declarations; reject them before anything tries to
+	// bind their names (#620).
+	if c.enclosing == nil && (c.forceScriptMode || c.isIndirectEval || c.callerScopeDesc != nil) {
+		if errs := c.checkScriptGoalEarlyErrors(program); len(errs) > 0 {
+			return nil, errs
+		}
+	}
+
 	// Use the assigned checker. If none was assigned (e.g., non-REPL), create one.
 	if c.typeChecker == nil {
 		c.typeChecker = checker.NewChecker()

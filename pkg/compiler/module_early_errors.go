@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/vm"
@@ -20,6 +21,21 @@ import (
 func (c *Compiler) isModuleGoal() bool {
 	return c.IsModuleMode() && !c.forceScriptMode && !c.isIndirectEval &&
 		c.callerScopeDesc == nil && c.enclosing == nil
+}
+
+// checkScriptGoalEarlyErrors reports a top-level import or export
+// declaration in Script code: the Script goal symbol has no production for
+// either (ECMA-262 16.1), so they are SyntaxErrors there.
+func (c *Compiler) checkScriptGoalEarlyErrors(program *parser.Program) []errors.PaseratiError {
+	for _, stmt := range program.Statements {
+		switch stmt.(type) {
+		case *parser.ImportDeclaration:
+			return []errors.PaseratiError{NewCompileError(stmt, "SyntaxError: Cannot use import statement outside a module")}
+		case parser.ExportDeclaration:
+			return []errors.PaseratiError{NewCompileError(stmt, "SyntaxError: Cannot use export statement outside a module")}
+		}
+	}
+	return nil
 }
 
 // checkModuleEarlyErrors reports the first module early error in program.
