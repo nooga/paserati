@@ -1328,6 +1328,16 @@ func (p *Paserati) runAsTemporaryModule(sourceCode string, program *parser.Progr
 // Used for CommonJS wrapping: the host wraps the file body in a function and
 // calls it with (exports, require, module, __filename, __dirname).
 func (p *Paserati) runAsScript(program *parser.Program, filename string) (vm.Value, []errors.PaseratiError) {
+	chunk, errs := p.compileAsScript(program)
+	if len(errs) > 0 {
+		return vm.Undefined, errs
+	}
+	return p.runScriptChunk(chunk, filename)
+}
+
+// compileAsScript compiles a parsed program as a Script (not an ESM module)
+// without running it.
+func (p *Paserati) compileAsScript(program *parser.Program) (*vm.Chunk, []errors.PaseratiError) {
 	p.checker.DisableModuleMode()
 	p.compiler.DisableModuleMode()
 
@@ -1339,16 +1349,21 @@ func (p *Paserati) runAsScript(program *parser.Program, filename string) (vm.Val
 	chunk, compileAndTypeErrs := p.compiler.Compile(program)
 	p.compiler.SetForceScriptMode(false)
 	if len(compileAndTypeErrs) > 0 {
-		return vm.Undefined, compileAndTypeErrs
+		return nil, compileAndTypeErrs
 	}
 	if chunk == nil {
 		internalErr := &errors.RuntimeError{
 			Position: errors.Position{Line: 0, Column: 0},
 			Msg:      "Internal Error: Compilation returned nil chunk without errors.",
 		}
-		return vm.Undefined, []errors.PaseratiError{internalErr}
+		return nil, []errors.PaseratiError{internalErr}
 	}
+	return chunk, nil
+}
 
+// runScriptChunk runs a chunk produced by compileAsScript (or an instance of one,
+// see RunProgram) as a Script on this session.
+func (p *Paserati) runScriptChunk(chunk *vm.Chunk, filename string) (vm.Value, []errors.PaseratiError) {
 	p.vmInstance.SyncGlobalNames(p.compiler.GetHeapAlloc().GetNameToIndexMap())
 	p.vmInstance.ResizeHeapForGlobals(p.compiler.GetHeapAlloc().GetAllocatedSize())
 	p.vmInstance.SetCurrentModulePath(filename)
