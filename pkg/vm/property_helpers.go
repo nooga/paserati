@@ -1405,11 +1405,9 @@ func (vm *VM) resolvePropertyWithCache(objVal Value, propName string, cache *Pro
 				if current != nil {
 					// Find offset in prototype
 					offset := -1
-					for _, field := range current.shape.fields {
-						if field.name == propName {
-							offset = field.offset
-							break
-						}
+					if i := current.shape.lookupStringField(propName); i >= 0 {
+						field := current.shape.fields[i]
+						offset = field.offset
 					}
 
 					if offset >= 0 {
@@ -1451,11 +1449,10 @@ func (vm *VM) resolvePropertyMeta(objVal Value, propName string, cache *PropInli
 	po := AsPlainObject(objVal)
 
 	// 1) Own property fast detection via shape scan
-	for _, f := range po.shape.fields {
-		if f.keyKind == KeyKindString && f.name == propName {
-			// Inline cache update for own property happens at caller
-			return po, f.offset, f.isAccessor, true
-		}
+	if i := po.shape.lookupStringField(propName); i >= 0 {
+		f := po.shape.fields[i]
+		// Inline cache update for own property happens at caller
+		return po, f.offset, f.isAccessor, true
 	}
 
 	// 2) Prototype cache lookup when enabled
@@ -1485,17 +1482,16 @@ func (vm *VM) resolvePropertyMeta(objVal Value, propName string, cache *PropInli
 	for current != nil && depth < 10 {
 		// Already checked own properties of base; skip this iteration for depth 0
 		if depth > 0 {
-			for _, f := range current.shape.fields {
-				if f.keyKind == KeyKindString && f.name == propName {
-					// Update caches
-					if protoCache != nil {
-						protoCache.Update(po.shape, current, depth, f.offset, Undefined, false)
-					}
-					if cache != nil {
-						cache.updateCacheProto(po, propName, current.shape, f.offset, int8(depth), f.isAccessor)
-					}
-					return current, f.offset, f.isAccessor, true
+			if i := current.shape.lookupStringField(propName); i >= 0 {
+				f := current.shape.fields[i]
+				// Update caches
+				if protoCache != nil {
+					protoCache.Update(po.shape, current, depth, f.offset, Undefined, false)
 				}
+				if cache != nil {
+					cache.updateCacheProto(po, propName, current.shape, f.offset, int8(depth), f.isAccessor)
+				}
+				return current, f.offset, f.isAccessor, true
 			}
 		}
 		pv := current.GetPrototype()

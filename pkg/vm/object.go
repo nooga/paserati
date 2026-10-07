@@ -135,7 +135,22 @@ type Shape struct {
 	// (0 unknown, 1 none, 2 some); see hasIndexKey. Field names never change
 	// for a given Shape, so the answer never goes stale.
 	indexKeys atomic.Uint32
+
+	// owned marks a "dictionary-mode" shape: private to one object, absent from
+	// every transition map, and grown in place (see addFieldInPlace). nameIndex
+	// is maintained incrementally for it instead of being rebuilt per shape, so
+	// adding N keys costs O(N) rather than O(N^2) (#596). version is bumped on
+	// every in-place change so inline-cache entries keyed on (shape, version)
+	// go stale exactly as they would on a fresh shape.
+	owned bool
 }
+
+// dictModeFields is the field count at which an object stops walking the
+// shared transition tree and switches to an object-owned, in-place-grown shape.
+// Objects this wide are maps/dictionaries, not records: they are not expected to
+// share a layout, and one new Shape (plus an O(n) index) per added key is what
+// made building them quadratic.
+const dictModeFields = 128
 
 // hasIndexKey reports whether an object of this shape has an own property
 // whose key is an array index ("0", "17", ...).
@@ -189,6 +204,62 @@ func (cur *Shape) extendFields(fld Field) (newFields []Field) {
 	copy(newFields, cur.fields)
 	newFields[n] = fld
 	return newFields
+}
+
+// findKey returns the index in s.fields of the field with the given key, or -1.
+// String keys use the (lazily built, or for owned shapes incrementally
+// maintained) name index once the shape is large; symbols scan, as the index
+// covers string keys only. A field's offset equals its index.
+func (s *Shape) findKey(key PropertyKey) int {
+	if key.isString() {
+		return s.lookupStringField(key.name)
+	}
+	for i := range s.fields {
+		f := &s.fields[i]
+		if f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj {
+			return i
+		}
+	}
+	return -1
+}
+
+// addFieldInPlace appends fld (whose offset must equal len(o.shape.fields)) to
+// o's shape without creating a new Shape, converting o to an object-owned shape
+// first if it still shares one. It reports false, leaving o untouched, while the
+// shape is small enough that the ordinary transition path should be used.
+func (o *PlainObject) addFieldInPlace(fld Field) bool {
+	cur := o.shape
+	if len(cur.fields) < dictModeFields {
+		return false
+	}
+	if !cur.owned {
+		fields := make([]Field, len(cur.fields), len(cur.fields)*2)
+		copy(fields, cur.fields)
+		idx := make(map[string]int, len(fields)*2)
+		for i := range fields {
+			if fields[i].keyKind == KeyKindString {
+				idx[fields[i].name] = i
+			}
+		}
+		own := &Shape{parent: cur.parent, fields: fields, version: cur.version + 1, owned: true}
+		own.nameIndex.Store(&idx)
+		own.indexBuilt.Store(true)
+		o.shape = own
+		cur = own
+	}
+	cur.fields = append(cur.fields, fld)
+	if fld.keyKind == KeyKindString {
+		(*cur.nameIndex.Load())[fld.name] = fld.offset
+	}
+	cur.version++
+	// Keep the cached hasIndexKey answer current: "none" flips to "some" when
+	// an index-like key arrives; unknown/some stay as they are.
+	if fld.keyKind == KeyKindString && cur.indexKeys.Load() == 1 {
+		if _, isIdx := tryParseArrayIndex(fld.name); isIdx {
+			cur.indexKeys.Store(2)
+		}
+	}
+	return true
 }
 
 // forkShape gives o a private, unshared Shape with the same field list, so the
@@ -394,24 +465,34 @@ func (o *PlainObject) SetInternalIterState(st *BuiltinIterState) {
 }
 
 // lookupStringField returns the index of the string-keyed field with the given
-// name, or -1 if not present. Uses the lazy per-shape name index for large
-// shapes; scans for small ones.
+// name, or -1 if not present.
+//
+// It builds no index of its own for a mid-sized shape. The callers are the
+// "does this property already exist?" checks that run just before a key is
+// added, and each add produces a brand-new shape: building a name index per
+// shape there costs O(n) allocation per added key, i.e. quadratic work (and
+// garbage) to build up a 100-property object or prototype - the checks used to
+// be allocation-free linear scans, and still are for shapes up to
+// dictModeFields. An already-built index (owned shapes always have one) is used
+// when present, and a shape too large to scan cheaply gets one built.
 func (s *Shape) lookupStringField(name string) int {
-	if len(s.fields) <= shapeIndexThreshold {
-		for i := range s.fields {
-			f := &s.fields[i]
-			if f.keyKind == KeyKindString && f.name == name {
-				return i
-			}
+	if idx := s.nameIndex.Load(); idx != nil {
+		if i, ok := (*idx)[name]; ok {
+			return i
 		}
 		return -1
 	}
-	idx := s.nameIndex.Load()
-	if idx == nil {
-		idx = s.buildNameIndex()
+	if len(s.fields) > dictModeFields {
+		if i, ok := (*s.buildNameIndex())[name]; ok {
+			return i
+		}
+		return -1
 	}
-	if i, ok := (*idx)[name]; ok {
-		return i
+	for i := range s.fields {
+		f := &s.fields[i]
+		if f.keyKind == KeyKindString && f.name == name {
+			return i
+		}
 	}
 	return -1
 }
@@ -497,18 +578,16 @@ func (o *PlainObject) GetOwnDescriptor(name string) (Value, bool, bool, bool, bo
 
 // GetOwnDescriptorByKey returns descriptor flags for an own property keyed by PropertyKey.
 func (o *PlainObject) GetOwnDescriptorByKey(key PropertyKey) (Value, bool, bool, bool, bool) {
-	for _, f := range o.shape.fields {
-		if (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
-			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj) {
-			if f.isAccessor {
-				return Undefined, false, f.enumerable, f.configurable, true
-			}
-			var v Value = Undefined
-			if f.offset < len(o.properties) {
-				v = o.properties[f.offset]
-			}
-			return v, f.writable, f.enumerable, f.configurable, true
+	if i := o.shape.findKey(key); i >= 0 {
+		f := o.shape.fields[i]
+		if f.isAccessor {
+			return Undefined, false, f.enumerable, f.configurable, true
 		}
+		var v Value = Undefined
+		if f.offset < len(o.properties) {
+			v = o.properties[f.offset]
+		}
+		return v, f.writable, f.enumerable, f.configurable, true
 	}
 	return Undefined, false, false, false, false
 }
@@ -528,22 +607,20 @@ func (o *PlainObject) GetOwnAccessorByKey(key PropertyKey) (Value, Value, bool, 
 	if o.getters == nil && o.setters == nil {
 		return Undefined, Undefined, false, false, false
 	}
-	for _, f := range o.shape.fields {
-		if ((key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
-			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj)) && f.isAccessor {
-			var g, s Value = Undefined, Undefined
-			if o.getters != nil {
-				if v, ok := o.getters[key.hash()]; ok {
-					g = v
-				}
+	if i := o.shape.findKey(key); i >= 0 && o.shape.fields[i].isAccessor {
+		f := o.shape.fields[i]
+		var g, s Value = Undefined, Undefined
+		if o.getters != nil {
+			if v, ok := o.getters[key.hash()]; ok {
+				g = v
 			}
-			if o.setters != nil {
-				if v, ok := o.setters[key.hash()]; ok {
-					s = v
-				}
-			}
-			return g, s, f.enumerable, f.configurable, true
 		}
+		if o.setters != nil {
+			if v, ok := o.setters[key.hash()]; ok {
+				s = v
+			}
+		}
+		return g, s, f.enumerable, f.configurable, true
 	}
 	return Undefined, Undefined, false, false, false
 }
@@ -557,15 +634,10 @@ func (o *PlainObject) DeleteOwn(name string) bool {
 // DeleteOwnByKey removes an own property by key if present and configurable.
 func (o *PlainObject) DeleteOwnByKey(key PropertyKey) bool {
 	// Find field index
-	idx := -1
+	idx := o.shape.findKey(key)
 	var f Field
-	for i := range o.shape.fields {
-		if (key.isString() && o.shape.fields[i].keyKind == KeyKindString && o.shape.fields[i].name == key.name) ||
-			(key.isSymbol() && o.shape.fields[i].keyKind == KeyKindSymbol && o.shape.fields[i].symbolVal.obj == key.symbolVal.obj) {
-			idx = i
-			f = o.shape.fields[i]
-			break
-		}
+	if idx >= 0 {
+		f = o.shape.fields[idx]
 	}
 	if idx == -1 {
 		// Non-existent own property: delete returns true per spec
@@ -619,21 +691,18 @@ func (o *PlainObject) DeleteOwnByKey(key PropertyKey) bool {
 // exists is true if the property exists on this object.
 // nonConfigurable is true if the property exists and is not configurable.
 func (o *PlainObject) IsOwnPropertyNonConfigurable(name string) (exists bool, nonConfigurable bool) {
-	for _, f := range o.shape.fields {
-		if f.keyKind == KeyKindString && f.name == name {
-			return true, !f.configurable
-		}
+	if i := o.shape.lookupStringField(name); i >= 0 {
+		f := o.shape.fields[i]
+		return true, !f.configurable
 	}
 	return false, false
 }
 
 // IsOwnPropertyNonConfigurableByKey checks if a property exists and is non-configurable by key
 func (o *PlainObject) IsOwnPropertyNonConfigurableByKey(key PropertyKey) (exists bool, nonConfigurable bool) {
-	for _, f := range o.shape.fields {
-		if (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
-			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj) {
-			return true, !f.configurable
-		}
+	if i := o.shape.findKey(key); i >= 0 {
+		f := o.shape.fields[i]
+		return true, !f.configurable
 	}
 	return false, false
 }
@@ -664,15 +733,21 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 		return
 	}
 
-	// Check if property already exists (need linear scan)
-	for _, f := range cur.fields {
-		if f.keyKind == KeyKindString && f.name == name {
-			// existing property: honor writable flag
-			if f.writable {
-				o.properties[f.offset] = v
-			}
-			return
+	// Check if property already exists (indexed once the shape is large)
+	if i := cur.lookupStringField(name); i >= 0 {
+		// existing property: honor writable flag
+		if f := &cur.fields[i]; f.writable {
+			o.properties[f.offset] = v
 		}
+		return
+	}
+
+	// Wide objects (maps used as dictionaries) grow an owned shape in place
+	// instead of walking one transition per key (#596).
+	if len(cur.fields) >= dictModeFields {
+		o.addFieldInPlace(Field{offset: len(cur.fields), name: name, keyKind: KeyKindString, writable: true, enumerable: true, configurable: true})
+		o.properties = append(o.properties, v)
+		return
 	}
 
 	// new property: regular assignment semantics -> writable: true, enumerable: true, configurable: true
@@ -715,17 +790,19 @@ func (o *PlainObject) SetOwn(name string, v Value) {
 // Creates a new shape on first definition with enumerable: false, writable: true, configurable: true.
 func (o *PlainObject) SetOwnNonEnumerable(name string, v Value) {
 	// Check if property already exists
-	for _, f := range o.shape.fields {
-		if f.keyKind == KeyKindString && f.name == name {
-			// existing property: honor writable flag
-			if f.writable {
-				o.properties[f.offset] = v
-			}
-			return
+	if i := o.shape.lookupStringField(name); i >= 0 {
+		// existing property: honor writable flag
+		if f := &o.shape.fields[i]; f.writable {
+			o.properties[f.offset] = v
 		}
+		return
 	}
 	// new property: built-in assignment semantics -> writable: true, enumerable: false, configurable: true
 	cur := o.shape
+	if o.addFieldInPlace(Field{offset: len(cur.fields), name: name, keyKind: KeyKindString, writable: true, enumerable: false, configurable: true}) {
+		o.properties = append(o.properties, v)
+		return
+	}
 	// Use transitions map with "ne:" prefix for non-enumerable (less common path)
 	hashKey := "ne:" + name
 	cur.mu.RLock()
@@ -760,63 +837,62 @@ func (o *PlainObject) SetOwnNonEnumerable(name string, v Value) {
 // For existing properties, unspecified attributes (nil) will keep previous values.
 func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool, enumerable *bool, configurable *bool) bool {
 	// Update existing
-	for i, f := range o.shape.fields {
-		if f.keyKind == KeyKindString && f.name == name {
-			// Existing property: enforce non-configurable rules
-			newF := f
-			convertingFromAccessor := false
-			if f.isAccessor {
-				// Convert accessor to data property: only if configurable
-				if !f.configurable {
-					return false
-				}
-				newF.isAccessor = false
-				newF.writable = false // Default for new data property
-				convertingFromAccessor = true
-				// Clean up getter/setter maps
-				keyHash := keyFromString(name).hash()
-				if o.getters != nil {
-					delete(o.getters, keyHash)
-				}
-				if o.setters != nil {
-					delete(o.setters, keyHash)
-				}
-			}
-			// If current non-configurable, cannot change configurable or enumerable
+	if i := o.shape.lookupStringField(name); i >= 0 {
+		f := o.shape.fields[i]
+		// Existing property: enforce non-configurable rules
+		newF := f
+		convertingFromAccessor := false
+		if f.isAccessor {
+			// Convert accessor to data property: only if configurable
 			if !f.configurable {
-				if configurable != nil && *configurable != f.configurable {
-					return false
-				}
-				if enumerable != nil && *enumerable != f.enumerable {
-					return false
-				}
-				// Non-configurable, non-writable properties cannot have writable changed to true
-				if !f.writable && writable != nil && *writable {
-					return false
-				}
-			}
-			// Update value: if configurable, always allow; otherwise only if writable.
-			// A non-configurable, non-writable property may only be "redefined"
-			// with the value it already has (SameValue) - anything else is a
-			// rejection, not a silent no-op.
-			if f.configurable || convertingFromAccessor || f.writable {
-				o.properties[f.offset] = value
-			} else if !sameValue(o.properties[f.offset], value) {
 				return false
 			}
-			if writable != nil {
-				newF.writable = *writable
+			newF.isAccessor = false
+			newF.writable = false // Default for new data property
+			convertingFromAccessor = true
+			// Clean up getter/setter maps
+			keyHash := keyFromString(name).hash()
+			if o.getters != nil {
+				delete(o.getters, keyHash)
 			}
-			if enumerable != nil {
-				newF.enumerable = *enumerable
+			if o.setters != nil {
+				delete(o.setters, keyHash)
 			}
-			if configurable != nil {
-				newF.configurable = *configurable
-			}
-			o.forkShape()
-			o.shape.fields[i] = newF
-			return true
 		}
+		// If current non-configurable, cannot change configurable or enumerable
+		if !f.configurable {
+			if configurable != nil && *configurable != f.configurable {
+				return false
+			}
+			if enumerable != nil && *enumerable != f.enumerable {
+				return false
+			}
+			// Non-configurable, non-writable properties cannot have writable changed to true
+			if !f.writable && writable != nil && *writable {
+				return false
+			}
+		}
+		// Update value: if configurable, always allow; otherwise only if writable.
+		// A non-configurable, non-writable property may only be "redefined"
+		// with the value it already has (SameValue) - anything else is a
+		// rejection, not a silent no-op.
+		if f.configurable || convertingFromAccessor || f.writable {
+			o.properties[f.offset] = value
+		} else if !sameValue(o.properties[f.offset], value) {
+			return false
+		}
+		if writable != nil {
+			newF.writable = *writable
+		}
+		if enumerable != nil {
+			newF.enumerable = *enumerable
+		}
+		if configurable != nil {
+			newF.configurable = *configurable
+		}
+		o.forkShape()
+		o.shape.fields[i] = newF
+		return true
 	}
 	// New property via descriptor: defaults false unless specified
 	cur := o.shape
@@ -830,6 +906,10 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 	}
 	if configurable != nil {
 		fld.configurable = *configurable
+	}
+	if o.addFieldInPlace(fld) {
+		o.properties = append(o.properties, value)
+		return true
 	}
 	cur.mu.Lock()
 	newFields := cur.extendFields(fld)
@@ -959,37 +1039,36 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 	noteAccessorKey(name)
 	// Wrapper using string name
 	// Find existing field
-	for i, f := range o.shape.fields {
-		if f.keyKind == KeyKindString && f.name == name {
-			if !o.accessorRedefineAllowed(f, keyFromString(name), getter, hasGetter, setter, hasSetter, enumerable, configurable) {
-				return false
-			}
-			// Update to accessor kind
-			newF := f
-			newF.isAccessor = true
-			// writable is meaningless for accessor
-			if enumerable != nil {
-				newF.enumerable = *enumerable
-			}
-			if configurable != nil {
-				newF.configurable = *configurable
-			}
-			o.forkShape()
-			o.shape.fields[i] = newF
-			if o.getters == nil {
-				o.getters = make(map[string]Value)
-			}
-			if o.setters == nil {
-				o.setters = make(map[string]Value)
-			}
-			if hasGetter {
-				o.getters[keyFromString(name).hash()] = getter
-			}
-			if hasSetter {
-				o.setters[keyFromString(name).hash()] = setter
-			}
-			return true
+	if i := o.shape.lookupStringField(name); i >= 0 {
+		f := o.shape.fields[i]
+		if !o.accessorRedefineAllowed(f, keyFromString(name), getter, hasGetter, setter, hasSetter, enumerable, configurable) {
+			return false
 		}
+		// Update to accessor kind
+		newF := f
+		newF.isAccessor = true
+		// writable is meaningless for accessor
+		if enumerable != nil {
+			newF.enumerable = *enumerable
+		}
+		if configurable != nil {
+			newF.configurable = *configurable
+		}
+		o.forkShape()
+		o.shape.fields[i] = newF
+		if o.getters == nil {
+			o.getters = make(map[string]Value)
+		}
+		if o.setters == nil {
+			o.setters = make(map[string]Value)
+		}
+		if hasGetter {
+			o.getters[keyFromString(name).hash()] = getter
+		}
+		if hasSetter {
+			o.setters[keyFromString(name).hash()] = setter
+		}
+		return true
 	}
 	// New field - for accessors, always create a new shape (don't use transitions)
 	// because accessor properties have different semantics than data properties
@@ -1002,11 +1081,12 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 	if configurable != nil {
 		fld.configurable = *configurable
 	}
-	cur.mu.Lock()
-	newFields := cur.extendFields(fld)
-	cur.mu.Unlock()
-	next := &Shape{parent: cur, fields: newFields, version: cur.version + 1}
-	o.shape = next
+	if !o.addFieldInPlace(fld) {
+		cur.mu.Lock()
+		newFields := cur.extendFields(fld)
+		cur.mu.Unlock()
+		o.shape = &Shape{parent: cur, fields: newFields, version: cur.version + 1}
+	}
 	// Ensure maps
 	if o.getters == nil {
 		o.getters = make(map[string]Value)
@@ -1027,49 +1107,47 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 
 // DefineOwnPropertyByKey defines or updates an own property for arbitrary key kinds.
 func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writable *bool, enumerable *bool, configurable *bool) bool {
-	for i, f := range o.shape.fields {
-		match := (key.isString() && f.keyKind == KeyKindString && f.name == key.name) || (key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj)
-		if match {
-			newF := f
-			if f.isAccessor {
-				// Only allow conversion if configurable
-				if !f.configurable {
-					return false
-				}
-				newF.isAccessor = false
-				newF.writable = false
-			}
+	if i := o.shape.findKey(key); i >= 0 {
+		f := o.shape.fields[i]
+		newF := f
+		if f.isAccessor {
+			// Only allow conversion if configurable
 			if !f.configurable {
-				if configurable != nil && *configurable != f.configurable {
-					return false
-				}
-				if enumerable != nil && *enumerable != f.enumerable {
-					return false
-				}
-			}
-			if !f.configurable && !f.writable && writable != nil && *writable {
 				return false
 			}
-			// Update value: if configurable, always allow; otherwise only if
-			// writable. See DefineOwnProperty for the SameValue rule.
-			if f.configurable || f.writable {
-				o.properties[f.offset] = value
-			} else if !sameValue(o.properties[f.offset], value) {
-				return false
-			}
-			if writable != nil {
-				newF.writable = *writable
-			}
-			if enumerable != nil {
-				newF.enumerable = *enumerable
-			}
-			if configurable != nil {
-				newF.configurable = *configurable
-			}
-			o.forkShape()
-			o.shape.fields[i] = newF
-			return true
+			newF.isAccessor = false
+			newF.writable = false
 		}
+		if !f.configurable {
+			if configurable != nil && *configurable != f.configurable {
+				return false
+			}
+			if enumerable != nil && *enumerable != f.enumerable {
+				return false
+			}
+		}
+		if !f.configurable && !f.writable && writable != nil && *writable {
+			return false
+		}
+		// Update value: if configurable, always allow; otherwise only if
+		// writable. See DefineOwnProperty for the SameValue rule.
+		if f.configurable || f.writable {
+			o.properties[f.offset] = value
+		} else if !sameValue(o.properties[f.offset], value) {
+			return false
+		}
+		if writable != nil {
+			newF.writable = *writable
+		}
+		if enumerable != nil {
+			newF.enumerable = *enumerable
+		}
+		if configurable != nil {
+			newF.configurable = *configurable
+		}
+		o.forkShape()
+		o.shape.fields[i] = newF
+		return true
 	}
 	// New
 	cur := o.shape
@@ -1086,6 +1164,10 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 	}
 	if configurable != nil {
 		fld.configurable = *configurable
+	}
+	if o.addFieldInPlace(fld) {
+		o.properties = append(o.properties, value)
+		return true
 	}
 	cur.mu.Lock()
 	newFields := cur.extendFields(fld)
@@ -1120,37 +1202,34 @@ func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value,
 		noteAccessorKey(key.name)
 	}
 	// Find existing field
-	for i, f := range o.shape.fields {
-		match := (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
-			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj)
-		if match {
-			if !o.accessorRedefineAllowed(f, key, getter, hasGetter, setter, hasSetter, enumerable, configurable) {
-				return false
-			}
-			newF := f
-			newF.isAccessor = true
-			if enumerable != nil {
-				newF.enumerable = *enumerable
-			}
-			if configurable != nil {
-				newF.configurable = *configurable
-			}
-			o.forkShape()
-			o.shape.fields[i] = newF
-			if o.getters == nil {
-				o.getters = make(map[string]Value)
-			}
-			if o.setters == nil {
-				o.setters = make(map[string]Value)
-			}
-			if hasGetter {
-				o.getters[key.hash()] = getter
-			}
-			if hasSetter {
-				o.setters[key.hash()] = setter
-			}
-			return true
+	if i := o.shape.findKey(key); i >= 0 {
+		f := o.shape.fields[i]
+		if !o.accessorRedefineAllowed(f, key, getter, hasGetter, setter, hasSetter, enumerable, configurable) {
+			return false
 		}
+		newF := f
+		newF.isAccessor = true
+		if enumerable != nil {
+			newF.enumerable = *enumerable
+		}
+		if configurable != nil {
+			newF.configurable = *configurable
+		}
+		o.forkShape()
+		o.shape.fields[i] = newF
+		if o.getters == nil {
+			o.getters = make(map[string]Value)
+		}
+		if o.setters == nil {
+			o.setters = make(map[string]Value)
+		}
+		if hasGetter {
+			o.getters[key.hash()] = getter
+		}
+		if hasSetter {
+			o.setters[key.hash()] = setter
+		}
+		return true
 	}
 	// New field. The cached transition must be keyed by the attributes as well
 	// as the key: two defineProperty calls for the same key but different
@@ -1171,6 +1250,11 @@ func (o *PlainObject) DefineAccessorPropertyByKey(key PropertyKey, getter Value,
 	cur.mu.RLock()
 	next, ok := cur.transitions[hashKey]
 	cur.mu.RUnlock()
+	fld.offset = len(cur.fields)
+	if o.addFieldInPlace(fld) {
+		ok = true
+		next = o.shape
+	}
 	if !ok {
 		cur.mu.Lock()
 		// Re-check under write lock: another goroutine might have added this
@@ -1212,11 +1296,8 @@ func (o *PlainObject) HasOwn(name string) bool {
 
 func (o *PlainObject) HasOwnByKey(key PropertyKey) bool {
 	// Check regular property slots in shape
-	for _, f := range o.shape.fields {
-		if (key.isString() && f.keyKind == KeyKindString && f.name == key.name) ||
-			(key.isSymbol() && f.keyKind == KeyKindSymbol && f.symbolVal.obj == key.symbolVal.obj) {
-			return true
-		}
+	if o.shape.findKey(key) >= 0 {
+		return true
 	}
 	// Also check accessor properties (getters/setters are stored separately)
 	keyHash := key.hash()

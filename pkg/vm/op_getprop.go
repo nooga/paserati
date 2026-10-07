@@ -379,7 +379,7 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 						break
 					}
 					current = pv.AsPlainObject()
-					if i+1 < entry.protoDepth && current.shape != entry.midShapes[i] {
+					if i+1 < entry.protoDepth && (current.shape != entry.midShapes[i] || current.shape.version != entry.midVersions[i]) {
 						current = nil
 					}
 				}
@@ -504,11 +504,9 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 
 			// Update cache flags for direct own properties
 			if holder == po {
-				for _, field := range po.shape.fields {
-					if field.name == propName {
-						cache.updateCache(po.shape, propName, field.offset, field.isAccessor, field.writable)
-						break
-					}
+				if i := po.shape.lookupStringField(propName); i >= 0 {
+					field := po.shape.fields[i]
+					cache.updateCache(po.shape, propName, field.offset, field.isAccessor, field.writable)
 				}
 			}
 

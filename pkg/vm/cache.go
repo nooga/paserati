@@ -23,8 +23,9 @@ type PropCacheEntry struct {
 	// shape and must shadow the holder.
 	holderShape   *Shape
 	midShapes     []*Shape
-	offset        int    // The property offset in the object's properties slice
-	shapeVersion  uint32 // Version guard for the shape
+	midVersions   []uint32 // versions of midShapes when cached: an owned (dictionary-mode) shape grows in place, keeping its pointer
+	offset        int      // The property offset in the object's properties slice
+	shapeVersion  uint32   // Version guard for the shape
 	holderVersion uint32
 	protoDepth    int8
 	isProto       bool
@@ -175,8 +176,10 @@ func (ic *PropInlineCache) updateCache(shape *Shape, propName string, offset int
 // found depth levels up base's prototype chain.
 func (ic *PropInlineCache) updateCacheProto(base *PlainObject, propName string, holderShape *Shape, offset int, depth int8, isAccessor bool) {
 	var mids []*Shape
+	var midVers []uint32
 	if depth > 1 {
 		mids = make([]*Shape, 0, depth-1)
+		midVers = make([]uint32, 0, depth-1)
 		cur := base
 		for i := int8(1); i < depth; i++ {
 			pv := cur.prototype
@@ -185,10 +188,11 @@ func (ic *PropInlineCache) updateCacheProto(base *PlainObject, propName string, 
 			}
 			cur = pv.AsPlainObject()
 			mids = append(mids, cur.shape)
+			midVers = append(midVers, cur.shape.version)
 		}
 	}
 	baseShape := base.shape
-	e := PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, midShapes: mids, protoDepth: depth, offset: offset, isAccessor: isAccessor}
+	e := PropCacheEntry{shape: baseShape, shapeVersion: baseShape.version, propName: propName, isProto: true, holderShape: holderShape, holderVersion: holderShape.version, midShapes: mids, midVersions: midVers, protoDepth: depth, offset: offset, isAccessor: isAccessor}
 	switch ic.state {
 	case CacheStateUninitialized:
 		ic.state = CacheStateMonomorphic
