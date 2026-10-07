@@ -1,4 +1,4 @@
-// expect_compile_error: This member cannot have an 'override' modifier because class 'MyClass' does not extend another class.
+// expect_compile_error: This member cannot have an 'override' modifier because its containing class 'MyClass' does not extend another class.
 // Test override error without inheritance
 
 class MyClass {

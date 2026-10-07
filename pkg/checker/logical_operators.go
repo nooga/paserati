@@ -149,7 +149,7 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 				(widenedLeftType == types.BigInt && widenedRightType == types.String) {
 				resultType = types.BigInt
 			} else {
-				c.reportArithmeticOperandType(node, widenedLeftType)
+				c.reportArithmeticOperandType(node, widenedLeftType, widenedRightType)
 				// Keep resultType = types.Any (default)
 			}
 		// --- Handle % and ** type checking ---
@@ -166,7 +166,7 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 				(widenedLeftType == types.Number && widenedRightType == types.BigInt) {
 				c.reportOperatorNotApplicable(node, widenedLeftType, widenedRightType)
 			} else {
-				c.reportArithmeticOperandType(node, widenedLeftType)
+				c.reportArithmeticOperandType(node, widenedLeftType, widenedRightType)
 			}
 
 		// --- Handle Bitwise/Shift Operators ---
@@ -211,7 +211,7 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 					resultType = types.Number
 				} else {
 					// Operands are not compatible types for bitwise/shift operations.
-					c.reportArithmeticOperandType(node, widenedLeftType)
+					c.reportArithmeticOperandType(node, widenedLeftType, widenedRightType)
 					// Keep resultType = types.Any (default)
 				}
 			}

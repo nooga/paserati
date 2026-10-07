@@ -115,7 +115,8 @@ func (c *Checker) extractTypeParametersFromSignature(sig *types.Signature) []*ty
 				extractFromType(memberType)
 			}
 		case *types.ObjectType:
-			for _, propType := range typ.Properties {
+			for _, __name := range types.SortedPropertyNames(typ.Properties) {
+				propType := typ.Properties[__name]
 				extractFromType(propType)
 			}
 			// Also search CallSignatures (function types are ObjectTypes with call signatures)
@@ -297,7 +298,8 @@ type Checker struct {
 	// Track if we're currently inside an async or generator function
 	inAsyncFunction        bool
 	inGeneratorFunction    bool
-	functionNestingDepth   int // 0 = top level, >0 = inside function(s)
+	functionNestingDepth   int  // 0 = top level, >0 = inside function(s)
+	crossFunctionTargets   bool // a loop, switch or label encloses the current function, so jumps there cross a function boundary
 	allowTopLevelReturn    bool
 	skipStrictPropertyInit bool // When true, TS2564 is not emitted (strict-init opt-out)
 	skipDefiniteAssignment bool // When true, TS2454 is not emitted (definite-assignment opt-out)
@@ -356,6 +358,8 @@ type Checker struct {
 	// Computed key expressions in class/interface bodies are checked after Pass 3
 	// so that const/let declarations earlier in the file are already in scope.
 	deferredComputedKeyChecks []deferredComputedKeyCheck
+	deferredHeritageChecks    []deferredHeritageCheck
+	typeRefNode               parser.Node // type reference being instantiated, for arity diagnostics
 }
 
 type deferredComputedKeyCheck struct {
@@ -370,9 +374,11 @@ func NewChecker() *Checker {
 
 // NewCheckerWithInitializers creates a new type checker with custom built-in initializers.
 func NewCheckerWithInitializers(initializers []builtins.BuiltinInitializer) *Checker {
+	globalEnv := NewGlobalEnvironment(initializers)
+	globalEnv.snapshotBuiltins()
 	return &Checker{
-		env:    NewGlobalEnvironment(initializers), // Create persistent global environment with custom initializers
-		errors: []errors.PaseratiError{},           // Initialize with correct type
+		env:    globalEnv,                // Create persistent global environment with custom initializers
+		errors: []errors.PaseratiError{}, // Initialize with correct type
 		// Initialize function context fields to nil/empty
 		currentExpectedReturnType:  nil,
 		currentInferredReturnTypes: nil,
@@ -575,8 +581,13 @@ func (c *Checker) createAccessError(objType *types.ObjectType, memberName string
 			code = errors.TS18013
 			errorMsg = fmt.Sprintf("Property '%s' is not accessible outside class '%s' because it has a private identifier.", memberName, className)
 		} else {
-			errorMsg = fmt.Sprintf("Property '%s' is %s and only accessible within class '%s'",
-				memberName, memberInfo.AccessLevel.String(), className)
+			if memberInfo.AccessLevel == types.AccessProtected {
+				code = errors.TS2445
+				errorMsg = fmt.Sprintf("Property '%s' is protected and only accessible within class '%s' and its subclasses.", memberName, className)
+			} else {
+				code = errors.TS2341
+				errorMsg = fmt.Sprintf("Property '%s' is private and only accessible within class '%s'.", memberName, className)
+			}
 		}
 	} else {
 		errorMsg = fmt.Sprintf("Property '%s' does not exist on type '%s'", memberName, className)
@@ -1234,6 +1245,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.currentInferredYieldTypes = []types.Type{} // Always collect yield types for generators
 		c.inAsyncFunction = funcLit.IsAsync
 		c.inGeneratorFunction = funcLit.IsGenerator
+		outerCrossTargets := c.crossFunctionTargets
+		c.crossFunctionTargets = outerCrossTargets || outerLoopDepth > 0 || c.switchDepth > 0 || len(c.activeLabels) > 0
 		c.loopDepth = 0
 		c.switchDepth = 0
 		c.activeLabels = make(map[string]bool)
@@ -1430,6 +1443,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		// Create the FINAL ObjectType with updated signature
 		finalSignature := &types.Signature{
+			TypeParameters:    funcSignature.TypeParameters,
 			ParameterTypes:    funcSignature.ParameterTypes,
 			ReturnType:        actualReturnType,
 			OptionalParams:    funcSignature.OptionalParams,
@@ -1482,6 +1496,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		c.inAsyncFunction = outerInAsyncFunction
 		c.inGeneratorFunction = outerInGeneratorFunction
 		c.loopDepth = outerLoopDepth
+		c.crossFunctionTargets = outerCrossTargets
 		c.switchDepth = outerSwitchDepth
 		c.activeLabels = outerActiveLabels
 		c.functionNestingDepth--
@@ -1589,6 +1604,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	}
 	debugPrintf("// --- Checker - Pass 5: Complete ---\n")
 
+	c.runDeferredHeritageChecks()
+
 	// Emit TS2304/TS2552 for typeof expressions with identifiers that were never resolved
 	for _, node := range c.unresolvedTypeofNodes {
 		if _, _, found := globalEnv.Resolve(node.Identifier); !found {
@@ -1601,7 +1618,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	for _, sigs := range globalEnv.GetAllPendingOverloads() {
 		for _, sig := range sigs {
 			if sig.Name != nil {
-				c.addError(sig.Name, "Function implementation is missing or not immediately following the declaration.")
+				c.addErrorWithCode(sig.Name, errors.TS2391, "Function implementation is missing or not immediately following the declaration.")
 			}
 		}
 	}
@@ -2031,7 +2048,7 @@ func (c *Checker) visit(node parser.Node) {
 				}
 			} else {
 				// Constants MUST be initialized
-				c.addError(declarator.Name, fmt.Sprintf("const declaration '%s' must be initialized", declarator.Name.Value))
+				c.addErrorWithCode(declarator.Name, errors.TS1155, "'const' declarations must be initialized.")
 				computedInitializerType = types.Any // Assign Any to prevent further cascading errors downstream
 			}
 
@@ -2251,7 +2268,7 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.ReturnStatement:
 		if c.functionNestingDepth == 0 && !c.allowTopLevelReturn {
-			c.addError(node, "A 'return' statement can only be used within a function body.")
+			c.addErrorWithCode(node, errors.TS1108, "A 'return' statement can only be used within a function body.")
 		}
 		var actualReturnType types.Type = types.Undefined // Default if no return value
 		if node.ReturnValue != nil {
@@ -2294,9 +2311,8 @@ func (c *Checker) visit(node parser.Node) {
 			if _, ok := c.currentExpectedReturnType.(*types.TypePredicateType); ok {
 				// Type predicate functions should accept boolean returns
 				if !types.IsAssignable(actualReturnType, types.Boolean) {
-					msg := fmt.Sprintf("cannot return value of type %s from type predicate function expecting boolean",
-						actualReturnType)
-					c.addError(node.ReturnValue, msg)
+					msg := fmt.Sprintf("Type '%s' is not assignable to type 'boolean'.", actualReturnType)
+					c.addErrorWithCode(node.ReturnValue, errors.TS2322, msg)
 				}
 			} else {
 				expectedType := c.currentExpectedReturnType
@@ -2307,9 +2323,8 @@ func (c *Checker) visit(node parser.Node) {
 					actualType = c.getAwaitedType(actualType)
 				}
 				if !c.isAssignableWithExpansion(actualType, expectedType) {
-					msg := fmt.Sprintf("cannot return value of type %s from function expecting %s",
-						actualReturnType, expectedType)
-					c.addError(node.ReturnValue, msg)
+					msg := fmt.Sprintf("Type '%s' is not assignable to type '%s'.", actualReturnType, expectedType)
+					c.addErrorWithCode(node.ReturnValue, errors.TS2322, msg)
 				}
 			}
 		}
@@ -2414,7 +2429,7 @@ func (c *Checker) visit(node parser.Node) {
 		for _, sigs := range c.env.GetAllPendingOverloads() {
 			for _, sig := range sigs {
 				if sig.Name != nil {
-					c.addError(sig.Name, "Function implementation is missing or not immediately following the declaration.")
+					c.addErrorWithCode(sig.Name, errors.TS2391, "Function implementation is missing or not immediately following the declaration.")
 				}
 			}
 		}
@@ -2482,8 +2497,9 @@ func (c *Checker) visit(node parser.Node) {
 			node.SetComputedType(c.currentThisType)
 			debugPrintf("// [Checker ThisExpr] Using context this type: %s\n", c.currentThisType.String())
 		} else {
-			// Global context or regular function - 'this' is undefined
-			node.SetComputedType(types.Undefined)
+			// Top level: 'this' is typeof globalThis (script) or undefined
+			// (module); we cannot tell them apart reliably, so stay permissive.
+			node.SetComputedType(types.Any)
 			debugPrintf("// [Checker ThisExpr] No this context, using undefined\n")
 		}
 
@@ -2644,22 +2660,23 @@ func (c *Checker) visit(node parser.Node) {
 		if node.Operator == "++" || node.Operator == "--" {
 			if ident, ok := node.Right.(*parser.Identifier); ok {
 				if ident.Value == "eval" || ident.Value == "arguments" {
-					c.addError(ident, fmt.Sprintf("Cannot assign to '%s' because it is a function.", ident.Value))
+					c.addErrorWithCode(ident, errors.TS2630, fmt.Sprintf("Cannot assign to '%s' because it is a function.", ident.Value))
 				}
 			}
 		}
-		// TS2703: delete on non-property-reference expressions
+		// TS2703: delete on non-property-reference expressions. TypeScript checks
+		// the operand first, then rejects anything that is not a property access.
 		if node.Operator == "delete" {
-			switch rhs := node.Right.(type) {
-			case *parser.Identifier:
-				c.addError(rhs, "The operand of a 'delete' operator must be a property reference.")
-				_, _, found := c.env.Resolve(rhs.Value)
-				if !found {
-					node.SetComputedType(types.Boolean)
-					return
+			switch node.Right.(type) {
+			case *parser.MemberExpression, *parser.IndexExpression,
+				*parser.OptionalChainingExpression, *parser.OptionalIndexExpression:
+				// property references are fine
+			default:
+				c.visit(node.Right)
+				if ident, isIdent := node.Right.(*parser.Identifier); isIdent && (c.isModule || c.alwaysStrict || c.getCurrentClassName() != "") {
+					c.addErrorWithCode(ident, errors.TS1102, "'delete' cannot be called on an identifier in strict mode.")
 				}
-			case *parser.ThisExpression:
-				c.addError(rhs, "The operand of a 'delete' operator must be a property reference.")
+				c.addErrorWithCode(node.Right, errors.TS2703, "The operand of a 'delete' operator must be a property reference.")
 				node.SetComputedType(types.Boolean)
 				return
 			}
@@ -2681,9 +2698,13 @@ func (c *Checker) visit(node parser.Node) {
 					} else {
 						resultType = types.Number
 					}
+				} else if widenedRightType == types.BigInt {
+					resultType = types.BigInt
 				} else {
-					c.addError(node, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedRightType.String()))
-					// Keep resultType = types.Any (default)
+					// TypeScript only rejects symbol operands here; every other
+					// type is coerced to a number.
+					c.reportSymbolUnaryOperand(node, widenedRightType)
+					resultType = types.Number
 				}
 			case "!":
 				resultType = types.Boolean
@@ -2693,6 +2714,7 @@ func (c *Checker) visit(node parser.Node) {
 				if widenedRightType == types.Any {
 					resultType = types.Any
 				} else {
+					c.reportSymbolUnaryOperand(node, widenedRightType)
 					// In TypeScript/JavaScript, unary plus always attempts to convert to number
 					// For type checking purposes, the result is always number (even if it could be NaN at runtime)
 					resultType = types.Number
@@ -2709,9 +2731,11 @@ func (c *Checker) visit(node parser.Node) {
 					resultType = types.Number
 				} else if widenedRightType == types.Number {
 					resultType = types.Number // Result of ~number is number
+				} else if widenedRightType == types.BigInt {
+					resultType = types.BigInt
 				} else {
-					c.addError(node, fmt.Sprintf("operator '%s' cannot be applied to type '%s'", node.Operator, widenedRightType.String()))
-					// Keep resultType = types.Any (default)
+					c.reportSymbolUnaryOperand(node, widenedRightType)
+					resultType = types.Number
 				}
 			// --- NEW: Handle delete operator ---
 			case "delete":
@@ -2988,7 +3012,7 @@ func (c *Checker) visit(node parser.Node) {
 		// --- NEW: Handle UpdateExpression ---
 		if ident, ok := node.Argument.(*parser.Identifier); ok {
 			if ident.Value == "eval" || ident.Value == "arguments" {
-				c.addError(ident, fmt.Sprintf("Cannot assign to '%s' because it is a function.", ident.Value))
+				c.addErrorWithCode(ident, errors.TS2630, fmt.Sprintf("Cannot assign to '%s' because it is a function.", ident.Value))
 			}
 		}
 		c.visit(node.Argument)
@@ -3071,20 +3095,20 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.BreakStatement:
 		if node.Label != nil {
 			if c.activeLabels == nil || !c.activeLabels[node.Label.Value] {
-				c.addError(node, fmt.Sprintf("A 'break' statement can only jump to a label of an enclosing statement."))
+				c.reportBadJump(node, true, true)
 			}
 		} else if c.loopDepth == 0 && c.switchDepth == 0 {
-			c.addError(node, "A 'break' statement can only be used within an enclosing iteration or switch statement.")
+			c.reportBadJump(node, true, false)
 		}
 	case *parser.EmptyStatement:
 		break // Nothing to check type-wise for empty statements
 	case *parser.ContinueStatement:
 		if node.Label != nil {
 			if c.activeLabels == nil || !c.activeLabels[node.Label.Value] {
-				c.addError(node, fmt.Sprintf("A 'continue' statement can only jump to a label of an enclosing iteration statement."))
+				c.reportBadJump(node, false, true)
 			}
 		} else if c.loopDepth == 0 {
-			c.addError(node, "A 'continue' statement can only be used within an enclosing iteration statement.")
+			c.reportBadJump(node, false, false)
 		}
 
 	case *parser.SwitchStatement: // Added
@@ -3190,6 +3214,8 @@ func (c *Checker) visit(node parser.Node) {
 		// 3. Set context for body check
 		c.currentExpectedReturnType = resolvedReturnType
 		c.currentInferredReturnTypes = nil
+		outerCrossTargetsSM := c.crossFunctionTargets
+		c.crossFunctionTargets = outerCrossTargetsSM || outerLoopDepthSM > 0 || c.switchDepth > 0 || len(c.activeLabels) > 0
 		c.loopDepth = 0
 		c.switchDepth = 0
 		c.activeLabels = make(map[string]bool)
@@ -3225,7 +3251,7 @@ func (c *Checker) visit(node parser.Node) {
 				// Rest parameter type should be an array or tuple type
 				if resolvedRestType != nil {
 					if !isValidRestParameterType(resolvedRestType) {
-						c.addError(node.RestParameter.TypeAnnotation, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
+						c.addErrorWithCode(node.RestParameter.TypeAnnotation, errors.TS2370, "A rest parameter must be of an array type.")
 						resolvedRestType = &types.ArrayType{ElementType: types.Any}
 					}
 				}
@@ -3283,6 +3309,7 @@ func (c *Checker) visit(node parser.Node) {
 		c.currentExpectedReturnType = outerExpectedReturnType
 		c.currentInferredReturnTypes = outerInferredReturnTypes
 		c.loopDepth = outerLoopDepthSM
+		c.crossFunctionTargets = outerCrossTargetsSM
 		c.switchDepth = outerSwitchDepthSM
 		c.activeLabels = outerActiveLabelsSM
 		c.functionNestingDepth--
@@ -3350,7 +3377,7 @@ func (c *Checker) visit(node parser.Node) {
 			c.activeLabels = make(map[string]bool)
 		}
 		if c.activeLabels[labelName] {
-			c.addError(node, fmt.Sprintf("Duplicate identifier '%s'.", labelName))
+			c.addErrorWithCode(node.Label, errors.TS1114, fmt.Sprintf("Duplicate label '%s'.", labelName))
 		}
 		c.activeLabels[labelName] = true
 		c.visit(node.Statement)
@@ -3432,7 +3459,7 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 	// Check if we have an initializer (required for const, optional for let/var)
 	if node.Value == nil {
 		if node.IsConst {
-			c.addError(node, "const declaration must be initialized")
+			c.addErrorWithCode(node, errors.TS1155, "'const' declarations must be initialized.")
 		}
 		// For let/var without initializer, all variables get undefined type
 		env := c.declarationEnv(node.Token != nil && node.Token.Literal == "var")
@@ -3508,7 +3535,7 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 		}
 	} else {
 		// Not an array-like or iterable type
-		c.addError(node.Value, fmt.Sprintf("cannot destructure non-array type '%s'", destructureType.String()))
+		c.reportNotIterable(node.Value, destructureType)
 		// Continue with Any types to avoid cascading errors
 		for range node.Elements {
 			elementTypes = append(elementTypes, types.Any)
@@ -3583,7 +3610,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 	// Check if we have an initializer (required for const, optional for let/var)
 	if node.Value == nil {
 		if node.IsConst {
-			c.addError(node, "const declaration must be initialized")
+			c.addErrorWithCode(node, errors.TS1155, "'const' declarations must be initialized.")
 		}
 		// For let/var without initializer, all variables get undefined type
 		env := c.declarationEnv(node.Token != nil && node.Token.Literal == "var")
@@ -3649,11 +3676,11 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 		if members, allObjects := objectLikeUnionMembers(unionType); allObjects {
 			unionObjMembers = members
 		} else {
-			c.addError(node.Value, fmt.Sprintf("cannot destructure non-object type '%s'", destructureType.String()))
+			c.reportBadObjectDestructure(node.Value, destructureType)
 		}
 	} else if destructureType != types.Any {
 		// Not an object-like type
-		c.addError(node.Value, fmt.Sprintf("cannot destructure non-object type '%s'", destructureType.String()))
+		c.reportBadObjectDestructure(node.Value, destructureType)
 	}
 
 	// Process each destructuring property
@@ -3731,7 +3758,8 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 
 			// Build remaining properties map
 			remainingProps := make(map[string]types.Type)
-			for propName, propType := range objType.Properties {
+			for _, propName := range types.SortedPropertyNames(objType.Properties) {
+				propType := objType.Properties[propName]
 				if _, wasExtracted := extractedProps[propName]; !wasExtracted {
 					remainingProps[propName] = propType
 				}
@@ -4466,7 +4494,7 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 // checkExportNamedDeclaration handles type checking for named export statements
 func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaration) {
 	if c.functionNestingDepth > 0 || c.blockDepth > 0 {
-		c.addError(node, "Modifiers cannot appear here.")
+		c.addErrorWithCode(node, errors.TS1184, "Modifiers cannot appear here.")
 		return
 	}
 	if node.Declaration != nil {

@@ -1,4 +1,4 @@
-// expect_compile_error: unknown type name: T
+// expect_compile_error: Cannot find name 'T'.
 
 // Test mapped type with undefined constraint type
 

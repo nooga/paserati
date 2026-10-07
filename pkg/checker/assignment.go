@@ -25,40 +25,18 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 
 	// Widen types for operator checks
 	widenedLhsType := types.GetWidenedType(lhsType) // Needed for operator checks AND assignability target
-	widenedRhsType := types.GetWidenedType(rhsType)
-	isAnyLhs := widenedLhsType == types.Any
-	isAnyRhs := widenedRhsType == types.Any
 
 	// Operator-Specific Pre-Checks
 	validOperands := true
+	assignedType := rhsType // what the operation hands to the target
 	switch node.Operator {
-	// Arithmetic Compound Assignments (Check if LHS/RHS are numeric)
-	case "+=", "-=", "*=", "/=", "%=", "**=":
-		if !isAnyLhs && widenedLhsType != types.Number {
-			// Exception: Allow string += any
-			if !(node.Operator == "+=" && widenedLhsType == types.String) {
-				c.addError(node.Left, fmt.Sprintf("operator '%s' requires LHS operand of type 'number' or 'any', got '%s'", node.Operator, widenedLhsType.String()))
-				validOperands = false
-			}
-		}
-		if !isAnyRhs && widenedRhsType != types.Number {
-			// Exception: Allow string += any or number += string
-			if !(node.Operator == "+=" && (widenedLhsType == types.String || widenedRhsType == types.String || isAnyRhs)) { // Adjusted check for RHS in +=
-				c.addError(node.Value, fmt.Sprintf("operator '%s' requires RHS operand of type 'number', 'string' (if LHS is string), or 'any', got '%s'", node.Operator, widenedRhsType.String()))
-				validOperands = false
-			}
-		}
-		// Note: += specifically allows string concatenation, checks adjusted slightly.
-
-	// Bitwise/Shift Compound Assignments (Require numeric operands)
-	case "&=", "|=", "^=", "<<=", ">>=", ">>>=":
-		if !isAnyLhs && widenedLhsType != types.Number {
-			c.addError(node.Left, fmt.Sprintf("operator '%s' requires LHS operand of type 'number' or 'any', got '%s'", node.Operator, widenedLhsType.String()))
-			validOperands = false
-		}
-		if !isAnyRhs && widenedRhsType != types.Number {
-			c.addError(node.Value, fmt.Sprintf("operator '%s' requires RHS operand of type 'number' or 'any', got '%s'", node.Operator, widenedRhsType.String()))
-			validOperands = false
+	// Arithmetic, bitwise and shift compound assignments: TypeScript checks the
+	// operator on the two operands and assigns the operation's result.
+	case "+=", "-=", "*=", "/=", "%=", "**=", "&=", "|=", "^=", "<<=", ">>=", ">>>=":
+		var resultType types.Type
+		resultType, validOperands = c.compoundAssignmentResult(node, lhsType, rhsType)
+		if validOperands {
+			assignedType = resultType
 		}
 
 	// Logical/Coalesce Compound Assignments (No extra numeric checks needed)
@@ -79,7 +57,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 	if identLHS, ok := node.Left.(*parser.Identifier); ok {
 		_, isConst, found := c.env.Resolve(identLHS.Value)
 		if found && isConst {
-			c.addError(node.Left, fmt.Sprintf("cannot assign to constant variable '%s'", identLHS.Value))
+			c.addErrorWithCode(node.Left, errors.TS2588, fmt.Sprintf("Cannot assign to '%s' because it is a constant.", identLHS.Value))
 			// Still proceed to check assignability for more errors
 		}
 	}
@@ -125,7 +103,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			}
 		}
 
-		if !types.IsAssignable(rhsType, targetType) { // <<< Use targetType (usually widened LHS)
+		if !types.IsAssignable(assignedType, targetType) { // <<< Use targetType (usually widened LHS)
 			// If the resolved type rejected the RHS, check if we're in a narrowing scope
 			// where the declared type is wider and would accept the assignment.
 			// This handles: if (x === null) { x = "default"; } where x: string | null
@@ -134,7 +112,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			if identLHS, isIdent := node.Left.(*parser.Identifier); isIdent {
 				declaredType := c.env.ResolveDeclaredType(identLHS.Value)
 				if declaredType != nil && declaredType != targetType {
-					if types.IsAssignable(rhsType, declaredType) {
+					if types.IsAssignable(assignedType, declaredType) {
 						allowAssignment = true
 					}
 				}
@@ -142,14 +120,14 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 
 			// Special case for ??=
 			if !allowAssignment && node.Operator == "??=" && (lhsType == types.Null || lhsType == types.Undefined) {
-				if types.IsAssignable(rhsType, widenedLhsType) {
+				if types.IsAssignable(assignedType, widenedLhsType) {
 					allowAssignment = true
 				}
 			}
 
 			if !allowAssignment {
 				// Report error comparing RHS to the potentially stricter targetType
-				c.addErrorWithCode(node.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", rhsType.String(), targetType.String()))
+				c.addErrorWithCode(node.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", assignedType.String(), targetType.String()))
 			}
 		}
 	}
@@ -254,7 +232,7 @@ func (c *Checker) checkArrayDestructuringAssignment(node *parser.ArrayDestructur
 		elementType = types.Any
 	} else {
 		// RHS is not array-like
-		c.addError(node.Value, fmt.Sprintf("type '%s' is not array-like and cannot be destructured", rhsType.String()))
+		c.reportNotIterable(node.Value, rhsType)
 		elementType = types.Any // Continue with Any to avoid cascading errors
 	}
 
@@ -373,7 +351,7 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 			// Valid: object type with known properties (includes interfaces)
 		default:
 			// For Phase 2, we require object types or Any
-			c.addError(node.Value, fmt.Sprintf("object destructuring requires RHS to be object-like, got '%s'", rhsType.String()))
+			c.reportBadObjectDestructure(node.Value, rhsType)
 			return
 		}
 	}

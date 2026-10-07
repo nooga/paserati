@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -10,18 +11,44 @@ import (
 // isValidRestParameterType checks if a type is valid for a rest parameter.
 // Valid types are array types and tuple types (including variadic tuples).
 func isValidRestParameterType(t types.Type) bool {
+	t = types.GetEffectiveType(t)
 	switch tt := t.(type) {
-	case *types.ArrayType:
-		return true
-	case *types.TupleType:
+	case *types.ArrayType, *types.TupleType:
 		return true
 	case *types.TypeParameterType:
-		// A type parameter with an array/tuple constraint is valid (e.g., Args extends any[])
+		// A type parameter is fine when its constraint is an array/tuple type
+		// (e.g. Args extends any[]); an unconstrained one is not.
 		if tt.Parameter != nil && tt.Parameter.Constraint != nil {
 			return isValidRestParameterType(tt.Parameter.Constraint)
 		}
+		return false
+	case *types.UnionType:
+		for _, member := range tt.Types {
+			if !isValidRestParameterType(member) {
+				return false
+			}
+		}
+		return true
+	case *types.IntersectionType:
+		for _, member := range tt.Types {
+			if isValidRestParameterType(member) {
+				return true
+			}
+		}
+		return false
+	case *types.Primitive:
+		// `any` (and never) are assignable to any array type.
+		return tt == types.Any || tt == types.Never
+	case *types.LiteralType:
+		return false
+	case *types.ObjectType:
+		// Interfaces extending Array carry no members here, so an empty object
+		// type gets the benefit of the doubt; one with members is not an array.
+		return len(tt.Properties) == 0 && len(tt.CallSignatures) == 0 && len(tt.ConstructSignatures) == 0
 	}
-	return false
+	// Conditional, indexed-access, infer and other deferred types cannot be
+	// judged here.
+	return true
 }
 
 // getAwaitedType implements the checker-side part of TypeScript's async return
@@ -195,7 +222,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 			// Rest parameter type should be an array or tuple type
 			if resolvedRestType != nil {
 				if !isValidRestParameterType(resolvedRestType) {
-					c.addError(ctx.RestParameter.TypeAnnotation, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
+					c.addErrorWithCode(ctx.RestParameter.TypeAnnotation, errors.TS2370, "A rest parameter must be of an array type.")
 					resolvedRestType = &types.ArrayType{ElementType: types.Any}
 				}
 			}
@@ -440,6 +467,8 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	outerLoopDepth := c.loopDepth
 	outerSwitchDepth := c.switchDepth
 	outerActiveLabels := c.activeLabels
+	outerCrossTargets := c.crossFunctionTargets
+	c.crossFunctionTargets = outerCrossTargets || outerLoopDepth > 0 || outerSwitchDepth > 0 || len(outerActiveLabels) > 0
 	c.loopDepth = 0
 	c.switchDepth = 0
 	c.activeLabels = make(map[string]bool)
@@ -503,7 +532,7 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 					targetType = types.Boolean
 				}
 				if !c.isAssignableWithExpansion(sourceType, targetType) {
-					c.addError(exprBody, fmt.Sprintf("cannot return expression of type '%s' from arrow function with return type annotation '%s'", bodyType.String(), expectedReturnType.String()))
+					c.addErrorWithCode(exprBody, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", bodyType.String(), expectedReturnType.String()))
 				}
 				finalReturnType = expectedReturnType
 			} else {
@@ -526,6 +555,7 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	c.inAsyncFunction = outerInAsyncFunction
 	c.inGeneratorFunction = outerInGeneratorFunction
 	c.loopDepth = outerLoopDepth
+	c.crossFunctionTargets = outerCrossTargets
 	c.switchDepth = outerSwitchDepth
 	c.activeLabels = outerActiveLabels
 	c.functionNestingDepth--

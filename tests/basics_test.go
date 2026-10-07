@@ -295,7 +295,7 @@ func TestOperatorsAndLiterals(t *testing.T) {
 		{
 			name:               "ConstReassignError",
 			input:              "const x = 10; x = 20;",
-			expect:             "cannot assign to constant variable 'x'",
+			expect:             "Cannot assign to 'x' because it is a constant.",
 			expectCompileError: true,
 		},
 

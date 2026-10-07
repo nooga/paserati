@@ -153,7 +153,7 @@ func (c *Checker) validateSpreadArgument(spreadElement *parser.SpreadElement, is
 	}
 
 	// Only reject if it's not an array or tuple at all
-	c.addError(spreadElement, fmt.Sprintf("spread syntax can only be applied to arrays or tuples, got '%s'", argType.String()))
+	c.reportBadSpreadArgument(spreadElement, argType)
 	return false
 }
 
@@ -267,7 +267,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 
 	// Super calls are only valid in constructors
 	if c.currentClassContext == nil || c.currentClassContext.ContextType != types.AccessContextConstructor {
-		c.addError(node, "super() calls are only allowed in constructors")
+		c.addErrorWithCode(node, errors.TS2337, "Super calls are not permitted outside constructors or in nested functions inside constructors.")
 		node.SetComputedType(types.Any)
 		return
 	}
@@ -283,7 +283,10 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 	// Check if the current class has a superclass
 	superClassName := classInstanceType.ClassMeta.SuperClassName
 	if superClassName == "" {
-		c.addError(node, fmt.Sprintf("class '%s' does not extend any class", classInstanceType.GetClassName()))
+		c.reportSuperWithoutBase(node, classInstanceType, true)
+		for _, argNode := range node.Arguments {
+			c.visit(argNode)
+		}
 		node.SetComputedType(types.Any)
 		return
 	}
@@ -401,7 +404,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 					if fixedArgsOk && constructorSig.RestParameterType != nil {
 						arrayType, isArray := constructorSig.RestParameterType.(*types.ArrayType)
 						if !isArray {
-							c.addError(node, fmt.Sprintf("internal checker error: variadic parameter type must be an array type, got %s", constructorSig.RestParameterType.String()))
+							c.visitRemainingArguments(node.Arguments, len(constructorSig.ParameterTypes))
 						} else {
 							variadicElementType := arrayType.ElementType
 							if variadicElementType == nil {
@@ -514,9 +517,17 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		return
 	}
 
-	if len(node.TypeArguments) > 0 && !c.callTargetAcceptsTypeArguments(funcNodeType) {
-		c.addError(node, "function is not generic but type arguments were provided")
+	if c.checkCallTypeArguments(node, funcNodeType) {
+		// TypeScript resolves a call with a bad type-argument list as an
+		// error call: arguments are still checked, but nothing is matched.
+		for _, argNode := range node.Arguments {
+			c.visit(argNode)
+		}
+		node.SetComputedType(types.Any)
+		return
 	}
+
+	funcNodeType = c.stripNullishCallee(node, funcNodeType)
 
 	if funcNodeType == types.Any {
 		// Allow calling 'any', result is 'any'. Check args against 'any'.
@@ -542,15 +553,14 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 				debugPrintf("// [Checker CallExpr] Using constraint type for type parameter call: %s\n", constraintType.String())
 			} else {
 				// If constraint is not callable, this is an error
-				c.addError(node, fmt.Sprintf("cannot call value of type '%s' (constraint '%s' is not callable)",
-					funcNodeType.String(), constraintType.String()))
+				c.reportNotCallable(node, funcNodeType)
 				node.SetComputedType(types.Any)
 				return
 			}
 		} else {
 			// Type parameter without constraint or with 'any' constraint - assume it could be callable
 			// but we can't verify at compile time
-			c.addError(node, fmt.Sprintf("cannot call value of type '%s' (no callable constraint)", funcNodeType.String()))
+			c.reportNotCallable(node, funcNodeType)
 			node.SetComputedType(types.Any)
 			return
 		}
@@ -598,7 +608,10 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 			return
 		}
 		// Fall through to error if not all callable
-		c.addError(node, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
+		c.reportNotCallable(node, funcNodeType)
+		for _, argNode := range node.Arguments {
+			c.visit(argNode)
+		}
 		node.SetComputedType(types.Any)
 		return
 	}
@@ -606,19 +619,25 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	// Handle callable ObjectType with unified approach
 	objType, ok := funcNodeType.(*types.ObjectType)
 	if !ok {
-		c.addError(node, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
+		c.reportNotCallable(node, funcNodeType)
+		for _, argNode := range node.Arguments {
+			c.visit(argNode)
+		}
 		node.SetComputedType(types.Any)
 		return
 	}
 
 	if !objType.IsCallable() {
-		c.addError(node, fmt.Sprintf("cannot call value of type '%s'", funcNodeType.String()))
+		c.reportNotCallable(node, funcNodeType)
+		for _, argNode := range node.Arguments {
+			c.visit(argNode)
+		}
 		node.SetComputedType(types.Any)
 		return
 	}
 
 	if len(objType.CallSignatures) == 0 {
-		c.addError(node, fmt.Sprintf("callable object has no call signatures"))
+		c.reportNotCallable(node, funcNodeType)
 		node.SetComputedType(types.Any)
 		return
 	}
@@ -701,7 +720,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		}
 
 		if !skipArityCheck && actualArgCount < minExpectedArgs {
-			c.addError(node, fmt.Sprintf("expected at least %d arguments for variadic function, but got %d", minExpectedArgs, actualArgCount))
+			c.addErrorWithCode(node, errors.TS2555, fmt.Sprintf("Expected at least %d arguments, but got %d.", minExpectedArgs, actualArgCount))
 			// Don't check args if minimum count isn't met.
 		} else {
 			// Check fixed arguments with spread expansion support
@@ -717,7 +736,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 				variadicParamType := funcSignature.RestParameterType
 				arrayType, isArray := variadicParamType.(*types.ArrayType)
 				if !isArray {
-					c.addError(node, fmt.Sprintf("internal checker error: variadic parameter type must be an array type, got %s", variadicParamType.String()))
+					c.visitRemainingArguments(node.Arguments, len(funcSignature.ParameterTypes))
 				} else {
 					variadicElementType := arrayType.ElementType
 					if variadicElementType == nil { // Should not happen with valid types
@@ -928,28 +947,7 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 
 	if signatureIndex == -1 {
 		// No matching signature found
-		var signatureStrs []string
-		for _, signature := range objType.CallSignatures {
-			signatureStrs = append(signatureStrs, signature.String())
-		}
-
-		// Build argument type string for error message
-		var argTypeStrs []string
-		for _, argType := range argTypes {
-			argTypeStrs = append(argTypeStrs, argType.String())
-		}
-
-		// Format signatures nicely - each on its own line with proper indentation
-		signatureList := ""
-		for i, sig := range signatureStrs {
-			if i > 0 {
-				signatureList += "\n"
-			}
-			signatureList += "  " + sig
-		}
-
-		c.addError(node, fmt.Sprintf("no overload matches call with arguments (%v). Available signatures:\n%s",
-			argTypeStrs, signatureList))
+		c.reportOverloadFailure(node, argTypes, objType.CallSignatures)
 
 		node.SetComputedType(types.Any)
 		return
@@ -999,7 +997,8 @@ func (c *Checker) isGenericSignature(sig *types.Signature) bool {
 			}
 			return false
 		case *types.ObjectType:
-			for _, propType := range typ.Properties {
+			for _, __name := range types.SortedPropertyNames(typ.Properties) {
+				propType := typ.Properties[__name]
 				if containsTypeParameters(propType) {
 					return true
 				}
@@ -1102,8 +1101,16 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		// Extract type parameters from the signature
 		typeParams := c.extractTypeParametersFromSignature(genericSig)
 
-		if len(callNode.TypeArguments) != len(typeParams) {
-			c.addError(callNode, fmt.Sprintf("expected %d type arguments, got %d", len(typeParams), len(callNode.TypeArguments)))
+		minTypeArgs := len(typeParams)
+		for minTypeArgs > 0 && typeParams[minTypeArgs-1].Default != nil {
+			minTypeArgs--
+		}
+		if n := len(callNode.TypeArguments); n < minTypeArgs || n > len(typeParams) {
+			expected := fmt.Sprintf("%d", minTypeArgs)
+			if minTypeArgs < len(typeParams) {
+				expected = fmt.Sprintf("%d-%d", minTypeArgs, len(typeParams))
+			}
+			c.addErrorWithCode(callNode.TypeArguments[0], errors.TS2558, fmt.Sprintf("Expected %s type arguments, but got %d.", expected, n))
 			return nil
 		}
 
@@ -1315,7 +1322,8 @@ func shouldWidenForAccumulator(typeParamName string, argType types.Type) bool {
 			switch objType := argType.(type) {
 			case *types.ObjectType:
 				// Check if any properties have literal types that would benefit from widening
-				for _, propType := range objType.Properties {
+				for _, __name := range types.SortedPropertyNames(objType.Properties) {
+					propType := objType.Properties[__name]
 					if literalType, isLiteral := propType.(*types.LiteralType); isLiteral {
 						// Check if it's a numeric literal using vm.Value type
 						if isNumericValue(literalType.Value) {
@@ -1424,7 +1432,8 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 			// Also handle regular object types with properties that may contain type parameters
 			// e.g., { value: T } matched against { value: "hello" } should infer T = string
 			if len(pType.Properties) > 0 {
-				for propName, paramPropType := range pType.Properties {
+				for _, propName := range types.SortedPropertyNames(pType.Properties) {
+					paramPropType := pType.Properties[propName]
 					if argPropType, exists := aType.Properties[propName]; exists {
 						propConstraints := c.collectConstraintsFromTypeSeen(paramPropType, argPropType, seen)
 						constraints = append(constraints, propConstraints...)
@@ -1438,7 +1447,8 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 						continue
 					}
 
-					for propName, argPropType := range aType.Properties {
+					for _, propName := range types.SortedPropertyNames(aType.Properties) {
+						argPropType := aType.Properties[propName]
 						if propertyMatchesIndexSignatureKey(propName, idxSig.KeyType) {
 							propConstraints := c.collectConstraintsFromTypeSeen(idxSig.ValueType, argPropType, seen)
 							markConstraintsCombine(propConstraints)
@@ -1471,7 +1481,7 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 			// Collect keys from the object literal to infer K
 			if constraintTypeParam, isTypeParam := pType.ConstraintType.(*types.TypeParameterType); isTypeParam {
 				var keyTypes []types.Type
-				for propName := range aType.Properties {
+				for _, propName := range types.SortedPropertyNames(aType.Properties) {
 					keyTypes = append(keyTypes, &types.LiteralType{Value: vm.String(propName)})
 				}
 				if len(keyTypes) > 0 {
@@ -1493,7 +1503,8 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 
 			// Collect constraints from values - recursively handle complex value types
 			// This handles cases like { [P in K]: [B, C] } where B and C need to be inferred
-			for _, propType := range aType.Properties {
+			for _, __name := range types.SortedPropertyNames(aType.Properties) {
+				propType := aType.Properties[__name]
 				valueConstraints := c.collectConstraintsFromTypeSeen(pType.ValueType, propType, seen)
 				constraints = append(constraints, valueConstraints...)
 			}
@@ -1664,7 +1675,8 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			memo[t] = newObj
 
 			// Substitute in properties
-			for name, propType := range typ.Properties {
+			for _, name := range types.SortedPropertyNames(typ.Properties) {
+				propType := typ.Properties[name]
 				newObj.Properties[name] = substitute(propType)
 			}
 

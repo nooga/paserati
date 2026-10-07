@@ -1,6 +1,7 @@
 package types
 
 import (
+	"sort"
 	"fmt"
 	"strings"
 )
@@ -42,11 +43,16 @@ func (n *NamespaceType) typeNode() {}
 func (n *NamespaceType) String() string {
 	parts := []string{}
 	if n.ValueShape != nil {
-		for k := range n.ValueShape.Properties {
+		for _, k := range SortedPropertyNames(n.ValueShape.Properties) {
 			parts = append(parts, k)
 		}
 	}
+	typeNames := make([]string, 0, len(n.TypeMembers))
 	for k := range n.TypeMembers {
+		typeNames = append(typeNames, k)
+	}
+	sort.Strings(typeNames)
+	for _, k := range typeNames {
 		parts = append(parts, "type "+k)
 	}
 	return fmt.Sprintf("namespace %s { %s }", n.Name, strings.Join(parts, "; "))

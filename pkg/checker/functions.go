@@ -3,7 +3,6 @@ package checker
 import (
 	"fmt"
 	"github.com/nooga/paserati/pkg/errors"
-	"strings"
 
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
@@ -129,8 +128,7 @@ func (c *Checker) completeOverloadedFunction(functionName string, implementation
 	for i, overloadSig := range overloadSignatures {
 		if !c.isSignatureCompatible(implementationSig, overloadSig) {
 			sig := pendingSignatures[i]
-			c.addError(sig, fmt.Sprintf("function implementation signature '%s' is not compatible with overload signature '%s'",
-				implementationSig.String(), overloadSig.String()))
+			c.addErrorWithCode(sig, errors.TS2394, "This overload signature is not compatible with its implementation signature.")
 		}
 	}
 
@@ -169,60 +167,47 @@ func (c *Checker) isImplementationCompatible(implementation, overload *types.Obj
 func (c *Checker) isSignatureCompatible(implementation, overload *types.Signature) bool {
 	debugPrintf("// [Checker isSignatureCompatible] Checking implementation %s against overload %s\n", implementation.String(), overload.String())
 
-	implMin := requiredParameterCount(implementation)
-	overloadMin := requiredParameterCount(overload)
-	implMax := len(implementation.ParameterTypes)
-	overloadMax := len(overload.ParameterTypes)
+	// Mirrors TypeScript's isImplementationCompatibleWithOverload: type
+	// parameters are erased to any, the return types must be related in either
+	// direction (or the overload returns void), and the implementation must be
+	// assignable to the overload ignoring return types - i.e. it may declare
+	// fewer parameters but never require more than the overload offers, and
+	// parameter types are compared bivariantly.
+	erase := func(t types.Type) types.Type {
+		if t == nil || c.typeContainsTypeParameter(t) {
+			return types.Any
+		}
+		return t
+	}
 
-	// The implementation signature must accept every call accepted by the overload.
-	if implMin > overloadMin || (!implementation.IsVariadic && implMax < overloadMax) {
-		debugPrintf("// [Checker isSignatureCompatible] Parameter count range mismatch: impl %d..%d vs overload %d..%d\n", implMin, implMax, overloadMin, overloadMax)
+	if overload.ReturnType != types.Void {
+		implReturn, overloadReturn := erase(implementation.ReturnType), erase(overload.ReturnType)
+		if !types.IsAssignable(overloadReturn, implReturn) && !types.IsAssignable(implReturn, overloadReturn) {
+			return false
+		}
+	}
+
+	if !overload.IsVariadic && requiredParameterCount(implementation) > len(overload.ParameterTypes) {
 		return false
 	}
 
-	// Check that each overload parameter type is assignable to the corresponding implementation parameter
 	for i, overloadParam := range overload.ParameterTypes {
 		if i >= len(implementation.ParameterTypes) {
-			if implementation.IsVariadic && implementation.RestParameterType != nil {
-				continue
-			}
-			return false
+			continue // extra overload parameters are simply ignored by a shorter implementation
 		}
 		implParam := implementation.ParameterTypes[i]
-		debugPrintf("// [Checker isSignatureCompatible] Checking param %d: overload %s assignable to impl %s\n", i, overloadParam.String(), implParam.String())
-		if !types.IsAssignable(overloadParam, implParam) {
-			debugPrintf("// [Checker isSignatureCompatible] Parameter %d incompatible: %s not assignable to %s\n", i, overloadParam.String(), implParam.String())
+		overloadParam, implParam = erase(overloadParam), erase(implParam)
+		if !types.IsAssignable(overloadParam, implParam) && !types.IsAssignable(implParam, overloadParam) {
 			return false
 		}
-		debugPrintf("// [Checker isSignatureCompatible] Parameter %d compatible\n", i)
 	}
+	return true
+}
 
-	// Check return type compatibility
-	debugPrintf("// [Checker isSignatureCompatible] Checking return types: impl %s vs overload %s\n", implementation.ReturnType.String(), overload.ReturnType.String())
-
-	// TypeScript rule: an overload with return type 'void' is compatible with any implementation
-	// return type (the void overload means "callers don't use the return value").
-	if overload.ReturnType == types.Void {
-		return true
-	}
-
-	// For overloads, if the implementation return type is a union, check if the overload return type is one of the union members
-	if implUnion, isUnion := implementation.ReturnType.(*types.UnionType); isUnion {
-		// Check if the overload return type is assignable to any of the union types
-		for _, unionMember := range implUnion.Types {
-			if types.IsAssignable(overload.ReturnType, unionMember) {
-				debugPrintf("// [Checker isSignatureCompatible] Return type compatible via union member %s\n", unionMember.String())
-				return true
-			}
-		}
-		debugPrintf("// [Checker isSignatureCompatible] Return type incompatible: overload %s not found in union %s\n", overload.ReturnType.String(), implUnion.String())
-		return false
-	} else {
-		// Non-union implementation return type - use standard assignability
-		result := types.IsAssignable(implementation.ReturnType, overload.ReturnType)
-		debugPrintf("// [Checker isSignatureCompatible] Return type compatible: %t\n", result)
-		return result
-	}
+// typeContainsTypeParameter reports whether t mentions a type parameter.
+func (c *Checker) typeContainsTypeParameter(t types.Type) bool {
+	sig := &types.Signature{ParameterTypes: []types.Type{t}}
+	return c.isGenericSignature(sig)
 }
 
 func requiredParameterCount(sig *types.Signature) int {
@@ -250,8 +235,8 @@ func (c *Checker) reportDuplicateIndexSignature(node parser.Node, indexSignature
 	}
 	for _, existing := range indexSignatures {
 		if existing != nil && existing.KeyType != nil && existing.KeyType.String() == keyType.String() {
-			c.addError(node, fmt.Sprintf("Duplicate index signature for type '%s'.", keyType.String()))
-			c.addError(node, fmt.Sprintf("Duplicate index signature for type '%s'.", keyType.String()))
+			c.addErrorWithCode(node, errors.TS2374, fmt.Sprintf("Duplicate index signature for type '%s'.", keyType.String()))
+			c.addErrorWithCode(node, errors.TS2374, fmt.Sprintf("Duplicate index signature for type '%s'.", keyType.String()))
 			return
 		}
 	}
@@ -343,29 +328,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 
 	if overloadIndex == -1 {
 		// No matching overload found
-		var overloadSigs []string
-		for _, overload := range overloadedFunc.CallSignatures {
-			overloadSigs = append(overloadSigs, overload.String())
-		}
-
-		// Build argument type string for error message
-		var argTypeStrs []string
-		for _, argType := range argTypes {
-			argTypeStrs = append(argTypeStrs, argType.String())
-		}
-
-		// Format overloads nicely - each on its own line with proper indentation
-		overloadList := ""
-		for i, sig := range overloadSigs {
-			if i > 0 {
-				overloadList += "\n"
-			}
-			overloadList += "  " + sig
-		}
-
-		c.addError(node, fmt.Sprintf("no overload matches call with arguments (%s). Available overloads:\n%s",
-			"["+strings.Join(argTypeStrs, ", ")+"]", // Clean argument list
-			overloadList)) // Each overload on its own line
+		c.reportOverloadFailure(node, argTypes, overloadedFunc.CallSignatures)
 
 		node.SetComputedType(types.Any)
 		return

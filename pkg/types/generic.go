@@ -156,7 +156,8 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 	case *ObjectType:
 		// Deep copy and substitute in properties
 		newObj := NewObjectType()
-		for name, propType := range t.Properties {
+		for _, name := range SortedPropertyNames(t.Properties) {
+			propType := t.Properties[name]
 			newObj.Properties[name] = substituteType(propType, substitutions)
 		}
 		// Copy optional properties

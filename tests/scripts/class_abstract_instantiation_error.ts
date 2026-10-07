@@ -1,4 +1,4 @@
-// expect_compile_error: cannot create an instance of an abstract class 'Shape'
+// expect_compile_error: Cannot create an instance of an abstract class.
 // Test that abstract classes cannot be instantiated
 
 abstract class Shape {

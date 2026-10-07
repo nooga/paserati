@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -165,7 +166,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	// Check that interface name is not a primitive type name (TS2427)
 	switch node.Name.Value {
 	case "string", "number", "boolean", "symbol", "bigint", "object":
-		c.addError(node.Name, fmt.Sprintf("Interface name cannot be '%s'.", node.Name.Value))
+		c.addErrorWithCode(node.Name, errors.TS2427, fmt.Sprintf("Interface name cannot be '%s'.", node.Name.Value))
 	}
 
 	// 1. Handle generic interfaces
@@ -214,9 +215,16 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	// First, inherit properties from extended interfaces
 	for _, extendedInterfaceExpr := range node.Extends {
 		// Resolve the extended interface type expression (supports both simple names and generic applications)
+		if id, ok := extendedInterfaceExpr.(*parser.Identifier); ok && primitiveBaseTypeNames[id.Value] {
+			c.reportInvalidInterfaceBase(extendedInterfaceExpr, nil)
+			continue
+		}
+		errorsBefore := len(c.errors)
 		extendedType := c.resolveTypeAnnotation(extendedInterfaceExpr)
 		if extendedType == nil {
-			c.addError(extendedInterfaceExpr, "failed to resolve extended interface type")
+			if len(c.errors) == errorsBefore {
+				c.addError(extendedInterfaceExpr, "failed to resolve extended interface type")
+			}
 			continue
 		}
 
@@ -238,8 +246,19 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			// We can't copy properties since we don't know the structure, but we allow the syntax
 			debugPrintf("// [Checker Interface P1] Interface '%s' extends unresolved generic type '%s', allowing for type-only imports\n",
 				node.Name.Value, extendedType.String())
+		} else if baseObjects, valid := c.interfaceBaseObjects(extendedType); valid {
+			// Arrays, tuples, `any` (e.g. Function) and intersections of object
+			// types are valid bases; inherit whatever object members they have.
+			for _, baseObject := range baseObjects {
+				for propName, propType := range baseObject.Properties {
+					properties[propName] = c.rebindThisType(propType, baseObject, interfaceType)
+					if baseObject.OptionalProperties != nil && baseObject.OptionalProperties[propName] {
+						optionalProperties[propName] = true
+					}
+				}
+			}
 		} else {
-			c.addError(extendedInterfaceExpr, fmt.Sprintf("'%s' is not an interface, cannot extend", extendedType.String()))
+			c.reportInvalidInterfaceBase(extendedInterfaceExpr, extendedType)
 		}
 	}
 
@@ -375,14 +394,14 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		case *types.GenericType:
 			existingGeneric = existing
 			if len(existing.TypeParameters) != len(node.TypeParameters) {
-				c.addError(node.Name, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
+				c.addErrorWithCode(node.Name, errors.TS2428, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
 				return
 			}
 			if existingBody, ok := existing.Body.(*types.ObjectType); ok {
 				bodyType = existingBody
 			}
 		case *types.ObjectType:
-			c.addError(node.Name, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
+			c.addErrorWithCode(node.Name, errors.TS2428, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
 			return
 		}
 	}
@@ -394,7 +413,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		typeParams = existingGeneric.TypeParameters
 		for i, param := range node.TypeParameters {
 			if param.Name.Value != typeParams[i].Name {
-				c.addError(param.Name, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
+				c.addErrorWithCode(param.Name, errors.TS2428, fmt.Sprintf("All declarations of '%s' must have identical type parameters.", node.Name.Value))
 			}
 			param.SetComputedType(&types.TypeParameterType{Parameter: typeParams[i]})
 		}
@@ -944,17 +963,17 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 							elementType = types.Any
 						} else {
 							// Not iterable
-							c.addError(node.Iterable, fmt.Sprintf("type '%s' is not iterable", iterableType.String()))
+							c.reportNotIterable(node.Iterable, iterableType)
 							elementType = types.Any
 						}
 					} else {
 						// Iterable type exists but isn't a generic - something's wrong
-						c.addError(node.Iterable, fmt.Sprintf("type '%s' is not iterable", iterableType.String()))
+						c.reportNotIterable(node.Iterable, iterableType)
 						elementType = types.Any
 					}
 				} else {
 					// No Iterable type found - fallback to old behavior
-					c.addError(node.Iterable, fmt.Sprintf("type '%s' is not iterable", iterableType.String()))
+					c.reportNotIterable(node.Iterable, iterableType)
 					elementType = types.Any
 				}
 			}

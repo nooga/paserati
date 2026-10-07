@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -12,18 +13,31 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 	debugPrintf("// [Checker Enum] Checking enum declaration '%s' (const=%v)\n", node.Name.Value, node.IsConst)
 
 	// 1. Check if enum name is already defined in the current scope.
-	// Use HasLocalSymbol to avoid false positives from outer scopes.
+	// Use HasLocalSymbol to avoid false positives from outer scopes. A second
+	// enum declaration with the same name merges into the first one.
+	var enumType *types.EnumType
+	merging := false
 	if c.env.HasLocalSymbol(node.Name.Value) {
-		c.addError(node.Name, fmt.Sprintf("identifier '%s' already declared", node.Name.Value))
-		return
+		if existing, _, found := c.env.Resolve(node.Name.Value); found {
+			if existingEnum, isEnum := existing.(*types.EnumType); isEnum && existingEnum.IsConst == node.IsConst {
+				enumType = existingEnum
+				merging = true
+			}
+		}
+		if !merging && !(c.isModule && c.env.shadowBuiltin(node.Name.Value)) {
+			c.addError(node.Name, fmt.Sprintf("identifier '%s' already declared", node.Name.Value))
+			return
+		}
 	}
 
 	// 2. Create enum type and member types
-	enumType := &types.EnumType{
-		Name:      node.Name.Value,
-		Members:   make(map[string]*types.EnumMemberType),
-		IsConst:   node.IsConst,
-		IsNumeric: true, // Assume numeric until we find a string
+	if enumType == nil {
+		enumType = &types.EnumType{
+			Name:      node.Name.Value,
+			Members:   make(map[string]*types.EnumMemberType),
+			IsConst:   node.IsConst,
+			IsNumeric: true, // Assume numeric until we find a string
+		}
 	}
 
 	// 3. Process enum members
@@ -34,8 +48,8 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 	for _, member := range node.Members {
 		memberName := member.Name.Value
 
-		// Check for duplicate member names
-		if memberNames[memberName] {
+		// Check for duplicate member names (across merged declarations too)
+		if _, exists := enumType.Members[memberName]; memberNames[memberName] || exists {
 			c.addError(member.Name, fmt.Sprintf("duplicate identifier '%s'", memberName))
 			continue
 		}
@@ -127,7 +141,7 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 			// No initializer - use auto-increment
 			if !lastMemberWasNumeric {
 				// Can't auto-increment after string member
-				c.addError(member.Name, "enum member must have initializer")
+				c.addErrorWithCode(member.Name, errors.TS1061, "Enum member must have initializer.")
 				continue
 			}
 			memberValue = nextValue
@@ -143,6 +157,7 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 		}
 
 		enumType.Members[memberName] = memberType
+		enumType.MemberOrder = append(enumType.MemberOrder, memberName)
 
 		// Note: EnumMember doesn't need computed type as it's not an expression
 
@@ -154,11 +169,17 @@ func (c *Checker) checkEnumDeclaration(node *parser.EnumDeclaration) {
 
 	// 4. Create a union type of all member types for the enum type context
 	var memberTypes []types.Type
-	for _, member := range enumType.Members {
-		memberTypes = append(memberTypes, member)
+	for _, memberName := range enumType.OrderedMemberNames() {
+		memberTypes = append(memberTypes, enumType.Members[memberName])
 	}
 
 	// 5. Register enum as both type and value (following class pattern)
+	if merging {
+		// The enum is already registered; refresh the member union it denotes.
+		c.env.setTypeAlias(node.Name.Value, &types.UnionType{Types: memberTypes})
+		node.SetComputedType(enumType)
+		return
+	}
 
 	// First, define a forward reference to handle self-references
 	forwardRef := &types.ForwardReferenceType{

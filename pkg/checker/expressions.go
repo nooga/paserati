@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"github.com/nooga/paserati/pkg/errors"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
@@ -67,7 +68,7 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 				generalizedElementTypes = append(generalizedElementTypes, types.Any)
 			} else {
 				// Error case - spread of non-array: issue a clear compile error
-				c.addError(spreadElem, fmt.Sprintf("spread syntax can only be applied to arrays, got '%s'", elemType.String()))
+				c.reportNotIterable(spreadElem.Argument, elemType)
 				generalizedElementTypes = append(generalizedElementTypes, types.Any)
 			}
 		} else {
@@ -332,7 +333,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 		if keyName != "__COMPUTED_PROPERTY__" && keyName != "__UNKNOWN_KEY__" {
 			isProtoColon := (keyName == "__proto__" && !isShorthand)
 			if seenKeys[keyName] && keyName != "__proto__" {
-				c.addError(prop.Key, fmt.Sprintf("duplicate property key: '%s'", keyName))
+				c.addErrorWithCode(prop.Key, errors.TS1117, "An object literal cannot have multiple properties with the same name.")
 			}
 			if isProtoColon && seenProtoColon {
 				c.addError(prop.Key, "duplicate __proto__ fields are not allowed")
@@ -466,7 +467,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			// Check if the type can be spread (is an object type)
 			widenedType := types.GetWidenedType(argType)
 			if !c.mergeSpreadOperand(fields, widenedType) {
-				c.addError(key.Argument, fmt.Sprintf("spread syntax requires an object, got %s", argType.String()))
+				c.addErrorWithCode(key.Argument, errors.TS2698, "Spread types may only be created from object types.")
 			}
 			// Skip the rest of the property processing for spread elements
 			continue
@@ -553,7 +554,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				} else {
 					// Regular method - check for conflicts
 					if seenKeys[keyName] && keyName != "__proto__" {
-						c.addError(prop.Key, fmt.Sprintf("duplicate property key: '%s'", keyName))
+						c.addErrorWithCode(prop.Key, errors.TS1117, "An object literal cannot have multiple properties with the same name.")
 					}
 					if isProtoColon && seenProtoColon {
 						c.addError(prop.Key, "duplicate __proto__ fields are not allowed")
@@ -566,7 +567,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			} else {
 				// Regular property - check for conflicts
 				if seenKeys[keyName] && keyName != "__proto__" {
-					c.addError(prop.Key, fmt.Sprintf("duplicate property key: '%s'", keyName))
+					c.addErrorWithCode(prop.Key, errors.TS1117, "An object literal cannot have multiple properties with the same name.")
 				}
 				if isProtoColon && seenProtoColon {
 					c.addError(prop.Key, "duplicate __proto__ fields are not allowed")
@@ -1158,6 +1159,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 	}
 
 	// 1. Visit the object part
+	errorsBefore := len(c.errors)
 	c.visit(node.Object)
 	objectType := node.Object.GetComputedType()
 	if objectType == nil {
@@ -1435,7 +1437,22 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			var possibleTypes []types.Type
 			allMembersHaveProperty := true
 
-			for _, memberType := range obj.Types {
+			// null/undefined members are reported once (TS18047/18048/...) and
+			// the access is then checked against what remains.
+			unionMembers := obj.Types
+			if remaining, ok := c.stripNullishObject(node.Object, obj); !ok {
+				unionMembers = nil
+				resultType = types.Any
+			} else if remainingUnion, isUnion := remaining.(*types.UnionType); isUnion {
+				unionMembers = remainingUnion.Types
+			} else {
+				unionMembers = []types.Type{remaining}
+			}
+			if len(unionMembers) == 0 {
+				break
+			}
+
+			for _, memberType := range unionMembers {
 				// Create a temporary member expression to check this member type
 				memberHasProperty := false
 				var memberResultType types.Type
@@ -1503,7 +1520,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					resultType = types.NewUnionType(possibleTypes...)
 				}
 			} else {
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on all members of union type %s", propertyName, obj.String()))
+				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, types.NewUnionType(unionMembers...).String()))
 				resultType = types.Never
 			}
 		case *types.EnumType:
@@ -1512,7 +1529,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				resultType = memberType
 				debugPrintf("// [Checker MemberExpr] Found enum member '%s.%s': %s\n", obj.Name, propertyName, memberType.String())
 			} else {
-				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on enum %s", propertyName, obj.Name))
+				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'typeof %s'.", propertyName, obj.Name))
 				resultType = types.Never
 			}
 		case *types.ForwardReferenceType:
@@ -1567,12 +1584,39 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			// typeof x === "object" narrows to object type marker
 			// Property access on object type returns any (same as TypeScript)
 			resultType = types.Any
+		case *types.GenericType:
+			// A generic class's constructor: static members live on the body.
+			if body, isObj := obj.Body.(*types.ObjectType); isObj {
+				if propType, exists := body.Properties[propertyName]; exists {
+					resultType = propType
+				} else if propertyName == "prototype" || c.classHasExtendsClause(strings.TrimSuffix(obj.Name, "Constructor")) {
+					// Statics inherited from a base class are not copied onto the body.
+					resultType = types.Any
+				} else {
+					c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'typeof %s'.", propertyName, strings.TrimSuffix(obj.Name, "Constructor")))
+				}
+			} else {
+				resultType = types.Any
+			}
 		default:
 			// This covers cases where widenedObjectType was not String, Any, ArrayType, ObjectType, etc.
 			// e.g., trying to access property on number, boolean, null, undefined
-			c.addError(node.Object, fmt.Sprintf("property access is not supported on type %s", widenedObjectType.String()))
-			// resultType remains types.Error
+			if widenedObjectType == types.Null || widenedObjectType == types.Undefined {
+				c.reportNullishObject(node.Object, widenedObjectType)
+				resultType = types.Any
+			} else if widenedObjectType == types.Unknown {
+				c.reportUnknownObject(node.Object)
+				resultType = types.Any
+			} else {
+				resultType = c.primitivePropertyType(widenedObjectType, propertyName, node)
+			}
 		}
+	}
+
+	// A failed property access has TypeScript's errorType (any-like), which
+	// suppresses follow-on diagnostics; never would cascade into bogus errors.
+	if resultType == types.Never && len(c.errors) > errorsBefore {
+		resultType = types.Any
 	}
 
 	// 5. Set the computed type on the MemberExpression node itself
@@ -1699,9 +1743,9 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 						debugPrintf("// [Checker IndexExpr] Tuple rest index %d -> %s\n", idx, resultType.String())
 					} else {
 						if indexValue < 0 {
-							c.addError(node.Index, "A tuple type cannot be indexed with a negative value.")
+							c.addErrorWithCode(node.Index, errors.TS2514, "A tuple type cannot be indexed with a negative value.")
 						} else {
-							c.addError(node.Index, fmt.Sprintf("Tuple type '%s' of length '%d' has no element at index '%d'.", base.String(), len(base.ElementTypes), idx))
+							c.addErrorWithCode(node.Index, errors.TS2493, fmt.Sprintf("Tuple type '%s' of length '%d' has no element at index '%d'.", base.String(), len(base.ElementTypes), idx))
 						}
 						resultType = types.Undefined
 						debugPrintf("// [Checker IndexExpr] Tuple index %d out of bounds\n", idx)
@@ -1766,7 +1810,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				}
 			} else {
 				// Invalid index type for object
-				c.addError(node.Index, fmt.Sprintf("object index must be of type 'string', 'number', 'symbol', or 'any', got '%s'", indexType.String()))
+				c.reportInvalidIndexType(node, indexType)
 				// resultType remains Error
 			}
 
@@ -1828,7 +1872,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				resultType = types.NewUnionType(possibleTypes...)
 			} else {
 				// Some members don't support indexing
-				c.addError(node.Left, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+				c.reportNonIndexable(node, leftType)
 			}
 
 		case *types.Primitive:
@@ -1856,7 +1900,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					c.addErrorWithCode(node.Index, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", indexStringValue, leftType.String()))
 				}
 			} else {
-				c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+				c.reportNonIndexable(node, leftType)
 			}
 
 		case *types.TypeParameterType:
@@ -1875,7 +1919,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 			} else if base.Parameter == nil || base.Parameter.Constraint == nil {
 				resultType = types.Any
 			} else {
-				c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+				c.reportNonIndexable(node, leftType)
 			}
 
 		case *types.EnumType:
@@ -1916,19 +1960,19 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 						if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Symbol || widenedIndexType == types.Any {
 							resultType = types.Any
 						} else {
-							c.addError(node.Index, fmt.Sprintf("object index must be of type 'string', 'number', 'symbol', or 'any', got '%s'", indexType.String()))
+							c.reportInvalidIndexType(node, indexType)
 							resultType = types.Any
 						}
 					}
 				} else {
-					c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+					c.reportNonIndexable(node, leftType)
 				}
 			} else {
-				c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+				c.reportNonIndexable(node, leftType)
 			}
 
 		default:
-			c.addError(node.Index, fmt.Sprintf("cannot apply index operator to type %s", leftType.String()))
+			c.reportNonIndexable(node, leftType)
 		}
 	}
 
@@ -2270,7 +2314,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 	// Check if trying to instantiate an abstract class
 	if ident, ok := node.Constructor.(*parser.Identifier); ok {
 		if c.abstractClasses[ident.Value] {
-			c.addError(node, fmt.Sprintf("cannot create an instance of an abstract class '%s'", ident.Value))
+			c.addErrorWithCode(node, errors.TS2511, "Cannot create an instance of an abstract class.")
 			node.SetComputedType(types.Any)
 			return
 		}
@@ -2381,7 +2425,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 						if fixedArgsOk && constructorSig.RestParameterType != nil {
 							arrayType, isArray := constructorSig.RestParameterType.(*types.ArrayType)
 							if !isArray {
-								c.addError(node, fmt.Sprintf("internal checker error: variadic parameter type must be an array type, got %s", constructorSig.RestParameterType.String()))
+								c.visitRemainingArguments(node.Arguments, len(constructorSig.ParameterTypes))
 							} else {
 								variadicElementType := arrayType.ElementType
 								if variadicElementType == nil {
@@ -2507,8 +2551,12 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		// If constructor type is Any, result is also Any
 		resultType = types.Any
 	} else {
-		// Invalid constructor type - now shows the proper instantiated type in error messages
-		c.addError(node.Constructor, fmt.Sprintf("'%s' is not a constructor", constructorType.String()))
+		// Invalid constructor type. Only types we can judge are reported:
+		// intersections of constructor types (mixins) and other deferred types
+		// are given the benefit of the doubt.
+		if c.isDefinitelyNotConstructor(constructorType) {
+			c.addErrorWithCode(leftmostExpression(node.Constructor), errors.TS2351, "This expression is not constructable.")
+		}
 		resultType = types.Any
 	}
 
@@ -2575,14 +2623,14 @@ func (c *Checker) checkTypeAssertionExpression(node *parser.TypeAssertionExpress
 	// Resolve the target type
 	targetType := c.resolveTypeAnnotation(node.TargetType)
 	if targetType == nil {
-		c.addError(node.TargetType, "invalid type in type assertion")
+		// resolveTypeAnnotation has already reported why the target is unusable.
 		node.SetComputedType(types.Any)
 		return
 	}
 
 	// Validate the type assertion according to TypeScript rules
 	if !c.isValidTypeAssertion(sourceType, targetType) {
-		c.addError(node, fmt.Sprintf("conversion of type '%s' to type '%s' may be a mistake because neither type sufficiently overlaps with the other",
+		c.addErrorWithCode(leftmostExpression(node.Expression), errors.TS2352, fmt.Sprintf("Conversion of type '%s' to type '%s' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
 			sourceType.String(), targetType.String()))
 	}
 
@@ -2649,8 +2697,8 @@ func (c *Checker) checkSatisfiesExpression(node *parser.SatisfiesExpression) {
 	} else {
 		// For non-object literals, use regular assignability check
 		if !types.IsAssignable(sourceType, targetType) {
-			c.addError(node, fmt.Sprintf("type '%s' does not satisfy the constraint '%s'",
-				sourceType.String(), targetType.String()))
+			c.addErrorWithCode(node.Expression, errors.TS1360, fmt.Sprintf("Type '%s' does not satisfy the expected type '%s'.",
+				types.GetWidenedType(sourceType).String(), targetType.String()))
 		}
 	}
 
@@ -2683,8 +2731,8 @@ func (c *Checker) checkObjectLiteralSatisfies(objectLit *parser.ObjectLiteral, t
 
 	// First check if the source type is assignable to the target type
 	if !types.IsAssignable(sourceType, targetType) {
-		c.addError(satisfiesNode, fmt.Sprintf("type '%s' does not satisfy the constraint '%s'",
-			sourceType.String(), targetType.String()))
+		c.addErrorWithCode(satisfiesNode.Expression, errors.TS1360, fmt.Sprintf("Type '%s' does not satisfy the expected type '%s'.",
+			types.GetWidenedType(sourceType).String(), targetType.String()))
 		return
 	}
 
@@ -2794,16 +2842,45 @@ func (c *Checker) isObjectType(t types.Type) bool {
 
 // checkInstanceofOperator checks the instanceof operator usage
 func (c *Checker) checkInstanceofOperator(leftType, rightType types.Type, node *parser.InfixExpression) {
-	// Left operand can be any value (the object to check)
-	// No specific type checking needed for left operand
+	// TS2358: the left operand must be `any`, an object type or a type
+	// parameter - a primitive can never be an instance of anything.
+	if leftType != nil && isPrimitiveOperandType(leftType) {
+		c.addErrorWithCode(node.Left, errors.TS2358, "The left-hand side of an 'instanceof' expression must be of type 'any', an object type or a type parameter.")
+	}
 
 	// Right operand must be a constructor function
-	if rightType != types.Any && !c.isConstructorType(rightType) {
-		c.addError(node.Right, fmt.Sprintf("Cannot use '%s' as a constructor.", rightType.String()))
+	if rightType != types.Any && c.isDefinitelyNotConstructor(rightType) {
+		c.addErrorWithCode(node.Right, errors.TS2359, "The right-hand side of an 'instanceof' expression must be either of type 'any', a class, function, or other type assignable to the 'Function' interface type, or an object type with a 'Symbol.hasInstance' method.")
 	}
 }
 
 // isConstructorType checks if a type represents a constructor function
+// isDefinitelyNotConstructor reports whether t certainly has no call or
+// construct signature and cannot be a Function subtype: primitives, literals
+// and plain object types. Anything we cannot judge answers false.
+func (c *Checker) isDefinitelyNotConstructor(t types.Type) bool {
+	switch tt := types.GetEffectiveType(t).(type) {
+	case *types.Primitive:
+		switch tt {
+		case types.String, types.Number, types.Boolean, types.BigInt, types.Symbol, types.Null, types.Undefined, types.Void:
+			return true
+		}
+		return false
+	case *types.LiteralType:
+		return true
+	case *types.ObjectType:
+		return !tt.IsCallable() && len(tt.ConstructSignatures) == 0 && len(tt.BaseTypes) == 0 && tt.ClassMeta == nil
+	case *types.UnionType:
+		for _, member := range tt.Types {
+			if !c.isDefinitelyNotConstructor(member) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func (c *Checker) isConstructorType(t types.Type) bool {
 	if objType, ok := t.(*types.ObjectType); ok {
 		return objType.IsCallable() || len(objType.ConstructSignatures) > 0
@@ -3176,4 +3253,11 @@ func getTupleElementUnion(tuple *types.TupleType) types.Type {
 		return allTypes[0]
 	}
 	return types.NewUnionType(allTypes...)
+}
+
+// classHasExtendsClause reports whether the named class (or something we cannot
+// look up) may inherit members, so missing statics should not be diagnosed.
+func (c *Checker) classHasExtendsClause(className string) bool {
+	instance := c.getClassInstanceType(className)
+	return instance == nil || instance.ClassMeta == nil || instance.ClassMeta.HasExtendsClause
 }

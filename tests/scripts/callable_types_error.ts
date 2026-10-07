@@ -1,4 +1,4 @@
-// expect_compile_error: no overload matches call with arguments
+// expect_compile_error: No overload matches this call.
 
 // Test callable types error case - wrong argument type
 type Fn = {

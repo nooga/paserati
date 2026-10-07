@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -91,7 +92,7 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 		for _, sigs := range bodyEnv.GetAllPendingOverloads() {
 			for _, sig := range sigs {
 				if sig.Name != nil {
-					c.addError(sig.Name, "Function implementation is missing or not immediately following the declaration.")
+					c.addErrorWithCode(sig.Name, errors.TS2391, "Function implementation is missing or not immediately following the declaration.")
 				}
 			}
 		}

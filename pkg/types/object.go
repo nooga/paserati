@@ -249,7 +249,8 @@ func (ot *ObjectType) String() string {
 	}
 
 	// Add properties
-	for name, typ := range ot.Properties {
+	for _, name := range SortedPropertyNames(ot.Properties) {
+		typ := ot.Properties[name]
 		typStr := "<nil>"
 		if typ != nil {
 			typStr = typ.String()
@@ -487,7 +488,8 @@ func (ot *ObjectType) GetEffectiveProperties() map[string]Type {
 	}
 
 	// Then add our own properties (these override base type properties)
-	for name, typ := range ot.Properties {
+	for _, name := range SortedPropertyNames(ot.Properties) {
+		typ := ot.Properties[name]
 		result[name] = typ
 	}
 
