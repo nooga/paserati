@@ -18,26 +18,27 @@ Right now it prioritizes **correctness** over raw speed, but the architecture is
 
 ### Wins
 
-- Test262 language suite: **98.3%**, built-ins: **89.9%**, TypeScript 6.0.3 conformance: **41.7%** strict / **72.7%** loose (see details below)
+- Test262 language suite: **98.6%**, built-ins: **91.8%**, TypeScript 6.0.3 conformance: **45.2%** exact / **67.1%** loose (see details below)
 - **Native TS execution.** No `tsc`, no TS→JS transpilation step.
 - **TCO.** Tail call optimization (elite feature).
 - **Shapes + ICs.** Fast-ish property access without a JIT.
 - **Runtime type reflection.** `Paserati.reflect<T>()` generates a type object or JSON Schema at runtime.
 - **Small-ish footprint.**
-  - **~16MB static binary** (unstripped, includes lexer/parser/checker/compiler/VM/builtins)
-  - **~5MB BSS idle** (approx; depends on build/OS)
-  - **Pure Go**, no CGO, no WASM blobs, **two simple dependencies** (`golang.org/x/text`, `github.com/dlclark/regexp2`)
+  - **~26MB static binary** (unstripped; **~18MB** with `-ldflags "-s -w"`), including the lexer, parser, type checker, compiler, VM and builtins
+  - **~21MB peak RSS** for `paserati -e '1'`, which starts in about 10ms
+  - **Pure Go**, no CGO, no WASM blobs, **three small dependencies** (`golang.org/x/text`, `github.com/dlclark/regexp2`, `github.com/rivo/uniseg`)
+  - Measured on Apple Silicon (arm64, macOS) with Go 1.27.1
 
 ### Weird flex but okay benchmarks
 
-Paserati has a long way to go performance-wise, but it's already at the point where it can **beat [dop251/goja](https://github.com/dop251/goja)** and **QJS** on a couple of simple microbenches.
+Paserati has a long way to go performance-wise, but it can already **beat [dop251/goja](https://github.com/dop251/goja)** and **[modernc.org/quickjs](https://gitlab.com/cznic/quickjs)** (QuickJS translated to pure Go) on a couple of simple microbenches. These are pure-Go peers; native engines such as V8 or C QuickJS are a different league.
 
-Results from `hyperfine` (see `bench/hyperfine.sh`):
+Results from `hyperfine` (see `bench/hyperfine.sh`; Apple Silicon, October 2026; Paserati runs with `--no-typecheck`):
 
-| Benchmark          | paserati (Mean) |     goja (Mean) |       QJS(Mean) |                                                            Relative |
-| :----------------- | --------------: | --------------: | --------------: | ------------------------------------------------------------------: |
-| `bench/bench.js`   | 3.924 ± 0.097 s | 5.207 ± 0.093 s | 4.945 ± 0.092 s | **paserati 1.33× faster than gojac**, **1.26× faster than quickjs** |
-| `bench/objects.js` | 6.169 ± 0.092 s | 7.015 ± 0.151 s | 8.135 ± 0.130 s | **paserati 1.14× faster than gojac**, **1.32× faster than quickjs** |
+| Benchmark          | paserati (Mean) |     goja (Mean) | QuickJS/modernc (Mean) |                                                     Relative |
+| :----------------- | --------------: | --------------: | ---------------------: | -----------------------------------------------------------: |
+| `bench/bench.js`   | 2.404 ± 0.041 s | 5.175 ± 0.034 s |        4.905 ± 0.046 s | **paserati 2.15× faster than goja**, **2.04× faster than QuickJS** |
+| `bench/objects.js` | 5.286 ± 0.036 s | 6.957 ± 0.052 s |        7.979 ± 0.041 s | **paserati 1.32× faster than goja**, **1.51× faster than QuickJS** |
 
 Paserati also [runs V8 benchmarks](<https://ahaoboy.github.io/js-engine-benchmark/?kind=Time(s)&selectEngines=goja,paserati&sort=Time(s)>), beating Goja in several.
 
@@ -86,19 +87,19 @@ go test ./tests/...
 
 | Suite | Passed | Failed | Skipped | Timeouts | Pass rate |
 | :-- | --: | --: | --: | --: | --: |
-| Test262 language | 23,126/23,523 | 397 | 0 | 0 | 98.3% |
-| Test262 built-ins | 20,947/23,294 | 2,347 | 0 | 0 | 89.9% |
-| TypeScript 6.0.3 conformance (strict error codes) | 2,058/4,933 | 2,402 | 473 | 0 | 41.7% |
-| TypeScript 6.0.3 conformance (loose) | 3,587/4,933 | 873 | 473 | 0 | 72.7% |
+| Test262 language | 23,186/23,523 | 337 | 0 | 0 | 98.6% |
+| Test262 built-ins | 21,394/23,294 | 1,900 | 0 | 0 | 91.8% |
+| TypeScript 6.0.3 conformance (exact) | 3,223/7,127 | 2,496 | 1,408 | 0 | 45.2% |
+| TypeScript 6.0.3 conformance (loose) | 4,779/7,127 | 940 | 1,408 | 0 | 67.1% |
 <!-- compliance:end -->
 
-`strict error codes` requires our diagnostics to carry the same TypeScript error code(s) the baseline expects. `loose` only requires that we raised *some* error where one was expected, so it overcounts conformance. Treat strict as the honest number.
+TypeScript figures cover every test in TypeScript 6.0.3's `tests/cases/conformance`, one entry per compiler-option variant the test declares. `exact` counts a test as passed only when Paserati reports the same diagnostics as `tsc`: the same TypeScript error codes on the same lines, nothing missing and nothing extra. `loose` only requires that we raised *some* error where one was expected, so it overcounts conformance. Skipped tests (multi-file and `.tsx`, not yet supported by the runner) count against the pass rate. Treat exact as the honest number.
 
-The Test262 language and built-ins figures come from the local baseline snapshots for the checked-out ECMA-262 conformance tests. Since September 2026 (runner policy 2) a test counts as passed only if it passes in every required variant (sloppy and strict unless flagged otherwise), negative tests raise the declared error in the declared phase, and async tests report success through `$DONE`. Earlier figures, including the 98.1% language number, came from a runner that counted many of those as passes. The TypeScript figures come from the single-file conformance runner against the TypeScript 6.0.3 test suite.
+The Test262 language and built-ins figures come from the local baseline snapshots for the checked-out ECMA-262 conformance tests. Since September 2026 (runner policy 2) a test counts as passed only if it passes in every required variant (sloppy and strict unless flagged otherwise), negative tests raise the declared error in the declared phase, and async tests report success through `$DONE`. Earlier figures, including the 98.1% language number, came from a runner that counted many of those as passes. The TypeScript figures come from `paserati-testtsc` run against the conformance suite of the TypeScript 6.0.3 release (tag `v6.0.3`), comparing Paserati's diagnostics with `tsc`'s reference baselines.
 
 ### Current status
 
-At **98.3% Test262 language compliance** and **41.7% TypeScript 6.0.3 conformance** (strict error codes; 72.7% under the looser any-error-raised metric), Paserati handles a large chunk of modern JavaScript/TypeScript semantics correctly. It's still evolving, but it's past the "toy project" phase.
+At **98.6% Test262 language compliance** and **45.2% TypeScript 6.0.3 conformance** (exact diagnostics; 67.1% under the looser any-error-raised metric), Paserati handles a large chunk of modern JavaScript/TypeScript semantics correctly. It's still evolving, but it's past the "toy project" phase.
 
 Core language features that work well:
 

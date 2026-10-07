@@ -61,8 +61,9 @@ def run_ts_suite_once(ts_path: Path, timeout: str, strict: bool) -> Suite:
         "-timeout",
         timeout,
     ]
-    if strict:
-        args.append("-strict-errors")
+    # "strict" selects the exact metric (same diagnostics on the same lines);
+    # otherwise the loose any-error-raised metric.
+    args += ["-metric", "line-code-exact" if strict else "loose"]
     result = subprocess.run(
         args,
         cwd=ROOT,
@@ -79,7 +80,7 @@ def run_ts_suite_once(ts_path: Path, timeout: str, strict: bool) -> Suite:
         raise RuntimeError("Could not find TypeScript GRAND TOTAL line in paserati-testtsc output")
 
     total, passed, failed, skipped, timeout_count, _ = match.groups()
-    suffix = " (strict error codes)" if strict else " (loose)"
+    suffix = " (exact)" if strict else " (loose)"
     return Suite(
         name=f"TypeScript {read_ts_version(ts_path)}{suffix}",
         total=int(total),
@@ -122,7 +123,7 @@ def save_cache(language: Suite, builtins: Suite, ts_loose: Suite, ts_strict: Sui
                 "test262_language": asdict(language),
                 "test262_builtins": asdict(builtins),
                 "typescript_loose": asdict(ts_loose),
-                "typescript_strict": asdict(ts_strict),
+                "typescript_exact": asdict(ts_strict),
             },
             indent=2,
         )
@@ -181,7 +182,7 @@ def draw_pie(suite: Suite, cx: int, cy: int, label: str | None = None) -> str:
 def render_svg(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: Suite) -> str:
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="320" viewBox="0 0 1080 320" role="img" aria-labelledby="title desc">
   <title id="title">Paserati compliance snapshot</title>
-  <desc id="desc">Pie charts for Test262 language, Test262 built-ins, and TypeScript conformance (strict error codes and loose) pass rates.</desc>
+  <desc id="desc">Pie charts for Test262 language, Test262 built-ins, and TypeScript conformance (exact and loose) pass rates.</desc>
   <style>
     .bg {{ fill: #fbfcfe; }}
     .group {{ font: 600 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #304050; }}
@@ -196,7 +197,7 @@ def render_svg(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: Sui
   <line x1="470" y1="28" x2="470" y2="250" stroke="#d9e0e8" stroke-width="1" />
   {draw_pie(language, 165, 135)}
   {draw_pie(builtins, 340, 135)}
-  {draw_pie(ts_strict, 610, 135, label="strict error codes")}
+  {draw_pie(ts_strict, 610, 135, label="exact (line + code)")}
   {draw_pie(ts_loose, 790, 135, label="loose")}
   <g transform="translate(584 278)">
     <rect x="0" y="-10" width="12" height="12" fill="#20a060" rx="2" /><text x="18" y="1" class="legend">Pass</text>
@@ -217,11 +218,11 @@ def readme_block(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: S
 | :-- | --: | --: | --: | --: | --: |
 | Test262 language | {language.passed:,}/{language.total:,} | {language.failed:,} | {language.skipped:,} | {language.timeout:,} | {language.pass_rate:.1f}% |
 | Test262 built-ins | {builtins.passed:,}/{builtins.total:,} | {builtins.failed:,} | {builtins.skipped:,} | {builtins.timeout:,} | {builtins.pass_rate:.1f}% |
-| TypeScript {version} conformance (strict error codes) | {ts_strict.passed:,}/{ts_strict.total:,} | {ts_strict.failed:,} | {ts_strict.skipped:,} | {ts_strict.timeout:,} | {ts_strict.pass_rate:.1f}% |
+| TypeScript {version} conformance (exact) | {ts_strict.passed:,}/{ts_strict.total:,} | {ts_strict.failed:,} | {ts_strict.skipped:,} | {ts_strict.timeout:,} | {ts_strict.pass_rate:.1f}% |
 | TypeScript {version} conformance (loose) | {ts_loose.passed:,}/{ts_loose.total:,} | {ts_loose.failed:,} | {ts_loose.skipped:,} | {ts_loose.timeout:,} | {ts_loose.pass_rate:.1f}% |
 <!-- compliance:end -->
 
-`strict error codes` requires our diagnostics to carry the same TypeScript error code(s) the baseline expects. `loose` only requires that we raised *some* error where one was expected, so it overcounts conformance. Treat strict as the honest number."""
+TypeScript figures cover every test in TypeScript {version}'s `tests/cases/conformance`, one entry per compiler-option variant the test declares. `exact` counts a test as passed only when Paserati reports the same diagnostics as `tsc`: the same TypeScript error codes on the same lines, nothing missing and nothing extra. `loose` only requires that we raised *some* error where one was expected, so it overcounts conformance. Skipped tests (multi-file and `.tsx`, not yet supported by the runner) count against the pass rate. Treat exact as the honest number."""
 
 
 def update_readme(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: Suite) -> None:
@@ -230,26 +231,26 @@ def update_readme(language: Suite, builtins: Suite, ts_strict: Suite, ts_loose: 
 	block = readme_block(language, builtins, ts_strict, ts_loose)
 	pattern = re.compile(
 		r"<!-- compliance:begin -->.*?<!-- compliance:end -->"
-		r"(\n\n`strict error codes`.*?honest number\.)?",
+		r"(\n\n(`strict error codes`|TypeScript figures cover).*?honest number\.)?",
 		re.S,
 	)
 	if not pattern.search(text):
 		raise RuntimeError("README.md is missing compliance block markers")
 	text = pattern.sub(block, text)
 	text = re.sub(
-		r"\*\*Test262 language suite: [0-9.]+%\*\*, \*\*built-ins: [0-9.]+%\*\*, "
-		r"\*\*TypeScript [^*]+ conformance: [0-9.]+%\*\*",
-		f"**Test262 language suite: {language.pass_rate:.1f}%**, "
-		f"**built-ins: {builtins.pass_rate:.1f}%**, "
-		f"**TypeScript {version} conformance: {ts_strict.pass_rate:.1f}% strict / {ts_loose.pass_rate:.1f}% loose**",
+		r"Test262 language suite: \*\*[0-9.]+%\*\*, built-ins: \*\*[0-9.]+%\*\*, "
+		r"TypeScript [^:]+ conformance: \*\*[0-9.]+%\*\* \w+ / \*\*[0-9.]+%\*\* loose",
+		f"Test262 language suite: **{language.pass_rate:.1f}%**, "
+		f"built-ins: **{builtins.pass_rate:.1f}%**, "
+		f"TypeScript {version} conformance: **{ts_strict.pass_rate:.1f}%** exact / **{ts_loose.pass_rate:.1f}%** loose",
 		text,
 	)
 	text = re.sub(
 		r"At \*\*[0-9.]+% Test262 language compliance\*\* and "
 		r"\*\*[0-9.]+% TypeScript [^*]+ conformance\*\*"
-		r"( \(strict error codes; [0-9.]+% under the looser any-error-raised metric\))?",
+		r"( \((strict error codes|exact diagnostics); [0-9.]+% under the looser any-error-raised metric\))?",
 		f"At **{language.pass_rate:.1f}% Test262 language compliance** and "
-		f"**{ts_strict.pass_rate:.1f}% TypeScript {version} conformance** (strict error codes; "
+		f"**{ts_strict.pass_rate:.1f}% TypeScript {version} conformance** (exact diagnostics; "
 		f"{ts_loose.pass_rate:.1f}% under the looser any-error-raised metric)",
 		text,
 	)
@@ -287,7 +288,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--language-baseline", default="baseline_language.txt")
     parser.add_argument("--builtins-baseline", default="baseline.txt")
-    parser.add_argument("--run-ts", action="store_true", help="Run the TypeScript conformance suite (both strict and loose)")
+    parser.add_argument("--run-ts", action="store_true", help="Run the TypeScript conformance suite (both exact and loose)")
     parser.add_argument("--ts-path", default="../TypeScript")
     parser.add_argument("--ts-timeout", default="0.2s")
     parser.add_argument("--ts-runs", type=int, default=2, help="Number of TypeScript suite runs to smooth one-test flakes")
@@ -306,7 +307,7 @@ def main() -> None:
 
     ts_path = (ROOT / args.ts_path).resolve()
     ts_strict = resolve_ts(
-        "typescript_strict", ts_path, args.ts_timeout, args.ts_runs, args.ts_flake_tolerance, True, args.run_ts
+        "typescript_exact", ts_path, args.ts_timeout, args.ts_runs, args.ts_flake_tolerance, True, args.run_ts
     )
     ts_loose = resolve_ts(
         "typescript_loose", ts_path, args.ts_timeout, args.ts_runs, args.ts_flake_tolerance, False, args.run_ts
@@ -318,7 +319,7 @@ def main() -> None:
 
     print(f"Test262 language: {language.passed}/{language.total} ({language.pass_rate:.1f}%)")
     print(f"Test262 built-ins: {builtins.passed}/{builtins.total} ({builtins.pass_rate:.1f}%)")
-    print(f"TypeScript {ts_strict.version} (strict): {ts_strict.passed}/{ts_strict.total} ({ts_strict.pass_rate:.1f}%)")
+    print(f"TypeScript {ts_strict.version} (exact): {ts_strict.passed}/{ts_strict.total} ({ts_strict.pass_rate:.1f}%)")
     print(f"TypeScript {ts_loose.version} (loose): {ts_loose.passed}/{ts_loose.total} ({ts_loose.pass_rate:.1f}%)")
 
 
