@@ -88,12 +88,13 @@ type Field struct {
 const shapeIndexThreshold = 8
 
 type Shape struct {
-	parent            *Shape
-	fields            []Field
-	stringTransitions map[string]*Shape // Fast path: keyed by property name directly (string keys only)
-	transitions       map[string]*Shape // Slow path: keyed by PropertyKey.hash() (symbols, etc.)
-	mu                sync.RWMutex      // Protects transitions maps, childExtended, fields mutation
-	version           uint32            // Bumped on any layout/flags change
+	parent             *Shape
+	fields             []Field
+	stringTransitions  map[string]*Shape // Fast path: keyed by property name directly (string keys only)
+	transitions        map[string]*Shape // Slow path: keyed by PropertyKey.hash() (symbols, etc.)
+	nonEnumTransitions map[string]*Shape // SetOwnNonEnumerable's additions, keyed by bare name (no key concatenation)
+	mu                 sync.RWMutex      // Protects transitions maps, childExtended, fields mutation
+	version            uint32            // Bumped on any layout/flags change
 
 	// Lazily-built string-key name → fields slice index. nil until the first
 	// slow-path lookup against a shape with len(fields) > shapeIndexThreshold.
@@ -260,6 +261,53 @@ func (o *PlainObject) addFieldInPlace(fld Field) bool {
 		}
 	}
 	return true
+}
+
+// dataDefineKeyPrefix[flags] namespaces transitions created by data-property
+// defines (flags: 1 writable, 2 enumerable, 4 configurable) away from SetOwn's
+// stringTransitions and the accessor keys.
+var dataDefineKeyPrefix = [8]string{"d0:", "d1:", "d2:", "d3:", "d4:", "d5:", "d6:", "d7:"}
+
+func dataDefineKey(fld Field, keyHash string) string {
+	flags := 0
+	if fld.writable {
+		flags |= 1
+	}
+	if fld.enumerable {
+		flags |= 2
+	}
+	if fld.configurable {
+		flags |= 4
+	}
+	return dataDefineKeyPrefix[flags] + keyHash
+}
+
+// transitionFor returns the shape reached from cur by adding fld, creating and
+// caching it under hashKey on first use. Descriptor-based defines used to build
+// a fresh Shape (and copy the field list) every time, so creating a realm's
+// prototypes - the same few thousand defines every time - allocated all of it
+// again per realm instead of walking the transitions the first realm recorded.
+// hashKey must encode everything about fld that distinguishes it (name and
+// attributes): field attributes are immutable once a Shape is shared.
+func (cur *Shape) transitionFor(hashKey string, fld Field) *Shape {
+	cur.mu.RLock()
+	next := cur.transitions[hashKey]
+	cur.mu.RUnlock()
+	if next != nil {
+		return next
+	}
+	cur.mu.Lock()
+	defer cur.mu.Unlock()
+	if next = cur.transitions[hashKey]; next != nil {
+		return next
+	}
+	fld.offset = len(cur.fields)
+	next = &Shape{parent: cur, fields: cur.extendFields(fld), version: cur.version + 1}
+	if cur.transitions == nil {
+		cur.transitions = make(map[string]*Shape)
+	}
+	cur.transitions[hashKey] = next
+	return next
 }
 
 // forkShape gives o a private, unshared Shape with the same field list, so the
@@ -803,16 +851,13 @@ func (o *PlainObject) SetOwnNonEnumerable(name string, v Value) {
 		o.properties = append(o.properties, v)
 		return
 	}
-	// Use transitions map with "ne:" prefix for non-enumerable (less common path)
-	hashKey := "ne:" + name
 	cur.mu.RLock()
-	next, ok := cur.transitions[hashKey]
+	next, ok := cur.nonEnumTransitions[name]
 	cur.mu.RUnlock()
 	if !ok {
-		// Check under write lock first to avoid wasteful allocations
 		cur.mu.Lock()
 		// Double-check: another goroutine might have added this
-		if existing, exists := cur.transitions[hashKey]; exists {
+		if existing, exists := cur.nonEnumTransitions[name]; exists {
 			cur.mu.Unlock()
 			o.shape = existing
 			o.properties = append(o.properties, v)
@@ -823,10 +868,10 @@ func (o *PlainObject) SetOwnNonEnumerable(name string, v Value) {
 		fld := Field{offset: off, name: name, keyKind: KeyKindString, writable: true, enumerable: false, configurable: true}
 		newFields := cur.extendFields(fld)
 		next = &Shape{parent: cur, fields: newFields, version: cur.version + 1}
-		if cur.transitions == nil {
-			cur.transitions = make(map[string]*Shape)
+		if cur.nonEnumTransitions == nil {
+			cur.nonEnumTransitions = make(map[string]*Shape)
 		}
-		cur.transitions[hashKey] = next
+		cur.nonEnumTransitions[name] = next
 		cur.mu.Unlock()
 	}
 	o.shape = next
@@ -911,11 +956,7 @@ func (o *PlainObject) DefineOwnProperty(name string, value Value, writable *bool
 		o.properties = append(o.properties, value)
 		return true
 	}
-	cur.mu.Lock()
-	newFields := cur.extendFields(fld)
-	cur.mu.Unlock()
-	next := &Shape{parent: cur, fields: newFields, version: cur.version + 1}
-	o.shape = next
+	o.shape = cur.transitionFor(dataDefineKey(fld, name), fld)
 	o.properties = append(o.properties, value)
 	return true
 }
@@ -1082,10 +1123,7 @@ func (o *PlainObject) DefineAccessorProperty(name string, getter Value, hasGette
 		fld.configurable = *configurable
 	}
 	if !o.addFieldInPlace(fld) {
-		cur.mu.Lock()
-		newFields := cur.extendFields(fld)
-		cur.mu.Unlock()
-		o.shape = &Shape{parent: cur, fields: newFields, version: cur.version + 1}
+		o.shape = cur.transitionFor(accessorTransitionKey(keyFromString(name), fld.enumerable, fld.configurable), fld)
 	}
 	// Ensure maps
 	if o.getters == nil {
@@ -1169,11 +1207,7 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 		o.properties = append(o.properties, value)
 		return true
 	}
-	cur.mu.Lock()
-	newFields := cur.extendFields(fld)
-	cur.mu.Unlock()
-	next := &Shape{parent: cur, fields: newFields, version: cur.version + 1}
-	o.shape = next
+	o.shape = cur.transitionFor(dataDefineKey(fld, key.hash()), fld)
 	o.properties = append(o.properties, value)
 	return true
 }
@@ -1182,7 +1216,7 @@ func (o *PlainObject) DefineOwnPropertyByKey(key PropertyKey, value Value, writa
 // property. It folds the enumerable/configurable attributes into the key so a
 // cached transition is only reused for a define with the same attributes
 // (writable is always false on an accessor field, so it can't differ); the "a"
-// prefix keeps it disjoint from SetOwnNonEnumerable's "ne:" keys.
+// prefix keeps it disjoint from the data-define keys.
 func accessorTransitionKey(key PropertyKey, enumerable, configurable bool) string {
 	prefix := "a00:"
 	switch {
