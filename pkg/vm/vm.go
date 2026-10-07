@@ -1686,8 +1686,28 @@ func (vm *VM) Interpret(chunk *Chunk) (Value, []errors.PaseratiError) {
 			).CausedBy(exceptionError{exception: exc})
 			return finalValue, []errors.PaseratiError{runtimeErr}
 		}
-		// An error occurred, return the potentially partial value and the collected errors
-		// fmt.Printf("// [VM] Interpret: Returning runtime error with %d errors\n", len(vm.errors))
+		// Top-level uncaught exception (#594). handleUncaughtException has
+		// already turned it into vm.errors, but left the unwind in flight:
+		// vm.unwinding/currentException/handlerFound still set and the dead
+		// script frame still on the stack. The next run on this instance
+		// would see "unwinding" at its first check and bail out (returning
+		// undefined or the stale exception), so tear it all down here, the
+		// same way a native boundary does after taking ownership of an
+		// exception. Return a copy of the errors: vm.errors is truncated by
+		// the next Interpret and must not alias what the caller holds.
+		if !isNestedInterpretCall {
+			errs := append([]errors.PaseratiError(nil), vm.errors...)
+			vm.unwinding = false
+			vm.handlerFound = false
+			vm.clearException()
+			vm.truncateFramesTo(entryFrameCount)
+			vm.regDir.popTo(entryMark)
+			vm.pendingAction = ActionNone
+			vm.pendingValue = Undefined
+			vm.finallyDepth = 0
+			vm.callDepth = 0
+			return finalValue, errs
+		}
 		return finalValue, vm.errors
 	} else {
 		// Execution finished without runtime error (InterpretOK)
