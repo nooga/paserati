@@ -420,7 +420,7 @@ func effectiveOptions(raw Options, v Variant) Options {
 // supportedOptions are the directives createTscPaserati actually honours.
 var supportedOptions = map[string]bool{
 	"strict": true, "strictnullchecks": true, "strictpropertyinitialization": true,
-	"alwaysstrict": true, "noimplicitoverride": true, "allowunreachablecode": true,
+	"alwaysstrict": true, "strictfunctiontypes": true, "noimplicitoverride": true, "allowunreachablecode": true,
 }
 
 // unmodeledOptions are directives that plausibly change TypeScript's
@@ -428,7 +428,7 @@ var supportedOptions = map[string]bool{
 // emit (sourceMap, outFile, ...) are not listed.
 var unmodeledOptions = map[string]bool{
 	"noimplicitany": true, "noimplicitthis": true, "noimplicitreturns": true,
-	"strictfunctiontypes": true, "strictbindcallapply": true, "strictbuiltiniteratorreturn": true,
+	"strictbindcallapply": true, "strictbuiltiniteratorreturn": true,
 	"exactoptionalpropertytypes": true, "nouncheckedindexedaccess": true,
 	"useunknownincatchvariables": true, "nopropertyaccessfromindexsignature": true,
 	"nolib": true, "lib": true, "target": true, "module": true, "moduleresolution": true,

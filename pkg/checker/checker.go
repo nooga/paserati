@@ -343,7 +343,16 @@ type Checker struct {
 	tscCompat              bool // Suppress diagnostics beyond what tsc reports; see SetTscCompatibleDiagnostics
 	alwaysStrict           bool // Mirrors --alwaysStrict; when true, TS1212 and its variants are emitted
 	strictNullChecks       bool // Mirrors --strictNullChecks; when false, TS18050 is not emitted
-	isModule               bool // Source is a module, so strict mode comes from the module (TS1214)
+	// reportedRelationDiagnostics dedupes relation diagnostics reported at the
+	// same position more than once (see addErrorAtStart).
+	reportedRelationDiagnostics map[string]bool
+	indexConstraintsReported    map[string]bool // TS2411 already reported per (type, property, index key)
+	deferredRelationChecks      []deferredRelationCheck
+	overloadStrictAny           bool // first overload pass: an `any` argument only fits any/unknown parameters
+	inAmbientNamespace          bool // checking the body of a `declare namespace`: members are implicitly exported
+	checkedParameterDefaults    map[*parser.Parameter]bool
+	namespaceBodyDepth          int  // > 0 while checking a namespace body
+	isModule                    bool // Source is a module, so strict mode comes from the module (TS1214)
 	// Identifiers already reported as strict-mode reserved words, so narrowing
 	// re-visits do not report them twice.
 	reportedStrictReserved map[*parser.Identifier]bool
@@ -491,6 +500,13 @@ func (c *Checker) beyondTsc() bool { return !c.tscCompat }
 // TS2365 about the operand pair instead. On by default, as in TypeScript 6.0.
 func (c *Checker) SetStrictNullChecks(strict bool) {
 	c.strictNullChecks = strict
+	types.StrictNullChecks = strict
+}
+
+// SetStrictFunctionTypes mirrors the `--strictFunctionTypes` compiler option:
+// parameters of non-method function types are compared contravariantly.
+func (c *Checker) SetStrictFunctionTypes(strict bool) {
+	types.StrictFunctionTypes = strict
 }
 
 // SetAlwaysStrict mirrors the `--alwaysStrict` compiler option, which gates
@@ -843,7 +859,7 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 
 	// Perform assignability check using the type from env (e.g., Any or annotation)
 	// Use expansion to handle mapped types
-	assignable := c.isAssignableWithExpansion(computedInitializerType, variableType)
+	assignable := c.assignableToFresh(initializer, computedInitializerType, variableType)
 
 	// Handle special case for assigning [] (unknown[]) to T[]
 	isEmptyArrayAssignment := false
@@ -881,8 +897,7 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 			c.addErrorWithCode(initializer, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 		} else {
 			// For regular variable assignments, use literal types and include variable name
-			sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, variableType)
-			c.addErrorWithCode(initializer, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
+			c.reportNotAssignable(varName, initializer, computedInitializerType, variableType, headAssign)
 		}
 	}
 
@@ -1512,6 +1527,9 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 		// --- END NEW ---
 
+		// Check parameter default values against the declared types.
+		c.checkParameterDefaults(&FunctionCheckContext{Parameters: funcLit.Parameters}, funcSignature.ParameterTypes)
+
 		// Define function itself within its scope for recursion (using initial signature)
 		if funcLit.Name != nil {
 			funcEnv.Define(funcLit.Name.Value, funcObjectType, false) // Ignore error if already defined (e.g. hoisted)
@@ -1744,6 +1762,10 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	}
 	c.unresolvedTypeofNodes = nil
 	c.unresolvedTypeofTypeOnly = nil
+
+	// Relation checks that need every declaration resolved (class members vs
+	// their base class, whose `typeof` annotations are only resolved in Pass 5).
+	c.runDeferredRelationChecks()
 
 	// Emit TS2391 for any function overload signatures that never got an implementation
 	for _, sigs := range globalEnv.GetAllPendingOverloads() {
@@ -2053,7 +2075,7 @@ func (c *Checker) visit(node parser.Node) {
 
 				if computedInitializerType != nil {
 					// Check if initializer is assignable to the declared type for error reporting
-					assignable := c.isAssignableWithExpansion(computedInitializerType, declaredType)
+					assignable := c.assignableToFresh(declarator.Value, computedInitializerType, declaredType)
 
 					// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
 					isEmptyArrayAssignment := false
@@ -2073,8 +2095,7 @@ func (c *Checker) visit(node parser.Node) {
 							c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 						} else {
 							// For regular variable assignments, use literal types
-							sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, finalVariableType)
-							c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
+							c.reportNotAssignable(declarator.Name, declarator.Value, computedInitializerType, finalVariableType, headAssign)
 						}
 					}
 				}
@@ -2085,7 +2106,11 @@ func (c *Checker) visit(node parser.Node) {
 						finalVariableType = types.GetWidenedType(computedInitializerType)
 						debugPrintf("// [Checker LetStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					} else {
-						finalVariableType = types.WidenEnumMember(computedInitializerType)
+						finalVariableType = computedInitializerType
+						if isWideningInitializer(declarator.Value) {
+							finalVariableType = types.DeeplyWidenType(computedInitializerType)
+						}
+						finalVariableType = types.WidenEnumMember(finalVariableType)
 						debugPrintf("// [Checker LetStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					}
 				} else {
@@ -2211,7 +2236,7 @@ func (c *Checker) visit(node parser.Node) {
 				finalType = declaredType
 
 				// Check if initializer is assignable to the declared type for error reporting
-				assignable := c.isAssignableWithExpansion(computedInitializerType, declaredType)
+				assignable := c.assignableToFresh(declarator.Value, computedInitializerType, declaredType)
 
 				// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
 				isEmptyArrayAssignment := false
@@ -2224,7 +2249,7 @@ func (c *Checker) visit(node parser.Node) {
 				}
 
 				if !assignable && !isEmptyArrayAssignment {
-					c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", computedInitializerType.String(), finalType.String()))
+					c.reportNotAssignable(declarator.Name, declarator.Value, computedInitializerType, finalType, headAssign)
 				}
 			} else {
 				// --- No annotation: Infer type ---
@@ -2236,6 +2261,9 @@ func (c *Checker) visit(node parser.Node) {
 				} else {
 					// Use the computed type directly for non-literals (functions, arrays, etc.)
 					finalType = computedInitializerType
+					if isWideningInitializer(declarator.Value) {
+						finalType = types.DeeplyWidenType(computedInitializerType)
+					}
 				}
 			}
 
@@ -2347,7 +2375,7 @@ func (c *Checker) visit(node parser.Node) {
 
 				if computedInitializerType != nil {
 					// Check if initializer is assignable to the declared type for error reporting
-					assignable := c.isAssignableWithExpansion(computedInitializerType, declaredType)
+					assignable := c.assignableToFresh(declarator.Value, computedInitializerType, declaredType)
 
 					// --- SPECIAL CASE: Allow assignment of [] (unknown[]) to T[] ---
 					isEmptyArrayAssignment := false
@@ -2367,8 +2395,7 @@ func (c *Checker) visit(node parser.Node) {
 							c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
 						} else {
 							// For regular variable assignments, use literal types
-							sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(computedInitializerType, finalVariableType)
-							c.addErrorWithCode(declarator.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
+							c.reportNotAssignable(declarator.Name, declarator.Value, computedInitializerType, finalVariableType, headAssign)
 						}
 					}
 				}
@@ -2379,7 +2406,11 @@ func (c *Checker) visit(node parser.Node) {
 						finalVariableType = types.GetWidenedType(computedInitializerType)
 						debugPrintf("// [Checker VarStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					} else {
-						finalVariableType = types.WidenEnumMember(computedInitializerType)
+						finalVariableType = computedInitializerType
+						if isWideningInitializer(declarator.Value) {
+							finalVariableType = types.DeeplyWidenType(computedInitializerType)
+						}
+						finalVariableType = types.WidenEnumMember(finalVariableType)
 						debugPrintf("// [Checker VarStmt] '%s': Assigned finalVariableType (direct non-literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 					}
 				} else {
@@ -2393,10 +2424,10 @@ func (c *Checker) visit(node parser.Node) {
 			// type as the first one (TS2403) and the variable keeps that type.
 			reliableDecl := c.varDeclTypeIsReliable(declarator.TypeAnnotation, declarator.Value)
 			if first, seen := c.firstVarDecl(funcScope, declarator.Name.Value); seen {
-				c.reportSubsequentVarDeclaration(declarator.Name, first, finalVariableType, reliableDecl)
+				c.reportSubsequentVarDeclaration(declarator.Name, first, finalVariableType, reliableDecl, declarator.TypeAnnotation != nil)
 				finalVariableType = first.typ
 			} else {
-				c.recordFirstVarDecl(funcScope, declarator.Name.Value, finalVariableType, reliableDecl)
+				c.recordFirstVarDecl(funcScope, declarator.Name.Value, finalVariableType, reliableDecl, declarator.TypeAnnotation != nil)
 			}
 
 			// 4. UPDATE variable type in function scope with the final type
@@ -2486,9 +2517,8 @@ func (c *Checker) visit(node parser.Node) {
 					expectedType = c.getAwaitedType(expectedType)
 					actualType = c.getAwaitedType(actualType)
 				}
-				if !c.isAssignableWithExpansion(actualType, expectedType) {
-					msg := fmt.Sprintf("Type '%s' is not assignable to type '%s'.", actualReturnType, expectedType)
-					c.addErrorWithCode(node.ReturnValue, errors.TS2322, msg)
+				if !c.assignableToFresh(node.ReturnValue, actualType, expectedType) {
+					c.reportNotAssignable(node, node.ReturnValue, actualType, expectedType, headAssign)
 				}
 			}
 		}
@@ -3353,8 +3383,12 @@ func (c *Checker) visit(node parser.Node) {
 				c.env = originalEnv         // Restore original environment
 
 				defaultValueType := param.DefaultValue.GetComputedType()
-				if defaultValueType != nil && !types.IsAssignable(defaultValueType, resolvedParamType) {
-					c.addErrorWithCode(param.DefaultValue, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", defaultValueType.String(), resolvedParamType.String()))
+				if defaultValueType != nil && !c.assignableToFresh(param.DefaultValue, defaultValueType, resolvedParamType) {
+					var errNode parser.Node = param.DefaultValue
+					if param.Name != nil {
+						errNode = param.Name
+					}
+					c.reportNotAssignable(errNode, param.DefaultValue, defaultValueType, resolvedParamType, headAssign)
 				}
 			}
 
@@ -3815,6 +3849,10 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 		}
 	}
 
+	if node.TypeAnnotation == nil {
+		c.checkDestructuringExcess(node.Properties, node.RestProperty != nil, node.Value)
+	}
+
 	// Check if we have a type annotation
 	var expectedType types.Type
 	if node.TypeAnnotation != nil {
@@ -4131,6 +4169,15 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 		canApplyContextualTyping := (nodeParamCount == expectedParamCount)
 		for _, param := range node.Parameters {
 			if param.TypeAnnotation != nil {
+				canApplyContextualTyping = false
+				break
+			}
+		}
+		// With several overloads that disagree on their parameters there is
+		// no single contextual signature (getContextualSignature), so the
+		// parameters stay untyped.
+		for _, other := range objType.CallSignatures[1:] {
+			if !sameParameterTypes(expectedSig, other) {
 				canApplyContextualTyping = false
 				break
 			}
@@ -4972,21 +5019,9 @@ func (c *Checker) getAssignmentErrorTypes(sourceType, targetType types.Type) (st
 func (c *Checker) getEnumAssignmentErrorTypes(sourceType, targetType types.Type) (string, string) {
 	var sourceTypeStr, targetTypeStr string
 
-	// For enum assignments, use widened source type for better error messages
-	if literalType, ok := sourceType.(*types.LiteralType); ok {
-		switch literalType.Value.Type() {
-		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
-			sourceTypeStr = "number"
-		case vm.TypeString:
-			sourceTypeStr = "string"
-		case vm.TypeBoolean:
-			sourceTypeStr = "boolean"
-		default:
-			sourceTypeStr = sourceType.String()
-		}
-	} else {
-		sourceTypeStr = sourceType.String()
-	}
+	// An enum target can hold literal members, so the source literal is kept
+	// (TypeScript reports `Type '7' is not assignable to type 'Color'`).
+	sourceTypeStr = sourceType.String()
 
 	// For enum target types, use the enum name or full string representation
 	if enumType, ok := targetType.(*types.UnionType); ok {
@@ -5064,4 +5099,18 @@ func programHasModuleSyntax(program *parser.Program) bool {
 		}
 	}
 	return false
+}
+
+// sameParameterTypes reports whether two signatures take identical parameter
+// types (used to decide whether overloads yield one contextual signature).
+func sameParameterTypes(a, b *types.Signature) bool {
+	if len(a.ParameterTypes) != len(b.ParameterTypes) {
+		return false
+	}
+	for i := range a.ParameterTypes {
+		if a.ParameterTypes[i] == nil || b.ParameterTypes[i] == nil || !a.ParameterTypes[i].Equals(b.ParameterTypes[i]) {
+			return false
+		}
+	}
+	return true
 }

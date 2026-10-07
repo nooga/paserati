@@ -112,6 +112,12 @@ func (p *Paserati) SetStrictNullChecks(strict bool) {
 	p.checker.SetStrictNullChecks(strict)
 }
 
+// SetStrictFunctionTypes mirrors --strictFunctionTypes (contravariant
+// parameters for non-method function types).
+func (p *Paserati) SetStrictFunctionTypes(strict bool) {
+	p.checker.SetStrictFunctionTypes(strict)
+}
+
 // SetAlwaysStrict mirrors --alwaysStrict, which gates TS1212. Part of the
 // strict family, so on by default as of TypeScript 6.0.
 func (p *Paserati) SetAlwaysStrict(strict bool) {

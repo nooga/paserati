@@ -22,6 +22,10 @@ type Signature struct {
 	OptionalParams    []bool // Tracks which parameters are optional
 	IsVariadic        bool   // Indicates if the function accepts variable arguments
 	RestParameterType Type   // Type of the rest parameter (...args), if present
+	// StrictVariance marks a signature whose declaration is not a method, so
+	// that with strictFunctionTypes its parameters are compared
+	// contravariantly (TypeScript keys this off the target's declaration kind).
+	StrictVariance bool
 }
 
 func (sig *Signature) String() string {
@@ -137,6 +141,10 @@ type IndexSignature struct {
 	IsMapped       bool   // Whether this is a mapped type pattern
 	TypeParameter  string // The type parameter name (e.g., "P" in [P in K])
 	ConstraintType Type   // The constraint type (e.g., K in [P in K])
+
+	// Synthetic marks a signature the checker invents for a dynamic computed
+	// property name; it is not a declared index signature.
+	Synthetic bool
 }
 
 func (is *IndexSignature) String() string {
@@ -210,6 +218,11 @@ type ObjectType struct {
 
 	// Index signatures for dynamic property access
 	IndexSignatures []*IndexSignature // Index signatures like [key: string]: Type
+
+	// IsInterface marks the type of an interface declaration. Interfaces do
+	// not get an implicit index signature (unlike type literals and object
+	// literal types), which matters when relating them to index signatures.
+	IsInterface bool
 
 	// IsReflectIntrinsic marks this as a compile-time type reflection intrinsic
 	// When the checker sees a call to a function with this flag, it resolves the type argument
@@ -478,7 +491,7 @@ func (ot *ObjectType) GetEffectiveProperties() map[string]Type {
 
 	// First, add properties from base types (in reverse order for proper precedence)
 	for i := len(ot.BaseTypes) - 1; i >= 0; i-- {
-		baseType := ot.BaseTypes[i]
+		baseType := resolveBaseType(ot.BaseTypes[i])
 		if baseObj, ok := baseType.(*ObjectType); ok {
 			baseProps := baseObj.GetEffectiveProperties()
 			for name, typ := range baseProps {
@@ -505,7 +518,7 @@ func (ot *ObjectType) IsPropertyOptional(name string) bool {
 	}
 	// Check base types
 	for _, baseType := range ot.BaseTypes {
-		if baseObj, ok := baseType.(*ObjectType); ok {
+		if baseObj, ok := resolveBaseType(baseType).(*ObjectType); ok {
 			if baseObj.IsPropertyOptional(name) {
 				return true
 			}
@@ -805,4 +818,15 @@ func NewClassInstanceType(className string) *ObjectType {
 // NewClassConstructorType creates an ObjectType representing a class constructor
 func NewClassConstructorType(className string, sig *Signature) *ObjectType {
 	return NewObjectType().AsClassConstructor(className).WithConstructSignature(sig)
+}
+
+// resolveBaseType turns an instantiated generic base (class C<T>) into its
+// concrete object type so that inherited members can be read.
+func resolveBaseType(t Type) Type {
+	if inst, ok := t.(*InstantiatedType); ok {
+		if sub := inst.Substitute(); sub != nil {
+			return sub
+		}
+	}
+	return t
 }

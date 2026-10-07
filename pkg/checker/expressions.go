@@ -205,13 +205,13 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 				// Validate that the spread array's element type is assignable to expected element type
 				if spreadArrayType, isArray := spreadType.(*types.ArrayType); isArray {
 					if !types.IsAssignable(spreadArrayType.ElementType, arrayType.ElementType) {
-						c.addError(elemNode, fmt.Sprintf("Type '%s' is not assignable to type '%s'",
+						c.addErrorAtStart(elemNode, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.",
 							spreadArrayType.ElementType.String(), arrayType.ElementType.String()))
 					}
 				} else if c.isSpreadableIterableType(spreadType) {
 					spreadElementType := c.getSpreadElementType(spreadType)
 					if !types.IsAssignable(spreadElementType, arrayType.ElementType) {
-						c.addError(elemNode, fmt.Sprintf("Type '%s' is not assignable to type '%s'",
+						c.addErrorAtStart(elemNode, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.",
 							spreadElementType.String(), arrayType.ElementType.String()))
 					}
 				} else if spreadType != types.Any {
@@ -232,9 +232,8 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 					actualElemType = types.Any
 				}
 
-				if !types.IsAssignable(actualElemType, arrayType.ElementType) {
-					c.addError(elemNode, fmt.Sprintf("Type '%s' is not assignable to type '%s'",
-						actualElemType.String(), arrayType.ElementType.String()))
+				if !c.assignableToFresh(elemNode, actualElemType, arrayType.ElementType) {
+					c.reportNotAssignable(elemNode, elemNode, actualElemType, arrayType.ElementType, headAssign)
 				}
 			}
 		}
@@ -1032,7 +1031,12 @@ func (c *Checker) checkTemplateLiteral(node *parser.TemplateLiteral) {
 		}
 	}
 
-	// Template literals always result in string type
+	// A template without substitutions is a string literal (`abc` has type "abc",
+	// widening to string in a mutable location); otherwise the type is string.
+	if text, ok := noSubstitutionTemplateText(node); ok {
+		node.SetComputedType(&types.LiteralType{Value: vm.String(text)})
+		return
+	}
 	node.SetComputedType(types.String)
 	debugPrintf("// [Checker TemplateLit] Set template literal type to: string\n")
 }
@@ -1882,6 +1886,9 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				if types.IsAssignable(indexType, types.Number) {
 					// Numeric index - accessing string characters
 					resultType = types.String
+				} else if isIndexStringLiteral && isNumericPropertyName(indexStringValue) {
+					// "0" indexes a character just like 0 does
+					resultType = types.String
 				} else if isIndexStringLiteral {
 					resultType = c.getPropertyTypeFromType(base, indexStringValue, false)
 					if resultType == types.Never {
@@ -2630,7 +2637,11 @@ func (c *Checker) checkTypeAssertionExpression(node *parser.TypeAssertionExpress
 
 	// Validate the type assertion according to TypeScript rules
 	if !c.isValidTypeAssertion(sourceType, targetType) {
-		c.addErrorWithCode(leftmostExpression(node.Expression), errors.TS2352, fmt.Sprintf("Conversion of type '%s' to type '%s' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+		var errNode parser.Node = node
+		if node.Token.Literal == "as" && node.Expression != nil {
+			errNode = node.Expression
+		}
+		c.addErrorAtStart(errNode, errors.TS2352, fmt.Sprintf("Conversion of type '%s' to type '%s' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
 			sourceType.String(), targetType.String()))
 	}
 
@@ -2675,31 +2686,27 @@ func (c *Checker) checkDuplicateTypeAssertionProperties(targetType parser.Expres
 
 // checkSatisfiesExpression handles satisfies expressions (value satisfies Type)
 func (c *Checker) checkSatisfiesExpression(node *parser.SatisfiesExpression) {
-	// Visit the expression being validated
-	c.visit(node.Expression)
-	sourceType := node.Expression.GetComputedType()
-	if sourceType == nil {
-		sourceType = types.Any
-	}
-
-	// Resolve the target type
+	// Resolve the target type first: it is the contextual type of the expression
 	targetType := c.resolveTypeAnnotation(node.TargetType)
 	if targetType == nil {
+		c.visit(node.Expression)
 		c.addError(node.TargetType, "invalid type in satisfies expression")
 		node.SetComputedType(types.Any)
 		return
 	}
 
-	// For satisfies, we need strict checking including excess property checks for object literals
-	if objectLit, ok := node.Expression.(*parser.ObjectLiteral); ok {
-		// Special handling for object literals - check for excess properties
-		c.checkObjectLiteralSatisfies(objectLit, targetType, node)
-	} else {
-		// For non-object literals, use regular assignability check
-		if !types.IsAssignable(sourceType, targetType) {
-			c.addErrorWithCode(node.Expression, errors.TS1360, fmt.Sprintf("Type '%s' does not satisfy the expected type '%s'.",
-				types.GetWidenedType(sourceType).String(), targetType.String()))
-		}
+	// Visit the expression being validated, contextually typed by the target
+	c.visitWithContext(node.Expression, &ContextualType{ExpectedType: targetType, IsContextual: true})
+	sourceType := node.Expression.GetComputedType()
+	if sourceType == nil {
+		sourceType = types.Any
+	}
+
+	// `e satisfies T` relates the (fresh) expression type to T: elaboration
+	// reports on the offending property or element, excess properties are
+	// TS2353, and otherwise the head message is TS1360.
+	if !c.assignableToFresh(node.Expression, sourceType, targetType) {
+		c.reportNotAssignable(node.Expression, node.Expression, sourceType, targetType, headSatisfies)
 	}
 
 	// The result type is the ORIGINAL expression type, NOT the target type
@@ -2761,22 +2768,29 @@ func (c *Checker) isValidTypeAssertion(sourceType, targetType types.Type) bool {
 		return true
 	}
 
-	// Check if either type is assignable to the other
-	if types.IsAssignable(targetType, sourceType) || types.IsAssignable(sourceType, targetType) {
+	// checkAssertionDeferred: with the source's literal types replaced by
+	// their base types, the assertion is fine when the target is comparable
+	// to the source or the source is comparable to the target.
+	sourceBase := baseTypeOfLiterals(sourceType)
+	sourceBase = c.resolveStructural(sourceBase)
+	targetType = c.resolveStructural(targetType)
+	if types.IsComparable(targetType, sourceBase) || types.IsComparable(sourceBase, targetType) {
 		return true
 	}
+	return false
+}
 
-	// Check for obvious mismatches between primitive types
-	// TypeScript allows assertions between primitives only if there's some potential overlap
-	if c.isPrimitiveType(sourceType) && c.isPrimitiveType(targetType) {
-		// Disallow assertions between completely different primitive types
-		if sourceType != targetType {
-			return false
+// baseTypeOfLiterals replaces literal types (including those inside unions)
+// by their primitive base types.
+func baseTypeOfLiterals(t types.Type) types.Type {
+	if u, ok := t.(*types.UnionType); ok {
+		members := make([]types.Type, len(u.Types))
+		for i, m := range u.Types {
+			members[i] = baseTypeOfLiterals(m)
 		}
+		return types.NewUnionType(members...)
 	}
-
-	// Allow other assertions (interfaces, objects, etc.) as they might have overlap
-	return true
+	return types.GetWidenedType(t)
 }
 
 // isPrimitiveType checks if a type is a primitive type

@@ -68,6 +68,16 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 	bodyEnv := NewFunctionEnvironment(outerEnv)
 	c.env = bodyEnv
 
+	// Members of an ambient namespace are exported with or without the
+	// `export` keyword.
+	outerAmbient := c.inAmbientNamespace
+	c.inAmbientNamespace = outerAmbient || node.Declare
+	c.namespaceBodyDepth++
+	defer func() {
+		c.inAmbientNamespace = outerAmbient
+		c.namespaceBodyDepth--
+	}()
+
 	// Seed bodyEnv with existing NAMESPACE children from nsType so that merge passes
 	// find and reuse child namespaces. Only seed NamespaceType members — other types
 	// (classes, interfaces, enums) should be free to re-declare in merge bodies.
@@ -101,11 +111,26 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 			c.deferredMethodBodies = append(c.deferredMethodBodies, deferredMethodBodyCheck{})
 		}
 		c.preprocessNamespaceTypes(node.Body, nsType)
+		// Names the body's var statements declare must exist while the
+		// function signatures are hoisted (`typeof a` in a parameter type).
+		c.hoistAnnotatedNamespaceVars(node.Body, bodyEnv)
+		c.hoistVarNames(bodyEnv, node.Body.Statements)
 		c.hoistNamespaceFunctions(node.Body, bodyEnv, nsType)
 
+		ambientBody := c.inAmbientNamespace
 		runBody := func() {
+			// The body may run after checkNamespaceDeclaration returned (it is
+			// deferred to Pass 2.5), so its ambient/namespace context is
+			// re-established here.
 			prevEnv := c.env
+			prevAmbient := c.inAmbientNamespace
 			c.env = bodyEnv
+			c.inAmbientNamespace = ambientBody
+			c.namespaceBodyDepth++
+			defer func() {
+				c.inAmbientNamespace = prevAmbient
+				c.namespaceBodyDepth--
+			}()
 			// Exported values of earlier declarations of this namespace are
 			// visible by bare name in a merged body. (Done here, not before
 			// the body is queued: earlier bodies publish their exports when
@@ -209,7 +234,7 @@ func (c *Checker) preprocessNamespaceTypes(body *parser.BlockStatement, nsType *
 	for _, stmt := range body.Statements {
 		switch s := stmt.(type) {
 		case *parser.InterfaceDeclaration, *parser.TypeAliasStatement, *parser.ClassDeclaration, *parser.NamespaceDeclaration, *parser.ExpressionStatement:
-			process(s, false)
+			process(s, c.inAmbientNamespace)
 		case *parser.ExportNamedDeclaration:
 			if s.Declaration != nil {
 				process(s.Declaration, true)
@@ -273,7 +298,7 @@ func (c *Checker) hoistNamespaceFunctions(body *parser.BlockStatement, env *Envi
 // a nested namespace declaration with IsExported=true), its bindings are copied
 // into nsType.
 func (c *Checker) checkNamespaceBodyStatement(stmt parser.Statement, nsType *types.NamespaceType) {
-	exported := false
+	exported := c.inAmbientNamespace
 	inner := stmt
 	if exp, ok := stmt.(*parser.ExportNamedDeclaration); ok && exp.Declaration != nil {
 		exported = true
@@ -297,7 +322,31 @@ func (c *Checker) checkNamespaceBodyStatement(stmt parser.Statement, nsType *typ
 			c.copyBindingTypes(parser.DeclaredNames(inner), nsType)
 		}
 
+	case *parser.FunctionSignature:
+		// `declare function f(...)` inside an ambient namespace.
+		if c.inAmbientNamespace {
+			n.Declare = true
+		}
+		c.visit(inner)
+		if exported && n.Name != nil {
+			if t, _, found := c.env.Resolve(n.Name.Value); found {
+				nsType.ValueShape.Properties[n.Name.Value] = t
+			}
+		}
+
 	case *parser.ExpressionStatement:
+		if sig, ok := n.Expression.(*parser.FunctionSignature); ok && sig.Name != nil {
+			if c.inAmbientNamespace {
+				sig.Declare = true
+			}
+			c.visit(n)
+			if exported {
+				if t, _, found := c.env.Resolve(sig.Name.Value); found {
+					nsType.ValueShape.Properties[sig.Name.Value] = t
+				}
+			}
+			return
+		}
 		// Function declaration or enum declaration may show up here.
 		if fn, ok := n.Expression.(*parser.FunctionLiteral); ok && fn.Name != nil {
 			// Body checking — hoisting already defined the signature.
@@ -346,6 +395,32 @@ func (c *Checker) checkNamespaceOverloads(node *parser.NamespaceDeclaration, bod
 		for _, sig := range sigs {
 			if sig.Name != nil {
 				c.addErrorWithCode(sig.Name, errors.TS2391, "Function implementation is missing or not immediately following the declaration.")
+			}
+		}
+	}
+}
+
+// hoistAnnotatedNamespaceVars declares the annotated top-level `var`s of a
+// namespace body with their declared types before function signatures are
+// hoisted, so `typeof a` in a parameter type sees `a`'s annotation.
+func (c *Checker) hoistAnnotatedNamespaceVars(body *parser.BlockStatement, env *Environment) {
+	for _, stmt := range body.Statements {
+		if exp, ok := stmt.(*parser.ExportNamedDeclaration); ok && exp.Declaration != nil {
+			stmt = exp.Declaration
+		}
+		vs, ok := stmt.(*parser.VarStatement)
+		if !ok {
+			continue
+		}
+		for _, d := range vs.Declarations {
+			if d == nil || d.Name == nil || d.TypeAnnotation == nil {
+				continue
+			}
+			if _, found := env.symbols[d.Name.Value]; found {
+				continue
+			}
+			if t := c.resolveTypeAnnotation(d.TypeAnnotation); t != nil {
+				env.Define(d.Name.Value, t, false)
 			}
 		}
 	}

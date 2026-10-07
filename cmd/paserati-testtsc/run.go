@@ -142,6 +142,7 @@ func createTscPaserati(opts Options) *driver.Paserati {
 	strictNull := strictNullChecksEnabled(opts)
 	pas.SetStrictNullChecks(strictNull)
 	pas.SetSkipDefiniteAssignment(!strictNull)
+	pas.SetStrictFunctionTypes(strictFunctionTypesEnabled(opts))
 	pas.SetSkipStrictPropertyInit(!strictPropertyInitEnabled(opts))
 	pas.SetNoImplicitOverride(noImplicitOverrideEnabled(opts))
 	pas.SetAllowUnreachableCode(allowUnreachableCodeEnabled(opts))
@@ -171,6 +172,10 @@ func allowUnreachableCodeEnabled(o Options) bool {
 	v, _ := o.boolOpt("allowunreachablecode")
 	return v
 }
+
+// strictFunctionTypesEnabled gates contravariant parameter comparison.
+// Explicit directive, then `strict`, default on.
+func strictFunctionTypesEnabled(o Options) bool { return o.strictFamily("strictfunctiontypes") }
 
 // alwaysStrictEnabled gates TS1212. Explicit directive, then `strict`, default on.
 func alwaysStrictEnabled(o Options) bool { return o.strictFamily("alwaysstrict") }

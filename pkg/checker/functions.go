@@ -54,7 +54,9 @@ func (c *Checker) processFunctionSignature(node *parser.FunctionSignature) {
 	// For now, continue using FunctionType for overloads until we update the entire overload system
 	node.SetComputedType(funcType)
 	if node.Declare {
-		c.env.Define(functionName, funcType, false)
+		if !c.env.Define(functionName, funcType, false) {
+			c.mergeAmbientOverload(functionName, sig)
+		}
 		debugPrintf("// [Checker] Added ambient function signature for '%s': %s\n", functionName, funcType.String())
 		return
 	}
@@ -395,4 +397,26 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 	// Set the result type from the matched overload
 	node.SetComputedType(resultType)
 	debugPrintf("// [Checker OverloadCall] Set result type to: %s\n", resultType.String())
+}
+
+// mergeAmbientOverload adds another `declare function f(...)` signature to the
+// function type already bound to f in this scope, so that all the overloads of
+// an ambient function are visible (the same signature is not added twice).
+func (c *Checker) mergeAmbientOverload(name string, sig *types.Signature) {
+	existing, _, found := c.env.Resolve(name)
+	if !found {
+		return
+	}
+	existingObj, ok := existing.(*types.ObjectType)
+	if !ok || !existingObj.IsCallable() || len(existingObj.Properties) != 0 {
+		return
+	}
+	for _, have := range existingObj.CallSignatures {
+		if have.String() == sig.String() {
+			return
+		}
+	}
+	merged := &types.ObjectType{}
+	merged.CallSignatures = append(append([]*types.Signature(nil), existingObj.CallSignatures...), sig)
+	c.env.Update(name, merged)
 }
