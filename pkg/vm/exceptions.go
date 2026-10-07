@@ -179,7 +179,15 @@ func (vm *VM) unwindException() bool {
 
 		// Look for handlers covering the current IP FIRST
 		// Even in direct call frames (generators/async), we want to handle exceptions within the frame
-		handlers := vm.findAllExceptionHandlers(frame.ip)
+		// frame.ip is the address of the NEXT instruction (a caller's return
+		// address, or just past the throwing op), so look up the byte that
+		// belongs to the faulting instruction. Using ip itself attributed a
+		// throw by the last instruction before a try to that try.
+		lookupPC := frame.ip
+		if lookupPC > 0 {
+			lookupPC--
+		}
+		handlers := vm.findAllExceptionHandlers(lookupPC)
 
 		if debugExceptions {
 			fmt.Printf("[DEBUG unwindException] Looking for handlers at IP %d, found %d handlers\n", frame.ip, len(handlers))
