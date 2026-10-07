@@ -292,6 +292,7 @@ func dataDefineKey(fld Field, keyHash string) string {
 func (cur *Shape) transitionFor(hashKey string, fld Field) *Shape {
 	cur.mu.RLock()
 	next := cur.transitions[hashKey]
+	n := len(cur.transitions)
 	cur.mu.RUnlock()
 	if next != nil {
 		return next
@@ -303,12 +304,20 @@ func (cur *Shape) transitionFor(hashKey string, fld Field) *Shape {
 	}
 	fld.offset = len(cur.fields)
 	next = &Shape{parent: cur, fields: cur.extendFields(fld), version: cur.version + 1}
+	if n >= maxDefineTransitions {
+		return next // wide fan-out: don't pin one-off shapes in the shared tree
+	}
 	if cur.transitions == nil {
 		cur.transitions = make(map[string]*Shape)
 	}
 	cur.transitions[hashKey] = next
 	return next
 }
+
+// maxDefineTransitions caps how many descriptor-defined children a shape
+// remembers. Realm setup defines the same names in the same order every time,
+// so its shapes fit; a program defining unique names does not.
+const maxDefineTransitions = 64
 
 // forkShape gives o a private, unshared Shape with the same field list, so the
 // caller can mutate a Field in place. Every other object that reached the old
