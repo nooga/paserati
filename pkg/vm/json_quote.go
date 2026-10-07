@@ -6,6 +6,21 @@ import (
 	"unicode/utf8"
 )
 
+// AppendQuoteJSONString appends QuoteJSONString(s) to dst. The common case - a
+// string needing no escaping and holding no multi-byte sequence, which covers
+// nearly every object key and most values - is one scan and one copy, with no
+// intermediate string. Anything else takes the full escaping path.
+func AppendQuoteJSONString(dst []byte, s string) []byte {
+	for i := 0; i < len(s); i++ {
+		if b := s[i]; b < 0x20 || b >= 0x80 || b == '"' || b == '\\' {
+			return append(dst, QuoteJSONString(s)...)
+		}
+	}
+	dst = append(dst, '"')
+	dst = append(dst, s...)
+	return append(dst, '"')
+}
+
 // QuoteJSONString quotes and escapes a string for JSON output per ECMAScript
 // QuoteJSONString, preserving lone surrogates as \uXXXX escapes. Go's
 // json.Marshal is not a substitute: it replaces invalid UTF-8 (including lone
