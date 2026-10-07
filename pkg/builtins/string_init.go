@@ -1583,6 +1583,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 				strLen := vm.UTF16Length(thisStr)
 				if separator == "" {
 					for i := 0; i < strLen && uint32(len(elements)) < limit; i++ {
+						if err := pollCancelled(vmInstance, i); err != nil {
+							return vm.Undefined, err
+						}
 						elements = append(elements, vm.NewString(vm.UTF16Substring(thisStr, i, i+1)))
 					}
 					return vm.NewArrayWithArgs(elements), nil
@@ -1610,6 +1613,9 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 			elements := make([]vm.Value, len(parts))
 			for i, part := range parts {
+				if err := pollCancelled(vmInstance, i); err != nil {
+					return vm.Undefined, err
+				}
 				elements[i] = vm.NewString(part)
 			}
 			return vm.NewArrayWithArgs(elements), nil

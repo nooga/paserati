@@ -528,6 +528,12 @@ func (vm *VM) handleUncaughtException() {
 	if stackTrace != "" {
 		errorMsg += "\n" + stackTrace
 	}
+	if vm.cancelled.Load() {
+		// A builtin aborted by CheckCancelled throws on its way out; the host
+		// asked for a cancellation, so report that, the same as the
+		// dispatch loop's own check does.
+		errorMsg = errCancelled.Error()
+	}
 
 	// Create runtime error with actual line and function information
 	fileName := "<script>"
