@@ -4,6 +4,9 @@ import (
 	"testing"
 
 	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/lexer"
+	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 const programSrc = `
@@ -69,5 +72,30 @@ func TestProgramRunsRepeatedlyOnOneSessionAndMatchesRunCode(t *testing.T) {
 func TestPrecompileReportsErrors(t *testing.T) {
 	if _, errs := newSkipCheck().Precompile("let = = 1", driver.RunOptions{}); len(errs) == 0 {
 		t.Fatal("expected a parse error")
+	}
+}
+
+// Array holes ([, 1]) put a TypeHole constant in the pool. It is an immutable
+// sentinel, so the program must still instantiate rather than silently fall
+// back to recompiling from source on every run.
+func TestInstantiateChunkWithArrayHole(t *testing.T) {
+	p := driver.NewPaserati()
+	prog, errs := parser.NewParser(lexer.NewLexer("var a = [, 1]; a.length")).ParseProgram()
+	if len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	chunk, cerrs := p.CompileProgramAsScript(prog)
+	if len(cerrs) > 0 {
+		t.Fatal(cerrs)
+	}
+	if _, ok := vm.InstantiateChunk(chunk); !ok {
+		t.Fatal("chunk with an array hole should be instantiable")
+	}
+	prog2, perrs := p.Precompile("var a = [, 1]; a.length", driver.RunOptions{})
+	if len(perrs) > 0 {
+		t.Fatal(perrs)
+	}
+	if !prog2.Instantiable() {
+		t.Fatal("Program with an array hole should report Instantiable")
 	}
 }

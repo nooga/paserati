@@ -32,7 +32,7 @@ func InstantiateChunk(c *Chunk) (inst *Chunk, ok bool) {
 	n.Constants = make([]Value, len(c.Constants))
 	for i, k := range c.Constants {
 		switch k.Type() {
-		case TypeUndefined, TypeNull, TypeBoolean, TypeIntegerNumber, TypeFloatNumber, TypeString, TypeBigInt:
+		case TypeUndefined, TypeNull, TypeBoolean, TypeIntegerNumber, TypeFloatNumber, TypeString, TypeBigInt, TypeHole, TypeUninitialized:
 			n.Constants[i] = k
 		case TypeFunction:
 			fn := *k.AsFunction()
