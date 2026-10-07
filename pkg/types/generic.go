@@ -140,6 +140,12 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 		return nil
 	}
 	
+	// Types that mention none of the substituted parameters are returned as
+	// they are, so identity (and class metadata) survives.
+	if !mentionsTypeParameter(t, substitutions, make(map[Type]bool)) {
+		return t
+	}
+
 	switch t := t.(type) {
 	case *TypeParameterType:
 		// Replace type parameter with concrete type
@@ -164,6 +170,20 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 		for name, isOptional := range t.OptionalProperties {
 			newObj.OptionalProperties[name] = isOptional
 		}
+		if len(t.ReadOnlyProperties) > 0 {
+			newObj.ReadOnlyProperties = make(map[string]bool, len(t.ReadOnlyProperties))
+			for name, ro := range t.ReadOnlyProperties {
+				newObj.ReadOnlyProperties[name] = ro
+			}
+		}
+		if len(t.BaseTypes) > 0 {
+			newObj.BaseTypes = make([]Type, len(t.BaseTypes))
+			for i, base := range t.BaseTypes {
+				newObj.BaseTypes[i] = substituteType(base, substitutions)
+			}
+		}
+		newObj.ClassMeta = t.ClassMeta
+		newObj.IsInterface = t.IsInterface
 		
 		// Handle call signatures
 		for _, sig := range t.CallSignatures {
@@ -424,6 +444,77 @@ func substituteSignature(sig *Signature, substitutions map[*TypeParameter]Type) 
 		ReturnType:        newReturnType,
 		OptionalParams:    sig.OptionalParams, // Copy as-is
 		IsVariadic:        sig.IsVariadic,
+		StrictVariance:   sig.StrictVariance,
 		RestParameterType: newRestParamType,
 	}
+}
+// mentionsTypeParameter reports whether t refers to any of the given type
+// parameters (visited guards against self-referential types).
+func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited map[Type]bool) bool {
+	if t == nil {
+		return false
+	}
+	switch tt := t.(type) {
+	case *TypeParameterType:
+		_, ok := params[tt.Parameter]
+		return ok
+	case *ArrayType:
+		return mentionsTypeParameter(tt.ElementType, params, visited)
+	case *ReadonlyType:
+		return mentionsTypeParameter(tt.InnerType, params, visited)
+	case *UnionType:
+		for _, m := range tt.Types {
+			if mentionsTypeParameter(m, params, visited) {
+				return true
+			}
+		}
+	case *IntersectionType:
+		for _, m := range tt.Types {
+			if mentionsTypeParameter(m, params, visited) {
+				return true
+			}
+		}
+	case *InstantiatedType:
+		for _, a := range tt.TypeArguments {
+			if mentionsTypeParameter(a, params, visited) {
+				return true
+			}
+		}
+	case *ObjectType:
+		if visited[t] {
+			return false
+		}
+		visited[t] = true
+		for _, p := range tt.Properties {
+			if mentionsTypeParameter(p, params, visited) {
+				return true
+			}
+		}
+		for _, sigs := range [][]*Signature{tt.CallSignatures, tt.ConstructSignatures} {
+			for _, sig := range sigs {
+				for _, p := range sig.ParameterTypes {
+					if mentionsTypeParameter(p, params, visited) {
+						return true
+					}
+				}
+				if mentionsTypeParameter(sig.ReturnType, params, visited) || mentionsTypeParameter(sig.RestParameterType, params, visited) {
+					return true
+				}
+			}
+		}
+		for _, idx := range tt.IndexSignatures {
+			if mentionsTypeParameter(idx.KeyType, params, visited) || mentionsTypeParameter(idx.ValueType, params, visited) {
+				return true
+			}
+		}
+	default:
+		// Other types (mapped, conditional, ...) are conservatively treated
+		// as possibly mentioning the parameters.
+		switch t.(type) {
+		case *Primitive, *LiteralType, *EnumMemberType, *EnumType:
+			return false
+		}
+		return true
+	}
+	return false
 }

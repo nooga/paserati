@@ -238,7 +238,7 @@ func (e *Environment) UpdateInChain(name string, typ types.Type) bool {
 	for current != nil {
 		if info, exists := current.symbols[name]; exists {
 			// Check if this is a shadow (another definition exists further out)
-			if current.outer != nil {
+			if current.outer != nil && !current.isFunctionScope {
 				if _, _, outerFound := current.outer.Resolve(name); outerFound {
 					// This is a narrowing shadow — safe to update
 					debugPrintf("// [Env UpdateInChain] Updating shadow '%s' from %s to %s in env %p\n",
@@ -349,6 +349,11 @@ func (e *Environment) ResolveDeclaredType(name string) types.Type {
 		if current.symbols != nil {
 			if info, ok := current.symbols[name]; ok {
 				outermost = info.Type // Keep overwriting — the last (outermost) one wins
+				if current.isFunctionScope {
+					// A function scope owns its declarations: a same-named
+					// binding further out is shadowed, not the declared type.
+					break
+				}
 			}
 		}
 		current = current.outer

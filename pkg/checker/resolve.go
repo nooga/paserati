@@ -611,6 +611,7 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 		OptionalParams:    node.OptionalParams,
 		IsVariadic:        node.RestParameter != nil,
 		RestParameterType: restParameterType,
+		StrictVariance:    !node.IsMethodSignature,
 	}
 
 	// Create a unified ObjectType with call signature
@@ -696,6 +697,7 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 		OptionalParams:    node.OptionalParams,
 		IsVariadic:        node.RestParameter != nil,
 		RestParameterType: restParameterType,
+		StrictVariance:    !node.IsMethodSignature,
 	}
 
 	// Create the function type
@@ -711,15 +713,19 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 	return genericType
 }
 
+// extractCallSignaturesFromType returns the call signatures of a function type
+// used as a call-signature member. Such signatures are not methods, so they
+// are compared contravariantly under strictFunctionTypes, and a generic
+// function's type parameters are recorded on its signatures.
 func (c *Checker) extractCallSignaturesFromType(typ types.Type) []*types.Signature {
 	switch t := typ.(type) {
 	case *types.ObjectType:
 		if len(t.CallSignatures) > 0 {
-			return t.CallSignatures
+			return strictSignatureCopies(t.CallSignatures, nil)
 		}
 	case *types.GenericType:
 		if bodyObj, ok := t.Body.(*types.ObjectType); ok && len(bodyObj.CallSignatures) > 0 {
-			return bodyObj.CallSignatures
+			return strictSignatureCopies(bodyObj.CallSignatures, t.TypeParameters)
 		}
 	}
 	return nil
@@ -729,14 +735,30 @@ func (c *Checker) extractConstructSignaturesFromType(typ types.Type) []*types.Si
 	switch t := typ.(type) {
 	case *types.ObjectType:
 		if len(t.ConstructSignatures) > 0 {
-			return t.ConstructSignatures
+			return strictSignatureCopies(t.ConstructSignatures, nil)
 		}
 	case *types.GenericType:
 		if bodyObj, ok := t.Body.(*types.ObjectType); ok && len(bodyObj.ConstructSignatures) > 0 {
-			return bodyObj.ConstructSignatures
+			return strictSignatureCopies(bodyObj.ConstructSignatures, t.TypeParameters)
 		}
 	}
 	return nil
+}
+
+// strictSignatureCopies copies signatures marking them as non-method (strict
+// variance) and, when typeParams is given, records them as the signatures' own
+// type parameters.
+func strictSignatureCopies(sigs []*types.Signature, typeParams []*types.TypeParameter) []*types.Signature {
+	out := make([]*types.Signature, len(sigs))
+	for i, sig := range sigs {
+		cp := *sig
+		cp.StrictVariance = true
+		if len(typeParams) > 0 && len(cp.TypeParameters) == 0 {
+			cp.TypeParameters = append([]*types.TypeParameter(nil), typeParams...)
+		}
+		out[i] = &cp
+	}
+	return out
 }
 
 // --- NEW: Helper to resolve ObjectTypeExpression nodes ---
@@ -777,6 +799,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			sig := &types.Signature{
 				ParameterTypes: paramTypes,
 				ReturnType:     returnType,
+				StrictVariance: true,
 				// Note: Object type call signatures don't track optional parameters for now
 			}
 
@@ -838,6 +861,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 				debugPrintf("// [Checker ObjectType] Dynamic computed property, treating as index signature\n")
 				indexSignature := &types.IndexSignature{
 					KeyType:   types.String, // Assume string keys for now
+					Synthetic: true,
 					ValueType: propType,
 				}
 				indexSignatures = append(indexSignatures, indexSignature)
@@ -851,6 +875,18 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			if _, exists := properties[prop.Name.Value]; exists {
 				if optionalProperties[prop.Name.Value] != prop.Optional {
 					c.addError(prop.Name, fmt.Sprintf("All declarations of '%s' must have identical optionality.", prop.Name.Value))
+				}
+			}
+			// Method overloads: `m(x: number): number; m(s: string): string;`
+			// accumulate into one callable type with several call signatures.
+			if prev, exists := properties[prop.Name.Value]; exists {
+				prevSigs, prevOk := overloadableCallSignatures(prev)
+				curSigs, curOk := overloadableCallSignatures(propType)
+				if prevOk && curOk {
+					merged := &types.ObjectType{}
+					merged.CallSignatures = append(merged.CallSignatures, prevSigs...)
+					merged.CallSignatures = append(merged.CallSignatures, curSigs...)
+					propType = merged
 				}
 			}
 			properties[prop.Name.Value] = propType
@@ -884,6 +920,25 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 		IndexSignatures:     indexSignatures,
 	}
 
+	// Properties of a type literal are constrained by its index signatures.
+	if len(indexSignatures) > 0 {
+		for _, prop := range node.Properties {
+			if prop.IsCallSignature || prop.IsConstructSignature || prop.IsIndexSignature {
+				continue
+			}
+			if prop.IsComputedProperty && prop.ComputedName != nil {
+				if name := c.extractConstantPropertyName(prop.ComputedName); name != "" {
+					c.checkPropertyAgainstIndexSignatures(nil, prop.ComputedName, name, properties[name], indexSignatures)
+				}
+				continue
+			}
+			if prop.Name == nil {
+				continue
+			}
+			c.checkPropertyAgainstIndexSignatures(nil, prop.Name, prop.Name.Value, properties[prop.Name.Value], indexSignatures)
+		}
+	}
+
 	// If it's a pure callable object with no properties and exactly one signature,
 	// we can make it a pure function type for better type display
 	if len(properties) == 0 && len(callSignatures) == 1 {
@@ -898,9 +953,11 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 // --- NEW: Helper to resolve ConstructorTypeExpression nodes ---
 func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeExpression) types.Type {
 	originalEnv := c.env
+	var sigTypeParams []*types.TypeParameter
 	if len(node.TypeParameters) > 0 {
 		typeParamEnv := NewEnclosedEnvironment(c.env)
 		typeParams := make([]*types.TypeParameter, len(node.TypeParameters))
+		sigTypeParams = typeParams
 		for i, paramNode := range node.TypeParameters {
 			typeParam := &types.TypeParameter{
 				Name:       paramNode.Name.Value,
@@ -965,10 +1022,13 @@ func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeEx
 
 	// Create signature
 	sig := &types.Signature{
+		TypeParameters:    sigTypeParams,
 		ParameterTypes:    paramTypes,
 		ReturnType:        constructedType,
+		OptionalParams:    node.OptionalParams,
 		IsVariadic:        node.RestParameter != nil,
 		RestParameterType: restParameterType,
+		StrictVariance:    true,
 		// Note: Constructor type expressions don't track optional parameters
 	}
 
@@ -1072,8 +1132,12 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 			c.env = originalEnv             // Restore original environment
 
 			defaultValueType := paramNode.DefaultValue.GetComputedType()
-			if defaultValueType != nil && !types.IsAssignable(defaultValueType, resolvedParamType) {
-				c.addError(paramNode.DefaultValue, fmt.Sprintf("default value type '%s' is not assignable to parameter type '%s'", defaultValueType.String(), resolvedParamType.String()))
+			if defaultValueType != nil && !c.assignableToFresh(paramNode.DefaultValue, defaultValueType, resolvedParamType) {
+				var errNode parser.Node = paramNode.DefaultValue
+				if paramNode.Name != nil {
+					errNode = paramNode.Name
+				}
+				c.reportNotAssignable(errNode, paramNode.DefaultValue, defaultValueType, resolvedParamType, headAssign)
 			}
 		}
 
@@ -1286,6 +1350,21 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 			TypeArguments: newTypeArgs,
 		}
 
+	case *types.InstantiatedType:
+		// `Promise<T>` inside a generic alias body: substitute the arguments
+		newArgs := make([]types.Type, len(typ.TypeArguments))
+		changed := false
+		for i, arg := range typ.TypeArguments {
+			newArgs[i] = c.substituteTypesWithVisited(arg, substitution, visited)
+			if newArgs[i] != arg {
+				changed = true
+			}
+		}
+		if !changed {
+			return typ
+		}
+		return types.NewInstantiatedType(typ.Generic, newArgs)
+
 	case *types.ArrayType:
 		// Recursively substitute element type
 		newElementType := c.substituteTypesWithVisited(typ.ElementType, substitution, visited)
@@ -1349,6 +1428,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 					ReturnType:        newReturnType,
 					OptionalParams:    sig.OptionalParams, // Copy optional flags
 					IsVariadic:        sig.IsVariadic,
+					StrictVariance:   sig.StrictVariance,
 					RestParameterType: newRestParamType,
 				}
 			}
@@ -1373,6 +1453,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 					ReturnType:        newReturnType,
 					OptionalParams:    sig.OptionalParams,
 					IsVariadic:        sig.IsVariadic,
+					StrictVariance:   sig.StrictVariance,
 					RestParameterType: newRestParamType,
 				}
 			}
@@ -1385,6 +1466,16 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 				IsClassInstance:    typ.ClassMeta.IsClassInstance,
 				IsClassConstructor: typ.ClassMeta.IsClassConstructor,
 				MemberAccess:       typ.ClassMeta.MemberAccess,
+			}
+		}
+
+		// Inherited members and the interface flag survive instantiation; the
+		// base types are instantiated with the same substitution.
+		result.IsInterface = typ.IsInterface
+		if len(typ.BaseTypes) > 0 {
+			result.BaseTypes = make([]types.Type, len(typ.BaseTypes))
+			for i, base := range typ.BaseTypes {
+				result.BaseTypes[i] = c.substituteTypesWithVisited(base, substitution, visited)
 			}
 		}
 
@@ -2322,6 +2413,7 @@ func cloneSignaturesWithTypes(signatures []*types.Signature, rewrite func(types.
 			ReturnType:        rewrite(sig.ReturnType),
 			OptionalParams:    append([]bool(nil), sig.OptionalParams...),
 			IsVariadic:        sig.IsVariadic,
+			StrictVariance:   sig.StrictVariance,
 			RestParameterType: rewrite(sig.RestParameterType),
 		}
 	}
@@ -2874,6 +2966,7 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 					ReturnType:        newReturnType,
 					OptionalParams:    sig.OptionalParams,
 					IsVariadic:        sig.IsVariadic,
+					StrictVariance:   sig.StrictVariance,
 					RestParameterType: sig.RestParameterType,
 				}
 			}
@@ -2993,4 +3086,28 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 		c.addError(node.Object, fmt.Sprintf("'%s' is not a namespace or enum type", node.Object.String()))
 		return nil
 	}
+}
+
+// overloadableCallSignatures returns the call signatures of a method type that
+// can take part in an overload set (a plain callable object or a generic
+// function), with a generic function's type parameters recorded on the
+// signature itself.
+func overloadableCallSignatures(t types.Type) ([]*types.Signature, bool) {
+	switch tt := t.(type) {
+	case *types.ObjectType:
+		if tt.IsCallable() && len(tt.Properties) == 0 && len(tt.ConstructSignatures) == 0 {
+			return tt.GetCallSignatures(), true
+		}
+	case *types.GenericType:
+		if body, ok := tt.Body.(*types.ObjectType); ok && body.IsCallable() && len(body.Properties) == 0 && len(body.ConstructSignatures) == 0 {
+			var out []*types.Signature
+			for _, sig := range body.GetCallSignatures() {
+				cp := *sig
+				cp.TypeParameters = append([]*types.TypeParameter(nil), tt.TypeParameters...)
+				out = append(out, &cp)
+			}
+			return out, true
+		}
+	}
+	return nil, false
 }

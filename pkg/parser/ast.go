@@ -2304,6 +2304,9 @@ type FunctionTypeExpression struct {
 	OptionalParams []bool           // Tracks optional parameters in method/call signatures
 	RestParameter  Expression       // Optional rest parameter type (e.g., ...args: string[])
 	ReturnType     Expression       // Expression node for the return type
+	// IsMethodSignature marks `m(x: T): U` members of type literals and
+	// interfaces, whose parameters stay bivariant under strictFunctionTypes.
+	IsMethodSignature bool
 }
 
 func (fte *FunctionTypeExpression) expressionNode()      {}
@@ -2991,6 +2994,7 @@ type ConstructorTypeExpression struct {
 	Token          *lexer.Token     // The 'new' token
 	TypeParameters []*TypeParameter // Optional type parameters: new<T>(...)
 	Parameters     []Expression     // Parameter types for the constructor
+	OptionalParams []bool           // Which parameters were written `name?: T`
 	RestParameter  Expression       // Rest parameter type for variadic constructors
 	ReturnType     Expression       // The constructed type (T in `new (): T`)
 }

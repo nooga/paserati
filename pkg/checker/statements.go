@@ -221,6 +221,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		interfaceType = &types.ObjectType{
 			Properties:         make(map[string]types.Type),
 			OptionalProperties: make(map[string]bool),
+			IsInterface:        true,
 		}
 		if !c.env.DefineTypeAlias(node.Name.Value, interfaceType) {
 			debugPrintf("// [Checker Interface P1] WARNING: DefineTypeAlias failed for interface '%s'.\n", node.Name.Value)
@@ -237,6 +238,8 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	}
 	var indexSignatures []*types.IndexSignature
 	var callSignatures []*types.Signature
+	var extendedObjs []*types.ObjectType
+	previousIndexSignatures := interfaceType.IndexSignatures
 
 	outerThisType := c.currentThisType
 	c.currentThisType = interfaceType
@@ -261,6 +264,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		// The extended type should resolve to an ObjectType. Instantiated object
 		// types such as Promise<string> are valid interface bases in TypeScript.
 		if extendedObjectType, ok := c.resolveExtendedInterfaceObjectType(extendedType); ok {
+			extendedObjs = append(extendedObjs, extendedObjectType)
 			// Copy all properties from the extended interface
 			for propName, propType := range extendedObjectType.Properties {
 				properties[propName] = c.rebindThisType(propType, extendedObjectType, interfaceType)
@@ -325,7 +329,12 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				debugPrintf("// [Checker Interface P1] Failed to resolve constructor type in interface '%s'. Using Any.\n", node.Name.Value)
 				constructorType = types.Any
 			}
-			properties["new"] = constructorType
+			if sigs := c.extractConstructSignaturesFromType(constructorType); len(sigs) > 0 {
+				// A construct signature is a member of the interface type, not a property.
+				interfaceType.ConstructSignatures = append(interfaceType.ConstructSignatures, sigs...)
+			} else {
+				properties["new"] = constructorType
+			}
 			// Constructor signatures are always required (not optional)
 		} else if prop.IsComputedProperty {
 			// This is a computed property: [expr]: Type
@@ -354,6 +363,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				debugPrintf("// [Checker Interface P1] Interface '%s' has dynamic computed property, treating as index signature\n", node.Name.Value)
 				indexSignature := &types.IndexSignature{
 					KeyType:   types.String, // Assume string keys for now
+					Synthetic: true,
 					ValueType: propType,
 				}
 				indexSignatures = append(indexSignatures, indexSignature)
@@ -403,9 +413,20 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	}
 
 	// 3. Update the pre-registered ObjectType with index signatures and call signatures
+	indexSignatures = append(append([]*types.IndexSignature(nil), previousIndexSignatures...), indexSignatures...)
+	indexSignatures = inheritIndexSignatures(indexSignatures, extendedObjs)
 	interfaceType.IndexSignatures = indexSignatures
+	interfaceTypeChecked, sigsChecked := interfaceType, indexSignatures
+	c.deferRelationCheck(func() { c.checkInterfaceIndexConstraints(node, interfaceTypeChecked, sigsChecked) })
+	c.checkInterfaceExtends(node, interfaceType, extendedObjs)
 	if len(callSignatures) > 0 {
 		interfaceType.CallSignatures = append(interfaceType.CallSignatures, callSignatures...)
+	}
+	// An interface's call and construct signatures follow those of the
+	// interfaces it extends (resolveObjectTypeMembers).
+	for _, ext := range extendedObjs {
+		interfaceType.CallSignatures = appendNewSignatures(interfaceType.CallSignatures, ext.CallSignatures)
+		interfaceType.ConstructSignatures = appendNewSignatures(interfaceType.ConstructSignatures, ext.ConstructSignatures)
 	}
 
 	debugPrintf("// [Checker Interface P1] Finalized interface '%s' as type '%s' in env %p (inherited from %d interfaces)\n",
@@ -537,6 +558,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		bodyType = &types.ObjectType{
 			Properties:         make(map[string]types.Type),
 			OptionalProperties: make(map[string]bool),
+			IsInterface:        true,
 		}
 	}
 	if bodyType.Properties == nil {
@@ -549,6 +571,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	optionalProperties := bodyType.OptionalProperties
 	indexSignatures := bodyType.IndexSignatures
 	callSignatures := bodyType.CallSignatures
+	var extendedObjs []*types.ObjectType
 	c.currentThisType = bodyType
 
 	// Handle extends clause with generic environment
@@ -567,6 +590,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		}
 
 		if extendedObjectType, ok := c.resolveExtendedInterfaceObjectType(extendedType); ok {
+			extendedObjs = append(extendedObjs, extendedObjectType)
 			for propName, propType := range extendedObjectType.Properties {
 				properties[propName] = c.rebindThisType(propType, extendedObjectType, bodyType)
 				if extendedObjectType.OptionalProperties != nil && extendedObjectType.OptionalProperties[propName] {
@@ -601,7 +625,11 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			if constructorType == nil {
 				constructorType = types.Any
 			}
-			properties["new"] = constructorType
+			if sigs := c.extractConstructSignaturesFromType(constructorType); len(sigs) > 0 {
+				bodyType.ConstructSignatures = append(bodyType.ConstructSignatures, sigs...)
+			} else {
+				properties["new"] = constructorType
+			}
 		} else if prop.Name == nil {
 			propType := c.resolveTypeAnnotation(prop.Type)
 			if propType == nil {
@@ -629,8 +657,16 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		}
 	}
 
+	indexSignatures = inheritIndexSignatures(indexSignatures, extendedObjs)
 	bodyType.IndexSignatures = indexSignatures
 	bodyType.CallSignatures = callSignatures
+	for _, ext := range extendedObjs {
+		bodyType.CallSignatures = appendNewSignatures(bodyType.CallSignatures, ext.CallSignatures)
+		bodyType.ConstructSignatures = appendNewSignatures(bodyType.ConstructSignatures, ext.ConstructSignatures)
+	}
+	bodyTypeChecked, sigsChecked := bodyType, indexSignatures
+	c.deferRelationCheck(func() { c.checkInterfaceIndexConstraints(node, bodyTypeChecked, sigsChecked) })
+	c.checkInterfaceExtends(node, bodyType, extendedObjs)
 
 	// Restore environment
 	c.env = savedEnv
@@ -800,6 +836,7 @@ func (c *Checker) rebindSignaturesThisType(signatures []*types.Signature, from *
 			ReturnType:        c.rebindThisTypeWithVisited(sig.ReturnType, from, to, visited),
 			OptionalParams:    sig.OptionalParams,
 			IsVariadic:        sig.IsVariadic,
+			StrictVariance:    sig.StrictVariance,
 			RestParameterType: c.rebindThisTypeWithVisited(sig.RestParameterType, from, to, visited),
 		}
 	}

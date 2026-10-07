@@ -1,4 +1,4 @@
-// expect_compile_error: is not assignable to type '{ [P in age | name]: string }'.
+// expect_compile_error: Type 'number' is not assignable to type 'string'.
 
 // Test that mapped types properly reject invalid assignments
 

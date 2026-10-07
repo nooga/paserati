@@ -346,6 +346,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// 3. Handle inheritance relationships and create instance type from methods and properties
 	// Note: createInstanceType will populate the same ObjectType reference
 	instanceType := c.createInstanceTypeInPlace(node.Name.Value, node.Body, node.SuperClass, node.Implements, placeholderType)
+	c.deferRelationCheck(func() { c.checkClassHeritageAccessibility(node, instanceType) })
 
 	debugPrintf("// [Checker Class] Finalized class type alias '%s': %s\n",
 		node.Name.Value, instanceType.String())
@@ -362,6 +363,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 
 	// 6. Add static members to the constructor type (can now resolve class name in type annotations)
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
+	c.inheritStaticMembers(constructorType, instanceType)
 
 	// 6. Update the constructor function in the environment (replacing forward reference)
 	// When we reference "Animal", we get the constructor function, not a separate class type
@@ -554,6 +556,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		constructorType.WithConstructSignature(sig)
 	}
 	constructorType = c.addStaticMembers(node.Body, constructorType)
+	c.inheritStaticMembers(constructorType, instanceType)
 
 	// 8. Create the GenericType for the class
 	genericClassType := &types.GenericType{
@@ -904,6 +907,9 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	for _, interfaceName := range interfaceNames {
 		c.validateInterfaceImplementationDeferred(instanceType, interfaceName)
 	}
+
+	// Members must be assignable to the same members of the base class (TS2416).
+	c.deferRelationCheck(func() { c.checkClassMembersAgainstBase(className, body, instanceType) })
 
 	return instanceType
 }
@@ -1336,6 +1342,18 @@ func (c *Checker) inferPropertyType(prop *parser.PropertyDefinition) types.Type 
 		} else {
 			propType = types.Any
 		}
+		// The initializer of an annotated property is checked against the
+		// annotation (reported on the property name, like a variable declaration).
+		if prop.Value != nil && annotationType != nil {
+			c.visitWithContext(prop.Value, &ContextualType{ExpectedType: annotationType, IsContextual: true})
+			if initType := prop.Value.GetComputedType(); initType != nil && !c.assignableToFresh(prop.Value, initType, annotationType) {
+				var errNode parser.Node = prop.Value
+				if prop.Key != nil {
+					errNode = prop.Key
+				}
+				c.reportNotAssignable(errNode, prop.Value, initType, annotationType, headAssign)
+			}
+		}
 	} else if prop.Value != nil {
 		// Type check the initializer expression to get its type. An instance
 		// property initializer runs when an instance is created, not when the
@@ -1353,6 +1371,11 @@ func (c *Checker) inferPropertyType(prop *parser.PropertyDefinition) types.Type 
 		}
 		if initType := prop.Value.GetComputedType(); initType != nil {
 			propType = initType
+			// A mutable property takes the widened type of its initializer
+			// (`foo = 1` is a number); readonly properties keep the literal.
+			if !prop.Readonly && isWideningInitializer(prop.Value) {
+				propType = types.DeeplyWidenType(initType)
+			}
 		} else {
 			propType = types.Any
 		}
@@ -2364,4 +2387,36 @@ func (c *Checker) inheritedClassMemberNames(instanceType *types.ObjectType, isSt
 		}
 	}
 	return names
+}
+
+// isWideningInitializer reports whether an initializer expression produces a
+// type whose literal parts are widened when it initializes a mutable location
+// (literals, object/array literals and conditionals of them).
+func isWideningInitializer(node parser.Node) bool {
+	switch n := node.(type) {
+	case *parser.ObjectLiteral, *parser.ArrayLiteral:
+		return true
+	case *parser.TernaryExpression:
+		return isWideningInitializer(n.Consequence) && isWideningInitializer(n.Alternative)
+	}
+	return isFreshLiteralExpression(node)
+}
+
+// inheritStaticMembers makes the static side of a derived class see the static
+// members of its base class: the base constructor type becomes a base type of
+// the derived constructor type.
+func (c *Checker) inheritStaticMembers(constructorType, instanceType *types.ObjectType) {
+	if constructorType == nil || instanceType == nil || instanceType.ClassMeta == nil {
+		return
+	}
+	baseCtor, ok := c.resolveStructural(instanceType.ClassMeta.SuperConstructorType).(*types.ObjectType)
+	if !ok || baseCtor == nil || baseCtor == constructorType {
+		return
+	}
+	for _, existing := range constructorType.BaseTypes {
+		if existing == types.Type(baseCtor) {
+			return
+		}
+	}
+	constructorType.BaseTypes = append(constructorType.BaseTypes, baseCtor)
 }

@@ -249,8 +249,12 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 				if paramIsOptional {
 					paramType = types.NewUnionType(paramType, types.Undefined)
 				}
-				if argType != nil && !c.isArgumentAssignableWithExpansion(argType, paramType) {
-					c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), paramType.String()))
+				if argType != nil && (!c.isArgumentAssignableWithExpansion(argType, paramType) || c.findExcessProperty(argNode, paramType) != nil) {
+					// Like TypeScript, only the first argument that does not
+					// fit is reported (getSignatureApplicabilityError).
+					if allOk {
+						c.reportNotAssignable(argNode, argNode, argType, paramType, headArgument)
+					}
 					allOk = false
 				}
 			}
@@ -880,70 +884,82 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 	signatureIndex := -1
 	var resultType types.Type
 
-	for i, signature := range objType.CallSignatures {
-		// Check if this signature can accept the given arguments
-		var isMatching bool
+	// chooseOverload: with several candidates a first pass requires arguments
+	// to be subtypes of the parameters (an `any` argument only fits an `any`
+	// or `unknown` parameter); only if that finds nothing are plain
+	// assignability and the first fitting candidate used.
+	passes := 1
+	if len(objType.CallSignatures) > 1 {
+		passes = 2
+	}
+	for pass := 0; pass < passes && signatureIndex == -1; pass++ {
+		c.overloadStrictAny = passes == 2 && pass == 0
+		for i, signature := range objType.CallSignatures {
+			// Check if this signature can accept the given arguments
+			var isMatching bool
 
-		if signature.IsVariadic {
-			// For variadic signatures, check minimum required arguments (fixed parameters)
-			minRequiredArgs := len(signature.ParameterTypes)
-			if len(argTypes) >= minRequiredArgs {
-				// Check fixed parameters first
-				fixedMatch := true
-				for j := 0; j < minRequiredArgs; j++ {
-					if !types.IsAssignable(argTypes[j], signature.ParameterTypes[j]) {
-						fixedMatch = false
+			if signature.IsVariadic {
+				// For variadic signatures, check minimum required arguments (fixed parameters)
+				minRequiredArgs := len(signature.ParameterTypes)
+				if len(argTypes) >= minRequiredArgs {
+					// Check fixed parameters first
+					fixedMatch := true
+					for j := 0; j < minRequiredArgs; j++ {
+						if !c.overloadArgMatches(node, j, argTypes[j], signature.ParameterTypes[j]) {
+							fixedMatch = false
+							break
+						}
+					}
+
+					if fixedMatch {
+						// Check remaining arguments against rest parameter type
+						if signature.RestParameterType != nil {
+							// Extract element type from rest parameter array type
+							var elementType types.Type = types.Any
+							if arrayType, ok := signature.RestParameterType.(*types.ArrayType); ok {
+								elementType = arrayType.ElementType
+							}
+
+							// Check all remaining arguments against element type
+							variadicMatch := true
+							for j := minRequiredArgs; j < len(argTypes); j++ {
+								if !c.overloadArgMatches(node, j, argTypes[j], elementType) {
+									variadicMatch = false
+									break
+								}
+							}
+							isMatching = variadicMatch
+						} else {
+							isMatching = true // No rest parameter type specified, assume compatible
+						}
+					}
+				}
+			} else {
+				minRequiredArgs := requiredParameterCount(signature)
+				if len(argTypes) < minRequiredArgs || len(argTypes) > len(signature.ParameterTypes) {
+					continue // Argument count mismatch
+				}
+
+				// Check if all argument types are assignable to parameter types
+				allMatch := true
+				for j, argType := range argTypes {
+					paramType := signature.ParameterTypes[j]
+					if !c.overloadArgMatches(node, j, argType, paramType) {
+						allMatch = false
 						break
 					}
 				}
-
-				if fixedMatch {
-					// Check remaining arguments against rest parameter type
-					if signature.RestParameterType != nil {
-						// Extract element type from rest parameter array type
-						var elementType types.Type = types.Any
-						if arrayType, ok := signature.RestParameterType.(*types.ArrayType); ok {
-							elementType = arrayType.ElementType
-						}
-
-						// Check all remaining arguments against element type
-						variadicMatch := true
-						for j := minRequiredArgs; j < len(argTypes); j++ {
-							if !types.IsAssignable(argTypes[j], elementType) {
-								variadicMatch = false
-								break
-							}
-						}
-						isMatching = variadicMatch
-					} else {
-						isMatching = true // No rest parameter type specified, assume compatible
-					}
-				}
-			}
-		} else {
-			minRequiredArgs := requiredParameterCount(signature)
-			if len(argTypes) < minRequiredArgs || len(argTypes) > len(signature.ParameterTypes) {
-				continue // Argument count mismatch
+				isMatching = allMatch
 			}
 
-			// Check if all argument types are assignable to parameter types
-			allMatch := true
-			for j, argType := range argTypes {
-				paramType := signature.ParameterTypes[j]
-				if !types.IsAssignable(argType, paramType) {
-					allMatch = false
-					break
-				}
+			if isMatching {
+				signatureIndex = i
+				resultType = signature.ReturnType
+				break // Found the first matching signature
 			}
-			isMatching = allMatch
-		}
-
-		if isMatching {
-			signatureIndex = i
-			resultType = signature.ReturnType
-			break // Found the first matching signature
 		}
 	}
+	c.overloadStrictAny = false
 
 	if signatureIndex == -1 {
 		// No matching signature found
@@ -1003,8 +1019,8 @@ func (c *Checker) isGenericSignature(sig *types.Signature) bool {
 					return true
 				}
 			}
-			// Check call signatures for type parameters
-			for _, sig := range typ.CallSignatures {
+			// Check call and construct signatures for type parameters
+			for _, sig := range append(append([]*types.Signature(nil), typ.CallSignatures...), typ.ConstructSignatures...) {
 				for _, paramType := range sig.ParameterTypes {
 					if containsTypeParameters(paramType) {
 						return true
@@ -1378,8 +1394,9 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 
 	case *types.ArrayType:
 		// Array<T> matched against Array<U> or U[]
-		if aType, isArray := argType.(*types.ArrayType); isArray {
-			// Recurse into element types
+		if aType, isArray := argType.(*types.ArrayType); isArray && aType.ElementType != types.Unknown {
+			// Recurse into element types (an empty literal `[]` carries no
+			// candidates: it is never[] and so never constrains T)
 			elemConstraints := c.collectConstraintsFromTypeSeen(pType.ElementType, aType.ElementType, seen)
 			constraints = append(constraints, elemConstraints...)
 		}
@@ -1407,10 +1424,17 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		// Handle function types: (T) => U matched against (A) => B
 		if aType, isObject := argType.(*types.ObjectType); isObject {
 			// Check if both are function types (have call signatures)
-			if len(pType.CallSignatures) > 0 && len(aType.CallSignatures) > 0 {
-				// Compare the first call signature (most common case)
-				pSig := pType.CallSignatures[0]
-				aSig := aType.CallSignatures[0]
+			sigPairs := [][2][]*types.Signature{
+				{pType.CallSignatures, aType.CallSignatures},
+				{pType.ConstructSignatures, aType.ConstructSignatures},
+			}
+			for _, pair := range sigPairs {
+				if len(pair[0]) == 0 || len(pair[1]) == 0 {
+					continue
+				}
+				// Compare the first signature (most common case)
+				pSig := pair[0][0]
+				aSig := pair[1][0]
 
 				// Collect constraints from parameter types (contravariant)
 				minParams := len(pSig.ParameterTypes)
@@ -1549,6 +1573,11 @@ func (c *Checker) solveTypeParameterConstraints(constraints []TypeParameterConst
 		} else if constraint.Confidence == existing {
 			if bestCombine[constraint.TypeParameter] && constraint.Combine {
 				bestTypes[constraint.TypeParameter] = appendUniqueType(bestTypes[constraint.TypeParameter], constraint.InferredType)
+			} else if cur := bestTypes[constraint.TypeParameter]; len(cur) == 1 && isObjectTypeCandidate(cur[0]) && isObjectTypeCandidate(constraint.InferredType) &&
+				// Among equally good object candidates keep the first unless a
+				// later one is a strict supertype of it (getCommonSupertype).
+				types.IsAssignable(cur[0], constraint.InferredType) && !types.IsAssignable(constraint.InferredType, cur[0]) {
+				bestTypes[constraint.TypeParameter] = []types.Type{constraint.InferredType}
 			}
 		}
 	}
@@ -1769,6 +1798,7 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 		ReturnType:        newReturnType,
 		OptionalParams:    sig.OptionalParams, // Copy as-is
 		IsVariadic:        sig.IsVariadic,
+		StrictVariance:    sig.StrictVariance,
 		RestParameterType: newRestParamType,
 	}
 }
@@ -1800,6 +1830,7 @@ func (c *Checker) substituteInSignature(sig *types.Signature, solution map[*type
 		ReturnType:        newReturnType,
 		OptionalParams:    sig.OptionalParams, // Copy as-is
 		IsVariadic:        sig.IsVariadic,
+		StrictVariance:    sig.StrictVariance,
 		RestParameterType: newRestParamType,
 	}
 }
@@ -1874,4 +1905,30 @@ func (c *Checker) handlePaseratiReflect(node *parser.CallExpression) {
 		WithProperty("toJSONSchema", toJSONSchemaType)
 
 	node.SetComputedType(typeDescriptorType)
+}
+
+func isObjectTypeCandidate(t types.Type) bool {
+	_, ok := t.(*types.ObjectType)
+	return ok
+}
+
+// overloadArgMatches reports whether argument j of the call is acceptable for
+// a candidate parameter type: assignable, and (for an object literal written
+// in place) free of excess properties.
+func (c *Checker) overloadArgMatches(node *parser.CallExpression, j int, argType, paramType types.Type) bool {
+	if !types.IsAssignable(argType, paramType) {
+		return false
+	}
+	if c.overloadStrictAny && argType == types.Any && paramType != types.Any && paramType != types.Unknown {
+		if _, isTypeParam := paramType.(*types.TypeParameterType); !isTypeParam {
+			return false
+		}
+	}
+	if j < len(node.Arguments) && node.Arguments[j] != nil {
+		if _, spread := node.Arguments[j].(*parser.SpreadElement); !spread &&
+			c.findExcessProperty(node.Arguments[j], paramType) != nil {
+			return false
+		}
+	}
+	return true
 }

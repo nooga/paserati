@@ -7,6 +7,11 @@ import "github.com/nooga/paserati/pkg/vm"
 // GetWidenedType converts literal types to their corresponding primitive base types.
 // Other types are returned unchanged.
 func GetWidenedType(t Type) Type {
+	// Without strictNullChecks the null and undefined types widen to any
+	// (an initializer of `null` declares an `any` variable).
+	if !StrictNullChecks && (t == Null || t == Undefined) {
+		return Any
+	}
 	if litType, ok := t.(*LiteralType); ok {
 		switch litType.Value.Type() {
 		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
@@ -58,8 +63,7 @@ func DeeplyWidenType(t Type) Type {
 		newFields := make(map[string]Type, len(objType.Properties))
 		for _, name := range SortedPropertyNames(objType.Properties) {
 			propType := objType.Properties[name]
-			// Recursively deeply widen property types? For now, just one level.
-			newFields[name] = GetWidenedType(propType)
+			newFields[name] = widenNested(propType, 0)
 		}
 		return &ObjectType{
 			Properties:          newFields,
@@ -92,4 +96,34 @@ func WidenEnumMember(t Type) Type {
 		return em.Parent.UnionOfMembers()
 	}
 	return t
+}
+
+// widenNested widens literal types in a property position: literals become
+// their base type and plain nested object (literal) types are widened the same
+// way. Callable types, class instances and everything else are left alone.
+func widenNested(t Type, depth int) Type {
+	if depth > 4 {
+		return t
+	}
+	t = GetWidenedType(t)
+	obj, ok := t.(*ObjectType)
+	if !ok || obj.IsCallable() || len(obj.ConstructSignatures) > 0 || obj.ClassMeta != nil || obj.IsInterface {
+		return t
+	}
+	changed := false
+	props := make(map[string]Type, len(obj.Properties))
+	for _, name := range SortedPropertyNames(obj.Properties) {
+		pt := obj.Properties[name]
+		w := widenNested(pt, depth+1)
+		if w != pt {
+			changed = true
+		}
+		props[name] = w
+	}
+	if !changed {
+		return t
+	}
+	cp := *obj
+	cp.Properties = props
+	return &cp
 }

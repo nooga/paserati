@@ -35,6 +35,16 @@ func simplifyMappedType(t Type) Type {
 	return t
 }
 
+// StrictNullChecks mirrors --strictNullChecks for the assignability relation.
+// When false (the default for embedders that never configure it) null and
+// undefined are assignable to every type, as in TypeScript without the flag.
+var StrictNullChecks = false
+
+// StrictFunctionTypes mirrors --strictFunctionTypes: when set, parameters of
+// signatures declared as function types (not methods) are compared
+// contravariantly instead of bivariantly.
+var StrictFunctionTypes = false
+
 func IsAssignable(source, target Type) bool {
 	return isAssignable(source, target)
 }
@@ -198,14 +208,15 @@ func isAssignable(source, target Type) bool {
 		}
 	}
 
-	// TypeScript compatibility: undefined is assignable to void
-	if target == Void && source == Undefined {
+	// TypeScript compatibility: undefined is assignable to void (and null too
+	// when strictNullChecks is off)
+	if target == Void && (source == Undefined || (source == Null && !StrictNullChecks)) {
 		return true
 	}
 
 	// strictNullChecks: false (TypeScript default) — null and undefined are assignable
 	// to any non-never, non-void type.
-	if (source == Null || source == Undefined) && target != Never && target != Void {
+	if !StrictNullChecks && (source == Null || source == Undefined) && target != Never && target != Void {
 		return true
 	}
 
@@ -232,6 +243,14 @@ func isAssignable(source, target Type) bool {
 		return true
 	}
 
+	// Enum members and their base primitives (isSimpleTypeRelatedTo): a
+	// numeric/string enum member is assignable to number/string, and number
+	// (or a number literal equal to a member value) is assignable to a
+	// numeric enum.
+	if enumAssignable(source, target) {
+		return true
+	}
+
 	// Handle InstantiatedType - substitute to get concrete type and check assignability
 	if sourceInst, ok := source.(*InstantiatedType); ok {
 		// Substitute the generic type with concrete type arguments
@@ -247,6 +266,14 @@ func isAssignable(source, target Type) bool {
 	// GenericType handling - for generic methods in interfaces
 	// When target is a GenericType (generic method signature) and source is an ObjectType (method implementation)
 	if targetGeneric, ok := target.(*GenericType); ok {
+		// A constructable source against a generic construct signature.
+		if sourceObj, ok := source.(*ObjectType); ok && len(sourceObj.ConstructSignatures) > 0 {
+			if bodyObj, ok := targetGeneric.Body.(*ObjectType); ok && len(bodyObj.ConstructSignatures) > 0 {
+				if len(sourceObj.ConstructSignatures[0].ParameterTypes) == len(bodyObj.ConstructSignatures[0].ParameterTypes) {
+					return true
+				}
+			}
+		}
 		// Check if source is a callable ObjectType
 		if sourceObj, ok := source.(*ObjectType); ok && sourceObj.IsCallable() {
 			// Get the body of the generic type (the function signature)
@@ -265,15 +292,20 @@ func isAssignable(source, target Type) bool {
 		// Also handle GenericType to GenericType comparison
 		if sourceGeneric, ok := source.(*GenericType); ok {
 			// Compare type parameter counts and body types
-			if len(sourceGeneric.TypeParameters) == len(targetGeneric.TypeParameters) {
-				return isAssignable(sourceGeneric.Body, targetGeneric.Body)
+			if len(sourceGeneric.TypeParameters) == len(targetGeneric.TypeParameters) &&
+				isAssignable(sourceGeneric.Body, targetGeneric.Body) {
+				return true
 			}
+			return isAssignable(eraseGenericType(sourceGeneric), targetGeneric.Body)
 		}
 	}
 
 	if sourceGeneric, ok := source.(*GenericType); ok {
-		if targetObj, ok := target.(*ObjectType); ok && targetObj.IsCallable() {
-			return isAssignable(sourceGeneric.Body, targetObj)
+		if targetObj, ok := target.(*ObjectType); ok {
+			if targetObj.IsCallable() {
+				return isAssignable(sourceGeneric.Body, targetObj) || isAssignable(eraseGenericType(sourceGeneric), targetObj)
+			}
+			return isAssignable(eraseGenericType(sourceGeneric), targetObj)
 		}
 	}
 
@@ -323,6 +355,14 @@ func isAssignable(source, target Type) bool {
 	if targetIsIntersection {
 		// Source must be assignable to ALL types in target intersection
 		for _, tType := range targetIntersection.Types {
+			if srcObj, ok := source.(*ObjectType); ok {
+				if tgtObj, ok := tType.(*ObjectType); ok {
+					if !objectAssignable(srcObj, tgtObj, false) {
+						return false
+					}
+					continue
+				}
+			}
 			if !isAssignable(source, tType) {
 				return false
 			}
@@ -333,6 +373,13 @@ func isAssignable(source, target Type) bool {
 		for _, sType := range sourceIntersection.Types {
 			if isAssignable(sType, target) {
 				return true
+			}
+		}
+		// Otherwise the members' combined structure may satisfy an object
+		// target ({a} & {b} is assignable to {a; b}).
+		if tgtObj, ok := target.(*ObjectType); ok {
+			if merged := mergeIntersectionObjects(sourceIntersection); merged != nil {
+				return objectAssignable(merged, tgtObj, true)
 			}
 		}
 		return false
@@ -361,6 +408,9 @@ func isAssignable(source, target Type) bool {
 		}
 	} else if sourceIsLiteral {
 		// Literal to non-literal: check if literal's primitive type is assignable
+		if len(numericEnumMembers(target)) > 0 {
+			return false // numeric literals relate to enums only by value (enumAssignable)
+		}
 		var primitiveType Type
 		switch sourceLiteral.Value.Type() {
 		case vm.TypeString:
@@ -369,6 +419,9 @@ func isAssignable(source, target Type) bool {
 			primitiveType = Number
 		case vm.TypeBoolean:
 			primitiveType = Boolean
+		case vm.TypeBigInt:
+			primitiveType = BigInt
+
 		default:
 			return false
 		}
@@ -448,71 +501,13 @@ func isAssignable(source, target Type) bool {
 		len(targetObj.CallSignatures) == 0 &&
 		len(targetObj.ConstructSignatures) == 0 {
 		// Only exclude null/undefined/never/void (already handled above).
-		if source != Never && source != Void {
+		if source != Never && source != Void && (!StrictNullChecks || (source != Null && source != Undefined)) {
 			return true
 		}
 	}
 
 	if sourceIsObj && targetIsObj {
-		// Check that all required properties in target exist in source and are assignable
-		targetProps := targetObj.GetEffectiveProperties()
-		sourceProps := sourceObj.GetEffectiveProperties()
-
-		for propName, targetPropType := range targetProps {
-			sourcePropType, exists := sourceProps[propName]
-			if !exists {
-				// Check if property is optional in target
-				isOptional := targetObj.OptionalProperties != nil && targetObj.OptionalProperties[propName]
-				if !isOptional {
-					return false
-				}
-			} else {
-				if !isAssignable(sourcePropType, targetPropType) {
-					return false
-				}
-			}
-		}
-
-		// If target has ONLY index signatures (no named properties), like Record<string, T>,
-		// check that all source properties are assignable to the index signature value type.
-		// Skip when target has named properties to preserve specific error messages from the checker.
-		if len(targetProps) == 0 && len(targetObj.IndexSignatures) > 0 {
-			for _, idxSig := range targetObj.IndexSignatures {
-				if idxSig.KeyType == String || idxSig.KeyType == Any {
-					for _, sourcePropType := range sourceProps {
-						if !isAssignable(sourcePropType, idxSig.ValueType) {
-							return false
-						}
-					}
-				}
-			}
-		}
-
-		// Check call signatures
-		if len(targetObj.CallSignatures) > 0 {
-			if len(sourceObj.CallSignatures) == 0 {
-				return false
-			}
-			// For now, require at least one compatible signature
-			// TODO: More sophisticated overload matching
-			compatible := false
-			for _, targetSig := range targetObj.CallSignatures {
-				for _, sourceSig := range sourceObj.CallSignatures {
-					if isSignatureAssignable(sourceSig, targetSig) {
-						compatible = true
-						break
-					}
-				}
-				if compatible {
-					break
-				}
-			}
-			if !compatible {
-				return false
-			}
-		}
-
-		return true
+		return objectAssignable(sourceObj, targetObj, true)
 	}
 
 	// Readonly type handling
@@ -552,8 +547,8 @@ func isAssignable(source, target Type) bool {
 			return true
 		}
 
-		if sourceTypeParam.Parameter.Constraint != nil {
-			return isAssignable(sourceTypeParam.Parameter.Constraint, target)
+		if c := typeParameterConstraint(sourceTypeParam); c != nil {
+			return isAssignable(c, target)
 		}
 
 		return false
@@ -563,8 +558,8 @@ func isAssignable(source, target Type) bool {
 	if sourceIsTypeParam && !targetIsTypeParam {
 		// Check if the source type parameter's constraint is assignable to the target
 		// This handles cases like: U extends Date should be assignable to Date
-		if sourceTypeParam.Parameter.Constraint != nil {
-			return isAssignable(sourceTypeParam.Parameter.Constraint, target)
+		if c := typeParameterConstraint(sourceTypeParam); c != nil {
+			return isAssignable(c, target)
 		}
 		// If no constraint, fall back to checking if the type parameter itself can be assigned
 		// (this would typically be false for concrete types)
@@ -578,6 +573,22 @@ func isAssignable(source, target Type) bool {
 	// Legacy FunctionType compatibility removed - use ObjectType with CallSignatures instead
 
 	return false
+}
+
+func signaturesRelated(sourceSigs, targetSigs []*Signature) bool {
+	for _, targetSig := range targetSigs {
+		matched := false
+		for _, sourceSig := range sourceSigs {
+			if isSignatureAssignable(sourceSig, targetSig) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 // Helper function to check signature assignability
@@ -598,41 +609,120 @@ func isSignatureAssignableForCallbackArgument(source, target *Signature) bool {
 	return isSignatureAssignableImpl(source, target, true)
 }
 
+// sigMinArgs is TypeScript's getMinArgumentCount for a Signature: the index
+// just past the last required fixed parameter.
+func sigMinArgs(sig *Signature) int {
+	n := len(sig.ParameterTypes)
+	for n > 0 && n-1 < len(sig.OptionalParams) && sig.OptionalParams[n-1] {
+		n--
+	}
+	// Trailing parameters that accept void may be omitted by callers.
+	for n > 0 && acceptsVoid(sig.ParameterTypes[n-1]) {
+		n--
+	}
+	return n
+}
+
+// sigRestElement returns the element type of a signature's rest parameter.
+func sigRestElement(sig *Signature) Type {
+	if sig.RestParameterType == nil {
+		return nil
+	}
+	switch r := sig.RestParameterType.(type) {
+	case *ArrayType:
+		return r.ElementType
+	case *ReadonlyType:
+		if a, ok := r.InnerType.(*ArrayType); ok {
+			return a.ElementType
+		}
+	}
+	return Any
+}
+
+// sigTypeAtPosition mirrors tryGetTypeAtPosition: the type of the i-th
+// argument position, falling back to the rest element type.
+func sigTypeAtPosition(sig *Signature, i int) Type {
+	if i < len(sig.ParameterTypes) {
+		pt := sig.ParameterTypes[i]
+		// Under strictNullChecks an optional parameter also accepts undefined.
+		if StrictNullChecks && i < len(sig.OptionalParams) && sig.OptionalParams[i] && pt != nil {
+			return NewUnionType(pt, Undefined)
+		}
+		return pt
+	}
+	return sigRestElement(sig)
+}
+
+// eraseSignatureTypeParams replaces a signature's own type parameters with
+// any (a permissive stand-in for TypeScript's instantiateSignatureInContextOf).
+func EraseSignatureTypeParams(sig *Signature) *Signature {
+	return eraseSignatureTypeParams(sig)
+}
+
+func eraseSignatureTypeParams(sig *Signature) *Signature {
+	if sig == nil || len(sig.TypeParameters) == 0 {
+		return sig
+	}
+	subs := make(map[*TypeParameter]Type, len(sig.TypeParameters))
+	for _, tp := range sig.TypeParameters {
+		subs[tp] = Any
+	}
+	out := substituteSignature(sig, subs)
+	out.ParameterNames = sig.ParameterNames
+	return out
+}
+
+// isSignatureAssignableImpl follows compareSignaturesRelated: the source may
+// not require more arguments than the target can supply, parameters are
+// compared pairwise (bivariantly), and the return type is covariant unless
+// the target returns void/any.
 func isSignatureAssignableImpl(source, target *Signature, tolerateVoidSourceReturn bool) bool {
+	return signatureRelated(source, target, tolerateVoidSourceReturn, false)
+}
+
+// signatureRelated is the signature relation; callbackParams relaxes strict
+// variance for signatures compared as callback parameters.
+func signatureRelated(source, target *Signature, tolerateVoidSourceReturn bool, callbackParams bool) bool {
 	if source == nil || target == nil {
 		return source == target
 	}
-
-	// Check parameter count compatibility
-	sourceParamCount := len(source.ParameterTypes)
-	targetParamCount := len(target.ParameterTypes)
-
-	// TypeScript allows functions with fewer parameters to be assigned to functions expecting more
-	// This is because JavaScript allows ignoring extra parameters when calling a function
-	// Example: (a, b) => a + b can be assigned to (a, b, c, d) => number
-
-	// The key rule: A function with fewer parameters can be assigned to one expecting more parameters
-	// We only need to check that the parameters the source DOES have are compatible with
-	// the corresponding parameters in the target
-
-	// No minimum parameter checking needed - source can have 0 parameters and still be valid!
-
-	// Check parameter types (contravariant) for the parameters that source provides
-	checkParamCount := sourceParamCount
-	if targetParamCount < sourceParamCount {
-		checkParamCount = targetParamCount
+	if source == target {
+		return true
 	}
 
-	for i := 0; i < checkParamCount; i++ {
-		targetParam := target.ParameterTypes[i]
-		sourceParam := source.ParameterTypes[i]
-		// TypeScript uses bivariant parameter checking for method signatures
-		// (contravariant only applies to function types with --strictFunctionTypes)
-		if !isAssignable(targetParam, sourceParam) && !isAssignable(sourceParam, targetParam) {
+	source = eraseSignatureTypeParams(source)
+	strict := StrictFunctionTypes && target.StrictVariance && !callbackParams
+
+	targetHasRest := target.RestParameterType != nil
+	if !targetHasRest && sigMinArgs(source) > len(target.ParameterTypes) {
+		return false
+	}
+
+	n := len(source.ParameterTypes)
+	if len(target.ParameterTypes) > n {
+		n = len(target.ParameterTypes)
+	}
+	for i := 0; i < n; i++ {
+		sp := sigTypeAtPosition(source, i)
+		tp := sigTypeAtPosition(target, i)
+		if sp == nil || tp == nil {
+			continue
+		}
+		if !paramRelated(sp, tp, strict) {
+			return false
+		}
+	}
+	if source.RestParameterType != nil && targetHasRest {
+		sp, tp := sigRestElement(source), sigRestElement(target)
+		if sp != nil && tp != nil && !paramRelated(sp, tp, strict) {
 			return false
 		}
 	}
 
+	// A void/any return type on the target accepts any source return.
+	if target.ReturnType == Void || target.ReturnType == Any {
+		return true
+	}
 	// A void-returning callback argument is assignable regardless of what
 	// specific return type the parameter's function type declares, since the
 	// caller (e.g. forEach) ignores the return value.
@@ -640,8 +730,385 @@ func isSignatureAssignableImpl(source, target *Signature, tolerateVoidSourceRetu
 		return true
 	}
 
-	// Check return type (covariant)
 	return isAssignable(source.ReturnType, target.ReturnType)
 }
 
 // Helper function removed - FunctionType deprecated, use ObjectType with CallSignatures
+
+// acceptsVoid reports whether a parameter type admits `void` (void itself or a
+// union containing it), which makes a trailing parameter omittable.
+func acceptsVoid(t Type) bool {
+	if t == Void {
+		return true
+	}
+	if u, ok := t.(*UnionType); ok {
+		for _, m := range u.Types {
+			if m == Void {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IsWeakObject reports whether an object type is "weak": it declares at least
+// one property, every declared property is optional, and it has no call,
+// construct or index signatures (TypeScript's isWeakType).
+func IsWeakObject(t *ObjectType) bool {
+	if t == nil || len(t.CallSignatures) > 0 || len(t.ConstructSignatures) > 0 || len(t.IndexSignatures) > 0 {
+		return false
+	}
+	props := t.GetEffectiveProperties()
+	if len(props) == 0 {
+		return false
+	}
+	for name := range props {
+		if !t.IsPropertyOptional(name) {
+			return false
+		}
+	}
+	return true
+}
+
+// ObjectHasMembers reports whether an object type has any property or
+// call/construct signature (the source condition of the weak type check).
+func ObjectHasMembers(t *ObjectType) bool {
+	return len(t.GetEffectiveProperties()) > 0 || len(t.CallSignatures) > 0 || len(t.ConstructSignatures) > 0
+}
+
+// ObjectsShareProperty reports whether two object types have a property name
+// in common (TypeScript's hasCommonProperties).
+func ObjectsShareProperty(a, b *ObjectType) bool {
+	bProps := b.GetEffectiveProperties()
+	for name := range a.GetEffectiveProperties() {
+		if _, ok := bProps[name]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// objectAssignable relates two object types structurally. checkWeak enables
+// the weak-type (no common properties) rule, which TypeScript skips when the
+// target is a constituent of an intersection.
+func objectAssignable(sourceObj, targetObj *ObjectType, checkWeak bool) bool {
+	// Check that all required properties in target exist in source and are assignable
+	targetProps := targetObj.GetEffectiveProperties()
+	sourceProps := sourceObj.GetEffectiveProperties()
+
+	// Weak type detection: a target whose properties are all optional
+	// demands that the source share at least one of them.
+	if checkWeak && IsWeakObject(targetObj) && ObjectHasMembers(sourceObj) && !ObjectsShareProperty(sourceObj, targetObj) {
+		return false
+	}
+
+	for propName, targetPropType := range targetProps {
+		targetOptional := targetObj.IsPropertyOptional(propName)
+		// Private and protected members are nominal: the source must derive
+		// from the class that declares them.
+		if declaring, ok := nonPublicMemberOwner(targetObj, propName, 0); ok {
+			if !classDerivesFrom(sourceObj, declaring, 0) {
+				return false
+			}
+		}
+		sourcePropType, exists := sourceProps[propName]
+		if !exists {
+			if !targetOptional {
+				return false
+			}
+			continue
+		}
+		if StrictNullChecks {
+			if sourceObj.IsPropertyOptional(propName) && !targetOptional {
+				return false
+			}
+			if targetOptional {
+				targetPropType = NewUnionType(targetPropType, Undefined)
+			}
+		}
+		if !isAssignable(sourcePropType, targetPropType) {
+			return false
+		}
+	}
+
+	if !indexSignaturesRelated(sourceObj, targetObj, sourceProps) {
+		return false
+	}
+
+	// Call and construct signatures: every target signature must be
+	// matched by some source signature (signaturesRelatedTo).
+	if !signaturesRelated(sourceObj.CallSignatures, targetObj.CallSignatures) ||
+		!signaturesRelated(sourceObj.ConstructSignatures, targetObj.ConstructSignatures) {
+		return false
+	}
+
+	return true
+}
+
+// paramRelated compares one pair of parameter types. Under strict variance the
+// target parameter must be assignable to the source parameter; otherwise
+// either direction suffices. Parameters that are themselves callbacks are
+// related with their own parameters compared bivariantly.
+func paramRelated(sp, tp Type, strict bool) bool {
+	if !strict {
+		return isAssignable(tp, sp) || isAssignable(sp, tp)
+	}
+	if sObj, ok := sp.(*ObjectType); ok && len(sObj.CallSignatures) == 1 && len(sObj.Properties) == 0 {
+		if tObj, ok := tp.(*ObjectType); ok && len(tObj.CallSignatures) == 1 && len(tObj.Properties) == 0 {
+			return signatureRelated(tObj.CallSignatures[0], sObj.CallSignatures[0], false, true)
+		}
+	}
+	return isAssignable(tp, sp)
+}
+
+// enumAssignable implements the enum <-> primitive relations. It returns true
+// only when the relation holds; callers fall through to other rules otherwise.
+func enumAssignable(source, target Type) bool {
+	if em, ok := source.(*EnumMemberType); ok {
+		switch em.Value.(type) {
+		case string:
+			if target == String {
+				return true
+			}
+		default:
+			if target == Number {
+				return true
+			}
+		}
+	}
+	members := numericEnumMembers(target)
+	if len(members) == 0 {
+		return false
+	}
+	if source == Number {
+		return true
+	}
+	if lit, ok := source.(*LiteralType); ok {
+		switch lit.Value.Type() {
+		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+			n := vm.AsNumber(lit.Value)
+			for _, m := range members {
+				if v, ok := m.Value.(int); ok && float64(v) == n {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// numericEnumMembers returns the members of a numeric enum member type or a
+// union consisting solely of numeric enum members.
+func numericEnumMembers(t Type) []*EnumMemberType {
+	switch tt := t.(type) {
+	case *EnumMemberType:
+		if _, ok := tt.Value.(int); ok {
+			return []*EnumMemberType{tt}
+		}
+	case *UnionType:
+		var out []*EnumMemberType
+		for _, m := range tt.Types {
+			em, ok := m.(*EnumMemberType)
+			if !ok {
+				return nil
+			}
+			if _, ok := em.Value.(int); !ok {
+				return nil
+			}
+			out = append(out, em)
+		}
+		return out
+	}
+	return nil
+}
+
+// eraseGenericType replaces a generic type's own parameters with any in its
+// body (a permissive stand-in for instantiating it in the context of the type
+// it is related to).
+func eraseGenericType(g *GenericType) Type {
+	subs := make(map[*TypeParameter]Type, len(g.TypeParameters))
+	for _, tp := range g.TypeParameters {
+		subs[tp] = Any
+	}
+	return substituteType(g.Body, subs)
+}
+
+// findIndexSignature returns the signature of obj (or its base types) that
+// applies to keys of keyType: a string signature covers numeric keys too.
+func findIndexSignature(obj *ObjectType, keyType Type) *IndexSignature {
+	var stringSig, anySig *IndexSignature
+	var visit func(o *ObjectType, depth int) *IndexSignature
+	visit = func(o *ObjectType, depth int) *IndexSignature {
+		if depth > 8 {
+			return nil
+		}
+		for _, sig := range o.IndexSignatures {
+			if sig == nil || sig.IsMapped || sig.Synthetic {
+				continue
+			}
+			switch {
+			case sig.KeyType == keyType:
+				return sig
+			case sig.KeyType == String && stringSig == nil:
+				stringSig = sig
+			case sig.KeyType == Any && anySig == nil:
+				anySig = sig
+			}
+		}
+		for _, base := range o.BaseTypes {
+			if bo, ok := base.(*ObjectType); ok {
+				if sig := visit(bo, depth+1); sig != nil {
+					return sig
+				}
+			}
+		}
+		return nil
+	}
+	if sig := visit(obj, 0); sig != nil {
+		return sig
+	}
+	if keyType == Number || keyType == String {
+		if stringSig != nil {
+			return stringSig
+		}
+	}
+	return anySig
+}
+
+// indexSignaturesRelated is TypeScript's indexSignaturesRelatedTo: every index
+// signature of the target needs a related signature in the source or, when
+// the source has none, an implicit one made from its properties (only for
+// object literal and type literal types, never interfaces or classes).
+func indexSignaturesRelated(sourceObj, targetObj *ObjectType, sourceProps map[string]Type) bool {
+	for _, tIdx := range targetObj.IndexSignatures {
+		if tIdx == nil || tIdx.IsMapped || tIdx.Synthetic || tIdx.ValueType == nil {
+			continue
+		}
+		if tIdx.KeyType != String && tIdx.KeyType != Number && tIdx.KeyType != Any {
+			continue
+		}
+		if sIdx := findIndexSignature(sourceObj, tIdx.KeyType); sIdx != nil {
+			if sIdx.ValueType == nil || !isAssignable(sIdx.ValueType, tIdx.ValueType) {
+				return false
+			}
+			continue
+		}
+		if sourceObj.IsInterface || sourceObj.ClassMeta != nil ||
+			len(sourceObj.CallSignatures) > 0 || len(sourceObj.ConstructSignatures) > 0 {
+			// No implicit index signature: tolerate only when nothing is declared
+			// that could violate it (an empty source relates vacuously).
+			if len(sourceProps) == 0 {
+				continue
+			}
+			return false
+		}
+		for name, pt := range sourceProps {
+			if tIdx.KeyType == Number && !isNumericName(name) {
+				continue
+			}
+			if StrictNullChecks && sourceObj.IsPropertyOptional(name) {
+				pt = NewUnionType(pt, Undefined)
+			}
+			if !isAssignable(pt, tIdx.ValueType) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isNumericName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, ch := range name {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// typeParameterConstraint returns the meaningful constraint of a type
+// parameter. An unconstrained parameter (the checker records `any`) or one
+// constrained to `unknown` has no constraint that could make it assignable to
+// anything other than any/unknown.
+func typeParameterConstraint(tp *TypeParameterType) Type {
+	c := tp.Parameter.Constraint
+	if c == nil || c == Any || c == Unknown {
+		return nil
+	}
+	return c
+}
+
+// mergeIntersectionObjects flattens an intersection of object types into one
+// object type that has all of their members, or returns nil when a member is
+// not an object type.
+func mergeIntersectionObjects(inter *IntersectionType) *ObjectType {
+	merged := &ObjectType{
+		Properties:         make(map[string]Type),
+		OptionalProperties: make(map[string]bool),
+	}
+	for _, m := range inter.Types {
+		obj, ok := m.(*ObjectType)
+		if !ok {
+			return nil
+		}
+		for name, pt := range obj.GetEffectiveProperties() {
+			if prev, exists := merged.Properties[name]; exists {
+				merged.Properties[name] = NewIntersectionType(prev, pt)
+				if !obj.IsPropertyOptional(name) {
+					merged.OptionalProperties[name] = false
+				}
+				continue
+			}
+			merged.Properties[name] = pt
+			merged.OptionalProperties[name] = obj.IsPropertyOptional(name)
+		}
+		merged.CallSignatures = append(merged.CallSignatures, obj.CallSignatures...)
+		merged.ConstructSignatures = append(merged.ConstructSignatures, obj.ConstructSignatures...)
+		merged.IndexSignatures = append(merged.IndexSignatures, obj.IndexSignatures...)
+	}
+	return merged
+}
+
+// nonPublicMemberOwner returns the name of the class that declares a private
+// or protected instance member of obj (looking through base types).
+func nonPublicMemberOwner(obj *ObjectType, name string, depth int) (string, bool) {
+	if obj == nil || depth > 8 {
+		return "", false
+	}
+	if obj.ClassMeta != nil {
+		if info := obj.ClassMeta.GetMemberAccess(name); info != nil && !info.IsStatic {
+			if info.AccessLevel != AccessPublic {
+				return obj.ClassMeta.ClassName, true
+			}
+			return "", false
+		}
+	}
+	for _, base := range obj.BaseTypes {
+		if bo, ok := resolveBaseType(base).(*ObjectType); ok {
+			if owner, found := nonPublicMemberOwner(bo, name, depth+1); found {
+				return owner, true
+			}
+		}
+	}
+	return "", false
+}
+
+// classDerivesFrom reports whether obj is an instance of the named class or of
+// a class derived from it.
+func classDerivesFrom(obj *ObjectType, className string, depth int) bool {
+	if obj == nil || depth > 8 {
+		return false
+	}
+	if obj.ClassMeta != nil && obj.ClassMeta.ClassName == className {
+		return true
+	}
+	for _, base := range obj.BaseTypes {
+		if bo, ok := resolveBaseType(base).(*ObjectType); ok && classDerivesFrom(bo, className, depth+1) {
+			return true
+		}
+	}
+	return false
+}

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -22,6 +21,8 @@ type varDeclRecord struct {
 	// reliable is true when typ came from an annotation or from an initializer
 	// whose type does not depend on narrowing/inference we only approximate.
 	reliable bool
+	// annotated is true when typ was written out as a type annotation.
+	annotated bool
 }
 
 // firstVarDecl returns the record for the first declaration of the `var`
@@ -34,11 +35,11 @@ func (c *Checker) firstVarDecl(scope *Environment, name string) (varDeclRecord, 
 	return r, ok
 }
 
-func (c *Checker) recordFirstVarDecl(scope *Environment, name string, t types.Type, reliable bool) {
+func (c *Checker) recordFirstVarDecl(scope *Environment, name string, t types.Type, reliable, annotated bool) {
 	if c.varFirstDecl == nil {
 		c.varFirstDecl = make(map[varDeclKey]varDeclRecord)
 	}
-	c.varFirstDecl[varDeclKey{scope, name}] = varDeclRecord{typ: t, reliable: reliable}
+	c.varFirstDecl[varDeclKey{scope, name}] = varDeclRecord{typ: t, reliable: reliable, annotated: annotated}
 }
 
 // varDeclTypeIsReliable reports whether the type of a declaration can be
@@ -77,8 +78,8 @@ func (c *Checker) varDeclTypeIsReliable(typeAnnotation, initializer parser.Expre
 // so we only report when both types are reliable (see varDeclTypeIsReliable)
 // and clearly different, rather than risk a false positive on a type we merely
 // failed to model.
-func (c *Checker) reportSubsequentVarDeclaration(name *parser.Identifier, first varDeclRecord, laterType types.Type, laterReliable bool) {
-	if name == nil || !first.reliable || !laterReliable || !c.varTypesClearlyDiffer(first.typ, laterType) {
+func (c *Checker) reportSubsequentVarDeclaration(name *parser.Identifier, first varDeclRecord, laterType types.Type, laterReliable, laterAnnotated bool) {
+	if name == nil || !first.reliable || !laterReliable || !c.varTypesClearlyDiffer(first.typ, laterType, first.annotated && laterAnnotated) {
 		return
 	}
 	c.addErrorWithCode(name, tsSubsequentVarDecl, fmt.Sprintf(
@@ -86,7 +87,7 @@ func (c *Checker) reportSubsequentVarDeclaration(name *parser.Identifier, first 
 		name.Value, first.typ.String(), laterType.String()))
 }
 
-func (c *Checker) varTypesClearlyDiffer(a, b types.Type) bool {
+func (c *Checker) varTypesClearlyDiffer(a, b types.Type, bothAnnotated bool) bool {
 	if a == nil || b == nil || a == b {
 		return false
 	}
@@ -95,6 +96,12 @@ func (c *Checker) varTypesClearlyDiffer(a, b types.Type) bool {
 	}
 	if a.String() == b.String() {
 		return false
+	}
+	if bothAnnotated && isIdentityComparable(a, 0) && isIdentityComparable(b, 0) &&
+		!strings.Contains(a.String(), "any") && !strings.Contains(b.String(), "any") {
+		// Both sides are built from kinds the relation models (including
+		// function and object literal types): use the real identity relation.
+		return !types.IsIdenticalType(a, b)
 	}
 	ka, kb := identityKind(a), identityKind(b)
 	if ka == "" || kb == "" {
@@ -112,7 +119,7 @@ func (c *Checker) varTypesClearlyDiffer(a, b types.Type) bool {
 	case "primitive", "literal":
 		return true // same kind, different text: string vs number, 1 vs 2
 	case "array":
-		return c.varTypesClearlyDiffer(a.(*types.ArrayType).ElementType, b.(*types.ArrayType).ElementType)
+		return c.varTypesClearlyDiffer(a.(*types.ArrayType).ElementType, b.(*types.ArrayType).ElementType, bothAnnotated)
 	case "union":
 		if strings.Contains(a.String(), "any") || strings.Contains(b.String(), "any") {
 			return false // see the any note above
@@ -184,12 +191,11 @@ func (c *Checker) checkSecondaryTopLevelVar(name *parser.Identifier, typeAnnotat
 		default:
 			declType = types.DeeplyWidenType(initType)
 		}
-	} else if initType != nil && !c.isAssignableWithExpansion(initType, declType) {
-		sourceTypeStr, targetTypeStr := c.getAssignmentErrorTypes(initType, declType)
-		c.addErrorWithCode(initializer, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", sourceTypeStr, targetTypeStr))
+	} else if initType != nil && !c.assignableToFresh(initializer, initType, declType) {
+		c.reportNotAssignable(name, initializer, initType, declType, headAssign)
 	}
 	name.SetComputedType(declType)
-	c.reportSubsequentVarDeclaration(name, first, declType, c.varDeclTypeIsReliable(typeAnnotation, initializer))
+	c.reportSubsequentVarDeclaration(name, first, declType, c.varDeclTypeIsReliable(typeAnnotation, initializer), typeAnnotation != nil)
 }
 
 // checkTopLevelVarLikeDeclarators runs the Pass 5 initializer check for every
@@ -216,7 +222,7 @@ func (c *Checker) checkTopLevelVarLikeDeclarators(declarations []*parser.VarDecl
 		c.checkVarLikeInitializerAndRefine(d.Name, d.TypeAnnotation, value, globalEnv, flow)
 		if isVar {
 			if t, _, ok := globalEnv.Resolve(d.Name.Value); ok {
-				c.recordFirstVarDecl(globalEnv, d.Name.Value, t, c.varDeclTypeIsReliable(d.TypeAnnotation, d.Value))
+				c.recordFirstVarDecl(globalEnv, d.Name.Value, t, c.varDeclTypeIsReliable(d.TypeAnnotation, d.Value), d.TypeAnnotation != nil)
 			}
 		}
 	}
@@ -260,4 +266,56 @@ func (c *Checker) reportBuiltinRedeclaration(name *parser.Identifier, annotation
 	c.addErrorWithCode(name, tsSubsequentVarDecl, fmt.Sprintf(
 		"Subsequent variable declarations must have the same type.  Variable '%s' must be of type '%s', but here has type '%s'.",
 		name.Value, builtinType.String(), declared.String()))
+}
+
+// isIdentityComparable reports whether a type is built only from kinds whose
+// structure the relation understands (no mapped, conditional, indexed-access,
+// typeof or generic placeholders), so an identity comparison is trustworthy.
+func isIdentityComparable(t types.Type, depth int) bool {
+	if t == nil || depth > 5 {
+		return depth > 5
+	}
+	switch tt := t.(type) {
+	case *types.Primitive, *types.LiteralType, *types.EnumMemberType:
+		return true
+	case *types.ArrayType:
+		return isIdentityComparable(tt.ElementType, depth+1)
+	case *types.TupleType:
+		for _, e := range tt.ElementTypes {
+			if !isIdentityComparable(e, depth+1) {
+				return false
+			}
+		}
+		return tt.RestElementType == nil || isIdentityComparable(tt.RestElementType, depth+1)
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if !isIdentityComparable(m, depth+1) {
+				return false
+			}
+		}
+		return true
+	case *types.ObjectType:
+		if tt.IsInterface || tt.ClassMeta != nil {
+			return false // declaration merging is not modelled precisely enough
+		}
+		for _, p := range tt.Properties {
+			if !isIdentityComparable(p, depth+1) {
+				return false
+			}
+		}
+		for _, sigs := range [][]*types.Signature{tt.CallSignatures, tt.ConstructSignatures} {
+			for _, sig := range sigs {
+				for _, p := range sig.ParameterTypes {
+					if !isIdentityComparable(p, depth+1) {
+						return false
+					}
+				}
+				if sig.ReturnType != nil && !isIdentityComparable(sig.ReturnType, depth+1) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return false
 }

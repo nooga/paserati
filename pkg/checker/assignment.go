@@ -103,7 +103,12 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			}
 		}
 
-		if !types.IsAssignable(assignedType, targetType) { // <<< Use targetType (usually widened LHS)
+		excessReported := false
+		if node.Operator == "=" && types.IsAssignable(assignedType, targetType) && c.findExcessProperty(node.Value, targetType) != nil {
+			c.reportNotAssignable(node.Left, node.Value, assignedType, targetType, headAssign)
+			excessReported = true
+		}
+		if !excessReported && !types.IsAssignable(assignedType, targetType) { // <<< Use targetType (usually widened LHS)
 			// If the resolved type rejected the RHS, check if we're in a narrowing scope
 			// where the declared type is wider and would accept the assignment.
 			// This handles: if (x === null) { x = "default"; } where x: string | null
@@ -127,7 +132,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 
 			if !allowAssignment {
 				// Report error comparing RHS to the potentially stricter targetType
-				c.addErrorWithCode(node.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", assignedType.String(), targetType.String()))
+				c.reportNotAssignable(node.Left, node.Value, assignedType, targetType, headAssign)
 			}
 		}
 	}
@@ -340,6 +345,8 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 	if rhsType == nil {
 		rhsType = types.Any
 	}
+
+	c.checkDestructuringExcess(node.Properties, node.RestProperty != nil, node.Value)
 
 	// 2. Widen the RHS type for compatibility checking
 	widenedRhsType := types.GetWidenedType(rhsType)

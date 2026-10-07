@@ -745,6 +745,11 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		// Unknown can be narrowed to any specific type
 		canNarrow = true
 		narrowedType = guard.NarrowedType
+	} else if _, isTypeParam := originalType.(*types.TypeParameterType); isTypeParam && guard.NarrowedType != nil && !isNarrowingMarker(guard.NarrowedType) && !types.IsAssignable(guard.NarrowedType, originalType) {
+		// A type parameter narrowed by a guard (`x instanceof C`,
+		// `typeof x === "string"`) becomes the intersection `T & C`.
+		canNarrow = true
+		narrowedType = types.NewIntersectionType(originalType, guard.NarrowedType)
 	} else if unionType, ok := originalType.(*types.UnionType); ok {
 		// For union types, check if we can narrow based on type compatibility
 		if guard.NarrowedType != nil {
@@ -2170,6 +2175,9 @@ func (c *Checker) resolveMemberExpressionOriginalType(key string) types.Type {
 			if !exists {
 				return nil
 			}
+			if objType.IsPropertyOptional(parts[i]) {
+				propType = types.NewUnionType(propType, types.Undefined)
+			}
 			currentType = propType
 		} else {
 			return nil
@@ -2296,4 +2304,14 @@ func blockAlwaysTerminates(node parser.Node) bool {
 	default:
 		return false
 	}
+}
+
+// isNarrowingMarker reports whether t is one of the synthetic marker types a
+// type guard uses to filter union members rather than a real narrowed type.
+func isNarrowingMarker(t types.Type) bool {
+	switch t.(type) {
+	case *types.ObjectTypeMarker, *types.PropertyExistenceMarker:
+		return true
+	}
+	return false
 }

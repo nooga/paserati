@@ -73,7 +73,7 @@ func (c *Checker) getAwaitedType(t types.Type) types.Type {
 	}
 
 	if objType, ok := t.(*types.ObjectType); ok {
-		if thenProp, hasThen := objType.Properties["then"]; hasThen {
+		if thenProp, hasThen := objType.GetEffectiveProperties()["then"]; hasThen {
 			if thenFuncType, ok := thenProp.(*types.ObjectType); ok && len(thenFuncType.CallSignatures) > 0 {
 				sig := thenFuncType.CallSignatures[0]
 				if len(sig.ParameterTypes) > 0 {
@@ -440,7 +440,37 @@ func (c *Checker) setupFunctionEnvironment(ctx *FunctionCheckContext, paramTypes
 		}
 	}
 
+	c.checkParameterDefaults(ctx, paramTypes)
+
 	return originalEnv
+}
+
+// checkParameterDefaults checks the default value of each annotated parameter
+// against its declared type, reporting TS2322 on the parameter name (like a
+// variable declaration). Each parameter node is checked once.
+func (c *Checker) checkParameterDefaults(ctx *FunctionCheckContext, paramTypes []types.Type) {
+	for i, param := range ctx.Parameters {
+		if param == nil || param.DefaultValue == nil || param.TypeAnnotation == nil || i >= len(paramTypes) || paramTypes[i] == nil {
+			continue
+		}
+		if c.checkedParameterDefaults == nil {
+			c.checkedParameterDefaults = make(map[*parser.Parameter]bool)
+		}
+		if c.checkedParameterDefaults[param] {
+			continue
+		}
+		c.checkedParameterDefaults[param] = true
+		c.visitWithContext(param.DefaultValue, &ContextualType{ExpectedType: paramTypes[i], IsContextual: true})
+		defaultType := param.DefaultValue.GetComputedType()
+		if defaultType == nil || c.assignableToFresh(param.DefaultValue, defaultType, paramTypes[i]) {
+			continue
+		}
+		var errNode parser.Node = param.DefaultValue
+		if param.Name != nil {
+			errNode = param.Name
+		}
+		c.reportNotAssignable(errNode, param.DefaultValue, defaultType, paramTypes[i], headAssign)
+	}
 }
 
 // checkFunctionBody visits the function body and handles return type inference
@@ -535,8 +565,11 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 				if _, ok := targetType.(*types.TypePredicateType); ok {
 					targetType = types.Boolean
 				}
-				if !c.isAssignableWithExpansion(sourceType, targetType) {
-					c.addErrorWithCode(exprBody, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", bodyType.String(), expectedReturnType.String()))
+				bodyExpr, _ := exprBody.(parser.Expression)
+				if bodyExpr != nil && !c.assignableToFresh(bodyExpr, sourceType, targetType) {
+					c.reportNotAssignable(exprBody, bodyExpr, sourceType, targetType, headAssign)
+				} else if bodyExpr == nil && !c.isAssignableWithExpansion(sourceType, targetType) {
+					c.reportNotAssignable(exprBody, nil, sourceType, targetType, headAssign)
 				}
 				finalReturnType = expectedReturnType
 			} else {

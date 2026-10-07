@@ -39,6 +39,10 @@ func debugPrint(format string, args ...interface{}) {
 
 // Parser takes a lexer and builds an AST.
 type Parser struct {
+	// funcTypeOptional is the optional-parameter flags of the most recent
+	// parseFunctionTypeParameterList call.
+	funcTypeOptional []bool
+
 	l      *lexer.Lexer
 	source *source.SourceFile // cached from lexer
 	errors []errors.PaseratiError
@@ -1656,6 +1660,7 @@ var errParamListReported = fmt.Errorf("parameter list error already reported")
 // constructor type. See parseTypeSignatureParams.
 func (p *Parser) parseFunctionTypeParameterList() ([]Expression, Expression, error) {
 	res, ok := p.parseTypeSignatureParams()
+	p.funcTypeOptional = res.optional
 	if !ok {
 		return nil, nil, errParamListReported
 	}
@@ -2283,6 +2288,11 @@ func (p *Parser) parseInfixContinuation(leftExp Expression, precedence int) Expr
 		// TypeScript's non-null assertion `x!` likewise needs no line break
 		// before the `!`; otherwise the `!` starts the next statement.
 		if p.peekToken.Type == lexer.BANG && p.peekToken.Line > p.curToken.Line {
+			break
+		}
+		// `as` / `satisfies` are operators only on the same line as their
+		// operand: after a line break they begin a new statement (ASI).
+		if (p.peekToken.Type == lexer.AS || p.peekToken.Type == lexer.SATISFIES) && p.peekToken.Line > p.curToken.Line {
 			break
 		}
 
@@ -8979,6 +8989,7 @@ func (p *Parser) parseConstructorTypeExpression() Expression {
 
 	// Parse parameter types (similar to function type parameters)
 	params, restParam, err := p.parseFunctionTypeParameterList()
+	cte.OptionalParams = append([]bool(nil), p.funcTypeOptional...)
 	if err != nil {
 		return nil
 	}
@@ -9033,6 +9044,7 @@ func (p *Parser) parseInterfaceConstructorSignature() Expression {
 
 	// Parse parameter types (similar to function type parameters)
 	params, restParam, err := p.parseFunctionTypeParameterList()
+	cte.OptionalParams = append([]bool(nil), p.funcTypeOptional...)
 	if err != nil {
 		return nil
 	}
@@ -10374,11 +10386,12 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 
 	// Create a FunctionTypeExpression to represent the method signature
 	funcType := &FunctionTypeExpression{
-		Token:          &lexer.Token{Type: lexer.LPAREN, Literal: "("},
-		Parameters:     params,
-		OptionalParams: optionalParams,
-		RestParameter:  restParam,
-		ReturnType:     returnType,
+		Token:             &lexer.Token{Type: lexer.LPAREN, Literal: "("},
+		Parameters:        params,
+		OptionalParams:    optionalParams,
+		RestParameter:     restParam,
+		ReturnType:        returnType,
+		IsMethodSignature: true,
 	}
 
 	return funcType
@@ -10771,6 +10784,7 @@ func (p *Parser) parseGenericFunctionTypeExpression() Expression {
 
 	// Parse function type parameters (for type annotations)
 	params, restParam, parseErr := p.parseFunctionTypeParameterList()
+	genericOptionals := append([]bool(nil), p.funcTypeOptional...)
 	if parseErr != nil {
 		return nil
 	}
@@ -10793,6 +10807,7 @@ func (p *Parser) parseGenericFunctionTypeExpression() Expression {
 		Token:          p.curToken, // Should be the '(' token
 		TypeParameters: typeParams,
 		Parameters:     params,
+		OptionalParams: genericOptionals,
 		RestParameter:  restParam,
 		ReturnType:     returnType,
 	}

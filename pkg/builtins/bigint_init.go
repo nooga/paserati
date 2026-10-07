@@ -20,7 +20,7 @@ func (b *BigIntInitializer) Priority() int {
 
 func (b *BigIntInitializer) InitTypes(ctx *TypeContext) error {
 	// Create BigInt constructor type
-	bigintCtorType := types.NewSimpleFunction([]types.Type{types.Any}, types.BigInt).
+	bigintCtorType := types.NewSimpleFunction([]types.Type{types.NewUnionType(types.BigInt, types.Boolean, types.Number, types.String)}, types.BigInt).
 		WithProperty("asIntN", types.NewSimpleFunction([]types.Type{types.Number, types.BigInt}, types.BigInt)).
 		WithProperty("asUintN", types.NewSimpleFunction([]types.Type{types.Number, types.BigInt}, types.BigInt))
 

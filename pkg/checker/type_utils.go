@@ -1,6 +1,8 @@
 package checker
 
 import (
+	"strings"
+
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 )
@@ -20,6 +22,9 @@ func isFreshLiteralExpression(node parser.Node) bool {
 	switch n := node.(type) {
 	case *parser.StringLiteral, *parser.NumberLiteral, *parser.BooleanLiteral, *parser.BigIntLiteral:
 		return true
+	case *parser.TemplateLiteral:
+		_, ok := noSubstitutionTemplateText(n)
+		return ok
 	case *parser.PrefixExpression:
 		if n.Operator == "-" || n.Operator == "+" {
 			return isFreshLiteralExpression(n.Right)
@@ -221,4 +226,21 @@ type IndexSignatureError struct {
 	PropertyType types.Type
 	ExpectedType types.Type
 	KeyType      types.Type
+}
+
+// noSubstitutionTemplateText returns the text of a template literal made only
+// of string parts (no `${}` substitutions).
+func noSubstitutionTemplateText(node *parser.TemplateLiteral) (string, bool) {
+	if node == nil {
+		return "", false
+	}
+	var sb strings.Builder
+	for _, part := range node.Parts {
+		sp, ok := part.(*parser.TemplateStringPart)
+		if !ok || sp == nil {
+			return "", false
+		}
+		sb.WriteString(sp.Value)
+	}
+	return sb.String(), true
 }

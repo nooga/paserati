@@ -353,11 +353,11 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("split", types.NewOptionalFunction([]types.Type{types.NewUnionType(types.String, types.RegExp), types.Number}, &types.ArrayType{ElementType: types.String}, []bool{true, true})).
 		WithProperty("replace", types.NewSimpleFunction([]types.Type{
 			types.NewUnionType(types.String, types.RegExp),
-			types.NewUnionType(types.String, types.NewSimpleFunction([]types.Type{types.String}, types.String)),
+			types.NewUnionType(types.String, types.NewVariadicFunction([]types.Type{types.String}, types.String, &types.ArrayType{ElementType: types.Any})),
 		}, types.String)).
 		WithProperty("replaceAll", types.NewSimpleFunction([]types.Type{
 			types.NewUnionType(types.String, types.RegExp),
-			types.NewUnionType(types.String, types.NewSimpleFunction([]types.Type{types.String}, types.String)),
+			types.NewUnionType(types.String, types.NewVariadicFunction([]types.Type{types.String}, types.String, &types.ArrayType{ElementType: types.Any})),
 		}, types.String)).
 		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).

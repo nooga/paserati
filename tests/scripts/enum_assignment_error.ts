@@ -1,6 +1,6 @@
-// expect_compile_error: Type 'number' is not assignable to type 'Color'.
+// expect_compile_error: Type '7' is not assignable to type 'Color'.
 
-// Test that raw numbers cannot be assigned to enum types in strict mode
+// Test that numbers matching no member value cannot be assigned to enum types
 
 enum Color {
     Red,     // 0
@@ -10,7 +10,7 @@ enum Color {
 
 function test() {
     // This should be a type error in strict TypeScript
-    let color: Color = 0;  // Error: cannot assign raw number to enum type
+    let color: Color = 7;  // Error: 7 is not a member value of Color (0 would be accepted)
     
     return color;
 }
