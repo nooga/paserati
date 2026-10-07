@@ -67,6 +67,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Every test file path derives from -path, and module tests resolve their
+	// fixtures against the test file's path, so it must not depend on how
+	// -path was spelled.
+	root, err := normalizeTestRoot(*testPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: invalid test262 path %s: %v\n", *testPath, err)
+		os.Exit(1)
+	}
+	*testPath = root
+
 	// Verify test262 directory exists
 	testDir := filepath.Join(*testPath, "test")
 	if _, err := os.Stat(testDir); err != nil {
@@ -181,6 +191,20 @@ func main() {
 	if stats.Failed > 0 || stats.Timeouts > 0 || stats.InfraErrors > 0 {
 		os.Exit(1)
 	}
+}
+
+// normalizeTestRoot makes the -path root absolute with symlinks resolved.
+// A relative root yields relative test file paths, and the module loader
+// then resolved a test's relative imports (e.g. './x_FIXTURE.js') against
+// that cwd-relative path on top of its already-absolute base directory,
+// failing to find them: module tests passed or failed depending on how
+// -path was spelled.
+func normalizeTestRoot(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(abs)
 }
 
 // corpusRevision is the checked-out test262 commit, part of a result's
