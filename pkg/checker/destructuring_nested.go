@@ -293,7 +293,7 @@ func (c *Checker) checkNestedArrayTarget(arrayTarget *parser.ArrayLiteral, expec
 	} else if widenedType == types.Any {
 		elementType = types.Any
 	} else {
-		c.addError(arrayTarget, fmt.Sprintf("cannot destructure array pattern from non-array type '%s'", expectedType.String()))
+		c.reportNotIterable(arrayTarget, expectedType)
 		elementType = types.Any
 	}
 
@@ -330,11 +330,11 @@ func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, ex
 				}
 
 				if objType == nil {
-					c.addError(objectTarget, fmt.Sprintf("cannot destructure object pattern from non-object type '%s'", expectedType.String()))
+					c.reportBadObjectDestructure(objectTarget, expectedType)
 					return
 				}
 			} else {
-				c.addError(objectTarget, fmt.Sprintf("cannot destructure object pattern from non-object type '%s'", expectedType.String()))
+				c.reportBadObjectDestructure(objectTarget, expectedType)
 				return
 			}
 		}
@@ -516,7 +516,7 @@ func (c *Checker) checkNestedArrayTargetForDeclaration(arrayTarget *parser.Array
 	} else if widenedType == types.Any {
 		elementType = types.Any
 	} else {
-		c.addError(arrayTarget, fmt.Sprintf("cannot destructure array pattern from non-array type '%s'", expectedType.String()))
+		c.reportNotIterable(arrayTarget, expectedType)
 		elementType = types.Any
 	}
 
@@ -553,11 +553,11 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 				}
 
 				if objType == nil {
-					c.addError(objectTarget, fmt.Sprintf("cannot destructure object pattern from non-object type '%s'", expectedType.String()))
+					c.reportBadObjectDestructure(objectTarget, expectedType)
 					return
 				}
 			} else {
-				c.addError(objectTarget, fmt.Sprintf("cannot destructure object pattern from non-object type '%s'", expectedType.String()))
+				c.reportBadObjectDestructure(objectTarget, expectedType)
 				return
 			}
 		}
@@ -621,7 +621,7 @@ func (c *Checker) checkNestedArrayParameterPattern(pattern *parser.ArrayParamete
 	} else if widenedType == types.Any {
 		elementType = types.Any
 	} else {
-		c.addError(pattern, fmt.Sprintf("cannot destructure array pattern from non-array type '%s'", expectedType.String()))
+		c.reportNotIterable(pattern, expectedType)
 		elementType = types.Any
 	}
 
@@ -643,7 +643,7 @@ func (c *Checker) checkNestedObjectParameterPattern(pattern *parser.ObjectParame
 	if widenedType != types.Any {
 		objType, ok := expectedType.(*types.ObjectType)
 		if !ok {
-			c.addError(pattern, fmt.Sprintf("cannot destructure object pattern from non-object type '%s'", expectedType.String()))
+			c.reportBadObjectDestructure(pattern, expectedType)
 			return
 		}
 

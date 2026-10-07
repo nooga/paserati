@@ -1,4 +1,4 @@
-// expect_compile_error: unknown type name
+// expect_compile_error: Cannot find name
 
 // Test multiple infer sites in function parameters
 // Note: This currently doesn't work because infer type parameters aren't 

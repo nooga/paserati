@@ -51,6 +51,9 @@ type Environment struct {
 	// --- Type narrowing support for member expressions ---
 	// Maps member expression keys (e.g., "this.value", "obj.prop") to their narrowed types
 	narrowings map[string]types.Type
+
+	// builtinNames lists names bound by the built-in initializers (global env only).
+	builtinNames map[string]bool
 }
 
 // NewEnvironment creates a new top-level type environment.

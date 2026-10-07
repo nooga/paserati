@@ -64,3 +64,13 @@ func (c *Checker) addConstraintError(node parser.Node, message string) {
 	}
 	c.errors = append(c.errors, err)
 }
+
+// reportGenericArity reports a type-argument arity error (TS2314/TS2707) at the
+// type reference being instantiated.
+func (c *Checker) reportGenericArity(code, message string) {
+	if c.typeRefNode != nil {
+		c.addErrorWithCode(c.typeRefNode, code, message)
+		return
+	}
+	c.addGenericError(message)
+}

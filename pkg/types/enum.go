@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -11,6 +12,24 @@ type EnumType struct {
 	Members   map[string]*EnumMemberType // Map of member name to member type
 	IsConst   bool                       // True for const enums
 	IsNumeric bool                       // True if all members are numeric
+
+	// MemberOrder lists the member names in declaration order, which is the
+	// order TypeScript prints and unions them in. Members itself is a map.
+	MemberOrder []string
+}
+
+// OrderedMemberNames returns the member names in declaration order, falling
+// back to alphabetical order for enums built without recording one.
+func (e *EnumType) OrderedMemberNames() []string {
+	if len(e.MemberOrder) == len(e.Members) {
+		return e.MemberOrder
+	}
+	names := make([]string, 0, len(e.Members))
+	for name := range e.Members {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // EnumMemberType represents a specific enum member literal type (e.g., Color.Red)
@@ -32,8 +51,8 @@ func (e *EnumType) String() string {
 func (e *EnumType) TypeString() string {
 	// For type contexts, enum type is the union of all its members
 	var memberTypes []string
-	for _, member := range e.Members {
-		memberTypes = append(memberTypes, member.String())
+	for _, memberName := range e.OrderedMemberNames() {
+		memberTypes = append(memberTypes, e.Members[memberName].String())
 	}
 	return strings.Join(memberTypes, " | ")
 }

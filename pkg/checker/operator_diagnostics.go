@@ -27,18 +27,20 @@ func (c *Checker) reportOperatorNotApplicable(node *parser.InfixExpression, left
 		node.Operator, left.String(), right.String()))
 }
 
-// reportArithmeticOperandType reports TS2362 or TS2363 for an operator that
-// needs each operand to be numeric on its own. TypeScript checks the left
-// operand first and stops there if it fails, so only one diagnostic is
-// produced even when both operands are wrong.
-func (c *Checker) reportArithmeticOperandType(node *parser.InfixExpression, left types.Type) {
-	if !isArithmeticOperandType(left) {
+// reportArithmeticOperandType reports TS2362 and/or TS2363 for an operator that
+// needs each operand to be numeric on its own. TypeScript checks the two
+// operands independently, so both diagnostics appear when both are wrong.
+func (c *Checker) reportArithmeticOperandType(node *parser.InfixExpression, left, right types.Type) {
+	leftBad := !isArithmeticOperandType(left)
+	rightBad := !isArithmeticOperandType(right)
+	if leftBad {
 		c.addErrorWithCode(node.Left, errors.TS2362,
 			"The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.")
-		return
 	}
-	c.addErrorWithCode(node.Right, errors.TS2363,
-		"The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.")
+	if rightBad || !leftBad {
+		c.addErrorWithCode(node.Right, errors.TS2363,
+			"The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.")
+	}
 }
 
 // isArithmeticOperandType reports whether a type is one an arithmetic operator
@@ -50,4 +52,38 @@ func isArithmeticOperandType(t types.Type) bool {
 	widened := types.GetWidenedType(t)
 	return widened == types.Any || widened == types.Number || widened == types.BigInt ||
 		types.IsNumericEnumLikeType(t)
+}
+
+// reportSymbolUnaryOperand reports TS2469 for a unary +, - or ~ applied to a
+// symbol, the only operand type TypeScript refuses for those operators.
+func (c *Checker) reportSymbolUnaryOperand(node *parser.PrefixExpression, operand types.Type) {
+	if operand != types.Symbol {
+		return
+	}
+	c.addErrorWithCode(node.Right, errors.TS2469, fmt.Sprintf("The '%s' operator cannot be applied to type 'symbol'.", node.Operator))
+}
+
+// isPrimitiveOperandType reports whether every constituent of t is a primitive
+// (string, number, boolean, bigint, symbol, null, undefined, void or a literal
+// of one of them), i.e. a value that can never be an object instance.
+func isPrimitiveOperandType(t types.Type) bool {
+	t = types.GetWidenedType(t)
+	switch tt := t.(type) {
+	case *types.Primitive:
+		switch tt {
+		case types.String, types.Number, types.Boolean, types.BigInt, types.Symbol, types.Null, types.Undefined, types.Void:
+			return true
+		}
+		return false
+	case *types.LiteralType:
+		return true
+	case *types.UnionType:
+		for _, member := range tt.Types {
+			if !isPrimitiveOperandType(member) {
+				return false
+			}
+		}
+		return len(tt.Types) > 0
+	}
+	return false
 }

@@ -1,4 +1,4 @@
-// expect_compile_error: enum member must have initializer
+// expect_compile_error: Enum member must have initializer.
 
 // Test that string enum members without initializers after string members are rejected
 

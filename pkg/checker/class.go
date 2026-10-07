@@ -2,6 +2,8 @@ package checker
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
@@ -73,7 +75,7 @@ func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
 	if len(body.ConstructorSigs) > 0 {
 		if !hasConstructorImpl {
 			for _, sig := range body.ConstructorSigs {
-				c.addError(sig, "Constructor implementation is missing.")
+				c.addErrorWithCode(sig, errors.TS2390, "Constructor implementation is missing.")
 			}
 		} else if constructorImpl != nil && constructorImpl.Value != nil {
 			// TS2394: check overload sig compatibility with implementation
@@ -85,7 +87,7 @@ func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
 				}
 				sigCount := len(sig.Parameters)
 				if !implHasRest && sigCount < implRequired {
-					c.addError(sig, "This overload signature is not compatible with its implementation signature.")
+					c.addErrorWithCode(sig, errors.TS2394, "This overload signature is not compatible with its implementation signature.")
 				}
 			}
 		}
@@ -110,7 +112,7 @@ func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
 			}
 			kindKey := staticPrefix + method.Kind + ":" + name
 			if seenNames[kindKey] && !method.IsAbstract {
-				c.addError(method.Key, "Duplicate function implementation.")
+				c.addErrorWithCode(method.Key, errors.TS2393, "Duplicate function implementation.")
 			}
 			seenNames[kindKey] = true
 		}
@@ -125,7 +127,7 @@ func (c *Checker) validateOverloadImplementations(body *parser.ClassBody) {
 			continue
 		}
 		if !implNames[name] {
-			c.addError(sig.Key, "Function implementation is missing or not immediately following the declaration.")
+			c.addErrorWithCode(sig.Key, errors.TS2391, "Function implementation is missing or not immediately following the declaration.")
 		}
 	}
 }
@@ -191,10 +193,10 @@ func (c *Checker) validateParamListBasic(params []*parser.Parameter) {
 		}
 		isOptional := param.Optional || param.DefaultValue != nil
 		if param.Optional && param.DefaultValue != nil {
-			c.addError(param.Name, "Parameter cannot have question mark and initializer.")
+			c.addErrorWithCode(param.Name, errors.TS1015, "Parameter cannot have question mark and initializer.")
 		}
 		if seenOptional && !isOptional {
-			c.addError(param.Name, "A required parameter cannot follow an optional parameter.")
+			c.addErrorWithCode(param.Name, errors.TS1016, "A required parameter cannot follow an optional parameter.")
 		}
 		if isOptional {
 			seenOptional = true
@@ -218,22 +220,22 @@ func (c *Checker) validateClassMemberConstraints(body *parser.ClassBody) {
 			if method.Value != nil {
 				if method.Value.TypeParameters != nil {
 					if len(method.Value.TypeParameters) > 0 {
-						c.addError(method.Value.TypeParameters[0], "Type parameters cannot appear on a constructor declaration.")
+						c.addErrorWithCode(method.Value.TypeParameters[0], errors.TS1092, "Type parameters cannot appear on a constructor declaration.")
 					} else {
-						c.addError(method.Key, "Type parameters cannot appear on a constructor declaration.")
+						c.addErrorWithCode(method.Key, errors.TS1092, "Type parameters cannot appear on a constructor declaration.")
 					}
 				}
 				if method.Value.ReturnTypeAnnotation != nil {
-					c.addError(method.Value.ReturnTypeAnnotation, "Type annotation cannot appear on a constructor declaration.")
+					c.addErrorWithCode(method.Value.ReturnTypeAnnotation, errors.TS1093, "Type annotation cannot appear on a constructor declaration.")
 				}
 			}
 		} else if method.Kind == "setter" && method.Value != nil {
 			for _, param := range method.Value.Parameters {
 				if param.Optional {
-					c.addError(param.Name, "A 'set' accessor cannot have an optional parameter.")
+					c.addErrorWithCode(param.Name, errors.TS1051, "A 'set' accessor cannot have an optional parameter.")
 				}
 				if param.DefaultValue != nil {
-					c.addError(param.Name, "A 'set' accessor parameter cannot have an initializer.")
+					c.addErrorWithCode(param.Name, errors.TS1052, "A 'set' accessor parameter cannot have an initializer.")
 				}
 			}
 		}
@@ -242,10 +244,10 @@ func (c *Checker) validateClassMemberConstraints(body *parser.ClassBody) {
 	for _, sig := range body.ConstructorSigs {
 		for _, param := range sig.Parameters {
 			if param.IsPublic || param.IsPrivate || param.IsProtected || param.IsReadonly {
-				c.addError(param.Name, "A parameter property is only allowed in a constructor implementation.")
+				c.addErrorWithCode(param.Name, errors.TS2369, "A parameter property is only allowed in a constructor implementation.")
 			}
 			if param.DefaultValue != nil {
-				c.addError(param.Name, "A parameter initializer is only allowed in a function or constructor implementation.")
+				c.addErrorWithCode(param.Name, errors.TS2371, "A parameter initializer is only allowed in a function or constructor implementation.")
 			}
 		}
 		c.validateParamListBasic(sig.Parameters)
@@ -254,7 +256,7 @@ func (c *Checker) validateClassMemberConstraints(body *parser.ClassBody) {
 	for _, sig := range body.MethodSigs {
 		for _, param := range sig.Parameters {
 			if param.DefaultValue != nil {
-				c.addError(param.Name, "A parameter initializer is only allowed in a function or constructor implementation.")
+				c.addErrorWithCode(param.Name, errors.TS2371, "A parameter initializer is only allowed in a function or constructor implementation.")
 			}
 		}
 		c.validateParamListBasic(sig.Parameters)
@@ -298,7 +300,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// 1. Check if class name is already defined IN THE CURRENT SCOPE ONLY.
 	// Using Resolve() would walk up the scope chain and incorrectly flag a class
 	// inside a namespace as conflicting with an outer class of the same name.
-	if c.env.HasLocalSymbol(node.Name.Value) {
+	if c.env.HasLocalSymbol(node.Name.Value) && !(c.isModule && c.env.shadowBuiltin(node.Name.Value)) {
 		c.addError(node.Name, fmt.Sprintf("identifier '%s' already declared", node.Name.Value))
 		return
 	}
@@ -391,11 +393,32 @@ func (c *Checker) checkAbstractMembersImplemented(node *parser.ClassDeclaration,
 		}
 	}
 
+	var missing []string
 	for memberName := range abstractMembers {
 		if !implemented[memberName] {
-			c.addError(node.Name, fmt.Sprintf("Non-abstract class '%s' does not implement inherited abstract member '%s' from class '%s'.",
-				node.Name.Value, memberName, superName))
+			missing = append(missing, memberName)
 		}
+	}
+	sort.Strings(missing)
+	switch {
+	case len(missing) == 0:
+	case len(missing) == 1:
+		c.addErrorWithCode(node.Name, errors.TS2515, fmt.Sprintf("Non-abstract class '%s' does not implement inherited abstract member %s from class '%s'.",
+			node.Name.Value, missing[0], superName))
+	case len(missing) > 5:
+		quoted := make([]string, 4)
+		for i := 0; i < 4; i++ {
+			quoted[i] = "'" + missing[i] + "'"
+		}
+		c.addErrorWithCode(node.Name, errors.TS2655, fmt.Sprintf("Non-abstract class '%s' is missing implementations for the following members of '%s': %s and %d more.",
+			node.Name.Value, superName, strings.Join(quoted, ", "), len(missing)-4))
+	default:
+		quoted := make([]string, len(missing))
+		for i, name := range missing {
+			quoted[i] = "'" + name + "'"
+		}
+		c.addErrorWithCode(node.Name, errors.TS2654, fmt.Sprintf("Non-abstract class '%s' is missing implementations for the following members of '%s': %s.",
+			node.Name.Value, superName, strings.Join(quoted, ", ")))
 	}
 }
 
@@ -575,6 +598,10 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 	// Handle inheritance relationships
 	if superClass != nil {
+		if instanceType.ClassMeta != nil {
+			instanceType.ClassMeta.HasExtendsClause = true
+			_, instanceType.ClassMeta.ExtendsNull = superClass.(*parser.NullLiteral)
+		}
 		c.handleClassInheritance(instanceType, superClass)
 	}
 
@@ -1006,7 +1033,7 @@ func (c *Checker) validateClassMemberOverride(node parser.Node, memberName strin
 
 	if instanceType.ClassMeta.SuperClassName == "" {
 		if hasOverride {
-			c.addError(node, fmt.Sprintf("This member cannot have an 'override' modifier because class '%s' does not extend another class.", className))
+			c.addErrorWithCode(node, errors.TS4112, fmt.Sprintf("This member cannot have an 'override' modifier because its containing class '%s' does not extend another class.", className))
 		}
 		return
 	}
@@ -1014,7 +1041,11 @@ func (c *Checker) validateClassMemberOverride(node parser.Node, memberName strin
 	baseName, inherited := c.hasInheritedClassMember(instanceType, memberName, isStatic)
 	if hasOverride {
 		if !inherited {
-			c.addError(node, fmt.Sprintf("This member cannot have an 'override' modifier because it is not declared in the base class '%s'.", baseName))
+			if suggestion := getSpellingSuggestion(memberName, c.inheritedClassMemberNames(instanceType, isStatic)); suggestion != "" {
+				c.addErrorWithCode(node, errors.TS4117, fmt.Sprintf("This member cannot have an 'override' modifier because it is not declared in the base class '%s'. Did you mean '%s'?", baseName, suggestion))
+			} else {
+				c.addErrorWithCode(node, errors.TS4113, fmt.Sprintf("This member cannot have an 'override' modifier because it is not declared in the base class '%s'.", baseName))
+			}
 		}
 		return
 	}
@@ -1023,7 +1054,7 @@ func (c *Checker) validateClassMemberOverride(node parser.Node, memberName strin
 		if !currentIsAbstract && c.inheritedAbstractClassMember(instanceType, memberName, isStatic) {
 			return
 		}
-		c.addError(node, fmt.Sprintf("This member must have an 'override' modifier because it overrides a member in the base class '%s'.", baseName))
+		c.addErrorWithCode(node, errors.TS4114, fmt.Sprintf("This member must have an 'override' modifier because it overrides a member in the base class '%s'.", baseName))
 	}
 }
 
@@ -1280,8 +1311,17 @@ func (c *Checker) inferPropertyType(prop *parser.PropertyDefinition) types.Type 
 			propType = types.Any
 		}
 	} else if prop.Value != nil {
-		// Type check the initializer expression to get its type
-		c.visit(prop.Value)
+		// Type check the initializer expression to get its type. In an instance
+		// field initializer `this` is the instance, whose type is still being
+		// assembled here, so treat it as any rather than as undefined.
+		if !prop.IsStatic {
+			prevThis := c.currentThisType
+			c.currentThisType = types.Any
+			c.visit(prop.Value)
+			c.currentThisType = prevThis
+		} else {
+			c.visit(prop.Value)
+		}
 		if initType := prop.Value.GetComputedType(); initType != nil {
 			propType = initType
 		} else {
@@ -1525,7 +1565,18 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		debugPrintf("// [Checker Class] Superclass is simple identifier: %s\n", ident.Value)
 		constructorType, _, exists = c.env.Resolve(ident.Value)
 		if !exists {
-			c.addError(superClassExpr, fmt.Sprintf("superclass '%s' is not defined", ident.Value))
+			if typeOnly, found := c.env.ResolveType(ident.Value); found {
+				// A type-only name (interface or alias) used where a value is needed.
+				if _, isObj := types.GetEffectiveType(typeOnly).(*types.ObjectType); isObj {
+					c.addErrorWithCode(superClassExpr, errors.TS2689, fmt.Sprintf("Cannot extend an interface '%s'. Did you mean 'implements'?", ident.Value))
+				} else {
+					c.addErrorWithCode(superClassExpr, errors.TS2693, fmt.Sprintf("'%s' only refers to a type, but is being used as a value here.", ident.Value))
+				}
+				return
+			}
+			// Classes are checked before top-level variables are defined, so the
+			// name may still appear; decide once every declaration is in place.
+			c.deferredHeritageChecks = append(c.deferredHeritageChecks, deferredHeritageCheck{expr: ident, env: c.env})
 			return
 		}
 		// For identifiers, the constructor type is also the super type
@@ -1557,7 +1608,7 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 
 			genericType, isGeneric := baseConstructor.(*types.GenericType)
 			if !isGeneric {
-				c.addError(superClassExpr, fmt.Sprintf("'%s' is not a generic type", genRef.Name.Value))
+				c.addErrorWithCode(superClassExpr, errors.TS2315, fmt.Sprintf("Type '%s' is not generic.", genRef.Name.Value))
 				return
 			}
 			instantiatedConstructor := c.instantiateGenericType(genericType, resolvedTypeArgs, nil)
@@ -1644,7 +1695,7 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 	}
 
 	if !ok {
-		c.addError(superClassExpr, fmt.Sprintf("'%s' is not a class or constructor function and cannot be extended", superClassExpr.String()))
+		c.reportNonConstructorBase(superClassExpr, constructorType)
 		return
 	}
 
@@ -1655,7 +1706,7 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 		hasCallable := len(constructorType.CallSignatures) > 0
 
 		if !hasConstructor && !hasCallable {
-			c.addError(superClassExpr, fmt.Sprintf("'%s' is not a class or constructor function and cannot be extended", superClassExpr.String()))
+			c.reportNonConstructorBase(superClassExpr, constructorType)
 			return
 		}
 
@@ -1857,7 +1908,7 @@ func (c *Checker) checkSuperExpression(node *parser.SuperExpression) {
 	// Check if the current class has a superclass
 	superClassName := classInstanceType.ClassMeta.SuperClassName
 	if superClassName == "" {
-		c.addError(node, fmt.Sprintf("class '%s' does not extend any class", classInstanceType.GetClassName()))
+		c.reportSuperWithoutBase(node, classInstanceType, false)
 		node.SetComputedType(types.Any)
 		return
 	}
@@ -2179,4 +2230,94 @@ func containsReturnWithValue(node parser.Node) bool {
 		// Not a return
 	}
 	return false
+}
+
+// deferredHeritageCheck is an `extends <identifier>` clause whose name was not
+// yet bound when the class was processed.
+type deferredHeritageCheck struct {
+	expr *parser.Identifier
+	env  *Environment
+}
+
+// reportNonConstructorBase reports TS2507 when the value of an extends clause
+// is something TypeScript cannot construct. Types we cannot judge reliably
+// (type parameters, unions, intersections, ...) are given the benefit of the
+// doubt, and `extends null` is legal.
+func (c *Checker) reportNonConstructorBase(expr parser.Expression, t types.Type) {
+	switch bt := t.(type) {
+	case *types.ObjectType:
+		if len(bt.ConstructSignatures) > 0 || len(bt.CallSignatures) > 0 {
+			return
+		}
+	case *types.Primitive:
+		if bt == types.Null || bt == types.Any || bt == types.Unknown {
+			return
+		}
+	case *types.LiteralType:
+	default:
+		return
+	}
+	c.addErrorWithCode(expr, errors.TS2507, fmt.Sprintf("Type '%s' is not a constructor function type.", t.String()))
+}
+
+// runDeferredHeritageChecks resolves `extends <identifier>` clauses recorded
+// while the class was processed, now that all declarations are bound.
+func (c *Checker) runDeferredHeritageChecks() {
+	for _, check := range c.deferredHeritageChecks {
+		name := check.expr.Value
+		if _, _, found := check.env.Resolve(name); found {
+			resolved, _, _ := check.env.Resolve(name)
+			c.reportNonConstructorBase(check.expr, resolved)
+			continue
+		}
+		if c.getBuiltinType(name) != nil {
+			continue
+		}
+		c.addCannotFindNameError(check.expr, check.env, name)
+	}
+	c.deferredHeritageChecks = nil
+}
+
+// inheritedClassMemberNames lists the member names a class inherits from its
+// base classes, for spelling suggestions.
+func (c *Checker) inheritedClassMemberNames(instanceType *types.ObjectType, isStatic bool) []string {
+	var names []string
+	seenObj := make(map[*types.ObjectType]bool)
+	var collect func(obj *types.ObjectType)
+	collect = func(obj *types.ObjectType) {
+		if obj == nil || seenObj[obj] {
+			return
+		}
+		seenObj[obj] = true
+		for _, name := range types.SortedPropertyNames(obj.Properties) {
+			names = append(names, name)
+		}
+		if isStatic {
+			if obj.ClassMeta != nil {
+				if baseCtor, ok := obj.ClassMeta.SuperConstructorType.(*types.ObjectType); ok {
+					collect(baseCtor)
+				}
+			}
+			return
+		}
+		for _, baseType := range obj.BaseTypes {
+			if baseObj, ok := baseType.(*types.ObjectType); ok {
+				collect(baseObj)
+			}
+		}
+	}
+	if isStatic {
+		if instanceType.ClassMeta != nil {
+			if baseCtor, ok := instanceType.ClassMeta.SuperConstructorType.(*types.ObjectType); ok {
+				collect(baseCtor)
+			}
+		}
+		return names
+	}
+	for _, baseType := range instanceType.BaseTypes {
+		if baseObj, ok := baseType.(*types.ObjectType); ok {
+			collect(baseObj)
+		}
+	}
+	return names
 }

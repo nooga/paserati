@@ -51,6 +51,8 @@ type ClassMetadata struct {
 	SourceClassName string
 	
 	// Inheritance relationships
+	HasExtendsClause bool // The declaration has an `extends` clause (even if it could not be resolved)
+	ExtendsNull      bool // The extends clause is the literal `null`
 	SuperClassName string     // The class this class extends (if any)
 	SuperConstructorType Type // The resolved constructor type of the superclass (if any)
 	ImplementedInterfaces []string // The interfaces this class implements

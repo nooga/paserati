@@ -1,4 +1,4 @@
-// expect_compile_error: unknown type name
+// expect_compile_error: Cannot find name
 
 // Test multiple infer sites with same name
 // Note: Object type parsing now works, but using inferred type parameters 

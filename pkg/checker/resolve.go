@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
@@ -104,6 +105,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			if genericType, ok := resolvedAlias.(*types.GenericType); ok {
 				debugPrintf("// [Checker resolveTypeAnno Ident] Found generic type '%s', instantiating with defaults\n", node.Value)
 				// Instantiate with no explicit type arguments - will use defaults
+				c.typeRefNode = node
 				return c.instantiateGenericType(genericType, []types.Type{}, []parser.Expression{})
 			}
 			return resolvedAlias
@@ -165,6 +167,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			if genericType, ok := resolvedAlias.(*types.GenericType); ok {
 				debugPrintf("// [Checker resolveTypeAnno Ident] Found generic type '%s', instantiating with defaults\n", node.Value)
 				// Instantiate with no explicit type arguments - will use defaults
+				c.typeRefNode = node
 				return c.instantiateGenericType(genericType, []types.Type{}, []parser.Expression{})
 			}
 
@@ -230,7 +233,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 			// 4. If neither alias, primitive, nor imported type, it's an unknown type name
 			debugPrintf("// [Checker resolveTypeAnno Ident] Primitive check failed for '%s', reporting error.\n", node.Value) // ADDED DEBUG
 			// Use the Identifier node itself for error reporting
-			c.addError(node, fmt.Sprintf("unknown type name: %s", node.Value))
+			c.addErrorWithCode(node, errors.TS2304, fmt.Sprintf("Cannot find name '%s'.", node.Value))
 			return nil // Indicate error
 		}
 
@@ -473,6 +476,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 				}
 
 				// Instantiate the generic type
+				c.typeRefNode = node
 				return c.instantiateGenericType(genericType, typeArgs, node.TypeArguments)
 			} else if baseType == types.Any {
 				// Special case: if baseType is Any (unresolved import) and we have type arguments,
@@ -497,7 +501,7 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 					TypeArguments: typeArgs,
 				}
 			} else {
-				c.addError(node, fmt.Sprintf("Type '%s' is not a generic type", node.Name.Value))
+				c.addErrorWithCode(node, errors.TS2315, fmt.Sprintf("Type '%s' is not generic.", node.Name.Value))
 				return nil
 			}
 		}
@@ -565,7 +569,7 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 		if resolvedRestType != nil {
 			// Validate that rest parameter type is an array or tuple type
 			if !isValidRestParameterType(resolvedRestType) {
-				c.addError(node.RestParameter, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
+				c.addErrorWithCode(node.RestParameter, errors.TS2370, "A rest parameter must be of an array type.")
 				resolvedRestType = &types.ArrayType{ElementType: types.Any}
 			}
 		} else {
@@ -647,7 +651,7 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 		resolvedRestType := c.resolveTypeAnnotation(node.RestParameter)
 		if resolvedRestType != nil {
 			if !isValidRestParameterType(resolvedRestType) {
-				c.addError(node.RestParameter, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
+				c.addErrorWithCode(node.RestParameter, errors.TS2370, "A rest parameter must be of an array type.")
 				resolvedRestType = &types.ArrayType{ElementType: types.Any}
 			}
 		} else {
@@ -926,7 +930,7 @@ func (c *Checker) resolveConstructorTypeSignature(node *parser.ConstructorTypeEx
 		resolvedRestType := c.resolveTypeAnnotation(node.RestParameter)
 		if resolvedRestType != nil {
 			if !isValidRestParameterType(resolvedRestType) {
-				c.addError(node.RestParameter, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
+				c.addErrorWithCode(node.RestParameter, errors.TS2370, "A rest parameter must be of an array type.")
 				resolvedRestType = &types.ArrayType{ElementType: types.Any}
 			}
 		} else {
@@ -1077,7 +1081,7 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 			// Rest parameter type should be an array or tuple type
 			if resolvedRestType != nil {
 				if !isValidRestParameterType(resolvedRestType) {
-					c.addError(node.RestParameter.TypeAnnotation, fmt.Sprintf("rest parameter type must be an array type, got '%s'", resolvedRestType.String()))
+					c.addErrorWithCode(node.RestParameter.TypeAnnotation, errors.TS2370, "A rest parameter must be of an array type.")
 					resolvedRestType = &types.ArrayType{ElementType: types.Any}
 				}
 			}
@@ -1163,9 +1167,16 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 			debugPrintf("// [Checker] Using default type '%s' for parameter '%s'\n",
 				typeParam.Default.String(), typeParam.Name)
 		} else {
-			// Error: no type argument provided and no default
-			errorMsg := fmt.Sprintf("Type parameter '%s' requires a type argument or default type", typeParam.Name)
-			c.addGenericError(errorMsg)
+			// Error: no type argument provided and no default (TS2314 / TS2707)
+			minArgs := len(genericType.TypeParameters)
+			for minArgs > 0 && genericType.TypeParameters[minArgs-1].Default != nil {
+				minArgs--
+			}
+			if minArgs < len(genericType.TypeParameters) {
+				c.reportGenericArity(errors.TS2707, fmt.Sprintf("Generic type '%s' requires between %d and %d type arguments.", genericType.Name, minArgs, len(genericType.TypeParameters)))
+			} else {
+				c.reportGenericArity(errors.TS2314, fmt.Sprintf("Generic type '%s' requires %d type argument(s).", genericType.Name, minArgs))
+			}
 			return types.Any
 		}
 	}
@@ -1198,14 +1209,15 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 			// Check if the type argument satisfies the constraint
 			if !types.IsAssignable(argType, constraintType) {
 				// Create a more detailed error message with proper node position
-				errorMsg := fmt.Sprintf("Type '%s' does not satisfy constraint '%s' for type parameter '%s'",
-					argType.String(), constraintType.String(), typeParam.Name)
+				errorMsg := fmt.Sprintf("Type '%s' does not satisfy the constraint '%s'.",
+					argType.String(), constraintType.String())
 
 				// Use the specific type argument node for accurate error positioning
 				if i < len(typeArgNodes) && typeArgNodes[i] != nil {
-					c.addConstraintError(typeArgNodes[i], errorMsg)
+					c.addErrorWithCode(typeArgNodes[i], errors.TS2344, errorMsg)
+				} else if c.typeRefNode != nil {
+					c.addErrorWithCode(c.typeRefNode, errors.TS2344, errorMsg)
 				} else {
-					// Fallback to generic error if node is not available
 					c.addGenericError(errorMsg)
 				}
 				return types.Any // Return any type to allow compilation to continue
@@ -1523,6 +1535,12 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 	// Walk remaining path segments through namespace ValueShape properties.
 	for i := 1; i < len(path); i++ {
 		seg := path[i]
+		// A generic class's constructor is a GenericType; its static members live on the body.
+		if generic, ok := varType.(*types.GenericType); ok {
+			if body, isObj := generic.Body.(*types.ObjectType); isObj {
+				varType = body
+			}
+		}
 		switch t := varType.(type) {
 		case *types.ObjectType:
 			if prop, ok := t.Properties[seg]; ok {
@@ -1537,7 +1555,7 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 			} else if member := t.LookupTypeMember(seg); member != nil {
 				varType = member
 			} else {
-				c.addError(node, fmt.Sprintf("Namespace '%s' has no exported member '%s'", path[i-1], seg))
+				c.addErrorWithCode(node, errors.TS2694, fmt.Sprintf("Namespace '%s' has no exported member '%s'.", path[i-1], seg))
 				return nil
 			}
 		default:
@@ -1910,8 +1928,8 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 			if keyofType.OperandType.Equals(objectType) {
 				// Collect all property types
 				var propTypes []types.Type
-				for _, propType := range objType.Properties {
-					propTypes = append(propTypes, propType)
+				for _, propName := range types.SortedPropertyNames(objType.Properties) {
+					propTypes = append(propTypes, objType.Properties[propName])
 				}
 				if len(propTypes) == 0 {
 					return types.Never // No properties means never
@@ -2916,7 +2934,7 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 		if member := ct.LookupTypeMember(memberName); member != nil {
 			return member
 		}
-		c.addError(node.Property, fmt.Sprintf("Namespace '%s' has no exported member '%s'", node.Object.String(), memberName))
+		c.addErrorWithCode(node.Property, errors.TS2694, fmt.Sprintf("Namespace '%s' has no exported member '%s'.", node.Object.String(), memberName))
 		return nil
 	case *types.EnumType:
 		memberType, exists := ct.Members[memberName]

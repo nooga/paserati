@@ -56,7 +56,8 @@ func DeeplyWidenType(t Type) Type {
 	// If it's an object after top-level widening, widen its properties
 	if objType, ok := widenedT.(*ObjectType); ok {
 		newFields := make(map[string]Type, len(objType.Properties))
-		for name, propType := range objType.Properties {
+		for _, name := range SortedPropertyNames(objType.Properties) {
+			propType := objType.Properties[name]
 			// Recursively deeply widen property types? For now, just one level.
 			newFields[name] = GetWidenedType(propType)
 		}

@@ -6,4 +6,4 @@ let person: TestInterface = { name: "John", age: 30 };
 
 ("manual type import works");
 
-// expect_compile_error: unknown type name
+// expect_compile_error: Cannot find name

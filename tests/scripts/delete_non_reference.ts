@@ -1,4 +1,5 @@
 // expect: true-true-true-true-true
+// skip-typecheck: TypeScript rejects these (TS2703); this checks the runtime semantics.
 // Test delete on non-reference values (literals, expressions)
 // Per ECMAScript spec, delete returns true for non-references
 

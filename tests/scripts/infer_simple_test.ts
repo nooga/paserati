@@ -1,4 +1,4 @@
-// expect_compile_error: unknown type name
+// expect_compile_error: Cannot find name
 
 // Test that infer parsing works
 

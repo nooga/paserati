@@ -3,4 +3,4 @@ class Test {
   static instances: StaticExample[] = [];
 }
 
-// expect_compile_error: unknown type
+// expect_compile_error: Cannot find name

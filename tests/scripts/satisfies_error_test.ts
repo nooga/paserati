@@ -1,4 +1,4 @@
-// expect_compile_error: type 'hello' does not satisfy the constraint 'number'
+// expect_compile_error: Type 'string' does not satisfy the expected type 'number'.
 
 // Test satisfies error handling - should catch type mismatches
 

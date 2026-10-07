@@ -1,4 +1,4 @@
-// expect_compile_error: Cannot use 'number' as a constructor.
+// expect_compile_error: The right-hand side of an 'instanceof' expression must be either of type 'any', a class, function
 // Test error cases and edge conditions
 
 // instanceof with non-function right-hand side
