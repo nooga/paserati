@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unsafe"
 	"weak"
 )
@@ -2534,25 +2535,66 @@ func IsFunction(v Value) bool { return v.IsFunction() }
 // AsFunction returns the FunctionObject pointer from a function template value.
 func AsFunction(v Value) *FunctionObject { return v.AsFunction() }
 
-// Helper for BigInt == String coercion per ECMAScript StringToBigInt
+// StringToBigInt is ECMAScript StringToBigInt (7.1.14): surrounding
+// whitespace is ignored, an empty string is 0n, and otherwise the text must
+// be a decimal integer with an optional sign, or an unsigned 0x/0o/0b
+// literal. No numeric separators, fractions or exponents; ok is false for
+// anything else.
+func StringToBigInt(s string) (*big.Int, bool) {
+	return stringToBigInt(s)
+}
+
 func stringToBigInt(s string) (*big.Int, bool) {
-	s = strings.TrimSpace(s)
+	// StrWhiteSpaceChar: Unicode spaces and line terminators plus U+FEFF,
+	// but not U+0085, which unicode.IsSpace counts.
+	s = strings.TrimFunc(s, func(r rune) bool { return (unicode.IsSpace(r) && r != '\u0085') || r == '\uFEFF' })
 	if s == "" {
-		// Per ECMAScript spec, empty string (or whitespace-only) converts to 0n
 		return big.NewInt(0), true
 	}
-	// Use SetString with base 0 to detect 0x/0b/0o prefixes
-	i := new(big.Int)
-	_, ok := i.SetString(s, 0) // base 0 auto-detects prefix
-	if !ok {
-		// Check if it might look like a float (decimal/exponent) - these are invalid for BigInt string comparison
-		if strings.ContainsAny(s, ".eE") {
-			return nil, false
+	base := 10
+	digits := s
+	if len(s) > 2 && s[0] == '0' {
+		switch s[1] {
+		case 'x', 'X':
+			base, digits = 16, s[2:]
+		case 'o', 'O':
+			base, digits = 8, s[2:]
+		case 'b', 'B':
+			base, digits = 2, s[2:]
 		}
-		// It might be just non-numeric
+	}
+	neg := false
+	if base == 10 && (digits[0] == '+' || digits[0] == '-') {
+		neg = digits[0] == '-'
+		digits = digits[1:]
+	}
+	if digits == "" {
 		return nil, false
 	}
-	// SetString succeeded, return the parsed BigInt
+	for i := 0; i < len(digits); i++ {
+		c := digits[i]
+		var d int
+		switch {
+		case c >= '0' && c <= '9':
+			d = int(c - '0')
+		case c >= 'a' && c <= 'f':
+			d = int(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			d = int(c-'A') + 10
+		default:
+			return nil, false
+		}
+		if d >= base {
+			return nil, false
+		}
+	}
+	i, ok := new(big.Int).SetString(digits, base)
+	if !ok {
+		return nil, false
+	}
+	if neg {
+		i.Neg(i)
+	}
 	return i, true
 }
 

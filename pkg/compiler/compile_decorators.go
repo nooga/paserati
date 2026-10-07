@@ -163,10 +163,21 @@ func (c *Compiler) applyMethodDecorators(decs []*decoratorInfo, methodReg Regist
 	propName := c.extractPropertyName(method.Key)
 	isPrivate := method.IsPrivate || (len(propName) > 0 && propName[0] == '#')
 
-	// Create initializer array for addInitializer callbacks
+	// addInitializer callbacks. A non-static member's run for each new
+	// instance (collected in the class's hidden binding, see
+	// RunInitializersStatement); a static member's run once below, with the
+	// class as receiver.
 	initArrayReg := c.regAlloc.Alloc()
 	defer c.regAlloc.Free(initArrayReg)
-	c.emitMakeEmptyArray(initArrayReg, decs[0].line)
+	perInstance := !method.IsStatic && c.currentInstanceInitializers != ""
+	if perInstance {
+		ident := &parser.Identifier{Token: method.Token, Value: c.currentInstanceInitializers}
+		if _, err := c.compileNode(ident, initArrayReg); err != nil {
+			return err
+		}
+	} else {
+		c.emitMakeEmptyArray(initArrayReg, decs[0].line)
+	}
 
 	// Apply in reverse order (bottom-to-top per TC39 spec)
 	for i := len(decs) - 1; i >= 0; i-- {
@@ -192,15 +203,9 @@ func (c *Compiler) applyMethodDecorators(decs []*decoratorInfo, methodReg Regist
 		c.regAlloc.Free(contextReg)
 	}
 
-	// For method decorators, initializers are stored for later execution.
-	// Static member initializers run after class definition.
-	// Instance member initializers run in the constructor.
-	// For now, we run them immediately (with undefined as this since the class isn't fully set up yet).
-	// TODO: properly defer instance initializers to constructor time
-	undefinedReg := c.regAlloc.Alloc()
-	c.emitLoadUndefined(undefinedReg, decs[0].line)
-	c.emitRunInitializers(initArrayReg, undefinedReg, decs[0].line)
-	c.regAlloc.Free(undefinedReg)
+	if method.IsStatic && c.inStaticMemberSetup {
+		c.emitRunInitializers(initArrayReg, c.currentStaticInitializerThis, decs[0].line)
+	}
 
 	return nil
 }
@@ -305,6 +310,17 @@ func hasDecorators(node *parser.ClassDeclaration) bool {
 	}
 	for _, prop := range node.Body.Properties {
 		if len(prop.Decorators) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// hasInstanceMethodDecorators reports whether a non-static method or
+// accessor of the class has a decorator.
+func hasInstanceMethodDecorators(node *parser.ClassDeclaration) bool {
+	for _, m := range node.Body.Methods {
+		if !m.IsStatic && len(m.Decorators) > 0 {
 			return true
 		}
 	}

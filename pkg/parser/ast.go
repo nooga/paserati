@@ -248,6 +248,22 @@ func (es *ExpressionStatement) String() string {
 	return ""
 }
 
+// RunInitializersStatement is never produced by the parser: the compiler
+// injects it at the start of a class's instance field initialization to run
+// the initializers that non-static method decorators registered with
+// addInitializer, with `this` bound to the new instance. Initializers names
+// the hidden binding holding them.
+type RunInitializersStatement struct {
+	Token        *lexer.Token
+	Initializers *Identifier
+}
+
+func (rs *RunInitializersStatement) statementNode()       {}
+func (rs *RunInitializersStatement) TokenLiteral() string { return rs.Token.Literal }
+func (rs *RunInitializersStatement) String() string {
+	return "%runInitializers(" + rs.Initializers.Value + ")"
+}
+
 // --- Expression Nodes ---
 
 // Identifier represents an identifier in the source code.

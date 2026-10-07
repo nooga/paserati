@@ -10,6 +10,8 @@ import (
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -1003,7 +1005,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		return vm.NewString(strings.ToLower(thisStr)), nil
+		return vm.NewString(jsToLower(thisStr)), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("toUpperCase", vm.NewNativeFunction(0, false, "toUpperCase", func(args []vm.Value) (vm.Value, error) {
@@ -1016,7 +1018,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if err != nil {
 			return vm.Undefined, err
 		}
-		return vm.NewString(strings.ToUpper(thisStr)), nil
+		return vm.NewString(jsToUpper(thisStr)), nil
 	}))
 
 	// String.prototype.toLocaleLowerCase - returns string converted to lower case, according to locale
@@ -1031,7 +1033,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		// For now, use simple lower case (proper locale support requires Intl)
-		return vm.NewString(strings.ToLower(thisStr)), nil
+		return vm.NewString(jsToLower(thisStr)), nil
 	}))
 
 	// String.prototype.toLocaleUpperCase - returns string converted to upper case, according to locale
@@ -1046,7 +1048,7 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 		// For now, use simple upper case (proper locale support requires Intl)
-		return vm.NewString(strings.ToUpper(thisStr)), nil
+		return vm.NewString(jsToUpper(thisStr)), nil
 	}))
 
 	// String.prototype.normalize - returns Unicode Normalization Form of the string
@@ -2481,4 +2483,33 @@ func createStringIterator(vmInstance *vm.VM, str string) vm.Value {
 	iterator.SetOwnNonEnumerable("next", makeBuiltinIterNext(vmInstance, state))
 
 	return vm.NewValueFromPlainObject(iterator)
+}
+
+// jsToUpper and jsToLower are the locale-independent full case mappings of
+// String.prototype.toUpperCase/toLowerCase (22.1.3.30-31): they use
+// SpecialCasing.txt's one-to-many mappings (ß -> SS, ﬁ -> FI, İ -> i̇) and
+// the Final_Sigma rule, which unicode.ToUpper's rune-for-rune mapping can't.
+// x/text passes WTF-8 lone surrogates through unchanged. A Caser carries
+// state, so each call builds its own.
+func jsToUpper(s string) string {
+	if isASCII(s) {
+		return strings.ToUpper(s)
+	}
+	return cases.Upper(language.Und).String(s)
+}
+
+func jsToLower(s string) string {
+	if isASCII(s) {
+		return strings.ToLower(s)
+	}
+	return cases.Lower(language.Und).String(s)
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }

@@ -442,6 +442,23 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 	// Store decorators for use by setupClassPrototype
 	c.currentClassDecorators = classDecorators
 
+	// Initializers added by non-static method decorators run for each new
+	// instance, before its fields (#617). Collect them in a hidden binding in
+	// the class scope that the constructor's field initialization reads.
+	prevInstanceInits := c.currentInstanceInitializers
+	c.currentInstanceInitializers = ""
+	defer func() { c.currentInstanceInitializers = prevInstanceInits }()
+	if classDecorators != nil && hasInstanceMethodDecorators(node) {
+		name := "%instanceInitializers"
+		slot := c.AllocSpillSlot()
+		arrReg := c.regAlloc.Alloc()
+		c.emitMakeEmptyArray(arrReg, node.Token.Line)
+		c.emitStoreSpill(slot, arrReg, node.Token.Line)
+		c.regAlloc.Free(arrReg)
+		c.currentSymbolTable.DefineSpilled(name, slot)
+		c.currentInstanceInitializers = name
+	}
+
 	// 2. Create constructor function
 	constructorReg, err := c.compileConstructor(node, superConstructorReg)
 	if err != nil {
@@ -482,8 +499,23 @@ func (c *Compiler) compileClassDeclaration(node *parser.ClassDeclaration, hint R
 		c.regAlloc.Free(cachedProtoReg)
 	}
 
+	// Static fields and blocks see the class through its name (the inner
+	// binding is initialized before static elements are evaluated), so
+	// store the constructor now; step 5 stores it again in case a class
+	// decorator replaced it (#608).
+	if node.Name.Value != "" {
+		if isGlobalClassScope {
+			c.emitSetGlobal(classGlobalIdx, constructorReg, node.Token.Line)
+		} else {
+			c.emitStoreSpill(classSpillSlot, constructorReg, node.Token.Line)
+		}
+	}
+
 	// 4. Set up static members on the constructor
+	prevStaticThis, prevInStatic := c.currentStaticInitializerThis, c.inStaticMemberSetup
+	c.currentStaticInitializerThis, c.inStaticMemberSetup = constructorReg, true
 	err = c.setupStaticMembers(node, constructorReg)
+	c.currentStaticInitializerThis, c.inStaticMemberSetup = prevStaticThis, prevInStatic
 	if err != nil {
 		if prevSymbolTable != nil {
 			c.currentSymbolTable = prevSymbolTable
@@ -1022,6 +1054,14 @@ func flattenCommaExpression(expr parser.Expression) []parser.Expression {
 func (c *Compiler) injectFieldInitializers(node *parser.ClassDeclaration, functionLiteral *parser.FunctionLiteral) (*parser.FunctionLiteral, []parser.Statement) {
 	// Collect field initializer statements
 	var fieldInitializers []parser.Statement
+
+	// Method decorators' instance initializers come first (#617).
+	if c.currentInstanceInitializers != "" {
+		fieldInitializers = append(fieldInitializers, &parser.RunInitializersStatement{
+			Token:        node.Token,
+			Initializers: &parser.Identifier{Token: node.Token, Value: c.currentInstanceInitializers},
+		})
+	}
 
 	// Extract field initializers from class properties
 	// Only include instance (non-static) fields - static fields are initialized separately

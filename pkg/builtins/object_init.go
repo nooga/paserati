@@ -3782,6 +3782,10 @@ func objectAssignWithVM(vmInstance *vm.VM, args []vm.Value) (vm.Value, error) {
 		if source.Type() == vm.TypeNull || source.Type() == vm.TypeUndefined {
 			continue
 		}
+		// ToObject(source): a string contributes its indexed characters (#607)
+		if source.Type() == vm.TypeString {
+			source = vmInstance.NewStringObject(source.ToString())
+		}
 
 		// Get own enumerable properties from source
 		if source.Type() == vm.TypeObject {

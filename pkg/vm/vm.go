@@ -9867,6 +9867,11 @@ startExecution:
 				// Skip - null and undefined contribute no enumerable properties
 				continue
 			}
+			// CopyDataProperties does ToObject(source): a string's indexed
+			// characters are own enumerable properties of its wrapper (#607).
+			if sourceVal.Type() == TypeString {
+				sourceVal = vm.NewStringObject(sourceVal.ToString())
+			}
 
 			// Handle Proxy objects - need to call ownKeys and related traps
 			if sourceVal.Type() == TypeProxy {
@@ -17973,7 +17978,7 @@ startExecution:
 
 			addInitFn := NewNativeFunction(1, false, "addInitializer", func(args []Value) (Value, error) {
 				if len(args) < 1 || !args[0].IsCallable() {
-					return Undefined, fmt.Errorf("addInitializer requires a callable argument")
+					return Undefined, vm.NewTypeError("addInitializer: initializer must be a function")
 				}
 				// Push the function onto the array
 				arr := arrayVal.AsArray()
@@ -17997,12 +18002,15 @@ startExecution:
 				for i := 0; i < arr.Length(); i++ {
 					initFn := arr.Get(i)
 					if initFn.IsCallable() {
-						_, callErr := vm.Call(initFn, thisVal, nil)
-						if callErr != nil {
-							return InterpretRuntimeError, Undefined
-						}
-						if vm.unwinding {
-							return InterpretRuntimeError, Undefined
+						// An initializer's exception propagates like any
+						// other throw; it used to end the script silently
+						// (#617).
+						if _, callErr := vm.Call(initFn, thisVal, nil); callErr != nil {
+							vm.throwFromCallError(callErr)
+							if vm.frameCount == 0 || vm.unwindingCrossedNative {
+								return InterpretRuntimeError, vm.currentException
+							}
+							goto reloadFrame
 						}
 					}
 				}
@@ -19370,9 +19378,11 @@ func (vm *VM) NewStringObject(primitiveValue string) Value {
 	wFalse := false
 	eTrue := true
 	cFalse := false
-	for i, ch := range utf16 {
+	for i := range utf16 {
 		key := strconv.Itoa(i)
-		obj.DefineOwnProperty(key, NewString(string(rune(ch))), &wFalse, &eTrue, &cFalse)
+		// UTF16ToString keeps a lone surrogate half (WTF-8); string(rune(ch))
+		// would turn it into U+FFFD.
+		obj.DefineOwnProperty(key, NewString(UTF16ToString(utf16[i:i+1])), &wFalse, &eTrue, &cFalse)
 	}
 
 	// Add length property (number of UTF-16 code units)

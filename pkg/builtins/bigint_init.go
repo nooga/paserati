@@ -1,8 +1,8 @@
 package builtins
 
 import (
+	"math"
 	"math/big"
-	"strings"
 
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
@@ -174,16 +174,9 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		// Convert argument to primitive BigInt
 		switch arg.Type() {
 		case vm.TypeString:
-			str := strings.TrimSpace(arg.ToString())
-			if str == "" {
-				// Empty string should throw SyntaxError
-				return vm.Undefined, vmInstance.NewSyntaxError("Cannot convert empty string to BigInt")
-			}
-
-			// Try to parse as BigInt
-			bigVal := new(big.Int)
-			if _, ok := bigVal.SetString(str, 0); !ok {
-				return vm.Undefined, vmInstance.NewSyntaxError("Cannot convert string to BigInt")
+			bigVal, ok := vm.StringToBigInt(arg.ToString())
+			if !ok {
+				return vm.Undefined, vmInstance.NewSyntaxError("Cannot convert " + arg.ToString() + " to a BigInt")
 			}
 			return vm.NewBigInt(bigVal), nil
 		case vm.TypeIntegerNumber:
@@ -212,55 +205,30 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 	})
 
 	// Add BigInt static methods
-	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("asIntN", vm.NewNativeFunction(2, false, "asIntN", func(args []vm.Value) (vm.Value, error) {
-		if len(args) < 2 {
-			return vm.Undefined, vmInstance.NewTypeError("BigInt.asIntN requires 2 arguments")
-		}
-
-		bits := int(args[0].ToFloat())
-		bigintVal := args[1]
-
-		if bigintVal.Type() != vm.TypeBigInt {
-			return vm.Undefined, vmInstance.NewTypeError("Cannot convert to BigInt")
-		}
-
-		if bits < 0 {
-			return vm.Undefined, vmInstance.NewRangeError("Invalid bit width")
-		}
-
-		// Truncate to N bits with sign extension
-		val := bigintVal.AsBigInt()
-		result := new(big.Int).Set(val)
-
-		// For now, just return the original value (proper implementation would require bit manipulation)
-		// TODO: Implement proper N-bit signed integer truncation
-		return vm.NewBigInt(result), nil
-	}))
-
-	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("asUintN", vm.NewNativeFunction(2, false, "asUintN", func(args []vm.Value) (vm.Value, error) {
-		if len(args) < 2 {
-			return vm.Undefined, vmInstance.NewTypeError("BigInt.asUintN requires 2 arguments")
-		}
-
-		bits := int(args[0].ToFloat())
-		bigintVal := args[1]
-
-		if bigintVal.Type() != vm.TypeBigInt {
-			return vm.Undefined, vmInstance.NewTypeError("Cannot convert to BigInt")
-		}
-
-		if bits < 0 {
-			return vm.Undefined, vmInstance.NewRangeError("Invalid bit width")
-		}
-
-		// Truncate to N bits without sign extension
-		val := bigintVal.AsBigInt()
-		result := new(big.Int).Set(val)
-
-		// For now, just return the original value (proper implementation would require bit manipulation)
-		// TODO: Implement proper N-bit unsigned integer truncation
-		return vm.NewBigInt(result), nil
-	}))
+	// BigInt.asIntN / asUintN (21.2.2.1-2): wrap to the low `bits` bits,
+	// as a two's-complement signed value or as an unsigned one.
+	asN := func(name string, signed bool) vm.Value {
+		return vm.NewNativeFunction(2, false, name, func(args []vm.Value) (vm.Value, error) {
+			var bitsArg, bigintArg vm.Value = vm.Undefined, vm.Undefined
+			if len(args) > 0 {
+				bitsArg = args[0]
+			}
+			if len(args) > 1 {
+				bigintArg = args[1]
+			}
+			bits, err := toIndexWithVM(vmInstance, bitsArg)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			n, err := toBigIntWithVM(vmInstance, bigintArg)
+			if err != nil {
+				return vm.Undefined, err
+			}
+			return vm.NewBigInt(wrapBigIntBits(n, bits, signed)), nil
+		})
+	}
+	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("asIntN", asN("asIntN", true))
+	bigintConstructor.AsNativeFunctionWithProps().Properties.SetOwnNonEnumerable("asUintN", asN("asUintN", false))
 
 	bigintConstructor.AsNativeFunctionWithProps().Properties.DefineFixedProperty("prototype", vmInstance.BigIntPrototype)
 
@@ -269,4 +237,92 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	// Define BigInt constructor in global scope
 	return ctx.DefineGlobal("BigInt", bigintConstructor)
+}
+
+// wrapBigIntBits returns n modulo 2^bits, read as a signed (two's
+// complement) or unsigned bits-wide integer.
+func wrapBigIntBits(n *big.Int, bits int, signed bool) *big.Int {
+	if bits == 0 {
+		return big.NewInt(0)
+	}
+	// Past this width every BigInt we can hold is already in range; skip
+	// building 2^bits for a huge bits.
+	if n.BitLen() < bits {
+		if !signed && n.Sign() < 0 {
+			// Negative values still wrap: n + 2^bits.
+			mod := new(big.Int).Lsh(big.NewInt(1), uint(bits))
+			return mod.Add(mod, n)
+		}
+		return new(big.Int).Set(n)
+	}
+	mod := new(big.Int).Lsh(big.NewInt(1), uint(bits))
+	r := new(big.Int).Mod(n, mod) // Euclidean: 0 <= r < 2^bits
+	if signed && r.Bit(bits-1) == 1 {
+		r.Sub(r, mod)
+	}
+	return r
+}
+
+// toIndexWithVM is ToIndex (7.1.22): ToIntegerOrInfinity, then a RangeError
+// outside [0, 2^53-1].
+func toIndexWithVM(vmInstance *vm.VM, v vm.Value) (int, error) {
+	if v.Type() == vm.TypeUndefined {
+		return 0, nil
+	}
+	if v.Type() == vm.TypeSymbol {
+		return 0, vmInstance.NewTypeError("Cannot convert a Symbol value to a number")
+	}
+	if v.Type() == vm.TypeBigInt {
+		return 0, vmInstance.NewTypeError("Cannot convert a BigInt value to a number")
+	}
+	vmInstance.EnterHelperCall()
+	f := vmInstance.ToNumber(v)
+	vmInstance.ExitHelperCall()
+	if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+		return 0, ErrVMUnwinding
+	}
+	if math.IsNaN(f) {
+		f = 0
+	}
+	f = math.Trunc(f)
+	if f < 0 || f > maxSafeInteger {
+		return 0, vmInstance.NewRangeError("Invalid value: not (convertible to) a safe integer")
+	}
+	return int(f), nil
+}
+
+// toBigIntWithVM is ToBigInt (7.1.13): ToPrimitive(number), then BigInt
+// and boolean pass, strings parse with StringToBigInt (SyntaxError if they
+// don't), and everything else is a TypeError.
+func toBigIntWithVM(vmInstance *vm.VM, v vm.Value) (*big.Int, error) {
+	if v.IsObject() || v.IsCallable() {
+		vmInstance.EnterHelperCall()
+		v = vmInstance.ToPrimitive(v, "number")
+		vmInstance.ExitHelperCall()
+		if vmInstance.IsUnwinding() || vmInstance.IsHandlerFound() {
+			return nil, ErrVMUnwinding
+		}
+	}
+	switch v.Type() {
+	case vm.TypeBigInt:
+		return v.AsBigInt(), nil
+	case vm.TypeBoolean:
+		if v.AsBoolean() {
+			return big.NewInt(1), nil
+		}
+		return big.NewInt(0), nil
+	case vm.TypeString:
+		n, ok := vm.StringToBigInt(v.ToString())
+		if !ok {
+			return nil, vmInstance.NewSyntaxError("Cannot convert " + v.ToString() + " to a BigInt")
+		}
+		return n, nil
+	case vm.TypeUndefined:
+		return nil, vmInstance.NewTypeError("Cannot convert undefined to a BigInt")
+	case vm.TypeNull:
+		return nil, vmInstance.NewTypeError("Cannot convert null to a BigInt")
+	case vm.TypeSymbol:
+		return nil, vmInstance.NewTypeError("Cannot convert a Symbol value to a BigInt")
+	}
+	return nil, vmInstance.NewTypeError("Cannot convert " + v.ToString() + " to a BigInt")
 }

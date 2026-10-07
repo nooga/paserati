@@ -303,9 +303,11 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 			}
 			return vm.NewBigInt(big.NewInt(0)), nil
 		case vm.TypeString:
-			// Parse string as BigInt - for now, just use 0 for invalid strings
-			// TODO: Implement proper BigInt parsing from string
-			return vm.NewBigInt(big.NewInt(0)), nil
+			n, ok := vm.StringToBigInt(val.ToString())
+			if !ok {
+				return vm.Undefined, vmInstance.NewSyntaxError("Cannot convert " + val.ToString() + " to a BigInt")
+			}
+			return vm.NewBigInt(n), nil
 		default:
 			// Objects: call ToPrimitive("number") first, which may run a
 			// user-defined valueOf()/toString() - bracketed so a thrown

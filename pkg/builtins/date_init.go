@@ -1513,45 +1513,6 @@ func thisTimeValue(vmInstance *vm.VM, dateValue vm.Value) (float64, error) {
 
 // getDateTimestamp is a legacy helper that returns (timestamp, ok).
 // For new code, prefer thisTimeValue which properly throws TypeError.
-// parseDateString turns a date string into a timestamp, returning NaN for
-// anything it cannot parse - the spec's "unrecognizable String" result.
-//
-// Shared by `new Date(string)` and Date.parse, which per spec 21.4.3.2 must
-// accept exactly the same formats. They did not: the constructor had its own
-// shorter ladder, so new Date("01/02/2006") and new Date("January 2, 2006")
-// were Invalid Date while Date.parse of the same strings worked.
-//
-// It also replaces a float64(0x7FF8000000000000) the constructor used to store
-// for an unparseable string: that converts the NaN bit pattern as an *integer*,
-// producing ~9.22e18 rather than a NaN, so the result read as a real timestamp
-// instead of an Invalid Date.
-func parseDateString(dateStr string) float64 {
-	// UTC formats first per ECMAScript spec; year-only and date-only default to UTC.
-	if parsedTime, err := time.Parse(time.RFC3339, dateStr); err == nil {
-		return float64(parsedTime.UnixMilli())
-	}
-	if parsedTime, err := time.Parse("2006-01-02T15:04:05Z", dateStr); err == nil {
-		return float64(parsedTime.UnixMilli())
-	}
-	if parsedTime, err := time.Parse("2006-01-02", dateStr); err == nil {
-		return float64(parsedTime.UTC().UnixMilli())
-	}
-	if parsedTime, err := time.Parse("2006", dateStr); err == nil {
-		// Year-only defaults to January 1st UTC
-		return float64(parsedTime.UTC().UnixMilli())
-	}
-	// Other common formats, interpreted as local time.
-	for _, format := range []string{
-		"01/02/2006",
-		"January 2, 2006",
-	} {
-		if parsedTime, err := time.Parse(format, dateStr); err == nil {
-			return float64(parsedTime.UnixMilli())
-		}
-	}
-	return math.NaN()
-}
-
 func getDateTimestamp(dateValue vm.Value) (float64, bool) {
 	if dateValue.Type() == vm.TypeObject {
 		obj := dateValue.AsPlainObject()
