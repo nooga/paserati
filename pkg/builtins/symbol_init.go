@@ -13,23 +13,23 @@ var (
 	symbolRegistryMutex  sync.RWMutex
 )
 
-// Well-known symbols
+// Well-known symbols: the process-wide singletons (see vm.WellKnownSymbols).
 var (
-	SymbolIterator           vm.Value
-	SymbolToStringTag        vm.Value
-	SymbolHasInstance        vm.Value
-	SymbolToPrimitive        vm.Value
-	SymbolIsConcatSpreadable vm.Value
-	SymbolSpecies            vm.Value
-	SymbolMatch              vm.Value
-	SymbolMatchAll           vm.Value
-	SymbolReplace            vm.Value
-	SymbolSearch             vm.Value
-	SymbolSplit              vm.Value
-	SymbolUnscopables        vm.Value
-	SymbolAsyncIterator      vm.Value
-	SymbolDispose            vm.Value
-	SymbolAsyncDispose       vm.Value
+	SymbolIterator           = vm.WellKnownSymbols.Iterator
+	SymbolToStringTag        = vm.WellKnownSymbols.ToStringTag
+	SymbolHasInstance        = vm.WellKnownSymbols.HasInstance
+	SymbolToPrimitive        = vm.WellKnownSymbols.ToPrimitive
+	SymbolIsConcatSpreadable = vm.WellKnownSymbols.IsConcatSpreadable
+	SymbolSpecies            = vm.WellKnownSymbols.Species
+	SymbolMatch              = vm.WellKnownSymbols.Match
+	SymbolMatchAll           = vm.WellKnownSymbols.MatchAll
+	SymbolReplace            = vm.WellKnownSymbols.Replace
+	SymbolSearch             = vm.WellKnownSymbols.Search
+	SymbolSplit              = vm.WellKnownSymbols.Split
+	SymbolUnscopables        = vm.WellKnownSymbols.Unscopables
+	SymbolAsyncIterator      = vm.WellKnownSymbols.AsyncIterator
+	SymbolDispose            = vm.WellKnownSymbols.Dispose
+	SymbolAsyncDispose       = vm.WellKnownSymbols.AsyncDispose
 )
 
 type SymbolInitializer struct{}
@@ -197,44 +197,6 @@ func (s *SymbolInitializer) InitRuntime(ctx *RuntimeContext) error {
 			vm.NewString("Symbol"),
 			&wFalse, &eFalse, &cTrue,
 		)
-	}
-
-	// Initialize well-known symbols - reuse existing ones if already created
-	// This ensures symbols are true singletons across VM resets
-	if vmInstance.SymbolIterator.Type() != vm.TypeSymbol {
-		// First initialization - create new symbols
-		SymbolIterator = vm.NewSymbol("Symbol.iterator")
-		SymbolToStringTag = vm.NewSymbol("Symbol.toStringTag")
-		SymbolHasInstance = vm.NewSymbol("Symbol.hasInstance")
-		SymbolToPrimitive = vm.NewSymbol("Symbol.toPrimitive")
-		SymbolIsConcatSpreadable = vm.NewSymbol("Symbol.isConcatSpreadable")
-		SymbolSpecies = vm.NewSymbol("Symbol.species")
-		SymbolMatch = vm.NewSymbol("Symbol.match")
-		SymbolMatchAll = vm.NewSymbol("Symbol.matchAll")
-		SymbolReplace = vm.NewSymbol("Symbol.replace")
-		SymbolSearch = vm.NewSymbol("Symbol.search")
-		SymbolSplit = vm.NewSymbol("Symbol.split")
-		SymbolUnscopables = vm.NewSymbol("Symbol.unscopables")
-		SymbolAsyncIterator = vm.NewSymbol("Symbol.asyncIterator")
-		SymbolDispose = vm.NewSymbol("Symbol.dispose")
-		SymbolAsyncDispose = vm.NewSymbol("Symbol.asyncDispose")
-	} else {
-		// Reuse ALL existing symbols from VM (all are now stored as singletons)
-		SymbolIterator = vmInstance.SymbolIterator
-		SymbolToStringTag = vmInstance.SymbolToStringTag
-		SymbolToPrimitive = vmInstance.SymbolToPrimitive
-		SymbolHasInstance = vmInstance.SymbolHasInstance
-		SymbolIsConcatSpreadable = vmInstance.SymbolIsConcatSpreadable
-		SymbolSpecies = vmInstance.SymbolSpecies
-		SymbolMatch = vmInstance.SymbolMatch
-		SymbolMatchAll = vmInstance.SymbolMatchAll
-		SymbolReplace = vmInstance.SymbolReplace
-		SymbolSearch = vmInstance.SymbolSearch
-		SymbolSplit = vmInstance.SymbolSplit
-		SymbolUnscopables = vmInstance.SymbolUnscopables
-		SymbolAsyncIterator = vmInstance.SymbolAsyncIterator
-		SymbolDispose = vmInstance.SymbolDispose
-		SymbolAsyncDispose = vmInstance.SymbolAsyncDispose
 	}
 
 	// Add static methods

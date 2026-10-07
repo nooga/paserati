@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/nooga/paserati/pkg/builtins"
 	"github.com/nooga/paserati/pkg/parser"
@@ -9,8 +10,9 @@ import (
 )
 
 // Global environment for prototype method resolution
-// This is shared with type_utils.go
-var globalEnvironment *Environment
+// This is shared with type_utils.go. Atomic because independent checkers
+// on other goroutines replace it (#606).
+var globalEnvironment atomic.Pointer[Environment]
 
 // --- NEW: Symbol Information ---
 type SymbolInfo struct {
@@ -161,7 +163,7 @@ func NewGlobalEnvironment(initializers []builtins.BuiltinInitializer) *Environme
 
 	// Set this as the global environment for prototype method resolution
 	// Note: This is used by the types package for property resolution
-	globalEnvironment = env
+	globalEnvironment.Store(env)
 
 	return env
 }

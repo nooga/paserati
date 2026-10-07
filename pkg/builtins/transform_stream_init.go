@@ -66,7 +66,6 @@ func (t *TransformStreamInitializer) InitRuntime(ctx *RuntimeContext) error {
 	vmInstance := ctx.VM
 
 	streamProto := vm.NewObject(vmInstance.ObjectPrototype).AsPlainObject()
-	transformStreamProto = streamProto
 
 	ctorFn := func(args []vm.Value) (vm.Value, error) {
 		var transformer vm.Value = vm.Undefined
@@ -120,8 +119,8 @@ func (t *TransformStreamInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vmInstance.NewResolvedPromise(vm.Undefined)
 		}
 
-		readableVal := createReadableStreamObject(vmInstance, readableState, readableStreamProto, readableStreamReaderProto)
-		writableVal := createWritableStreamObject(vmInstance, writableState, writableStreamProto)
+		readableVal := createReadableStreamObject(vmInstance, readableState, vmInstance.ReadableStreamPrototype, vmInstance.ReadableStreamReaderPrototype)
+		writableVal := createWritableStreamObject(vmInstance, writableState, vmInstance.WritableStreamPrototype)
 
 		obj := vm.NewObject(vm.NewValueFromPlainObject(streamProto)).AsPlainObject()
 		obj.SetOwnNonEnumerable("readable", readableVal)
@@ -146,10 +145,6 @@ func (t *TransformStreamInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	return ctx.DefineGlobal("TransformStream", ctor)
 }
-
-// Package-level prototype, set once during InitRuntime - see the identical
-// convention on readableStreamProto/writableStreamProto.
-var transformStreamProto *vm.PlainObject
 
 // callAlgorithmIfPresent looks up an optional hook (transformer.flush, etc.)
 // and calls it if present and callable, wrapping the result the same way

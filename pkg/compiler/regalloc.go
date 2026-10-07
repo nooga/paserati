@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"sync/atomic"
 	"sort"
 )
 
@@ -111,7 +112,7 @@ func (ra *RegisterAllocator) TryAllocForParam() (Register, bool) {
 // RegisterAllocator manages the allocation of registers within a function scope.
 // This initial implementation uses a simple stack-like allocation.
 // Global counter for allocator IDs
-var allocatorIDCounter int32 = 0
+var allocatorIDCounter atomic.Int32
 
 type RegisterAllocator struct {
 	allocatorID int32    // Unique ID for debugging
@@ -140,8 +141,7 @@ type RegisterAllocator struct {
 
 // NewRegisterAllocator creates a new allocator for a scope (e.g., a function).
 func NewRegisterAllocator() *RegisterAllocator {
-	id := allocatorIDCounter
-	allocatorIDCounter++
+	id := allocatorIDCounter.Add(1) - 1
 	return &RegisterAllocator{
 		allocatorID: id,
 		nextReg:     0,
