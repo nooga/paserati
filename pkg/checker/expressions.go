@@ -473,7 +473,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			}
 
 			// Check if the type can be spread (is an object type)
-			widenedType := types.GetWidenedType(argType)
+			widenedType := c.apparentType(types.GetWidenedType(argType))
 			if !c.mergeSpreadOperand(fields, widenedType) {
 				c.addErrorWithCode(key.Argument, errors.TS2698, "Spread types may only be created from object types.")
 			}
@@ -1230,7 +1230,16 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			break
 		}
 		switch ro.InnerType.(type) {
-		case *types.ObjectType, *types.ArrayType, *types.TupleType:
+		case *types.ObjectType:
+		case *types.ArrayType, *types.TupleType:
+			// `readonly T[]` reads like `T[]` minus the mutators (#637).
+			if readonlyArrayMutators[propertyName] {
+				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, ro.String()))
+				node.SetComputedType(types.Any) // already reported; don't cascade
+				return
+			}
+			widenedObjectType = ro.InnerType
+			continue
 		default:
 			widenedObjectType = types.GetWidenedType(ro.InnerType)
 			continue
@@ -1375,7 +1384,12 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			}
 		case *types.IntersectionType:
 			// Handle property access on intersection types
-			propType := c.getPropertyTypeFromIntersection(obj, propertyName)
+			var propType types.Type
+			if apparent, ok := c.apparentType(obj).(*types.IntersectionType); ok {
+				propType = c.getPropertyTypeFromIntersection(apparent, propertyName)
+			} else {
+				propType = c.getPropertyTypeFromType(c.apparentType(obj), propertyName, false)
+			}
 			if propType == types.Never {
 				c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on intersection type %s", propertyName, obj.String()))
 			}
@@ -1419,6 +1433,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				debugPrintf("// [Checker MemberExpr] Mapped type expanded to ObjectType: %s\n", expandedObj.String())
 				if propType, exists := expandedObj.Properties[propertyName]; exists {
 					resultType = propType
+					if expandedObj.IsPropertyOptional(propertyName) {
+						resultType = types.NewUnionType(propType, types.Undefined)
+					}
 					debugPrintf("// [Checker MemberExpr] Found property '%s' in expanded type: %s\n", propertyName, propType.String())
 				} else {
 					// Check index signatures before reporting error
@@ -2103,7 +2120,10 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 	propertyName := c.extractPropertyName(node.Property)
 
 	// 3. Widen the object type for checks
-	widenedObjectType := types.GetWidenedType(objectType)
+	widenedObjectType := c.apparentType(types.GetWidenedType(objectType))
+	if ro, ok := widenedObjectType.(*types.ReadonlyType); ok {
+		widenedObjectType = types.GetWidenedType(ro.InnerType)
+	}
 
 	var baseResultType types.Type = types.Never // Default to Never if property not found/invalid access
 
@@ -2167,6 +2187,8 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 		case *types.ArrayType:
 			if propertyName == "length" {
 				baseResultType = types.Number // Array.length is number
+			} else if methodType := c.env.GetPrimitivePrototypeMethodType("array", propertyName); methodType != nil {
+				baseResultType = c.instantiateGenericMethod(methodType, obj.ElementType)
 			} else {
 				// Array methods should be resolved through the builtins system
 				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
@@ -2699,6 +2721,11 @@ func (c *Checker) checkTypeAssertionExpression(node *parser.TypeAssertionExpress
 		c.checkDuplicateTypeAssertionProperties(node.TargetType)
 	}
 
+	if isConstAssertionTarget(node.TargetType) {
+		node.SetComputedType(constAssertionType(node.Expression))
+		return
+	}
+
 	// Resolve the target type
 	targetType := c.resolveTypeAnnotation(node.TargetType)
 	if targetType == nil {
@@ -2882,7 +2909,7 @@ func (c *Checker) checkInOperator(leftType, rightType types.Type, node *parser.I
 	}
 
 	// Right operand (object) should be an object type
-	if rightType != types.Any && !c.isObjectType(rightType) {
+	if rightType != types.Any && !c.isObjectType(c.apparentType(rightType)) {
 		c.addError(node.Right, fmt.Sprintf("the right-hand side of 'in' must be an object, but got '%s'", rightType.String()))
 	}
 }

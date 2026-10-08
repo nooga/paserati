@@ -1590,6 +1590,11 @@ func (c *Checker) applyTypeNarrowingFromCondition(condition parser.Expression) *
 		return c.applyMemberTruthinessNarrowing(memberExpr)
 	}
 
+	// A truthy optional chain `a.b?.c` also proves its receivers non-nullish.
+	if chain, ok := condition.(*parser.OptionalChainingExpression); ok {
+		return c.narrowNonNullish(chain)
+	}
+
 	// Handle single type guard expressions
 	guard := c.detectTypeGuard(condition)
 	return c.applyTypeNarrowing(guard)
@@ -2366,4 +2371,40 @@ func isNarrowingMarker(t types.Type) bool {
 		return true
 	}
 	return false
+}
+
+// narrowNonNullish narrows a truthy reference to non-nullish. For an optional
+// chain that covers every receiver in it too: when `a.b?.c` is truthy, `a.b`
+// was not nullish and `a.b.c` is not either (#635).
+func (c *Checker) narrowNonNullish(expr parser.Expression) *Environment {
+	switch e := expr.(type) {
+	case *parser.Identifier:
+		return c.applyTruthinessNarrowing(e.Value)
+	case *parser.MemberExpression:
+		return c.applyMemberTruthinessNarrowing(e)
+	case *parser.OptionalChainingExpression:
+		receiverEnv := c.narrowNonNullish(e.Object)
+		key := expressionToNarrowingKey(e)
+		if key == "" {
+			return receiverEnv
+		}
+		saved := c.env
+		if receiverEnv != nil {
+			c.env = receiverEnv
+		}
+		defer func() { c.env = saved }()
+		c.visit(e)
+		t := e.GetComputedType()
+		if t == nil {
+			return receiverEnv
+		}
+		nonNullish := types.RemoveNullishTypes(t)
+		if nonNullish == nil || nonNullish == types.Never || nonNullish.Equals(t) {
+			return receiverEnv
+		}
+		env := NewEnclosedEnvironment(c.env)
+		env.narrowings[key] = nonNullish
+		return env
+	}
+	return nil
 }

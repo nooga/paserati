@@ -136,11 +136,17 @@ func NewUnionType(ts ...Type) Type {
 		return Never
 	}
 
-	// any absorbs all other types: any | T => any
+	// any absorbs all other types: any | T => any; unknown absorbs all but
+	// any: unknown | T => unknown (#638).
+	hasUnknown := false
 	for _, m := range uniqueMembers {
 		if m == Any {
 			return Any
 		}
+		hasUnknown = hasUnknown || m == Unknown
+	}
+	if hasUnknown {
+		return Unknown
 	}
 
 	if len(uniqueMembers) == 1 {

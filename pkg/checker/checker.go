@@ -370,6 +370,11 @@ type Checker struct {
 	// See flow_narrowing.go.
 	flowNarrowOverlay map[string]types.Type
 
+	// returnContexts holds the contextual type a generic call's result is
+	// expected to have, for inferring type parameters that no argument
+	// determines (`const xs: string[] = from()`).
+	returnContexts map[*parser.CallExpression]types.Type
+
 	// --- Loop/switch/label context (reset when entering a new function scope) ---
 	loopDepth    int             // depth of enclosing iteration statements in current function
 	switchDepth  int             // depth of enclosing switch statements in current function
@@ -907,6 +912,9 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 		var finalInferredType types.Type
 		if isEmptyArrayAssignment {
 			finalInferredType = computedInitializerType // Keep unknown[] type
+		} else if isConstAssertion(initializer) {
+			// `as const` opts out of widening (#638).
+			finalInferredType = computedInitializerType
 		} else if _, isBareLiteral := computedInitializerType.(*types.LiteralType); isBareLiteral && !isFreshLiteralExpression(initializer) {
 			// A bare literal type computed from something other than literal
 			// syntax (e.g. `a || "foo"` collapsing via subtype reduction) isn't
@@ -2849,6 +2857,7 @@ func (c *Checker) visit(node parser.Node) {
 			if narrowType, ok := c.flowNarrowOverlay[node.Value]; ok {
 				typ = narrowType
 			}
+			typ = c.resolveDeferredTypeofIndex(typ, true)
 
 			// node is guaranteed non-nil here
 			node.SetComputedType(typ)
@@ -3133,9 +3142,11 @@ func (c *Checker) visit(node parser.Node) {
 		// 2. Detect type guards in the condition
 		typeGuard := c.detectTypeGuard(node.Condition)
 
-		// 3. Check Consequence expression (potentially with narrowed environment)
+		// 3. Check Consequence expression (potentially with narrowed environment),
+		// narrowed the way an if statement's consequence is: that also covers
+		// truthiness (`rate ? rate * 2 : 0`) and compound conditions (#635).
 		originalEnv := c.env
-		narrowedEnv := c.applyTypeNarrowing(typeGuard)
+		narrowedEnv := c.applyTypeNarrowingWithFallback(node.Condition)
 
 		if narrowedEnv != nil {
 			debugPrintf("// [Checker TernaryExpr] Applying type narrowing in consequence expression\n")
@@ -4030,6 +4041,13 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		c.checkObjectLiteralWithContext(node, context)
 	case *parser.ArrowFunctionLiteral:
 		c.checkArrowFunctionLiteralWithContext(node, context)
+	case *parser.CallExpression:
+		if c.returnContexts == nil {
+			c.returnContexts = map[*parser.CallExpression]types.Type{}
+		}
+		c.returnContexts[node] = context.ExpectedType
+		c.visit(node)
+		delete(c.returnContexts, node)
 	case *parser.InfixExpression:
 		// The expected type only ever reaches the operand that decides the
 		// expression's value in context: for `&&`/`||`/`??` that is the right

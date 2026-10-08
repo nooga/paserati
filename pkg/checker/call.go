@@ -1264,6 +1264,21 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 	allConstraints := c.collectTypeParameterConstraints(genericSig, argTypes)
 	solution := c.solveTypeParameterConstraints(allConstraints)
 
+	// Type parameters no argument determines are inferred from the type the
+	// call's result is expected to have, at lower priority than arguments.
+	if expected := c.returnContexts[callNode]; expected != nil && expected != types.Any && genericSig.ReturnType != nil {
+		retSig := &types.Signature{ParameterTypes: []types.Type{genericSig.ReturnType}}
+		retConstraints := c.collectTypeParameterConstraints(retSig, []types.Type{stripReadonlyArrays(expected)})
+		for tp, t := range c.solveTypeParameterConstraints(retConstraints) {
+			if _, have := solution[tp]; !have {
+				if solution == nil {
+					solution = map[*types.TypeParameter]types.Type{}
+				}
+				solution[tp] = t
+			}
+		}
+	}
+
 	if len(solution) == 0 {
 		debugPrintf("// [Checker Inference] No type parameters could be inferred\n")
 		return nil // Inference failed

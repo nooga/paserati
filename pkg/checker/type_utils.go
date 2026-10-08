@@ -244,3 +244,67 @@ func noSubstitutionTemplateText(node *parser.TemplateLiteral) (string, bool) {
 	}
 	return sb.String(), true
 }
+
+// readonlyArrayMutators are the Array.prototype methods ReadonlyArray<T>
+// leaves out.
+var readonlyArrayMutators = map[string]bool{
+	"push": true, "pop": true, "shift": true, "unshift": true, "splice": true,
+	"sort": true, "reverse": true, "fill": true, "copyWithin": true,
+}
+
+// apparentType is the type whose members a read of t sees: a mapped type
+// (Record<string, T>, Readonly<T>, ...) as its expanded object form, and an
+// intersection with each member so expanded (#634).
+func (c *Checker) apparentType(t types.Type) types.Type {
+	switch tt := t.(type) {
+	case *types.MappedType, *types.InstantiatedType:
+		if e := c.expandIfMappedType(t); e != nil {
+			return e
+		}
+	case *types.IntersectionType:
+		changed := false
+		members := make([]types.Type, len(tt.Types))
+		for i, m := range tt.Types {
+			members[i] = c.apparentType(m)
+			changed = changed || members[i] != m
+		}
+		if changed {
+			return types.NewIntersectionType(members...)
+		}
+	case *types.UnionType:
+		changed := false
+		members := make([]types.Type, len(tt.Types))
+		for i, m := range tt.Types {
+			members[i] = c.apparentType(m)
+			changed = changed || members[i] != m
+		}
+		if changed {
+			return types.NewUnionType(members...)
+		}
+	}
+	return t
+}
+
+// stripReadonlyArrays turns `readonly T[]` / `readonly [A, B]`, alone or as
+// union members, into their mutable forms, for positions that only read the
+// elements (iteration).
+func stripReadonlyArrays(t types.Type) types.Type {
+	switch tt := t.(type) {
+	case *types.ReadonlyType:
+		switch tt.InnerType.(type) {
+		case *types.ArrayType, *types.TupleType:
+			return tt.InnerType
+		}
+	case *types.UnionType:
+		changed := false
+		members := make([]types.Type, len(tt.Types))
+		for i, m := range tt.Types {
+			members[i] = stripReadonlyArrays(m)
+			changed = changed || members[i] != m
+		}
+		if changed {
+			return types.NewUnionType(members...)
+		}
+	}
+	return t
+}
