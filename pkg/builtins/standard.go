@@ -84,6 +84,8 @@ func GetStandardInitializers() []BuiltinInitializer {
 	initializers = append(initializers, &BigUint64ArrayInitializer{})
 	initializers = append(initializers, &AtomicsInitializer{})
 	initializers = append(initializers, &TextEncoderInitializer{})
+	initializers = append(initializers, &WebGlobalsInitializer{})
+	initializers = append(initializers, &URLInitializer{})
 	initializers = append(initializers, &TextDecoderInitializer{})
 
 	// Paserati intrinsics (compile-time type reflection)
