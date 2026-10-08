@@ -342,7 +342,7 @@ func (s *StringInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("toLocaleLowerCase", types.NewOptionalFunction([]types.Type{types.String}, types.String, []bool{true})).
 		WithProperty("toLocaleUpperCase", types.NewOptionalFunction([]types.Type{types.String}, types.String, []bool{true})).
 		WithProperty("normalize", types.NewOptionalFunction([]types.Type{types.String}, types.String, []bool{true})).
-		WithProperty("localeCompare", types.NewSimpleFunction([]types.Type{types.String}, types.Number)).
+		WithProperty("localeCompare", types.NewOptionalFunction([]types.Type{types.String, types.Any, types.Any}, types.Number, []bool{false, true, true})).
 		WithProperty("trim", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("trimStart", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("trimEnd", types.NewSimpleFunction([]types.Type{}, types.String)).
@@ -1097,19 +1097,16 @@ func (s *StringInitializer) InitRuntime(ctx *RuntimeContext) error {
 			return vm.Undefined, err
 		}
 
-		if len(args) < 1 {
-			return vm.NumberValue(0), nil
+		that, err := getStringValueWithVM(vmInstance, intlArg(args, 0))
+		if err != nil {
+			return vm.Undefined, err
 		}
-
-		compareStr := args[0].ToString()
-
-		// Simple comparison (proper locale support requires Intl.Collator)
-		if thisStr < compareStr {
-			return vm.NumberValue(-1), nil
-		} else if thisStr > compareStr {
-			return vm.NumberValue(1), nil
+		// ECMA-402: compare as new Intl.Collator(locales, options) would.
+		c, err := intlCollatorFor(vmInstance, intlArg(args, 1), intlArg(args, 2))
+		if err != nil {
+			return intlAbrupt(err)
 		}
-		return vm.NumberValue(0), nil
+		return vm.NumberValue(float64(c.compare(thisStr, that))), nil
 	}))
 
 	stringProto.SetOwnNonEnumerable("trim", vm.NewNativeFunction(0, false, "trim", func(args []vm.Value) (vm.Value, error) {

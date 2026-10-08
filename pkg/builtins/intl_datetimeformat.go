@@ -87,8 +87,13 @@ func intlResolveLocaleKeys(requested []string, available func(string) bool, keys
 	for _, key := range keys {
 		value, fromExt := "", ""
 		if foundRequested != "" {
-			if v, ok := intlUnicodeExtensionValue(foundRequested, key); ok && v != "" && supported[key](v) {
-				value, fromExt = v, v
+			if v, ok := intlUnicodeExtensionValue(foundRequested, key); ok {
+				if v == "" {
+					v = "true" // a keyword without a value means "true" (UTS #35)
+				}
+				if supported[key](v) {
+					value, fromExt = v, v
+				}
 			}
 		}
 		if opt := options[key]; opt == intlNullOption {
@@ -96,7 +101,11 @@ func intlResolveLocaleKeys(requested []string, available func(string) bool, keys
 		} else if opt != "" && supported[key](opt) && opt != value {
 			value, fromExt = opt, ""
 		}
-		if fromExt != "" {
+		switch fromExt {
+		case "":
+		case "true":
+			ext = append(ext, key)
+		default:
 			ext = append(ext, key, fromExt)
 		}
 		values[key] = value

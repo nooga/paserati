@@ -312,6 +312,10 @@ type VM struct {
 	IntlCollatorPrototype         Value // %Intl.Collator.prototype%
 	IntlPluralRulesPrototype      Value // %Intl.PluralRules.prototype%
 	IntlListFormatPrototype       Value // %Intl.ListFormat.prototype%
+	// IntlCache is the Intl builtins' per-VM cache (e.g. localeCompare's
+	// collators), opaque to the VM; per VM so VMs on different goroutines
+	// never share one.
+	IntlCache                     any
 	GeneratorPrototype            Value
 	AsyncGeneratorPrototype       Value
 	AsyncIteratorPrototype        Value // %AsyncIteratorPrototype%
