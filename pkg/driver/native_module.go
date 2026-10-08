@@ -907,7 +907,8 @@ func goFunctionToTSType(fn interface{}) types.Type {
 // rest parameter, and a trailing run of pointer parameters is optional,
 // since a missing argument arrives as the zero value, nil. The result is
 // the first return value (the error of a (T, error) pair throws instead),
-// and a pointer result can be null.
+// and a pointer result can be null, unless it comes with an error: by Go
+// convention the T of a (*T, error) is non-nil when there is no error.
 func goSignatureToTSSignature(fnType reflect.Type, skip int, seen map[reflect.Type]types.Type) *types.Signature {
 	n := fnType.NumIn()
 	fixed := n
@@ -926,7 +927,13 @@ func goSignatureToTSSignature(fnType reflect.Type, skip int, seen map[reflect.Ty
 		optional[i] = true
 	}
 	var ret types.Type = types.Void
-	if fnType.NumOut() > 0 && !(fnType.NumOut() == 1 && fnType.Out(0) == errorType) {
+	switch {
+	case fnType.NumOut() == 1 && fnType.Out(0) == errorType:
+	case fnType.NumOut() == 2 && fnType.Out(1) == errorType:
+		// (T, error): T is valid whenever there is no error, so a pointer
+		// is not null by convention.
+		ret = goTypeToTSTypeSeen(fnType.Out(0), seen)
+	case fnType.NumOut() > 0:
 		ret = goResultToTSType(fnType.Out(0), seen)
 	}
 	sig := types.SigOptional(params, ret, optional)
