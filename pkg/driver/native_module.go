@@ -1082,7 +1082,7 @@ func goTypeToTSTypeSeen(t reflect.Type, seen map[reflect.Type]types.Type) types.
 		}
 		// Methods, named as bindStructMethods binds them (lower-cased first
 		// letter), without the receiver.
-		ptr := reflect.PtrTo(t)
+		ptr := reflect.PointerTo(t)
 		for i := 0; i < ptr.NumMethod(); i++ {
 			method := ptr.Method(i)
 			jsName := strings.ToLower(method.Name[:1]) + method.Name[1:]
