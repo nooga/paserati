@@ -206,6 +206,7 @@ func (c *Checker) checkTopLevelVarLikeDeclarators(declarations []*parser.VarDecl
 		if d == nil || d.Name == nil {
 			continue
 		}
+		c.settlePendingInit(d.Name.Value)
 		// A function literal initializer was fully handled by Pass 2/3.
 		value := d.Value
 		if _, isFn := value.(*parser.FunctionLiteral); isFn {

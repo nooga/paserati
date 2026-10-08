@@ -1709,6 +1709,7 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 	}
 
 	// Resolve the first segment from the environment.
+	c.inferPendingInit(path[0])
 	varType, _, found := c.env.Resolve(path[0])
 	if found {
 		varType = c.checkNamespaceUsedAsValue(&parser.Identifier{Token: node.Token, Value: path[0]}, varType)
@@ -1765,6 +1766,7 @@ func (c *Checker) resolveTypeofTypeIfNeeded(t types.Type) types.Type {
 		debugPrintf("// [Checker resolveTypeofTypeIfNeeded] Resolving forward reference for typeof %s\n", typeofType.Identifier)
 
 		// Look up the identifier in the environment
+		c.inferPendingInit(typeofType.Identifier)
 		varType, _, found := c.env.Resolve(typeofType.Identifier)
 		if found {
 			debugPrintf("// [Checker resolveTypeofTypeIfNeeded] Successfully resolved typeof %s to %T\n", typeofType.Identifier, varType)
