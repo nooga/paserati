@@ -88,6 +88,20 @@ func (s *SetInitializer) InitTypes(ctx *TypeContext) error {
 		return err
 	}
 
+	// ReadonlySet<T>: Set<T> without the mutating methods
+	readonlyBody := types.NewObjectType()
+	for name, propType := range setInstanceType.Properties {
+		switch name {
+		case "add", "delete", "clear":
+		default:
+			readonlyBody.WithProperty(name, propType)
+		}
+	}
+	readonlySet := &types.GenericType{Name: "ReadonlySet", TypeParameters: []*types.TypeParameter{tParam}, Body: readonlyBody}
+	if err := ctx.DefineTypeAlias("ReadonlySet", readonlySet); err != nil {
+		return err
+	}
+
 	// Also define the type alias for type annotations like Set<string>
 	return ctx.DefineTypeAlias("Set", setType)
 }

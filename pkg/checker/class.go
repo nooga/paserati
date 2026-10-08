@@ -918,6 +918,8 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 // checkMethodBodiesInInstance performs a final pass to check all method bodies
 // after the complete instance type (with all properties) has been built
 func (c *Checker) checkMethodBodiesInInstance(className string, body *parser.ClassBody, instanceType *types.ObjectType) {
+	c.resolveTypeofInMembers(instanceType)
+
 	// Set up context for method body checking
 	prevInstanceType := c.currentClassInstanceType
 	c.currentClassInstanceType = instanceType
@@ -2479,4 +2481,26 @@ func (c *Checker) inheritStaticMembers(constructorType, instanceType *types.Obje
 		}
 	}
 	constructorType.BaseTypes = append(constructorType.BaseTypes, baseCtor)
+}
+
+// resolveTypeofInMembers resolves `typeof x` queries (and conditional types
+// waiting on them, like `ReturnType<typeof x>`) that member annotations could
+// not resolve while the class was hoisted, before x had a type.
+func (c *Checker) resolveTypeofInMembers(instance *types.ObjectType) {
+	if instance == nil {
+		return
+	}
+	for name, propType := range instance.Properties {
+		if resolved := c.resolveTypeofInType(propType); resolved != propType {
+			instance.Properties[name] = resolved
+		}
+		if fn, ok := instance.Properties[name].(*types.ObjectType); ok {
+			for _, sig := range fn.CallSignatures {
+				for i, paramType := range sig.ParameterTypes {
+					sig.ParameterTypes[i] = c.resolveTypeofInType(paramType)
+				}
+				sig.ReturnType = c.resolveTypeofInType(sig.ReturnType)
+			}
+		}
+	}
 }

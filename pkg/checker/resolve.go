@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
 	"github.com/nooga/paserati/pkg/vm"
@@ -1750,40 +1751,15 @@ func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression)
 			c.unresolvedTypeofTypeOnly = append(c.unresolvedTypeofTypeOnly, c.isTypeOnlyName(node.Identifier))
 			return &types.TypeofType{Identifier: node.Identifier}
 		}
-		c.addCannotFindNameError(node, c.env, path[0])
-		return nil
+		// Not declared yet (a hoisted annotation): resolve it later.
+		c.unresolvedTypeofNodes = append(c.unresolvedTypeofNodes, node)
+		c.unresolvedTypeofTypeOnly = append(c.unresolvedTypeofTypeOnly, false)
+		return &types.TypeofType{Identifier: path[0], Path: path}
 	}
 
-	// Walk remaining path segments through namespace ValueShape properties.
-	for i := 1; i < len(path); i++ {
-		seg := path[i]
-		// A generic class's constructor is a GenericType; its static members live on the body.
-		if generic, ok := varType.(*types.GenericType); ok {
-			if body, isObj := generic.Body.(*types.ObjectType); isObj {
-				varType = body
-			}
-		}
-		switch t := varType.(type) {
-		case *types.ObjectType:
-			if prop, ok := t.Properties[seg]; ok {
-				varType = prop
-			} else {
-				c.addError(node, fmt.Sprintf("property '%s' does not exist on type '%s'", seg, t.String()))
-				return nil
-			}
-		case *types.NamespaceType:
-			if prop, ok := t.ValueShape.Properties[seg]; ok {
-				varType = prop
-			} else if member := t.LookupTypeMember(seg); member != nil {
-				varType = member
-			} else {
-				c.addErrorWithCode(node, errors.TS2694, fmt.Sprintf("Namespace '%s' has no exported member '%s'.", path[i-1], seg))
-				return nil
-			}
-		default:
-			c.addError(node, fmt.Sprintf("cannot access member '%s' on non-object type", seg))
-			return nil
-		}
+	varType, ok := c.walkTypeofPath(node, path, varType)
+	if !ok {
+		return nil
 	}
 
 	debugPrintf("// [Checker resolveTypeofType] Found type for '%v': %T\n", path, varType)
@@ -1800,6 +1776,13 @@ func (c *Checker) resolveTypeofTypeIfNeeded(t types.Type) types.Type {
 		varType, _, found := c.env.Resolve(typeofType.Identifier)
 		if found {
 			debugPrintf("// [Checker resolveTypeofTypeIfNeeded] Successfully resolved typeof %s to %T\n", typeofType.Identifier, varType)
+			if len(typeofType.Path) > 1 {
+				walked, ok := c.speculativeTypeofPath(typeofType.Path, varType)
+				if !ok {
+					return typeofType
+				}
+				return walked
+			}
 			return varType
 		} else {
 			debugPrintf("// [Checker resolveTypeofTypeIfNeeded] Still cannot resolve typeof %s, keeping forward reference\n", typeofType.Identifier)
@@ -2159,7 +2142,7 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 
 		// `any extends U ? X : Y` is both branches: NonNullable<any> is any.
 		if checkType == types.Any && len(inferences) == 0 {
-			return types.NewUnionType(trueType, falseType)
+			return types.NewUnionType(c.inferAsAny(trueType), falseType)
 		}
 
 		// Apply the inferences to the true type
@@ -2167,6 +2150,11 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 		debugPrintf("// [ConditionalType] YES with inference: %s extends %s -> %s\n",
 			checkType.String(), extendsType.String(), substitutedTrueType.String())
 		return substitutedTrueType
+	}
+
+	// `any` matches any pattern: both branches, with `infer X` taken as any.
+	if checkType == types.Any {
+		return types.NewUnionType(c.inferAsAny(trueType), falseType)
 	}
 
 	// Fallback to basic assignability check without inference
@@ -3361,4 +3349,70 @@ func isNumericIndexType(t types.Type) bool {
 	}
 	lit, ok := t.(*types.LiteralType)
 	return ok && (lit.Value.Type() == vm.TypeIntegerNumber || lit.Value.Type() == vm.TypeFloatNumber)
+}
+
+// walkTypeofPath follows the members of a `typeof a.b.c` path through the type
+// of its first segment, reporting at node when a member is missing.
+func (c *Checker) walkTypeofPath(node parser.Node, path []string, varType types.Type) (types.Type, bool) {
+	for i := 1; i < len(path); i++ {
+		seg := path[i]
+		// A generic class's constructor is a GenericType; its static members live on the body.
+		if generic, ok := varType.(*types.GenericType); ok {
+			if body, isObj := generic.Body.(*types.ObjectType); isObj {
+				varType = body
+			}
+		}
+		switch t := varType.(type) {
+		case *types.ObjectType:
+			if prop, ok := t.Properties[seg]; ok {
+				varType = prop
+			} else {
+				c.addError(node, fmt.Sprintf("property '%s' does not exist on type '%s'", seg, t.String()))
+				return nil, false
+			}
+		case *types.NamespaceType:
+			if prop, ok := t.ValueShape.Properties[seg]; ok {
+				varType = prop
+			} else if member := t.LookupTypeMember(seg); member != nil {
+				varType = member
+			} else {
+				c.addErrorWithCode(node, errors.TS2694, fmt.Sprintf("Namespace '%s' has no exported member '%s'.", path[i-1], seg))
+				return nil, false
+			}
+		default:
+			c.addError(node, fmt.Sprintf("cannot access member '%s' on non-object type", seg))
+			return nil, false
+		}
+	}
+
+	return varType, true
+}
+
+// speculativeTypeofPath walks a deferred dotted typeof path without reporting;
+// ok is false while a member is not known yet.
+func (c *Checker) speculativeTypeofPath(path []string, varType types.Type) (result types.Type, ok bool) {
+	ok = c.speculate(func() {
+		result, _ = c.walkTypeofPath(&parser.Identifier{Token: &lexer.Token{}, Value: path[0]}, path, varType)
+	})
+	if result == nil {
+		ok = false
+	}
+	return result, ok
+}
+
+// inferAsAny replaces `infer X` in a conditional's true branch with any.
+func (c *Checker) inferAsAny(t types.Type) types.Type {
+	switch tt := t.(type) {
+	case *types.InferType:
+		return types.Any
+	case *types.ArrayType:
+		return &types.ArrayType{ElementType: c.inferAsAny(tt.ElementType)}
+	case *types.UnionType:
+		members := make([]types.Type, len(tt.Types))
+		for i, m := range tt.Types {
+			members[i] = c.inferAsAny(m)
+		}
+		return types.NewUnionType(members...)
+	}
+	return t
 }

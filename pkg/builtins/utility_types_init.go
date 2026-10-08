@@ -213,13 +213,25 @@ func (u *UtilityTypesInitializer) registerReturnType(ctx *TypeContext) {
 	// For now, we'll create a simplified version that works with our existing infrastructure
 	// This represents: T extends Function ? ReturnTypeOfT : never
 
-	// Create a conditional type that checks if T is a function
-	// Since we don't have full infer support yet, we'll use a simplified approach
+	// T extends (...args: any) => infer R ? R : any
+	inferR := &types.InferType{TypeParameter: "R"}
+	callSignature := &types.Signature{
+		ParameterTypes:    []types.Type{},
+		ReturnType:        inferR,
+		OptionalParams:    []bool{},
+		IsVariadic:        true,
+		RestParameterType: &types.ArrayType{ElementType: types.Any},
+	}
+	functionType := &types.ObjectType{
+		Properties:         map[string]types.Type{},
+		OptionalProperties: map[string]bool{},
+		CallSignatures:     []*types.Signature{callSignature},
+	}
 	conditionalType := &types.ConditionalType{
 		CheckType:   &types.TypeParameterType{Parameter: tParam},
-		ExtendsType: types.Any, // We'll improve this to check for function types
-		TrueType:    types.Any, // This should be the inferred return type
-		FalseType:   types.Never,
+		ExtendsType: functionType,
+		TrueType:    inferR,
+		FalseType:   types.Any,
 	}
 
 	// Create the generic type
