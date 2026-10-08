@@ -2293,6 +2293,7 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 	}
 
 	// 6. Set the computed type on the OptionalChainingExpression node itself
+	resultType = c.checkOptionalContinuation(node.Continuation, resultType, node.Object)
 	node.SetComputedType(resultType)
 	debugPrintf("// [Checker OptionalChaining] ObjectType: %s, Property: %s, ResultType: %s\n", objectType.String(), propertyName, resultType.String())
 }
@@ -2351,6 +2352,7 @@ func (c *Checker) checkOptionalIndexExpression(node *parser.OptionalIndexExpress
 		}
 	}
 
+	resultType = c.checkOptionalContinuation(node.Continuation, resultType, nil)
 	node.SetComputedType(resultType)
 	debugPrintf("// [Checker OptionalIndex] ObjectType: %s, IndexType: %s, ResultType: %s\n", objectType.String(), indexType.String(), resultType.String())
 }
@@ -2410,6 +2412,7 @@ func (c *Checker) checkOptionalCallExpression(node *parser.OptionalCallExpressio
 		}
 	}
 
+	resultType = c.checkOptionalContinuation(node.Continuation, resultType, nil)
 	node.SetComputedType(resultType)
 	debugPrintf("// [Checker OptionalCall] FunctionType: %s, ResultType: %s\n", functionType.String(), resultType.String())
 }
@@ -3416,4 +3419,64 @@ func getTupleElementUnion(tuple *types.TupleType) types.Type {
 func (c *Checker) classHasExtendsClause(className string) bool {
 	instance := c.getClassInstanceType(className)
 	return instance == nil || instance.ClassMeta == nil || instance.ClassMeta.HasExtendsClause
+}
+
+// checkOptionalContinuation types the rest of an optional chain (`.c`, `[i]`,
+// `(args)` after `a?.b`) against the non-nullish type of its head and returns
+// the type of the whole chain. The continuation's root receiver is nil in the
+// tree; a ChainBase carrying the head type stands in for it while it is typed.
+func (c *Checker) checkOptionalContinuation(cont parser.Expression, head types.Type, receiver parser.Expression) types.Type {
+	if cont == nil {
+		return head
+	}
+	nonNullish := types.RemoveNullishTypes(head)
+	if nonNullish == nil || nonNullish == types.Never {
+		return types.Undefined
+	}
+
+	base := &parser.ChainBase{Token: parser.GetTokenFromNode(cont), Receiver: receiver}
+	base.SetComputedType(nonNullish)
+
+	var restore func()
+	// Find the innermost link, whose receiver slot is nil.
+	cur := cont
+	for {
+		switch n := cur.(type) {
+		case *parser.MemberExpression:
+			if n.Object == nil {
+				n.Object = base
+				restore = func() { n.Object = nil }
+			} else {
+				cur = n.Object
+				continue
+			}
+		case *parser.IndexExpression:
+			if n.Left == nil {
+				n.Left = base
+				restore = func() { n.Left = nil }
+			} else {
+				cur = n.Left
+				continue
+			}
+		case *parser.CallExpression:
+			if n.Function == nil {
+				n.Function = base
+				restore = func() { n.Function = nil }
+			} else {
+				cur = n.Function
+				continue
+			}
+		default:
+			return head
+		}
+		break
+	}
+	defer restore()
+
+	c.visit(cont)
+	result := cont.GetComputedType()
+	if result == nil || result == types.Any {
+		return types.Any
+	}
+	return types.NewUnionType(result, types.Undefined)
 }

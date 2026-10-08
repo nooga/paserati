@@ -262,6 +262,7 @@ func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.S
 		IsVariadic:        ctx.RestParameter != nil,
 		RestParameterType: restParameterType,
 	}
+	dropThisParam(signature, ctx.Parameters)
 
 	return signature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv
 }
@@ -333,9 +334,15 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 
 		var paramType types.Type
 
+		// Contextual parameter types do not count an explicit `this` parameter.
+		ctxIdx := i
+		if len(ctx.Parameters) > 0 && ctx.Parameters[0].IsThis {
+			ctxIdx--
+		}
+
 		// Use contextual type if available and no explicit annotation
-		if i < len(ctx.ContextualParameterTypes) && param.TypeAnnotation == nil {
-			paramType = ctx.ContextualParameterTypes[i]
+		if ctxIdx >= 0 && ctxIdx < len(ctx.ContextualParameterTypes) && param.TypeAnnotation == nil && !param.IsThis {
+			paramType = ctx.ContextualParameterTypes[ctxIdx]
 			debugPrintf("// [Checker FuncContextual] Using contextual type for param '%s': %s\n", param.Name.Value, paramType.String())
 		} else if param.TypeAnnotation != nil {
 			// Use explicit annotation
@@ -353,6 +360,9 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 
 		paramTypes = append(paramTypes, paramType)
 		optionalParams = append(optionalParams, param.DefaultValue != nil)
+		if param.IsThis {
+			param.ComputedType = paramType
+		}
 	}
 
 	// 3. Handle rest parameter
@@ -397,6 +407,7 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 		IsVariadic:        ctx.RestParameter != nil,
 		RestParameterType: restParameterType,
 	}
+	dropThisParam(signature, ctx.Parameters)
 
 	return signature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv
 }
@@ -637,6 +648,7 @@ func (c *Checker) createFinalFunctionType(ctx *FunctionCheckContext, paramTypes 
 		IsVariadic:        ctx.RestParameter != nil,
 		RestParameterType: restParameterType,
 	}
+	dropThisParam(sig, ctx.Parameters)
 
 	// Create unified ObjectType with call signature
 	return types.NewFunctionType(sig)
@@ -683,4 +695,21 @@ func (c *Checker) returnTypeEnv(typeParamEnv *Environment, params []*parser.Para
 		env.Define(p.Name.Value, paramTypes[i], false)
 	}
 	return env
+}
+
+// dropThisParam removes an explicit `this` parameter from a signature. It
+// constrains the receiver, not the arguments, so it takes no part in call
+// arity or assignability.
+func dropThisParam(sig *types.Signature, params []*parser.Parameter) {
+	if len(params) == 0 || params[0] == nil || !params[0].IsThis || len(sig.ParameterTypes) == 0 {
+		return
+	}
+	sig.ThisType = sig.ParameterTypes[0]
+	sig.ParameterTypes = sig.ParameterTypes[1:]
+	if len(sig.ParameterNames) > 0 {
+		sig.ParameterNames = sig.ParameterNames[1:]
+	}
+	if len(sig.OptionalParams) > 0 {
+		sig.OptionalParams = sig.OptionalParams[1:]
+	}
 }

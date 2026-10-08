@@ -22,6 +22,9 @@ type Signature struct {
 	OptionalParams    []bool // Tracks which parameters are optional
 	IsVariadic        bool   // Indicates if the function accepts variable arguments
 	RestParameterType Type   // Type of the rest parameter (...args), if present
+	// ThisType is the declared type of an explicit `this` parameter. It
+	// constrains the receiver, not the arguments, so it is not a parameter.
+	ThisType Type
 	// StrictVariance marks a signature whose declaration is not a method, so
 	// that with strictFunctionTypes its parameters are compared
 	// contravariantly (TypeScript keys this off the target's declaration kind).

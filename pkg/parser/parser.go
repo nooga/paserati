@@ -42,6 +42,8 @@ type Parser struct {
 	// funcTypeOptional is the optional-parameter flags of the most recent
 	// parseFunctionTypeParameterList call.
 	funcTypeOptional []bool
+	// funcTypeThis is the explicit `this` type of the same parameter list.
+	funcTypeThis Expression
 
 	l      *lexer.Lexer
 	source *source.SourceFile // cached from lexer
@@ -1632,6 +1634,7 @@ func (p *Parser) parseFunctionTypeExpression() Expression {
 		funcType.Parameters = params
 		funcType.RestParameter = restParam
 		funcType.OptionalParams = sig.optional
+		funcType.ThisType = sig.this
 
 		p.nextToken() // Consume '=>'
 		p.nextToken() // Move to the return type
@@ -1666,6 +1669,7 @@ var errParamListReported = fmt.Errorf("parameter list error already reported")
 func (p *Parser) parseFunctionTypeParameterList() ([]Expression, Expression, error) {
 	res, ok := p.parseTypeSignatureParams()
 	p.funcTypeOptional = res.optional
+	p.funcTypeThis = res.this
 	if !ok {
 		return nil, nil, errParamListReported
 	}
@@ -10427,6 +10431,7 @@ func (p *Parser) parseMethodTypeSignature() Expression {
 		Parameters:        params,
 		OptionalParams:    optionalParams,
 		RestParameter:     restParam,
+		ThisType:          sig.this,
 		ReturnType:        returnType,
 		IsMethodSignature: true,
 	}
@@ -10824,6 +10829,7 @@ func (p *Parser) parseGenericFunctionTypeExpression() Expression {
 	// Parse function type parameters (for type annotations)
 	params, restParam, parseErr := p.parseFunctionTypeParameterList()
 	genericOptionals := append([]bool(nil), p.funcTypeOptional...)
+	genericThis := p.funcTypeThis
 	if parseErr != nil {
 		return nil
 	}
@@ -10848,6 +10854,7 @@ func (p *Parser) parseGenericFunctionTypeExpression() Expression {
 		Parameters:     params,
 		OptionalParams: genericOptionals,
 		RestParameter:  restParam,
+		ThisType:       genericThis,
 		ReturnType:     returnType,
 	}
 

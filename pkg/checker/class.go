@@ -1566,6 +1566,9 @@ func (c *Checker) extractParameterTypes(fn *parser.FunctionLiteral) []types.Type
 	}
 
 	for _, param := range fn.Parameters {
+		if param.IsThis {
+			continue // the receiver is not an argument
+		}
 		if param.TypeAnnotation != nil {
 			// Use explicit type annotation
 			paramType := c.resolveTypeAnnotation(param.TypeAnnotation)
@@ -1588,12 +1591,15 @@ func (c *Checker) extractParameterTypes(fn *parser.FunctionLiteral) []types.Type
 
 // extractOptionalParams determines which parameters are optional
 func (c *Checker) extractOptionalParams(fn *parser.FunctionLiteral) []bool {
-	optionalParams := make([]bool, len(fn.Parameters))
+	optionalParams := make([]bool, 0, len(fn.Parameters))
 
-	for i, param := range fn.Parameters {
+	for _, param := range fn.Parameters {
+		if param.IsThis {
+			continue
+		}
 		// A parameter is optional if it's explicitly marked optional (y?: number)
 		// or if it has a default value (y: number = 42)
-		optionalParams[i] = param.Optional || param.DefaultValue != nil
+		optionalParams = append(optionalParams, param.Optional || param.DefaultValue != nil)
 	}
 
 	return optionalParams

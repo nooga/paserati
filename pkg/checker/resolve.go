@@ -664,6 +664,9 @@ func (c *Checker) resolveFunctionTypeSignature(node *parser.FunctionTypeExpressi
 		RestParameterType: restParameterType,
 		StrictVariance:    !node.IsMethodSignature,
 	}
+	if node.ThisType != nil {
+		sig.ThisType = c.resolveTypeAnnotation(node.ThisType)
+	}
 
 	// Create a unified ObjectType with call signature
 	return types.NewFunctionType(sig)
@@ -749,6 +752,12 @@ func (c *Checker) resolveGenericFunctionType(node *parser.FunctionTypeExpression
 		IsVariadic:        node.RestParameter != nil,
 		RestParameterType: restParameterType,
 		StrictVariance:    !node.IsMethodSignature,
+	}
+	if node.ThisType != nil {
+		originalEnvForThis := c.env
+		c.env = typeParamEnv
+		sig.ThisType = c.resolveTypeAnnotation(node.ThisType)
+		c.env = originalEnvForThis
 	}
 
 	// Create the function type
@@ -1261,7 +1270,7 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 	}
 
 	// Return a unified Signature
-	return &types.Signature{
+	sig := &types.Signature{
 		ParameterNames:    parameterNameStrings(node.Parameters),
 		ParameterTypes:    paramTypes,
 		ReturnType:        resolvedReturnType, // Use the value assigned outside the if
@@ -1269,6 +1278,8 @@ func (c *Checker) resolveFunctionLiteralSignature(node *parser.FunctionLiteral, 
 		IsVariadic:        node.RestParameter != nil,
 		RestParameterType: restParameterType,
 	}
+	dropThisParam(sig, node.Parameters)
+	return sig
 }
 
 func functionTypeParameterNameStrings(params []parser.Expression) []string {

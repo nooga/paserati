@@ -60,6 +60,12 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 
 	widenedLeftType := types.GetWidenedType(leftType)
 	widenedRightType := types.GetWidenedType(rightType)
+	switch node.Operator {
+	case "+", "-", "*", "/", "%", "**", "<", ">", "<=", ">=", "&", "|", "^", "<<", ">>", ">>>":
+		// A union of same-kind literals (`flag ? 1 : 0`) operates as its primitive.
+		widenedLeftType = widenLiteralUnion(widenedLeftType)
+		widenedRightType = widenLiteralUnion(widenedRightType)
+	}
 
 	debugPrintf("// [Checker Infix Pre-Check] Left : %T (%v)\n", leftType, leftType)
 	debugPrintf("// [Checker Infix Pre-Check] Right: %T (%v)\n", rightType, rightType)
@@ -327,4 +333,26 @@ func shortCircuitsToLeft(operator string, left types.Type) bool {
 func isEmptyArrayLiteral(e parser.Expression) bool {
 	arr, ok := e.(*parser.ArrayLiteral)
 	return ok && len(arr.Elements) == 0
+}
+
+// widenLiteralUnion widens a union whose members are all literals of one
+// primitive kind (`0 | 1`) to that primitive. Other types are unchanged.
+func widenLiteralUnion(t types.Type) types.Type {
+	union, ok := t.(*types.UnionType)
+	if !ok || len(union.Types) == 0 {
+		return t
+	}
+	var kind types.Type
+	for _, member := range union.Types {
+		if _, isLit := member.(*types.LiteralType); !isLit {
+			return t
+		}
+		w := types.GetWidenedType(member)
+		if kind == nil {
+			kind = w
+		} else if kind != w {
+			return t
+		}
+	}
+	return kind
 }
