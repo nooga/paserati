@@ -360,6 +360,9 @@ func TestNativeModuleGoSignatureTypes(t *testing.T) {
 				}
 				return &resp{Status: 1, Body: k}, nil
 			})
+			m.Function("decode", func(s string) (interface{}, error) {
+				return map[string]interface{}{"n": float64(len(s))}, nil
+			})
 			m.Function("fail", func(msg string) error {
 				if msg == "" {
 					return nil
@@ -379,6 +382,8 @@ func TestNativeModuleGoSignatureTypes(t *testing.T) {
 		{"optional field in type", `import { Resp } from "host"; const r: Resp = { status: 1, body: "" }; r.status`, "1"},
 		{"nullable result", `import h from "host"; const v = h.lookup(""); v === null ? "null" : v.length`, "null"},
 		{"(*T, error) is not nullable", `import h from "host"; h.find("k").body`, "k"},
+		{"untyped result is any", `import h from "host"; const r = h.decode("abc"); const n: number = r.n; n`, "3"},
+		{"untyped result takes a type argument", `import h from "host"; const r = h.decode<{ n: number }>("ab"); r.n`, "2"},
 		{"lone error throws", `import h from "host"; let out = String(h.fail("")); try { h.fail("boom"); } catch (e) { out += " " + (e as Error).message; } out`, "undefined boom"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -401,6 +406,7 @@ func TestNativeModuleGoSignatureTypes(t *testing.T) {
 		{"missing required", `import h from "host"; h.get();`},
 		{"rest element type", `import { join } from "host"; join("-", 1);`},
 		{"nullable result", `import h from "host"; const n: number = h.lookup("k").length;`},
+		{"typed untyped result", `import h from "host"; const r = h.decode<{ n: number }>("ab"); const s: string = r.n;`},
 	} {
 		t.Run("rejects "+tc.name, func(t *testing.T) {
 			p := NewPaserati()

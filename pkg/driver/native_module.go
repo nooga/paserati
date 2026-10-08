@@ -937,11 +937,24 @@ func goSignatureToTSSignature(fnType reflect.Type, skip int, seen map[reflect.Ty
 		ret = goResultToTSType(fnType.Out(0), seen)
 	}
 	sig := types.SigOptional(params, ret, optional)
+	// An untyped result (interface{}) is generic in it, <T = any>(...) => T:
+	// the same as any without a type argument, and the usual TS way to let
+	// the caller say what an untyped result holds, like JSON.
+	if ret == types.Any && fnType.NumOut() > 0 && isEmptyInterface(fnType.Out(0)) {
+		tp := types.NewTypeParameter("T", 0, nil)
+		tp.Default = types.Any
+		sig.TypeParameters = []*types.TypeParameter{tp}
+		sig.ReturnType = &types.TypeParameterType{Parameter: tp}
+	}
 	if rest != nil {
 		sig.IsVariadic = true
 		sig.RestParameterType = rest
 	}
 	return sig
+}
+
+func isEmptyInterface(t reflect.Type) bool {
+	return t.Kind() == reflect.Interface && t.NumMethod() == 0
 }
 
 // goResultToTSType maps a Go result type: like goTypeToTSTypeSeen, except a
