@@ -2512,6 +2512,24 @@ func (tlte *TemplateLiteralTypeExpression) String() string {
 // GetComputedType satisfies the Expression interface
 func (tlte *TemplateLiteralTypeExpression) GetComputedType() types.Type { return tlte.ComputedType }
 
+// ReadonlyTypeExpression is the `readonly` type operator: `readonly T[]`,
+// `readonly [A, B]`.
+type ReadonlyTypeExpression struct {
+	BaseExpression
+	Token *lexer.Token // The 'readonly' token
+	Type  Expression   // The array or tuple type it applies to
+}
+
+func (rte *ReadonlyTypeExpression) expressionNode()      {}
+func (rte *ReadonlyTypeExpression) TokenLiteral() string { return rte.Token.Literal }
+func (rte *ReadonlyTypeExpression) String() string {
+	if rte.Type == nil {
+		return "readonly"
+	}
+	return "readonly " + rte.Type.String()
+}
+func (rte *ReadonlyTypeExpression) GetComputedType() types.Type { return rte.ComputedType }
+
 // --- NEW: KeyofTypeExpression ---
 
 // KeyofTypeExpression represents a keyof type operator like keyof T
@@ -2952,6 +2970,7 @@ type InterfaceProperty struct {
 	Type                   Expression  // Type annotation (for properties) or function type (for methods)
 	IsMethod               bool        // Whether this is a method signature
 	Optional               bool        // Whether the property is optional (Name?)
+	Readonly               bool        // Whether the member is marked 'readonly'
 	IsConstructorSignature bool        // Whether this is a constructor signature (new (): T)
 	IsComputedProperty     bool        // Whether this is a computed property name [expr]:
 

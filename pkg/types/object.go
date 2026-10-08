@@ -136,6 +136,7 @@ func (sig *Signature) Equals(other *Signature) bool {
 type IndexSignature struct {
 	KeyType   Type // The type of the key (e.g., string, number, symbol)
 	ValueType Type // The type of the value
+	Readonly  bool // `readonly [k: K]: V` only permits reading
 
 	// For mapped types: [P in K]: V
 	IsMapped       bool   // Whether this is a mapped type pattern

@@ -557,6 +557,14 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 	case *parser.ConstructorTypeExpression:
 		return c.resolveConstructorTypeSignature(node)
 
+	case *parser.ReadonlyTypeExpression:
+		inner := c.resolveTypeAnnotation(node.Type)
+		switch inner.(type) {
+		case *types.ArrayType, *types.TupleType:
+			return types.NewReadonlyType(inner)
+		}
+		return inner
+
 	case *parser.KeyofTypeExpression:
 		return c.resolveKeyofTypeExpression(node)
 
@@ -859,6 +867,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			indexSig := &types.IndexSignature{
 				KeyType:   keyType,
 				ValueType: valueType,
+				Readonly:  prop.Readonly,
 			}
 
 			// We'll add this to the ObjectType's IndexSignatures field
@@ -2377,6 +2386,7 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 	properties := make(map[string]types.Type)
 	optionalProperties := make(map[string]bool)
 
+	readOnlyProperties := make(map[string]bool)
 	// For each key in the iteration, compute the resulting property
 	for _, keyType := range iterationKeys {
 		literalType, ok := keyType.(*types.LiteralType)
@@ -2410,6 +2420,16 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 					optionalProperties[keyName] = true
 				}
 			}
+
+			// Readonly modifier, likewise inherited by a homomorphic mapping.
+			switch mappedType.ReadonlyModifier {
+			case "+":
+				readOnlyProperties[keyName] = true
+			case "":
+				if sourceObjectType != nil && sourceObjectType.ReadOnlyProperties[keyName] {
+					readOnlyProperties[keyName] = true
+				}
+			}
 		}
 	}
 
@@ -2417,6 +2437,7 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 	return &types.ObjectType{
 		Properties:         properties,
 		OptionalProperties: optionalProperties,
+		ReadOnlyProperties: readOnlyProperties,
 		CallSignatures:     []*types.Signature{},      // Mapped types don't create call signatures
 		IndexSignatures:    []*types.IndexSignature{}, // TODO: Handle index signatures if needed
 	}

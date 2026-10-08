@@ -3245,6 +3245,7 @@ func (c *Checker) visit(node parser.Node) {
 			}
 		}
 		c.visit(node.Argument)
+		c.checkReadonlyAssignmentTarget(node.Argument)
 		argType := node.Argument.GetComputedType()
 		resultType := types.Number // Default result is number
 
@@ -4029,6 +4030,17 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		return
 	}
 
+	// An array literal is contextually typed by a readonly array or tuple
+	// type's element structure: `const t: readonly [number, string] = [1, "a"]`.
+	if ro, ok := context.ExpectedType.(*types.ReadonlyType); ok {
+		if _, isArrayLit := node.(*parser.ArrayLiteral); isArrayLit {
+			switch ro.InnerType.(type) {
+			case *types.ArrayType, *types.TupleType:
+				context = &ContextualType{ExpectedType: ro.InnerType, IsContextual: context.IsContextual}
+			}
+		}
+	}
+
 	debugPrintf("// [Checker VisitContext] Node: %T, Expected: %s\n", node, context.ExpectedType.String())
 
 	// A union expected type (`number[] | null`, `Options | undefined`,
@@ -4051,6 +4063,15 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 		c.checkObjectLiteralWithContext(node, context)
 	case *parser.ArrowFunctionLiteral:
 		c.checkArrowFunctionLiteralWithContext(node, context)
+	case *parser.TypeAssertionExpression:
+		c.visit(node)
+		// An `as const` array literal contextually typed by a mutable array
+		// type stays mutable: `[1, 2] as const satisfies number[]` is [1, 2].
+		if isConstAssertion(node) && hasMutableArrayLikeMember(context.ExpectedType) {
+			if ro, ok := node.GetComputedType().(*types.ReadonlyType); ok && types.IsReadonlyArrayLike(ro) {
+				node.SetComputedType(ro.InnerType)
+			}
+		}
 	case *parser.CallExpression:
 		if c.returnContexts == nil {
 			c.returnContexts = map[*parser.CallExpression]types.Type{}

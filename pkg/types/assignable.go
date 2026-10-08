@@ -529,12 +529,24 @@ func isAssignable(source, target Type) bool {
 		// readonly T to readonly U: T must be assignable to U
 		return isAssignable(sourceReadonly.InnerType, targetReadonly.InnerType)
 	} else if sourceIsReadonly && !targetIsReadonly {
-		// readonly T to T: allowed (covariance)
+		// A readonly array or tuple never fits a mutable one (TS4104);
+		// otherwise readonly T to T is allowed (covariance).
+		if IsReadonlyArrayLike(source) && isMutableArrayLike(target) {
+			return false
+		}
 		return isAssignable(sourceReadonly.InnerType, target)
 	} else if !sourceIsReadonly && targetIsReadonly {
 		// T to readonly T: allowed (source is assignable to target inner type)
 		// This is safe because we're making something more restrictive
-		return isAssignable(source, targetReadonly.InnerType)
+		if isAssignable(source, targetReadonly.InnerType) {
+			return true
+		}
+		// A type parameter whose constraint is itself readonly relates
+		// through that constraint, readonly intact.
+		if tp, ok := source.(*TypeParameterType); ok && tp.Parameter != nil && tp.Parameter.Constraint != nil {
+			return isAssignable(tp.Parameter.Constraint, target)
+		}
+		return false
 	}
 
 	// TypeParameterType handling - type parameters with the same identity are assignable
@@ -1120,6 +1132,28 @@ func classDerivesFrom(obj *ObjectType, className string, depth int) bool {
 		if bo, ok := resolveBaseType(base).(*ObjectType); ok && classDerivesFrom(bo, className, depth+1) {
 			return true
 		}
+	}
+	return false
+}
+
+// IsReadonlyArrayLike reports whether t is `readonly T[]` or a readonly tuple.
+func IsReadonlyArrayLike(t Type) bool {
+	ro, ok := t.(*ReadonlyType)
+	if !ok {
+		return false
+	}
+	switch ro.InnerType.(type) {
+	case *ArrayType, *TupleType:
+		return true
+	}
+	return false
+}
+
+// isMutableArrayLike reports whether t is a mutable array or tuple type.
+func isMutableArrayLike(t Type) bool {
+	switch t.(type) {
+	case *ArrayType, *TupleType:
+		return true
 	}
 	return false
 }

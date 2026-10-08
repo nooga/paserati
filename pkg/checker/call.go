@@ -1389,6 +1389,15 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 	}
 	seen[pair] = true
 
+	// Readonly arrays and tuples infer through their element structure:
+	// `[A[], B[]]` against `readonly [T1[], T2[]]`.
+	if ro, ok := paramType.(*types.ReadonlyType); ok && types.IsReadonlyArrayLike(ro) {
+		return c.collectConstraintsFromTypeSeen(ro.InnerType, stripReadonlyArrays(argType), seen)
+	}
+	if _, isTP := paramType.(*types.TypeParameterType); !isTP && types.IsReadonlyArrayLike(argType) {
+		return c.collectConstraintsFromTypeSeen(paramType, stripReadonlyArrays(argType), seen)
+	}
+
 	switch pType := paramType.(type) {
 	case *types.TypeParameterType:
 		// Direct constraint: T should be inferred as argType
@@ -1686,6 +1695,8 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			return typ // Keep unresolved type parameters
 		case *types.ArrayType:
 			return &types.ArrayType{ElementType: substitute(typ.ElementType)}
+		case *types.ReadonlyType:
+			return types.NewReadonlyType(substitute(typ.InnerType))
 		case *types.UnionType:
 			var newTypes []types.Type
 			for _, memberType := range typ.Types {
