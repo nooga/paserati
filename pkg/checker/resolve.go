@@ -460,9 +460,19 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 					return nil
 				}
 				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Creating forward reference for unknown type '%s'\n", node.Name.Value)
+				// Keep the arguments when they resolve, so the reference can be
+				// instantiated once the generic is declared.
+				args := make([]types.Type, len(node.TypeArguments))
+				if !c.speculate(func() {
+					for i, arg := range node.TypeArguments {
+						args[i] = c.resolveTypeAnnotation(arg)
+					}
+				}) {
+					args = make([]types.Type, len(node.TypeArguments))
+				}
 				return &types.GenericTypeAliasForwardReference{
 					AliasName:     node.Name.Value,
-					TypeArguments: make([]types.Type, len(node.TypeArguments)),
+					TypeArguments: args,
 				}
 			}
 
@@ -2136,6 +2146,11 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 	if c.tryInferTypes(checkType, extendsType, inferences) {
 		debugPrintf("// [ConditionalType] Inference successful with %d captured types\n", len(inferences))
 
+		// `any extends U ? X : Y` is both branches: NonNullable<any> is any.
+		if checkType == types.Any && len(inferences) == 0 {
+			return types.NewUnionType(trueType, falseType)
+		}
+
 		// Apply the inferences to the true type
 		substitutedTrueType := c.substituteInferredTypes(trueType, inferences)
 		debugPrintf("// [ConditionalType] YES with inference: %s extends %s -> %s\n",
@@ -2155,6 +2170,20 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 
 // computeIndexedAccessType computes the result of an indexed access type like T[K]
 func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) types.Type {
+	// `Required<any>[number]`: a mapped type is indexed through its expansion.
+	if mapped, ok := objectType.(*types.MappedType); ok {
+		if expanded := c.expandMappedType(mapped); expanded != nil {
+			objectType = expanded
+		}
+	}
+	// A primitive key reads the matching index signature.
+	if obj, ok := objectType.(*types.ObjectType); ok && (indexType == types.String || indexType == types.Number) {
+		for _, sig := range obj.IndexSignatures {
+			if sig.KeyType == indexType || (indexType == types.Number && sig.KeyType == types.String) {
+				return sig.ValueType
+			}
+		}
+	}
 	// Arrays and tuples, readonly or not, indexed by a number: `T[][0]`,
 	// `(typeof TUPLE)[number]` (#638).
 	elementsOf := c.resolveTypeofTypeIfNeeded(objectType)
@@ -2268,7 +2297,12 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 	var sourceObjectType *types.ObjectType // Track source object for inheriting optionality
 	if keyofType, ok := constraintType.(*types.KeyofType); ok {
 		// Get the keys from the keyof operand
-		operandType := keyofType.OperandType
+		operandType := c.resolveStructural(keyofType.OperandType)
+		if ref, ok := operandType.(*types.GenericTypeAliasForwardReference); ok {
+			if inst := c.instantiateAliasReference(ref); inst != nil {
+				operandType = c.resolveStructural(inst)
+			}
+		}
 		if objType, ok := operandType.(*types.ObjectType); ok {
 			sourceObjectType = objType
 			// Extract all property names as literal types
@@ -2659,6 +2693,22 @@ func (c *Checker) expandIfMappedType(typ types.Type) types.Type {
 			return expanded
 		}
 		debugPrintf("// [Checker] Direct mapped type expansion failed\n")
+		return typ
+	}
+
+	// Union members (`Partial<T> | undefined` for an optional parameter)
+	if union, ok := typ.(*types.UnionType); ok {
+		changed := false
+		members := make([]types.Type, len(union.Types))
+		for i, member := range union.Types {
+			members[i] = c.expandIfMappedType(member)
+			if members[i] != member {
+				changed = true
+			}
+		}
+		if changed {
+			return types.NewUnionType(members...)
+		}
 		return typ
 	}
 

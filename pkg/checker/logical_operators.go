@@ -29,11 +29,11 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 			c.env = narrowedEnv
 		}
 	} else if node.Operator == "||" {
+		// The right operand only runs when every `||` operand to its left was
+		// falsy (`total === null || total <= 0`), so the left's guards are
+		// applied inverted; this composes onto c.env.
 		savedEnvForLogical = c.env
-		invertedEnv := c.applyInvertedTruthinessNarrowing(node.Left)
-		if invertedEnv != nil {
-			c.env = invertedEnv
-		}
+		c.applyInvertedOrNarrowing(node.Left)
 	}
 
 	if rightContext != nil {

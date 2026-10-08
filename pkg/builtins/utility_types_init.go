@@ -35,6 +35,9 @@ func (u *UtilityTypesInitializer) InitTypes(ctx *TypeContext) error {
 	// Record<K, T> = { [P in K]: T }
 	u.registerRecordType(ctx)
 
+	// NonNullable<T>, Exclude<T, U>, Extract<T, U>
+	u.registerDistributiveFilters(ctx)
+
 	// ReturnType<T> = T extends (...args: any[]) => infer R ? R : never
 	u.registerReturnType(ctx)
 
@@ -391,4 +394,39 @@ func (u *UtilityTypesInitializer) registerInstanceType(ctx *TypeContext) {
 
 	// Register it in the environment
 	_ = ctx.DefineTypeAlias("InstanceType", instanceTypeGeneric)
+}
+
+// registerDistributiveFilters registers the conditional utilities that filter
+// a union's members:
+//
+//	NonNullable<T> = T extends null | undefined ? never : T
+//	Exclude<T, U>  = T extends U ? never : T
+//	Extract<T, U>  = T extends U ? T : never
+func (u *UtilityTypesInitializer) registerDistributiveFilters(ctx *TypeContext) {
+	tNN := types.NewTypeParameter("T", 0, nil)
+	nonNullable := &types.ConditionalType{
+		CheckType:   &types.TypeParameterType{Parameter: tNN},
+		ExtendsType: types.NewUnionType(types.Null, types.Undefined),
+		TrueType:    types.Never,
+		FalseType:   &types.TypeParameterType{Parameter: tNN},
+	}
+	_ = ctx.DefineTypeAlias("NonNullable", types.NewGenericType("NonNullable", []*types.TypeParameter{tNN}, nonNullable))
+
+	tEx, uEx := types.NewTypeParameter("T", 0, nil), types.NewTypeParameter("U", 1, nil)
+	exclude := &types.ConditionalType{
+		CheckType:   &types.TypeParameterType{Parameter: tEx},
+		ExtendsType: &types.TypeParameterType{Parameter: uEx},
+		TrueType:    types.Never,
+		FalseType:   &types.TypeParameterType{Parameter: tEx},
+	}
+	_ = ctx.DefineTypeAlias("Exclude", types.NewGenericType("Exclude", []*types.TypeParameter{tEx, uEx}, exclude))
+
+	tExt, uExt := types.NewTypeParameter("T", 0, nil), types.NewTypeParameter("U", 1, nil)
+	extract := &types.ConditionalType{
+		CheckType:   &types.TypeParameterType{Parameter: tExt},
+		ExtendsType: &types.TypeParameterType{Parameter: uExt},
+		TrueType:    &types.TypeParameterType{Parameter: tExt},
+		FalseType:   types.Never,
+	}
+	_ = ctx.DefineTypeAlias("Extract", types.NewGenericType("Extract", []*types.TypeParameter{tExt, uExt}, extract))
 }

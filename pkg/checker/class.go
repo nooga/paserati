@@ -937,10 +937,12 @@ func (c *Checker) checkMethodBodiesInInstance(className string, body *parser.Cla
 	// Check all method bodies (including constructors, but excluding static and generic methods)
 	for _, method := range body.Methods {
 		if !method.IsStatic && method.Value != nil {
-			// Skip generic methods - they should be checked when instantiated
-			if len(method.Value.TypeParameters) > 0 {
+			// Generic methods were already checked when their signature was
+			// built, unless that check was deferred to here.
+			if len(method.Value.TypeParameters) > 0 && !c.speculatedGenericMethods[method.Value] {
 				continue
 			}
+			delete(c.speculatedGenericMethods, method.Value)
 
 			methodName := c.extractPropertyName(method.Key)
 			debugPrintf("// [Checker Class] Checking method body for '%s'\n", methodName)
@@ -1276,7 +1278,18 @@ func (c *Checker) inferMethodType(method *parser.MethodDefinition) types.Type {
 	// For generic methods, we need to check them properly to make type parameters available
 	if len(method.Value.TypeParameters) > 0 {
 		// Check the method's function literal which will handle type parameters
-		c.checkFunctionLiteral(method.Value)
+		if c.deferMethodBodies {
+			// Outer declarations are not hoisted yet, so this pass only
+			// supplies the signature; the body is checked for real with the
+			// other method bodies (checkMethodBodiesInInstance).
+			c.speculate(func() { c.checkFunctionLiteral(method.Value) })
+			if c.speculatedGenericMethods == nil {
+				c.speculatedGenericMethods = make(map[*parser.FunctionLiteral]bool)
+			}
+			c.speculatedGenericMethods[method.Value] = true
+		} else {
+			c.checkFunctionLiteral(method.Value)
+		}
 
 		// Get the computed type from the function literal
 		if computedType := method.Value.GetComputedType(); computedType != nil {

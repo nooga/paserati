@@ -117,8 +117,12 @@ func UnionWithSubtypeReduction(ts ...Type) Type {
 				continue
 			}
 			if IsAssignable(candidate, other) {
-				covered = true
-				break
+				// Mutually assignable members (`Record<string, T>` and a
+				// fresh `{}`) reduce to the earlier one.
+				if j < i || !IsAssignable(other, candidate) {
+					covered = true
+					break
+				}
 			}
 		}
 		if !covered {

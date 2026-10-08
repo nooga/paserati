@@ -57,7 +57,9 @@ func (c *Checker) speculate(fn func()) bool {
 	}
 	for _, e := range c.errors[n:] {
 		if te, ok := e.(*errors.TypeError); ok && te.ErrorCode != "" {
-			delete(c.reportedErrors, fmt.Sprintf("%d:%s:%s", te.Position.StartPos, te.ErrorCode, te.Msg))
+			key := fmt.Sprintf("%d:%s:%s", te.Position.StartPos, te.ErrorCode, te.Msg)
+			delete(c.reportedErrors, key)
+			delete(c.reportedRelationDiagnostics, key)
 		}
 	}
 	c.errors = c.errors[:n]
