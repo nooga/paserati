@@ -9,12 +9,11 @@ import (
 // all of which are in place well before the Date/Temporal tier.
 const PriorityIntl = PriorityDate + 5
 
-// IntlInitializer installs the ECMA-402 Intl namespace object. Scope (#210):
-// Intl.Segmenter (grapheme/word/sentence, UAX #29 default rules) plus the
-// namespace's own Intl.getCanonicalLocales and @@toStringTag. The other
-// ECMA-402 constructors (Collator, DateTimeFormat, NumberFormat, ...) are
-// not implemented and are absent rather than stubbed, so feature detection
-// (`"DateTimeFormat" in Intl`) stays truthful.
+// IntlInitializer installs the ECMA-402 Intl namespace object: Intl.Segmenter
+// (#210), Intl.NumberFormat (#624), the namespace's own
+// Intl.getCanonicalLocales and @@toStringTag. Constructors that are not
+// implemented are absent rather than stubbed, so feature detection
+// (`"DisplayNames" in Intl`) stays truthful.
 type IntlInitializer struct{}
 
 func (i *IntlInitializer) Name() string  { return "Intl" }
@@ -63,10 +62,41 @@ func (i *IntlInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("supportedLocalesOf", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, stringArray, []bool{false, true})).
 		WithProperty("prototype", segmenterType)
 
+	// interface Intl.NumberFormatPart { type: string; value: string }
+	numberPartType := types.NewObjectType().
+		WithProperty("type", types.String).
+		WithProperty("value", types.String)
+	numberRangePartType := types.NewObjectType().
+		WithProperty("type", types.String).
+		WithProperty("value", types.String).
+		WithProperty("source", types.String)
+	numberFormatType := types.NewObjectType().
+		WithProperty("format", types.NewSimpleFunction([]types.Type{types.Any}, types.String)).
+		WithProperty("formatToParts", types.NewOptionalFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: numberPartType}, []bool{true})).
+		WithProperty("formatRange", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.String)).
+		WithProperty("formatRangeToParts", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, &types.ArrayType{ElementType: numberRangePartType})).
+		WithProperty("resolvedOptions", types.NewSimpleFunction([]types.Type{}, types.Any))
+	numberFormatCtorType := types.NewObjectType().
+		WithConstructSignature(&types.Signature{
+			ParameterTypes: []types.Type{types.Any, types.Any},
+			ReturnType:     numberFormatType,
+			OptionalParams: []bool{true, true},
+		}).
+		WithCallSignature(&types.Signature{
+			ParameterTypes: []types.Type{types.Any, types.Any},
+			ReturnType:     numberFormatType,
+			OptionalParams: []bool{true, true},
+		}).
+		WithProperty("supportedLocalesOf", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, stringArray, []bool{false, true})).
+		WithProperty("prototype", numberFormatType)
+
 	intlNamespace := types.NewNamespaceType("Intl")
 	intlNamespace.ValueShape.
+		WithProperty("NumberFormat", numberFormatCtorType).
 		WithProperty("Segmenter", segmenterCtorType).
 		WithProperty("getCanonicalLocales", types.NewOptionalFunction([]types.Type{types.Any}, stringArray, []bool{true}))
+	intlNamespace.TypeMembers["NumberFormat"] = numberFormatType
+	intlNamespace.TypeMembers["NumberFormatPart"] = numberPartType
 	intlNamespace.TypeMembers["Segmenter"] = segmenterType
 	intlNamespace.TypeMembers["Segments"] = segmentsType
 	intlNamespace.TypeMembers["SegmentData"] = segmentDataType
@@ -97,6 +127,7 @@ func (i *IntlInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	installIntlSegmenter(vmInstance, intlObj)
+	installIntlNumberFormat(vmInstance, intlObj)
 
 	return ctx.DefineGlobal("Intl", vm.NewValueFromPlainObject(intlObj))
 }

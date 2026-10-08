@@ -71,6 +71,7 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 		// Keep concat non-generic for flexibility with different array types
 		WithVariadicProperty("concat", []types.Type{}, &types.ArrayType{ElementType: types.Any}, &types.ArrayType{ElementType: types.Any}).
 		WithProperty("join", types.NewOptionalFunction([]types.Type{types.String}, types.String, []bool{true})).
+		WithProperty("toLocaleString", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, types.String, []bool{true, true})).
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("reverse", a.createGenericMethod("reverse", tParam,
 			types.NewSimpleFunction([]types.Type{}, tArrayType))).
@@ -673,6 +674,27 @@ func (a *ArrayInitializer) InitRuntime(ctx *RuntimeContext) error {
 			}
 		}
 		return result, nil
+	}))
+
+	// Array.prototype.toLocaleString(locales, options) (ECMA-402 13.4.1): each
+	// element's own toLocaleString, given the same locales and options.
+	arrayProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
+		thisVal := vmInstance.GetThis()
+		if thisVal.Type() == vm.TypeUndefined || thisVal.Type() == vm.TypeNull {
+			return vm.Undefined, vmInstance.NewTypeError("Cannot convert undefined or null to object")
+		}
+		obj, err := vmInstance.ToObject(thisVal)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		length, err := arrayLikeLength(vmInstance, obj)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		return localeStringOfElements(vmInstance, length, func(i int) (vm.Value, error) {
+			v, _, err := arrayLikeGet(vmInstance, obj, i)
+			return v, err
+		}, intlArg(args, 0), intlArg(args, 1))
 	}))
 
 	arrayProto.SetOwnNonEnumerable("join", vm.NewNativeFunction(1, false, "join", func(args []vm.Value) (vm.Value, error) {
@@ -2887,4 +2909,39 @@ func (a *ArrayInitializer) createGenericMapMethod(tParam *types.TypeParameter) t
 		TypeParameters: []*types.TypeParameter{tParam, uParam},
 		Body:           methodType,
 	}
+}
+
+// localeStringOfElements joins Invoke(element, "toLocaleString", «locales,
+// options») with ",", null and undefined elements contributing "".
+func localeStringOfElements(vmInstance *vm.VM, length int, get func(int) (vm.Value, error), locales, options vm.Value) (vm.Value, error) {
+	var sb strings.Builder
+	for i := 0; i < length; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		elem, err := get(i)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if elem.Type() == vm.TypeUndefined || elem.Type() == vm.TypeNull {
+			continue
+		}
+		fn, err := vmInstance.GetProperty(elem, "toLocaleString")
+		if err != nil {
+			return vm.Undefined, err
+		}
+		if !fn.IsCallable() {
+			return vm.Undefined, vmInstance.NewTypeError("toLocaleString is not a function")
+		}
+		res, err := vmInstance.Call(fn, elem, []vm.Value{locales, options})
+		if err != nil {
+			return vm.Undefined, err
+		}
+		s, err := getStringValueWithVM(vmInstance, res)
+		if err != nil {
+			return vm.Undefined, err
+		}
+		sb.WriteString(s)
+	}
+	return vm.NewString(sb.String()), nil
 }

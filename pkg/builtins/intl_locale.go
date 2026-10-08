@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -503,12 +504,18 @@ func intlCanonicalizeLocaleList(vmInstance *vm.VM, locales vm.Value) ([]string, 
 	}
 	var seen []string
 	for k := 0; k < length; k++ {
-		kValue, present, err := arrayLikeGet(vmInstance, obj, k)
+		// HasProperty(O, Pk), then Get(O, Pk) - observable on proxies.
+		pk := vm.NewString(strconv.Itoa(k))
+		present, err := reflectHas(vmInstance, obj, pk)
 		if err != nil {
 			return nil, err
 		}
 		if !present {
 			continue
+		}
+		kValue, err := vmInstance.GetProperty(obj, pk.ToString())
+		if err != nil {
+			return nil, err
 		}
 		if kValue.Type() != vm.TypeString && !kValue.IsObject() && !kValue.IsCallable() {
 			return nil, vmInstance.NewTypeError("Language ID should be string or object.")

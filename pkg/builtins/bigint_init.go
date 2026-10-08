@@ -116,19 +116,12 @@ func (b *BigIntInitializer) InitRuntime(ctx *RuntimeContext) error {
 		return vm.NewString(bigIntVal.Text(radix)), nil
 	}))
 
-	bigintProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(2, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
-		thisBigInt := vmInstance.GetThis()
-
-		// Get the primitive BigInt value
-		primitiveBigInt, ok := thisBigIntValue(thisBigInt)
+	bigintProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
+		primitiveBigInt, ok := thisBigIntValue(vmInstance.GetThis())
 		if !ok {
-			// For non-BigInts, try to convert or throw error
-			return vm.NewString(thisBigInt.ToString()), nil
+			return vm.Undefined, vmInstance.NewTypeError("BigInt.prototype.toLocaleString requires that 'this' be a BigInt")
 		}
-
-		// For now, just return the string representation (proper locale support would be complex)
-		// TODO: Implement proper locale formatting
-		return vm.NewString(primitiveBigInt.AsBigInt().String()), nil
+		return intlFormatNumberWith(vmInstance, primitiveBigInt, intlArg(args, 0), intlArg(args, 1))
 	}))
 
 	bigintProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
