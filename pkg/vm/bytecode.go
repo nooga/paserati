@@ -870,6 +870,10 @@ type Chunk struct {
 	// Empty for script (non-module) compiles.
 	ModulePath     string
 	ExceptionTable []ExceptionHandler // Exception handlers for try/catch blocks
+	// CallSiteNames names the callee of call instructions for error messages
+	// ("o.run is not a function"), keyed by the offset just past the
+	// instruction. Read-only once compiled; nil when nothing was recorded.
+	CallSiteNames map[int]string
 	// BuiltinGlobalNames and GlobalNames record the compiler's indexed global
 	// layout. InterpretChunk consumers use them to reject incompatible VMs before
 	// bytecode can read or overwrite a different binding at the same index.
@@ -956,6 +960,15 @@ func (c *Chunk) MarkColumn(offset, column int) {
 		return
 	}
 	c.Columns = append(c.Columns, ColumnEntry{Offset: offset, Column: column})
+}
+
+// SetCallSiteName records the callee description of the call instruction
+// ending at offset.
+func (c *Chunk) SetCallSiteName(offset int, name string) {
+	if c.CallSiteNames == nil {
+		c.CallSiteNames = make(map[int]string)
+	}
+	c.CallSiteNames[offset] = name
 }
 
 // NewChunk creates a new, empty Chunk.

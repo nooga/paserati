@@ -255,6 +255,7 @@ func (c *Compiler) emitCall(dest, funcReg Register, argCount byte, line int) {
 	c.emitByte(byte(dest))
 	c.emitByte(byte(funcReg))
 	c.emitByte(argCount)
+	c.lastCallEnd = len(c.chunk.Code)
 }
 
 func (c *Compiler) emitTailCall(dest, funcReg Register, argCount byte, line int) {
@@ -262,6 +263,7 @@ func (c *Compiler) emitTailCall(dest, funcReg Register, argCount byte, line int)
 	c.emitByte(byte(dest))
 	c.emitByte(byte(funcReg))
 	c.emitByte(argCount)
+	c.lastCallEnd = len(c.chunk.Code)
 }
 
 func (c *Compiler) emitTailCallMethod(dest, funcReg, thisReg Register, argCount byte, line int) {
@@ -270,6 +272,7 @@ func (c *Compiler) emitTailCallMethod(dest, funcReg, thisReg Register, argCount 
 	c.emitByte(byte(funcReg))
 	c.emitByte(byte(thisReg))
 	c.emitByte(argCount)
+	c.lastCallEnd = len(c.chunk.Code)
 }
 
 // emitCallMethod emits OpCallMethod with method call convention (this as implicit first parameter)
@@ -292,6 +295,7 @@ func (c *Compiler) emitCallMethod(dest, funcReg, thisReg Register, argCount byte
 	c.emitByte(byte(funcReg))
 	c.emitByte(byte(thisReg))
 	c.emitByte(argCount)
+	c.lastCallEnd = len(c.chunk.Code)
 }
 
 // emitCallFromWithContext emits OpCallFromWithContext for calls inside with blocks
@@ -313,6 +317,7 @@ func (c *Compiler) emitSpreadCall(dest, funcReg, spreadArgReg Register, line int
 	c.emitByte(byte(dest))
 	c.emitByte(byte(funcReg))
 	c.emitByte(byte(spreadArgReg))
+	c.lastCallEnd = len(c.chunk.Code)
 }
 
 // emitSpreadCallMethod emits OpSpreadCallMethod for method calls with spread arguments
@@ -322,6 +327,7 @@ func (c *Compiler) emitSpreadCallMethod(dest, funcReg, thisReg, spreadArgReg Reg
 	c.emitByte(byte(funcReg))
 	c.emitByte(byte(thisReg))
 	c.emitByte(byte(spreadArgReg))
+	c.lastCallEnd = len(c.chunk.Code)
 }
 
 // emitNew emits OpNew with constructor register, argument count, and flags

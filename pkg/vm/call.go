@@ -734,7 +734,15 @@ func (vm *VM) prepareCallWithGeneratorMode(calleeVal Value, thisValue Value, arg
 	default:
 		currentFrame.ip = callerIP
 		// Throw a TypeError exception for non-callable values
-		errorMsg := fmt.Sprintf("%s is not a function", calleeVal.TypeName())
+		// Name the callee as written when the compiler recorded it (#622):
+		// "o.run is not a function" beats "undefined is not a function".
+		callee := calleeVal.TypeName()
+		if currentFrame.closure != nil && currentFrame.closure.Fn != nil && currentFrame.closure.Fn.Chunk != nil {
+			if name, ok := currentFrame.closure.Fn.Chunk.CallSiteNames[callerIP]; ok {
+				callee = name
+			}
+		}
+		errorMsg := fmt.Sprintf("%s is not a function", callee)
 
 		// DEBUG: Add extra context to help identify what's undefined
 		if calleeVal.Type() == TypeUndefined {

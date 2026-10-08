@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"math/big"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
@@ -2270,6 +2271,17 @@ func (c *Compiler) determineTotalArgCount(node *parser.CallExpression) int {
 }
 
 func (c *Compiler) compileCallExpression(node *parser.CallExpression, hint Register) (Register, errors.PaseratiError) {
+	// Name this call site for "x is not a function" errors (#622). Calls in
+	// the arguments are emitted first, so the last call emitted while
+	// compiling this expression is its own.
+	callStart := len(c.chunk.Code)
+	defer func() {
+		if c.lastCallEnd > callStart {
+			if name := calleeDescription(node.Function); name != "" {
+				c.chunk.SetCallSiteName(c.lastCallEnd, name)
+			}
+		}
+	}()
 	// Manage temporary registers with automatic cleanup
 	var tempRegs []Register
 	defer func() {
@@ -4761,4 +4773,56 @@ func (c *Compiler) compileDirectEval(node *parser.CallExpression, hint Register,
 	c.chunk.EmitByte(byte(codeReg))
 
 	return hint, nil
+}
+
+// calleeDescription renders a callee the way V8's "is not a function"
+// message does: identifiers, `this` and dotted member chains as written,
+// anything else as "(intermediate value)". Empty when the result would be
+// unhelpfully long.
+func calleeDescription(expr parser.Expression) string {
+	var b strings.Builder
+	var walk func(e parser.Expression) bool
+	walk = func(e parser.Expression) bool {
+		switch n := e.(type) {
+		case *parser.Identifier:
+			b.WriteString(n.Value)
+		case *parser.ThisExpression:
+			b.WriteString("this")
+		case *parser.SuperExpression:
+			b.WriteString("super")
+		case *parser.MemberExpression:
+			if !walk(n.Object) {
+				return false
+			}
+			switch prop := n.Property.(type) {
+			case *parser.Identifier:
+				b.WriteString("." + prop.Value)
+			default:
+				return false
+			}
+		case *parser.IndexExpression:
+			if !walk(n.Left) {
+				return false
+			}
+			switch idx := n.Index.(type) {
+			case *parser.StringLiteral:
+				b.WriteString("." + idx.Value)
+			case *parser.Identifier:
+				b.WriteString("[" + idx.Value + "]")
+			case *parser.NumberLiteral:
+				b.WriteString(fmt.Sprintf("[%v]", idx.Value))
+			default:
+				b.WriteString("[...]")
+			}
+		case *parser.TypeAssertionExpression, *parser.NonNullExpression, *parser.SatisfiesExpression:
+			return walk(parser.UnwrapTypeAssertions(e))
+		default:
+			b.WriteString("(intermediate value)")
+		}
+		return true
+	}
+	if !walk(expr) || b.Len() > 80 {
+		return ""
+	}
+	return b.String()
 }

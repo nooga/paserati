@@ -210,17 +210,17 @@ func (vm *VM) opGetProp(frame *CallFrame, ip int, objVal *Value, propName string
 		// Check for null/undefined specifically for a better error message
 		switch objVal.Type() {
 		case TypeNull, TypeUndefined:
-			// Throw JS TypeError: Cannot read property 'X' of null/undefined
+			// Throw JS TypeError: Cannot read properties of null/undefined (reading 'X')
 			var excVal Value
 			if typeErrCtor, ok := vm.GetGlobal("TypeError"); ok {
-				if res, callErr := vm.Call(typeErrCtor, Undefined, []Value{NewString(fmt.Sprintf("Cannot read property '%s' of %s", propName, objVal.TypeName()))}); callErr == nil {
+				if res, callErr := vm.Call(typeErrCtor, Undefined, []Value{NewString(fmt.Sprintf("Cannot read properties of %s (reading '%s')", objVal.TypeName(), propName))}); callErr == nil {
 					excVal = res
 				}
 			}
 			if excVal.Type() == 0 {
 				eo := NewObject(vm.ErrorPrototype).AsPlainObject()
 				eo.SetOwn("name", NewString("TypeError"))
-				eo.SetOwn("message", NewString(fmt.Sprintf("Cannot read property '%s' of %s", propName, objVal.TypeName())))
+				eo.SetOwn("message", NewString(fmt.Sprintf("Cannot read properties of %s (reading '%s')", objVal.TypeName(), propName)))
 				excVal = NewValueFromPlainObject(eo)
 			}
 			if frame != nil && !frameWasNil {

@@ -546,6 +546,9 @@ type Compiler struct {
 	// --- Decorator Support ---
 	// Pre-evaluated decorators for the current class being compiled
 	currentClassDecorators []*decoratorInfo
+	// lastCallEnd is the offset just past the most recently emitted call
+	// instruction, for naming call sites (see recordCallSiteName).
+	lastCallEnd int
 	// currentInstanceInitializers names the hidden binding holding the
 	// initializers non-static method decorators add (see
 	// RunInitializersStatement); empty when the class being compiled has none.
