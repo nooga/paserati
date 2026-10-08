@@ -1384,11 +1384,9 @@ func (c *Checker) inferPropertyType(prop *parser.PropertyDefinition) types.Type 
 		propType = types.Any
 	}
 
-	// Wrap with readonly if the property is readonly
-	if prop.Readonly {
-		return types.NewReadonlyType(propType)
-	}
-
+	// A readonly field's type is its plain type: readonly is a property of the
+	// member (recorded in ClassMeta), not of the value - `readonly tags:
+	// string[]` holds a mutable array.
 	return propType
 }
 

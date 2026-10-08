@@ -89,6 +89,14 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			}
 		}
 
+		// A readonly member (writable only in its class's constructor) keeps
+		// its literal type: `readonly n = 1` accepts only 1.
+		if memberLHS, isMember := node.Left.(*parser.MemberExpression); isMember && memberLHS.Property != nil {
+			if objT := memberLHS.Object.GetComputedType(); objT != nil && c.isReadonlyProperty(objT, c.extractPropertyName(memberLHS.Property), 0) {
+				targetType = lhsType
+			}
+		}
+
 		// For member expressions, if the property has been narrowed (e.g., this._tools
 		// narrowed from string[] | null to null), check assignment against the original
 		// declared property type, not the narrowed type.

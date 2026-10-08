@@ -661,6 +661,12 @@ func (ot *ObjectType) AsClassConstructor(className string) *ObjectType {
 func (ot *ObjectType) WithClassMember(memberName string, memberType Type, accessLevel AccessModifier, isStatic, isReadonly bool) *ObjectType {
 	// Add the property to the type
 	ot.Properties[memberName] = memberType
+	if isReadonly {
+		if ot.ReadOnlyProperties == nil {
+			ot.ReadOnlyProperties = make(map[string]bool)
+		}
+		ot.ReadOnlyProperties[memberName] = true
+	}
 
 	// Add access control metadata
 	if ot.ClassMeta != nil {
