@@ -375,6 +375,11 @@ type Checker struct {
 	// determines (`const xs: string[] = from()`).
 	returnContexts map[*parser.CallExpression]types.Type
 
+	// pendingInits are unannotated top-level declarators Pass 5 hasn't
+	// reached, inferred on demand when a function body reads them
+	// (hoisted_inits.go).
+	pendingInits map[string]*pendingInit
+
 	// --- Loop/switch/label context (reset when entering a new function scope) ---
 	loopDepth    int             // depth of enclosing iteration statements in current function
 	switchDepth  int             // depth of enclosing switch statements in current function
@@ -784,6 +789,9 @@ func (c *Checker) hoistVarLikeDeclarationsPass2(declarations []*parser.VarDeclar
 		}
 		// Set type on the Name node itself
 		varName.SetComputedType(preliminaryType)
+		if !ambient {
+			c.registerPendingInit(declarator, globalEnv)
+		}
 	}
 
 	return functionsToVisitBody
@@ -955,6 +963,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// Source positions and first-declaration records are per program: a REPL
 	// session checks many programs against one persistent global scope.
 	c.blockScoped = nil
+	c.pendingInits = nil
 	c.varFirstDecl = nil
 	c.pass2VarSeen = nil
 	// Duplicate-declaration diagnostics come from the parser's declaration binder.
@@ -2789,6 +2798,7 @@ func (c *Checker) visit(node parser.Node) {
 		// }
 
 		// First try regular resolution, then check with objects
+		c.inferPendingInit(node.Value)
 		typ, isConst, found := c.env.Resolve(node.Value) // Use node.Value directly; UPDATED TO 3 VARS
 		isFromWith := false
 		if found {
