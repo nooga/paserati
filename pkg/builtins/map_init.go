@@ -88,6 +88,20 @@ func (m *MapInitializer) InitTypes(ctx *TypeContext) error {
 		return err
 	}
 
+	// ReadonlyMap<K, V>: Map<K, V> without the mutating methods
+	readonlyBody := types.NewObjectType()
+	for name, propType := range mapInstanceType.Properties {
+		switch name {
+		case "set", "delete", "clear", "getOrInsert", "getOrInsertComputed":
+		default:
+			readonlyBody.WithProperty(name, propType)
+		}
+	}
+	readonlyMap := &types.GenericType{Name: "ReadonlyMap", TypeParameters: mapType.TypeParameters, Body: readonlyBody}
+	if err := ctx.DefineTypeAlias("ReadonlyMap", readonlyMap); err != nil {
+		return err
+	}
+
 	// Also define the type alias for type annotations like Map<string, number>
 	return ctx.DefineTypeAlias("Map", mapType)
 }

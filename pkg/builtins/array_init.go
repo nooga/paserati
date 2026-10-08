@@ -84,15 +84,15 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 		// Make callback-based methods generic (these are the important ones!)
 		WithProperty("find", a.createGenericMethod("find", tParam,
 			types.NewSimpleFunction([]types.Type{
-				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Unknown, []bool{false, true, true})},
 				types.NewUnionType(tType, types.Undefined)))).
 		WithProperty("findIndex", a.createGenericMethod("findIndex", tParam,
 			types.NewSimpleFunction([]types.Type{
-				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Unknown, []bool{false, true, true})},
 				types.Number))).
 		WithProperty("filter", a.createGenericMethod("filter", tParam,
 			types.NewSimpleFunction([]types.Type{
-				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Unknown, []bool{false, true, true})},
 				tArrayType))).
 		WithProperty("map", a.createGenericMapMethod(tParam)).
 		WithProperty("forEach", a.createGenericMethod("forEach", tParam,
@@ -101,11 +101,11 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 				types.Undefined))).
 		WithProperty("every", a.createGenericMethod("every", tParam,
 			types.NewSimpleFunction([]types.Type{
-				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Unknown, []bool{false, true, true})},
 				types.Boolean))).
 		WithProperty("some", a.createGenericMethod("some", tParam,
 			types.NewSimpleFunction([]types.Type{
-				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Unknown, []bool{false, true, true})},
 				types.Boolean))).
 		// Keep reduce non-generic for now since it's complex
 		WithProperty("reduce", types.NewOptionalFunction([]types.Type{types.NewSimpleFunction([]types.Type{types.Any, types.Any, types.Number, &types.ArrayType{ElementType: types.Any}}, types.Any), types.Any}, types.Any, []bool{false, true})).
@@ -129,12 +129,12 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 		// findLast: (predicate: (value: T, index?: number, array?: T[]) => boolean) => T | undefined
 		WithProperty("findLast", a.createGenericMethod("findLast", tParam,
 			types.NewSimpleFunction([]types.Type{
-				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Unknown, []bool{false, true, true})},
 				types.NewUnionType(tType, types.Undefined)))).
 		// findLastIndex: (predicate: (value: T, index?: number, array?: T[]) => boolean) => number
 		WithProperty("findLastIndex", a.createGenericMethod("findLastIndex", tParam,
 			types.NewSimpleFunction([]types.Type{
-				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Boolean, []bool{false, true, true})},
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Unknown, []bool{false, true, true})},
 				types.Number))).
 		// copyWithin: (target: number, start?: number, end?: number) => T[]
 		WithProperty("copyWithin", a.createGenericMethod("copyWithin", tParam,

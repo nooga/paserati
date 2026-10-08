@@ -245,10 +245,14 @@ func (kt *KeyofType) typeNode() {}
 // TypeofType represents a typeof type operator like typeof someVariable
 // This extracts the type of a value from the type environment
 type TypeofType struct {
-	Identifier string // The identifier whose type we're extracting
+	Identifier string   // The identifier whose type we're extracting
+	Path       []string // Full dotted path (`typeof a.b.c`), when longer than the identifier
 }
 
 func (tt *TypeofType) String() string {
+	if len(tt.Path) > 1 {
+		return "typeof " + strings.Join(tt.Path, ".")
+	}
 	return fmt.Sprintf("typeof %s", tt.Identifier)
 }
 
@@ -257,7 +261,7 @@ func (tt *TypeofType) Equals(other Type) bool {
 	if !ok {
 		return false
 	}
-	return tt.Identifier == otherTt.Identifier
+	return tt.Identifier == otherTt.Identifier && strings.Join(tt.Path, ".") == strings.Join(otherTt.Path, ".")
 }
 
 func (tt *TypeofType) typeNode() {}

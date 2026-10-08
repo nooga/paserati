@@ -57,6 +57,7 @@ func (c *Checker) checkArrayLiteral(node *parser.ArrayLiteral) {
 		// Handle spread elements specially
 		if spreadElem, isSpread := elemNode.(*parser.SpreadElement); isSpread {
 			// For spread elements, extract the element type from the array
+			elemType = stripReadonlyArrays(elemType)
 			if arrayType, isArray := elemType.(*types.ArrayType); isArray {
 				// Use the element type of the spread array
 				generalizedType := types.DeeplyWidenType(arrayType.ElementType)
@@ -201,6 +202,7 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 				if spreadType == nil {
 					spreadType = types.Any
 				}
+				spreadType = stripReadonlyArrays(spreadType)
 
 				// Validate that the spread array's element type is assignable to expected element type
 				if spreadArrayType, isArray := spreadType.(*types.ArrayType); isArray {

@@ -120,6 +120,9 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 			}
 		}
 
+		// A property declared `Required<T>`/`Partial<T>` is still a mapped type here.
+		targetType = c.expandIfMappedType(targetType)
+
 		excessReported := false
 		if node.Operator == "=" && types.IsAssignable(assignedType, targetType) && c.findExcessProperty(node.Value, targetType) != nil {
 			c.reportNotAssignable(node.Left, node.Value, assignedType, targetType, headAssign)

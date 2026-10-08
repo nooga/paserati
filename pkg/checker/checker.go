@@ -3208,6 +3208,14 @@ func (c *Checker) visit(node parser.Node) {
 		}
 
 		// The type of a conditional expression is the union of its branches.
+		// A bare `[]` branch is `never[]`, which subtype reduction drops
+		// against the other branch's array type (`c ? xs : []` is `T[]`).
+		if isEmptyArrayLiteral(node.Consequence) {
+			consType = &types.ArrayType{ElementType: types.Never}
+		}
+		if isEmptyArrayLiteral(node.Alternative) {
+			altType = &types.ArrayType{ElementType: types.Never}
+		}
 		var resultType types.Type
 		if consType == altType {
 			resultType = consType
