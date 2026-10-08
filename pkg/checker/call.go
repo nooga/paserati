@@ -507,6 +507,25 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	c.noteIndirectCallCallee(node.Function)
 	c.visit(node.Function)
 	funcNodeType := node.Function.GetComputedType()
+
+	// The receiver a method call passes as `this`, for signatures that
+	// declare an explicit `this` parameter.
+	savedReceiver := c.callReceiver
+	c.callReceiver = nil
+	switch fn := node.Function.(type) {
+	case *parser.MemberExpression:
+		if fn.Object != nil {
+			c.callReceiver = fn.Object.GetComputedType()
+		}
+	case *parser.ChainBase:
+		if fn.Receiver != nil {
+			c.callReceiver = fn.Receiver.GetComputedType()
+		}
+	}
+	if c.callReceiver != nil {
+		c.callReceiver = types.RemoveNullishTypes(c.callReceiver)
+	}
+	defer func() { c.callReceiver = savedReceiver }()
 	debugPrintf("// [Checker CallExpr] Function type resolved to: %T (%v)\n", funcNodeType, funcNodeType)
 
 	if funcNodeType == nil {
@@ -1081,6 +1100,9 @@ func (c *Checker) isLikelyFunctionArgument(argNode parser.Expression) bool {
 // collectTypeParameterConstraintsPhase1 collects constraints only from non-nil argument types
 func (c *Checker) collectTypeParameterConstraintsPhase1(sig *types.Signature, argTypes []types.Type) []TypeParameterConstraint {
 	var constraints []TypeParameterConstraint
+	if sig.ThisType != nil && c.callReceiver != nil {
+		constraints = append(constraints, c.collectConstraintsFromType(sig.ThisType, c.callReceiver)...)
+	}
 
 	// For each parameter, if it contains type parameters, create constraints based on the argument type
 	for i, paramType := range sig.ParameterTypes {
@@ -1306,6 +1328,9 @@ type constraintTypePair struct {
 // collectTypeParameterConstraints analyzes arguments to build constraints for type parameters
 func (c *Checker) collectTypeParameterConstraints(sig *types.Signature, argTypes []types.Type) []TypeParameterConstraint {
 	var constraints []TypeParameterConstraint
+	if sig.ThisType != nil && c.callReceiver != nil {
+		constraints = append(constraints, c.collectConstraintsFromType(sig.ThisType, c.callReceiver)...)
+	}
 
 	// For each parameter, if it contains type parameters, create constraints based on the argument type
 	for i, paramType := range sig.ParameterTypes {
@@ -1799,6 +1824,14 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			debugPrintf("// [Checker Substitute] Expanded mapped type: %s -> %s\n",
 				substitutedMapped.String(), expanded.String())
 			return expanded
+		case *types.KeyofType:
+			return c.computeKeyofType(substitute(typ.OperandType))
+		case *types.IndexedAccessType:
+			objectType, indexType := substitute(typ.ObjectType), substitute(typ.IndexType)
+			if resolved := c.computeIndexedAccessType(objectType, indexType); resolved != nil {
+				return resolved
+			}
+			return &types.IndexedAccessType{ObjectType: objectType, IndexType: indexType}
 		// Add more cases as needed
 		default:
 			return typ

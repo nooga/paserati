@@ -1889,6 +1889,21 @@ func (me *MemberExpression) String() string {
 	return out.String()
 }
 
+// ChainBase stands in for the missing receiver at the root of an optional
+// chain's continuation while the checker types it. It never appears in a parsed
+// tree: the checker installs it temporarily and restores the nil root.
+type ChainBase struct {
+	BaseExpression
+	Token *lexer.Token
+	// Receiver is the object the chain head's property was read from, which a
+	// method call in the continuation passes as `this`.
+	Receiver Expression
+}
+
+func (cb *ChainBase) expressionNode()      {}
+func (cb *ChainBase) TokenLiteral() string { return "" }
+func (cb *ChainBase) String() string       { return "<chain>" }
+
 // OptionalChainingExpression represents optional chaining property access (e.g., object?.property).
 // For long chains like obj?.a.b.c, the entire chain after ?. is captured to enable proper short-circuiting.
 type OptionalChainingExpression struct {
@@ -2319,6 +2334,7 @@ type FunctionTypeExpression struct {
 	Parameters     []Expression     // Slice of Expression nodes representing parameter types
 	OptionalParams []bool           // Tracks optional parameters in method/call signatures
 	RestParameter  Expression       // Optional rest parameter type (e.g., ...args: string[])
+	ThisType       Expression       // Optional explicit `this` parameter type
 	ReturnType     Expression       // Expression node for the return type
 	// IsMethodSignature marks `m(x: T): U` members of type literals and
 	// interfaces, whose parameters stay bivariant under strictFunctionTypes.

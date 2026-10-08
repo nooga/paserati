@@ -72,6 +72,9 @@ type typeSigParams struct {
 	params   []Expression
 	optional []bool
 	rest     Expression
+	// this is the type of an explicit `this` parameter, which is not part of
+	// the call signature.
+	this Expression
 	// bareName is set when the list consists of exactly one unannotated
 	// identifier, e.g. `(Foo)`: that is a parenthesized type unless an arrow
 	// follows.
@@ -116,10 +119,11 @@ func (p *Parser) parseTypeSignatureParams() (res typeSigParams, ok bool) {
 		optional := false
 		switch {
 		case p.curTokenIs(lexer.THIS) && p.peekTokenIs(lexer.COLON):
-			// `this: T` is not part of the call signature; parse and drop it.
+			// `this: T` is not part of the call signature; keep it apart.
 			p.nextToken()
 			p.nextToken()
-			if p.parseTypeExpression() == nil {
+			res.this = p.parseTypeExpression()
+			if res.this == nil {
 				return res, false
 			}
 			goto next

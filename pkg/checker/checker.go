@@ -409,6 +409,8 @@ type Checker struct {
 	// This ensures type predicate functions and other hoisted functions are available
 	deferMethodBodies    bool
 	deferredMethodBodies []deferredMethodBodyCheck
+	// Receiver type of the method call being checked (for `this` parameters).
+	callReceiver types.Type
 	// Generic methods whose first check only produced a signature.
 	speculatedGenericMethods map[*parser.FunctionLiteral]bool
 	// True while Pass 2.5 checks the bodies of top-level classes: all top-level
@@ -1428,8 +1430,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		// Handle explicit 'this' parameter
 		if len(funcLit.Parameters) > 0 && funcLit.Parameters[0].IsThis {
 			// Set the 'this' context from the first parameter's type
-			if len(funcSignature.ParameterTypes) > 0 {
-				c.currentThisType = funcSignature.ParameterTypes[0]
+			if thisType := funcLit.Parameters[0].ComputedType; thisType != nil {
+				c.currentThisType = thisType
 				debugPrintf("// [Checker Pass 3] Setting this type from explicit parameter: %s\n", c.currentThisType.String())
 			} else {
 				// Should not happen if resolution worked correctly
@@ -1490,14 +1492,16 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		funcEnv := NewFunctionEnvironment(typeParamEnv)
 		c.env = funcEnv
 		// Define parameters using the initial signature
-		for i, paramNode := range funcLit.Parameters {
-			if i < len(funcSignature.ParameterTypes) {
-				paramType := funcSignature.ParameterTypes[i]
-				// Skip 'this' parameters as they don't have names and don't go into the scope
-				if !paramNode.IsThis {
-					if !funcEnv.Define(paramNode.Name.Value, paramType, false) {
-						c.redeclarationReportedByBinder()
-					}
+		sigIdx := 0
+		for _, paramNode := range funcLit.Parameters {
+			if paramNode.IsThis {
+				continue // not in the signature, and not a binding
+			}
+			if sigIdx < len(funcSignature.ParameterTypes) {
+				paramType := funcSignature.ParameterTypes[sigIdx]
+				sigIdx++
+				if !funcEnv.Define(paramNode.Name.Value, paramType, false) {
+					c.redeclarationReportedByBinder()
 				}
 				paramNode.ComputedType = paramType // Set type on parameter node
 			} else {
@@ -3203,21 +3207,12 @@ func (c *Checker) visit(node parser.Node) {
 			altType = types.Any
 		}
 
+		// The type of a conditional expression is the union of its branches.
 		var resultType types.Type
-		// Basic type inference: if types match, use that type, otherwise Any.
-		// TODO: Use Union types here when available.
-		if consType == altType { // Pointer comparison works for primitives and Any
+		if consType == altType {
 			resultType = consType
 		} else {
-			// Check structural equality for ArrayTypes (basic version)
-			consArray, consIsArray := consType.(*types.ArrayType)
-			altArray, altIsArray := altType.(*types.ArrayType)
-			if consIsArray && altIsArray && consArray.ElementType == altArray.ElementType {
-				resultType = consType // Types are equivalent array types
-			} else {
-				// TODO: Add structural checks for ObjectType, FunctionType?
-				resultType = types.Any // Types differ, fallback to Any
-			}
+			resultType = types.UnionWithSubtypeReduction(consType, altType)
 		}
 
 		node.SetComputedType(resultType)
@@ -3298,6 +3293,9 @@ func (c *Checker) visit(node parser.Node) {
 		c.checkMemberExpression(node)
 
 	// --- NEW: Optional Chaining Expression Type Checking ---
+	case *parser.ChainBase:
+		// Type preset by checkOptionalContinuation.
+
 	case *parser.OptionalChainingExpression:
 		c.checkOptionalChainingExpression(node)
 
