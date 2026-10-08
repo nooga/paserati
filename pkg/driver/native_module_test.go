@@ -354,6 +354,12 @@ func TestNativeModuleGoSignatureTypes(t *testing.T) {
 				}
 				return &k
 			})
+			m.Function("find", func(k string) (*resp, error) {
+				if k == "" {
+					return nil, fmt.Errorf("no key")
+				}
+				return &resp{Status: 1, Body: k}, nil
+			})
 			m.Function("fail", func(msg string) error {
 				if msg == "" {
 					return nil
@@ -372,6 +378,7 @@ func TestNativeModuleGoSignatureTypes(t *testing.T) {
 		{"pointer field", `import h from "host"; h.get("u", { method: "GET", timeout: 5 }).status`, "201"},
 		{"optional field in type", `import { Resp } from "host"; const r: Resp = { status: 1, body: "" }; r.status`, "1"},
 		{"nullable result", `import h from "host"; const v = h.lookup(""); v === null ? "null" : v.length`, "null"},
+		{"(*T, error) is not nullable", `import h from "host"; h.find("k").body`, "k"},
 		{"lone error throws", `import h from "host"; let out = String(h.fail("")); try { h.fail("boom"); } catch (e) { out += " " + (e as Error).message; } out`, "undefined boom"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
