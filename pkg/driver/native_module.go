@@ -109,13 +109,131 @@ func (m *ModuleBuilder) Function(name string, fn interface{}) *ModuleBuilder {
 	return m
 }
 
-// AsyncFunction adds a function whose JS return value is a Promise.
-// The Go implementation still runs synchronously on the caller's thread
-// (do not use this for real I/O — copy the fetch BeginExternalOp pattern).
-func (m *ModuleBuilder) AsyncFunction(name string, fn interface{}) *ModuleBuilder {
+// AsyncOption configures ModuleBuilder.AsyncFunction.
+type AsyncOption int
+
+const (
+	// OffThread runs the Go function on its own goroutine and settles the
+	// returned promise from the event loop when it finishes, so a slow
+	// function (I/O, a long computation) doesn't block the VM. Arguments are
+	// converted before the goroutine starts and results after it returns,
+	// both on the VM's goroutine. The function must not touch the VM itself,
+	// and so can't take func (JS callback) parameters: declaring one panics.
+	OffThread AsyncOption = iota + 1
+)
+
+// AsyncFunction adds a function whose JS return value is a Promise. By
+// default the Go function runs synchronously on the caller's thread and the
+// promise is already settled when it returns; pass OffThread to run it on
+// its own goroutine instead (#623). A non-nil error result rejects the
+// promise.
+func (m *ModuleBuilder) AsyncFunction(name string, fn interface{}, opts ...AsyncOption) *ModuleBuilder {
 	m.exports[name] = goAsyncFunctionToTSType(fn)
-	m.values[name] = wrapNativeAsAsync(m.vm, name, goFunctionToVM(fn))
+	for _, o := range opts {
+		if o == OffThread {
+			m.values[name] = m.offThreadAsync(name, fn)
+			return m
+		}
+	}
+	m.values[name] = wrapNativeAsAsync(m.vm, name, m.goFunctionToVM(fn))
 	return m
+}
+
+// offThreadAsync wraps fn as a native function returning a promise that a
+// goroutine running fn settles (see OffThread).
+func (m *ModuleBuilder) offThreadAsync(name string, fn interface{}) vm.Value {
+	fnValue := reflect.ValueOf(fn)
+	fnType := fnValue.Type()
+	if fnType.Kind() != reflect.Func {
+		panic(fmt.Sprintf("AsyncFunction %q: not a function", name))
+	}
+	for i := 0; i < fnType.NumIn(); i++ {
+		if fnType.In(i).Kind() == reflect.Func {
+			panic(fmt.Sprintf("AsyncFunction %q: an OffThread function can't take a func parameter (it would call into the VM from another goroutine)", name))
+		}
+	}
+	vmInst := m.vm
+	conv := m.conv()
+	numIn := fnType.NumIn()
+	variadic := fnType.IsVariadic()
+	minArgs := numIn
+	if variadic {
+		minArgs--
+	}
+	return vm.NewNativeFunction(minArgs, variadic, name, func(args []vm.Value) (vm.Value, error) {
+		goArgs := make([]reflect.Value, 0, numIn)
+		fixed := numIn
+		if variadic {
+			fixed--
+		}
+		for i := 0; i < fixed; i++ {
+			if i < len(args) {
+				goArgs = append(goArgs, conv.fromVM(args[i], fnType.In(i)))
+			} else {
+				goArgs = append(goArgs, reflect.Zero(fnType.In(i)))
+			}
+		}
+		if variadic {
+			elem := fnType.In(fixed).Elem()
+			for i := fixed; i < len(args); i++ {
+				goArgs = append(goArgs, conv.fromVM(args[i], elem))
+			}
+		}
+
+		promise := vmInst.NewPendingPromise()
+		promiseObj := promise.AsPromise()
+		rt := vmInst.GetAsyncRuntime()
+		rt.BeginExternalOp()
+		go func() {
+			defer rt.EndExternalOp()
+			var results []reflect.Value
+			var callErr error
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						callErr = fmt.Errorf("%s: panic: %v", name, r)
+					}
+				}()
+				results = fnValue.Call(goArgs)
+			}()
+			if callErr == nil && len(results) > 0 {
+				if last := results[len(results)-1]; last.Type() == errorType {
+					if !last.IsNil() {
+						callErr = last.Interface().(error)
+					}
+					results = results[:len(results)-1]
+				}
+			}
+			// Queued before EndExternalOp so the runtime can't go idle in
+			// between; it runs on the VM's goroutine.
+			rt.ScheduleMicrotask(func() {
+				if callErr != nil {
+					vmInst.RejectPromise(promiseObj, goErrorToJS(vmInst, callErr))
+					return
+				}
+				result := vm.Undefined
+				if len(results) > 0 {
+					result = conv.toVM(results[0])
+				}
+				vmInst.ResolvePromise(promiseObj, result)
+			})
+		}()
+		return promise, nil
+	})
+}
+
+// goErrorToJS is the rejection value for a Go error: the thrown value if it
+// carries one, otherwise an Error with its message.
+func goErrorToJS(vmInst *vm.VM, err error) vm.Value {
+	if ee, ok := err.(vm.ExceptionError); ok {
+		return ee.GetExceptionValue()
+	}
+	if ctor, ok := vmInst.GetGlobal("Error"); ok {
+		if v, cerr := vmInst.Call(ctor, vm.Undefined, []vm.Value{vm.NewString(err.Error())}); cerr == nil {
+			return v
+		}
+	}
+	return vm.NewString(err.Error())
 }
 
 func goAsyncFunctionToTSType(fn interface{}) types.Type {
@@ -213,16 +331,38 @@ func (m *ModuleBuilder) Namespace(name string, builder func(ns *NamespaceBuilder
 	return m
 }
 
-// Interface adds a TypeScript interface (TODO: implement)
+// Interface exports a TypeScript object type named name, for type
+// annotations in importing code. Each field's type is given by a
+// types.Type, a reflect.Type, or a sample Go value of that type (see Type).
 func (m *ModuleBuilder) Interface(name string, fields map[string]interface{}) *ModuleBuilder {
-	// TODO: implement interface generation
+	obj := types.NewObjectType()
+	for field, spec := range fields {
+		obj.Properties[field] = tsTypeOfSpec(spec)
+	}
+	m.exports[name] = obj
 	return m
 }
 
-// Type adds a type alias (TODO: implement)
+// Type exports a TypeScript type alias named name. typedef is a
+// types.Type, a reflect.Type, or a sample Go value whose type is mapped the
+// way function signatures are (a struct becomes an object type keyed by its
+// fields' JSON names).
 func (m *ModuleBuilder) Type(name string, typedef interface{}) *ModuleBuilder {
-	// TODO: implement type alias generation
+	m.exports[name] = tsTypeOfSpec(typedef)
 	return m
+}
+
+// tsTypeOfSpec maps an Interface/Type type specification to a TS type.
+func tsTypeOfSpec(spec interface{}) types.Type {
+	switch s := spec.(type) {
+	case types.Type:
+		return s
+	case reflect.Type:
+		return goTypeToTSType(s)
+	case nil:
+		return types.Null
+	}
+	return goTypeToTSType(reflect.TypeOf(spec))
 }
 
 // Default sets the ESM default export.
@@ -292,7 +432,7 @@ func (ns *NamespaceBuilder) Function(name string, fn interface{}) *NamespaceBuil
 	ns.exports[name] = tsType
 
 	// Create runtime function directly
-	vmValue := goFunctionToVM(fn)
+	vmValue := (&goConverter{vm: ns.vm}).functionToVM(fn)
 	ns.values[name] = vmValue
 
 	return ns
@@ -307,7 +447,7 @@ func (m *ModuleBuilder) goValueToTSType(value interface{}) types.Type {
 
 // goValueToVM converts a Go value to a VM value
 func (m *ModuleBuilder) goValueToVM(value interface{}) vm.Value {
-	return goValueToVM(value)
+	return m.conv().valueToVM(value)
 }
 
 // goFunctionToTSType converts a Go function to a TypeScript function type
@@ -317,7 +457,12 @@ func (m *ModuleBuilder) goFunctionToTSType(fn interface{}) types.Type {
 
 // goFunctionToVM converts a Go function to a VM native function
 func (m *ModuleBuilder) goFunctionToVM(fn interface{}) vm.Value {
-	return goFunctionToVM(fn)
+	return m.conv().functionToVM(fn)
+}
+
+// conv is the value converter for this builder's VM.
+func (m *ModuleBuilder) conv() *goConverter {
+	return &goConverter{vm: m.vm}
 }
 
 // createClassConstructor creates a JavaScript-style constructor function that:
@@ -361,7 +506,7 @@ func (m *ModuleBuilder) createClassConstructor(name string, goStruct interface{}
 		// arity - which panics outright rather than ignoring the extras.
 		goArgs := make([]reflect.Value, 0, constructorType.NumIn())
 		for i := 0; i < len(args) && i < constructorType.NumIn(); i++ {
-			goArgs = append(goArgs, vmValueToReflectValue(args[i], constructorType.In(i)))
+			goArgs = append(goArgs, m.conv().fromVM(args[i], constructorType.In(i)))
 		}
 
 		// Add missing arguments as zero values if constructor expects more
@@ -519,7 +664,7 @@ func (m *ModuleBuilder) createPrototypeMethod(unboundMethod reflect.Value) vm.Va
 		goArgs := make([]reflect.Value, 0, methodType.NumIn())
 		goArgs = append(goArgs, goInstance)
 		for i := 0; i < len(args) && i+1 < methodType.NumIn(); i++ {
-			goArgs = append(goArgs, vmValueToReflectValue(args[i], methodType.In(i+1)))
+			goArgs = append(goArgs, m.conv().fromVM(args[i], methodType.In(i+1)))
 		}
 
 		// Add missing arguments as zero values if method expects more
@@ -607,7 +752,7 @@ func (m *ModuleBuilder) createBoundMethod(methodFunc reflect.Value) vm.Value {
 		// createClassConstructor.
 		goArgs := make([]reflect.Value, 0, methodType.NumIn())
 		for i := 0; i < len(args) && i < methodType.NumIn(); i++ {
-			goArgs = append(goArgs, vmValueToReflectValue(args[i], methodType.In(i)))
+			goArgs = append(goArgs, m.conv().fromVM(args[i], methodType.In(i)))
 		}
 
 		// Add missing arguments as zero values if method expects more
@@ -746,7 +891,7 @@ func goValueToVM(value interface{}) vm.Value {
 	case nil:
 		return vm.Null
 	default:
-		return vm.Undefined
+		return reflectValueToVM(reflect.ValueOf(v))
 	}
 }
 
@@ -773,7 +918,7 @@ func goFunctionToTSType(fn interface{}) types.Type {
 }
 
 // goFunctionToVM converts a Go function to a VM native function using reflection
-func goFunctionToVM(fn interface{}) vm.Value {
+func (c *goConverter) functionToVM(fn interface{}) vm.Value {
 	fnValue := reflect.ValueOf(fn)
 	fnType := reflect.TypeOf(fn)
 
@@ -787,7 +932,18 @@ func goFunctionToVM(fn interface{}) vm.Value {
 		minArgs--
 	}
 
-	return vm.NewNativeFunction(minArgs, fnType.IsVariadic(), "native_function", func(args []vm.Value) (vm.Value, error) {
+	return vm.NewNativeFunction(minArgs, fnType.IsVariadic(), "native_function", func(args []vm.Value) (result vm.Value, err error) {
+		// A JS callback passed as a Go func parameter that throws, when the
+		// func type has no error result to carry it, unwinds to here.
+		defer func() {
+			if r := recover(); r != nil {
+				cb, ok := r.(jsCallbackPanic)
+				if !ok {
+					panic(r)
+				}
+				result, err = vm.Undefined, cb.err
+			}
+		}()
 		// Handle variadic functions specially
 		if fnType.IsVariadic() {
 			// For variadic functions, we need to handle the last parameter differently
@@ -796,7 +952,7 @@ func goFunctionToVM(fn interface{}) vm.Value {
 
 			// Convert normal arguments
 			for i := 0; i < normalArgCount && i < len(args); i++ {
-				goArgs = append(goArgs, vmValueToReflectValue(args[i], fnType.In(i)))
+				goArgs = append(goArgs, c.fromVM(args[i], fnType.In(i)))
 			}
 
 			// Add zero values for missing normal arguments
@@ -809,7 +965,7 @@ func goFunctionToVM(fn interface{}) vm.Value {
 				// The variadic parameter type is a slice
 				variadicType := fnType.In(normalArgCount).Elem()
 				for i := normalArgCount; i < len(args); i++ {
-					goArgs = append(goArgs, vmValueToReflectValue(args[i], variadicType))
+					goArgs = append(goArgs, c.fromVM(args[i], variadicType))
 				}
 			}
 
@@ -828,10 +984,10 @@ func goFunctionToVM(fn interface{}) vm.Value {
 					}
 				}
 				// No error, return the first value
-				return reflectValueToVM(results[0]), nil
+				return c.toVM(results[0]), nil
 			} else if len(results) == 1 {
 				// Single return value
-				return reflectValueToVM(results[0]), nil
+				return c.toVM(results[0]), nil
 			}
 
 			return vm.Undefined, nil
@@ -842,7 +998,7 @@ func goFunctionToVM(fn interface{}) vm.Value {
 		// createClassConstructor.
 		goArgs := make([]reflect.Value, 0, fnType.NumIn())
 		for i := 0; i < len(args) && i < fnType.NumIn(); i++ {
-			goArgs = append(goArgs, vmValueToReflectValue(args[i], fnType.In(i)))
+			goArgs = append(goArgs, c.fromVM(args[i], fnType.In(i)))
 		}
 
 		// Add missing arguments as zero values if function expects more
@@ -864,18 +1020,35 @@ func goFunctionToVM(fn interface{}) vm.Value {
 				}
 			}
 			// No error, return the first value
-			return reflectValueToVM(results[0]), nil
+			return c.toVM(results[0]), nil
 		} else if len(results) == 1 {
 			// Single return value
-			return reflectValueToVM(results[0]), nil
+			return c.toVM(results[0]), nil
 		}
 
 		return vm.Undefined, nil
 	})
 }
 
+// goFunctionToVM converts a Go function without a VM at hand (func
+// parameters then can't be called back).
+func goFunctionToVM(fn interface{}) vm.Value {
+	return (&goConverter{}).functionToVM(fn)
+}
+
 // goTypeToTSType maps Go types to TypeScript types
 func goTypeToTSType(t reflect.Type) types.Type {
+	return goTypeToTSTypeSeen(t, map[reflect.Type]types.Type{})
+}
+
+// goTypeToTSTypeSeen is goTypeToTSType with the struct types already being
+// mapped, so a self-referential struct (a *T field or method result) maps
+// to itself instead of recursing forever.
+func goTypeToTSTypeSeen(t reflect.Type, seen map[reflect.Type]types.Type) types.Type {
+	// vm.Value and the VM's own object types pass through untyped.
+	if t == vmValueType || (t.Kind() == reflect.Ptr && t.Elem().PkgPath() == vmValueType.PkgPath()) || t.PkgPath() == vmValueType.PkgPath() {
+		return types.Any
+	}
 	switch t.Kind() {
 	case reflect.String:
 		return types.String
@@ -887,7 +1060,43 @@ func goTypeToTSType(t reflect.Type) types.Type {
 	case reflect.Bool:
 		return types.Boolean
 	case reflect.Map:
-		return mapTypeToObjectType(t, goTypeToTSType(t.Elem()))
+		return mapTypeToObjectType(t, goTypeToTSTypeSeen(t.Elem(), seen))
+	case reflect.Ptr:
+		return goTypeToTSTypeSeen(t.Elem(), seen)
+	case reflect.Struct:
+		// Exported fields, keyed by JSON name, as structToVM exposes them.
+		if known, ok := seen[t]; ok {
+			return known
+		}
+		obj := types.NewObjectType()
+		seen[t] = obj
+		mb := &ModuleBuilder{}
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			if name := mb.getJSONPropertyName(f); name != "" {
+				obj.Properties[name] = goTypeToTSTypeSeen(f.Type, seen)
+			}
+		}
+		// Methods, named as bindStructMethods binds them (lower-cased first
+		// letter), without the receiver.
+		ptr := reflect.PtrTo(t)
+		for i := 0; i < ptr.NumMethod(); i++ {
+			method := ptr.Method(i)
+			jsName := strings.ToLower(method.Name[:1]) + method.Name[1:]
+			params := make([]types.Type, 0, method.Type.NumIn()-1)
+			for j := 1; j < method.Type.NumIn(); j++ {
+				params = append(params, goTypeToTSTypeSeen(method.Type.In(j), seen))
+			}
+			var ret types.Type = types.Void
+			if method.Type.NumOut() > 0 {
+				ret = goTypeToTSTypeSeen(method.Type.Out(0), seen)
+			}
+			obj.Properties[jsName] = types.NewSimpleFunction(params, ret)
+		}
+		return obj
 	case reflect.Slice:
 		// Handle slices, particularly []byte -> Uint8Array
 		if t.Elem().Kind() == reflect.Uint8 {
@@ -896,7 +1105,7 @@ func goTypeToTSType(t reflect.Type) types.Type {
 			return types.Any
 		}
 		// For other slice types, return array type
-		elemType := goTypeToTSType(t.Elem())
+		elemType := goTypeToTSTypeSeen(t.Elem(), seen)
 		return &types.ArrayType{ElementType: elemType}
 	default:
 		return types.Any
@@ -918,244 +1127,8 @@ func mapTypeToObjectType(t reflect.Type, valueType types.Type) types.Type {
 	}
 }
 
-// vmValueToReflectValue converts a VM value to a reflect.Value for function calls
-func vmValueToReflectValue(vmVal vm.Value, targetType reflect.Type) reflect.Value {
-	// A Go parameter typed vm.Value itself wants the raw argument, untouched.
-	// Mirror reflectValueToVM's symmetric passthrough on the return side.
-	if targetType == reflect.TypeOf(vm.Value{}) {
-		return reflect.ValueOf(vmVal)
-	}
-	switch targetType.Kind() {
-	case reflect.String:
-		if vmVal.IsString() {
-			return reflect.ValueOf(vmVal.AsString())
-		}
-		return reflect.ValueOf(vmVal.ToString())
-	case reflect.Float64:
-		if vmVal.IsNumber() {
-			return reflect.ValueOf(vmVal.ToFloat())
-		}
-		return reflect.ValueOf(0.0)
-	case reflect.Float32:
-		if vmVal.IsNumber() {
-			return reflect.ValueOf(float32(vmVal.ToFloat()))
-		}
-		return reflect.ValueOf(float32(0.0))
-	case reflect.Int, reflect.Int64:
-		if vmVal.IsNumber() {
-			return reflect.ValueOf(int64(vmVal.ToFloat())).Convert(targetType)
-		}
-		return reflect.Zero(targetType)
-	case reflect.Bool:
-		if vmVal.IsBoolean() {
-			return reflect.ValueOf(vmVal.AsBoolean())
-		}
-		return reflect.ValueOf(false)
-	case reflect.Map:
-		// Convert VM object to Go map
-		if vmVal.IsObject() || vmVal.IsDictObject() {
-			// Create a new map of the target type
-			mapType := targetType
-			newMap := reflect.MakeMap(mapType)
 
-			// Get the object
-			var obj interface {
-				OwnKeys() []string
-				GetOwn(string) (vm.Value, bool)
-			}
-			if vmVal.IsObject() {
-				obj = vmVal.AsPlainObject()
-			} else if vmVal.IsDictObject() {
-				obj = vmVal.AsDictObject()
-			}
 
-			if obj != nil {
-				// Copy all properties
-				for _, key := range obj.OwnKeys() {
-					if val, ok := obj.GetOwn(key); ok {
-						// Convert the key
-						keyVal := reflect.ValueOf(key)
-						// Convert the value recursively
-						elemType := mapType.Elem()
-						valVal := vmValueToReflectValue(val, elemType)
-						if valVal.IsValid() {
-							newMap.SetMapIndex(keyVal, valVal)
-						}
-					}
-				}
-			}
-
-			return newMap
-		}
-		return reflect.Zero(targetType)
-	case reflect.Interface:
-		// For interface{}, we need to convert to a concrete Go type
-		switch {
-		case vmVal.IsString():
-			return reflect.ValueOf(vmVal.AsString())
-		case vmVal.IsNumber():
-			return reflect.ValueOf(vmVal.ToFloat())
-		case vmVal.IsBoolean():
-			return reflect.ValueOf(vmVal.AsBoolean())
-		case vmVal.Type() == vm.TypeNull:
-			return reflect.Zero(targetType)
-		case vmVal.IsObject() || vmVal.IsDictObject():
-			// Convert to map[string]interface{}
-			result := make(map[string]interface{})
-
-			var obj interface {
-				OwnKeys() []string
-				GetOwn(string) (vm.Value, bool)
-			}
-			if vmVal.IsObject() {
-				obj = vmVal.AsPlainObject()
-			} else if vmVal.IsDictObject() {
-				obj = vmVal.AsDictObject()
-			}
-
-			if obj != nil {
-				for _, key := range obj.OwnKeys() {
-					if val, ok := obj.GetOwn(key); ok {
-						// Recursively convert value
-						result[key] = vmValueToInterface(val)
-					}
-				}
-			}
-
-			return reflect.ValueOf(result)
-		default:
-			return reflect.Zero(targetType)
-		}
-	default:
-		return reflect.Zero(targetType)
-	}
-}
-
-// vmValueToInterface converts a VM value to a Go interface{}
-func vmValueToInterface(vmVal vm.Value) interface{} {
-	switch {
-	case vmVal.IsString():
-		return vmVal.AsString()
-	case vmVal.IsNumber():
-		return vmVal.ToFloat()
-	case vmVal.IsBoolean():
-		return vmVal.AsBoolean()
-	case vmVal.Type() == vm.TypeNull:
-		return nil
-	case vmVal.IsObject() || vmVal.IsDictObject():
-		// Convert to map[string]interface{}
-		result := make(map[string]interface{})
-
-		var obj interface {
-			OwnKeys() []string
-			GetOwn(string) (vm.Value, bool)
-		}
-		if vmVal.IsObject() {
-			obj = vmVal.AsPlainObject()
-		} else if vmVal.IsDictObject() {
-			obj = vmVal.AsDictObject()
-		}
-
-		if obj != nil {
-			for _, key := range obj.OwnKeys() {
-				if val, ok := obj.GetOwn(key); ok {
-					// Recursively convert value
-					result[key] = vmValueToInterface(val)
-				}
-			}
-		}
-
-		return result
-	default:
-		return nil
-	}
-}
-
-// reflectValueToVM converts a reflect.Value to a VM value
-func reflectValueToVM(reflectVal reflect.Value) vm.Value {
-	if !reflectVal.IsValid() {
-		return vm.Undefined
-	}
-
-	// Check if the value is already a vm.Value
-	if reflectVal.Type() == reflect.TypeOf(vm.Value{}) {
-		return reflectVal.Interface().(vm.Value)
-	}
-
-	switch reflectVal.Kind() {
-	case reflect.String:
-		return vm.NewString(reflectVal.String())
-	case reflect.Float64, reflect.Float32:
-		return vm.NumberValue(reflectVal.Float())
-	case reflect.Int, reflect.Int64, reflect.Int32, reflect.Int16, reflect.Int8:
-		return vm.NumberValue(float64(reflectVal.Int()))
-	case reflect.Uint, reflect.Uint64, reflect.Uint32, reflect.Uint16, reflect.Uint8:
-		return vm.NumberValue(float64(reflectVal.Uint()))
-	case reflect.Bool:
-		return vm.BooleanValue(reflectVal.Bool())
-	case reflect.Map:
-		// Convert Go map to VM object
-		obj := vm.NewObject(vm.Undefined)
-		objPtr := obj.AsPlainObject()
-		for _, key := range reflectVal.MapKeys() {
-			keyStr := reflectValueToVM(key).ToString()
-			valVM := reflectValueToVM(reflectVal.MapIndex(key))
-			objPtr.SetOwn(keyStr, valVM)
-		}
-		return obj
-	case reflect.Ptr:
-		// Handle struct pointers
-		if reflectVal.IsNil() {
-			return vm.Null
-		}
-		if reflectVal.Elem().Kind() == reflect.Struct {
-			// Create a VM object to represent the struct instance
-			instance := vm.NewObject(vm.Undefined)
-			instanceObj := instance.AsPlainObject()
-
-			// Get the struct type
-			structType := reflectVal.Elem().Type()
-
-			// Create a temporary ModuleBuilder to use its helper methods
-			// This is a bit hacky but works for now
-			mb := &ModuleBuilder{vm: nil} // vm not needed for field binding
-
-			// Bind all fields and methods from the Go struct to the VM object
-			mb.bindStructMethods(instanceObj, reflectVal, structType)
-
-			return instance
-		}
-		// For other pointer types, try to dereference
-		return reflectValueToVM(reflectVal.Elem())
-	case reflect.Slice:
-		// Handle slices, particularly []byte -> Uint8Array
-		if reflectVal.Type().Elem().Kind() == reflect.Uint8 {
-			// Convert []byte to Uint8Array using vm.NewArrayBuffer + vm.NewTypedArray
-			goBytes := reflectVal.Bytes()
-
-			// Create ArrayBuffer with the correct size
-			arrayBufferValue := vm.NewArrayBuffer(len(goBytes))
-			if buffer := arrayBufferValue.AsArrayBuffer(); buffer != nil {
-				// Copy the Go bytes into the ArrayBuffer
-				copy(buffer.GetData(), goBytes)
-				// Create Uint8Array from the ArrayBuffer
-				return vm.NewTypedArray(vm.TypedArrayUint8, buffer, 0, 0)
-			}
-			return vm.Undefined
-		}
-		// For other slice types, convert to JS array
-		arr := vm.NewArray()
-		arrayObj := arr.AsArray()
-		length := reflectVal.Len()
-		for i := 0; i < length; i++ {
-			elem := reflectValueToVM(reflectVal.Index(i))
-			arrayObj.Set(i, elem)
-		}
-		return arr
-	default:
-		return vm.Undefined
-	}
-}
 
 // ValueConverter methods
 
