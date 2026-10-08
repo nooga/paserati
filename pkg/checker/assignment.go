@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"github.com/nooga/paserati/pkg/errors"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
@@ -150,6 +151,7 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 					// Update the type in the nearest defining scope to the widened RHS type
 					widenedRhs := types.GetWidenedType(rhsType)
 					c.env.UpdateInChain(identLHS.Value, widenedRhs)
+					c.dropMemberNarrowings(identLHS.Value)
 					debugPrintf("// [Checker Assignment] Updated '%s' type to '%s' after assignment\n",
 						identLHS.Value, widenedRhs.String())
 				}
@@ -163,7 +165,12 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 				key := expressionToNarrowingKey(memberLHS)
 				if key != "" {
 					widenedRhs := types.GetWidenedType(rhsType)
-					c.updateNarrowingInChain(key, widenedRhs)
+					if c.hasNarrowingInChain(key) {
+						c.updateNarrowingInChain(key, widenedRhs)
+					} else if narrowed := assignmentReducedType(memberLHS.GetComputedType(), widenedRhs); narrowed != nil {
+						// `st.n = (st.n || 0) + 1` leaves st.n a number (#635).
+						c.env.narrowings[key] = narrowed
+					}
 				}
 			}
 		}
@@ -468,4 +475,53 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 
 	// Set computed type for the overall expression (evaluates to RHS value)
 	node.SetComputedType(rhsType)
+}
+
+// assignmentReducedType is the declared union narrowed by an assignment: the
+// members the assigned type can be. It returns nil when nothing narrows.
+func assignmentReducedType(declared, assigned types.Type) types.Type {
+	union, ok := declared.(*types.UnionType)
+	if !ok || assigned == nil || assigned == types.Any {
+		return nil
+	}
+	assignedMembers := []types.Type{assigned}
+	if au, ok := assigned.(*types.UnionType); ok {
+		assignedMembers = au.Types
+	}
+	var kept []types.Type
+	for _, m := range union.Types {
+		for _, a := range assignedMembers {
+			if types.IsAssignable(a, m) {
+				kept = append(kept, m)
+				break
+			}
+		}
+	}
+	if len(kept) == 0 || len(kept) == len(union.Types) {
+		return nil
+	}
+	return types.NewUnionType(kept...)
+}
+
+// hasNarrowingInChain reports whether some enclosing scope narrows key.
+func (c *Checker) hasNarrowingInChain(key string) bool {
+	for e := c.env; e != nil; e = e.outer {
+		if _, ok := e.narrowings[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// dropMemberNarrowings forgets the property narrowings under a reassigned
+// binding: after `st = other`, what was known about `st.n` no longer holds.
+func (c *Checker) dropMemberNarrowings(name string) {
+	prefix := name + "."
+	for e := c.env; e != nil; e = e.outer {
+		for k := range e.narrowings {
+			if strings.HasPrefix(k, prefix) {
+				delete(e.narrowings, k)
+			}
+		}
+	}
 }

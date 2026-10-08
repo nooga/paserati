@@ -244,6 +244,12 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 			c.checkInstanceofOperator(leftType, rightType, node)
 			resultType = types.Boolean
 		case "&&", "||", "??":
+			if node.Operator != "&&" && isEmptyArrayLiteral(node.Right) {
+				// A bare `[]` fallback is tsc's `never[]`, which subtype
+				// reduction drops against the left operand's array type:
+				// `xs || []` is `T[]`, not `unknown[]` (#636).
+				rightType = &types.ArrayType{ElementType: types.Never}
+			}
 			resultType = c.logicalOperatorResultType(node.Operator, leftType, rightType)
 		case ",":
 			// Comma operator: evaluates both expressions but returns the type of the right expression
@@ -315,4 +321,10 @@ func shortCircuitsToLeft(operator string, left types.Type) bool {
 		return types.ExtractNullishTypes(left) == types.Never
 	}
 	return false
+}
+
+// isEmptyArrayLiteral reports whether e is `[]`.
+func isEmptyArrayLiteral(e parser.Expression) bool {
+	arr, ok := e.(*parser.ArrayLiteral)
+	return ok && len(arr.Elements) == 0
 }

@@ -52,6 +52,14 @@ func (c *Checker) checkTypeRefDefined(node parser.Expression) {
 // resolveTypeAnnotation converts a parser node representing a type annotation
 // into a types.Type representation.
 func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
+	t := c.resolveTypeAnnotationNode(node)
+	if t != nil {
+		t = c.resolveDeferredTypeofIndex(t, false)
+	}
+	return t
+}
+
+func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 	if node == nil {
 		// No annotation provided, perhaps default to any or handle elsewhere?
 		// For now, returning nil might be okay, caller decides default.
@@ -368,6 +376,17 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 				return nil // Error already reported
 			}
 			return &types.ArrayType{ElementType: elemType}
+
+		case "ReadonlyArray":
+			// ReadonlyArray<T> is `readonly T[]` (#637).
+			if len(node.TypeArguments) != 1 {
+				c.addError(node, "ReadonlyArray requires exactly one type argument")
+				return nil
+			}
+			if elemType := c.resolveTypeAnnotation(node.TypeArguments[0]); elemType != nil {
+				return types.NewReadonlyType(&types.ArrayType{ElementType: elemType})
+			}
+			return nil
 
 		case "Promise":
 			if len(node.TypeArguments) != 1 {
@@ -1541,11 +1560,28 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		for i, elementType := range typ.ElementTypes {
 			newElementTypes[i] = c.substituteTypesWithVisited(elementType, substitution, visited)
 		}
-		return &types.TupleType{ElementTypes: newElementTypes}
+		var newRest types.Type
+		if typ.RestElementType != nil {
+			newRest = c.substituteTypesWithVisited(typ.RestElementType, substitution, visited)
+		}
+		return &types.TupleType{ElementTypes: newElementTypes, OptionalElements: typ.OptionalElements, RestElementType: newRest}
 
 	case *types.MappedType:
 		// Recursively substitute types in mapped type
-		newConstraintType := c.substituteTypesWithVisited(typ.ConstraintType, substitution, visited)
+		var newConstraintType types.Type
+		if keyof, ok := typ.ConstraintType.(*types.KeyofType); ok {
+			// Keep `keyof T` unevaluated once T is an object: the mapped type
+			// is homomorphic and expansion copies T's `?` / readonly
+			// modifiers, which the evaluated key union would lose (#638).
+			operand := c.substituteTypesWithVisited(keyof.OperandType, substitution, visited)
+			if _, isObj := operand.(*types.ObjectType); isObj {
+				newConstraintType = &types.KeyofType{OperandType: operand}
+			} else {
+				newConstraintType = c.computeKeyofType(operand)
+			}
+		} else {
+			newConstraintType = c.substituteTypesWithVisited(typ.ConstraintType, substitution, visited)
+		}
 		newValueType := c.substituteTypesWithVisited(typ.ValueType, substitution, visited)
 
 		return &types.MappedType{
@@ -1740,6 +1776,38 @@ func (c *Checker) resolveTypeofTypeIfNeeded(t types.Type) types.Type {
 		}
 	}
 	// Not a TypeofType, return as-is
+	return c.resolveDeferredTypeofIndex(t, false)
+}
+
+// resolveDeferredTypeofIndex resolves `(typeof X)[K]`, alone or in a union,
+// that was written before X had a type (a hoisted signature or type alias)
+// and so was left as an IndexedAccessType (#638).
+//
+// With anyIsFinal, a `typeof X` that still resolves to any (X read from a
+// hoisted function body before its initializer was checked) indexes to any;
+// otherwise it stays deferred so a later use can see X's real type.
+func (c *Checker) resolveDeferredTypeofIndex(t types.Type, anyIsFinal bool) types.Type {
+	switch tt := t.(type) {
+	case *types.IndexedAccessType:
+		if _, ok := tt.ObjectType.(*types.TypeofType); ok {
+			if resolved := c.computeIndexedAccessType(tt.ObjectType, tt.IndexType); resolved != nil {
+				return resolved
+			}
+			if anyIsFinal && c.resolveTypeofTypeIfNeeded(tt.ObjectType) == types.Any {
+				return types.Any
+			}
+		}
+	case *types.UnionType:
+		changed := false
+		members := make([]types.Type, len(tt.Types))
+		for i, m := range tt.Types {
+			members[i] = c.resolveDeferredTypeofIndex(m, anyIsFinal)
+			changed = changed || members[i] != m
+		}
+		if changed {
+			return types.NewUnionType(members...)
+		}
+	}
 	return t
 }
 
@@ -2076,6 +2144,35 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 
 // computeIndexedAccessType computes the result of an indexed access type like T[K]
 func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) types.Type {
+	// Arrays and tuples, readonly or not, indexed by a number: `T[][0]`,
+	// `(typeof TUPLE)[number]` (#638).
+	elementsOf := c.resolveTypeofTypeIfNeeded(objectType)
+	if ro, ok := elementsOf.(*types.ReadonlyType); ok {
+		elementsOf = ro.InnerType
+	}
+	if isNumericIndexType(indexType) {
+		switch ot := elementsOf.(type) {
+		case *types.ArrayType:
+			return ot.ElementType
+		case *types.TupleType:
+			if lit, ok := indexType.(*types.LiteralType); ok {
+				i := int(lit.Value.ToFloat())
+				if float64(i) == lit.Value.ToFloat() && i >= 0 && i < len(ot.ElementTypes) {
+					elem := ot.ElementTypes[i]
+					if i < len(ot.OptionalElements) && ot.OptionalElements[i] {
+						elem = types.NewUnionType(elem, types.Undefined)
+					}
+					return elem
+				}
+				if ot.RestElementType != nil && i >= len(ot.ElementTypes) {
+					return ot.RestElementType
+				}
+				return nil
+			}
+			return getTupleElementUnion(ot)
+		}
+	}
+
 	// Handle object types with specific string literal keys
 	if objType, ok := objectType.(*types.ObjectType); ok {
 		// Case: Object["propertyName"] where "propertyName" is a string literal
@@ -3171,4 +3268,13 @@ func overloadableCallSignatures(t types.Type) ([]*types.Signature, bool) {
 		}
 	}
 	return nil, false
+}
+
+// isNumericIndexType reports whether t is `number` or a number literal.
+func isNumericIndexType(t types.Type) bool {
+	if t == types.Number {
+		return true
+	}
+	lit, ok := t.(*types.LiteralType)
+	return ok && (lit.Value.Type() == vm.TypeIntegerNumber || lit.Value.Type() == vm.TypeFloatNumber)
 }

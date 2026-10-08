@@ -1055,6 +1055,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 		if iterableType == nil {
 			iterableType = types.Any
 		}
+		iterableType = stripReadonlyArrays(iterableType)
 
 		// Determine the element type from the iterable
 		var elementType types.Type
@@ -1078,7 +1079,10 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 			}
 		} else {
 			// Regular for...of (synchronous iteration)
-			if arrayType, ok := iterableType.(*types.ArrayType); ok {
+			if iterableType == types.Any {
+				// Before the string test below, which `any` would pass (#636).
+				elementType = types.Any
+			} else if arrayType, ok := iterableType.(*types.ArrayType); ok {
 				elementType = arrayType.ElementType
 			} else if unionType, ok := iterableType.(*types.UnionType); ok {
 				// Handle union types like T[] | undefined (common after optional property access)
