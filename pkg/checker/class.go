@@ -723,8 +723,9 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 					// Both getter and setter - for now, mark as getter (could be enhanced later)
 					instanceType.ClassMeta.AddGetterMember(propName, accessLevel, false)
 				} else if getter != nil {
-					// Only getter
+					// Only getter: a read-only property.
 					instanceType.ClassMeta.AddGetterMember(propName, accessLevel, false)
+					setReadonlyProperty(instanceType, propName, true)
 				} else if setter != nil {
 					// Only setter
 					instanceType.ClassMeta.AddSetterMember(propName, accessLevel, false)
@@ -1412,9 +1413,51 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 		classInstanceType = instanceType[0]
 	}
 
+	// Static accessors are properties: the getter's return type (else the
+	// setter's parameter type), read-only without a setter.
+	staticGetters := map[string]types.Type{}
+	staticSetters := map[string]types.Type{}
+	staticAccess := map[string]types.AccessModifier{}
+	for _, method := range body.Methods {
+		if !method.IsStatic || (method.Kind != "getter" && method.Kind != "setter") {
+			continue
+		}
+		c.setClassContext(className, types.AccessContextStaticMethod)
+		name := c.extractPropertyName(method.Key)
+		var accessorType types.Type = types.Any
+		if fnType, ok := c.inferMethodType(method).(*types.ObjectType); ok && len(fnType.CallSignatures) > 0 {
+			sig := fnType.CallSignatures[0]
+			if method.Kind == "getter" && sig.ReturnType != nil {
+				accessorType = sig.ReturnType
+			} else if method.Kind == "setter" && len(sig.ParameterTypes) > 0 {
+				accessorType = sig.ParameterTypes[0]
+			}
+		}
+		if method.Kind == "getter" {
+			staticGetters[name] = accessorType
+		} else {
+			staticSetters[name] = accessorType
+		}
+		if _, seen := staticAccess[name]; !seen || method.Kind == "getter" {
+			staticAccess[name] = c.getAccessLevel(method.IsPublic, method.IsPrivate, method.IsProtected)
+		}
+	}
+	for name, t := range staticSetters {
+		if _, hasGetter := staticGetters[name]; !hasGetter {
+			constructorType.WithClassMember(name, t, staticAccess[name], true, false)
+		}
+	}
+	for name, t := range staticGetters {
+		_, hasSetter := staticSetters[name]
+		constructorType.WithClassMember(name, t, staticAccess[name], true, !hasSetter)
+		if !hasSetter {
+			setReadonlyProperty(constructorType, name, true)
+		}
+	}
+
 	// Add static methods
 	for _, method := range body.Methods {
-		if method.IsStatic && method.Kind != "constructor" {
+		if method.IsStatic && method.Kind != "constructor" && method.Kind != "getter" && method.Kind != "setter" {
 			// Set static method context for access control checking
 			c.setClassContext(className, types.AccessContextStaticMethod)
 			c.validateClassMemberOverride(method.Key, c.extractPropertyName(method.Key), true, method.IsOverride, false, className, classInstanceType)

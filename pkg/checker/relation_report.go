@@ -586,6 +586,10 @@ func (c *Checker) elaborate(expr parser.Expression, source, target types.Type, h
 // assignment-like check whose error node is errNode and whose source
 // expression is expr (nil when the source is not an expression).
 func (c *Checker) reportNotAssignable(errNode parser.Node, expr parser.Expression, source, target types.Type, head relHead) {
+	// A `(typeof X)[K]` resolved before X had a type is reported as what it
+	// is by now.
+	source = c.resolveDeferredTypeofIndex(source, false)
+	target = c.resolveDeferredTypeofIndex(target, false)
 	if expr != nil && c.elaborate(expr, source, target, head) {
 		return
 	}

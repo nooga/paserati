@@ -833,8 +833,15 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 			keyName = "__UNKNOWN_KEY__"
 		}
 
-		// Skip if already processed in first pass (non-function properties)
-		if _, isNonFunction := fields[keyName]; isNonFunction {
+		// Skip if already processed in first pass (non-function properties).
+		// An accessor's pair shares its key, so accessors are never skipped.
+		// (Computed-key accessors are fully handled by the first pass.)
+		isAccessor := false
+		if md, ok := prop.Value.(*parser.MethodDefinition); ok && (md.Kind == "getter" || md.Kind == "setter") {
+			_, computedKey := prop.Key.(*parser.ComputedPropertyName)
+			isAccessor = !computedKey
+		}
+		if _, isNonFunction := fields[keyName]; isNonFunction && !isAccessor {
 			continue
 		}
 
@@ -936,6 +943,14 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 
 	// Create the final ObjectType
 	objType := &types.ObjectType{Properties: finalFields}
+	// A getter without a setter is a read-only property.
+	for key := range finalFields {
+		if name, ok := strings.CutPrefix(key, "__get__"); ok {
+			if _, hasSetter := finalFields["__set__"+name]; !hasSetter {
+				setReadonlyProperty(objType, name, true)
+			}
+		}
+	}
 
 	// If we have computed properties, add an index signature
 	if hasComputedProperties {
