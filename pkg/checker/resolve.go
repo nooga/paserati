@@ -2445,8 +2445,10 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 				// Explicitly make property optional
 				optionalProperties[keyName] = true
 			} else if mappedType.OptionalModifier == "-" {
-				// Explicitly make property required (remove optional)
+				// Explicitly make property required (remove optional), and
+				// with it the `undefined` the optionality contributed.
 				optionalProperties[keyName] = false
+				properties[keyName] = removeUndefinedMember(valueType)
 			} else if mappedType.OptionalModifier == "" && sourceObjectType != nil {
 				// No modifier: inherit optionality from source type
 				if sourceObjectType.IsPropertyOptional(keyName) {
@@ -3380,6 +3382,9 @@ func (c *Checker) walkTypeofPath(node parser.Node, path []string, varType types.
 				return nil, false
 			}
 		default:
+			if varType == types.Any {
+				continue // `typeof anyValue.member` is any
+			}
 			c.addError(node, fmt.Sprintf("cannot access member '%s' on non-object type", seg))
 			return nil, false
 		}
@@ -3415,4 +3420,22 @@ func (c *Checker) inferAsAny(t types.Type) types.Type {
 		return types.NewUnionType(members...)
 	}
 	return t
+}
+
+// removeUndefinedMember drops `undefined` from a union (`-?` modifier).
+func removeUndefinedMember(t types.Type) types.Type {
+	union, ok := t.(*types.UnionType)
+	if !ok {
+		return t
+	}
+	var kept []types.Type
+	for _, m := range union.Types {
+		if m != types.Undefined {
+			kept = append(kept, m)
+		}
+	}
+	if len(kept) == len(union.Types) || len(kept) == 0 {
+		return t
+	}
+	return types.NewUnionType(kept...)
 }

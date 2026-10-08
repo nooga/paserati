@@ -20,7 +20,7 @@ func (u *UtilityTypesInitializer) InitTypes(ctx *TypeContext) error {
 	// Partial<T> = { [P in keyof T]?: T[P] }
 	u.registerPartialType(ctx)
 
-	// Required<T> = { [P in keyof T]: T[P] }
+	// Required<T> = { [P in keyof T]-?: T[P] }
 	u.registerRequiredType(ctx)
 
 	// Readonly<T> = { readonly [P in keyof T]: T[P] }
@@ -90,7 +90,7 @@ func (u *UtilityTypesInitializer) registerPartialType(ctx *TypeContext) {
 	_ = ctx.DefineTypeAlias("Partial", partialGeneric)
 }
 
-// registerRequiredType registers Required<T> = { [P in keyof T]: T[P] }
+// registerRequiredType registers Required<T> = { [P in keyof T]-?: T[P] }
 func (u *UtilityTypesInitializer) registerRequiredType(ctx *TypeContext) {
 	// Create type parameter T
 	tParam := types.NewTypeParameter("T", 0, nil)
@@ -111,7 +111,7 @@ func (u *UtilityTypesInitializer) registerRequiredType(ctx *TypeContext) {
 		TypeParameter:    "P",
 		ConstraintType:   keyofT,
 		ValueType:        indexedAccess,
-		OptionalModifier: "", // No optional modifier
+		OptionalModifier: "-", // Remove optionality
 		ReadonlyModifier: "", // No readonly modifier
 	}
 
