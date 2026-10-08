@@ -244,9 +244,58 @@ func (c *goConverter) fromVM(vmVal vm.Value, targetType reflect.Type) reflect.Va
 			return reflect.Zero(targetType)
 		}
 		return c.jsFunctionToGo(vmVal, targetType)
+	case reflect.Ptr:
+		// null and undefined (a missing argument) are nil; anything else
+		// converts to what the pointer holds.
+		if vmVal.Type() == vm.TypeNull || vmVal.Type() == vm.TypeUndefined {
+			return reflect.Zero(targetType)
+		}
+		// An instance of a Go-backed class is passed as itself.
+		if inst, ok := goInstanceFromThis(vmVal); ok && inst.Type() == targetType {
+			return inst
+		}
+		out := reflect.New(targetType.Elem())
+		out.Elem().Set(c.fromVM(vmVal, targetType.Elem()))
+		return out
+	case reflect.Struct:
+		// An object fills the exported fields named (by JSON name, as
+		// goTypeToTSType types them) by its own properties.
+		keys, get, ok := ownEntries(vmVal)
+		out := reflect.New(targetType).Elem()
+		if !ok {
+			return out
+		}
+		fields := structFieldsByJSONName(targetType)
+		for _, key := range keys {
+			idx, known := fields[key]
+			if !known {
+				continue
+			}
+			if val, ok := get(key); ok {
+				out.Field(idx).Set(c.fromVM(val, targetType.Field(idx).Type))
+			}
+		}
+		return out
 	default:
 		return reflect.Zero(targetType)
 	}
+}
+
+// structFieldsByJSONName maps a struct's exported fields' JSON names to
+// their indices.
+func structFieldsByJSONName(t reflect.Type) map[string]int {
+	mb := &ModuleBuilder{}
+	fields := make(map[string]int, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		if name := mb.getJSONPropertyName(f); name != "" {
+			fields[name] = i
+		}
+	}
+	return fields
 }
 
 // jsFunctionToGo wraps a JS function as a Go func of type fnType. Its
