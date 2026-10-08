@@ -63,6 +63,11 @@ func DeeplyWidenType(t Type) Type {
 		newFields := make(map[string]Type, len(objType.Properties))
 		for _, name := range SortedPropertyNames(objType.Properties) {
 			propType := objType.Properties[name]
+			if objType.ReadOnlyProperties[name] {
+				// A readonly property keeps its literal type.
+				newFields[name] = propType
+				continue
+			}
 			newFields[name] = widenNested(propType, 0)
 		}
 		return &ObjectType{
