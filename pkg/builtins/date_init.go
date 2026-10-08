@@ -77,9 +77,9 @@ func (d *DateInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("toISOString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toDateString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toTimeString", types.NewSimpleFunction([]types.Type{}, types.String)).
-		WithProperty("toLocaleString", types.NewSimpleFunction([]types.Type{}, types.String)).
-		WithProperty("toLocaleDateString", types.NewSimpleFunction([]types.Type{}, types.String)).
-		WithProperty("toLocaleTimeString", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("toLocaleString", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, types.String, []bool{true, true})).
+		WithProperty("toLocaleDateString", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, types.String, []bool{true, true})).
+		WithProperty("toLocaleTimeString", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, types.String, []bool{true, true})).
 		WithProperty("toUTCString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("toJSON", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("valueOf", types.NewSimpleFunction([]types.Type{}, types.Number)).
@@ -756,9 +756,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if math.IsNaN(timestamp) {
 			return vm.NewString("Invalid Date"), nil
 		}
-		t := time.UnixMilli(int64(timestamp))
-		// Simple locale format - could be enhanced with actual locale support
-		return vm.NewString(t.Format("1/2/2006, 3:04:05 PM")), nil
+		return intlFormatDateWith(vmInstance, timestamp, intlArg(args, 0), intlArg(args, 1), "any", "all")
 	}))
 
 	dateProto.SetOwnNonEnumerable("toLocaleDateString", vm.NewNativeFunction(0, false, "toLocaleDateString", func(args []vm.Value) (vm.Value, error) {
@@ -769,9 +767,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if math.IsNaN(timestamp) {
 			return vm.NewString("Invalid Date"), nil
 		}
-		t := time.UnixMilli(int64(timestamp))
-		// Simple locale format - could be enhanced with actual locale support
-		return vm.NewString(t.Format("1/2/2006")), nil
+		return intlFormatDateWith(vmInstance, timestamp, intlArg(args, 0), intlArg(args, 1), "date", "date")
 	}))
 
 	dateProto.SetOwnNonEnumerable("toLocaleTimeString", vm.NewNativeFunction(0, false, "toLocaleTimeString", func(args []vm.Value) (vm.Value, error) {
@@ -782,9 +778,7 @@ func (d *DateInitializer) InitRuntime(ctx *RuntimeContext) error {
 		if math.IsNaN(timestamp) {
 			return vm.NewString("Invalid Date"), nil
 		}
-		t := time.UnixMilli(int64(timestamp))
-		// Simple locale format - could be enhanced with actual locale support
-		return vm.NewString(t.Format("3:04:05 PM")), nil
+		return intlFormatDateWith(vmInstance, timestamp, intlArg(args, 0), intlArg(args, 1), "time", "time")
 	}))
 
 	// toUTCString - returns date in UTC timezone as RFC 7231 format
