@@ -10,7 +10,7 @@ import (
 const PriorityIntl = PriorityDate + 5
 
 // IntlInitializer installs the ECMA-402 Intl namespace object: Intl.Segmenter
-// (#210), Intl.NumberFormat (#624), the namespace's own
+// (#210), Intl.NumberFormat and Intl.DateTimeFormat (#624), the namespace's own
 // Intl.getCanonicalLocales and @@toStringTag. Constructors that are not
 // implemented are absent rather than stubbed, so feature detection
 // (`"DisplayNames" in Intl`) stays truthful.
@@ -90,12 +90,35 @@ func (i *IntlInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("supportedLocalesOf", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, stringArray, []bool{false, true})).
 		WithProperty("prototype", numberFormatType)
 
+	dateTimeFormatType := types.NewObjectType().
+		WithProperty("format", types.NewOptionalFunction([]types.Type{types.Any}, types.String, []bool{true})).
+		WithProperty("formatToParts", types.NewOptionalFunction([]types.Type{types.Any}, &types.ArrayType{ElementType: numberPartType}, []bool{true})).
+		WithProperty("formatRange", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, types.String)).
+		WithProperty("formatRangeToParts", types.NewSimpleFunction([]types.Type{types.Any, types.Any}, &types.ArrayType{ElementType: numberRangePartType})).
+		WithProperty("resolvedOptions", types.NewSimpleFunction([]types.Type{}, types.Any))
+	dateTimeFormatCtorType := types.NewObjectType().
+		WithConstructSignature(&types.Signature{
+			ParameterTypes: []types.Type{types.Any, types.Any},
+			ReturnType:     dateTimeFormatType,
+			OptionalParams: []bool{true, true},
+		}).
+		WithCallSignature(&types.Signature{
+			ParameterTypes: []types.Type{types.Any, types.Any},
+			ReturnType:     dateTimeFormatType,
+			OptionalParams: []bool{true, true},
+		}).
+		WithProperty("supportedLocalesOf", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, stringArray, []bool{false, true})).
+		WithProperty("prototype", dateTimeFormatType)
+
 	intlNamespace := types.NewNamespaceType("Intl")
 	intlNamespace.ValueShape.
 		WithProperty("NumberFormat", numberFormatCtorType).
+		WithProperty("DateTimeFormat", dateTimeFormatCtorType).
 		WithProperty("Segmenter", segmenterCtorType).
 		WithProperty("getCanonicalLocales", types.NewOptionalFunction([]types.Type{types.Any}, stringArray, []bool{true}))
 	intlNamespace.TypeMembers["NumberFormat"] = numberFormatType
+	intlNamespace.TypeMembers["DateTimeFormat"] = dateTimeFormatType
+	intlNamespace.TypeMembers["DateTimeFormatPart"] = numberPartType
 	intlNamespace.TypeMembers["NumberFormatPart"] = numberPartType
 	intlNamespace.TypeMembers["Segmenter"] = segmenterType
 	intlNamespace.TypeMembers["Segments"] = segmentsType
@@ -128,6 +151,7 @@ func (i *IntlInitializer) InitRuntime(ctx *RuntimeContext) error {
 
 	installIntlSegmenter(vmInstance, intlObj)
 	installIntlNumberFormat(vmInstance, intlObj)
+	installIntlDateTimeFormat(vmInstance, intlObj)
 
 	return ctx.DefineGlobal("Intl", vm.NewValueFromPlainObject(intlObj))
 }
