@@ -307,6 +307,11 @@ type VM struct {
 	WeakRefPrototype              Value
 	FinalizationRegistryPrototype Value
 	IntlSegmenterPrototype        Value // %Intl.Segmenter.prototype%
+	IntlNumberFormatPrototype     Value // %Intl.NumberFormat.prototype%
+	IntlDateTimeFormatPrototype   Value // %Intl.DateTimeFormat.prototype%
+	IntlCollatorPrototype         Value // %Intl.Collator.prototype%
+	IntlPluralRulesPrototype      Value // %Intl.PluralRules.prototype%
+	IntlListFormatPrototype       Value // %Intl.ListFormat.prototype%
 	GeneratorPrototype            Value
 	AsyncGeneratorPrototype       Value
 	AsyncIteratorPrototype        Value // %AsyncIteratorPrototype%
@@ -941,6 +946,16 @@ func (vm *VM) GetPrototypeFromConstructor(constructor Value, intrinsicDefault st
 		return realm.FinalizationRegistryPrototype, nil
 	case "%Intl.Segmenter.prototype%":
 		return realm.IntlSegmenterPrototype, nil
+	case "%Intl.NumberFormat.prototype%":
+		return realm.IntlNumberFormatPrototype, nil
+	case "%Intl.DateTimeFormat.prototype%":
+		return realm.IntlDateTimeFormatPrototype, nil
+	case "%Intl.Collator.prototype%":
+		return realm.IntlCollatorPrototype, nil
+	case "%Intl.PluralRules.prototype%":
+		return realm.IntlPluralRulesPrototype, nil
+	case "%Intl.ListFormat.prototype%":
+		return realm.IntlListFormatPrototype, nil
 	case "%ErrorPrototype%":
 		return realm.ErrorPrototype, nil
 	case "%TypeErrorPrototype%":
@@ -1025,6 +1040,11 @@ func (vm *VM) syncPrototypesFromRealm() {
 	vm.WeakRefPrototype = r.WeakRefPrototype
 	vm.FinalizationRegistryPrototype = r.FinalizationRegistryPrototype
 	vm.IntlSegmenterPrototype = r.IntlSegmenterPrototype
+	vm.IntlNumberFormatPrototype = r.IntlNumberFormatPrototype
+	vm.IntlDateTimeFormatPrototype = r.IntlDateTimeFormatPrototype
+	vm.IntlCollatorPrototype = r.IntlCollatorPrototype
+	vm.IntlPluralRulesPrototype = r.IntlPluralRulesPrototype
+	vm.IntlListFormatPrototype = r.IntlListFormatPrototype
 	vm.PromisePrototype = r.PromisePrototype
 	vm.SymbolPrototype = r.SymbolPrototype
 	vm.DatePrototype = r.DatePrototype
@@ -1125,6 +1145,11 @@ func (vm *VM) SyncPrototypesToRealm() {
 	r.WeakRefPrototype = vm.WeakRefPrototype
 	r.FinalizationRegistryPrototype = vm.FinalizationRegistryPrototype
 	r.IntlSegmenterPrototype = vm.IntlSegmenterPrototype
+	r.IntlNumberFormatPrototype = vm.IntlNumberFormatPrototype
+	r.IntlDateTimeFormatPrototype = vm.IntlDateTimeFormatPrototype
+	r.IntlCollatorPrototype = vm.IntlCollatorPrototype
+	r.IntlPluralRulesPrototype = vm.IntlPluralRulesPrototype
+	r.IntlListFormatPrototype = vm.IntlListFormatPrototype
 	r.PromisePrototype = vm.PromisePrototype
 	r.SymbolPrototype = vm.SymbolPrototype
 	r.DatePrototype = vm.DatePrototype

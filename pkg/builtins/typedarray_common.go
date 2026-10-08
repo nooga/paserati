@@ -55,7 +55,7 @@ func typedArrayInstanceType(elementType types.Type) *types.ObjectType {
 		WithProperty("toSorted", types.NewOptionalFunction([]types.Type{types.Any}, self, []bool{true})).
 		WithProperty("with", types.NewSimpleFunction([]types.Type{types.Number, elementType}, self)).
 		WithProperty("join", types.NewOptionalFunction([]types.Type{types.String}, types.String, []bool{true})).
-		WithProperty("toLocaleString", types.NewSimpleFunction([]types.Type{}, types.String)).
+		WithProperty("toLocaleString", types.NewOptionalFunction([]types.Type{types.Any, types.Any}, types.String, []bool{true, true})).
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String)).
 		WithProperty("entries", types.NewSimpleFunction([]types.Type{}, types.Any)).
 		WithProperty("keys", types.NewSimpleFunction([]types.Type{}, types.Any)).

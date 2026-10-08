@@ -28,6 +28,11 @@ type Realm struct {
 	WeakRefPrototype              Value
 	FinalizationRegistryPrototype Value
 	IntlSegmenterPrototype        Value // %Intl.Segmenter.prototype%
+	IntlNumberFormatPrototype     Value // %Intl.NumberFormat.prototype%
+	IntlDateTimeFormatPrototype   Value // %Intl.DateTimeFormat.prototype%
+	IntlCollatorPrototype         Value // %Intl.Collator.prototype%
+	IntlPluralRulesPrototype      Value // %Intl.PluralRules.prototype%
+	IntlListFormatPrototype       Value // %Intl.ListFormat.prototype%
 	GeneratorPrototype            Value
 	AsyncGeneratorPrototype       Value
 	AsyncIteratorPrototype        Value

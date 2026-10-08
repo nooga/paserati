@@ -1236,24 +1236,9 @@ func setupTypedArrayPrototypeWithErrors(proto *vm.PlainObject, vmInstance *vm.VM
 		if err != nil {
 			return vm.Undefined, err
 		}
-
-		length := ta.GetLength()
-		if length == 0 {
-			return vm.NewString(""), nil
-		}
-
-		result := ""
-		for i := 0; i < length; i++ {
-			if i > 0 {
-				result += ","
-			}
-			elem := ta.GetElement(i)
-			if !elem.IsUndefined() && elem.Type() != vm.TypeNull {
-				result += elem.ToString()
-			}
-		}
-
-		return vm.NewString(result), nil
+		return localeStringOfElements(vmInstance, ta.GetLength(), func(i int) (vm.Value, error) {
+			return ta.GetElement(i), nil
+		}, intlArg(args, 0), intlArg(args, 1))
 	}))
 
 	// sort(compareFn?) - sorts array in place

@@ -301,16 +301,17 @@ func (n *NumberInitializer) InitRuntime(ctx *RuntimeContext) error {
 	}))
 
 	numberProto.SetOwnNonEnumerable("toLocaleString", vm.NewNativeFunction(0, false, "toLocaleString", func(args []vm.Value) (vm.Value, error) {
-		thisNum := vmInstance.GetThis()
-
-		// Check if this is a number
-		if thisNum.Type() != vm.TypeFloatNumber && thisNum.Type() != vm.TypeIntegerNumber && thisNum.Type() != vm.TypeBigInt {
-			return vm.NewString(thisNum.ToString()), nil
+		// thisNumberValue, then Intl.NumberFormat(locales, options).format.
+		x := vmInstance.GetThis()
+		if x.IsObject() {
+			if prim, ok := x.AsPlainObject().GetInternal("[[PrimitiveValue]]"); ok && (prim.Type() == vm.TypeFloatNumber || prim.Type() == vm.TypeIntegerNumber) {
+				x = prim
+			}
 		}
-
-		// For now, just return the string representation (proper locale support would be complex)
-		// TODO: Implement proper locale formatting
-		return vm.NewString(thisNum.ToString()), nil
+		if x.Type() != vm.TypeFloatNumber && x.Type() != vm.TypeIntegerNumber {
+			return vm.Undefined, vmInstance.NewTypeError("Number.prototype.toLocaleString requires that 'this' be a Number")
+		}
+		return intlFormatNumberWith(vmInstance, x, intlArg(args, 0), intlArg(args, 1))
 	}))
 
 	numberProto.SetOwnNonEnumerable("valueOf", vm.NewNativeFunction(0, false, "valueOf", func(args []vm.Value) (vm.Value, error) {
