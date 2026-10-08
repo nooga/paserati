@@ -238,22 +238,15 @@ func goErrorToJS(vmInst *vm.VM, err error) vm.Value {
 
 func goAsyncFunctionToTSType(fn interface{}) types.Type {
 	fnType := reflect.TypeOf(fn)
-	if fnType.Kind() != reflect.Func {
+	if fnType == nil || fnType.Kind() != reflect.Func {
 		return types.Any
 	}
-	params := make([]types.Type, fnType.NumIn())
-	for i := 0; i < fnType.NumIn(); i++ {
-		params[i] = goTypeToTSType(fnType.In(i))
+	sig := goSignatureToTSSignature(fnType, 0, map[reflect.Type]types.Type{})
+	if sig.ReturnType == nil {
+		sig.ReturnType = types.Any
 	}
-	var returnType types.Type = types.Void
-	if fnType.NumOut() > 0 {
-		returnType = goTypeToTSType(fnType.Out(0))
-	}
-	if returnType == nil {
-		returnType = types.Any
-	}
-	promiseRet := types.NewInstantiatedType(types.PromiseGeneric, []types.Type{returnType})
-	return types.NewSimpleFunction(params, promiseRet)
+	sig.ReturnType = types.NewInstantiatedType(types.PromiseGeneric, []types.Type{sig.ReturnType})
+	return types.NewFunctionType(sig)
 }
 
 func wrapNativeAsAsync(vmInst *vm.VM, name string, inner vm.Value) vm.Value {
@@ -686,7 +679,9 @@ func (m *ModuleBuilder) createPrototypeMethod(unboundMethod reflect.Value) vm.Va
 			}
 		}
 
-		// Convert result back to VM value
+		if len(results) == 1 {
+			return m.conv().singleResultToVM(results[0])
+		}
 		if len(results) > 0 {
 			return reflectValueToVM(results[0]), nil
 		}
@@ -774,7 +769,9 @@ func (m *ModuleBuilder) createBoundMethod(methodFunc reflect.Value) vm.Value {
 			}
 		}
 
-		// Convert result back to VM value
+		if len(results) == 1 {
+			return m.conv().singleResultToVM(results[0])
+		}
 		if len(results) > 0 {
 			return reflectValueToVM(results[0]), nil
 		}
@@ -898,23 +895,56 @@ func goValueToVM(value interface{}) vm.Value {
 // goFunctionToTSType converts a Go function to a TypeScript function type using reflection
 func goFunctionToTSType(fn interface{}) types.Type {
 	fnType := reflect.TypeOf(fn)
-	if fnType.Kind() != reflect.Func {
+	if fnType == nil || fnType.Kind() != reflect.Func {
 		return types.Any
 	}
+	return types.NewFunctionType(goSignatureToTSSignature(fnType, 0, map[reflect.Type]types.Type{}))
+}
 
-	// Build parameter types
-	params := make([]types.Type, fnType.NumIn())
-	for i := 0; i < fnType.NumIn(); i++ {
-		params[i] = goTypeToTSType(fnType.In(i))
+// goSignatureToTSSignature maps a Go func type to a TS call signature, the
+// way functionToVM calls it. Parameters from index skip on are mapped (skip
+// is 1 for a method expression, to drop the receiver). A variadic func gets a
+// rest parameter, and a trailing run of pointer parameters is optional,
+// since a missing argument arrives as the zero value, nil. The result is
+// the first return value (the error of a (T, error) pair throws instead),
+// and a pointer result can be null.
+func goSignatureToTSSignature(fnType reflect.Type, skip int, seen map[reflect.Type]types.Type) *types.Signature {
+	n := fnType.NumIn()
+	fixed := n
+	var rest types.Type
+	if fnType.IsVariadic() {
+		fixed = n - 1
+		rest = &types.ArrayType{ElementType: goTypeToTSTypeSeen(fnType.In(n-1).Elem(), seen)}
 	}
-
-	// Build return type
-	var returnType types.Type = types.Void
-	if fnType.NumOut() > 0 {
-		returnType = goTypeToTSType(fnType.Out(0))
+	params := make([]types.Type, 0, fixed-skip)
+	optional := make([]bool, 0, fixed-skip)
+	for i := skip; i < fixed; i++ {
+		params = append(params, goTypeToTSTypeSeen(fnType.In(i), seen))
+		optional = append(optional, false)
 	}
+	for i := len(params) - 1; i >= 0 && fnType.In(skip+i).Kind() == reflect.Ptr; i-- {
+		optional[i] = true
+	}
+	var ret types.Type = types.Void
+	if fnType.NumOut() > 0 && !(fnType.NumOut() == 1 && fnType.Out(0) == errorType) {
+		ret = goResultToTSType(fnType.Out(0), seen)
+	}
+	sig := types.SigOptional(params, ret, optional)
+	if rest != nil {
+		sig.IsVariadic = true
+		sig.RestParameterType = rest
+	}
+	return sig
+}
 
-	return types.NewSimpleFunction(params, returnType)
+// goResultToTSType maps a Go result type: like goTypeToTSTypeSeen, except a
+// pointer can be nil, which reaches JS as null.
+func goResultToTSType(t reflect.Type, seen map[reflect.Type]types.Type) types.Type {
+	mapped := goTypeToTSTypeSeen(t, seen)
+	if t.Kind() == reflect.Ptr && mapped != types.Any {
+		return types.NewUnionType(mapped, types.Null)
+	}
+	return mapped
 }
 
 // goFunctionToVM converts a Go function to a VM native function using reflection
@@ -986,8 +1016,7 @@ func (c *goConverter) functionToVM(fn interface{}) vm.Value {
 				// No error, return the first value
 				return c.toVM(results[0]), nil
 			} else if len(results) == 1 {
-				// Single return value
-				return c.toVM(results[0]), nil
+				return c.singleResultToVM(results[0])
 			}
 
 			return vm.Undefined, nil
@@ -1022,12 +1051,24 @@ func (c *goConverter) functionToVM(fn interface{}) vm.Value {
 			// No error, return the first value
 			return c.toVM(results[0]), nil
 		} else if len(results) == 1 {
-			// Single return value
-			return c.toVM(results[0]), nil
+			return c.singleResultToVM(results[0])
 		}
 
 		return vm.Undefined, nil
 	})
+}
+
+// singleResultToVM converts a Go function's only result. A lone error
+// result throws when non-nil (and the call returns undefined otherwise),
+// the same as the error of a (T, error) pair.
+func (c *goConverter) singleResultToVM(result reflect.Value) (vm.Value, error) {
+	if result.Type() == errorType {
+		if result.IsNil() {
+			return vm.Undefined, nil
+		}
+		return vm.Undefined, result.Interface().(error)
+	}
+	return c.toVM(result), nil
 }
 
 // goFunctionToVM converts a Go function without a VM at hand (func
@@ -1078,6 +1119,15 @@ func goTypeToTSTypeSeen(t reflect.Type, seen map[reflect.Type]types.Type) types.
 			}
 			if name := mb.getJSONPropertyName(f); name != "" {
 				obj.Properties[name] = goTypeToTSTypeSeen(f.Type, seen)
+				// A field the JSON encoding may leave out, or a nil pointer,
+				// is optional; so a struct taken as an options argument does
+				// not need every field spelled out.
+				if f.Type.Kind() == reflect.Ptr || hasOmitEmpty(f) {
+					if obj.OptionalProperties == nil {
+						obj.OptionalProperties = map[string]bool{}
+					}
+					obj.OptionalProperties[name] = true
+				}
 			}
 		}
 		// Methods, named as bindStructMethods binds them (lower-cased first
@@ -1086,15 +1136,7 @@ func goTypeToTSTypeSeen(t reflect.Type, seen map[reflect.Type]types.Type) types.
 		for i := 0; i < ptr.NumMethod(); i++ {
 			method := ptr.Method(i)
 			jsName := strings.ToLower(method.Name[:1]) + method.Name[1:]
-			params := make([]types.Type, 0, method.Type.NumIn()-1)
-			for j := 1; j < method.Type.NumIn(); j++ {
-				params = append(params, goTypeToTSTypeSeen(method.Type.In(j), seen))
-			}
-			var ret types.Type = types.Void
-			if method.Type.NumOut() > 0 {
-				ret = goTypeToTSTypeSeen(method.Type.Out(0), seen)
-			}
-			obj.Properties[jsName] = types.NewSimpleFunction(params, ret)
+			obj.Properties[jsName] = types.NewFunctionType(goSignatureToTSSignature(method.Type, 1, seen))
 		}
 		return obj
 	case reflect.Slice:
@@ -1110,6 +1152,20 @@ func goTypeToTSTypeSeen(t reflect.Type, seen map[reflect.Type]types.Type) types.
 	default:
 		return types.Any
 	}
+}
+
+// hasOmitEmpty reports whether a struct field's json tag has omitempty.
+func hasOmitEmpty(f reflect.StructField) bool {
+	tag, ok := f.Tag.Lookup("json")
+	if !ok {
+		return false
+	}
+	for _, opt := range strings.Split(tag, ",")[1:] {
+		if strings.TrimSpace(opt) == "omitempty" {
+			return true
+		}
+	}
+	return false
 }
 
 func mapTypeToObjectType(t reflect.Type, valueType types.Type) types.Type {

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nooga/paserati/pkg/modules"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // TestNativeModuleBasic tests the basic native module declaration and usage
@@ -319,5 +320,88 @@ func TestNativeModuleClassInstanceof(t *testing.T) {
 
 	if result.ToString() != "instanceof_test_passed" {
 		t.Errorf("Expected 'instanceof_test_passed', got: %v", result.ToString())
+	}
+}
+
+// Go signatures map to TS signatures callers can use as written: variadic
+// funcs take rest arguments, trailing pointer parameters and omitempty or
+// pointer fields are optional, a pointer result can be null, and a lone
+// error result throws.
+func TestNativeModuleGoSignatureTypes(t *testing.T) {
+	type opts struct {
+		Method  string            `json:"method,omitempty"`
+		Headers map[string]string `json:"headers,omitempty"`
+		Timeout *int              `json:"timeout"`
+	}
+	type resp struct {
+		Status int    `json:"status"`
+		Body   string `json:"body"`
+		Error  string `json:"error,omitempty"`
+	}
+	declare := func(p *Paserati) {
+		p.DeclareModule("host", func(m *ModuleBuilder) {
+			m.Function("output", func(args ...vm.Value) int { return len(args) })
+			m.Function("join", func(sep string, parts ...string) string { return strings.Join(parts, sep) })
+			m.Function("get", func(url string, o *opts) resp {
+				if o == nil {
+					return resp{Status: 200, Body: url}
+				}
+				return resp{Status: 201, Body: o.Method + " " + url + " " + o.Headers["a"]}
+			})
+			m.Function("lookup", func(k string) *string {
+				if k == "" {
+					return nil
+				}
+				return &k
+			})
+			m.Function("fail", func(msg string) error {
+				if msg == "" {
+					return nil
+				}
+				return fmt.Errorf("%s", msg)
+			})
+			m.Type("Resp", resp{})
+			m.Default(nil)
+		})
+	}
+	for _, tc := range []struct{ name, src, want string }{
+		{"rest", `import h from "host"; h.output() + h.output("a") + h.output("a", 1, {x: 1})`, "4"},
+		{"typed rest", `import { join } from "host"; join("-") + join("-", "a", "b")`, "a-b"},
+		{"optional pointer param", `import h from "host"; const r = h.get("u"); const n: number = r.status; n + r.body`, "200u"},
+		{"omitempty fields", `import h from "host"; h.get("u", { headers: { a: "b" } }).body`, " u b"},
+		{"pointer field", `import h from "host"; h.get("u", { method: "GET", timeout: 5 }).status`, "201"},
+		{"optional field in type", `import { Resp } from "host"; const r: Resp = { status: 1, body: "" }; r.status`, "1"},
+		{"nullable result", `import h from "host"; const v = h.lookup(""); v === null ? "null" : v.length`, "null"},
+		{"lone error throws", `import h from "host"; let out = String(h.fail("")); try { h.fail("boom"); } catch (e) { out += " " + (e as Error).message; } out`, "undefined boom"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewPaserati()
+			defer p.Cleanup()
+			declare(p)
+			v, errs := p.RunCode(tc.src, RunOptions{ModuleName: "/main.ts", Filename: "/main.ts"})
+			if len(errs) > 0 {
+				t.Fatalf("errors: %v", errs)
+			}
+			if got := v.ToString(); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// Still checked: a required parameter, a rest element type and a nullable
+	// result are enforced.
+	for _, tc := range []struct{ name, src string }{
+		{"missing required", `import h from "host"; h.get();`},
+		{"rest element type", `import { join } from "host"; join("-", 1);`},
+		{"nullable result", `import h from "host"; const n: number = h.lookup("k").length;`},
+	} {
+		t.Run("rejects "+tc.name, func(t *testing.T) {
+			p := NewPaserati()
+			defer p.Cleanup()
+			declare(p)
+			if _, errs := p.RunCode(tc.src, RunOptions{ModuleName: "/main.ts", Filename: "/main.ts"}); len(errs) == 0 {
+				t.Fatal("expected a type error")
+			}
+		})
 	}
 }
