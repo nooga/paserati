@@ -268,6 +268,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			// Copy all properties from the extended interface
 			for propName, propType := range extendedObjectType.Properties {
 				properties[propName] = c.rebindThisType(propType, extendedObjectType, interfaceType)
+				setReadonlyProperty(interfaceType, propName, extendedObjectType.ReadOnlyProperties[propName])
 				// Copy optional property flags
 				if extendedObjectType.OptionalProperties != nil && extendedObjectType.OptionalProperties[propName] {
 					optionalProperties[propName] = true
@@ -286,6 +287,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			for _, baseObject := range baseObjects {
 				for propName, propType := range baseObject.Properties {
 					properties[propName] = c.rebindThisType(propType, baseObject, interfaceType)
+					setReadonlyProperty(interfaceType, propName, baseObject.ReadOnlyProperties[propName])
 					if baseObject.OptionalProperties != nil && baseObject.OptionalProperties[propName] {
 						optionalProperties[propName] = true
 					}
@@ -315,6 +317,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			indexSignature := &types.IndexSignature{
 				KeyType:   keyType,
 				ValueType: valueType,
+				Readonly:  prop.Readonly,
 			}
 			c.reportDuplicateIndexSignature(prop.KeyName, indexSignatures, keyType)
 			indexSignatures = append(indexSignatures, indexSignature)
@@ -352,6 +355,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			if computedName != "" {
 				// We can resolve this to a concrete property name
 				properties[computedName] = propType
+				setReadonlyProperty(interfaceType, computedName, prop.Readonly)
 				if prop.Optional {
 					optionalProperties[computedName] = true
 				}
@@ -401,6 +405,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			}
 
 			properties[prop.Name.Value] = propType
+			setReadonlyProperty(interfaceType, prop.Name.Value, prop.Readonly)
 
 			// Track optional properties
 			if prop.Optional {

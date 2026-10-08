@@ -418,6 +418,15 @@ func (c *Checker) reportLeaf(node parser.Node, expr parser.Expression, source, t
 		}
 	}
 
+	if head == headAssign && types.IsReadonlyArrayLike(source) {
+		switch target.(type) {
+		case *types.ArrayType, *types.TupleType:
+			c.addErrorAtStart(node, errors.TS4104, fmt.Sprintf(
+				"The type '%s' is 'readonly' and cannot be assigned to the mutable type '%s'.", srcStr, tgtStr))
+			return
+		}
+	}
+
 	if names, ok := c.missingProperties(source, target); ok {
 		if head == headAssign {
 			switch {

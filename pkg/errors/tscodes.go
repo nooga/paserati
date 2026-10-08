@@ -95,6 +95,7 @@ const (
 	TS2533  = "TS2533"  // Object is possibly 'null' or 'undefined'
 	TS2538  = "TS2538"  // Type 'X' cannot be used as an index type
 	TS2540  = "TS2540"  // Cannot assign to 'X' because it is a read-only property
+	TS2542  = "TS2542"  // Index signature in type 'X' only permits reading
 	TS2552  = "TS2552"  // Cannot find name 'X'. Did you mean 'Y'?
 	TS2554  = "TS2554"  // Expected N arguments, but got M
 	TS2555  = "TS2555"  // Expected at least N arguments, but got M
@@ -120,6 +121,7 @@ const (
 	TS2743  = "TS2743"  // No overload expects N type arguments, but overloads do exist that expect either A or B
 	TS2769  = "TS2769"  // No overload matches this call
 	TS2840  = "TS2840"  // An interface cannot extend a primitive type like 'X'. It can only extend other named object types.
+	TS4104  = "TS4104"  // The type 'X' is 'readonly' and cannot be assigned to the mutable type 'Y'
 	TS4112  = "TS4112"  // This member cannot have an 'override' modifier because its containing class 'X' does not extend another class
 	TS4113  = "TS4113"  // This member cannot have an 'override' modifier because it is not declared in the base class 'X'
 	TS4114  = "TS4114"  // This member must have an 'override' modifier because it overrides a member in the base class 'X'

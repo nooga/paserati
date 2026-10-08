@@ -451,8 +451,13 @@ func NewParser(l *lexer.Lexer) *Parser {
 	// NEW: Constructor types that start with 'new'
 	p.registerTypePrefix(lexer.NEW, p.parseConstructorTypeExpression) // Constructor types like 'new () => T'
 	p.registerTypePrefix(lexer.READONLY, func() Expression {          // 'readonly T[]' (readonly array type)
+		tok := p.curToken
 		p.nextToken() // consume 'readonly', parse the inner type
-		return p.parseTypeExpressionRecursive(TYPE_LOWEST)
+		inner := p.parseTypeExpressionRecursive(TYPE_LOWEST)
+		if inner == nil {
+			return nil
+		}
+		return &ReadonlyTypeExpression{Token: tok, Type: inner}
 	})
 	p.registerTypePrefix(lexer.ABSTRACT, func() Expression { // 'abstract new (...) => T'
 		p.nextToken() // consume 'abstract', next should be 'new'
@@ -8607,6 +8612,18 @@ func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
 
 // parseInterfaceProperty parses a single property in an interface
 func (p *Parser) parseInterfaceProperty() *InterfaceProperty {
+	// `readonly` is a modifier unless it is itself the member name
+	// (`readonly: T`, `readonly?: T`, `readonly(): T`, ...).
+	if p.curTokenIs(lexer.READONLY) && !p.peekTokenIs(lexer.COLON) && !p.peekTokenIs(lexer.QUESTION) &&
+		!p.peekTokenIs(lexer.LPAREN) && !p.peekTokenIs(lexer.LT) && !p.peekTokenIs(lexer.SEMICOLON) &&
+		!p.peekTokenIs(lexer.COMMA) && !p.peekTokenIs(lexer.RBRACE) {
+		p.nextToken()
+		prop := p.parseInterfaceProperty()
+		if prop != nil {
+			prop.Readonly = true
+		}
+		return prop
+	}
 	// Check for invalid access modifiers on interface type members (TS1070)
 	if (p.curTokenIs(lexer.PUBLIC) || p.curTokenIs(lexer.PRIVATE) ||
 		p.curTokenIs(lexer.PROTECTED) || p.curTokenIs(lexer.STATIC) ||
@@ -10518,6 +10535,8 @@ func GetTokenFromNode(node Node) *lexer.Token {
 		return n.Token // The '|' token
 	case *ArrayTypeExpression:
 		return n.Token // The '[' token
+	case *ReadonlyTypeExpression:
+		return n.Token // The 'readonly' token
 	case *FunctionTypeExpression:
 		return n.Token // The '(' token
 	case *ObjectTypeExpression:
