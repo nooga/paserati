@@ -409,6 +409,8 @@ type Checker struct {
 	// This ensures type predicate functions and other hoisted functions are available
 	deferMethodBodies    bool
 	deferredMethodBodies []deferredMethodBodyCheck
+	// Generic methods whose first check only produced a signature.
+	speculatedGenericMethods map[*parser.FunctionLiteral]bool
 	// True while Pass 2.5 checks the bodies of top-level classes: all top-level
 	// bindings are hoisted by then, so unresolved names are real errors.
 	strictDeferredMethodBodies bool

@@ -17,8 +17,15 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		lhsType = types.Any
 	} // Handle nil from error
 
-	// Visit RHS value with contextual typing from the LHS.
-	c.visitWithContext(node.Value, &ContextualType{ExpectedType: lhsType})
+	// Visit RHS value with contextual typing from the LHS. A narrowed variable
+	// (`if (!b) { b = ... }`) is typed by its declared type, not the narrowed one.
+	contextType := lhsType
+	if identLHS, isIdent := node.Left.(*parser.Identifier); isIdent && node.Operator == "=" {
+		if declared := c.env.ResolveDeclaredType(identLHS.Value); declared != nil {
+			contextType = declared
+		}
+	}
+	c.visitWithContext(node.Value, &ContextualType{ExpectedType: contextType})
 	rhsType := node.Value.GetComputedType()
 	if rhsType == nil {
 		rhsType = types.Any

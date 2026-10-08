@@ -141,6 +141,11 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 			guard.IsNegated = !guard.IsNegated
 			return guard
 		}
+		if ident, ok := prefixExpr.Right.(*parser.Identifier); ok {
+			if guard := c.falsyNullishGuard(ident.Value); guard != nil {
+				return guard
+			}
+		}
 	}
 
 	// Pattern 0: Type predicate function calls like isString(x) or Array.isArray(x)
@@ -741,6 +746,12 @@ func (c *Checker) applyPositiveTypeNarrowing(guard *TypeGuard) *Environment {
 		// false, same as the "cannot narrow" fallback below.
 		debugPrintf("// [TypeNarrowing] Property-existence guard on non-union '%s' (%s) - marker has nothing to filter, leaving type unchanged\n",
 			guard.VariableName, originalType.String())
+	} else if _, isObjMarker := guard.NarrowedType.(*types.ObjectTypeMarker); isObjMarker && originalType == types.Any {
+		// `typeof x === "object"` does not refine `any`.
+	} else if _, isObjMarker := guard.NarrowedType.(*types.ObjectTypeMarker); isObjMarker && originalType == types.Unknown {
+		// `typeof x === "object"` on `unknown` is `object | null`.
+		canNarrow = true
+		narrowedType = types.NewUnionType(types.NonPrimitive, types.Null)
 	} else if originalType == types.Unknown && guard.NarrowedType != nil {
 		// Unknown can be narrowed to any specific type
 		canNarrow = true
@@ -1717,6 +1728,10 @@ func (c *Checker) applyInvertedTruthinessNarrowing(condition parser.Expression) 
 		if memberExpr, ok := prefixExpr.Right.(*parser.MemberExpression); ok {
 			return c.applyMemberTruthinessNarrowing(memberExpr)
 		}
+		if chain, ok := prefixExpr.Right.(*parser.OptionalChainingExpression); ok {
+			// if (!a?.b) { return } => a and a.b are non-nullish after
+			return c.narrowNonNullish(chain)
+		}
 	}
 	// Handle bare x pattern: if (x) { return } => x is falsy after (null/undefined)
 	// This is less common and less useful, skip for now
@@ -2407,4 +2422,35 @@ func (c *Checker) narrowNonNullish(expr parser.Expression) *Environment {
 		return env
 	}
 	return nil
+}
+
+// falsyNullishGuard models `!x` for a variable whose type is an object type
+// plus null/undefined: the only falsy values it can hold are the nullish
+// members, so the condition holding is equivalent to `x` being nullish.
+// Variables with a primitive member (`""`, `0`) are left to the plain
+// truthiness handling, since falsy there is not just nullish.
+func (c *Checker) falsyNullishGuard(name string) *TypeGuard {
+	t, _, found := c.env.Resolve(name)
+	if !found || t == nil {
+		return nil
+	}
+	union, ok := t.(*types.UnionType)
+	if !ok {
+		return nil
+	}
+	var nullish []types.Type
+	for _, member := range union.Types {
+		switch member {
+		case types.Null, types.Undefined:
+			nullish = append(nullish, member)
+		default:
+			if !c.isObjectLikeType(c.resolveTypeAlias(member)) {
+				return nil
+			}
+		}
+	}
+	if len(nullish) == 0 || len(nullish) == len(union.Types) {
+		return nil
+	}
+	return &TypeGuard{VariableName: name, NarrowedType: types.NewUnionType(nullish...)}
 }

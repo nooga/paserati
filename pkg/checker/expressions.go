@@ -1580,7 +1580,23 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				default:
 					// Check primitive prototypes for string, number, boolean, symbol, RegExp
 					var prototypeName string
-					switch memberType {
+					primMember := memberType
+					if lit, ok := memberType.(*types.LiteralType); ok {
+						// Literal members expose their primitive's prototype.
+						switch {
+						case lit.Value.Type() == vm.TypeString:
+							primMember = types.String
+						case lit.Value.IsNumber():
+							primMember = types.Number
+						case lit.Value.Type() == vm.TypeBoolean:
+							primMember = types.Boolean
+						case lit.Value.Type() == vm.TypeBigInt:
+							primMember = types.BigInt
+						}
+					}
+					switch primMember {
+					case types.BigInt:
+						prototypeName = "bigint"
 					case types.String:
 						prototypeName = "string"
 					case types.Number:
@@ -2266,6 +2282,9 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 	} else if baseResultType == types.Never {
 		// If property access failed, optional chaining still returns undefined instead of error
 		resultType = types.Undefined
+	} else if baseResultType == types.Any {
+		// `any | undefined` is `any`
+		resultType = types.Any
 	} else {
 		// Create union type: baseResultType | undefined
 		resultType = &types.UnionType{
@@ -2324,6 +2343,8 @@ func (c *Checker) checkOptionalIndexExpression(node *parser.OptionalIndexExpress
 	var resultType types.Type
 	if baseResultType == types.Undefined {
 		resultType = types.Undefined
+	} else if baseResultType == types.Any && widenedObjectType == types.Any {
+		resultType = types.Any
 	} else {
 		resultType = &types.UnionType{
 			Types: []types.Type{baseResultType, types.Undefined},
@@ -2381,6 +2402,8 @@ func (c *Checker) checkOptionalCallExpression(node *parser.OptionalCallExpressio
 	var resultType types.Type
 	if baseResultType == types.Undefined {
 		resultType = types.Undefined
+	} else if baseResultType == types.Any && widenedFunctionType == types.Any {
+		resultType = types.Any
 	} else {
 		resultType = &types.UnionType{
 			Types: []types.Type{baseResultType, types.Undefined},
@@ -2964,7 +2987,7 @@ func (c *Checker) isObjectType(t types.Type) bool {
 		// needs its own case here - otherwise `"test" in /x/` was rejected
 		// at check time before the 'in' operator's own object-ness fix in
 		// the VM (OpIn, pkg/vm/vm.go) ever ran.
-		return t == types.Any || t == types.RegExp
+		return t == types.Any || t == types.RegExp || t == types.NonPrimitive
 	}
 }
 

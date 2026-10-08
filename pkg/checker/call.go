@@ -1406,6 +1406,12 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		// Use DeeplyWidenType to also widen object literal properties
 		// e.g., { count: 0 } should infer T = { count: number }, not T = { count: 0 }
 		inferredType := types.DeeplyWidenType(argType)
+		if argTP, argIsTP := argType.(*types.TypeParameterType); argIsTP && argTP.Parameter != nil &&
+			argTP.Parameter.Constraint != nil && argTP.Parameter.Constraint != types.Any {
+			// A constrained type parameter infers as itself, not as its
+			// constraint (`T extends {..}`, `list.slice()` is `T[]`).
+			inferredType = argType
+		}
 		debugPrintf("// [Checker Constraints] Widening type for %s: %s -> %s\n",
 			pType.Parameter.Name, argType.String(), inferredType.String())
 
