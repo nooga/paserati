@@ -854,6 +854,16 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 		defer func() { bs.initializing = false }()
 	}
 
+	// An annotation resolved in Pass 2 may hold a `(typeof X)[K]` that X now
+	// has the type for.
+	if typeAnnotation != nil {
+		if resolved := c.resolveDeferredTypeofIndex(variableType, false); resolved != variableType {
+			variableType = resolved
+			globalEnv.Update(varName.Value, resolved)
+			varName.SetComputedType(resolved)
+		}
+	}
+
 	// Use contextual typing if we have a type annotation (not Any)
 	if typeAnnotation != nil && variableType != types.Any {
 		debugPrintf("// [Checker Pass 5] Using contextual typing for '%s' with expected type: %s\n", varName.Value, variableType.String())
