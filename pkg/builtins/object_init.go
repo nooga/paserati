@@ -645,7 +645,7 @@ func (o *ObjectInitializer) InitRuntime(ctx *RuntimeContext) error {
 	protoGetter := vm.NewNativeFunction(0, false, "get __proto__", func(args []vm.Value) (vm.Value, error) {
 		thisValue := vmInstance.GetThis()
 		if thisValue.Type() == vm.TypeUndefined || thisValue.Type() == vm.TypeNull {
-			return vm.Undefined, vmInstance.NewTypeError("Cannot read property '__proto__' of " + thisValue.TypeName())
+			return vm.Undefined, vmInstance.NewTypeError("Cannot read properties of " + thisValue.TypeName() + " (reading '__proto__')")
 		}
 		// Use getPrototypeOfValue which handles Proxy traps and all object types
 		return getPrototypeOfValue(vmInstance, thisValue)
