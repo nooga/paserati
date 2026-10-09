@@ -172,10 +172,12 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 			return done
 		}
 		newObj := NewObjectType()
+		newObj.PropertyDocs = t.PropertyDocs
+		newObj.Doc = t.Doc
 		memo[t] = newObj
-		for _, name := range SortedPropertyNames(t.Properties) {
+		for _, name := range t.PropertyNames() {
 			propType := t.Properties[name]
-			newObj.Properties[name] = substituteTypeMemo(propType, substitutions, memo)
+			newObj.SetProperty(name, substituteTypeMemo(propType, substitutions, memo))
 		}
 		// Copy optional properties
 		for name, isOptional := range t.OptionalProperties {

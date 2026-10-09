@@ -615,14 +615,14 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 									// Only add if not already defined (own properties override prototype)
 									if _, exists := fields[propName]; !exists {
 										fields[propName] = propType
-										preliminaryObjType.Properties[propName] = propType
+										preliminaryObjType.SetProperty(propName, propType)
 									}
 								}
 							}
 							// Don't add __proto__ itself as a property
 						} else {
 							fields[keyName] = valueType
-							preliminaryObjType.Properties[keyName] = valueType
+							preliminaryObjType.SetProperty(keyName, valueType)
 						}
 					}
 				}
@@ -704,13 +704,13 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 					preliminaryFuncSig.ParameterTypes[i] = types.Any
 				}
 			}
-			preliminaryObjType.Properties[keyName] = types.NewFunctionType(preliminaryFuncSig)
+			preliminaryObjType.SetProperty(keyName, types.NewFunctionType(preliminaryFuncSig))
 		} else if _, isArrowFunction := prop.Value.(*parser.ArrowFunctionLiteral); isArrowFunction {
 			// For arrow functions, we can use a generic function type temporarily
-			preliminaryObjType.Properties[keyName] = types.NewFunctionType(&types.Signature{
+			preliminaryObjType.SetProperty(keyName, types.NewFunctionType(&types.Signature{
 				ParameterTypes: []types.Type{}, // We'll refine this later
 				ReturnType:     types.Any,
-			})
+			}))
 		} else if shorthandMethod, isShorthandMethod := prop.Value.(*parser.ShorthandMethod); isShorthandMethod {
 			// Create preliminary function signature for shorthand methods
 			paramTypes := make([]types.Type, len(shorthandMethod.Parameters))
@@ -739,7 +739,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				ParameterTypes: paramTypes,
 				ReturnType:     returnType,
 			}
-			preliminaryObjType.Properties[keyName] = types.NewFunctionType(preliminaryFuncSig)
+			preliminaryObjType.SetProperty(keyName, types.NewFunctionType(preliminaryFuncSig))
 		} else if methodDef, isMethodDef := prop.Value.(*parser.MethodDefinition); isMethodDef {
 			// Create preliminary function signature for method definitions (getters/setters)
 			if methodDef.Value != nil {
@@ -758,20 +758,20 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				// Store with appropriate prefix for the second pass too
 				if methodDef.Kind == "getter" {
 					getterName := "__get__" + keyName
-					preliminaryObjType.Properties[getterName] = types.NewFunctionType(preliminaryFuncSig)
+					preliminaryObjType.SetProperty(getterName, types.NewFunctionType(preliminaryFuncSig))
 					// Also store the property type for type checking
-					preliminaryObjType.Properties[keyName] = preliminaryFuncSig.ReturnType
+					preliminaryObjType.SetProperty(keyName, preliminaryFuncSig.ReturnType)
 				} else if methodDef.Kind == "setter" {
 					setterName := "__set__" + keyName
-					preliminaryObjType.Properties[setterName] = types.NewFunctionType(preliminaryFuncSig)
+					preliminaryObjType.SetProperty(setterName, types.NewFunctionType(preliminaryFuncSig))
 					// Also store the property type for type checking
 					if len(preliminaryFuncSig.ParameterTypes) > 0 {
-						preliminaryObjType.Properties[keyName] = preliminaryFuncSig.ParameterTypes[0]
+						preliminaryObjType.SetProperty(keyName, preliminaryFuncSig.ParameterTypes[0])
 					} else {
-						preliminaryObjType.Properties[keyName] = types.Any
+						preliminaryObjType.SetProperty(keyName, types.Any)
 					}
 				} else {
-					preliminaryObjType.Properties[keyName] = types.NewFunctionType(preliminaryFuncSig)
+					preliminaryObjType.SetProperty(keyName, types.NewFunctionType(preliminaryFuncSig))
 				}
 			}
 		}

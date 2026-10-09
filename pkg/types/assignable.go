@@ -1077,15 +1077,17 @@ func mergeIntersectionObjects(inter *IntersectionType) *ObjectType {
 		if !ok {
 			return nil
 		}
-		for name, pt := range obj.GetEffectiveProperties() {
+		effective := obj.GetEffectiveProperties()
+		for _, name := range obj.EffectivePropertyNames() {
+			pt := effective[name]
 			if prev, exists := merged.Properties[name]; exists {
-				merged.Properties[name] = NewIntersectionType(prev, pt)
+				merged.SetProperty(name, NewIntersectionType(prev, pt))
 				if !obj.IsPropertyOptional(name) {
 					merged.OptionalProperties[name] = false
 				}
 				continue
 			}
-			merged.Properties[name] = pt
+			merged.SetProperty(name, pt)
 			merged.OptionalProperties[name] = obj.IsPropertyOptional(name)
 		}
 		merged.CallSignatures = append(merged.CallSignatures, obj.CallSignatures...)

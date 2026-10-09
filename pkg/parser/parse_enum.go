@@ -77,10 +77,12 @@ func (p *Parser) parseEnumDeclaration(isConst bool) *EnumDeclaration {
 		p.nextToken() // Move to first member
 
 		for {
+			memberStart := p.curToken.StartPos
 			member := p.parseEnumMember()
 			if member == nil {
 				return nil
 			}
+			member.Doc = p.l.DocBefore(memberStart)
 			members = append(members, member)
 
 			if p.peekTokenIs(lexer.RBRACE) {
