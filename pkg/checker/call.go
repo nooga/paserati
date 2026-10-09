@@ -1490,6 +1490,13 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		// Use DeeplyWidenType to also widen object literal properties
 		// e.g., { count: 0 } should infer T = { count: number }, not T = { count: 0 }
 		inferredType := types.DeeplyWidenType(argType)
+		keepsLiteral := false
+		if _, isLit := argType.(*types.LiteralType); isLit && hasPrimitiveConstraint(pType.Parameter.Constraint) {
+			// `T extends string` / `K extends keyof O` keep the literal
+			// ("a"), as tsc does for a primitive-constrained parameter.
+			inferredType = argType
+			keepsLiteral = true
+		}
 		if argTP, argIsTP := argType.(*types.TypeParameterType); argIsTP && argTP.Parameter != nil &&
 			argTP.Parameter.Constraint != nil && argTP.Parameter.Constraint != types.Any {
 			// A constrained type parameter infers as itself, not as its
@@ -1503,6 +1510,7 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 			TypeParameter: pType.Parameter,
 			InferredType:  inferredType,
 			Confidence:    100, // High confidence for direct matches
+			Combine:       keepsLiteral,
 		})
 		debugPrintf("// [Checker Constraints] Direct constraint: %s = %s\n", pType.Parameter.Name, inferredType.String())
 
@@ -2082,4 +2090,25 @@ func (c *Checker) overloadArgMatches(node *parser.CallExpression, j int, argType
 		}
 	}
 	return true
+}
+
+// hasPrimitiveConstraint reports whether a type parameter's constraint admits
+// primitive values (a primitive, literal, keyof or template literal type, or a
+// union containing one), which stops inference widening its literal candidates.
+func hasPrimitiveConstraint(constraint types.Type) bool {
+	switch t := constraint.(type) {
+	case nil:
+		return false
+	case *types.KeyofType, *types.LiteralType, *types.TemplateLiteralType:
+		return true
+	case *types.UnionType:
+		for _, m := range t.Types {
+			if hasPrimitiveConstraint(m) {
+				return true
+			}
+		}
+		return false
+	}
+	return constraint == types.String || constraint == types.Number || constraint == types.Boolean ||
+		constraint == types.BigInt || constraint == types.Symbol
 }

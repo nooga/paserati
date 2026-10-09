@@ -93,6 +93,16 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 			rightIsNumeric := widenedRightType == types.Number || types.IsNumericEnumLikeType(rightType)
 			if isAnyOperand {
 				resultType = types.Any
+			} else if widenedLeftType == types.Never || widenedRightType == types.Never {
+				// never is assignable to every operand kind, so the other
+				// operand decides: "x" + never is string, never + never number.
+				if widenedLeftType == types.String || widenedRightType == types.String {
+					resultType = types.String
+				} else if widenedLeftType == types.BigInt || widenedRightType == types.BigInt {
+					resultType = types.BigInt
+				} else {
+					resultType = types.Number
+				}
 			} else if leftIsNumeric && rightIsNumeric {
 				resultType = types.Number
 			} else if widenedLeftType == types.BigInt && widenedRightType == types.BigInt {

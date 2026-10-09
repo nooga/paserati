@@ -2560,6 +2560,11 @@ func (c *Checker) visit(node parser.Node) {
 		// Add to inferred types - widen literal types for better inference
 		// This is especially important for generators where the return type becomes TReturn parameter
 		widenedReturnType := types.GetWidenedType(actualReturnType)
+		if _, isLiteral := node.ReturnValue.(*parser.ObjectLiteral); isLiteral {
+			// A returned object literal's members widen too, so the
+			// inferred return type is `{ a: number }`, not `{ a: 1 }`.
+			widenedReturnType = types.DeeplyWidenType(widenedReturnType)
+		}
 		c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, widenedReturnType)
 
 	case *parser.BlockStatement:

@@ -1383,7 +1383,7 @@ func (c *Checker) inferSimpleMethodReturnType(fn *parser.FunctionLiteral) types.
 	if returnType == nil {
 		return types.Any
 	}
-	return types.GetWidenedType(returnType)
+	return types.DeeplyWidenType(returnType)
 }
 
 // inferPropertyType determines the type of a class property
