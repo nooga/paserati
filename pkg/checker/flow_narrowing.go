@@ -121,6 +121,13 @@ func (f *flowNarrowState) trackVarDeclarationNarrowing(c *Checker, declarators [
 func (f *flowNarrowState) observeExpressionStatement(c *Checker, node *parser.ExpressionStatement) {
 	defer c.applyAssertionNarrowing(node.Expression)
 	assign, isAssign := node.Expression.(*parser.AssignmentExpression)
+	if isAssign && (assign.Operator == "??=" || assign.Operator == "||=") {
+		if ident, isIdent := assign.Left.(*parser.Identifier); isIdent {
+			c.visit(node.Expression)
+			f.observeLogicalAssignment(c, ident.Value, assign)
+			return
+		}
+	}
 	if !isAssign || assign.Operator != "=" {
 		f.invalidateAll()
 		c.visit(node.Expression)
@@ -142,5 +149,34 @@ func (f *flowNarrowState) observeExpressionStatement(c *Checker, node *parser.Ex
 	rhsType := assign.Value.GetComputedType()
 	if narrowType, isLiteral := rhsType.(*types.LiteralType); isLiteral {
 		f.track(ident.Value, narrowType)
+		return
+	}
+	if rhsType != nil {
+		// `x = f()` narrows a declared union to the members f() can be.
+		declared := c.env.ResolveDeclaredType(ident.Value)
+		if reduced := assignmentReducedType(declared, types.GetWidenedType(rhsType)); reduced != nil {
+			f.track(ident.Value, reduced)
+		}
+	}
+}
+
+// observeLogicalAssignment keeps `x ??= v` / `x ||= v` narrowing alive: x is
+// then its old non-nullish value or v.
+func (f *flowNarrowState) observeLogicalAssignment(c *Checker, name string, assign *parser.AssignmentExpression) {
+	before := assign.Left.GetComputedType()
+	rhsType := assign.Value.GetComputedType()
+	if before == nil || rhsType == nil || rhsType == types.Any || before == types.Any {
+		return
+	}
+	kept := types.RemoveNullishTypes(before)
+	if kept == types.Never {
+		kept = nil
+	}
+	joined := types.GetWidenedType(rhsType)
+	if kept != nil {
+		joined = types.NewUnionType(kept, joined)
+	}
+	if declared := c.env.ResolveDeclaredType(name); declared != nil && types.IsAssignable(joined, declared) && !c.typesEqual(joined, declared) {
+		f.track(name, joined)
 	}
 }

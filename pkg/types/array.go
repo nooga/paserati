@@ -16,6 +16,14 @@ func (at *ArrayType) String() string {
 	elemTypeStr := "<nil>"
 	if at.ElementType != nil { // Add nil check
 		elemTypeStr = at.ElementType.String()
+		switch elem := at.ElementType.(type) {
+		case *UnionType, *IntersectionType:
+			elemTypeStr = "(" + elemTypeStr + ")"
+		case *ObjectType:
+			if elem.IsCallable() && len(elem.Properties) == 0 && elem.DisplayName == "" && elem.GenericName == "" {
+				elemTypeStr = "(" + elemTypeStr + ")"
+			}
+		}
 	}
 	return fmt.Sprintf("%s[]", elemTypeStr)
 }

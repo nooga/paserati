@@ -864,6 +864,8 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		}
 	}
 
+	resultType = c.narrowFilterResult(node, resultType)
+
 	debugPrintf("// [Checker CallExpr] Setting result type from func '%s'. ReturnType from Sig: %T (%v)\n", node.Function.String(), resultType, resultType)
 	node.SetComputedType(resultType)
 
@@ -2264,4 +2266,27 @@ func (c *Checker) markParametersContextual(params []*parser.Parameter, rest *par
 		c.contextualParams[rest] = true
 		delete(c.implicitAnyParams, rest)
 	}
+}
+
+// narrowFilterResult gives `xs.filter(isT)` the type T[] when the callback is a
+// type predicate (`(x): x is T => ...`), as the S-returning overload of
+// Array.prototype.filter does.
+func (c *Checker) narrowFilterResult(node *parser.CallExpression, result types.Type) types.Type {
+	member, ok := node.Function.(*parser.MemberExpression)
+	if !ok || len(node.Arguments) == 0 || c.extractPropertyName(member.Property) != "filter" {
+		return result
+	}
+	arr, ok := result.(*types.ArrayType)
+	if !ok {
+		return result
+	}
+	callback, ok := node.Arguments[0].GetComputedType().(*types.ObjectType)
+	if !ok || len(callback.CallSignatures) == 0 {
+		return result
+	}
+	pred, ok := callback.CallSignatures[0].ReturnType.(*types.TypePredicateType)
+	if !ok || pred.Asserts || pred.Type == nil || !types.IsAssignable(pred.Type, arr.ElementType) {
+		return result
+	}
+	return &types.ArrayType{ElementType: pred.Type}
 }

@@ -3346,9 +3346,32 @@ func (c *Checker) checkAwaitExpression(node *parser.AwaitExpression) {
 // isSpreadableIterableType returns true if a type has a usable Symbol.iterator
 // shape for spread syntax. A bare computed property is not enough because
 // classes can define [Symbol.iterator]() without returning an iterator.
+// collectionElementType is the element type produced by iterating a built-in
+// Set or Map instance: the item for a Set, a [key, value] tuple for a Map.
+func collectionElementType(t types.Type) (types.Type, bool) {
+	obj, ok := t.(*types.ObjectType)
+	if !ok {
+		return nil, false
+	}
+	switch obj.GenericName {
+	case "Set", "ReadonlySet":
+		if len(obj.GenericArgs) == 1 {
+			return obj.GenericArgs[0], true
+		}
+	case "Map", "ReadonlyMap":
+		if len(obj.GenericArgs) == 2 {
+			return &types.TupleType{ElementTypes: []types.Type{obj.GenericArgs[0], obj.GenericArgs[1]}}, true
+		}
+	}
+	return nil, false
+}
+
 func (c *Checker) isSpreadableIterableType(t types.Type) bool {
 	if t == nil {
 		return false
+	}
+	if _, ok := collectionElementType(t); ok {
+		return true
 	}
 	if genericType, ok := t.(*types.GenericType); ok {
 		if genericType.Name == "Iterable" || genericType.Name == "Iterator" || genericType.Name == "Generator" {
@@ -3394,6 +3417,9 @@ func (c *Checker) hasIteratorNext(t types.Type) bool {
 func (c *Checker) getSpreadElementType(t types.Type) types.Type {
 	if t == nil {
 		return types.Any
+	}
+	if elem, ok := collectionElementType(t); ok {
+		return elem
 	}
 	if arrayType, ok := t.(*types.ArrayType); ok {
 		if arrayType.ElementType != nil {

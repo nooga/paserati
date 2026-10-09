@@ -100,8 +100,8 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("map", a.createGenericMapMethod(tParam)).
 		WithProperty("forEach", a.createGenericMethod("forEach", tParam,
 			types.NewSimpleFunction([]types.Type{
-				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Undefined, []bool{false, true, true})},
-				types.Undefined))).
+				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Void, []bool{false, true, true})},
+				types.Void))).
 		WithProperty("every", a.createGenericMethod("every", tParam,
 			types.NewSimpleFunction([]types.Type{
 				types.NewOptionalFunction([]types.Type{tType, types.Number, tArrayType}, types.Unknown, []bool{false, true, true})},

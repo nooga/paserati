@@ -1956,7 +1956,7 @@ func (c *Checker) applyMemberTruthinessNarrowing(memberExpr *parser.MemberExpres
 // This is used for "typeof x === 'object'" narrowing
 func (c *Checker) isObjectLikeType(t types.Type) bool {
 	switch t.(type) {
-	case *types.ObjectType, *types.ArrayType:
+	case *types.ObjectType, *types.ArrayType, *types.MappedType, *types.TupleType:
 		return true
 	default:
 		// Primitives like string, number, boolean are not object-like
@@ -2228,6 +2228,91 @@ func (c *Checker) mergePostIfTypes(originalEnv *Environment, narrowedEnv *Enviro
 	}
 }
 
+// falsyGuardKey is the narrowing key of the reference tested by `if (!ref)`,
+// or "" when the condition has another shape.
+func falsyGuardKey(condition parser.Expression) string {
+	prefix, ok := condition.(*parser.PrefixExpression)
+	if !ok || prefix.Operator != "!" {
+		return ""
+	}
+	switch prefix.Right.(type) {
+	case *parser.Identifier, *parser.MemberExpression:
+		return expressionToNarrowingKey(prefix.Right)
+	}
+	return ""
+}
+
+// narrowedTypeIn is the type env gives key: a variable's type, or a member
+// chain's narrowing.
+func narrowedTypeIn(env *Environment, key string) types.Type {
+	if env == nil {
+		return nil
+	}
+	if strings.Contains(key, ".") {
+		return env.narrowings[key]
+	}
+	if info, ok := env.symbols[key]; ok {
+		return info.Type
+	}
+	return nil
+}
+
+// seedFalsyGuardEnv is a scope that holds ref's current type for the
+// consequence of `if (!ref)`, so assignments there do not touch the enclosing
+// declaration. It returns nil when ref's type is not known.
+func (c *Checker) seedFalsyGuardEnv(key string, condition parser.Expression) *Environment {
+	prefix := condition.(*parser.PrefixExpression)
+	env := NewEnclosedEnvironment(c.env)
+	if !strings.Contains(key, ".") {
+		t, isConst, found := c.env.Resolve(key)
+		if !found || t == nil {
+			return nil
+		}
+		env.Define(key, t, isConst)
+		return env
+	}
+	t := prefix.Right.GetComputedType()
+	if t == nil {
+		return nil
+	}
+	env.narrowings[key] = t
+	return env
+}
+
+// mergePostIfFalsy joins the branches of `if (!ref) { ...ref = value... }`
+// when the consequence falls through: afterwards ref is what the consequence
+// assigned or, if the condition was false, its truthy type. before is the
+// narrowing the consequence started with.
+func (c *Checker) mergePostIfFalsy(originalEnv, narrowedEnv *Environment, condition parser.Expression, before types.Type) {
+	key := falsyGuardKey(condition)
+	if key == "" || narrowedEnv == nil || before == nil {
+		return
+	}
+	thenType := narrowedTypeIn(narrowedEnv, key)
+	if thenType == nil || c.typesEqual(thenType, before) {
+		return
+	}
+	truthyEnv := c.applyInvertedTruthinessNarrowing(condition)
+	elseType := narrowedTypeIn(truthyEnv, key)
+	if elseType == nil {
+		return
+	}
+	merged := c.computeMergedType(thenType, elseType)
+	if strings.Contains(key, ".") {
+		mergedEnv := NewEnclosedEnvironment(originalEnv)
+		for k, v := range originalEnv.narrowings {
+			mergedEnv.narrowings[k] = v
+		}
+		mergedEnv.narrowings[key] = merged
+		c.env = mergedEnv
+		return
+	}
+	_, isConst, _ := originalEnv.Resolve(key)
+	mergedEnv := NewEnclosedEnvironment(originalEnv)
+	mergedEnv.Define(key, merged, isConst)
+	c.env = mergedEnv
+}
+
 // resolveMemberExpressionOriginalType resolves the declared type of a member expression
 // from its narrowing key (e.g., "this._tools" → string[] | null from the class property).
 func (c *Checker) resolveMemberExpressionOriginalType(key string) types.Type {
@@ -2254,6 +2339,10 @@ func (c *Checker) resolveMemberExpressionOriginalType(key string) types.Type {
 		currentType = types.GetWidenedType(currentType)
 		if objType, ok := currentType.(*types.ObjectType); ok {
 			propType, exists := objType.Properties[parts[i]]
+			if !exists {
+				// Inherited members (a property of a generic base class).
+				propType, exists = objType.GetEffectiveProperties()[parts[i]]
+			}
 			if !exists {
 				return nil
 			}

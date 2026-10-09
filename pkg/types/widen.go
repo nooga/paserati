@@ -76,6 +76,8 @@ func DeeplyWidenType(t Type) Type {
 			PropertyDocs:        objType.PropertyDocs,
 			Doc:                 objType.Doc,
 			DisplayName:         objType.DisplayName,
+			GenericName:         objType.GenericName,
+			GenericArgs:         objType.GenericArgs,
 			OptionalProperties:  objType.OptionalProperties,
 			ReadOnlyProperties:  objType.ReadOnlyProperties,
 			CallSignatures:      objType.CallSignatures,
@@ -98,10 +100,15 @@ func DeeplyWidenType(t Type) Type {
 	return widenedT
 }
 
-// WidenEnumMember widens an enum member type to its enum (`let t = Color.Red`
+// WidenEnumMember widens null and undefined to any (see below) and an enum member type to its enum (`let t = Color.Red`
 // declares a Color), as tsc does for a mutable declaration's inferred type.
 // Other types are returned unchanged.
 func WidenEnumMember(t Type) Type {
+	// A mutable `let x = null` has no useful declared type: tsc evolves it
+	// with the assignments that follow, which any approximates.
+	if t == Null || t == Undefined {
+		return Any
+	}
 	if em, ok := t.(*EnumMemberType); ok && em.Parent != nil {
 		return em.Parent.UnionOfMembers()
 	}
