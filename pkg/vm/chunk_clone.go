@@ -44,9 +44,61 @@ func InstantiateChunk(c *Chunk) (inst *Chunk, ok bool) {
 			fn.Properties = nil
 			fn.cachedClosure = nil
 			n.Constants[i] = Value{typ: TypeFunction, obj: unsafe.Pointer(&fn)}
+		case TypeArray:
+			// The template object of a tagged template: one per call site
+			// and, as in the spec, per realm.
+			arr, arrOK := instantiateTemplateObject(k)
+			if !arrOK {
+				return nil, false
+			}
+			n.Constants[i] = arr
 		default:
 			return nil, false
 		}
 	}
 	return &n, true
+}
+
+// SharedModuleChunkFallbacks reports how many module chunks this VM had to run
+// shared between realms because InstantiateChunk could not copy one of their
+// constants. It is zero for ordinary modules; embedders and tests can check it
+// to notice a module that is not isolated per realm.
+func (vm *VM) SharedModuleChunkFallbacks() int { return vm.sharedModuleChunkFallbacks }
+
+// instantiateTemplateObject copies the frozen template object the compiler
+// builds for a tagged template: an array of the cooked strings (undefined for
+// an invalid escape) with a frozen array of the raw strings as its `raw`
+// property. ok is false for any other array, which this does not know how to
+// copy faithfully.
+func instantiateTemplateObject(v Value) (Value, bool) {
+	src := v.AsArray()
+	rawVal, hasRaw := src.GetOwn("raw")
+	if !hasRaw || rawVal.Type() != TypeArray || !src.IsFrozen() {
+		return Undefined, false
+	}
+	copyStrings := func(a *ArrayObject, allowUndefined bool) (Value, bool) {
+		out := NewArray()
+		dst := out.AsArray()
+		for i := 0; i < a.Length(); i++ {
+			e := a.Get(i)
+			if e.Type() != TypeString && !(allowUndefined && e.Type() == TypeUndefined) {
+				return Undefined, false
+			}
+			dst.Append(e)
+		}
+		dst.SetExtensible(false)
+		dst.SetFrozen(true)
+		return out, true
+	}
+	cooked, ok := copyStrings(src, true)
+	if !ok {
+		return Undefined, false
+	}
+	raw, ok := copyStrings(rawVal.AsArray(), false)
+	if !ok {
+		return Undefined, false
+	}
+	dst := cooked.AsArray()
+	dst.DefineOwnProperty("raw", raw, false, false, false)
+	return cooked, true
 }

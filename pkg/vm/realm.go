@@ -114,8 +114,17 @@ type Realm struct {
 	// Intrinsic functions
 	ThrowTypeErrorFunc Value // %ThrowTypeError% - for strict mode arguments.callee/caller
 
-	// Module system (per-realm)
-	ModuleContexts map[string]*ModuleContext
+	// Module system (per-realm). Module records, namespaces and the bindings
+	// of every module's top level belong to the realm that evaluated them, as
+	// in the spec; only parsing, checking and compiling are shared (they live
+	// in the session's module loader). Evaluating a module in a realm runs a
+	// private instance of its compiled chunk. The VM works on the current
+	// realm's maps (see WithRealm).
+	ModuleContexts     map[string]*ModuleContext
+	deferredNamespaces map[string]Value
+	// realmExports holds, per module record, the export values a host module
+	// built for this realm (see RealmExporter).
+	realmExports map[ModuleRecord]map[string]Value
 
 	// Parent VM reference
 	vm *VM
@@ -133,6 +142,7 @@ func NewRealm(vm *VM, id int) *Realm {
 		Heap:                    NewHeap(64),
 		SymbolRegistry:          make(map[string]Value),
 		ModuleContexts:          make(map[string]*ModuleContext),
+		deferredNamespaces:      make(map[string]Value),
 		globalsFromGlobalObject: make(map[uint16]bool),
 	}
 }

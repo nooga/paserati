@@ -27,31 +27,48 @@ type ASTArena struct {
 	ternaryExprs      []TernaryExpression
 }
 
-// NewASTArena creates a new arena with pre-allocated capacity.
-func NewASTArena() *ASTArena {
+// NewASTArena creates a new arena with pre-allocated capacity for a typical
+// (about a thousand token) program.
+func NewASTArena() *ASTArena { return newASTArenaSized(1024) }
+
+// newASTArenaSized pre-allocates for a program of about the given number of
+// tokens, in proportion to the typical case (never less than a few nodes of
+// each kind); the slices grow on demand. The parser starts small: a module
+// keeps its AST for the life of the session, and a typical program's worth of
+// empty node slots is hundreds of kilobytes of it.
+func newASTArenaSized(tokens int) *ASTArena {
+	const typical = 1024
+	c := func(n int) int {
+		if tokens >= typical {
+			return n
+		}
+		if scaled := n * tokens / typical; scaled > 4 {
+			return scaled
+		}
+		return 4
+	}
 	return &ASTArena{
-		// Pre-allocate based on typical usage patterns
-		identifiers:       make([]Identifier, 0, 256),
-		numberLiterals:    make([]NumberLiteral, 0, 64),
-		stringLiterals:    make([]StringLiteral, 0, 64),
-		booleanLiterals:   make([]BooleanLiteral, 0, 32),
-		blockStatements:   make([]BlockStatement, 0, 128),
-		ifStatements:      make([]IfStatement, 0, 64),
-		infixExpressions:  make([]InfixExpression, 0, 128),
-		prefixExpressions: make([]PrefixExpression, 0, 32),
-		callExpressions:   make([]CallExpression, 0, 128),
-		memberExpressions: make([]MemberExpression, 0, 128),
-		objectProperties:  make([]ObjectProperty, 0, 128),
-		objectLiterals:    make([]ObjectLiteral, 0, 64),
-		arrayLiterals:     make([]ArrayLiteral, 0, 64),
-		returnStatements:  make([]ReturnStatement, 0, 64),
-		letStatements:     make([]LetStatement, 0, 64),
-		constStatements:   make([]ConstStatement, 0, 64),
-		varStatements:     make([]VarStatement, 0, 32),
-		functionLiterals:  make([]FunctionLiteral, 0, 64),
-		arrowFunctions:    make([]ArrowFunctionLiteral, 0, 64),
-		assignmentExprs:   make([]AssignmentExpression, 0, 64),
-		ternaryExprs:      make([]TernaryExpression, 0, 32),
+		identifiers:       make([]Identifier, 0, c(256)),
+		numberLiterals:    make([]NumberLiteral, 0, c(64)),
+		stringLiterals:    make([]StringLiteral, 0, c(64)),
+		booleanLiterals:   make([]BooleanLiteral, 0, c(32)),
+		blockStatements:   make([]BlockStatement, 0, c(128)),
+		ifStatements:      make([]IfStatement, 0, c(64)),
+		infixExpressions:  make([]InfixExpression, 0, c(128)),
+		prefixExpressions: make([]PrefixExpression, 0, c(32)),
+		callExpressions:   make([]CallExpression, 0, c(128)),
+		memberExpressions: make([]MemberExpression, 0, c(128)),
+		objectProperties:  make([]ObjectProperty, 0, c(128)),
+		objectLiterals:    make([]ObjectLiteral, 0, c(64)),
+		arrayLiterals:     make([]ArrayLiteral, 0, c(64)),
+		returnStatements:  make([]ReturnStatement, 0, c(64)),
+		letStatements:     make([]LetStatement, 0, c(64)),
+		constStatements:   make([]ConstStatement, 0, c(64)),
+		varStatements:     make([]VarStatement, 0, c(32)),
+		functionLiterals:  make([]FunctionLiteral, 0, c(64)),
+		arrowFunctions:    make([]ArrowFunctionLiteral, 0, c(64)),
+		assignmentExprs:   make([]AssignmentExpression, 0, c(64)),
+		ternaryExprs:      make([]TernaryExpression, 0, c(32)),
 	}
 }
 

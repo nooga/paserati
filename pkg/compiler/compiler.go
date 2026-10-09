@@ -891,6 +891,15 @@ func newFunctionCompiler(enclosingCompiler *Compiler) *Compiler {
 // and generates bytecode.
 // Returns the generated chunk and any errors encountered (including type errors).
 func (c *Compiler) Compile(node parser.Node) (resultChunk *vm.Chunk, resultErrs []errors.PaseratiError) {
+	// Which modules this chunk has already emitted OpEvalModule for is a
+	// property of the chunk, not of the compiler: a session compiles many
+	// entry programs on one compiler, and each must evaluate its own imports
+	// (the VM makes OpEvalModule idempotent per realm). Remembering them across
+	// compiles left a later program, run in a realm that had not loaded the
+	// module yet, without the instruction that does it.
+	if c.enclosing == nil && c.processedModules != nil {
+		c.processedModules = make(map[string]bool)
+	}
 	// Register exhaustion (RegisterAllocator.Alloc/AllocContiguous panicking
 	// once a function's 255-register budget is used up) and constant-pool
 	// exhaustion (Chunk.AddConstant panicking once a chunk's 65,536-entry

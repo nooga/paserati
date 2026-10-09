@@ -24,6 +24,14 @@ import (
 // belongs to: run Contexts of one session one at a time (a pool of sessions,
 // each used by one goroutine at a time, is the way to run in parallel).
 //
+// ES modules are per Context as well: importing a module in a Context evaluates
+// it there, in a private instance of the module's compiled code, with its own
+// top-level state, classes and namespace object. Only the expensive part is
+// shared - the session parses, type-checks and compiles each module once, on
+// first import in any Context - so a call that imports a large graph costs
+// instantiating and running it, not rebuilding it. Native modules (DeclareModule)
+// are built per Context too, unless declared Shared().
+//
 // Per-call host state (credentials, a request scope) belongs in the Context's
 // own globals - see SetGlobal and DefineNativeGlobal. Natives bound that way
 // exist only in that Context, so a pooled session cannot leak them into the

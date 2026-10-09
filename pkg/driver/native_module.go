@@ -55,6 +55,51 @@ type NativeModule struct {
 	exports     map[string]types.Type // Type information
 	values      map[string]vm.Value   // Runtime values
 	mutex       sync.Once
+	// initRealm is the realm current when the builder first ran; its values
+	// (nm.values) belong to it and are reused there rather than built twice.
+	initRealm *vm.Realm
+	// shared makes every realm use the one set of values built at load time
+	// (see Shared). Otherwise each realm gets its own (see NewExports).
+	shared bool
+}
+
+// Shared makes the module a host singleton: its exports are built once per
+// session and the same function, class and object values are used by every
+// Context, instead of each Context building its own. That is cheaper, and the
+// right choice for stateless helpers and for modules whose state is meant to
+// be common to all Contexts (a connection pool, a cache). The cost is
+// isolation: a JS object exported by a shared module can be mutated by
+// scripts in one Context and observed in another, and its classes and
+// prototypes are those of the realm that happened to load it. Returns the
+// module for chaining.
+func (nm *NativeModule) Shared() *NativeModule {
+	nm.shared = true
+	return nm
+}
+
+// IsShared implements the NativeModuleInterface's optional realm hook.
+func (nm *NativeModule) IsShared() bool { return nm.shared }
+
+// NewExports builds the module's runtime values for the VM's current realm by
+// running the module's builder function again. The first realm to ask, the one
+// the module was loaded in, gets the values built at load time.
+func (nm *NativeModule) NewExports(vmInstance *vm.VM) map[string]vm.Value {
+	nm.initializeNativeModule(vmInstance)
+	if nm.initRealm == vmInstance.CurrentRealm() {
+		return nm.values
+	}
+	return nm.buildValues(vmInstance).values
+}
+
+func (nm *NativeModule) buildValues(vmInstance *vm.VM) *ModuleBuilder {
+	builder := &ModuleBuilder{
+		exports: make(map[string]types.Type),
+		values:  make(map[string]vm.Value),
+		vm:      vmInstance,
+	}
+	nm.builder(builder)
+	builder.applyDefaultExport()
+	return builder
 }
 
 // ValueConverter handles conversion between Go values and VM values
@@ -1602,16 +1647,8 @@ func (nm *NativeModule) InitializeExports(vmInstance *vm.VM) map[string]vm.Value
 // initializeNativeModule initializes a native module and returns its runtime values
 func (nm *NativeModule) initializeNativeModule(vmInstance *vm.VM) map[string]vm.Value {
 	nm.mutex.Do(func() {
-		// Create the module builder with direct type/value synthesis
-		builder := &ModuleBuilder{
-			exports: make(map[string]types.Type),
-			values:  make(map[string]vm.Value),
-			vm:      vmInstance,
-		}
-
-		// Call the user's builder function
-		nm.builder(builder)
-		builder.applyDefaultExport()
+		builder := nm.buildValues(vmInstance)
+		nm.initRealm = vmInstance.CurrentRealm()
 
 		// Store the results
 		nm.exports = builder.exports // Type information

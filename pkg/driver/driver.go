@@ -1919,7 +1919,7 @@ func (p *Paserati) registerNativeModuleExports(moduleRecord *modules.ModuleRecor
 		return
 	}
 
-	exportValues := moduleRecord.GetExportValues()
+	exportValues := moduleRecord.RealmExportValues(p.vmInstance)
 	debugPrintf("// [Driver] Registering %d native module exports with HeapAlloc\n", len(exportValues))
 
 	// Get the HeapAlloc instance from the compiler
