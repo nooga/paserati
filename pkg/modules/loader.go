@@ -292,6 +292,8 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 			record.CompiledChunk = vmChunk
 
 			ml.applyCompilerExports(record, moduleCompiler)
+
+			record.ReleaseSyntax(moduleCompiler)
 			debugPrintf("// [ModuleLoader] Stored %d export indices for module: %s\n", len(record.ExportIndices), record.ResolvedPath)
 		}
 		record.State = ModuleCompiled
@@ -330,6 +332,8 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		record.CompiledChunk = vmChunk
 
 		ml.applyCompilerExports(record, moduleCompiler)
+
+		record.ReleaseSyntax(moduleCompiler)
 		debugPrintf("// [ModuleLoader] Stored %d export indices for module: %s\n", len(record.ExportIndices), record.ResolvedPath)
 		record.State = ModuleCompiled
 	} else {
@@ -891,6 +895,8 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 			record.CompiledChunk = vmChunk
 
 			ml.applyCompilerExports(record, moduleCompiler)
+
+			record.ReleaseSyntax(moduleCompiler)
 
 			debugPrintf("// [ModuleLoader] Module '%s' compiled successfully\n", modulePath)
 		}

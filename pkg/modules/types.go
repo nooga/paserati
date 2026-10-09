@@ -69,7 +69,11 @@ type ModuleRecord struct {
 
 	// Source and parsing
 	Source *source.SourceFile // Source file content
-	AST    *parser.Program    // Parsed AST
+	AST    *parser.Program    // Parsed AST; nil once released (see ReleaseSyntax)
+
+	// LinkSummary is what the compiler keeps of the AST for linking importers
+	// after the AST is released.
+	LinkSummary any
 
 	// Type information
 	Exports       map[string]types.Type // Exported types
@@ -267,6 +271,30 @@ type LoaderStats struct {
 // These methods implement the vm.ModuleRecord interface to avoid circular imports
 
 // GetExportValues returns the exported runtime values from this module
+// SyntaxSummarizer is implemented by compilers that can reduce a module's AST
+// to what linking needs.
+type SyntaxSummarizer interface {
+	SummarizeModule(path string, program *parser.Program) any
+}
+
+// ReleaseSyntax drops the module's AST (and with it the tokens it points into)
+// once the module is compiled. A session compiles a module once and runs it
+// many times; execution, function source text and stack traces use the chunk
+// and the source file, never the AST. Embedders keep a graph of modules
+// compiled for the life of a session, where the parse output is most of what
+// a module costs.
+func (mr *ModuleRecord) ReleaseSyntax(c Compiler) {
+	if mr.AST == nil || mr.CompiledChunk == nil {
+		return
+	}
+	if s, ok := c.(SyntaxSummarizer); ok {
+		mr.LinkSummary = s.SummarizeModule(mr.ResolvedPath, mr.AST)
+	} else {
+		return
+	}
+	mr.AST = nil
+}
+
 func (mr *ModuleRecord) GetExportValues() map[string]vm.Value {
 	if mr.ExportValues == nil {
 		return make(map[string]vm.Value)

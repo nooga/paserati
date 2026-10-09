@@ -1007,7 +1007,7 @@ func (p *Paserati) RunModule(filename string) bool {
 	}
 
 	// Check if AST is available
-	if moduleRecord.AST == nil {
+	if moduleRecord.AST == nil && moduleRecord.CompiledChunk == nil {
 		moduleErr := &errors.CompileError{
 			Position: errors.Position{Line: 0, Column: 0},
 			Msg:      fmt.Sprintf("Module '%s' has no AST (possibly not parsed)", filename),
@@ -1140,7 +1140,7 @@ func (p *Paserati) RunModuleWithValue(filename string) (vm.Value, []errors.Paser
 	}
 
 	// Check if AST is available
-	if moduleRecord.AST == nil {
+	if moduleRecord.AST == nil && moduleRecord.CompiledChunk == nil {
 		moduleErr := &errors.CompileError{
 			Position: errors.Position{Line: 0, Column: 0},
 			Msg:      fmt.Sprintf("Module '%s' has no AST (possibly not parsed)", filename),
