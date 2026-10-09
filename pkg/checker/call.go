@@ -1812,7 +1812,6 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				Properties:          make(map[string]types.Type),
 				PropertyDocs:        typ.PropertyDocs,
 				Doc:                 typ.Doc,
-				DisplayName:         typ.NonGenericDisplayName(),
 				OptionalProperties:  typ.OptionalProperties, // Copy as-is
 				ReadOnlyProperties:  typ.ReadOnlyProperties, // Copy as-is
 				CallSignatures:      nil,
@@ -1823,6 +1822,7 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				IsReflectIntrinsic:  typ.IsReflectIntrinsic,
 			}
 			memo[t] = newObj
+			typ.CopyDisplay(newObj, substitute)
 
 			// Substitute in properties
 			for _, name := range typ.PropertyNames() {

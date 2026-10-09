@@ -226,6 +226,12 @@ type ObjectType struct {
 	// by substitution do not carry it, so instantiations print structurally.
 	DisplayName string
 
+	// GenericName and GenericArgs name an instance of a declared generic
+	// class: `Box<string>`. The declared type carries the class's own type
+	// parameters as arguments; substitution maps them to the instantiation's.
+	GenericName string
+	GenericArgs []Type
+
 	// Doc is the JSDoc comment of the declaration that introduced this type
 	// (an interface or class), delimiters stripped.
 	Doc string
@@ -263,6 +269,13 @@ func (ot *ObjectType) String() string {
 	// Declared classes print by name, as tsc does.
 	if ot.DisplayName != "" {
 		return ot.DisplayName
+	}
+	if ot.GenericName != "" && len(ot.GenericArgs) > 0 {
+		args := make([]string, len(ot.GenericArgs))
+		for i, a := range ot.GenericArgs {
+			args[i] = a.String()
+		}
+		return ot.GenericName + "<" + strings.Join(args, ", ") + ">"
 	}
 
 	// If this is a pure function (callable with no properties), show it as a function signature
