@@ -12260,7 +12260,7 @@ startExecution:
 					}
 
 					// Result must be an object
-					if !result.IsObject() {
+					if !result.IsObject() && !result.IsCallable() {
 						frame.ip = callerIP
 						vm.ThrowTypeError("'construct' on proxy: trap result must be an object")
 						if !vm.unwinding {
