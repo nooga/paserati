@@ -50,6 +50,8 @@ const (
 	TS2315  = "TS2315"  // Type 'X' is not generic
 	TS2355  = "TS2355"  // A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value
 	TS2366  = "TS2366"  // Function lacks ending return statement and return type does not include 'undefined'
+	TS2420  = "TS2420"  // Class 'X' incorrectly implements interface 'Y'
+	TS2678  = "TS2678"  // Type 'X' is not comparable to type 'Y'
 	TS2322  = "TS2322"  // Type 'X' is not assignable to type 'Y'
 	TS2335  = "TS2335"  // 'super' can only be referenced in a derived class
 	TS2337  = "TS2337"  // Super calls are not permitted outside constructors or in nested functions inside constructors

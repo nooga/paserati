@@ -348,6 +348,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 
 	// 3. Handle inheritance relationships and create instance type from methods and properties
 	// Note: createInstanceType will populate the same ObjectType reference
+	c.classNameNode = node.Name
 	instanceType := c.createInstanceTypeInPlace(node.Name.Value, node.Body, node.SuperClass, node.Implements, placeholderType)
 	c.deferRelationCheck(func() { c.checkClassHeritageAccessibility(node, instanceType) })
 
@@ -551,6 +552,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	}
 
 	// 5. Create the instance type body with TypeParameterType references
+	c.classNameNode = node.Name
 	instanceType := c.createInstanceType(node.Name.Value, node.Body, node.SuperClass, node.Implements)
 
 	// 6. Create constructor signatures from constructor overloads or implementation
@@ -641,6 +643,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 	}
 
 	// Handle interface implementations (registration only, validation deferred)
+	classNameNode := c.classNameNode
 	var interfaceNames []string
 	for _, iface := range implements {
 		interfaceNames = append(interfaceNames, iface.Value)
@@ -921,7 +924,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 	// VALIDATE INTERFACES: Now that all properties and methods are added, validate interface implementations
 	for _, interfaceName := range interfaceNames {
-		c.validateInterfaceImplementationDeferred(instanceType, interfaceName)
+		c.validateInterfaceImplementationDeferred(instanceType, interfaceName, classNameNode)
 	}
 
 	// Members must be assignable to the same members of the base class (TS2416).
@@ -2040,7 +2043,7 @@ func (c *Checker) registerInterfaceImplementation(instanceType *types.ObjectType
 }
 
 // validateInterfaceImplementationDeferred validates interface implementation after class is fully built
-func (c *Checker) validateInterfaceImplementationDeferred(instanceType *types.ObjectType, interfaceName string) {
+func (c *Checker) validateInterfaceImplementationDeferred(instanceType *types.ObjectType, interfaceName string, errNode parser.Node) {
 	debugPrintf("// [Checker Class] Validating deferred interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
 
 	// Check if interface exists (should exist since we registered it earlier)
@@ -2058,7 +2061,7 @@ func (c *Checker) validateInterfaceImplementationDeferred(instanceType *types.Ob
 	}
 
 	// Now validate that the class actually implements the interface
-	c.validateInterfaceImplementation(instanceType, interfaceObjType, interfaceName)
+	c.validateInterfaceImplementation(instanceType, interfaceObjType, interfaceName, errNode)
 
 	debugPrintf("// [Checker Class] Successfully validated interface implementation: %s implements %s\n", instanceType.GetClassName(), interfaceName)
 }
@@ -2169,22 +2172,49 @@ func (c *Checker) checkSuperExpression(node *parser.SuperExpression) {
 }
 
 // validateInterfaceImplementation checks that a class properly implements an interface
-func (c *Checker) validateInterfaceImplementation(classType *types.ObjectType, interfaceType *types.ObjectType, interfaceName string) {
+func (c *Checker) validateInterfaceImplementation(classType *types.ObjectType, interfaceType *types.ObjectType, interfaceName string, errNode parser.Node) {
 	className := classType.GetClassName()
 	debugPrintf("// [Checker Class] Validating interface implementation: %s implements %s\n", className, interfaceName)
 
+	head := fmt.Sprintf("Class '%s' incorrectly implements interface '%s'.", className, interfaceName)
+	report := func(detail string) {
+		msg := head + "\n  " + detail
+		if errNode != nil {
+			c.addErrorWithCode(errNode, errors.TS2420, msg)
+		} else {
+			c.addErrorWithCode(nil, errors.TS2420, msg)
+		}
+	}
+
 	// Check that all interface properties are implemented
-	for propName, propType := range interfaceType.Properties {
-		classProperty, hasProp := classType.Properties[propName]
+	// The class's own members and its superclasses'. Its base types also list
+	// the interfaces it implements, whose members it must not get credit for.
+	classProps := make(map[string]types.Type, len(classType.Properties))
+	for _, base := range classType.BaseTypes {
+		if baseObj, ok := c.resolveStructural(base).(*types.ObjectType); ok && baseObj.IsClassInstance() {
+			for name, t := range baseObj.GetEffectiveProperties() {
+				classProps[name] = t
+			}
+		}
+	}
+	for name, t := range classType.Properties {
+		classProps[name] = t
+	}
+	for _, propName := range types.SortedPropertyNames(interfaceType.GetEffectiveProperties()) {
+		propType := interfaceType.GetEffectiveProperties()[propName]
+		classProperty, hasProp := classProps[propName]
 		if !hasProp {
-			c.addError(nil, fmt.Sprintf("class '%s' is missing property '%s' required by interface '%s'", className, propName, interfaceName))
-			continue
+			if interfaceType.IsPropertyOptional(propName) {
+				continue
+			}
+			report(fmt.Sprintf("Property '%s' is missing in type '%s' but required in type '%s'.", propName, className, interfaceName))
+			return
 		}
 
 		// Check type compatibility - handle generic methods specially
 		if !c.isCompatibleWithInterfaceProperty(classProperty, propType) {
-			c.addError(nil, fmt.Sprintf("property '%s' in class '%s' is not compatible with interface '%s' (expected %s, got %s)",
-				propName, className, interfaceName, propType.String(), classProperty.String()))
+			report(fmt.Sprintf("Types of property '%s' are incompatible.", propName))
+			return
 		}
 	}
 
