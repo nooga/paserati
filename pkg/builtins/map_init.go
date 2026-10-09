@@ -49,6 +49,10 @@ func (m *MapInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Now set the body of the generic type
 	mapType.Body = mapInstanceType
+	mapInstanceType.GenericName = "Map"
+	for _, tp := range mapType.TypeParameters {
+		mapInstanceType.GenericArgs = append(mapInstanceType.GenericArgs, &types.TypeParameterType{Parameter: tp})
+	}
 
 	// Create Map.prototype type for runtime (same structure)
 	mapProtoType := types.NewObjectType().

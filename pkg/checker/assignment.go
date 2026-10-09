@@ -195,6 +195,32 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		}
 	}
 
+	// `x ??= v` leaves x non-nullish: its old value when that was non-nullish,
+	// else v.
+	if (node.Operator == "??=" || node.Operator == "||=") && validOperands && rhsType != nil && lhsType != nil {
+		kept := types.RemoveNullishTypes(lhsType)
+		if node.Operator == "||=" {
+			kept = types.RemoveNullishTypes(kept)
+		}
+		if kept != nil && kept != types.Never && kept != types.Any && rhsType != types.Any {
+			joined := types.NewUnionType(kept, types.GetWidenedType(rhsType))
+			if ident, ok := node.Left.(*parser.Identifier); ok {
+				if _, isConst, found := c.env.Resolve(ident.Value); found && !isConst {
+					c.env.UpdateInChain(ident.Value, joined)
+					c.dropMemberNarrowings(ident.Value)
+				}
+			} else if member, ok := node.Left.(*parser.MemberExpression); ok {
+				if key := expressionToNarrowingKey(member); key != "" {
+					if c.hasNarrowingInChain(key) {
+						c.updateNarrowingInChain(key, joined)
+					} else {
+						c.env.narrowings[key] = joined
+					}
+				}
+			}
+		}
+	}
+
 	// Set computed type for the overall assignment expression (evaluates to RHS value)
 	node.SetComputedType(rhsType)
 }

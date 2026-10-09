@@ -3116,6 +3116,19 @@ func (c *Checker) visit(node parser.Node) {
 			c.env = narrowedEnv // Use narrowed environment for consequence
 		}
 
+		var beforeFalsy types.Type
+		if key := falsyGuardKey(node.Condition); key != "" {
+			if narrowedEnv == nil && node.Alternative == nil {
+				// Nothing narrows inside `if (!ref)`, but the branch still
+				// needs its own scope to record what it assigns to ref.
+				if seeded := c.seedFalsyGuardEnv(key, node.Condition); seeded != nil {
+					narrowedEnv = seeded
+					c.env = seeded
+				}
+			}
+			beforeFalsy = narrowedTypeIn(narrowedEnv, key)
+		}
+
 		c.visit(node.Consequence)
 
 		// After visiting consequence, c.env is back to narrowedEnv (BlockStatement restores)
@@ -3179,6 +3192,9 @@ func (c *Checker) visit(node parser.Node) {
 			//   if (x === null) { x = "default"; }
 			//   return x;  // x should be string, not string | null
 			c.mergePostIfTypes(originalEnv, consequenceNarrowedEnv, typeGuard)
+			if typeGuard == nil {
+				c.mergePostIfFalsy(originalEnv, consequenceNarrowedEnv, node.Condition, beforeFalsy)
+			}
 		} else {
 			// Restore original environment after if statement
 			c.env = originalEnv
@@ -4327,7 +4343,11 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 			// 3. Check function body and determine return type
 			// If we want return type inference (contextualReturnType is nil), pass nil to checkFunctionBody
 			var expectedReturnTypeForBodyCheck types.Type
-			if ctx.ContextualReturnType != nil {
+			if ctx.ContextualReturnType == types.Void && node.ReturnTypeAnnotation == nil {
+				// A callback contextually typed to return void may return
+				// anything: its body is not checked against void.
+				expectedReturnTypeForBodyCheck = nil
+			} else if ctx.ContextualReturnType != nil {
 				expectedReturnTypeForBodyCheck = preliminarySignature.ReturnType
 				if expectedReturnTypeForBodyCheck != nil {
 					debugPrintf("// [Checker ArrowFuncContext] Using contextual return type for body check: %s\n", expectedReturnTypeForBodyCheck.String())
