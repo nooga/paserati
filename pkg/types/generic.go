@@ -136,6 +136,13 @@ func (i *InstantiatedType) Substitute() Type {
 
 // substituteType performs type parameter substitution in a type
 func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
+	return substituteTypeMemo(t, substitutions, make(map[*ObjectType]*ObjectType))
+}
+
+// substituteTypeMemo is substituteType with a table of the object types
+// already being copied, so a type that refers back to itself (a class whose
+// method returns the class) terminates by reusing the copy under construction.
+func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[*ObjectType]*ObjectType) Type {
 	if t == nil {
 		return nil
 	}
@@ -156,15 +163,19 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 
 	case *ArrayType:
 		// Recursively substitute in element type
-		newElementType := substituteType(t.ElementType, substitutions)
+		newElementType := substituteTypeMemo(t.ElementType, substitutions, memo)
 		return &ArrayType{ElementType: newElementType}
 
 	case *ObjectType:
 		// Deep copy and substitute in properties
+		if done, ok := memo[t]; ok {
+			return done
+		}
 		newObj := NewObjectType()
+		memo[t] = newObj
 		for _, name := range SortedPropertyNames(t.Properties) {
 			propType := t.Properties[name]
-			newObj.Properties[name] = substituteType(propType, substitutions)
+			newObj.Properties[name] = substituteTypeMemo(propType, substitutions, memo)
 		}
 		// Copy optional properties
 		for name, isOptional := range t.OptionalProperties {
@@ -179,7 +190,7 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 		if len(t.BaseTypes) > 0 {
 			newObj.BaseTypes = make([]Type, len(t.BaseTypes))
 			for i, base := range t.BaseTypes {
-				newObj.BaseTypes[i] = substituteType(base, substitutions)
+				newObj.BaseTypes[i] = substituteTypeMemo(base, substitutions, memo)
 			}
 		}
 		newObj.ClassMeta = t.ClassMeta
@@ -187,21 +198,21 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 
 		// Handle call signatures
 		for _, sig := range t.CallSignatures {
-			newSig := substituteSignature(sig, substitutions)
+			newSig := substituteMemberSignature(sig, substitutions, memo)
 			newObj.CallSignatures = append(newObj.CallSignatures, newSig)
 		}
 
 		// Handle constructor signatures
 		for _, sig := range t.ConstructSignatures {
-			newSig := substituteSignature(sig, substitutions)
+			newSig := substituteMemberSignature(sig, substitutions, memo)
 			newObj.ConstructSignatures = append(newObj.ConstructSignatures, newSig)
 		}
 
 		// Copy index signatures
 		for _, indexSig := range t.IndexSignatures {
 			newIndexSig := &IndexSignature{
-				KeyType:   substituteType(indexSig.KeyType, substitutions),
-				ValueType: substituteType(indexSig.ValueType, substitutions),
+				KeyType:   substituteTypeMemo(indexSig.KeyType, substitutions, memo),
+				ValueType: substituteTypeMemo(indexSig.ValueType, substitutions, memo),
 			}
 			newObj.IndexSignatures = append(newObj.IndexSignatures, newIndexSig)
 		}
@@ -212,7 +223,7 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 		// Substitute in all constituent types
 		newTypes := make([]Type, len(t.Types))
 		for i, constituent := range t.Types {
-			newTypes[i] = substituteType(constituent, substitutions)
+			newTypes[i] = substituteTypeMemo(constituent, substitutions, memo)
 		}
 		return NewUnionType(newTypes...)
 
@@ -220,7 +231,7 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 		// Substitute in all constituent types
 		newTypes := make([]Type, len(t.Types))
 		for i, constituent := range t.Types {
-			newTypes[i] = substituteType(constituent, substitutions)
+			newTypes[i] = substituteTypeMemo(constituent, substitutions, memo)
 		}
 		return NewIntersectionType(newTypes...)
 
@@ -228,7 +239,7 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 		// Recursively substitute in type arguments
 		newArgs := make([]Type, len(t.TypeArguments))
 		for i, arg := range t.TypeArguments {
-			newArgs[i] = substituteType(arg, substitutions)
+			newArgs[i] = substituteTypeMemo(arg, substitutions, memo)
 		}
 		// Return the InstantiatedType with substituted arguments
 		// Don't call Substitute() here to avoid infinite recursion with self-referential types
@@ -236,7 +247,7 @@ func substituteType(t Type, substitutions map[*TypeParameter]Type) Type {
 
 	case *ReadonlyType:
 		// Substitute in the inner type
-		newInnerType := substituteType(t.InnerType, substitutions)
+		newInnerType := substituteTypeMemo(t.InnerType, substitutions, memo)
 		return NewReadonlyType(newInnerType)
 
 	// For primitive types and other types that don't contain type parameters
@@ -420,6 +431,36 @@ func init() {
 
 // substituteSignature performs type parameter substitution in a signature
 func substituteSignature(sig *Signature, substitutions map[*TypeParameter]Type) *Signature {
+	return substituteSignatureMemo(sig, substitutions, make(map[*ObjectType]*ObjectType))
+}
+
+// substituteMemberSignature substitutes in a signature that is a member of an
+// object type. The signature's own type parameters shadow any substituted
+// parameter of the same identity, so they are left alone.
+func substituteMemberSignature(sig *Signature, substitutions map[*TypeParameter]Type, memo map[*ObjectType]*ObjectType) *Signature {
+	if sig != nil && len(sig.TypeParameters) > 0 {
+		shadowed := false
+		for _, tp := range sig.TypeParameters {
+			if _, ok := substitutions[tp]; ok {
+				shadowed = true
+				break
+			}
+		}
+		if shadowed {
+			inner := make(map[*TypeParameter]Type, len(substitutions))
+			for k, v := range substitutions {
+				inner[k] = v
+			}
+			for _, tp := range sig.TypeParameters {
+				delete(inner, tp)
+			}
+			return substituteSignatureMemo(sig, inner, make(map[*ObjectType]*ObjectType))
+		}
+	}
+	return substituteSignatureMemo(sig, substitutions, memo)
+}
+
+func substituteSignatureMemo(sig *Signature, substitutions map[*TypeParameter]Type, memo map[*ObjectType]*ObjectType) *Signature {
 	if sig == nil {
 		return nil
 	}
@@ -427,16 +468,16 @@ func substituteSignature(sig *Signature, substitutions map[*TypeParameter]Type) 
 	// Substitute parameter types
 	newParamTypes := make([]Type, len(sig.ParameterTypes))
 	for i, paramType := range sig.ParameterTypes {
-		newParamTypes[i] = substituteType(paramType, substitutions)
+		newParamTypes[i] = substituteTypeMemo(paramType, substitutions, memo)
 	}
 
 	// Substitute return type
-	newReturnType := substituteType(sig.ReturnType, substitutions)
+	newReturnType := substituteTypeMemo(sig.ReturnType, substitutions, memo)
 
 	// Substitute rest parameter type if present
 	var newRestParamType Type
 	if sig.RestParameterType != nil {
-		newRestParamType = substituteType(sig.RestParameterType, substitutions)
+		newRestParamType = substituteTypeMemo(sig.RestParameterType, substitutions, memo)
 	}
 
 	return &Signature{
