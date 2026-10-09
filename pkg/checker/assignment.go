@@ -169,10 +169,20 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 				// A rejected assignment leaves the declared type in place.
 				if declared := c.env.ResolveDeclaredType(identLHS.Value); declared != nil && !types.IsAssignable(types.GetWidenedType(rhsType), declared) {
 					found = false
+				} else if declared == types.Any || declared == types.Unknown {
+					// A declared any (or unknown) is never narrowed by assignment.
+					found = false
 				}
 				if found && !isConst {
 					// Update the type in the nearest defining scope to the widened RHS type
 					widenedRhs := types.GetWidenedType(rhsType)
+					// The declared union reduced to what the value can be
+					// (`r.D = {}` leaves the object member, not `{}`).
+					if declared := c.env.ResolveDeclaredType(identLHS.Value); declared != nil {
+						if reduced := assignmentReducedType(declared, widenedRhs); reduced != nil {
+							widenedRhs = reduced
+						}
+					}
 					c.env.UpdateInChain(identLHS.Value, widenedRhs)
 					c.dropMemberNarrowings(identLHS.Value)
 					debugPrintf("// [Checker Assignment] Updated '%s' type to '%s' after assignment\n",
@@ -189,6 +199,11 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 				if key != "" {
 					widenedRhs := types.GetWidenedType(rhsType)
 					if c.hasNarrowingInChain(key) {
+						if declared := c.resolveMemberExpressionOriginalType(key); declared != nil {
+							if reduced := assignmentReducedType(declared, widenedRhs); reduced != nil {
+								widenedRhs = reduced
+							}
+						}
 						c.updateNarrowingInChain(key, widenedRhs)
 					} else if narrowed := assignmentReducedType(memberLHS.GetComputedType(), widenedRhs); narrowed != nil {
 						// `st.n = (st.n || 0) + 1` leaves st.n a number (#635).
