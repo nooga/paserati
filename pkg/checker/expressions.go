@@ -1368,6 +1368,11 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						}
 					}
 
+					if resultType == types.Never && propertyName == "prototype" && len(obj.ConstructSignatures) > 0 && obj.ConstructSignatures[0].ReturnType != nil {
+						// A class constructor's `prototype` is an instance of the class.
+						resultType = obj.ConstructSignatures[0].ReturnType
+					}
+
 					if resultType == types.Never {
 						if obj.IsCallable() {
 							// Check for function prototype methods if this is a callable object
