@@ -140,9 +140,6 @@ func (vm *VM) createDeferredNamespace(modulePath string) Value {
 	}))
 
 	ns := NewProxy(targetVal, NewValueFromPlainObject(handler))
-	if vm.deferredNamespaces == nil {
-		vm.deferredNamespaces = make(map[string]Value)
-	}
 	vm.deferredNamespaces[contextKey] = ns
 	return ns
 }

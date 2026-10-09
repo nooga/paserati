@@ -16,9 +16,22 @@ type TokenPool struct {
 }
 
 // NewTokenPool creates an empty pool with one pre-allocated chunk.
-func NewTokenPool() *TokenPool {
+func NewTokenPool() *TokenPool { return newTokenPoolSized(tokenChunkSize) }
+
+// newTokenPoolSized creates a pool whose first chunk holds about the given
+// number of tokens (at least 16, at most a full chunk). Later chunks double
+// in size up to a full chunk, so the pool never holds much more capacity than
+// tokens: a module that keeps its AST should not retain a thousand empty
+// Tokens (each is over a hundred bytes) for a few dozen lines of source.
+func newTokenPoolSized(tokens int) *TokenPool {
+	if tokens > tokenChunkSize {
+		tokens = tokenChunkSize
+	}
+	if tokens < 16 {
+		tokens = 16
+	}
 	return &TokenPool{
-		chunks: [][]lexer.Token{make([]lexer.Token, 0, tokenChunkSize)},
+		chunks: [][]lexer.Token{make([]lexer.Token, 0, tokens)},
 	}
 }
 
@@ -27,7 +40,13 @@ func NewTokenPool() *TokenPool {
 func (p *TokenPool) Take(t lexer.Token) *lexer.Token {
 	cur := &p.chunks[len(p.chunks)-1]
 	if len(*cur) == cap(*cur) {
-		p.chunks = append(p.chunks, make([]lexer.Token, 0, tokenChunkSize))
+		// Chunks double up to the full size, so a source that outgrows its
+		// estimate does not jump straight to a thousand empty Tokens.
+		next := 2 * cap(*cur)
+		if next > tokenChunkSize {
+			next = tokenChunkSize
+		}
+		p.chunks = append(p.chunks, make([]lexer.Token, 0, next))
 		cur = &p.chunks[len(p.chunks)-1]
 	}
 	*cur = append(*cur, t)

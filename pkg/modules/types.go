@@ -287,6 +287,22 @@ func (mr *ModuleRecord) IsNativeModule() bool {
 	return mr.nativeModule != nil
 }
 
+// realmNative is the optional hook a native module offers to give each realm
+// its own export values (see vm.RealmExporter).
+type realmNative interface {
+	NewExports(vmInstance *vm.VM) map[string]vm.Value
+	IsShared() bool
+}
+
+// RealmExportValues implements vm.RealmExporter: a native module's exports are
+// built per realm unless the module is shared; every other record has one set.
+func (mr *ModuleRecord) RealmExportValues(vmInstance *vm.VM) map[string]vm.Value {
+	if rn, ok := mr.nativeModule.(realmNative); ok && !rn.IsShared() {
+		return vmInstance.RealmExports(mr, func() map[string]vm.Value { return rn.NewExports(vmInstance) })
+	}
+	return mr.GetExportValues()
+}
+
 // GetNativeModule returns the native module interface if this is a native module
 func (mr *ModuleRecord) GetNativeModule() NativeModuleInterface {
 	return mr.nativeModule

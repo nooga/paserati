@@ -104,6 +104,40 @@ type ModuleRecord interface {
 	GetResolvedPath() string
 }
 
+// RealmExporter is implemented by module records whose runtime exports are
+// built by the host (native modules) rather than by evaluating code. Their
+// values are objects of a realm - functions, classes, prototypes - so a record
+// that is not shared hands each realm its own set, built on first use there.
+type RealmExporter interface {
+	// RealmExportValues returns the export values for the VM's current realm,
+	// calling build to create them if the realm has none yet.
+	RealmExportValues(vm *VM) map[string]Value
+}
+
+// RealmExports returns the cached export values of rec in the current realm,
+// building them once with build.
+func (vm *VM) RealmExports(rec ModuleRecord, build func() map[string]Value) map[string]Value {
+	r := vm.currentRealm
+	if vals, ok := r.realmExports[rec]; ok {
+		return vals
+	}
+	vals := build()
+	if r.realmExports == nil {
+		r.realmExports = make(map[ModuleRecord]map[string]Value)
+	}
+	r.realmExports[rec] = vals
+	return vals
+}
+
+// exportValuesOf returns the host-provided export values of rec for the
+// current realm.
+func (vm *VM) exportValuesOf(rec ModuleRecord) map[string]Value {
+	if re, ok := rec.(RealmExporter); ok {
+		return re.RealmExportValues(vm)
+	}
+	return rec.GetExportValues()
+}
+
 // ModuleReExport describes `export { SourceName as ExportName } from SourceModule`.
 type ModuleReExport struct {
 	SourceModule string
@@ -502,10 +536,15 @@ type VM struct {
 	completionStack []Completion  // Stack of deferred break/continue actions
 
 	// Module system (Phase 5)
-	moduleContexts map[string]*ModuleContext // Cached module contexts by path
-	// deferredNamespaces caches each module's `import defer` namespace, by
-	// module context key.
+	// moduleContexts and deferredNamespaces are the current realm's module
+	// state (Realm.ModuleContexts, Realm.deferredNamespaces), switched along
+	// with the heap by WithRealm. deferredNamespaces caches each module's
+	// `import defer` namespace, by module context key.
+	moduleContexts     map[string]*ModuleContext
 	deferredNamespaces map[string]Value
+	// sharedModuleChunkFallbacks counts module chunks that could not be
+	// instantiated per realm (see InstantiateChunk) and run shared.
+	sharedModuleChunkFallbacks int
 	moduleLoader       ModuleLoader // Reference to module loader for loading modules
 	currentModulePath  string       // Currently executing module path (for module-scoped globals)
 	importMetaBaseDir  string       // FS resolver base dir; relative module paths Abs against this
@@ -653,7 +692,6 @@ func NewVM() *VM {
 		propCache:               make(map[int]*PropInlineCache),  // Initialize inline cache
 		cacheStats:              ICacheStats{},                   // Initialize cache statistics
 		errors:                  make([]errors.PaseratiError, 0), // Initialize error list
-		moduleContexts:          make(map[string]*ModuleContext), // Initialize module context cache
 		completionStack:         make([]Completion, 0, 4),        // Initialize completion stack
 		globalsFromGlobalObject: make(map[uint16]bool),           // Track globals read from GlobalObject
 	}
@@ -669,6 +707,7 @@ func NewVM() *VM {
 	realm.InitializeSymbols()
 	vm.defaultRealm = realm
 	vm.currentRealm = realm
+	vm.moduleContexts, vm.deferredNamespaces = realm.ModuleContexts, realm.deferredNamespaces
 
 	// Sync realm values to VM's legacy fields for backwards compatibility
 	// This allows existing code that accesses vm.ObjectPrototype to still work
@@ -798,17 +837,20 @@ func (vm *VM) WithRealm(realm *Realm, fn func()) {
 	prevHeap := vm.heap
 	prevGlobalObject := vm.GlobalObject
 	prevGlobalsFromGO := vm.globalsFromGlobalObject
+	prevModules, prevDeferred := vm.moduleContexts, vm.deferredNamespaces
 
 	vm.currentRealm = realm
 	vm.heap = realm.Heap
 	vm.GlobalObject = realm.GlobalObject
 	vm.globalsFromGlobalObject = realm.globalsFromGlobalObject
+	vm.moduleContexts, vm.deferredNamespaces = realm.ModuleContexts, realm.deferredNamespaces
 	vm.syncPrototypesFromRealm() // Update legacy fields for backwards compatibility
 	defer func() {
 		vm.currentRealm = prev
 		vm.heap = prevHeap
 		vm.GlobalObject = prevGlobalObject
 		vm.globalsFromGlobalObject = prevGlobalsFromGO
+		vm.moduleContexts, vm.deferredNamespaces = prevModules, prevDeferred
 		vm.syncPrototypesFromRealm()
 	}()
 	fn()
@@ -824,17 +866,20 @@ func (vm *VM) WithRealmValue(realm *Realm, fn func() Value) Value {
 	prevHeap := vm.heap
 	prevGlobalObject := vm.GlobalObject
 	prevGlobalsFromGO := vm.globalsFromGlobalObject
+	prevModules, prevDeferred := vm.moduleContexts, vm.deferredNamespaces
 
 	vm.currentRealm = realm
 	vm.heap = realm.Heap
 	vm.GlobalObject = realm.GlobalObject
 	vm.globalsFromGlobalObject = realm.globalsFromGlobalObject
+	vm.moduleContexts, vm.deferredNamespaces = realm.ModuleContexts, realm.deferredNamespaces
 	vm.syncPrototypesFromRealm()
 	defer func() {
 		vm.currentRealm = prev
 		vm.heap = prevHeap
 		vm.GlobalObject = prevGlobalObject
 		vm.globalsFromGlobalObject = prevGlobalsFromGO
+		vm.moduleContexts, vm.deferredNamespaces = prevModules, prevDeferred
 		vm.syncPrototypesFromRealm()
 	}()
 	result := fn()
@@ -21691,10 +21736,22 @@ func (vm *VM) executeModule(modulePath string) (InterpretResult, Value) {
 		}
 		// fmt.Printf("// [VM] executeModule: Module '%s' has compiled chunk\n", modulePath)
 
+		// The loader's chunk is the session-wide compile result and is never
+		// run itself: each realm gets a private instance, so inline caches,
+		// function constants (prototypes, property bags, home objects) and
+		// the realm they were created in are not shared between realms.
+		instance, instantiable := InstantiateChunk(chunk)
+		if !instantiable {
+			// A constant kind we cannot copy: run the shared chunk, which is
+			// only isolated while one realm uses it.
+			instance = chunk
+			vm.sharedModuleChunkFallbacks++
+		}
+
 		// Create module context without module-scoped globals
 		// All modules now use the unified heap
 		vm.moduleContexts[contextKey] = &ModuleContext{
-			chunk:        chunk,
+			chunk:        instance,
 			exports:      make(map[string]Value),
 			executed:     false,
 			globals:      nil, // No longer used - unified heap replaces this
@@ -22021,7 +22078,14 @@ func (vm *VM) collectModuleExports(modulePath string, moduleCtx *ModuleContext) 
 	moduleCtx.collectingExports = true
 	defer func() { moduleCtx.collectingExports = false }()
 
-	exportValues := moduleRecord.GetExportValues()
+	// Host-built values only: the record is shared by every realm, and the
+	// values a driver stored on a code module's record after running it belong
+	// to the realm that ran it. Code modules are read from the heap below.
+	var exportValues map[string]Value
+	native, _ := moduleRecord.(interface{ IsNativeModule() bool })
+	if moduleRecord.GetCompiledChunk() == nil || (native != nil && native.IsNativeModule()) {
+		exportValues = vm.exportValuesOf(moduleRecord)
+	}
 	for exportName, exportValue := range exportValues {
 		if exportValue.Type() == TypeUndefined {
 			continue

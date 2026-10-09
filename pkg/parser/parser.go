@@ -297,12 +297,13 @@ var typePrecedences = map[lexer.TokenType]int{
 
 // NewParser creates a new Parser.
 func NewParser(l *lexer.Lexer) *Parser {
+	src := l.GetSource()
 	p := &Parser{
 		l:         l,
-		source:    l.GetSource(), // Cache source from lexer
+		source:    src, // Cache source from lexer
 		errors:    []errors.PaseratiError{},
-		arena:     NewASTArena(),  // Initialize arena for AST node allocation
-		tokenPool: NewTokenPool(), // Initialize pool for *lexer.Token storage
+		arena:     newASTArenaSized(0),  // Initialize arena for AST node allocation (grows on demand)
+		tokenPool: newTokenPoolSized(0), // Initialize pool for *lexer.Token storage (grows by doubling)
 	}
 
 	// Initialize Pratt parser maps for VALUE expressions
