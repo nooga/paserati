@@ -1477,13 +1477,13 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 			Properties:         make(map[string]types.Type),
 			PropertyDocs:       typ.PropertyDocs,
 			Doc:                typ.Doc,
-			DisplayName:        typ.NonGenericDisplayName(),
 			OptionalProperties: make(map[string]bool),
 			ReadOnlyProperties: make(map[string]bool),
 			BaseTypes:          typ.BaseTypes,
 			IsReflectIntrinsic: typ.IsReflectIntrinsic,
 		}
 		visited[typ] = result
+		typ.CopyDisplay(result, func(a types.Type) types.Type { return c.substituteTypesWithVisited(a, substitution, visited) })
 
 		// Copy and substitute property types
 		for _, propName := range typ.PropertyNames() {
@@ -2584,7 +2584,6 @@ func cloneObjectTypeWithTypes(obj *types.ObjectType, rewrite func(types.Type) ty
 		Properties:          make(map[string]types.Type, len(obj.Properties)),
 		PropertyDocs:        obj.PropertyDocs,
 		Doc:                 obj.Doc,
-		DisplayName:         obj.NonGenericDisplayName(),
 		OptionalProperties:  make(map[string]bool, len(obj.OptionalProperties)),
 		ReadOnlyProperties:  make(map[string]bool, len(obj.ReadOnlyProperties)),
 		BaseTypes:           append([]types.Type(nil), obj.BaseTypes...),

@@ -769,12 +769,12 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 			Properties:         make(map[string]types.Type),
 			PropertyDocs:       typ.PropertyDocs,
 			Doc:                typ.Doc,
-			DisplayName:        typ.NonGenericDisplayName(),
 			OptionalProperties: make(map[string]bool),
 			ReadOnlyProperties: make(map[string]bool),
 			IsReflectIntrinsic: typ.IsReflectIntrinsic,
 		}
 		visited[typ] = result
+		typ.CopyDisplay(result, func(a types.Type) types.Type { return c.rebindThisTypeWithVisited(a, from, to, visited) })
 
 		for _, propName := range typ.PropertyNames() {
 			propType := typ.Properties[propName]

@@ -1,9 +1,6 @@
 package types
 
-import (
-	"sort"
-	"strings"
-)
+import "sort"
 
 // SortedPropertyNames returns the keys of a property map in a deterministic
 // order. Go randomizes map iteration, so anything whose result depends on the
@@ -119,11 +116,16 @@ func (ot *ObjectType) PropertyDoc(name string) string {
 	return ""
 }
 
-// NonGenericDisplayName is DisplayName unless it names a generic class
-// (`B<T>`), whose clones are instantiations that must not keep the name.
-func (ot *ObjectType) NonGenericDisplayName() string {
-	if strings.Contains(ot.DisplayName, "<") {
-		return ""
+// CopyDisplay gives clone the name this type prints with, mapping the type
+// arguments of a generic class instance through sub.
+func (ot *ObjectType) CopyDisplay(clone *ObjectType, sub func(Type) Type) {
+	clone.DisplayName = ot.DisplayName
+	if ot.GenericName == "" {
+		return
 	}
-	return ot.DisplayName
+	clone.GenericName = ot.GenericName
+	clone.GenericArgs = make([]Type, len(ot.GenericArgs))
+	for i, a := range ot.GenericArgs {
+		clone.GenericArgs[i] = sub(a)
+	}
 }

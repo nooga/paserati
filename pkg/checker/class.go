@@ -561,14 +561,11 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	constructorType = c.addStaticMembers(node.Body, constructorType)
 	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
 	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
-	{
-		names := make([]string, len(node.TypeParameters))
-		for i, tp := range node.TypeParameters {
-			names[i] = tp.Name.Value
-		}
-		instanceType.DisplayName = node.Name.Value + "<" + strings.Join(names, ", ") + ">"
-		constructorType.DisplayName = "typeof " + node.Name.Value
+	instanceType.GenericName = node.Name.Value
+	for _, tp := range typeParams {
+		instanceType.GenericArgs = append(instanceType.GenericArgs, &types.TypeParameterType{Parameter: tp})
 	}
+	constructorType.DisplayName = "typeof " + node.Name.Value
 	c.inheritStaticMembers(constructorType, instanceType)
 
 	// 8. Create the GenericType for the class
