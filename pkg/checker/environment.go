@@ -488,10 +488,11 @@ func (e *Environment) CompleteOverloadedFunction(name string, overloadSignatures
 // from pending signatures and implementation, then stores it and clears the pending overloads.
 // This is the UTS replacement for CompleteOverloadedFunction.
 func (e *Environment) CompleteOverloadedFunctionUTS(name string, overloadSignatures []*types.Signature, implementation *types.Signature) bool {
-	// Create a new ObjectType with all call signatures
+	// The implementation signature is not callable from outside: only the
+	// declared overloads are visible to callers.
 	obj := &types.ObjectType{
 		Properties:     make(map[string]types.Type),
-		CallSignatures: append(overloadSignatures, implementation),
+		CallSignatures: append([]*types.Signature(nil), overloadSignatures...),
 	}
 
 	// Clear pending overloads for this function

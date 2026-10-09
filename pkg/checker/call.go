@@ -896,6 +896,13 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 		if argType == nil {
 			argType = types.Any
 		}
+		// An empty array literal has no context here to give it an element
+		// type; like tsc's `never[]` it fits any array parameter.
+		if lit, ok := argNode.(*parser.ArrayLiteral); ok && len(lit.Elements) == 0 {
+			if arr, ok := argType.(*types.ArrayType); ok && arr.ElementType == types.Unknown {
+				argType = &types.ArrayType{ElementType: types.Never}
+			}
+		}
 		argTypes = append(argTypes, argType)
 	}
 
