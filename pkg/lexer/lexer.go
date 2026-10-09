@@ -377,6 +377,10 @@ type Lexer struct {
 	// inside an identifier does not denote an ID_Start/ID_Continue code point.
 	identInvalidEscape bool
 
+	// docByEnd holds every /** ... */ comment scanned so far, keyed by the
+	// byte offset just past its closing '*/'. See DocBefore.
+	docByEnd map[int]string
+
 	// --- NEW: Template literal state tracking ---
 	inTemplate    bool // true when we're inside a template literal
 	braceDepth    int  // tracks nested braces inside ${...} interpolations
@@ -1248,6 +1252,7 @@ func (l *Lexer) NextToken() Token {
 			l.skipComment()      // Skips to the end of the line or EOF
 			return l.NextToken() // Recursively call NextToken to get the token after the comment
 		} else if l.peekChar() == '*' {
+			commentStart := l.position
 			if !l.skipMultilineComment() { // Skips until '*/' or EOF
 				// Unterminated comment, return an ILLEGAL token
 				literal := "Unterminated multiline comment"
@@ -1255,6 +1260,7 @@ func (l *Lexer) NextToken() Token {
 				tok = Token{Type: ILLEGAL, Literal: literal, Line: startLine, Column: startCol, StartPos: startPos, EndPos: l.position}
 				return tok // Explicitly return, don't advance char
 			}
+			l.recordDocComment(commentStart, l.position)
 			return l.NextToken() // Get the token after the multiline comment
 		} else if l.forceRegexContext || canBeRegexStart(l.prevToken) {
 			// Check for regex context BEFORE /= - patterns like /=/ are valid regex

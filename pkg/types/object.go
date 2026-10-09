@@ -212,6 +212,19 @@ type ObjectType struct {
 	OptionalProperties map[string]bool // Tracks which properties are optional
 	ReadOnlyProperties map[string]bool // Tracks which properties are readonly
 
+	// PropertyOrder records the order own properties were first added in.
+	// Write through SetProperty to keep it in step with Properties; code
+	// that fills the map directly still works, those names are listed last.
+	PropertyOrder []string
+
+	// PropertyDocs holds the JSDoc comment of each documented own property
+	// (delimiters stripped, tags left in the text). Read it with PropertyDoc.
+	PropertyDocs map[string]string
+
+	// Doc is the JSDoc comment of the declaration that introduced this type
+	// (an interface or class), delimiters stripped.
+	Doc string
+
 	// NEW: Unified callable/constructor support
 	CallSignatures      []*Signature // Object call signatures: obj(args)
 	ConstructSignatures []*Signature // Object constructor signatures: new obj(args)
@@ -567,20 +580,20 @@ func NewObjectType() *ObjectType {
 
 // WithProperty adds a required property to the ObjectType and returns the same instance for chaining
 func (ot *ObjectType) WithProperty(name string, propType Type) *ObjectType {
-	ot.Properties[name] = propType
+	ot.SetProperty(name, propType)
 	return ot
 }
 
 // WithOptionalProperty adds an optional property to the ObjectType and returns the same instance for chaining
 func (ot *ObjectType) WithOptionalProperty(name string, propType Type) *ObjectType {
-	ot.Properties[name] = propType
+	ot.SetProperty(name, propType)
 	ot.OptionalProperties[name] = true
 	return ot
 }
 
 // WithReadOnlyProperty adds a readonly property to the ObjectType and returns the same instance for chaining
 func (ot *ObjectType) WithReadOnlyProperty(name string, propType Type) *ObjectType {
-	ot.Properties[name] = propType
+	ot.SetProperty(name, propType)
 	if ot.ReadOnlyProperties == nil {
 		ot.ReadOnlyProperties = make(map[string]bool)
 	}
@@ -668,7 +681,7 @@ func (ot *ObjectType) AsClassConstructor(className string) *ObjectType {
 // WithClassMember adds a class member with access control information
 func (ot *ObjectType) WithClassMember(memberName string, memberType Type, accessLevel AccessModifier, isStatic, isReadonly bool) *ObjectType {
 	// Add the property to the type
-	ot.Properties[memberName] = memberType
+	ot.SetProperty(memberName, memberType)
 	if isReadonly {
 		if ot.ReadOnlyProperties == nil {
 			ot.ReadOnlyProperties = make(map[string]bool)

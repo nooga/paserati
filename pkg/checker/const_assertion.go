@@ -54,8 +54,9 @@ func constAssertionType(expr parser.Expression) types.Type {
 			return computed
 		}
 		out := types.NewObjectType()
-		for name, t := range obj.Properties {
-			out.Properties[name] = t
+		for _, name := range obj.PropertyNames() {
+			t := obj.Properties[name]
+			out.SetProperty(name, t)
 		}
 		for name, opt := range obj.OptionalProperties {
 			if out.OptionalProperties == nil {
@@ -82,7 +83,7 @@ func constAssertionType(expr parser.Expression) types.Type {
 				continue
 			}
 			if _, exists := out.Properties[name]; exists && prop.Value != nil {
-				out.Properties[name] = constAssertionType(prop.Value)
+				out.SetProperty(name, constAssertionType(prop.Value))
 			}
 		}
 		if out.ReadOnlyProperties == nil {

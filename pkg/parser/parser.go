@@ -800,6 +800,48 @@ func (p *Parser) ParseProgram() (*Program, []errors.PaseratiError) {
 // --- Statement Parsing ---
 
 func (p *Parser) parseStatement() Statement {
+	start := p.curToken.StartPos
+	stmt := p.parseStatementNoDoc()
+	if stmt != nil {
+		if doc := p.l.DocBefore(start); doc != "" {
+			attachDeclarationDoc(stmt, doc)
+		}
+	}
+	return stmt
+}
+
+// attachDeclarationDoc stores a JSDoc comment on the declaration a statement
+// introduces, looking through `export`, `export default` and function
+// declaration wrappers.
+func attachDeclarationDoc(stmt Statement, doc string) {
+	switch n := stmt.(type) {
+	case *ExportNamedDeclaration:
+		if n.Declaration != nil {
+			attachDeclarationDoc(n.Declaration, doc)
+		}
+	case *ExportDefaultDeclaration:
+		attachExpressionDoc(n.Declaration, doc)
+	case *ExpressionStatement:
+		attachExpressionDoc(n.Expression, doc)
+	case *InterfaceDeclaration:
+		n.Doc = doc
+	case *ClassDeclaration:
+		n.Doc = doc
+	case *TypeAliasStatement:
+		n.Doc = doc
+	}
+}
+
+func attachExpressionDoc(e Expression, doc string) {
+	switch n := e.(type) {
+	case *FunctionLiteral:
+		n.Doc = doc
+	case *EnumDeclaration:
+		n.Doc = doc
+	}
+}
+
+func (p *Parser) parseStatementNoDoc() Statement {
 	debugPrint("parseStatement: cur='%s' (%s), peek='%s' (%s)", p.curToken.Literal, p.curToken.Type, p.peekToken.Literal, p.peekToken.Type)
 	inSubStatement := p.inSubStatement
 	p.inSubStatement = false
@@ -8597,8 +8639,10 @@ func (p *Parser) parseInterfaceDeclaration() *InterfaceDeclaration {
 			break
 		}
 
+		memberStart := p.curToken.StartPos
 		prop := p.parseInterfaceProperty()
 		if prop != nil {
+			prop.Doc = p.l.DocBefore(memberStart)
 			stmt.Properties = append(stmt.Properties, prop)
 		}
 
@@ -9143,9 +9187,21 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 		Properties: []*ObjectTypeProperty{},
 	}
 
+	// Attach each member's JSDoc once the member is fully parsed; the loop body
+	// has many exits, so the previous member is flushed at the next iteration.
+	docIdx, docStart := -1, 0
+	flushDoc := func() {
+		if docIdx >= 0 && docIdx < len(objType.Properties) {
+			objType.Properties[docIdx].Doc = p.l.DocBefore(docStart)
+		}
+		docIdx = -1
+	}
+
 	// Parse properties
 	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
+		flushDoc()
 		p.nextToken() // Consume '{' or ';' to get to the property name or call signature
+		docIdx, docStart = len(objType.Properties), p.curToken.StartPos
 
 		// Check if this is a call signature starting with '('
 		if p.curTokenIs(lexer.LPAREN) {
@@ -9331,6 +9387,7 @@ func (p *Parser) parseObjectTypeExpression() Expression {
 		return nil // Error message already added by expectPeek
 	}
 
+	flushDoc()
 	return objType
 }
 

@@ -1803,6 +1803,8 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			// For ObjectType, we need to substitute in properties and signatures
 			newObj := &types.ObjectType{
 				Properties:          make(map[string]types.Type),
+				PropertyDocs:        typ.PropertyDocs,
+				Doc:                 typ.Doc,
 				OptionalProperties:  typ.OptionalProperties, // Copy as-is
 				ReadOnlyProperties:  typ.ReadOnlyProperties, // Copy as-is
 				CallSignatures:      nil,
@@ -1815,9 +1817,9 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			memo[t] = newObj
 
 			// Substitute in properties
-			for _, name := range types.SortedPropertyNames(typ.Properties) {
+			for _, name := range typ.PropertyNames() {
 				propType := typ.Properties[name]
-				newObj.Properties[name] = substitute(propType)
+				newObj.SetProperty(name, substitute(propType))
 			}
 
 			for _, indexSig := range typ.IndexSignatures {

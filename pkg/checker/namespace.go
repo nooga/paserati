@@ -188,7 +188,7 @@ func (c *Checker) preprocessNamespaceTypes(body *parser.BlockStatement, nsType *
 			c.checkClassDeclaration(n)
 			if exported && n.Name != nil {
 				if t, _, found := c.env.Resolve(n.Name.Value); found {
-					nsType.ValueShape.Properties[n.Name.Value] = t
+					nsType.ValueShape.SetProperty(n.Name.Value, t)
 				}
 				if t, found := c.env.ResolveType(n.Name.Value); found {
 					nsType.TypeMembers[n.Name.Value] = t
@@ -211,7 +211,7 @@ func (c *Checker) preprocessNamespaceTypes(body *parser.BlockStatement, nsType *
 				c.checkEnumDeclaration(enum)
 				if exported {
 					if t, _, found := c.env.Resolve(enum.Name.Value); found {
-						nsType.ValueShape.Properties[enum.Name.Value] = t
+						nsType.ValueShape.SetProperty(enum.Name.Value, t)
 					}
 					if t, found := c.env.ResolveType(enum.Name.Value); found {
 						nsType.TypeMembers[enum.Name.Value] = t
@@ -225,7 +225,7 @@ func (c *Checker) preprocessNamespaceTypes(body *parser.BlockStatement, nsType *
 				if childType, found := c.env.ResolveType(n.Name.Value); found {
 					nsType.TypeMembers[n.Name.Value] = childType
 					if childNs, ok := childType.(*types.NamespaceType); ok {
-						nsType.ValueShape.Properties[n.Name.Value] = childNs.ValueShape
+						nsType.ValueShape.SetProperty(n.Name.Value, childNs.ValueShape)
 					}
 				}
 			}
@@ -265,7 +265,7 @@ func (c *Checker) hoistNamespaceFunctions(body *parser.BlockStatement, env *Envi
 		// Exported functions are visible through the namespace right away, even
 		// while the body's value statements are still waiting to be checked.
 		if exported && nsType != nil {
-			nsType.ValueShape.Properties[fname] = funcObjectType
+			nsType.ValueShape.SetProperty(fname, funcObjectType)
 		}
 	}
 
@@ -330,7 +330,7 @@ func (c *Checker) checkNamespaceBodyStatement(stmt parser.Statement, nsType *typ
 		c.visit(inner)
 		if exported && n.Name != nil {
 			if t, _, found := c.env.Resolve(n.Name.Value); found {
-				nsType.ValueShape.Properties[n.Name.Value] = t
+				nsType.ValueShape.SetProperty(n.Name.Value, t)
 			}
 		}
 
@@ -342,7 +342,7 @@ func (c *Checker) checkNamespaceBodyStatement(stmt parser.Statement, nsType *typ
 			c.visit(n)
 			if exported {
 				if t, _, found := c.env.Resolve(sig.Name.Value); found {
-					nsType.ValueShape.Properties[sig.Name.Value] = t
+					nsType.ValueShape.SetProperty(sig.Name.Value, t)
 				}
 			}
 			return
@@ -353,7 +353,7 @@ func (c *Checker) checkNamespaceBodyStatement(stmt parser.Statement, nsType *typ
 			c.visit(n)
 			if exported {
 				if t, _, found := c.env.Resolve(fn.Name.Value); found {
-					nsType.ValueShape.Properties[fn.Name.Value] = t
+					nsType.ValueShape.SetProperty(fn.Name.Value, t)
 				}
 			}
 			return
@@ -378,7 +378,7 @@ func (c *Checker) checkNamespaceBodyStatement(stmt parser.Statement, nsType *typ
 func (c *Checker) copyBindingTypes(names []string, nsType *types.NamespaceType) {
 	for _, name := range names {
 		if t, _, found := c.env.Resolve(name); found {
-			nsType.ValueShape.Properties[name] = t
+			nsType.ValueShape.SetProperty(name, t)
 		}
 	}
 }

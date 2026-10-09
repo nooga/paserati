@@ -363,6 +363,8 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 
 	// 6. Add static members to the constructor type (can now resolve class name in type annotations)
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
+	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
+	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
 	c.inheritStaticMembers(constructorType, instanceType)
 
 	// 6. Update the constructor function in the environment (replacing forward reference)
@@ -556,6 +558,8 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		constructorType.WithConstructSignature(sig)
 	}
 	constructorType = c.addStaticMembers(node.Body, constructorType)
+	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
+	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
 	c.inheritStaticMembers(constructorType, instanceType)
 
 	// 8. Create the GenericType for the class
@@ -715,7 +719,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 		if propType != nil {
 			// Add the property to the type
-			instanceType.Properties[propName] = propType
+			instanceType.SetProperty(propName, propType)
 
 			// Add specific getter/setter metadata
 			if instanceType.ClassMeta != nil {
@@ -861,6 +865,8 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			}
 		}
 	}
+
+	c.orderInstanceMembersBySource(instanceType, body)
 
 	// If class has computed properties, create index signatures
 	if hasComputedProperties {
@@ -2520,7 +2526,7 @@ func (c *Checker) resolveTypeofInMembers(instance *types.ObjectType) {
 	}
 	for name, propType := range instance.Properties {
 		if resolved := c.resolveTypeofInType(propType); resolved != propType {
-			instance.Properties[name] = resolved
+			instance.SetProperty(name, resolved)
 		}
 		if fn, ok := instance.Properties[name].(*types.ObjectType); ok {
 			for _, sig := range fn.CallSignatures {

@@ -173,8 +173,9 @@ func (c *Checker) resolveExtendedInterfaceObjectType(t types.Type) (*types.Objec
 			if !ok {
 				return nil, false
 			}
-			for name, prop := range obj.Properties {
-				merged.Properties[name] = prop
+			for _, name := range obj.PropertyNames() {
+				prop := obj.Properties[name]
+				merged.SetProperty(name, prop)
 				if obj.OptionalProperties != nil && obj.OptionalProperties[name] {
 					merged.OptionalProperties[name] = true
 				}
@@ -229,6 +230,10 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		debugPrintf("// [Checker Interface P1] Registered interface '%s'\n", node.Name.Value)
 	}
 
+	if node.Doc != "" {
+		interfaceType.Doc = node.Doc
+	}
+
 	// Use the interface type's properties maps (either from placeholder or new)
 	properties := interfaceType.Properties
 	optionalProperties := interfaceType.OptionalProperties
@@ -266,8 +271,10 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 		if extendedObjectType, ok := c.resolveExtendedInterfaceObjectType(extendedType); ok {
 			extendedObjs = append(extendedObjs, extendedObjectType)
 			// Copy all properties from the extended interface
-			for propName, propType := range extendedObjectType.Properties {
-				properties[propName] = c.rebindThisType(propType, extendedObjectType, interfaceType)
+			for _, propName := range extendedObjectType.PropertyNames() {
+				propType := extendedObjectType.Properties[propName]
+				interfaceType.SetProperty(propName, c.rebindThisType(propType, extendedObjectType, interfaceType))
+				interfaceType.SetPropertyDoc(propName, extendedObjectType.PropertyDoc(propName))
 				setReadonlyProperty(interfaceType, propName, extendedObjectType.ReadOnlyProperties[propName])
 				// Copy optional property flags
 				if extendedObjectType.OptionalProperties != nil && extendedObjectType.OptionalProperties[propName] {
@@ -285,8 +292,10 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			// Arrays, tuples, `any` (e.g. Function) and intersections of object
 			// types are valid bases; inherit whatever object members they have.
 			for _, baseObject := range baseObjects {
-				for propName, propType := range baseObject.Properties {
-					properties[propName] = c.rebindThisType(propType, baseObject, interfaceType)
+				for _, propName := range baseObject.PropertyNames() {
+					propType := baseObject.Properties[propName]
+					interfaceType.SetProperty(propName, c.rebindThisType(propType, baseObject, interfaceType))
+					interfaceType.SetPropertyDoc(propName, baseObject.PropertyDoc(propName))
 					setReadonlyProperty(interfaceType, propName, baseObject.ReadOnlyProperties[propName])
 					if baseObject.OptionalProperties != nil && baseObject.OptionalProperties[propName] {
 						optionalProperties[propName] = true
@@ -336,7 +345,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 				// A construct signature is a member of the interface type, not a property.
 				interfaceType.ConstructSignatures = append(interfaceType.ConstructSignatures, sigs...)
 			} else {
-				properties["new"] = constructorType
+				interfaceType.SetProperty("new", constructorType)
 			}
 			// Constructor signatures are always required (not optional)
 		} else if prop.IsComputedProperty {
@@ -354,7 +363,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			computedName := c.extractConstantPropertyName(prop.ComputedName)
 			if computedName != "" {
 				// We can resolve this to a concrete property name
-				properties[computedName] = propType
+				interfaceType.SetProperty(computedName, propType)
 				setReadonlyProperty(interfaceType, computedName, prop.Readonly)
 				if prop.Optional {
 					optionalProperties[computedName] = true
@@ -404,7 +413,8 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 					node.Name.Value, prop.Name.Value, existingType.String(), propType.String())
 			}
 
-			properties[prop.Name.Value] = propType
+			interfaceType.SetProperty(prop.Name.Value, propType)
+			interfaceType.SetPropertyDoc(prop.Name.Value, prop.Doc)
 			setReadonlyProperty(interfaceType, prop.Name.Value, prop.Readonly)
 
 			// Track optional properties
@@ -596,8 +606,9 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 
 		if extendedObjectType, ok := c.resolveExtendedInterfaceObjectType(extendedType); ok {
 			extendedObjs = append(extendedObjs, extendedObjectType)
-			for propName, propType := range extendedObjectType.Properties {
-				properties[propName] = c.rebindThisType(propType, extendedObjectType, bodyType)
+			for _, propName := range extendedObjectType.PropertyNames() {
+				propType := extendedObjectType.Properties[propName]
+				bodyType.SetProperty(propName, c.rebindThisType(propType, extendedObjectType, bodyType))
 				if extendedObjectType.OptionalProperties != nil && extendedObjectType.OptionalProperties[propName] {
 					optionalProperties[propName] = true
 				}
@@ -633,7 +644,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			if sigs := c.extractConstructSignaturesFromType(constructorType); len(sigs) > 0 {
 				bodyType.ConstructSignatures = append(bodyType.ConstructSignatures, sigs...)
 			} else {
-				properties["new"] = constructorType
+				bodyType.SetProperty("new", constructorType)
 			}
 		} else if prop.Name == nil {
 			propType := c.resolveTypeAnnotation(prop.Type)
@@ -643,7 +654,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			if sigs := c.extractCallSignaturesFromType(propType); len(sigs) > 0 {
 				callSignatures = append(callSignatures, sigs...)
 			} else {
-				properties["__call"] = propType
+				bodyType.SetProperty("__call", propType)
 			}
 		} else {
 			propType := c.resolveTypeAnnotation(prop.Type)
@@ -655,7 +666,8 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 					propType = mergedType
 				}
 			}
-			properties[prop.Name.Value] = propType
+			bodyType.SetProperty(prop.Name.Value, propType)
+			bodyType.SetPropertyDoc(prop.Name.Value, prop.Doc)
 			if prop.Optional {
 				optionalProperties[prop.Name.Value] = true
 			}
@@ -755,14 +767,17 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 
 		result := &types.ObjectType{
 			Properties:         make(map[string]types.Type),
+			PropertyDocs:       typ.PropertyDocs,
+			Doc:                typ.Doc,
 			OptionalProperties: make(map[string]bool),
 			ReadOnlyProperties: make(map[string]bool),
 			IsReflectIntrinsic: typ.IsReflectIntrinsic,
 		}
 		visited[typ] = result
 
-		for propName, propType := range typ.Properties {
-			result.Properties[propName] = c.rebindThisTypeWithVisited(propType, from, to, visited)
+		for _, propName := range typ.PropertyNames() {
+			propType := typ.Properties[propName]
+			result.SetProperty(propName, c.rebindThisTypeWithVisited(propType, from, to, visited))
 		}
 		for propName, isOptional := range typ.OptionalProperties {
 			result.OptionalProperties[propName] = isOptional

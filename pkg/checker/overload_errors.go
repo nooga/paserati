@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
@@ -17,9 +18,10 @@ import (
 //     call when they disagree.
 func (c *Checker) reportOverloadFailure(node *parser.CallExpression, argTypes []types.Type, sigs []*types.Signature) {
 	n := len(argTypes)
+	noOverloadMessage := "No overload matches this call." + c.overloadFailureDetails(argTypes, sigs)
 	for _, arg := range node.Arguments {
 		if _, isSpread := arg.(*parser.SpreadElement); isSpread {
-			c.addErrorWithCode(node, errors.TS2769, "No overload matches this call.")
+			c.addErrorWithCode(node, errors.TS2769, noOverloadMessage)
 			return
 		}
 	}
@@ -36,26 +38,7 @@ func (c *Checker) reportOverloadFailure(node *parser.CallExpression, argTypes []
 		return
 	}
 
-	firstMismatch := func(sig *types.Signature) int {
-		for i, argType := range argTypes {
-			var paramType types.Type
-			switch {
-			case i < len(sig.ParameterTypes) && !(sig.IsVariadic && i == len(sig.ParameterTypes)-1):
-				paramType = sig.ParameterTypes[i]
-			case sig.RestParameterType != nil:
-				if arr, ok := sig.RestParameterType.(*types.ArrayType); ok {
-					paramType = arr.ElementType
-				}
-			}
-			if paramType == nil || c.typeContainsTypeParameter(paramType) {
-				continue
-			}
-			if !types.IsAssignable(argType, paramType) {
-				return i
-			}
-		}
-		return -1
-	}
+	firstMismatch := func(sig *types.Signature) int { return c.firstArgumentMismatch(sig, argTypes) }
 
 	if len(withArity) == 1 {
 		sig := withArity[0]
@@ -64,16 +47,16 @@ func (c *Checker) reportOverloadFailure(node *parser.CallExpression, argTypes []
 				"Argument of type '%s' is not assignable to parameter of type '%s'.", argTypes[i].String(), sig.ParameterTypes[i].String()))
 			return
 		}
-		c.addErrorWithCode(node, errors.TS2769, "No overload matches this call.")
+		c.addErrorWithCode(node, errors.TS2769, noOverloadMessage)
 		return
 	}
 
 	if len(withArity) > 3 {
 		if i := firstMismatch(withArity[len(withArity)-1]); i >= 0 {
-			c.addErrorWithCode(node.Arguments[i], errors.TS2769, "No overload matches this call.")
+			c.addErrorWithCode(node.Arguments[i], errors.TS2769, noOverloadMessage)
 			return
 		}
-		c.addErrorWithCode(node, errors.TS2769, "No overload matches this call.")
+		c.addErrorWithCode(node, errors.TS2769, noOverloadMessage)
 		return
 	}
 
@@ -87,10 +70,10 @@ func (c *Checker) reportOverloadFailure(node *parser.CallExpression, argTypes []
 		}
 	}
 	if common >= 0 {
-		c.addErrorWithCode(node.Arguments[common], errors.TS2769, "No overload matches this call.")
+		c.addErrorWithCode(node.Arguments[common], errors.TS2769, noOverloadMessage)
 		return
 	}
-	c.addErrorWithCode(node, errors.TS2769, "No overload matches this call.")
+	c.addErrorWithCode(node, errors.TS2769, noOverloadMessage)
 }
 
 // reportOverloadArityError mirrors TypeScript's getArgumentArityError for a set
@@ -140,4 +123,110 @@ func (c *Checker) reportOverloadArityError(node *parser.CallExpression, n int, s
 		return
 	}
 	c.addErrorWithCode(node, errors.TS2554, message)
+}
+
+func (c *Checker) firstArgumentMismatch(sig *types.Signature, argTypes []types.Type) int {
+	for i, argType := range argTypes {
+		var paramType types.Type
+		switch {
+		case i < len(sig.ParameterTypes) && !(sig.IsVariadic && i == len(sig.ParameterTypes)-1):
+			paramType = sig.ParameterTypes[i]
+		case sig.RestParameterType != nil:
+			if arr, ok := sig.RestParameterType.(*types.ArrayType); ok {
+				paramType = arr.ElementType
+			}
+		}
+		if paramType == nil || c.typeContainsTypeParameter(paramType) {
+			continue
+		}
+		if !types.IsAssignable(argType, paramType) {
+			return i
+		}
+	}
+	return -1
+}
+
+// overloadFailureDetails lists, tsc-style, why each overload rejected the
+// call: its signature followed by the first error it gave. Overloads whose
+// failure cannot be pinned on an argument (generic signatures are not
+// inferred here) are left out.
+func (c *Checker) overloadFailureDetails(argTypes []types.Type, sigs []*types.Signature) string {
+	n := len(argTypes)
+	detail := func(sig *types.Signature) string {
+		if n < requiredParameterCount(sig) || (!sig.IsVariadic && sig.RestParameterType == nil && n > len(sig.ParameterTypes)) {
+			required, count := requiredParameterCount(sig), len(sig.ParameterTypes)
+			expected := fmt.Sprintf("%d", required)
+			if sig.RestParameterType == nil && !sig.IsVariadic && required < count {
+				expected = fmt.Sprintf("%d-%d", required, count)
+			}
+			if sig.RestParameterType != nil || sig.IsVariadic {
+				return fmt.Sprintf("Expected at least %s arguments, but got %d.", expected, n)
+			}
+			return fmt.Sprintf("Expected %s arguments, but got %d.", expected, n)
+		}
+		i := c.firstArgumentMismatch(sig, argTypes)
+		if i < 0 || i >= len(sig.ParameterTypes) {
+			return ""
+		}
+		return fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argTypes[i].String(), sig.ParameterTypes[i].String())
+	}
+
+	var out strings.Builder
+	if len(sigs) > 3 {
+		last := sigs[len(sigs)-1]
+		if msg := detail(last); msg != "" {
+			out.WriteString("\n  The last overload gave the following error.\n    " + msg)
+		}
+		return out.String()
+	}
+	for i, sig := range sigs {
+		msg := detail(sig)
+		if msg == "" {
+			continue
+		}
+		fmt.Fprintf(&out, "\n  Overload %d of %d, '%s', gave the following error.\n    %s", i+1, len(sigs), overloadSignatureText(sig), msg)
+	}
+	return out.String()
+}
+
+// overloadSignatureText prints a signature the way tsc quotes it in
+// diagnostics: `(name: T, other?: U): R`.
+func overloadSignatureText(sig *types.Signature) string {
+	var b strings.Builder
+	b.WriteString("(")
+	for i, p := range sig.ParameterTypes {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		name := fmt.Sprintf("arg%d", i)
+		if i < len(sig.ParameterNames) && sig.ParameterNames[i] != "" {
+			name = sig.ParameterNames[i]
+		}
+		if sig.IsVariadic && i == len(sig.ParameterTypes)-1 {
+			b.WriteString("...")
+		}
+		b.WriteString(name)
+		if i < len(sig.OptionalParams) && sig.OptionalParams[i] {
+			b.WriteString("?")
+		}
+		b.WriteString(": ")
+		if p != nil {
+			b.WriteString(p.String())
+		} else {
+			b.WriteString("any")
+		}
+	}
+	if sig.RestParameterType != nil {
+		if len(sig.ParameterTypes) > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("...rest: " + sig.RestParameterType.String())
+	}
+	b.WriteString("): ")
+	if sig.ReturnType != nil {
+		b.WriteString(sig.ReturnType.String())
+	} else {
+		b.WriteString("void")
+	}
+	return b.String()
 }

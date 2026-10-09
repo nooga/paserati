@@ -375,7 +375,32 @@ func (p *Parser) parseClassBody() *ClassBody {
 
 	p.nextToken() // move past '{'
 
+	// Attach each member's JSDoc once the member is fully parsed; the loop body
+	// has many exits, so the previous member is flushed at the next iteration.
+	nMethods, nProps, nMethodSigs, docStart := 0, 0, 0, -1
+	flushDoc := func() {
+		if docStart < 0 {
+			return
+		}
+		doc := p.l.DocBefore(docStart)
+		docStart = -1
+		if doc == "" {
+			return
+		}
+		switch {
+		case len(methods) > nMethods:
+			methods[nMethods].Doc = doc
+		case len(properties) > nProps:
+			properties[nProps].Doc = doc
+		case len(methodSigs) > nMethodSigs:
+			methodSigs[nMethodSigs].Doc = doc
+		}
+	}
+
 	for !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
+		flushDoc()
+		nMethods, nProps, nMethodSigs = len(methods), len(properties), len(methodSigs)
+		docStart = p.curToken.StartPos
 		// Skip semicolons
 		if p.curTokenIs(lexer.SEMICOLON) {
 			p.nextToken()
@@ -740,6 +765,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 		}
 	}
 
+	flushDoc()
 	if !p.curTokenIs(lexer.RBRACE) {
 		p.addError(p.curToken, "expected '}' to close class body")
 		return nil

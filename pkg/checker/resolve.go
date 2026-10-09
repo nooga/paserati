@@ -825,6 +825,8 @@ func strictSignatureCopies(sigs []*types.Signature, typeParams []*types.TypePara
 // --- NEW: Helper to resolve ObjectTypeExpression nodes ---
 func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) types.Type {
 	properties := make(map[string]types.Type)
+	var propertyOrder []string
+	propertyDocs := make(map[string]string)
 	optionalProperties := make(map[string]bool)
 	readOnlyProperties := make(map[string]bool)
 	var callSignatures []*types.Signature
@@ -912,7 +914,7 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 			computedName := c.extractConstantPropertyName(prop.ComputedName)
 			if computedName != "" {
 				// We can resolve this to a concrete property name
-				properties[computedName] = propType
+				types.SetOrdered(properties, &propertyOrder, computedName, propType)
 				if prop.Optional {
 					optionalProperties[computedName] = true
 				}
@@ -951,7 +953,10 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 					propType = merged
 				}
 			}
-			properties[prop.Name.Value] = propType
+			types.SetOrdered(properties, &propertyOrder, prop.Name.Value, propType)
+			if prop.Doc != "" {
+				propertyDocs[prop.Name.Value] = prop.Doc
+			}
 			if prop.Optional {
 				optionalProperties[prop.Name.Value] = true
 			}
@@ -975,6 +980,8 @@ func (c *Checker) resolveObjectTypeSignature(node *parser.ObjectTypeExpression) 
 	// Create a unified ObjectType
 	objectType := &types.ObjectType{
 		Properties:          properties,
+		PropertyOrder:       propertyOrder,
+		PropertyDocs:        propertyDocs,
 		OptionalProperties:  optionalProperties,
 		ReadOnlyProperties:  readOnlyProperties,
 		CallSignatures:      callSignatures,
@@ -1468,6 +1475,8 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		// Handle ObjectType with properties and call signatures
 		result := &types.ObjectType{
 			Properties:         make(map[string]types.Type),
+			PropertyDocs:       typ.PropertyDocs,
+			Doc:                typ.Doc,
 			OptionalProperties: make(map[string]bool),
 			ReadOnlyProperties: make(map[string]bool),
 			BaseTypes:          typ.BaseTypes,
@@ -1476,8 +1485,9 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		visited[typ] = result
 
 		// Copy and substitute property types
-		for propName, propType := range typ.Properties {
-			result.Properties[propName] = c.substituteTypesWithVisited(propType, substitution, visited)
+		for _, propName := range typ.PropertyNames() {
+			propType := typ.Properties[propName]
+			result.SetProperty(propName, c.substituteTypesWithVisited(propType, substitution, visited))
 		}
 		for propName, isOptional := range typ.OptionalProperties {
 			result.OptionalProperties[propName] = isOptional
@@ -2419,6 +2429,7 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 
 	// Create the expanded object type
 	properties := make(map[string]types.Type)
+	var propertyOrder []string
 	optionalProperties := make(map[string]bool)
 
 	readOnlyProperties := make(map[string]bool)
@@ -2440,7 +2451,7 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 		)
 
 		if valueType != nil {
-			properties[keyName] = valueType
+			types.SetOrdered(properties, &propertyOrder, keyName, valueType)
 
 			// Handle optional modifier
 			if mappedType.OptionalModifier == "+" {
@@ -2450,7 +2461,7 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 				// Explicitly make property required (remove optional), and
 				// with it the `undefined` the optionality contributed.
 				optionalProperties[keyName] = false
-				properties[keyName] = removeUndefinedMember(valueType)
+				types.SetOrdered(properties, &propertyOrder, keyName, removeUndefinedMember(valueType))
 			} else if mappedType.OptionalModifier == "" && sourceObjectType != nil {
 				// No modifier: inherit optionality from source type
 				if sourceObjectType.IsPropertyOptional(keyName) {
@@ -2473,6 +2484,7 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 	// Create the expanded object type
 	return &types.ObjectType{
 		Properties:         properties,
+		PropertyOrder:      propertyOrder,
 		OptionalProperties: optionalProperties,
 		ReadOnlyProperties: readOnlyProperties,
 		CallSignatures:     []*types.Signature{},      // Mapped types don't create call signatures
@@ -2569,6 +2581,8 @@ func cloneObjectTypeWithTypes(obj *types.ObjectType, rewrite func(types.Type) ty
 
 	result := &types.ObjectType{
 		Properties:          make(map[string]types.Type, len(obj.Properties)),
+		PropertyDocs:        obj.PropertyDocs,
+		Doc:                 obj.Doc,
 		OptionalProperties:  make(map[string]bool, len(obj.OptionalProperties)),
 		ReadOnlyProperties:  make(map[string]bool, len(obj.ReadOnlyProperties)),
 		BaseTypes:           append([]types.Type(nil), obj.BaseTypes...),
@@ -2577,8 +2591,9 @@ func cloneObjectTypeWithTypes(obj *types.ObjectType, rewrite func(types.Type) ty
 		ConstructSignatures: cloneSignaturesWithTypes(obj.ConstructSignatures, rewrite),
 	}
 
-	for name, propType := range obj.Properties {
-		result.Properties[name] = rewrite(propType)
+	for _, name := range obj.PropertyNames() {
+		propType := obj.Properties[name]
+		result.SetProperty(name, rewrite(propType))
 	}
 	for name, optional := range obj.OptionalProperties {
 		result.OptionalProperties[name] = optional

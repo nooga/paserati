@@ -375,7 +375,7 @@ func (m *ModuleBuilder) Namespace(name string, builder func(ns *NamespaceBuilder
 func (m *ModuleBuilder) Interface(name string, fields map[string]interface{}) *ModuleBuilder {
 	obj := types.NewObjectType()
 	for field, spec := range fields {
-		obj.Properties[field] = tsTypeOfSpec(spec)
+		obj.SetProperty(field, tsTypeOfSpec(spec))
 	}
 	m.exports[name] = obj
 	return m
@@ -1183,7 +1183,7 @@ func goTypeToTSTypeSeen(t reflect.Type, seen map[reflect.Type]types.Type) types.
 				continue
 			}
 			if name := mb.getJSONPropertyName(f); name != "" {
-				obj.Properties[name] = goTypeToTSTypeSeen(f.Type, seen)
+				obj.SetProperty(name, goTypeToTSTypeSeen(f.Type, seen))
 				// A field the JSON encoding may leave out, or a nil pointer,
 				// is optional; so a struct taken as an options argument does
 				// not need every field spelled out.
@@ -1201,7 +1201,7 @@ func goTypeToTSTypeSeen(t reflect.Type, seen map[reflect.Type]types.Type) types.
 		for i := 0; i < ptr.NumMethod(); i++ {
 			method := ptr.Method(i)
 			jsName := strings.ToLower(method.Name[:1]) + method.Name[1:]
-			obj.Properties[jsName] = types.NewFunctionType(goSignatureToTSSignature(method.Type, 1, seen))
+			obj.SetProperty(jsName, types.NewFunctionType(goSignatureToTSSignature(method.Type, 1, seen)))
 		}
 		return obj
 	case reflect.Slice:

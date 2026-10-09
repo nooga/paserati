@@ -68,14 +68,14 @@ func declareAmbientLibGlobals(env *Environment) {
 	if _, found := env.ResolveType("PropertyDescriptor"); !found {
 		pd := types.NewObjectType()
 		for _, name := range []string{"configurable", "enumerable", "writable"} {
-			pd.Properties[name] = types.Boolean
+			pd.SetProperty(name, types.Boolean)
 			pd.OptionalProperties[name] = true
 		}
-		pd.Properties["value"] = types.Any
+		pd.SetProperty("value", types.Any)
 		pd.OptionalProperties["value"] = true
-		pd.Properties["get"] = types.Any
+		pd.SetProperty("get", types.Any)
 		pd.OptionalProperties["get"] = true
-		pd.Properties["set"] = types.Any
+		pd.SetProperty("set", types.Any)
 		pd.OptionalProperties["set"] = true
 		env.DefineTypeAlias("PropertyDescriptor", pd)
 	}
