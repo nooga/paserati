@@ -1,4 +1,4 @@
-// expect_compile_error: Type 'invalid' is not assignable to type
+// expect_compile_error: Type '"invalid"' is not assignable to type
 
 // Test keyof type checking with invalid assignments
 

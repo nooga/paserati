@@ -174,6 +174,7 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 		newObj := NewObjectType()
 		newObj.PropertyDocs = t.PropertyDocs
 		newObj.Doc = t.Doc
+		newObj.DisplayName = t.NonGenericDisplayName()
 		memo[t] = newObj
 		for _, name := range t.PropertyNames() {
 			propType := t.Properties[name]

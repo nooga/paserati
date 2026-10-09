@@ -7,6 +7,7 @@ import (
 	"github.com/nooga/paserati/pkg/lexer"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/types"
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 func checkedAlias(t *testing.T, src, name string) *types.ObjectType {
@@ -92,5 +93,16 @@ class K {
 		if got := k.PropertyDoc(name); got != want {
 			t.Errorf("K.%s doc: got %q want %q", name, got, want)
 		}
+	}
+}
+
+func TestUnionKeepsWrittenOrder(t *testing.T) {
+	typ := types.NewUnionType(
+		&types.LiteralType{Value: vm.String("small")},
+		&types.LiteralType{Value: vm.String("medium")},
+		&types.LiteralType{Value: vm.String("large")},
+	)
+	if got := typ.String(); got != `"small" | "medium" | "large"` {
+		t.Errorf("got %s", got)
 	}
 }

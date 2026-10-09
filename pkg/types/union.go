@@ -1,9 +1,5 @@
 package types
 
-import (
-	"sort"
-)
-
 // --- Union Types ---
 
 // UnionType represents a union of multiple types (e.g., string | number).
@@ -154,12 +150,8 @@ func NewUnionType(ts ...Type) Type {
 		return uniqueMembers[0]
 	}
 
-	// Sort the unique types for a canonical string representation (optional but good)
-	sort.SliceStable(uniqueMembers, func(i, j int) bool {
-		// Basic sort by string representation for consistency
-		return uniqueMembers[i].String() < uniqueMembers[j].String()
-	})
-
+	// Members stay in first-seen order, which is the order they were written
+	// in; Equals compares as a set, so nothing relies on a canonical order.
 	return &UnionType{Types: uniqueMembers}
 }
 

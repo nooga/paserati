@@ -221,6 +221,11 @@ type ObjectType struct {
 	// (delimiters stripped, tags left in the text). Read it with PropertyDoc.
 	PropertyDocs map[string]string
 
+	// DisplayName, when set, is how the type prints: `X` for a declared
+	// class's instance type, `typeof X` for its constructor value. Clones made
+	// by substitution do not carry it, so instantiations print structurally.
+	DisplayName string
+
 	// Doc is the JSDoc comment of the declaration that introduced this type
 	// (an interface or class), delimiters stripped.
 	Doc string
@@ -254,6 +259,11 @@ func (ot *ObjectType) String() string {
 		return "<self>"
 	}
 	defer stringifyVisited.Delete(ptr)
+
+	// Declared classes print by name, as tsc does.
+	if ot.DisplayName != "" {
+		return ot.DisplayName
+	}
 
 	// If this is a pure function (callable with no properties), show it as a function signature
 	if ot.IsPureFunction() && len(ot.CallSignatures) == 1 {

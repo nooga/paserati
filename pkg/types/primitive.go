@@ -1,6 +1,8 @@
 package types
 
 import (
+	"strconv"
+
 	"github.com/nooga/paserati/pkg/vm"
 )
 
@@ -61,7 +63,13 @@ type LiteralType struct {
 
 func (lt *LiteralType) isType()        {}
 func (lt *LiteralType) Name() string   { return lt.Value.ToString() }
-func (lt *LiteralType) String() string { return lt.Value.ToString() }
+func (lt *LiteralType) String() string {
+	// String literal types print quoted, as tsc does: "huge", not huge.
+	if lt.Value.Type() == vm.TypeString {
+		return strconv.Quote(lt.Value.ToString())
+	}
+	return lt.Value.ToString()
+}
 func (lt *LiteralType) typeNode()      {}
 func (lt *LiteralType) Equals(other Type) bool {
 	otherLt, ok := other.(*LiteralType)

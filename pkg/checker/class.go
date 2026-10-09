@@ -365,6 +365,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
 	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
 	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
+	instanceType.DisplayName, constructorType.DisplayName = node.Name.Value, "typeof "+node.Name.Value
 	c.inheritStaticMembers(constructorType, instanceType)
 
 	// 6. Update the constructor function in the environment (replacing forward reference)
@@ -560,6 +561,14 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	constructorType = c.addStaticMembers(node.Body, constructorType)
 	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
 	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
+	{
+		names := make([]string, len(node.TypeParameters))
+		for i, tp := range node.TypeParameters {
+			names[i] = tp.Name.Value
+		}
+		instanceType.DisplayName = node.Name.Value + "<" + strings.Join(names, ", ") + ">"
+		constructorType.DisplayName = "typeof " + node.Name.Value
+	}
 	c.inheritStaticMembers(constructorType, instanceType)
 
 	// 8. Create the GenericType for the class

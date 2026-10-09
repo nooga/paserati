@@ -1812,6 +1812,7 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				Properties:          make(map[string]types.Type),
 				PropertyDocs:        typ.PropertyDocs,
 				Doc:                 typ.Doc,
+				DisplayName:         typ.NonGenericDisplayName(),
 				OptionalProperties:  typ.OptionalProperties, // Copy as-is
 				ReadOnlyProperties:  typ.ReadOnlyProperties, // Copy as-is
 				CallSignatures:      nil,

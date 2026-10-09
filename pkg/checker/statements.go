@@ -769,6 +769,7 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 			Properties:         make(map[string]types.Type),
 			PropertyDocs:       typ.PropertyDocs,
 			Doc:                typ.Doc,
+			DisplayName:        typ.NonGenericDisplayName(),
 			OptionalProperties: make(map[string]bool),
 			ReadOnlyProperties: make(map[string]bool),
 			IsReflectIntrinsic: typ.IsReflectIntrinsic,
