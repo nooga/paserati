@@ -374,6 +374,12 @@ type Checker struct {
 	// See flow_narrowing.go.
 	flowNarrowOverlay map[string]types.Type
 
+	// constAliases are the initializers of unannotated consts (aliased
+	// conditions); stableParams the parameters of the function being checked
+	// that its body never assigns.
+	constAliases map[string]parser.Expression
+	stableParams map[string]bool
+
 	// returnContexts holds the contextual type a generic call's result is
 	// expected to have, for inferring type parameters that no argument
 	// determines (`const xs: string[] = from()`).
@@ -974,7 +980,7 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 
 		// See flow_narrowing.go: a widened literal keeps its
 		// exact narrow type for straight-line reads that follow.
-		flow.observeLetOrVar(varName.Value, variableType, computedInitializerType, finalInferredType != computedInitializerType)
+		flow.observeLetOrVar(varName.Value, finalInferredType, computedInitializerType, finalInferredType != computedInitializerType)
 	}
 	// --- END FIX ---
 }
@@ -982,6 +988,7 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 // Check analyzes the given program AST for type errors.
 func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	c.program = program
+	c.constAliases = collectConstAliases(program)
 	c.source = program.Source           // Cache source for error reporting
 	c.errors = []errors.PaseratiError{} // Reset errors
 	c.reportedErrors = nil
@@ -1422,6 +1429,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		outerActiveLabels := c.activeLabels
 
 		c.currentExpectedReturnType = funcSignature.ReturnType // Use return type from initial signature
+		defer func(prev map[string]bool) { c.stableParams = prev }(c.stableParams)
+		c.stableParams = stableParameters(funcLit.Parameters, funcLit.Body)
 		c.currentInferredReturnTypes = nil
 		c.currentInferredYieldTypes = []types.Type{} // Always collect yield types for generators
 		c.inAsyncFunction = funcLit.IsAsync
@@ -1762,7 +1771,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 			if !needsInitializerCheck {
 				debugPrintf("// [Checker Pass 5] Skipping already processed/visited node: %T\n", stmt)
-				flow.invalidateAll()
+				flow.dropAssignedIn(stmt)
 				continue
 			} else {
 				debugPrintf("// [Checker Pass 5] Re-visiting Let/Const/Var for initializer check: %T\n", stmt)
@@ -1788,7 +1797,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		// TODO: Handle other top-level statement types if necessary
 		default:
-			flow.invalidateAll()
+			flow.dropAssignedIn(node)
 			debugPrintf("// [Checker Pass 5] Visiting unhandled statement type %T\n", node)
 			c.visit(node) // Fallback visit? Might be unnecessary
 		}
@@ -2663,7 +2672,7 @@ func (c *Checker) visit(node parser.Node) {
 			case *parser.ExpressionStatement:
 				flow.observeExpressionStatement(c, s)
 			default:
-				flow.invalidateAll()
+				flow.dropAssignedIn(stmt)
 				c.visit(stmt)
 			}
 		}
@@ -3109,59 +3118,75 @@ func (c *Checker) visit(node parser.Node) {
 
 		// 2. Check Consequence block with type narrowing (supports compound conditions)
 		originalEnv := c.env
-		narrowedEnv := c.applyTypeNarrowingWithFallback(node.Condition)
+		condition := node.Condition
+		if aliased := c.resolveAliasedCondition(condition); aliased != condition &&
+			c.detectTypeGuard(condition) == nil && c.applyTypeNarrowingWithFallback(condition) == nil {
+			// `const ok = id !== undefined; if (ok)`: the condition `ok` stands for.
+			condition = aliased
+		}
+		narrowedEnv := c.applyTypeNarrowingWithFallback(condition)
+		typeGuard := c.detectTypeGuard(condition)
 
 		if narrowedEnv != nil {
 			debugPrintf("// [Checker IfStmt] Applying type narrowing in consequence block\n")
 			c.env = narrowedEnv // Use narrowed environment for consequence
 		}
 
-		var beforeFalsy types.Type
-		if key := falsyGuardKey(node.Condition); key != "" {
-			if narrowedEnv == nil && node.Alternative == nil {
-				// Nothing narrows inside `if (!ref)`, but the branch still
-				// needs its own scope to record what it assigns to ref.
-				if seeded := c.seedFalsyGuardEnv(key, node.Condition); seeded != nil {
-					narrowedEnv = seeded
-					c.env = seeded
-				}
+		// Each arm is checked in a scope seeded with the references it writes,
+		// so its assignments neither leak out of it nor get lost at the join.
+		refKeys := writtenRefs(node.Consequence, node.Alternative)
+		if len(refKeys) > 0 {
+			for _, key := range conditionRefKeys(condition, typeGuard) {
+				refKeys = appendUnique(refKeys, key)
 			}
-			beforeFalsy = narrowedTypeIn(narrowedEnv, key)
+		}
+		consequenceTerminates := blockAlwaysTerminates(node.Consequence)
+		alternativeTerminates := node.Alternative != nil && blockAlwaysTerminates(node.Alternative)
+		joinPossible := !(consequenceTerminates && node.Alternative == nil)
+
+		thenEnv := narrowedEnv
+		if len(refKeys) > 0 {
+			thenEnv = c.seedBranchEnv(narrowedEnv, refKeys)
+		}
+		if thenEnv != nil {
+			c.env = thenEnv
 		}
 
 		c.visit(node.Consequence)
 
-		// After visiting consequence, c.env is back to narrowedEnv (BlockStatement restores)
-		// but narrowedEnv's symbols may have been updated by assignments via UpdateInChain
-		// Save reference to the (possibly modified) narrowed env before restoring
-		consequenceNarrowedEnv := narrowedEnv
-
 		// Restore original environment before checking alternative
 		c.env = originalEnv
 
-		// Detect type guard for inverted narrowing
-		typeGuard := c.detectTypeGuard(node.Condition)
-
 		// 3. Check Alternative block (if it exists) with inverted narrowing
+		var elseEnv *Environment
+		if typeGuard != nil {
+			elseEnv = c.applyInvertedTypeNarrowing(typeGuard)
+		}
+		if elseEnv == nil && node.Alternative == nil && joinPossible {
+			elseEnv = c.applyInvertedTruthinessNarrowing(condition)
+		}
+		elseEnv = c.completeMemberGuardElse(elseEnv, typeGuard)
 		if node.Alternative != nil {
-			var invertedEnv *Environment
-			if typeGuard != nil {
-				invertedEnv = c.applyInvertedTypeNarrowing(typeGuard)
+			if len(refKeys) > 0 {
+				elseEnv = c.seedBranchEnv(elseEnv, refKeys)
 			}
-
-			if invertedEnv != nil {
+			if elseEnv != nil {
 				debugPrintf("// [Checker IfStmt] Applying inverted type narrowing in alternative block\n")
-				c.env = invertedEnv // Use inverted narrowed environment for alternative
+				c.env = elseEnv // Use inverted narrowed environment for alternative
 			}
 
 			c.visit(node.Alternative)
+
+			// The alternative may itself have joined into a deeper scope.
+			if c.env != nil && (elseEnv == nil || c.env != elseEnv) && elseEnv != nil {
+				elseEnv = c.env
+			}
 
 			// Restore original environment
 			c.env = originalEnv
 		}
 
 		// 4. Control flow narrowing after the if statement
-		consequenceTerminates := blockAlwaysTerminates(node.Consequence)
 		if consequenceTerminates && node.Alternative == nil {
 			// The if block terminates, so code after only runs when condition was false
 			narrowingApplied := false
@@ -3175,7 +3200,7 @@ func (c *Checker) visit(node parser.Node) {
 			}
 			if !narrowingApplied {
 				// Try truthiness narrowing: if (!x) { return } => x is truthy after
-				if invertedEnv := c.applyInvertedTruthinessNarrowing(node.Condition); invertedEnv != nil {
+				if invertedEnv := c.applyInvertedTruthinessNarrowing(condition); invertedEnv != nil {
 					c.env = invertedEnv
 					narrowingApplied = true
 				}
@@ -3183,21 +3208,23 @@ func (c *Checker) visit(node parser.Node) {
 			if !narrowingApplied {
 				// Handle compound || conditions: if (A || B) { throw }
 				// After throw, both !A and !B hold, so apply inverted narrowing for each
-				c.applyInvertedOrNarrowing(node.Condition)
+				c.applyInvertedOrNarrowing(condition)
 			}
-		} else if !consequenceTerminates && node.Alternative == nil && consequenceNarrowedEnv != nil {
-			// 5. Post-if type merging: consequence doesn't terminate and no else block.
-			// Merge types from the then-branch (with possible assignments) and the
-			// else-branch (inverted narrowing). This handles patterns like:
-			//   if (x === null) { x = "default"; }
-			//   return x;  // x should be string, not string | null
-			c.mergePostIfTypes(originalEnv, consequenceNarrowedEnv, typeGuard)
-			if typeGuard == nil {
-				c.mergePostIfFalsy(originalEnv, consequenceNarrowedEnv, node.Condition, beforeFalsy)
+		} else if len(refKeys) > 0 {
+			// 5. Post-if join: the arms that fall through decide the type of
+			// every reference an arm wrote (and of the one the condition tests).
+			thenResult := thenEnv
+			if thenResult == nil {
+				thenResult = originalEnv
 			}
-		} else {
-			// Restore original environment after if statement
-			c.env = originalEnv
+			elseResult := elseEnv
+			if elseResult == nil {
+				elseResult = originalEnv
+			}
+			c.joinBranches(originalEnv, refKeys, []branchEnd{
+				{env: thenResult, terminates: consequenceTerminates},
+				{env: elseResult, terminates: alternativeTerminates},
+			})
 		}
 
 		// 6. IfStatement doesn't have a value/type (it's a statement, not expression)
@@ -3357,25 +3384,29 @@ func (c *Checker) visit(node parser.Node) {
 
 	// --- Loop Statements (Control flow, check condition/body) ---
 	case *parser.WhileStatement:
-		c.visit(node.Condition)
-		c.loopDepth++
-		c.visit(node.Body)
-		c.loopDepth--
+		c.checkLoop(node, node.Condition, func() {
+			c.visit(node.Condition)
+			c.loopDepth++
+			c.visitNarrowedBy(node.Condition, node.Body)
+			c.loopDepth--
+		})
 
 	case *parser.DoWhileStatement:
-		c.loopDepth++
-		c.visit(node.Body)
-		c.loopDepth--
-		c.visit(node.Condition)
+		c.checkLoop(node, node.Condition, func() {
+			c.loopDepth++
+			c.visit(node.Body)
+			c.loopDepth--
+			c.visit(node.Condition)
+		})
 
 	case *parser.ForStatement:
-		c.checkForStatement(node)
+		c.checkLoop(node, node.Condition, func() { c.checkForStatement(node) })
 
 	case *parser.ForOfStatement:
-		c.checkForOfStatement(node)
+		c.checkLoop(node, nil, func() { c.checkForOfStatement(node) })
 
 	case *parser.ForInStatement:
-		c.checkForInStatement(node)
+		c.checkLoop(node, nil, func() { c.checkForInStatement(node) })
 
 	// --- With Statement ---
 	case *parser.WithStatement:
@@ -3494,6 +3525,8 @@ func (c *Checker) visit(node parser.Node) {
 		outerActiveLabelsSM := c.activeLabels
 
 		// 3. Set context for body check
+		defer func(prev map[string]bool) { c.stableParams = prev }(c.stableParams)
+		c.stableParams = stableParameters(node.Parameters, node.Body)
 		c.currentExpectedReturnType = resolvedReturnType
 		c.currentInferredReturnTypes = nil
 		outerCrossTargetsSM := c.crossFunctionTargets
@@ -4395,12 +4428,73 @@ func (c *Checker) checkArrowFunctionLiteralWithContext(node *parser.ArrowFunctio
 
 // checkTryStatement performs type checking for try/catch statements
 func (c *Checker) checkTryStatement(node *parser.TryStatement) {
-	// Check the try block
-	c.visit(node.Body)
+	originalEnv := c.env
+	var catchBody parser.Node
+	if node.CatchClause != nil && node.CatchClause.Body != nil {
+		catchBody = node.CatchClause.Body
+	}
+	var finallyBody parser.Node
+	if node.FinallyBlock != nil {
+		finallyBody = node.FinallyBlock
+	}
+	keys := writtenRefs(node.Body, catchBody, finallyBody)
 
-	// Check the catch clause if present
+	// The try block runs in a scope seeded with the references the statement
+	// writes; the catch and finally blocks can start after any assignment in
+	// the try block, so they start from the declared types.
+	if len(keys) > 0 {
+		if env := c.seedBranchEnv(nil, keys); env != nil {
+			c.env = env
+		}
+	}
+	tryEnv := c.env
+	c.visit(node.Body)
+	c.env = originalEnv
+	arms := []branchEnd{{env: tryEnv, terminates: blockAlwaysTerminates(node.Body)}}
+
 	if node.CatchClause != nil {
+		if len(keys) > 0 {
+			if env := c.seedBranchEnvWith(nil, keys, true); env != nil {
+				c.env = env
+			}
+		}
+		catchEnv := c.env
 		c.checkCatchClause(node.CatchClause)
+		c.env = originalEnv
+		arms = append(arms, branchEnd{env: catchEnv, terminates: catchBody != nil && blockAlwaysTerminates(catchBody)})
+	}
+	if len(keys) > 0 {
+		c.joinBranches(originalEnv, keys, arms)
+	}
+
+	if node.FinallyBlock != nil {
+		joined := c.env
+		c.env = originalEnv
+		finallyEnv := originalEnv
+		if len(keys) > 0 {
+			if env := c.seedBranchEnvWith(nil, keys, true); env != nil {
+				finallyEnv = env
+				c.env = env
+			}
+		}
+		c.visit(node.FinallyBlock)
+		c.env = joined
+		// What the finally block assigned is what follows it.
+		if written := writtenRefs(finallyBody); len(written) > 0 && finallyEnv != originalEnv {
+			after := NewEnclosedEnvironment(joined)
+			for _, key := range written {
+				t := typeOfRefIn(finallyEnv, key)
+				if t == nil {
+					continue
+				}
+				if strings.Contains(key, ".") {
+					after.narrowings[key] = t
+				} else if _, isConst, found := originalEnv.Resolve(key); found {
+					after.Define(key, t, isConst)
+				}
+			}
+			c.env = after
+		}
 	}
 }
 

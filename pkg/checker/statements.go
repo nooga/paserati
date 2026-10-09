@@ -943,19 +943,64 @@ func (c *Checker) checkSwitchStatement(node *parser.SwitchStatement) {
 
 	}
 
-	// 3. Visit the bodies, each narrowed by the clauses that reach it (#615)
+	// 3. Visit the bodies, each narrowed by the clauses that reach it (#615).
+	// Each body runs in a scope seeded with the references the switch writes;
+	// the clauses that leave the switch normally decide their types afterwards.
 	originalEnv := c.env
+	keys := writtenRefs(switchBodies(node)...)
+	arms := make([]branchEnd, 0, len(node.Cases)+1)
+	joinable := len(keys) > 0
+	hasDefault := false
 	for i, caseClause := range node.Cases {
+		if caseClause.Condition == nil {
+			hasDefault = true
+		}
+		var clauseEnv *Environment
 		if cond := switchClauseCondition(node, i); cond != nil {
 			if narrowed := c.applyTypeNarrowingWithFallback(cond); narrowed != nil {
-				c.env = narrowed
+				clauseEnv = narrowed
 			}
+		}
+		if len(keys) > 0 {
+			// A body reached by falling through may start after any assignment.
+			enteredByFallthrough := i > 0 && len(node.Cases[i-1].Body.Statements) > 0 && clauseMayFallThrough(node.Cases[i-1].Body)
+			clauseEnv = c.seedBranchEnvWith(clauseEnv, keys, enteredByFallthrough)
+		}
+		if clauseEnv != nil {
+			c.env = clauseEnv
 		}
 		// Visit case body (BlockStatement, handles its own scope)
 		c.switchDepth++
 		c.visit(caseClause.Body)
 		c.switchDepth--
+		endEnv := clauseEnv
+		if endEnv == nil {
+			endEnv = originalEnv
+		}
 		c.env = originalEnv
+
+		// Which path out of the switch does this clause provide?
+		last := i == len(node.Cases)-1
+		switch {
+		case breaksOnlyAtEnd(caseClause.Body):
+			arms = append(arms, branchEnd{env: endEnv, terminates: false})
+		case last && !blockAlwaysTerminates(caseClause.Body) && !hasBreak(caseClause.Body):
+			arms = append(arms, branchEnd{env: endEnv, terminates: false})
+		case hasBreak(caseClause.Body):
+			joinable = false // a break from the middle: not modelled
+		default:
+			arms = append(arms, branchEnd{env: endEnv, terminates: true})
+		}
+	}
+	if len(keys) > 0 {
+		if !hasDefault && !c.switchCoversAll(node, switchExprType) {
+			arms = append(arms, branchEnd{env: originalEnv, terminates: false})
+		}
+		if joinable {
+			c.joinBranches(originalEnv, keys, arms)
+		} else {
+			c.resetToDeclared(originalEnv, keys)
+		}
 	}
 
 	// Switch statements don't produce a value themselves
@@ -1036,7 +1081,7 @@ func (c *Checker) checkForStatement(node *parser.ForStatement) {
 	c.visit(node.Condition)
 	c.visit(node.Update)
 	c.loopDepth++
-	c.visit(node.Body)
+	c.visitNarrowedBy(node.Condition, node.Body)
 	c.loopDepth--
 
 	// 3. Restore the outer environment

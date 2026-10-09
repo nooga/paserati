@@ -245,8 +245,13 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 				}
 			}
 
-			// Pattern 2: identifier === literal (e.g., x === "foo")
-			if ident, ok := infix.Left.(*parser.Identifier); ok {
+			// Pattern 2: identifier === literal (e.g., x === "foo"), also for
+			// the identifier assigned in the comparison: (x = f()) !== null
+			guardLeft := infix.Left
+			if assign, isAssign := guardLeft.(*parser.AssignmentExpression); isAssign && assign.Operator == "=" {
+				guardLeft = assign.Left
+			}
+			if ident, ok := guardLeft.(*parser.Identifier); ok {
 				if narrowedType := c.literalToType(infix.Right); narrowedType != nil {
 					// For loose equality (== null), narrow both null and undefined
 					isLoose := infix.Operator == "==" || infix.Operator == "!="
