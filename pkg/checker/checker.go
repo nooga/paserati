@@ -361,7 +361,10 @@ type Checker struct {
 	// in the REPL, bindings from earlier evaluations. A `var` redeclaring one of
 	// these merges with it, so definite assignment analysis leaves them alone.
 	preexistingGlobals map[string]bool
-	noImplicitOverride bool // When true, overriding class members require explicit override
+	contextualParams   map[parser.Node]bool             // parameters of function arguments that a callee types
+	implicitAnyParams  map[parser.Node]implicitAnyParam // noImplicitAny candidates, reported when checking ends
+	noImplicitAny      bool                             // Mirrors --noImplicitAny; when true, TS7006/TS7019 are emitted
+	noImplicitOverride bool                             // When true, overriding class members require explicit override
 	// Comma expressions sitting in callee position, recorded so the TS2695
 	// check can spare the `(0, eval)(...)` indirect-call idiom.
 	indirectCallCallees map[*parser.InfixExpression]bool
@@ -543,6 +546,12 @@ func (c *Checker) SetAlwaysStrict(strict bool) {
 // this selects TS1214 over TS1212.
 func (c *Checker) SetIsModule(isModule bool) {
 	c.isModule = isModule
+}
+
+// SetNoImplicitAny mirrors the `--noImplicitAny` compiler option, which gates
+// TS7006 and TS7019. Default false: Paserati also runs untyped JavaScript.
+func (c *Checker) SetNoImplicitAny(enabled bool) {
+	c.noImplicitAny = enabled
 }
 
 // SetNoImplicitOverride controls whether overriding class members require an
@@ -1572,6 +1581,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 
 		// Visit Body
 		c.validateParamListBasic(funcLit.Parameters)
+		c.noteImplicitAnyParameters(&FunctionCheckContext{Parameters: funcLit.Parameters, RestParameter: funcLit.RestParameter})
 		c.hoistFunctionBodyVars(funcLit.Body)
 		c.visit(funcLit.Body) // Use funcEnv implicitly
 		c.checkMissingReturn(funcLit.ReturnTypeAnnotation, funcSignature.ReturnType, funcLit.Body, funcLit.IsAsync, funcLit.IsGenerator)
@@ -1816,6 +1826,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// TS2454: definite assignment analysis. Runs last so every declarator's
 	// ComputedType has been resolved by the passes above.
 	c.checkDefiniteAssignment(program)
+
+	c.reportImplicitAnyParameters()
 
 	return c.errors
 }
@@ -2726,6 +2738,11 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.TemplateLiteral:
 		c.checkTemplateLiteral(node)
 	case *parser.TaggedTemplateExpression:
+		if c.noImplicitAny && node.Template != nil {
+			for _, part := range node.Template.Parts {
+				c.markFunctionsUnder(part, 0) // callbacks in `${}` are typed by the tag
+			}
+		}
 		c.checkTaggedTemplateExpression(node)
 
 	// --- NEW: Handle ThisExpression ---
@@ -4082,6 +4099,8 @@ func (c *Checker) visitWithContext(node parser.Node, context *ContextualType) {
 			context = &ContextualType{ExpectedType: narrowed, IsContextual: context.IsContextual}
 		}
 	}
+
+	c.markContextuallyTypedFunction(node, context.ExpectedType)
 
 	// Handle specific node types that benefit from contextual typing
 	switch node := node.(type) {

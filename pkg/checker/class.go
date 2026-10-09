@@ -239,6 +239,8 @@ func (c *Checker) validateClassMemberConstraints(body *parser.ClassBody) {
 				}
 			}
 		} else if method.Kind == "setter" && method.Value != nil {
+			// A setter's value parameter takes its type from the getter.
+			c.markParametersContextual(method.Value.Parameters, nil)
 			for _, param := range method.Value.Parameters {
 				if param.Optional {
 					c.addErrorWithCode(param.Name, errors.TS1051, "A 'set' accessor cannot have an optional parameter.")

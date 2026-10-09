@@ -408,7 +408,11 @@ func (c *Checker) missingProperties(source, target types.Type) ([]string, bool) 
 // reportLeaf reports an assignability failure at a node with the code TypeScript
 // would choose for it.
 func (c *Checker) reportLeaf(node parser.Node, expr parser.Expression, source, target types.Type, head relHead) {
-	srcStr, tgtStr := c.getAssignmentErrorTypes(c.generalizedSource(source, target), target)
+	shown := c.generalizedSource(source, target)
+	if _, isLiteral := expr.(*parser.ObjectLiteral); isLiteral {
+		shown = c.widenObjectLiteralForReport(shown, target)
+	}
+	srcStr, tgtStr := c.getAssignmentErrorTypes(shown, target)
 
 	if expr != nil {
 		if ex := c.findExcessProperty(expr, target); ex != nil {
@@ -674,4 +678,42 @@ func (c *Checker) checkDestructuringExcess(props []*parser.DestructuringProperty
 			name, strings.Join(parts, "; ")))
 		return
 	}
+}
+
+// widenObjectLiteralForReport is the type an object literal prints as in a
+// diagnostic: its members widened (`{ name: string }`), except members whose
+// target counterpart is a literal type, which the literal's own contextual
+// type keeps.
+func (c *Checker) widenObjectLiteralForReport(source, target types.Type) types.Type {
+	srcObj, ok := source.(*types.ObjectType)
+	if !ok || srcObj.IsCallable() || srcObj.ClassMeta != nil {
+		return source
+	}
+	tgtObj, _ := c.resolveStructural(target).(*types.ObjectType)
+	widened := types.DeeplyWidenType(srcObj)
+	wObj, ok := widened.(*types.ObjectType)
+	if !ok || tgtObj == nil {
+		return widened
+	}
+	tgtProps := tgtObj.GetEffectiveProperties()
+	for name, orig := range srcObj.Properties {
+		if want, has := tgtProps[name]; has && containsLiteralType(want) {
+			wObj.Properties[name] = orig
+		}
+	}
+	return wObj
+}
+
+func containsLiteralType(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.LiteralType, *types.EnumMemberType:
+		return true
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if containsLiteralType(m) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -130,6 +130,14 @@ func (p *Paserati) SetIsModule(isModule bool) {
 	p.checker.SetIsModule(isModule)
 }
 
+// SetNoImplicitAny mirrors --noImplicitAny: parameters whose type is neither
+// written nor contextual are TS7006 instead of silently any. Default false,
+// since Paserati also runs untyped JavaScript; paserati-testtsc and the
+// -noImplicitAny CLI flag turn it on.
+func (p *Paserati) SetNoImplicitAny(enabled bool) {
+	p.checker.SetNoImplicitAny(enabled)
+}
+
 // SetNoImplicitOverride controls whether overriding class members require an
 // explicit `override` modifier.
 func (p *Paserati) SetNoImplicitOverride(enabled bool) {

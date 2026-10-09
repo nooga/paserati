@@ -4975,6 +4975,21 @@ func (p *Parser) startsDeclarationWithNoAsyncForm() bool {
 	return false
 }
 
+// awaitOperandFollowsOnSameLine is tsc's test for `await` outside an async
+// context being an await expression: an identifier, keyword value or literal
+// follows on the same line (`await foo`, `await 1`), as opposed to an operator
+// or a call (`await(x)`, `await + 1`).
+func (p *Parser) awaitOperandFollowsOnSameLine() bool {
+	if p.peekToken.Line != p.curToken.Line {
+		return false
+	}
+	switch p.peekToken.Type {
+	case lexer.IDENT, lexer.NUMBER, lexer.STRING, lexer.NEW, lexer.THIS, lexer.TRUE, lexer.FALSE, lexer.NULL:
+		return true
+	}
+	return false
+}
+
 // parseAwaitExpression handles await expressions
 // await <expression>
 // Note: We parse await expressions when await is followed by a valid expression start.
@@ -4988,10 +5003,16 @@ func (p *Parser) parseAwaitExpression() Expression {
 	// This allows `function await() {}` and `await(null)` as a function call.
 	// But at top level or inside async functions, 'await' is the await expression keyword.
 	if p.inNonAsyncFunction > 0 && p.inAsyncFunction == 0 {
-		return &Identifier{
-			Token: awaitToken,
-			Value: awaitToken.Literal, // "await"
+		if !p.awaitOperandFollowsOnSameLine() {
+			return &Identifier{
+				Token: awaitToken,
+				Value: awaitToken.Literal, // "await"
+			}
 		}
+		// `await x` outside an async function: tsc reads it as an await
+		// expression and reports where it is not allowed.
+		p.addSemanticErrorWithCode(awaitToken, "TS1308",
+			"'await' expressions are only allowed within async functions and at the top levels of modules.")
 	}
 
 	// Special case: await => expr is a shorthand arrow function with await as parameter
