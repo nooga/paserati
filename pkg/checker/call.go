@@ -927,6 +927,30 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 		}
 	}
 
+	// Generic overloads called without explicit type arguments are matched
+	// through the signature their type parameters infer from the arguments.
+	if len(node.TypeArguments) == 0 {
+		var inferred []*types.Signature
+		for i, sig := range objType.CallSignatures {
+			if !c.isGenericSignature(sig) {
+				continue
+			}
+			constraints := c.collectTypeParameterConstraints(sig, argTypes)
+			solution := c.solveTypeParameterConstraints(constraints)
+			if len(solution) == 0 {
+				continue
+			}
+			if inferred == nil {
+				inferred = append([]*types.Signature(nil), objType.CallSignatures...)
+			}
+			inferred[i] = c.substituteTypeParameters(sig, solution)
+		}
+		if inferred != nil {
+			objType = types.NewObjectType()
+			objType.CallSignatures = inferred
+		}
+	}
+
 	// Try to find the best matching signature
 	signatureIndex := -1
 	var resultType types.Type
