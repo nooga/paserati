@@ -98,6 +98,11 @@ func (c *Checker) seedBranchEnvWith(base *Environment, keys []string, declared b
 	for _, key := range keys {
 		if strings.Contains(key, ".") {
 			t := typeOfRefIn(lookup(), key)
+			if t == nil && typeOfRefIn(lookup(), key+"__complement") != nil {
+				// Narrowed by subtraction (`!== undefined`); seeding the
+				// declared type would override that.
+				continue
+			}
 			if declared || t == nil {
 				if d := c.resolveMemberExpressionOriginalType(key); d != nil {
 					t = d

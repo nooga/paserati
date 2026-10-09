@@ -3120,7 +3120,8 @@ func (c *Checker) visit(node parser.Node) {
 		originalEnv := c.env
 		condition := node.Condition
 		if aliased := c.resolveAliasedCondition(condition); aliased != condition &&
-			c.detectTypeGuard(condition) == nil && c.applyTypeNarrowingWithFallback(condition) == nil {
+			c.detectTypeGuard(condition) == nil && c.applyTypeNarrowingWithFallback(condition) == nil &&
+			c.applyInvertedTruthinessNarrowing(condition) == nil {
 			// `const ok = id !== undefined; if (ok)`: the condition `ok` stands for.
 			condition = aliased
 		}
