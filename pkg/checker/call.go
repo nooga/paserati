@@ -1511,9 +1511,11 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 			// Also handle regular object types with properties that may contain type parameters
 			// e.g., { value: T } matched against { value: "hello" } should infer T = string
 			if len(pType.Properties) > 0 {
+				// Members inherited from base types (e.g. a generic base class) count too
+				argEffectiveProps := aType.GetEffectiveProperties()
 				for _, propName := range types.SortedPropertyNames(pType.Properties) {
 					paramPropType := pType.Properties[propName]
-					if argPropType, exists := aType.Properties[propName]; exists {
+					if argPropType, exists := argEffectiveProps[propName]; exists {
 						propConstraints := c.collectConstraintsFromTypeSeen(paramPropType, argPropType, seen)
 						constraints = append(constraints, propConstraints...)
 					}
