@@ -34,6 +34,52 @@ type linkModule struct {
 	stars    []string                // `export * from` specifiers
 	imports  []linkImport            // named and default imports
 	requests []linkRequest           // every requested module, in order
+	hasTLA   bool                    // the top level uses await
+	// exportNames is what `export * from` of this module contributes before
+	// its own star re-exports (see Compiler.collectExportAllNames).
+	exportNames []string
+}
+
+// detach makes the entry safe to keep after the module's syntax is released:
+// the nodes kept for error positions are replaced by copies of their token, so
+// nothing points into the AST or the token storage it lives in.
+func (m *linkModule) detach() {
+	pin := func(n parser.Node) parser.Node {
+		tok := parser.GetTokenFromNode(n)
+		if tok == nil {
+			return nil
+		}
+		cp := *tok
+		return &parser.Identifier{Token: &cp, Value: cp.Literal}
+	}
+	for i := range m.requests {
+		m.requests[i].node = pin(m.requests[i].node)
+	}
+	for i := range m.imports {
+		m.imports[i].node = pin(m.imports[i].node)
+	}
+	for k, ind := range m.indirect {
+		ind.node = pin(ind.node)
+		m.indirect[k] = ind
+	}
+}
+
+// SummarizeModule is what the module loader keeps of a module's syntax once
+// it is compiled: its import/export entries, which importers are linked
+// against, without the AST or tokens.
+func (c *Compiler) SummarizeModule(path string, program *parser.Program) any {
+	m := newLinkModule(canonicalLinkKey(path), path, program)
+	m.hasTLA = containsTopLevelAwait(program)
+	m.exportNames = c.extractExportNamesFromAST(program)
+	for _, stmt := range program.Statements {
+		if all, ok := stmt.(*parser.ExportAllDeclaration); ok && all.Source != nil && all.Exported != nil {
+			if nsName := getExportSpecName(all.Exported); nsName != "" {
+				m.exportNames = append(m.exportNames, nsName)
+			}
+		}
+	}
+	m.detach()
+	return m
 }
 
 type linkIndirect struct {
@@ -269,7 +315,11 @@ func (l *moduleLinker) load(m *linkModule, spec string) (*linkModule, error) {
 			lm.local[name] = true
 		}
 	case record.AST == nil:
-		lm = &linkModule{key: key, opaque: true}
+		if kept, ok := record.LinkSummary.(*linkModule); ok {
+			lm = kept
+		} else {
+			lm = &linkModule{key: key, opaque: true}
+		}
 	default:
 		lm = newLinkModule(key, record.ResolvedPath, record.AST)
 	}
@@ -469,15 +519,24 @@ func (c *Compiler) asyncModulesOfDeferredImport(spec string) []string {
 			return
 		}
 		record, ok := rec.(*modules.ModuleRecord)
-		if !ok || record == nil || record.AST == nil || seen[record.ResolvedPath] {
+		if !ok || record == nil || seen[record.ResolvedPath] {
+			return
+		}
+		var lm *linkModule
+		if record.AST != nil {
+			lm = newLinkModule(record.ResolvedPath, record.ResolvedPath, record.AST)
+			lm.hasTLA = containsTopLevelAwait(record.AST)
+		} else if kept, ok := record.LinkSummary.(*linkModule); ok {
+			lm = kept
+		} else {
 			return
 		}
 		seen[record.ResolvedPath] = true
-		if containsTopLevelAwait(record.AST) {
+		if lm.hasTLA {
 			out = append(out, record.ResolvedPath)
 			return
 		}
-		for _, req := range newLinkModule(record.ResolvedPath, record.ResolvedPath, record.AST).requests {
+		for _, req := range lm.requests {
 			visit(req.spec, record.ResolvedPath)
 		}
 	}

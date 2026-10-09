@@ -5355,6 +5355,27 @@ func (c *Compiler) collectExportAllNames(rec vm.ModuleRecord, specifier string, 
 	}
 	// rec is this very module's record; only the concrete type exposes the AST.
 	concreteRec, _ := rec.(*modules.ModuleRecord)
+	if concreteRec != nil && concreteRec.AST == nil {
+		// The module's syntax was released after it compiled; its link
+		// summary has what the harvest below would find.
+		kept, ok := concreteRec.LinkSummary.(*linkModule)
+		if !ok {
+			return nil, nil
+		}
+		names := append([]string(nil), kept.exportNames...)
+		for _, spec := range kept.stars {
+			nestedRec, err := c.moduleLoader.LoadModule(spec, resolvedPath)
+			if err != nil {
+				continue
+			}
+			nestedNames, nestedErr := c.collectExportAllNames(nestedRec, spec, visited, node)
+			if nestedErr != nil {
+				return nil, nestedErr
+			}
+			names = append(names, nestedNames...)
+		}
+		return names, nil
+	}
 	if concreteRec == nil || concreteRec.AST == nil {
 		return nil, nil
 	}
