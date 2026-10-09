@@ -2243,6 +2243,11 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 				} else {
 					baseResultType = fieldType
 				}
+			} else if inherited, ok := obj.GetEffectiveProperties()[propertyName]; ok && inherited != nil {
+				baseResultType = inherited
+			} else if indexed := stringIndexValueType(obj); indexed != nil && !obj.IsCallable() {
+				// `r?.p` over `Record<string, V>` reads V, as `r.p` does.
+				baseResultType = indexed
 			} else if obj.IsCallable() {
 				// Check for function prototype methods if this is a callable object
 				if methodType := c.env.GetPrimitivePrototypeMethodType("function", propertyName); methodType != nil {
@@ -2570,7 +2575,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 						c.addError(node, fmt.Sprintf("Constructor expected at least %d arguments but got %d.", minExpectedArgs, actualArgCount))
 					} else {
 						// Check fixed arguments
-						fixedArgsOk := c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)
+						fixedArgsOk := c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic, constructorSig.OptionalParams)
 
 						// Check variadic arguments
 						if fixedArgsOk && constructorSig.RestParameterType != nil {
@@ -2648,7 +2653,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 						// (allow extra args for constructors with no params - they may use 'arguments')
 						c.addErrorWithCode(node, errors.TS2554, formatArityError(minRequiredArgs, expectedArgCount, actualArgCount))
 					} else {
-						c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic)
+						c.checkFixedArgumentsWithSpread(node.Arguments, constructorSig.ParameterTypes, constructorSig.IsVariadic, constructorSig.OptionalParams)
 					}
 				}
 			}
@@ -3524,4 +3529,18 @@ func (c *Checker) builtinGenericCtorResult(ctor types.Type, typeArgs []types.Typ
 		}
 	}
 	return c.instantiateGenericType(instance, args, nil)
+}
+
+// stringIndexValueType is the value type of obj's string (or any) index
+// signature, or nil when it has none.
+func stringIndexValueType(obj *types.ObjectType) types.Type {
+	for _, sig := range obj.IndexSignatures {
+		if sig.KeyType == types.String || sig.KeyType == types.Any {
+			if sig.ValueType == nil {
+				return types.Any
+			}
+			return sig.ValueType
+		}
+	}
+	return nil
 }

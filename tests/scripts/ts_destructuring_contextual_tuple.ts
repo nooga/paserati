@@ -1,6 +1,6 @@
 // expect: annotated destructuring uses declared types
 
-var [a, b]: [number, any] = [undefined, undefined];
+var [a, b]: [number, any] = [1, undefined];
 let [x]: [string | number] = [1];
 let [y]: [string | undefined] = [""];
 let [z = ""]: [string | undefined] = [undefined];

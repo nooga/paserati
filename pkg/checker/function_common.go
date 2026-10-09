@@ -486,6 +486,8 @@ func (c *Checker) checkParameterDefaults(ctx *FunctionCheckContext, paramTypes [
 
 // checkFunctionBody visits the function body and handles return type inference
 func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnType types.Type) types.Type {
+	c.validateParamListBasic(ctx.Parameters)
+
 	// Set return context
 	outerExpectedReturnType := c.currentExpectedReturnType
 	outerInferredReturnTypes := c.currentInferredReturnTypes
@@ -550,6 +552,9 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	// Visit body
 	c.hoistFunctionBodyVars(ctx.Body)
 	c.visit(ctx.Body)
+	if block, ok := ctx.Body.(*parser.BlockStatement); ok {
+		c.checkMissingReturn(ctx.ReturnTypeAnnotation, expectedReturnType, block, ctx.IsAsync, ctx.IsGenerator)
+	}
 
 	// Handle different body types
 	if ctx.IsArrow {

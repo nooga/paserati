@@ -120,7 +120,7 @@ func TestModuleBuilderTypeExports(t *testing.T) {
 	})
 	v, errs := p.RunCode(`
 		import { origin, Point, Labeled } from "geo";
-		const p: Point = origin();
+		const p: Point = origin()!;
 		const l: Labeled = { label: "a", weight: 1 };
 		p.x + p.norm() + l.weight
 	`, RunOptions{})
