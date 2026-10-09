@@ -291,12 +291,21 @@ func (it *InferType) typeNode() {}
 type TypePredicateType struct {
 	ParameterName string // The parameter being tested (e.g., "x" in "x is string")
 	Type          Type   // The type being tested for
+	// Asserts marks an assertion signature (`asserts x is T`, or bare
+	// `asserts x`, whose Type is unknown): it narrows after the call returns.
+	Asserts bool
 }
 
 func (tpt *TypePredicateType) String() string {
 	typeStr := "unknown"
 	if tpt.Type != nil {
 		typeStr = tpt.Type.String()
+	}
+	if tpt.Asserts {
+		if tpt.Type == Unknown {
+			return "asserts " + tpt.ParameterName
+		}
+		return fmt.Sprintf("asserts %s is %s", tpt.ParameterName, typeStr)
 	}
 	return fmt.Sprintf("%s is %s", tpt.ParameterName, typeStr)
 }

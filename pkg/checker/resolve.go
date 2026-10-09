@@ -1920,6 +1920,7 @@ func (c *Checker) resolveTypePredicateExpression(node *parser.TypePredicateExpre
 	return &types.TypePredicateType{
 		ParameterName: node.Parameter.Value,
 		Type:          predicateType,
+		Asserts:       node.Asserts,
 	}
 }
 

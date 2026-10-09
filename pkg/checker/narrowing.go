@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
@@ -1264,6 +1265,15 @@ func (c *Checker) applyInvertedTypeNarrowing(guard *TypeGuard) *Environment {
 		}
 	}
 
+	// A unit type compared unequal to itself leaves nothing: after
+	// `k !== "a" && k !== "b"` over "a" | "b" the second step sees k: "b".
+	if guard.NarrowedType != nil && isUnitType(originalType) && types.IsIdenticalType(originalType, guard.NarrowedType) {
+		narrowedEnv := NewEnclosedEnvironment(c.env)
+		if narrowedEnv.Define(guard.VariableName, types.Never, isConst) {
+			return narrowedEnv
+		}
+	}
+
 	// For literal narrowing on non-union types, the else branch doesn't provide useful narrowing
 	// (if x is string and we check x === "foo", in the else branch x is still string, just not "foo")
 	// But for typeof narrowing on unknown, the else branch is still useful
@@ -2453,4 +2463,52 @@ func (c *Checker) falsyNullishGuard(name string) *TypeGuard {
 		return nil
 	}
 	return &TypeGuard{VariableName: name, NarrowedType: types.NewUnionType(nullish...)}
+}
+
+// isUnitType reports whether t has exactly one value: a literal type, null or
+// undefined.
+func isUnitType(t types.Type) bool {
+	if t == types.Null || t == types.Undefined {
+		return true
+	}
+	_, ok := t.(*types.LiteralType)
+	return ok
+}
+
+// applyAssertionNarrowing narrows for the rest of the enclosing block after an
+// expression statement that calls an assertion function: the call returning
+// means `asserts x is T` held (or, for a bare `asserts x`, that x is truthy).
+func (c *Checker) applyAssertionNarrowing(expr parser.Expression) {
+	call, ok := expr.(*parser.CallExpression)
+	if !ok {
+		return
+	}
+	functionType := call.Function.GetComputedType()
+	if ident, ok := call.Function.(*parser.Identifier); ok {
+		if envType, _, found := c.env.Resolve(ident.Value); found {
+			functionType = envType
+		}
+	}
+	if functionType == nil {
+		return
+	}
+	predSig := extractTypePredicateFromType(functionType)
+	if predSig == nil || predSig.predicate == nil || !predSig.predicate.Asserts {
+		return
+	}
+	guard := c.detectTypeGuard(call)
+	if guard == nil {
+		return
+	}
+	var env *Environment
+	if predSig.predicate.Type == types.Unknown {
+		if !strings.Contains(guard.VariableName, ".") {
+			env = c.applyTruthinessNarrowing(guard.VariableName)
+		}
+	} else {
+		env = c.applyTypeNarrowing(guard)
+	}
+	if env != nil {
+		c.env = env
+	}
 }
