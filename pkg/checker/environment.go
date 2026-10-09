@@ -664,3 +664,17 @@ func (e *Environment) ResolveWithFallback(name string) (types.Type, bool, bool) 
 	debugPrintf("// [Env ResolveWithFallback] '%s' not found anywhere\n", name)
 	return nil, false, false
 }
+
+// PrimitivePrototypeNames lists the members of a primitive's prototype
+// ("string", "number", "array", ...), sorted.
+func (e *Environment) PrimitivePrototypeNames(primitiveName string) []string {
+	for current := e; current != nil; current = current.outer {
+		if current.primitivePrototypes != nil {
+			if proto, ok := current.primitivePrototypes[primitiveName]; ok {
+				return types.SortedPropertyNames(proto.Properties)
+			}
+			return nil
+		}
+	}
+	return nil
+}

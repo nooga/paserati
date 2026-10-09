@@ -52,6 +52,9 @@ const (
 	TS2366  = "TS2366"  // Function lacks ending return statement and return type does not include 'undefined'
 	TS2420  = "TS2420"  // Class 'X' incorrectly implements interface 'Y'
 	TS2678  = "TS2678"  // Type 'X' is not comparable to type 'Y'
+	TS2551  = "TS2551"  // Property 'X' does not exist on type 'Y'. Did you mean 'Z'?
+	TS7006  = "TS7006"  // Parameter 'x' implicitly has an 'any' type
+	TS7019  = "TS7019"  // Rest parameter 'x' implicitly has an 'any[]' type
 	TS2322  = "TS2322"  // Type 'X' is not assignable to type 'Y'
 	TS2335  = "TS2335"  // 'super' can only be referenced in a derived class
 	TS2337  = "TS2337"  // Super calls are not permitted outside constructors or in nested functions inside constructors

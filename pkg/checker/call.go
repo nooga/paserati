@@ -551,6 +551,10 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	}
 
 	funcNodeType = c.stripNullishCallee(node, funcNodeType)
+	c.markContextuallyTypedArguments(node.Arguments, funcNodeType)
+	if c.noImplicitAny {
+		c.markFunctionsUnder(node.Function, 5) // an immediately invoked function takes its parameter types from the arguments
+	}
 
 	if funcNodeType == types.Any {
 		// Allow calling 'any', result is 'any'. Check args against 'any'.
@@ -2118,4 +2122,146 @@ func hasPrimitiveConstraint(constraint types.Type) bool {
 	}
 	return constraint == types.String || constraint == types.Number || constraint == types.Boolean ||
 		constraint == types.BigInt || constraint == types.Symbol
+}
+
+// markContextuallyTypedArguments records the unannotated parameters of function
+// arguments that sit in a function-typed parameter position of the callee: they
+// are contextually typed, so noImplicitAny does not apply to them even when the
+// built-in's own typing leaves them as any.
+func (c *Checker) markContextuallyTypedArguments(args []parser.Expression, callee types.Type) {
+	if !c.noImplicitAny {
+		return
+	}
+	var sigs []*types.Signature
+	untyped := callee == types.Any
+	switch t := callee.(type) {
+	case *types.ObjectType:
+		sigs = append(append(sigs, t.CallSignatures...), t.ConstructSignatures...)
+	case *types.GenericType:
+		if body, ok := t.Body.(*types.ObjectType); ok {
+			sigs = append(append(sigs, body.CallSignatures...), body.ConstructSignatures...)
+		}
+	}
+	for i, arg := range args {
+		var params []*parser.Parameter
+		var rest *parser.RestParameter
+		switch fn := arg.(type) {
+		case *parser.ArrowFunctionLiteral:
+			params, rest = fn.Parameters, fn.RestParameter
+		case *parser.FunctionLiteral:
+			params, rest = fn.Parameters, fn.RestParameter
+		default:
+			continue
+		}
+		if untyped {
+			// A callee we could not type (an import(), a loosely typed
+			// built-in) may well give its callbacks a signature.
+			c.markParametersContextual(params, rest)
+			continue
+		}
+		for _, sig := range sigs {
+			var pt types.Type
+			switch {
+			case i < len(sig.ParameterTypes):
+				pt = sig.ParameterTypes[i]
+			case sig.IsVariadic && sig.RestParameterType != nil:
+				if arr, ok := sig.RestParameterType.(*types.ArrayType); ok {
+					pt = arr.ElementType
+				}
+			}
+			if pt == nil {
+				continue
+			}
+			// An `any` parameter counts too: built-in callbacks are often
+			// typed that loosely, and flagging their arguments would be noise.
+			if pt == types.Any || c.parameterTypeIsFunctionLike(pt) {
+				c.markParametersContextual(params, rest)
+				break
+			}
+		}
+	}
+}
+
+// parameterTypeIsFunctionLike reports whether a parameter type can supply a
+// contextual signature: a callable type, a type parameter, or a union of such.
+func (c *Checker) parameterTypeIsFunctionLike(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.ObjectType:
+		return tt.IsCallable()
+	case *types.GenericType:
+		return c.parameterTypeIsFunctionLike(tt.Body)
+	case *types.TypeParameterType:
+		return true
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if c.parameterTypeIsFunctionLike(m) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// markContextuallyTypedFunction marks the unannotated parameters of the function
+// expressions an expression contains in the positions a contextual type reaches
+// (the expression itself, object literal members, array elements, either side
+// of `??`, `||`, `&&` and `?:`), for noImplicitAny.
+func (c *Checker) markContextuallyTypedFunction(node parser.Node, expected types.Type) {
+	if !c.noImplicitAny || expected == nil || expected == types.Any || expected == types.Unknown {
+		return
+	}
+	c.markFunctionsUnder(node, 0)
+}
+
+func (c *Checker) markFunctionsUnder(node parser.Node, depth int) {
+	if node == nil || depth > 6 {
+		return
+	}
+	switch n := node.(type) {
+	case *parser.ArrowFunctionLiteral:
+		c.markParametersContextual(n.Parameters, n.RestParameter)
+	case *parser.FunctionLiteral:
+		c.markParametersContextual(n.Parameters, n.RestParameter)
+	case *parser.ShorthandMethod:
+		c.markParametersContextual(n.Parameters, n.RestParameter)
+	case *parser.MethodDefinition:
+		if n.Value != nil {
+			c.markParametersContextual(n.Value.Parameters, n.Value.RestParameter)
+		}
+	case *parser.ObjectLiteral:
+		for _, prop := range n.Properties {
+			c.markFunctionsUnder(prop.Value, depth+1)
+		}
+	case *parser.ArrayLiteral:
+		for _, elem := range n.Elements {
+			c.markFunctionsUnder(elem, depth+1)
+		}
+	case *parser.TernaryExpression:
+		c.markFunctionsUnder(n.Consequence, depth+1)
+		c.markFunctionsUnder(n.Alternative, depth+1)
+	case *parser.InfixExpression:
+		switch n.Operator {
+		case "??", "||", "&&", ",":
+			c.markFunctionsUnder(n.Left, depth+1)
+			c.markFunctionsUnder(n.Right, depth+1)
+		}
+	case *parser.SatisfiesExpression:
+		c.markFunctionsUnder(n.Expression, depth+1)
+	case *parser.TypeAssertionExpression:
+		c.markFunctionsUnder(n.Expression, depth+1)
+	}
+}
+
+func (c *Checker) markParametersContextual(params []*parser.Parameter, rest *parser.RestParameter) {
+	if c.contextualParams == nil {
+		c.contextualParams = make(map[parser.Node]bool)
+	}
+	for _, p := range params {
+		c.contextualParams[p] = true
+		delete(c.implicitAnyParams, p) // it may have been checked already
+	}
+	if rest != nil {
+		c.contextualParams[rest] = true
+		delete(c.implicitAnyParams, rest)
+	}
 }

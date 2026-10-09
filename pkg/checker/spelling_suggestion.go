@@ -8,6 +8,7 @@ import (
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/types"
 )
 
 // getSpellingSuggestion ports TypeScript's core.ts `getSpellingSuggestion`
@@ -263,4 +264,60 @@ func (c *Checker) addCannotFindTypeNameError(node parser.Node, env *Environment,
 		candidates = append(candidates, cand)
 	}
 	c.reportCannotFindName(node, name, candidates)
+}
+
+// reportPropertyNotFound reports a missing property on a member access:
+// TS2339, or TS2551 with a "Did you mean" when a member of the object's type
+// is close enough to the written name. typeText is how the type prints.
+func (c *Checker) reportPropertyNotFound(propNode parser.Node, object parser.Expression, name, typeText string) {
+	msg := fmt.Sprintf("Property '%s' does not exist on type '%s'.", name, typeText)
+	if object != nil {
+		if suggestion := getSpellingSuggestion(name, c.memberNames(object.GetComputedType())); suggestion != "" {
+			c.addErrorWithCode(propNode, errors.TS2551, msg+fmt.Sprintf(" Did you mean '%s'?", suggestion))
+			return
+		}
+	}
+	c.addErrorWithCode(propNode, errors.TS2339, msg)
+}
+
+// memberNames lists the property names a value of type t has, for spelling
+// suggestions: declared and inherited members, and the members of the
+// prototype a primitive or array borrows.
+func (c *Checker) memberNames(t types.Type) []string {
+	if t == nil {
+		return nil
+	}
+	t = c.apparentType(types.GetWidenedType(t))
+	var names []string
+	add := func(m map[string]types.Type) {
+		for _, name := range types.SortedPropertyNames(m) {
+			if !strings.HasPrefix(name, "__COMPUTED_PROPERTY__") && !strings.HasPrefix(name, "@@") && !strings.HasPrefix(name, "#") {
+				names = append(names, name)
+			}
+		}
+	}
+	protoNames := ""
+	switch tt := t.(type) {
+	case *types.ObjectType:
+		add(tt.GetEffectiveProperties())
+	case *types.ArrayType, *types.TupleType:
+		protoNames = "array"
+		names = append(names, "length")
+	default:
+		switch t {
+		case types.String:
+			protoNames = "string"
+			names = append(names, "length")
+		case types.Number:
+			protoNames = "number"
+		case types.Boolean:
+			protoNames = "boolean"
+		case types.BigInt:
+			protoNames = "bigint"
+		}
+	}
+	if protoNames != "" {
+		names = append(names, c.env.PrimitivePrototypeNames(protoNames)...)
+	}
+	return names
 }

@@ -2,6 +2,8 @@ package checker
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
@@ -487,6 +489,7 @@ func (c *Checker) checkParameterDefaults(ctx *FunctionCheckContext, paramTypes [
 // checkFunctionBody visits the function body and handles return type inference
 func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnType types.Type) types.Type {
 	c.validateParamListBasic(ctx.Parameters)
+	c.noteImplicitAnyParameters(ctx)
 
 	// Set return context
 	outerExpectedReturnType := c.currentExpectedReturnType
@@ -717,4 +720,63 @@ func dropThisParam(sig *types.Signature, params []*parser.Parameter) {
 	if len(sig.OptionalParams) > 0 {
 		sig.OptionalParams = sig.OptionalParams[1:]
 	}
+}
+
+// implicitAnyParam is a parameter that so far has no written, initial or
+// contextual type.
+type implicitAnyParam struct {
+	name *parser.Identifier
+	rest bool
+}
+
+// noteImplicitAnyParameters records the parameters of a function being checked
+// that have no written type, no initializer and no contextual type
+// (noImplicitAny). A function may be checked more than once, first without and
+// then with a contextual signature, so the report waits for the end of the
+// program (reportImplicitAnyParameters) and a contextual visit withdraws it.
+func (c *Checker) noteImplicitAnyParameters(ctx *FunctionCheckContext) {
+	if !c.noImplicitAny {
+		return
+	}
+	if c.implicitAnyParams == nil {
+		c.implicitAnyParams = make(map[parser.Node]implicitAnyParam)
+	}
+	for i, param := range ctx.Parameters {
+		if param == nil || param.IsThis || param.Name == nil || param.TypeAnnotation != nil || param.DefaultValue != nil ||
+			param.Pattern != nil || param.IsDestructuring || strings.HasPrefix(param.Name.Value, "__destructured_param_") {
+			continue
+		}
+		if (i < len(ctx.ContextualParameterTypes) && ctx.ContextualParameterTypes[i] != nil) || c.contextualParams[param] {
+			delete(c.implicitAnyParams, param)
+			continue
+		}
+		c.implicitAnyParams[param] = implicitAnyParam{name: param.Name}
+	}
+	if rest := ctx.RestParameter; rest != nil && rest.Name != nil && rest.TypeAnnotation == nil {
+		if len(ctx.ContextualParameterTypes) > len(ctx.Parameters) || c.contextualParams[rest] {
+			delete(c.implicitAnyParams, rest)
+		} else {
+			c.implicitAnyParams[rest] = implicitAnyParam{name: rest.Name, rest: true}
+		}
+	}
+}
+
+// reportImplicitAnyParameters reports TS7006 / TS7019 for every parameter
+// still without a type once the whole program has been checked.
+func (c *Checker) reportImplicitAnyParameters() {
+	pending := make([]implicitAnyParam, 0, len(c.implicitAnyParams))
+	for _, p := range c.implicitAnyParams {
+		pending = append(pending, p)
+	}
+	sort.Slice(pending, func(i, j int) bool {
+		return parser.GetTokenFromNode(pending[i].name).StartPos < parser.GetTokenFromNode(pending[j].name).StartPos
+	})
+	for _, p := range pending {
+		if p.rest {
+			c.addErrorWithCode(p.name, errors.TS7019, fmt.Sprintf("Rest parameter '%s' implicitly has an 'any[]' type.", p.name.Value))
+		} else {
+			c.addErrorWithCode(p.name, errors.TS7006, fmt.Sprintf("Parameter '%s' implicitly has an 'any' type.", p.name.Value))
+		}
+	}
+	c.implicitAnyParams = nil
 }

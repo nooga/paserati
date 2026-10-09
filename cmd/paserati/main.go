@@ -23,6 +23,9 @@ var (
 	buildDate = "unknown"
 )
 
+// noImplicitAny is the -noImplicitAny flag, read where each Paserati is made.
+var noImplicitAny bool
+
 func main() {
 	// Define flags
 	versionFlag := flag.Bool("version", false, "Print version information and exit")
@@ -33,11 +36,13 @@ func main() {
 	bytecodeFlag := flag.Bool("bytecode", false, "Show compiled bytecode before execution")
 	disasmFilterFlag := flag.String("disasm-filter", "", "Filter disassembly output by function name")
 	astDumpFlag := flag.Bool("ast", false, "Show AST dump before type checking")
+	noImplicitAnyFlag := flag.Bool("noImplicitAny", false, "Report parameters and rest parameters with an implicit any type (TS7006, TS7019)")
 	noTypecheckFlag := flag.Bool("no-typecheck", false, "Ignore TypeScript type errors (like paserati-test262)")
 	cpuProfileFlag := flag.String("cpuprofile", "", "Write CPU profile to file (pprof)")
 	memProfileFlag := flag.String("memprofile", "", "Write heap profile to file (pprof)")
 
 	flag.Parse() // Parses the command-line flags
+	noImplicitAny = *noImplicitAnyFlag
 
 	// Handle version flag
 	if *versionFlag {
@@ -124,6 +129,7 @@ func main() {
 func runExpression(expr string, showCacheStats bool, showBytecode bool) {
 	// Create a new Paserati session
 	paserati := driver.NewPaserati()
+	paserati.SetNoImplicitAny(noImplicitAny)
 
 	// Run the expression with options
 	options := driver.RunOptions{ShowCacheStats: showCacheStats, ShowBytecode: showBytecode}
@@ -152,6 +158,7 @@ func exitOnUnhandledRejection(paserati *driver.Paserati) {
 
 func runExpressionWithTypes(expr string, showCacheStats bool, showBytecode bool, ignoreTypes bool, disasmFilter string) {
 	paserati := driver.NewPaserati()
+	paserati.SetNoImplicitAny(noImplicitAny)
 	exitOnUnhandledRejection(paserati)
 	if ignoreTypes {
 		// Completely skip type checking for pure JS mode
@@ -204,6 +211,7 @@ func runFileWithTypes(filename string, scriptArgs []string, showCacheStats bool,
 	initializers := builtins.GetStandardInitializers()
 	initializers = append(initializers, driver.NewProcessInitializer(argv))
 	paserati := driver.NewPaseratiWithInitializers(initializers)
+	paserati.SetNoImplicitAny(noImplicitAny)
 	exitOnUnhandledRejection(paserati)
 	if ignoreTypes {
 		// Completely skip type checking for pure JS mode
@@ -224,6 +232,7 @@ func runRepl(showCacheStats bool, showBytecode bool) {
 
 	// Create a persistent Paserati session for the REPL
 	paserati := driver.NewPaserati()
+	paserati.SetNoImplicitAny(noImplicitAny)
 
 	fmt.Println("Paserati (Ctrl+C to exit)")
 	if showCacheStats {
@@ -264,6 +273,7 @@ func runRepl(showCacheStats bool, showBytecode bool) {
 func runReplWithTypes(showCacheStats bool, showBytecode bool, ignoreTypes bool, disasmFilter string) {
 	reader := bufio.NewReader(os.Stdin)
 	paserati := driver.NewPaserati()
+	paserati.SetNoImplicitAny(noImplicitAny)
 	if ignoreTypes {
 		// Completely skip type checking for pure JS mode
 		paserati.SetSkipTypeCheck(true)

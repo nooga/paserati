@@ -122,6 +122,38 @@ func (c *Checker) checkArrayLiteralWithContext(node *parser.ArrayLiteral, contex
 			maxAllowed = -1 // No upper limit with rest element
 		}
 
+		// A literal of the wrong length is still a tuple (`[string, number,
+		// number]`), which is what the mismatch then reports.
+		if tooShort := len(node.Elements) < minRequired; tooShort || (maxAllowed >= 0 && len(node.Elements) > maxAllowed) {
+			hasSpread := false
+			for _, elem := range node.Elements {
+				if _, isSpread := elem.(*parser.SpreadElement); isSpread {
+					hasSpread = true
+				}
+			}
+			if !hasSpread {
+				elemTypes := make([]types.Type, len(node.Elements))
+				for i, elemNode := range node.Elements {
+					var ctx *ContextualType
+					if i < len(tupleType.ElementTypes) {
+						ctx = &ContextualType{ExpectedType: tupleType.ElementTypes[i], IsContextual: true}
+					}
+					if ctx != nil {
+						c.visitWithContext(elemNode, ctx)
+					} else {
+						c.visit(elemNode)
+					}
+					et := elemNode.GetComputedType()
+					if et == nil {
+						et = types.Any
+					}
+					elemTypes[i] = types.GetWidenedType(et)
+				}
+				node.SetComputedType(&types.TupleType{ElementTypes: elemTypes})
+				return
+			}
+		}
+
 		// Check element count
 		if len(node.Elements) < minRequired {
 			debugPrintf("// [Checker ArrayLitContext] Not enough elements: expected at least %d, got %d. Using regular array checking.\n", minRequired, len(node.Elements))
@@ -880,6 +912,9 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		} else if methodDef, isMethodDef := prop.Value.(*parser.MethodDefinition); isMethodDef {
 			// Handle getter/setter methods
 			debugPrintf("// [Checker ObjectLit] Visiting method definition '%s' (kind: %s) with this context\n", keyName, methodDef.Kind)
+			if methodDef.Kind == "setter" && methodDef.Value != nil {
+				c.markParametersContextual(methodDef.Value.Parameters, nil) // typed by the getter
+			}
 			c.visit(prop.Value)
 			valueType := prop.Value.GetComputedType()
 			if valueType == nil {
@@ -1251,7 +1286,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		case *types.ArrayType, *types.TupleType:
 			// `readonly T[]` reads like `T[]` minus the mutators (#637).
 			if readonlyArrayMutators[propertyName] {
-				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, ro.String()))
+				c.reportPropertyNotFound(node.Property, node.Object, propertyName, ro.String())
 				node.SetComputedType(types.Any) // already reported; don't cascade
 				return
 			}
@@ -1277,7 +1312,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			if methodType := c.env.GetPrimitivePrototypeMethodType("string", propertyName); methodType != nil {
 				resultType = methodType
 			} else {
-				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'string'.", propertyName))
+				c.reportPropertyNotFound(node.Property, node.Object, propertyName, "string")
 				// resultType remains types.Never
 			}
 		}
@@ -1286,7 +1321,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		if methodType := c.env.GetPrimitivePrototypeMethodType("number", propertyName); methodType != nil {
 			resultType = methodType
 		} else {
-			c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'number'.", propertyName))
+			c.reportPropertyNotFound(node.Property, node.Object, propertyName, "number")
 			// resultType remains types.Never
 		}
 	} else if widenedObjectType == types.RegExp {
@@ -1294,7 +1329,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		if methodType := c.env.GetPrimitivePrototypeMethodType("RegExp", propertyName); methodType != nil {
 			resultType = methodType
 		} else {
-			c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'RegExp'.", propertyName))
+			c.reportPropertyNotFound(node.Property, node.Object, propertyName, "RegExp")
 			// resultType remains types.Never
 		}
 	} else if widenedObjectType == types.Symbol {
@@ -1302,7 +1337,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		if methodType := c.env.GetPrimitivePrototypeMethodType("symbol", propertyName); methodType != nil {
 			resultType = methodType
 		} else {
-			c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type 'symbol'.", propertyName))
+			c.reportPropertyNotFound(node.Property, node.Object, propertyName, "symbol")
 			// resultType remains types.Never
 		}
 	} else {
@@ -1317,7 +1352,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					// If the method is generic, instantiate it with the array's element type
 					resultType = c.instantiateGenericMethod(methodType, obj.ElementType)
 				} else {
-					c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
+					c.reportPropertyNotFound(node.Property, node.Object, propertyName, obj.String())
 					// resultType remains types.Never
 				}
 			}
@@ -1327,7 +1362,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			} else if methodType := c.env.GetPrimitivePrototypeMethodType("array", propertyName); methodType != nil {
 				resultType = c.instantiateGenericMethod(methodType, getTupleElementUnion(obj))
 			} else {
-				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
+				c.reportPropertyNotFound(node.Property, node.Object, propertyName, obj.String())
 			}
 		case *types.ObjectType: // <<< MODIFIED CASE
 			// Check if this is a function and we're accessing 'prototype'
@@ -1386,7 +1421,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 									debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
 								} else {
 									// Property not found
-									c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
+									c.reportPropertyNotFound(node.Property, node.Object, propertyName, obj.String())
 									// resultType remains types.Never
 								}
 							}
@@ -1397,7 +1432,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 								debugPrintf("// [Checker MemberExpr] Found object prototype method '%s': %s\n", propertyName, methodType.String())
 							} else {
 								// Property not found
-								c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
+								c.reportPropertyNotFound(node.Property, node.Object, propertyName, obj.String())
 								// resultType remains types.Never
 							}
 						}
@@ -1473,7 +1508,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						// Check if property is optional
 						isOptional := expandedObj.OptionalProperties != nil && expandedObj.OptionalProperties[propertyName]
 						if !isOptional {
-							c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
+							c.reportPropertyNotFound(node.Property, node.Object, propertyName, obj.String())
 							resultType = types.Never
 						} else {
 							resultType = types.Undefined
@@ -1639,7 +1674,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					resultType = types.NewUnionType(possibleTypes...)
 				}
 			} else {
-				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, types.NewUnionType(unionMembers...).String()))
+				c.reportPropertyNotFound(node.Property, node.Object, propertyName, types.NewUnionType(unionMembers...).String())
 				resultType = types.Never
 			}
 		case *types.EnumType:
@@ -1669,7 +1704,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						resultType = propType
 						debugPrintf("// [Checker MemberExpr] Found property '%s' on resolved type: %s\n", propertyName, propType.String())
 					} else {
-						c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, resolvedType.String()))
+						c.reportPropertyNotFound(node.Property, node.Object, propertyName, resolvedType.String())
 						resultType = types.Never
 					}
 				} else {
@@ -2229,7 +2264,7 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 				baseResultType = c.instantiateGenericMethod(methodType, obj.ElementType)
 			} else {
 				// Array methods should be resolved through the builtins system
-				c.addErrorWithCode(node.Property, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", propertyName, obj.String()))
+				c.reportPropertyNotFound(node.Property, node.Object, propertyName, obj.String())
 				// baseResultType remains types.Never
 			}
 		case *types.ObjectType:
@@ -2466,6 +2501,8 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			constructorType = instantiatedConstructorType
 		}
 	}
+
+	c.markContextuallyTypedArguments(node.Arguments, constructorType)
 
 	// Check if trying to instantiate an abstract class
 	if ident, ok := node.Constructor.(*parser.Identifier); ok {
@@ -3095,6 +3132,9 @@ func (c *Checker) instantiateGenericMethod(methodType types.Type, elementType ty
 
 // checkYieldExpression handles type checking for yield expressions in generator functions
 func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
+	if c.noImplicitAny && node.Value != nil {
+		c.markFunctionsUnder(node.Value, 0) // typed by the generator's contextual yield type
+	}
 	// Outside a generator body the parser has already reported TS1163. tsc's
 	// checkYieldExpression then returns any without checking the operand; we
 	// still check it (an unknown name there is a real bug) unless in tsc mode.

@@ -14,6 +14,12 @@ import (
 // if it were the argument directly.
 func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContext *ContextualType) {
 	c.visit(node.Left)
+	if c.noImplicitAny && (node.Operator == "||" || node.Operator == "??") {
+		// `f || (x => ...)`: the left operand types the right one.
+		if lt := node.Left.GetComputedType(); lt != nil && lt != types.Any && c.parameterTypeIsFunctionLike(types.RemoveNullishTypes(lt)) {
+			c.markFunctionsUnder(node.Right, 0)
+		}
+	}
 
 	// For && expressions, apply narrowing from left operand before checking right
 	// This ensures that in `isObjectRecord(node) && node["fn"]`, the right side
@@ -136,12 +142,14 @@ func (c *Checker) checkInfixExpression(node *parser.InfixExpression, rightContex
 				(widenedLeftType == types.Number) {
 				// Number + boolean/null/undefined → number
 				resultType = types.Number
-			} else if c.isObjectType(widenedLeftType) || c.isObjectType(widenedRightType) {
-				// JavaScript allows objects in addition via ToPrimitive conversion
-				// Object + anything or anything + Object → depends on ToPrimitive result
-				// If ToPrimitive returns string, result is string; otherwise number
-				// Conservative: assume string since that's most common for objects
+			} else if (widenedLeftType == types.String && widenedRightType != types.Symbol) ||
+				(widenedRightType == types.String && widenedLeftType != types.Symbol) {
+				// string + anything concatenates
 				resultType = types.String
+			} else if c.typeContainsTypeParameter(widenedLeftType) || c.typeContainsTypeParameter(widenedRightType) {
+				// A type parameter (often a built-in's imperfectly typed
+				// callback parameter) may be anything: stay lenient.
+				resultType = types.Any
 			} else {
 				c.reportOperatorNotApplicable(node, widenedLeftType, widenedRightType)
 				// Keep resultType = types.Any (default)
