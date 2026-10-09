@@ -66,9 +66,9 @@ func TestRuntimeErrorSurvivesBrokenFrameCount(t *testing.T) {
 func TestRuntimeErrorFrameSyntheticPositionUsesColumnsTable(t *testing.T) {
 	chunk := &Chunk{
 		Code:    []byte{byte(OpNop), byte(OpNop), byte(OpNop)},
-		Lines:   []int{5, 5, 5},
 		Columns: []ColumnEntry{{Offset: 0, Column: 9}},
 	}
+	chunk.SetLines(5, 5, 5)
 	fn := &FunctionObject{Name: "foo", Chunk: chunk}
 	closure := &ClosureObject{Fn: fn}
 
@@ -101,10 +101,10 @@ func TestRuntimeErrorFrameSyntheticPositionUsesColumnsTable(t *testing.T) {
 // still fall back to column 1 rather than 0 or some other nonsense value.
 func TestRuntimeErrorFrameSyntheticPositionFallsBackWithoutColumnsTable(t *testing.T) {
 	chunk := &Chunk{
-		Code:  []byte{byte(OpNop), byte(OpNop)},
-		Lines: []int{7, 7},
+		Code: []byte{byte(OpNop), byte(OpNop)},
 		// Columns intentionally left empty.
 	}
+	chunk.SetLines(7, 7)
 	fn := &FunctionObject{Name: "foo", Chunk: chunk}
 	closure := &ClosureObject{Fn: fn}
 
