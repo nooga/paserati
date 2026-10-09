@@ -2214,12 +2214,14 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 
 	// Handle object types with specific string literal keys
 	if objType, ok := objectType.(*types.ObjectType); ok {
+		// Include members inherited from base types (classes, interfaces)
+		props := objType.GetEffectiveProperties()
 		// Case: Object["propertyName"] where "propertyName" is a string literal
 		if literalType, ok := indexType.(*types.LiteralType); ok {
 			if literalType.Value.Type() == vm.TypeString {
 				strVal := literalType.Value.AsString()
 				// Look up the property directly
-				if propType, exists := objType.Properties[strVal]; exists {
+				if propType, exists := props[strVal]; exists {
 					return propType
 				}
 				// Property doesn't exist - this could be an error or return never/undefined
@@ -2233,8 +2235,8 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 			if keyofType.OperandType.Equals(objectType) {
 				// Collect all property types
 				var propTypes []types.Type
-				for _, propName := range types.SortedPropertyNames(objType.Properties) {
-					propTypes = append(propTypes, objType.Properties[propName])
+				for _, propName := range types.SortedPropertyNames(props) {
+					propTypes = append(propTypes, props[propName])
 				}
 				if len(propTypes) == 0 {
 					return types.Never // No properties means never
@@ -2253,7 +2255,7 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 				if literalType, ok := memberType.(*types.LiteralType); ok {
 					if literalType.Value.Type() == vm.TypeString {
 						strVal := literalType.Value.AsString()
-						if propType, exists := objType.Properties[strVal]; exists {
+						if propType, exists := props[strVal]; exists {
 							resultTypes = append(resultTypes, propType)
 						}
 					}
