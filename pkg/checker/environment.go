@@ -164,6 +164,12 @@ func NewGlobalEnvironment(initializers []builtins.BuiltinInitializer) *Environme
 	// Set this as the global environment for prototype method resolution
 	// Note: This is used by the types package for property resolution
 	globalEnvironment.Store(env)
+	types.PrimitivePrototypeMembers = func(kind string) map[string]types.Type {
+		if proto, ok := env.primitivePrototypes[kind]; ok {
+			return proto.Properties
+		}
+		return nil
+	}
 
 	return env
 }

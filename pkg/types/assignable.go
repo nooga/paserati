@@ -266,6 +266,13 @@ func isAssignable(source, target Type) bool {
 		}
 	}
 
+	// A primitive, array or tuple has the members of its wrapper type, so it
+	// satisfies an object type that asks only for those (`string` is a
+	// `{ length: number }`).
+	if tgt, ok := target.(*ObjectType); ok && apparentMembersAssignable(source, tgt) {
+		return true
+	}
+
 	// Check using type-specific Equals method for complex types
 	if source.Equals(target) {
 		return true
@@ -1175,4 +1182,78 @@ func isMutableArrayLike(t Type) bool {
 		return true
 	}
 	return false
+}
+
+// PrimitivePrototypeMembers supplies the members of a primitive's wrapper
+// prototype ("string", "number", "boolean", "bigint", "array"). The checker
+// installs it once the built-ins are declared.
+var PrimitivePrototypeMembers func(kind string) map[string]Type
+
+// apparentMembersAssignable reports whether source's apparent type (the wrapper
+// prototype of a primitive, array or tuple) satisfies the plain object type tgt.
+func apparentMembersAssignable(source Type, tgt *ObjectType) bool {
+	if PrimitivePrototypeMembers == nil || tgt.IsCallable() || len(tgt.ConstructSignatures) > 0 || len(tgt.IndexSignatures) > 0 {
+		return false
+	}
+	kind := ""
+	switch src := source.(type) {
+	case *ArrayType, *TupleType:
+		kind = "array"
+	case *LiteralType:
+		switch src.Value.Type() {
+		case vm.TypeString:
+			kind = "string"
+		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+			kind = "number"
+		case vm.TypeBoolean:
+			kind = "boolean"
+		}
+	default:
+		switch source {
+		case String:
+			kind = "string"
+		case Number:
+			kind = "number"
+		case Boolean:
+			kind = "boolean"
+		case BigInt:
+			kind = "bigint"
+		}
+	}
+	if kind == "" {
+		return false
+	}
+	members := PrimitivePrototypeMembers(kind)
+	if members == nil {
+		return false
+	}
+	props := tgt.GetEffectiveProperties()
+	shared := false
+	for _, name := range SortedPropertyNames(props) {
+		want := props[name]
+		have, ok := members[name]
+		if name == "length" && (kind == "string" || kind == "array") {
+			have, ok = Number, true
+		}
+		if ok {
+			shared = true
+		}
+		if tgt.IsPropertyOptional(name) {
+			continue
+		}
+		if !ok {
+			return false
+		}
+		if _, generic := have.(*GenericType); generic || want == nil {
+			continue
+		}
+		if !isAssignable(have, want) {
+			return false
+		}
+	}
+	// A weak target (all optional) needs at least one member in common.
+	if IsWeakObject(tgt) && !shared {
+		return false
+	}
+	return true
 }
