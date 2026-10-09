@@ -915,6 +915,9 @@ func (c *Checker) checkSwitchStatement(node *parser.SwitchStatement) {
 
 			if incompatible {
 				c.addError(caseClause.Condition, fmt.Sprintf("this case expression type (%s) is not comparable to the switch expression type (%s)", widenedCaseCondType, widenedSwitchExprType))
+			} else if !isAny && !isUnknown && c.caseComparisonDecidable(switchExprType, caseCondType) && !c.typesHaveOverlap(switchExprType, caseCondType) {
+				c.addErrorWithCode(caseClause.Condition, errors.TS2678, fmt.Sprintf(
+					"Type '%s' is not comparable to type '%s'.", caseCondType.String(), switchExprType.String()))
 			}
 			// --- End Comparability Check ---
 		}
@@ -1617,4 +1620,33 @@ func (c *Checker) reportInterfaceTypeParameterMismatch(g *types.GenericType, nod
 		c.addErrorWithCode(name, "TS2428", msg)
 	}
 	c.addErrorWithCode(node.Name, "TS2428", msg)
+}
+
+// caseComparisonDecidable reports whether TS2678 can be judged from the two
+// types alone: type parameters and intersections need the constraint-aware
+// comparability relation, which typesHaveOverlap does not model.
+func (c *Checker) caseComparisonDecidable(switchType, caseType types.Type) bool {
+	for _, t := range []types.Type{switchType, caseType} {
+		if c.typeContainsTypeParameter(t) {
+			return false
+		}
+		if hasIntersection(t) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasIntersection(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.IntersectionType:
+		return true
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if hasIntersection(m) {
+				return true
+			}
+		}
+	}
+	return false
 }
