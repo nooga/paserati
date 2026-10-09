@@ -749,7 +749,7 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 
 			c.validateOverrideMethod(method, superClass, className)
 
-			methodType := c.inferMethodType(method)
+			methodType := c.methodTypeWithOverloads(body, method, c.inferMethodType(method))
 
 			// Determine access level
 			accessLevel := c.getAccessLevel(method.IsPublic, method.IsPrivate, method.IsProtected)
@@ -1045,6 +1045,34 @@ func (c *Checker) inferMethodTypeFromSignature(methodSig *parser.MethodSignature
 	}
 
 	return types.NewFunctionType(signature)
+}
+
+// methodTypeWithOverloads returns the type callers see for a method. When the
+// method has overload signatures, those are its call signatures and the
+// implementation signature is not callable from outside; otherwise implType.
+func (c *Checker) methodTypeWithOverloads(body *parser.ClassBody, method *parser.MethodDefinition, implType types.Type) types.Type {
+	name, known := getMethodKeyString(method.Key)
+	if !known {
+		return implType
+	}
+	var sigs []*types.Signature
+	for _, sig := range body.MethodSigs {
+		if sig.IsAbstract || sig.Optional || sig.IsStatic != method.IsStatic || sig.Key == nil {
+			continue
+		}
+		if sigName, ok := getMethodKeyString(sig.Key); !ok || sigName != name {
+			continue
+		}
+		if obj, ok := c.inferMethodTypeFromSignature(sig).(*types.ObjectType); ok {
+			sigs = append(sigs, obj.CallSignatures...)
+		}
+	}
+	if len(sigs) == 0 {
+		return implType
+	}
+	result := types.NewObjectType()
+	result.CallSignatures = sigs
+	return result
 }
 
 // validateOverrideMethodSignature validates the usage of the override keyword for method signatures
@@ -1477,7 +1505,7 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 			c.setClassContext(className, types.AccessContextStaticMethod)
 			c.validateClassMemberOverride(method.Key, c.extractPropertyName(method.Key), true, method.IsOverride, false, className, classInstanceType)
 
-			methodType := c.inferMethodType(method)
+			methodType := c.methodTypeWithOverloads(body, method, c.inferMethodType(method))
 
 			// Determine access level
 			accessLevel := c.getAccessLevel(method.IsPublic, method.IsPrivate, method.IsProtected)

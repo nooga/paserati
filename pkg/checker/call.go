@@ -899,6 +899,34 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 		argTypes = append(argTypes, argType)
 	}
 
+	// Explicit type arguments select the overloads that take that many and
+	// instantiate them, as tsc does; the others are not candidates.
+	if len(node.TypeArguments) > 0 {
+		var candidates []*types.Signature
+		for _, sig := range objType.CallSignatures {
+			min, max, known := c.signatureTypeArgumentRange(sig)
+			if !known || len(node.TypeArguments) < min || len(node.TypeArguments) > max {
+				continue
+			}
+			typeParams := c.extractTypeParametersFromSignature(sig)
+			solution := make(map[*types.TypeParameter]types.Type, len(node.TypeArguments))
+			for i, typeArgExpr := range node.TypeArguments {
+				typeArg := c.resolveTypeAnnotation(typeArgExpr)
+				if typeArg == nil {
+					typeArg = types.Any
+				}
+				if i < len(typeParams) {
+					solution[typeParams[i]] = typeArg
+				}
+			}
+			candidates = append(candidates, c.substituteTypeParameters(sig, solution))
+		}
+		if len(candidates) > 0 {
+			objType = types.NewObjectType()
+			objType.CallSignatures = candidates
+		}
+	}
+
 	// Try to find the best matching signature
 	signatureIndex := -1
 	var resultType types.Type
