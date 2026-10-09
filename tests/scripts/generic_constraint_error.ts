@@ -11,4 +11,4 @@ interface Container<T extends Lengthable> {
 // This should fail - object missing length property
 let badContainer: Container<{value: string}>;
 
-// expect_compile_error: Type '{ value: string }' does not satisfy the constraint '{ length: number }'.
+// expect_compile_error: Type '{ value: string }' does not satisfy the constraint 'Lengthable'.

@@ -49,6 +49,14 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 		return
 	}
 
+	// An alias of an object type literal names that type: it prints as the
+	// alias, as tsc does.
+	if _, isLiteral := node.Type.(*parser.ObjectTypeExpression); isLiteral {
+		if obj, ok := aliasedType.(*types.ObjectType); ok && obj.DisplayName == "" && obj.GenericName == "" && !obj.IsInterface && obj.ClassMeta == nil {
+			obj.DisplayName = node.Name.Value
+		}
+	}
+
 	// 5. Define the alias in the CURRENT (global) environment
 	if !c.env.DefineTypeAlias(node.Name.Value, aliasedType) {
 		debugPrintf("// [Checker TypeAlias P1] WARNING: DefineTypeAlias failed for '%s'.\n", node.Name.Value)
@@ -129,6 +137,12 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 
 	// Restore environment
 	c.env = savedEnv
+
+	if _, isLiteral := node.Type.(*parser.ObjectTypeExpression); isLiteral {
+		if obj, ok := bodyType.(*types.ObjectType); ok && obj.DisplayName == "" && !obj.IsInterface && obj.ClassMeta == nil {
+			nameGenericType(obj, node.Name.Value, typeParams)
+		}
+	}
 
 	// 3. Create the GenericType
 	genericType := &types.GenericType{
@@ -223,6 +237,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			Properties:         make(map[string]types.Type),
 			OptionalProperties: make(map[string]bool),
 			IsInterface:        true,
+			DisplayName:        node.Name.Value,
 		}
 		if !c.env.DefineTypeAlias(node.Name.Value, interfaceType) {
 			debugPrintf("// [Checker Interface P1] WARNING: DefineTypeAlias failed for interface '%s'.\n", node.Name.Value)
@@ -232,6 +247,9 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 
 	if node.Doc != "" {
 		interfaceType.Doc = node.Doc
+	}
+	if interfaceType.DisplayName == "" && interfaceType.GenericName == "" && interfaceType.ClassMeta == nil {
+		interfaceType.DisplayName = node.Name.Value // a placeholder made before the declaration was reached
 	}
 
 	// Use the interface type's properties maps (either from placeholder or new)
@@ -582,6 +600,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 	if bodyType.OptionalProperties == nil {
 		bodyType.OptionalProperties = make(map[string]bool)
 	}
+	nameGenericType(bodyType, node.Name.Value, typeParams)
 	properties := bodyType.Properties
 	optionalProperties := bodyType.OptionalProperties
 	indexSignatures := bodyType.IndexSignatures
@@ -1649,4 +1668,17 @@ func hasIntersection(t types.Type) bool {
 		}
 	}
 	return false
+}
+
+// nameGenericType makes obj print as `Name<T, U>` with its own type
+// parameters; substitution maps the arguments, so an instantiation prints as
+// `Name<string, number>`.
+func nameGenericType(obj *types.ObjectType, name string, typeParams []*types.TypeParameter) {
+	if obj.GenericName != "" || obj.DisplayName != "" {
+		return
+	}
+	obj.GenericName = name
+	for _, tp := range typeParams {
+		obj.GenericArgs = append(obj.GenericArgs, &types.TypeParameterType{Parameter: tp})
+	}
 }
