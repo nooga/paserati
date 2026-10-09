@@ -496,6 +496,10 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 	outerInferredReturnTypes := c.currentInferredReturnTypes
 	outerInferredYieldTypes := c.currentInferredYieldTypes
 
+	outerStableParams := c.stableParams
+	c.stableParams = stableParameters(ctx.Parameters, ctx.Body)
+	defer func() { c.stableParams = outerStableParams }()
+
 	c.currentExpectedReturnType = expectedReturnType
 	c.currentInferredReturnTypes = nil
 	c.currentInferredYieldTypes = []types.Type{} // Always collect yield types for generators

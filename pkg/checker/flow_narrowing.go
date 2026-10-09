@@ -70,6 +70,21 @@ func (f *flowNarrowState) invalidateAll() {
 	f.tracked = make(map[string]bool)
 }
 
+// dropAssignedIn forgets the narrowing of every tracked variable that node
+// writes anywhere inside it, before node is visited: reads inside it must not
+// see a stale type, and what is true after it is no longer known. Variables
+// node leaves alone keep their narrowing across it.
+func (f *flowNarrowState) dropAssignedIn(node parser.Node) {
+	if len(f.tracked) == 0 {
+		return
+	}
+	writes := map[string]bool{}
+	unionSyntacticWrites(writes, node)
+	for name := range writes {
+		f.forget(name)
+	}
+}
+
 // applyToStatement is called once per statement in a straight-line sequence,
 // in order, after the checker has already fully processed stmt (visited it
 // and, for a let/var, resolved and possibly widened its declared type).
@@ -85,7 +100,21 @@ func (f *flowNarrowState) observeLetOrVar(name string, declaredType, narrowType 
 	if _, isLiteral := narrowType.(*types.LiteralType); !isLiteral {
 		return
 	}
+	if !narrowsOnAssignment(declaredType) {
+		return
+	}
 	f.track(name, narrowType)
+}
+
+// narrowsOnAssignment reports whether an assignment narrows a variable of the
+// declared type: only unions (and boolean, which is `true | false`) do. A
+// `let n = 5` stays a number, so `n === 6` is no error.
+func narrowsOnAssignment(declared types.Type) bool {
+	switch declared.(type) {
+	case *types.UnionType, *types.EnumType:
+		return true
+	}
+	return declared == types.Boolean
 }
 
 // trackVarDeclarationNarrowing is called after a let/var/const statement's
@@ -106,7 +135,7 @@ func (f *flowNarrowState) trackVarDeclarationNarrowing(c *Checker, declarators [
 			continue
 		}
 		declaredType, _, found := c.env.Resolve(declarator.Name.Value)
-		if !found || declaredType == nil || declaredType.Equals(narrowType) {
+		if !found || declaredType == nil || declaredType.Equals(narrowType) || !narrowsOnAssignment(declaredType) {
 			continue
 		}
 		f.track(declarator.Name.Value, narrowType)
@@ -123,22 +152,24 @@ func (f *flowNarrowState) observeExpressionStatement(c *Checker, node *parser.Ex
 	assign, isAssign := node.Expression.(*parser.AssignmentExpression)
 	if isAssign && (assign.Operator == "??=" || assign.Operator == "||=") {
 		if ident, isIdent := assign.Left.(*parser.Identifier); isIdent {
+			f.dropAssignedIn(assign.Value)
 			c.visit(node.Expression)
 			f.observeLogicalAssignment(c, ident.Value, assign)
 			return
 		}
 	}
 	if !isAssign || assign.Operator != "=" {
-		f.invalidateAll()
+		f.dropAssignedIn(node)
 		c.visit(node.Expression)
 		return
 	}
 	ident, isIdent := assign.Left.(*parser.Identifier)
 	if !isIdent {
-		f.invalidateAll()
+		f.dropAssignedIn(node)
 		c.visit(node.Expression)
 		return
 	}
+	f.dropAssignedIn(assign.Value)
 
 	// Forget before visiting: checkAssignmentExpression reads the LHS to
 	// validate the new value against it, and that must see the declared
@@ -148,7 +179,9 @@ func (f *flowNarrowState) observeExpressionStatement(c *Checker, node *parser.Ex
 
 	rhsType := assign.Value.GetComputedType()
 	if narrowType, isLiteral := rhsType.(*types.LiteralType); isLiteral {
-		f.track(ident.Value, narrowType)
+		if narrowsOnAssignment(c.env.ResolveDeclaredType(ident.Value)) {
+			f.track(ident.Value, narrowType)
+		}
 		return
 	}
 	if rhsType != nil {

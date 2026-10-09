@@ -166,6 +166,10 @@ func (c *Checker) checkAssignmentExpression(node *parser.AssignmentExpression) {
 		if identLHS, ok := node.Left.(*parser.Identifier); ok {
 			if rhsType != nil && rhsType != types.Any {
 				_, isConst, found := c.env.Resolve(identLHS.Value)
+				// A rejected assignment leaves the declared type in place.
+				if declared := c.env.ResolveDeclaredType(identLHS.Value); declared != nil && !types.IsAssignable(types.GetWidenedType(rhsType), declared) {
+					found = false
+				}
 				if found && !isConst {
 					// Update the type in the nearest defining scope to the widened RHS type
 					widenedRhs := types.GetWidenedType(rhsType)
