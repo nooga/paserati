@@ -52,6 +52,8 @@ func (s *SetInitializer) InitTypes(ctx *TypeContext) error {
 
 	// Now set the body of the generic type
 	setType.Body = setInstanceType
+	setInstanceType.GenericName = "Set"
+	setInstanceType.GenericArgs = []types.Type{tType}
 
 	// Create Set.prototype type for runtime (same structure)
 	setProtoType := types.NewObjectType().
