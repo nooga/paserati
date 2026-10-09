@@ -520,6 +520,11 @@ func (ot *ObjectType) IsPropertyOptional(name string) bool {
 			return opt
 		}
 	}
+	// A member the type declares itself replaces the inherited declaration,
+	// optionality included.
+	if _, declared := ot.Properties[name]; declared {
+		return false
+	}
 	// Check base types
 	for _, baseType := range ot.BaseTypes {
 		if baseObj, ok := resolveBaseType(baseType).(*ObjectType); ok {
