@@ -103,3 +103,102 @@ func (c *Checker) checkCallTypeArguments(node *parser.CallExpression, funcType t
 	c.addErrorWithCode(typeArgs[0], errors.TS2558, fmt.Sprintf("Expected %d type arguments, but got %d.", expected, argCount))
 	return true
 }
+
+// instantiatedConstraint is tp's constraint with the solution's type arguments
+// substituted in, or nil when tp is unconstrained.
+func (c *Checker) instantiatedConstraint(tp *types.TypeParameter, solution map[*types.TypeParameter]types.Type) types.Type {
+	if tp == nil || tp.Constraint == nil || tp.Constraint == types.Any {
+		return nil
+	}
+	byName := make(map[string]types.Type, len(solution))
+	for p, t := range solution {
+		byName[p.Name] = t
+	}
+	return c.substituteTypes(tp.Constraint, byName)
+}
+
+// checkExplicitTypeArgConstraints reports TS2344 for each written type
+// argument that does not satisfy its type parameter's constraint.
+func (c *Checker) checkExplicitTypeArgConstraints(typeParams []*types.TypeParameter, typeArgNodes []parser.Expression, solution map[*types.TypeParameter]types.Type) {
+	for i, node := range typeArgNodes {
+		if i >= len(typeParams) {
+			break
+		}
+		constraint := c.instantiatedConstraint(typeParams[i], solution)
+		arg := solution[typeParams[i]]
+		if constraint == nil || arg == nil || arg == types.Any || c.satisfiesConstraint(arg, constraint) {
+			continue
+		}
+		c.addErrorWithCode(node, errors.TS2344, fmt.Sprintf(
+			"Type '%s' does not satisfy the constraint '%s'.", arg.String(), constraint.String()))
+	}
+}
+
+// fallBackToConstraints replaces an inferred type argument that violates its
+// parameter's constraint with the constraint itself, as tsc does; the argument
+// that produced the candidate then fails against the constraint at the call.
+func (c *Checker) fallBackToConstraints(solution map[*types.TypeParameter]types.Type) {
+	for tp, inferred := range solution {
+		constraint := c.instantiatedConstraint(tp, solution)
+		if constraint == nil || inferred == types.Any || c.typeContainsTypeParameter(constraint) || c.satisfiesConstraint(inferred, constraint) {
+			continue
+		}
+		solution[tp] = constraint
+	}
+}
+
+// satisfiesConstraint is assignability for a type argument against its
+// constraint. A primitive or array has the members of its wrapper type, which
+// plain structural assignability does not see (`string` satisfies
+// `{ length: number }`).
+func (c *Checker) satisfiesConstraint(arg, constraint types.Type) bool {
+	if types.IsAssignable(arg, constraint) {
+		return true
+	}
+	if union, ok := arg.(*types.UnionType); ok {
+		for _, m := range union.Types {
+			if !c.satisfiesConstraint(m, constraint) {
+				return false
+			}
+		}
+		return true
+	}
+	target, ok := c.resolveStructural(constraint).(*types.ObjectType)
+	if !ok || target.IsCallable() || len(target.ConstructSignatures) > 0 {
+		return false
+	}
+	var protoName string
+	switch w := types.GetWidenedType(arg).(type) {
+	case *types.Primitive:
+		switch w {
+		case types.String:
+			protoName = "string"
+		case types.Number:
+			protoName = "number"
+		default:
+			return false
+		}
+	case *types.ArrayType, *types.TupleType:
+		protoName = "array"
+	default:
+		return false
+	}
+	for name, want := range target.GetEffectiveProperties() {
+		if target.IsPropertyOptional(name) {
+			continue
+		}
+		var have types.Type
+		if name == "length" && protoName != "number" {
+			have = types.Number
+		} else {
+			have = c.env.GetPrimitivePrototypeMethodType(protoName, name)
+		}
+		if have == nil {
+			return false
+		}
+		if want != nil && !types.IsAssignable(have, want) && !types.IsAssignable(c.instantiateGenericMethod(have, types.Any), want) {
+			return false
+		}
+	}
+	return true
+}

@@ -249,6 +249,23 @@ func isAssignable(source, target Type) bool {
 		return true // ObjectTypes, arrays, functions, etc.
 	}
 
+	// `object` has no members, so it is assignable to an object type that
+	// requires none (`{ t?: string }`, `{}`).
+	if source == NonPrimitive {
+		if tgt, ok := target.(*ObjectType); ok && !tgt.IsCallable() && len(tgt.ConstructSignatures) == 0 && len(tgt.IndexSignatures) == 0 {
+			required := false
+			for name := range tgt.GetEffectiveProperties() {
+				if !tgt.IsPropertyOptional(name) {
+					required = true
+					break
+				}
+			}
+			if !required {
+				return true
+			}
+		}
+	}
+
 	// Check using type-specific Equals method for complex types
 	if source.Equals(target) {
 		return true

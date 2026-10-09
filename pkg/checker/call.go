@@ -926,6 +926,9 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 					solution[typeParams[i]] = typeArg
 				}
 			}
+			if len(objType.CallSignatures) == 1 {
+				c.checkExplicitTypeArgConstraints(typeParams, node.TypeArguments, solution)
+			}
 			candidates = append(candidates, c.substituteTypeParameters(sig, solution))
 		}
 		if len(candidates) > 0 {
@@ -1224,6 +1227,8 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 			}
 		}
 
+		c.checkExplicitTypeArgConstraints(typeParams, callNode.TypeArguments, solution)
+
 		// Substitute type parameters to create concrete signature
 		inferredSig := c.substituteTypeParameters(genericSig, solution)
 		debugPrintf("// [Checker Inference] Created signature from explicit type args: %s\n", inferredSig.String())
@@ -1314,6 +1319,7 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		debugPrintf("// [Checker Inference] Phase 2: Final solution with %d type parameter bindings\n", len(finalSolution))
 
 		if len(finalSolution) > 0 {
+			c.fallBackToConstraints(finalSolution)
 			inferredSig := c.substituteTypeParameters(genericSig, finalSolution)
 			debugPrintf("// [Checker Inference] Created final inferred signature: %s\n", inferredSig.String())
 			return inferredSig
@@ -1365,6 +1371,7 @@ func (c *Checker) inferGenericFunctionCall(callNode *parser.CallExpression, gene
 		return nil // Inference failed
 	}
 
+	c.fallBackToConstraints(solution)
 	inferredSig := c.substituteTypeParameters(genericSig, solution)
 	debugPrintf("// [Checker Inference] Created fallback inferred signature: %s\n", inferredSig.String())
 
