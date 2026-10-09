@@ -440,6 +440,7 @@ func NewCheckerWithInitializers(initializers []builtins.BuiltinInitializer) *Che
 	globalEnv := NewGlobalEnvironment(initializers)
 	declareAmbientLibGlobals(globalEnv)
 	globalEnv.snapshotBuiltins()
+	types.StrictNullChecks = true // matches the checker's strictNullChecks default
 	return &Checker{
 		env:    globalEnv,                // Create persistent global environment with custom initializers
 		errors: []errors.PaseratiError{}, // Initialize with correct type
@@ -1569,8 +1570,10 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 		}
 
 		// Visit Body
+		c.validateParamListBasic(funcLit.Parameters)
 		c.hoistFunctionBodyVars(funcLit.Body)
 		c.visit(funcLit.Body) // Use funcEnv implicitly
+		c.checkMissingReturn(funcLit.ReturnTypeAnnotation, funcSignature.ReturnType, funcLit.Body, funcLit.IsAsync, funcLit.IsGenerator)
 
 		// Determine Final ACTUAL Return Type
 		var actualReturnType types.Type
@@ -3521,6 +3524,7 @@ func (c *Checker) visit(node parser.Node) {
 
 		// 5. Visit method body
 		c.visit(node.Body)
+		c.checkMissingReturn(node.ReturnTypeAnnotation, resolvedReturnType, node.Body, false, false)
 
 		// 6. Determine final return type
 		var actualReturnType types.Type

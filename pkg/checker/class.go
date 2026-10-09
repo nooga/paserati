@@ -197,14 +197,15 @@ func (c *Checker) validateParamListBasic(params []*parser.Parameter) {
 		if param.IsThis {
 			continue
 		}
-		isOptional := param.Optional || param.DefaultValue != nil
 		if param.Optional && param.DefaultValue != nil {
 			c.addErrorWithCode(param.Name, errors.TS1015, "Parameter cannot have question mark and initializer.")
 		}
-		if seenOptional && !isOptional {
+		// Only `?` makes a parameter optional here: one with an initializer
+		// may precede a required parameter (it just takes undefined).
+		if seenOptional && !param.Optional && param.DefaultValue == nil {
 			c.addErrorWithCode(param.Name, errors.TS1016, "A required parameter cannot follow an optional parameter.")
 		}
-		if isOptional {
+		if param.Optional {
 			seenOptional = true
 		}
 	}
@@ -233,6 +234,8 @@ func (c *Checker) validateClassMemberConstraints(body *parser.ClassBody) {
 				}
 				if method.Value.ReturnTypeAnnotation != nil {
 					c.addErrorWithCode(method.Value.ReturnTypeAnnotation, errors.TS1093, "Type annotation cannot appear on a constructor declaration.")
+					// Reported; a constructor has no return type to check the body against.
+					method.Value.ReturnTypeAnnotation = nil
 				}
 			}
 		} else if method.Kind == "setter" && method.Value != nil {
@@ -558,7 +561,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 	for _, sig := range constructorSigs[1:] {
 		constructorType.WithConstructSignature(sig)
 	}
-	constructorType = c.addStaticMembers(node.Body, constructorType)
+	constructorType = c.addStaticMembers(node.Body, constructorType, instanceType)
 	c.attachClassMemberDocs(node.Body, instanceType, constructorType)
 	instanceType.Doc, constructorType.Doc = node.Doc, node.Doc
 	instanceType.GenericName = node.Name.Value
@@ -1005,7 +1008,7 @@ func (c *Checker) checkMethodBodyWithContext(fn *parser.FunctionLiteral) {
 	if savedInstanceType != nil && savedInstanceType.ClassMeta != nil && savedInstanceType.ClassMeta.SuperClassName != "" {
 		// For constructor context, super should be the parent constructor
 		// For method context, super should be the parent instance
-		if savedClassContext != nil && savedClassContext.ContextType == types.AccessContextConstructor {
+		if savedClassContext != nil && (savedClassContext.ContextType == types.AccessContextConstructor || savedClassContext.ContextType == types.AccessContextStaticMethod) {
 			// Get the parent constructor
 			if superConstructor, _, exists := c.env.Resolve(savedInstanceType.ClassMeta.SuperClassName); exists {
 				c.env.Define("super", superConstructor, true)
@@ -1566,7 +1569,48 @@ func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *type
 		}
 	}
 
+	c.deferStaticMethodBodies(className, body, constructorType, classInstanceType)
+
 	return constructorType
+}
+
+// deferStaticMethodBodies checks the bodies of static methods and accessors
+// once the constructor type is complete: `this` in them is the class object,
+// so it sees the static members and not the instance ones.
+func (c *Checker) deferStaticMethodBodies(className string, body *parser.ClassBody, constructorType, instanceType *types.ObjectType) {
+	if instanceType != nil && instanceType.GetClassName() != "" {
+		className = instanceType.GetClassName() // the constructor type carries no class metadata yet
+	}
+	var methods []*parser.MethodDefinition
+	for _, method := range body.Methods {
+		if method.IsStatic && method.Kind != "constructor" && method.Value != nil && len(method.Value.TypeParameters) == 0 {
+			methods = append(methods, method)
+		}
+	}
+	if len(methods) == 0 {
+		return
+	}
+	strict := c.blockDepth == 0 && c.functionNestingDepth == 0
+	run := func() {
+		prevThis, prevInstance, prevContext, prevStrict := c.currentThisType, c.currentClassInstanceType, c.currentClassContext, c.strictDeferredMethodBodies
+		defer func() {
+			c.currentThisType, c.currentClassInstanceType, c.currentClassContext, c.strictDeferredMethodBodies = prevThis, prevInstance, prevContext, prevStrict
+		}()
+		c.currentThisType = constructorType
+		if instanceType != nil {
+			c.currentClassInstanceType = instanceType
+		}
+		c.strictDeferredMethodBodies = strict
+		for _, method := range methods {
+			c.setClassContext(className, types.AccessContextStaticMethod)
+			c.checkMethodBodyWithContext(method.Value)
+		}
+	}
+	if c.deferMethodBodies {
+		c.deferredMethodBodies = append(c.deferredMethodBodies, deferredMethodBodyCheck{env: c.env, run: run})
+		return
+	}
+	run()
 }
 
 // extractParameterTypes extracts types from function parameters
@@ -2085,6 +2129,17 @@ func (c *Checker) checkSuperExpression(node *parser.SuperExpression) {
 	if classInstanceType.ClassMeta.SuperConstructorType == types.Any {
 		node.SetComputedType(types.Any)
 		debugPrintf("// [Checker SuperExpr] Superclass constructor type is 'any', using 'any' for super\n")
+		return
+	}
+
+	// In a static method `super` is the superclass constructor, whose members
+	// are the static ones.
+	if c.currentClassContext != nil && c.currentClassContext.ContextType == types.AccessContextStaticMethod {
+		if superCtor, _, found := c.env.Resolve(superClassName); found && superCtor != nil {
+			node.SetComputedType(superCtor)
+		} else {
+			node.SetComputedType(types.Any)
+		}
 		return
 	}
 
