@@ -23,8 +23,8 @@ func newCorruptedConstantFunction() vm.Value {
 			byte(vm.OpReturnUndefined),
 		},
 		Constants: nil, // empty pool: any non-negative index is out of range
-		Lines:     []int{1, 1, 1, 1, 1},
 	}
+	chunk.SetLines(1, 1, 1, 1, 1)
 	return vm.NewFunction(0, 0, 0, 4, false, "corrupted", chunk, false, false, false, false)
 }
 

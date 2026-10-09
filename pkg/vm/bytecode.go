@@ -3,6 +3,8 @@ package vm
 import (
 	"fmt"
 	"math"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/source"
@@ -842,7 +844,12 @@ type ColumnEntry struct {
 type Chunk struct {
 	Code      []byte  // The bytecode instructions (OpCodes and operands)
 	Constants []Value // Constant pool (Now uses Value from vm package)
-	Lines     []int   // Line number for each byte in Code (parallel array)
+	// lineRuns records the source line of each byte of Code as runs of equal
+	// lines (a run starts at the offset where the line changes): a byte of code
+	// costs a fraction of a byte here rather than a whole int, which is most of
+	// a compiled module's size otherwise. Read it through GetLine.
+	lineRuns  []lineRun
+	lineBytes int // bytes of Code with a recorded line
 	// Columns is a sparse, offset-ordered side table of column numbers, unlike
 	// Lines: recording one entry per source line the compiler crosses while
 	// emitting this chunk (see Compiler.markPosition) rather than one per byte
@@ -909,16 +916,60 @@ type Chunk struct {
 	floatConstCache map[uint64]uint16
 }
 
-// GetLine returns the source line number corresponding to a given bytecode offset.
-// It assumes the Lines slice is populated correctly (same length as Code, storing line per OpCode).
+type lineRun struct {
+	start int32 // first code offset of the run
+	line  int32
+}
+
+// addLine records the line of the next byte of Code.
+func (c *Chunk) addLine(line int) {
+	if n := len(c.lineRuns); n == 0 || c.lineRuns[n-1].line != int32(line) {
+		c.lineRuns = append(c.lineRuns, lineRun{int32(c.lineBytes), int32(line)})
+	}
+	c.lineBytes++
+}
+
+// SetLines records the line of each byte of Code, for hand-assembled chunks.
+func (c *Chunk) SetLines(lines ...int) {
+	c.lineRuns, c.lineBytes = nil, 0
+	for _, l := range lines {
+		c.addLine(l)
+	}
+}
+
+// LineBytes is the number of bytes of code that have a recorded line.
+func (c *Chunk) LineBytes() int { return c.lineBytes }
+
+// GetLine returns the source line number corresponding to a given bytecode
+// offset, or 0 for an offset without line information.
 func (c *Chunk) GetLine(offset int) int {
-	// Basic bounds check
-	if offset < 0 || offset >= len(c.Lines) {
-		// Return 0 or -1 to indicate an invalid offset or missing line info?
-		// Let's return 0, assuming line numbers are 1-based.
+	if offset < 0 || offset >= c.lineBytes {
 		return 0
 	}
-	return c.Lines[offset]
+	runs := c.lineRuns
+	i := sort.Search(len(runs), func(i int) bool { return int(runs[i].start) > offset })
+	return int(runs[i-1].line)
+}
+
+// compact releases the spare capacity append left on the chunk's buffers. A
+// compiled chunk is never appended to again, and a session keeps every module
+// it compiled.
+func (c *Chunk) compact() {
+	c.Code = slices.Clip(c.Code)
+	c.Constants = slices.Clip(c.Constants)
+	c.lineRuns = slices.Clip(c.lineRuns)
+}
+
+// Compact trims the chunk and the function chunks in its constants.
+func (c *Chunk) Compact() {
+	c.compact()
+	for _, k := range c.Constants {
+		if k.Type() == TypeFunction {
+			if fn := k.AsFunction(); fn != nil && fn.Chunk != nil {
+				fn.Chunk.Compact()
+			}
+		}
+	}
 }
 
 // GetColumn returns the column in effect at a given bytecode offset, per the
@@ -976,7 +1027,6 @@ func NewChunk() *Chunk {
 	return &Chunk{
 		Code:             make([]byte, 0),
 		Constants:        make([]Value, 0),
-		Lines:            make([]int, 0),
 		ExceptionTable:   make([]ExceptionHandler, 0),
 		VarGlobalIndices: make([]uint16, 0),
 	}
@@ -997,7 +1047,7 @@ func (c *Chunk) AddVarGlobalIndex(idx uint16) {
 // The line number is tracked for error reporting.
 func (c *Chunk) WriteOpCode(op OpCode, line int) {
 	c.Code = append(c.Code, byte(op))
-	c.Lines = append(c.Lines, line)
+	c.addLine(line)
 	c.currentLine = line // Track for subsequent operand bytes
 }
 
@@ -1006,16 +1056,16 @@ func (c *Chunk) WriteOpCode(op OpCode, line int) {
 // Note: Named EmitByte instead of WriteByte to avoid conflict with io.ByteWriter interface.
 func (c *Chunk) EmitByte(b byte) {
 	c.Code = append(c.Code, b)
-	c.Lines = append(c.Lines, c.currentLine) // Keep Lines parallel to Code
+	c.addLine(c.currentLine)
 }
 
 // WriteUint16 adds a 16-bit unsigned integer operand (e.g., for larger constant indices or jump offsets).
 // Encoded as Big Endian. Uses the line number from the most recent WriteOpCode call.
 func (c *Chunk) WriteUint16(val uint16) {
 	c.Code = append(c.Code, byte(val>>8))
-	c.Lines = append(c.Lines, c.currentLine)
+	c.addLine(c.currentLine)
 	c.Code = append(c.Code, byte(val&0xff))
-	c.Lines = append(c.Lines, c.currentLine)
+	c.addLine(c.currentLine)
 }
 
 // WriteUint32 adds a 32-bit unsigned integer operand (used for jump/branch
@@ -1024,13 +1074,13 @@ func (c *Chunk) WriteUint16(val uint16) {
 // from the most recent WriteOpCode call.
 func (c *Chunk) WriteUint32(val uint32) {
 	c.Code = append(c.Code, byte(val>>24))
-	c.Lines = append(c.Lines, c.currentLine)
+	c.addLine(c.currentLine)
 	c.Code = append(c.Code, byte(val>>16))
-	c.Lines = append(c.Lines, c.currentLine)
+	c.addLine(c.currentLine)
 	c.Code = append(c.Code, byte(val>>8))
-	c.Lines = append(c.Lines, c.currentLine)
+	c.addLine(c.currentLine)
 	c.Code = append(c.Code, byte(val&0xff))
-	c.Lines = append(c.Lines, c.currentLine)
+	c.addLine(c.currentLine)
 }
 
 // readInt32BE decodes a signed 32-bit Big Endian value from the first 4 bytes

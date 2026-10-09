@@ -18887,16 +18887,16 @@ func (vm *VM) runtimeError(format string, args ...interface{}) InterpretResult {
 		// the column lookup below (#153) points at the same instruction
 		// rather than possibly-mismatched fallback offsets.
 		lineOffset := -1
-		if instructionPos >= 0 && instructionPos < len(chunk.Lines) {
+		if instructionPos >= 0 && instructionPos < chunk.LineBytes() {
 			line = chunk.GetLine(instructionPos)
 			lineOffset = instructionPos
-		} else if frame.ip >= 0 && frame.ip < len(chunk.Lines) {
+		} else if frame.ip >= 0 && frame.ip < chunk.LineBytes() {
 			// If ip-1 is invalid, try using ip itself
 			line = chunk.GetLine(frame.ip)
 			lineOffset = frame.ip
-		} else if len(chunk.Lines) > 0 {
+		} else if chunk.LineBytes() > 0 {
 			// Fallback: use the first line if available
-			line = chunk.Lines[0]
+			line = chunk.GetLine(0)
 			lineOffset = 0
 		}
 		// If line is still 0 and we have code, default to line 1

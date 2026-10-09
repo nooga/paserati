@@ -291,6 +291,8 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 
 			record.CompiledChunk = vmChunk
 
+			vmChunk.Compact()
+
 			ml.applyCompilerExports(record, moduleCompiler)
 
 			record.ReleaseSyntax(moduleCompiler)
@@ -330,6 +332,8 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		}
 
 		record.CompiledChunk = vmChunk
+
+		vmChunk.Compact()
 
 		ml.applyCompilerExports(record, moduleCompiler)
 
@@ -893,6 +897,7 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 
 			// Store the compiled chunk
 			record.CompiledChunk = vmChunk
+			vmChunk.Compact()
 
 			ml.applyCompilerExports(record, moduleCompiler)
 

@@ -433,14 +433,14 @@ func (vm *VM) getFrameLineAndColumnInfo(frame *CallFrame) (int, int, string) {
 
 	lineOffset := -1
 	line := 1
-	if instructionPos >= 0 && instructionPos < len(chunk.Lines) {
+	if instructionPos >= 0 && instructionPos < chunk.LineBytes() {
 		line, lineOffset = chunk.GetLine(instructionPos), instructionPos
-	} else if frame.ip >= 0 && frame.ip < len(chunk.Lines) {
+	} else if frame.ip >= 0 && frame.ip < chunk.LineBytes() {
 		// Fallback to ip itself if ip-1 is invalid
 		line, lineOffset = chunk.GetLine(frame.ip), frame.ip
-	} else if len(chunk.Lines) > 0 {
+	} else if chunk.LineBytes() > 0 {
 		// Last resort: first line in chunk
-		line, lineOffset = chunk.Lines[0], 0
+		line, lineOffset = chunk.GetLine(0), 0
 	}
 
 	column := 0
