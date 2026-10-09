@@ -61,11 +61,14 @@ func (a *ArrayInitializer) InitTypes(ctx *TypeContext) error {
 	// Create Array.prototype type with selective generic methods
 	arrayProtoType := types.NewObjectType().
 		WithProperty("length", types.Number).
-		// Keep mutation methods non-generic for flexibility
-		WithVariadicProperty("push", []types.Type{}, types.Number, &types.ArrayType{ElementType: types.Any}).
-		WithProperty("pop", types.NewSimpleFunction([]types.Type{}, types.Any)).
-		WithProperty("shift", types.NewSimpleFunction([]types.Type{}, types.Any)).
-		WithVariadicProperty("unshift", []types.Type{}, types.Number, &types.ArrayType{ElementType: types.Any}).
+		WithProperty("push", a.createGenericMethod("push", tParam,
+			types.NewVariadicFunction([]types.Type{}, types.Number, tArrayType))).
+		WithProperty("pop", a.createGenericMethod("pop", tParam,
+			types.NewSimpleFunction([]types.Type{}, types.NewUnionType(tType, types.Undefined)))).
+		WithProperty("shift", a.createGenericMethod("shift", tParam,
+			types.NewSimpleFunction([]types.Type{}, types.NewUnionType(tType, types.Undefined)))).
+		WithProperty("unshift", a.createGenericMethod("unshift", tParam,
+			types.NewVariadicFunction([]types.Type{}, types.Number, tArrayType))).
 		WithProperty("slice", a.createGenericMethod("slice", tParam,
 			types.NewOptionalFunction([]types.Type{types.Number, types.Number}, tArrayType, []bool{true, true}))).
 		// Keep concat non-generic for flexibility with different array types
