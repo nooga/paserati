@@ -2704,7 +2704,7 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 
 	// Determine the result type based on the constructor type (unified ObjectType system)
 	var resultType types.Type
-	if inst := c.builtinGenericCtorResult(constructorType, explicitTypeArgs); inst != nil {
+	if inst := c.builtinGenericCtorResult(constructorType, explicitTypeArgs, node.Arguments); inst != nil {
 		resultType = inst
 	} else if objType, ok := constructorType.(*types.ObjectType); ok {
 		// For unified ObjectType constructors, check if they have constructor signatures
@@ -3542,7 +3542,7 @@ func (c *Checker) checkOptionalContinuation(cont parser.Expression, head types.T
 // whose return type is the generic instance type, so the construct result is
 // that type instantiated with the written type arguments; type parameters
 // without an argument are any. It returns nil for any other constructor.
-func (c *Checker) builtinGenericCtorResult(ctor types.Type, typeArgs []types.Type) types.Type {
+func (c *Checker) builtinGenericCtorResult(ctor types.Type, typeArgs []types.Type, callArgs []parser.Expression) types.Type {
 	obj, ok := ctor.(*types.ObjectType)
 	if g, isGeneric := ctor.(*types.GenericType); isGeneric {
 		obj, ok = g.Body.(*types.ObjectType)
@@ -3561,10 +3561,17 @@ func (c *Checker) builtinGenericCtorResult(ctor types.Type, typeArgs []types.Typ
 		return nil
 	}
 	args := make([]types.Type, len(instance.TypeParameters))
+	var inferred []types.Type
+	if len(typeArgs) == 0 && (instance.Name == "Map" || instance.Name == "Set") {
+		inferred = inferCollectionTypeArgs(len(args), callArgs)
+	}
 	for i := range args {
-		if i < len(typeArgs) {
+		switch {
+		case i < len(typeArgs):
 			args[i] = typeArgs[i]
-		} else {
+		case i < len(inferred) && inferred[i] != nil:
+			args[i] = inferred[i]
+		default:
 			args[i] = types.Any
 		}
 	}
@@ -3581,6 +3588,67 @@ func stringIndexValueType(obj *types.ObjectType) types.Type {
 			}
 			return sig.ValueType
 		}
+	}
+	return nil
+}
+
+// inferCollectionTypeArgs infers the type arguments of `new Map(entries)` and
+// `new Set(items)` from the iterable written as the argument: the union of the
+// (widened) key and value types of the entries, or of the items. It returns nil
+// when the argument says nothing (`new Map()`, a non-literal iterable).
+func inferCollectionTypeArgs(paramCount int, callArgs []parser.Expression) []types.Type {
+	if len(callArgs) == 0 {
+		return nil
+	}
+	widen := func(e parser.Expression) types.Type {
+		t := e.GetComputedType()
+		if t == nil {
+			return nil
+		}
+		return types.DeeplyWidenType(t)
+	}
+	union := func(ts []types.Type) types.Type {
+		if len(ts) == 0 {
+			return nil
+		}
+		return types.NewUnionType(ts...)
+	}
+	lit, isLit := callArgs[0].(*parser.ArrayLiteral)
+	switch paramCount {
+	case 1:
+		if isLit {
+			var items []types.Type
+			for _, el := range lit.Elements {
+				if _, spread := el.(*parser.SpreadElement); spread {
+					return nil
+				}
+				if t := widen(el); t != nil {
+					items = append(items, t)
+				}
+			}
+			return []types.Type{union(items)}
+		}
+		if arr, ok := callArgs[0].GetComputedType().(*types.ArrayType); ok {
+			return []types.Type{arr.ElementType}
+		}
+	case 2:
+		if !isLit {
+			return nil
+		}
+		var keys, values []types.Type
+		for _, el := range lit.Elements {
+			pair, ok := el.(*parser.ArrayLiteral)
+			if !ok || len(pair.Elements) != 2 {
+				return nil
+			}
+			if k := widen(pair.Elements[0]); k != nil {
+				keys = append(keys, k)
+			}
+			if v := widen(pair.Elements[1]); v != nil {
+				values = append(values, v)
+			}
+		}
+		return []types.Type{union(keys), union(values)}
 	}
 	return nil
 }
