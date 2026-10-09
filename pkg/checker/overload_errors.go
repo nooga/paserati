@@ -18,7 +18,7 @@ import (
 //     call when they disagree.
 func (c *Checker) reportOverloadFailure(node *parser.CallExpression, argTypes []types.Type, sigs []*types.Signature) {
 	n := len(argTypes)
-	noOverloadMessage := "No overload matches this call." + c.overloadFailureDetails(argTypes, sigs)
+	noOverloadMessage := "No overload matches this call." + c.overloadFailureDetails(node, argTypes, sigs)
 	for _, arg := range node.Arguments {
 		if _, isSpread := arg.(*parser.SpreadElement); isSpread {
 			c.addErrorWithCode(node, errors.TS2769, noOverloadMessage)
@@ -150,7 +150,7 @@ func (c *Checker) firstArgumentMismatch(sig *types.Signature, argTypes []types.T
 // call: its signature followed by the first error it gave. Overloads whose
 // failure cannot be pinned on an argument (generic signatures are not
 // inferred here) are left out.
-func (c *Checker) overloadFailureDetails(argTypes []types.Type, sigs []*types.Signature) string {
+func (c *Checker) overloadFailureDetails(node *parser.CallExpression, argTypes []types.Type, sigs []*types.Signature) string {
 	n := len(argTypes)
 	detail := func(sig *types.Signature) string {
 		if n < requiredParameterCount(sig) || (!sig.IsVariadic && sig.RestParameterType == nil && n > len(sig.ParameterTypes)) {
@@ -165,6 +165,17 @@ func (c *Checker) overloadFailureDetails(argTypes []types.Type, sigs []*types.Si
 			return fmt.Sprintf("Expected %s arguments, but got %d.", expected, n)
 		}
 		i := c.firstArgumentMismatch(sig, argTypes)
+		// A fresh object literal with a property the parameter lacks fails
+		// on that property, even when it also misses required ones.
+		for k := 0; k < n && k < len(node.Arguments) && k < len(sig.ParameterTypes) && (i < 0 || k <= i); k++ {
+			if _, isLit := node.Arguments[k].(*parser.ObjectLiteral); !isLit || sig.ParameterTypes[k] == nil || c.typeContainsTypeParameter(sig.ParameterTypes[k]) {
+				continue
+			}
+			if ex := c.findExcessProperty(node.Arguments[k], sig.ParameterTypes[k]); ex != nil {
+				_, tgtStr := c.getAssignmentErrorTypes(argTypes[k], sig.ParameterTypes[k])
+				return fmt.Sprintf("Object literal may only specify known properties, but '%s' does not exist in type '%s'.", ex.name, tgtStr)
+			}
+		}
 		if i < 0 || i >= len(sig.ParameterTypes) {
 			return ""
 		}

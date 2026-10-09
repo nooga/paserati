@@ -1,6 +1,9 @@
 package types
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // SortedPropertyNames returns the keys of a property map in a deterministic
 // order. Go randomizes map iteration, so anything whose result depends on the
@@ -114,4 +117,13 @@ func (ot *ObjectType) PropertyDoc(name string) string {
 		}
 	}
 	return ""
+}
+
+// NonGenericDisplayName is DisplayName unless it names a generic class
+// (`B<T>`), whose clones are instantiations that must not keep the name.
+func (ot *ObjectType) NonGenericDisplayName() string {
+	if strings.Contains(ot.DisplayName, "<") {
+		return ""
+	}
+	return ot.DisplayName
 }

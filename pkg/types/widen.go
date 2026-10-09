@@ -72,6 +72,10 @@ func DeeplyWidenType(t Type) Type {
 		}
 		return &ObjectType{
 			Properties:          newFields,
+			PropertyOrder:       objType.PropertyOrder,
+			PropertyDocs:        objType.PropertyDocs,
+			Doc:                 objType.Doc,
+			DisplayName:         objType.DisplayName,
 			OptionalProperties:  objType.OptionalProperties,
 			ReadOnlyProperties:  objType.ReadOnlyProperties,
 			CallSignatures:      objType.CallSignatures,
