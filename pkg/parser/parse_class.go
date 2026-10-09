@@ -580,7 +580,7 @@ func (p *Parser) parseClassBody() *ClassBody {
 		} else if p.curTokenIs(lexer.ASTERISK) {
 			// Parse generator method: *methodName() { ... }
 			// Could be async generator if isAsync is true
-			method := p.parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride)
+			method := p.parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, isAsync)
 			if method != nil {
 				// Mark as async if we saw async keyword
 				if isAsync && method.Value != nil {
@@ -1747,7 +1747,7 @@ func (p *Parser) parseComputedProperty(bracketToken *lexer.Token, keyExpr Expres
 
 // parseGeneratorMethod parses a generator method in a class
 // Syntax: [static] *methodName() { body }
-func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride bool) *MethodDefinition {
+func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected, isAbstract, isOverride, isAsync bool) *MethodDefinition {
 	asteriskToken := p.curToken // '*' token
 
 	// Move past '*' to get method name
@@ -1837,7 +1837,17 @@ func (p *Parser) parseGeneratorMethod(isStatic, isPublic, isPrivate, isProtected
 		fmt.Printf("[PARSER] Entering generator context (class generator method), inGenerator=%d\n", p.inGenerator)
 	}
 
+	// An async generator body is an async context, even inside a non-async function
+	savedAsyncContext := p.inAsyncFunction
+	savedNonAsyncContext := p.inNonAsyncFunction
+	if isAsync {
+		p.inAsyncFunction++
+	} else {
+		p.inNonAsyncFunction++
+	}
 	body := p.parseFunctionBody(parameters, restParameter, bodyMethod)
+	p.inAsyncFunction = savedAsyncContext
+	p.inNonAsyncFunction = savedNonAsyncContext
 
 	// Restore generator context
 	p.inGenerator--
