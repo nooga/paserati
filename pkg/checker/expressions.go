@@ -2436,10 +2436,12 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 	debugPrintf("// [Checker NewExpression] Constructor type: %T = %s\n", constructorType, constructorType.String())
 
 	// Handle generic constructor calls (e.g., new Container<number>(42))
+	var explicitTypeArgs []types.Type
 	if len(node.TypeArguments) > 0 {
 		debugPrintf("// [Checker NewExpression] Processing %d type arguments\n", len(node.TypeArguments))
 		// Check type arguments - these are type annotations, not expressions
 		typeArgs := make([]types.Type, len(node.TypeArguments))
+		explicitTypeArgs = typeArgs
 		for i, arg := range node.TypeArguments {
 			// Don't call c.visit(arg) here - type arguments are not expressions
 			typeArgs[i] = c.resolveTypeAnnotation(arg)
@@ -2660,7 +2662,9 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 
 	// Determine the result type based on the constructor type (unified ObjectType system)
 	var resultType types.Type
-	if objType, ok := constructorType.(*types.ObjectType); ok {
+	if inst := c.builtinGenericCtorResult(constructorType, explicitTypeArgs); inst != nil {
+		resultType = inst
+	} else if objType, ok := constructorType.(*types.ObjectType); ok {
 		// For unified ObjectType constructors, check if they have constructor signatures
 		if len(objType.ConstructSignatures) > 0 {
 			// Use the first constructor signature's return type
@@ -3486,4 +3490,38 @@ func (c *Checker) checkOptionalContinuation(cont parser.Expression, head types.T
 		return types.Any
 	}
 	return types.NewUnionType(result, types.Undefined)
+}
+
+// builtinGenericCtorResult types `new Map<K, V>()` and its siblings. Built-in
+// collection constructors are declared as callable (not constructable) types
+// whose return type is the generic instance type, so the construct result is
+// that type instantiated with the written type arguments; type parameters
+// without an argument are any. It returns nil for any other constructor.
+func (c *Checker) builtinGenericCtorResult(ctor types.Type, typeArgs []types.Type) types.Type {
+	obj, ok := ctor.(*types.ObjectType)
+	if g, isGeneric := ctor.(*types.GenericType); isGeneric {
+		obj, ok = g.Body.(*types.ObjectType)
+	}
+	if ok && obj != nil && len(obj.ConstructSignatures) == 0 && len(obj.CallSignatures) > 0 && len(typeArgs) == 1 {
+		// new Array<T>() is T[].
+		if arr, isArr := obj.CallSignatures[0].ReturnType.(*types.ArrayType); isArr && arr.ElementType == types.Any {
+			return &types.ArrayType{ElementType: typeArgs[0]}
+		}
+	}
+	if !ok || obj == nil || len(obj.ConstructSignatures) > 0 || len(obj.CallSignatures) != 1 {
+		return nil
+	}
+	instance, ok := obj.CallSignatures[0].ReturnType.(*types.GenericType)
+	if !ok || len(instance.TypeParameters) == 0 {
+		return nil
+	}
+	args := make([]types.Type, len(instance.TypeParameters))
+	for i := range args {
+		if i < len(typeArgs) {
+			args[i] = typeArgs[i]
+		} else {
+			args[i] = types.Any
+		}
+	}
+	return c.instantiateGenericType(instance, args, nil)
 }
