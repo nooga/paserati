@@ -1811,13 +1811,13 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 
 			// Substitute in call signatures
 			for _, sig := range typ.CallSignatures {
-				newSig := c.substituteInSignature(sig, solution, substitute)
+				newSig := c.substituteMemberSignature(sig, solution, substitute)
 				newObj.CallSignatures = append(newObj.CallSignatures, newSig)
 			}
 
 			// Substitute in construct signatures
 			for _, sig := range typ.ConstructSignatures {
-				newSig := c.substituteInSignature(sig, solution, substitute)
+				newSig := c.substituteMemberSignature(sig, solution, substitute)
 				newObj.ConstructSignatures = append(newObj.ConstructSignatures, newSig)
 			}
 
@@ -1896,6 +1896,28 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 		StrictVariance:    sig.StrictVariance,
 		RestParameterType: newRestParamType,
 	}
+}
+
+// substituteMemberSignature substitutes in a signature that is a member of an
+// object type. The signature's own type parameters shadow solution entries for
+// the same parameters, so those are left alone.
+func (c *Checker) substituteMemberSignature(sig *types.Signature, solution map[*types.TypeParameter]types.Type, substitute func(types.Type) types.Type) *types.Signature {
+	var inner map[*types.TypeParameter]types.Type
+	for _, tp := range sig.TypeParameters {
+		if _, ok := solution[tp]; ok {
+			if inner == nil {
+				inner = make(map[*types.TypeParameter]types.Type, len(solution))
+				for k, v := range solution {
+					inner[k] = v
+				}
+			}
+			delete(inner, tp)
+		}
+	}
+	if inner == nil {
+		return c.substituteInSignature(sig, solution, substitute)
+	}
+	return c.substituteTypeParameters(sig, inner)
 }
 
 // substituteInSignature is a helper to substitute type parameters in a signature
