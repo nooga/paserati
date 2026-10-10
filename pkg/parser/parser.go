@@ -498,6 +498,15 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.LBRACKET, p.parseTupleTypeExpression) // NEW: Tuple type literals like [string, number, boolean?]
 	// --- NEW: Leading pipe union types that start with '|' ---
 	p.registerTypePrefix(lexer.PIPE, p.parseLeadingPipeUnionType) // NEW: Leading pipe union types like | A | B
+	p.registerTypePrefix(lexer.BITWISE_AND, func() Expression {     // Leading ampersand: & A & B
+		p.nextToken()
+		return p.parseTypeExpression()
+	})
+	// Contextual keywords that name types or namespaces: `type.JSON` (a
+	// namespace named type), `from<T>`, `async.X`.
+	for _, kw := range []lexer.TokenType{lexer.TYPE, lexer.ASYNC, lexer.FROM, lexer.OF, lexer.GET, lexer.SET, lexer.STATIC, lexer.AS, lexer.OVERRIDE, lexer.SATISFIES, lexer.IS} {
+		p.registerTypePrefix(kw, p.parseKeywordTypeIdentifier)
+	}
 
 	// --- Register TYPE Infix Functions ---
 	p.registerTypeInfix(lexer.PIPE, p.parseUnionTypeExpression)               // TYPE context: '|' is union
@@ -1635,8 +1644,11 @@ func (p *Parser) skipDeclareBody() Statement {
 func (p *Parser) parseTypeAliasStatement() *TypeAliasStatement {
 	stmt := &TypeAliasStatement{Token: p.curToken} // 'type' token
 
-	if !p.expectPeek(lexer.IDENT) {
-		return nil // Expected identifier after 'type'
+	// The name may be a contextual keyword: `type override<T> = ...`.
+	p.nextToken()
+	if !p.curTokenIsIdentLike() || p.curTokenIs(lexer.UNDEFINED) || p.curTokenIs(lexer.NULL) {
+		p.addError(p.curToken, "Identifier expected.")
+		return nil
 	}
 
 	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
@@ -3126,10 +3138,14 @@ func (p *Parser) parseFunctionLiteral(isAsync bool) Expression {
 		lit.ReturnTypeAnnotation = nil // No annotation provided
 	}
 
-	// Check if this is a function signature (ends with semicolon) or implementation (has body)
-	if p.peekTokenIs(lexer.SEMICOLON) {
+	// Check if this is a function signature (ends with semicolon, or by ASI
+	// at a line break, `}` or the end) or implementation (has body)
+	if p.peekTokenIs(lexer.SEMICOLON) || (!p.peekTokenIs(lexer.LBRACE) &&
+		(p.peekToken.Line > p.curToken.Line || p.peekTokenIs(lexer.RBRACE) || p.peekTokenIs(lexer.EOF))) {
 		// This is a function signature, not an implementation - return FunctionSignature instead
-		p.nextToken() // Consume semicolon
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken() // Consume semicolon
+		}
 
 		sig := &FunctionSignature{
 			Token:                lit.Token,
@@ -3461,10 +3477,8 @@ func (p *Parser) parseOneParameter(allowParameterProperties bool, first bool, de
 
 	// Check for optional parameter (?)
 	if p.peekTokenIs(lexer.QUESTION) && !param.IsThis {
-		if param.IsDestructuring {
-			p.addError(p.peekToken, "destructuring parameters cannot be optional")
-			return nil, fmt.Errorf("destructuring parameters cannot be optional")
-		}
+		// An optional binding pattern (`({ a }?: T)`) is valid in a
+		// signature; the checker reports TS2463 in an implementation.
 		p.nextToken() // Consume '?'
 		param.Optional = true
 	}
@@ -3904,6 +3918,7 @@ func (p *Parser) transformFunctionWithDestructuring(fn *FunctionLiteral) *Functi
 				TypeAnnotation:  param.TypeAnnotation,
 				ComputedType:    param.ComputedType,
 				Optional:        false,              // Destructuring params can't be optional
+				OptionalPattern: param.Optional,     // ...in an implementation (TS2463)
 				DefaultValue:    param.DefaultValue, // Preserve default value for destructuring parameters
 				IsThis:          false,
 				IsDestructuring: false,
@@ -4021,6 +4036,7 @@ func (p *Parser) transformArrowFunctionWithDestructuring(fn *ArrowFunctionLitera
 				TypeAnnotation:  param.TypeAnnotation,
 				ComputedType:    param.ComputedType,
 				Optional:        false,
+				OptionalPattern: param.Optional,
 				DefaultValue:    param.DefaultValue, // Preserve default value for destructuring parameters
 				IsThis:          false,
 				IsDestructuring: false,
@@ -4158,6 +4174,7 @@ func (p *Parser) transformShorthandMethodWithDestructuring(method *ShorthandMeth
 				TypeAnnotation:  param.TypeAnnotation,
 				ComputedType:    param.ComputedType,
 				Optional:        false,
+				OptionalPattern: param.Optional,
 				DefaultValue:    param.DefaultValue, // Preserve default value for destructuring parameters
 				IsThis:          false,
 				IsDestructuring: false,
@@ -5816,13 +5833,9 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 
 	// Check for optional parameter (?)
 	if p.peekTokenIs(lexer.QUESTION) {
-		if param.IsDestructuring {
-			p.addError(p.peekToken, "destructuring parameters cannot be optional")
-			return nil, nil, fmt.Errorf("destructuring parameters cannot be optional")
-		} else {
-			p.nextToken() // Consume '?'
-			param.Optional = true
-		}
+		// Optional binding patterns: see parseParameter.
+		p.nextToken() // Consume '?'
+		param.Optional = true
 	}
 
 	// Check for Type Annotation
@@ -5928,10 +5941,7 @@ func (p *Parser) parseParameterList() ([]*Parameter, *RestParameter, error) {
 
 		// Check for optional parameter (?)
 		if p.peekTokenIs(lexer.QUESTION) {
-			if param.IsDestructuring {
-				p.addError(p.peekToken, "destructuring parameters cannot be optional")
-				return nil, nil, fmt.Errorf("destructuring parameters cannot be optional")
-			}
+			// Optional binding patterns: see parseParameter.
 			p.nextToken() // Consume '?'
 			param.Optional = true
 		}
@@ -7659,6 +7669,16 @@ func (p *Parser) parseTypeIdentifier() Expression {
 		return p.tryParseGenericTypeRef(ident)
 	}
 
+	return ident
+}
+
+// parseKeywordTypeIdentifier parses a contextual keyword used as a type
+// name in a type, as parseTypeIdentifier does an identifier.
+func (p *Parser) parseKeywordTypeIdentifier() Expression {
+	ident := &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	if p.peekTokenIs(lexer.LT) && p.peekToken.Line == p.curToken.Line {
+		return p.tryParseGenericTypeRef(ident)
+	}
 	return ident
 }
 
@@ -12341,6 +12361,19 @@ func (p *Parser) parseExportDeclaration() Statement {
 		// Let it fall through to the case statement which will handle lexer.TYPE
 	}
 
+	if p.curTokenIs(lexer.AS) && p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "namespace" {
+		// export as namespace Lib; (a UMD global, declared by a declaration
+		// file for script use). It declares nothing a module sees.
+		p.nextToken() // 'namespace'
+		if !p.expectPeek(lexer.IDENT) {
+			return nil
+		}
+		if p.peekTokenIs(lexer.SEMICOLON) {
+			p.nextToken()
+		}
+		return &EmptyStatement{Token: exportToken}
+	}
+
 	if p.curTokenIs(lexer.IMPORT) && p.isImportEquals() {
 		// export import X = N.M; / export import x = require("m");
 		if decl := p.parseImportEqualsDeclaration(true); decl != nil {
@@ -12400,8 +12433,9 @@ func (p *Parser) parseExportDeclaration() Statement {
 			}
 			return &ExportNamedDeclaration{Token: exportToken, Declaration: decl}
 		}
-		// export namespace X { ... } — TypeScript namespace export
-		if p.curToken.Literal == "namespace" &&
+		// export namespace X { ... } — TypeScript namespace export (also the
+		// older `export module X { ... }` spelling)
+		if (p.curToken.Literal == "namespace" || p.curToken.Literal == "module") &&
 			(p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
 			ns := p.parseNamespaceDeclaration(false)
 			if ns == nil {
@@ -12429,6 +12463,22 @@ func (p *Parser) parseExportDefaultDeclaration(exportToken *lexer.Token) *Export
 	stmt := &ExportDefaultDeclaration{Token: exportToken}
 
 	p.nextToken() // Move past 'default'
+
+	// export default abstract class C {}
+	if p.curTokenIs(lexer.ABSTRACT) && p.peekTokenIs(lexer.CLASS) && p.peekToken.Line == p.curToken.Line {
+		p.nextToken() // 'class'
+		cls, ok := p.prefixParseFns[lexer.CLASS]().(*ClassExpression)
+		if !ok || cls == nil {
+			return nil
+		}
+		cls.IsAbstract = true
+		stmt.Declaration = cls
+		stmt.IsDeclaration = true
+		if p.peekToken.Type == lexer.SEMICOLON {
+			p.nextToken()
+		}
+		return stmt
+	}
 
 	// `export default function ...` / `class ...` is a declaration: it ends at
 	// its closing brace, so `export default function() {}()` is not a call.
@@ -12600,6 +12650,14 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken *lexer.To
 			p.addError(p.curToken, "expected identifier or string in export specifier")
 			return nil
 		}
+		// An inline type modifier: `export { type T }`. `type` itself is the
+		// name when nothing (or only `as` and the alias) follows.
+		specTypeOnly := false
+		if p.curTokenIs(lexer.TYPE) && isExportSpecifierName(p.peekToken.Type) &&
+			(!p.peekTokenIs(lexer.AS) || isExportSpecifierName(p.lookAhead(1).Type)) {
+			specTypeOnly = true
+			p.nextToken()
+		}
 		local = p.parseExportSpecifierExpr()
 		exported = local // Default: same as local name
 
@@ -12617,9 +12675,10 @@ func (p *Parser) parseExportNamedDeclarationWithSpecifiers(exportToken *lexer.To
 		}
 
 		namedSpec := &ExportNamedSpecifier{
-			Token:    p.curToken,
-			Local:    local,
-			Exported: exported,
+			Token:      p.curToken,
+			Local:      local,
+			Exported:   exported,
+			IsTypeOnly: specTypeOnly,
 		}
 		specifiers = append(specifiers, namedSpec)
 

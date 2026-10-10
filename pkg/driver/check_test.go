@@ -67,3 +67,28 @@ func TestCheckFiles(t *testing.T) {
 		t.Errorf("main.ts diagnostics = %q, want one TS2322 number-to-string", got)
 	}
 }
+
+func TestCheckFilesReportsSyntaxErrors(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bad.ts"), []byte("const x = ;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	results := NewPaserati().CheckFiles([]string{"bad.ts"})
+	var got []string
+	for _, r := range results {
+		for _, d := range r.Diagnostics {
+			got = append(got, d.Code())
+		}
+	}
+	if len(got) != 1 || got[0] != "TS1109" {
+		t.Errorf("diagnostics = %v, want [TS1109]", got)
+	}
+}

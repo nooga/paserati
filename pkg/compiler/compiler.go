@@ -5029,6 +5029,9 @@ func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclara
 
 			for _, spec := range node.Specifiers {
 				if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
+					if exportSpec.IsTypeOnly {
+						continue // `export { type T }` has no runtime binding
+					}
 					localName := getExportSpecName(exportSpec.Local)
 					exportName := getExportSpecName(exportSpec.Exported)
 
@@ -5043,6 +5046,9 @@ func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclara
 			// Validate that the exported names exist and register them
 			for _, spec := range node.Specifiers {
 				if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
+					if exportSpec.IsTypeOnly {
+						continue // `export { type T }` has no runtime binding
+					}
 					if exportSpec.Local == nil {
 						return BadRegister, NewCompileError(node, "export specifier missing local name")
 					}
@@ -5470,6 +5476,9 @@ func (c *Compiler) extractExportNamesFromAST(program *parser.Program) []string {
 				// Named exports: export { x, y }
 				for _, spec := range node.Specifiers {
 					if exportSpec, ok := spec.(*parser.ExportNamedSpecifier); ok {
+						if exportSpec.IsTypeOnly {
+							continue // `export { type T }` has no runtime binding
+						}
 						if exportSpec.Local != nil {
 							// Use the export name (or local name if no alias)
 							exportName := getExportSpecName(exportSpec.Local)

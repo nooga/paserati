@@ -441,7 +441,7 @@ func newLinkModule(key, fromPath string, program *parser.Program) *linkModule {
 			}
 			for _, spec := range s.Specifiers {
 				es, ok := spec.(*parser.ExportNamedSpecifier)
-				if !ok {
+				if !ok || es.IsTypeOnly {
 					continue
 				}
 				exported := moduleExportNameValue(es.Exported)
@@ -476,7 +476,7 @@ func newLinkModule(key, fromPath string, program *parser.Program) *linkModule {
 		}
 		for _, spec := range s.Specifiers {
 			es, ok := spec.(*parser.ExportNamedSpecifier)
-			if !ok {
+			if !ok || es.IsTypeOnly {
 				continue
 			}
 			if ib, isImport := importedLocals[moduleExportNameValue(es.Local)]; isImport {

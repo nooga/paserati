@@ -112,7 +112,24 @@ type FunctionCheckContext struct {
 
 // resolveFunctionParameters resolves parameter types and creates the parameter environment setup
 // Returns: signature, paramTypes, paramNames, restParameterType, restParameterName, typeParamEnv
+// checkOptionalBindingParameters reports TS2463 once for each optional
+// binding pattern parameter of a function with a body (the parser rewrites
+// those parameters and marks them OptionalPattern).
+func (c *Checker) checkOptionalBindingParameters(params []*parser.Parameter) {
+	for _, param := range params {
+		if param == nil || !param.OptionalPattern || c.reportedOptionalPatterns[param] {
+			continue
+		}
+		if c.reportedOptionalPatterns == nil {
+			c.reportedOptionalPatterns = map[*parser.Parameter]bool{}
+		}
+		c.reportedOptionalPatterns[param] = true
+		c.addErrorWithCode(param, errors.TS2463, "A binding pattern parameter cannot be optional in an implementation signature.")
+	}
+}
+
 func (c *Checker) resolveFunctionParameters(ctx *FunctionCheckContext) (*types.Signature, []types.Type, []*parser.Identifier, types.Type, *parser.Identifier, *Environment) {
+	c.checkOptionalBindingParameters(ctx.Parameters)
 	// 1. First, create an environment for type parameters if this is a generic function
 	var typeParamEnv *Environment = c.env
 
@@ -276,6 +293,7 @@ func (c *Checker) resolveFunctionParametersWithContext(ctx *FunctionCheckContext
 	if len(ctx.ContextualParameterTypes) == 0 {
 		return c.resolveFunctionParameters(ctx)
 	}
+	c.checkOptionalBindingParameters(ctx.Parameters)
 
 	// 1. First, create an environment for type parameters if this is a generic function
 	var typeParamEnv *Environment = c.env

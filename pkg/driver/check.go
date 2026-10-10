@@ -55,7 +55,20 @@ func (p *Paserati) CheckFiles(files []string) []FileDiagnostics {
 
 	results := loadErrors
 	for _, rec := range p.moduleLoader.Modules() {
-		if rec.ResolvedPath == "" || isLibraryFile(rec.ResolvedPath) {
+		if rec.ResolvedPath == "" {
+			continue
+		}
+		if rec.Error != nil {
+			// A file that does not parse is reported, library or not (tsc
+			// reports syntax errors under skipLibCheck too).
+			res := FileDiagnostics{Path: rec.ResolvedPath, Diagnostics: rec.Diagnostics}
+			if len(rec.Diagnostics) == 0 {
+				res.LoadError = rec.Error
+			}
+			results = append(results, res)
+			continue
+		}
+		if isLibraryFile(rec.ResolvedPath) {
 			continue
 		}
 		results = append(results, FileDiagnostics{Path: rec.ResolvedPath, Diagnostics: rec.Diagnostics})

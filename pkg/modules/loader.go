@@ -460,6 +460,8 @@ func (ml *moduleLoader) parseModuleSequential(record *ModuleRecord, resolved *Re
 
 	program, parseErrs := parserInstance.ParseProgram()
 	if len(parseErrs) > 0 {
+		record.Diagnostics = parseErrs
+		record.Source = sourceFile
 		return paseratiErrors.NewPositionedError("parsing failed", parseErrs[0])
 	}
 

@@ -302,6 +302,10 @@ type Parameter struct {
 	TypeAnnotation  Expression   // Parsed type node (e.g., *Identifier)
 	ComputedType    types.Type   // Stores the resolved type from TypeAnnotation
 	Optional        bool         // Whether this parameter is optional (param?)
+	// OptionalPattern marks the parameter a destructuring parameter written
+	// optional (`({ a }?: T) {}`) was rewritten to: TS2463 in an
+	// implementation.
+	OptionalPattern bool
 	DefaultValue    Expression   // Default value expression (param = defaultValue)
 	IsThis          bool         // Whether this is an explicit 'this' parameter
 	IsDestructuring bool         // Whether this parameter uses destructuring pattern
@@ -2311,6 +2315,8 @@ type ExportNamedSpecifier struct {
 	Token    *lexer.Token // The exported name token
 	Local    Expression   // Local name being exported (Identifier or StringLiteral)
 	Exported Expression   // Export name (Identifier or StringLiteral, same as Local if no alias)
+	// IsTypeOnly marks an inline `type` modifier: `export { type T, v }`.
+	IsTypeOnly bool
 }
 
 func (ens *ExportNamedSpecifier) exportSpecifier()     {}
