@@ -53,6 +53,7 @@ const (
 	TS2355  = "TS2355"  // A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value
 	TS2366  = "TS2366"  // Function lacks ending return statement and return type does not include 'undefined'
 	TS2420  = "TS2420"  // Class 'X' incorrectly implements interface 'Y'
+	TS2463  = "TS2463"  // A binding pattern parameter cannot be optional in an implementation signature
 	TS2678  = "TS2678"  // Type 'X' is not comparable to type 'Y'
 	TS2551  = "TS2551"  // Property 'X' does not exist on type 'Y'. Did you mean 'Z'?
 	TS7006  = "TS7006"  // Parameter 'x' implicitly has an 'any' type

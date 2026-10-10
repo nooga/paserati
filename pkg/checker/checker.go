@@ -252,6 +252,8 @@ type Checker struct {
 	moduleLoader modules.ModuleLoader // Real ModuleLoader for dependency resolution
 	// importTypeCache holds the namespaces `import("x")` types name, by specifier.
 	importTypeCache map[string]*types.NamespaceType
+	// reportedOptionalPatterns holds the parameters TS2463 was reported for.
+	reportedOptionalPatterns map[*parser.Parameter]bool
 
 	// --- NEW: Context for checking function bodies ---
 	// Expected return type of the function currently being checked (set by explicit annotation).
@@ -5081,7 +5083,7 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 					exportName := getExportSpecName(exportSpec.Exported)
 
 					if c.IsModuleMode() {
-						c.moduleEnv.DefineReExport(exportName, sourceModule, localName, node.IsTypeOnly)
+						c.moduleEnv.DefineReExport(exportName, sourceModule, localName, node.IsTypeOnly || exportSpec.IsTypeOnly)
 						debugPrintf("// [Checker] Re-exported: %s as %s from %s\n", localName, exportName, sourceModule)
 					}
 				}
@@ -5106,7 +5108,7 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 					if t, found := c.env.ResolveType(localName); found {
 						// A namespace is exported whole, so importers get
 						// both its value shape and its types.
-						if _, isNs := t.(*types.NamespaceType); isNs || !exists || node.IsTypeOnly {
+						if _, isNs := t.(*types.NamespaceType); isNs || !exists || node.IsTypeOnly || exportSpec.IsTypeOnly {
 							localType, exists = t, true
 						}
 					}
