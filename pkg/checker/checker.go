@@ -250,6 +250,8 @@ type Checker struct {
 	// --- Module System Integration ---
 	moduleEnv    *ModuleEnvironment   // Module-aware environment (nil for non-module files)
 	moduleLoader modules.ModuleLoader // Real ModuleLoader for dependency resolution
+	// importTypeCache holds the namespaces `import("x")` types name, by specifier.
+	importTypeCache map[string]*types.NamespaceType
 
 	// --- NEW: Context for checking function bodies ---
 	// Expected return type of the function currently being checked (set by explicit annotation).
@@ -1188,6 +1190,10 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			c.checkNamespaceDeclaration(nsStmt)
 			nodesProcessedPass1[nsStmt] = true
 			nodesProcessedPass2[nsStmt] = true
+		} else if ieStmt, ok := stmt.(*parser.ImportEqualsDeclaration); ok {
+			c.checkImportEqualsDeclaration(ieStmt)
+			nodesProcessedPass1[ieStmt] = true
+			nodesProcessedPass2[ieStmt] = true
 		} else if importStmt, ok := stmt.(*parser.ImportDeclaration); ok {
 			// Add defensive check for nil Source
 			if importStmt.Source != nil {
@@ -3767,6 +3773,12 @@ func (c *Checker) visit(node parser.Node) {
 	case *parser.ImportDeclaration:
 		c.checkImportDeclaration(node)
 
+	case *parser.ImportEqualsDeclaration:
+		c.checkImportEqualsDeclaration(node)
+
+	case *parser.ExportAssignment:
+		c.checkExportAssignment(node)
+
 	case *parser.ExportNamedDeclaration:
 		c.checkExportNamedDeclaration(node)
 
@@ -4948,15 +4960,7 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 				// import * as z: in a type position z.T names the module's
 				// exported type T (z.infer<typeof S>), so the type side is a
 				// namespace. The value side is the plain object.
-				ns := types.NewNamespaceType(localName)
-				// The module namespace object exists at runtime, so z in a
-				// value position is that object, never TS2708.
-				ns.Instantiated = true
-				ns.ValueShape = types.NewObjectType()
-				for name, t := range objType.Properties {
-					ns.TypeMembers[name] = importedTypeAlias(t)
-					ns.ValueShape.SetProperty(name, importedValue(t))
-				}
+				ns := moduleNamespace(localName, objType.Properties)
 				typeAliasValue, valueType = ns, ns.ValueShape
 			}
 			c.env.DefineTypeAlias(localName, typeAliasValue)
@@ -5000,6 +5004,52 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 			debugPrintf("// [Checker] Skipped import binding for type-only import %s (no module mode)\n", localName)
 		}
 	}
+}
+
+// moduleNamespace is a module's namespace: its exported types on the type
+// side and the module namespace object (its exported values) on the value side.
+func moduleNamespace(name string, exports map[string]types.Type) *types.NamespaceType {
+	ns := types.NewNamespaceType(name)
+	// The module namespace object exists at runtime, so the namespace in a
+	// value position is that object, never TS2708.
+	ns.Instantiated = true
+	ns.ValueShape = types.NewObjectType()
+	for exportName, t := range exports {
+		ns.TypeMembers[exportName] = importedTypeAlias(t)
+		ns.ValueShape.SetProperty(exportName, importedValue(t))
+	}
+	return ns
+}
+
+// importTypeNamespace is the namespace of the module `import("x")` names in a
+// type, loading the module on first use. It is nil (after TS2307) when the
+// module cannot be loaded.
+func (c *Checker) importTypeNamespace(node *parser.ImportTypeExpression) *types.NamespaceType {
+	if ns, ok := c.importTypeCache[node.Specifier]; ok {
+		return ns
+	}
+	var ns *types.NamespaceType
+	if c.moduleLoader != nil {
+		from := ""
+		if c.moduleEnv != nil {
+			from = c.moduleEnv.ModulePath
+		} else if c.source != nil {
+			from = c.source.Path
+		}
+		if loaded, err := c.moduleLoader.LoadModule(node.Specifier, from); err == nil {
+			if rec, ok := loaded.(*modules.ModuleRecord); ok {
+				ns = moduleNamespace(fmt.Sprintf("import(%q)", node.Specifier), rec.Exports)
+			}
+		}
+	}
+	if ns == nil {
+		c.addErrorWithCode(node.Source, errors.TS2307, fmt.Sprintf("Cannot find module '%s' or its corresponding type declarations.", node.Specifier))
+	}
+	if c.importTypeCache == nil {
+		c.importTypeCache = map[string]*types.NamespaceType{}
+	}
+	c.importTypeCache[node.Specifier] = ns
+	return ns
 }
 
 // checkExportNamedDeclaration handles type checking for named export statements
@@ -5420,8 +5470,14 @@ func programHasModuleSyntax(program *parser.Program) bool {
 	for _, stmt := range program.Statements {
 		switch stmt.(type) {
 		case *parser.ImportDeclaration, *parser.ExportNamedDeclaration,
-			*parser.ExportDefaultDeclaration, *parser.ExportAllDeclaration:
+			*parser.ExportDefaultDeclaration, *parser.ExportAllDeclaration, *parser.ExportAssignment:
 			return true
+		case *parser.ImportEqualsDeclaration:
+			// `import x = require("m")` makes a module; `import x = N.M` does
+			// only when exported.
+			if ie := stmt.(*parser.ImportEqualsDeclaration); ie.Require != nil || ie.IsExported {
+				return true
+			}
 		}
 	}
 	return false

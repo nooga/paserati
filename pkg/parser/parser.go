@@ -71,6 +71,9 @@ type Parser struct {
 	inAsyncFunction    int // Counter for nested async function contexts (0 = not in async function)
 	inNonAsyncFunction int // Counter for nested non-async function contexts (for await-as-identifier)
 	inAmbientContext   int // Counter for nested ambient contexts (declare namespace / declare module bodies)
+	// ambientFile marks a declaration file (.d.ts, .d.mts, .d.cts): every
+	// top-level declaration is ambient, with or without `declare`.
+	ambientFile bool
 
 	// speculating > 0 while a parse attempt is running whose failure the caller
 	// detects (and undoes) by return value; error recovery must stay off there,
@@ -305,6 +308,13 @@ func NewParser(l *lexer.Lexer) *Parser {
 		arena:     newASTArenaSized(0),  // Initialize arena for AST node allocation (grows on demand)
 		tokenPool: newTokenPoolSized(0), // Initialize pool for *lexer.Token storage (grows by doubling)
 	}
+	if src != nil {
+		name := src.Path
+		if name == "" {
+			name = src.Name
+		}
+		p.ambientFile = IsDeclarationFile(name)
+	}
 
 	// Initialize Pratt parser maps for VALUE expressions
 	p.prefixParseFns = make(map[lexer.TokenType]prefixParseFn)
@@ -449,6 +459,7 @@ func NewParser(l *lexer.Lexer) *Parser {
 	p.registerTypePrefix(lexer.VOID, p.parseVoidTypeLiteral)               // 'void' type
 	p.registerTypePrefix(lexer.KEYOF, p.parseKeyofTypeExpression)          // 'keyof' type operator
 	p.registerTypePrefix(lexer.TYPEOF, p.parseTypeofTypeExpression)        // 'typeof' type operator
+	p.registerTypePrefix(lexer.IMPORT, p.parseImportTypeExpression)        // import("x").T
 	p.registerTypePrefix(lexer.INFER, p.parseInferTypeExpression)          // 'infer' type operator
 	p.registerTypePrefix(lexer.TEMPLATE_START, p.parseTemplateLiteralType) // Template literal types
 	// NEW: Constructor types that start with 'new'
@@ -1033,6 +1044,12 @@ func (p *Parser) parseStatementNoDoc() Statement {
 		if p.disallowModuleSyntax {
 			p.addError(p.curToken, "SyntaxError: 'import' declarations are only valid in module code")
 		}
+		if p.isImportEquals() {
+			if decl := p.parseImportEqualsDeclaration(false); decl != nil {
+				return decl
+			}
+			return nil
+		}
 		// A nil *ImportDeclaration must not escape as a non-nil Statement.
 		if decl := p.parseImportDeclaration(); decl != nil {
 			return decl
@@ -1327,6 +1344,39 @@ func (p *Parser) parseDeclareStatement() Statement {
 	return p.skipDeclareBody()
 }
 
+// IsDeclarationFile reports whether path names a TypeScript declaration file.
+func IsDeclarationFile(path string) bool {
+	return strings.HasSuffix(path, ".d.ts") || strings.HasSuffix(path, ".d.mts") || strings.HasSuffix(path, ".d.cts")
+}
+
+// parseAmbientInitializer parses the initializer an ambient constant may
+// have (`declare const VERSION = "1.0";`, as .d.ts files declare literal
+// constants). It is not evaluated; a literal initializer without an
+// annotation gives the constant its literal type.
+func (p *Parser) parseAmbientInitializer(d *VarDeclarator) {
+	if !p.peekTokenIs(lexer.ASSIGN) {
+		return
+	}
+	p.nextToken() // '='
+	p.nextToken() // initializer
+	init := p.parseExpression(ASSIGNMENT)
+	if d.TypeAnnotation != nil || init == nil {
+		return
+	}
+	switch v := init.(type) {
+	case *StringLiteral, *NumberLiteral, *BigIntLiteral, *BooleanLiteral:
+		d.TypeAnnotation = init
+	case *PrefixExpression:
+		if _, ok := v.Right.(*NumberLiteral); ok && v.Operator == "-" {
+			d.TypeAnnotation = &PrefixExpression{Token: v.Token, Operator: "-", Right: v.Right}
+		}
+	case *TemplateLiteral:
+		if len(v.Parts) <= 1 {
+			d.TypeAnnotation = &Identifier{Token: v.Token, Value: "string"}
+		}
+	}
+}
+
 // parseDeclareVarStatement parses `declare const/let/var name: Type;`
 // It creates a proper AST node with Declare=true so the checker registers
 // the type but the compiler skips code generation.
@@ -1353,7 +1403,7 @@ func (p *Parser) parseDeclareVarStatement() Statement {
 
 	// Parse declarator: name: Type
 	declarator := &VarDeclarator{}
-	if !p.curTokenIsIdentLike() {
+	if !p.curTokenIsIdentLike() && !p.isKeywordThatCanBeIdentifier(p.curToken.Type) {
 		p.addError(p.curToken, fmt.Sprintf("expected identifier after 'declare %s', got %s", varToken.Literal, p.curToken.Type))
 		return nil
 	}
@@ -1365,6 +1415,7 @@ func (p *Parser) parseDeclareVarStatement() Statement {
 		p.nextToken() // Move to type expression start
 		declarator.TypeAnnotation = p.parseTypeExpression()
 	}
+	p.parseAmbientInitializer(declarator)
 
 	declarations := []*VarDeclarator{declarator}
 
@@ -1383,6 +1434,7 @@ func (p *Parser) parseDeclareVarStatement() Statement {
 			p.nextToken()
 			d.TypeAnnotation = p.parseTypeExpression()
 		}
+		p.parseAmbientInitializer(d)
 		declarations = append(declarations, d)
 	}
 
@@ -11340,12 +11392,21 @@ func (p *Parser) parseTypeofTypeExpression() Expression {
 
 	p.nextToken()
 
-	if !p.curTokenIsIdentLike() && !p.curTokenIs(lexer.THIS) {
+	var path []string
+	if p.curTokenIs(lexer.IMPORT) {
+		// typeof import("x").a.b
+		imp, ok := p.parseImportTypeExpression().(*ImportTypeExpression)
+		if !ok {
+			return nil
+		}
+		tte.Import = imp
+		path = []string{}
+	} else if !p.curTokenIsIdentLike() && !p.curTokenIs(lexer.THIS) {
 		p.addError(p.curToken, "expected identifier after 'typeof'")
 		return nil
+	} else {
+		path = []string{p.curToken.Literal}
 	}
-
-	path := []string{p.curToken.Literal}
 	for p.peekTokenIs(lexer.DOT) {
 		p.nextToken() // consume '.'
 		p.nextToken() // move to next segment
@@ -11363,8 +11424,41 @@ func (p *Parser) parseTypeofTypeExpression() Expression {
 	}
 
 	tte.Path = path
-	tte.Identifier = path[0]
+	if tte.Import == nil {
+		tte.Identifier = path[0]
+	}
 	return tte
+}
+
+// parseImportTypeExpression parses `import("x")` in a type, with an optional
+// import attributes argument (`import("x", { with: { ... } })`), which is
+// skipped.
+func (p *Parser) parseImportTypeExpression() Expression {
+	tok := p.curToken
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil
+	}
+	if !p.expectPeek(lexer.STRING) {
+		return nil
+	}
+	ite := &ImportTypeExpression{Token: tok, Specifier: p.curToken.Literal, Source: &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}}
+	if p.peekTokenIs(lexer.COMMA) {
+		p.nextToken() // ','
+		depth := 0
+		for !p.peekTokenIs(lexer.EOF) && !(depth == 0 && p.peekTokenIs(lexer.RPAREN)) {
+			p.nextToken()
+			switch p.curToken.Type {
+			case lexer.LBRACE, lexer.LPAREN, lexer.LBRACKET:
+				depth++
+			case lexer.RBRACE, lexer.RPAREN, lexer.RBRACKET:
+				depth--
+			}
+		}
+	}
+	if !p.expectPeek(lexer.RPAREN) {
+		return nil
+	}
+	return ite
 }
 
 // parseInferTypeExpression parses an infer type expression like 'infer R'
@@ -11784,6 +11878,63 @@ func (p *Parser) parseMappedTypeExpression(startToken *lexer.Token) Expression {
 // import { export1 as alias1 } from "module"
 // import defaultImport, { export1, export2 } from "module"
 // import defaultImport, * as name from "module"
+// isImportEquals reports whether the `import` at curToken starts an
+// import-equals declaration: `import x =` or `import type x =`.
+func (p *Parser) isImportEquals() bool {
+	if p.peekTokenIs(lexer.TYPE) {
+		next := p.lookAhead(1)
+		return (next.Type == lexer.IDENT || p.isKeywordThatCanBeIdentifier(next.Type)) && next.Type != lexer.FROM && p.lookAhead(2).Type == lexer.ASSIGN
+	}
+	return (p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) && p.peekTokenIs2(lexer.ASSIGN)
+}
+
+// parseImportEqualsDeclaration parses `import x = require("m");` or
+// `import x = N.M;` (curToken is 'import').
+func (p *Parser) parseImportEqualsDeclaration(exported bool) *ImportEqualsDeclaration {
+	decl := &ImportEqualsDeclaration{Token: p.curToken, IsExported: exported}
+	p.nextToken()
+	if p.curTokenIs(lexer.TYPE) && !p.peekTokenIs(lexer.ASSIGN) {
+		decl.IsTypeOnly = true
+		p.nextToken()
+	}
+	decl.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	if !p.expectPeek(lexer.ASSIGN) {
+		return nil
+	}
+	p.nextToken()
+	if p.curTokenIs(lexer.IDENT) && p.curToken.Literal == "require" && p.peekTokenIs(lexer.LPAREN) {
+		p.nextToken() // '('
+		if !p.expectPeek(lexer.STRING) {
+			return nil
+		}
+		decl.Require = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil
+		}
+	} else {
+		if !p.curTokenIsIdentLike() && !p.isKeywordThatCanBeIdentifier(p.curToken.Type) {
+			p.addError(p.curToken, "Identifier expected.")
+			return nil
+		}
+		var entity Expression = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		for p.peekTokenIs(lexer.DOT) {
+			dot := p.peekToken
+			p.nextToken()
+			p.nextToken()
+			if !p.isIdentifierNameToken(p.curToken) {
+				p.addError(p.curToken, "Identifier expected.")
+				return nil
+			}
+			entity = &MemberExpression{Token: dot, Object: entity, Property: &Identifier{Token: p.curToken, Value: p.curToken.Literal}}
+		}
+		decl.Entity = entity
+	}
+	if p.peekTokenIs(lexer.SEMICOLON) {
+		p.nextToken()
+	}
+	return decl
+}
+
 func (p *Parser) parseImportDeclaration() *ImportDeclaration {
 	stmt := &ImportDeclaration{Token: p.curToken}
 
@@ -12190,6 +12341,14 @@ func (p *Parser) parseExportDeclaration() Statement {
 		// Let it fall through to the case statement which will handle lexer.TYPE
 	}
 
+	if p.curTokenIs(lexer.IMPORT) && p.isImportEquals() {
+		// export import X = N.M; / export import x = require("m");
+		if decl := p.parseImportEqualsDeclaration(true); decl != nil {
+			return decl
+		}
+		return nil
+	}
+
 	switch p.curToken.Type {
 	case lexer.DEFAULT:
 		// export default expression;
@@ -12220,13 +12379,12 @@ func (p *Parser) parseExportDeclaration() Statement {
 			p.addError(exportToken, "Expression expected.")
 			return nil
 		}
-		// Parse the expression and return it as a statement so the checker can validate it
 		expr := p.parseExpression(LOWEST)
 		if p.peekTokenIs(lexer.SEMICOLON) {
 			p.nextToken()
 		}
 		if expr != nil {
-			return &ExpressionStatement{Token: exportToken, Expression: expr}
+			return &ExportAssignment{Token: exportToken, Expression: expr}
 		}
 		return nil
 
@@ -12600,8 +12758,8 @@ func (p *Parser) parseEnumMemberTypeExpression(left Expression) Expression {
 	}
 
 	switch left.(type) {
-	case *Identifier, *MemberExpression:
-		// OK — simple name or already-chained qualified name
+	case *Identifier, *MemberExpression, *ImportTypeExpression:
+		// OK — simple name, already-chained qualified name, or import("x")
 	default:
 		p.addError(p.curToken, "enum member type access requires identifier before '.'")
 		return nil

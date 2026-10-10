@@ -39,12 +39,14 @@ const (
 	TS1213  = "TS1213"  // ... Class definitions are automatically in strict mode
 	TS1214  = "TS1214"  // ... Modules are automatically in strict mode
 	TS1263  = "TS1263"  // Declarations with initializers cannot also have definite assignment assertions
+	TS1340  = "TS1340"  // Module 'X' does not refer to a type, but is used as a type here
 	TS1346  = "TS1346"  // This parameter is not allowed with 'use strict' directive
 	TS1347  = "TS1347"  // 'use strict' directive cannot be used with non-simple parameter list
 	TS1360  = "TS1360"  // Type 'X' does not satisfy the expected type 'Y'
 	TS1492  = "TS1492"  // 'using'/'await using' declarations may not have binding patterns
 	TS2300  = "TS2300"  // Duplicate identifier 'X'
 	TS2304  = "TS2304"  // Cannot find name 'X'
+	TS2307  = "TS2307"  // Cannot find module 'X' or its corresponding type declarations
 	TS2312  = "TS2312"  // An interface can only extend an object type or intersection of object types with statically known members
 	TS2314  = "TS2314"  // Generic type 'X' requires N type argument(s)
 	TS2315  = "TS2315"  // Type 'X' is not generic

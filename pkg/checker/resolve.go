@@ -855,6 +855,13 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 	case *parser.TypeofTypeExpression:
 		return c.resolveTypeofTypeExpression(node)
 
+	case *parser.ImportTypeExpression:
+		// A module is not a type: `typeof import("x")` is.
+		if c.importTypeNamespace(node) != nil {
+			c.addErrorWithCode(node, errors.TS1340, fmt.Sprintf("Module '%s' does not refer to a type, but is used as a type here. Did you mean 'typeof import('%s')'?", node.Specifier, node.Specifier))
+		}
+		return types.Any
+
 	case *parser.InferTypeExpression:
 		return c.resolveInferTypeExpression(node)
 
@@ -2108,9 +2115,31 @@ func (c *Checker) resolveKeyofTypeExpression(node *parser.KeyofTypeExpression) t
 	return c.computeKeyofType(operandType)
 }
 
+// resolveTypeofImport resolves `typeof import("x").a.b`: the module namespace
+// object, then its members.
+func (c *Checker) resolveTypeofImport(node *parser.TypeofTypeExpression) types.Type {
+	ns := c.importTypeNamespace(node.Import)
+	if ns == nil {
+		return types.Any
+	}
+	var t types.Type = ns.ValueShape
+	for _, name := range node.Path {
+		member := c.getPropertyTypeFromType(t, name, false)
+		if member == nil {
+			c.addErrorWithCode(node, errors.TS2339, fmt.Sprintf("Property '%s' does not exist on type '%s'.", name, t.String()))
+			return types.Any
+		}
+		t = member
+	}
+	return t
+}
+
 // resolveTypeofTypeExpression resolves a typeof type expression to the type of a variable.
 // Handles both simple names ('typeof x') and dotted paths ('typeof M2.Point').
 func (c *Checker) resolveTypeofTypeExpression(node *parser.TypeofTypeExpression) types.Type {
+	if node.Import != nil {
+		return c.resolveTypeofImport(node)
+	}
 	path := node.Path
 	if len(path) == 0 {
 		path = []string{node.Identifier}
@@ -3915,6 +3944,12 @@ func (c *Checker) resolveEnumMemberTypeExpression(node *parser.MemberExpression)
 		if containerType == nil {
 			return nil
 		}
+	case *parser.ImportTypeExpression:
+		ns := c.importTypeNamespace(obj)
+		if ns == nil {
+			return types.Any
+		}
+		containerType = ns
 	default:
 		c.addError(node.Object, "enum member access requires identifier before '.'")
 		return nil
