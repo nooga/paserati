@@ -1373,7 +1373,12 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	// Validate constraints before instantiation
 	for i, typeParam := range genericType.TypeParameters {
 		if typeParam.Constraint != nil {
-			argType := finalTypeArgs[i]
+			argType := c.resolveTypeofTypeIfNeeded(finalTypeArgs[i])
+			if _, deferred := argType.(*types.TypeofType); deferred {
+				// `typeof X` before X has a type (a hoisted alias): there is
+				// nothing to check yet.
+				continue
+			}
 			constraintType := c.substituteTypes(typeParam.Constraint, substitution)
 
 			debugPrintf("// [Checker] Checking constraint: %s extends %s\n",
@@ -2199,6 +2204,13 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 
 // computeIndexedAccessType computes the result of an indexed access type like T[K]
 func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) types.Type {
+	// `(typeof X)[K]` written before X had a type: index X's type now.
+	if _, ok := objectType.(*types.TypeofType); ok {
+		objectType = c.resolveTypeofTypeIfNeeded(objectType)
+		if _, still := objectType.(*types.TypeofType); still {
+			return nil
+		}
+	}
 	// `Required<any>[number]`: a mapped type is indexed through its expansion.
 	if mapped, ok := objectType.(*types.MappedType); ok {
 		if expanded := c.expandMappedType(mapped); expanded != nil {
