@@ -168,6 +168,53 @@ func (c *Checker) settleTypeDepth(t types.Type, depth int) types.Type {
 	return t
 }
 
+// reachesPending reports whether a class or interface placeholder not filled
+// in yet is reachable from t through members, base types, type arguments or
+// union and intersection members (a few levels deep).
+func reachesPending(t types.Type, depth int, seen map[types.Type]bool) bool {
+	if t == nil || depth > 4 {
+		return false
+	}
+	if seen == nil {
+		seen = map[types.Type]bool{}
+	}
+	if seen[t] {
+		return false
+	}
+	seen[t] = true
+	switch tt := t.(type) {
+	case *types.ObjectType:
+		if tt.Pending {
+			return true
+		}
+		for _, p := range tt.Properties {
+			if reachesPending(p, depth+1, seen) {
+				return true
+			}
+		}
+		for _, b := range tt.BaseTypes {
+			if reachesPending(b, depth+1, seen) {
+				return true
+			}
+		}
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if reachesPending(m, depth+1, seen) {
+				return true
+			}
+		}
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if reachesPending(m, depth+1, seen) {
+				return true
+			}
+		}
+	case *types.ArrayType:
+		return reachesPending(tt.ElementType, depth+1, seen)
+	}
+	return false
+}
+
 // mentionsUndeclared reports whether t refers to a class not filled in yet or
 // a generic the program declares later and that cannot be instantiated yet.
 func (c *Checker) mentionsUndeclared(t types.Type, depth int) bool {
@@ -1593,11 +1640,6 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 				// nothing to check yet.
 				continue
 			}
-			if obj, ok := argType.(*types.ObjectType); ok && obj.Pending {
-				// A class not declared yet (a hoisted alias names it): its
-				// members are unknown, so there is nothing to check yet.
-				continue
-			}
 			// A type parameter argument satisfies the constraint through its
 			// own: PassthroughType<UnknownKeys> inside a generic whose
 			// UnknownKeys extends UnknownKeysParam.
@@ -1612,6 +1654,33 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 
 			debugPrintf("// [Checker] Checking constraint: %s extends %s\n",
 				argType.String(), constraintType.String())
+
+			if reachesPending(argType, 0, nil) || reachesPending(constraintType, 0, nil) {
+				// A class or interface not filled in yet is reachable (a
+				// hoisted alias names it, or `interface BB extends AA<BB>`
+				// names BB in its own heritage): its members are filled in
+				// place later, so the check runs once all declarations are
+				// done.
+				var argNode parser.Node
+				if i < len(typeArgNodes) && typeArgNodes[i] != nil {
+					argNode = typeArgNodes[i]
+				} else if c.typeRefNode != nil {
+					argNode = c.typeRefNode
+				}
+				arg, constraint := argType, constraintType
+				c.deferRelationCheck(func() {
+					if types.IsAssignable(arg, constraint) {
+						return
+					}
+					msg := fmt.Sprintf("Type '%s' does not satisfy the constraint '%s'.", arg.String(), constraint.String())
+					if argNode != nil {
+						c.addErrorWithCode(argNode, errors.TS2344, msg)
+					} else {
+						c.addGenericError(msg)
+					}
+				})
+				continue
+			}
 
 			// Check if the type argument satisfies the constraint
 			if !types.IsAssignable(argType, constraintType) {
