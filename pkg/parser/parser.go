@@ -12575,7 +12575,9 @@ func (p *Parser) parseEnumMemberTypeExpression(left Expression) Expression {
 	dotToken := p.curToken
 	p.nextToken()
 
-	if !p.curTokenIs(lexer.IDENT) {
+	// The right side of a qualified name is an IdentifierName, so keywords
+	// are fine there: z.infer<T>, ts.default, N.type.
+	if !p.isIdentifierNameToken(p.curToken) {
 		p.addError(p.curToken, fmt.Sprintf("expected member name after '.', got %s", p.curToken.Type))
 		return nil
 	}
