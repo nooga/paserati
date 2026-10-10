@@ -57,6 +57,16 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	if t != nil {
 		t = c.resolveDeferredTypeofIndex(t, false)
 	}
+	// A conditional left deferred by an alias resolved before the classes it
+	// mentions (`type C = ZodType extends ZodTypeAny ? ...` in Pass 1) is
+	// evaluated where the alias is used.
+	if cond, ok := t.(*types.ConditionalType); ok {
+		if resolved := c.computeConditionalType(cond.CheckType, cond.ExtendsType, cond.TrueType, cond.FalseType); resolved != nil {
+			if _, still := resolved.(*types.ConditionalType); !still {
+				t = resolved
+			}
+		}
+	}
 	return t
 }
 
@@ -1385,6 +1395,16 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 				// nothing to check yet.
 				continue
 			}
+			// A type parameter argument satisfies the constraint through its
+			// own: PassthroughType<UnknownKeys> inside a generic whose
+			// UnknownKeys extends UnknownKeysParam.
+			for depth := 0; depth < 8; depth++ {
+				tp, ok := argType.(*types.TypeParameterType)
+				if !ok || tp.Parameter == nil || tp.Parameter.Constraint == nil {
+					break
+				}
+				argType = tp.Parameter.Constraint
+			}
 			constraintType := c.substituteTypes(typeParam.Constraint, substitution)
 
 			debugPrintf("// [Checker] Checking constraint: %s extends %s\n",
@@ -1645,7 +1665,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 			// is homomorphic and expansion copies T's `?` / readonly
 			// modifiers, which the evaluated key union would lose (#638).
 			operand := c.substituteTypesWithVisited(keyof.OperandType, substitution, visited)
-			if _, isObj := operand.(*types.ObjectType); isObj {
+			if _, isObj := c.structuralObject(operand); isObj {
 				newConstraintType = &types.KeyofType{OperandType: operand}
 			} else {
 				newConstraintType = c.computeKeyofType(operand)
@@ -1673,12 +1693,13 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		// Substitute both object and index types
 		newObjectType := c.substituteTypesWithVisited(typ.ObjectType, substitution, visited)
 		newIndexType := c.substituteTypesWithVisited(typ.IndexType, substitution, visited)
-		// Once both sides are concrete, T[K] is just a property type.
-		if _, ok := newIndexType.(*types.LiteralType); ok {
-			if _, ok := newObjectType.(*types.ObjectType); ok {
-				if resolved := c.computeIndexedAccessType(newObjectType, newIndexType); resolved != nil {
-					return resolved
-				}
+		// Once both sides are concrete, T[K] is just a property type, also for
+		// a mapped object or a union key (`{ [k in keyof T]: ... }[keyof T]`).
+		_, objIsParam := newObjectType.(*types.TypeParameterType)
+		_, idxIsParam := newIndexType.(*types.TypeParameterType)
+		if !objIsParam && !idxIsParam {
+			if resolved := c.computeIndexedAccessType(newObjectType, newIndexType); resolved != nil {
+				return resolved
 			}
 		}
 		return &types.IndexedAccessType{
@@ -1884,28 +1905,107 @@ func (c *Checker) resolveInferTypeExpression(node *parser.InferTypeExpression) t
 func (c *Checker) computeKeyofType(operandType types.Type) types.Type {
 	switch typ := operandType.(type) {
 	case *types.ObjectType:
-		// Extract property names and create string literal types
+		// Property names as string literals, in declaration order, then
+		// inherited ones; a string index signature adds string | number.
 		var keyTypes []types.Type
-
-		// Add regular properties
-		for propName := range typ.Properties {
-			keyTypes = append(keyTypes, &types.LiteralType{
-				Value: vm.String(propName),
-			})
+		seen := map[string]bool{}
+		add := func(name string) {
+			if !seen[name] {
+				seen[name] = true
+				keyTypes = append(keyTypes, &types.LiteralType{Value: vm.String(name)})
+			}
 		}
-
-		// If there are no properties, keyof should be never
+		for _, name := range typ.PropertyNames() {
+			add(name)
+		}
+		if len(typ.BaseTypes) > 0 {
+			inherited := typ.GetEffectiveProperties()
+			names := make([]string, 0, len(inherited))
+			for name := range inherited {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				add(name)
+			}
+		}
+		for _, sig := range typ.IndexSignatures {
+			if sig == nil {
+				continue
+			}
+			switch sig.KeyType {
+			case types.String:
+				keyTypes = append(keyTypes, types.String, types.Number)
+			case types.Number:
+				keyTypes = append(keyTypes, types.Number)
+			}
+		}
 		if len(keyTypes) == 0 {
 			return types.Never
 		}
-
-		// If there's only one key, return the literal type directly
 		if len(keyTypes) == 1 {
 			return keyTypes[0]
 		}
-
-		// Return union of all key literal types
 		return types.NewUnionType(keyTypes...)
+
+	case *types.MappedType:
+		// keyof { [P in K]: X } is K; expand first so `keyof T` constraints
+		// that are concrete by now resolve.
+		if expanded := c.expandMappedType(typ); expanded != nil {
+			if obj, ok := expanded.(*types.ObjectType); ok {
+				return c.computeKeyofType(obj)
+			}
+		}
+		if typ.ConstraintType != nil {
+			return typ.ConstraintType
+		}
+		return &types.KeyofType{OperandType: operandType}
+
+	case *types.IntersectionType:
+		// keyof (A & B) = keyof A | keyof B
+		var keys []types.Type
+		for _, member := range typ.Types {
+			k := c.computeKeyofType(member)
+			if _, deferred := k.(*types.KeyofType); deferred {
+				return &types.KeyofType{OperandType: operandType}
+			}
+			if k != types.Never {
+				keys = append(keys, k)
+			}
+		}
+		if len(keys) == 0 {
+			return types.Never
+		}
+		return types.NewUnionType(keys...)
+
+	case *types.UnionType:
+		// keyof (A | B) = the keys A and B share
+		var common []types.Type
+		for i, member := range typ.Types {
+			k := c.computeKeyofType(member)
+			if _, deferred := k.(*types.KeyofType); deferred {
+				return &types.KeyofType{OperandType: operandType}
+			}
+			if i == 0 {
+				common = keyMembers(k)
+				continue
+			}
+			mine := keyMembers(k)
+			var kept []types.Type
+			for _, ck := range common {
+				for _, mk := range mine {
+					if ck.Equals(mk) || (mk == types.String && isStringLiteral(ck)) {
+						kept = append(kept, ck)
+						break
+					}
+				}
+			}
+			common = kept
+		}
+		if len(common) == 0 {
+			return types.Never
+		}
+		return types.NewUnionType(common...)
 
 	default:
 		// Handle special cases
@@ -1916,7 +2016,8 @@ func (c *Checker) computeKeyofType(operandType types.Type) types.Type {
 		switch operandType.(type) {
 		case *types.TypeParameterType, *types.ForwardReferenceType,
 			*types.TypeAliasForwardReference, *types.GenericTypeAliasForwardReference,
-			*types.ParameterizedForwardReferenceType, *types.InstantiatedType:
+			*types.ParameterizedForwardReferenceType, *types.InstantiatedType,
+			*types.ConditionalType, *types.IndexedAccessType:
 			// Generic or unresolved operands may gain concrete properties during
 			// substitution. Preserve keyof so mapped types like
 			// { [P in keyof T]: T[P] } can expand after T is instantiated.
@@ -1926,6 +2027,22 @@ func (c *Checker) computeKeyofType(operandType types.Type) types.Type {
 		// TODO: Handle other types like arrays (which should include numeric indices)
 		return types.Never
 	}
+}
+
+// keyMembers lists a keyof result's members.
+func keyMembers(k types.Type) []types.Type {
+	if u, ok := k.(*types.UnionType); ok {
+		return u.Types
+	}
+	if k == types.Never {
+		return nil
+	}
+	return []types.Type{k}
+}
+
+func isStringLiteral(t types.Type) bool {
+	lit, ok := t.(*types.LiteralType)
+	return ok && lit.Value.Type() == vm.TypeString
 }
 
 // resolveTypePredicateExpression resolves a type predicate expression to a TypePredicateType
@@ -2149,10 +2266,35 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 	// T[K] with T or K still a type parameter (a mapped type's value before
 	// its key is substituted) isn't known yet: defer, rather than let the
 	// unresolved indexed access count as assignable and pick the true branch.
-	if ia, ok := checkType.(*types.IndexedAccessType); ok {
-		_, objIsParam := ia.ObjectType.(*types.TypeParameterType)
-		_, idxIsParam := ia.IndexType.(*types.TypeParameterType)
-		if objIsParam || idxIsParam {
+	// The same holds on the extends side: zod's optionalKeys is
+	// `{ [k in keyof T]: undefined extends T[k] ? k : never }`. A bare type
+	// parameter on either side defers too: zod's CatchallOutput<T> is
+	// `ZodType extends T ? unknown : ...`, decided only once T is known.
+	for _, side := range []types.Type{checkType, extendsType} {
+		if _, isParam := side.(*types.TypeParameterType); isParam {
+			return nil
+		}
+		if ia, ok := side.(*types.IndexedAccessType); ok {
+			_, objIsParam := ia.ObjectType.(*types.TypeParameterType)
+			_, idxIsParam := ia.IndexType.(*types.TypeParameterType)
+			if objIsParam || idxIsParam {
+				return nil
+			}
+		}
+	}
+
+	// A reference to a generic declared later (ZodTypeAny = ZodType<any, any,
+	// any>, resolved before class ZodType) is instantiated now if it can be,
+	// and otherwise the conditional waits: deciding against a placeholder
+	// picks the wrong branch.
+	for _, side := range []*types.Type{&checkType, &extendsType} {
+		ref, ok := (*side).(*types.GenericTypeAliasForwardReference)
+		if !ok {
+			continue
+		}
+		if inst := c.instantiateAliasReference(ref); inst != nil {
+			*side = inst
+		} else if c.declaredTypeNames[ref.AliasName] {
 			return nil
 		}
 	}
@@ -2216,6 +2358,31 @@ func (c *Checker) computeIndexedAccessType(objectType, indexType types.Type) typ
 		if _, still := objectType.(*types.TypeofType); still {
 			return nil
 		}
+	}
+	// (A & B)[K] is A[K] & B[K] over the members that have K; (A | B)[K] is
+	// A[K] | B[K] and needs K in every member.
+	switch ot := objectType.(type) {
+	case *types.IntersectionType:
+		var parts []types.Type
+		for _, member := range ot.Types {
+			if t := c.computeIndexedAccessType(member, indexType); t != nil {
+				parts = append(parts, t)
+			}
+		}
+		if len(parts) == 0 {
+			return nil
+		}
+		return types.NewIntersectionType(parts...)
+	case *types.UnionType:
+		parts := make([]types.Type, 0, len(ot.Types))
+		for _, member := range ot.Types {
+			t := c.computeIndexedAccessType(member, indexType)
+			if t == nil {
+				return nil
+			}
+			parts = append(parts, t)
+		}
+		return types.NewUnionType(parts...)
 	}
 	// `Required<any>[number]`: a mapped type is indexed through its expansion.
 	if mapped, ok := objectType.(*types.MappedType); ok {
@@ -2352,10 +2519,10 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 				operandType = c.resolveStructural(inst)
 			}
 		}
-		if objType, ok := operandType.(*types.ObjectType); ok {
+		if objType, ok := c.structuralObject(operandType); ok {
 			sourceObjectType = objType
 			// Extract all property names as literal types
-			for propName := range objType.Properties {
+			for _, propName := range objType.PropertyNames() {
 				iterationKeys = append(iterationKeys, &types.LiteralType{
 					Value: vm.String(propName),
 				})
@@ -2786,6 +2953,23 @@ func (c *Checker) expandIfMappedType(typ types.Type) types.Type {
 		}
 		if changed {
 			return types.NewUnionType(members...)
+		}
+		return typ
+	}
+
+	// Intersection members (zod's addQuestionMarks<T> is three mapped types
+	// intersected)
+	if inter, ok := typ.(*types.IntersectionType); ok {
+		changed := false
+		members := make([]types.Type, len(inter.Types))
+		for i, member := range inter.Types {
+			members[i] = c.expandIfMappedType(member)
+			if members[i] != member {
+				changed = true
+			}
+		}
+		if changed {
+			return types.NewIntersectionType(members...)
 		}
 		return typ
 	}
@@ -3515,4 +3699,60 @@ func removeUndefinedMember(t types.Type) types.Type {
 		return t
 	}
 	return types.NewUnionType(kept...)
+}
+
+// structuralObject reduces an object type, a mapped type that expands to one,
+// or an intersection of those to a single object type, so a homomorphic
+// mapped type over it (zod's flatten<T> = { [k in keyof T]: T[k] }) sees
+// every property with its modifiers. An intersected property has the
+// intersection of the member types and is optional only when every member
+// that has it marks it optional.
+func (c *Checker) structuralObject(t types.Type) (*types.ObjectType, bool) {
+	switch tt := t.(type) {
+	case *types.ObjectType:
+		return tt, true
+	case *types.MappedType:
+		if expanded, ok := c.expandMappedType(tt).(*types.ObjectType); ok {
+			return expanded, true
+		}
+	case *types.IntersectionType:
+		merged := types.NewObjectType()
+		optional := map[string]bool{}
+		readonly := map[string]bool{}
+		for _, member := range tt.Types {
+			obj, ok := c.structuralObject(member)
+			if !ok {
+				return nil, false
+			}
+			for _, name := range obj.PropertyNames() {
+				prop := obj.Properties[name]
+				if prev, exists := merged.Properties[name]; exists {
+					merged.SetProperty(name, types.NewIntersectionType(prev, prop))
+					optional[name] = optional[name] && obj.OptionalProperties[name]
+					readonly[name] = readonly[name] && obj.ReadOnlyProperties[name]
+				} else {
+					merged.SetProperty(name, prop)
+					optional[name] = obj.OptionalProperties[name]
+					readonly[name] = obj.ReadOnlyProperties[name]
+				}
+			}
+			merged.IndexSignatures = append(merged.IndexSignatures, obj.IndexSignatures...)
+			merged.CallSignatures = append(merged.CallSignatures, obj.CallSignatures...)
+		}
+		for name, opt := range optional {
+			if opt {
+				merged.OptionalProperties[name] = true
+			}
+		}
+		for name, ro := range readonly {
+			if ro {
+				if merged.ReadOnlyProperties == nil {
+					merged.ReadOnlyProperties = map[string]bool{}
+				}
+				merged.ReadOnlyProperties[name] = true
+			}
+		}
+		return merged, true
+	}
+	return nil, false
 }

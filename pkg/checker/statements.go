@@ -1690,6 +1690,11 @@ func (c *Checker) reportInterfaceTypeParameterMismatch(g *types.GenericType, nod
 // types alone: type parameters and intersections need the constraint-aware
 // comparability relation, which typesHaveOverlap does not model.
 func (c *Checker) caseComparisonDecidable(switchType, caseType types.Type) bool {
+	// never is comparable to everything (it is assignable to every type), so
+	// switching on an impossible `string & number` reports no case.
+	if switchType == types.Never || caseType == types.Never {
+		return false
+	}
 	for _, t := range []types.Type{switchType, caseType} {
 		if c.typeContainsTypeParameter(t) {
 			return false
