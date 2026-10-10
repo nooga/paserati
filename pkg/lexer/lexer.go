@@ -499,9 +499,9 @@ func NewLexerWithSource(sourceFile *source.SourceFile) *Lexer {
 		source:    sourceFile,
 		input:     sourceFile.Content,
 		line:      1,
-		column:    1,
+		column:    0, // readChar below moves it to 1 for the first character
 		prevToken: ILLEGAL, // Initialize to ILLEGAL to allow regex at start of input
-	} // Start at line 1, column 1
+	}
 	l.readChar() // Initialize l.ch, l.position, l.readPosition, and potentially update line/column if input starts with newline
 	return l
 }
