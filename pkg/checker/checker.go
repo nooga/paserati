@@ -1070,6 +1070,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 					}
 					c.env.DefineTypeAlias(interfaceStmt.Name.Value, placeholderType)
 					debugPrintf("// [Checker Pass 0] Pre-registered interface '%s'\n", interfaceStmt.Name.Value)
+					c.markClassPlaceholder(placeholderType)
 				}
 			}
 		} else if aliasStmt, ok := stmt.(*parser.TypeAliasStatement); ok {
@@ -1111,6 +1112,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 							}
 							c.env.DefineTypeAlias(interfaceStmt.Name.Value, placeholderType)
 							debugPrintf("// [Checker Pass 0] Pre-registered exported interface '%s'\n", interfaceStmt.Name.Value)
+							c.markClassPlaceholder(placeholderType)
 						}
 					}
 				} else if aliasStmt, ok := exportStmt.Declaration.(*parser.TypeAliasStatement); ok {
@@ -3400,6 +3402,12 @@ func (c *Checker) visit(node parser.Node) {
 	// --- NEW: Member Expression Type Checking ---
 	case *parser.MemberExpression:
 		c.checkMemberExpression(node)
+		// `this` in the member's declared type is the receiver's type.
+		if t := node.GetComputedType(); t != nil && node.Object != nil {
+			if recv := node.Object.GetComputedType(); recv != nil && recv != types.Any && types.MentionsTypeParameter(t, types.PolymorphicThis) {
+				node.SetComputedType(c.substituteTypes(t, map[string]types.Type{"this": recv}))
+			}
+		}
 		// A member read from a type computed before its classes existed may
 		// hold a deferred part (ZodOptional<ZodNumber>["_output"]).
 		if t := node.GetComputedType(); isDeferredType(t) {
@@ -5423,8 +5431,8 @@ func sameParameterTypes(a, b *types.Signature) bool {
 	return true
 }
 
-// markClassPlaceholder records a Pass 0 class type that its declaration has
-// not filled in yet: types computed against it before then (in hoisted
+// markClassPlaceholder records a Pass 0 class or interface type that its
+// declaration has not filled in yet: types computed against it before then (in hoisted
 // aliases) are deferred rather than judged against an empty object.
 func (c *Checker) markClassPlaceholder(t *types.ObjectType) {
 	t.Pending = true

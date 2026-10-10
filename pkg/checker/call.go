@@ -1816,6 +1816,18 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				newTypes = append(newTypes, substitute(memberType))
 			}
 			return types.NewUnionType(newTypes...)
+		case *types.IntersectionType:
+			newTypes := make([]types.Type, len(typ.Types))
+			for i, memberType := range typ.Types {
+				newTypes[i] = substitute(memberType)
+			}
+			return types.NewIntersectionType(newTypes...)
+		case *types.InstantiatedType:
+			newArgs := make([]types.Type, len(typ.TypeArguments))
+			for i, a := range typ.TypeArguments {
+				newArgs[i] = substitute(a)
+			}
+			return types.NewInstantiatedType(typ.Generic, newArgs)
 		case *types.ParameterizedForwardReferenceType:
 			// Substitute type parameters in the type arguments
 			var newTypeArgs []types.Type
@@ -1828,6 +1840,14 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				TypeArguments: newTypeArgs,
 			}
 		case *types.ObjectType:
+			// An object that mentions none of the inferred parameters is kept:
+			// copying zod's class types (and expanding every mapped type in
+			// their methods) per call was exponential.
+			if !typ.Pending && !types.MentionsAnyTypeParameter(typ, solution) {
+				memo[t] = typ
+				return typ
+			}
+
 			// For ObjectType, we need to substitute in properties and signatures
 			newObj := &types.ObjectType{
 				Properties:          make(map[string]types.Type),
@@ -1844,6 +1864,13 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			}
 			memo[t] = newObj
 			typ.CopyDisplay(newObj, substitute)
+			if len(typ.BaseTypes) > 0 {
+				// Inherited members are read through the bases.
+				newObj.BaseTypes = make([]types.Type, len(typ.BaseTypes))
+				for i, base := range typ.BaseTypes {
+					newObj.BaseTypes[i] = substitute(base)
+				}
+			}
 
 			// Substitute in properties
 			for _, name := range typ.PropertyNames() {
@@ -1917,6 +1944,25 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				return resolved
 			}
 			return &types.IndexedAccessType{ObjectType: objectType, IndexType: indexType}
+		case *types.ConditionalType:
+			// `undefined extends T[k] ? never : k` in a return type: decided
+			// once T is inferred (zod's optionalKeys).
+			check, ext := substitute(typ.CheckType), substitute(typ.ExtendsType)
+			trueT, falseT := substitute(typ.TrueType), substitute(typ.FalseType)
+			if resolved := c.computeConditionalType(check, ext, trueT, falseT); resolved != nil {
+				return resolved
+			}
+			return &types.ConditionalType{CheckType: check, ExtendsType: ext, TrueType: trueT, FalseType: falseT}
+		case *types.GenericTypeAliasForwardReference:
+			args := make([]types.Type, len(typ.TypeArguments))
+			for i, a := range typ.TypeArguments {
+				args[i] = substitute(a)
+			}
+			ref := &types.GenericTypeAliasForwardReference{AliasName: typ.AliasName, TypeArguments: args}
+			if inst := c.instantiateAliasReference(ref); inst != nil {
+				return inst
+			}
+			return ref
 		// Add more cases as needed
 		default:
 			return typ

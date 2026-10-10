@@ -259,6 +259,11 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 		if c.currentThisType != nil {
 			return c.currentThisType
 		}
+		if c.currentClassInstanceType != nil {
+			// A member's declared type: `this` is the receiver's type,
+			// substituted where the member is read.
+			return &types.TypeParameterType{Parameter: types.PolymorphicThis}
+		}
 		return types.Any
 
 	case *parser.Identifier:
@@ -1725,6 +1730,12 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		if replacement, exists := visited[typ]; exists {
 			return replacement
 		}
+		if !mayMentionTypeParamNames(typ, substitution, map[types.Type]bool{}) {
+			// Nothing to substitute: keep the object rather than deep-copy
+			// it (instantiating zod's aliases copied whole class types).
+			visited[typ] = typ
+			return typ
+		}
 		if typ.Pending {
 			// A class its declaration fills in later, in place: keep the
 			// reference, a copy would stay empty.
@@ -1743,6 +1754,14 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		}
 		visited[typ] = result
 		typ.CopyDisplay(result, func(a types.Type) types.Type { return c.substituteTypesWithVisited(a, substitution, visited) })
+		// Inherited members come from the bases: ZodObject<..., Output>
+		// reads _output through `extends ZodType<Output, ...>`.
+		if len(typ.BaseTypes) > 0 {
+			result.BaseTypes = make([]types.Type, len(typ.BaseTypes))
+			for i, base := range typ.BaseTypes {
+				result.BaseTypes[i] = c.substituteTypesWithVisited(base, substitution, visited)
+			}
+		}
 
 		// Copy and substitute property types
 		for _, propName := range typ.PropertyNames() {
@@ -4014,4 +4033,92 @@ func (c *Checker) markGenericComplete(name string) {
 			c.completeGenerics[g] = true
 		}
 	}
+}
+
+// mayMentionTypeParamNames reports whether t can refer to a type parameter
+// named in names. It is conservative: a kind of type it does not walk counts
+// as a mention, so a false result means substitution leaves t unchanged. An
+// object's display arguments (GenericArgs) count: instantiations are compared
+// through them.
+func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited map[types.Type]bool) bool {
+	if t == nil {
+		return false
+	}
+	switch tt := t.(type) {
+	case *types.Primitive, *types.LiteralType:
+		return false
+	case *types.TypeParameterType:
+		if tt.Parameter == nil {
+			return true
+		}
+		_, ok := names[tt.Parameter.Name]
+		return ok
+	case *types.ArrayType:
+		return mayMentionTypeParamNames(tt.ElementType, names, visited)
+	case *types.ReadonlyType:
+		return mayMentionTypeParamNames(tt.InnerType, names, visited)
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if mayMentionTypeParamNames(m, names, visited) {
+				return true
+			}
+		}
+		return false
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if mayMentionTypeParamNames(m, names, visited) {
+				return true
+			}
+		}
+		return false
+	case *types.ObjectType:
+		if visited[t] {
+			return false
+		}
+		visited[t] = true
+		for _, p := range tt.Properties {
+			if mayMentionTypeParamNames(p, names, visited) {
+				return true
+			}
+		}
+		for _, a := range tt.GenericArgs {
+			if mayMentionTypeParamNames(a, names, visited) {
+				return true
+			}
+		}
+		for _, b := range tt.BaseTypes {
+			if mayMentionTypeParamNames(b, names, visited) {
+				return true
+			}
+		}
+		for _, sigs := range [][]*types.Signature{tt.CallSignatures, tt.ConstructSignatures} {
+			for _, sig := range sigs {
+				if sig == nil {
+					continue
+				}
+				for _, p := range sig.ParameterTypes {
+					if mayMentionTypeParamNames(p, names, visited) {
+						return true
+					}
+				}
+				if mayMentionTypeParamNames(sig.ReturnType, names, visited) ||
+					mayMentionTypeParamNames(sig.RestParameterType, names, visited) ||
+					mayMentionTypeParamNames(sig.ThisType, names, visited) {
+					return true
+				}
+				for _, tp := range sig.TypeParameters {
+					if tp != nil && (mayMentionTypeParamNames(tp.Constraint, names, visited) || mayMentionTypeParamNames(tp.Default, names, visited)) {
+						return true
+					}
+				}
+			}
+		}
+		for _, sig := range tt.IndexSignatures {
+			if sig != nil && (mayMentionTypeParamNames(sig.KeyType, names, visited) || mayMentionTypeParamNames(sig.ValueType, names, visited) || mayMentionTypeParamNames(sig.ConstraintType, names, visited)) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }

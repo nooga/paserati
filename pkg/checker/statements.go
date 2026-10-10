@@ -276,6 +276,8 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 	if node.Doc != "" {
 		interfaceType.Doc = node.Doc
 	}
+	// Complete once this declaration's members and bases are in.
+	defer func() { interfaceType.Pending = false }()
 	if interfaceType.DisplayName == "" && interfaceType.GenericName == "" && interfaceType.ClassMeta == nil {
 		interfaceType.DisplayName = node.Name.Value // a placeholder made before the declaration was reached
 	}

@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/nooga/paserati/pkg/errors"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/source"
 	"github.com/nooga/paserati/pkg/types"
@@ -77,6 +78,9 @@ type ModuleRecord struct {
 
 	// Type information
 	Exports       map[string]types.Type // Exported types
+	// Diagnostics is every type-checking diagnostic of the module (Error
+	// keeps only the first, for loading); see Paserati.CheckFiles.
+	Diagnostics []errors.PaseratiError
 	ExportValues  map[string]vm.Value   // Exported runtime values
 	ExportIndices map[string]uint16     // Export name to global heap index mapping (for dynamic import)
 	ReExports     map[string]vm.ModuleReExport
