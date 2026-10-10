@@ -4979,7 +4979,8 @@ func (c *Compiler) processImportBinding(localName, sourceModule, sourceName stri
 // Parallels type checker's checkExportNamedDeclaration
 func (c *Compiler) compileExportNamedDeclaration(node *parser.ExportNamedDeclaration, hint Register) (Register, errors.PaseratiError) {
 	// Type-only exports are handled during type checking only - no runtime code needed
-	if node.IsTypeOnly {
+	if node.IsTypeOnly || (node.Declaration != nil && isAmbientDeclaration(node.Declaration)) {
+		// `export type`, and `export declare ...`, which exports a type and no value.
 		debugPrintf("// [Compiler] Skipping type-only export\n")
 		return BadRegister, nil
 	}
@@ -5419,6 +5420,9 @@ func (c *Compiler) extractExportNamesFromAST(program *parser.Program) []string {
 	for _, stmt := range program.Statements {
 		switch node := stmt.(type) {
 		case *parser.ExportNamedDeclaration:
+			if node.Declaration != nil && isAmbientDeclaration(node.Declaration) {
+				continue // export declare ...: no runtime binding
+			}
 			if node.Declaration != nil {
 				// Direct export: export const x = 1; export function foo() {}
 				switch decl := node.Declaration.(type) {

@@ -248,6 +248,12 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				// IArguments, ...) that Paserati models only as a value.
 				return types.Any
 			}
+			if c.declaredTypeNames[node.Value] {
+				// A generic declared later whose type parameters all have
+				// defaults (`e: ZodError[]` before `class ZodError<T = any>`):
+				// a forward reference, instantiated with the defaults on use.
+				return &types.GenericTypeAliasForwardReference{AliasName: node.Value}
+			}
 			c.addCannotFindTypeNameError(node, c.env, node.Value)
 			return nil // Indicate error
 		}
@@ -2527,8 +2533,19 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 // substituteTypeParameterInType substitutes a type parameter with a concrete type
 // This is used when expanding mapped types to replace P with specific literal types
 func (c *Checker) substituteTypeParameterInType(targetType types.Type, paramName string, replacement types.Type) types.Type {
+	return c.substituteTypeParameterInTypeMemo(targetType, paramName, replacement, map[*types.ObjectType]*types.ObjectType{})
+}
+
+// substituteTypeParameterInTypeMemo is substituteTypeParameterInType with the
+// object types already being rewritten: a self-referencing object (a class
+// whose method returns Wrap<this>) maps to its in-progress copy instead of
+// recursing forever.
+func (c *Checker) substituteTypeParameterInTypeMemo(targetType types.Type, paramName string, replacement types.Type, memo map[*types.ObjectType]*types.ObjectType) types.Type {
 	if targetType == nil {
 		return nil
+	}
+	recur := func(t types.Type) types.Type {
+		return c.substituteTypeParameterInTypeMemo(t, paramName, replacement, memo)
 	}
 
 	switch typ := targetType.(type) {
@@ -2541,29 +2558,30 @@ func (c *Checker) substituteTypeParameterInType(targetType types.Type, paramName
 
 	case *types.ArrayType:
 		return &types.ArrayType{
-			ElementType: c.substituteTypeParameterInType(typ.ElementType, paramName, replacement),
+			ElementType: recur(typ.ElementType),
 		}
 
 	case *types.TupleType:
 		elementTypes := make([]types.Type, len(typ.ElementTypes))
 		for i, elementType := range typ.ElementTypes {
-			elementTypes[i] = c.substituteTypeParameterInType(elementType, paramName, replacement)
+			elementTypes[i] = recur(elementType)
 		}
 		return &types.TupleType{
 			ElementTypes:     elementTypes,
 			OptionalElements: append([]bool(nil), typ.OptionalElements...),
-			RestElementType:  c.substituteTypeParameterInType(typ.RestElementType, paramName, replacement),
+			RestElementType:  recur(typ.RestElementType),
 		}
 
 	case *types.ObjectType:
-		return cloneObjectTypeWithTypes(typ, func(t types.Type) types.Type {
-			return c.substituteTypeParameterInType(t, paramName, replacement)
-		})
+		if done, ok := memo[typ]; ok {
+			return done
+		}
+		return cloneObjectTypeWithTypesNotify(typ, recur, func(clone *types.ObjectType) { memo[typ] = clone })
 
 	case *types.IndexedAccessType:
 		// Handle T[P] where P is the type parameter being substituted
-		objectType := c.substituteTypeParameterInType(typ.ObjectType, paramName, replacement)
-		indexType := c.substituteTypeParameterInType(typ.IndexType, paramName, replacement)
+		objectType := recur(typ.ObjectType)
+		indexType := recur(typ.IndexType)
 
 		// Try to resolve the indexed access with the substituted types
 		resolvedType := c.computeIndexedAccessType(objectType, indexType)
@@ -2581,7 +2599,7 @@ func (c *Checker) substituteTypeParameterInType(targetType types.Type, paramName
 		// Recursively substitute in union members
 		var substitutedTypes []types.Type
 		for _, memberType := range typ.Types {
-			substituted := c.substituteTypeParameterInType(memberType, paramName, replacement)
+			substituted := recur(memberType)
 			if substituted != nil {
 				substitutedTypes = append(substitutedTypes, substituted)
 			}
@@ -2607,21 +2625,31 @@ func (c *Checker) substituteTypeParameterInType(targetType types.Type, paramName
 }
 
 func cloneObjectTypeWithTypes(obj *types.ObjectType, rewrite func(types.Type) types.Type) *types.ObjectType {
+	return cloneObjectTypeWithTypesNotify(obj, rewrite, nil)
+}
+
+// cloneObjectTypeWithTypesNotify is cloneObjectTypeWithTypes that hands the
+// clone to created before rewriting any member, so a rewrite that meets obj
+// again can use the clone.
+func cloneObjectTypeWithTypesNotify(obj *types.ObjectType, rewrite func(types.Type) types.Type, created func(*types.ObjectType)) *types.ObjectType {
 	if obj == nil {
 		return nil
 	}
 
 	result := &types.ObjectType{
-		Properties:          make(map[string]types.Type, len(obj.Properties)),
-		PropertyDocs:        obj.PropertyDocs,
-		Doc:                 obj.Doc,
-		OptionalProperties:  make(map[string]bool, len(obj.OptionalProperties)),
-		ReadOnlyProperties:  make(map[string]bool, len(obj.ReadOnlyProperties)),
-		BaseTypes:           append([]types.Type(nil), obj.BaseTypes...),
-		IsReflectIntrinsic:  obj.IsReflectIntrinsic,
-		CallSignatures:      cloneSignaturesWithTypes(obj.CallSignatures, rewrite),
-		ConstructSignatures: cloneSignaturesWithTypes(obj.ConstructSignatures, rewrite),
+		Properties:         make(map[string]types.Type, len(obj.Properties)),
+		PropertyDocs:       obj.PropertyDocs,
+		Doc:                obj.Doc,
+		OptionalProperties: make(map[string]bool, len(obj.OptionalProperties)),
+		ReadOnlyProperties: make(map[string]bool, len(obj.ReadOnlyProperties)),
+		BaseTypes:          append([]types.Type(nil), obj.BaseTypes...),
+		IsReflectIntrinsic: obj.IsReflectIntrinsic,
 	}
+	if created != nil {
+		created(result)
+	}
+	result.CallSignatures = cloneSignaturesWithTypes(obj.CallSignatures, rewrite)
+	result.ConstructSignatures = cloneSignaturesWithTypes(obj.ConstructSignatures, rewrite)
 
 	for _, name := range obj.PropertyNames() {
 		propType := obj.Properties[name]

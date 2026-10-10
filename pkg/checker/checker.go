@@ -349,8 +349,8 @@ type Checker struct {
 	reportedRelationDiagnostics map[string]bool
 	indexConstraintsReported    map[string]bool // TS2411 already reported per (type, property, index key)
 	deferredRelationChecks      []deferredRelationCheck
-	overloadStrictAny           bool // first overload pass: an `any` argument only fits any/unknown parameters
-	inAmbientNamespace          bool // checking the body of a `declare namespace`: members are implicitly exported
+	overloadStrictAny           bool              // first overload pass: an `any` argument only fits any/unknown parameters
+	inAmbientNamespace          bool              // checking the body of a `declare namespace`: members are implicitly exported
 	ambientClassBody            *parser.ClassBody // body of the `declare class` being checked: its method signatures are its members
 	checkedParameterDefaults    map[*parser.Parameter]bool
 	namespaceBodyDepth          int  // > 0 while checking a namespace body
@@ -5235,6 +5235,25 @@ func (c *Checker) processExportDeclaration(decl parser.Statement) {
 				c.moduleEnv.DefineExport(localName, localName, exportType, decl)
 			}
 			debugPrintf("// [Checker] Exported type: %s (type: %s)\n", localName, exportType.String())
+		}
+
+	case *parser.FunctionSignature:
+		// `export declare function f(): T;` (each overload signature names the
+		// same binding, so exporting it again is harmless).
+		if node.Name != nil && c.IsModuleMode() {
+			if fnType, _, exists := c.env.Resolve(node.Name.Value); exists {
+				c.moduleEnv.DefineExport(node.Name.Value, node.Name.Value, fnType, decl)
+			}
+		}
+
+	case *parser.NamespaceDeclaration:
+		// `export namespace N` / `export declare namespace util`: exported
+		// whole, so importers get both its value shape and its types
+		// (util.OmitKeys<T, K>).
+		if node.Name != nil && !node.AmbientModule && c.IsModuleMode() {
+			if nsType, exists := c.env.ResolveType(node.Name.Value); exists {
+				c.moduleEnv.DefineExport(node.Name.Value, node.Name.Value, nsType, decl)
+			}
 		}
 
 	default:

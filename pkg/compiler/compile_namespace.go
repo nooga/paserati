@@ -160,7 +160,7 @@ func isNamespaceFunctionDeclaration(stmt parser.Statement) bool {
 func (c *Compiler) predeclareNamespaceExports(body *parser.BlockStatement, accessExpr parser.Expression) {
 	for _, stmt := range body.Statements {
 		exp, ok := stmt.(*parser.ExportNamedDeclaration)
-		if !ok || exp.Declaration == nil {
+		if !ok || exp.Declaration == nil || isAmbientDeclaration(exp.Declaration) {
 			continue
 		}
 		switch d := exp.Declaration.(type) {
@@ -208,8 +208,9 @@ func (c *Compiler) compileNamespaceBodyStatement(stmt parser.Statement, accessEx
 		return err
 	}
 
-	// Exported. Process by declaration kind.
-	if exp.Declaration == nil {
+	// Exported. Process by declaration kind. An ambient declaration
+	// (`export declare var x`) has no runtime value.
+	if exp.Declaration == nil || isAmbientDeclaration(exp.Declaration) {
 		return nil
 	}
 	switch d := exp.Declaration.(type) {
@@ -579,4 +580,24 @@ func (c *Compiler) retargetPattern(target parser.Expression, accessExpr parser.E
 	}
 
 	return nil, NewCompileError(target, "unsupported destructuring target in an exported namespace declaration")
+}
+
+// isAmbientDeclaration reports whether decl is a `declare` declaration, which
+// emits no code.
+func isAmbientDeclaration(decl parser.Statement) bool {
+	switch d := decl.(type) {
+	case *parser.VarStatement:
+		return d.Declare
+	case *parser.LetStatement:
+		return d.Declare
+	case *parser.ConstStatement:
+		return d.Declare
+	case *parser.ClassDeclaration:
+		return d.Declare
+	case *parser.NamespaceDeclaration:
+		return d.Declare
+	case *parser.FunctionSignature:
+		return true
+	}
+	return false
 }
