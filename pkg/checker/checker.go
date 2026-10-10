@@ -4884,6 +4884,9 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 				// exported type T (z.infer<typeof S>), so the type side is a
 				// namespace. The value side keeps the plain object.
 				ns := types.NewNamespaceType(localName)
+				// The module namespace object exists at runtime, so z in a
+				// value position is that object, never TS2708.
+				ns.Instantiated = true
 				ns.ValueShape = objType
 				for name, t := range objType.Properties {
 					ns.TypeMembers[name] = importedTypeAlias(t)
