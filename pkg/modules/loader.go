@@ -232,6 +232,7 @@ func (ml *moduleLoader) loadModuleSequential(specifier string, fromPath string) 
 		moduleChecker.EnableModuleMode(record.ResolvedPath, ml)
 
 		checkErrors := moduleChecker.Check(record.AST)
+		record.Diagnostics = checkErrors
 
 		// Always extract exported types, even if type checking had errors.
 		// The checker registers exports during its passes regardless of errors,
@@ -839,6 +840,7 @@ func (ml *moduleLoader) performDependencyOrderedTypeChecking(entryPoint string) 
 
 			// Perform type checking on this module
 			errors := moduleChecker.Check(record.AST)
+			record.Diagnostics = errors
 			if len(errors) > 0 && !ml.config.IgnoreTypeErrors {
 				// Store the first error (can be enhanced to store all errors)
 				record.Error = paseratiErrors.NewPositionedError("type checking failed", errors[0])
@@ -998,4 +1000,17 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// Modules returns every module record the loader has loaded, once each.
+func (ml *moduleLoader) Modules() []*ModuleRecord {
+	seen := map[*ModuleRecord]bool{}
+	var out []*ModuleRecord
+	for _, spec := range ml.registry.List() {
+		if rec := ml.registry.Get(spec); rec != nil && !seen[rec] {
+			seen[rec] = true
+			out = append(out, rec)
+		}
+	}
+	return out
 }

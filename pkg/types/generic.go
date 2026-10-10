@@ -257,6 +257,50 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 		newInnerType := substituteTypeMemo(t.InnerType, substitutions, memo)
 		return NewReadonlyType(newInnerType)
 
+	// Type operators are substituted structurally; the checker evaluates them
+	// where they are used (a call returning zod's objectOutputType<Shape>
+	// left Shape inside its mapped and conditional parts).
+	case *TupleType:
+		elems := make([]Type, len(t.ElementTypes))
+		for i, e := range t.ElementTypes {
+			elems[i] = substituteTypeMemo(e, substitutions, memo)
+		}
+		return &TupleType{ElementTypes: elems, OptionalElements: t.OptionalElements, RestElementType: substituteTypeMemo(t.RestElementType, substitutions, memo)}
+	case *MappedType:
+		cp := *t
+		cp.ConstraintType = substituteTypeMemo(t.ConstraintType, substitutions, memo)
+		cp.ValueType = substituteTypeMemo(t.ValueType, substitutions, memo)
+		return &cp
+	case *ConditionalType:
+		return &ConditionalType{
+			CheckType:   substituteTypeMemo(t.CheckType, substitutions, memo),
+			ExtendsType: substituteTypeMemo(t.ExtendsType, substitutions, memo),
+			TrueType:    substituteTypeMemo(t.TrueType, substitutions, memo),
+			FalseType:   substituteTypeMemo(t.FalseType, substitutions, memo),
+		}
+	case *IndexedAccessType:
+		return &IndexedAccessType{
+			ObjectType: substituteTypeMemo(t.ObjectType, substitutions, memo),
+			IndexType:  substituteTypeMemo(t.IndexType, substitutions, memo),
+		}
+	case *KeyofType:
+		return &KeyofType{OperandType: substituteTypeMemo(t.OperandType, substitutions, memo)}
+	case *GenericTypeAliasForwardReference:
+		args := make([]Type, len(t.TypeArguments))
+		for i, a := range t.TypeArguments {
+			args[i] = substituteTypeMemo(a, substitutions, memo)
+		}
+		return &GenericTypeAliasForwardReference{AliasName: t.AliasName, TypeArguments: args}
+	case *TemplateLiteralType:
+		parts := make([]TemplateLiteralPart, len(t.Parts))
+		for i, part := range t.Parts {
+			parts[i] = part
+			if !part.IsLiteral {
+				parts[i].Type = substituteTypeMemo(part.Type, substitutions, memo)
+			}
+		}
+		return &TemplateLiteralType{Parts: parts}
+
 	// For primitive types and other types that don't contain type parameters
 	default:
 		return t
@@ -573,9 +617,37 @@ func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited map[T
 				return true
 			}
 		}
+	case *TupleType:
+		for _, e := range tt.ElementTypes {
+			if mentionsTypeParameter(e, params, visited) {
+				return true
+			}
+		}
+		return mentionsTypeParameter(tt.RestElementType, params, visited)
+	case *MappedType:
+		return mentionsTypeParameter(tt.ConstraintType, params, visited) || mentionsTypeParameter(tt.ValueType, params, visited)
+	case *ConditionalType:
+		return mentionsTypeParameter(tt.CheckType, params, visited) || mentionsTypeParameter(tt.ExtendsType, params, visited) ||
+			mentionsTypeParameter(tt.TrueType, params, visited) || mentionsTypeParameter(tt.FalseType, params, visited)
+	case *IndexedAccessType:
+		return mentionsTypeParameter(tt.ObjectType, params, visited) || mentionsTypeParameter(tt.IndexType, params, visited)
+	case *KeyofType:
+		return mentionsTypeParameter(tt.OperandType, params, visited)
+	case *GenericTypeAliasForwardReference:
+		for _, a := range tt.TypeArguments {
+			if mentionsTypeParameter(a, params, visited) {
+				return true
+			}
+		}
+	case *TemplateLiteralType:
+		for _, part := range tt.Parts {
+			if !part.IsLiteral && mentionsTypeParameter(part.Type, params, visited) {
+				return true
+			}
+		}
 	default:
-		// Other types (mapped, conditional, ...) are conservatively treated
-		// as possibly mentioning the parameters.
+		// Other types are conservatively treated as possibly mentioning the
+		// parameters.
 		switch t.(type) {
 		case *Primitive, *LiteralType, *EnumMemberType, *EnumType:
 			return false
@@ -583,4 +655,21 @@ func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited map[T
 		return true
 	}
 	return false
+}
+
+// PolymorphicThis is the type parameter `this` stands for in a class member's
+// declared type (`optional(): ZodOptional<this>`): the type of the receiver
+// the member is read from, substituted at the read.
+var PolymorphicThis = &TypeParameter{Name: "this"}
+
+// MentionsTypeParameter reports whether t may refer to p (conservatively:
+// type operators it does not walk count as a mention).
+func MentionsTypeParameter(t Type, p *TypeParameter) bool {
+	return mentionsTypeParameter(t, map[*TypeParameter]Type{p: nil}, map[Type]bool{})
+}
+
+// MentionsAnyTypeParameter reports whether t may refer to any parameter in
+// params (conservatively, as mentionsTypeParameter).
+func MentionsAnyTypeParameter(t Type, params map[*TypeParameter]Type) bool {
+	return mentionsTypeParameter(t, params, map[Type]bool{})
 }

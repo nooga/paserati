@@ -56,6 +56,9 @@ type ModuleLoader interface {
 	// SetCompilerFactory sets the factory function for creating compilers
 	SetCompilerFactory(factory func() Compiler)
 
+	// Modules returns every module record loaded so far, once each.
+	Modules() []*ModuleRecord
+
 	// SetVMInstance sets the VM instance for native module initialization
 	SetVMInstance(vm *vm.VM)
 

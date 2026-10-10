@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/builtins"
 	"github.com/nooga/paserati/pkg/driver"
+	"github.com/nooga/paserati/pkg/nodemodules"
 	"github.com/nooga/paserati/pkg/parser"
 	"github.com/nooga/paserati/pkg/vm"
 )
@@ -40,6 +42,8 @@ func main() {
 	noTypecheckFlag := flag.Bool("no-typecheck", false, "Ignore TypeScript type errors (like paserati-test262)")
 	cpuProfileFlag := flag.String("cpuprofile", "", "Write CPU profile to file (pprof)")
 	memProfileFlag := flag.String("memprofile", "", "Write heap profile to file (pprof)")
+	checkFlag := flag.Bool("check", false, "Type-check the given files and their imports without running them (like tsc --noEmit); packages resolve to their typings from node_modules")
+	noNodeModulesFlag := flag.Bool("no-node-modules", false, "Do not resolve bare package imports from node_modules")
 
 	flag.Parse() // Parses the command-line flags
 	noImplicitAny = *noImplicitAnyFlag
@@ -91,6 +95,14 @@ func main() {
 
 	// Set global AST dump flag
 	parser.DumpASTEnabled = *astDumpFlag
+
+	if *checkFlag {
+		if flag.NArg() < 1 {
+			fmt.Fprintf(os.Stderr, "Usage: paserati --check [options] <file.ts>...\n")
+			os.Exit(64)
+		}
+		os.Exit(runCheck(flag.Args(), !*noNodeModulesFlag))
+	}
 
 	// JavaScript emission mode
 	if *emitJSFlag {
@@ -312,4 +324,36 @@ func runReplWithTypes(showCacheStats bool, showBytecode bool, ignoreTypes bool, 
 func containsImportsInString(input string) bool {
 	trimmed := strings.TrimSpace(input)
 	return strings.HasPrefix(trimmed, "import ") || strings.Contains(trimmed, "\nimport ")
+}
+
+// runCheck type-checks files without running them and prints diagnostics in
+// tsc's format, returning tsc's exit status (0 clean, 2 with errors).
+func runCheck(files []string, nodeModules bool) int {
+	p := driver.NewPaserati()
+	p.SetNoImplicitAny(noImplicitAny)
+	if nodeModules {
+		p.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types}))
+	}
+	wd, _ := os.Getwd()
+	count := 0
+	for _, res := range p.CheckFiles(files) {
+		name := res.Path
+		if rel, err := filepath.Rel(wd, name); err == nil && !strings.HasPrefix(rel, "..") {
+			name = rel
+		}
+		if res.LoadError != nil {
+			fmt.Printf("%s: error: %s\n", name, res.LoadError)
+			count++
+			continue
+		}
+		for _, d := range res.Diagnostics {
+			pos := d.Pos()
+			fmt.Printf("%s(%d,%d): error %s: %s\n", name, pos.Line, pos.Column, d.Code(), d.Message())
+			count++
+		}
+	}
+	if count > 0 {
+		return 2
+	}
+	return 0
 }
