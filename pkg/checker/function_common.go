@@ -558,7 +558,17 @@ func (c *Checker) checkFunctionBody(ctx *FunctionCheckContext, expectedReturnTyp
 
 	// Visit body
 	c.hoistFunctionBodyVars(ctx.Body)
-	c.visit(ctx.Body)
+	if exprBody, ok := ctx.Body.(parser.Expression); ok && ctx.IsArrow && expectedReturnType != nil {
+		// An expression body is contextually typed by the return type, like a
+		// return statement's value: `(n): [number, number] => [n, n]`.
+		contextType := expectedReturnType
+		if ctx.IsAsync {
+			contextType = c.getAwaitedType(contextType)
+		}
+		c.visitWithContext(exprBody, &ContextualType{ExpectedType: contextType})
+	} else {
+		c.visit(ctx.Body)
+	}
 	if block, ok := ctx.Body.(*parser.BlockStatement); ok {
 		c.checkMissingReturn(ctx.ReturnTypeAnnotation, expectedReturnType, block, ctx.IsAsync, ctx.IsGenerator)
 	}
