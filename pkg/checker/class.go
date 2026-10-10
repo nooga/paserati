@@ -1826,6 +1826,9 @@ func (c *Checker) handleClassInheritance(instanceType *types.ObjectType, superCl
 			resolvedTypeArgs := make([]types.Type, len(genRef.TypeArguments))
 			for i, typeArg := range genRef.TypeArguments {
 				resolvedTypeArgs[i] = c.resolveTypeAnnotation(typeArg)
+				if resolvedTypeArgs[i] == nil {
+					resolvedTypeArgs[i] = types.Any // its error is already reported
+				}
 				debugPrintf("// [Checker Class] Resolved type arg %d: %s\n", i, resolvedTypeArgs[i].String())
 			}
 

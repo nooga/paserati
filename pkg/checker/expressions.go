@@ -1123,8 +1123,15 @@ func (c *Checker) instantiateAliasReference(ref *types.GenericTypeAliasForwardRe
 		return nil
 	}
 	generic, ok := resolved.(*types.GenericType)
-	if !ok || len(ref.TypeArguments) != len(generic.TypeParameters) {
+	if !ok || len(ref.TypeArguments) > len(generic.TypeParameters) {
 		return nil
+	}
+	// Missing trailing arguments take their defaults (a bare forward
+	// reference has none at all).
+	for _, param := range generic.TypeParameters[len(ref.TypeArguments):] {
+		if param.Default == nil {
+			return nil
+		}
 	}
 	for _, arg := range ref.TypeArguments {
 		if arg == nil {

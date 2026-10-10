@@ -1295,6 +1295,16 @@ func (p *Parser) parseDeclareStatement() Statement {
 		if p.peekTokenIs(lexer.CLASS) {
 			return p.finishDeclareClass(p.parseAbstractClassDeclarationStatement())
 		}
+	case lexer.IDENT:
+		// `export declare namespace util { ... }` (a bare `declare namespace`
+		// is handled before this is reached).
+		if p.curToken.Literal == "namespace" &&
+			(p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {
+			if ns := p.parseNamespaceDeclaration(true); ns != nil {
+				return ns
+			}
+			return nil
+		}
 	}
 
 	// For all other forms (enum, async, namespace),
@@ -12208,8 +12218,15 @@ func (p *Parser) parseExportDeclaration() Statement {
 
 	case lexer.IDENT:
 		if p.curToken.Literal == "declare" {
-			// export declare const x: number; — ambient declaration
-			return p.parseDeclareStatement()
+			// export declare const x: number; — an exported ambient declaration
+			decl := p.parseDeclareStatement()
+			if decl == nil {
+				return nil
+			}
+			if ns, ok := decl.(*NamespaceDeclaration); ok {
+				ns.IsExported = true
+			}
+			return &ExportNamedDeclaration{Token: exportToken, Declaration: decl}
 		}
 		// export namespace X { ... } — TypeScript namespace export
 		if p.curToken.Literal == "namespace" &&
