@@ -349,9 +349,14 @@ type Checker struct {
 	reportedRelationDiagnostics map[string]bool
 	indexConstraintsReported    map[string]bool // TS2411 already reported per (type, property, index key)
 	deferredRelationChecks      []deferredRelationCheck
-	overloadStrictAny           bool              // first overload pass: an `any` argument only fits any/unknown parameters
-	inAmbientNamespace          bool              // checking the body of a `declare namespace`: members are implicitly exported
-	ambientClassBody            *parser.ClassBody // body of the `declare class` being checked: its method signatures are its members
+	overloadStrictAny           bool                                  // first overload pass: an `any` argument only fits any/unknown parameters
+	inAmbientNamespace          bool                                  // checking the body of a `declare namespace`: members are implicitly exported
+	ambientClassBody            *parser.ClassBody                     // body of the `declare class` being checked: its method signatures are its members
+	aliasInstantiationDepth     int                                   // nesting of instantiateAliasReference, capped for recursive aliases
+	aliasInstCache              map[aliasInstKey]types.Type           // instantiateAliasReference results
+	pendingAliases              map[string]*parser.TypeAliasStatement // top-level aliases Pass 1 has not resolved yet
+	pendingAliasEnv             *Environment                          // the environment they resolve in
+	classPlaceholders           map[*types.ObjectType]bool            // Pass 0 class types not filled in yet
 	checkedParameterDefaults    map[*parser.Parameter]bool
 	namespaceBodyDepth          int  // > 0 while checking a namespace body
 	isModule                    bool // Source is a module, so strict mode comes from the module (TS1214)
@@ -1090,6 +1095,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 				}
 				c.env.DefineTypeAlias(classStmt.Name.Value, placeholderType)
 				debugPrintf("// [Checker Pass 0] Pre-registered class '%s'\n", classStmt.Name.Value)
+				c.markClassPlaceholder(placeholderType)
 			}
 		} else if exportStmt, ok := stmt.(*parser.ExportNamedDeclaration); ok {
 			if exportStmt.Declaration != nil {
@@ -1125,6 +1131,7 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 						}
 						c.env.DefineTypeAlias(classDecl.Name.Value, placeholderType)
 						debugPrintf("// [Checker Pass 0] Pre-registered exported class '%s'\n", classDecl.Name.Value)
+						c.markClassPlaceholder(placeholderType)
 					}
 				}
 			}
@@ -1132,6 +1139,24 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	}
 
 	// --- Pass 1: Define ALL Type Aliases ---
+	// Aliases are resolved in source order, but one may mention an alias
+	// declared after it (zod's objectOutputType names baseObjectOutputType,
+	// declared on the next line); such a reference resolves the later alias
+	// on demand (resolvePendingAlias), so the order does not matter.
+	c.pendingAliases = map[string]*parser.TypeAliasStatement{}
+	c.pendingAliasEnv = c.env
+	for _, stmt := range program.Statements {
+		alias, ok := stmt.(*parser.TypeAliasStatement)
+		if exp, isExp := stmt.(*parser.ExportNamedDeclaration); isExp && exp.Declaration != nil {
+			alias, ok = exp.Declaration.(*parser.TypeAliasStatement)
+		}
+		if ok && alias.Name != nil {
+			if _, dup := c.pendingAliases[alias.Name.Value]; !dup {
+				c.pendingAliases[alias.Name.Value] = alias
+			}
+		}
+	}
+	defer func() { c.pendingAliases, c.pendingAliasEnv = nil, nil }()
 	// Defer class method body checking until after Pass 2 (function hoisting)
 	// so that hoisted functions (including type predicate functions) are available
 	c.deferMethodBodies = true
@@ -3373,6 +3398,11 @@ func (c *Checker) visit(node parser.Node) {
 	// --- NEW: Member Expression Type Checking ---
 	case *parser.MemberExpression:
 		c.checkMemberExpression(node)
+		// A member read from a type computed before its classes existed may
+		// hold a deferred part (ZodOptional<ZodNumber>["_output"]).
+		if t := node.GetComputedType(); isDeferredType(t) {
+			node.SetComputedType(c.settleType(t))
+		}
 
 	// --- NEW: Optional Chaining Expression Type Checking ---
 	case *parser.ChainBase:
@@ -5389,4 +5419,11 @@ func sameParameterTypes(a, b *types.Signature) bool {
 		}
 	}
 	return true
+}
+
+// markClassPlaceholder records a Pass 0 class type that its declaration has
+// not filled in yet: types computed against it before then (in hoisted
+// aliases) are deferred rather than judged against an empty object.
+func (c *Checker) markClassPlaceholder(t *types.ObjectType) {
+	t.Pending = true
 }

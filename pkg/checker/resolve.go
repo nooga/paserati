@@ -57,17 +57,193 @@ func (c *Checker) resolveTypeAnnotation(node parser.Expression) types.Type {
 	if t != nil {
 		t = c.resolveDeferredTypeofIndex(t, false)
 	}
-	// A conditional left deferred by an alias resolved before the classes it
-	// mentions (`type C = ZodType extends ZodTypeAny ? ...` in Pass 1) is
-	// evaluated where the alias is used.
-	if cond, ok := t.(*types.ConditionalType); ok {
-		if resolved := c.computeConditionalType(cond.CheckType, cond.ExtendsType, cond.TrueType, cond.FalseType); resolved != nil {
-			if _, still := resolved.(*types.ConditionalType); !still {
-				t = resolved
+	// Parts left deferred by an alias resolved before the classes it mentions
+	// are evaluated where the alias is used.
+	return c.settleType(t)
+}
+
+// settleType re-evaluates the parts of t that were deferred because their
+// inputs did not exist yet: aliases resolve in Pass 1, before classes are
+// filled in, so `ZodNumber["_output"]` met the empty class placeholder and
+// `ZodType extends ZodTypeAny ? ...` met no ZodType at all. The placeholders
+// are filled in place, so by the time a type is used these compute. It walks
+// unions, intersections, indexed accesses, conditionals and forward
+// references; object members are settled where they are read.
+func (c *Checker) settleType(t types.Type) types.Type {
+	return c.settleTypeDepth(t, 0)
+}
+
+func (c *Checker) settleTypeDepth(t types.Type, depth int) types.Type {
+	if t == nil || depth > 16 {
+		return t
+	}
+	switch tt := t.(type) {
+	case *types.IndexedAccessType:
+		obj := c.settleTypeDepth(tt.ObjectType, depth+1)
+		idx := c.settleTypeDepth(tt.IndexType, depth+1)
+		_, objIsParam := obj.(*types.TypeParameterType)
+		_, idxIsParam := idx.(*types.TypeParameterType)
+		if !objIsParam && !idxIsParam {
+			if resolved := c.computeIndexedAccessType(obj, idx); resolved != nil {
+				return c.settleTypeDepth(resolved, depth+1)
 			}
+		}
+		if obj != tt.ObjectType || idx != tt.IndexType {
+			return &types.IndexedAccessType{ObjectType: obj, IndexType: idx}
+		}
+	case *types.ConditionalType:
+		check := c.settleTypeDepth(tt.CheckType, depth+1)
+		ext := c.settleTypeDepth(tt.ExtendsType, depth+1)
+		if resolved := c.computeConditionalType(check, ext, tt.TrueType, tt.FalseType); resolved != nil {
+			if _, still := resolved.(*types.ConditionalType); !still {
+				return c.settleTypeDepth(resolved, depth+1)
+			}
+		}
+	case *types.GenericTypeAliasForwardReference:
+		if inst := c.instantiateAliasReference(tt); inst != nil {
+			return c.settleTypeDepth(inst, depth+1)
+		}
+	case *types.UnionType:
+		changed := false
+		members := make([]types.Type, len(tt.Types))
+		for i, m := range tt.Types {
+			members[i] = c.settleTypeDepth(m, depth+1)
+			changed = changed || members[i] != m
+		}
+		if changed {
+			return types.NewUnionType(members...)
+		}
+	case *types.IntersectionType:
+		changed := false
+		members := make([]types.Type, len(tt.Types))
+		for i, m := range tt.Types {
+			members[i] = c.settleTypeDepth(m, depth+1)
+			changed = changed || members[i] != m
+		}
+		if changed {
+			return types.NewIntersectionType(members...)
+		}
+	case *types.KeyofType:
+		// Stays a keyof, so a mapped type over it remains homomorphic.
+		if operand := c.settleTypeDepth(tt.OperandType, depth+1); operand != tt.OperandType {
+			return &types.KeyofType{OperandType: operand}
+		}
+	case *types.MappedType:
+		// The key set may be a deferred `{ ... }[keyof T]` (zod's requiredKeys).
+		if constraint := c.settleTypeDepth(tt.ConstraintType, depth+1); constraint != tt.ConstraintType {
+			cp := *tt
+			cp.ConstraintType = constraint
+			return &cp
+		}
+	case *types.ObjectType:
+		// Only properties that are themselves deferred are settled, so an
+		// ordinary (possibly recursive) class type is returned as is.
+		var settled map[string]types.Type
+		for _, name := range tt.PropertyNames() {
+			prop := tt.Properties[name]
+			// Forward references in members (`owner: OwnerList<T>`) resolve
+			// where they are read; copying a recursive interface to settle
+			// them would lose its identity.
+			if !isDeferredComputation(prop) {
+				continue
+			}
+			if np := c.settleTypeDepth(prop, depth+1); np != prop {
+				if settled == nil {
+					settled = map[string]types.Type{}
+				}
+				settled[name] = np
+			}
+		}
+		if settled != nil {
+			return cloneObjectTypeWithTypes(tt, func(p types.Type) types.Type {
+				for name, np := range settled {
+					if tt.Properties[name] == p {
+						return np
+					}
+				}
+				return p
+			})
 		}
 	}
 	return t
+}
+
+// mentionsUndeclared reports whether t refers to a class not filled in yet or
+// a generic the program declares later and that cannot be instantiated yet.
+func (c *Checker) mentionsUndeclared(t types.Type, depth int) bool {
+	if t == nil || depth > 8 {
+		return false
+	}
+	switch tt := t.(type) {
+	case *types.ObjectType:
+		return tt.Pending
+	case *types.GenericTypeAliasForwardReference:
+		if !c.declaredTypeNames[tt.AliasName] {
+			return false
+		}
+		_, isGeneric := c.lookupTypeNoPending(tt.AliasName).(*types.GenericType)
+		return !isGeneric
+	case *types.ParameterizedForwardReferenceType:
+		return true
+	case *types.IndexedAccessType:
+		return c.mentionsUndeclared(tt.ObjectType, depth+1) || c.mentionsUndeclared(tt.IndexType, depth+1)
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if c.mentionsUndeclared(m, depth+1) {
+				return true
+			}
+		}
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if c.mentionsUndeclared(m, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isDeferredComputation reports whether t holds an indexed access or a
+// conditional that settleType can evaluate later.
+func isDeferredComputation(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.IndexedAccessType, *types.ConditionalType:
+		return true
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if isDeferredComputation(m) {
+				return true
+			}
+		}
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if isDeferredComputation(m) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isDeferredType reports whether t is a type settleType can evaluate later.
+func isDeferredType(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.IndexedAccessType, *types.ConditionalType, *types.GenericTypeAliasForwardReference:
+		return true
+	case *types.UnionType:
+		for _, m := range tt.Types {
+			if isDeferredType(m) {
+				return true
+			}
+		}
+	case *types.IntersectionType:
+		for _, m := range tt.Types {
+			if isDeferredType(m) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
@@ -257,6 +433,11 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				// lib.d.ts declares an interface of this name (JSON, Atomics,
 				// IArguments, ...) that Paserati models only as a value.
 				return types.Any
+			}
+			if c.resolvePendingAlias(node.Value) {
+				if t, found := c.env.ResolveType(node.Value); found {
+					return t
+				}
 			}
 			if c.declaredTypeNames[node.Value] {
 				// A generic declared later whose type parameters all have
@@ -481,6 +662,9 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 
 				// Check if this is a user-defined generic type
 				baseType, exists = c.env.ResolveType(node.Name.Value)
+				if !exists && c.resolvePendingAlias(node.Name.Value) {
+					baseType, exists = c.env.ResolveType(node.Name.Value)
+				}
 			}
 
 			if !exists {
@@ -1395,6 +1579,11 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 				// nothing to check yet.
 				continue
 			}
+			if obj, ok := argType.(*types.ObjectType); ok && obj.Pending {
+				// A class not declared yet (a hoisted alias names it): its
+				// members are unknown, so there is nothing to check yet.
+				continue
+			}
 			// A type parameter argument satisfies the constraint through its
 			// own: PassthroughType<UnknownKeys> inside a generic whose
 			// UnknownKeys extends UnknownKeysParam.
@@ -1519,6 +1708,11 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 	case *types.ObjectType:
 		if replacement, exists := visited[typ]; exists {
 			return replacement
+		}
+		if typ.Pending {
+			// A class its declaration fills in later, in place: keep the
+			// reference, a copy would stay empty.
+			return typ
 		}
 
 		// Handle ObjectType with properties and call signatures
@@ -2299,6 +2493,13 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 		}
 	}
 
+	// A side that still mentions a class or generic not declared yet (a
+	// hoisted alias naming ZodOptional<ZodNumber>) cannot be judged; settleType
+	// evaluates it where the alias is used.
+	if c.mentionsUndeclared(checkType, 0) || c.mentionsUndeclared(extendsType, 0) {
+		return nil
+	}
+
 	// Check if we have unresolved TypeofType that we should defer
 	if c.containsUnresolvedTypeofType(checkType) || c.containsUnresolvedTypeofType(extendsType) {
 		debugPrintf("// [ConditionalType] Contains unresolved TypeofType, deferring evaluation\n")
@@ -2743,6 +2944,9 @@ func (c *Checker) substituteTypeParameterInTypeMemo(targetType types.Type, param
 		if done, ok := memo[typ]; ok {
 			return done
 		}
+		if typ.Pending {
+			return typ // filled in later, in place (see substituteTypes)
+		}
 		return cloneObjectTypeWithTypesNotify(typ, recur, func(clone *types.ObjectType) { memo[typ] = clone })
 
 	case *types.IndexedAccessType:
@@ -2924,6 +3128,7 @@ func (c *Checker) expandIfMappedType(typ types.Type) types.Type {
 	if typ == nil {
 		return typ
 	}
+	typ = c.settleType(typ)
 
 	debugPrintf("// [Checker] expandIfMappedType called with type: %T %s\n", typ, typ.String())
 
@@ -2935,7 +3140,7 @@ func (c *Checker) expandIfMappedType(typ types.Type) types.Type {
 		expanded := c.expandMappedType(mappedType)
 		if expanded != nil {
 			debugPrintf("// [Checker] Direct mapped type expanded to: %s\n", expanded.String())
-			return expanded
+			return c.settleType(expanded)
 		}
 		debugPrintf("// [Checker] Direct mapped type expansion failed\n")
 		return typ
@@ -3756,3 +3961,13 @@ func (c *Checker) structuralObject(t types.Type) (*types.ObjectType, bool) {
 	}
 	return nil, false
 }
+
+// lookupTypeNoPending is ResolveType without side effects: nil when name is
+// not (yet) a type.
+func (c *Checker) lookupTypeNoPending(name string) types.Type {
+	if t, ok := c.env.ResolveType(name); ok {
+		return t
+	}
+	return nil
+}
+
