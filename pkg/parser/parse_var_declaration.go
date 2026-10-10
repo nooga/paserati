@@ -129,7 +129,7 @@ func (p *Parser) parseDeclListItem(declToken *lexer.Token, kind varDeclKind, pre
 				p.nextToken() // Consume '='
 				p.nextToken() // Move to the first token of the initializer
 				declarator.Value = p.parseExpression(COMMA)
-			} else if p.inAmbientContext == 0 {
+			} else if p.inAmbientContext == 0 && !p.ambientFile {
 				// tsc's parser accepts `const x;`; its checker reports TS1155
 				// at the name (grammar check, not in ambient contexts).
 				p.addErrorWithCode(declarator.Name.Token, errors.TS1155, "'const' declarations must be initialized.")

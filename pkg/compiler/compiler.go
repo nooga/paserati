@@ -2442,6 +2442,25 @@ func (c *Compiler) compileNode(node parser.Node, hint Register) (Register, error
 	case *parser.ExportAllDeclaration:
 		return c.compileExportAllDeclaration(node, hint)
 
+	case *parser.ExportAssignment:
+		// FIXME: `export =` does not set the module's export at runtime; the
+		// expression is evaluated for its effects, as before. Its types are
+		// exported by the checker.
+		return c.compileNode(&parser.ExpressionStatement{Token: node.Token, Expression: node.Expression}, hint)
+
+	case *parser.ImportEqualsDeclaration:
+		if node.Require != nil {
+			// FIXME: CommonJS require at runtime.
+			return BadRegister, NewCompileError(node, "import = require() is not supported at runtime")
+		}
+		if node.IsTypeOnly {
+			return BadRegister, nil
+		}
+		// import x = N.M: a constant bound to the entity's value.
+		decl := &parser.ConstStatement{Token: node.Token, Name: node.Name, Value: node.Entity,
+			Declarations: []*parser.VarDeclarator{{Name: node.Name, Value: node.Entity}}}
+		return c.compileNode(decl, hint)
+
 	// --- Expressions (excluding FunctionLiteral which is handled above) ---
 	case *parser.NumberLiteral:
 		//fmt.Printf("[NUMBER LITERAL DEBUG] Compiling NumberLiteral value=%f with hint=R%d\n", node.Value, hint)

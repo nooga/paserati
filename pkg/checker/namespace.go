@@ -53,6 +53,20 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 		nsType.Declare = node.Declare
 		// Bind in type env (for namespace-qualified type names like N.X).
 		c.env.DefineTypeAlias(name, nsType)
+		// A function or class of the same name merges with the namespace
+		// (`declare function e(): e.App; declare namespace e { ... }`, as
+		// @types/express declares): the value is callable or constructible
+		// and has the namespace's members.
+		if prev, ok := c.env.symbols[name]; ok && !node.AmbientModule {
+			if fn, ok := prev.Type.(*types.ObjectType); ok && (len(fn.CallSignatures) > 0 || len(fn.ConstructSignatures) > 0) {
+				nsType.ValueShape.CallSignatures = append(nsType.ValueShape.CallSignatures, fn.CallSignatures...)
+				nsType.ValueShape.ConstructSignatures = append(nsType.ValueShape.ConstructSignatures, fn.ConstructSignatures...)
+				for _, prop := range fn.PropertyNames() {
+					nsType.ValueShape.SetProperty(prop, fn.Properties[prop])
+				}
+				nsType.Instantiated = true
+			}
+		}
 		// Bind ValueShape in value env so `N.x` member access resolves through
 		// ordinary ObjectType property lookup.
 		c.env.Define(name, nsType.ValueShape, false)
@@ -170,6 +184,16 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 func (c *Checker) preprocessNamespaceTypes(body *parser.BlockStatement, nsType *types.NamespaceType) {
 	process := func(inner parser.Statement, exported bool) {
 		switch n := inner.(type) {
+		case *parser.ImportEqualsDeclaration:
+			typeSide, valueSide := c.checkImportEqualsDeclaration(n)
+			if n.IsExported && n.Name != nil {
+				if typeSide != nil {
+					nsType.TypeMembers[n.Name.Value] = typeSide
+				}
+				if valueSide != nil {
+					nsType.ValueShape.SetProperty(n.Name.Value, valueSide)
+				}
+			}
 		case *parser.InterfaceDeclaration:
 			c.checkInterfaceDeclaration(n)
 			if exported && n.Name != nil {
@@ -233,7 +257,8 @@ func (c *Checker) preprocessNamespaceTypes(body *parser.BlockStatement, nsType *
 	}
 	for _, stmt := range body.Statements {
 		switch s := stmt.(type) {
-		case *parser.InterfaceDeclaration, *parser.TypeAliasStatement, *parser.ClassDeclaration, *parser.NamespaceDeclaration, *parser.ExpressionStatement:
+		case *parser.InterfaceDeclaration, *parser.TypeAliasStatement, *parser.ClassDeclaration, *parser.NamespaceDeclaration, *parser.ExpressionStatement,
+			*parser.ImportEqualsDeclaration:
 			process(s, c.inAmbientNamespace)
 		case *parser.ExportNamedDeclaration:
 			if s.Declaration != nil {
@@ -306,7 +331,8 @@ func (c *Checker) checkNamespaceBodyStatement(stmt parser.Statement, nsType *typ
 	}
 
 	switch n := inner.(type) {
-	case *parser.NamespaceDeclaration, *parser.InterfaceDeclaration, *parser.TypeAliasStatement, *parser.ClassDeclaration:
+	case *parser.NamespaceDeclaration, *parser.InterfaceDeclaration, *parser.TypeAliasStatement, *parser.ClassDeclaration,
+		*parser.ImportEqualsDeclaration:
 		// Already processed in preprocessNamespaceTypes.
 		_ = n
 		return

@@ -194,16 +194,15 @@ func (p *Parser) finishDeclareClass(classStmt Statement) Statement {
 			}
 		}
 	}
-	// Check computed property/method keys in ambient class bodies.
-	// Bare identifier keys (e.g. [e]) emit TS2304; unknown Symbol.X emit TS2339.
+	// Check computed property/method keys in ambient class bodies: unknown
+	// Symbol.X emit TS2339. (A bare identifier key is resolved by the
+	// checker, which reports TS2304 if the name is undeclared.)
 	checkComputedKey := func(keyExpr Expression) {
 		cpn, ok := keyExpr.(*ComputedPropertyName)
 		if !ok {
 			return
 		}
 		switch expr := cpn.Expr.(type) {
-		case *Identifier:
-			p.addError(expr.Token, fmt.Sprintf("Cannot find name '%s'.", expr.Value))
 		case *MemberExpression:
 			if obj, ok := expr.Object.(*Identifier); ok && obj.Value == "Symbol" {
 				if prop, ok := expr.Property.(*Identifier); ok {

@@ -408,7 +408,19 @@ func (c *Checker) mergeAmbientOverload(name string, sig *types.Signature) {
 		return
 	}
 	existingObj, ok := existing.(*types.ObjectType)
-	if !ok || !existingObj.IsCallable() || len(existingObj.Properties) != 0 {
+	if !ok {
+		return
+	}
+	if t, found := c.env.ResolveType(name); found {
+		if ns, isNs := t.(*types.NamespaceType); isNs && ns.ValueShape == existingObj {
+			// `declare namespace e { ... }` merged with `declare function
+			// e()`: the namespace value is callable.
+			existingObj.CallSignatures = append(existingObj.CallSignatures, sig)
+			ns.Instantiated = true
+			return
+		}
+	}
+	if !existingObj.IsCallable() || len(existingObj.Properties) != 0 {
 		return
 	}
 	for _, have := range existingObj.CallSignatures {

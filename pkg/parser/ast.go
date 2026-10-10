@@ -2582,11 +2582,65 @@ func (kte *KeyofTypeExpression) GetComputedType() types.Type { return kte.Comput
 
 // TypeofTypeExpression represents a typeof type operator like typeof someVariable
 // Used in type contexts to extract the type of a value
+// ImportEqualsDeclaration is `import x = require("m")` (the module's
+// `export =` value, or its namespace) or `import x = N.M` (an alias of an
+// entity name), optionally `export`ed or `type`-only.
+type ImportEqualsDeclaration struct {
+	Token      *lexer.Token // The 'import' token
+	Name       *Identifier
+	Require    *StringLiteral // the module specifier of require("m"); nil for an entity alias
+	Entity     Expression     // N.M (Identifier or MemberExpression); nil for require
+	IsExported bool
+	IsTypeOnly bool
+}
+
+func (ied *ImportEqualsDeclaration) statementNode()       {}
+func (ied *ImportEqualsDeclaration) TokenLiteral() string { return ied.Token.Literal }
+func (ied *ImportEqualsDeclaration) String() string {
+	target := ""
+	if ied.Require != nil {
+		target = fmt.Sprintf("require(%q)", ied.Require.Value)
+	} else if ied.Entity != nil {
+		target = ied.Entity.String()
+	}
+	return fmt.Sprintf("import %s = %s;", ied.Name.Value, target)
+}
+
+// ExportAssignment is `export = expr;`: the module's whole export (CommonJS
+// style, as declaration files for CommonJS packages use).
+type ExportAssignment struct {
+	Token      *lexer.Token // The 'export' token
+	Expression Expression
+}
+
+func (ea *ExportAssignment) statementNode()       {}
+func (ea *ExportAssignment) TokenLiteral() string { return ea.Token.Literal }
+func (ea *ExportAssignment) String() string       { return "export = " + ea.Expression.String() + ";" }
+
+// ImportTypeExpression is `import("specifier")` in a type: the module's
+// namespace. It is used qualified (`import("x").T<A>`) or in a type query
+// (`typeof import("x")`).
+type ImportTypeExpression struct {
+	BaseExpression
+	Token     *lexer.Token // The 'import' token
+	Specifier string
+	Source    *StringLiteral // The specifier literal, for diagnostics
+}
+
+func (ite *ImportTypeExpression) expressionNode()      {}
+func (ite *ImportTypeExpression) TokenLiteral() string { return ite.Token.Literal }
+func (ite *ImportTypeExpression) String() string {
+	return fmt.Sprintf("import(%q)", ite.Specifier)
+}
+
 type TypeofTypeExpression struct {
 	BaseExpression              // Embed base for ComputedType
 	Token          *lexer.Token // The 'typeof' token
 	Identifier     string       // The identifier whose type we want (first segment, or full name for simple case)
 	Path           []string     // Full dotted path segments, e.g. ["M2", "Point"] for typeof M2.Point
+	// Import is set for `typeof import("x").a.b`: Path then holds the
+	// segments after the import (empty for the module itself).
+	Import *ImportTypeExpression
 }
 
 func (tte *TypeofTypeExpression) expressionNode()      {}
