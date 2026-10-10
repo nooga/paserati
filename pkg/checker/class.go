@@ -468,6 +468,7 @@ func (c *Checker) checkAbstractMembersImplemented(node *parser.ClassDeclaration,
 
 // checkGenericClassDeclaration handles generic class declarations
 func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
+	defer c.markGenericComplete(node.Name.Value)
 	debugPrintf("// [Checker Class] Processing generic class '%s' with %d type parameters\n",
 		node.Name.Value, len(node.TypeParameters))
 
