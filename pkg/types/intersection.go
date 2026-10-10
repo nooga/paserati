@@ -2,6 +2,8 @@ package types
 
 import (
 	"sort"
+
+	"github.com/nooga/paserati/pkg/vm"
 )
 
 // --- Intersection Types ---
@@ -103,6 +105,47 @@ func NewIntersectionType(ts ...Type) Type {
 		}
 	}
 
+	// unknown & T is T.
+	if len(uniqueMembers) > 1 {
+		known := uniqueMembers[:0:0]
+		for _, m := range uniqueMembers {
+			if m != Unknown {
+				known = append(known, m)
+			}
+		}
+		if len(known) == 0 {
+			return Unknown
+		}
+		uniqueMembers = known
+	}
+	// A literal absorbs its own primitive: "foo" & string is "foo".
+	if len(uniqueMembers) > 1 {
+		literalKinds := map[string]bool{}
+		for _, m := range uniqueMembers {
+			if _, isLit := m.(*LiteralType); isLit {
+				literalKinds[primitiveKind(m)] = true
+			}
+		}
+		if len(literalKinds) > 0 {
+			kept := uniqueMembers[:0:0]
+			for _, m := range uniqueMembers {
+				if _, isLit := m.(*LiteralType); !isLit && literalKinds[primitiveKind(m)] && primitiveKind(m) != "" {
+					continue
+				}
+				kept = append(kept, m)
+			}
+			uniqueMembers = kept
+		}
+	}
+	// Disjoint primitives are never: "a" & "b", string & number, "a" & number.
+	for i, a := range uniqueMembers {
+		for _, b := range uniqueMembers[i+1:] {
+			if disjointPrimitives(a, b) {
+				return Never
+			}
+		}
+	}
+
 	// Handle simplification rules
 	if len(uniqueMembers) == 0 {
 		// Empty intersection (should not happen normally)
@@ -135,4 +178,53 @@ func NewIntersectionType(ts ...Type) Type {
 	})
 
 	return &IntersectionType{Types: uniqueMembers}
+}
+
+// primitiveKind is the primitive a type is or belongs to ("string" for string
+// and string literals), or "" for anything else.
+func primitiveKind(t Type) string {
+	switch t {
+	case String:
+		return "string"
+	case Number:
+		return "number"
+	case Boolean:
+		return "boolean"
+	case BigInt:
+		return "bigint"
+	case Symbol:
+		return "symbol"
+	case Null:
+		return "null"
+	case Undefined:
+		return "undefined"
+	}
+	if lit, ok := t.(*LiteralType); ok {
+		switch lit.Value.Type() {
+		case vm.TypeString:
+			return "string"
+		case vm.TypeFloatNumber, vm.TypeIntegerNumber:
+			return "number"
+		case vm.TypeBoolean:
+			return "boolean"
+		case vm.TypeBigInt:
+			return "bigint"
+		}
+	}
+	return ""
+}
+
+// disjointPrimitives reports whether a & b is empty because both are
+// primitives (or literals) with no value in common.
+func disjointPrimitives(a, b Type) bool {
+	ka, kb := primitiveKind(a), primitiveKind(b)
+	if ka == "" || kb == "" {
+		return false
+	}
+	if ka != kb {
+		return true
+	}
+	la, aLit := a.(*LiteralType)
+	lb, bLit := b.(*LiteralType)
+	return aLit && bLit && !la.Equals(lb)
 }
