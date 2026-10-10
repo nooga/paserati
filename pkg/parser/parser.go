@@ -1291,9 +1291,13 @@ func (p *Parser) parseDeclareStatement() Statement {
 		return sig
 	case lexer.CLASS:
 		return p.parseDeclareClassStatement()
+	case lexer.ABSTRACT:
+		if p.peekTokenIs(lexer.CLASS) {
+			return p.finishDeclareClass(p.parseAbstractClassDeclarationStatement())
+		}
 	}
 
-	// For all other forms (enum, async, abstract, namespace),
+	// For all other forms (enum, async, namespace),
 	// skip tokens with balanced bracket tracking until we find a terminating semicolon
 	// at depth 0, or reach a point where ASI should apply.
 	return p.skipDeclareBody()

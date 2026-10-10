@@ -150,7 +150,13 @@ func (p *Parser) parseClassDeclaration() Statement {
 // so the checker registers the class type for inheritance/type checking, while the
 // compiler skips code generation for it.
 func (p *Parser) parseDeclareClassStatement() Statement {
-	classStmt := p.parseClassDeclaration()
+	return p.finishDeclareClass(p.parseClassDeclaration())
+}
+
+// finishDeclareClass marks a parsed class ambient (`declare class`,
+// `declare abstract class`) and reports what an ambient class body cannot
+// contain.
+func (p *Parser) finishDeclareClass(classStmt Statement) Statement {
 	if classStmt == nil {
 		return nil
 	}

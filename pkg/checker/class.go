@@ -284,8 +284,14 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// Validate class member constraints before type-building.
 	// Skip for declare classes: ambient bodies have signatures without implementations
 	// and no bodies — that's their intended form.
-	if !node.Declare {
+	ambient := node.Declare || c.inAmbientNamespace
+	if !ambient {
 		c.validateClassMemberConstraints(node.Body)
+	}
+	if ambient {
+		outerAmbient := c.ambientClassBody
+		c.ambientClassBody = node.Body
+		defer func() { c.ambientClassBody = outerAmbient }()
 	}
 
 	// Handle generic classes
@@ -836,6 +842,8 @@ func (c *Checker) createInstanceTypeInPlace(className string, body *parser.Class
 			debugPrintf("// [Checker Class] Processed method signature '%s'\n", methodName)
 		}
 	}
+
+	c.addAmbientMethodSignatures(body, false, instanceType)
 
 	// ADDED: Synthesize parameter properties from constructor before processing regular properties
 	c.synthesizeParameterProperties(body)
@@ -1471,6 +1479,7 @@ func (c *Checker) getAccessLevel(isPublic, isPrivate, isProtected bool) types.Ac
 func (c *Checker) addStaticMembers(body *parser.ClassBody, constructorType *types.ObjectType, instanceType ...*types.ObjectType) *types.ObjectType {
 	// Get the class name from constructor metadata
 	className := constructorType.GetClassName()
+	c.addAmbientMethodSignatures(body, true, constructorType)
 	var classInstanceType *types.ObjectType
 	if len(instanceType) > 0 {
 		classInstanceType = instanceType[0]
@@ -2629,5 +2638,51 @@ func (c *Checker) resolveTypeofInMembers(instance *types.ObjectType) {
 				sig.ReturnType = c.resolveTypeofInType(sig.ReturnType)
 			}
 		}
+	}
+}
+
+// addAmbientMethodSignatures adds the method signatures of an ambient class
+// (`declare class`, or a class in a `declare namespace`) as members: with no
+// implementations, the signatures are the methods, and repeated names are
+// overloads. Abstract and optional signatures are added by the caller.
+func (c *Checker) addAmbientMethodSignatures(body *parser.ClassBody, static bool, target *types.ObjectType) {
+	if body == nil || body != c.ambientClassBody {
+		return
+	}
+	var order []string
+	byName := map[string][]*parser.MethodSignature{}
+	for _, sig := range body.MethodSigs {
+		if sig.IsStatic != static || sig.IsAbstract || sig.Optional || sig.Key == nil {
+			continue
+		}
+		name, known := getMethodKeyString(sig.Key)
+		if !known {
+			continue
+		}
+		if _, seen := byName[name]; !seen {
+			order = append(order, name)
+		}
+		byName[name] = append(byName[name], sig)
+	}
+	for _, name := range order {
+		if _, exists := target.Properties[name]; exists {
+			continue // an implementation (or accessor) already defines it
+		}
+		sigs := byName[name]
+		var methodType types.Type
+		if len(sigs) == 1 {
+			methodType = c.inferMethodTypeFromSignature(sigs[0])
+		} else {
+			merged := types.NewObjectType()
+			for _, sig := range sigs {
+				if callSigs, ok := overloadableCallSignatures(c.inferMethodTypeFromSignature(sig)); ok {
+					merged.CallSignatures = append(merged.CallSignatures, callSigs...)
+				}
+			}
+			methodType = merged
+		}
+		first := sigs[0]
+		access := c.getAccessLevel(first.IsPublic, first.IsPrivate, first.IsProtected)
+		target.WithClassMember(name, methodType, access, static, false)
 	}
 }

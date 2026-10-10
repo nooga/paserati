@@ -351,6 +351,7 @@ type Checker struct {
 	deferredRelationChecks      []deferredRelationCheck
 	overloadStrictAny           bool // first overload pass: an `any` argument only fits any/unknown parameters
 	inAmbientNamespace          bool // checking the body of a `declare namespace`: members are implicitly exported
+	ambientClassBody            *parser.ClassBody // body of the `declare class` being checked: its method signatures are its members
 	checkedParameterDefaults    map[*parser.Parameter]bool
 	namespaceBodyDepth          int  // > 0 while checking a namespace body
 	isModule                    bool // Source is a module, so strict mode comes from the module (TS1214)
@@ -1078,8 +1079,11 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 			}
 		} else if classStmt, ok := stmt.(*parser.ClassDeclaration); ok {
 			c.declareBlockScoped(c.env, classStmt.Name.Value, classStmt.Name.Token, bsClass)
-			// Pre-register class names so they can be used as types before declaration
-			if _, exists := c.env.ResolveType(classStmt.Name.Value); !exists {
+			// Pre-register class names so they can be used as types before
+			// declaration. A generic class is left unregistered, like a generic
+			// interface: B<T> before `class B<T>` is then a forward reference
+			// instantiated once B is declared, not "B is not generic".
+			if _, exists := c.env.ResolveType(classStmt.Name.Value); !exists && len(classStmt.TypeParameters) == 0 {
 				placeholderType := &types.ObjectType{
 					Properties:         make(map[string]types.Type),
 					OptionalProperties: make(map[string]bool),
@@ -1113,8 +1117,8 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 						}
 					}
 				} else if classDecl, ok := exportStmt.Declaration.(*parser.ClassDeclaration); ok {
-					// Pre-register exported class names
-					if _, exists := c.env.ResolveType(classDecl.Name.Value); !exists {
+					// Pre-register exported class names (non-generic, as above)
+					if _, exists := c.env.ResolveType(classDecl.Name.Value); !exists && len(classDecl.TypeParameters) == 0 {
 						placeholderType := &types.ObjectType{
 							Properties:         make(map[string]types.Type),
 							OptionalProperties: make(map[string]bool),
