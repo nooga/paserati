@@ -448,7 +448,7 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				// A generic declared later whose type parameters all have
 				// defaults (`e: ZodError[]` before `class ZodError<T = any>`):
 				// a forward reference, instantiated with the defaults on use.
-				return &types.GenericTypeAliasForwardReference{AliasName: node.Value}
+				return &types.GenericTypeAliasForwardReference{AliasName: node.Value, Scope: c.env.ResolveType}
 			}
 			c.addCannotFindTypeNameError(node, c.env, node.Value)
 			return nil // Indicate error
@@ -659,6 +659,7 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 					}
 					return &types.GenericTypeAliasForwardReference{
 						AliasName:     node.Name.Value,
+						Scope:         c.env.ResolveType,
 						TypeArguments: args,
 					}
 				}
@@ -696,6 +697,7 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				}
 				return &types.GenericTypeAliasForwardReference{
 					AliasName:     node.Name.Value,
+					Scope:         c.env.ResolveType,
 					TypeArguments: args,
 				}
 			}
@@ -779,6 +781,7 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 				// This allows interface inheritance and other generic type usage to work
 				return &types.GenericTypeAliasForwardReference{
 					AliasName:     node.Name.Value,
+					Scope:         c.env.ResolveType,
 					TypeArguments: typeArgs,
 				}
 			} else {
@@ -824,7 +827,13 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 		return c.resolveTemplateLiteralTypeExpression(node)
 
 	case *parser.MemberExpression:
-		return c.resolveEnumMemberTypeExpression(node)
+		resolved := c.resolveEnumMemberTypeExpression(node)
+		if g, ok := resolved.(*types.GenericType); ok {
+			// `z.Base` without type arguments: the defaults (TS2314 when a
+			// parameter has none).
+			return c.instantiateGenericType(g, nil, nil)
+		}
+		return resolved
 
 	default:
 		// If we get here, the parser created a node type that resolveTypeAnnotation doesn't handle yet.
@@ -1635,6 +1644,21 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 		}
 	}
 	instantiatedType := c.substituteTypes(genericType.Body, substitution)
+	if obj, ok := instantiatedType.(*types.ObjectType); ok && obj != genericType.Body {
+		if genericType.InstanceType != nil {
+			// A class constructor: the instances it constructs instantiate
+			// the class's instance generic (`extends ZodType<string, ...>`
+			// instantiates the constructor).
+			for _, sig := range obj.ConstructSignatures {
+				if inst, ok := sig.ReturnType.(*types.ObjectType); ok && inst.Instantiates == nil &&
+					len(inst.GenericArgs) == len(genericType.InstanceType.TypeParameters) {
+					inst.Instantiates = genericType.InstanceType
+				}
+			}
+		} else if obj.Instantiates == nil && len(obj.GenericArgs) == len(genericType.TypeParameters) {
+			obj.Instantiates = genericType
+		}
+	}
 	if cacheable {
 		if c.genericInstCache == nil || len(c.genericInstCache) > 1<<16 {
 			c.genericInstCache = map[genericInstKey]types.Type{}
@@ -1714,7 +1738,7 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		if !changed {
 			return typ
 		}
-		return &types.GenericTypeAliasForwardReference{AliasName: typ.AliasName, TypeArguments: args}
+		return &types.GenericTypeAliasForwardReference{AliasName: typ.AliasName, TypeArguments: args, Scope: typ.Scope}
 	case *types.ReadonlyType:
 		inner := c.substituteTypesWithVisited(typ.InnerType, substitution, visited)
 		if inner == typ.InnerType {
@@ -2982,6 +3006,12 @@ func (c *Checker) substituteTypeParameterInTypeMemo(targetType types.Type, param
 		if typ.Pending {
 			return typ // filled in later, in place (see substituteTypes)
 		}
+		if !mayMentionTypeParamNames(typ, map[string]types.Type{paramName: replacement}, map[types.Type]bool{}) {
+			// A mapped type's key substituted into `Shape[k]` must not copy
+			// the class types inside Shape.
+			memo[typ] = typ
+			return typ
+		}
 		return cloneObjectTypeWithTypesNotify(typ, recur, func(clone *types.ObjectType) { memo[typ] = clone })
 
 	case *types.IndexedAccessType:
@@ -4076,6 +4106,21 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 			return false
 		}
 		visited[t] = true
+		if tt.ClassMeta != nil && tt.ClassMeta.IsClassInstance && !tt.Pending {
+			// A class instance mentions outer parameters only through its
+			// type arguments (its members name the class's own parameters,
+			// already replaced by those arguments) and the polymorphic this:
+			// walking zod's class graph on every substitution never finished.
+			if _, ok := names["this"]; ok {
+				return true
+			}
+			for _, a := range tt.GenericArgs {
+				if mayMentionTypeParamNames(a, names, visited) {
+					return true
+				}
+			}
+			return false
+		}
 		for _, p := range tt.Properties {
 			if mayMentionTypeParamNames(p, names, visited) {
 				return true

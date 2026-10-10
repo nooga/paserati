@@ -34,6 +34,12 @@ type TypeAliasForwardReference struct {
 type GenericTypeAliasForwardReference struct {
 	AliasName     string
 	TypeArguments []Type
+	// Scope looks a type name up where the reference was written. A
+	// reference can be resolved far from there: zod's ZodType declares
+	// `optional(): ZodOptional<this>` before ZodOptional, and the reference
+	// is resolved in the module calling optional(), where ZodOptional is
+	// not in scope.
+	Scope func(name string) (Type, bool)
 }
 
 // ParameterizedForwardReferenceType represents a forward reference to a generic class with type arguments

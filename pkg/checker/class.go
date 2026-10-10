@@ -602,6 +602,7 @@ func (c *Checker) checkGenericClassDeclaration(node *parser.ClassDeclaration) {
 		Name:           node.Name.Value + "Constructor", // Internal name
 		TypeParameters: typeParams,
 		Body:           constructorType,
+		InstanceType:   genericClassType,
 	}
 
 	// 10. UPDATE AGAIN: Replace the placeholder with the real constructor type
