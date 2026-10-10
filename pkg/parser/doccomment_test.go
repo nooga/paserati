@@ -94,3 +94,21 @@ enum E {
 		t.Errorf("alias type is %T", alias.Type)
 	}
 }
+
+// A doc comment before a declaration that fails to parse must not crash the
+// parser: the failed declaration comes back as a typed nil.
+func TestJSDocOnBrokenDeclaration(t *testing.T) {
+	for _, src := range []string{
+		"/** d */ export default",
+		"/** d */ export default class",
+		"/** d */ export default function",
+		"/** d */ interface",
+		"/** d */ class",
+		"/** d */ type",
+		"/** d */ export",
+		"/** d */ export declare",
+		"namespace N { /** d */ interface }",
+	} {
+		NewParser(lexer.NewLexer(src)).ParseProgram()
+	}
+}

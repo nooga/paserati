@@ -816,28 +816,42 @@ func (p *Parser) parseStatement() Statement {
 func attachDeclarationDoc(stmt Statement, doc string) {
 	switch n := stmt.(type) {
 	case *ExportNamedDeclaration:
-		if n.Declaration != nil {
+		if n != nil && n.Declaration != nil {
 			attachDeclarationDoc(n.Declaration, doc)
 		}
 	case *ExportDefaultDeclaration:
-		attachExpressionDoc(n.Declaration, doc)
+		if n != nil {
+			attachExpressionDoc(n.Declaration, doc)
+		}
 	case *ExpressionStatement:
-		attachExpressionDoc(n.Expression, doc)
+		if n != nil {
+			attachExpressionDoc(n.Expression, doc)
+		}
 	case *InterfaceDeclaration:
-		n.Doc = doc
+		if n != nil {
+			n.Doc = doc
+		}
 	case *ClassDeclaration:
-		n.Doc = doc
+		if n != nil {
+			n.Doc = doc
+		}
 	case *TypeAliasStatement:
-		n.Doc = doc
+		if n != nil {
+			n.Doc = doc
+		}
 	}
 }
 
 func attachExpressionDoc(e Expression, doc string) {
 	switch n := e.(type) {
 	case *FunctionLiteral:
-		n.Doc = doc
+		if n != nil {
+			n.Doc = doc
+		}
 	case *EnumDeclaration:
-		n.Doc = doc
+		if n != nil {
+			n.Doc = doc
+		}
 	}
 }
 
