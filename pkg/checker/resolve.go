@@ -1618,8 +1618,24 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 		}
 	}
 
-	// Perform type substitution on the body type
+	// Perform type substitution on the body type. Once the generic's own
+	// declaration is complete its body no longer changes, so the result is
+	// cached per argument identities (the arguments are referenced, not
+	// copied, so they may still be filling in).
+	cacheable := c.completeGenerics[genericType]
+	key := genericInstKey{generic: genericType, args: typeListKey(finalTypeArgs)}
+	if cacheable {
+		if cached, hit := c.genericInstCache[key]; hit {
+			return cached
+		}
+	}
 	instantiatedType := c.substituteTypes(genericType.Body, substitution)
+	if cacheable {
+		if c.genericInstCache == nil || len(c.genericInstCache) > 1<<16 {
+			c.genericInstCache = map[genericInstKey]types.Type{}
+		}
+		c.genericInstCache[key] = instantiatedType
+	}
 
 	debugPrintf("// [Checker] Instantiated type: %s\n", instantiatedType.String())
 	return instantiatedType
@@ -1907,10 +1923,10 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		newFalseType := c.substituteTypesWithVisited(typ.FalseType, substitution, visited)
 
 		// For extends type, don't substitute infer types - they should remain as inference placeholders
-		newExtendsType := c.substituteTypesPreservingInfer(typ.ExtendsType, substitution)
+		newExtendsType := c.substituteTypesPreservingInferVisited(typ.ExtendsType, substitution, visited)
 
 		// For true type, don't substitute infer types - they will be replaced by inference results
-		newTrueType := c.substituteTypesPreservingInfer(typ.TrueType, substitution)
+		newTrueType := c.substituteTypesPreservingInferVisited(typ.TrueType, substitution, visited)
 
 		// Try to compute the result with substituted types
 		debugPrintf("// [SubstituteTypes] About to compute conditional type...\n")
@@ -3613,6 +3629,13 @@ func (c *Checker) resolveTemplateLiteralTypeExpression(node *parser.TemplateLite
 
 // substituteTypesPreservingInfer performs type substitution but preserves InferType nodes
 func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution map[string]types.Type) types.Type {
+	return c.substituteTypesPreservingInferVisited(typ, substitution, make(map[types.Type]types.Type))
+}
+
+// substituteTypesPreservingInferVisited is substituteTypesPreservingInfer
+// sharing the caller's substitution memo, so one instantiation copies each
+// shared part once.
+func (c *Checker) substituteTypesPreservingInferVisited(typ types.Type, substitution map[string]types.Type, visited map[types.Type]types.Type) types.Type {
 	if typ == nil {
 		return nil
 	}
@@ -3633,14 +3656,14 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 
 	case *types.ArrayType:
 		// Recursively preserve infer in array element type
-		substitutedElement := c.substituteTypesPreservingInfer(t.ElementType, substitution)
+		substitutedElement := c.substituteTypesPreservingInferVisited(t.ElementType, substitution, visited)
 		return &types.ArrayType{ElementType: substitutedElement}
 
 	case *types.UnionType:
 		// Recursively preserve infer in union members
 		var substitutedTypes []types.Type
 		for _, memberType := range t.Types {
-			substituted := c.substituteTypesPreservingInfer(memberType, substitution)
+			substituted := c.substituteTypesPreservingInferVisited(memberType, substitution, visited)
 			substitutedTypes = append(substitutedTypes, substituted)
 		}
 		return types.NewUnionType(substitutedTypes...)
@@ -3653,9 +3676,9 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 				// Substitute in signature parameters and return type while preserving infer
 				newParamTypes := make([]types.Type, len(sig.ParameterTypes))
 				for j, paramType := range sig.ParameterTypes {
-					newParamTypes[j] = c.substituteTypesPreservingInfer(paramType, substitution)
+					newParamTypes[j] = c.substituteTypesPreservingInferVisited(paramType, substitution, visited)
 				}
-				newReturnType := c.substituteTypesPreservingInfer(sig.ReturnType, substitution)
+				newReturnType := c.substituteTypesPreservingInferVisited(sig.ReturnType, substitution, visited)
 
 				newSigs[i] = &types.Signature{
 					TypeParameters:    sig.TypeParameters,
@@ -3680,7 +3703,7 @@ func (c *Checker) substituteTypesPreservingInfer(typ types.Type, substitution ma
 
 	default:
 		// For other types, fall back to regular substitution
-		return c.substituteTypes(typ, substitution)
+		return c.substituteTypesWithVisited(typ, substitution, visited)
 	}
 }
 
@@ -3971,3 +3994,24 @@ func (c *Checker) lookupTypeNoPending(name string) types.Type {
 	return nil
 }
 
+
+type genericInstKey struct {
+	generic *types.GenericType
+	args    string
+}
+
+// markGenericComplete records that the generic declared as name (type and,
+// for a class, constructor) has its final body.
+func (c *Checker) markGenericComplete(name string) {
+	if c.completeGenerics == nil {
+		c.completeGenerics = map[*types.GenericType]bool{}
+	}
+	if g, ok := c.lookupTypeNoPending(name).(*types.GenericType); ok {
+		c.completeGenerics[g] = true
+	}
+	if v, _, ok := c.env.Resolve(name); ok {
+		if g, isGeneric := v.(*types.GenericType); isGeneric {
+			c.completeGenerics[g] = true
+		}
+	}
+}

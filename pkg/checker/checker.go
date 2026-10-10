@@ -354,6 +354,8 @@ type Checker struct {
 	ambientClassBody            *parser.ClassBody                     // body of the `declare class` being checked: its method signatures are its members
 	aliasInstantiationDepth     int                                   // nesting of instantiateAliasReference, capped for recursive aliases
 	aliasInstCache              map[aliasInstKey]types.Type           // instantiateAliasReference results
+	genericInstCache            map[genericInstKey]types.Type         // instantiateGenericType results for declGeneration
+	completeGenerics            map[*types.GenericType]bool           // generics whose declaration finished; their instantiations are cached
 	pendingAliases              map[string]*parser.TypeAliasStatement // top-level aliases Pass 1 has not resolved yet
 	pendingAliasEnv             *Environment                          // the environment they resolve in
 	classPlaceholders           map[*types.ObjectType]bool            // Pass 0 class types not filled in yet

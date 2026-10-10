@@ -95,6 +95,7 @@ func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 
 // checkGenericTypeAliasStatement handles generic type alias declarations
 func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement) {
+	defer c.markGenericComplete(node.Name.Value)
 	debugPrintf("// [Checker TypeAlias P1] Processing generic type alias '%s' with %d type parameters\n",
 		node.Name.Value, len(node.TypeParameters))
 
@@ -495,6 +496,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 
 // checkGenericInterfaceDeclaration handles generic interface declarations
 func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclaration) {
+	defer c.markGenericComplete(node.Name.Value)
 	debugPrintf("// [Checker Interface P1] Processing generic interface '%s' with %d type parameters\n",
 		node.Name.Value, len(node.TypeParameters))
 
