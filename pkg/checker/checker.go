@@ -4855,6 +4855,17 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 }
 
 // processImportBinding handles the binding of an imported name
+// importedTypeAlias is what an imported name means in a type position: a
+// class (a constructor type) stands for its instance type.
+func importedTypeAlias(t types.Type) types.Type {
+	if objType, ok := t.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
+		if ret := objType.ConstructSignatures[0].ReturnType; ret != nil {
+			return ret
+		}
+	}
+	return t
+}
+
 func (c *Checker) processImportBinding(localName, sourceModule, sourceName string, importType ImportBindingType, isTypeOnly bool) {
 	// If we're in module mode, use the module environment for proper tracking
 	if c.IsModuleMode() {
@@ -4867,12 +4878,17 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 
 			// Register the imported type in the local type environment for type annotation resolution
 			// For classes (constructor types), register the instance type (not the constructor)
-			typeAliasValue := resolvedType
-			if objType, ok := resolvedType.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
-				// Use the constructor's return type as the type alias (instance type)
-				if objType.ConstructSignatures[0].ReturnType != nil {
-					typeAliasValue = objType.ConstructSignatures[0].ReturnType
+			typeAliasValue := importedTypeAlias(resolvedType)
+			if objType, ok := resolvedType.(*types.ObjectType); ok && importType == ImportNamespace {
+				// import * as z: in a type position z.T names the module's
+				// exported type T (z.infer<typeof S>), so the type side is a
+				// namespace. The value side keeps the plain object.
+				ns := types.NewNamespaceType(localName)
+				ns.ValueShape = objType
+				for name, t := range objType.Properties {
+					ns.TypeMembers[name] = importedTypeAlias(t)
 				}
+				typeAliasValue = ns
 			}
 			c.env.DefineTypeAlias(localName, typeAliasValue)
 			debugPrintf("// [Checker] Registered imported type %s in local type environment\n", localName)
@@ -4964,8 +4980,16 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 					localName := getExportSpecName(exportSpec.Local)
 					exportName := getExportSpecName(exportSpec.Exported)
 
-					// Check if the local name exists in current scope
-					if localType, _, exists := c.env.Resolve(localName); exists {
+					// Check if the local name exists in current scope. A type
+					// alias or interface has no value binding, so `export type
+					// { T as U }` and `export { T }` find it on the type side.
+					localType, _, exists := c.env.Resolve(localName)
+					if !exists || node.IsTypeOnly {
+						if t, found := c.env.ResolveType(localName); found {
+							localType, exists = t, true
+						}
+					}
+					if exists {
 						// Register the export in module environment
 						if c.IsModuleMode() {
 							c.moduleEnv.DefineExport(localName, exportName, localType, nil)
