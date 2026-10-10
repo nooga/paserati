@@ -1847,6 +1847,18 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				memo[t] = typ
 				return typ
 			}
+			// An instantiation of a generic (ZodObject<Shape, ...>) is
+			// re-instantiated with substituted arguments: the cached
+			// instantiation, without copying and expanding every member.
+			if g := typ.Instantiates; g != nil && len(typ.GenericArgs) == len(g.TypeParameters) {
+				args := make([]types.Type, len(typ.GenericArgs))
+				for i, a := range typ.GenericArgs {
+					args[i] = substitute(a)
+				}
+				inst := c.instantiateGenericType(g, args, nil)
+				memo[t] = inst
+				return inst
+			}
 
 			// For ObjectType, we need to substitute in properties and signatures
 			newObj := &types.ObjectType{
@@ -1958,7 +1970,7 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			for i, a := range typ.TypeArguments {
 				args[i] = substitute(a)
 			}
-			ref := &types.GenericTypeAliasForwardReference{AliasName: typ.AliasName, TypeArguments: args}
+			ref := &types.GenericTypeAliasForwardReference{AliasName: typ.AliasName, TypeArguments: args, Scope: typ.Scope}
 			if inst := c.instantiateAliasReference(ref); inst != nil {
 				return inst
 			}

@@ -3404,7 +3404,8 @@ func (c *Checker) visit(node parser.Node) {
 		c.checkMemberExpression(node)
 		// `this` in the member's declared type is the receiver's type.
 		if t := node.GetComputedType(); t != nil && node.Object != nil {
-			if recv := node.Object.GetComputedType(); recv != nil && recv != types.Any && types.MentionsTypeParameter(t, types.PolymorphicThis) {
+			if recv, ok := node.Object.GetComputedType().(*types.ObjectType); ok && recv.ClassMeta != nil && recv.ClassMeta.IsClassInstance &&
+				types.MentionsTypeParameter(t, types.PolymorphicThis) {
 				node.SetComputedType(c.substituteTypes(t, map[string]types.Type{"this": recv}))
 			}
 		}
@@ -4902,6 +4903,9 @@ func (c *Checker) checkImportDeclaration(node *parser.ImportDeclaration) {
 // importedTypeAlias is what an imported name means in a type position: a
 // class (a constructor type) stands for its instance type.
 func importedTypeAlias(t types.Type) types.Type {
+	if g, ok := t.(*types.GenericType); ok && g.InstanceType != nil {
+		return g.InstanceType // a generic class: ZodType<Output, Def, Input>
+	}
 	if objType, ok := t.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
 		if ret := objType.ConstructSignatures[0].ReturnType; ret != nil {
 			return ret

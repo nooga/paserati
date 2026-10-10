@@ -839,6 +839,9 @@ func ObjectsShareProperty(a, b *ObjectType) bool {
 // the weak-type (no common properties) rule, which TypeScript skips when the
 // target is a constituent of an intersection.
 func objectAssignable(sourceObj, targetObj *ObjectType, checkWeak bool) bool {
+	if sameGenericWithLooserArgs(sourceObj, targetObj, 0) {
+		return true
+	}
 	// Check that all required properties in target exist in source and are assignable
 	targetProps := targetObj.GetEffectiveProperties()
 	sourceProps := sourceObj.GetEffectiveProperties()
@@ -1254,6 +1257,57 @@ func apparentMembersAssignable(source Type, tgt *ObjectType) bool {
 	// A weak target (all optional) needs at least one member in common.
 	if IsWeakObject(tgt) && !shared {
 		return false
+	}
+	return true
+}
+
+// sameGenericWithLooserArgs reports whether source is assignable to target
+// without a structural walk because both instantiate the same generic:
+// source itself with every target argument any, unknown or identical, or a
+// base class of source with every target argument any or unknown (a derived
+// class may override members incompatibly, which only the structural check
+// sees). ZodString to ZodTypeAny = ZodType<any, any, any> is the case this
+// is for: walking zod's members met mapped types this relation cannot
+// expand. Anything else is left to the structural check.
+func sameGenericWithLooserArgs(source, target *ObjectType, depth int) bool {
+	g := target.Instantiates
+	if g == nil || depth > 16 || source == nil {
+		return false
+	}
+	if source.Instantiates == g && len(source.GenericArgs) == len(target.GenericArgs) {
+		for i, ta := range target.GenericArgs {
+			if ta == Any || ta == Unknown {
+				continue
+			}
+			if depth > 0 || (ta != source.GenericArgs[i] && !ta.Equals(source.GenericArgs[i])) {
+				return false
+			}
+		}
+		return true
+	}
+	for _, base := range source.BaseTypes {
+		switch b := base.(type) {
+		case *ObjectType:
+			if sameGenericWithLooserArgs(b, target, depth+1) {
+				return true
+			}
+		case *InstantiatedType:
+			if b.Generic == g && len(b.TypeArguments) == len(target.GenericArgs) && allAnyOrUnknown(target.GenericArgs) {
+				return true
+			}
+			if bo, isObj := b.Substitute().(*ObjectType); isObj && sameGenericWithLooserArgs(bo, target, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func allAnyOrUnknown(ts []Type) bool {
+	for _, t := range ts {
+		if t != Any && t != Unknown {
+			return false
+		}
 	}
 	return true
 }

@@ -101,7 +101,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Usage: paserati --check [options] <file.ts>...\n")
 			os.Exit(64)
 		}
-		os.Exit(runCheck(flag.Args(), !*noNodeModulesFlag))
+		code := runCheck(flag.Args(), !*noNodeModulesFlag)
+		if *cpuProfileFlag != "" {
+			pprof.StopCPUProfile() // os.Exit skips the deferred stop
+		}
+		os.Exit(code)
 	}
 
 	// JavaScript emission mode

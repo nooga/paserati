@@ -216,6 +216,12 @@ type ObjectType struct {
 	// the reference instead of copying it (a copy would stay empty).
 	Pending bool
 
+	// Instantiates is the generic this object instantiates with GenericArgs,
+	// when the checker made it by instantiation. Substituting into the
+	// object re-instantiates the generic with substituted arguments instead
+	// of copying every member.
+	Instantiates *GenericType
+
 	// Using a map for simplicity now. Consider ordered map or slice for stability.
 	Properties         map[string]Type
 	OptionalProperties map[string]bool // Tracks which properties are optional

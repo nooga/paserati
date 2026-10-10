@@ -1125,6 +1125,13 @@ func (c *Checker) instantiateAliasReference(ref *types.GenericTypeAliasForwardRe
 		return nil
 	}
 	resolved, found := c.env.ResolveType(ref.AliasName)
+	if ref.Scope != nil {
+		// Where the reference was written wins: the same name may mean
+		// something else, or nothing, here.
+		if t, ok := ref.Scope(ref.AliasName); ok {
+			resolved, found = t, true
+		}
+	}
 	// Instantiations are cached per generic and argument list: settleType and
 	// conditional evaluation ask for the same references many times.
 	var key aliasInstKey

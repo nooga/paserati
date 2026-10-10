@@ -53,6 +53,10 @@ type GenericType struct {
 	Name           string           // Name of the generic type (e.g., "Array", "Promise")
 	TypeParameters []*TypeParameter // The type parameters (e.g., [T] for Array<T>)
 	Body           Type             // The body type that may contain TypeParameterType references
+	// InstanceType is, for a generic class's constructor, the generic of its
+	// instances: what the class name means in a type position. An exported
+	// generic class is exported as its constructor.
+	InstanceType *GenericType
 }
 
 func (g *GenericType) String() string {
@@ -290,7 +294,7 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 		for i, a := range t.TypeArguments {
 			args[i] = substituteTypeMemo(a, substitutions, memo)
 		}
-		return &GenericTypeAliasForwardReference{AliasName: t.AliasName, TypeArguments: args}
+		return &GenericTypeAliasForwardReference{AliasName: t.AliasName, TypeArguments: args, Scope: t.Scope}
 	case *TemplateLiteralType:
 		parts := make([]TemplateLiteralPart, len(t.Parts))
 		for i, part := range t.Parts {
