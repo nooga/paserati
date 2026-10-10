@@ -11,6 +11,10 @@ import (
 var stringifyVisited sync.Map
 var objectEqualsVisited sync.Map
 
+// objectPair keys objectEqualsVisited (a comparable struct, not a formatted
+// string: Equals is hot in union de-duplication).
+type objectPair struct{ a, b *ObjectType }
+
 // --- Function/Object Signatures ---
 
 // Signature represents a function or constructor signature
@@ -207,6 +211,11 @@ func (is *IndexSignature) Equals(other *IndexSignature) bool {
 
 // ObjectType represents the type of an object literal or interface.
 type ObjectType struct {
+	// Pending marks a class type registered before its declaration is
+	// checked; the declaration fills this object in place. Substitution keeps
+	// the reference instead of copying it (a copy would stay empty).
+	Pending bool
+
 	// Using a map for simplicity now. Consider ordered map or slice for stability.
 	Properties         map[string]Type
 	OptionalProperties map[string]bool // Tracks which properties are optional
@@ -341,7 +350,7 @@ func (ot *ObjectType) Equals(other Type) bool {
 		return true
 	}
 
-	pairKey := fmt.Sprintf("%p:%p", ot, otherOt)
+	pairKey := objectPair{ot, otherOt}
 	if _, visited := objectEqualsVisited.LoadOrStore(pairKey, true); visited {
 		return true
 	}

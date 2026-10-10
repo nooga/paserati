@@ -171,6 +171,10 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 		if done, ok := memo[t]; ok {
 			return done
 		}
+		if t.Pending || !mentionsTypeParameter(t, substitutions, map[Type]bool{}) {
+			// Nothing to substitute (or filled in later, in place): no copy.
+			return t
+		}
 		newObj := NewObjectType()
 		newObj.PropertyDocs = t.PropertyDocs
 		newObj.Doc = t.Doc
@@ -542,13 +546,30 @@ func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited map[T
 						return true
 					}
 				}
-				if mentionsTypeParameter(sig.ReturnType, params, visited) || mentionsTypeParameter(sig.RestParameterType, params, visited) {
+				if mentionsTypeParameter(sig.ReturnType, params, visited) || mentionsTypeParameter(sig.RestParameterType, params, visited) ||
+					mentionsTypeParameter(sig.ThisType, params, visited) {
 					return true
+				}
+				for _, tp := range sig.TypeParameters {
+					if tp != nil && (mentionsTypeParameter(tp.Constraint, params, visited) || mentionsTypeParameter(tp.Default, params, visited)) {
+						return true
+					}
 				}
 			}
 		}
 		for _, idx := range tt.IndexSignatures {
-			if mentionsTypeParameter(idx.KeyType, params, visited) || mentionsTypeParameter(idx.ValueType, params, visited) {
+			if mentionsTypeParameter(idx.KeyType, params, visited) || mentionsTypeParameter(idx.ValueType, params, visited) ||
+				mentionsTypeParameter(idx.ConstraintType, params, visited) {
+				return true
+			}
+		}
+		for _, base := range tt.BaseTypes {
+			if mentionsTypeParameter(base, params, visited) {
+				return true
+			}
+		}
+		for _, a := range tt.GenericArgs {
+			if mentionsTypeParameter(a, params, visited) {
 				return true
 			}
 		}

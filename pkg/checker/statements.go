@@ -11,8 +11,35 @@ import (
 
 // --- NEW: Type Alias Statement Check ---
 
+// resolvePendingAlias resolves a top-level alias that Pass 1 has not reached
+// yet, because a reference to it was met first. It reports whether name was
+// such an alias.
+func (c *Checker) resolvePendingAlias(name string) bool {
+	node, ok := c.pendingAliases[name]
+	if !ok || c.resolvingTypeAliases[name] {
+		return false
+	}
+	outerEnv := c.env
+	c.env = c.pendingAliasEnv
+	defer func() { c.env = outerEnv }()
+	c.checkTypeAliasStatement(node)
+	return true
+}
+
 func (c *Checker) checkTypeAliasStatement(node *parser.TypeAliasStatement) {
 	// Called ONLY during Pass 1 for hoisted aliases.
+	if c.pendingAliases != nil && node.Name != nil && c.pendingAliases[node.Name.Value] == node {
+		delete(c.pendingAliases, node.Name.Value)
+	} else if c.pendingAliases != nil && node.Name != nil && c.env == c.pendingAliasEnv {
+		if _, stillPending := c.pendingAliases[node.Name.Value]; !stillPending {
+			// Already resolved on demand by an earlier reference.
+			if t, exists := c.env.ResolveTypeLocal(node.Name.Value); exists {
+				if _, fwd := t.(*types.TypeAliasForwardReference); !fwd {
+					return
+				}
+			}
+		}
+	}
 
 	// 1. Check if already defined (belt-and-suspenders check)
 	// Note: We use c.env which IS the globalEnv during Pass 1

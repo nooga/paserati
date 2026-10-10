@@ -1118,7 +1118,49 @@ func (c *Checker) checkTaggedTemplateExpression(node *parser.TaggedTemplateExpre
 // substitution, which covers mapped, conditional and indexed-access bodies.
 // nil if the alias isn't a known generic type.
 func (c *Checker) instantiateAliasReference(ref *types.GenericTypeAliasForwardReference) types.Type {
+	// A recursive alias (deoptional<T> = T extends ZodOptional<infer U> ?
+	// deoptional<U> : T) re-enters here through its own body; past a depth
+	// tsc would also give up on (TS2589), leave the reference unexpanded.
+	if c.aliasInstantiationDepth >= maxAliasInstantiationDepth {
+		return nil
+	}
 	resolved, found := c.env.ResolveType(ref.AliasName)
+	// Instantiations are cached per generic and argument list: settleType and
+	// conditional evaluation ask for the same references many times.
+	var key aliasInstKey
+	if generic, ok := resolved.(*types.GenericType); ok && found {
+		key = aliasInstKey{generic: generic, args: typeListKey(ref.TypeArguments)}
+		if cached, hit := c.aliasInstCache[key]; hit {
+			return cached
+		}
+	}
+	c.aliasInstantiationDepth++
+	defer func() { c.aliasInstantiationDepth-- }()
+	result := c.instantiateAliasReferenceUncached(ref, resolved, found)
+	if key.generic != nil {
+		if c.aliasInstCache == nil {
+			c.aliasInstCache = map[aliasInstKey]types.Type{}
+		}
+		c.aliasInstCache[key] = result
+	}
+	return result
+}
+
+type aliasInstKey struct {
+	generic *types.GenericType
+	args    string
+}
+
+// typeListKey identifies an argument list by the identity of its types.
+func typeListKey(ts []types.Type) string {
+	var b strings.Builder
+	for _, t := range ts {
+		fmt.Fprintf(&b, "%p|%T;", t, t)
+	}
+	return b.String()
+}
+
+func (c *Checker) instantiateAliasReferenceUncached(ref *types.GenericTypeAliasForwardReference, resolved types.Type, found bool) types.Type {
 	if !found {
 		return nil
 	}
@@ -3685,3 +3727,6 @@ func inferCollectionTypeArgs(paramCount int, callArgs []parser.Expression) []typ
 	}
 	return nil
 }
+
+// maxAliasInstantiationDepth bounds nested instantiateAliasReference calls.
+const maxAliasInstantiationDepth = 50

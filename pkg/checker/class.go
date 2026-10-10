@@ -337,6 +337,13 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// This allows self-referencing return types like `setName(): Person` to resolve
 	// Create empty ObjectType first, then populate it during createInstanceType
 	placeholderType := types.NewClassInstanceType(node.Name.Value)
+	if existing, ok := c.env.ResolveTypeLocal(node.Name.Value); ok {
+		if pending, isObj := existing.(*types.ObjectType); isObj && pending.Pending {
+			// Fill the Pass 0 placeholder in place: types computed before
+			// this declaration (hoisted aliases) hold this very object.
+			placeholderType = pending.AsClassInstance(node.Name.Value)
+		}
+	}
 	if !c.env.DefineTypeAlias(node.Name.Value, placeholderType) {
 		// An interface of the same name declared first merges with the class:
 		// the class members are added to the interface's own type.
@@ -358,6 +365,7 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// Note: createInstanceType will populate the same ObjectType reference
 	c.classNameNode = node.Name
 	instanceType := c.createInstanceTypeInPlace(node.Name.Value, node.Body, node.SuperClass, node.Implements, placeholderType)
+	placeholderType.Pending = false
 	c.deferRelationCheck(func() { c.checkClassHeritageAccessibility(node, instanceType) })
 
 	debugPrintf("// [Checker Class] Finalized class type alias '%s': %s\n",
