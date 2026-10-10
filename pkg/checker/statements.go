@@ -814,6 +814,14 @@ func (c *Checker) rebindThisTypeWithVisited(t types.Type, from *types.ObjectType
 		if replacement, exists := visited[typ]; exists {
 			return replacement
 		}
+		// The declaration being filled (`interface BB extends AA<AA<BB>>`
+		// reaches BB itself) and any other placeholder are kept by
+		// identity, as is every object `from` is not reachable from: a copy
+		// would detach them from their declarations and generics.
+		if typ == to || typ.Pending || !types.Reaches(typ, from) {
+			visited[typ] = typ
+			return typ
+		}
 
 		result := &types.ObjectType{
 			Properties:         make(map[string]types.Type),
