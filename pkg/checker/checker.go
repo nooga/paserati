@@ -3339,6 +3339,12 @@ func (c *Checker) visit(node parser.Node) {
 
 	case *parser.CallExpression:
 		c.checkCallExpression(node)
+		// A declared return type may name a generic declared later in its
+		// file (`optional(): ZodOptional<this>` in ZodType): with the call's
+		// arguments substituted it can be evaluated now.
+		if t := node.GetComputedType(); t != nil && isDeferredType(t) {
+			node.SetComputedType(c.settleType(t))
+		}
 
 	case *parser.YieldExpression:
 		c.checkYieldExpression(node)

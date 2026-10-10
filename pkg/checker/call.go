@@ -1933,9 +1933,22 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			}
 		case *types.MappedType:
 			// Substitute type parameters in the constraint and value types
+			constraint := typ.ConstraintType
+			if keyof, ok := constraint.(*types.KeyofType); ok {
+				// Homomorphic: `[k in keyof T]` keeps T's `?` and `readonly`
+				// once T is a concrete object (zod's flatten).
+				operand := substitute(keyof.OperandType)
+				if _, ok := c.structuralObject(operand); ok {
+					constraint = &types.KeyofType{OperandType: operand}
+				} else {
+					constraint = c.computeKeyofType(operand)
+				}
+			} else {
+				constraint = substitute(constraint)
+			}
 			substitutedMapped := &types.MappedType{
 				TypeParameter:    typ.TypeParameter,
-				ConstraintType:   substitute(typ.ConstraintType),
+				ConstraintType:   constraint,
 				ValueType:        substitute(typ.ValueType),
 				ReadonlyModifier: typ.ReadonlyModifier,
 				OptionalModifier: typ.OptionalModifier,

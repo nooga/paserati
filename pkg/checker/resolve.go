@@ -2440,9 +2440,21 @@ func (c *Checker) resolveMappedTypeExpression(node *parser.MappedTypeExpression)
 		return nil
 	}
 
+	// `[k in keyof X]` over a concrete X is homomorphic: X's members keep
+	// their `?` and `readonly` (zod's flatten over addQuestionMarks), so the
+	// constraint stays `keyof X` for the expansion to see X.
+	mappedConstraint := constraintType
+	if keyofNode, ok := node.ConstraintType.(*parser.KeyofTypeExpression); ok {
+		if operand := c.resolveTypeAnnotation(keyofNode.Type); operand != nil {
+			if _, ok := c.structuralObject(operand); ok {
+				mappedConstraint = &types.KeyofType{OperandType: operand}
+			}
+		}
+	}
+
 	return &types.MappedType{
 		TypeParameter:    node.TypeParameter.Value,
-		ConstraintType:   constraintType,
+		ConstraintType:   mappedConstraint,
 		ValueType:        valueType,
 		ReadonlyModifier: node.ReadonlyModifier,
 		OptionalModifier: node.OptionalModifier,
@@ -2952,12 +2964,19 @@ func (c *Checker) expandMappedType(mappedType *types.MappedType) types.Type {
 				iterationKeys = append(iterationKeys, key)
 			}
 		}
+	} else if constraintType == types.Never {
+		// No keys: `{ [K in never]: X }` is `{}` (zod's addQuestionMarks
+		// when every key is optional).
+		return types.NewObjectType()
 	} else {
 		// Unsupported constraint type for now
 		return nil
 	}
 
 	if len(iterationKeys) == 0 {
+		if _, ok := constraintType.(*types.KeyofType); ok && sourceObjectType != nil {
+			return types.NewObjectType() // keyof an object without members
+		}
 		return nil
 	}
 
