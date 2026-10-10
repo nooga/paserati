@@ -4866,6 +4866,16 @@ func importedTypeAlias(t types.Type) types.Type {
 	return t
 }
 
+// importedValue is what an imported name means in a value position: an
+// exported namespace (export { z } of an import * as z, or of a namespace
+// declaration) is its value shape.
+func importedValue(t types.Type) types.Type {
+	if ns, ok := t.(*types.NamespaceType); ok {
+		return ns.ValueShape
+	}
+	return t
+}
+
 func (c *Checker) processImportBinding(localName, sourceModule, sourceName string, importType ImportBindingType, isTypeOnly bool) {
 	// If we're in module mode, use the module environment for proper tracking
 	if c.IsModuleMode() {
@@ -4879,19 +4889,21 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 			// Register the imported type in the local type environment for type annotation resolution
 			// For classes (constructor types), register the instance type (not the constructor)
 			typeAliasValue := importedTypeAlias(resolvedType)
+			valueType := importedValue(resolvedType)
 			if objType, ok := resolvedType.(*types.ObjectType); ok && importType == ImportNamespace {
 				// import * as z: in a type position z.T names the module's
 				// exported type T (z.infer<typeof S>), so the type side is a
-				// namespace. The value side keeps the plain object.
+				// namespace. The value side is the plain object.
 				ns := types.NewNamespaceType(localName)
 				// The module namespace object exists at runtime, so z in a
 				// value position is that object, never TS2708.
 				ns.Instantiated = true
-				ns.ValueShape = objType
+				ns.ValueShape = types.NewObjectType()
 				for name, t := range objType.Properties {
 					ns.TypeMembers[name] = importedTypeAlias(t)
+					ns.ValueShape.SetProperty(name, importedValue(t))
 				}
-				typeAliasValue = ns
+				typeAliasValue, valueType = ns, ns.ValueShape
 			}
 			c.env.DefineTypeAlias(localName, typeAliasValue)
 			debugPrintf("// [Checker] Registered imported type %s in local type environment\n", localName)
@@ -4900,9 +4912,9 @@ func (c *Checker) processImportBinding(localName, sourceModule, sourceName strin
 			if !isTypeOnly {
 				// Update the value environment with the resolved type
 				// This covers classes (ConstructSignatures), functions (CallSignatures), and other exports
-				if !c.env.Update(localName, resolvedType) {
+				if !c.env.Update(localName, valueType) {
 					// Fallback: define instead of update (in case DefineImport didn't pre-define)
-					c.env.Define(localName, resolvedType, false)
+					c.env.Define(localName, valueType, false)
 				}
 				debugPrintf("// [Checker] Registered imported value %s in value environment: %T\n", localName, resolvedType)
 			} else {
@@ -4987,8 +4999,10 @@ func (c *Checker) checkExportNamedDeclaration(node *parser.ExportNamedDeclaratio
 					// alias or interface has no value binding, so `export type
 					// { T as U }` and `export { T }` find it on the type side.
 					localType, _, exists := c.env.Resolve(localName)
-					if !exists || node.IsTypeOnly {
-						if t, found := c.env.ResolveType(localName); found {
+					if t, found := c.env.ResolveType(localName); found {
+						// A namespace is exported whole, so importers get
+						// both its value shape and its types.
+						if _, isNs := t.(*types.NamespaceType); isNs || !exists || node.IsTypeOnly {
 							localType, exists = t, true
 						}
 					}
