@@ -365,8 +365,12 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 	// --- NEW: Handle GenericTypeRef ---
 	case *parser.GenericTypeRef:
 		debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Processing GenericTypeRef: %s with %d type args\n", node.Name.Value, len(node.TypeArguments))
-		// For Phase 1, we only support built-in generic types
-		switch node.Name.Value {
+		// A qualified reference (N.Array<T>) never names a builtin.
+		builtinName := node.Name.Value
+		if node.Qualifier != nil {
+			builtinName = ""
+		}
+		switch builtinName {
 		case "Array":
 			if len(node.TypeArguments) != 1 {
 				c.addError(node, "Array requires exactly one type argument")
@@ -413,7 +417,21 @@ func (c *Checker) resolveTypeAnnotationNode(node parser.Expression) types.Type {
 			var baseType types.Type
 			var exists bool
 
-			if c.currentForwardRef != nil && node.Name.Value == c.currentForwardRef.ClassName {
+			if node.Qualifier != nil {
+				// N.G<T> / z.infer<T>: look G up in the namespace or module.
+				baseType = c.resolveEnumMemberTypeExpression(&parser.MemberExpression{
+					Token:    node.Token,
+					Object:   node.Qualifier,
+					Property: node.Name,
+				})
+				if baseType == nil {
+					for _, arg := range node.TypeArguments {
+						c.resolveTypeAnnotation(arg)
+					}
+					return nil
+				}
+				exists = true
+			} else if c.currentForwardRef != nil && node.Name.Value == c.currentForwardRef.ClassName {
 				debugPrintf("// [Checker resolveTypeAnno GenericTypeRef] Resolved '%s' as forward reference to current generic class\n", node.Name.Value)
 				baseType = c.currentForwardRef
 				exists = true
