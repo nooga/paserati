@@ -2,6 +2,7 @@ package driver
 
 import (
 	"fmt"
+	"github.com/nooga/paserati/pkg/builtins"
 	"os"
 	"path/filepath"
 	"sort"
@@ -82,8 +83,9 @@ func (p *Paserati) CheckFilesWithOptions(files []string, opts CheckOptions) []Fi
 	p.moduleLoader.SetCompilerFactory(nil)
 	loader := p.moduleLoader
 	globals := checker.NewGlobalDeclarations()
+	builtinEnv := checker.NewBuiltinEnvironment(builtins.GetStandardInitializers())
 	p.moduleLoader.SetCheckerFactory(func() modules.TypeChecker {
-		c := checker.NewChecker()
+		c := checker.NewCheckerWithBuiltins(builtinEnv)
 		c.EnableModuleMode("", loader)
 		opts.apply(c)
 		c.SetSharedGlobals(globals)
