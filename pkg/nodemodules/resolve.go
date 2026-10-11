@@ -41,6 +41,9 @@ type Options struct {
 	// Paths maps specifiers to files before packages are looked up, as
 	// tsc's "paths" option does.
 	Paths []PathMapping
+
+	// fs, when set, caches directory listings across resolutions.
+	fs *fsCache
 }
 
 // PathMapping is one "paths" entry: a pattern with at most one "*" and the
@@ -54,6 +57,10 @@ type PathMapping struct {
 // with the longest prefix matches (an exact pattern before any wildcard), and
 // its targets are tried in order. ok is false when no pattern matches.
 func ResolvePaths(specifier string, paths []PathMapping, mode Mode) (path string, ok bool, err error) {
+	return resolvePaths(nil, specifier, paths, mode)
+}
+
+func resolvePaths(c *fsCache, specifier string, paths []PathMapping, mode Mode) (path string, ok bool, err error) {
 	best := -1
 	bestPrefix := -1
 	star := ""
@@ -77,8 +84,8 @@ func ResolvePaths(specifier string, paths []PathMapping, mode Mode) (path string
 	}
 	for _, target := range paths[best].Targets {
 		candidate := strings.Replace(target, "*", star, 1)
-		if p, found := tryFile("", candidate, mode); found {
-			p, err := canonicalPath(p)
+		if p, found := tryFile(c, "", candidate, mode); found {
+			p, err := c.canonicalPath(p)
 			return p, true, err
 		}
 	}
@@ -104,7 +111,7 @@ func IsBareSpecifier(specifier string) bool {
 // absolute path, with symlinks followed.
 func Resolve(specifier, fromDir string, opts Options) (string, error) {
 	if len(opts.Paths) > 0 {
-		if path, ok, err := ResolvePaths(specifier, opts.Paths, opts.Mode); ok && err == nil {
+		if path, ok, err := resolvePaths(opts.fs, specifier, opts.Paths, opts.Mode); ok && err == nil {
 			return path, nil
 		}
 	}
@@ -120,10 +127,10 @@ func Resolve(specifier, fromDir string, opts Options) (string, error) {
 	// in each directory before moving up to the parent.
 	for {
 		nm := filepath.Join(dir, "node_modules")
-		if pkgDir := filepath.Join(nm, filepath.FromSlash(pkgName)); isDir(pkgDir) {
+		if pkgDir := filepath.Join(nm, filepath.FromSlash(pkgName)); opts.fs.isDir(pkgDir) {
 			path, err := resolveInPackage(pkgDir, subpath, opts)
 			if err == nil {
-				return canonicalPath(path)
+				return opts.fs.canonicalPath(path)
 			}
 			if opts.Mode == Runtime {
 				return "", fmt.Errorf("failed to resolve entry for %q: %w", specifier, err)
@@ -131,9 +138,9 @@ func Resolve(specifier, fromDir string, opts Options) (string, error) {
 			// A package without typings: its @types package may have them.
 		}
 		if opts.Mode == Types && !strings.HasPrefix(pkgName, "@types/") {
-			if typesDir := filepath.Join(nm, "@types", filepath.FromSlash(TypesPackageName(pkgName))); isDir(typesDir) {
+			if typesDir := filepath.Join(nm, "@types", filepath.FromSlash(TypesPackageName(pkgName))); opts.fs.isDir(typesDir) {
 				if path, err := resolveInPackage(typesDir, subpath, opts); err == nil {
-					return canonicalPath(path)
+					return opts.fs.canonicalPath(path)
 				}
 			}
 		}
@@ -159,8 +166,8 @@ func ResolveRelative(specifier, fromDir string, opts Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if path, ok := tryFile("", base, Types); ok {
-		return canonicalPath(path)
+	if path, ok := tryFile(opts.fs, "", base, Types); ok {
+		return opts.fs.canonicalPath(path)
 	}
 	return "", fmt.Errorf("cannot find %q from %s", specifier, fromDir)
 }
@@ -258,28 +265,28 @@ func resolveInPackage(pkgDir, subpath string, opts Options) (string, error) {
 			// With an exports map, nothing outside it is reachable.
 			return "", fmt.Errorf("%q is not exported by %s", key, pkgDir)
 		}
-		return entryFile(pkgDir, target, opts.Mode)
+		return entryFile(opts.fs, pkgDir, target, opts.Mode)
 	}
 	if subpath != "" {
-		if path, ok := tryFile(pkgDir, subpath, opts.Mode); ok {
+		if path, ok := tryFile(opts.fs, pkgDir, subpath, opts.Mode); ok {
 			return path, nil
 		}
 		return "", fmt.Errorf("subpath %q not found in %s", subpath, pkgDir)
 	}
 	if pkg != nil {
 		if opts.Mode == Types && pkg.Types != "" {
-			if path, err := entryFile(pkgDir, pkg.Types, Types); err == nil {
+			if path, err := entryFile(opts.fs, pkgDir, pkg.Types, Types); err == nil {
 				return path, nil
 			}
 		}
 		// Node ignores the bundler-only "module" field.
 		if pkg.Main != "" {
-			if path, err := entryFile(pkgDir, pkg.Main, opts.Mode); err == nil {
+			if path, err := entryFile(opts.fs, pkgDir, pkg.Main, opts.Mode); err == nil {
 				return path, nil
 			}
 		}
 	}
-	if path, ok := tryFile(pkgDir, "index", opts.Mode); ok {
+	if path, ok := tryFile(opts.fs, pkgDir, "index", opts.Mode); ok {
 		return path, nil
 	}
 	return "", fmt.Errorf("no entry point found in %s", pkgDir)
@@ -287,9 +294,9 @@ func resolveInPackage(pkgDir, subpath string, opts Options) (string, error) {
 
 // entryFile maps a package-relative target to a file on disk. In Types mode a
 // JavaScript target stands for its declaration file next to it.
-func entryFile(pkgDir, target string, mode Mode) (string, error) {
+func entryFile(c *fsCache, pkgDir, target string, mode Mode) (string, error) {
 	rel := strings.TrimPrefix(filepath.ToSlash(target), "./")
-	if path, ok := tryFile(pkgDir, rel, mode); ok {
+	if path, ok := tryFile(c, pkgDir, rel, mode); ok {
 		return path, nil
 	}
 	return "", fmt.Errorf("entry %q does not exist in %s", target, pkgDir)
@@ -322,7 +329,7 @@ func isDeclarationOrTS(rel string) bool {
 	return false
 }
 
-func tryFile(pkgDir, rel string, mode Mode) (string, bool) {
+func tryFile(c *fsCache, pkgDir, rel string, mode Mode) (string, bool) {
 	var candidates []string
 	if mode == Types {
 		if isDeclarationOrTS(rel) {
@@ -344,9 +351,9 @@ func tryFile(pkgDir, rel string, mode Mode) (string, bool) {
 			candidates = append(candidates, filepath.ToSlash(filepath.Join(rel, idx)))
 		}
 	}
-	for _, c := range candidates {
-		path := filepath.Join(pkgDir, filepath.FromSlash(c))
-		if isFile(path) {
+	for _, cand := range candidates {
+		path := filepath.Join(pkgDir, filepath.FromSlash(cand))
+		if c.isFile(path) {
 			return path, true
 		}
 	}
@@ -524,14 +531,4 @@ func canonicalPath(path string) (string, error) {
 		return filepath.Abs(resolved)
 	}
 	return filepath.Abs(path)
-}
-
-func isDir(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
-}
-
-func isFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
 }
