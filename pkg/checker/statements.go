@@ -538,6 +538,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 		switch existing := existingType.(type) {
 		case *types.GenericType:
 			existingGeneric = existing
+			c.instCache.reopen(existing)
 			if len(existing.TypeParameters) != len(node.TypeParameters) {
 				c.reportInterfaceTypeParameterMismatch(existing, node)
 				existingGeneric = nil

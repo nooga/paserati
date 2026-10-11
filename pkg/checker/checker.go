@@ -377,8 +377,7 @@ type Checker struct {
 	ambientClassBody            *parser.ClassBody                     // body of the `declare class` being checked: its method signatures are its members
 	aliasInstantiationDepth     int                                   // nesting of instantiateAliasReference, capped for recursive aliases
 	aliasInstCache              map[aliasInstKey]types.Type           // instantiateAliasReference results
-	genericInstCache            map[genericInstKey]types.Type         // instantiateGenericType results for declGeneration
-	completeGenerics            map[*types.GenericType]bool           // generics whose declaration finished; their instantiations are cached
+	instCache                   *instantiationCache                   // instantiateGenericType results; shared by a program's checkers
 	pendingAliases              map[string]*parser.TypeAliasStatement // top-level aliases Pass 1 has not resolved yet
 	pendingAliasEnv             *Environment                          // the environment they resolve in
 	classPlaceholders           map[*types.ObjectType]bool            // Pass 0 class types not filled in yet
@@ -484,8 +483,9 @@ func NewCheckerWithInitializers(initializers []builtins.BuiltinInitializer) *Che
 	globalEnv.snapshotBuiltins()
 	types.StrictNullChecks = true // matches the checker's strictNullChecks default
 	return &Checker{
-		env:    globalEnv,                // Create persistent global environment with custom initializers
-		errors: []errors.PaseratiError{}, // Initialize with correct type
+		env:       globalEnv,                // Create persistent global environment with custom initializers
+		errors:    []errors.PaseratiError{}, // Initialize with correct type
+		instCache: newInstantiationCache(),
 		// Initialize function context fields to nil/empty
 		currentExpectedReturnType:  nil,
 		currentInferredReturnTypes: nil,

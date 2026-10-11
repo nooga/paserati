@@ -19,17 +19,24 @@ type GlobalDeclarations struct {
 
 	lateBases []lateBase
 	derived   map[*types.ObjectType][]*types.ObjectType
+
+	instCache *instantiationCache
 }
 
 // NewGlobalDeclarations returns an empty registry.
 func NewGlobalDeclarations() *GlobalDeclarations {
-	return &GlobalDeclarations{values: map[string]types.Type{}, types: map[string]types.Type{}}
+	return &GlobalDeclarations{
+		values:    map[string]types.Type{},
+		types:     map[string]types.Type{},
+		instCache: newInstantiationCache(),
+	}
 }
 
 // SetSharedGlobals makes the checker see the registry's declarations as
 // globals and publish its file's global declarations to it.
 func (c *Checker) SetSharedGlobals(g *GlobalDeclarations) {
 	c.sharedGlobals = g
+	c.instCache = g.instCache
 }
 
 // importSharedGlobals defines the registry's declarations in env (the global
