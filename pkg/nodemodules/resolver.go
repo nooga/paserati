@@ -59,14 +59,12 @@ func (r *Resolver) Resolve(specifier, fromPath string) (*modules.ResolvedModule,
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open %q: %w", path, err)
-	}
+	// Many resolutions land on a module that is already loaded, and the
+	// loader closes the source unread; open the file only once it is read.
 	return &modules.ResolvedModule{
 		Specifier:    specifier,
 		ResolvedPath: path,
-		Source:       f,
+		Source:       &lazyFile{path: path},
 		Resolver:     r.Name(),
 	}, nil
 }
@@ -120,4 +118,28 @@ func startDir(c *fsCache, fromPath string) string {
 func isRelative(specifier string) bool {
 	return specifier == "." || specifier == ".." ||
 		strings.HasPrefix(specifier, "./") || strings.HasPrefix(specifier, "../")
+}
+
+// lazyFile opens path on the first Read.
+type lazyFile struct {
+	path string
+	f    *os.File
+}
+
+func (l *lazyFile) Read(p []byte) (int, error) {
+	if l.f == nil {
+		f, err := os.Open(l.path)
+		if err != nil {
+			return 0, fmt.Errorf("failed to open %q: %w", l.path, err)
+		}
+		l.f = f
+	}
+	return l.f.Read(p)
+}
+
+func (l *lazyFile) Close() error {
+	if l.f == nil {
+		return nil
+	}
+	return l.f.Close()
 }
