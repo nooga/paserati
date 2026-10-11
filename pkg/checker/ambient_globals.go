@@ -205,3 +205,12 @@ func declareDecoratorContextTypes(env *Environment) {
 	env.DefineTypeAlias("DecoratorMetadata", metadata)
 	env.DefineTypeAlias("DecoratorMetadataObject", metadata)
 }
+
+// ambientTypeStubs is ambientTypeGlobals as a set.
+var ambientTypeStubs = func() map[string]bool {
+	m := make(map[string]bool, len(ambientTypeGlobals))
+	for _, name := range ambientTypeGlobals {
+		m[name] = true
+	}
+	return m
+}()

@@ -4521,7 +4521,7 @@ func isContextualKeywordType(t lexer.TokenType) bool {
 	case lexer.SET, lexer.GET, lexer.FROM, lexer.OF, lexer.AS,
 		lexer.ASYNC, lexer.STATIC, lexer.TYPE, lexer.READONLY,
 		lexer.OVERRIDE, lexer.ABSTRACT, lexer.UNDEFINED, lexer.IS,
-		lexer.SATISFIES:
+		lexer.SATISFIES, lexer.KEYOF, lexer.INFER:
 		return true
 	}
 	return false
@@ -4537,7 +4537,7 @@ func (p *Parser) peekIsIdentifierLike() bool {
 	switch p.peekToken.Type {
 	case lexer.IDENT, lexer.SET, lexer.GET, lexer.FROM, lexer.OF, lexer.AS,
 		lexer.ASYNC, lexer.STATIC, lexer.TYPE, lexer.READONLY,
-		lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS:
+		lexer.OVERRIDE, lexer.ABSTRACT, lexer.IS, lexer.SATISFIES, lexer.KEYOF, lexer.INFER:
 		return true
 	}
 	return false

@@ -316,8 +316,15 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 
 		// The extended type should resolve to an ObjectType. Instantiated object
 		// types such as Promise<string> are valid interface bases in TypeScript.
+		if id, ok := extendedInterfaceExpr.(*parser.Identifier); ok && extendedType == types.Any &&
+			c.globalScope != nil && c.globalScope.typeAliases[id.Value] == types.Any {
+			// A lib global no file has declared yet: inherit its members
+			// once one does.
+			c.recordLateBase(interfaceType, id.Value)
+		}
 		if extendedObjectType, ok := c.resolveExtendedInterfaceObjectType(extendedType); ok {
 			extendedObjs = append(extendedObjs, extendedObjectType)
+			c.recordDerived(extendedObjectType, interfaceType)
 			// Copy all properties from the extended interface
 			for _, propName := range extendedObjectType.PropertyNames() {
 				propType := extendedObjectType.Properties[propName]
@@ -340,6 +347,7 @@ func (c *Checker) checkInterfaceDeclaration(node *parser.InterfaceDeclaration) {
 			// Arrays, tuples, `any` (e.g. Function) and intersections of object
 			// types are valid bases; inherit whatever object members they have.
 			for _, baseObject := range baseObjects {
+				c.recordDerived(baseObject, interfaceType)
 				for _, propName := range baseObject.PropertyNames() {
 					propType := baseObject.Properties[propName]
 					interfaceType.SetProperty(propName, c.rebindThisType(propType, baseObject, interfaceType))
@@ -654,8 +662,15 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 			continue // Skip unresolved extended interfaces
 		}
 
+		if id, ok := extendedInterfaceExpr.(*parser.Identifier); ok && extendedType == types.Any &&
+			c.globalScope != nil && c.globalScope.typeAliases[id.Value] == types.Any {
+			// A lib global no file has declared yet: inherit its members
+			// once one does.
+			c.recordLateBase(bodyType, id.Value)
+		}
 		if extendedObjectType, ok := c.resolveExtendedInterfaceObjectType(extendedType); ok {
 			extendedObjs = append(extendedObjs, extendedObjectType)
+			c.recordDerived(extendedObjectType, bodyType)
 			for _, propName := range extendedObjectType.PropertyNames() {
 				propType := extendedObjectType.Properties[propName]
 				bodyType.SetProperty(propName, c.rebindThisType(propType, extendedObjectType, bodyType))
