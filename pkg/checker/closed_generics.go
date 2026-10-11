@@ -211,6 +211,10 @@ func collectInferTypeNames(t types.Type, names *[]string, seen map[types.Type]bo
 		for _, a := range tt.TypeArguments {
 			collectInferTypeNames(a, names, seen)
 		}
+	case *types.GenericTypeAliasForwardReference:
+		for _, a := range tt.TypeArguments {
+			collectInferTypeNames(a, names, seen)
+		}
 	case *types.ObjectType:
 		if seen[t] {
 			return

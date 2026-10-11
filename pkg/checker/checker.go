@@ -252,6 +252,11 @@ type ContextualType struct {
 
 // Checker performs static type checking on the AST.
 type Checker struct {
+	// In-progress (source, target) pairs and depth of tryInferTypes; see
+	// inferFromConditional.
+	inferVisiting map[inferPair]bool
+	inferDepth    int
+
 	program *parser.Program    // Root AST node
 	source  *source.SourceFile // Source context for error reporting (cached from program)
 	// TODO: Add Type Registry if needed
@@ -462,8 +467,9 @@ type Checker struct {
 	// so that const/let declarations earlier in the file are already in scope.
 	deferredComputedKeyChecks []deferredComputedKeyCheck
 	deferredHeritageChecks    []deferredHeritageCheck
-	typeRefNode               parser.Node         // type reference being instantiated, for arity diagnostics
-	mentionScratch            map[types.Type]bool // objectMayMention's visited set
+	typeRefNode               parser.Node                    // type reference being instantiated, for arity diagnostics
+	mentionScratch            map[types.Type]bool            // objectMayMention's visited set
+	mentionShadowed           map[string]map[types.Type]bool // ... per set of names under a shadowing declaration
 }
 
 type deferredComputedKeyCheck struct {

@@ -1900,10 +1900,18 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 			visited[typ] = typ
 			return typ
 		}
-		if !c.objectMayMention(typ, substitution) {
+		if mentions, seen := c.objectMayMention(typ, substitution); !mentions {
 			// Nothing to substitute: keep the object rather than deep-copy
 			// it (instantiating zod's aliases copied whole class types).
-			visited[typ] = typ
+			// The walk that found no mention explored everything reachable
+			// from every object it entered, so substitution keeps those too:
+			// asking again per object rewalked (and materialized) the same
+			// graph, quadratic on playwright's types with @types/node.
+			for kept := range seen {
+				if _, done := visited[kept]; !done {
+					visited[kept] = kept
+				}
+			}
 			return typ
 		}
 		if typ.Pending {
@@ -1988,7 +1996,13 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		} else {
 			newConstraintType = c.substituteTypesWithVisited(typ.ConstraintType, substitution, visited)
 		}
-		newValueType := c.substituteTypesWithVisited(typ.ValueType, substitution, visited)
+		// The value means the mapped type's own key, not an outer one.
+		newValueType := typ.ValueType
+		if unshadowed, shadows := unshadowedNames(substitution, []*types.TypeParameter{{Name: typ.TypeParameter}}); !shadows {
+			newValueType = c.substituteTypesWithVisited(typ.ValueType, substitution, visited)
+		} else if len(unshadowed) > 0 {
+			newValueType = c.substituteTypesWithVisited(typ.ValueType, unshadowed, make(map[types.Type]types.Type))
+		}
 
 		return &types.MappedType{
 			TypeParameter:    typ.TypeParameter, // Keep parameter name as-is
@@ -2707,7 +2721,7 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 
 	// Check if the extends type contains infer types that we need to match
 	inferences := make(map[string]types.Type)
-	if c.tryInferTypes(checkType, extendsType, inferences) {
+	if c.inferFromConditional(checkType, extendsType, inferences) {
 		if checkerDebug {
 			debugPrintf("// [ConditionalType] Inference successful with %d captured types\n", len(inferences))
 		}
@@ -3150,7 +3164,7 @@ func (c *Checker) substituteTypeParameterInTypeMemo(targetType types.Type, param
 		if typ.Pending {
 			return typ // filled in later, in place (see substituteTypes)
 		}
-		if !c.objectMayMention(typ, map[string]types.Type{paramName: replacement}) {
+		if mentions, _ := c.objectMayMention(typ, map[string]types.Type{paramName: replacement}); !mentions {
 			// A mapped type's key substituted into `Shape[k]` must not copy
 			// the class types inside Shape.
 			memo[typ] = typ
@@ -3437,8 +3451,46 @@ func (c *Checker) expandIfMappedType(typ types.Type) types.Type {
 	return typ
 }
 
+// maxInferDepth bounds the structural walk of tryInferTypes for types that
+// keep expanding into fresh instantiations instead of revisiting a pair.
+const maxInferDepth = 100
+
+// inferPair is a (source, target) pair being matched by tryInferTypes.
+type inferPair struct{ check, extends types.Type }
+
+// inferFromConditional runs one top-level infer match (one conditional type)
+// with its own visited set, so a nested conditional resolved mid-walk can't
+// mistake the outer walk's pairs for its own cycles.
+func (c *Checker) inferFromConditional(checkType, extendsType types.Type, inferences map[string]types.Type) bool {
+	savedVisiting, savedDepth := c.inferVisiting, c.inferDepth
+	c.inferVisiting, c.inferDepth = nil, 0
+	defer func() { c.inferVisiting, c.inferDepth = savedVisiting, savedDepth }()
+	return c.tryInferTypes(checkType, extendsType, inferences)
+}
+
 // tryInferTypes attempts to match checkType against extendsType and capture infer types
 func (c *Checker) tryInferTypes(checkType, extendsType types.Type, inferences map[string]types.Type) bool {
+	// Recursive types (Observable.pipe(): Observable<...>) bring the walk back
+	// to a pair it is still matching. Like TypeScript's inference `visited`
+	// map, a pair already in progress contributes nothing further and is
+	// assumed to match; the depth cap catches ever-growing instantiations.
+	if checkType == nil || extendsType == nil {
+		return false
+	}
+	pair := inferPair{checkType, extendsType}
+	if c.inferVisiting[pair] || c.inferDepth >= maxInferDepth {
+		return true
+	}
+	if c.inferVisiting == nil {
+		c.inferVisiting = make(map[inferPair]bool)
+	}
+	c.inferVisiting[pair] = true
+	c.inferDepth++
+	defer func() {
+		delete(c.inferVisiting, pair)
+		c.inferDepth--
+	}()
+
 	if checkerDebug {
 		debugPrintf("// [TryInfer] Trying to infer from %s to %s\n", checkType.String(), extendsType.String())
 	}
@@ -4302,14 +4354,24 @@ func (c *Checker) markGenericComplete(name string) {
 }
 
 // objectMayMention is mayMentionTypeParamNames with a visited set reused
-// across calls (substitution asks once per object it meets).
-func (c *Checker) objectMayMention(t types.Type, names map[string]types.Type) bool {
-	if c.mentionScratch == nil {
-		c.mentionScratch = make(map[types.Type]bool)
+// across calls (substitution asks once per object it meets). When it reports
+// no mention, seen holds every object the walk entered, none of which
+// mentions names either; it is valid until the next call.
+func (c *Checker) objectMayMention(t types.Type, names map[string]types.Type) (mentions bool, seen map[types.Type]bool) {
+	// Reading a lazily substituted object's members mid-walk substitutes,
+	// which asks again: a nested call takes a set of its own instead of
+	// clearing the one this walk is using.
+	seen, shadowed := c.mentionScratch, c.mentionShadowed
+	c.mentionScratch, c.mentionShadowed = nil, nil
+	if seen == nil {
+		seen, shadowed = make(map[types.Type]bool), make(map[string]map[types.Type]bool)
 	} else {
-		clear(c.mentionScratch)
+		clear(seen)
+		clear(shadowed)
 	}
-	return mayMentionTypeParamNames(t, names, c.mentionScratch)
+	mentions = mayMentionTypeParamNames(t, names, seen, shadowed)
+	c.mentionScratch, c.mentionShadowed = seen, shadowed
+	return mentions, seen
 }
 
 // mayMentionTypeParamNames reports whether t can refer to a type parameter
@@ -4317,7 +4379,7 @@ func (c *Checker) objectMayMention(t types.Type, names map[string]types.Type) bo
 // as a mention, so a false result means substitution leaves t unchanged. An
 // object's display arguments (GenericArgs) count: instantiations are compared
 // through them.
-func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited map[types.Type]bool) bool {
+func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited map[types.Type]bool, shadowed map[string]map[types.Type]bool) bool {
 	if t == nil {
 		return false
 	}
@@ -4331,19 +4393,91 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 		_, ok := names[tt.Parameter.Name]
 		return ok
 	case *types.ArrayType:
-		return mayMentionTypeParamNames(tt.ElementType, names, visited)
+		return mayMentionTypeParamNames(tt.ElementType, names, visited, shadowed)
 	case *types.ReadonlyType:
-		return mayMentionTypeParamNames(tt.InnerType, names, visited)
+		return mayMentionTypeParamNames(tt.InnerType, names, visited, shadowed)
 	case *types.UnionType:
 		for _, m := range tt.Types {
-			if mayMentionTypeParamNames(m, names, visited) {
+			if mayMentionTypeParamNames(m, names, visited, shadowed) {
 				return true
 			}
 		}
 		return false
 	case *types.IntersectionType:
 		for _, m := range tt.Types {
-			if mayMentionTypeParamNames(m, names, visited) {
+			if mayMentionTypeParamNames(m, names, visited, shadowed) {
+				return true
+			}
+		}
+		return false
+	case *types.InstantiatedType:
+		// Substitution changes `Promise<Page>` or a forward `BrowserType<X>`
+		// only through its arguments. Counting them as mentions made every
+		// object reaching one (all of playwright's) a copy per substitution.
+		for _, a := range tt.TypeArguments {
+			if mayMentionTypeParamNames(a, names, visited, shadowed) {
+				return true
+			}
+		}
+		return false
+	case *types.GenericTypeAliasForwardReference:
+		for _, a := range tt.TypeArguments {
+			if a == nil || mayMentionTypeParamNames(a, names, visited, shadowed) {
+				return true
+			}
+		}
+		return false
+	case *types.InferType:
+		// Declared by its conditional; substitution leaves it alone.
+		return false
+	case *types.ConditionalType:
+		// Like tsc's couldContainTypeVariables. The true branch means the
+		// conditional's own `infer T`, not an outer T: playwright's
+		// Unboxed<Arg> (reachable from nearly every object) counted as
+		// mentioning any T, so instantiating anything copied the graph.
+		if mayMentionTypeParamNames(tt.CheckType, names, visited, shadowed) ||
+			mayMentionTypeParamNames(tt.ExtendsType, names, visited, shadowed) ||
+			mayMentionTypeParamNames(tt.FalseType, names, visited, shadowed) {
+			return true
+		}
+		var inferred []*types.TypeParameter
+		var inferNames []string
+		collectInferTypeNames(tt.ExtendsType, &inferNames, map[types.Type]bool{})
+		for _, n := range inferNames {
+			inferred = append(inferred, &types.TypeParameter{Name: n})
+		}
+		trueNames, trueVisited := names, visited
+		if unshadowed, shadows := unshadowedNames(names, inferred); shadows {
+			trueNames, trueVisited = unshadowed, shadowedVisited(shadowed, unshadowed)
+		}
+		return mayMentionTypeParamNames(tt.TrueType, trueNames, trueVisited, shadowed)
+	case *types.MappedType:
+		// `[key in K]: V` binds its own key in V: hookable's nested mapped
+		// types counted as mentioning every outer `key`, so expanding one
+		// copied tsdown's whole hook graph per key.
+		if mayMentionTypeParamNames(tt.ConstraintType, names, visited, shadowed) {
+			return true
+		}
+		valueNames, valueVisited := names, visited
+		if unshadowed, shadows := unshadowedNames(names, []*types.TypeParameter{{Name: tt.TypeParameter}}); shadows {
+			valueNames, valueVisited = unshadowed, shadowedVisited(shadowed, unshadowed)
+		}
+		return mayMentionTypeParamNames(tt.ValueType, valueNames, valueVisited, shadowed)
+	case *types.KeyofType:
+		return mayMentionTypeParamNames(tt.OperandType, names, visited, shadowed)
+	case *types.IndexedAccessType:
+		return mayMentionTypeParamNames(tt.ObjectType, names, visited, shadowed) ||
+			mayMentionTypeParamNames(tt.IndexType, names, visited, shadowed)
+	case *types.TupleType:
+		for _, e := range tt.ElementTypes {
+			if mayMentionTypeParamNames(e, names, visited, shadowed) {
+				return true
+			}
+		}
+		return mayMentionTypeParamNames(tt.RestElementType, names, visited, shadowed)
+	case *types.TemplateLiteralType:
+		for _, part := range tt.Parts {
+			if !part.IsLiteral && mayMentionTypeParamNames(part.Type, names, visited, shadowed) {
 				return true
 			}
 		}
@@ -4362,24 +4496,24 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 				return true
 			}
 			for _, a := range tt.GenericArgs {
-				if mayMentionTypeParamNames(a, names, visited) {
+				if mayMentionTypeParamNames(a, names, visited, shadowed) {
 					return true
 				}
 			}
 			return false
 		}
 		for _, p := range tt.Props() {
-			if mayMentionTypeParamNames(p, names, visited) {
+			if mayMentionTypeParamNames(p, names, visited, shadowed) {
 				return true
 			}
 		}
 		for _, a := range tt.GenericArgs {
-			if mayMentionTypeParamNames(a, names, visited) {
+			if mayMentionTypeParamNames(a, names, visited, shadowed) {
 				return true
 			}
 		}
 		for _, b := range tt.Bases() {
-			if mayMentionTypeParamNames(b, names, visited) {
+			if mayMentionTypeParamNames(b, names, visited, shadowed) {
 				return true
 			}
 		}
@@ -4388,31 +4522,84 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 				if sig == nil {
 					continue
 				}
+				sigNames, sigVisited := names, visited
+				if unshadowed, shadows := unshadowedNames(names, sig.TypeParameters); shadows {
+					// `waitForEvent<T>(...)` means its own T: an outer T
+					// doesn't reach it.
+					sigNames, sigVisited = unshadowed, shadowedVisited(shadowed, unshadowed)
+				}
 				for _, p := range sig.ParameterTypes {
-					if mayMentionTypeParamNames(p, names, visited) {
+					if mayMentionTypeParamNames(p, sigNames, sigVisited, shadowed) {
 						return true
 					}
 				}
-				if mayMentionTypeParamNames(sig.ReturnType, names, visited) ||
-					mayMentionTypeParamNames(sig.RestParameterType, names, visited) ||
-					mayMentionTypeParamNames(sig.ThisType, names, visited) {
+				if mayMentionTypeParamNames(sig.ReturnType, sigNames, sigVisited, shadowed) ||
+					mayMentionTypeParamNames(sig.RestParameterType, sigNames, sigVisited, shadowed) ||
+					mayMentionTypeParamNames(sig.ThisType, sigNames, sigVisited, shadowed) {
 					return true
 				}
-				for _, tp := range sig.TypeParameters {
-					if tp != nil && (mayMentionTypeParamNames(tp.Constraint, names, visited) || mayMentionTypeParamNames(tp.Default, names, visited)) {
-						return true
-					}
-				}
+				// Not the signature's own type parameters' constraints and
+				// defaults: substitution keeps them, so counting them made
+				// every object reaching an instantiated ElementHandle<T>
+				// (`evaluate<R, Arg, O extends T = T>`) mention T forever.
 			}
 		}
 		for _, sig := range tt.IndexSigs() {
-			if sig != nil && (mayMentionTypeParamNames(sig.KeyType, names, visited) || mayMentionTypeParamNames(sig.ValueType, names, visited) || mayMentionTypeParamNames(sig.ConstraintType, names, visited)) {
+			if sig != nil && (mayMentionTypeParamNames(sig.KeyType, names, visited, shadowed) || mayMentionTypeParamNames(sig.ValueType, names, visited, shadowed) || mayMentionTypeParamNames(sig.ConstraintType, names, visited, shadowed)) {
+				return true
+			}
+		}
+		return false
+	case *types.ParameterizedForwardReferenceType:
+		for _, a := range tt.TypeArguments {
+			if mayMentionTypeParamNames(a, names, visited, shadowed) {
 				return true
 			}
 		}
 		return false
 	}
-	return true
+	// substituteTypesWithVisited returns every other kind as it is (a
+	// generic's declaration, typeof, an enum, a plain forward reference).
+	return false
+}
+
+// shadowedVisited is the visited set of a walk for the names still in scope
+// under a shadowing declaration. What is settled for fewer names isn't for
+// all of them, so each set of names gets its own, shared by every place it
+// is reached from: a fresh one per generic method or conditional re-walked
+// playwright's graph from each of them.
+func shadowedVisited(shadowed map[string]map[types.Type]bool, names map[string]types.Type) map[types.Type]bool {
+	keys := make([]string, 0, len(names))
+	for name := range names {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	key := strings.Join(keys, ",")
+	set := shadowed[key]
+	if set == nil {
+		set = make(map[types.Type]bool)
+		shadowed[key] = set
+	}
+	return set
+}
+
+// unshadowedNames drops from names the type parameters a generic signature
+// declares itself, reporting whether it declared any of them.
+func unshadowedNames[V any](names map[string]V, own []*types.TypeParameter) (map[string]V, bool) {
+	var out map[string]V
+	for _, tp := range own {
+		if tp == nil {
+			continue
+		}
+		if _, ok := names[tp.Name]; !ok {
+			continue
+		}
+		if out == nil {
+			out = maps.Clone(names)
+		}
+		delete(out, tp.Name)
+	}
+	return out, out != nil
 }
 
 // substituteMembers fills in result's members: typ's, substituted.
@@ -4454,16 +4641,26 @@ func (c *Checker) substituteMembers(typ, result *types.ObjectType, substitution 
 	// Signature slices are assigned once complete: a recursive visit of
 	// result meanwhile (it is in visited) must not see empty slots.
 	if sigs := typ.CallSigs(); sigs != nil {
-		result.CallSignatures = c.substituteSignatures(sigs, sub)
+		result.CallSignatures = c.substituteSignatures(sigs, substitution, visited)
 	}
 	if sigs := typ.ConstructSigs(); sigs != nil {
-		result.ConstructSignatures = c.substituteSignatures(sigs, sub)
+		result.ConstructSignatures = c.substituteSignatures(sigs, substitution, visited)
 	}
 }
 
-func (c *Checker) substituteSignatures(sigs []*types.Signature, sub func(types.Type) types.Type) []*types.Signature {
+func (c *Checker) substituteSignatures(sigs []*types.Signature, substitution map[string]types.Type, visited map[types.Type]types.Type) []*types.Signature {
 	out := make([]*types.Signature, len(sigs))
 	for i, sig := range sigs {
+		sigSubstitution, sigVisited := substitution, visited
+		if unshadowed, shadows := unshadowedNames(substitution, sig.TypeParameters); shadows {
+			if len(unshadowed) == 0 {
+				out[i] = sig
+				continue
+			}
+			// The memo belongs to the full substitution.
+			sigSubstitution, sigVisited = unshadowed, make(map[types.Type]types.Type)
+		}
+		sub := func(t types.Type) types.Type { return c.substituteTypesWithVisited(t, sigSubstitution, sigVisited) }
 		params := make([]types.Type, len(sig.ParameterTypes))
 		for j, p := range sig.ParameterTypes {
 			params[j] = sub(p)
