@@ -204,9 +204,9 @@ func objectKnowsProperty(obj *types.ObjectType, name string) bool {
 // objectPropertyType returns a target object's declared type for a property
 // (with undefined added when optional), falling back to an applicable index
 // signature.
-func objectPropertyType(obj *types.ObjectType, name string) (types.Type, bool) {
+func (c *Checker) objectPropertyType(obj *types.ObjectType, name string) (types.Type, bool) {
 	if pt, ok := obj.GetEffectiveProperties()[name]; ok {
-		if obj.IsPropertyOptional(name) && types.StrictNullChecks {
+		if obj.IsPropertyOptional(name) && c.rel.StrictNullChecks {
 			return types.NewUnionType(pt, types.Undefined), true
 		}
 		return pt, true
@@ -225,10 +225,10 @@ func objectPropertyType(obj *types.ObjectType, name string) (types.Type, bool) {
 
 // targetPropertyType is the type a property takes across all target objects
 // (the union of the declarations when several members declare it).
-func targetPropertyType(objs []*types.ObjectType, name string) (types.Type, bool) {
+func (c *Checker) targetPropertyType(objs []*types.ObjectType, name string) (types.Type, bool) {
 	var found []types.Type
 	for _, o := range objs {
-		if pt, ok := objectPropertyType(o, name); ok {
+		if pt, ok := c.objectPropertyType(o, name); ok {
 			found = append(found, pt)
 		}
 	}
@@ -308,7 +308,7 @@ func (c *Checker) findExcessProperty(expr parser.Expression, target types.Type) 
 			if !ok || p.Value == nil {
 				continue
 			}
-			if pt, ok := targetPropertyType(objs, name); ok {
+			if pt, ok := c.targetPropertyType(objs, name); ok {
 				if ex := c.findExcessProperty(p.Value, pt); ex != nil {
 					return ex
 				}
@@ -499,7 +499,7 @@ func (c *Checker) elaborate(expr parser.Expression, source, target types.Type, h
 			if !ok {
 				continue
 			}
-			tp, ok := targetPropertyType(objs, name)
+			tp, ok := c.targetPropertyType(objs, name)
 			if !ok {
 				continue
 			}
@@ -609,11 +609,11 @@ func (c *Checker) generalizedSource(source, target types.Type) types.Type {
 	}
 	switch c.resolveStructural(target).(type) {
 	case *types.ObjectType, *types.ArrayType, *types.TupleType:
-		return types.GetWidenedType(source)
+		return c.rel.GetWidenedType(source)
 	}
 	switch target {
 	case types.String, types.Number, types.BigInt, types.Symbol:
-		return types.GetWidenedType(source)
+		return c.rel.GetWidenedType(source)
 	}
 	return source
 }
@@ -690,7 +690,7 @@ func (c *Checker) widenObjectLiteralForReport(source, target types.Type) types.T
 		return source
 	}
 	tgtObj, _ := c.resolveStructural(target).(*types.ObjectType)
-	widened := types.DeeplyWidenType(srcObj)
+	widened := c.rel.DeeplyWidenType(srcObj)
 	wObj, ok := widened.(*types.ObjectType)
 	if !ok || tgtObj == nil {
 		return widened

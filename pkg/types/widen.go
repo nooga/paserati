@@ -6,10 +6,10 @@ import "github.com/nooga/paserati/pkg/vm"
 
 // GetWidenedType converts literal types to their corresponding primitive base types.
 // Other types are returned unchanged.
-func GetWidenedType(t Type) Type {
+func (r *Relation) GetWidenedType(t Type) Type {
 	// Without strictNullChecks the null and undefined types widen to any
 	// (an initializer of `null` declares an `any` variable).
-	if !StrictNullChecks && (t == Null || t == Undefined) {
+	if !r.StrictNullChecks && (t == Null || t == Undefined) {
 		return Any
 	}
 	if litType, ok := t.(*LiteralType); ok {
@@ -37,7 +37,7 @@ func GetWidenedType(t Type) Type {
 		if typeParam.Parameter.Constraint != nil {
 			// For arithmetic operations, widen to the constraint
 			// e.g., T extends number -> number for + operations
-			return GetWidenedType(typeParam.Parameter.Constraint)
+			return r.GetWidenedType(typeParam.Parameter.Constraint)
 		}
 	}
 
@@ -48,15 +48,15 @@ func GetWidenedType(t Type) Type {
 }
 
 // WidenType converts literal types to their primitive equivalents
-func WidenType(t Type) Type {
-	return GetWidenedType(t) // Use existing function
+func (r *Relation) WidenType(t Type) Type {
+	return r.GetWidenedType(t) // Use existing function
 }
 
 // deeplyWidenObjectType creates a new ObjectType where literal property types are widened.
 // Returns the original type if it's not an ObjectType.
-func DeeplyWidenType(t Type) Type {
+func (r *Relation) DeeplyWidenType(t Type) Type {
 	// Widen top-level literals first
-	widenedT := GetWidenedType(t)
+	widenedT := r.GetWidenedType(t)
 
 	// If it's an object after top-level widening, widen its properties
 	if objType, ok := widenedT.(*ObjectType); ok {
@@ -68,7 +68,7 @@ func DeeplyWidenType(t Type) Type {
 				newFields[name] = propType
 				continue
 			}
-			newFields[name] = widenNested(propType, 0)
+			newFields[name] = r.widenNested(propType, 0)
 		}
 		return &ObjectType{
 			Properties:          newFields,
@@ -118,11 +118,11 @@ func WidenEnumMember(t Type) Type {
 // widenNested widens literal types in a property position: literals become
 // their base type and plain nested object (literal) types are widened the same
 // way. Callable types, class instances and everything else are left alone.
-func widenNested(t Type, depth int) Type {
+func (r *Relation) widenNested(t Type, depth int) Type {
 	if depth > 4 {
 		return t
 	}
-	t = GetWidenedType(t)
+	t = r.GetWidenedType(t)
 	obj, ok := t.(*ObjectType)
 	if !ok || obj.IsCallable() || len(obj.ConstructSigs()) > 0 || obj.ClassMeta != nil || obj.IsInterface {
 		return t
@@ -131,7 +131,7 @@ func widenNested(t Type, depth int) Type {
 	props := make(map[string]Type, len(obj.Props()))
 	for _, name := range SortedPropertyNames(obj.Props()) {
 		pt := obj.Props()[name]
-		w := widenNested(pt, depth+1)
+		w := r.widenNested(pt, depth+1)
 		if w != pt {
 			changed = true
 		}

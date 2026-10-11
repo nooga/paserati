@@ -252,6 +252,11 @@ type ContextualType struct {
 
 // Checker performs static type checking on the AST.
 type Checker struct {
+	// rel relates types under this checker's options and built-ins.
+	rel *types.Relation
+	// builtinEnv is the global environment the checker started from.
+	builtinEnv *Environment
+
 	// In-progress (source, target) pairs and depth of tryInferTypes; see
 	// inferFromConditional.
 	inferVisiting map[inferPair]bool
@@ -503,15 +508,14 @@ func NewBuiltinEnvironment(initializers []builtins.BuiltinInitializer) *Environm
 // copy of builtins. The checkers of one program share the built-in types
 // (globals are program-wide anyway) instead of each building its own.
 func NewCheckerWithBuiltins(builtins *Environment) *Checker {
-	env := builtins.cloneGlobal()
-	globalEnvironment.Store(env)
-	return newCheckerInEnv(env)
+	return newCheckerInEnv(builtins.cloneGlobal())
 }
 
 func newCheckerInEnv(globalEnv *Environment) *Checker {
-	types.StrictNullChecks = true // matches the checker's strictNullChecks default
 	return &Checker{
-		env:       globalEnv,                // Create persistent global environment with custom initializers
+		env:        globalEnv, // Create persistent global environment with custom initializers
+		builtinEnv: globalEnv,
+		rel:        newRelation(globalEnv),
 		errors:    []errors.PaseratiError{}, // Initialize with correct type
 		instCache: newInstantiationCache(),
 		// Initialize function context fields to nil/empty
@@ -585,13 +589,34 @@ func (c *Checker) beyondTsc() bool { return !c.tscCompat }
 // TS2365 about the operand pair instead. On by default, as in TypeScript 6.0.
 func (c *Checker) SetStrictNullChecks(strict bool) {
 	c.strictNullChecks = strict
-	types.StrictNullChecks = strict
+	c.rel.StrictNullChecks = strict
 }
 
 // SetStrictFunctionTypes mirrors the `--strictFunctionTypes` compiler option:
 // parameters of non-method function types are compared contravariantly.
 func (c *Checker) SetStrictFunctionTypes(strict bool) {
-	types.StrictFunctionTypes = strict
+	c.rel.StrictFunctionTypes = strict
+}
+
+// Relation returns the checker's type relations, configured with its options
+// and built-ins.
+func (c *Checker) Relation() *types.Relation {
+	return c.rel
+}
+
+// newRelation returns the type relations for a checker whose built-ins are
+// declared in globalEnv, under the checker's default options.
+func newRelation(globalEnv *Environment) *types.Relation {
+	return &types.Relation{
+		StrictNullChecks: true, // matches the checker's strictNullChecks default
+		PrimitivePrototypeMembers: func(kind string) map[string]types.Type {
+			if proto, ok := globalEnv.primitivePrototypes[kind]; ok {
+				return proto.Props()
+			}
+			return nil
+		},
+		PrototypeMethods: globalEnv.GetPrimitivePrototypeMethodType,
+	}
 }
 
 // SetAlwaysStrict mirrors the `--alwaysStrict` compiler option, which gates
@@ -1046,7 +1071,7 @@ func (c *Checker) checkVarLikeInitializerAndRefine(varName *parser.Identifier, t
 			// fresh, so it doesn't widen — see isFreshLiteralExpression.
 			finalInferredType = computedInitializerType
 		} else {
-			finalInferredType = types.DeeplyWidenType(computedInitializerType) // Use the deep widen helper
+			finalInferredType = c.rel.DeeplyWidenType(computedInitializerType) // Use the deep widen helper
 			if !isConstVarLikeName(varName, globalEnv) {
 				finalInferredType = types.WidenEnumMember(finalInferredType)
 			}
@@ -2338,14 +2363,14 @@ func (c *Checker) visit(node parser.Node) {
 				// --- No annotation: Infer type ---
 				if computedInitializerType != nil {
 					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral && isFreshLiteralExpression(declarator.Value) {
-						finalVariableType = types.GetWidenedType(computedInitializerType)
+						finalVariableType = c.rel.GetWidenedType(computedInitializerType)
 						if checkerDebug {
 							debugPrintf("// [Checker LetStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 						}
 					} else {
 						finalVariableType = computedInitializerType
 						if isWideningInitializer(declarator.Value) {
-							finalVariableType = types.DeeplyWidenType(computedInitializerType)
+							finalVariableType = c.rel.DeeplyWidenType(computedInitializerType)
 						}
 						finalVariableType = types.WidenEnumMember(finalVariableType)
 						if checkerDebug {
@@ -2505,12 +2530,12 @@ func (c *Checker) visit(node parser.Node) {
 
 				// Only widen literal types
 				if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral {
-					finalType = types.GetWidenedType(computedInitializerType)
+					finalType = c.rel.GetWidenedType(computedInitializerType)
 				} else {
 					// Use the computed type directly for non-literals (functions, arrays, etc.)
 					finalType = computedInitializerType
 					if isWideningInitializer(declarator.Value) {
-						finalType = types.DeeplyWidenType(computedInitializerType)
+						finalType = c.rel.DeeplyWidenType(computedInitializerType)
 					}
 				}
 			}
@@ -2653,14 +2678,14 @@ func (c *Checker) visit(node parser.Node) {
 				// --- No annotation: Infer type ---
 				if computedInitializerType != nil {
 					if _, isLiteral := computedInitializerType.(*types.LiteralType); isLiteral && isFreshLiteralExpression(declarator.Value) {
-						finalVariableType = types.GetWidenedType(computedInitializerType)
+						finalVariableType = c.rel.GetWidenedType(computedInitializerType)
 						if checkerDebug {
 							debugPrintf("// [Checker VarStmt] '%s': Inferred final type (widened literal): %s (Go Type: %T)\n", nameValueStr, finalVariableType.String(), finalVariableType)
 						}
 					} else {
 						finalVariableType = computedInitializerType
 						if isWideningInitializer(declarator.Value) {
-							finalVariableType = types.DeeplyWidenType(computedInitializerType)
+							finalVariableType = c.rel.DeeplyWidenType(computedInitializerType)
 						}
 						finalVariableType = types.WidenEnumMember(finalVariableType)
 						if checkerDebug {
@@ -2767,7 +2792,7 @@ func (c *Checker) visit(node parser.Node) {
 			// Special handling for type predicate return types
 			if _, ok := c.currentExpectedReturnType.(*types.TypePredicateType); ok {
 				// Type predicate functions should accept boolean returns
-				if !types.IsAssignable(actualReturnType, types.Boolean) {
+				if !c.rel.IsAssignable(actualReturnType, types.Boolean) {
 					msg := fmt.Sprintf("Type '%s' is not assignable to type 'boolean'.", actualReturnType)
 					c.addErrorWithCode(node.ReturnValue, errors.TS2322, msg)
 				}
@@ -2787,11 +2812,11 @@ func (c *Checker) visit(node parser.Node) {
 
 		// Add to inferred types - widen literal types for better inference
 		// This is especially important for generators where the return type becomes TReturn parameter
-		widenedReturnType := types.GetWidenedType(actualReturnType)
+		widenedReturnType := c.rel.GetWidenedType(actualReturnType)
 		if _, isLiteral := node.ReturnValue.(*parser.ObjectLiteral); isLiteral {
 			// A returned object literal's members widen too, so the
 			// inferred return type is `{ a: number }`, not `{ a: 1 }`.
-			widenedReturnType = types.DeeplyWidenType(widenedReturnType)
+			widenedReturnType = c.rel.DeeplyWidenType(widenedReturnType)
 		}
 		c.currentInferredReturnTypes = append(c.currentInferredReturnTypes, widenedReturnType)
 
@@ -3178,7 +3203,7 @@ func (c *Checker) visit(node parser.Node) {
 		var resultType types.Type = types.Any // Default to Any on error
 
 		if rightType != nil { // Proceed only if operand type is known
-			widenedRightType := types.GetWidenedType(rightType)
+			widenedRightType := c.rel.GetWidenedType(rightType)
 			switch node.Operator {
 			case "-":
 				if widenedRightType == types.Any {
@@ -3504,7 +3529,7 @@ func (c *Checker) visit(node parser.Node) {
 		if consType == altType {
 			resultType = consType
 		} else {
-			resultType = types.UnionWithSubtypeReduction(consType, altType)
+			resultType = c.rel.UnionWithSubtypeReduction(consType, altType)
 		}
 
 		node.SetComputedType(resultType)
@@ -3558,7 +3583,7 @@ func (c *Checker) visit(node parser.Node) {
 			argType = types.Any // Handle nil from visit error
 		}
 
-		widenedArgType := types.GetWidenedType(argType)
+		widenedArgType := c.rel.GetWidenedType(argType)
 
 		// JavaScript allows ++/-- on any type that can be coerced to number
 		// This includes: number, boolean, null, undefined, string
@@ -3705,7 +3730,7 @@ func (c *Checker) visit(node parser.Node) {
 				defaultValueType := param.DefaultValue.GetComputedType()
 				if defaultValueType != nil {
 					// Widen literal types for parameter inference (like let/const inference)
-					resolvedParamType = types.GetWidenedType(defaultValueType)
+					resolvedParamType = c.rel.GetWidenedType(defaultValueType)
 					if checkerDebug {
 						debugPrintf("// [Checker ShorthandMethod] Inferred parameter '%s' type from default value: %s -> %s\n",
 							param.Name.Value, defaultValueType.String(), resolvedParamType.String())
@@ -4064,7 +4089,7 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 
 	if expectedType != nil {
 		// Verify that the value is assignable to the expected type
-		if !types.IsAssignable(valueType, expectedType) {
+		if !c.rel.IsAssignable(valueType, expectedType) {
 			c.addErrorWithCode(node.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", valueType.String(), expectedType.String()))
 		}
 	}
@@ -4094,7 +4119,7 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 	} else if c.isSpreadableIterableType(destructureType) {
 		// Iterable protocol values (objects with Symbol.iterator, strings, etc.)
 		// destructure element-wise using the iterator's declared value type.
-		elemType := types.DeeplyWidenType(c.getSpreadElementType(destructureType))
+		elemType := c.rel.DeeplyWidenType(c.getSpreadElementType(destructureType))
 		for range node.Elements {
 			elementTypes = append(elementTypes, elemType)
 		}
@@ -4156,7 +4181,7 @@ func (c *Checker) checkArrayDestructuringDeclaration(node *parser.ArrayDestructu
 			// The resulting type is the union of element type and default type
 			// Use the default type if element type is undefined or unknown
 			if elemType == types.Undefined || elemType == types.Unknown {
-				elemType = types.GetWidenedType(defaultType)
+				elemType = c.rel.GetWidenedType(defaultType)
 			}
 		}
 
@@ -4222,7 +4247,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 	if node.TypeAnnotation != nil {
 		expectedType = c.resolveTypeAnnotation(node.TypeAnnotation)
 		// Verify that the value is assignable to the expected type
-		if node.Value != nil && expectedType != nil && valueType != nil && !types.IsAssignable(valueType, expectedType) {
+		if node.Value != nil && expectedType != nil && valueType != nil && !c.rel.IsAssignable(valueType, expectedType) {
 			c.addErrorWithCode(node.Value, errors.TS2322, fmt.Sprintf("Type '%s' is not assignable to type '%s'.", valueType.String(), expectedType.String()))
 		}
 	}
@@ -4299,7 +4324,7 @@ func (c *Checker) checkObjectDestructuringDeclaration(node *parser.ObjectDestruc
 			// The resulting type is the union of property type and default type
 			// Use the default type if property type is undefined or unknown
 			if propType == types.Undefined || propType == types.Unknown {
-				propType = types.GetWidenedType(defaultType)
+				propType = c.rel.GetWidenedType(defaultType)
 			}
 		}
 
@@ -4481,7 +4506,7 @@ func (c *Checker) contextualTypeFromUnion(node parser.Node, union *types.UnionTy
 			}
 		}
 		if len(candidates) > 1 {
-			candidates = discriminateObjectCandidates(n, candidates)
+			candidates = c.discriminateObjectCandidates(n, candidates)
 		}
 	case *parser.ArrowFunctionLiteral:
 		for _, t := range union.Types {
@@ -4503,7 +4528,7 @@ func (c *Checker) contextualTypeFromUnion(node parser.Node, union *types.UnionTy
 // because `"b"` is not assignable to the first's `k`. A candidate is dropped
 // only when it declares the property and the literal does not fit it; other
 // properties (missing, non-literal values) leave the candidate list alone.
-func discriminateObjectCandidates(lit *parser.ObjectLiteral, candidates []types.Type) []types.Type {
+func (c *Checker) discriminateObjectCandidates(lit *parser.ObjectLiteral, candidates []types.Type) []types.Type {
 	for _, prop := range lit.Properties {
 		var keyName string
 		switch key := prop.Key.(type) {
@@ -4533,7 +4558,7 @@ func discriminateObjectCandidates(lit *parser.ObjectLiteral, candidates []types.
 				continue
 			}
 			propType, declared := objType.Props()[keyName]
-			if !declared || types.IsAssignable(litType, propType) {
+			if !declared || c.rel.IsAssignable(litType, propType) {
 				kept = append(kept, cand)
 			}
 		}

@@ -187,7 +187,7 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 				for j, elemType := range tupleType.ElementTypes {
 					if effectiveArgIndex+j < len(paramTypes) {
 						paramType := paramTypes[effectiveArgIndex+j]
-						if !types.IsAssignable(elemType, paramType) {
+						if !c.rel.IsAssignable(elemType, paramType) {
 							c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", elemType.String(), paramType.String()))
 							allOk = false
 						}
@@ -204,7 +204,7 @@ func (c *Checker) checkFixedArgumentsWithSpread(arguments []parser.Expression, p
 							elemType := element.GetComputedType()
 							paramType := paramTypes[effectiveArgIndex+j]
 
-							if elemType != nil && !types.IsAssignable(elemType, paramType) {
+							if elemType != nil && !c.rel.IsAssignable(elemType, paramType) {
 								c.addError(element, fmt.Sprintf("spread element %d: cannot assign type '%s' to parameter of type '%s'", j+1, elemType.String(), paramType.String()))
 								allOk = false
 							}
@@ -431,7 +431,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 										continue
 									}
 
-									if !types.IsAssignable(argType, constructorSig.RestParameterType) {
+									if !c.rel.IsAssignable(argType, constructorSig.RestParameterType) {
 										c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), constructorSig.RestParameterType.String()))
 									}
 								} else {
@@ -445,7 +445,7 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 										continue
 									}
 
-									if !types.IsAssignable(argType, variadicElementType) {
+									if !c.rel.IsAssignable(argType, variadicElementType) {
 										c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicElementType.String()))
 									}
 								}
@@ -617,7 +617,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 
 	// An intersection is callable with the call signatures of its members
 	// (vitest's `test` is `ChainableTestAPI & ExtendedAPI & Hooks & {...}`).
-	if inter, ok := funcNodeType.(*types.IntersectionType); ok && !hasConflictingDiscriminant(inter) {
+	if inter, ok := funcNodeType.(*types.IntersectionType); ok && !c.hasConflictingDiscriminant(inter) {
 		if sigs := c.intersectionCallSignatures(inter, 0); len(sigs) > 0 {
 			callable := types.NewObjectType()
 			callable.Materialize()
@@ -818,12 +818,12 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 
 							if c.isSpreadableIterableType(argType) {
 								spreadElementType := c.getSpreadElementType(argType)
-								if !types.IsAssignable(spreadElementType, variadicElementType) {
+								if !c.rel.IsAssignable(spreadElementType, variadicElementType) {
 									c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", spreadElementType.String(), variadicElementType.String()))
 								}
 								continue
 							}
-							if !types.IsAssignable(argType, variadicParamType) {
+							if !c.rel.IsAssignable(argType, variadicParamType) {
 								c.addErrorWithCode(spreadElement, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicParamType.String()))
 							}
 						} else {
@@ -839,7 +839,7 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 								continue
 							}
 
-							if !types.IsAssignable(argType, variadicElementType) {
+							if !c.rel.IsAssignable(argType, variadicElementType) {
 								c.addErrorWithCode(argNode, errors.TS2345, fmt.Sprintf("Argument of type '%s' is not assignable to parameter of type '%s'.", argType.String(), variadicElementType.String()))
 							}
 						}
@@ -1609,7 +1609,7 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		// e.g., createSignal(0) should infer T = number, not T = 0
 		// Use DeeplyWidenType to also widen object literal properties
 		// e.g., { count: 0 } should infer T = { count: number }, not T = { count: 0 }
-		inferredType := types.DeeplyWidenType(argType)
+		inferredType := c.rel.DeeplyWidenType(argType)
 		keepsLiteral := false
 		if _, isLit := argType.(*types.LiteralType); isLit && hasPrimitiveConstraint(pType.Parameter.Constraint) {
 			// `T extends string` / `K extends keyof O` keep the literal
@@ -1839,7 +1839,7 @@ func (c *Checker) solveTypeParameterConstraints(constraints []TypeParameterConst
 			} else if cur := bestTypes[constraint.TypeParameter]; len(cur) == 1 && isObjectTypeCandidate(cur[0]) && isObjectTypeCandidate(constraint.InferredType) &&
 				// Among equally good object candidates keep the first unless a
 				// later one is a strict supertype of it (getCommonSupertype).
-				types.IsAssignable(cur[0], constraint.InferredType) && !types.IsAssignable(constraint.InferredType, cur[0]) {
+				c.rel.IsAssignable(cur[0], constraint.InferredType) && !c.rel.IsAssignable(constraint.InferredType, cur[0]) {
 				bestTypes[constraint.TypeParameter] = []types.Type{constraint.InferredType}
 			}
 		}
@@ -2295,7 +2295,7 @@ func isObjectTypeCandidate(t types.Type) bool {
 // a candidate parameter type: assignable, and (for an object literal written
 // in place) free of excess properties.
 func (c *Checker) overloadArgMatches(node *parser.CallExpression, j int, argType, paramType types.Type) bool {
-	if !types.IsAssignable(argType, paramType) {
+	if !c.rel.IsAssignable(argType, paramType) {
 		return false
 	}
 	if c.overloadStrictAny && argType == types.Any && paramType != types.Any && paramType != types.Unknown {
@@ -2492,7 +2492,7 @@ func (c *Checker) narrowFilterResult(node *parser.CallExpression, result types.T
 		return result
 	}
 	pred, ok := callback.CallSigs()[0].ReturnType.(*types.TypePredicateType)
-	if !ok || pred.Asserts || pred.Type == nil || !types.IsAssignable(pred.Type, arr.ElementType) {
+	if !ok || pred.Asserts || pred.Type == nil || !c.rel.IsAssignable(pred.Type, arr.ElementType) {
 		return result
 	}
 	return &types.ArrayType{ElementType: pred.Type}
@@ -2523,7 +2523,7 @@ func (c *Checker) intersectionCallSignatures(inter *types.IntersectionType, dept
 // hasConflictingDiscriminant reports an intersection TypeScript reduces to
 // never: two members give a property disjoint types, one of them a unit type
 // (`{ a: "" } & { a: number }`).
-func hasConflictingDiscriminant(inter *types.IntersectionType) bool {
+func (c *Checker) hasConflictingDiscriminant(inter *types.IntersectionType) bool {
 	seen := map[string]types.Type{}
 	for _, member := range inter.Types {
 		obj, ok := types.GetEffectiveType(member).(*types.ObjectType)
@@ -2536,7 +2536,7 @@ func hasConflictingDiscriminant(inter *types.IntersectionType) bool {
 				seen[name] = prop
 				continue
 			}
-			if (isUnitType(prev) || isUnitType(prop)) && !types.IsAssignable(prev, prop) && !types.IsAssignable(prop, prev) {
+			if (isUnitType(prev) || isUnitType(prop)) && !c.rel.IsAssignable(prev, prop) && !c.rel.IsAssignable(prop, prev) {
 				return true
 			}
 		}

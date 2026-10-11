@@ -87,7 +87,7 @@ func (c *Checker) isReadonlyProperty(t types.Type, name string, depth int) bool 
 	if t == nil || depth > 10 {
 		return false
 	}
-	t = c.apparentType(types.GetWidenedType(t))
+	t = c.apparentType(c.rel.GetWidenedType(t))
 	switch tt := t.(type) {
 	case *types.ReadonlyType:
 		switch inner := tt.InnerType.(type) {
@@ -151,7 +151,7 @@ func (c *Checker) objectPropertyReadonly(obj *types.ObjectType, name string, dep
 
 // hasProperty reports whether t declares property name (own or inherited).
 func (c *Checker) hasProperty(t types.Type, name string) bool {
-	switch tt := c.apparentType(types.GetWidenedType(t)).(type) {
+	switch tt := c.apparentType(c.rel.GetWidenedType(t)).(type) {
 	case *types.ObjectType:
 		_, ok := tt.GetEffectiveProperties()[name]
 		return ok
@@ -165,7 +165,7 @@ func (c *Checker) hasProperty(t types.Type, name string) bool {
 // rejected: readonly arrays and `readonly [k: K]: V` signatures. A non-empty
 // name restricts it to the signatures that name could match.
 func (c *Checker) hasReadonlyIndex(t types.Type, name string) bool {
-	switch tt := c.apparentType(types.GetWidenedType(t)).(type) {
+	switch tt := c.apparentType(c.rel.GetWidenedType(t)).(type) {
 	case *types.ReadonlyType:
 		switch tt.InnerType.(type) {
 		case *types.ArrayType:

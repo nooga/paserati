@@ -152,7 +152,7 @@ func (c *Checker) fallBackToConstraints(solution map[*types.TypeParameter]types.
 // plain structural assignability does not see (`string` satisfies
 // `{ length: number }`).
 func (c *Checker) satisfiesConstraint(arg, constraint types.Type) bool {
-	if types.IsAssignable(arg, constraint) {
+	if c.rel.IsAssignable(arg, constraint) {
 		return true
 	}
 	if union, ok := arg.(*types.UnionType); ok {
@@ -168,7 +168,7 @@ func (c *Checker) satisfiesConstraint(arg, constraint types.Type) bool {
 		return false
 	}
 	var protoName string
-	switch w := types.GetWidenedType(arg).(type) {
+	switch w := c.rel.GetWidenedType(arg).(type) {
 	case *types.Primitive:
 		switch w {
 		case types.String:
@@ -196,7 +196,7 @@ func (c *Checker) satisfiesConstraint(arg, constraint types.Type) bool {
 		if have == nil {
 			return false
 		}
-		if want != nil && !types.IsAssignable(have, want) && !types.IsAssignable(c.instantiateGenericMethod(have, types.Any), want) {
+		if want != nil && !c.rel.IsAssignable(have, want) && !c.rel.IsAssignable(c.instantiateGenericMethod(have, types.Any), want) {
 			return false
 		}
 	}

@@ -302,7 +302,7 @@ func (c *Checker) memberNames(t types.Type) []string {
 	if t == nil {
 		return nil
 	}
-	t = c.apparentType(types.GetWidenedType(t))
+	t = c.apparentType(c.rel.GetWidenedType(t))
 	var names []string
 	add := func(m map[string]types.Type) {
 		for _, name := range types.SortedPropertyNames(m) {

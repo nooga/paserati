@@ -63,7 +63,7 @@ func (c *Checker) checkNullishOperandsForOperator(node *parser.InfixExpression, 
 		// TypeScript only null-checks the operands of `+` when neither side
 		// could be a string — otherwise this is concatenation, where `null` and
 		// `undefined` are legitimate values that stringify.
-		if isStringLikeForAddition(leftType) || isStringLikeForAddition(rightType) {
+		if c.isStringLikeForAddition(leftType) || c.isStringLikeForAddition(rightType) {
 			return false
 		}
 	default:
@@ -95,17 +95,17 @@ func nullishOperatorResultType(operator string) types.Type {
 // isStringLikeForAddition reports whether a `+` operand could be a string, in
 // which case the expression is concatenation and nullish operands are allowed.
 // `any` counts, matching TypeScript's assignability-based test.
-func isStringLikeForAddition(t types.Type) bool {
+func (c *Checker) isStringLikeForAddition(t types.Type) bool {
 	if t == nil {
 		return false
 	}
-	widened := types.GetWidenedType(t)
+	widened := c.rel.GetWidenedType(t)
 	if widened == types.String || widened == types.Any {
 		return true
 	}
 	if union, ok := widened.(*types.UnionType); ok {
 		for _, member := range union.Types {
-			if isStringLikeForAddition(member) {
+			if c.isStringLikeForAddition(member) {
 				return true
 			}
 		}

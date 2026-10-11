@@ -1,14 +1,10 @@
 package types
 
 import (
-	"sync"
-
 	"github.com/nooga/paserati/pkg/vm"
 )
 
 // --- Type Assignability ---
-
-var assignabilityVisited sync.Map
 
 // IsAssignable checks if a value of type `source` can be assigned to a variable
 // of type `target`. This is moved from checker to types package for clean separation.
@@ -35,18 +31,8 @@ func simplifyMappedType(t Type) Type {
 	return t
 }
 
-// StrictNullChecks mirrors --strictNullChecks for the assignability relation.
-// When false (the default for embedders that never configure it) null and
-// undefined are assignable to every type, as in TypeScript without the flag.
-var StrictNullChecks = false
-
-// StrictFunctionTypes mirrors --strictFunctionTypes: when set, parameters of
-// signatures declared as function types (not methods) are compared
-// contravariantly instead of bivariantly.
-var StrictFunctionTypes = false
-
-func IsAssignable(source, target Type) bool {
-	return isAssignable(source, target)
+func (r *Relation) IsAssignable(source, target Type) bool {
+	return r.isAssignable(source, target)
 }
 
 // IsAssignableForCallArgument checks assignability like IsAssignable, but
@@ -65,8 +51,8 @@ func IsAssignable(source, target Type) bool {
 // used specifically when checking values passed as call arguments — not for
 // general variable/property assignability, where a mismatched return type
 // should still be reported.
-func IsAssignableForCallArgument(source, target Type) bool {
-	if isAssignable(source, target) {
+func (r *Relation) IsAssignableForCallArgument(source, target Type) bool {
+	if r.isAssignable(source, target) {
 		return true
 	}
 
@@ -76,7 +62,7 @@ func IsAssignableForCallArgument(source, target Type) bool {
 	// function-typed member.
 	if targetUnion, ok := target.(*UnionType); ok {
 		for _, member := range targetUnion.Types {
-			if IsAssignableForCallArgument(source, member) {
+			if r.IsAssignableForCallArgument(source, member) {
 				return true
 			}
 		}
@@ -104,7 +90,7 @@ func IsAssignableForCallArgument(source, target Type) bool {
 
 	for _, targetSig := range targetSigs {
 		for _, sourceSig := range sourceSigs {
-			if isSignatureAssignableForCallbackArgument(sourceSig, targetSig) {
+			if r.isSignatureAssignableForCallbackArgument(sourceSig, targetSig) {
 				return true
 			}
 		}
@@ -112,29 +98,28 @@ func IsAssignableForCallArgument(source, target Type) bool {
 	return false
 }
 
-// relatingInstances counts, per generic, the instantiations of it that
-// objectAssignable is relating (source and target sides together). Checking
-// runs on one goroutine, like assignabilityVisited's other users.
-var relatingInstances = map[*GenericType]int{}
-
 // maxRelatedNesting is how deep one generic's instantiations may nest on
 // each side before objectAssignable assumes they relate.
 const maxRelatedNesting = 3
 
-// assignPair keys assignabilityVisited.
+// assignPair keys Relation.visited.
 type assignPair struct{ source, target Type }
 
-func isAssignable(source, target Type) bool {
+func (r *Relation) isAssignable(source, target Type) bool {
 	if source == nil || target == nil {
 		return false
 	}
 
 	// Every Type is a pointer, so the pair itself is the key.
 	pairKey := assignPair{source, target}
-	if _, visited := assignabilityVisited.LoadOrStore(pairKey, true); visited {
+	if r.visited[pairKey] {
 		return true
 	}
-	defer assignabilityVisited.Delete(pairKey)
+	if r.visited == nil {
+		r.visited = make(map[assignPair]bool)
+	}
+	r.visited[pairKey] = true
+	defer delete(r.visited, pairKey)
 
 	// Simplify mapped types (e.g., Record<string, T>) to ObjectType with index signatures
 	source = simplifyMappedType(source)
@@ -181,7 +166,7 @@ func isAssignable(source, target Type) bool {
 				return false
 			}
 			for i := range sourceParamRef.TypeArguments {
-				if !isAssignable(sourceParamRef.TypeArguments[i], targetParamRef.TypeArguments[i]) {
+				if !r.isAssignable(sourceParamRef.TypeArguments[i], targetParamRef.TypeArguments[i]) {
 					return false
 				}
 			}
@@ -219,19 +204,19 @@ func isAssignable(source, target Type) bool {
 	}
 	if sourcePred, ok := source.(*TypePredicateType); ok {
 		if targetPred, ok := target.(*TypePredicateType); ok {
-			return isAssignable(sourcePred.Type, targetPred.Type)
+			return r.isAssignable(sourcePred.Type, targetPred.Type)
 		}
 	}
 
 	// TypeScript compatibility: undefined is assignable to void (and null too
 	// when strictNullChecks is off)
-	if target == Void && (source == Undefined || (source == Null && !StrictNullChecks)) {
+	if target == Void && (source == Undefined || (source == Null && !r.StrictNullChecks)) {
 		return true
 	}
 
 	// strictNullChecks: false (TypeScript default) — null and undefined are assignable
 	// to any non-never, non-void type.
-	if !StrictNullChecks && (source == Null || source == Undefined) && target != Never && target != Void {
+	if !r.StrictNullChecks && (source == Null || source == Undefined) && target != Never && target != Void {
 		return true
 	}
 
@@ -243,7 +228,7 @@ func isAssignable(source, target Type) bool {
 	// Template literal types (#616): a string literal is assignable when it
 	// matches the pattern.
 	if tlt, ok := target.(*TemplateLiteralType); ok {
-		if result, decided := assignableToTemplateLiteral(source, tlt); decided {
+		if result, decided := r.assignableToTemplateLiteral(source, tlt); decided {
 			return result
 		}
 	}
@@ -284,7 +269,7 @@ func isAssignable(source, target Type) bool {
 	// A primitive, array or tuple has the members of its wrapper type, so it
 	// satisfies an object type that asks only for those (`string` is a
 	// `{ length: number }`).
-	if tgt, ok := target.(*ObjectType); ok && apparentMembersAssignable(source, tgt) {
+	if tgt, ok := target.(*ObjectType); ok && r.apparentMembersAssignable(source, tgt) {
 		return true
 	}
 
@@ -305,12 +290,12 @@ func isAssignable(source, target Type) bool {
 	if sourceInst, ok := source.(*InstantiatedType); ok {
 		// Substitute the generic type with concrete type arguments
 		concreteSource := sourceInst.Substitute()
-		return isAssignable(concreteSource, target)
+		return r.isAssignable(concreteSource, target)
 	}
 	if targetInst, ok := target.(*InstantiatedType); ok {
 		// Substitute the generic type with concrete type arguments
 		concreteTarget := targetInst.Substitute()
-		return isAssignable(source, concreteTarget)
+		return r.isAssignable(source, concreteTarget)
 	}
 
 	// GenericType handling - for generic methods in interfaces
@@ -343,19 +328,19 @@ func isAssignable(source, target Type) bool {
 		if sourceGeneric, ok := source.(*GenericType); ok {
 			// Compare type parameter counts and body types
 			if len(sourceGeneric.TypeParameters) == len(targetGeneric.TypeParameters) &&
-				isAssignable(sourceGeneric.Body, targetGeneric.Body) {
+				r.isAssignable(sourceGeneric.Body, targetGeneric.Body) {
 				return true
 			}
-			return isAssignable(eraseGenericType(sourceGeneric), targetGeneric.Body)
+			return r.isAssignable(eraseGenericType(sourceGeneric), targetGeneric.Body)
 		}
 	}
 
 	if sourceGeneric, ok := source.(*GenericType); ok {
 		if targetObj, ok := target.(*ObjectType); ok {
 			if targetObj.IsCallable() {
-				return isAssignable(sourceGeneric.Body, targetObj) || isAssignable(eraseGenericType(sourceGeneric), targetObj)
+				return r.isAssignable(sourceGeneric.Body, targetObj) || r.isAssignable(eraseGenericType(sourceGeneric), targetObj)
 			}
-			return isAssignable(eraseGenericType(sourceGeneric), targetObj)
+			return r.isAssignable(eraseGenericType(sourceGeneric), targetObj)
 		}
 	}
 
@@ -369,7 +354,7 @@ func isAssignable(source, target Type) bool {
 			for _, sType := range sourceUnion.Types {
 				assignable := false
 				for _, tType := range targetUnion.Types {
-					if isAssignable(sType, tType) {
+					if r.isAssignable(sType, tType) {
 						assignable = true
 						break
 					}
@@ -382,7 +367,7 @@ func isAssignable(source, target Type) bool {
 		} else {
 			// Non-union to union: source must be assignable to at least one type in target
 			for _, tType := range targetUnion.Types {
-				if isAssignable(source, tType) {
+				if r.isAssignable(source, tType) {
 					return true
 				}
 			}
@@ -391,7 +376,7 @@ func isAssignable(source, target Type) bool {
 	} else if sourceIsUnion {
 		// Union to non-union: every type in source must be assignable to target
 		for _, sType := range sourceUnion.Types {
-			if !isAssignable(sType, target) {
+			if !r.isAssignable(sType, target) {
 				return false
 			}
 		}
@@ -407,13 +392,13 @@ func isAssignable(source, target Type) bool {
 		for _, tType := range targetIntersection.Types {
 			if srcObj, ok := source.(*ObjectType); ok {
 				if tgtObj, ok := tType.(*ObjectType); ok {
-					if !objectAssignable(srcObj, tgtObj, false) {
+					if !r.objectAssignable(srcObj, tgtObj, false) {
 						return false
 					}
 					continue
 				}
 			}
-			if !isAssignable(source, tType) {
+			if !r.isAssignable(source, tType) {
 				return false
 			}
 		}
@@ -421,7 +406,7 @@ func isAssignable(source, target Type) bool {
 	} else if sourceIsIntersection {
 		// At least one type in source intersection must be assignable to target
 		for _, sType := range sourceIntersection.Types {
-			if isAssignable(sType, target) {
+			if r.isAssignable(sType, target) {
 				return true
 			}
 		}
@@ -429,7 +414,7 @@ func isAssignable(source, target Type) bool {
 		// target ({a} & {b} is assignable to {a; b}).
 		if tgtObj, ok := target.(*ObjectType); ok {
 			if merged := mergeIntersectionObjects(sourceIntersection); merged != nil {
-				return objectAssignable(merged, tgtObj, true)
+				return r.objectAssignable(merged, tgtObj, true)
 			}
 		}
 		return false
@@ -475,7 +460,7 @@ func isAssignable(source, target Type) bool {
 		default:
 			return false
 		}
-		return isAssignable(primitiveType, target)
+		return r.isAssignable(primitiveType, target)
 	} else if targetIsLiteral {
 		// Non-literal to literal: generally false except for special cases
 		return false
@@ -489,7 +474,7 @@ func isAssignable(source, target Type) bool {
 		if sourceArray.ElementType == nil || targetArray.ElementType == nil {
 			return false
 		}
-		return isAssignable(sourceArray.ElementType, targetArray.ElementType)
+		return r.isAssignable(sourceArray.ElementType, targetArray.ElementType)
 	}
 
 	// Tuple type handling
@@ -503,7 +488,7 @@ func isAssignable(source, target Type) bool {
 		}
 		// All tuple elements must be assignable to the array element type
 		for _, tupleElementType := range sourceTuple.ElementTypes {
-			if !isAssignable(tupleElementType, targetArray.ElementType) {
+			if !r.isAssignable(tupleElementType, targetArray.ElementType) {
 				return false
 			}
 		}
@@ -521,7 +506,7 @@ func isAssignable(source, target Type) bool {
 
 			if i < sourceLen {
 				sourceElementType := sourceTuple.ElementTypes[i]
-				if !isAssignable(sourceElementType, targetElementType) {
+				if !r.isAssignable(sourceElementType, targetElementType) {
 					return false
 				}
 			} else if !targetIsOptional {
@@ -551,13 +536,13 @@ func isAssignable(source, target Type) bool {
 		len(targetObj.CallSigs()) == 0 &&
 		len(targetObj.ConstructSigs()) == 0 {
 		// Only exclude null/undefined/never/void (already handled above).
-		if source != Never && source != Void && (!StrictNullChecks || (source != Null && source != Undefined)) {
+		if source != Never && source != Void && (!r.StrictNullChecks || (source != Null && source != Undefined)) {
 			return true
 		}
 	}
 
 	if sourceIsObj && targetIsObj {
-		return objectAssignable(sourceObj, targetObj, true)
+		return r.objectAssignable(sourceObj, targetObj, true)
 	}
 
 	// Readonly type handling
@@ -566,24 +551,24 @@ func isAssignable(source, target Type) bool {
 
 	if sourceIsReadonly && targetIsReadonly {
 		// readonly T to readonly U: T must be assignable to U
-		return isAssignable(sourceReadonly.InnerType, targetReadonly.InnerType)
+		return r.isAssignable(sourceReadonly.InnerType, targetReadonly.InnerType)
 	} else if sourceIsReadonly && !targetIsReadonly {
 		// A readonly array or tuple never fits a mutable one (TS4104);
 		// otherwise readonly T to T is allowed (covariance).
 		if IsReadonlyArrayLike(source) && isMutableArrayLike(target) {
 			return false
 		}
-		return isAssignable(sourceReadonly.InnerType, target)
+		return r.isAssignable(sourceReadonly.InnerType, target)
 	} else if !sourceIsReadonly && targetIsReadonly {
 		// T to readonly T: allowed (source is assignable to target inner type)
 		// This is safe because we're making something more restrictive
-		if isAssignable(source, targetReadonly.InnerType) {
+		if r.isAssignable(source, targetReadonly.InnerType) {
 			return true
 		}
 		// A type parameter whose constraint is itself readonly relates
 		// through that constraint, readonly intact.
 		if tp, ok := source.(*TypeParameterType); ok && tp.Parameter != nil && tp.Parameter.Constraint != nil {
-			return isAssignable(tp.Parameter.Constraint, target)
+			return r.isAssignable(tp.Parameter.Constraint, target)
 		}
 		return false
 	}
@@ -610,7 +595,7 @@ func isAssignable(source, target Type) bool {
 		}
 
 		if c := typeParameterConstraint(sourceTypeParam); c != nil {
-			return isAssignable(c, target)
+			return r.isAssignable(c, target)
 		}
 
 		return false
@@ -621,7 +606,7 @@ func isAssignable(source, target Type) bool {
 		// Check if the source type parameter's constraint is assignable to the target
 		// This handles cases like: U extends Date should be assignable to Date
 		if c := typeParameterConstraint(sourceTypeParam); c != nil {
-			return isAssignable(c, target)
+			return r.isAssignable(c, target)
 		}
 		// If no constraint, fall back to checking if the type parameter itself can be assigned
 		// (this would typically be false for concrete types)
@@ -637,11 +622,11 @@ func isAssignable(source, target Type) bool {
 	return false
 }
 
-func signaturesRelated(sourceSigs, targetSigs []*Signature) bool {
+func (r *Relation) signaturesRelated(sourceSigs, targetSigs []*Signature) bool {
 	for _, targetSig := range targetSigs {
 		matched := false
 		for _, sourceSig := range sourceSigs {
-			if isSignatureAssignable(sourceSig, targetSig) {
+			if r.isSignatureAssignable(sourceSig, targetSig) {
 				matched = true
 				break
 			}
@@ -654,8 +639,8 @@ func signaturesRelated(sourceSigs, targetSigs []*Signature) bool {
 }
 
 // Helper function to check signature assignability
-func isSignatureAssignable(source, target *Signature) bool {
-	return isSignatureAssignableImpl(source, target, false)
+func (r *Relation) isSignatureAssignable(source, target *Signature) bool {
+	return r.isSignatureAssignableImpl(source, target, false)
 }
 
 // isSignatureAssignableForCallbackArgument is like isSignatureAssignable but
@@ -667,8 +652,8 @@ func isSignatureAssignable(source, target *Signature) bool {
 // checking a function literal/value used as a call argument (e.g. the
 // callback passed to Array.prototype.forEach), not for general function-type
 // assignability, so it doesn't loosen plain variable/property assignments.
-func isSignatureAssignableForCallbackArgument(source, target *Signature) bool {
-	return isSignatureAssignableImpl(source, target, true)
+func (r *Relation) isSignatureAssignableForCallbackArgument(source, target *Signature) bool {
+	return r.isSignatureAssignableImpl(source, target, true)
 }
 
 // sigMinArgs is TypeScript's getMinArgumentCount for a Signature: the index
@@ -703,11 +688,11 @@ func sigRestElement(sig *Signature) Type {
 
 // sigTypeAtPosition mirrors tryGetTypeAtPosition: the type of the i-th
 // argument position, falling back to the rest element type.
-func sigTypeAtPosition(sig *Signature, i int) Type {
+func (r *Relation) sigTypeAtPosition(sig *Signature, i int) Type {
 	if i < len(sig.ParameterTypes) {
 		pt := sig.ParameterTypes[i]
 		// Under strictNullChecks an optional parameter also accepts undefined.
-		if StrictNullChecks && i < len(sig.OptionalParams) && sig.OptionalParams[i] && pt != nil {
+		if r.StrictNullChecks && i < len(sig.OptionalParams) && sig.OptionalParams[i] && pt != nil {
 			return NewUnionType(pt, Undefined)
 		}
 		return pt
@@ -738,13 +723,13 @@ func eraseSignatureTypeParams(sig *Signature) *Signature {
 // not require more arguments than the target can supply, parameters are
 // compared pairwise (bivariantly), and the return type is covariant unless
 // the target returns void/any.
-func isSignatureAssignableImpl(source, target *Signature, tolerateVoidSourceReturn bool) bool {
-	return signatureRelated(source, target, tolerateVoidSourceReturn, false)
+func (r *Relation) isSignatureAssignableImpl(source, target *Signature, tolerateVoidSourceReturn bool) bool {
+	return r.signatureRelated(source, target, tolerateVoidSourceReturn, false)
 }
 
 // signatureRelated is the signature relation; callbackParams relaxes strict
 // variance for signatures compared as callback parameters.
-func signatureRelated(source, target *Signature, tolerateVoidSourceReturn bool, callbackParams bool) bool {
+func (r *Relation) signatureRelated(source, target *Signature, tolerateVoidSourceReturn bool, callbackParams bool) bool {
 	if source == nil || target == nil {
 		return source == target
 	}
@@ -753,7 +738,7 @@ func signatureRelated(source, target *Signature, tolerateVoidSourceReturn bool, 
 	}
 
 	source = eraseSignatureTypeParams(source)
-	strict := StrictFunctionTypes && target.StrictVariance && !callbackParams
+	strict := r.StrictFunctionTypes && target.StrictVariance && !callbackParams
 
 	targetHasRest := target.RestParameterType != nil
 	if !targetHasRest && sigMinArgs(source) > len(target.ParameterTypes) {
@@ -765,18 +750,18 @@ func signatureRelated(source, target *Signature, tolerateVoidSourceReturn bool, 
 		n = len(target.ParameterTypes)
 	}
 	for i := 0; i < n; i++ {
-		sp := sigTypeAtPosition(source, i)
-		tp := sigTypeAtPosition(target, i)
+		sp := r.sigTypeAtPosition(source, i)
+		tp := r.sigTypeAtPosition(target, i)
 		if sp == nil || tp == nil {
 			continue
 		}
-		if !paramRelated(sp, tp, strict) {
+		if !r.paramRelated(sp, tp, strict) {
 			return false
 		}
 	}
 	if source.RestParameterType != nil && targetHasRest {
 		sp, tp := sigRestElement(source), sigRestElement(target)
-		if sp != nil && tp != nil && !paramRelated(sp, tp, strict) {
+		if sp != nil && tp != nil && !r.paramRelated(sp, tp, strict) {
 			return false
 		}
 	}
@@ -792,7 +777,7 @@ func signatureRelated(source, target *Signature, tolerateVoidSourceReturn bool, 
 		return true
 	}
 
-	return isAssignable(source.ReturnType, target.ReturnType)
+	return r.isAssignable(source.ReturnType, target.ReturnType)
 }
 
 // Helper function removed - FunctionType deprecated, use ObjectType with CallSignatures
@@ -853,7 +838,7 @@ func ObjectsShareProperty(a, b *ObjectType) bool {
 // objectAssignable relates two object types structurally. checkWeak enables
 // the weak-type (no common properties) rule, which TypeScript skips when the
 // target is a constituent of an intersection.
-func objectAssignable(sourceObj, targetObj *ObjectType, checkWeak bool) bool {
+func (r *Relation) objectAssignable(sourceObj, targetObj *ObjectType, checkWeak bool) bool {
 	if sameGenericWithLooserArgs(sourceObj, targetObj, 0) {
 		return true
 	}
@@ -863,14 +848,17 @@ func objectAssignable(sourceObj, targetObj *ObjectType, checkWeak bool) bool {
 	// deep on both sides, assume the rest relates.
 	sg, tg := sourceObj.Instantiates, targetObj.Instantiates
 	if sg != nil && tg != nil {
-		if relatingInstances[sg] >= maxRelatedNesting && relatingInstances[tg] >= maxRelatedNesting {
+		if r.relatingInstances[sg] >= maxRelatedNesting && r.relatingInstances[tg] >= maxRelatedNesting {
 			return true
 		}
-		relatingInstances[sg]++
-		relatingInstances[tg]++
+		if r.relatingInstances == nil {
+			r.relatingInstances = make(map[*GenericType]int)
+		}
+		r.relatingInstances[sg]++
+		r.relatingInstances[tg]++
 		defer func() {
-			relatingInstances[sg]--
-			relatingInstances[tg]--
+			r.relatingInstances[sg]--
+			r.relatingInstances[tg]--
 		}()
 	}
 	// Check that all required properties in target exist in source and are assignable
@@ -899,7 +887,7 @@ func objectAssignable(sourceObj, targetObj *ObjectType, checkWeak bool) bool {
 			}
 			continue
 		}
-		if StrictNullChecks {
+		if r.StrictNullChecks {
 			if sourceObj.IsPropertyOptional(propName) && !targetOptional {
 				return false
 			}
@@ -907,19 +895,19 @@ func objectAssignable(sourceObj, targetObj *ObjectType, checkWeak bool) bool {
 				targetPropType = NewUnionType(targetPropType, Undefined)
 			}
 		}
-		if !isAssignable(sourcePropType, targetPropType) {
+		if !r.isAssignable(sourcePropType, targetPropType) {
 			return false
 		}
 	}
 
-	if !indexSignaturesRelated(sourceObj, targetObj, sourceProps) {
+	if !r.indexSignaturesRelated(sourceObj, targetObj, sourceProps) {
 		return false
 	}
 
 	// Call and construct signatures: every target signature must be
 	// matched by some source signature (signaturesRelatedTo).
-	if !signaturesRelated(sourceObj.CallSigs(), targetObj.CallSigs()) ||
-		!signaturesRelated(sourceObj.ConstructSigs(), targetObj.ConstructSigs()) {
+	if !r.signaturesRelated(sourceObj.CallSigs(), targetObj.CallSigs()) ||
+		!r.signaturesRelated(sourceObj.ConstructSigs(), targetObj.ConstructSigs()) {
 		return false
 	}
 
@@ -930,16 +918,16 @@ func objectAssignable(sourceObj, targetObj *ObjectType, checkWeak bool) bool {
 // target parameter must be assignable to the source parameter; otherwise
 // either direction suffices. Parameters that are themselves callbacks are
 // related with their own parameters compared bivariantly.
-func paramRelated(sp, tp Type, strict bool) bool {
+func (r *Relation) paramRelated(sp, tp Type, strict bool) bool {
 	if !strict {
-		return isAssignable(tp, sp) || isAssignable(sp, tp)
+		return r.isAssignable(tp, sp) || r.isAssignable(sp, tp)
 	}
 	if sObj, ok := sp.(*ObjectType); ok && len(sObj.CallSigs()) == 1 && len(sObj.Props()) == 0 {
 		if tObj, ok := tp.(*ObjectType); ok && len(tObj.CallSigs()) == 1 && len(tObj.Props()) == 0 {
-			return signatureRelated(tObj.CallSigs()[0], sObj.CallSigs()[0], false, true)
+			return r.signatureRelated(tObj.CallSigs()[0], sObj.CallSigs()[0], false, true)
 		}
 	}
-	return isAssignable(tp, sp)
+	return r.isAssignable(tp, sp)
 }
 
 // enumAssignable implements the enum <-> primitive relations. It returns true
@@ -1060,7 +1048,7 @@ func findIndexSignature(obj *ObjectType, keyType Type) *IndexSignature {
 // signature of the target needs a related signature in the source or, when
 // the source has none, an implicit one made from its properties (only for
 // object literal and type literal types, never interfaces or classes).
-func indexSignaturesRelated(sourceObj, targetObj *ObjectType, sourceProps map[string]Type) bool {
+func (r *Relation) indexSignaturesRelated(sourceObj, targetObj *ObjectType, sourceProps map[string]Type) bool {
 	for _, tIdx := range targetObj.IndexSigs() {
 		if tIdx == nil || tIdx.IsMapped || tIdx.Synthetic || tIdx.ValueType == nil {
 			continue
@@ -1069,7 +1057,7 @@ func indexSignaturesRelated(sourceObj, targetObj *ObjectType, sourceProps map[st
 			continue
 		}
 		if sIdx := findIndexSignature(sourceObj, tIdx.KeyType); sIdx != nil {
-			if sIdx.ValueType == nil || !isAssignable(sIdx.ValueType, tIdx.ValueType) {
+			if sIdx.ValueType == nil || !r.isAssignable(sIdx.ValueType, tIdx.ValueType) {
 				return false
 			}
 			continue
@@ -1087,10 +1075,10 @@ func indexSignaturesRelated(sourceObj, targetObj *ObjectType, sourceProps map[st
 			if tIdx.KeyType == Number && !isNumericName(name) {
 				continue
 			}
-			if StrictNullChecks && sourceObj.IsPropertyOptional(name) {
+			if r.StrictNullChecks && sourceObj.IsPropertyOptional(name) {
 				pt = NewUnionType(pt, Undefined)
 			}
-			if !isAssignable(pt, tIdx.ValueType) {
+			if !r.isAssignable(pt, tIdx.ValueType) {
 				return false
 			}
 		}
@@ -1221,15 +1209,10 @@ func isMutableArrayLike(t Type) bool {
 	return false
 }
 
-// PrimitivePrototypeMembers supplies the members of a primitive's wrapper
-// prototype ("string", "number", "boolean", "bigint", "array"). The checker
-// installs it once the built-ins are declared.
-var PrimitivePrototypeMembers func(kind string) map[string]Type
-
 // apparentMembersAssignable reports whether source's apparent type (the wrapper
 // prototype of a primitive, array or tuple) satisfies the plain object type tgt.
-func apparentMembersAssignable(source Type, tgt *ObjectType) bool {
-	if PrimitivePrototypeMembers == nil || tgt.IsCallable() || len(tgt.ConstructSigs()) > 0 || len(tgt.IndexSigs()) > 0 {
+func (r *Relation) apparentMembersAssignable(source Type, tgt *ObjectType) bool {
+	if r.PrimitivePrototypeMembers == nil || tgt.IsCallable() || len(tgt.ConstructSigs()) > 0 || len(tgt.IndexSigs()) > 0 {
 		return false
 	}
 	kind := ""
@@ -1260,7 +1243,7 @@ func apparentMembersAssignable(source Type, tgt *ObjectType) bool {
 	if kind == "" {
 		return false
 	}
-	members := PrimitivePrototypeMembers(kind)
+	members := r.PrimitivePrototypeMembers(kind)
 	if members == nil {
 		return false
 	}
@@ -1284,7 +1267,7 @@ func apparentMembersAssignable(source Type, tgt *ObjectType) bool {
 		if _, generic := have.(*GenericType); generic || want == nil {
 			continue
 		}
-		if !isAssignable(have, want) {
+		if !r.isAssignable(have, want) {
 			return false
 		}
 	}

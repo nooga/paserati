@@ -10,7 +10,7 @@ import (
 // type: a string literal must match its pattern, a union must match member by
 // member, an identical template matches. decided is false for source kinds it
 // has no rule for, which fall through to the general checks.
-func assignableToTemplateLiteral(source Type, target *TemplateLiteralType) (result bool, decided bool) {
+func (r *Relation) assignableToTemplateLiteral(source Type, target *TemplateLiteralType) (result bool, decided bool) {
 	switch s := source.(type) {
 	case *LiteralType:
 		if s.Value.Type() != vm.TypeString {
@@ -19,7 +19,7 @@ func assignableToTemplateLiteral(source Type, target *TemplateLiteralType) (resu
 		return matchTemplateParts(target.Parts, s.Value.ToString()), true
 	case *UnionType:
 		for _, member := range s.Types {
-			if !IsAssignable(member, target) {
+			if !r.IsAssignable(member, target) {
 				return false, true
 			}
 		}

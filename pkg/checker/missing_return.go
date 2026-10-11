@@ -21,7 +21,7 @@ func (c *Checker) checkMissingReturn(annotation parser.Expression, declared type
 	if _, isPredicate := declared.(*types.TypePredicateType); isPredicate {
 		return
 	}
-	if returnTypeAllowsFallOff(declared) {
+	if c.returnTypeAllowsFallOff(declared) {
 		return
 	}
 	if !c.endReachable(body) {
@@ -38,18 +38,18 @@ func (c *Checker) checkMissingReturn(annotation parser.Expression, declared type
 
 // returnTypeAllowsFallOff reports whether a function returning t may finish
 // without a return statement.
-func returnTypeAllowsFallOff(t types.Type) bool {
+func (c *Checker) returnTypeAllowsFallOff(t types.Type) bool {
 	switch t {
 	case types.Any, types.Unknown, types.Void, types.Undefined, types.Never:
 		return true
 	}
-	if !types.StrictNullChecks {
+	if !c.rel.StrictNullChecks {
 		return true
 	}
 	switch tt := t.(type) {
 	case *types.UnionType:
 		for _, m := range tt.Types {
-			if returnTypeAllowsFallOff(m) {
+			if c.returnTypeAllowsFallOff(m) {
 				return true
 			}
 		}

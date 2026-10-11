@@ -48,7 +48,7 @@ func (c *Checker) checkClassMembersAgainstBase(className string, body *parser.Cl
 		}
 		ownType = c.resolveTypeofDeep(ownType, 0)
 		baseType = c.resolveTypeofDeep(baseType, 0)
-		if types.StrictNullChecks && ownOptional && !baseObj.IsPropertyOptional(name) {
+		if c.rel.StrictNullChecks && ownOptional && !baseObj.IsPropertyOptional(name) {
 			ownType = types.NewUnionType(ownType, types.Undefined)
 		}
 		if c.isAssignableWithExpansion(ownType, baseType) {

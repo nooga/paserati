@@ -10,7 +10,7 @@ import (
 func (c *Checker) isAssignableToIntersection(source types.Type, intersection *types.IntersectionType) bool {
 	// Source must be assignable to ALL members of the intersection
 	for _, member := range intersection.Types {
-		if !types.IsAssignable(source, member) {
+		if !c.rel.IsAssignable(source, member) {
 			return false
 		}
 	}
@@ -23,7 +23,7 @@ func (c *Checker) isAssignableToIntersection(source types.Type, intersection *ty
 func (c *Checker) isIntersectionAssignableTo(intersection *types.IntersectionType, target types.Type) bool {
 	// At least one member of the intersection must be assignable to target
 	for _, member := range intersection.Types {
-		if types.IsAssignable(member, target) {
+		if c.rel.IsAssignable(member, target) {
 			return true
 		}
 	}
@@ -33,7 +33,7 @@ func (c *Checker) isIntersectionAssignableTo(intersection *types.IntersectionTyp
 // getPropertyTypeFromIntersection returns the type of a property accessed on an intersection type.
 // This is now a wrapper around the implementation in the types package.
 func (c *Checker) getPropertyTypeFromIntersection(intersection *types.IntersectionType, propertyName string) types.Type {
-	return types.GetPropertyTypeFromIntersection(intersection, propertyName)
+	return c.rel.GetPropertyTypeFromIntersection(intersection, propertyName)
 }
 
 // intersectionHasCallSignature checks if an intersection type can be called.

@@ -60,17 +60,17 @@ func TestNewGlobalEnvironmentWithInitializers(t *testing.T) {
 
 func TestPrototypeMethodResolver(t *testing.T) {
 	// Create global environment to initialize the resolver with standard initializers
-	_ = NewGlobalEnvironment(builtins.GetStandardInitializers())
+	rel := newRelation(NewGlobalEnvironment(builtins.GetStandardInitializers()))
 
 	// Test object property access (we have ObjectInitializer)
 	objectType := types.NewObjectType()
-	hasOwnType := types.GetPropertyType(objectType, "hasOwnProperty", false)
+	hasOwnType := rel.GetPropertyType(objectType, "hasOwnProperty", false)
 	if hasOwnType == types.Never {
 		t.Error("Object.prototype.hasOwnProperty should be accessible via types package")
 	}
 
 	// Test that toString is available on objects
-	toStringType := types.GetPropertyType(objectType, "toString", false)
+	toStringType := rel.GetPropertyType(objectType, "toString", false)
 	if toStringType == types.Never {
 		t.Error("Object.prototype.toString should be accessible via types package")
 	}

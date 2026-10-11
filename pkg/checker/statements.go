@@ -147,7 +147,7 @@ func (c *Checker) checkGenericTypeAliasStatement(node *parser.TypeAliasStatement
 				typeParam.Default = defaultType
 
 				// Validate that default type satisfies constraint if both are present
-				if typeParam.Constraint != nil && !types.IsAssignable(defaultType, typeParam.Constraint) {
+				if typeParam.Constraint != nil && !c.rel.IsAssignable(defaultType, typeParam.Constraint) {
 					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
 				}
 			}
@@ -644,7 +644,7 @@ func (c *Checker) checkGenericInterfaceDeclaration(node *parser.InterfaceDeclara
 				}
 				typeParam.Default = defaultType
 
-				if typeParam.Constraint != nil && !types.IsAssignable(defaultType, typeParam.Constraint) {
+				if typeParam.Constraint != nil && !c.rel.IsAssignable(defaultType, typeParam.Constraint) {
 					c.addError(param.DefaultType, fmt.Sprintf("default type '%s' does not satisfy constraint '%s'", defaultType.String(), typeParam.Constraint.String()))
 				}
 			}
@@ -990,7 +990,7 @@ func (c *Checker) checkSwitchStatement(node *parser.SwitchStatement) {
 	if switchExprType == nil {
 		switchExprType = types.Any // Default to Any if expression check failed
 	}
-	widenedSwitchExprType := types.GetWidenedType(switchExprType)
+	widenedSwitchExprType := c.rel.GetWidenedType(switchExprType)
 
 	// 2. Visit cases
 	for _, caseClause := range node.Cases {
@@ -1001,7 +1001,7 @@ func (c *Checker) checkSwitchStatement(node *parser.SwitchStatement) {
 			if caseCondType == nil {
 				caseCondType = types.Any // Default to Any on error
 			}
-			widenedCaseCondType := types.GetWidenedType(caseCondType)
+			widenedCaseCondType := c.rel.GetWidenedType(caseCondType)
 
 			// --- Basic Comparability Check --- (Simplified for now)
 			// Allow comparison if either is Any/Unknown or if they are the same primitive type.
@@ -1292,7 +1292,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 				} else {
 					elementType = types.Any
 				}
-			} else if iterableType == types.String || types.IsAssignable(iterableType, types.String) {
+			} else if iterableType == types.String || c.rel.IsAssignable(iterableType, types.String) {
 				// String iteration yields individual characters (strings)
 				// This handles both the general string type and string literal types
 				elementType = types.String
@@ -1325,7 +1325,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 							TypeArguments: []types.Type{types.Any},
 						}
 
-						if types.IsAssignable(iterableType, iterableAny) {
+						if c.rel.IsAssignable(iterableType, iterableAny) {
 							// It's iterable, but we can't easily extract the element type
 							// For now, use Any as a safe fallback
 							elementType = types.Any
@@ -1387,7 +1387,7 @@ func (c *Checker) checkForOfStatement(node *parser.ForOfStatement) {
 						varType, _, exists := c.env.Resolve(ident.Value)
 						if !exists {
 							c.addError(ident, fmt.Sprintf("undefined variable '%s'", ident.Value))
-						} else if !types.IsAssignable(elementType, varType) {
+						} else if !c.rel.IsAssignable(elementType, varType) {
 							c.addError(ident, fmt.Sprintf("cannot assign element type '%s' to variable type '%s'", elementType.String(), varType.String()))
 						}
 						ident.SetComputedType(elementType)
@@ -1533,7 +1533,7 @@ func (c *Checker) defineDestructuringTarget(target parser.Expression, typ types.
 			// would skip it silently and the later read would be "Cannot find
 			// name 'rr'".
 			if spread, isRest := prop.Key.(*parser.SpreadElement); isRest {
-				c.defineDestructuringTarget(spread.Argument, nestedObjectPatternRestType(typ, t), isConst, isVar)
+				c.defineDestructuringTarget(spread.Argument, c.nestedObjectPatternRestType(typ, t), isConst, isVar)
 				continue
 			}
 			// Extract key name from the property
@@ -1655,7 +1655,7 @@ func (c *Checker) checkForInStatement(node *parser.ForInStatement) {
 							}
 							outer.Define(ident.Value, elementType, false)
 							// No error added; body will see the binding.
-						} else if !types.IsAssignable(elementType, varType) {
+						} else if !c.rel.IsAssignable(elementType, varType) {
 							c.addError(ident, fmt.Sprintf("cannot assign property name type '%s' to variable type '%s'", elementType.String(), varType.String()))
 						}
 						ident.SetComputedType(elementType)

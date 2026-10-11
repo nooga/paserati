@@ -30,7 +30,7 @@ func (c *Checker) isDefinitelyNotIterable(t types.Type) bool {
 		}
 		return false
 	case *types.LiteralType:
-		return !types.IsAssignable(tt, types.String)
+		return !c.rel.IsAssignable(tt, types.String)
 	case *types.ObjectType:
 		if tt.IsCallable() || len(tt.ConstructSigs()) > 0 || len(tt.Bases()) > 0 || tt.ClassMeta != nil {
 			return false

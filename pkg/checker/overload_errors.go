@@ -139,7 +139,7 @@ func (c *Checker) firstArgumentMismatch(sig *types.Signature, argTypes []types.T
 		if paramType == nil || c.typeContainsTypeParameter(paramType) {
 			continue
 		}
-		if !types.IsAssignable(argType, paramType) {
+		if !c.rel.IsAssignable(argType, paramType) {
 			return i
 		}
 	}

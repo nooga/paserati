@@ -265,7 +265,7 @@ func (c *Compiler) compileMemberExpression(node *parser.MemberExpression, hint R
 			// debug disabled
 		} else {
 			// Widen the type to handle cases like `string | null` having `.length`
-			widenedObjectType := types.GetWidenedType(objectStaticType)
+			widenedObjectType := c.widenedType(objectStaticType)
 
 			// Check if the widened type supports .length
 			_, isArray := widenedObjectType.(*types.ArrayType)
@@ -355,7 +355,7 @@ func (c *Compiler) compileOptionalChainingExpression(node *parser.OptionalChaini
 	if propertyName == "length" {
 		objectStaticType := node.Object.GetComputedType()
 		if objectStaticType != nil {
-			widenedObjectType := types.GetWidenedType(objectStaticType)
+			widenedObjectType := c.widenedType(objectStaticType)
 			_, isArray := widenedObjectType.(*types.ArrayType)
 			if isArray || widenedObjectType == types.String {
 				c.emitGetLength(propResultReg, objectReg, node.Token.Line)
