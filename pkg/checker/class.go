@@ -284,8 +284,8 @@ func (c *Checker) checkClassDeclaration(node *parser.ClassDeclaration) {
 	// Validate class member constraints before type-building.
 	// Skip for declare classes: ambient bodies have signatures without implementations
 	// and no bodies — that's their intended form.
-	ambient := node.Declare || c.inAmbientNamespace
-	if !ambient {
+	ambient := node.Declare || c.inAmbientNamespace || c.inDeclarationFile()
+	if !ambient && !c.skipValidation() {
 		c.validateClassMemberConstraints(node.Body)
 	}
 	if ambient {

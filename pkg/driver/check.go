@@ -1,12 +1,15 @@
 package driver
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/nooga/paserati/pkg/checker"
 	"github.com/nooga/paserati/pkg/errors"
+	"github.com/nooga/paserati/pkg/modules"
 )
 
 // FileDiagnostics is the type-checking result of one file.
@@ -17,14 +20,75 @@ type FileDiagnostics struct {
 	LoadError error
 }
 
-// CheckFiles type-checks files and every module they import without
+// CheckOptions are the compiler options a check honors (tsc's names).
+type CheckOptions struct {
+	StrictNullChecks             bool
+	StrictFunctionTypes          bool
+	StrictPropertyInitialization bool
+	NoImplicitAny                bool
+	NoImplicitOverride           bool
+	AlwaysStrict                 bool
+	AllowUnreachableCode         bool
+	// SkipLibCheck skips validating library files' declarations and
+	// reporting their errors (tsc's skipLibCheck); their syntax errors are
+	// still reported.
+	SkipLibCheck bool
+	// Types are the type packages whose global declarations every file
+	// sees (tsc's "types": "node" for @types/node, "vitest/globals"),
+	// loaded before the files. They resolve from TypesFrom (a directory).
+	Types     []string
+	TypesFrom string
+}
+
+// DefaultCheckOptions are tsc's defaults (TypeScript 6: the strict family on).
+func DefaultCheckOptions() CheckOptions {
+	return CheckOptions{
+		StrictNullChecks:             true,
+		StrictFunctionTypes:          true,
+		StrictPropertyInitialization: true,
+		NoImplicitAny:                true,
+		AlwaysStrict:                 true,
+		SkipLibCheck:                 true,
+	}
+}
+
+// apply configures a checker for these options.
+func (o CheckOptions) apply(c *checker.Checker) {
+	c.SetStrictNullChecks(o.StrictNullChecks)
+	c.SetSkipDefiniteAssignment(!o.StrictNullChecks)
+	c.SetStrictFunctionTypes(o.StrictFunctionTypes)
+	c.SetSkipStrictPropertyInit(!o.StrictPropertyInitialization || !o.StrictNullChecks)
+	c.SetNoImplicitAny(o.NoImplicitAny)
+	c.SetNoImplicitOverride(o.NoImplicitOverride)
+	c.SetAlwaysStrict(o.AlwaysStrict)
+	c.SetAllowUnreachableCode(o.AllowUnreachableCode)
+	c.SetTscCompatibleDiagnostics(true)
+	c.SetSkipLibCheck(o.SkipLibCheck)
+}
+
+// CheckFiles type-checks files with tsc's default options; see
+// CheckFilesWithOptions.
+func (p *Paserati) CheckFiles(files []string) []FileDiagnostics {
+	return p.CheckFilesWithOptions(files, DefaultCheckOptions())
+}
+
+// CheckFilesWithOptions type-checks files and every module they import without
 // compiling or running anything (`paserati --check`, tsc --noEmit). It
 // returns the results of the files checked, sorted by path, leaving out
 // library files as tsc's skipLibCheck does: declaration files and modules
 // under node_modules. Bare package imports resolve only if the host has
 // registered a resolver for them (pkg/nodemodules in Types mode).
-func (p *Paserati) CheckFiles(files []string) []FileDiagnostics {
+func (p *Paserati) CheckFilesWithOptions(files []string, opts CheckOptions) []FileDiagnostics {
 	p.moduleLoader.SetCompilerFactory(nil)
+	loader := p.moduleLoader
+	globals := checker.NewGlobalDeclarations()
+	p.moduleLoader.SetCheckerFactory(func() modules.TypeChecker {
+		c := checker.NewChecker()
+		c.EnableModuleMode("", loader)
+		opts.apply(c)
+		c.SetSharedGlobals(globals)
+		return c
+	})
 	// A type error in one module must not hide the types it exports from
 	// the modules importing it: every module's diagnostics are kept on its
 	// record and reported below.
@@ -36,6 +100,17 @@ func (p *Paserati) CheckFiles(files []string) []FileDiagnostics {
 	}
 	from := filepath.Join(wd, "<check>")
 	var loadErrors []FileDiagnostics
+	if len(opts.Types) > 0 {
+		typesFrom := from
+		if opts.TypesFrom != "" {
+			typesFrom = filepath.Join(opts.TypesFrom, "<check>")
+		}
+		for _, spec := range opts.Types {
+			if _, err := p.moduleLoader.LoadModule(spec, typesFrom); err != nil {
+				loadErrors = append(loadErrors, FileDiagnostics{Path: spec, LoadError: fmt.Errorf("cannot find type definition file for '%s': %w", spec, err)})
+			}
+		}
+	}
 	for _, file := range files {
 		abs, err := filepath.Abs(file)
 		if err != nil {
@@ -68,7 +143,7 @@ func (p *Paserati) CheckFiles(files []string) []FileDiagnostics {
 			results = append(results, res)
 			continue
 		}
-		if isLibraryFile(rec.ResolvedPath) {
+		if opts.SkipLibCheck && isLibraryFile(rec.ResolvedPath) {
 			continue
 		}
 		results = append(results, FileDiagnostics{Path: rec.ResolvedPath, Diagnostics: rec.Diagnostics})

@@ -1638,9 +1638,10 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 		substitution[typeParam.Name] = finalTypeArgs[i]
 	}
 
-	// Validate constraints before instantiation
+	// Validate constraints before instantiation (not in a library file under
+	// skipLibCheck)
 	for i, typeParam := range genericType.TypeParameters {
-		if typeParam.Constraint != nil {
+		if typeParam.Constraint != nil && !c.skipValidation() {
 			argType := c.resolveTypeofTypeIfNeeded(finalTypeArgs[i])
 			if _, deferred := argType.(*types.TypeofType); deferred {
 				// `typeof X` before X has a type (a hoisted alias): there is
@@ -2592,6 +2593,9 @@ func (c *Checker) resolveConditionalTypeExpression(node *parser.ConditionalTypeE
 // computeConditionalType computes the result of a conditional type like T extends U ? X : Y
 // Enhanced to handle infer types for type inference
 func (c *Checker) computeConditionalType(checkType, extendsType, trueType, falseType types.Type) types.Type {
+	if checkType == nil || extendsType == nil || trueType == nil || falseType == nil {
+		return nil // a part failed to resolve: nothing to decide
+	}
 	debugPrintf("// [ConditionalType] === STARTING CONDITIONAL TYPE COMPUTATION ===\n")
 	debugPrintf("// [ConditionalType] CheckType: %s (Go type: %T)\n", checkType.String(), checkType)
 	debugPrintf("// [ConditionalType] ExtendsType: %s (Go type: %T)\n", extendsType.String(), extendsType)
@@ -2616,7 +2620,10 @@ func (c *Checker) computeConditionalType(checkType, extendsType, trueType, false
 				effectiveTrue = member
 			}
 			result := c.computeConditionalType(member, extendsType, effectiveTrue, effectiveFalse)
-			if result != nil && result != types.Never {
+			if result == nil {
+				return nil // a member cannot be decided yet: neither can the union
+			}
+			if result != types.Never {
 				resultTypes = append(resultTypes, result)
 			}
 		}
@@ -3657,6 +3664,9 @@ func (c *Checker) evaluateConditionalType(checkType, extendsType, trueType, fals
 		var resultTypes []types.Type
 		for _, member := range unionCheck.Types {
 			result := c.computeConditionalType(member, extendsType, trueType, falseType)
+			if result == nil {
+				return &types.ConditionalType{CheckType: checkType, ExtendsType: extendsType, TrueType: trueType, FalseType: falseType}
+			}
 			if result != types.Never {
 				resultTypes = append(resultTypes, result)
 			}
@@ -3667,8 +3677,12 @@ func (c *Checker) evaluateConditionalType(checkType, extendsType, trueType, fals
 		return types.NewUnionType(resultTypes...)
 	}
 
-	// Non-union: evaluate directly
-	return c.computeConditionalType(checkType, extendsType, trueType, falseType)
+	// Non-union: evaluate directly; a conditional that cannot be decided
+	// yet stays one.
+	if result := c.computeConditionalType(checkType, extendsType, trueType, falseType); result != nil {
+		return result
+	}
+	return &types.ConditionalType{CheckType: checkType, ExtendsType: extendsType, TrueType: trueType, FalseType: falseType}
 }
 
 // substituteInType performs type substitution based on a substitution map
@@ -4165,7 +4179,6 @@ func (c *Checker) lookupTypeNoPending(name string) types.Type {
 	}
 	return nil
 }
-
 
 type genericInstKey struct {
 	generic *types.GenericType

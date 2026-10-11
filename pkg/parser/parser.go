@@ -1111,6 +1111,14 @@ func (p *Parser) parseStatementNoDoc() Statement {
 				}
 			}
 		}
+		// `global { ... }` inside `declare module "m" { ... }`: augments the
+		// global scope.
+		if p.curToken.Literal == "global" && p.peekTokenIs(lexer.LBRACE) && p.inAmbientContext > 0 {
+			if ns := p.parseAmbientModule(true); ns != nil {
+				return ns
+			}
+			return nil
+		}
 		// `namespace X { ... }` — TypeScript namespace declaration (contextual keyword).
 		if p.curToken.Literal == "namespace" &&
 			(p.peekTokenIs(lexer.IDENT) || p.isKeywordThatCanBeIdentifier(p.peekToken.Type)) {

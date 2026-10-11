@@ -15,6 +15,7 @@ import (
 	"github.com/nooga/paserati/pkg/driver"
 	"github.com/nooga/paserati/pkg/nodemodules"
 	"github.com/nooga/paserati/pkg/parser"
+	"github.com/nooga/paserati/pkg/tsconfig"
 	"github.com/nooga/paserati/pkg/vm"
 )
 
@@ -44,6 +45,7 @@ func main() {
 	memProfileFlag := flag.String("memprofile", "", "Write heap profile to file (pprof)")
 	checkFlag := flag.Bool("check", false, "Type-check the given files and their imports without running them (like tsc --noEmit); packages resolve to their typings from node_modules")
 	noNodeModulesFlag := flag.Bool("no-node-modules", false, "Do not resolve bare package imports from node_modules")
+	projectFlag := flag.String("p", "", "Type-check the project of a tsconfig.json (a file, or a directory holding one), like tsc -p --noEmit")
 
 	flag.Parse() // Parses the command-line flags
 	noImplicitAny = *noImplicitAnyFlag
@@ -95,6 +97,14 @@ func main() {
 
 	// Set global AST dump flag
 	parser.DumpASTEnabled = *astDumpFlag
+
+	if *projectFlag != "" {
+		code := runProjectCheck(*projectFlag, !*noNodeModulesFlag)
+		if *cpuProfileFlag != "" {
+			pprof.StopCPUProfile() // os.Exit skips the deferred stop
+		}
+		os.Exit(code)
+	}
 
 	if *checkFlag {
 		if flag.NArg() < 1 {
@@ -334,13 +344,61 @@ func containsImportsInString(input string) bool {
 // tsc's format, returning tsc's exit status (0 clean, 2 with errors).
 func runCheck(files []string, nodeModules bool) int {
 	p := driver.NewPaserati()
-	p.SetNoImplicitAny(noImplicitAny)
 	if nodeModules {
 		p.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types}))
 	}
+	opts := driver.DefaultCheckOptions()
+	opts.NoImplicitAny = opts.NoImplicitAny || noImplicitAny
+	return printCheckResults(p.CheckFilesWithOptions(files, opts))
+}
+
+// unsupportedOptions are compiler options that make tsc report errors
+// Paserati does not check for yet.
+var unsupportedOptions = []string{
+	"noUncheckedIndexedAccess", "exactOptionalPropertyTypes", "noPropertyAccessFromIndexSignature",
+	"noUnusedLocals", "noUnusedParameters", "noImplicitReturns", "noFallthroughCasesInSwitch",
+}
+
+// runProjectCheck type-checks a tsconfig.json project (tsc -p --noEmit).
+func runProjectCheck(path string, nodeModules bool) int {
+	cfg, err := tsconfig.Load(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	for _, name := range unsupportedOptions {
+		if v, set := cfg.Bool(name); set && v {
+			fmt.Fprintf(os.Stderr, "paserati: note: compiler option '%s' is not supported yet; its errors are not reported\n", name)
+		}
+	}
+	p := driver.NewPaserati()
+	if nodeModules {
+		p.AddResolver(nodemodules.NewResolver(nodemodules.Options{Mode: nodemodules.Types, Paths: cfg.Paths}))
+	}
+	opts := driver.CheckOptions{
+		StrictNullChecks:             cfg.StrictFamily("strictNullChecks"),
+		StrictFunctionTypes:          cfg.StrictFamily("strictFunctionTypes"),
+		StrictPropertyInitialization: cfg.StrictFamily("strictPropertyInitialization"),
+		NoImplicitAny:                cfg.StrictFamily("noImplicitAny"),
+		AlwaysStrict:                 cfg.StrictFamily("alwaysStrict"),
+	}
+	opts.NoImplicitOverride, _ = cfg.Bool("noImplicitOverride")
+	opts.AllowUnreachableCode, _ = cfg.Bool("allowUnreachableCode")
+	opts.SkipLibCheck, _ = cfg.Bool("skipLibCheck")
+	if nodeModules {
+		opts.Types = cfg.Types()
+		opts.TypesFrom = filepath.Dir(cfg.Path)
+	}
+	// Diagnostics are reported relative to the working directory, as tsc does.
+	return printCheckResults(p.CheckFilesWithOptions(cfg.Files, opts))
+}
+
+// printCheckResults prints diagnostics as tsc does (file(line,col): error
+// TSxxxx: message) and returns the exit status: 2 when there are errors.
+func printCheckResults(results []driver.FileDiagnostics) int {
 	wd, _ := os.Getwd()
 	count := 0
-	for _, res := range p.CheckFiles(files) {
+	for _, res := range results {
 		name := res.Path
 		if rel, err := filepath.Rel(wd, name); err == nil && !strings.HasPrefix(rel, "..") {
 			name = rel

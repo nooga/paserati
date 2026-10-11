@@ -82,7 +82,7 @@ func (c *Checker) checkInterfaceIndexConstraints(node *parser.InterfaceDeclarati
 // one of the interfaces it extends (its own members are incompatible with the
 // inherited ones).
 func (c *Checker) checkInterfaceExtends(node *parser.InterfaceDeclaration, own *types.ObjectType, extended []*types.ObjectType) {
-	if own == nil || node.Name == nil {
+	if own == nil || node.Name == nil || c.skipValidation() {
 		return
 	}
 	for i, ext := range extended {

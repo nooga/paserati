@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nooga/paserati/pkg/builtins"
@@ -252,6 +253,14 @@ type Checker struct {
 	moduleLoader modules.ModuleLoader // Real ModuleLoader for dependency resolution
 	// importTypeCache holds the namespaces `import("x")` types name, by specifier.
 	importTypeCache map[string]*types.NamespaceType
+	// sharedGlobals is the program's registry of global declarations (see
+	// GlobalDeclarations); globalScope is the global env of the file being
+	// checked, where `declare global` declares.
+	sharedGlobals *GlobalDeclarations
+	globalScope   *Environment
+	// skipLibCheck mirrors tsc's skipLibCheck: declarations in library files
+	// (declaration files and modules under node_modules) are not validated.
+	skipLibCheck bool
 	// reportedOptionalPatterns holds the parameters TS2463 was reported for.
 	reportedOptionalPatterns map[*parser.Parameter]bool
 
@@ -570,6 +579,28 @@ func (c *Checker) SetIsModule(isModule bool) {
 // TS7006 and TS7019. Default false: Paserati also runs untyped JavaScript.
 func (c *Checker) SetNoImplicitAny(enabled bool) {
 	c.noImplicitAny = enabled
+}
+
+// SetSkipLibCheck mirrors tsc's skipLibCheck: library files' own
+// declarations are not validated (their types are still built and used).
+func (c *Checker) SetSkipLibCheck(skip bool) {
+	c.skipLibCheck = skip
+}
+
+// inDeclarationFile reports whether the file being checked is a declaration
+// file, where every declaration is ambient.
+func (c *Checker) inDeclarationFile() bool {
+	return c.source != nil && parser.IsDeclarationFile(c.source.Path)
+}
+
+// skipValidation reports whether the file being checked is a library file
+// under skipLibCheck: validation-only checks (heritage compatibility, type
+// argument constraints, member rules) are skipped there.
+func (c *Checker) skipValidation() bool {
+	if !c.skipLibCheck || c.source == nil {
+		return false
+	}
+	return c.inDeclarationFile() || strings.Contains(filepath.ToSlash(c.source.Path), "/node_modules/")
 }
 
 // SetNoImplicitOverride controls whether overriding class members require an
@@ -1015,6 +1046,10 @@ func (c *Checker) Check(program *parser.Program) []errors.PaseratiError {
 	// DON'T reset the environment - keep it persistent for REPL sessions
 	// c.env = NewGlobalEnvironment()      // Start with a fresh global environment for this check
 	globalEnv := c.env
+	c.importSharedGlobals(globalEnv)
+	c.globalScope = globalEnv
+	globalsBefore := snapshotGlobals(globalEnv)
+	defer func(env *Environment) { c.publishGlobals(env, globalsBefore) }(globalEnv)
 	if programHasModuleSyntax(program) {
 		// A module's top-level declarations are module-scoped: they shadow
 		// builtin globals (`export class Object {}`) instead of colliding.
@@ -1948,8 +1983,12 @@ func (c *Checker) resolveTypeofInType(t types.Type) types.Type {
 		if resolvedCheckType != typ.CheckType || resolvedExtendsType != typ.ExtendsType ||
 			resolvedTrueType != typ.TrueType || resolvedFalseType != typ.FalseType {
 			debugPrintf("// [resolveTypeofInType] Re-evaluating conditional type after typeof resolution\n")
-			// Re-evaluate the conditional type with resolved typeof types
-			return c.computeConditionalType(resolvedCheckType, resolvedExtendsType, resolvedTrueType, resolvedFalseType)
+			// Re-evaluate the conditional type with resolved typeof types;
+			// it stays a conditional while it cannot be decided yet.
+			if resolved := c.computeConditionalType(resolvedCheckType, resolvedExtendsType, resolvedTrueType, resolvedFalseType); resolved != nil {
+				return resolved
+			}
+			return &types.ConditionalType{CheckType: resolvedCheckType, ExtendsType: resolvedExtendsType, TrueType: resolvedTrueType, FalseType: resolvedFalseType}
 		}
 
 	case *types.ArrayType:
