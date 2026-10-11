@@ -112,6 +112,15 @@ func IsAssignableForCallArgument(source, target Type) bool {
 	return false
 }
 
+// relatingInstances counts, per generic, the instantiations of it that
+// objectAssignable is relating (source and target sides together). Checking
+// runs on one goroutine, like assignabilityVisited's other users.
+var relatingInstances = map[*GenericType]int{}
+
+// maxRelatedNesting is how deep one generic's instantiations may nest on
+// each side before objectAssignable assumes they relate.
+const maxRelatedNesting = 3
+
 // assignPair keys assignabilityVisited.
 type assignPair struct{ source, target Type }
 
@@ -847,6 +856,22 @@ func ObjectsShareProperty(a, b *ObjectType) bool {
 func objectAssignable(sourceObj, targetObj *ObjectType, checkWeak bool) bool {
 	if sameGenericWithLooserArgs(sourceObj, targetObj, 0) {
 		return true
+	}
+	// Relating Grow<A> to Grow<B> relates their next(): Grow<Wrap<A>> to
+	// Grow<Wrap<B>>, and so on without end. Like tsc's isDeeplyNestedType,
+	// once instantiations of one generic are being related several levels
+	// deep on both sides, assume the rest relates.
+	sg, tg := sourceObj.Instantiates, targetObj.Instantiates
+	if sg != nil && tg != nil {
+		if relatingInstances[sg] >= maxRelatedNesting && relatingInstances[tg] >= maxRelatedNesting {
+			return true
+		}
+		relatingInstances[sg]++
+		relatingInstances[tg]++
+		defer func() {
+			relatingInstances[sg]--
+			relatingInstances[tg]--
+		}()
 	}
 	// Check that all required properties in target exist in source and are assignable
 	targetProps := targetObj.GetEffectiveProperties()

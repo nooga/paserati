@@ -30,6 +30,16 @@ func (ot *ObjectType) Materialize() {
 	}
 }
 
+// ResetMembers empties ot's members (and drops any not filled in yet), for
+// filling them in again.
+func (ot *ObjectType) ResetMembers() {
+	ot.lazy, ot.lazySource, ot.lazySubstitution = nil, nil, nil
+	ot.Properties, ot.OptionalProperties, ot.ReadOnlyProperties = nil, nil, nil
+	ot.PropertyOrder = nil
+	ot.CallSignatures, ot.ConstructSignatures, ot.IndexSignatures = nil, nil, nil
+	ot.BaseTypes = nil
+}
+
 // Props returns the own properties by name.
 func (ot *ObjectType) Props() map[string]Type {
 	if ot.lazy != nil {

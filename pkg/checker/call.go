@@ -1141,6 +1141,14 @@ func (c *Checker) isGenericSignature(sig *types.Signature) bool {
 			}
 			return false
 		case *types.ObjectType:
+			if typ.ClosedInstance {
+				for _, a := range typ.GenericArgs {
+					if containsTypeParameters(a) {
+						return true
+					}
+				}
+				return false
+			}
 			for _, __name := range types.SortedPropertyNames(typ.Props()) {
 				propType := typ.Props()[__name]
 				if containsTypeParameters(propType) {
@@ -1540,6 +1548,13 @@ func (c *Checker) collectConstraintsFromType(paramType, argType types.Type) []Ty
 	return c.collectConstraintsFromTypeSeen(paramType, argType, make(map[constraintTypePair]bool))
 }
 
+// maxInferNesting is how deep one generic's instantiations may nest on each
+// side of collectConstraintsFromTypeSeen; maxInferWalkDepth bounds the walk.
+const (
+	maxInferNesting   = 3
+	maxInferWalkDepth = 100
+)
+
 func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, seen map[constraintTypePair]bool) []TypeParameterConstraint {
 	var constraints []TypeParameterConstraint
 	if paramType == nil || argType == nil {
@@ -1550,6 +1565,33 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		return constraints
 	}
 	seen[pair] = true
+	// Recursive generics lead the walk to ever deeper instantiations
+	// (Grow<A>'s next(): Grow<Wrap<A>> against an argument's). Like tsc's
+	// isDeeplyNestedType, stop once one generic's instantiations nest several
+	// levels deep on both sides, and in any case past a depth no real type
+	// reaches.
+	if c.inferNesting == nil {
+		c.inferNesting = map[*types.GenericType]int{}
+	}
+	if c.inferWalkDepth >= maxInferWalkDepth {
+		return constraints
+	}
+	c.inferWalkDepth++
+	defer func() { c.inferWalkDepth-- }()
+	pObj, _ := paramType.(*types.ObjectType)
+	aObj, _ := argType.(*types.ObjectType)
+	if pObj != nil && aObj != nil && pObj.Instantiates != nil && aObj.Instantiates != nil {
+		pg, ag := pObj.Instantiates, aObj.Instantiates
+		if c.inferNesting[pg] >= maxInferNesting && c.inferNesting[ag] >= maxInferNesting {
+			return constraints
+		}
+		c.inferNesting[pg]++
+		c.inferNesting[ag]++
+		defer func() {
+			c.inferNesting[pg]--
+			c.inferNesting[ag]--
+		}()
+	}
 
 	// Readonly arrays and tuples infer through their element structure:
 	// `[A[], B[]]` against `readonly [T1[], T2[]]`.
@@ -1625,6 +1667,17 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		}
 
 	case *types.ObjectType:
+		// Two instantiations of one closed generic infer from their type
+		// arguments, as tsc does for two references to one type: their
+		// members are the generic's with those arguments, and walking them
+		// follows `next(): Grow<Wrap<T>>` to ever deeper instantiations.
+		if aType, isObject := argType.(*types.ObjectType); isObject && pType.ClosedInstance && aType.ClosedInstance &&
+			pType.Instantiates == aType.Instantiates && len(pType.GenericArgs) == len(aType.GenericArgs) {
+			for i, pa := range pType.GenericArgs {
+				constraints = append(constraints, c.collectConstraintsFromTypeSeen(pa, aType.GenericArgs[i], seen)...)
+			}
+			return constraints
+		}
 		// Handle function types: (T) => U matched against (A) => B
 		if aType, isObject := argType.(*types.ObjectType); isObject {
 			// Check if both are function types (have call signatures)

@@ -590,6 +590,14 @@ func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited map[T
 			return false
 		}
 		visited[t] = true
+		if tt.ClosedInstance {
+			for _, a := range tt.GenericArgs {
+				if mentionsTypeParameter(a, params, visited, target) {
+					return true
+				}
+			}
+			return false
+		}
 		for _, p := range tt.Props() {
 			if mentionsTypeParameter(p, params, visited, target) {
 				return true
