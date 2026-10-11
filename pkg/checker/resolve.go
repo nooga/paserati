@@ -1767,6 +1767,13 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 		}
 	}
 	instantiatedType := c.substituteTypes(genericType.Body, substitution)
+	if !cacheable {
+		if obj, ok := instantiatedType.(*types.ObjectType); ok && obj != genericType.Body {
+			if _, bodyIsObject := genericType.Body.(*types.ObjectType); bodyIsObject {
+				c.instCache.early[genericType] = append(c.instCache.early[genericType], earlyInstance{obj, substitution})
+			}
+		}
+	}
 	if obj, ok := instantiatedType.(*types.ObjectType); ok && obj != genericType.Body {
 		if genericType.InstanceType != nil {
 			// A class constructor: the instances it constructs instantiate
@@ -1780,6 +1787,9 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 			}
 		} else if obj.Instantiates == nil && len(obj.GenericArgs) == len(genericType.TypeParameters) {
 			obj.Instantiates = genericType
+		}
+		if cacheable && obj.Instantiates == genericType && c.genericClosed(genericType) {
+			obj.ClosedInstance = true
 		}
 	}
 	if cacheable {
@@ -1939,17 +1949,9 @@ func (c *Checker) substituteTypesWithVisited(t types.Type, substitution map[stri
 		}
 		if c.closedInstantiation(typ, substitution) {
 			result.Instantiates = typ.Instantiates
+			result.ClosedInstance = true
 		}
-		// The caller may reuse its map for another substitution.
-		subst, env := maps.Clone(substitution), c.env
-		result.SetLazyMembers(typ, subst, func(ot *types.ObjectType) {
-			// Substitute as where the instantiation was written (`typeof x`
-			// resolves in that scope); what it reports was reported there.
-			saved := c.env
-			c.env = env
-			c.speculate(func() { c.substituteMembers(typ, ot, subst, visited) })
-			c.env = saved
-		})
+		c.substituteMembersLazily(typ, result, substitution, visited)
 		return result
 
 	case *types.UnionType:
@@ -4315,6 +4317,16 @@ type instantiationCache struct {
 	complete map[*types.GenericType]bool
 	inst     map[genericInstKey]types.Type
 	closed   map[*types.GenericType]bool // see genericClosed
+	early    map[*types.GenericType][]earlyInstance
+}
+
+// earlyInstance is an instantiation made before its generic's declaration
+// was complete: `next(): Grow<Wrap<T>>` inside `interface Grow<T>` copies the
+// body as declared so far. Once the declaration completes, the instance is
+// refilled from the complete body.
+type earlyInstance struct {
+	obj          *types.ObjectType
+	substitution map[string]types.Type
 }
 
 func newInstantiationCache() *instantiationCache {
@@ -4322,6 +4334,7 @@ func newInstantiationCache() *instantiationCache {
 		complete: map[*types.GenericType]bool{},
 		inst:     map[genericInstKey]types.Type{},
 		closed:   map[*types.GenericType]bool{},
+		early:    map[*types.GenericType][]earlyInstance{},
 	}
 }
 
@@ -4344,12 +4357,36 @@ func (ic *instantiationCache) reopen(g *types.GenericType) {
 // for a class, constructor) has its final body.
 func (c *Checker) markGenericComplete(name string) {
 	if g, ok := c.lookupTypeNoPending(name).(*types.GenericType); ok {
-		c.instCache.complete[g] = true
+		c.completeGeneric(g)
 	}
 	if v, _, ok := c.env.Resolve(name); ok {
 		if g, isGeneric := v.(*types.GenericType); isGeneric {
-			c.instCache.complete[g] = true
+			c.completeGeneric(g)
 		}
+	}
+}
+
+func (c *Checker) completeGeneric(g *types.GenericType) {
+	c.instCache.complete[g] = true
+	early := c.instCache.early[g]
+	delete(c.instCache.early, g)
+	body, ok := g.Body.(*types.ObjectType)
+	if !ok {
+		return
+	}
+	if !c.genericClosed(g) {
+		// Only a closed generic's instances stop the walks for type
+		// parameters at their arguments; refilled, an open one's
+		// `next(): Grow<Wrap<T>>` chain would lead those walks on forever.
+		return
+	}
+	for _, e := range early {
+		if e.obj.Instantiates != g || len(e.obj.GenericArgs) != len(g.TypeParameters) {
+			continue
+		}
+		e.obj.ResetMembers()
+		c.substituteMembersLazily(body, e.obj, e.substitution, map[types.Type]types.Type{body: e.obj})
+		e.obj.ClosedInstance = true
 	}
 }
 
@@ -4487,6 +4524,17 @@ func mayMentionTypeParamNames(t types.Type, names map[string]types.Type, visited
 			return false
 		}
 		visited[t] = true
+		if tt.ClosedInstance {
+			if _, ok := names["this"]; ok {
+				return true
+			}
+			for _, a := range tt.GenericArgs {
+				if mayMentionTypeParamNames(a, names, visited, shadowed) {
+					return true
+				}
+			}
+			return false
+		}
 		if source, subst, lazy := tt.LazySource(); lazy {
 			// Its members will be source's with subst applied: a name can
 			// come from source (unless subst replaces it) or from what subst
@@ -4623,6 +4671,21 @@ func unshadowedNames[V any](names map[string]V, own []*types.TypeParameter) (map
 		delete(out, tp.Name)
 	}
 	return out, out != nil
+}
+
+// substituteMembersLazily makes result's members typ's, substituted when
+// first read.
+func (c *Checker) substituteMembersLazily(typ, result *types.ObjectType, substitution map[string]types.Type, visited map[types.Type]types.Type) {
+	// The caller may reuse its map for another substitution.
+	subst, env := maps.Clone(substitution), c.env
+	result.SetLazyMembers(typ, subst, func(ot *types.ObjectType) {
+		// Substitute as where the instantiation was written (`typeof x`
+		// resolves in that scope); what it reports was reported there.
+		saved := c.env
+		c.env = env
+		c.speculate(func() { c.substituteMembers(typ, ot, subst, visited) })
+		c.env = saved
+	})
 }
 
 // substituteMembers fills in result's members: typ's, substituted.

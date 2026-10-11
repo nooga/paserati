@@ -128,6 +128,20 @@ func (w *closedWalk) foreign(t types.Type, names []string) bool {
 			return false
 		}
 		w.visited[t] = true
+		if tt.ClosedInstance {
+			return w.any(tt.GenericArgs, names)
+		}
+		if source, subst, lazy := tt.LazySource(); lazy {
+			// Its members will be source's, substituted: reading them would
+			// fill them in, and a generic naming itself with growing
+			// arguments (`next(): Grow<Wrap<T>>`) has no last instantiation.
+			for _, v := range subst {
+				if w.foreign(v, names) {
+					return true
+				}
+			}
+			return w.foreign(source, names)
+		}
 		for _, p := range tt.Props() {
 			if w.foreign(p, names) {
 				return true
@@ -220,6 +234,19 @@ func collectInferTypeNames(t types.Type, names *[]string, seen map[types.Type]bo
 			return
 		}
 		seen[t] = true
+		if tt.ClosedInstance {
+			for _, a := range tt.GenericArgs {
+				collectInferTypeNames(a, names, seen)
+			}
+			return
+		}
+		if source, subst, lazy := tt.LazySource(); lazy {
+			for _, v := range subst {
+				collectInferTypeNames(v, names, seen)
+			}
+			collectInferTypeNames(source, names, seen)
+			return
+		}
 		for _, p := range tt.Props() {
 			collectInferTypeNames(p, names, seen)
 		}

@@ -237,6 +237,14 @@ type ObjectType struct {
 	// of copying every member.
 	Instantiates *GenericType
 
+	// ClosedInstance marks an instantiation of a generic whose body names no
+	// type parameter but its own: its members are the body's with those
+	// replaced by GenericArgs, so only GenericArgs can mention an outer type
+	// parameter. Walks looking for type parameters stop at its arguments,
+	// like tsc's at a type reference's: a generic naming itself with growing
+	// arguments (`next(): Grow<Wrap<T>>`) has no last instantiation.
+	ClosedInstance bool
+
 	// Using a map for simplicity now. Consider ordered map or slice for stability.
 	Properties         map[string]Type
 	OptionalProperties map[string]bool // Tracks which properties are optional
@@ -374,6 +382,18 @@ func (ot *ObjectType) Equals(other Type) bool {
 
 	// Pointer identity check - prevents infinite recursion for self-referencing types
 	if ot == otherOt {
+		return true
+	}
+
+	if ot.ClosedInstance && otherOt.ClosedInstance && ot.Instantiates == otherOt.Instantiates &&
+		len(ot.GenericArgs) == len(otherOt.GenericArgs) {
+		// Their members are one generic's with these arguments: comparing
+		// them member by member follows `next(): Grow<Wrap<T>>` forever.
+		for i, a := range ot.GenericArgs {
+			if a != otherOt.GenericArgs[i] && !a.Equals(otherOt.GenericArgs[i]) {
+				return false
+			}
+		}
 		return true
 	}
 

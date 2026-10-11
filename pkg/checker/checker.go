@@ -256,6 +256,9 @@ type Checker struct {
 	// inferFromConditional.
 	inferVisiting map[inferPair]bool
 	inferDepth    int
+	// Nesting per generic and depth of collectConstraintsFromTypeSeen.
+	inferNesting   map[*types.GenericType]int
+	inferWalkDepth int
 
 	program *parser.Program    // Root AST node
 	source  *source.SourceFile // Source context for error reporting (cached from program)
