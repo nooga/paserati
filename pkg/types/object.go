@@ -282,8 +282,11 @@ type ObjectType struct {
 	// literal types), which matters when relating them to index signatures.
 	IsInterface bool
 
-	// lazy, when set, fills in the members on first access (see Materialize).
-	lazy func(*ObjectType)
+	// lazy, when set, fills in the members on first access (see Materialize):
+	// lazySource's, substituted with lazySubstitution.
+	lazy             func(*ObjectType)
+	lazySource       *ObjectType
+	lazySubstitution map[string]Type
 
 	// IsReflectIntrinsic marks this as a compile-time type reflection intrinsic
 	// When the checker sees a call to a function with this flag, it resolves the type argument
