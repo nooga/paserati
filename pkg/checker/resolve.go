@@ -1656,12 +1656,11 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 		}
 	}
 
-	// Create debug string for final type arguments
-	var typeStrs []string
-	for _, t := range finalTypeArgs {
-		typeStrs = append(typeStrs, t.String())
-	}
 	if checkerDebug {
+		var typeStrs []string
+		for _, t := range finalTypeArgs {
+			typeStrs = append(typeStrs, t.String())
+		}
 		debugPrintf("// [Checker] Instantiating generic type '%s' with args [%s]\n",
 			genericType.Name, strings.Join(typeStrs, ", "))
 	}
@@ -1751,7 +1750,7 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	// declaration is complete its body no longer changes, so the result is
 	// cached per argument identities (the arguments are referenced, not
 	// copied, so they may still be filling in).
-	cacheable := c.completeGenerics[genericType]
+	cacheable := c.instCache.complete[genericType]
 	if !cacheable && isOwnTypeParameters(genericType, finalTypeArgs) {
 		// `next?: Node<T>` inside `interface Node<T>`: the declared type
 		// itself. Substituting would copy the body as declared so far,
@@ -1760,7 +1759,7 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 	}
 	key := genericInstKey{generic: genericType, args: typeListKey(finalTypeArgs)}
 	if cacheable {
-		if cached, hit := c.genericInstCache[key]; hit {
+		if cached, hit := c.instCache.inst[key]; hit {
 			return cached
 		}
 	}
@@ -1781,10 +1780,10 @@ func (c *Checker) instantiateGenericType(genericType *types.GenericType, typeArg
 		}
 	}
 	if cacheable {
-		if c.genericInstCache == nil || len(c.genericInstCache) > 1<<16 {
-			c.genericInstCache = map[genericInstKey]types.Type{}
+		if len(c.instCache.inst) > 1<<18 {
+			clear(c.instCache.inst)
 		}
-		c.genericInstCache[key] = instantiatedType
+		c.instCache.inst[key] = instantiatedType
 	}
 
 	if checkerDebug {
@@ -4329,18 +4328,45 @@ type genericInstKey struct {
 	args    string
 }
 
+// instantiationCache holds the instantiations of generics whose declarations
+// are complete. The checkers of one program share it (a generic declared in
+// one module is instantiated by every module importing it), so an entry is
+// valid only while its generic's body is the one it was made from.
+type instantiationCache struct {
+	complete map[*types.GenericType]bool
+	inst     map[genericInstKey]types.Type
+}
+
+func newInstantiationCache() *instantiationCache {
+	return &instantiationCache{
+		complete: map[*types.GenericType]bool{},
+		inst:     map[genericInstKey]types.Type{},
+	}
+}
+
+// reopen forgets g's instantiations: a declaration merging into g is about
+// to change its body in place.
+func (ic *instantiationCache) reopen(g *types.GenericType) {
+	if !ic.complete[g] {
+		return
+	}
+	delete(ic.complete, g)
+	for key := range ic.inst {
+		if key.generic == g {
+			delete(ic.inst, key)
+		}
+	}
+}
+
 // markGenericComplete records that the generic declared as name (type and,
 // for a class, constructor) has its final body.
 func (c *Checker) markGenericComplete(name string) {
-	if c.completeGenerics == nil {
-		c.completeGenerics = map[*types.GenericType]bool{}
-	}
 	if g, ok := c.lookupTypeNoPending(name).(*types.GenericType); ok {
-		c.completeGenerics[g] = true
+		c.instCache.complete[g] = true
 	}
 	if v, _, ok := c.env.Resolve(name); ok {
 		if g, isGeneric := v.(*types.GenericType); isGeneric {
-			c.completeGenerics[g] = true
+			c.instCache.complete[g] = true
 		}
 	}
 }
