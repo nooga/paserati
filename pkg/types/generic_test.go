@@ -142,8 +142,8 @@ func TestComplexSubstitution(t *testing.T) {
 	
 	// Verify the substitution
 	if objType, ok := substituted.(*ObjectType); ok {
-		firstProp, hasFirst := objType.Properties["first"]
-		secondProp, hasSecond := objType.Properties["second"]
+		firstProp, hasFirst := objType.Props()["first"]
+		secondProp, hasSecond := objType.Props()["second"]
 		
 		if !hasFirst || !hasSecond {
 			t.Error("Substituted type should have 'first' and 'second' properties")

@@ -195,12 +195,12 @@ func (c *Checker) checkExportAssignment(node *parser.ExportAssignment) {
 		return
 	}
 	for name, t := range ns.TypeMembers {
-		if v, ok := ns.ValueShape.Properties[name]; ok {
+		if v, ok := ns.ValueShape.Props()[name]; ok {
 			t = v
 		}
 		c.moduleEnv.DefineExport(name, name, t, nil)
 	}
-	for name, v := range ns.ValueShape.Properties {
+	for name, v := range ns.ValueShape.Props() {
 		if _, done := ns.TypeMembers[name]; !done {
 			c.moduleEnv.DefineExport(name, name, v, nil)
 		}

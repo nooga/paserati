@@ -29,7 +29,7 @@ type typePredicateSignature struct {
 // Returns the TypePredicateType and its signature if found, nil otherwise.
 func extractTypePredicateFromType(functionType types.Type) *typePredicateSignature {
 	if objType, ok := functionType.(*types.ObjectType); ok {
-		for _, sig := range objType.CallSignatures {
+		for _, sig := range objType.CallSigs() {
 			if predType, ok := sig.ReturnType.(*types.TypePredicateType); ok {
 				return &typePredicateSignature{predicate: predType, signature: sig}
 			}
@@ -172,7 +172,7 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 				if objType != nil {
 					propName := c.extractPropertyName(memberFunc.Property)
 					if widened, ok := types.GetWidenedType(objType).(*types.ObjectType); ok {
-						if propType, exists := widened.Properties[propName]; exists {
+						if propType, exists := widened.Props()[propName]; exists {
 							functionType = propType
 						}
 					}
@@ -424,8 +424,8 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 						if ctorType, _, found := c.env.Resolve(constructorIdent.Value); found {
 							if objType, ok := ctorType.(*types.ObjectType); ok {
 								// Prefer ConstructSignatures, fall back to CallSignatures
-								if len(objType.ConstructSignatures) > 0 {
-									instanceType := objType.ConstructSignatures[0].ReturnType
+								if len(objType.ConstructSigs()) > 0 {
+									instanceType := objType.ConstructSigs()[0].ReturnType
 									if instanceType != nil {
 										return &TypeGuard{
 											VariableName: ident.Value,
@@ -434,8 +434,8 @@ func (c *Checker) detectTypeGuard(condition parser.Expression) *TypeGuard {
 										}
 									}
 								}
-								if len(objType.CallSignatures) > 0 {
-									instanceType := objType.CallSignatures[0].ReturnType
+								if len(objType.CallSigs()) > 0 {
+									instanceType := objType.CallSigs()[0].ReturnType
 									// Don't narrow to void (ES5 constructor functions return void)
 									if instanceType != nil && instanceType != types.Void {
 										return &TypeGuard{
@@ -1962,7 +1962,7 @@ func (c *Checker) applyMemberTruthinessNarrowing(memberExpr *parser.MemberExpres
 						if !ok {
 							continue
 						}
-						propType, exists := objType.Properties[propIdent.Value]
+						propType, exists := objType.Props()[propIdent.Value]
 						if !exists {
 							continue
 						}
@@ -2097,11 +2097,11 @@ func (c *Checker) isTypeCompatibleForInstanceof(memberType, targetType types.Typ
 		if targetObj, ok := targetType.(*types.ObjectType); ok {
 			// If memberType has call signatures but targetType doesn't, they're incompatible
 			// This prevents ContextFn<T> from being considered compatible with Date instances
-			if len(memberObj.CallSignatures) > 0 && len(targetObj.CallSignatures) == 0 {
+			if len(memberObj.CallSigs()) > 0 && len(targetObj.CallSigs()) == 0 {
 				return false
 			}
 			// If both are object types without call signatures, they might be compatible
-			if len(memberObj.CallSignatures) == 0 && len(targetObj.CallSignatures) == 0 {
+			if len(memberObj.CallSigs()) == 0 && len(targetObj.CallSigs()) == 0 {
 				return true
 			}
 		}
@@ -2120,7 +2120,7 @@ func (c *Checker) memberMatchesDiscriminant(memberType types.Type, propName stri
 	}
 
 	// Check if the object has the discriminant property
-	propType, exists := objType.Properties[propName]
+	propType, exists := objType.Props()[propName]
 	if !exists {
 		return false
 	}
@@ -2183,7 +2183,7 @@ func (c *Checker) typeHasProperty(t types.Type, propertyName string) bool {
 	switch typ := t.(type) {
 	case *types.ObjectType:
 		// Check if the object type has this property
-		_, exists := typ.Properties[propertyName]
+		_, exists := typ.Props()[propertyName]
 		return exists
 	case *types.ArrayType:
 		// Arrays have "length" property and some built-in methods
@@ -2441,7 +2441,7 @@ func (c *Checker) resolveMemberExpressionOriginalType(key string) types.Type {
 	for i := 1; i < len(parts); i++ {
 		currentType = types.GetWidenedType(currentType)
 		if objType, ok := currentType.(*types.ObjectType); ok {
-			propType, exists := objType.Properties[parts[i]]
+			propType, exists := objType.Props()[parts[i]]
 			if !exists {
 				// Inherited members (a property of a generic base class).
 				propType, exists = objType.GetEffectiveProperties()[parts[i]]

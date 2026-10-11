@@ -25,7 +25,8 @@ func (e *ErrorInitializer) InitTypes(ctx *TypeContext) error {
 		WithProperty("toString", types.NewSimpleFunction([]types.Type{}, types.String))
 
 	// Allow arbitrary properties on Error instances (common JS pattern: err.code, etc.)
-	errorProtoType.IndexSignatures = append(errorProtoType.IndexSignatures, &types.IndexSignature{
+	errorProtoType.Materialize()
+errorProtoType.IndexSignatures = append(errorProtoType.IndexSigs(), &types.IndexSignature{
 		KeyType:   types.String,
 		ValueType: types.Any,
 	})

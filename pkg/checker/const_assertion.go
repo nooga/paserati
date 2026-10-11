@@ -55,17 +55,20 @@ func constAssertionType(expr parser.Expression) types.Type {
 		}
 		out := types.NewObjectType()
 		for _, name := range obj.PropertyNames() {
-			t := obj.Properties[name]
+			t := obj.Props()[name]
 			out.SetProperty(name, t)
 		}
-		for name, opt := range obj.OptionalProperties {
-			if out.OptionalProperties == nil {
-				out.OptionalProperties = map[string]bool{}
+		for name, opt := range obj.OptionalProps() {
+			if out.OptionalProps() == nil {
+				out.Materialize()
+out.OptionalProperties = map[string]bool{}
 			}
-			out.OptionalProperties[name] = opt
+			out.OptionalProps()[name] = opt
 		}
-		out.IndexSignatures = obj.IndexSignatures
-		out.CallSignatures = obj.CallSignatures
+		out.Materialize()
+out.IndexSignatures = obj.IndexSigs()
+		out.Materialize()
+out.CallSignatures = obj.CallSigs()
 		for _, prop := range e.Properties {
 			var name string
 			switch k := prop.Key.(type) {
@@ -82,15 +85,16 @@ func constAssertionType(expr parser.Expression) types.Type {
 			if _, isMethod := prop.Value.(*parser.MethodDefinition); isMethod {
 				continue
 			}
-			if _, exists := out.Properties[name]; exists && prop.Value != nil {
+			if _, exists := out.Props()[name]; exists && prop.Value != nil {
 				out.SetProperty(name, constAssertionType(prop.Value))
 			}
 		}
-		if out.ReadOnlyProperties == nil {
-			out.ReadOnlyProperties = map[string]bool{}
+		if out.ReadOnlyProps() == nil {
+			out.Materialize()
+out.ReadOnlyProperties = map[string]bool{}
 		}
-		for name := range out.Properties {
-			out.ReadOnlyProperties[name] = true
+		for name := range out.Props() {
+			out.ReadOnlyProps()[name] = true
 		}
 		return out
 	}

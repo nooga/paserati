@@ -184,7 +184,7 @@ func objectKnowsProperty(obj *types.ObjectType, name string) bool {
 	if _, ok := obj.GetEffectiveProperties()[name]; ok {
 		return true
 	}
-	for _, idx := range obj.IndexSignatures {
+	for _, idx := range obj.IndexSigs() {
 		if idx == nil {
 			continue
 		}
@@ -211,7 +211,7 @@ func objectPropertyType(obj *types.ObjectType, name string) (types.Type, bool) {
 		}
 		return pt, true
 	}
-	for _, idx := range obj.IndexSignatures {
+	for _, idx := range obj.IndexSigs() {
 		if idx == nil {
 			continue
 		}
@@ -279,11 +279,11 @@ func (c *Checker) findExcessProperty(expr parser.Expression, target types.Type) 
 			return nil
 		}
 		for _, o := range objs {
-			if len(o.GetEffectiveProperties()) == 0 && len(o.IndexSignatures) == 0 &&
-				len(o.CallSignatures) == 0 && len(o.ConstructSignatures) == 0 {
+			if len(o.GetEffectiveProperties()) == 0 && len(o.IndexSigs()) == 0 &&
+				len(o.CallSigs()) == 0 && len(o.ConstructSigs()) == 0 {
 				return nil // {} accepts anything
 			}
-			if len(o.GetEffectiveProperties()) == 0 && len(o.IndexSignatures) == 0 {
+			if len(o.GetEffectiveProperties()) == 0 && len(o.IndexSigs()) == 0 {
 				return nil // function-like targets: be conservative
 			}
 		}
@@ -383,9 +383,9 @@ func (c *Checker) missingProperties(source, target types.Type) ([]string, bool) 
 	// shouldReportUnmatchedPropertyError: a callable source without
 	// properties only focuses on the property when the target is callable too.
 	srcProps := srcObj.GetEffectiveProperties()
-	if (len(srcObj.CallSignatures) > 0 || len(srcObj.ConstructSignatures) > 0) && len(srcProps) == 0 {
-		if !((len(tgtObj.CallSignatures) > 0 && len(srcObj.CallSignatures) > 0) ||
-			(len(tgtObj.ConstructSignatures) > 0 && len(srcObj.ConstructSignatures) > 0)) {
+	if (len(srcObj.CallSigs()) > 0 || len(srcObj.ConstructSigs()) > 0) && len(srcProps) == 0 {
+		if !((len(tgtObj.CallSigs()) > 0 && len(srcObj.CallSigs()) > 0) ||
+			(len(tgtObj.ConstructSigs()) > 0 && len(srcObj.ConstructSigs()) > 0)) {
 			return nil, false
 		}
 	}
@@ -551,23 +551,23 @@ func (c *Checker) elaborate(expr parser.Expression, source, target types.Type, h
 			return false
 		}
 		srcObj, ok := c.resolveStructural(source).(*types.ObjectType)
-		if !ok || len(srcObj.CallSignatures) != 1 {
+		if !ok || len(srcObj.CallSigs()) != 1 {
 			return false
 		}
 		tgtObj, ok := c.resolveStructural(target).(*types.ObjectType)
-		if !ok || len(tgtObj.CallSignatures) == 0 {
+		if !ok || len(tgtObj.CallSigs()) == 0 {
 			return false
 		}
 		var tgtReturns []types.Type
-		for _, s := range tgtObj.CallSignatures {
+		for _, s := range tgtObj.CallSigs() {
 			if s.ReturnType != nil {
 				tgtReturns = append(tgtReturns, s.ReturnType)
 			}
 		}
-		if len(tgtReturns) == 0 || srcObj.CallSignatures[0].ReturnType == nil {
+		if len(tgtReturns) == 0 || srcObj.CallSigs()[0].ReturnType == nil {
 			return false
 		}
-		srcReturn := srcObj.CallSignatures[0].ReturnType
+		srcReturn := srcObj.CallSigs()[0].ReturnType
 		tgtReturn := types.NewUnionType(tgtReturns...)
 		if tgtReturn == types.Void || tgtReturn == types.Any || c.assignableToFresh(body, srcReturn, tgtReturn) {
 			return false
@@ -623,13 +623,13 @@ func (c *Checker) generalizedSource(source, target types.Type) types.Type {
 // source itself is not.
 func (c *Checker) didYouMeanToCall(source, target types.Type) bool {
 	srcObj, ok := c.resolveStructural(source).(*types.ObjectType)
-	if !ok || (len(srcObj.CallSignatures) == 0 && len(srcObj.ConstructSignatures) == 0) {
+	if !ok || (len(srcObj.CallSigs()) == 0 && len(srcObj.ConstructSigs()) == 0) {
 		return false
 	}
 	if c.isAssignableWithExpansion(source, target) {
 		return false
 	}
-	for _, sigs := range [][]*types.Signature{srcObj.ConstructSignatures, srcObj.CallSignatures} {
+	for _, sigs := range [][]*types.Signature{srcObj.ConstructSigs(), srcObj.CallSigs()} {
 		for _, sig := range sigs {
 			if sig.ReturnType == nil || sig.ReturnType == types.Any || sig.ReturnType == types.Never {
 				continue
@@ -696,9 +696,9 @@ func (c *Checker) widenObjectLiteralForReport(source, target types.Type) types.T
 		return widened
 	}
 	tgtProps := tgtObj.GetEffectiveProperties()
-	for name, orig := range srcObj.Properties {
+	for name, orig := range srcObj.Props() {
 		if want, has := tgtProps[name]; has && containsLiteralType(want) {
-			wObj.Properties[name] = orig
+			wObj.Props()[name] = orig
 		}
 	}
 	return wObj

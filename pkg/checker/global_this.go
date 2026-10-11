@@ -21,7 +21,7 @@ func (c *Checker) globalThisType() types.Type {
 				if sym.Type == nil || name == "globalThis" {
 					continue
 				}
-				if _, exists := obj.Properties[name]; !exists {
+				if _, exists := obj.Props()[name]; !exists {
 					obj.SetProperty(name, sym.Type)
 				}
 			}

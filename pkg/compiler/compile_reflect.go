@@ -74,12 +74,12 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 		c.emitSetProperty(hint, "kind", vm.NewString("object"), line)
 
 		// Add properties
-		if len(typ.Properties) > 0 {
+		if len(typ.Props()) > 0 {
 			propsReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, propsReg)
 			c.emitMakeEmptyObject(propsReg, line)
 
-			for name, propType := range typ.Properties {
+			for name, propType := range typ.Props() {
 				// Create property descriptor
 				propDescReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, propDescReg)
@@ -91,10 +91,10 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 				_, _ = c.emitTypeDescriptor(propType, typeReg, line)
 				c.emitSetPropertyFromReg(propDescReg, "type", typeReg, line)
 
-				if typ.OptionalProperties[name] {
+				if typ.OptionalProps()[name] {
 					c.emitSetProperty(propDescReg, "optional", vm.True, line)
 				}
-				if typ.ReadOnlyProperties[name] {
+				if typ.ReadOnlyProps()[name] {
 					c.emitSetProperty(propDescReg, "readonly", vm.True, line)
 				}
 
@@ -105,12 +105,12 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 		}
 
 		// Add index signatures for additionalProperties support
-		if len(typ.IndexSignatures) > 0 {
+		if len(typ.IndexSigs()) > 0 {
 			indexSigsReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, indexSigsReg)
 			c.emitMakeEmptyArray(indexSigsReg, line)
 
-			for _, indexSig := range typ.IndexSignatures {
+			for _, indexSig := range typ.IndexSigs() {
 				sigReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, sigReg)
 				c.emitMakeEmptyObject(sigReg, line)
@@ -134,12 +134,12 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 		}
 
 		// Add call signatures if callable
-		if len(typ.CallSignatures) > 0 {
+		if len(typ.CallSigs()) > 0 {
 			sigsReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, sigsReg)
 			c.emitMakeEmptyArray(sigsReg, line)
 
-			for _, sig := range typ.CallSignatures {
+			for _, sig := range typ.CallSigs() {
 				sigReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, sigReg)
 				c.emitSignatureDescriptor(sig, sigReg, line, &tempRegs)
@@ -150,12 +150,12 @@ func (c *Compiler) emitTypeDescriptor(t types.Type, hint Register, line int) (Re
 		}
 
 		// Add base types for inheritance (extends/implements)
-		if len(typ.BaseTypes) > 0 {
+		if len(typ.Bases()) > 0 {
 			baseTypesReg := c.regAlloc.Alloc()
 			tempRegs = append(tempRegs, baseTypesReg)
 			c.emitMakeEmptyArray(baseTypesReg, line)
 
-			for _, baseType := range typ.BaseTypes {
+			for _, baseType := range typ.Bases() {
 				baseReg := c.regAlloc.Alloc()
 				tempRegs = append(tempRegs, baseReg)
 				_, _ = c.emitTypeDescriptor(baseType, baseReg, line)

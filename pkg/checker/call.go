@@ -318,9 +318,9 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 
 		// For generic constructors, we need the instantiated constructor from the current class's superclass type
 		// Look it up in the BaseTypes of the current class instance
-		if len(classInstanceType.BaseTypes) > 0 {
+		if len(classInstanceType.Bases()) > 0 {
 			// The first base type should be the superclass instance type
-			if _, ok := classInstanceType.BaseTypes[0].(*types.ObjectType); ok {
+			if _, ok := classInstanceType.Bases()[0].(*types.ObjectType); ok {
 				// Find the constructor type that matches this instance type
 				debugPrintf("// [Checker CallExpr] Found superclass instance type, will use its constructor\n")
 				// For now, use a simplified approach - the generic case is handled during inheritance setup
@@ -340,14 +340,14 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 	// Handle different types of superclass constructors
 	var finalConstructor *types.ObjectType
 
-	if objType, ok := superConstructor.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
+	if objType, ok := superConstructor.(*types.ObjectType); ok && len(objType.ConstructSigs()) > 0 {
 		finalConstructor = objType
 	} else if _, ok := superConstructor.(*types.GenericType); ok {
 		debugPrintf("// [Checker CallExpr] Superclass constructor is generic, need to instantiate it\n")
 		// For parameterized superclasses, we need to use the already instantiated constructor
 		// that was resolved during inheritance setup. It should be stored in SuperConstructorType.
 		if classInstanceType.ClassMeta.SuperConstructorType != nil {
-			if objType, ok := classInstanceType.ClassMeta.SuperConstructorType.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
+			if objType, ok := classInstanceType.ClassMeta.SuperConstructorType.(*types.ObjectType); ok && len(objType.ConstructSigs()) > 0 {
 				finalConstructor = objType
 				debugPrintf("// [Checker CallExpr] Using pre-instantiated superclass constructor\n")
 			}
@@ -366,8 +366,8 @@ func (c *Checker) checkSuperCallExpression(node *parser.CallExpression, superExp
 	}
 
 	// Type-check and validate arguments against constructor signature
-	if len(finalConstructor.ConstructSignatures) > 0 {
-		constructorSig := finalConstructor.ConstructSignatures[0]
+	if len(finalConstructor.ConstructSigs()) > 0 {
+		constructorSig := finalConstructor.ConstructSigs()[0]
 
 		// First validate all spread arguments
 		hasSpreadErrors := false
@@ -620,7 +620,8 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 	if inter, ok := funcNodeType.(*types.IntersectionType); ok && !hasConflictingDiscriminant(inter) {
 		if sigs := c.intersectionCallSignatures(inter, 0); len(sigs) > 0 {
 			callable := types.NewObjectType()
-			callable.CallSignatures = sigs
+			callable.Materialize()
+callable.CallSignatures = sigs
 			funcNodeType = callable
 		}
 	}
@@ -636,8 +637,8 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		allCallable := true
 		for _, member := range unionType.Types {
 			if objMember, ok := member.(*types.ObjectType); ok && objMember.IsCallable() {
-				if len(objMember.CallSignatures) > 0 {
-					returnTypes = append(returnTypes, objMember.CallSignatures[0].ReturnType)
+				if len(objMember.CallSigs()) > 0 {
+					returnTypes = append(returnTypes, objMember.CallSigs()[0].ReturnType)
 				}
 			} else {
 				allCallable = false
@@ -681,23 +682,23 @@ func (c *Checker) checkCallExpression(node *parser.CallExpression) {
 		return
 	}
 
-	if len(objType.CallSignatures) == 0 {
+	if len(objType.CallSigs()) == 0 {
 		c.reportNotCallable(node, funcNodeType)
 		node.SetComputedType(types.Any)
 		return
 	}
 
 	// Handle overloaded functions (multiple call signatures)
-	if len(objType.CallSignatures) > 1 {
+	if len(objType.CallSigs()) > 1 {
 		if checkerDebug {
-			debugPrintf("// [Checker CallExpr] Processing overloaded function with %d signatures\n", len(objType.CallSignatures))
+			debugPrintf("// [Checker CallExpr] Processing overloaded function with %d signatures\n", len(objType.CallSigs()))
 		}
 		c.checkOverloadedCallUnified(node, objType)
 		return
 	}
 
 	// Handle single call signature
-	funcSignature := objType.CallSignatures[0]
+	funcSignature := objType.CallSigs()[0]
 
 	if checkerDebug {
 		debugPrintf("// [Checker CallExpr] Processing function signature: %s, IsVariadic: %t\n", funcSignature.String(), funcSignature.IsVariadic)
@@ -910,7 +911,7 @@ func (c *Checker) callTargetAcceptsTypeArguments(funcNodeType types.Type) bool {
 	case *types.GenericType:
 		return true
 	case *types.ObjectType:
-		for _, sig := range typ.CallSignatures {
+		for _, sig := range typ.CallSigs() {
 			if c.isGenericSignature(sig) {
 				return true
 			}
@@ -950,7 +951,7 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 	// instantiate them, as tsc does; the others are not candidates.
 	if len(node.TypeArguments) > 0 {
 		var candidates []*types.Signature
-		for _, sig := range objType.CallSignatures {
+		for _, sig := range objType.CallSigs() {
 			min, max, known := c.signatureTypeArgumentRange(sig)
 			if !known || len(node.TypeArguments) < min || len(node.TypeArguments) > max {
 				continue
@@ -966,14 +967,15 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 					solution[typeParams[i]] = typeArg
 				}
 			}
-			if len(objType.CallSignatures) == 1 {
+			if len(objType.CallSigs()) == 1 {
 				c.checkExplicitTypeArgConstraints(typeParams, node.TypeArguments, solution)
 			}
 			candidates = append(candidates, c.substituteTypeParameters(sig, solution))
 		}
 		if len(candidates) > 0 {
 			objType = types.NewObjectType()
-			objType.CallSignatures = candidates
+			objType.Materialize()
+objType.CallSignatures = candidates
 		}
 	}
 
@@ -981,7 +983,7 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 	// through the signature their type parameters infer from the arguments.
 	if len(node.TypeArguments) == 0 {
 		var inferred []*types.Signature
-		for i, sig := range objType.CallSignatures {
+		for i, sig := range objType.CallSigs() {
 			if !c.isGenericSignature(sig) {
 				continue
 			}
@@ -991,13 +993,14 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 				continue
 			}
 			if inferred == nil {
-				inferred = append([]*types.Signature(nil), objType.CallSignatures...)
+				inferred = append([]*types.Signature(nil), objType.CallSigs()...)
 			}
 			inferred[i] = c.substituteTypeParameters(sig, solution)
 		}
 		if inferred != nil {
 			objType = types.NewObjectType()
-			objType.CallSignatures = inferred
+			objType.Materialize()
+objType.CallSignatures = inferred
 		}
 	}
 
@@ -1010,12 +1013,12 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 	// or `unknown` parameter); only if that finds nothing are plain
 	// assignability and the first fitting candidate used.
 	passes := 1
-	if len(objType.CallSignatures) > 1 {
+	if len(objType.CallSigs()) > 1 {
 		passes = 2
 	}
 	for pass := 0; pass < passes && signatureIndex == -1; pass++ {
 		c.overloadStrictAny = passes == 2 && pass == 0
-		for i, signature := range objType.CallSignatures {
+		for i, signature := range objType.CallSigs() {
 			// Check if this signature can accept the given arguments
 			var isMatching bool
 
@@ -1084,14 +1087,14 @@ func (c *Checker) checkOverloadedCallUnified(node *parser.CallExpression, objTyp
 
 	if signatureIndex == -1 {
 		// No matching signature found
-		c.reportOverloadFailure(node, argTypes, objType.CallSignatures)
+		c.reportOverloadFailure(node, argTypes, objType.CallSigs())
 
 		node.SetComputedType(types.Any)
 		return
 	}
 
 	// Found a matching signature
-	matchedSignature := objType.CallSignatures[signatureIndex]
+	matchedSignature := objType.CallSigs()[signatureIndex]
 	if checkerDebug {
 		debugPrintf("// [Checker OverloadCall] Found matching signature %d: %s for call with args (%v)\n",
 			signatureIndex, matchedSignature.String(), argTypes)
@@ -1138,14 +1141,14 @@ func (c *Checker) isGenericSignature(sig *types.Signature) bool {
 			}
 			return false
 		case *types.ObjectType:
-			for _, __name := range types.SortedPropertyNames(typ.Properties) {
-				propType := typ.Properties[__name]
+			for _, __name := range types.SortedPropertyNames(typ.Props()) {
+				propType := typ.Props()[__name]
 				if containsTypeParameters(propType) {
 					return true
 				}
 			}
 			// Check call and construct signatures for type parameters
-			for _, sig := range append(append([]*types.Signature(nil), typ.CallSignatures...), typ.ConstructSignatures...) {
+			for _, sig := range append(append([]*types.Signature(nil), typ.CallSigs()...), typ.ConstructSigs()...) {
 				for _, paramType := range sig.ParameterTypes {
 					if containsTypeParameters(paramType) {
 						return true
@@ -1512,8 +1515,8 @@ func shouldWidenForAccumulator(typeParamName string, argType types.Type) bool {
 			switch objType := argType.(type) {
 			case *types.ObjectType:
 				// Check if any properties have literal types that would benefit from widening
-				for _, __name := range types.SortedPropertyNames(objType.Properties) {
-					propType := objType.Properties[__name]
+				for _, __name := range types.SortedPropertyNames(objType.Props()) {
+					propType := objType.Props()[__name]
 					if literalType, isLiteral := propType.(*types.LiteralType); isLiteral {
 						// Check if it's a numeric literal using vm.Value type
 						if isNumericValue(literalType.Value) {
@@ -1626,8 +1629,8 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 		if aType, isObject := argType.(*types.ObjectType); isObject {
 			// Check if both are function types (have call signatures)
 			sigPairs := [][2][]*types.Signature{
-				{pType.CallSignatures, aType.CallSignatures},
-				{pType.ConstructSignatures, aType.ConstructSignatures},
+				{pType.CallSigs(), aType.CallSigs()},
+				{pType.ConstructSigs(), aType.ConstructSigs()},
 			}
 			for _, pair := range sigPairs {
 				if len(pair[0]) == 0 || len(pair[1]) == 0 {
@@ -1656,11 +1659,11 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 
 			// Also handle regular object types with properties that may contain type parameters
 			// e.g., { value: T } matched against { value: "hello" } should infer T = string
-			if len(pType.Properties) > 0 {
+			if len(pType.Props()) > 0 {
 				// Members inherited from base types (e.g. a generic base class) count too
 				argEffectiveProps := aType.GetEffectiveProperties()
-				for _, propName := range types.SortedPropertyNames(pType.Properties) {
-					paramPropType := pType.Properties[propName]
+				for _, propName := range types.SortedPropertyNames(pType.Props()) {
+					paramPropType := pType.Props()[propName]
 					if argPropType, exists := argEffectiveProps[propName]; exists {
 						propConstraints := c.collectConstraintsFromTypeSeen(paramPropType, argPropType, seen)
 						constraints = append(constraints, propConstraints...)
@@ -1668,14 +1671,14 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 				}
 			}
 
-			if len(pType.IndexSignatures) > 0 {
-				for _, idxSig := range pType.IndexSignatures {
+			if len(pType.IndexSigs()) > 0 {
+				for _, idxSig := range pType.IndexSigs() {
 					if idxSig == nil || idxSig.ValueType == nil {
 						continue
 					}
 
-					for _, propName := range types.SortedPropertyNames(aType.Properties) {
-						argPropType := aType.Properties[propName]
+					for _, propName := range types.SortedPropertyNames(aType.Props()) {
+						argPropType := aType.Props()[propName]
 						if propertyMatchesIndexSignatureKey(propName, idxSig.KeyType) {
 							propConstraints := c.collectConstraintsFromTypeSeen(idxSig.ValueType, argPropType, seen)
 							markConstraintsCombine(propConstraints)
@@ -1683,7 +1686,7 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 						}
 					}
 
-					for _, argIdxSig := range aType.IndexSignatures {
+					for _, argIdxSig := range aType.IndexSigs() {
 						if argIdxSig == nil || argIdxSig.ValueType == nil {
 							continue
 						}
@@ -1708,7 +1711,7 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 			// Collect keys from the object literal to infer K
 			if constraintTypeParam, isTypeParam := pType.ConstraintType.(*types.TypeParameterType); isTypeParam {
 				var keyTypes []types.Type
-				for _, propName := range types.SortedPropertyNames(aType.Properties) {
+				for _, propName := range types.SortedPropertyNames(aType.Props()) {
 					keyTypes = append(keyTypes, &types.LiteralType{Value: vm.String(propName)})
 				}
 				if len(keyTypes) > 0 {
@@ -1732,8 +1735,8 @@ func (c *Checker) collectConstraintsFromTypeSeen(paramType, argType types.Type, 
 
 			// Collect constraints from values - recursively handle complex value types
 			// This handles cases like { [P in K]: [B, C] } where B and C need to be inferred
-			for _, __name := range types.SortedPropertyNames(aType.Properties) {
-				propType := aType.Properties[__name]
+			for _, __name := range types.SortedPropertyNames(aType.Props()) {
+				propType := aType.Props()[__name]
 				valueConstraints := c.collectConstraintsFromTypeSeen(pType.ValueType, propType, seen)
 				constraints = append(constraints, valueConstraints...)
 			}
@@ -1937,36 +1940,38 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 				Properties:          make(map[string]types.Type),
 				PropertyDocs:        typ.PropertyDocs,
 				Doc:                 typ.Doc,
-				OptionalProperties:  typ.OptionalProperties, // Copy as-is
-				ReadOnlyProperties:  typ.ReadOnlyProperties, // Copy as-is
+				OptionalProperties:  typ.OptionalProps(), // Copy as-is
+				ReadOnlyProperties:  typ.ReadOnlyProps(), // Copy as-is
 				CallSignatures:      nil,
 				ConstructSignatures: nil,
-				BaseTypes:           typ.BaseTypes, // Copy as-is for now
+				BaseTypes:           typ.Bases(), // Copy as-is for now
 				IndexSignatures:     nil,
 				ClassMeta:           typ.ClassMeta,
 				IsReflectIntrinsic:  typ.IsReflectIntrinsic,
 			}
 			memo[t] = newObj
 			typ.CopyDisplay(newObj, substitute)
-			if len(typ.BaseTypes) > 0 {
+			if len(typ.Bases()) > 0 {
 				// Inherited members are read through the bases.
-				newObj.BaseTypes = make([]types.Type, len(typ.BaseTypes))
-				for i, base := range typ.BaseTypes {
-					newObj.BaseTypes[i] = substitute(base)
+				newObj.Materialize()
+newObj.BaseTypes = make([]types.Type, len(typ.Bases()))
+				for i, base := range typ.Bases() {
+					newObj.Bases()[i] = substitute(base)
 				}
 			}
 
 			// Substitute in properties
 			for _, name := range typ.PropertyNames() {
-				propType := typ.Properties[name]
+				propType := typ.Props()[name]
 				newObj.SetProperty(name, substitute(propType))
 			}
 
-			for _, indexSig := range typ.IndexSignatures {
+			for _, indexSig := range typ.IndexSigs() {
 				if indexSig == nil {
 					continue
 				}
-				newObj.IndexSignatures = append(newObj.IndexSignatures, &types.IndexSignature{
+				newObj.Materialize()
+newObj.IndexSignatures = append(newObj.IndexSigs(), &types.IndexSignature{
 					KeyType:        substitute(indexSig.KeyType),
 					ValueType:      substitute(indexSig.ValueType),
 					IsMapped:       indexSig.IsMapped,
@@ -1976,15 +1981,17 @@ func (c *Checker) substituteTypeParameters(sig *types.Signature, solution map[*t
 			}
 
 			// Substitute in call signatures
-			for _, sig := range typ.CallSignatures {
+			for _, sig := range typ.CallSigs() {
 				newSig := c.substituteMemberSignature(sig, solution, substitute)
-				newObj.CallSignatures = append(newObj.CallSignatures, newSig)
+				newObj.Materialize()
+newObj.CallSignatures = append(newObj.CallSigs(), newSig)
 			}
 
 			// Substitute in construct signatures
-			for _, sig := range typ.ConstructSignatures {
+			for _, sig := range typ.ConstructSigs() {
 				newSig := c.substituteMemberSignature(sig, solution, substitute)
-				newObj.ConstructSignatures = append(newObj.ConstructSignatures, newSig)
+				newObj.Materialize()
+newObj.ConstructSignatures = append(newObj.ConstructSigs(), newSig)
 			}
 
 			return newObj
@@ -2285,10 +2292,10 @@ func (c *Checker) markContextuallyTypedArguments(args []parser.Expression, calle
 	untyped := callee == types.Any
 	switch t := callee.(type) {
 	case *types.ObjectType:
-		sigs = append(append(sigs, t.CallSignatures...), t.ConstructSignatures...)
+		sigs = append(append(sigs, t.CallSigs()...), t.ConstructSigs()...)
 	case *types.GenericType:
 		if body, ok := t.Body.(*types.ObjectType); ok {
-			sigs = append(append(sigs, body.CallSignatures...), body.ConstructSignatures...)
+			sigs = append(append(sigs, body.CallSigs()...), body.ConstructSigs()...)
 		}
 	}
 	for i, arg := range args {
@@ -2428,10 +2435,10 @@ func (c *Checker) narrowFilterResult(node *parser.CallExpression, result types.T
 		return result
 	}
 	callback, ok := node.Arguments[0].GetComputedType().(*types.ObjectType)
-	if !ok || len(callback.CallSignatures) == 0 {
+	if !ok || len(callback.CallSigs()) == 0 {
 		return result
 	}
-	pred, ok := callback.CallSignatures[0].ReturnType.(*types.TypePredicateType)
+	pred, ok := callback.CallSigs()[0].ReturnType.(*types.TypePredicateType)
 	if !ok || pred.Asserts || pred.Type == nil || !types.IsAssignable(pred.Type, arr.ElementType) {
 		return result
 	}
@@ -2452,7 +2459,7 @@ func (c *Checker) intersectionCallSignatures(inter *types.IntersectionType, dept
 		}
 		switch m := member.(type) {
 		case *types.ObjectType:
-			sigs = append(sigs, m.CallSignatures...)
+			sigs = append(sigs, m.CallSigs()...)
 		case *types.IntersectionType:
 			sigs = append(sigs, c.intersectionCallSignatures(m, depth+1)...)
 		}
@@ -2470,7 +2477,7 @@ func hasConflictingDiscriminant(inter *types.IntersectionType) bool {
 		if !ok {
 			continue
 		}
-		for name, prop := range obj.Properties {
+		for name, prop := range obj.Props() {
 			prev, exists := seen[name]
 			if !exists {
 				seen[name] = prop

@@ -25,7 +25,8 @@ func (p *ProxyInitializer) InitTypes(ctx *TypeContext) error {
 		ReturnType:     types.Any,
 		OptionalParams: []bool{false, false},
 	}
-	proxyConstructor.CallSignatures = []*types.Signature{callSignature}
+	proxyConstructor.Materialize()
+proxyConstructor.CallSignatures = []*types.Signature{callSignature}
 
 	// Add Proxy.revocable static method
 	revocableReturnType := types.NewObjectType()

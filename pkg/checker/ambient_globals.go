@@ -69,14 +69,14 @@ func declareAmbientLibGlobals(env *Environment) {
 		pd := types.NewObjectType()
 		for _, name := range []string{"configurable", "enumerable", "writable"} {
 			pd.SetProperty(name, types.Boolean)
-			pd.OptionalProperties[name] = true
+			pd.OptionalProps()[name] = true
 		}
 		pd.SetProperty("value", types.Any)
-		pd.OptionalProperties["value"] = true
+		pd.OptionalProps()["value"] = true
 		pd.SetProperty("get", types.Any)
-		pd.OptionalProperties["get"] = true
+		pd.OptionalProps()["get"] = true
 		pd.SetProperty("set", types.Any)
-		pd.OptionalProperties["set"] = true
+		pd.OptionalProps()["set"] = true
 		env.DefineTypeAlias("PropertyDescriptor", pd)
 	}
 }
@@ -153,7 +153,8 @@ func declareDecoratorContextTypes(env *Environment) {
 	}
 	lit := func(s string) types.Type { return &types.LiteralType{Value: vm.String(s)} }
 	metadata := types.NewObjectType()
-	metadata.IndexSignatures = []*types.IndexSignature{{KeyType: types.String, ValueType: types.Unknown}}
+	metadata.Materialize()
+metadata.IndexSignatures = []*types.IndexSignature{{KeyType: types.String, ValueType: types.Unknown}}
 	addInit := types.NewSimpleFunction([]types.Type{types.NewSimpleFunction(nil, types.Void)}, types.Void)
 	param := func(name string) *types.TypeParameter {
 		return &types.TypeParameter{Name: name, Default: types.Unknown}

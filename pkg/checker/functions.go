@@ -115,10 +115,10 @@ func (c *Checker) completeOverloadedFunction(functionName string, implementation
 		if sigType := sig.GetComputedType(); sigType != nil {
 			if objType, ok := sigType.(*types.ObjectType); ok && objType.IsCallable() {
 				// Extract call signatures from unified ObjectType
-				if len(objType.CallSignatures) > 0 {
-					overloadSignatures = append(overloadSignatures, objType.CallSignatures[0])
+				if len(objType.CallSigs()) > 0 {
+					overloadSignatures = append(overloadSignatures, objType.CallSigs()[0])
 					if checkerDebug {
-						debugPrintf("// [Checker completeOverloadedFunction] Added overload signature: %s\n", objType.CallSignatures[0].String())
+						debugPrintf("// [Checker completeOverloadedFunction] Added overload signature: %s\n", objType.CallSigs()[0].String())
 					}
 				}
 			}
@@ -130,11 +130,11 @@ func (c *Checker) completeOverloadedFunction(functionName string, implementation
 	}
 
 	// Convert implementation ObjectType to Signature
-	if len(implementation.CallSignatures) == 0 {
+	if len(implementation.CallSigs()) == 0 {
 		debugPrintf("// [Checker completeOverloadedFunction] Implementation has no call signatures\n")
 		return
 	}
-	implementationSig := implementation.CallSignatures[0] // Use first call signature
+	implementationSig := implementation.CallSigs()[0] // Use first call signature
 
 	// Validate that implementation is compatible with all overloads
 	for i, overloadSig := range overloadSignatures {
@@ -165,13 +165,13 @@ func (c *Checker) isImplementationCompatible(implementation, overload *types.Obj
 	}
 
 	// Extract call signatures from ObjectTypes
-	if len(implementation.CallSignatures) == 0 || len(overload.CallSignatures) == 0 {
+	if len(implementation.CallSigs()) == 0 || len(overload.CallSigs()) == 0 {
 		debugPrintf("// [Checker isImplementationCompatible] Missing call signatures\n")
 		return false
 	}
 
-	implSig := implementation.CallSignatures[0]
-	overloadSig := overload.CallSignatures[0]
+	implSig := implementation.CallSigs()[0]
+	overloadSig := overload.CallSigs()[0]
 
 	// Delegate to unified signature compatibility check
 	return c.isSignatureCompatible(implSig, overloadSig)
@@ -279,7 +279,7 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 	overloadIndex := -1
 	var resultType types.Type
 
-	for i, overload := range overloadedFunc.CallSignatures {
+	for i, overload := range overloadedFunc.CallSigs() {
 		// Check if this overload can accept the given arguments
 		var isMatching bool
 
@@ -346,14 +346,14 @@ func (c *Checker) checkOverloadedCall(node *parser.CallExpression, overloadedFun
 
 	if overloadIndex == -1 {
 		// No matching overload found
-		c.reportOverloadFailure(node, argTypes, overloadedFunc.CallSignatures)
+		c.reportOverloadFailure(node, argTypes, overloadedFunc.CallSigs())
 
 		node.SetComputedType(types.Any)
 		return
 	}
 
 	// Found a matching overload
-	matchedOverload := overloadedFunc.CallSignatures[overloadIndex]
+	matchedOverload := overloadedFunc.CallSigs()[overloadIndex]
 	if checkerDebug {
 		debugPrintf("// [Checker OverloadCall] Found matching overload %d: %s for call with args (%v)\n",
 			overloadIndex, matchedOverload.String(), argTypes)
@@ -435,20 +435,22 @@ func (c *Checker) mergeAmbientOverload(name string, sig *types.Signature) {
 		if ns, isNs := t.(*types.NamespaceType); isNs && ns.ValueShape == existingObj {
 			// `declare namespace e { ... }` merged with `declare function
 			// e()`: the namespace value is callable.
-			existingObj.CallSignatures = append(existingObj.CallSignatures, sig)
+			existingObj.Materialize()
+existingObj.CallSignatures = append(existingObj.CallSigs(), sig)
 			ns.Instantiated = true
 			return
 		}
 	}
-	if !existingObj.IsCallable() || len(existingObj.Properties) != 0 {
+	if !existingObj.IsCallable() || len(existingObj.Props()) != 0 {
 		return
 	}
-	for _, have := range existingObj.CallSignatures {
+	for _, have := range existingObj.CallSigs() {
 		if have.String() == sig.String() {
 			return
 		}
 	}
 	merged := &types.ObjectType{}
-	merged.CallSignatures = append(append([]*types.Signature(nil), existingObj.CallSignatures...), sig)
+	merged.Materialize()
+merged.CallSignatures = append(append([]*types.Signature(nil), existingObj.CallSigs()...), sig)
 	c.env.Update(name, merged)
 }

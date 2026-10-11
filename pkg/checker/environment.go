@@ -166,7 +166,7 @@ func NewGlobalEnvironment(initializers []builtins.BuiltinInitializer) *Environme
 	globalEnvironment.Store(env)
 	types.PrimitivePrototypeMembers = func(kind string) map[string]types.Type {
 		if proto, ok := env.primitivePrototypes[kind]; ok {
-			return proto.Properties
+			return proto.Props()
 		}
 		return nil
 	}
@@ -189,7 +189,7 @@ func (e *Environment) GetPrimitivePrototypeMethodType(primitiveName, methodName 
 		if current.primitivePrototypes != nil {
 			// Found global environment
 			if prototypeType, exists := current.primitivePrototypes[primitiveName]; exists {
-				if methodType, found := prototypeType.Properties[methodName]; found {
+				if methodType, found := prototypeType.Props()[methodName]; found {
 					return methodType
 				}
 			}
@@ -278,7 +278,7 @@ func (e *Environment) DefineTypeAlias(name string, typ types.Type) bool {
 		// declaration (@types/node's global `interface EventTarget`).
 		if _, isForwardRef := existingType.(*types.TypeAliasForwardReference); !isForwardRef && !(existingType == types.Any && ambientTypeStubs[name]) {
 			// Also allow overwriting empty object placeholders (used for interface forward refs)
-			if objType, isObj := existingType.(*types.ObjectType); !isObj || len(objType.Properties) > 0 || len(objType.CallSignatures) > 0 {
+			if objType, isObj := existingType.(*types.ObjectType); !isObj || len(objType.Props()) > 0 || len(objType.CallSigs()) > 0 {
 				return false
 			}
 		}
@@ -546,7 +546,7 @@ func (e *Environment) IsOverloadedFunction(name string) bool {
 	if e.overloadedFunctions != nil {
 		if unified, exists := e.overloadedFunctions[name]; exists {
 			// Verify it actually has multiple call signatures
-			if len(unified.CallSignatures) > 1 {
+			if len(unified.CallSigs()) > 1 {
 				return true
 			}
 		}
@@ -689,7 +689,7 @@ func (e *Environment) PrimitivePrototypeNames(primitiveName string) []string {
 	for current := e; current != nil; current = current.outer {
 		if current.primitivePrototypes != nil {
 			if proto, ok := current.primitivePrototypes[primitiveName]; ok {
-				return types.SortedPropertyNames(proto.Properties)
+				return types.SortedPropertyNames(proto.Props())
 			}
 			return nil
 		}

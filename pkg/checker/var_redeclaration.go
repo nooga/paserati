@@ -299,12 +299,12 @@ func isIdentityComparable(t types.Type, depth int) bool {
 		if tt.IsInterface || tt.ClassMeta != nil {
 			return false // declaration merging is not modelled precisely enough
 		}
-		for _, p := range tt.Properties {
+		for _, p := range tt.Props() {
 			if !isIdentityComparable(p, depth+1) {
 				return false
 			}
 		}
-		for _, sigs := range [][]*types.Signature{tt.CallSignatures, tt.ConstructSignatures} {
+		for _, sigs := range [][]*types.Signature{tt.CallSigs(), tt.ConstructSigs()} {
 			for _, sig := range sigs {
 				for _, p := range sig.ParameterTypes {
 					if !isIdentityComparable(p, depth+1) {
@@ -347,12 +347,12 @@ func containsAny(t types.Type, depth int) bool {
 			}
 		}
 	case *types.ObjectType:
-		for _, p := range tt.Properties {
+		for _, p := range tt.Props() {
 			if containsAny(p, depth+1) {
 				return true
 			}
 		}
-		for _, sigs := range [][]*types.Signature{tt.CallSignatures, tt.ConstructSignatures} {
+		for _, sigs := range [][]*types.Signature{tt.CallSigs(), tt.ConstructSigs()} {
 			for _, sig := range sigs {
 				for _, p := range sig.ParameterTypes {
 					if containsAny(p, depth+1) {

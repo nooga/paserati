@@ -13,10 +13,10 @@ import (
 // (checkKindsOfPropertyMemberOverrides / checkTypeAssignableTo on the
 // property types). Private members and accessors are left alone.
 func (c *Checker) checkClassMembersAgainstBase(className string, body *parser.ClassBody, instanceType *types.ObjectType) {
-	if body == nil || instanceType == nil || len(instanceType.BaseTypes) == 0 {
+	if body == nil || instanceType == nil || len(instanceType.Bases()) == 0 {
 		return
 	}
-	baseObj, ok := c.resolveStructural(instanceType.BaseTypes[0]).(*types.ObjectType)
+	baseObj, ok := c.resolveStructural(instanceType.Bases()[0]).(*types.ObjectType)
 	if !ok || baseObj.ClassMeta == nil {
 		return
 	}
@@ -42,7 +42,7 @@ func (c *Checker) checkClassMembersAgainstBase(className string, body *parser.Cl
 		if !exists || baseType == nil {
 			return
 		}
-		ownType, ok := instanceType.Properties[name]
+		ownType, ok := instanceType.Props()[name]
 		if !ok || ownType == nil {
 			return
 		}
@@ -126,8 +126,8 @@ func (c *Checker) resolveTypeofDeep(t types.Type, depth int) types.Type {
 		}
 	case *types.ObjectType:
 		changed := false
-		props := make(map[string]types.Type, len(tt.Properties))
-		for name, pt := range tt.Properties {
+		props := make(map[string]types.Type, len(tt.Props()))
+		for name, pt := range tt.Props() {
 			props[name] = c.resolveTypeofDeep(pt, depth+1)
 			if props[name] != pt {
 				changed = true
@@ -152,13 +152,16 @@ func (c *Checker) resolveTypeofDeep(t types.Type, depth int) types.Type {
 			}
 			return out
 		}
-		calls := resolveSigs(tt.CallSignatures)
-		ctors := resolveSigs(tt.ConstructSignatures)
+		calls := resolveSigs(tt.CallSigs())
+		ctors := resolveSigs(tt.ConstructSigs())
 		if changed {
 			cp := *tt
-			cp.Properties = props
-			cp.CallSignatures = calls
-			cp.ConstructSignatures = ctors
+			cp.Materialize()
+cp.Properties = props
+			cp.Materialize()
+cp.CallSignatures = calls
+			cp.Materialize()
+cp.ConstructSignatures = ctors
 			return &cp
 		}
 	}
@@ -176,7 +179,7 @@ func (c *Checker) memberAccessThroughBases(obj *types.ObjectType, name string, d
 			return info.AccessLevel, true
 		}
 	}
-	for _, base := range obj.BaseTypes {
+	for _, base := range obj.Bases() {
 		if bo, ok := c.resolveStructural(base).(*types.ObjectType); ok {
 			if level, found := c.memberAccessThroughBases(bo, name, depth+1); found {
 				return level, true
@@ -191,10 +194,10 @@ func (c *Checker) memberAccessThroughBases(obj *types.ObjectType, name string, d
 // shadowing a public or protected one, a protected one shadowing a public
 // one) or redeclares a private member of the base.
 func (c *Checker) checkClassHeritageAccessibility(node *parser.ClassDeclaration, instanceType *types.ObjectType) {
-	if node == nil || node.Name == nil || node.Body == nil || instanceType == nil || len(instanceType.BaseTypes) == 0 || instanceType.ClassMeta == nil {
+	if node == nil || node.Name == nil || node.Body == nil || instanceType == nil || len(instanceType.Bases()) == 0 || instanceType.ClassMeta == nil {
 		return
 	}
-	baseObj, ok := c.resolveStructural(instanceType.BaseTypes[0]).(*types.ObjectType)
+	baseObj, ok := c.resolveStructural(instanceType.Bases()[0]).(*types.ObjectType)
 	if !ok || baseObj.ClassMeta == nil {
 		return
 	}

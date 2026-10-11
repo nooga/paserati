@@ -119,15 +119,15 @@ func comparableObjects(s, t *ObjectType, depth int) bool {
 			return false
 		}
 	}
-	if len(t.CallSignatures) > 0 && len(s.CallSignatures) == 0 {
+	if len(t.CallSigs()) > 0 && len(s.CallSigs()) == 0 {
 		return false
 	}
-	if len(t.ConstructSignatures) > 0 && len(s.ConstructSignatures) == 0 {
+	if len(t.ConstructSigs()) > 0 && len(s.ConstructSigs()) == 0 {
 		return false
 	}
-	for _, ts := range t.CallSignatures {
+	for _, ts := range t.CallSigs() {
 		matched := false
-		for _, ss := range s.CallSignatures {
+		for _, ss := range s.CallSigs() {
 			if comparableSignatures(ss, ts, depth) {
 				matched = true
 				break

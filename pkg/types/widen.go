@@ -60,10 +60,10 @@ func DeeplyWidenType(t Type) Type {
 
 	// If it's an object after top-level widening, widen its properties
 	if objType, ok := widenedT.(*ObjectType); ok {
-		newFields := make(map[string]Type, len(objType.Properties))
-		for _, name := range SortedPropertyNames(objType.Properties) {
-			propType := objType.Properties[name]
-			if objType.ReadOnlyProperties[name] {
+		newFields := make(map[string]Type, len(objType.Props()))
+		for _, name := range SortedPropertyNames(objType.Props()) {
+			propType := objType.Props()[name]
+			if objType.ReadOnlyProps()[name] {
 				// A readonly property keeps its literal type.
 				newFields[name] = propType
 				continue
@@ -72,19 +72,19 @@ func DeeplyWidenType(t Type) Type {
 		}
 		return &ObjectType{
 			Properties:          newFields,
-			PropertyOrder:       objType.PropertyOrder,
+			PropertyOrder:       objType.PropOrder(),
 			PropertyDocs:        objType.PropertyDocs,
 			Doc:                 objType.Doc,
 			DisplayName:         objType.DisplayName,
 			GenericName:         objType.GenericName,
 			GenericArgs:         objType.GenericArgs,
-			OptionalProperties:  objType.OptionalProperties,
-			ReadOnlyProperties:  objType.ReadOnlyProperties,
-			CallSignatures:      objType.CallSignatures,
-			ConstructSignatures: objType.ConstructSignatures,
-			BaseTypes:           objType.BaseTypes,
+			OptionalProperties:  objType.OptionalProps(),
+			ReadOnlyProperties:  objType.ReadOnlyProps(),
+			CallSignatures:      objType.CallSigs(),
+			ConstructSignatures: objType.ConstructSigs(),
+			BaseTypes:           objType.Bases(),
 			ClassMeta:           objType.ClassMeta,       // Preserve class metadata
-			IndexSignatures:     objType.IndexSignatures, // Preserve index signatures
+			IndexSignatures:     objType.IndexSigs(), // Preserve index signatures
 		}
 	}
 
@@ -124,13 +124,13 @@ func widenNested(t Type, depth int) Type {
 	}
 	t = GetWidenedType(t)
 	obj, ok := t.(*ObjectType)
-	if !ok || obj.IsCallable() || len(obj.ConstructSignatures) > 0 || obj.ClassMeta != nil || obj.IsInterface {
+	if !ok || obj.IsCallable() || len(obj.ConstructSigs()) > 0 || obj.ClassMeta != nil || obj.IsInterface {
 		return t
 	}
 	changed := false
-	props := make(map[string]Type, len(obj.Properties))
-	for _, name := range SortedPropertyNames(obj.Properties) {
-		pt := obj.Properties[name]
+	props := make(map[string]Type, len(obj.Props()))
+	for _, name := range SortedPropertyNames(obj.Props()) {
+		pt := obj.Props()[name]
 		w := widenNested(pt, depth+1)
 		if w != pt {
 			changed = true
@@ -141,6 +141,7 @@ func widenNested(t Type, depth int) Type {
 		return t
 	}
 	cp := *obj
-	cp.Properties = props
+	cp.Materialize()
+cp.Properties = props
 	return &cp
 }

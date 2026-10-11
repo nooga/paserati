@@ -36,7 +36,7 @@ func nestedObjectPatternRestType(source types.Type, pattern *parser.ObjectLitera
 		// Computed keys and the rest element itself contribute nothing.
 	}
 	remaining := make(map[string]types.Type)
-	for name, t := range objType.Properties {
+	for name, t := range objType.Props() {
 		if _, wasExtracted := extracted[name]; !wasExtracted {
 			remaining[name] = t
 		}
@@ -361,7 +361,7 @@ func (c *Checker) checkNestedObjectTarget(objectTarget *parser.ObjectLiteral, ex
 			var propType types.Type = types.Undefined
 
 			if objType != nil {
-				if foundType, exists := objType.Properties[propName]; exists {
+				if foundType, exists := objType.Props()[propName]; exists {
 					propType = foundType
 				}
 			} else if _, ok := expectedType.(*types.ArrayType); ok {
@@ -585,7 +585,7 @@ func (c *Checker) checkNestedObjectTargetForDeclaration(objectTarget *parser.Obj
 			var propType types.Type = types.Undefined
 
 			if objType != nil {
-				if foundType, exists := objType.Properties[propName]; exists {
+				if foundType, exists := objType.Props()[propName]; exists {
 					propType = foundType
 				}
 			} else if _, ok := expectedType.(*types.ArrayType); ok {
@@ -658,7 +658,7 @@ func (c *Checker) checkNestedObjectParameterPattern(pattern *parser.ObjectParame
 			}
 
 			var propType types.Type = types.Undefined
-			if t, exists := objType.Properties[propName]; exists {
+			if t, exists := objType.Props()[propName]; exists {
 				propType = t
 			}
 
@@ -735,7 +735,7 @@ func (c *Checker) checkNestedObjectParameterPatternForDeclaration(pattern *parse
 			}
 
 			var propType types.Type = types.Undefined
-			if t, exists := objType.Properties[propName]; exists {
+			if t, exists := objType.Props()[propName]; exists {
 				propType = t
 			}
 

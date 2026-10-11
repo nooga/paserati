@@ -58,11 +58,13 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 		// @types/express declares): the value is callable or constructible
 		// and has the namespace's members.
 		if prev, ok := c.env.symbols[name]; ok && !node.AmbientModule {
-			if fn, ok := prev.Type.(*types.ObjectType); ok && (len(fn.CallSignatures) > 0 || len(fn.ConstructSignatures) > 0) {
-				nsType.ValueShape.CallSignatures = append(nsType.ValueShape.CallSignatures, fn.CallSignatures...)
-				nsType.ValueShape.ConstructSignatures = append(nsType.ValueShape.ConstructSignatures, fn.ConstructSignatures...)
+			if fn, ok := prev.Type.(*types.ObjectType); ok && (len(fn.CallSigs()) > 0 || len(fn.ConstructSigs()) > 0) {
+				nsType.ValueShape.Materialize()
+nsType.ValueShape.CallSignatures = append(nsType.ValueShape.CallSigs(), fn.CallSigs()...)
+				nsType.ValueShape.Materialize()
+nsType.ValueShape.ConstructSignatures = append(nsType.ValueShape.ConstructSigs(), fn.ConstructSigs()...)
 				for _, prop := range fn.PropertyNames() {
-					nsType.ValueShape.SetProperty(prop, fn.Properties[prop])
+					nsType.ValueShape.SetProperty(prop, fn.Props()[prop])
 				}
 				nsType.Instantiated = true
 			}
@@ -156,7 +158,7 @@ func (c *Checker) checkNamespaceDeclaration(node *parser.NamespaceDeclaration) {
 			// visible by bare name in a merged body. (Done here, not before
 			// the body is queued: earlier bodies publish their exports when
 			// they run.)
-			for valueName, valueType := range nsType.ValueShape.Properties {
+			for valueName, valueType := range nsType.ValueShape.Props() {
 				if _, isNs := nsType.TypeMembers[valueName].(*types.NamespaceType); isNs {
 					continue
 				}
@@ -233,7 +235,7 @@ func (c *Checker) preprocessNamespaceTypes(body *parser.BlockStatement, nsType *
 				if exported {
 					// An exported enum merges with the same-named exported enum
 					// of an earlier body of this namespace.
-					if prev, ok := nsType.ValueShape.Properties[enum.Name.Value].(*types.EnumType); ok {
+					if prev, ok := nsType.ValueShape.Props()[enum.Name.Value].(*types.EnumType); ok {
 						if _, local := c.env.symbols[enum.Name.Value]; !local {
 							c.env.Define(enum.Name.Value, prev, false)
 						}

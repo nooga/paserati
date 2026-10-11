@@ -85,7 +85,7 @@ func (c *Checker) resolveObjectMemberForDestructuring(obj *types.ObjectType, pro
 		return propType, true
 	}
 
-	for _, indexSig := range obj.IndexSignatures {
+	for _, indexSig := range obj.IndexSigs() {
 		if indexSig.KeyType == types.String || indexSig.KeyType == types.Any {
 			if indexSig.ValueType == nil {
 				return types.Any, true
@@ -164,13 +164,13 @@ func (c *Checker) validateIndexSignatures(sourceType, targetType types.Type) []I
 	targetObj, targetIsObj := targetType.(*types.ObjectType)
 
 	// Only validate if both are object types and target has index signatures
-	if !sourceIsObj || !targetIsObj || len(targetObj.IndexSignatures) == 0 {
+	if !sourceIsObj || !targetIsObj || len(targetObj.IndexSigs()) == 0 {
 		return errors
 	}
 
 	// Check each property in source against all index signatures in target
-	for propName, propType := range sourceObj.Properties {
-		errors = append(errors, c.validatePropertyAgainstIndexSignatures(propName, propType, targetObj.IndexSignatures)...)
+	for propName, propType := range sourceObj.Props() {
+		errors = append(errors, c.validatePropertyAgainstIndexSignatures(propName, propType, targetObj.IndexSigs())...)
 	}
 
 	return errors

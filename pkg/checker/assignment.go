@@ -486,7 +486,7 @@ func (c *Checker) checkObjectDestructuringAssignment(node *parser.ObjectDestruct
 
 			// Build remaining properties map
 			remainingProps := make(map[string]types.Type)
-			for propName, propType := range objType.Properties {
+			for propName, propType := range objType.Props() {
 				if _, wasExtracted := extractedProps[propName]; !wasExtracted {
 					remainingProps[propName] = propType
 				}

@@ -294,44 +294,44 @@ func (ot *ObjectType) String() string {
 	}
 
 	// If this is a pure function (callable with no properties), show it as a function signature
-	if ot.IsPureFunction() && len(ot.CallSignatures) == 1 {
-		return ot.CallSignatures[0].String()
+	if ot.IsPureFunction() && len(ot.CallSigs()) == 1 {
+		return ot.CallSigs()[0].String()
 	}
 
 	// If this is a pure constructor, show it as a constructor signature
-	if len(ot.Properties) == 0 && len(ot.CallSignatures) == 0 && len(ot.ConstructSignatures) == 1 {
-		return fmt.Sprintf("new %s", ot.ConstructSignatures[0].String())
+	if len(ot.Props()) == 0 && len(ot.CallSigs()) == 0 && len(ot.ConstructSigs()) == 1 {
+		return fmt.Sprintf("new %s", ot.ConstructSigs()[0].String())
 	}
 
 	// Build object type representation
 	var parts []string
 
 	// Add call signatures
-	for _, sig := range ot.CallSignatures {
+	for _, sig := range ot.CallSigs() {
 		parts = append(parts, sig.String())
 	}
 
 	// Add constructor signatures
-	for _, sig := range ot.ConstructSignatures {
+	for _, sig := range ot.ConstructSigs() {
 		parts = append(parts, fmt.Sprintf("new %s", sig.String()))
 	}
 
 	// Add properties
-	for _, name := range SortedPropertyNames(ot.Properties) {
-		typ := ot.Properties[name]
+	for _, name := range SortedPropertyNames(ot.Props()) {
+		typ := ot.Props()[name]
 		typStr := "<nil>"
 		if typ != nil {
 			typStr = typ.String()
 		}
 		optional := ""
-		if ot.OptionalProperties != nil && ot.OptionalProperties[name] {
+		if ot.OptionalProps() != nil && ot.OptionalProps()[name] {
 			optional = "?"
 		}
 		parts = append(parts, fmt.Sprintf("%s%s: %s", name, optional, typStr))
 	}
 
 	// Add index signatures
-	for _, indexSig := range ot.IndexSignatures {
+	for _, indexSig := range ot.IndexSigs() {
 		parts = append(parts, indexSig.String())
 	}
 
@@ -363,11 +363,11 @@ func (ot *ObjectType) Equals(other Type) bool {
 	defer objectEqualsVisited.Delete(pairKey)
 
 	// Check properties
-	if len(ot.Properties) != len(otherOt.Properties) {
+	if len(ot.Props()) != len(otherOt.Props()) {
 		return false // Different number of properties
 	}
-	for key, t1 := range ot.Properties {
-		t2, exists := otherOt.Properties[key]
+	for key, t1 := range ot.Props() {
+		t2, exists := otherOt.Props()[key]
 		if !exists {
 			return false // Key missing in other object
 		}
@@ -379,41 +379,41 @@ func (ot *ObjectType) Equals(other Type) bool {
 		}
 
 		// Check optional property flags
-		optional1 := ot.OptionalProperties != nil && ot.OptionalProperties[key]
-		optional2 := otherOt.OptionalProperties != nil && otherOt.OptionalProperties[key]
+		optional1 := ot.OptionalProps() != nil && ot.OptionalProps()[key]
+		optional2 := otherOt.OptionalProps() != nil && otherOt.OptionalProps()[key]
 		if optional1 != optional2 {
 			return false // Optionality mismatch
 		}
 	}
 
 	// Check call signatures
-	if len(ot.CallSignatures) != len(otherOt.CallSignatures) {
+	if len(ot.CallSigs()) != len(otherOt.CallSigs()) {
 		return false
 	}
-	for i, sig1 := range ot.CallSignatures {
-		sig2 := otherOt.CallSignatures[i]
+	for i, sig1 := range ot.CallSigs() {
+		sig2 := otherOt.CallSigs()[i]
 		if !sig1.Equals(sig2) {
 			return false
 		}
 	}
 
 	// Check constructor signatures
-	if len(ot.ConstructSignatures) != len(otherOt.ConstructSignatures) {
+	if len(ot.ConstructSigs()) != len(otherOt.ConstructSigs()) {
 		return false
 	}
-	for i, sig1 := range ot.ConstructSignatures {
-		sig2 := otherOt.ConstructSignatures[i]
+	for i, sig1 := range ot.ConstructSigs() {
+		sig2 := otherOt.ConstructSigs()[i]
 		if !sig1.Equals(sig2) {
 			return false
 		}
 	}
 
 	// Check base types
-	if len(ot.BaseTypes) != len(otherOt.BaseTypes) {
+	if len(ot.Bases()) != len(otherOt.Bases()) {
 		return false
 	}
-	for i, base1 := range ot.BaseTypes {
-		base2 := otherOt.BaseTypes[i]
+	for i, base1 := range ot.Bases() {
+		base2 := otherOt.Bases()[i]
 		if (base1 == nil) != (base2 == nil) {
 			return false
 		}
@@ -438,11 +438,11 @@ func (ot *ObjectType) Equals(other Type) bool {
 	}
 
 	// Check index signatures
-	if len(ot.IndexSignatures) != len(otherOt.IndexSignatures) {
+	if len(ot.IndexSigs()) != len(otherOt.IndexSigs()) {
 		return false
 	}
-	for i, sig1 := range ot.IndexSignatures {
-		sig2 := otherOt.IndexSignatures[i]
+	for i, sig1 := range ot.IndexSigs() {
+		sig2 := otherOt.IndexSigs()[i]
 		if !sig1.Equals(sig2) {
 			return false
 		}
@@ -455,7 +455,7 @@ func (ot *ObjectType) Equals(other Type) bool {
 
 // IsCallable returns true if this ObjectType has call signatures
 func (ot *ObjectType) IsCallable() bool {
-	return ot != nil && ot.CallSignatures != nil && len(ot.CallSignatures) > 0
+	return ot != nil && ot.CallSigs() != nil && len(ot.CallSigs()) > 0
 }
 
 // IsClassInstance returns true if this ObjectType represents a class instance
@@ -485,7 +485,7 @@ func (ot *ObjectType) GetMemberAccessInfo(memberName string) *MemberAccessInfo {
 		}
 
 		// Then check parent classes
-		for _, baseType := range ot.BaseTypes {
+		for _, baseType := range ot.Bases() {
 			if baseObj, ok := baseType.(*ObjectType); ok {
 				if info := baseObj.GetMemberAccessInfo(memberName); info != nil {
 					return info
@@ -505,7 +505,7 @@ func (ot *ObjectType) IsAccessibleFrom(memberName string, accessContext *AccessC
 		}
 
 		// Then check parent classes
-		for _, baseType := range ot.BaseTypes {
+		for _, baseType := range ot.Bases() {
 			if baseObj, ok := baseType.(*ObjectType); ok {
 				if baseObj.IsAccessibleFrom(memberName, accessContext) {
 					return true
@@ -521,23 +521,23 @@ func (ot *ObjectType) IsAccessibleFrom(memberName string, accessContext *AccessC
 
 // IsConstructable returns true if this ObjectType has constructor signatures
 func (ot *ObjectType) IsConstructable() bool {
-	return len(ot.ConstructSignatures) > 0
+	return len(ot.ConstructSigs()) > 0
 }
 
 // IsPureFunction returns true if this ObjectType is callable but has no properties
 // (i.e., it's a pure function)
 func (ot *ObjectType) IsPureFunction() bool {
-	return ot.IsCallable() && len(ot.Properties) == 0
+	return ot.IsCallable() && len(ot.Props()) == 0
 }
 
 // GetCallSignatures returns the call signatures of this ObjectType
 func (ot *ObjectType) GetCallSignatures() []*Signature {
-	return ot.CallSignatures
+	return ot.CallSigs()
 }
 
 // GetConstructSignatures returns the constructor signatures of this ObjectType
 func (ot *ObjectType) GetConstructSignatures() []*Signature {
-	return ot.ConstructSignatures
+	return ot.ConstructSigs()
 }
 
 // GetEffectiveProperties returns all properties including inherited ones from base types
@@ -545,8 +545,8 @@ func (ot *ObjectType) GetEffectiveProperties() map[string]Type {
 	result := make(map[string]Type)
 
 	// First, add properties from base types (in reverse order for proper precedence)
-	for i := len(ot.BaseTypes) - 1; i >= 0; i-- {
-		baseType := resolveBaseType(ot.BaseTypes[i])
+	for i := len(ot.Bases()) - 1; i >= 0; i-- {
+		baseType := resolveBaseType(ot.Bases()[i])
 		if baseObj, ok := baseType.(*ObjectType); ok {
 			baseProps := baseObj.GetEffectiveProperties()
 			for name, typ := range baseProps {
@@ -556,8 +556,8 @@ func (ot *ObjectType) GetEffectiveProperties() map[string]Type {
 	}
 
 	// Then add our own properties (these override base type properties)
-	for _, name := range SortedPropertyNames(ot.Properties) {
-		typ := ot.Properties[name]
+	for _, name := range SortedPropertyNames(ot.Props()) {
+		typ := ot.Props()[name]
 		result[name] = typ
 	}
 
@@ -566,18 +566,18 @@ func (ot *ObjectType) GetEffectiveProperties() map[string]Type {
 
 // IsPropertyOptional checks whether a property is optional, including inherited properties
 func (ot *ObjectType) IsPropertyOptional(name string) bool {
-	if ot.OptionalProperties != nil {
-		if opt, exists := ot.OptionalProperties[name]; exists {
+	if ot.OptionalProps() != nil {
+		if opt, exists := ot.OptionalProps()[name]; exists {
 			return opt
 		}
 	}
 	// A member the type declares itself replaces the inherited declaration,
 	// optionality included.
-	if _, declared := ot.Properties[name]; declared {
+	if _, declared := ot.Props()[name]; declared {
 		return false
 	}
 	// Check base types
-	for _, baseType := range ot.BaseTypes {
+	for _, baseType := range ot.Bases() {
 		if baseObj, ok := resolveBaseType(baseType).(*ObjectType); ok {
 			if baseObj.IsPropertyOptional(name) {
 				return true
@@ -589,17 +589,20 @@ func (ot *ObjectType) IsPropertyOptional(name string) bool {
 
 // AddCallSignature adds a call signature to this ObjectType
 func (ot *ObjectType) AddCallSignature(sig *Signature) {
-	ot.CallSignatures = append(ot.CallSignatures, sig)
+	ot.Materialize()
+ot.CallSignatures = append(ot.CallSigs(), sig)
 }
 
 // AddConstructSignature adds a constructor signature to this ObjectType
 func (ot *ObjectType) AddConstructSignature(sig *Signature) {
-	ot.ConstructSignatures = append(ot.ConstructSignatures, sig)
+	ot.Materialize()
+ot.ConstructSignatures = append(ot.ConstructSigs(), sig)
 }
 
 // AddBaseType adds a base type for inheritance
 func (ot *ObjectType) AddBaseType(baseType Type) {
-	ot.BaseTypes = append(ot.BaseTypes, baseType)
+	ot.Materialize()
+ot.BaseTypes = append(ot.Bases(), baseType)
 }
 
 // --- Smart Constructors/Builder Pattern ---
@@ -625,23 +628,24 @@ func (ot *ObjectType) WithProperty(name string, propType Type) *ObjectType {
 // WithOptionalProperty adds an optional property to the ObjectType and returns the same instance for chaining
 func (ot *ObjectType) WithOptionalProperty(name string, propType Type) *ObjectType {
 	ot.SetProperty(name, propType)
-	ot.OptionalProperties[name] = true
+	ot.OptionalProps()[name] = true
 	return ot
 }
 
 // WithReadOnlyProperty adds a readonly property to the ObjectType and returns the same instance for chaining
 func (ot *ObjectType) WithReadOnlyProperty(name string, propType Type) *ObjectType {
 	ot.SetProperty(name, propType)
-	if ot.ReadOnlyProperties == nil {
-		ot.ReadOnlyProperties = make(map[string]bool)
+	if ot.ReadOnlyProps() == nil {
+		ot.Materialize()
+ot.ReadOnlyProperties = make(map[string]bool)
 	}
-	ot.ReadOnlyProperties[name] = true
+	ot.ReadOnlyProps()[name] = true
 	return ot
 }
 
 // IsReadOnly returns whether a property is readonly
 func (ot *ObjectType) IsReadOnly(name string) bool {
-	return ot.ReadOnlyProperties != nil && ot.ReadOnlyProperties[name]
+	return ot.ReadOnlyProps() != nil && ot.ReadOnlyProps()[name]
 }
 
 // WithVariadicProperty adds a variadic method property to the ObjectType and returns the same instance for chaining
@@ -652,7 +656,8 @@ func (ot *ObjectType) WithVariadicProperty(name string, paramTypes []Type, retur
 
 // WithCallSignature adds a call signature to the ObjectType and returns the same instance for chaining
 func (ot *ObjectType) WithCallSignature(sig *Signature) *ObjectType {
-	ot.CallSignatures = append(ot.CallSignatures, sig)
+	ot.Materialize()
+ot.CallSignatures = append(ot.CallSigs(), sig)
 	return ot
 }
 
@@ -682,7 +687,8 @@ func (ot *ObjectType) WithVariadicCallSignature(paramTypes []Type, returnType Ty
 
 // WithConstructSignature adds a constructor signature to the ObjectType and returns the same instance for chaining
 func (ot *ObjectType) WithConstructSignature(sig *Signature) *ObjectType {
-	ot.ConstructSignatures = append(ot.ConstructSignatures, sig)
+	ot.Materialize()
+ot.ConstructSignatures = append(ot.ConstructSigs(), sig)
 	return ot
 }
 
@@ -700,7 +706,8 @@ func (ot *ObjectType) WithSimpleConstructSignature(paramTypes []Type, returnType
 
 // Inherits adds a base type for inheritance and returns the same instance for chaining
 func (ot *ObjectType) Inherits(baseType Type) *ObjectType {
-	ot.BaseTypes = append(ot.BaseTypes, baseType)
+	ot.Materialize()
+ot.BaseTypes = append(ot.Bases(), baseType)
 	return ot
 }
 
@@ -721,10 +728,11 @@ func (ot *ObjectType) WithClassMember(memberName string, memberType Type, access
 	// Add the property to the type
 	ot.SetProperty(memberName, memberType)
 	if isReadonly {
-		if ot.ReadOnlyProperties == nil {
-			ot.ReadOnlyProperties = make(map[string]bool)
+		if ot.ReadOnlyProps() == nil {
+			ot.Materialize()
+ot.ReadOnlyProperties = make(map[string]bool)
 		}
-		ot.ReadOnlyProperties[memberName] = true
+		ot.ReadOnlyProps()[memberName] = true
 	}
 
 	// Add access control metadata

@@ -32,11 +32,11 @@ func (c *Checker) isDefinitelyNotIterable(t types.Type) bool {
 	case *types.LiteralType:
 		return !types.IsAssignable(tt, types.String)
 	case *types.ObjectType:
-		if tt.IsCallable() || len(tt.ConstructSignatures) > 0 || len(tt.BaseTypes) > 0 || tt.ClassMeta != nil {
+		if tt.IsCallable() || len(tt.ConstructSigs()) > 0 || len(tt.Bases()) > 0 || tt.ClassMeta != nil {
 			return false
 		}
 		for _, marker := range iterableMarkerProperties {
-			if _, ok := tt.Properties[marker]; ok {
+			if _, ok := tt.Props()[marker]; ok {
 				return false
 			}
 		}

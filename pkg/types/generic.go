@@ -185,47 +185,52 @@ func substituteTypeMemo(t Type, substitutions map[*TypeParameter]Type, memo map[
 		t.CopyDisplay(newObj, func(a Type) Type { return substituteTypeMemo(a, substitutions, memo) })
 		memo[t] = newObj
 		for _, name := range t.PropertyNames() {
-			propType := t.Properties[name]
+			propType := t.Props()[name]
 			newObj.SetProperty(name, substituteTypeMemo(propType, substitutions, memo))
 		}
 		// Copy optional properties
-		for name, isOptional := range t.OptionalProperties {
-			newObj.OptionalProperties[name] = isOptional
+		for name, isOptional := range t.OptionalProps() {
+			newObj.OptionalProps()[name] = isOptional
 		}
-		if len(t.ReadOnlyProperties) > 0 {
-			newObj.ReadOnlyProperties = make(map[string]bool, len(t.ReadOnlyProperties))
-			for name, ro := range t.ReadOnlyProperties {
-				newObj.ReadOnlyProperties[name] = ro
+		if len(t.ReadOnlyProps()) > 0 {
+			newObj.Materialize()
+newObj.ReadOnlyProperties = make(map[string]bool, len(t.ReadOnlyProps()))
+			for name, ro := range t.ReadOnlyProps() {
+				newObj.ReadOnlyProps()[name] = ro
 			}
 		}
-		if len(t.BaseTypes) > 0 {
-			newObj.BaseTypes = make([]Type, len(t.BaseTypes))
-			for i, base := range t.BaseTypes {
-				newObj.BaseTypes[i] = substituteTypeMemo(base, substitutions, memo)
+		if len(t.Bases()) > 0 {
+			newObj.Materialize()
+newObj.BaseTypes = make([]Type, len(t.Bases()))
+			for i, base := range t.Bases() {
+				newObj.Bases()[i] = substituteTypeMemo(base, substitutions, memo)
 			}
 		}
 		newObj.ClassMeta = t.ClassMeta
 		newObj.IsInterface = t.IsInterface
 
 		// Handle call signatures
-		for _, sig := range t.CallSignatures {
+		for _, sig := range t.CallSigs() {
 			newSig := substituteMemberSignature(sig, substitutions, memo)
-			newObj.CallSignatures = append(newObj.CallSignatures, newSig)
+			newObj.Materialize()
+newObj.CallSignatures = append(newObj.CallSigs(), newSig)
 		}
 
 		// Handle constructor signatures
-		for _, sig := range t.ConstructSignatures {
+		for _, sig := range t.ConstructSigs() {
 			newSig := substituteMemberSignature(sig, substitutions, memo)
-			newObj.ConstructSignatures = append(newObj.ConstructSignatures, newSig)
+			newObj.Materialize()
+newObj.ConstructSignatures = append(newObj.ConstructSigs(), newSig)
 		}
 
 		// Copy index signatures
-		for _, indexSig := range t.IndexSignatures {
+		for _, indexSig := range t.IndexSigs() {
 			newIndexSig := &IndexSignature{
 				KeyType:   substituteTypeMemo(indexSig.KeyType, substitutions, memo),
 				ValueType: substituteTypeMemo(indexSig.ValueType, substitutions, memo),
 			}
-			newObj.IndexSignatures = append(newObj.IndexSignatures, newIndexSig)
+			newObj.Materialize()
+newObj.IndexSignatures = append(newObj.IndexSigs(), newIndexSig)
 		}
 
 		return newObj
@@ -585,12 +590,12 @@ func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited map[T
 			return false
 		}
 		visited[t] = true
-		for _, p := range tt.Properties {
+		for _, p := range tt.Props() {
 			if mentionsTypeParameter(p, params, visited, target) {
 				return true
 			}
 		}
-		for _, sigs := range [][]*Signature{tt.CallSignatures, tt.ConstructSignatures} {
+		for _, sigs := range [][]*Signature{tt.CallSigs(), tt.ConstructSigs()} {
 			for _, sig := range sigs {
 				for _, p := range sig.ParameterTypes {
 					if mentionsTypeParameter(p, params, visited, target) {
@@ -608,13 +613,13 @@ func mentionsTypeParameter(t Type, params map[*TypeParameter]Type, visited map[T
 				}
 			}
 		}
-		for _, idx := range tt.IndexSignatures {
+		for _, idx := range tt.IndexSigs() {
 			if mentionsTypeParameter(idx.KeyType, params, visited, target) || mentionsTypeParameter(idx.ValueType, params, visited, target) ||
 				mentionsTypeParameter(idx.ConstraintType, params, visited, target) {
 				return true
 			}
 		}
-		for _, base := range tt.BaseTypes {
+		for _, base := range tt.Bases() {
 			if mentionsTypeParameter(base, params, visited, target) {
 				return true
 			}

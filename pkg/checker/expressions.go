@@ -330,7 +330,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 	}
 
 	if checkerDebug {
-		debugPrintf("// [Checker ObjectLitContext] Using object type with %d properties\n", len(expectedObjType.Properties))
+		debugPrintf("// [Checker ObjectLitContext] Using object type with %d properties\n", len(expectedObjType.Props()))
 	}
 
 	// Process the object literal with contextual typing for property values
@@ -359,7 +359,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 			}
 			widenedType := types.GetWidenedType(argType)
 			if spreadObjType, ok := widenedType.(*types.ObjectType); ok {
-				for propName, propType := range spreadObjType.Properties {
+				for propName, propType := range spreadObjType.Props() {
 					fields[propName] = propType
 				}
 			}
@@ -400,7 +400,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 		}
 
 		// Visit the property value with context if we have an expected type for this property
-		expectedPropType := expectedObjType.Properties[keyName]
+		expectedPropType := expectedObjType.Props()[keyName]
 		if expectedPropType != nil {
 			if checkerDebug {
 				debugPrintf("// [Checker ObjectLitContext] Property '%s' has expected type: %s\n", keyName, expectedPropType.String())
@@ -423,7 +423,7 @@ func (c *Checker) checkObjectLiteralWithContext(node *parser.ObjectLiteral, cont
 		if keyName == "__proto__" && !isShorthand {
 			widenedProtoType := types.GetWidenedType(valueType)
 			if protoObjType, ok := widenedProtoType.(*types.ObjectType); ok {
-				for propName, propType := range protoObjType.Properties {
+				for propName, propType := range protoObjType.Props() {
 					if _, exists := fields[propName]; !exists {
 						fields[propName] = propType
 					}
@@ -454,7 +454,7 @@ func (c *Checker) mergeSpreadOperand(fields map[string]types.Type, t types.Type)
 		if checkerDebug {
 			debugPrintf("// [Checker ObjectLit Spread] Merging properties from spread object: %s\n", spreadType.String())
 		}
-		for propName, propType := range spreadType.Properties {
+		for propName, propType := range spreadType.Props() {
 			fields[propName] = propType // Later properties override earlier ones
 			if checkerDebug {
 				debugPrintf("// [Checker ObjectLit Spread] Added property '%s': %s\n", propName, propType.String())
@@ -673,7 +673,7 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 							widenedProtoType := types.GetWidenedType(valueType)
 							if protoObjType, ok := widenedProtoType.(*types.ObjectType); ok {
 								// Merge prototype properties into our object
-								for propName, propType := range protoObjType.Properties {
+								for propName, propType := range protoObjType.Props() {
 									// Only add if not already defined (own properties override prototype)
 									if _, exists := fields[propName]; !exists {
 										fields[propName] = propType
@@ -964,8 +964,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				fields[getterName] = valueType // Implementation for compiler
 
 				// Also store the property with its return type for type checking
-				if objType, ok := valueType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 {
-					fields[keyName] = objType.CallSignatures[0].ReturnType // Property type for type checker
+				if objType, ok := valueType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSigs()) > 0 {
+					fields[keyName] = objType.CallSigs()[0].ReturnType // Property type for type checker
 				} else {
 					fields[keyName] = types.Any
 				}
@@ -976,8 +976,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 				fields[setterName] = valueType // Implementation for compiler
 
 				// Also store the property with its parameter type for type checking
-				if objType, ok := valueType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSignatures) > 0 && len(objType.CallSignatures[0].ParameterTypes) > 0 {
-					fields[keyName] = objType.CallSignatures[0].ParameterTypes[0] // Property type for type checker
+				if objType, ok := valueType.(*types.ObjectType); ok && objType.IsCallable() && len(objType.CallSigs()) > 0 && len(objType.CallSigs()[0].ParameterTypes) > 0 {
+					fields[keyName] = objType.CallSigs()[0].ParameterTypes[0] // Property type for type checker
 				} else {
 					fields[keyName] = types.Any
 				}
@@ -1034,7 +1034,8 @@ func (c *Checker) checkObjectLiteral(node *parser.ObjectLiteral) {
 		}
 
 		// Add string index signature
-		objType.IndexSignatures = []*types.IndexSignature{
+		objType.Materialize()
+objType.IndexSignatures = []*types.IndexSignature{
 			{
 				KeyType:   types.String,
 				ValueType: indexValueType,
@@ -1291,10 +1292,10 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			if objectType != nil {
 				propertyName := c.extractPropertyName(node.Property)
 				if objType, ok := types.GetWidenedType(objectType).(*types.ObjectType); ok {
-					propType, found := objType.Properties[propertyName]
+					propType, found := objType.Props()[propertyName]
 					directProperty := found
 					if !found {
-						for _, sig := range objType.IndexSignatures {
+						for _, sig := range objType.IndexSigs() {
 							if sig.KeyType == types.String || sig.KeyType == types.Any {
 								propType = sig.ValueType
 								found = true
@@ -1348,10 +1349,10 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					if objectType != nil {
 						propertyName := c.extractPropertyName(node.Property)
 						if objType, ok := types.GetWidenedType(objectType).(*types.ObjectType); ok {
-							propType, found := objType.Properties[propertyName]
+							propType, found := objType.Props()[propertyName]
 							directProperty := found
 							if !found {
-								for _, sig := range objType.IndexSignatures {
+								for _, sig := range objType.IndexSigs() {
 									if sig.KeyType == types.String || sig.KeyType == types.Any {
 										propType = sig.ValueType
 										found = true
@@ -1532,11 +1533,11 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					}
 				} else {
 					// Property not found in explicit properties - check index signatures
-					if len(obj.IndexSignatures) > 0 {
+					if len(obj.IndexSigs()) > 0 {
 						if checkerDebug {
-							debugPrintf("// [Checker MemberExpr] Property '%s' not found, checking %d index signatures\n", propertyName, len(obj.IndexSignatures))
+							debugPrintf("// [Checker MemberExpr] Property '%s' not found, checking %d index signatures\n", propertyName, len(obj.IndexSigs()))
 						}
-						for _, indexSig := range obj.IndexSignatures {
+						for _, indexSig := range obj.IndexSigs() {
 							// For string index signatures, allow any string property access
 							if indexSig.KeyType == types.String {
 								resultType = indexSig.ValueType
@@ -1549,9 +1550,9 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 						}
 					}
 
-					if resultType == types.Never && propertyName == "prototype" && len(obj.ConstructSignatures) > 0 && obj.ConstructSignatures[0].ReturnType != nil {
+					if resultType == types.Never && propertyName == "prototype" && len(obj.ConstructSigs()) > 0 && obj.ConstructSigs()[0].ReturnType != nil {
 						// A class constructor's `prototype` is an instance of the class.
-						resultType = obj.ConstructSignatures[0].ReturnType
+						resultType = obj.ConstructSigs()[0].ReturnType
 					}
 
 					if resultType == types.Never {
@@ -1615,12 +1616,12 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 			} else {
 				switch innerObj := innerType.(type) {
 				case *types.ObjectType:
-					if propType, exists := innerObj.Properties[propertyName]; exists {
+					if propType, exists := innerObj.Props()[propertyName]; exists {
 						// Property exists, return its type (not wrapped in readonly for reading)
 						resultType = propType
 					} else {
 						// Check if property is optional
-						isOptional := innerObj.OptionalProperties != nil && innerObj.OptionalProperties[propertyName]
+						isOptional := innerObj.OptionalProps() != nil && innerObj.OptionalProps()[propertyName]
 						if !isOptional {
 							c.addError(node.Property, fmt.Sprintf("property '%s' does not exist on readonly type", propertyName))
 							resultType = types.Never
@@ -1644,7 +1645,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				if checkerDebug {
 					debugPrintf("// [Checker MemberExpr] Mapped type expanded to ObjectType: %s\n", expandedObj.String())
 				}
-				if propType, exists := expandedObj.Properties[propertyName]; exists {
+				if propType, exists := expandedObj.Props()[propertyName]; exists {
 					resultType = propType
 					if expandedObj.IsPropertyOptional(propertyName) {
 						resultType = types.NewUnionType(propType, types.Undefined)
@@ -1655,7 +1656,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				} else {
 					// Check index signatures before reporting error
 					found := false
-					for _, sig := range expandedObj.IndexSignatures {
+					for _, sig := range expandedObj.IndexSigs() {
 						if sig.KeyType == types.String || sig.KeyType == types.Any {
 							resultType = sig.ValueType
 							found = true
@@ -1664,7 +1665,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 					}
 					if !found {
 						// Check if property is optional
-						isOptional := expandedObj.OptionalProperties != nil && expandedObj.OptionalProperties[propertyName]
+						isOptional := expandedObj.OptionalProps() != nil && expandedObj.OptionalProps()[propertyName]
 						if !isOptional {
 							c.reportPropertyNotFound(node.Property, node.Object, propertyName, obj.String())
 							resultType = types.Never
@@ -1693,7 +1694,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				switch subst := substitutedType.(type) {
 				case *types.ObjectType:
 					// Look for the property in the substituted object's fields
-					fieldType, exists := subst.Properties[propertyName]
+					fieldType, exists := subst.Props()[propertyName]
 					if exists {
 						resultType = fieldType
 					} else {
@@ -1760,12 +1761,12 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				// Check what type this member would produce for the property
 				switch member := memberType.(type) {
 				case *types.ObjectType:
-					if fieldType, exists := member.Properties[propertyName]; exists {
+					if fieldType, exists := member.Props()[propertyName]; exists {
 						memberHasProperty = true
 						memberResultType = fieldType
 					} else {
 						// Check index signatures as fallback
-						for _, sig := range member.IndexSignatures {
+						for _, sig := range member.IndexSigs() {
 							if sig.KeyType == types.String || sig.KeyType == types.Any {
 								memberHasProperty = true
 								memberResultType = sig.ValueType
@@ -1868,7 +1869,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 				}
 				if objType, ok := resolvedType.(*types.ObjectType); ok {
 					// Check if the property exists on the resolved type
-					if propType, exists := objType.Properties[propertyName]; exists {
+					if propType, exists := objType.Props()[propertyName]; exists {
 						resultType = propType
 						if checkerDebug {
 							debugPrintf("// [Checker MemberExpr] Found property '%s' on resolved type: %s\n", propertyName, propType.String())
@@ -1913,7 +1914,7 @@ func (c *Checker) checkMemberExpression(node *parser.MemberExpression) {
 		case *types.GenericType:
 			// A generic class's constructor: static members live on the body.
 			if body, isObj := obj.Body.(*types.ObjectType); isObj {
-				if propType, exists := body.Properties[propertyName]; exists {
+				if propType, exists := body.Props()[propertyName]; exists {
 					resultType = propType
 				} else if propertyName == "prototype" || c.classHasExtendsClause(strings.TrimSuffix(obj.Name, "Constructor")) {
 					// Statics inherited from a base class are not copied onto the body.
@@ -1975,12 +1976,12 @@ func (c *Checker) handleForwardReferenceStaticAccess(forwardRef *types.ForwardRe
 		// Check if it's an ObjectType with static members
 		if objType, ok := constructorType.(*types.ObjectType); ok {
 			// Look for static property in the constructor object
-			if propType, exists := objType.Properties[propertyName]; exists {
+			if propType, exists := objType.Props()[propertyName]; exists {
 				return propType
 			}
 
 			// Check if it's a call signature (static method)
-			for _, callSig := range objType.CallSignatures {
+			for _, callSig := range objType.CallSigs() {
 				if callSig.ParameterTypes != nil {
 					// This is a static method call - return the method type
 					return types.NewFunctionType(callSig)
@@ -1991,7 +1992,7 @@ func (c *Checker) handleForwardReferenceStaticAccess(forwardRef *types.ForwardRe
 		// Handle generic class constructors
 		if genericType, ok := constructorType.(*types.GenericType); ok {
 			if constructorObj, ok := genericType.Body.(*types.ObjectType); ok {
-				if propType, exists := constructorObj.Properties[propertyName]; exists {
+				if propType, exists := constructorObj.Props()[propertyName]; exists {
 					return propType
 				}
 			}
@@ -2117,7 +2118,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 			if widenedIndexType == types.String || widenedIndexType == types.Number || widenedIndexType == types.Symbol || widenedIndexType == types.Any {
 				if isIndexStringLiteral {
 					// Index is a specific string literal, look it up directly
-					propType, exists := base.Properties[indexStringValue]
+					propType, exists := base.Props()[indexStringValue]
 					if exists {
 						if propType == nil { // Safety check
 							resultType = types.Never
@@ -2128,7 +2129,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 					} else {
 						// Check index signatures before defaulting to any
 						found := false
-						for _, sig := range base.IndexSignatures {
+						for _, sig := range base.IndexSigs() {
 							if sig.KeyType == types.String || sig.KeyType == types.Any {
 								resultType = sig.ValueType
 								found = true
@@ -2142,7 +2143,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 				} else {
 					// Index is a general string/number/any - check index signatures
 					found := false
-					for _, sig := range base.IndexSignatures {
+					for _, sig := range base.IndexSigs() {
 						w := types.GetWidenedType(indexType)
 						if sig.KeyType == w || sig.KeyType == types.Any {
 							resultType = sig.ValueType
@@ -2293,7 +2294,7 @@ func (c *Checker) checkIndexExpression(node *parser.IndexExpression) {
 			if base.Generic != nil && base.Generic.Body != nil {
 				if baseObjectType, ok := base.Generic.Body.(*types.ObjectType); ok {
 					// Check if this is a Generator type by looking for the next() method
-					if _, hasNext := baseObjectType.Properties["next"]; hasNext {
+					if _, hasNext := baseObjectType.Props()["next"]; hasNext {
 						// This is likely a Generator or Iterator - allow Symbol indexing for Symbol.iterator
 						if types.IsAssignable(indexType, types.Symbol) {
 							resultType = types.Any // Symbol.iterator returns the iterator itself
@@ -2455,7 +2456,7 @@ func (c *Checker) checkOptionalChainingExpression(node *parser.OptionalChainingE
 			}
 		case *types.ObjectType:
 			// Look for the property in the object's fields
-			fieldType, exists := obj.Properties[propertyName]
+			fieldType, exists := obj.Props()[propertyName]
 			if exists {
 				// Property found
 				if fieldType == nil { // Should ideally not happen if checker populates correctly
@@ -2628,8 +2629,8 @@ func (c *Checker) checkOptionalCallExpression(node *parser.OptionalCallExpressio
 		// For optional call, we're more permissive - just try to get return type
 		if objType, ok := widenedFunctionType.(*types.ObjectType); ok {
 			// Check if it has a call signature
-			if len(objType.CallSignatures) > 0 {
-				baseResultType = objType.CallSignatures[0].ReturnType
+			if len(objType.CallSigs()) > 0 {
+				baseResultType = objType.CallSigs()[0].ReturnType
 			} else {
 				baseResultType = types.Any
 			}
@@ -2735,8 +2736,8 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		}
 
 		// Get the constructor signature from the generic type's body
-		if bodyObjType, ok := genericType.Body.(*types.ObjectType); ok && len(bodyObjType.ConstructSignatures) > 0 {
-			constructorSig := bodyObjType.ConstructSignatures[0]
+		if bodyObjType, ok := genericType.Body.(*types.ObjectType); ok && len(bodyObjType.ConstructSigs()) > 0 {
+			constructorSig := bodyObjType.ConstructSigs()[0]
 
 			// Check if this is a generic signature
 			if c.isGenericSignature(constructorSig) {
@@ -2773,11 +2774,11 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		// Check arguments with proper validation
 		// First, try to get the constructor signature to validate arguments
 		var constructorSig *types.Signature
-		if objType, ok := constructorType.(*types.ObjectType); ok && len(objType.ConstructSignatures) > 0 {
+		if objType, ok := constructorType.(*types.ObjectType); ok && len(objType.ConstructSigs()) > 0 {
 			// For now, only validate if there's a single constructor signature
 			// TODO: Implement overload resolution for constructors
-			if len(objType.ConstructSignatures) == 1 {
-				constructorSig = objType.ConstructSignatures[0]
+			if len(objType.ConstructSigs()) == 1 {
+				constructorSig = objType.ConstructSigs()[0]
 			}
 		}
 
@@ -2918,18 +2919,18 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 		resultType = inst
 	} else if objType, ok := constructorType.(*types.ObjectType); ok {
 		// For unified ObjectType constructors, check if they have constructor signatures
-		if len(objType.ConstructSignatures) > 0 {
+		if len(objType.ConstructSigs()) > 0 {
 			// Use the first constructor signature's return type
-			resultType = objType.ConstructSignatures[0].ReturnType
+			resultType = objType.ConstructSigs()[0].ReturnType
 		} else {
 			// Callable object but no constructor signatures - return any (matches TypeScript behavior)
 			resultType = types.Any
 		}
 	} else if genericType, ok := constructorType.(*types.GenericType); ok {
 		// Handle GenericType constructors by checking their body for constructor signatures
-		if bodyObjType, bodyOk := genericType.Body.(*types.ObjectType); bodyOk && len(bodyObjType.ConstructSignatures) > 0 {
+		if bodyObjType, bodyOk := genericType.Body.(*types.ObjectType); bodyOk && len(bodyObjType.ConstructSigs()) > 0 {
 			// Use the first constructor signature's return type
-			resultType = bodyObjType.ConstructSignatures[0].ReturnType
+			resultType = bodyObjType.ConstructSigs()[0].ReturnType
 			if checkerDebug {
 				debugPrintf("// [Checker NewExpression] GenericType constructor result: %s\n", resultType.String())
 			}
@@ -2946,8 +2947,8 @@ func (c *Checker) checkNewExpression(node *parser.NewExpression) {
 			if checkerDebug {
 				debugPrintf("// [Checker NewExpression] Resolved forward reference to: %T = %s\n", actualType, actualType.String())
 			}
-			if objType, objOk := actualType.(*types.ObjectType); objOk && len(objType.ConstructSignatures) > 0 {
-				resultType = objType.ConstructSignatures[0].ReturnType
+			if objType, objOk := actualType.(*types.ObjectType); objOk && len(objType.ConstructSigs()) > 0 {
+				resultType = objType.ConstructSigs()[0].ReturnType
 			} else {
 				// If can't resolve to constructor type, return the forward reference as result type
 				resultType = forwardRef
@@ -3157,8 +3158,8 @@ func (c *Checker) checkObjectLiteralSatisfies(objectLit *parser.ObjectLiteral, t
 
 	if sourceIsObj && targetIsObj {
 		// Check for excess properties in the source object literal
-		for propName := range sourceObjType.Properties {
-			if _, exists := targetObjType.Properties[propName]; !exists {
+		for propName := range sourceObjType.Props() {
+			if _, exists := targetObjType.Props()[propName]; !exists {
 				// This is an excess property - satisfies should reject it
 				c.addError(satisfiesNode, fmt.Sprintf("Object literal may only specify known properties, and '%s' does not exist in type '%s'",
 					propName, targetType.String()))
@@ -3290,7 +3291,7 @@ func (c *Checker) isDefinitelyNotConstructor(t types.Type) bool {
 	case *types.LiteralType:
 		return true
 	case *types.ObjectType:
-		return !tt.IsCallable() && len(tt.ConstructSignatures) == 0 && len(tt.BaseTypes) == 0 && tt.ClassMeta == nil
+		return !tt.IsCallable() && len(tt.ConstructSigs()) == 0 && len(tt.Bases()) == 0 && tt.ClassMeta == nil
 	case *types.UnionType:
 		for _, member := range tt.Types {
 			if !c.isDefinitelyNotConstructor(member) {
@@ -3304,7 +3305,7 @@ func (c *Checker) isDefinitelyNotConstructor(t types.Type) bool {
 
 func (c *Checker) isConstructorType(t types.Type) bool {
 	if objType, ok := t.(*types.ObjectType); ok {
-		return objType.IsCallable() || len(objType.ConstructSignatures) > 0
+		return objType.IsCallable() || len(objType.ConstructSigs()) > 0
 	}
 	return false
 }
@@ -3422,9 +3423,9 @@ func (c *Checker) checkYieldExpression(node *parser.YieldExpression) {
 					}
 				}
 
-				if objType, ok := iteratorMethodType.(*types.ObjectType); ok && len(objType.CallSignatures) > 0 {
+				if objType, ok := iteratorMethodType.(*types.ObjectType); ok && len(objType.CallSigs()) > 0 {
 					// Extract the return type of Symbol.iterator method
-					signature := objType.CallSignatures[0]
+					signature := objType.CallSigs()[0]
 					returnType := signature.ReturnType
 
 					// The return type should be Iterator<T>
@@ -3521,17 +3522,17 @@ func (c *Checker) checkAwaitExpression(node *parser.AwaitExpression) {
 			// Promise objects have .then(), .catch(), .finally() methods
 			// The .then() callback's first parameter type is the resolved value
 			if objType, ok := argType.(*types.ObjectType); ok {
-				if thenProp, hasThen := objType.Properties["then"]; hasThen {
+				if thenProp, hasThen := objType.Props()["then"]; hasThen {
 					// Extract the type from the .then() callback parameter
 					if thenFuncType, ok := thenProp.(*types.ObjectType); ok {
-						if len(thenFuncType.CallSignatures) > 0 {
-							sig := thenFuncType.CallSignatures[0]
+						if len(thenFuncType.CallSigs()) > 0 {
+							sig := thenFuncType.CallSigs()[0]
 							// The first parameter should be a function that receives the resolved value
 							if len(sig.ParameterTypes) > 0 {
 								callbackType := sig.ParameterTypes[0]
 								if callbackFuncType, ok := callbackType.(*types.ObjectType); ok {
-									if len(callbackFuncType.CallSignatures) > 0 {
-										callbackSig := callbackFuncType.CallSignatures[0]
+									if len(callbackFuncType.CallSigs()) > 0 {
+										callbackSig := callbackFuncType.CallSigs()[0]
 										if len(callbackSig.ParameterTypes) > 0 {
 											// This is the resolved value type
 											resolvedType := callbackSig.ParameterTypes[0]
@@ -3686,10 +3687,10 @@ func (c *Checker) getSpreadElementType(t types.Type) types.Type {
 
 func callableReturnType(t types.Type) types.Type {
 	objType, ok := t.(*types.ObjectType)
-	if !ok || len(objType.CallSignatures) == 0 {
+	if !ok || len(objType.CallSigs()) == 0 {
 		return nil
 	}
-	return objType.CallSignatures[0].ReturnType
+	return objType.CallSigs()[0].ReturnType
 }
 
 // getTupleElementUnion creates a union type from all element types in a tuple
@@ -3797,16 +3798,16 @@ func (c *Checker) builtinGenericCtorResult(ctor types.Type, typeArgs []types.Typ
 	if g, isGeneric := ctor.(*types.GenericType); isGeneric {
 		obj, ok = g.Body.(*types.ObjectType)
 	}
-	if ok && obj != nil && len(obj.ConstructSignatures) == 0 && len(obj.CallSignatures) > 0 && len(typeArgs) == 1 {
+	if ok && obj != nil && len(obj.ConstructSigs()) == 0 && len(obj.CallSigs()) > 0 && len(typeArgs) == 1 {
 		// new Array<T>() is T[].
-		if arr, isArr := obj.CallSignatures[0].ReturnType.(*types.ArrayType); isArr && arr.ElementType == types.Any {
+		if arr, isArr := obj.CallSigs()[0].ReturnType.(*types.ArrayType); isArr && arr.ElementType == types.Any {
 			return &types.ArrayType{ElementType: typeArgs[0]}
 		}
 	}
-	if !ok || obj == nil || len(obj.ConstructSignatures) > 0 || len(obj.CallSignatures) != 1 {
+	if !ok || obj == nil || len(obj.ConstructSigs()) > 0 || len(obj.CallSigs()) != 1 {
 		return nil
 	}
-	instance, ok := obj.CallSignatures[0].ReturnType.(*types.GenericType)
+	instance, ok := obj.CallSigs()[0].ReturnType.(*types.GenericType)
 	if !ok || len(instance.TypeParameters) == 0 {
 		return nil
 	}
@@ -3831,7 +3832,7 @@ func (c *Checker) builtinGenericCtorResult(ctor types.Type, typeArgs []types.Typ
 // stringIndexValueType is the value type of obj's string (or any) index
 // signature, or nil when it has none.
 func stringIndexValueType(obj *types.ObjectType) types.Type {
-	for _, sig := range obj.IndexSignatures {
+	for _, sig := range obj.IndexSigs() {
 		if sig.KeyType == types.String || sig.KeyType == types.Any {
 			if sig.ValueType == nil {
 				return types.Any
