@@ -1,6 +1,10 @@
 package checker
 
-import "github.com/nooga/paserati/pkg/types"
+import (
+	"maps"
+
+	"github.com/nooga/paserati/pkg/types"
+)
 
 // Built-in globals (Object, Array, ...) live in the global environment, but a
 // module has its own top-level scope: `export class Object {}` declares a new
@@ -16,6 +20,23 @@ func (e *Environment) snapshotBuiltins() {
 	}
 	for name := range e.typeAliases {
 		e.builtinNames[name] = true
+	}
+}
+
+// cloneGlobal copies a global environment's bindings into a new one sharing
+// their types. The copy's own declarations and shadowed built-ins do not
+// touch e.
+func (e *Environment) cloneGlobal() *Environment {
+	return &Environment{
+		symbols:             maps.Clone(e.symbols),
+		typeAliases:         maps.Clone(e.typeAliases),
+		typeParameters:      maps.Clone(e.typeParameters),
+		pendingOverloads:    maps.Clone(e.pendingOverloads),
+		overloadedFunctions: maps.Clone(e.overloadedFunctions),
+		primitivePrototypes: maps.Clone(e.primitivePrototypes),
+		withObjects:         []WithObject{},
+		narrowings:          maps.Clone(e.narrowings),
+		builtinNames:        maps.Clone(e.builtinNames),
 	}
 }
 

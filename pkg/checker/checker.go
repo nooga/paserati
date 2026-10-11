@@ -478,9 +478,28 @@ func NewChecker() *Checker {
 
 // NewCheckerWithInitializers creates a new type checker with custom built-in initializers.
 func NewCheckerWithInitializers(initializers []builtins.BuiltinInitializer) *Checker {
+	return newCheckerInEnv(NewBuiltinEnvironment(initializers))
+}
+
+// NewBuiltinEnvironment builds the global environment of built-ins once, for
+// NewCheckerWithBuiltins to start many checkers from.
+func NewBuiltinEnvironment(initializers []builtins.BuiltinInitializer) *Environment {
 	globalEnv := NewGlobalEnvironment(initializers)
 	declareAmbientLibGlobals(globalEnv)
 	globalEnv.snapshotBuiltins()
+	return globalEnv
+}
+
+// NewCheckerWithBuiltins creates a checker whose global scope starts as a
+// copy of builtins. The checkers of one program share the built-in types
+// (globals are program-wide anyway) instead of each building its own.
+func NewCheckerWithBuiltins(builtins *Environment) *Checker {
+	env := builtins.cloneGlobal()
+	globalEnvironment.Store(env)
+	return newCheckerInEnv(env)
+}
+
+func newCheckerInEnv(globalEnv *Environment) *Checker {
 	types.StrictNullChecks = true // matches the checker's strictNullChecks default
 	return &Checker{
 		env:       globalEnv,                // Create persistent global environment with custom initializers
